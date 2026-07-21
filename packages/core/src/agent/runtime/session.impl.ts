@@ -344,6 +344,16 @@ export function getLlmConfig(this: Agent): LLMConfig {
 export function setLLMConfig(this: Agent, next: Partial<LLMConfig>): void {
     this.llmConfig = { ...this.llmConfig, ...next };
   }
+
+  /**
+   * Replace the complete live provider snapshot after onboarding commits a new
+   * config. This intentionally differs from `setLLMConfig`: a
+   * provider switch must remove Azure/router-only optional fields that are not
+   * present in the newly selected provider.
+   */
+export function replaceLLMConfig(this: Agent, next: LLMConfig): void {
+    this.llmConfig = structuredClone(next);
+  }
 export function getLLMConfig(this: Agent): LLMConfig {
     return this.llmConfig;
   }

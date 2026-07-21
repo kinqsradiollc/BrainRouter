@@ -9,7 +9,15 @@ import {
   executeOrchestrationTool,
 } from '@kinqs/brainrouter-core/orchestration';
 import { _resetCliKnobsCache, setCliKnobOverride } from '@kinqs/brainrouter-core/config';
+import type { Config } from '@kinqs/brainrouter-core/config';
 import { normalizeSkillsList } from '../cli/commands/workflow/index.js';
+import { tryHandleMcpCommand } from '../cli/commands/mcp/index.js';
+import {
+  McpProfilePersistenceError,
+  reconcileLiveMcpProfile,
+  resolveEffectiveMcpProfile,
+} from '../cli/mcpProfileLifecycle.js';
+import type { CommandContext } from '../cli/commands/_context.js';
 import { withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
 
 test('McpClientWrapper.isConnected is false before connect', async () => {
@@ -90,6 +98,509 @@ test('McpClientWrapper.callTool returns an error envelope when disconnected (off
   assert.equal(env.isError, true);
   assert.match(env.content[0].text, /MCP server is not connected/);
   assert.match(env.content[0].text, /memory_recall/);
+});
+
+test('/mcp connect uses the effective profile and launch model for future reconnect state', async () => {
+  const config: Config = {
+    activeServer: 'github',
+    servers: {
+      github: { type: 'http', url: 'https://example.test/mcp', identity: 'third-party' },
+    },
+    llm: {
+      provider: 'openai-compatible',
+      apiKey: 'fresh-key',
+      model: 'base-model',
+      endpoint: 'https://base.example.test/v1',
+      models: ['base-model', 'profile-model', 'command-model'],
+    },
+    cli: {
+      activeLlmProfile: 'focused',
+      llmProfiles: {
+        focused: { model: 'profile-model', endpoint: 'https://profile.example.test/v1' },
+      },
+    },
+  };
+  let connectedWith: Config['llm'];
+  let connected = false;
+  let supervisorStarted = false;
+  const context = {
+    command: '/mcp',
+    args: ['connect', 'github'],
+    config,
+    agent: { workspaceRoot: '/workspace' },
+    repl: { launchPolicy: { modelOverride: 'command-model' } },
+    mcpClient: {
+      stopReconnectSupervisor: () => undefined,
+      setReconnectLlmConfig: () => undefined,
+      connectOne: async (_id: string, _profile: unknown, llm: Config['llm']) => {
+        connectedWith = structuredClone(llm);
+        connected = true;
+      },
+      getStatuses: () => [],
+      getStatus: () => connected
+        ? { serverId: 'github', identity: 'third-party', status: 'connected', toolCount: 1 }
+        : undefined,
+      startReconnectSupervisor: () => { supervisorStarted = true; },
+    },
+  } as unknown as CommandContext;
+  const originalLog = console.log;
+  console.log = () => undefined;
+  try {
+    assert.equal(await tryHandleMcpCommand(context), true);
+  } finally {
+    console.log = originalLog;
+  }
+
+  assert.deepEqual(connectedWith!, {
+    provider: 'openai-compatible',
+    apiKey: 'fresh-key',
+    model: 'command-model',
+    endpoint: 'https://profile.example.test/v1',
+  });
+  assert.equal(supervisorStarted, true, 'manual connect re-arms recovery after launch-only MCP Skip');
+});
+
+test('/mcp connection failures redact credentials from legacy endpoint errors', async () => {
+  const secretUrl = 'https://user:password@example.test/mcp/token%25252Fabc1234567890ABCDEF1234567890abcdef?sig=query-secret';
+  const lines: string[] = [];
+  let attempted = false;
+  const context = {
+    command: '/mcp',
+    args: ['connect', 'legacy'],
+    config: {
+      activeServer: 'legacy',
+      servers: { legacy: { type: 'http', url: secretUrl, identity: 'third-party' } },
+      llm: { provider: 'openai', apiKey: 'key', model: 'model' },
+    },
+    agent: { workspaceRoot: '/workspace' },
+    repl: { launchPolicy: {} },
+    mcpClient: {
+      stopReconnectSupervisor: () => undefined,
+      setReconnectLlmConfig: () => undefined,
+      connectOne: async () => { attempted = true; },
+      getStatuses: () => [],
+      getStatus: () => attempted
+        ? {
+            serverId: 'legacy',
+            identity: 'third-party',
+            status: 'failed',
+            error: `fetch ${secretUrl} failed`,
+          }
+        : undefined,
+      startReconnectSupervisor: () => undefined,
+    },
+  } as unknown as CommandContext;
+  const originalLog = console.log;
+  console.log = (...values: unknown[]) => { lines.push(values.map(String).join(' ')); };
+  try {
+    assert.equal(await tryHandleMcpCommand(context), true);
+  } finally {
+    console.log = originalLog;
+  }
+
+  const rendered = lines.join('\n');
+  assert.doesNotMatch(rendered, /password|query-secret|abc1234567890/);
+  assert.match(rendered, /\[redacted\]/);
+});
+
+test('/mcp reconnect reconciles the live pool to safe-mode targets before reconnecting', async () => {
+  const removed: string[] = [];
+  let connectedIds: string[] = [];
+  let supervisorStarted = false;
+  const context = {
+    command: '/mcp',
+    args: ['reconnect'],
+    config: {
+      activeServer: 'github',
+      activeBrainrouterServer: 'brain',
+      servers: {
+        brain: { type: 'stdio', command: 'brainrouter-mcp', identity: 'brainrouter' },
+        github: { type: 'http', url: 'https://github.example.test/mcp', identity: 'third-party' },
+      },
+      llm: { provider: 'openai', apiKey: 'key', model: 'model' },
+    },
+    agent: { workspaceRoot: '/workspace' },
+    repl: { launchPolicy: { safeMode: true } },
+    mcpClient: {
+      stopReconnectSupervisor: () => undefined,
+      startReconnectSupervisor: () => { supervisorStarted = true; },
+      setReconnectLlmConfig: () => undefined,
+      getServerIds: () => ['brain', 'github'],
+      removeOne: async (id: string) => { removed.push(id); },
+      connectAll: async (profiles: Record<string, unknown>) => {
+        connectedIds = Object.keys(profiles);
+        return [{ serverId: 'brain', identity: 'brainrouter', status: 'connected' }];
+      },
+    },
+  } as unknown as CommandContext;
+  const originalLog = console.log;
+  console.log = () => undefined;
+  try {
+    assert.equal(await tryHandleMcpCommand(context), true);
+  } finally {
+    console.log = originalLog;
+  }
+
+  assert.deepEqual(removed, ['github']);
+  assert.deepEqual(connectedIds, ['brain']);
+  assert.equal(supervisorStarted, true);
+  assert.equal(context.config.servers.brain.args, undefined, 'workspace projection remains outside durable config');
+  assert.deepEqual(context.repl.runtimeMcp?.servers.brain.args, ['--root', '/workspace']);
+});
+
+test('/mcp exposes and reconnects a runtime-only BrainRouter profile without creating a durable selector', async () => {
+  const config: Config = {
+    activeServer: 'github',
+    activeBrainrouterServer: undefined,
+    servers: {
+      github: { type: 'http', url: 'https://github.example.test/mcp', identity: 'third-party' },
+    },
+    llm: { provider: 'openai', apiKey: 'key', model: 'model' },
+  };
+  const durableSnapshot = structuredClone(config);
+  const statuses = new Map<string, any>();
+  let connectedProfile: unknown;
+  const lines: string[] = [];
+  const context = {
+    command: '/mcp',
+    args: ['list'],
+    config,
+    agent: {
+      workspaceRoot: '/workspace',
+      sessionKey: 'session:test',
+      getModel: () => 'model',
+    },
+    repl: {
+      launchPolicy: {},
+      runtimeMcp: {
+        servers: {
+          brainrouter: {
+            type: 'http',
+            url: 'https://brain.example.test/mcp',
+            identity: 'brainrouter',
+          },
+        },
+        activeServer: 'github',
+        activeBrainrouterServer: 'brainrouter',
+      },
+      replaceBanner: () => undefined,
+    },
+    mcpClient: {
+      stopReconnectSupervisor: () => undefined,
+      startReconnectSupervisor: () => undefined,
+      setReconnectLlmConfig: () => undefined,
+      getStatuses: () => [...statuses.values()],
+      getStatus: (id: string) => statuses.get(id),
+      getActiveBrainrouterServerId: () => statuses.get('brainrouter')?.status === 'connected'
+        ? 'brainrouter'
+        : undefined,
+      isConnected: () => statuses.get('brainrouter')?.status === 'connected',
+      connectOne: async (id: string, profile: unknown) => {
+        connectedProfile = structuredClone(profile);
+        statuses.set(id, {
+          serverId: id,
+          identity: 'brainrouter',
+          status: 'connected',
+          toolCount: 12,
+        });
+      },
+      removeOne: async (id: string) => { statuses.delete(id); },
+    },
+  } as unknown as CommandContext;
+  const originalLog = console.log;
+  console.log = (...values: unknown[]) => { lines.push(values.map(String).join(' ')); };
+  try {
+    assert.equal(await tryHandleMcpCommand(context), true);
+    const runtimeBeforeProbe = structuredClone(context.repl.runtimeMcp);
+    assert.deepEqual(await resolveEffectiveMcpProfile(context, 'brainrouter'), {
+      type: 'http',
+      url: 'https://brain.example.test/mcp',
+      identity: 'brainrouter',
+    });
+    assert.deepEqual(
+      context.repl.runtimeMcp,
+      runtimeBeforeProbe,
+      'resolving a probe profile must not change the live session overlay',
+    );
+    context.args = ['reconnect', 'brainrouter'];
+    assert.equal(await tryHandleMcpCommand(context), true);
+  } finally {
+    console.log = originalLog;
+  }
+
+  assert.match(lines.join('\n'), /brainrouter/, 'the session-only profile is visible in /mcp list');
+  assert.match(lines.join('\n'), /this session only/);
+  assert.doesNotMatch(lines.join('\n'), /for this and future sessions/);
+  assert.deepEqual(connectedProfile, {
+    type: 'http',
+    url: 'https://brain.example.test/mcp',
+    identity: 'brainrouter',
+  });
+  assert.deepEqual(config, durableSnapshot, 'runtime reconnect must not create a profile or dangling selectors');
+  assert.equal(context.repl.runtimeMcp?.activeBrainrouterServer, 'brainrouter');
+});
+
+test('profile resolution prefers a newly edited durable transport over its stale runtime snapshot', async () => {
+  const context = {
+    config: {
+      activeServer: 'github',
+      servers: {
+        github: { type: 'http', url: 'https://new.example.test/mcp', identity: 'third-party' },
+      },
+      llm: { provider: 'openai', apiKey: 'key', model: 'model' },
+    },
+    agent: { workspaceRoot: '/workspace' },
+    repl: {
+      launchPolicy: {},
+      runtimeMcp: {
+        servers: {
+          github: { type: 'http', url: 'https://old.example.test/mcp', identity: 'third-party' },
+        },
+        activeServer: 'github',
+      },
+    },
+    mcpClient: {},
+  } as unknown as CommandContext;
+  const runtimeBeforeProbe = structuredClone(context.repl.runtimeMcp);
+
+  assert.deepEqual(await resolveEffectiveMcpProfile(context, 'github'), {
+    type: 'http',
+    url: 'https://new.example.test/mcp',
+    identity: 'third-party',
+  });
+  assert.deepEqual(context.repl.runtimeMcp, runtimeBeforeProbe, 'resolution alone must not rewrite live state');
+});
+
+test('profile reconciliation retires failed, offline, idle, and pool-only BrainRouter profiles before reconnecting the target', async () => {
+  const events: string[] = [];
+  const statuses = new Map<string, any>([
+    ['target', { serverId: 'target', identity: 'brainrouter', status: 'failed' }],
+    ['failed-old', { serverId: 'failed-old', identity: 'brainrouter', status: 'failed' }],
+    ['offline-old', { serverId: 'offline-old', identity: 'brainrouter', status: 'offline' }],
+    ['pool-only', { serverId: 'pool-only', identity: 'brainrouter', status: 'offline' }],
+    ['github', { serverId: 'github', identity: 'third-party', status: 'connected' }],
+  ]);
+  const context = {
+    config: {
+      activeServer: 'target',
+      servers: {
+        target: { type: 'stdio', command: 'brainrouter-mcp', identity: 'brainrouter' },
+        'failed-old': { type: 'stdio', command: 'brainrouter-mcp', identity: 'brainrouter' },
+        'offline-old': { type: 'stdio', command: 'brainrouter-mcp', identity: 'brainrouter' },
+        'idle-old': { type: 'stdio', command: 'brainrouter-mcp', identity: 'brainrouter' },
+        github: { type: 'http', url: 'https://example.test/mcp', identity: 'third-party' },
+      },
+      llm: { provider: 'openai', apiKey: 'key', model: 'model' },
+    },
+    agent: { workspaceRoot: '/workspace' },
+    repl: { launchPolicy: {} },
+    mcpClient: {
+      stopReconnectSupervisor: () => { events.push('stop'); },
+      startReconnectSupervisor: () => { events.push('start'); },
+      setReconnectLlmConfig: () => undefined,
+      getStatus: (id: string) => statuses.get(id),
+      getStatuses: () => [...statuses.values()],
+      removeOne: async (id: string) => {
+        events.push(`remove:${id}`);
+        statuses.delete(id);
+      },
+      connectOne: async (id: string, profile: any, _llm: unknown, _timeout: number, options: any) => {
+        events.push(`connect:${id}:${profile.args?.at(-1)}`);
+        for (const retiredId of options.retireBrainrouterServerIds) {
+          events.push(`remove:${retiredId}`);
+          statuses.delete(retiredId);
+        }
+        statuses.set(id, { serverId: id, identity: 'brainrouter', status: 'connected' });
+      },
+    },
+  } as unknown as CommandContext;
+
+  const status = await reconcileLiveMcpProfile(context, 'target', {
+    forceReconnect: true,
+    persistConfig: () => undefined,
+  });
+
+  assert.equal(status?.status, 'connected');
+  assert.deepEqual(events, [
+    'stop',
+    'connect:target:/workspace',
+    'remove:failed-old',
+    'remove:offline-old',
+    'remove:idle-old',
+    'remove:pool-only',
+    'start',
+  ]);
+  assert.equal(statuses.has('github'), true, 'third-party transports remain additive');
+});
+
+test('a failed explicit BrainRouter switch preserves the live selector for later reconnect-all', async () => {
+  const statuses = new Map<string, any>([
+    ['old-brain', { serverId: 'old-brain', identity: 'brainrouter', status: 'connected' }],
+  ]);
+  let reconnectTargets: string[] = [];
+  let reconnectPreferred: string | undefined;
+  const context = {
+    command: '/mcp',
+    args: ['connect', 'candidate'],
+    config: {
+      activeServer: 'old-brain',
+      activeBrainrouterServer: 'old-brain',
+      servers: {
+        'old-brain': { type: 'stdio', command: 'brainrouter-mcp', identity: 'brainrouter' },
+        candidate: { type: 'http', url: 'https://offline.example.test/mcp', identity: 'brainrouter' },
+      },
+      llm: { provider: 'openai', apiKey: 'key', model: 'model' },
+    },
+    agent: { workspaceRoot: '/workspace' },
+    repl: {
+      launchPolicy: {},
+      runtimeMcp: {
+        servers: {
+          'old-brain': { type: 'stdio', command: 'brainrouter-mcp', identity: 'brainrouter' },
+          candidate: { type: 'http', url: 'https://offline.example.test/mcp', identity: 'brainrouter' },
+        },
+        activeServer: 'old-brain',
+        activeBrainrouterServer: 'old-brain',
+      },
+    },
+    mcpClient: {
+      stopReconnectSupervisor: () => undefined,
+      startReconnectSupervisor: () => undefined,
+      setReconnectLlmConfig: () => undefined,
+      getStatus: (id: string) => statuses.get(id),
+      getStatuses: () => [...statuses.values()],
+      getServerIds: () => [...statuses.keys()],
+      getActiveBrainrouterServerId: () => statuses.get('old-brain')?.status === 'connected'
+        ? 'old-brain'
+        : undefined,
+      connectOne: async (id: string) => {
+        statuses.set(id, {
+          serverId: id,
+          identity: 'brainrouter',
+          status: 'failed',
+          error: 'offline',
+        });
+      },
+      removeOne: async (id: string) => { statuses.delete(id); },
+      connectAll: async (profiles: Record<string, unknown>, _llm: unknown, options: any) => {
+        reconnectTargets = Object.keys(profiles);
+        reconnectPreferred = options.preferredBrainrouterServerId;
+        statuses.set('old-brain', {
+          serverId: 'old-brain',
+          identity: 'brainrouter',
+          status: 'connected',
+        });
+        return [...statuses.values()];
+      },
+    },
+  } as unknown as CommandContext;
+
+  const originalLog = console.log;
+  console.log = () => undefined;
+  try {
+    assert.equal(await tryHandleMcpCommand(context), true);
+    assert.equal(statuses.get('candidate')?.status, 'failed');
+    assert.equal(statuses.get('old-brain')?.status, 'connected');
+    assert.equal(context.repl.runtimeMcp?.activeBrainrouterServer, 'old-brain');
+
+    context.args = ['reconnect'];
+    assert.equal(await tryHandleMcpCommand(context), true);
+  } finally {
+    console.log = originalLog;
+  }
+
+  assert.equal(reconnectPreferred, 'old-brain');
+  assert.deepEqual(reconnectTargets, ['old-brain']);
+  assert.equal(context.config.activeBrainrouterServer, 'old-brain');
+});
+
+test('profile reconciliation retires the previous brain when an unknown profile is identified during connect', async () => {
+  const events: string[] = [];
+  const statuses = new Map<string, any>([
+    ['old-brain', { serverId: 'old-brain', identity: 'brainrouter', status: 'connected' }],
+  ]);
+  const context = {
+    config: {
+      activeServer: 'candidate',
+      servers: {
+        candidate: { type: 'http', url: 'https://example.test/mcp' },
+        'old-brain': { type: 'stdio', command: 'brainrouter-mcp', identity: 'brainrouter' },
+      },
+      llm: { provider: 'openai', apiKey: 'key', model: 'model' },
+    },
+    agent: { workspaceRoot: '/workspace' },
+    repl: { launchPolicy: {} },
+    mcpClient: {
+      stopReconnectSupervisor: () => { events.push('stop'); },
+      startReconnectSupervisor: () => { events.push('start'); },
+      setReconnectLlmConfig: () => undefined,
+      getStatus: (id: string) => statuses.get(id),
+      getStatuses: () => [...statuses.values()],
+      connectOne: async (id: string) => {
+        events.push(`connect:${id}`);
+        statuses.set(id, { serverId: id, identity: 'brainrouter', status: 'connected' });
+      },
+      removeOne: async (id: string) => {
+        events.push(`remove:${id}`);
+        statuses.delete(id);
+      },
+    },
+  } as unknown as CommandContext;
+
+  const persisted: string[] = [];
+  const status = await reconcileLiveMcpProfile(context, 'candidate', {
+    persistConfig: (next) => { persisted.push(next.activeBrainrouterServer ?? ''); },
+  });
+
+  assert.equal(status?.identity, 'brainrouter');
+  assert.deepEqual(events, ['stop', 'connect:candidate', 'remove:old-brain', 'start']);
+  assert.equal(statuses.has('candidate'), true);
+  assert.equal(statuses.has('old-brain'), false);
+  assert.deepEqual(persisted, ['candidate']);
+});
+
+test('profile reconciliation reports live success separately when durable selection persistence fails', async () => {
+  const statuses = new Map<string, any>();
+  const config: Config = {
+    activeServer: 'github',
+    servers: {
+      candidate: { type: 'http', url: 'https://example.test/mcp' },
+      github: { type: 'http', url: 'https://github.example.test/mcp', identity: 'third-party' },
+    },
+    llm: { provider: 'openai', apiKey: 'key', model: 'model' },
+  };
+  const context = {
+    config,
+    agent: { workspaceRoot: '/workspace' },
+    repl: { launchPolicy: {} },
+    mcpClient: {
+      stopReconnectSupervisor: () => undefined,
+      startReconnectSupervisor: () => undefined,
+      setReconnectLlmConfig: () => undefined,
+      getStatus: (id: string) => statuses.get(id),
+      getStatuses: () => [...statuses.values()],
+      connectOne: async (id: string) => {
+        statuses.set(id, { serverId: id, identity: 'brainrouter', status: 'connected' });
+      },
+      removeOne: async (id: string) => { statuses.delete(id); },
+    },
+  } as unknown as CommandContext;
+
+  await assert.rejects(
+    reconcileLiveMcpProfile(context, 'candidate', {
+      persistConfig: () => { throw new Error('disk full'); },
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof McpProfilePersistenceError);
+      assert.equal(error.liveStatus.status, 'connected');
+      assert.match(error.message, /could not be saved/i);
+      return true;
+    },
+  );
+  assert.equal(statuses.get('candidate')?.status, 'connected');
+  assert.equal(config.activeBrainrouterServer, undefined, 'failed persistence must roll back the durable selector');
+  assert.equal(config.activeServer, 'github', 'banner highlight remains independent');
+  assert.equal(context.repl.runtimeMcp?.activeBrainrouterServer, 'candidate', 'the live selection remains session-scoped');
 });
 
 test('mcpUtils: extractToolText handles content arrays, strings, and unknown shapes', () => {

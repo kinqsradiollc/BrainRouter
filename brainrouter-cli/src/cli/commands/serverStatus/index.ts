@@ -1,5 +1,6 @@
 import chalk from 'chalk';
 import type { Config } from '@kinqs/brainrouter-core/config';
+import { redactMcpHttpUrl, redactMcpStdioCommand } from '../../mcpUrl.js';
 
 /**
  * Render the "Active Server" lines for `/status`. Pure (returns chalk-wrapped
@@ -26,9 +27,9 @@ export function describeActiveServer(config: Config): string[] {
   }
   const lines = [`  Active Server: ${chalk.green(name)} (Type: ${chalk.cyan(server.type)})`];
   if (server.type === 'http') {
-    lines.push(`  Endpoint URL:  ${chalk.blue(server.url ?? '(unset)')}`);
+    lines.push(`  Endpoint URL:  ${chalk.blue(redactMcpHttpUrl(server.url))}`);
   } else {
-    lines.push(`  Command:       ${chalk.blue(server.command ?? '(unset)')} ${server.args?.join(' ') || ''}`);
+    lines.push(`  Command:       ${chalk.blue(redactMcpStdioCommand(server) || '(unset)')}`);
   }
   return lines;
 }

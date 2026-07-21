@@ -29,6 +29,7 @@ import {
   listProviderRequestFormatRows, applyProviderRequestFormat,
   WIRE_FORMAT_OPTIONS, type WireFormatOption,
 } from './wireFormat.js';
+import { persistLlmConfig } from './llmPersistence.js';
 
 async function gatherLlmConfig(
   ctx: CommandContext,
@@ -59,6 +60,7 @@ async function gatherLlmConfig(
       : provider.local ? `${provider.label} is local — blank key OK.` : `Paste your ${provider.label} key.`,
     badge: provider.label,
     prefilled: envValue,
+    mask: true,
     placeholder: provider.local ? '(blank OK)' : 'paste API key',
     validate: (raw) => {
       const v = validateApiKey(raw, provider);
@@ -149,11 +151,16 @@ export async function editLlm(ctx: CommandContext): Promise<boolean> {
   const theme = themeFor(ctx);
   const gathered = await gatherLlmConfig(ctx, theme, ctx.config.llm);
   if (!gathered) return false;
-  ctx.config.llm = gathered.llm;
-  saveConfig(ctx.config);
+  try {
+    persistLlmConfig(ctx.config, gathered.llm);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.log(chalk.red(`\n  ✗ Could not persist LLM config: ${message}\n`));
+    return false;
+  }
   // setLLMConfig (not just setModel) so the live agent picks up the new
-  // apiKey + endpoint immediately.
-  ctx.agent.setLLMConfig(ctx.config.llm);
+  // apiKey + endpoint immediately, but only after the strict write succeeds.
+  ctx.agent.setLLMConfig(gathered.llm);
   console.log(chalk.green(`\n  ✓ LLM saved: ${gathered.label} · ${gathered.llm.model} · ${maskApiKey(gathered.llm.apiKey)}${gathered.sourceTail}`));
   return true;
 }
@@ -374,6 +381,7 @@ export async function promptBrainrouterApiKey(
     subtitle,
     badge: 'MCP',
     prefilled,
+    mask: true,
     placeholder: '(blank OK)',
   });
   if (result.kind !== 'accept') return undefined;

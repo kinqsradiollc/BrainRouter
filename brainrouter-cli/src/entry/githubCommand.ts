@@ -7,14 +7,18 @@
 // profile (run `brainrouter login` first); the profile's API key authenticates you.
 import type { Command } from 'commander';
 import chalk from 'chalk';
-import { loadOrInitConfig } from '@kinqs/brainrouter-core/config';
+import { loadOrInitConfig, type Config } from '@kinqs/brainrouter-core/config';
+import { resolvePreferredBrainrouterServerId } from '@kinqs/brainrouter-core/mcp';
 
 interface HttpTarget { baseUrl: string; apiKey: string }
 
 /** Resolve the active hosted profile → the backend base URL + API key, or an error. */
-function resolveHttpTarget(): HttpTarget | { error: string } {
-  const config = loadOrInitConfig();
-  const active = config.activeServer;
+export function resolveGithubHttpTarget(config: Config = loadOrInitConfig()): HttpTarget | { error: string } {
+  const active = resolvePreferredBrainrouterServerId(
+    config.servers ?? {},
+    config.activeBrainrouterServer,
+    config.activeServer,
+  );
   const server = active ? config.servers?.[active] : undefined;
   if (!server || server.type !== 'http' || !('url' in server) || !server.url) {
     return { error: 'No hosted BrainRouter server is configured. Run `brainrouter login` to connect to one first.' };
@@ -84,7 +88,7 @@ export function registerGithubCommand(program: Command): void {
     .description('Connect GitHub to your BrainRouter account: login | logout | status')
     .action(async (action: string) => {
       const act = String(action ?? '').toLowerCase();
-      const t = resolveHttpTarget();
+      const t = resolveGithubHttpTarget();
       if ('error' in t) { console.error(chalk.red(t.error)); process.exitCode = 1; return; }
       switch (act) {
         case 'login': case 'connect': await githubLogin(t); break;

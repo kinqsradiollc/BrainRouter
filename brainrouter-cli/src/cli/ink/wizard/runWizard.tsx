@@ -1,31 +1,19 @@
 import React from 'react';
-import fs from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
 import { WizardApp } from '../WizardApp.js';
 import type { WizardState, WizardDraft } from '../../wizard/types.js';
 import type { McpPick } from '../../wizard/types.js';
 import { writePreferences } from '@kinqs/brainrouter-core/session';
-import { loadOrInitConfig, saveConfig, type Config } from '@kinqs/brainrouter-core/config';
-import { initAgentMd } from '../../../prompt/initAgentMd.js';
+import type { Config } from '@kinqs/brainrouter-core/config';
 import { NoTTYError } from '../../prompt/cliPrompt.js';
+import { getAmbientChat } from '../chat/ambientChat.js';
 import { resetStdinForReadline } from '../terminal/stdinHandoff.js';
 import { renderWithResizeClear } from '../terminal/renderWithResizeClear.js';
+import {
+  updateGlobalSetupConfigOrThrow,
+} from '../../wizard/globalPersistence.js';
+import { resolveWizardMcpProfileName } from '../../wizard/mcpProfile.js';
 
-const ONBOARDED_MARKER = path.join(os.homedir(), '.config', 'brainrouter', '.onboarded');
-
-export function isOnboarded(): boolean {
-  try { return fs.existsSync(ONBOARDED_MARKER); } catch { return false; }
-}
-
-export function markOnboarded(): void {
-  try {
-    fs.mkdirSync(path.dirname(ONBOARDED_MARKER), { recursive: true });
-    fs.writeFileSync(ONBOARDED_MARKER, '', 'utf8');
-  } catch {
-    /* non-fatal */
-  }
-}
+export { isOnboarded, markOnboarded } from '../../wizard/globalPersistence.js';
 
 export interface WizardRunOptions {
   workspaceRoot: string;
@@ -34,6 +22,8 @@ export interface WizardRunOptions {
 export interface WizardRunResult {
   state: WizardState;
   config?: Config;
+  /** Ephemeral choice for the caller; never persisted over saved MCP profiles. */
+  skipMcpForLaunch: boolean;
 }
 
 /**
@@ -47,58 +37,93 @@ export interface WizardRunResult {
  * approach had (creep, stacking, off-by-one) is eliminated by design.
  */
 export async function runWizard(opts: WizardRunOptions): Promise<WizardRunResult> {
-  if (!process.stdin.isTTY) {
+  const ambient = getAmbientChat();
+  if (!ambient && !process.stdin.isTTY) {
     throw new NoTTYError(
       'BrainRouter has no config and stdin is not a TTY — run `brainrouter` in an interactive terminal at least once to complete the setup wizard.',
     );
   }
 
-  const finalState = await new Promise<WizardState>((resolve) => {
-    let captured: WizardState | undefined;
-    const { instance, cleanupResizeClear } = renderWithResizeClear(
-      <WizardApp workspaceRoot={opts.workspaceRoot} onFinish={(s) => {
-        // Capture but DON'T resolve yet — we want to wait for Ink's
-        // own unmount to complete (next tick) before handing stdin
-        // back to readline. Resolving prematurely would let our
-        // caller try to read stdin while Ink is still tearing down,
-        // which breaks the next readline.createInterface.
-        captured = s;
-      }} />,
-      {
-        // Don't put Ink's output into the alt-screen buffer — we want
-        // the final frame (Done summary) to stay in scrollback after
-        // unmount. Ink's default is `exitOnCtrlC: true` which is fine
-        // for our Ctrl+C abort path.
-        exitOnCtrlC: true,
-      },
-    );
-    instance.waitUntilExit().then(() => {
-      cleanupResizeClear();
-      // Hand stdin back to the caller in a state where readline (or
-      // anything else) can take it. Ink leaves stdin unref'd, in raw
-      // mode false, with its 'readable' listener removed; without
-      // this reset the post-wizard REPL would print its banner and
-      // then immediately exit because nothing kept the event loop
-      // alive. See cli/ink/stdinHandoff.ts for the full rationale.
-      resetStdinForReadline();
-      resolve(captured ?? { aborted: true, committed: false, currentStep: 'welcome', draft: {}, warnings: [] } as WizardState);
-    }).catch(() => {
-      cleanupResizeClear();
-      resetStdinForReadline();
-      resolve(captured ?? { aborted: true, committed: false, currentStep: 'welcome', draft: {}, warnings: [] } as WizardState);
-    });
-  });
+  const finalState = ambient
+    ? await collectFromChatOverlay(ambient)
+    : await collectFromStandaloneInk();
 
   let savedConfig: Config | undefined;
   if (finalState.committed) {
     savedConfig = commitWizardDraft(finalState.draft, opts.workspaceRoot);
-    markOnboarded();
   }
-  return { state: finalState, config: savedConfig };
+  return {
+    state: finalState,
+    config: savedConfig,
+    skipMcpForLaunch: wizardSkipsMcpForLaunch(finalState),
+  };
+}
+
+export function wizardSkipsMcpForLaunch(state: WizardState): boolean {
+  return state.committed && state.draft.mcp?.kind === 'skip';
+}
+
+function abortedWizardState(): WizardState {
+  return { aborted: true, committed: false, currentStep: 'welcome', draft: {}, warnings: [] };
+}
+
+async function collectFromChatOverlay(
+  ambient: NonNullable<ReturnType<typeof getAmbientChat>>,
+): Promise<WizardState> {
+  return new Promise<WizardState>((resolve) => {
+    let resolved = false;
+    const finish = (state: WizardState) => {
+      if (resolved) return;
+      resolved = true;
+      ambient.clearOverlay();
+      resolve(state);
+    };
+    ambient.showOverlay(
+      <WizardApp exitOnFinish={false} onFinish={finish} />,
+    ).catch(() => finish(abortedWizardState()));
+  });
+}
+
+async function collectFromStandaloneInk(): Promise<WizardState> {
+  return new Promise<WizardState>((resolve) => {
+    let captured: WizardState | undefined;
+    const { instance, cleanupResizeClear } = renderWithResizeClear(
+      <WizardApp onFinish={(state) => { captured = state; }} />,
+      { exitOnCtrlC: true },
+    );
+    instance.waitUntilExit().then(() => {
+      cleanupResizeClear();
+      resetStdinForReadline();
+      resolve(captured ?? abortedWizardState());
+    }).catch(() => {
+      cleanupResizeClear();
+      resetStdinForReadline();
+      resolve(captured ?? abortedWizardState());
+    });
+  });
 }
 
 function commitWizardDraft(draft: WizardDraft, workspaceRoot: string): Config {
-  const config = loadOrInitConfig();
+  const config = updateGlobalSetupConfigOrThrow((current) =>
+    applyWizardDraftToConfig(current, draft),
+  );
+  if (draft.theme) {
+    try { writePreferences(workspaceRoot, { theme: draft.theme }); } catch { /* non-fatal */ }
+  }
+  return config;
+}
+
+/**
+ * Apply the durable portion of a wizard draft. MCP Skip is deliberately absent
+ * from that durable portion: it means local-only for the current launch, while
+ * any saved profiles remain available the next time BrainRouter starts.
+ */
+export function applyWizardDraftToConfig(current: Config, draft: WizardDraft): Config {
+  const config: Config = {
+    ...current,
+    servers: { ...current.servers },
+    ...(current.llm ? { llm: { ...current.llm } } : {}),
+  };
   if (draft.provider) {
     config.llm = {
       provider: draft.provider.id,
@@ -108,24 +133,13 @@ function commitWizardDraft(draft: WizardDraft, workspaceRoot: string): Config {
     };
   }
   if (draft.mcp && draft.mcp.kind !== 'skip') {
-    const profileName = draft.mcp.kind === 'remote-http' ? 'remote' : draft.mcp.kind === 'local-http' ? 'local-http' : 'local-stdio';
+    const profileName = resolveWizardMcpProfileName(config.servers, draft.mcp);
     const serverConfig = mcpPickToServerConfig(draft.mcp);
     if (serverConfig) {
       config.servers[profileName] = serverConfig;
       config.activeServer = profileName;
+      config.activeBrainrouterServer = profileName;
     }
-  } else if (draft.mcp?.kind === 'skip') {
-    // Skip means skip — clear any previously-active profile so the CLI doesn't
-    // silently re-spawn an MCP child from a stale config. The user can re-add
-    // a profile via `/login` later.
-    config.activeServer = '';
-  }
-  saveConfig(config);
-  if (draft.theme) {
-    try { writePreferences(workspaceRoot, { theme: draft.theme }); } catch { /* non-fatal */ }
-  }
-  if (draft.writeAgentMd) {
-    try { initAgentMd(workspaceRoot); } catch { /* non-fatal */ }
   }
   return config;
 }

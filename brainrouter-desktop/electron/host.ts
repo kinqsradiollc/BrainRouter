@@ -18,7 +18,11 @@ import { createComputerUseBridge, createSecretBridge, git, type ParentPortLike }
 // host/queries — the extracted query router (the former inline ~2400-line
 // `queries` object). host.ts assembles the HostContext bag below and folds
 // buildQueries(ctx) into createHostCore({ queries }).
-import { buildQueries } from './host/queries.js';
+import {
+  buildQueries,
+  desktopMcpProfileForWorkspace,
+  resolveSelectedDesktopBrainRouterAccountApi as resolveBrainRouterAccountApi,
+} from './host/queries.js';
 import { PtyRegistry } from './host/pty.js';
 import { HostedAgentManager } from './host/hostedAgents.js';
 import { FanoutManager } from './host/fanoutManager.js';
@@ -29,7 +33,6 @@ import { ensureBrainSession, getBrainSessionKey } from './host/brainSession.js';
 import {
   fetchAccountModelCatalog,
   emptyAccountModelCatalog,
-  resolveBrainRouterAccountApi,
   resolveBrainRouterAccountBaseUrl,
   type BrainRouterAccountContext,
   type DesktopAccountModelCatalog,
@@ -65,7 +68,11 @@ import {
   registerModelReasoningCapabilities,
   refreshLmStudioCache,
 } from '@kinqs/brainrouter-core/provider';
-import { McpClientPool } from '@kinqs/brainrouter-core/mcp';
+import {
+  McpClientPool,
+  resolvePreferredBrainrouterServerId,
+  selectMcpServerIds,
+} from '@kinqs/brainrouter-core/mcp';
 import {
   loadTranscript,
   transcriptExists,
@@ -407,7 +414,26 @@ async function main(): Promise<void> {
   // it here made account loading slow on every launch. Connect in the background;
   // local tools work immediately, remote tools light up as servers come online,
   // and the brain-dependent boot steps run once the pool is ready.
-  void mcpClient.connectAll(config.servers ?? {}, llm, { timeoutMs: 5_000 })
+  const configuredMcpServers = config.servers ?? {};
+  const preferredBrainrouterServerId = resolvePreferredBrainrouterServerId(
+    configuredMcpServers,
+    config.activeBrainrouterServer,
+    config.activeServer,
+  );
+  const startupMcpServerIds = selectMcpServerIds(
+    configuredMcpServers,
+    preferredBrainrouterServerId,
+  );
+  const startupMcpServers = Object.fromEntries(
+    startupMcpServerIds.map((serverId) => [
+      serverId,
+      desktopMcpProfileForWorkspace(config, serverId, workspaceRoot),
+    ]),
+  );
+  void mcpClient.connectAll(startupMcpServers, llm, {
+    timeoutMs: 5_000,
+    preferredBrainrouterServerId,
+  })
     .then(() => {
       mcpClient.startReconnectSupervisor(); // WS9 — auto-reconnect dropped MCP servers in the background
       // FED — register this desktop as an active session for the signed-in user, so it

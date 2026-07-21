@@ -1,21 +1,26 @@
-import fs from 'node:fs';
 import type { Command } from 'commander';
 import chalk from 'chalk';
-import { loadConfig, getConfigPath, setCliKnobOverride, hydrateConfigDefaultsOnDisk, resolveCliKnobs, type LLMConfig } from '@kinqs/brainrouter-core/config';
+import { getCliKnobs, loadConfig, setCliKnobOverride, hydrateConfigDefaultsOnDisk } from '@kinqs/brainrouter-core/config';
 import { resolveSessionLlmConfig } from '@kinqs/brainrouter-core/session';
-import { McpClientPool, selectMcpServerIds, applyBrainUrlOverride, probeBrainHealth, embeddedBrainId } from '@kinqs/brainrouter-core/mcp';
-import { applyActiveLlmProfile } from '@kinqs/brainrouter-core/provider';
+import { McpClientPool } from '@kinqs/brainrouter-core/mcp';
 import { VERSION } from '@kinqs/brainrouter-core/version';
 import { loadExtensions } from '@kinqs/brainrouter-core/extension';
 import { setKnownMcpServerIds } from '../cli/ink/text/toolFormat.js';
-import type { ServerConfig } from '@kinqs/brainrouter-core/config';
+import { redactMcpErrorText, redactMcpHttpUrl, redactMcpHttpUrlsInText } from '../cli/mcpUrl.js';
 import { Agent } from '@kinqs/brainrouter-core/agent';
 import { cliPrompter } from '../cli/prompt/cliPrompt.js';
 import { runChat } from '../cli/ink/runChat.js';
 import { applyWorkspaceRoot, findWorkspaceRoot } from '@kinqs/brainrouter-core/workspace';
-import { runWizard, isOnboarded } from '../cli/ink/wizard/runWizard.js';
-import { DEFAULT_LLM } from './shared.js';
+import { runCliOnboardingSequence } from '../cli/commands/init/onboardingSequence.js';
 import { refreshCliOrgConventionRepos } from './orgConvention.js';
+import {
+  allMcpConnectionsFailed,
+  configWithRuntimeMcpState,
+  createRuntimeMcpState,
+  resolveEffectiveLlmConfig,
+  resolveEffectiveMcpLaunch,
+  type RuntimeLaunchPolicy,
+} from './mcpStartup.js';
 
 export function registerChatCommand(program: Command): void {
   // Chat Command (default)
@@ -60,26 +65,29 @@ export function registerChatCommand(program: Command): void {
       // the launch CWD + detection reason on demand. Keeping a duplicate
       // stale-chrome line above the banner undermines the banner-first design.
 
-      // 0.3.7 — first-run auto-trigger. When no config exists OR the
-      // onboarded marker is missing, drop the user straight into the
-      // wizard before constructing the Agent / MCP client. This replaces
-      // the pre-0.3.7 "Error: No BrainRouter config found ... run
-      // `brainrouter login`" exit-with-error path. The wizard owns its
-      // own readline for the wizard's lifetime; when it returns we
-      // continue into the REPL with the freshly-saved config.
-      if (!fs.existsSync(getConfigPath()) || !isOnboarded()) {
-        try {
-          const wizardResult = await runWizard({
-            workspaceRoot: workspace.workspaceRoot,
-          });
-          if (wizardResult.state.aborted) {
-            console.error(chalk.gray('Wizard aborted before saving — exiting. Run `brainrouter` again any time to retry.'));
-            process.exit(0);
-          }
-        } catch (err: any) {
-          console.error(chalk.red(`Wizard failed: ${err?.message ?? err}`));
-          process.exit(1);
+      // Both onboarding lifecycles finish (or workspace setup is explicitly
+      // skipped) before config hydration, MCP connections, Agent
+      // construction, and therefore before a session key can exist.
+      let skipMcpForLaunch = false;
+      try {
+        const onboarding = await runCliOnboardingSequence({
+          workspaceRoot: workspace.workspaceRoot,
+          global: 'if-needed',
+        });
+        if (onboarding.status === 'global-aborted') {
+          console.error(chalk.gray('Setup aborted before saving — exiting. Run `brainrouter` again any time to retry.'));
+          process.exit(0);
         }
+        skipMcpForLaunch = onboarding.skipMcpForLaunch;
+        if (onboarding.workspace === 'failed') {
+          console.error(chalk.yellow(
+            `Workspace setup could not finish (${onboarding.workspaceError ?? 'unknown error'}). `
+            + 'Your global provider/MCP setup was saved; continuing with workspace defaults. Run `/init` to retry.',
+          ));
+        }
+      } catch (err: any) {
+        console.error(chalk.red(`Onboarding failed: ${err?.message ?? err}`));
+        process.exit(1);
       }
 
       // CONFIG-HYDRATE — self-fill config.json with any missing safe cli.* knobs so
@@ -92,107 +100,87 @@ export function registerChatCommand(program: Command): void {
       }
       await refreshCliOrgConventionRepos(config);
 
-      // REMOTE-BRAIN (Workstream A) — if `cli.brainUrl` is set, point the active
-      // brain at the remote HTTP endpoint (embedded/stdio stays default when unset).
-      // Phase 2: probe the remote's /health first and gracefully fall back to a
-      // configured embedded brain when it's unreachable, so a momentary remote
-      // outage never strands a user who also has a local brain.
-      const brainUrl = resolveCliKnobs(config).brainUrl;
-      if (brainUrl) {
-        const health = await probeBrainHealth(brainUrl, { timeoutMs: 3_000 });
-        const embedded = embeddedBrainId(config.servers);
-        if (health.ok || !embedded) {
-          const overridden = applyBrainUrlOverride(config.servers, config.activeServer, brainUrl);
-          config.servers = overridden.servers;
-          config.activeServer = overridden.activeServer;
-          if (health.ok) {
-            console.error(`[BrainRouter] remote brain: ${config.activeServer} → ${brainUrl} (cli.brainUrl)`);
-          } else {
-            console.error(`[BrainRouter] remote brain ${brainUrl} unreachable (${health.error ?? `HTTP ${health.status}`}); no embedded fallback — connecting anyway, will retry in background.`);
-          }
-        } else {
-          console.error(`[BrainRouter] remote brain ${brainUrl} unreachable (${health.error ?? `HTTP ${health.status}`}); falling back to embedded brain "${embedded}".`);
-        }
-      }
-
-      // 0.3.7 — multi-MCP support. Third-party MCPs are additive and all
-      // connect concurrently. BrainRouter MCPs are different: users may store
-      // several BrainRouter profiles (local/staging/remote/self-hosted), but
-      // only one brain should be active at a time. `activeServer` selects that
-      // BrainRouter profile when it points at one; otherwise we use the first
-      // configured BrainRouter profile. `--profile <name>` still scopes the run
-      // to exactly one server for explicit single-server mode.
       const requestedProfile = options.profile as string | undefined;
-      const allServerIds = Object.keys(config.servers);
-      if (allServerIds.length === 0) {
+      const launchPolicy: RuntimeLaunchPolicy = {
+        requestedProfile,
+        modelOverride: typeof options.model === 'string' ? options.model : undefined,
+        strictMcp: options.strictMcp === true,
+        skipMcpForLaunch,
+        // Includes persisted/env state plus the launch-only --safe-mode override.
+        safeMode: getCliKnobs().safeMode,
+      };
+      const mcpLaunch = await resolveEffectiveMcpLaunch({
+        config,
+        workspaceRoot: workspace.workspaceRoot,
+        policy: launchPolicy,
+      });
+      if (mcpLaunch.remoteBrain) {
+        const remote = mcpLaunch.remoteBrain;
+        const failure = remote.health.error ?? `HTTP ${remote.health.status}`;
+        if (remote.outcome === 'remote') {
+          console.error(`[BrainRouter] remote brain: ${remote.serverId} → ${redactMcpHttpUrl(remote.url)} (cli.brainUrl)`);
+        } else if (remote.outcome === 'remote-unreachable') {
+          console.error(`[BrainRouter] remote brain ${redactMcpHttpUrl(remote.url)} unreachable (${redactMcpHttpUrlsInText(failure)}); no embedded fallback — connecting anyway, will retry in background.`);
+        } else {
+          console.error(`[BrainRouter] remote brain ${redactMcpHttpUrl(remote.url)} unreachable (${redactMcpHttpUrlsInText(failure)}); falling back to embedded brain "${remote.embeddedServerId}".`);
+        }
+      }
+      if (mcpLaunch.status === 'missing-profile') {
+        console.error(chalk.red(`Error: Profile "${mcpLaunch.requestedProfile}" not found in config.`));
+        console.error(chalk.gray(
+          mcpLaunch.availableIds.length > 0
+            ? `Available profiles: ${mcpLaunch.availableIds.join(', ')}.`
+            : 'No MCP profiles are configured. Run `/init config` or `/login` to add one.',
+        ));
+        process.exit(1);
+      }
+      if (mcpLaunch.status === 'strict-no-profiles') {
         console.error(chalk.red('Error: No MCP server profiles in config.'));
-        console.error(chalk.gray('Run `/login` inside the REPL or `brainrouter login` to add a profile.'));
+        console.error(chalk.gray('--strict-mcp requires a configured MCP profile. Run `/init config` or `/login` to add one.'));
         process.exit(1);
       }
-      if (requestedProfile && !config.servers[requestedProfile]) {
-        console.error(chalk.red(`Error: Profile "${requestedProfile}" not found in config.`));
-        console.error(chalk.gray(`Available profiles: ${allServerIds.join(', ')}.`));
-        process.exit(1);
+      const targetIds = mcpLaunch.targetIds;
+      if (mcpLaunch.intentionallySkipped) {
+        const ignored = mcpLaunch.ignoredRequestedProfile
+          ? `; ignoring --profile ${mcpLaunch.ignoredRequestedProfile}`
+          : '';
+        console.error(chalk.gray(`[BrainRouter] MCP skipped for this launch${ignored}. Local tools remain available.`));
+      } else if (targetIds.length === 0) {
+        console.error(chalk.gray('[BrainRouter] No MCP profiles configured — starting with local tools only.'));
       }
-      let targetIds = selectMcpServerIds(config.servers, config.activeServer, requestedProfile);
-
-      // CC-CONFIG-A1 — SAFE MODE: connect ONLY the BrainRouter brain, dropping any
-      // custom / third-party MCP servers so a misbehaving external server can't
-      // break the troubleshooting session. Identity is the explicit `identity`
-      // tag, else the `brainrouter`-prefixed profile-name heuristic.
-      if (resolveCliKnobs(config).safeMode) {
-        const brainOnly = targetIds.filter((id) => {
-          const s = config.servers[id];
-          return s?.identity === 'brainrouter' || id.toLowerCase().startsWith('brainrouter');
-        });
-        if (brainOnly.length > 0 && brainOnly.length < targetIds.length) {
-          const dropped = targetIds.filter((id) => !brainOnly.includes(id));
-          console.error(chalk.yellow(`[BrainRouter] safe mode — skipping custom MCP servers: ${dropped.join(', ')}`));
-          targetIds = brainOnly;
-        }
+      if (mcpLaunch.safeModeSkippedIds?.length) {
+        console.error(chalk.yellow(
+          `[BrainRouter] safe mode — skipping custom MCP servers: ${mcpLaunch.safeModeSkippedIds.join(', ')}`,
+        ));
       }
 
-      // Pre-process each target's serverConfig to thread workspaceRoot
-      // into the stdio `--root` arg shape the MCP server expects.
-      const targetServers: Record<string, ServerConfig> = {};
-      for (const id of targetIds) {
-        const cloned = { ...config.servers[id] };
-        if (cloned.type === 'stdio') {
-          const args = cloned.args ?? [];
-          const rootIndex = args.indexOf('--root');
-          cloned.args = rootIndex >= 0
-            ? [...args.slice(0, rootIndex + 1), workspace.workspaceRoot, ...args.slice(rootIndex + 2)]
-            : [...args, '--root', workspace.workspaceRoot];
-        }
-        targetServers[id] = cloned;
-        config.servers[id] = cloned;
-      }
-
-      // MC-D3 — overlay the active named LLM profile (cli.activeLlmProfile →
-      // cli.llmProfiles) onto the base llm config. Inert when unset; an
-      // explicit --model and per-session runtime overrides still win.
-      const bootKnobs = resolveCliKnobs(config);
-      const llm: LLMConfig = applyActiveLlmProfile(bootKnobs, { ...(config.llm ?? DEFAULT_LLM) });
-
-      if (options.model) {
-        llm.model = options.model;
-      }
+      // Keep launch-only remote transport/workspace state outside the durable
+      // config object so a later /login, /logout, or /config save cannot commit it.
+      const runtimeMcp = createRuntimeMcpState(mcpLaunch);
+      const runtimeConfig = configWithRuntimeMcpState(config, runtimeMcp);
+      const targetServers = mcpLaunch.targetServers;
+      const llm = resolveEffectiveLlmConfig(config, launchPolicy);
 
       // Connect everyone concurrently — offline servers don't block.
       // "Connecting..." status lines intentionally dropped (see prior
       // comment); the banner's per-server row is the success signal.
       const mcpClient = new McpClientPool();
-      const statuses = await mcpClient.connectAll(targetServers, llm, { timeoutMs: 5_000 });
+      const statuses = await mcpClient.connectAll(targetServers, llm, {
+        timeoutMs: 5_000,
+        preferredBrainrouterServerId: mcpLaunch.runtimeActiveBrainrouterServer,
+      });
       mcpClient.startReconnectSupervisor(); // WS9 — auto-reconnect dropped MCP servers in the background
       // Register live server ids for Ink tool-name display so multi-word
       // server names (e.g. `my_server`) don't get mis-stripped by the
       // single-underscore prefix regex.
       setKnownMcpServerIds(mcpClient.getServerIds());
       const failures = statuses.filter((s) => s.status === 'failed');
-      if (failures.length === statuses.length) {
+      if (allMcpConnectionsFailed(statuses)) {
         // Every server failed — equivalent to the pre-0.3.7 "MCP
         // unreachable" path; same --strict-mcp semantics apply.
-        const summary = failures.map((s) => `${s.serverId}: ${s.error ?? 'unknown error'}`).join('\n  ');
+        const summary = failures
+          .map((s) => `${s.serverId}: ${redactMcpErrorText(s.error ?? 'unknown error', runtimeConfig, s.serverId)}`)
+          .join('\n  ');
         console.error(chalk.red(`Failed to connect to any MCP server:\n  ${summary}`));
         if (options.strictMcp) {
           console.error(chalk.gray('--strict-mcp set; exiting.'));
@@ -270,7 +258,16 @@ export function registerChatCommand(program: Command): void {
       process.once('SIGINT', onSignal);
       process.once('SIGTERM', onSignal);
       try {
-        await runChat({ agent, mcpClient, config, workspace, federation });
+        await runChat({
+          agent,
+          mcpClient,
+          config,
+          workspace,
+          federation,
+          launchPolicy,
+          runtimeMcp,
+          mcpIntentionallySkipped: mcpLaunch.intentionallySkipped,
+        });
       } finally {
         process.off('SIGINT', onSignal);
         process.off('SIGTERM', onSignal);

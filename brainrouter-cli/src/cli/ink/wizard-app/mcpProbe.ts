@@ -3,11 +3,12 @@ import {
   type WizardDraft,
 } from '../../wizard/types.js';
 import { McpClientWrapper } from '@kinqs/brainrouter-core/mcp';
+import { redactMcpHttpUrl, redactMcpHttpUrlsInText } from '../../mcpUrl.js';
 
 export function formatMcpForBadge(pick: McpPick): string {
   if (pick.kind === 'local-stdio') return 'local stdio';
   if (pick.kind === 'local-http') return 'http://localhost:3747/mcp';
-  if (pick.kind === 'remote-http') return pick.url;
+  if (pick.kind === 'remote-http') return redactMcpHttpUrl(pick.url);
   return 'no MCP';
 }
 
@@ -31,7 +32,7 @@ export async function probeMcp(pick: McpPick, draft: WizardDraft, onStatus: (s: 
     try { await wrapper.close(); } catch { /* ignore */ }
     return {
       ok: false,
-      warning: `MCP probe failed (${err?.message ?? err}). Profile saved — start the server and run /mcp reconnect later.`,
+      warning: `MCP probe failed (${redactMcpHttpUrlsInText(String(err?.message ?? err))}). Profile saved — start the server and run /mcp reconnect later.`,
     };
   }
 }

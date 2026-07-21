@@ -10,12 +10,25 @@ import chalk from 'chalk';
 import { applyYoloOff, applyYoloOn, readPreferences, writePreferences, resolveActiveMode, setSessionMode } from '@kinqs/brainrouter-core/session';
 import { addHook, readHooks, removeHook, setHookEnabled, type HookEvent } from '@kinqs/brainrouter-core/hooks';
 import { createHookifyRule, deleteHookifyRule, listHookifyRules, toggleHookifyRule } from '@kinqs/brainrouter-core/hooks';
-import { saveConfig, getCliKnobs } from '@kinqs/brainrouter-core/config';
+import { getCliKnobs, type Config } from '@kinqs/brainrouter-core/config';
+import { resolvePreferredBrainrouterServerId } from '@kinqs/brainrouter-core/mcp';
 import { listRecentDenials } from '@kinqs/brainrouter-core/exec';
 import type { CommandContext } from '../_context.js';
+import { redactMcpErrorText } from '../../mcpUrl.js';
+import {
+  clearBrainrouterCredentials,
+  persistBrainrouterLogout,
+  replaceLoggedOutRuntimeProfile,
+} from './logoutCredentials.js';
 
+export interface GuardCommandDependencies {
+  persistLogout?: typeof persistBrainrouterLogout;
+}
 
-export async function tryHandleGuardCommand(ctx: CommandContext): Promise<boolean> {
+export async function tryHandleGuardCommand(
+  ctx: CommandContext,
+  dependencies: GuardCommandDependencies = {},
+): Promise<boolean> {
   const { command, args, agent, mcpClient, config, rl, repl } = ctx;
   // 'ctx' alias to keep references to the old ReplContext name working
   const replCtx = repl;
@@ -297,24 +310,72 @@ export async function tryHandleGuardCommand(ctx: CommandContext): Promise<boolea
     }
     case '/logout':
     {
-      // Remove the API key from the active server profile. The CLI keeps the
-      // profile so a future /login can re-attach credentials.
-      const profile = config.activeServer;
-      const server = config.servers[profile];
+      // Remove every credential location from the active BrainRouter profile.
+      // The transport shape stays intact so /login can re-attach credentials.
+      const effectiveServers = {
+        ...config.servers,
+        ...(ctx.repl.runtimeMcp?.servers ?? {}),
+      };
+      const profile = resolvePreferredBrainrouterServerId(
+        effectiveServers,
+        ctx.repl.runtimeMcp?.activeBrainrouterServer ?? config.activeBrainrouterServer,
+        config.activeServer,
+      ) ?? '';
+      const durableServer = config.servers[profile];
+      const runtimeServer = ctx.repl.runtimeMcp?.servers[profile];
+      const server = runtimeServer ?? durableServer;
       if (!server) {
         console.log(chalk.red(`\nNo active profile to log out of.\n`));
         return true;
       }
-      const removed: string[] = [];
-      if ((server as any).apiKey) { delete (server as any).apiKey; removed.push('server.apiKey'); }
-      if (config.llm?.apiKey) { (config.llm as any).apiKey = ''; removed.push('llm.apiKey'); }
-      if (removed.length === 0) {
+      const redactionConfig: Config = {
+        ...config,
+        servers: {
+          ...config.servers,
+          [profile]: durableServer ?? server,
+        },
+      };
+      const runtimeRedactionConfig: Config | undefined = runtimeServer
+        ? { ...redactionConfig, servers: { ...redactionConfig.servers, [profile]: runtimeServer } }
+        : undefined;
+      let removed: string[];
+      try {
+        removed = (dependencies.persistLogout ?? persistBrainrouterLogout)(config, profile);
+      } catch (err: any) {
+        console.log(chalk.red(`\nCould not persist logout: ${err?.message ?? err}\n`));
+        return true;
+      }
+      const clearedRuntime = runtimeServer
+        ? clearBrainrouterCredentials(runtimeServer, undefined)
+        : undefined;
+      const runtimeRemoved = (clearedRuntime?.removed ?? [])
+        .filter((entry) => !removed.includes(entry))
+        .map((entry) => `runtime.${entry.replace(/^server\./, '')}`);
+      const allRemoved = [...removed, ...runtimeRemoved];
+      if (allRemoved.length === 0) {
         console.log(chalk.gray(`\nNo credentials were set on profile "${profile}".\n`));
         return true;
       }
-      const { saveConfig } = await import('@kinqs/brainrouter-core/config');
-      saveConfig(config);
-      console.log(chalk.green(`\n✓ Cleared ${removed.join(', ')} from profile "${profile}".`));
+      if (runtimeServer) {
+        ctx.repl.runtimeMcp = replaceLoggedOutRuntimeProfile(
+          ctx.repl.runtimeMcp,
+          profile,
+          config.servers[profile] ?? clearedRuntime!.server,
+        );
+      }
+      if (removed.includes('llm.apiKey') && config.llm) {
+        agent.setLLMConfig(config.llm);
+      }
+      try {
+        await mcpClient.removeOne(profile);
+      } catch (err: any) {
+        let message = redactMcpErrorText(String(err?.message ?? err), redactionConfig, profile);
+        if (runtimeRedactionConfig) {
+          message = redactMcpErrorText(message, runtimeRedactionConfig, profile);
+        }
+        console.log(chalk.yellow(`\n⚠ Credentials were cleared, but the live profile could not be disconnected: ${message}\n`));
+      }
+      console.log(chalk.green(`\n✓ Cleared ${allRemoved.join(', ')} from profile "${profile}".`));
       console.log(chalk.gray('  Re-attach with /login.\n'));
       return true;
     }

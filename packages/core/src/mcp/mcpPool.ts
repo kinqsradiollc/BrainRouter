@@ -16,6 +16,7 @@ export type { McpServerStatus, BrainHealth } from './types.js';
 export { McpClientPool } from './pool/pool.js';
 export {
   selectMcpServerIds,
+  resolvePreferredBrainrouterServerId,
   applyBrainUrlOverride,
   brainHealthUrl,
   probeBrainHealth,

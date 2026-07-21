@@ -8,12 +8,13 @@
  * workspace transcripts remain the source of truth and are untouched — a push
  * only mirrors user + assistant text turns up to the server.
  *
- * Auth reuses the CLI's existing hosted-profile mechanism (the active `http`
- * server profile's base URL + API key, same bearer used by `brainrouter github`),
+ * Auth reuses the CLI's existing hosted-profile mechanism (the active BrainRouter
+ * `http` profile's base URL + API key, same bearer used by `brainrouter github`),
  * so there is no new config knob or env var. The server resolves the caller's
  * org from the bearer (the optional `X-BrainRouter-Org` header is not needed).
  */
-import { loadOrInitConfig } from '@kinqs/brainrouter-core/config';
+import { loadOrInitConfig, type Config } from '@kinqs/brainrouter-core/config';
+import { resolvePreferredBrainrouterServerId } from '@kinqs/brainrouter-core/mcp';
 import { isInternalSessionKey, loadTranscript } from '@kinqs/brainrouter-core/session';
 import {
   chatSyncMappingPath,
@@ -56,9 +57,12 @@ export class ChatSyncHttpError extends Error {
  * Mirrors the resolver `brainrouter github` uses: the profile URL is the MCP
  * endpoint (`…/mcp`); the account API lives at the root.
  */
-export function resolveChatSyncTarget(): ChatSyncTarget | { error: string } {
-  const config = loadOrInitConfig();
-  const active = config.activeServer;
+export function resolveChatSyncTarget(config: Config = loadOrInitConfig()): ChatSyncTarget | { error: string } {
+  const active = resolvePreferredBrainrouterServerId(
+    config.servers ?? {},
+    config.activeBrainrouterServer,
+    config.activeServer,
+  );
   const server = active ? config.servers?.[active] : undefined;
   if (!server || server.type !== 'http' || !('url' in server) || !server.url) {
     return { error: 'No hosted BrainRouter server is configured. Run `brainrouter login` to connect to one first.' };

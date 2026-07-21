@@ -1,9 +1,15 @@
 import { spawn } from 'node:child_process';
 import type { Command } from 'commander';
 import { loadConfig, type Config } from '@kinqs/brainrouter-core/config';
+import { resolvePreferredBrainrouterServerId } from '@kinqs/brainrouter-core/mcp';
 
 export function resolveMcpProxyEnv(config: Config, env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const active = config.activeServer ? config.servers?.[config.activeServer] : undefined;
+  const activeId = resolvePreferredBrainrouterServerId(
+    config.servers ?? {},
+    config.activeBrainrouterServer,
+    config.activeServer,
+  );
+  const active = activeId ? config.servers?.[activeId] : undefined;
   const apiKey = active?.apiKey?.trim() || env.BRAINROUTER_API_KEY?.trim();
   return { ...env, ...(apiKey ? { BRAINROUTER_API_KEY: apiKey } : {}) };
 }

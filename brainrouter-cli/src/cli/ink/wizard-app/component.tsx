@@ -15,7 +15,6 @@ import {
   ApiKeyStep,
   ModelStep,
   McpStep,
-  AgentMdStep,
   DoneStep,
 } from './steps.js';
 
@@ -31,18 +30,18 @@ import {
  *   - Each step is its own component (`<WelcomeStep>`, `<ThemeStep>`,
  *     etc.) that takes a `state` + `onAdvance` / `onBack` /
  *     `onAbort` / `onWarn` callback.
- *   - On terminal step (done / abort), the wizard calls
- *     `useApp().exit()` and `props.onFinish(state)` so the caller
- *     can persist + unmount.
+ *   - On a terminal step it reports state to the host. Standalone mounts also
+ *     exit Ink; the in-chat overlay host clears only its overlay slot.
  */
 
 export interface WizardAppProps {
-  workspaceRoot: string;
   /** Fires once the wizard reaches a terminal state. */
   onFinish: (state: WizardState) => void;
+  /** Standalone mounts exit Ink; the chat-overlay host owns its own lifecycle. */
+  exitOnFinish?: boolean;
 }
 
-export function WizardApp({ workspaceRoot, onFinish }: WizardAppProps) {
+export function WizardApp({ onFinish, exitOnFinish = true }: WizardAppProps) {
   const [state, setState] = useState<WizardState>(() => initWizardState());
   const { exit } = useApp();
 
@@ -56,17 +55,15 @@ export function WizardApp({ workspaceRoot, onFinish }: WizardAppProps) {
   useEffect(() => { onFinishRef.current = onFinish; });
 
   // Notify the caller + exit Ink when the wizard reaches terminal.
-  // Dep on state.aborted + state.committed only — not on `state` or
-  // `onFinish` — so the effect fires exactly ONCE per terminal
-  // transition. (Earlier code depended on `state` itself, which fired
-  // the effect on every state update; harmless but wasteful.)
+  // Depend on terminal flags plus stable host lifecycle values, not the whole
+  // state object, so this fires exactly once per terminal transition.
   useEffect(() => {
     if (state.aborted || state.committed) {
       onFinishRef.current(state);
-      exit();
+      if (exitOnFinish) exit();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.aborted, state.committed]);
+  }, [state.aborted, state.committed, exitOnFinish, exit]);
 
   const theme: ThemeMode = state.draft.theme ?? 'dark';
   const accent = ACCENT[theme];
@@ -129,15 +126,6 @@ export function WizardApp({ workspaceRoot, onFinish }: WizardAppProps) {
             if (warning) dispatchWarn(warning);
             dispatchAdvance({ mcp });
           }}
-          onAbort={dispatchAbort}
-        />
-      );
-    case 'agentMd':
-      return (
-        <AgentMdStep
-          accent={accent}
-          workspaceRoot={workspaceRoot}
-          onPick={(writeAgentMd) => dispatchAdvance({ writeAgentMd })}
           onAbort={dispatchAbort}
         />
       );

@@ -31,14 +31,29 @@ export function installDispatch(ctx: RunChatContext): void {
   ctx.dispatchSlash = async function dispatchSlash(command: string, args: string[], rl: any): Promise<void> {
     if (!ctx.controller) return;
     try {
+      const replContext = {
+        launchPolicy: ctx.launchPolicy,
+        refreshPromptForMode: ctx.refreshFooter,
+        replaceBanner: (text: string) => ctx.controller?.replaceBanner(text),
+        isProcessing: () => ctx.isProcessing,
+        runAgentTurn: (prompt: string) => { void ctx.runChatTurn(prompt); },
+        runAgentTurnAsync: (prompt: string) => ctx.runChatTurn(prompt),
+      };
+      Object.defineProperty(replContext, 'runtimeMcp', {
+        enumerable: true,
+        get: () => ctx.runtimeMcp,
+        set: (runtimeMcp) => { ctx.runtimeMcp = runtimeMcp; },
+      });
       const captured = await captureConsoleOutput(() =>
-        handleSlashCommand(command, args, agent, mcpClient, config, rl as readline.Interface, {
-          refreshPromptForMode: ctx.refreshFooter,
-          replaceBanner: (text: string) => ctx.controller?.replaceBanner(text),
-          isProcessing: () => ctx.isProcessing,
-          runAgentTurn: (prompt: string) => { void ctx.runChatTurn(prompt); },
-          runAgentTurnAsync: (prompt: string) => ctx.runChatTurn(prompt),
-        }),
+        handleSlashCommand(
+          command,
+          args,
+          agent,
+          mcpClient,
+          config,
+          rl as readline.Interface,
+          replContext,
+        ),
       );
       const output = captured.output.trimEnd();
       if (output) {

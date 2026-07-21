@@ -276,6 +276,7 @@ import {
   maybeReindexSource as maybeReindexSourceImpl,
   getLlmConfig as getLlmConfigImpl,
   setLLMConfig as setLLMConfigImpl,
+  replaceLLMConfig as replaceLLMConfigImpl,
   getLLMConfig as getLLMConfigImpl,
   getAccessMode as getAccessModeImpl,
   setAccessMode as setAccessModeImpl,
@@ -1329,6 +1330,10 @@ export class Agent {
 
   public setLLMConfig(next: Partial<LLMConfig>): void {
     return setLLMConfigImpl.call(this, next);
+  }
+
+  public replaceLLMConfig(next: LLMConfig): void {
+    return replaceLLMConfigImpl.call(this, next);
   }
 
   public getLLMConfig(): LLMConfig {

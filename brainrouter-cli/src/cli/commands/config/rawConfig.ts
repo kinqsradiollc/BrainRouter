@@ -7,6 +7,12 @@ import { getConfigPath } from '@kinqs/brainrouter-core/config';
 import { maskApiKey } from '@kinqs/brainrouter-core/provider';
 import type { Theme } from '../../theme/theme.js';
 import { pickFromList } from './shared.js';
+import {
+  containsObviousCredentialValue,
+  isSensitiveCredentialName,
+  redactMcpHttpUrl,
+  redactMcpStdioArgs,
+} from '../../mcpUrl.js';
 
 export async function showRawConfigPanel(ctx: CommandContext, theme: Theme): Promise<void> {
   const lines = buildRawConfigLines(ctx);
@@ -39,31 +45,81 @@ function buildRawConfigLines(ctx: CommandContext): string[] {
   return buildScrubbedConfigJson(ctx.config).split('\n');
 }
 
-function scrubSecrets(scrubbed: any): void {
-  if (scrubbed.llm?.apiKey) scrubbed.llm.apiKey = maskApiKey(scrubbed.llm.apiKey);
-  if (scrubbed.cli?.webSearch) {
-    if (scrubbed.cli.webSearch.serperApiKey) scrubbed.cli.webSearch.serperApiKey = maskApiKey(scrubbed.cli.webSearch.serperApiKey);
-    if (scrubbed.cli.webSearch.braveApiKey) scrubbed.cli.webSearch.braveApiKey = maskApiKey(scrubbed.cli.webSearch.braveApiKey);
-    if (scrubbed.cli.webSearch.google?.apiKey) scrubbed.cli.webSearch.google.apiKey = maskApiKey(scrubbed.cli.webSearch.google.apiKey);
+function scrubSecrets(scrubbed: unknown): void {
+  scrubValue(scrubbed, []);
+}
+
+function scrubValue(value: unknown, path: string[]): unknown {
+  if (isMcpCredentialMap(path)) return scrubEveryString(value);
+  if (isMcpStdioArgs(path) && Array.isArray(value)) return scrubStdioArgs(value);
+
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      value[index] = scrubValue(value[index], [...path, String(index)]);
+    }
+    return value;
   }
-  if (scrubbed.cli?.router?.serveKey) scrubbed.cli.router.serveKey = maskApiKey(scrubbed.cli.router.serveKey);
-  // Named provider keys (multi-provider routing) — these were NOT masked before,
-  // so `/config show` leaked every saved provider's api key.
-  for (const p of Object.values(scrubbed.providers ?? {})) {
-    const prov = p as any;
-    if (prov?.apiKey) prov.apiKey = maskApiKey(prov.apiKey);
+
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    for (const [key, child] of Object.entries(record)) {
+      record[key] = isSecretFieldName(key)
+        ? scrubSecretValue(child)
+        : scrubValue(child, [...path, key]);
+    }
+    return record;
   }
-  for (const s of Object.values(scrubbed.servers ?? {})) {
-    const srv = s as any;
-    if (srv.apiKey) srv.apiKey = maskApiKey(srv.apiKey);
-    if (srv.env?.BRAINROUTER_API_KEY) srv.env.BRAINROUTER_API_KEY = maskApiKey(srv.env.BRAINROUTER_API_KEY);
-    // Custom auth headers on an MCP server profile (Authorization / x-api-key / …).
-    if (srv.headers && typeof srv.headers === 'object') {
-      for (const k of Object.keys(srv.headers)) {
-        if (/authorization|api[-_]?key|token|secret|cookie/i.test(k) && typeof srv.headers[k] === 'string') {
-          srv.headers[k] = maskApiKey(srv.headers[k]);
-        }
-      }
+
+  return typeof value === 'string' ? scrubPotentialCredential(value) : value;
+}
+
+function isMcpCredentialMap(path: string[]): boolean {
+  return path.length === 3
+    && path[0] === 'servers'
+    && (path[2] === 'env' || path[2] === 'headers');
+}
+
+function isMcpStdioArgs(path: string[]): boolean {
+  return path.length === 3 && path[0] === 'servers' && path[2] === 'args';
+}
+
+function isSecretFieldName(key: string): boolean {
+  const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+  // Credential file locations are useful diagnostics and are not credentials.
+  if (normalized.endsWith('path') || normalized.endsWith('file') || normalized.endsWith('filename')) {
+    return false;
+  }
+  return normalized === 'servekey' || isSensitiveCredentialName(key);
+}
+
+function scrubSecretValue(value: unknown): unknown {
+  if (value === null || value === undefined) return value;
+  return typeof value === 'string' ? maskApiKey(value) : '[redacted]';
+}
+
+function scrubEveryString(value: unknown): unknown {
+  if (typeof value === 'string') return maskApiKey(value);
+  if (Array.isArray(value)) return value.map((entry) => scrubEveryString(entry));
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    for (const [key, child] of Object.entries(record)) {
+      record[key] = scrubEveryString(child);
     }
   }
+  return value;
+}
+
+function scrubStdioArgs(args: unknown[]): unknown[] {
+  const redacted = redactMcpStdioArgs(args.map((argument) =>
+    typeof argument === 'string' ? argument : ''));
+  return args.map((argument, index) =>
+    typeof argument === 'string' ? redacted[index] : argument);
+}
+
+function scrubPotentialCredential(value: string): string {
+  if (/^https?:\/\//i.test(value)) return redactMcpHttpUrl(value);
+  if (/\bBearer\s+\S+/i.test(value) || containsObviousCredentialValue(value)) {
+    return maskApiKey(value);
+  }
+  return value;
 }

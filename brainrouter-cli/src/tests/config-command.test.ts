@@ -160,17 +160,26 @@ test('buildScrubbedConfigJson masks LLM and MCP API keys', () => {
     activeServer: 'remote',
     llm: {
       provider: 'openai',
-      endpoint: 'https://api.openai.com/v1',
+      endpoint: 'https://user:llm-password@api.openai.com/v1?api_key=llm-query-secret',
       model: 'gpt-5',
       apiKey: 'sk-test-1234567890',
     },
     servers: {
       remote: {
         type: 'http',
-        url: 'https://brainrouter.example/mcp',
+        url: 'https://user:password@brainrouter.example/mcp/token%25252Fabc1234567890ABCDEF1234567890abcdef?token=query-secret',
         apiKey: 'brainrouter_remote_abcdef123456',
         env: {
           BRAINROUTER_API_KEY: 'brainrouter_env_abcdef123456',
+          GITHUB_TOKEN: 'github_pat_abcdef1234567890',
+          CUSTOM_PASSWORD: 'custom-password-value',
+          AWS_SECRET_ACCESS_KEY: 'aws-secret-access-value',
+          PRIVATE_KEY: 'private-key-value',
+          DATABASE_URL: 'postgres://dbuser:db-password@example.test/app',
+        },
+        headers: {
+          Authorization: 'Bearer header-secret-value',
+          'X-Amz-Signature': 'signature-secret-value',
         },
       },
     },
@@ -179,6 +188,149 @@ test('buildScrubbedConfigJson masks LLM and MCP API keys', () => {
   assert.doesNotMatch(out, /sk-test-1234567890/);
   assert.doesNotMatch(out, /brainrouter_remote_abcdef123456/);
   assert.doesNotMatch(out, /brainrouter_env_abcdef123456/);
+  assert.doesNotMatch(out, /github_pat_abcdef1234567890|custom-password-value/);
+  assert.doesNotMatch(out, /aws-secret-access-value|private-key-value|db-password/);
+  assert.doesNotMatch(out, /header-secret-value|signature-secret-value/);
+  assert.doesNotMatch(out, /llm-password|llm-query-secret/);
+  assert.doesNotMatch(out, /password|query-secret|abc1234567890/);
+  assert.match(out, /\[redacted\]/);
   assert.match(out, /7890/);
   assert.match(out, /3456/);
+});
+
+test('buildScrubbedConfigJson recursively scrubs onboarding and integration credentials', () => {
+  const out = buildScrubbedConfigJson({
+    activeServer: '',
+    llm: {
+      provider: 'openai',
+      endpoint: 'https://llm-user:llm-pass@example.test/v1?api_key=llm-query-secret',
+      model: 'gpt-5',
+      apiKey: 'sk-recursive-1234567890',
+    },
+    providers: {
+      managed: {
+        provider: 'openai',
+        endpoint: 'https://provider-user:provider-pass@example.test/v1?token=provider-query-secret',
+        model: 'gpt-5',
+        apiKey: 'provider-key-1234567890',
+      },
+    },
+    cli: {
+      brainUrl: 'https://brain-user:brain-pass@example.test/api?token=brain-query-secret',
+      router: { serveKey: 'router-serve-key-secret' },
+      tracingApiKey: 'tracing-api-key-secret',
+      tracingEndpoint: 'https://trace-user:trace-pass@example.test/v1?sig=trace-query-secret',
+      webSearch: {
+        serperApiKey: 'serper-api-key-secret',
+        braveApiKey: 'brave-api-key-secret',
+        google: { apiKey: 'google-api-key-secret', cx: 'visible-search-engine-id' },
+        searxngBaseUrl: 'https://search-user:search-pass@example.test/search?token=search-query-secret',
+      },
+      triggers: {
+        githubApp: {
+          privateKey: '-----BEGIN PRIVATE KEY-----inline-private-key-secret-----END PRIVATE KEY-----',
+          privateKeyPath: '/Users/example/.keys/github-app.pem',
+          apiBase: 'https://github-user:github-pass@example.test/api?token=github-query-secret',
+        },
+        githubSecret: 'github-webhook-secret',
+        slackSigningSecret: 'slack-signing-secret',
+        gitlabSecret: 'gitlab-webhook-secret',
+        jiraSecret: 'jira-webhook-secret',
+      },
+      track: {
+        githubToken: 'github_pat_global1234567890',
+        githubRepos: [{
+          repo: 'owner/repo',
+          token: 'github_pat_repo1234567890',
+        }],
+        githubCaBundle: '/etc/ssl/certs/github-ca.pem',
+      },
+      github: { caBundle: '/etc/ssl/certs/corporate-ca.pem' },
+      plugins: {
+        registryUrl: '/var/lib/brainrouter/registry.json',
+        marketplaces: [{
+          name: 'private',
+          sourceType: 'git',
+          source: 'https://market-user:market-pass@example.test/catalog?token=market-query-secret',
+        }],
+      },
+    },
+    servers: {},
+  } as any);
+  const parsed = JSON.parse(out);
+
+  for (const secret of [
+    'router-serve-key-secret',
+    'tracing-api-key-secret',
+    'serper-api-key-secret',
+    'brave-api-key-secret',
+    'google-api-key-secret',
+    'inline-private-key-secret',
+    'github-webhook-secret',
+    'slack-signing-secret',
+    'gitlab-webhook-secret',
+    'jira-webhook-secret',
+    'github_pat_global1234567890',
+    'github_pat_repo1234567890',
+  ]) {
+    assert.equal(out.includes(secret), false, `raw config must not include ${secret}`);
+  }
+  assert.doesNotMatch(out, /(?:llm|provider|brain|trace|search|github|market)-(?:user|pass|query-secret)/);
+  assert.equal(parsed.cli.triggers.githubApp.privateKeyPath, '/Users/example/.keys/github-app.pem');
+  assert.equal(parsed.cli.track.githubCaBundle, '/etc/ssl/certs/github-ca.pem');
+  assert.equal(parsed.cli.github.caBundle, '/etc/ssl/certs/corporate-ca.pem');
+  assert.equal(parsed.cli.plugins.registryUrl, '/var/lib/brainrouter/registry.json');
+  assert.equal(parsed.cli.webSearch.google.cx, 'visible-search-engine-id');
+  assert.match(parsed.cli.triggers.githubApp.apiBase, /\[redacted\]/);
+  assert.match(parsed.cli.plugins.marketplaces[0].source, /\[redacted\]/);
+});
+
+test('buildScrubbedConfigJson scrubs MCP maps and secret-bearing stdio args without hiding paths', () => {
+  const out = buildScrubbedConfigJson({
+    activeServer: 'local',
+    servers: {
+      local: {
+        type: 'stdio',
+        command: 'node',
+        args: [
+          '--root',
+          '/Users/example/project',
+          '--token',
+          'stdio-token-secret',
+          '--api-key=inline-stdio-secret',
+          'GITHUB_TOKEN=github-arg-secret',
+          '--endpoint=https://arg-user:arg-pass@example.test/v1?token=arg-query-secret',
+          '--private-key-path',
+          '/Users/example/.keys/service.pem',
+          '--ca-bundle=/etc/ssl/certs/service-ca.pem',
+          'Authorization: Bearer argument-header-secret',
+          '--header',
+          'Authorization:',
+          'Bearer',
+          'split-header-secret',
+          'plain-argument',
+        ],
+        env: {
+          PROJECT_ID: 'non-secret-map-value',
+          SERVICE_TOKEN: 'stdio-env-secret',
+        },
+        headers: {
+          Authorization: 'Bearer stdio-header-secret',
+          'X-Workspace': 'non-secret-header-value',
+        },
+      },
+    },
+  } as any);
+  const parsed = JSON.parse(out);
+  const args = parsed.servers.local.args as string[];
+
+  assert.doesNotMatch(out, /stdio-token-secret|inline-stdio-secret|github-arg-secret/);
+  assert.doesNotMatch(out, /arg-user|arg-pass|arg-query-secret|argument-header-secret|split-header-secret/);
+  assert.doesNotMatch(out, /non-secret-map-value|stdio-env-secret|stdio-header-secret|non-secret-header-value/);
+  assert.deepEqual(args.slice(0, 2), ['--root', '/Users/example/project']);
+  assert.equal(args[7], '--private-key-path');
+  assert.equal(args[8], '/Users/example/.keys/service.pem');
+  assert.equal(args[9], '--ca-bundle=/etc/ssl/certs/service-ca.pem');
+  assert.equal(args[15], 'plain-argument');
+  assert.match(args[6], /\[redacted\]/);
 });

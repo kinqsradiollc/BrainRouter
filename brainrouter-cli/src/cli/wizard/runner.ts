@@ -1,15 +1,9 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
 import chalk from 'chalk';
 import { NoTTYError } from '../prompt/cliPrompt.js';
 import { writePreferences } from '@kinqs/brainrouter-core/session';
 import {
-  loadOrInitConfig,
-  saveConfig,
   type Config,
 } from '@kinqs/brainrouter-core/config';
-import { initAgentMd } from '../../prompt/initAgentMd.js';
 import { McpClientWrapper } from '@kinqs/brainrouter-core/mcp';
 import {
   PROVIDER_CATALOG,
@@ -29,6 +23,14 @@ import {
 import { pickFromList, promptText, type PickerRow } from './picker.js';
 import { selectModel } from './modelsApi.js';
 import { buildTheme, type Theme, type ThemeMode } from '../theme/theme.js';
+import { updateGlobalSetupConfigOrThrow } from './globalPersistence.js';
+import { resolveWizardMcpProfileName } from './mcpProfile.js';
+import {
+  normalizeMcpHttpUrl,
+  redactMcpHttpUrl,
+  redactMcpHttpUrlsInText,
+  validateMcpHttpUrl,
+} from '../mcpUrl.js';
 
 /**
  * 0.3.7 onboarding wizard — drives the Step state machine over the new
@@ -42,24 +44,11 @@ import { buildTheme, type Theme, type ThemeMode } from '../theme/theme.js';
  *      `runWizard({ ownsReadline: true })` BEFORE constructing the
  *      Agent / McpClient when `~/.config/brainrouter/config.json` is
  *      missing.
- *   2. **`/init`** from inside the REPL — `runWizard({ ownsReadline:
+ *   2. **`/init config`** from inside the REPL — `runWizard({ ownsReadline:
  *      false })` reuses the REPL's existing readline.
  */
 
-const ONBOARDED_MARKER = path.join(os.homedir(), '.config', 'brainrouter', '.onboarded');
-
-export function isOnboarded(): boolean {
-  try { return fs.existsSync(ONBOARDED_MARKER); } catch { return false; }
-}
-
-export function markOnboarded(): void {
-  try {
-    fs.mkdirSync(path.dirname(ONBOARDED_MARKER), { recursive: true });
-    fs.writeFileSync(ONBOARDED_MARKER, '', 'utf8');
-  } catch {
-    /* non-fatal */
-  }
-}
+export { isOnboarded, markOnboarded } from './globalPersistence.js';
 
 export interface WizardRunOptions {
   ownsReadline: boolean;
@@ -69,12 +58,13 @@ export interface WizardRunOptions {
 export interface WizardRunResult {
   state: WizardState;
   config?: Config;
+  skipMcpForLaunch: boolean;
 }
 
-const TOTAL_STEPS = 6; // theme, provider, apiKey, model, mcp, agentMd
+const TOTAL_STEPS = 5; // theme, provider, apiKey, model, mcp
 
 function progressBadge(step: Step): string | undefined {
-  const decisionSteps: Step[] = ['theme', 'provider', 'apiKey', 'model', 'mcp', 'agentMd'];
+  const decisionSteps: Step[] = ['theme', 'provider', 'apiKey', 'model', 'mcp'];
   const idx = decisionSteps.indexOf(step);
   if (idx < 0) return undefined;
   return `Step ${idx + 1} of ${TOTAL_STEPS}`;
@@ -92,7 +82,7 @@ export async function runWizard(opts: WizardRunOptions): Promise<WizardRunResult
 
   while (!state.committed && !state.aborted) {
     const before = state.draft.theme;
-    state = await runStep(state, opts, theme);
+    state = await runStep(state, theme);
     if (state.draft.theme && state.draft.theme !== before) {
       theme = buildTheme(state.draft.theme);
     }
@@ -101,23 +91,25 @@ export async function runWizard(opts: WizardRunOptions): Promise<WizardRunResult
   let savedConfig: Config | undefined;
   if (state.committed) {
     savedConfig = commitWizardDraft(state.draft, opts.workspaceRoot);
-    markOnboarded();
     renderDoneSummary(state, savedConfig, theme);
   } else if (state.aborted) {
     process.stdout.write(theme.warning('\n  Wizard aborted — no changes saved.\n\n'));
   }
-  return { state, config: savedConfig };
+  return {
+    state,
+    config: savedConfig,
+    skipMcpForLaunch: state.committed && state.draft.mcp?.kind === 'skip',
+  };
 }
 
-async function runStep(state: WizardState, opts: WizardRunOptions, theme: Theme): Promise<WizardState> {
+async function runStep(state: WizardState, theme: Theme): Promise<WizardState> {
   switch (state.currentStep) {
     case 'welcome':  return runWelcomeStep(state, theme);
-    case 'theme':    return runThemeStep(state, opts.workspaceRoot);
+    case 'theme':    return runThemeStep(state);
     case 'provider': return runProviderStep(state, theme);
     case 'apiKey':   return runApiKeyStep(state, theme);
     case 'model':    return runModelStep(state, theme);
     case 'mcp':      return runMcpStep(state, theme);
-    case 'agentMd':  return runAgentMdStep(state, opts.workspaceRoot, theme);
     case 'done':     return reduceWizard(state, { kind: 'commit' });
   }
 }
@@ -128,9 +120,9 @@ async function runWelcomeStep(state: WizardState, theme: Theme): Promise<WizardS
   const result = await pickFromList({
     theme,
     title: '🧠  BrainRouter',
-    subtitle: 'A memory-native coding agent that runs in your terminal. This wizard takes ~60 seconds and writes to ~/.config/brainrouter/config.json plus <workspace>/.brainrouter/cli/preferences.json. Press ENTER to start, q to abort.',
+    subtitle: 'Configure BrainRouter for this user: theme, provider, model, and MCP. Workspace profile and project instructions follow separately. Press ENTER to start, q to abort.',
     rows: [
-      { id: 'start', label: 'Start setup', description: 'Theme → Provider → API key → Model → MCP → AGENT.md' },
+      { id: 'start', label: 'Start global setup', description: 'Theme → Provider → API key → Model → MCP' },
       { id: 'abort', label: 'Abort', description: 'Exit without saving anything' },
     ],
     badge: 'Welcome',
@@ -142,7 +134,7 @@ async function runWelcomeStep(state: WizardState, theme: Theme): Promise<WizardS
 
 // --- Theme -------------------------------------------------------------
 
-async function runThemeStep(state: WizardState, workspaceRoot: string): Promise<WizardState> {
+async function runThemeStep(state: WizardState): Promise<WizardState> {
   const themes: { id: ThemeMode; label: string; description: string }[] = [
     { id: 'dark',  label: 'Dark',  description: 'Default · saturated accents on a black terminal' },
     { id: 'light', label: 'Light', description: 'Darker accents for white terminals (solarized-light, GitHub light)' },
@@ -166,7 +158,6 @@ async function runThemeStep(state: WizardState, workspaceRoot: string): Promise<
   });
   if (result.kind !== 'pick') return reduceWizard(state, { kind: 'abort' });
   const mode = result.id as ThemeMode;
-  try { writePreferences(workspaceRoot, { theme: mode }); } catch { /* non-fatal */ }
   return reduceWizard(state, { kind: 'advance', patch: { theme: mode } });
 }
 
@@ -259,7 +250,7 @@ async function runApiKeyStep(state: WizardState, theme: Theme): Promise<WizardSt
     subtitle,
     badge: `${progressBadge('apiKey')} · ${provider.label}`,
     prefilled: envValue,
-    mask: false, // we mask on display in the summary; while typing the user benefits from seeing chars
+    mask: true,
     placeholder: provider.local ? '(blank OK for local endpoints)' : 'paste your API key here',
     validate: (raw) => {
       const verdict = validateApiKey(raw, provider);
@@ -336,16 +327,11 @@ async function runMcpStep(state: WizardState, theme: Theme): Promise<WizardState
       badge: 'MCP',
       prefilled: '',
       placeholder: 'https://...',
-      validate: (raw) => {
-        const v = raw.trim();
-        if (!v) return 'URL is required';
-        try { new URL(v); } catch { return 'not a valid URL'; }
-        return undefined;
-      },
+      validate: validateMcpHttpUrl,
       eraseOnClose: true,
     });
     if (urlResult.kind === 'cancelled') return reduceWizard(state, { kind: 'abort' });
-    final = { kind: 'remote-http', url: urlResult.text.trim() };
+    final = { kind: 'remote-http', url: normalizeMcpHttpUrl(urlResult.text) };
   }
 
   // 0.3.7 — collect the BrainRouter MCP API key for any HTTP transport
@@ -363,6 +349,7 @@ async function runMcpStep(state: WizardState, theme: Theme): Promise<WizardState
           : 'Optional — leave blank if the hosted MCP doesn\'t require auth. Use the key issued by the BrainRouter dashboard.',
       badge: 'MCP',
       prefilled: envValue,
+      mask: true,
       placeholder: '(blank OK)',
       eraseOnClose: true,
     });
@@ -400,7 +387,7 @@ async function probeMcp(pick: McpPick, draft: WizardDraft): Promise<{ ok: boolea
     try { await wrapper.close(); } catch { /* ignore */ }
     return {
       ok: false,
-      warning: `MCP probe failed (${err?.message ?? err}). Profile saved — start the server and run /mcp reconnect later.`,
+      warning: `MCP probe failed (${redactMcpHttpUrlsInText(String(err?.message ?? err))}). Profile saved — start the server and run /mcp reconnect later.`,
     };
   }
 }
@@ -418,70 +405,36 @@ function mcpPickToServerConfig(pick: McpPick) {
   return undefined;
 }
 
-// --- AGENT.md ----------------------------------------------------------
-
-async function runAgentMdStep(state: WizardState, workspaceRoot: string, theme: Theme): Promise<WizardState> {
-  const agentMdPath = path.join(workspaceRoot, 'AGENT.md');
-  const claudeMdPath = path.join(workspaceRoot, 'CLAUDE.md');
-  const exists = fs.existsSync(agentMdPath) || fs.existsSync(claudeMdPath);
-  const result = await pickFromList({
-    theme,
-    title: 'AGENT.md',
-    subtitle: exists
-      ? 'Workspace already has AGENT.md / CLAUDE.md — skipping by default. Pick "Overwrite" only if you really want to replace it.'
-      : 'AGENT.md gives every coding agent (Claude Code, Codex, BrainRouter, …) a single hub of repo conventions. Recommended.',
-    badge: progressBadge('agentMd'),
-    rows: exists
-      ? [
-          { id: 'skip',     label: 'Skip',     value: 'keep existing file', description: 'Leave the current AGENT.md / CLAUDE.md alone' },
-          { id: 'write',    label: 'Overwrite', value: 'replace contents',  description: 'Drop the starter template over the existing file' },
-        ]
-      : [
-          { id: 'write', label: 'Write AGENT.md', value: 'recommended', description: 'Scaffold a starter template in the workspace root' },
-          { id: 'skip',  label: 'Skip',           value: 'no file',    description: 'Write AGENT.md manually later' },
-        ],
-    initialCursor: 0,
-    eraseOnClose: true,
-  });
-  if (result.kind === 'cancelled') return reduceWizard(state, { kind: 'abort' });
-  if (result.kind !== 'pick') return state;
-  return reduceWizard(state, {
-    kind: 'advance',
-    patch: { writeAgentMd: result.id === 'write' },
-  });
-}
-
 // --- Commit + summary --------------------------------------------------
 
 function commitWizardDraft(draft: WizardDraft, workspaceRoot: string): Config {
-  const config = loadOrInitConfig();
-  if (draft.provider) {
-    config.llm = {
-      provider: draft.provider.id,
-      apiKey: draft.apiKey ?? '',
-      model: draft.model ?? '',
-      endpoint: draft.customEndpoint ?? draft.provider.endpoint,
+  const config = updateGlobalSetupConfigOrThrow((current) => {
+    const next: Config = {
+      ...current,
+      servers: { ...current.servers },
+      ...(current.llm ? { llm: { ...current.llm } } : {}),
     };
-  }
-  if (draft.mcp && draft.mcp.kind !== 'skip') {
-    const profileName = draft.mcp.kind === 'remote-http' ? 'remote' : draft.mcp.kind === 'local-http' ? 'local-http' : 'local-stdio';
-    const serverConfig = mcpPickToServerConfig(draft.mcp);
-    if (serverConfig) {
-      config.servers[profileName] = serverConfig;
-      config.activeServer = profileName;
+    if (draft.provider) {
+      next.llm = {
+        provider: draft.provider.id,
+        apiKey: draft.apiKey ?? '',
+        model: draft.model ?? '',
+        endpoint: draft.customEndpoint ?? draft.provider.endpoint,
+      };
     }
-  } else if (draft.mcp?.kind === 'skip') {
-    // Skip means skip — clear any previously-active profile so the CLI doesn't
-    // silently re-spawn an MCP child from a stale config. The user can re-add
-    // a profile via `/login` later.
-    config.activeServer = '';
-  }
-  saveConfig(config);
+    if (draft.mcp && draft.mcp.kind !== 'skip') {
+      const profileName = resolveWizardMcpProfileName(next.servers, draft.mcp);
+      const serverConfig = mcpPickToServerConfig(draft.mcp);
+      if (serverConfig) {
+        next.servers[profileName] = serverConfig;
+        next.activeServer = profileName;
+        next.activeBrainrouterServer = profileName;
+      }
+    }
+    return next;
+  });
   if (draft.theme) {
     try { writePreferences(workspaceRoot, { theme: draft.theme }); } catch { /* non-fatal */ }
-  }
-  if (draft.writeAgentMd) {
-    try { initAgentMd(workspaceRoot); } catch { /* non-fatal */ }
   }
   return config;
 }
@@ -496,10 +449,9 @@ function renderDoneSummary(state: WizardState, _config: Config, theme: Theme): v
     `    ${theme.muted('model')}    ${theme.plain(state.draft.model ?? '(unset)')}`,
     `    ${theme.muted('api key')}  ${theme.plain(maskApiKey(state.draft.apiKey ?? ''))}`,
     `    ${theme.muted('mcp')}      ${theme.plain(formatMcpForSummary(state.draft.mcp))}`,
-    `    ${theme.muted('agent.md')} ${theme.plain(state.draft.writeAgentMd ? 'written' : 'skipped')}`,
     '',
     theme.muted('  Config saved to ~/.config/brainrouter/config.json.'),
-    theme.muted('  Re-run any time with /init.  Tweak individual knobs with /config.'),
+    theme.muted('  Re-run any time with /init config. Tweak individual knobs with /config.'),
   ];
   if (state.warnings.length > 0) {
     lines.push('');
@@ -515,6 +467,6 @@ function formatMcpForSummary(pick?: McpPick): string {
   if (!pick) return '(unset)';
   if (pick.kind === 'local-stdio') return 'local stdio (brainrouter-mcp)';
   if (pick.kind === 'local-http') return 'local http (http://localhost:3747/mcp)';
-  if (pick.kind === 'remote-http') return `remote · ${pick.url}`;
+  if (pick.kind === 'remote-http') return `remote · ${redactMcpHttpUrl(pick.url)}`;
   return 'skipped (offline-only)';
 }

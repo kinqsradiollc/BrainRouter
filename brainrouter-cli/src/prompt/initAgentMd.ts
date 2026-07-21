@@ -1,5 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import {
+  readWorkspaceFileBounded,
+  writeWorkspaceFileAtomic,
+  type WorkspaceFileStagedVersion,
+} from '@kinqs/brainrouter-core/workspace';
+
+const REPO_SIGNAL_MAX_BYTES = 256 * 1024;
 
 /**
  * Repo-signal scan. We sniff for common project files and use that to populate
@@ -12,12 +19,17 @@ function detectRepoSignals(root: string) {
   const buildCmds: string[] = [];
   const testCmds: string[] = [];
 
-  const has = (rel: string) => fs.existsSync(path.join(root, rel));
+  const hasFile = (rel: string) => safeWorkspaceEntryKind(root, rel) === 'file';
+  const hasDirectory = (rel: string) => safeWorkspaceEntryKind(root, rel) === 'directory';
   const read = (rel: string): string | undefined => {
-    try { return fs.readFileSync(path.join(root, rel), 'utf8'); } catch { return undefined; }
+    try {
+      return readWorkspaceFileBounded(root, rel, REPO_SIGNAL_MAX_BYTES).toString('utf8');
+    } catch {
+      return undefined;
+    }
   };
 
-  if (has('package.json')) {
+  if (hasFile('package.json')) {
     hits.push('Node.js / npm (`package.json`)');
     try {
       const pkg = JSON.parse(read('package.json') ?? '{}');
@@ -30,39 +42,65 @@ function detectRepoSignals(root: string) {
       if (pkg.workspaces) hits.push('npm workspaces (monorepo)');
     } catch { /* malformed package.json — skip */ }
   }
-  if (has('pnpm-workspace.yaml') || has('pnpm-lock.yaml')) hits.push('pnpm');
-  if (has('yarn.lock')) hits.push('yarn');
-  if (has('tsconfig.json')) hits.push('TypeScript (`tsconfig.json`)');
-  if (has('go.mod')) {
+  if (hasFile('pnpm-workspace.yaml') || hasFile('pnpm-lock.yaml')) hits.push('pnpm');
+  if (hasFile('yarn.lock')) hits.push('yarn');
+  if (hasFile('tsconfig.json')) hits.push('TypeScript (`tsconfig.json`)');
+  if (hasFile('go.mod')) {
     hits.push('Go (`go.mod`)');
     buildCmds.push('go build ./...');
     testCmds.push('go test ./...');
   }
-  if (has('Cargo.toml')) {
+  if (hasFile('Cargo.toml')) {
     hits.push('Rust (`Cargo.toml`)');
     buildCmds.push('cargo build');
     testCmds.push('cargo test');
   }
-  if (has('pyproject.toml') || has('requirements.txt') || has('setup.py')) {
+  if (hasFile('pyproject.toml') || hasFile('requirements.txt') || hasFile('setup.py')) {
     hits.push('Python');
-    if (has('pytest.ini') || (read('pyproject.toml') ?? '').includes('pytest')) {
+    if (hasFile('pytest.ini') || (read('pyproject.toml') ?? '').includes('pytest')) {
       testCmds.push('pytest');
     }
   }
-  if (has('Gemfile')) hits.push('Ruby (`Gemfile`)');
-  if (has('Dockerfile')) hits.push('Docker (`Dockerfile`)');
-  if (has('docker-compose.yml') || has('docker-compose.yaml') || has('compose.yaml')) hits.push('Docker Compose');
-  if (has('.github/workflows')) hits.push('GitHub Actions CI');
-  if (has('.gitlab-ci.yml')) hits.push('GitLab CI');
-  if (has('Makefile')) {
+  if (hasFile('Gemfile')) hits.push('Ruby (`Gemfile`)');
+  if (hasFile('Dockerfile')) hits.push('Docker (`Dockerfile`)');
+  if (hasFile('docker-compose.yml') || hasFile('docker-compose.yaml') || hasFile('compose.yaml')) hits.push('Docker Compose');
+  if (hasDirectory('.github/workflows')) hits.push('GitHub Actions CI');
+  if (hasFile('.gitlab-ci.yml')) hits.push('GitLab CI');
+  if (hasFile('Makefile')) {
     hits.push('Makefile');
     buildCmds.push('make');
     testCmds.push('make test');
   }
-  if (has('.env.example') || has('.env.sample')) hits.push('Env template (`.env.example`)');
-  if (has('CLAUDE.md') || has('AGENTS.md') || has('AGENT.md')) hits.push('Existing sibling agent doc');
-  if (has('README.md')) hits.push('README.md');
+  if (hasFile('.env.example') || hasFile('.env.sample')) hits.push('Env template (`.env.example`)');
+  if (hasFile('CLAUDE.md') || hasFile('AGENTS.md') || hasFile('AGENT.md')) hits.push('Existing sibling agent doc');
+  if (hasFile('README.md')) hits.push('README.md');
   return { hits, buildCmds: dedupe(buildCmds), testCmds: dedupe(testCmds) };
+}
+
+function safeWorkspaceEntryKind(
+  workspaceRoot: string,
+  relativePath: string,
+): 'file' | 'directory' | undefined {
+  try {
+    const root = fs.realpathSync(workspaceRoot);
+    const segments = relativePath.split('/');
+    let current = root;
+    for (let index = 0; index < segments.length; index += 1) {
+      const segment = segments[index]!;
+      if (!segment || segment === '.' || segment === '..') return undefined;
+      current = path.join(current, segment);
+      const stat = fs.lstatSync(current);
+      if (stat.isSymbolicLink()) return undefined;
+      if (index < segments.length - 1 && !stat.isDirectory()) return undefined;
+      if (index === segments.length - 1) {
+        if (stat.isFile()) return 'file';
+        if (stat.isDirectory()) return 'directory';
+      }
+    }
+  } catch {
+    // Signal detection is advisory; unsafe, missing, or unreadable inputs are ignored.
+  }
+  return undefined;
 }
 
 function dedupe<T>(items: T[]): T[] {
@@ -176,6 +214,39 @@ export interface InitResult {
   path: string;
 }
 
+export interface InitAgentMdOptions {
+  /** Additional validation/test hook run at the atomic commit boundary. */
+  beforeCommit?: () => void;
+  /** Durable staged-file identity used by the onboarding pair coordinator. */
+  onStaged?: (staged: WorkspaceFileStagedVersion) => void;
+}
+
+export type PreparedAgentMd =
+  | { status: 'created'; path: string; contents: string }
+  | { status: 'exists'; path: string };
+
+/** Build the exact deterministic instruction write without mutating the workspace. */
+export function prepareAgentMd(workspaceRoot: string): PreparedAgentMd {
+  const candidates = ['AGENT.md', 'AGENTS.md', 'CLAUDE.md'].map((name) => path.join(workspaceRoot, name));
+  for (const candidate of candidates) {
+    let stat: fs.Stats | undefined;
+    try { stat = fs.lstatSync(candidate); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    if (stat) {
+      if (stat.isSymbolicLink() || !stat.isFile()) {
+        throw new Error(`Unsafe project instruction path: ${candidate}`);
+      }
+      return { status: 'exists', path: candidate };
+    }
+  }
+  const target = candidates[0];
+  const projectName = path.basename(workspaceRoot);
+  const signals = detectRepoSignals(workspaceRoot);
+  const contents = signals.hits.length > 0 ? renderTemplate(signals, projectName) : TEMPLATE_FALLBACK;
+  return { status: 'created', path: target, contents };
+}
+
 /**
  * Create AGENT.md in the workspace root if neither AGENT.md nor AGENTS.md is
  * already present. Idempotent: returns { status: 'exists' } when something
@@ -184,17 +255,16 @@ export interface InitResult {
  * We use AGENT.md (singular) as the canonical name — most AGENT-md aware tools
  * read both spellings, so a singular file works everywhere.
  */
-export function initAgentMd(workspaceRoot: string): InitResult {
-  const candidates = ['AGENT.md', 'AGENTS.md', 'CLAUDE.md'].map((name) => path.join(workspaceRoot, name));
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      return { status: 'exists', path: candidate };
-    }
-  }
-  const target = candidates[0];
-  const projectName = path.basename(workspaceRoot);
-  const signals = detectRepoSignals(workspaceRoot);
-  const body = signals.hits.length > 0 ? renderTemplate(signals, projectName) : TEMPLATE_FALLBACK;
-  fs.writeFileSync(target, body, 'utf8');
-  return { status: 'created', path: target };
+export function initAgentMd(
+  workspaceRoot: string,
+  options: InitAgentMdOptions = {},
+): InitResult {
+  const prepared = prepareAgentMd(workspaceRoot);
+  if (prepared.status === 'exists') return prepared;
+  const written = writeWorkspaceFileAtomic(workspaceRoot, 'AGENT.md', prepared.contents, {
+    beforeCommit: options.beforeCommit,
+    onStaged: options.onStaged,
+    exclusive: true,
+  });
+  return { status: 'created', path: written };
 }

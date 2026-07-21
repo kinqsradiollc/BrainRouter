@@ -1,5 +1,9 @@
 import { loadConfig, type LLMConfig } from '@kinqs/brainrouter-core/config';
-import { McpClientPool, selectMcpServerIds } from '@kinqs/brainrouter-core/mcp';
+import {
+  McpClientPool,
+  resolvePreferredBrainrouterServerId,
+  selectMcpServerIds,
+} from '@kinqs/brainrouter-core/mcp';
 import type { ServerConfig } from '@kinqs/brainrouter-core/config';
 
 export const DEFAULT_LLM: LLMConfig = { provider: 'openai', model: 'gpt-4o-mini', apiKey: '' };
@@ -21,13 +25,25 @@ export async function pushFleetSnapshotToBrain(summary: unknown): Promise<{ ok: 
     const { fleetSnapshotPushArgs } = await import('../runtime/fleet/fleetCommand.js');
     const config = loadConfig();
     if (!config.servers || Object.keys(config.servers).length === 0) return { ok: false, error: 'no MCP server configured' };
-    const targetIds = selectMcpServerIds(config.servers, config.activeServer, undefined);
+    const preferredBrainrouterServerId = resolvePreferredBrainrouterServerId(
+      config.servers,
+      config.activeBrainrouterServer,
+      config.activeServer,
+    );
+    const targetIds = selectMcpServerIds(
+      config.servers,
+      preferredBrainrouterServerId,
+      undefined,
+    );
     const targetServers: Record<string, ServerConfig> = {};
     for (const id of targetIds) targetServers[id] = config.servers[id];
     const llm: LLMConfig = { ...(config.llm ?? DEFAULT_LLM) };
     const pool = new McpClientPool();
     try {
-      await pool.connectAll(targetServers, llm, { timeoutMs: 5_000 });
+      await pool.connectAll(targetServers, llm, {
+        timeoutMs: 5_000,
+        preferredBrainrouterServerId,
+      });
       await pool.callTool('fleet_snapshot_put', fleetSnapshotPushArgs(summary as never));
       return { ok: true };
     } finally {

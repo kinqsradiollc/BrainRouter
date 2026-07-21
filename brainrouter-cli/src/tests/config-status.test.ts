@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { selfHealConfig, type Config } from '@kinqs/brainrouter-core/config';
 import { describeActiveServer } from '../cli/commands/serverStatus/index.js';
+import { editableMcpStdioCommand } from '../cli/mcpUrl.js';
 
 /**
  * Regression cover for GitHub issue #59 (`/status` crash:
@@ -92,4 +93,66 @@ test('describeActiveServer renders http and stdio profiles', () => {
   assert.ok(http.includes('http://x'), 'http profile shows the endpoint');
   const stdio = describeActiveServer({ activeServer: 'b', servers: { b: { type: 'stdio', command: 'run', args: ['--x'] } } }).join('\n');
   assert.ok(stdio.includes('stdio') && stdio.includes('run'), 'stdio profile shows the command');
+});
+
+test('describeActiveServer redacts credentials from legacy MCP endpoint URLs', () => {
+  const rendered = describeActiveServer({
+    activeServer: 'remote',
+    servers: {
+      remote: {
+        type: 'http',
+        url: 'https://user:password@example.test/mcp?token=query-secret#fragment-secret',
+      },
+    },
+  }).join('\n');
+
+  assert.doesNotMatch(rendered, /password|query-secret|fragment-secret|user:/);
+  assert.match(rendered, /\?\[redacted\]/);
+});
+
+test('describeActiveServer redacts credentials from legacy stdio arguments', () => {
+  const secrets = [
+    'short-token',
+    'url-password',
+    'query-secret',
+    'split-bearer-secret',
+    'header-secret',
+    'inline-header-prefix-secret',
+  ];
+  const rendered = describeActiveServer({
+    activeServer: 'legacy',
+    servers: {
+      legacy: {
+        type: 'stdio',
+        command: 'connector',
+        args: [
+          '--token',
+          secrets[0],
+          `--endpoint=https://user:${secrets[1]}@example.test/mcp?token=${secrets[2]}`,
+          'Bearer',
+          secrets[3],
+          '--header=Authorization:',
+          'Bearer',
+          secrets[4],
+          '--header=Authorization: Bearer',
+          secrets[5],
+          '--private-key-path',
+          '/safe/key.pem',
+        ],
+      },
+    },
+  }).join('\n');
+
+  for (const secret of secrets) assert.doesNotMatch(rendered, new RegExp(secret));
+  assert.match(rendered, /--token \[redacted\]/);
+  assert.match(rendered, /--private-key-path \/safe\/key\.pem/);
+  assert.match(rendered, /example\.test\/mcp\?\[redacted\]/);
+});
+
+test('stdio command editor never prefills inline credentials', () => {
+  assert.equal(editableMcpStdioCommand({ command: 'connector', args: ['--token', 'secret'] }), '');
+  assert.equal(
+    editableMcpStdioCommand({ command: 'connector', args: ['--private-key-path', '/safe/key.pem'] }),
+    'connector --private-key-path /safe/key.pem',
+  );
 });

@@ -1198,6 +1198,8 @@ export interface AgentModelAssignment {
 
 export interface Config {
   activeServer: string;
+  /** Persisted memory-plane choice, independent from the banner-highlighted MCP profile. */
+  activeBrainrouterServer?: string;
   servers: Record<string, ServerConfig>;
   llm?: LLMConfig;
   /**

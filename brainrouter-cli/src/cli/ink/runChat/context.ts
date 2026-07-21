@@ -3,6 +3,7 @@ import type { Config } from '@kinqs/brainrouter-core/config';
 import { InputQueue } from '../../../runtime/input/inputQueue.js';
 import type { ChatController } from '../ChatApp.js';
 import type { createReadlineShim } from './readlineShim.js';
+import type { RuntimeLaunchPolicy, RuntimeMcpState } from '../../../entry/mcpStartup.js';
 
 type ReadlineShim = ReturnType<typeof createReadlineShim>;
 
@@ -25,6 +26,8 @@ export interface RunChatContext {
   readonly agent: Agent;
   readonly mcpClient: import('@kinqs/brainrouter-core/mcp').McpClientPool;
   readonly config: Config;
+  readonly launchPolicy: RuntimeLaunchPolicy;
+  runtimeMcp?: RuntimeMcpState;
   readonly shim: ReadlineShim;
   readonly inputQueue: InputQueue;
   readonly notifiedCompletions: Set<string>;

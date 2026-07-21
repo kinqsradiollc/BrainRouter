@@ -17,6 +17,7 @@ import { aggregateCatalog, buildModelRegistry, getRouterPolicy, resolveRoutes } 
 import { getPolicyProfile, profileNames } from '../../../runtime/exec/policyProfiles.js';
 import { describeActiveServer } from '../serverStatus/index.js';
 import type { CommandContext } from '../_context.js';
+import { redactMcpErrorText, redactMcpHttpUrl, redactMcpStdioCommand } from '../../mcpUrl.js';
 
 export async function tryHandleUiStatusCommand(ctx: CommandContext): Promise<boolean> {
   const { command, args, agent, mcpClient, config } = ctx;
@@ -109,13 +110,13 @@ export async function tryHandleUiStatusCommand(ctx: CommandContext): Promise<boo
             if (extraction.syncPaused) {
               console.log(chalk.red(`  ⚠️  Extraction PAUSED after ${extraction.extractionErrors} consecutive failures.`));
               if (extraction.lastErrorMessage) {
-                console.log(chalk.gray(`     Last error: ${String(extraction.lastErrorMessage).slice(0, 200)}`));
+                console.log(chalk.gray(`     Last error: ${redactMcpErrorText(String(extraction.lastErrorMessage), config).slice(0, 200)}`));
               }
               console.log(chalk.gray(`     Fix the upstream LLM (model loaded / API key set), then run /memories consolidate to backfill.`));
             } else if (extraction.extractionErrors > 0) {
               console.log(chalk.yellow(`  ⚠️  ${extraction.extractionErrors} recent extraction failure(s). Last: ${extraction.lastErrorAt ?? '(unknown)'}.`));
               if (extraction.lastErrorMessage) {
-                console.log(chalk.gray(`     ${String(extraction.lastErrorMessage).slice(0, 200)}`));
+                console.log(chalk.gray(`     ${redactMcpErrorText(String(extraction.lastErrorMessage), config).slice(0, 200)}`));
               }
             } else if (cognitiveTotal === 0 && sensoryTotal > 0) {
               console.log(chalk.gray(`  (Cognitive extraction fires every 3 sensory turns — keep talking to populate.)`));
@@ -126,7 +127,7 @@ export async function tryHandleUiStatusCommand(ctx: CommandContext): Promise<boo
         }
       } catch (err: any) {
         spinner.fail(chalk.red('Failed to fetch diagnostics.'));
-        console.warn(chalk.yellow(`  Warning: ${err.message}`));
+        console.warn(chalk.yellow(`  Warning: ${redactMcpErrorText(String(err?.message ?? err), config)}`));
       }
       console.log();
       return true;
@@ -245,9 +246,9 @@ export async function tryHandleUiStatusCommand(ctx: CommandContext): Promise<boo
 
       console.log(`  Server profile: ${chalk.green(server.type)}`);
       if (server.type === 'stdio') {
-        console.log(`  Launch command: ${chalk.blue(server.command)} ${server.args?.join(' ') || ''}`);
+        console.log(`  Launch command: ${chalk.blue(redactMcpStdioCommand(server))}`);
       } else {
-        console.log(`  Endpoint: ${chalk.blue(server.url)}`);
+        console.log(`  Endpoint: ${chalk.blue(redactMcpHttpUrl(server.url))}`);
       }
 
       const spinner = makeSpinner(chalk.gray('Checking MCP tool surface...')).start();
@@ -265,7 +266,7 @@ export async function tryHandleUiStatusCommand(ctx: CommandContext): Promise<boo
         }
       } catch (err: any) {
         spinner.fail(chalk.red('MCP connection check failed.'));
-        console.warn(chalk.yellow(`  Warning: ${err.message}`));
+        console.warn(chalk.yellow(`  Warning: ${redactMcpErrorText(String(err?.message ?? err), config)}`));
       }
 
       // Memory health: are captures actually being extracted into searchable

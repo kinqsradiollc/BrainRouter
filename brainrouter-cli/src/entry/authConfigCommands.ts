@@ -1,8 +1,15 @@
 import type { Command } from 'commander';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
-import { loadOrInitConfig, saveConfig } from '@kinqs/brainrouter-core/config';
-import { McpClientWrapper } from '@kinqs/brainrouter-core/mcp';
+import { loadOrInitConfig, saveConfigOrThrow } from '@kinqs/brainrouter-core/config';
+import { McpClientWrapper, resolveIdentityFromConfig } from '@kinqs/brainrouter-core/mcp';
+import {
+  normalizeMcpHttpUrl,
+  redactMcpHttpUrlsInText,
+  validateMcpHttpUrl,
+} from '../cli/mcpUrl.js';
+import { persistSelectedBrainrouterProfile } from './mcpStartup.js';
+import { buildScrubbedConfigJson } from '../cli/commands/config/rawConfig.js';
 
 export function registerLoginCommand(program: Command): void {
   // Login Command
@@ -19,16 +26,13 @@ export function registerLoginCommand(program: Command): void {
           message: 'Enter BrainRouter HTTP/SSE MCP Endpoint URL:',
           default: 'http://localhost:3747/mcp',
           validate: (input) => {
-            try {
-              new URL(input);
-              return true;
-            } catch {
-              return 'Please enter a valid URL (e.g. http://localhost:3747/mcp)';
-            }
+            const error = validateMcpHttpUrl(String(input));
+            return error ?? true;
           }
         },
         {
-          type: 'input',
+          type: 'password',
+          mask: '*',
           name: 'apiKey',
           message: 'Enter Authorization / API Key (leave empty if none):',
         },
@@ -37,36 +41,42 @@ export function registerLoginCommand(program: Command): void {
           name: 'profileName',
           message: 'Enter profile name to save this connection as:',
           default: 'hosted-team',
-          validate: (input) => input.trim() ? true : 'Profile name cannot be empty.'
+          validate: (input) => /^[a-z0-9][a-z0-9_-]*$/i.test(String(input).trim())
+            ? true
+            : 'Use letters, digits, underscore, or dash; start with a letter or digit.'
         }
       ]);
 
       const mcpClient = new McpClientWrapper();
-      const spinner = inquirer.ui.BottomBar ? null : console.log(chalk.gray('Testing connection...'));
+      console.log(chalk.gray('Testing connection...'));
 
       try {
+        const profileName = String(answers.profileName).trim();
+        const normalizedUrl = normalizeMcpHttpUrl(String(answers.url));
         await mcpClient.connect({
           type: 'http',
-          url: answers.url,
-          apiKey: answers.apiKey || undefined
-        }, undefined, answers.profileName);
+          url: normalizedUrl,
+          apiKey: answers.apiKey || undefined,
+          identity: 'brainrouter',
+        }, undefined, profileName);
         await mcpClient.close();
 
         // Save to config — `loadOrInitConfig` lets first-run users build a
         // fresh config.json instead of hitting the strict no-config error.
         const config = loadOrInitConfig();
-        config.servers[answers.profileName] = {
+        persistSelectedBrainrouterProfile(config, profileName, {
           type: 'http',
-          url: answers.url,
-          apiKey: answers.apiKey || undefined
-        };
-        config.activeServer = answers.profileName;
-        saveConfig(config);
+          url: normalizedUrl,
+          apiKey: answers.apiKey || undefined,
+          identity: 'brainrouter',
+        });
 
-        console.log(chalk.green(`\n✔ Successfully connected and saved profile "${answers.profileName}"!`));
-        console.log(`Set "${answers.profileName}" as the active connection profile.\n`);
+        console.log(chalk.green(`\n✔ Successfully connected and saved profile "${profileName}"!`));
+        console.log(`Set "${profileName}" as the active connection profile.\n`);
       } catch (err: any) {
-        console.error(chalk.red(`\n✖ Connection test failed: ${err.message}`));
+        const apiKey = String(answers.apiKey ?? '');
+        const message = redactMcpHttpUrlsInText(String(err?.message ?? err));
+        console.error(chalk.red(`\n✖ Login failed: ${apiKey ? message.split(apiKey).join('[redacted]') : message}`));
         console.log(chalk.yellow('No profile changes were saved. Check the URL and credentials and try again.\n'));
       }
     });
@@ -100,7 +110,8 @@ export function registerConfigCommand(program: Command): void {
       if (menu.action === 'Configure LLM Provider') {
         const llmAnswers = await inquirer.prompt([
           {
-            type: 'input',
+            type: 'password',
+            mask: '*',
             name: 'apiKey',
             message: 'Enter LLM API Key (leave blank to use system env variables or local endpoints):',
             default: config.llm?.apiKey || ''
@@ -115,7 +126,19 @@ export function registerConfigCommand(program: Command): void {
             type: 'input',
             name: 'endpoint',
             message: 'Enter Custom API Endpoint URL (optional, e.g. for Ollama/LM Studio):',
-            default: config.llm?.endpoint || ''
+            default: config.llm?.endpoint || '',
+            validate: (input) => {
+              const value = String(input).trim();
+              if (!value) return true;
+              try {
+                const parsed = new URL(value);
+                return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+                  ? true
+                  : 'Endpoint URL must use http or https.';
+              } catch {
+                return 'Enter a valid http or https URL.';
+              }
+            },
           }
         ]);
 
@@ -125,7 +148,7 @@ export function registerConfigCommand(program: Command): void {
           model: llmAnswers.model,
           endpoint: llmAnswers.endpoint || undefined
         };
-        saveConfig(config);
+        saveConfigOrThrow(config);
         console.log(chalk.green('\n✔ LLM configuration updated successfully!\n'));
 
       } else if (menu.action === 'Configure Server Profile') {
@@ -162,15 +185,17 @@ export function registerConfigCommand(program: Command): void {
               type: 'input',
               name: 'url',
               message: 'Enter Server URL (e.g., http://localhost:3747/mcp):',
-              default: 'http://localhost:3747/mcp'
+              default: 'http://localhost:3747/mcp',
+              validate: (input) => validateMcpHttpUrl(String(input)) ?? true,
             },
             {
-              type: 'input',
+              type: 'password',
+              mask: '*',
               name: 'apiKey',
               message: 'Enter API authorization key (if any):'
             }
           ]);
-          serverOpts.url = httpAnswers.url;
+          serverOpts.url = normalizeMcpHttpUrl(String(httpAnswers.url));
           serverOpts.apiKey = httpAnswers.apiKey || undefined;
         }
 
@@ -179,13 +204,17 @@ export function registerConfigCommand(program: Command): void {
             type: 'input',
             name: 'name',
             message: 'Enter profile name for this server:',
-            default: 'custom-server'
+            default: 'custom-server',
+            validate: (input) => /^[a-z0-9][a-z0-9_-]*$/i.test(String(input).trim())
+              ? true
+              : 'Use letters, digits, underscore, or dash; start with a letter or digit.',
           }
         ]);
 
-        config.servers[nameAnswer.name] = serverOpts;
-        saveConfig(config);
-        console.log(chalk.green(`\n✔ Server profile "${nameAnswer.name}" saved successfully!\n`));
+        const serverName = String(nameAnswer.name).trim();
+        config.servers[serverName] = serverOpts;
+        saveConfigOrThrow(config);
+        console.log(chalk.green(`\n✔ Server profile "${serverName}" saved successfully!\n`));
 
       } else if (menu.action === 'Set Active Server Profile') {
         const activeChoices = Object.keys(config.servers);
@@ -205,19 +234,15 @@ export function registerConfigCommand(program: Command): void {
         ]);
 
         config.activeServer = activeAnswers.active;
-        saveConfig(config);
+        if (resolveIdentityFromConfig(config.servers[activeAnswers.active], activeAnswers.active) === 'brainrouter') {
+          config.activeBrainrouterServer = activeAnswers.active;
+        }
+        saveConfigOrThrow(config);
         console.log(chalk.green(`\n✔ Active server profile set to "${activeAnswers.active}"!\n`));
 
       } else if (menu.action === 'View Configuration') {
         console.log(chalk.bold('\n⚙️  Current configuration:'));
-        const scrubbed = JSON.parse(JSON.stringify(config));
-        if (scrubbed.llm?.apiKey) scrubbed.llm.apiKey = 'br_••••••••';
-        for (const s of Object.values(scrubbed.servers)) {
-          const srv = s as any;
-          if (srv.apiKey) srv.apiKey = 'br_••••••••';
-          if (srv.env?.BRAINROUTER_API_KEY) srv.env.BRAINROUTER_API_KEY = 'br_••••••••';
-        }
-        console.log(chalk.gray(JSON.stringify(scrubbed, null, 2)));
+        console.log(chalk.gray(buildScrubbedConfigJson(config)));
         console.log();
       }
     });

@@ -6,7 +6,15 @@ import type { Config } from '@kinqs/brainrouter-core/config';
 test('MCP proxy injects the active sealed credential without altering other env', () => {
   const config = {
     activeServer: 'primary',
-    servers: { primary: { type: 'http', url: 'https://brain.example/mcp', apiKey: 'br_secret' } },
+    activeBrainrouterServer: 'primary',
+    servers: {
+      primary: {
+        type: 'http',
+        url: 'https://brain.example/mcp',
+        apiKey: 'br_secret',
+        identity: 'brainrouter',
+      },
+    },
   } as Config;
   const env = resolveMcpProxyEnv(config, { PATH: '/bin', BRAINROUTER_API_KEY: 'stale' });
   assert.equal(env.BRAINROUTER_API_KEY, 'br_secret');

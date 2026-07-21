@@ -19,6 +19,7 @@ export interface FlagDef {
 }
 
 export const COMMAND_FLAGS: Record<string, FlagDef[]> = {
+  "/init": [{ flag: "--edit", desc: "review and revise the saved workspace setup" }],
   "/review": [
     { flag: "--fix", desc: "apply surviving fixes in place + re-verify" },
     { flag: "--force", desc: "re-run even if the workflow looks complete" },

@@ -70,6 +70,12 @@ test('INPUT-ERGO flagSuggestions: bare "--" lists all remaining flags; excludes 
   assert.deepEqual(partial!.matches.map((m) => m.flag), ['--force']);
 });
 
+test('INPUT-ERGO flagSuggestions: /init exposes workspace edit mode', () => {
+  assert.deepEqual(flagSuggestions('/init --')?.matches, [
+    { flag: '--edit', desc: 'review and revise the saved workspace setup' },
+  ]);
+});
+
 test('INPUT-ERGO flagSuggestions: unknown command or no flags → null', () => {
   assert.equal(flagSuggestions('/unknown --x'), null);
   assert.equal(flagSuggestions('plain text --x'), null);

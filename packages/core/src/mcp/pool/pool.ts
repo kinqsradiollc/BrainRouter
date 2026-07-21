@@ -1,8 +1,10 @@
 import { McpClientWrapper } from '../client/client.js';
+import { resolveIdentityFromConfig } from '../client/identity.js';
 import type { LLMConfig, ServerConfig } from '../../config/config.js';
 import { reconnectBackoffMs } from '../reconnect/reconnect.js';
 import type { McpServerStatus } from '../types.js';
 import { dueForReconnect } from './reconnectSweep.js';
+import { resolvePreferredBrainrouterServerId } from './brainProfiles.js';
 import { isBrainrouterOwnedTool, normalizeMcpToolName } from './toolNames.js';
 
 /**
@@ -57,6 +59,99 @@ export class McpClientPool {
   private reconnectTimer?: ReturnType<typeof setInterval>;
   private reconnectAttempts = new Map<string, number>();
   private reconnectNextAt = new Map<string, number>();
+  /** Preference rank for a published BrainRouter profile; higher ranks win concurrent discovery. */
+  private brainrouterPriorities = new Map<string, number>();
+  /** Serializes BrainRouter publication so two successful handshakes cannot overlap in the live pool. */
+  private brainrouterPublicationTail: Promise<void> = Promise.resolve();
+  /** Invalidates async tool-index snapshots when the live topology changes. */
+  private toolIndexGeneration = 0;
+  /**
+   * Per-server operation generation invalidates connects that were already
+   * awaiting transport startup when a profile is removed; deleting
+   * the visible maps alone cannot stop their continuation from re-inserting it.
+   */
+  private serverGenerations = new Map<string, number>();
+
+  private beginServerOperation(serverId: string): number {
+    this.toolIndexGeneration += 1;
+    const generation = (this.serverGenerations.get(serverId) ?? 0) + 1;
+    this.serverGenerations.set(serverId, generation);
+    return generation;
+  }
+
+  private isCurrentServerOperation(serverId: string, generation: number): boolean {
+    return this.serverGenerations.get(serverId) === generation;
+  }
+
+  /** Kept as a seam for deterministic connect-race tests. */
+  private createClientWrapper(): McpClientWrapper {
+    return new McpClientWrapper();
+  }
+
+  private publishConnectedWrapper(
+    serverId: string,
+    wrapper: McpClientWrapper,
+    brainrouterPriority: number,
+  ): void {
+    this.clients.set(serverId, wrapper);
+    this.assignPrefixId(serverId, wrapper);
+    this.statuses.set(serverId, {
+      serverId,
+      identity: wrapper.getIdentity(),
+      status: 'connected',
+    });
+    if (wrapper.getIdentity() === 'brainrouter') {
+      this.brainrouterPriorities.set(serverId, brainrouterPriority);
+    } else {
+      this.brainrouterPriorities.delete(serverId);
+    }
+  }
+
+  private async publishBrainrouterWrapperExclusively(
+    serverId: string,
+    generation: number,
+    wrapper: McpClientWrapper,
+    retireServerIds: readonly string[],
+    brainrouterPriority: number,
+  ): Promise<boolean> {
+    let release!: () => void;
+    const predecessor = this.brainrouterPublicationTail;
+    this.brainrouterPublicationTail = new Promise<void>((resolve) => { release = resolve; });
+    await predecessor;
+    try {
+      if (!this.isCurrentServerOperation(serverId, generation)) return false;
+
+      const retired = new Set(retireServerIds);
+      let strongestPublishedPriority = Number.NEGATIVE_INFINITY;
+      for (const [otherId, other] of this.clients) {
+        if (otherId !== serverId && other.getIdentity() === 'brainrouter') {
+          retired.add(otherId);
+          strongestPublishedPriority = Math.max(
+            strongestPublishedPriority,
+            this.brainrouterPriorities.get(otherId) ?? 0,
+          );
+        }
+      }
+      retired.delete(serverId);
+      if (strongestPublishedPriority > brainrouterPriority) {
+        this.statuses.delete(serverId);
+        this.serverConfigs.delete(serverId);
+        this.reconnectAttempts.delete(serverId);
+        this.reconnectNextAt.delete(serverId);
+        this.brainrouterPriorities.delete(serverId);
+        return false;
+      }
+      for (const otherId of retired) {
+        await this.removeOne(otherId);
+      }
+
+      if (!this.isCurrentServerOperation(serverId, generation)) return false;
+      this.publishConnectedWrapper(serverId, wrapper, brainrouterPriority);
+      return true;
+    } finally {
+      release();
+    }
+  }
 
   /** WS9 — start a background supervisor that auto-reconnects any dropped server
    *  (brain or tool) with per-server exponential backoff, so a transient outage
@@ -92,8 +187,17 @@ export class McpClientPool {
     return this.prefixIds.get(serverId) ?? serverId;
   }
 
+  private clearPrefixId(serverId: string): void {
+    const prefixId = this.prefixIds.get(serverId);
+    if (prefixId && this.prefixToServerId.get(prefixId) === serverId) {
+      this.prefixToServerId.delete(prefixId);
+    }
+    this.prefixIds.delete(serverId);
+  }
+
   private assignPrefixId(serverId: string, wrapper: McpClientWrapper): void {
     const id = wrapper.getIdentity() === 'brainrouter' ? 'brainrouter' : serverId;
+    this.clearPrefixId(serverId);
     this.prefixIds.set(serverId, id);
     this.prefixToServerId.set(id, serverId);
   }
@@ -106,14 +210,26 @@ export class McpClientPool {
   async connectAll(
     servers: Record<string, ServerConfig>,
     llmConfig?: LLMConfig,
-    options?: { timeoutMs?: number; onStatusChange?: (s: McpServerStatus) => void },
+    options?: {
+      timeoutMs?: number;
+      onStatusChange?: (s: McpServerStatus) => void;
+      preferredBrainrouterServerId?: string;
+    },
   ): Promise<McpServerStatus[]> {
-    this.currentLlmConfig = llmConfig;
+    this.setReconnectLlmConfig(llmConfig);
     const entries = Object.entries(servers);
+    const configuredBrainrouterId = resolvePreferredBrainrouterServerId(
+      servers,
+      options?.preferredBrainrouterServerId,
+    );
     // Stash configs first so `/mcp reconnect <id>` can find them later.
     for (const [serverId, cfg] of entries) this.serverConfigs.set(serverId, cfg);
-    const tasks = entries.map(([serverId, cfg]) =>
-      this.connectOne(serverId, cfg, llmConfig, options?.timeoutMs).then(() => {
+    const tasks = entries.map(([serverId, cfg], index) =>
+      this.connectOne(serverId, cfg, llmConfig, options?.timeoutMs, {
+        brainrouterPriority: serverId === configuredBrainrouterId
+          ? entries.length + 1
+          : entries.length - index,
+      }).then(() => {
         const s = this.statuses.get(serverId);
         if (s && options?.onStatusChange) options.onStatusChange(s);
       }),
@@ -133,50 +249,111 @@ export class McpClientPool {
     config: ServerConfig,
     llmConfig?: LLMConfig,
     timeoutMs = 5_000,
+    options: {
+      retireBrainrouterServerIds?: readonly string[];
+      brainrouterPriority?: number;
+    } = {},
   ): Promise<void> {
-    if (this.clients.has(serverId)) {
-      try { await this.clients.get(serverId)!.close(); } catch { /* ignore */ }
-      this.clients.delete(serverId);
+    if (llmConfig !== undefined) this.setReconnectLlmConfig(llmConfig);
+    const generation = this.beginServerOperation(serverId);
+    const previous = this.clients.get(serverId);
+    const configIdentity = resolveIdentityFromConfig(config, serverId);
+    const priorRuntimeIdentity = previous?.getIdentity() ?? this.statuses.get(serverId)?.identity;
+    const previousIdentity = configIdentity !== 'unknown'
+      ? configIdentity
+      : priorRuntimeIdentity ?? 'unknown';
+    const brainrouterPriority = options.brainrouterPriority
+      ?? this.brainrouterPriorities.get(serverId)
+      ?? 0;
+    if (previousIdentity === 'brainrouter') {
+      this.brainrouterPriorities.set(serverId, brainrouterPriority);
+    }
+    if (previous) {
+      try { await previous.close(); } catch { /* ignore */ }
+      if (!this.isCurrentServerOperation(serverId, generation)) return;
+      if (this.clients.get(serverId) === previous) {
+        this.clients.delete(serverId);
+        this.clearPrefixId(serverId);
+      }
     }
     this.serverConfigs.set(serverId, config);
-    this.statuses.set(serverId, { serverId, identity: 'unknown', status: 'connecting' });
-    const wrapper = new McpClientWrapper();
+    this.statuses.set(serverId, { serverId, identity: previousIdentity, status: 'connecting' });
+    const wrapper = this.createClientWrapper();
+    const startedAt = Date.now();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
         wrapper.connect(config, llmConfig ?? this.currentLlmConfig, serverId),
-        new Promise<void>((_, reject) =>
-          setTimeout(() => reject(new Error(`timed out after ${timeoutMs}ms`)), timeoutMs),
-        ),
+        new Promise<void>((_, reject) => {
+          timeout = setTimeout(() => reject(new Error(`timed out after ${timeoutMs}ms`)), timeoutMs);
+        }),
       ]);
-      this.clients.set(serverId, wrapper);
-      this.assignPrefixId(serverId, wrapper);
-      this.statuses.set(serverId, {
-        serverId,
-        identity: wrapper.getIdentity(),
-        status: 'connected',
-      });
+      if (!this.isCurrentServerOperation(serverId, generation)) {
+        try { await wrapper.close(); } catch { /* ignore */ }
+        return;
+      }
+      if (wrapper.getIdentity() === 'unknown') {
+        let identityTimeout: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const remainingMs = Math.max(1, timeoutMs - (Date.now() - startedAt));
+          await Promise.race([
+            wrapper.listTools(),
+            new Promise<never>((_, reject) => {
+              identityTimeout = setTimeout(
+                () => reject(new Error(`identity probe timed out after ${timeoutMs}ms`)),
+                remainingMs,
+              );
+            }),
+          ]);
+        } finally {
+          if (identityTimeout) clearTimeout(identityTimeout);
+        }
+      }
+      if (!this.isCurrentServerOperation(serverId, generation)) {
+        try { await wrapper.close(); } catch { /* ignore */ }
+        return;
+      }
+      if (wrapper.getIdentity() === 'brainrouter') {
+        const published = await this.publishBrainrouterWrapperExclusively(
+          serverId,
+          generation,
+          wrapper,
+          options.retireBrainrouterServerIds ?? [],
+          brainrouterPriority,
+        );
+        if (!published) {
+          try { await wrapper.close(); } catch { /* ignore */ }
+          return;
+        }
+      } else {
+        this.publishConnectedWrapper(serverId, wrapper, 0);
+      }
     } catch (err: any) {
+      if (!this.isCurrentServerOperation(serverId, generation)) {
+        try { await wrapper.close(); } catch { /* ignore */ }
+        return;
+      }
       this.statuses.set(serverId, {
         serverId,
-        identity: 'unknown',
+        identity: wrapper.getIdentity() === 'unknown' ? previousIdentity : wrapper.getIdentity(),
         status: 'failed',
         error: err?.message ?? String(err),
       });
       try { await wrapper.close(); } catch { /* ignore */ }
+    } finally {
+      if (timeout) clearTimeout(timeout);
     }
     await this.refreshToolIndex();
   }
 
-  /** Tear down a single server. Removes it from the pool and rebuilds the tool index. */
-  async disconnectOne(serverId: string): Promise<void> {
+  private async disconnectOneAtGeneration(serverId: string, generation: number): Promise<boolean> {
     const wrapper = this.clients.get(serverId);
     if (wrapper) {
       try { await wrapper.close(); } catch { /* ignore */ }
     }
+    if (!this.isCurrentServerOperation(serverId, generation)) return false;
     this.clients.delete(serverId);
-    const oldPid = this.prefixIds.get(serverId);
-    if (oldPid) this.prefixToServerId.delete(oldPid);
-    this.prefixIds.delete(serverId);
+    this.clearPrefixId(serverId);
     const prev = this.statuses.get(serverId);
     this.statuses.set(serverId, {
       serverId,
@@ -184,6 +361,39 @@ export class McpClientPool {
       status: 'offline',
     });
     await this.refreshToolIndex();
+    return this.isCurrentServerOperation(serverId, generation);
+  }
+
+  /** Tear down a single server. Removes it from the pool and rebuilds the tool index. */
+  async disconnectOne(serverId: string): Promise<void> {
+    const generation = this.beginServerOperation(serverId);
+    await this.disconnectOneAtGeneration(serverId, generation);
+  }
+
+  /**
+   * Remove a server from the live pool and its reconnect catalog.
+   *
+   * `disconnectOne` deliberately retains status/config so a transiently
+   * offline profile can be retried by the supervisor. Callers reconciling the
+   * pool to a newly committed config need the opposite semantic: a profile
+   * that is no longer selected must not be resurrected in the background.
+   */
+  async removeOne(serverId: string): Promise<void> {
+    const generation = this.beginServerOperation(serverId);
+    const wrapper = this.clients.get(serverId);
+    this.clients.delete(serverId);
+    this.clearPrefixId(serverId);
+    this.statuses.delete(serverId);
+    this.serverConfigs.delete(serverId);
+    this.reconnectAttempts.delete(serverId);
+    this.reconnectNextAt.delete(serverId);
+    this.brainrouterPriorities.delete(serverId);
+    if (wrapper) {
+      try { await wrapper.close(); } catch { /* ignore */ }
+    }
+    if (this.isCurrentServerOperation(serverId, generation)) {
+      await this.refreshToolIndex();
+    }
   }
 
   /** Reconnect: close + connect again using the stashed config. */
@@ -192,8 +402,15 @@ export class McpClientPool {
     if (!config) {
       throw new Error(`No stored config for serverId "${serverId}". Add it to ~/.config/brainrouter/config.json first.`);
     }
-    await this.disconnectOne(serverId);
+    const generation = this.beginServerOperation(serverId);
+    const disconnected = await this.disconnectOneAtGeneration(serverId, generation);
+    if (!disconnected || !this.serverConfigs.has(serverId)) return;
     await this.connectOne(serverId, config, this.currentLlmConfig);
+  }
+
+  /** Replace the provider snapshot used by future background reconnects. */
+  setReconnectLlmConfig(llmConfig?: LLMConfig): void {
+    this.currentLlmConfig = llmConfig === undefined ? undefined : structuredClone(llmConfig);
   }
 
   /**
@@ -203,8 +420,7 @@ export class McpClientPool {
    * `callTool`.
    */
   private async refreshToolIndex(): Promise<void> {
-    this.toolToServer.clear();
-    this.prefixedToServer.clear();
+    const generation = ++this.toolIndexGeneration;
     // Fetch every connected server's tools IN PARALLEL — a sequential
     // `await listTools()` per server was pure additive latency on the startup
     // critical path (N servers × one round-trip each, summed). Build the index
@@ -212,30 +428,50 @@ export class McpClientPool {
     // byte-for-byte unchanged; only the network fetch fans out.
     const connected = [...this.clients].filter(([, wrapper]) => wrapper.isConnected());
     const settled = await Promise.allSettled(connected.map(([, wrapper]) => wrapper.listTools()));
+    if (
+      this.toolIndexGeneration !== generation
+      || connected.some(([serverId, wrapper]) => (
+        this.clients.get(serverId) !== wrapper || !wrapper.isConnected()
+      ))
+    ) {
+      return;
+    }
+
+    const nextToolToServer = new Map<string, string>();
+    const nextPrefixedToServer = new Map<string, { serverId: string; tool: string }>();
+    const statusUpdates: Array<{ serverId: string; wrapper: McpClientWrapper; toolCount: number }> = [];
     for (let i = 0; i < connected.length; i++) {
       const [serverId, wrapper] = connected[i];
       const result = settled[i];
       if (result.status !== 'fulfilled') continue; // listTools failed — retries next refresh
       const tools = (result.value as any).tools ?? [];
-      const status = this.statuses.get(serverId);
-      if (status) {
-        status.toolCount = tools.length;
-        status.identity = wrapper.getIdentity();
-      }
+      statusUpdates.push({ serverId, wrapper, toolCount: tools.length });
       for (const tool of tools) {
         const rawName = tool.name;
         const pid = this.getPrefixId(serverId);
         const prefixed = `mcp_${pid}_${rawName}`;
-        this.prefixedToServer.set(prefixed, { serverId, tool: rawName });
-        const existing = this.toolToServer.get(rawName);
+        nextPrefixedToServer.set(prefixed, { serverId, tool: rawName });
+        const existing = nextToolToServer.get(rawName);
         if (existing && existing !== serverId) {
           // Two servers expose the same unprefixed tool name. Mark
           // collision so the raw-name resolver knows to require the
           // prefix.
-          this.toolToServer.set(rawName, '__COLLISION__');
+          nextToolToServer.set(rawName, '__COLLISION__');
         } else if (!existing) {
-          this.toolToServer.set(rawName, serverId);
+          nextToolToServer.set(rawName, serverId);
         }
+      }
+    }
+
+    // Publishing is synchronous after the final generation check, so a newer
+    // connect/remove/refresh cannot interleave a stale snapshot into the maps.
+    this.toolToServer = nextToolToServer;
+    this.prefixedToServer = nextPrefixedToServer;
+    for (const { serverId, wrapper, toolCount } of statusUpdates) {
+      const status = this.statuses.get(serverId);
+      if (status) {
+        status.toolCount = toolCount;
+        status.identity = wrapper.getIdentity();
       }
     }
   }
@@ -452,7 +688,7 @@ export class McpClientPool {
         if (
           wrapper.isConnected() &&
           wrapper.getIdentity() === 'brainrouter' &&
-          this.prefixedToServer.has(`mcp_${serverId}_${name}`)
+          this.prefixedToServer.has(`mcp_${this.getPrefixId(serverId)}_${name}`)
         ) {
           return { serverId, tool: name };
         }
@@ -551,10 +787,12 @@ export class McpClientPool {
 
   /** Close every wrapper. Used on CLI exit. */
   async close(): Promise<void> {
+    this.stopReconnectSupervisor(); // WS9 — stop new reconnect attempts before invalidating active ones
+    const serverIds = new Set([...this.clients.keys(), ...this.statuses.keys(), ...this.serverConfigs.keys()]);
+    for (const serverId of serverIds) this.beginServerOperation(serverId);
     for (const wrapper of this.clients.values()) {
       try { await wrapper.close(); } catch { /* ignore */ }
     }
-    this.stopReconnectSupervisor(); // WS9 — stop background reconnects on close
     this.clients.clear();
     this.toolToServer.clear();
     this.prefixedToServer.clear();

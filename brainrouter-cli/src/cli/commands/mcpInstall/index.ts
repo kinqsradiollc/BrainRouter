@@ -10,6 +10,7 @@
 
 import chalk from 'chalk';
 import type { Config } from '@kinqs/brainrouter-core/config';
+import { resolvePreferredBrainrouterServerId } from '@kinqs/brainrouter-core/mcp';
 import { displayPath, getVendor, listVendors, renderSnippet, VENDORS } from '../../../runtime/platform/vendorSnippets.js';
 
 export interface RenderResult {
@@ -26,7 +27,11 @@ export interface RunOpts {
  * the user hasn't logged in yet — caller prints a `/login` hint.
  */
 function resolveActiveBrainrouter(config: Config): { url: string; apiKey: string } | null {
-  const name = config.activeServer;
+  const name = resolvePreferredBrainrouterServerId(
+    config.servers ?? {},
+    config.activeBrainrouterServer,
+    config.activeServer,
+  );
   if (!name) return null;
   const profile = config.servers?.[name];
   if (!profile) return null;

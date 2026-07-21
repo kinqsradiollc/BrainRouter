@@ -2,6 +2,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { writeFileAtomic } from '../util/fs/atomicFile.js';
+import {
+  openWorkspaceFileParentGuard,
+  type WorkspaceFileParentGuard,
+} from '../workspace/fileWrite.js';
 
 export function isPathInside(parent: string, candidate: string): boolean {
   const relative = path.relative(parent, candidate);
@@ -68,72 +73,84 @@ export function getStateDir(workspaceRoot: string): string {
   return stateDir;
 }
 
-let migrationAttempted = new Set<string>();
+const migrationAttempted = new Set<string>();
+const LEGACY_PERSONAL_STATE_ROOTS = new Set(['cli', 'hooks', 'memories']);
+
+/** Test seam for exercising a second-process migration against one workspace. */
+export function _resetLegacyWorkspaceMigrationForTests(workspaceRoot?: string): void {
+  if (workspaceRoot === undefined) migrationAttempted.clear();
+  else migrationAttempted.delete(workspaceRoot);
+}
+
 function migrateLegacyWorkspaceState(workspaceRoot: string, newRoot: string): void {
   if (migrationAttempted.has(workspaceRoot)) return;
   migrationAttempted.add(workspaceRoot);
   try {
     const abs = fs.realpathSync(workspaceRoot);
     const legacyRoot = path.join(abs, '.brainrouter');
-    if (!fs.existsSync(legacyRoot)) return;
-    // If the legacy tree IS the new tree (because BRAINROUTER_HOME points at the
-    // workspace), do nothing.
-    if (path.resolve(legacyRoot) === path.resolve(newRoot)) return;
-    // The workspace-local "workflows/" tree is intentionally part of the
-    // workspace and must NOT be migrated away — that's the documented
-    // place to keep spec.md / tasks.md / walkthrough.md so the team can
-    // commit them. We only rescue cli/, hooks/, and memories/.
-    const markerFile = path.join(newRoot, '.migrated-from-workspace');
-    if (!fs.existsSync(markerFile)) {
-      for (const sub of ['cli', 'hooks', 'memories']) {
-        const src = path.join(legacyRoot, sub);
-        if (fs.existsSync(src)) {
-          copyDirRecursive(src, path.join(newRoot, sub));
-        }
+    if (!fs.existsSync(legacyRoot)) {
+      // A crash can remove the final cleanup tombstone immediately before it
+      // removes the trusted receipt (and the now-empty legacy root). Retire
+      // cleanup-ready receipts even when no workspace-local directory remains.
+      for (const sub of LEGACY_PERSONAL_STATE_ROOTS) {
+        recoverInterruptedLegacyMigration(
+          path.join(legacyRoot, sub),
+          path.join(newRoot, sub),
+        );
       }
-      fs.writeFileSync(markerFile, `Migrated from ${legacyRoot} at ${new Date().toISOString()}\n`, 'utf8');
-      process.stderr.write(`brainrouter: migrated legacy state from ${legacyRoot} to ${newRoot}\n`);
+      return;
     }
-    // Now neutralize the legacy directory so the agent's list_dir / read_file
-    // don't see stale state in the workspace tree. The important state has
-    // already been rescue-copied into the new home above (guaranteed by the
-    // marker check), so anything that ISN'T a workflows/ folder is DELETED
-    // outright — we no longer create a `.brainrouter.migrated/` archive in
-    // the project tree. If only workflows/ remains, the workspace-local
-    // .brainrouter/ stays as the canonical home for committable artifacts.
-    const entries = fs.readdirSync(legacyRoot, { withFileTypes: true });
+    const legacyRootStat = fs.lstatSync(legacyRoot);
+    if (legacyRootStat.isSymbolicLink() || !legacyRootStat.isDirectory()) {
+      process.stderr.write(`brainrouter: legacy-state migration skipped (unsafe workspace-local .brainrouter path)\n`);
+      return;
+    }
+    // A custom BRAINROUTER_HOME may be placed inside the historical tree (or
+    // vice versa). Never recurse from a source into its own destination: that
+    // would repeatedly copy the newly-created `workspaces/` subtree into
+    // itself. Resolve both existing directories so symlink aliases cannot hide
+    // the overlap.
+    const resolvedLegacyRoot = fs.realpathSync(legacyRoot);
+    const resolvedNewRoot = fs.realpathSync(newRoot);
+    if (isPathInside(resolvedLegacyRoot, resolvedNewRoot) ||
+        isPathInside(resolvedNewRoot, resolvedLegacyRoot)) {
+      process.stderr.write('brainrouter: legacy-state migration skipped (source and destination overlap)\n');
+      return;
+    }
+    // Only three historical roots are personal state. Everything else is
+    // project-owned and preserved by default, including artifact kinds added by
+    // newer releases that this older migrator does not know about yet.
+    const markerFile = path.join(newRoot, '.migrated-from-workspace');
+    const markerStat = lstatIfPresent(markerFile);
+    if (markerStat && (markerStat.isSymbolicLink() || !markerStat.isFile())) {
+      process.stderr.write('brainrouter: legacy-state migration skipped (unsafe migration marker)\n');
+      return;
+    }
+    let migrationComplete = true;
     let removedAny = false;
-    for (const entry of entries) {
-      if (entry.name === 'workflows') continue;
-      const from = path.join(legacyRoot, entry.name);
-      try {
-        fs.rmSync(from, { recursive: true, force: true });
-        removedAny = true;
-      } catch {
-        // best-effort: skip files we can't remove
-      }
+    for (const sub of LEGACY_PERSONAL_STATE_ROOTS) {
+      const outcome = rescueLegacyPersonalStateRoot(
+        path.join(legacyRoot, sub),
+        path.join(newRoot, sub),
+      );
+      if (outcome === 'preserved') migrationComplete = false;
+      if (outcome === 'removed') removedAny = true;
+    }
+    if (migrationComplete && !markerStat) {
+      writeFileAtomic(
+        markerFile,
+        `Migrated from ${legacyRoot} at ${new Date().toISOString()}\n`,
+        { mode: 0o600, exclusive: true },
+      );
+      process.stderr.write(`brainrouter: migrated legacy state from ${legacyRoot} to ${newRoot}\n`);
     }
     if (removedAny) {
       process.stderr.write(`brainrouter: removed legacy in-workspace state under ${legacyRoot} (rescued to ${newRoot})\n`);
     }
-    // One-time SWEEP: older builds archived legacy state into a
-    // `<ws>/.brainrouter.migrated/` folder. Now that the rescue-copy has run
-    // and the marker exists (migration complete), delete any such stale
-    // archive so pre-existing ones from older builds also disappear.
-    try {
-      const staleArchive = path.join(abs, '.brainrouter.migrated');
-      if (fs.existsSync(staleArchive) && fs.existsSync(markerFile)) {
-        fs.rmSync(staleArchive, { recursive: true, force: true });
-        process.stderr.write(`brainrouter: swept stale archive ${staleArchive}\n`);
-      }
-    } catch {
-      // best-effort sweep
-    }
     // If the workspace-local `.brainrouter/` is now completely empty (no
-    // `workflows/` to preserve), remove the empty shell so the user
-    // doesn't see a stray folder reappear every session. We only delete
-    // it when empty — never when it still has committable workflow
-    // artifacts inside.
+    // committable artifacts to preserve), remove the empty shell so the user
+    // doesn't see a stray folder reappear every session. We only delete it
+    // when empty — never when it still has committable artifacts inside.
     try {
       const remaining = fs.readdirSync(legacyRoot);
       if (remaining.length === 0) {
@@ -152,7 +169,8 @@ function migrateLegacyWorkspaceState(workspaceRoot: string, newRoot: string): vo
 /**
  * Workspace-local state directory, e.g. `<workspace>/.brainrouter/`. Reserved
  * for artifacts that are *meant* to be committed alongside the code — durable
- * workflow specs, task breakdowns, walkthrough notes. Everything else
+ * workspace manifests, workflow specs, task breakdowns, walkthrough notes.
+ * Everything else
  * (sessions, hooks, hookify rules, memories, preferences, transcripts) lives
  * under `getWorkspaceStateRoot` in the user-global home so the project tree
  * stays clean.
@@ -167,17 +185,831 @@ export function getWorkspaceLocalDir(workspaceRoot: string): string {
   return dir;
 }
 
-function copyDirRecursive(src: string, dst: string): void {
-  if (!fs.existsSync(src)) return;
-  fs.mkdirSync(dst, { recursive: true });
+type LegacyRescueOutcome = 'absent' | 'removed' | 'preserved';
+
+interface LegacyMigrationReceipt {
+  version: 1;
+  phase: 'prepared' | 'cleanup-ready';
+  source: string;
+  destination: string;
+  token: string;
+  candidates: string[];
+  expected: {
+    mode: number;
+    dev: number;
+    ino: number;
+  };
+}
+
+interface ActiveLegacyMigrationReceipt {
+  path: string;
+  value: LegacyMigrationReceipt;
+}
+
+const LEGACY_MIGRATION_RECEIPT_MAX_BYTES = 16 * 1024;
+const LEGACY_MIGRATION_RECEIPT_LIMIT = 64;
+const activeLegacyMigrationTokens = new Set<string>();
+
+export interface LegacyWorkspaceMigrationTestEvent {
+  stage:
+    | 'before-quarantine'
+    | 'after-quarantine'
+    | 'before-quarantine-cleanup'
+    | 'after-cleanup-tombstone'
+    | 'after-cleanup-removal';
+  source: string;
+  quarantine: string;
+  destination: string;
+}
+
+let legacyWorkspaceMigrationHookForTests:
+  ((event: LegacyWorkspaceMigrationTestEvent) => void) | undefined;
+
+/** Test seam for deterministic races around the destructive migration boundary. */
+export function _setLegacyWorkspaceMigrationHookForTests(
+  hook?: (event: LegacyWorkspaceMigrationTestEvent) => void,
+): void {
+  legacyWorkspaceMigrationHookForTests = hook;
+}
+
+/**
+ * Rescue one legacy personal-state root without following links or overwriting
+ * a different destination value. Source removal is allowed only after a fresh
+ * recursive byte-equivalence check succeeds in this invocation.
+ */
+function rescueLegacyPersonalStateRoot(src: string, dst: string): LegacyRescueOutcome {
+  if (!recoverInterruptedLegacyMigration(src, dst)) return 'preserved';
+  let guard: WorkspaceFileParentGuard;
+  try {
+    guard = openLegacySourceGuard(src);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'absent';
+    return 'preserved';
+  }
+  // Crash leftovers have no durable ownership receipt. Merely opening a
+  // checkout must never interpret a repository-controlled matching name as
+  // internal state and delete it, so preserve every recognizable leftover for
+  // explicit recovery and keep the migration incomplete.
+  if (hasPendingMigrationArtifact(src, path.dirname(guard.accessTarget))) {
+    guard.close();
+    return 'preserved';
+  }
+
+  const quarantine = path.join(
+    path.dirname(src),
+    `.${path.basename(src)}.migration-source.${process.pid}.${crypto.randomBytes(12).toString('hex')}`,
+  );
+
+  const initial = lstatIfPresent(guard.accessTarget);
+  if (!initial) {
+    guard.close();
+    return 'absent';
+  }
+  if (initial.isSymbolicLink() || !initial.isDirectory()) {
+    guard.close();
+    return 'preserved';
+  }
+  const accessQuarantine = guard.siblingPath(path.basename(quarantine));
+  const receipt = createLegacyMigrationReceipt(src, dst, quarantine, initial);
+
+  try {
+    legacyWorkspaceMigrationHookForTests?.({
+      stage: 'before-quarantine',
+      source: src,
+      quarantine,
+      destination: dst,
+    });
+    guard.assertStable();
+    assertLegacyMigrationReceipt(receipt);
+    fs.renameSync(guard.accessTarget, accessQuarantine);
+    guard.fsyncParent();
+    guard.assertStable();
+    const quarantined = lstatIfPresent(accessQuarantine);
+    if (!quarantined || quarantined.isSymbolicLink() || !quarantined.isDirectory() ||
+        !sameFilesystemEntry(initial, quarantined)) {
+      restoreQuarantineIfOwned(accessQuarantine, guard.accessTarget, initial, guard);
+      removeLegacyMigrationReceiptIfRecovered(receipt, src, initial);
+      return 'preserved';
+    }
+
+    legacyWorkspaceMigrationHookForTests?.({
+      stage: 'after-quarantine',
+      source: src,
+      quarantine,
+      destination: dst,
+    });
+    guard.assertStable();
+    if (!rescueQuarantinedDirectory(
+      accessQuarantine,
+      dst,
+      quarantined,
+      src,
+      receipt,
+      guard,
+      quarantine,
+    )) {
+      restoreQuarantineIfOwned(accessQuarantine, guard.accessTarget, quarantined, guard);
+      removeLegacyMigrationReceiptIfRecovered(receipt, src, quarantined);
+      return 'preserved';
+    }
+    removeLegacyMigrationReceipt(receipt.path);
+
+    // An older process can recreate the canonical path after the atomic rename.
+    // Its new state was not part of this rescue and must survive for a later run.
+    return lstatIfPresent(src) ? 'preserved' : 'removed';
+  } catch {
+    restoreQuarantineIfOwned(accessQuarantine, guard.accessTarget, initial, guard);
+    removeLegacyMigrationReceiptIfRecovered(receipt, src, initial);
+    return 'preserved';
+  } finally {
+    activeLegacyMigrationTokens.delete(receipt.value.token);
+    guard.close();
+  }
+}
+
+function rescueQuarantinedDirectory(
+  quarantine: string,
+  dst: string,
+  expectedSource: fs.Stats,
+  canonicalSource: string,
+  receipt: ActiveLegacyMigrationReceipt,
+  guard?: WorkspaceFileParentGuard,
+  canonicalQuarantine = quarantine,
+): boolean {
+  let cleanupTombstone: string | undefined;
+  try {
+    const touchedDirectories = new Set<string>();
+    const copied = rescueDirectoryContents(quarantine, dst, touchedDirectories);
+    if (!copied || !directoryContentsAreRescued(quarantine, dst)) return false;
+    fsyncTouchedDirectories(touchedDirectories);
+
+    legacyWorkspaceMigrationHookForTests?.({
+      stage: 'before-quarantine-cleanup',
+      source: canonicalSource,
+      quarantine: canonicalQuarantine,
+      destination: dst,
+    });
+    guard?.assertStable();
+    const current = lstatIfPresent(quarantine);
+    if (!current || current.isSymbolicLink() || !current.isDirectory() ||
+        !sameFilesystemEntry(expectedSource, current) ||
+        !directoryContentsAreRescued(quarantine, dst)) return false;
+
+    const canonicalCleanupTombstone = path.join(
+      path.dirname(canonicalQuarantine),
+      `.${path.basename(canonicalSource)}.migration-cleanup.${process.pid}.${crypto.randomBytes(12).toString('hex')}`,
+    );
+    cleanupTombstone = guard
+      ? guard.siblingPath(path.basename(canonicalCleanupTombstone))
+      : canonicalCleanupTombstone;
+    receipt.value.candidates = [canonicalQuarantine, canonicalCleanupTombstone];
+    writeLegacyMigrationReceipt(receipt.path, receipt.value, false);
+    guard?.assertStable();
+    fs.renameSync(quarantine, cleanupTombstone);
+    if (guard) guard.fsyncParent();
+    else fsyncDirectory(path.dirname(quarantine));
+    guard?.assertStable();
+    legacyWorkspaceMigrationHookForTests?.({
+      stage: 'after-cleanup-tombstone',
+      source: canonicalSource,
+      quarantine: canonicalCleanupTombstone,
+      destination: dst,
+    });
+    guard?.assertStable();
+    const moved = lstatIfPresent(cleanupTombstone);
+    if (!moved || moved.isSymbolicLink() || !moved.isDirectory() ||
+        !sameFilesystemEntry(expectedSource, moved) ||
+        !directoryContentsAreRescued(cleanupTombstone, dst)) {
+      restoreCleanupTombstoneIfOwned(cleanupTombstone, quarantine, expectedSource, guard);
+      return false;
+    }
+
+    // Durable proof that cleanup is authorized must precede deletion. If the
+    // process dies after rm but before receipt removal, the next run can now
+    // retire the receipt without guessing whether an unverified source died.
+    receipt.value.phase = 'cleanup-ready';
+    writeLegacyMigrationReceipt(receipt.path, receipt.value, false);
+    guard?.assertStable();
+    fs.rmSync(cleanupTombstone, { recursive: true, force: true });
+    if (guard) guard.fsyncParent();
+    else fsyncDirectory(path.dirname(cleanupTombstone));
+    guard?.assertStable();
+    legacyWorkspaceMigrationHookForTests?.({
+      stage: 'after-cleanup-removal',
+      source: canonicalSource,
+      quarantine: canonicalCleanupTombstone,
+      destination: dst,
+    });
+    guard?.assertStable();
+    return true;
+  } catch {
+    if (cleanupTombstone) {
+      restoreCleanupTombstoneIfOwned(cleanupTombstone, quarantine, expectedSource, guard);
+    }
+    return false;
+  }
+}
+
+function hasPendingMigrationArtifact(src: string, parent = path.dirname(src)): boolean {
+  const base = path.basename(src);
+  const generatedName = new RegExp(
+    `^\\.${base}\\.migration-(?:source|cleanup)\\.[0-9]+\\.[0-9a-f]{24}$`,
+  );
+  return fs.readdirSync(parent).some((name) => generatedName.test(name));
+}
+
+function createLegacyMigrationReceipt(
+  source: string,
+  destination: string,
+  quarantine: string,
+  expected: fs.Stats,
+): ActiveLegacyMigrationReceipt {
+  const match = /\.migration-source\.([0-9]+\.[0-9a-f]{24})$/.exec(quarantine);
+  if (!match) throw new Error(`Invalid legacy migration quarantine: ${quarantine}`);
+  const token = match[1]!;
+  const directory = path.dirname(destination);
+  const receiptPath = path.join(
+    directory,
+    `.${path.basename(source)}.legacy-migration.${token}.json`,
+  );
+  const value: LegacyMigrationReceipt = {
+    version: 1,
+    phase: 'prepared',
+    source,
+    destination,
+    token,
+    candidates: [quarantine],
+    expected: {
+      mode: expected.mode & 0o777,
+      dev: expected.dev,
+      ino: expected.ino,
+    },
+  };
+  activeLegacyMigrationTokens.add(token);
+  try {
+    writeLegacyMigrationReceipt(receiptPath, value, true);
+  } catch (error) {
+    activeLegacyMigrationTokens.delete(token);
+    throw error;
+  }
+  return { path: receiptPath, value };
+}
+
+function writeLegacyMigrationReceipt(
+  receiptPath: string,
+  receipt: LegacyMigrationReceipt,
+  exclusive: boolean,
+): void {
+  writeFileAtomic(receiptPath, `${JSON.stringify(receipt)}\n`, {
+    mode: 0o600,
+    exclusive,
+  });
+}
+
+function assertLegacyMigrationReceipt(active: ActiveLegacyMigrationReceipt): void {
+  const current = readLegacyMigrationReceipt(active.path, active.value.source, active.value.destination);
+  if (!current || current.token !== active.value.token ||
+      JSON.stringify(current) !== JSON.stringify(active.value)) {
+    throw new Error('Legacy migration ownership receipt changed before source quarantine.');
+  }
+}
+
+function recoverInterruptedLegacyMigration(source: string, destination: string): boolean {
+  const directory = path.dirname(destination);
+  const escapedBase = escapeRegExp(path.basename(source));
+  const receiptName = new RegExp(
+    `^\\.${escapedBase}\\.legacy-migration\\.([0-9]+\\.[0-9a-f]{24})\\.json$`,
+  );
+  let entries: Array<{ name: string; token: string }>;
+  try {
+    const stat = fs.lstatSync(directory);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) return false;
+    entries = fs.readdirSync(directory)
+      .map((name) => ({ name, match: receiptName.exec(name) }))
+      .filter((entry): entry is { name: string; match: RegExpExecArray } => !!entry.match)
+      .map(({ name, match }) => ({ name, token: match[1]! }))
+      .sort((left, right) => left.name.localeCompare(right.name));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
+    throw error;
+  }
+  if (entries.length > LEGACY_MIGRATION_RECEIPT_LIMIT) return false;
+
+  const pending: Array<{
+    entry: { name: string; token: string };
+    receipt: LegacyMigrationReceipt;
+  }> = [];
+  for (const entry of entries) {
+    const receiptPath = path.join(directory, entry.name);
+    const receipt = readLegacyMigrationReceipt(receiptPath, source, destination);
+    if (!receipt || receipt.token !== entry.token) return false;
+    if (legacyMigrationOwnerIsActive(receipt.token)) return false;
+    if (!lstatIfPresent(source) &&
+        receipt.candidates.every((candidate) => !lstatIfPresent(candidate))) {
+      // A second writer can persist its prepared receipt, lose the source
+      // rename to the first writer, and therefore never create a candidate.
+      // With no canonical source and no owned candidate there are no bytes this
+      // receipt can recover; retaining it would block every future migration.
+      removeLegacyMigrationReceipt(receiptPath);
+      continue;
+    }
+    pending.push({ entry, receipt });
+  }
+
+  let guard: WorkspaceFileParentGuard | undefined;
+  if (pending.length > 0) {
+    try {
+      guard = openLegacySourceGuard(source);
+    } catch {
+      return false;
+    }
+  }
+
+  try {
+    for (const { entry, receipt } of pending) {
+      const receiptPath = path.join(directory, entry.name);
+      guard!.assertStable();
+      const canonical = lstatIfPresent(guard!.accessTarget);
+      const ownedCandidates = receipt.candidates
+        .map((candidate) => ({
+          candidate,
+          accessCandidate: guard!.siblingPath(path.basename(candidate)),
+        }))
+        .map((candidate) => ({
+          ...candidate,
+          stat: lstatIfPresent(candidate.accessCandidate),
+        }))
+        .filter((candidate): candidate is {
+          candidate: string;
+          accessCandidate: string;
+          stat: fs.Stats;
+        } => !!candidate.stat && migrationDirectoryMatchesReceipt(candidate.stat, receipt));
+      guard!.assertStable();
+
+      if (canonical && (canonical.isSymbolicLink() || !canonical.isDirectory())) return false;
+      if (canonical && ownedCandidates.length === 0) {
+        removeLegacyMigrationReceipt(receiptPath);
+        continue;
+      }
+      if (ownedCandidates.length !== 1) return false;
+
+      const active: ActiveLegacyMigrationReceipt = { path: receiptPath, value: receipt };
+      activeLegacyMigrationTokens.add(receipt.token);
+      try {
+        if (!rescueQuarantinedDirectory(
+          ownedCandidates[0]!.accessCandidate,
+          destination,
+          ownedCandidates[0]!.stat,
+          source,
+          active,
+          guard,
+          ownedCandidates[0]!.candidate,
+        )) return false;
+        removeLegacyMigrationReceipt(receiptPath);
+        if (canonical) {
+          // The receipt owns only the quarantined old generation. Rescue and
+          // retire it now, but leave the recreated canonical generation for a
+          // fresh migration pass with its own snapshot and receipt.
+          return false;
+        }
+      } finally {
+        activeLegacyMigrationTokens.delete(receipt.token);
+      }
+    }
+  } finally {
+    guard?.close();
+  }
+  return true;
+}
+
+function openLegacySourceGuard(source: string): WorkspaceFileParentGuard {
+  const legacyRoot = path.dirname(source);
+  const workspaceRoot = path.dirname(legacyRoot);
+  if (path.basename(legacyRoot) !== '.brainrouter') {
+    throw new Error(`Unexpected legacy migration source: ${source}`);
+  }
+  const guard = openWorkspaceFileParentGuard(
+    workspaceRoot,
+    path.join('.brainrouter', path.basename(source)),
+    { targetKind: 'directory' },
+  );
+  if (guard.canonicalTarget !== source) {
+    guard.close();
+    throw new Error(`Legacy migration source changed: ${source}`);
+  }
+  return guard;
+}
+
+function readLegacyMigrationReceipt(
+  receiptPath: string,
+  source: string,
+  destination: string,
+): LegacyMigrationReceipt | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readRegularFileBounded(receiptPath, LEGACY_MIGRATION_RECEIPT_MAX_BYTES).toString('utf8'));
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+  const receipt = parsed as Partial<LegacyMigrationReceipt>;
+  const expected = receipt.expected;
+  if (receipt.version !== 1 ||
+      (receipt.phase !== 'prepared' && receipt.phase !== 'cleanup-ready') ||
+      receipt.source !== source || receipt.destination !== destination ||
+      typeof receipt.token !== 'string' || !/^[0-9]+\.[0-9a-f]{24}$/.test(receipt.token) ||
+      !Array.isArray(receipt.candidates) || receipt.candidates.length < 1 || receipt.candidates.length > 2 ||
+      receipt.candidates.some((candidate) => !validLegacyMigrationCandidate(candidate, source)) ||
+      !expected || typeof expected !== 'object' || !Number.isFinite(expected.mode) ||
+      !Number.isFinite(expected.dev) || !Number.isFinite(expected.ino)) {
+    return undefined;
+  }
+  return receipt as LegacyMigrationReceipt;
+}
+
+function validLegacyMigrationCandidate(candidate: unknown, source: string): candidate is string {
+  if (typeof candidate !== 'string' || path.dirname(candidate) !== path.dirname(source)) return false;
+  const escapedBase = escapeRegExp(path.basename(source));
+  return new RegExp(
+    `^\\.${escapedBase}\\.migration-(?:source|cleanup)\\.[0-9]+\\.[0-9a-f]{24}$`,
+  ).test(path.basename(candidate));
+}
+
+function migrationDirectoryMatchesReceipt(stat: fs.Stats, receipt: LegacyMigrationReceipt): boolean {
+  return !stat.isSymbolicLink() && stat.isDirectory() &&
+    (stat.mode & 0o777) === receipt.expected.mode &&
+    stat.dev === receipt.expected.dev && stat.ino === receipt.expected.ino;
+}
+
+function legacyMigrationOwnerIsActive(token: string): boolean {
+  const ownerPid = Number(token.slice(0, token.indexOf('.')));
+  if (ownerPid === process.pid) return activeLegacyMigrationTokens.has(token);
+  try {
+    process.kill(ownerPid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
+}
+
+function removeLegacyMigrationReceiptIfRecovered(
+  active: ActiveLegacyMigrationReceipt,
+  source: string,
+  expected: fs.Stats,
+): void {
+  try {
+    const restored = lstatIfPresent(source);
+    if (!restored || restored.isSymbolicLink() || !restored.isDirectory() ||
+        !sameFilesystemEntry(expected, restored) ||
+        active.value.candidates.some((candidate) => {
+          const candidateStat = lstatIfPresent(candidate);
+          return !!candidateStat && sameFilesystemEntry(expected, candidateStat);
+        })) return;
+    removeLegacyMigrationReceipt(active.path);
+  } catch {
+    // A durable receipt is safer than guessing after an ambiguous restore.
+  }
+}
+
+function removeLegacyMigrationReceipt(receiptPath: string): void {
+  try {
+    fs.unlinkSync(receiptPath);
+    fsyncDirectory(path.dirname(receiptPath));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+}
+
+function readRegularFileBounded(target: string, maxBytes: number): Buffer {
+  const pathStat = fs.lstatSync(target);
+  if (pathStat.isSymbolicLink() || !pathStat.isFile() || pathStat.size > maxBytes) {
+    throw new Error(`Unsafe migration receipt: ${target}`);
+  }
+  const noFollow = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
+  let descriptor: number | undefined;
+  try {
+    descriptor = fs.openSync(target, fs.constants.O_RDONLY | noFollow);
+    const opened = fs.fstatSync(descriptor);
+    if (!opened.isFile() || !sameFilesystemEntry(pathStat, opened) || opened.size > maxBytes) {
+      throw new Error(`Unsafe migration receipt: ${target}`);
+    }
+    const contents = Buffer.alloc(opened.size);
+    if (!readExactly(descriptor, contents, contents.length, 0)) {
+      throw new Error(`Migration receipt changed while reading: ${target}`);
+    }
+    const after = fs.fstatSync(descriptor);
+    const afterPath = fs.lstatSync(target);
+    if (!sameStableFile(opened, after) || afterPath.isSymbolicLink() || !afterPath.isFile() ||
+        !sameStableFile(after, afterPath)) {
+      throw new Error(`Migration receipt changed while reading: ${target}`);
+    }
+    return contents;
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+  }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function restoreCleanupTombstoneIfOwned(
+  cleanupTombstone: string,
+  quarantine: string,
+  expected: fs.Stats,
+  guard?: Pick<WorkspaceFileParentGuard, 'assertStable' | 'fsyncParent'>,
+): void {
+  try {
+    guard?.assertStable();
+    if (lstatIfPresent(quarantine)) return;
+    const current = lstatIfPresent(cleanupTombstone);
+    if (!current || current.isSymbolicLink() || !current.isDirectory() ||
+        !sameFilesystemEntry(expected, current)) return;
+    fs.renameSync(cleanupTombstone, quarantine);
+    if (guard) guard.fsyncParent();
+    else fsyncDirectory(path.dirname(quarantine));
+    guard?.assertStable();
+  } catch {
+    // Preserve the tombstone when ownership or the restore target is unclear.
+  }
+}
+
+function restoreQuarantineIfOwned(
+  quarantine: string,
+  src: string,
+  expected: fs.Stats,
+  guard?: Pick<WorkspaceFileParentGuard, 'assertStable' | 'fsyncParent'>,
+): void {
+  try {
+    guard?.assertStable();
+    if (lstatIfPresent(src)) return;
+    const current = lstatIfPresent(quarantine);
+    if (!current || current.isSymbolicLink() || !current.isDirectory() ||
+        !sameFilesystemEntry(expected, current)) return;
+    fs.renameSync(quarantine, src);
+    if (guard) guard.fsyncParent();
+    else fsyncDirectory(path.dirname(src));
+    guard?.assertStable();
+  } catch {
+    // Both the canonical path and quarantine are safer preserved than guessed at.
+  }
+}
+
+function rescueDirectoryContents(
+  src: string,
+  dst: string,
+  touchedDirectories: Set<string>,
+): boolean {
+  const sourceDirectory = lstatIfPresent(src);
+  if (!sourceDirectory || sourceDirectory.isSymbolicLink() || !sourceDirectory.isDirectory() ||
+      !ensureRealDirectory(dst, sourceDirectory.mode & 0o777, touchedDirectories)) return false;
+  let complete = true;
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
     const srcPath = path.join(src, entry.name);
     const dstPath = path.join(dst, entry.name);
-    if (entry.isDirectory()) {
-      copyDirRecursive(srcPath, dstPath);
-    } else if (entry.isFile()) {
-      if (fs.existsSync(dstPath)) continue; // don't clobber existing state
-      fs.copyFileSync(srcPath, dstPath);
+    const srcStat = lstatIfPresent(srcPath);
+    if (!srcStat || srcStat.isSymbolicLink()) {
+      complete = false;
+      continue;
+    }
+    if (srcStat.isDirectory()) {
+      if (!rescueDirectoryContents(srcPath, dstPath, touchedDirectories)) complete = false;
+      continue;
+    }
+    if (!srcStat.isFile() ||
+        !rescueRegularFile(srcPath, dstPath, srcStat, touchedDirectories)) complete = false;
+  }
+  return complete;
+}
+
+function directoryContentsAreRescued(src: string, dst: string): boolean {
+  const srcStat = lstatIfPresent(src);
+  const dstStat = lstatIfPresent(dst);
+  if (!srcStat?.isDirectory() || srcStat.isSymbolicLink() ||
+      !dstStat?.isDirectory() || dstStat.isSymbolicLink() ||
+      (srcStat.mode & 0o777) !== (dstStat.mode & 0o777)) return false;
+
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const srcPath = path.join(src, entry.name);
+    const dstPath = path.join(dst, entry.name);
+    const entryStat = lstatIfPresent(srcPath);
+    if (!entryStat || entryStat.isSymbolicLink()) return false;
+    if (entryStat.isDirectory()) {
+      if (!directoryContentsAreRescued(srcPath, dstPath)) return false;
+    } else if (!entryStat.isFile() || !regularFilesEqual(srcPath, dstPath)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function ensureRealDirectory(
+  dir: string,
+  mode: number,
+  touchedDirectories: Set<string>,
+): boolean {
+  let stat = lstatIfPresent(dir);
+  if (!stat) {
+    try {
+      fs.mkdirSync(dir, { mode });
+      fs.chmodSync(dir, mode);
+      touchedDirectories.add(path.dirname(dir));
+      touchedDirectories.add(dir);
+    } catch { /* raced with another creator or failed */ }
+    stat = lstatIfPresent(dir);
+  }
+  const valid = !!stat && stat.isDirectory() && !stat.isSymbolicLink() &&
+    (stat.mode & 0o777) === mode;
+  // Even an already-present collision must be made durable before its only
+  // verified legacy copy is removed.
+  if (valid) touchedDirectories.add(dir);
+  return valid;
+}
+
+function rescueRegularFile(
+  src: string,
+  dst: string,
+  expectedSource: fs.Stats,
+  touchedDirectories: Set<string>,
+): boolean {
+  const destination = lstatIfPresent(dst);
+  if (destination) {
+    return !destination.isSymbolicLink() && destination.isFile() && regularFilesEqual(src, dst);
+  }
+
+  const noFollow = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
+  const temporary = path.join(
+    path.dirname(dst),
+    `.${path.basename(dst)}.${process.pid}.${crypto.randomBytes(12).toString('hex')}.migration-tmp`,
+  );
+  let sourceFd: number | undefined;
+  let temporaryFd: number | undefined;
+  let temporaryVersion: fs.Stats | undefined;
+  try {
+    sourceFd = fs.openSync(src, fs.constants.O_RDONLY | noFollow);
+    const openedSource = fs.fstatSync(sourceFd);
+    if (!openedSource.isFile() || !sameFilesystemEntry(expectedSource, openedSource)) return false;
+
+    temporaryFd = fs.openSync(
+      temporary,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | noFollow,
+      openedSource.mode & 0o777,
+    );
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let offset = 0;
+    while (offset < openedSource.size) {
+      const requested = Math.min(buffer.length, openedSource.size - offset);
+      const read = fs.readSync(sourceFd, buffer, 0, requested, offset);
+      if (read <= 0) throw new Error('Legacy state source changed while it was being rescued.');
+      let written = 0;
+      while (written < read) {
+        const count = fs.writeSync(temporaryFd, buffer, written, read - written, offset + written);
+        if (count <= 0) throw new Error('Legacy state destination stopped accepting rescued bytes.');
+        written += count;
+      }
+      offset += read;
+    }
+    fs.fchmodSync(temporaryFd, openedSource.mode & 0o777);
+    fs.fsyncSync(temporaryFd);
+    const closedSource = fs.fstatSync(sourceFd);
+    if (!sameStableFile(openedSource, closedSource)) return false;
+
+    try {
+      fs.linkSync(temporary, dst);
+      touchedDirectories.add(path.dirname(dst));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return false;
+    }
+    // Linking updates the inode ctime. Capture the post-link version so the
+    // finally block removes only this exact staging file, never a replacement.
+    temporaryVersion = fs.fstatSync(temporaryFd);
+    return regularFilesEqual(src, dst);
+  } catch {
+    return false;
+  } finally {
+    if (temporaryFd !== undefined) {
+      // Snapshot through our still-open descriptor. Cleanup then unlinks the
+      // staging name only if it still identifies this exact final version.
+      try { temporaryVersion = fs.fstatSync(temporaryFd); } catch { /* preserve the copy result */ }
+      try { fs.closeSync(temporaryFd); } catch { /* best-effort close */ }
+    }
+    if (sourceFd !== undefined) {
+      try { fs.closeSync(sourceFd); } catch { /* best-effort close */ }
+    }
+    removeTemporaryIfOwned(temporary, temporaryVersion);
+    touchedDirectories.add(path.dirname(temporary));
+  }
+}
+
+function removeTemporaryIfOwned(temporary: string, expected: fs.Stats | undefined): void {
+  if (!expected) return;
+  try {
+    const current = fs.lstatSync(temporary);
+    if (current.isSymbolicLink() || !current.isFile() ||
+        !sameStableFile(expected, current)) return;
+    fs.rmSync(temporary, { force: true });
+  } catch {
+    // A stale complete temp is safer than deleting a path whose identity changed.
+  }
+}
+
+function regularFilesEqual(left: string, right: string): boolean {
+  const noFollow = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
+  let leftFd: number | undefined;
+  let rightFd: number | undefined;
+  try {
+    leftFd = fs.openSync(left, fs.constants.O_RDONLY | noFollow);
+    rightFd = fs.openSync(right, fs.constants.O_RDONLY | noFollow);
+    const leftBefore = fs.fstatSync(leftFd);
+    const rightBefore = fs.fstatSync(rightFd);
+    if (!leftBefore.isFile() || !rightBefore.isFile() ||
+        leftBefore.size !== rightBefore.size ||
+        (leftBefore.mode & 0o777) !== (rightBefore.mode & 0o777)) return false;
+    const leftPathStat = fs.lstatSync(left);
+    const rightPathStat = fs.lstatSync(right);
+    if (leftPathStat.isSymbolicLink() || rightPathStat.isSymbolicLink() ||
+        !sameFilesystemEntry(leftBefore, leftPathStat) || !sameFilesystemEntry(rightBefore, rightPathStat)) return false;
+
+    const leftBuffer = Buffer.allocUnsafe(64 * 1024);
+    const rightBuffer = Buffer.allocUnsafe(64 * 1024);
+    for (let offset = 0; offset < leftBefore.size; offset += leftBuffer.length) {
+      const length = Math.min(leftBuffer.length, leftBefore.size - offset);
+      if (!readExactly(leftFd, leftBuffer, length, offset) ||
+          !readExactly(rightFd, rightBuffer, length, offset) ||
+          !leftBuffer.subarray(0, length).equals(rightBuffer.subarray(0, length))) return false;
+    }
+    // A byte-equivalent pre-existing collision is the destination copy we
+    // rely on, so flush its inode before permitting source cleanup.
+    fs.fsyncSync(rightFd);
+    const leftAfter = fs.fstatSync(leftFd);
+    const rightAfter = fs.fstatSync(rightFd);
+    const leftAfterPath = fs.lstatSync(left);
+    const rightAfterPath = fs.lstatSync(right);
+    return sameStableFile(leftBefore, leftAfter) &&
+      sameStableFile(rightBefore, rightAfter) &&
+      !leftAfterPath.isSymbolicLink() && leftAfterPath.isFile() &&
+      !rightAfterPath.isSymbolicLink() && rightAfterPath.isFile() &&
+      sameStableFile(leftAfter, leftAfterPath) &&
+      sameStableFile(rightAfter, rightAfterPath);
+  } catch {
+    return false;
+  } finally {
+    if (rightFd !== undefined) {
+      try { fs.closeSync(rightFd); } catch { /* best-effort close */ }
+    }
+    if (leftFd !== undefined) {
+      try { fs.closeSync(leftFd); } catch { /* best-effort close */ }
+    }
+  }
+}
+
+function readExactly(fd: number, buffer: Buffer, length: number, position: number): boolean {
+  let offset = 0;
+  while (offset < length) {
+    const read = fs.readSync(fd, buffer, offset, length - offset, position + offset);
+    if (read <= 0) return false;
+    offset += read;
+  }
+  return true;
+}
+
+function lstatIfPresent(target: string): fs.Stats | undefined {
+  try {
+    return fs.lstatSync(target);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+}
+
+function sameFilesystemEntry(left: fs.Stats, right: fs.Stats): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function sameStableFile(before: fs.Stats, after: fs.Stats): boolean {
+  return sameFilesystemEntry(before, after) &&
+    (before.mode & 0o777) === (after.mode & 0o777) &&
+    before.size === after.size &&
+    before.mtimeMs === after.mtimeMs &&
+    before.ctimeMs === after.ctimeMs;
+}
+
+function fsyncTouchedDirectories(directories: Set<string>): void {
+  const ordered = [...directories].sort((left, right) => right.length - left.length);
+  for (const directory of ordered) fsyncDirectory(directory);
+}
+
+function fsyncDirectory(directory: string): void {
+  let descriptor: number | undefined;
+  try {
+    descriptor = fs.openSync(directory, fs.constants.O_RDONLY);
+    fs.fsyncSync(descriptor);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'EINVAL' && code !== 'ENOTSUP' && code !== 'EBADF' && code !== 'EISDIR') throw error;
+  } finally {
+    if (descriptor !== undefined) {
+      try { fs.closeSync(descriptor); } catch { /* best-effort close */ }
     }
   }
 }

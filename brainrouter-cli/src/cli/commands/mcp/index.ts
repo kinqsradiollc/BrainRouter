@@ -19,11 +19,23 @@
 import chalk from 'chalk';
 import { spinner as makeSpinner } from '../../prompt/spinner.js';
 import type { CommandContext } from '../_context.js';
-import { saveConfig } from '@kinqs/brainrouter-core/config';
-import { resolveIdentityFromConfig, selectMcpServerIds } from '@kinqs/brainrouter-core/mcp';
+import { resolveIdentityFromConfig } from '@kinqs/brainrouter-core/mcp';
 import { buildBannerInputs, renderBanner } from '../../view/banner.js';
 import { resolveTheme } from '../../theme/theme.js';
 import { runMcpInstall } from '../mcpInstall/index.js';
+import {
+  configForRuntimeMcpResolution,
+  configWithRuntimeMcpState,
+  createRuntimeMcpState,
+  resolveEffectiveLlmConfig,
+  resolveEffectiveMcpLaunch,
+} from '../../../entry/mcpStartup.js';
+import { redactMcpErrorText, redactMcpHttpUrl, redactMcpStdioCommand } from '../../mcpUrl.js';
+import {
+  isBrainrouterProfile,
+  McpProfilePersistenceError,
+  reconcileLiveMcpProfile,
+} from '../../mcpProfileLifecycle.js';
 
 export async function tryHandleMcpCommand(ctx: CommandContext): Promise<boolean> {
   const { command, args, mcpClient, config } = ctx;
@@ -31,6 +43,7 @@ export async function tryHandleMcpCommand(ctx: CommandContext): Promise<boolean>
 
   const sub = (args[0] ?? 'list').toLowerCase();
   const targetName = args[1]?.trim();
+  const runtimeConfig = configWithRuntimeMcpState(config, ctx.repl.runtimeMcp);
 
   if (sub === 'tools') {
     const onlyServer = targetName;
@@ -84,14 +97,14 @@ export async function tryHandleMcpCommand(ctx: CommandContext): Promise<boolean>
         }
       }
     } catch (err: any) {
-      spinner.fail(chalk.red(`Failed: ${err.message}`));
+      spinner.fail(chalk.red(`Failed: ${redactMcpErrorText(String(err?.message ?? err), runtimeConfig, onlyServer)}`));
     }
     console.log();
     return true;
   }
 
   if (sub === 'list') {
-    const profiles = Object.keys(config.servers ?? {});
+    const profiles = Object.keys(runtimeConfig.servers);
     if (profiles.length === 0) {
       console.log(chalk.yellow('\nNo MCP profiles configured. Run `/login` or `brainrouter config` to set one up.\n'));
       return true;
@@ -101,12 +114,12 @@ export async function tryHandleMcpCommand(ctx: CommandContext): Promise<boolean>
     const statusById = new Map(statuses.map((s) => [s.serverId, s]));
     const activeName = config.activeServer;
     for (const section of groupServerIdsByEcosystem(profiles, (name) => {
-      const profile = config.servers[name];
+      const profile = runtimeConfig.servers[name];
       return statusById.get(name)?.identity ?? profile?.identity ?? 'unknown';
     })) {
       console.log(`\n${section.title}`);
       for (const name of section.ids) {
-        const profile = config.servers[name];
+        const profile = runtimeConfig.servers[name];
         const poolStatus = statusById.get(name);
         // Identity: pool live > config metadata > 'unknown'.
         const identity: string = poolStatus?.identity ?? profile.identity ?? 'unknown';
@@ -121,9 +134,13 @@ export async function tryHandleMcpCommand(ctx: CommandContext): Promise<boolean>
         const idLabel = formatIdentityTag(identity);
         const marker = name === activeName ? chalk.bold('★ ') : '  ';
         const transport = profile.type;
-        const target = profile.type === 'http' ? profile.url ?? '<no url>' : profile.command ?? '<no command>';
+        const target = profile.type === 'http'
+          ? redactMcpHttpUrl(profile.url)
+          : redactMcpStdioCommand(profile) || '<no command>';
         const toolTag = poolStatus?.toolCount != null ? chalk.gray(`${poolStatus.toolCount} tools`) : '';
-        const errTag = liveStatus === 'failed' && poolStatus?.error ? chalk.red(` · ${poolStatus.error}`) : '';
+        const errTag = liveStatus === 'failed' && poolStatus?.error
+          ? chalk.red(` · ${redactMcpErrorText(poolStatus.error, runtimeConfig, name)}`)
+          : '';
         console.log(`${marker}${chalk.bold(name)}  ${idLabel}  ${transport}  ${statusLabel}  ${chalk.gray(target)}  ${toolTag}${errTag}`);
       }
     }
@@ -135,49 +152,75 @@ export async function tryHandleMcpCommand(ctx: CommandContext): Promise<boolean>
   if (sub === 'reconnect') {
     if (!targetName) {
       // No name → reconnect every configured server in the pool.
-      const ids = selectMcpServerIds(config.servers ?? {}, config.activeServer);
+      const launch = await resolveEffectiveMcpLaunch({
+        config: configForRuntimeMcpResolution(config, ctx.repl.runtimeMcp),
+        workspaceRoot: ctx.agent.workspaceRoot,
+        policy: { ...ctx.repl.launchPolicy, skipMcpForLaunch: false },
+      });
+      if (launch.status !== 'ready') {
+        console.log(chalk.red('\nThe current MCP launch policy cannot resolve a reconnect set.\n'));
+        return true;
+      }
+      ctx.repl.runtimeMcp = createRuntimeMcpState(launch);
+      const connectedRuntimeConfig = configWithRuntimeMcpState(config, ctx.repl.runtimeMcp);
+      const ids = launch.targetIds;
       if (ids.length === 0) {
         console.log(chalk.red(`\nNo MCP profiles configured.\n`));
         return true;
       }
       console.log(chalk.gray(`Reconnecting all servers (${ids.length})…`));
-      await Promise.allSettled(ids.map(async (id) => {
-        try {
-          await mcpClient.reconnectOne(id);
-          const s = mcpClient.getStatus(id);
-          if (s?.status === 'connected') {
+      const llmConfig = resolveEffectiveLlmConfig(config, ctx.repl.launchPolicy);
+      mcpClient.stopReconnectSupervisor();
+      try {
+        mcpClient.setReconnectLlmConfig(llmConfig);
+        const targetSet = new Set(ids);
+        for (const serverId of mcpClient.getServerIds()) {
+          if (!targetSet.has(serverId)) await mcpClient.removeOne(serverId);
+        }
+        const statuses = await mcpClient.connectAll(launch.targetServers, llmConfig, {
+          timeoutMs: 5_000,
+          preferredBrainrouterServerId: launch.runtimeActiveBrainrouterServer,
+        });
+        const byId = new Map(statuses.map((status) => [status.serverId, status]));
+        for (const id of ids) {
+          const status = byId.get(id);
+          if (status?.status === 'connected') {
             console.log(chalk.green(`  ✓ ${id}`));
           } else {
-            console.log(chalk.red(`  ✗ ${id} — ${s?.error ?? 'failed'}`));
+            console.log(chalk.red(`  ✗ ${id} — ${redactMcpErrorText(status?.error ?? 'failed', connectedRuntimeConfig, id)}`));
           }
-        } catch (err: any) {
-          console.log(chalk.red(`  ✗ ${id} — ${err?.message ?? err}`));
         }
-      }));
+      } finally {
+        mcpClient.startReconnectSupervisor();
+      }
       console.log();
       return true;
     }
-    if (!config.servers?.[targetName]) {
+    if (!runtimeConfig.servers[targetName]) {
       console.log(chalk.red(`\nNo profile named "${targetName}".\n`));
       return true;
     }
     console.log(chalk.gray(`Reconnecting "${targetName}"…`));
     try {
-      await disconnectOtherBrainrouterServers(ctx, targetName);
-      await mcpClient.reconnectOne(targetName);
-      const s = mcpClient.getStatus(targetName);
+      const s = await reconcileLiveMcpProfile(ctx, targetName, {
+        forceReconnect: true,
+        persistHighlightedProfile: true,
+      });
       if (s?.status === 'connected') {
-        const activated = activateBrainrouterProfile(ctx, targetName);
         console.log(chalk.green(`✓ Reconnected to "${targetName}".\n`));
-        if (activated) {
-          console.log(chalk.gray(`  Active BrainRouter profile saved as "${targetName}" for this and future sessions.\n`));
+        if (isBrainrouterProfile(ctx, targetName)) {
+          printBrainrouterSelectionResult(ctx, targetName);
           printRefreshedBanner(ctx);
         }
       } else {
-        console.log(chalk.red(`✗ "${targetName}" remained ${s?.status ?? 'offline'} — ${s?.error ?? 'unknown'}\n`));
+        console.log(chalk.red(`✗ "${targetName}" remained ${s?.status ?? 'offline'} — ${redactMcpErrorText(s?.error ?? 'unknown', runtimeConfig, targetName)}\n`));
       }
     } catch (err: any) {
-      console.log(chalk.red(`✗ Reconnect failed: ${err?.message ?? err}\n`));
+      if (err instanceof McpProfilePersistenceError) {
+        console.log(chalk.yellow(`⚠ ${redactMcpErrorText(err.message, runtimeConfig, targetName)} The live connection is active for this session.\n`));
+        return true;
+      }
+      console.log(chalk.red(`✗ Reconnect failed: ${redactMcpErrorText(String(err?.message ?? err), runtimeConfig, targetName)}\n`));
     }
     return true;
   }
@@ -187,34 +230,35 @@ export async function tryHandleMcpCommand(ctx: CommandContext): Promise<boolean>
       console.log(chalk.red('\nUsage: /mcp connect <name>\n'));
       return true;
     }
-    const profile = config.servers?.[targetName];
+    const profile = runtimeConfig.servers[targetName];
     if (!profile) {
-      console.log(chalk.red(`\nNo profile named "${targetName}". Available: ${Object.keys(config.servers ?? {}).join(', ') || '(none)'}.\n`));
+      console.log(chalk.red(`\nNo profile named "${targetName}". Available: ${Object.keys(runtimeConfig.servers).join(', ') || '(none)'}.\n`));
       return true;
     }
     console.log(chalk.gray(`Connecting "${targetName}"…`));
     try {
-      await disconnectOtherBrainrouterServers(ctx, targetName);
-      await mcpClient.connectOne(targetName, profile, config.llm, 5_000);
-      const s = mcpClient.getStatus(targetName);
+      const s = await reconcileLiveMcpProfile(ctx, targetName, { persistHighlightedProfile: true });
       if (s?.status === 'connected') {
-        const activated = activateBrainrouterProfile(ctx, targetName);
         console.log(chalk.green(`✓ "${targetName}" online (${s.toolCount ?? 0} tools).\n`));
-        if (activated) {
-          console.log(chalk.gray(`  Active BrainRouter profile saved as "${targetName}" for this and future sessions.\n`));
+        if (isBrainrouterProfile(ctx, targetName)) {
+          printBrainrouterSelectionResult(ctx, targetName);
           printRefreshedBanner(ctx);
         }
       } else {
-        console.log(chalk.red(`✗ "${targetName}" failed — ${s?.error ?? 'unknown'}\n`));
+        console.log(chalk.red(`✗ "${targetName}" failed — ${redactMcpErrorText(s?.error ?? 'unknown', runtimeConfig, targetName)}\n`));
       }
     } catch (err: any) {
-      console.log(chalk.red(`✗ Connect failed: ${err?.message ?? err}\n`));
+      if (err instanceof McpProfilePersistenceError) {
+        console.log(chalk.yellow(`⚠ ${redactMcpErrorText(err.message, runtimeConfig, targetName)} The live connection is active for this session.\n`));
+        return true;
+      }
+      console.log(chalk.red(`✗ Connect failed: ${redactMcpErrorText(String(err?.message ?? err), runtimeConfig, targetName)}\n`));
     }
     return true;
   }
 
   if (sub === 'install') {
-    const result = runMcpInstall(args.slice(1), config);
+    const result = runMcpInstall(args.slice(1), runtimeConfig);
     console.log(result.output);
     return true;
   }
@@ -229,10 +273,13 @@ export async function tryHandleMcpCommand(ctx: CommandContext): Promise<boolean>
       return true;
     }
     try {
-      await mcpClient.disconnectOne(targetName);
-      console.log(chalk.green(`✓ "${targetName}" disconnected. Config preserved — /mcp connect ${targetName} to bring it back.\n`));
+      await mcpClient.removeOne(targetName);
+      const preservedWhere = Object.prototype.hasOwnProperty.call(config.servers, targetName)
+        ? 'Config preserved'
+        : 'Session profile preserved';
+      console.log(chalk.green(`✓ "${targetName}" disconnected. ${preservedWhere} — /mcp connect ${targetName} to bring it back.\n`));
     } catch (err: any) {
-      console.log(chalk.red(`✗ Disconnect failed: ${err?.message ?? err}\n`));
+      console.log(chalk.red(`✗ Disconnect failed: ${redactMcpErrorText(String(err?.message ?? err), runtimeConfig, targetName)}\n`));
     }
     return true;
   }
@@ -269,36 +316,18 @@ function groupServerIdsByEcosystem(
   return sections;
 }
 
-async function disconnectOtherBrainrouterServers(ctx: CommandContext, targetName: string): Promise<void> {
-  const targetProfile = ctx.config.servers?.[targetName];
-  if (!targetProfile) return;
-  if (resolveIdentityFromConfig(targetProfile, targetName) !== 'brainrouter') return;
-
-  for (const [id, profile] of Object.entries(ctx.config.servers ?? {})) {
-    if (id === targetName) continue;
-    if (resolveIdentityFromConfig(profile, id) !== 'brainrouter') continue;
-    const status = ctx.mcpClient.getStatus(id);
-    if (status?.status === 'connected' || status?.status === 'connecting') {
-      await ctx.mcpClient.disconnectOne(id);
-    }
+function printBrainrouterSelectionResult(ctx: CommandContext, serverId: string): void {
+  if (Object.prototype.hasOwnProperty.call(ctx.config.servers, serverId)) {
+    console.log(chalk.gray(`  Active BrainRouter profile saved as "${serverId}" for this and future sessions.\n`));
+    return;
   }
-}
-
-function activateBrainrouterProfile(ctx: CommandContext, targetName: string): boolean {
-  const status = ctx.mcpClient.getStatus(targetName);
-  const profile = ctx.config.servers?.[targetName];
-  const isBrainrouter =
-    status?.identity === 'brainrouter' ||
-    (profile ? resolveIdentityFromConfig(profile, targetName) === 'brainrouter' : false);
-  if (!isBrainrouter) return false;
-  ctx.config.activeServer = targetName;
-  saveConfig(ctx.config);
-  return true;
+  console.log(chalk.gray(`  Active BrainRouter profile switched to "${serverId}" for this session only. Durable config is unchanged.\n`));
 }
 
 function printRefreshedBanner(ctx: CommandContext): void {
   const theme = resolveTheme(ctx.agent.workspaceRoot);
-  const banner = renderBanner(buildBannerInputs(ctx.config, ctx.agent, ctx.mcpClient), theme);
+  const runtimeConfig = configWithRuntimeMcpState(ctx.config, ctx.repl.runtimeMcp);
+  const banner = renderBanner(buildBannerInputs(runtimeConfig, ctx.agent, ctx.mcpClient), theme);
   if (ctx.repl.replaceBanner) {
     ctx.repl.replaceBanner('\n' + banner);
   } else {

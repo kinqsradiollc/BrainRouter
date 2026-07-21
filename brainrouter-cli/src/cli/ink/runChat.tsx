@@ -32,6 +32,11 @@ import { installInputQueueHandlers } from './runChat/inputQueueHandlers.js';
 import { installTurnRunner } from './runChat/turnRunner.js';
 import { installScheduleTicker } from './runChat/scheduleTicker.js';
 import { installDispatch, createOnSubmit } from './runChat/dispatch.js';
+import {
+  configWithRuntimeMcpState,
+  type RuntimeLaunchPolicy,
+  type RuntimeMcpState,
+} from '../../entry/mcpStartup.js';
 
 /**
  * Mount the full Ink-based chat REPL and run it until the user exits.
@@ -66,6 +71,12 @@ export interface RunChatOptions {
   mcpClient: McpClientWrapper;
   config: Config;
   workspace?: WorkspaceInfo;
+  /** Launch constraints retained so `/init config` reconciles identically. */
+  launchPolicy: RuntimeLaunchPolicy;
+  /** Launch-only MCP projection, kept separate from the durable config. */
+  runtimeMcp?: RuntimeMcpState;
+  /** The global wizard explicitly selected local-only mode for this launch. */
+  mcpIntentionallySkipped?: boolean;
   /**
    * Optional federation handle from `attachFederation`. When provided,
    * `runChat` swaps its `onInboxText` to push incoming /dm + broadcast
@@ -78,6 +89,7 @@ export interface RunChatOptions {
 
 export async function runChat(opts: RunChatOptions): Promise<void> {
   const { agent, mcpClient, config, federation } = opts;
+  const runtimeConfig = () => configWithRuntimeMcpState(config, opts.runtimeMcp);
   // Fire user-registered session-start hooks. Previously these were
   // accepted by `/hooks add session-start <cmd>` and persisted to
   // hooks.json but never actually executed — silent dead config. Hooks
@@ -108,11 +120,16 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
   // const banner = renderBanner(buildBannerInputs(config, agent, mcpClient), theme);
   const banner = '';
 
+  const localOnlyMode = opts.mcpIntentionallySkipped || Object.keys(runtimeConfig().servers).length === 0;
   const offlineWarning = mcpClient.isConnected()
     ? undefined
-    : theme.warning('  ⚠️  OFFLINE MODE — MCP server unreachable. Memory recall, skills, and capture are disabled.')
-      + '\n' + theme.muted('       Local tools (file edits, shell, web fetch, spawn_agent) still work.')
-      + '\n' + theme.muted('       Start the MCP server and restart the CLI to restore full functionality.');
+    : localOnlyMode
+      ? theme.warning('  LOCAL-ONLY MODE — MCP is not enabled for this launch. Memory recall, skills, and capture are disabled.')
+        + '\n' + theme.muted('       Local tools (file edits, shell, web fetch, spawn_agent) still work.')
+        + '\n' + theme.muted('       Run /init config or /login when you want to connect an MCP profile.')
+      : theme.warning('  ⚠️  OFFLINE MODE — MCP server unreachable. Memory recall, skills, and capture are disabled.')
+        + '\n' + theme.muted('       Local tools (file edits, shell, web fetch, spawn_agent) still work.')
+        + '\n' + theme.muted('       Start the MCP server and restart the CLI to restore full functionality.');
 
   const hint = theme.muted('  Type ') + theme.info('/help')
     + theme.muted(' for commands · ') + theme.info('/where')
@@ -159,6 +176,8 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
     agent,
     mcpClient,
     config,
+    launchPolicy: opts.launchPolicy,
+    runtimeMcp: opts.runtimeMcp,
     shim,
     inputQueue: new InputQueue(),
     notifiedCompletions: new Set<string>(),
@@ -237,7 +256,7 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
           session: agent.sessionKey,
           effort: readPreferences(agent.workspaceRoot).effort,
         }}
-        bannerInputs={buildBannerInputs(config, agent, mcpClient)}
+        bannerInputs={buildBannerInputs(runtimeConfig(), agent, mcpClient)}
         onReady={(ctrl) => {
           ctx.controller = ctrl;
           // Publish the shim so cliPrompt's askYesNo can find an "active

@@ -1,17 +1,22 @@
 import type { Command } from 'commander';
-import { loadConfig, getCliKnobs, setCliKnobOverride, resolveCliKnobs, type LLMConfig } from '@kinqs/brainrouter-core/config';
-import { applyActiveLlmProfile } from '@kinqs/brainrouter-core/provider';
+import { loadConfig, getCliKnobs, setCliKnobOverride, type LLMConfig } from '@kinqs/brainrouter-core/config';
 import { resolveSessionLlmConfig } from '@kinqs/brainrouter-core/session';
-import { McpClientPool, selectMcpServerIds } from '@kinqs/brainrouter-core/mcp';
+import { McpClientPool } from '@kinqs/brainrouter-core/mcp';
 import { formatJsonlEvent, memoryRunEvent, isOffloadTool, type RunEvent } from '../runtime/reporting/jsonlEvents.js';
 import { costUsd } from '../runtime/reporting/pricing.js';
 import { setKnownMcpServerIds } from '../cli/ink/text/toolFormat.js';
-import type { ServerConfig } from '@kinqs/brainrouter-core/config';
 import { Agent } from '@kinqs/brainrouter-core/agent';
 import { cliPrompter } from '../cli/prompt/cliPrompt.js';
 import { applyWorkspaceRoot, findWorkspaceRoot } from '@kinqs/brainrouter-core/workspace';
-import { DEFAULT_LLM } from './shared.js';
 import { refreshCliOrgConventionRepos } from './orgConvention.js';
+import { redactMcpErrorText } from '../cli/mcpUrl.js';
+import {
+  configWithRuntimeMcpState,
+  createRuntimeMcpState,
+  resolveEffectiveLlmConfig,
+  resolveEffectiveMcpLaunch,
+  type RuntimeLaunchPolicy,
+} from './mcpStartup.js';
 
 export function registerRunCommand(program: Command): void {
   // One-shot non-interactive run — pipe-friendly for scripting/CI.
@@ -88,41 +93,44 @@ export function registerRunCommand(program: Command): void {
 
       const config = loadConfig();
       await refreshCliOrgConventionRepos(config);
-      // Multi-MCP: like `chat`, connect third-party servers concurrently but
-      // only one BrainRouter MCP profile at a time. `--profile <name>` scopes
-      // to exactly one.
       const requestedProfile = options.profile as string | undefined;
-      const allServerIds = Object.keys(config.servers);
-      if (allServerIds.length === 0) {
+      const launchPolicy: RuntimeLaunchPolicy = {
+        requestedProfile,
+        modelOverride: typeof options.model === 'string' ? options.model : undefined,
+        strictMcp: options.strictMcp === true,
+        safeMode: getCliKnobs().safeMode,
+      };
+      const mcpLaunch = await resolveEffectiveMcpLaunch({
+        config,
+        workspaceRoot: workspace.workspaceRoot,
+        policy: launchPolicy,
+      });
+      if (mcpLaunch.status === 'missing-profile') {
+        console.error(`Error: Profile "${mcpLaunch.requestedProfile}" not found.`);
+        process.exit(1);
+      }
+      if (mcpLaunch.status === 'strict-no-profiles') {
         console.error('Error: No MCP server profiles in config.');
         process.exit(1);
       }
-      if (requestedProfile && !config.servers[requestedProfile]) {
-        console.error(`Error: Profile "${requestedProfile}" not found.`);
-        process.exit(1);
-      }
-      const targetIds = selectMcpServerIds(config.servers, config.activeServer, requestedProfile);
-      const targetServers: Record<string, ServerConfig> = {};
-      for (const id of targetIds) {
-        const cloned = { ...config.servers[id] };
-        if (cloned.type === 'stdio') {
-          const args = cloned.args ?? [];
-          const rootIndex = args.indexOf('--root');
-          cloned.args = rootIndex >= 0
-            ? [...args.slice(0, rootIndex + 1), workspace.workspaceRoot, ...args.slice(rootIndex + 2)]
-            : [...args, '--root', workspace.workspaceRoot];
-        }
-        targetServers[id] = cloned;
-      }
+
+      const runtimeConfig = configWithRuntimeMcpState(
+        config,
+        createRuntimeMcpState(mcpLaunch),
+      );
 
       // MC-D3 — active named LLM profile overlays the base llm config (inert
       // when unset); --model / --session overrides still win below.
-      let llm: LLMConfig = applyActiveLlmProfile(resolveCliKnobs(config), { ...(config.llm ?? DEFAULT_LLM) });
-      if (options.model) llm.model = options.model;
-      else if (options.session) llm = resolveSessionLlmConfig(llm, workspace.workspaceRoot, options.session);
+      let llm: LLMConfig = resolveEffectiveLlmConfig(config, launchPolicy);
+      if (!options.model && options.session) {
+        llm = resolveSessionLlmConfig(llm, workspace.workspaceRoot, options.session);
+      }
 
       const mcpClient = new McpClientPool();
-      const statuses = await mcpClient.connectAll(targetServers, llm, { timeoutMs: 5_000 });
+      const statuses = await mcpClient.connectAll(mcpLaunch.targetServers, llm, {
+        timeoutMs: 5_000,
+        preferredBrainrouterServerId: mcpLaunch.runtimeActiveBrainrouterServer,
+      });
       mcpClient.startReconnectSupervisor(); // WS9 — auto-reconnect dropped MCP servers in the background
       // Register live server ids for Ink tool-name display so multi-word
       // server names (e.g. `my_server`) don't get mis-stripped by the
@@ -130,7 +138,9 @@ export function registerRunCommand(program: Command): void {
       setKnownMcpServerIds(mcpClient.getServerIds());
       const allFailed = statuses.length > 0 && statuses.every((s) => s.status === 'failed');
       if (allFailed) {
-        const summary = statuses.map((s) => `${s.serverId}: ${s.error ?? 'unknown'}`).join('; ');
+        const summary = statuses
+          .map((s) => `${s.serverId}: ${redactMcpErrorText(s.error ?? 'unknown', runtimeConfig, s.serverId)}`)
+          .join('; ');
         console.error(`MCP connect failed (all servers): ${summary}`);
         if (options.strictMcp) process.exit(1);
         // Offline mode for one-shot: same rationale as the chat command — local
@@ -197,8 +207,9 @@ export function registerRunCommand(program: Command): void {
           onCodeIndex: (e) => emit({ type: 'code_index', file: e.file, status: 'reindexed', chunks: e.chunks }),
         });
       } catch (err: any) {
-        emit({ type: 'error', message: err?.message ?? String(err) });
-        if (fmt !== 'jsonl') console.error(`run failed: ${err.message}`);
+        const message = redactMcpErrorText(String(err?.message ?? err), runtimeConfig);
+        emit({ type: 'error', message });
+        if (fmt !== 'jsonl') console.error(`run failed: ${message}`);
         await mcpClient.close();
         process.exit(1);
       }

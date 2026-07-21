@@ -4,6 +4,7 @@ import os from 'node:os';
 import type { ExternalDirMode } from '../exec/policy/execPolicy.js';
 import { sanitizeCommandAllowlist } from '../exec/guard/approvalGuard.js';
 import { BUILTIN_PROVIDERS } from '../provider/providers/index.js';
+import { writeFileAtomic } from '../util/fs/atomicFile.js';
 
 // Record + knob type shapes live in ./configTypes.js (split out for readability).
 export * from './configTypes.js';
@@ -135,13 +136,25 @@ export function loadOrInitConfig(): Config {
 
 export function saveConfig(config: Config): void {
   try {
-    if (!fs.existsSync(CONFIG_DIR)) {
-      fs.mkdirSync(CONFIG_DIR, { recursive: true });
-    }
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf8');
+    saveConfigOrThrow(config);
   } catch (error) {
     console.error(`Error: Failed to save config to ${CONFIG_FILE}:`, error instanceof Error ? error.message : error);
   }
+}
+
+/**
+ * Setup flows need a durable-commit signal before they can advance to a
+ * workspace-scoped wizard. Existing best-effort callers keep `saveConfig()`;
+ * transactional callers use this strict sibling and handle the failure.
+ */
+export function saveConfigOrThrow(config: Config, options: { exclusive?: boolean } = {}): void {
+  if (!fs.existsSync(CONFIG_DIR)) {
+    fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  }
+  writeFileAtomic(CONFIG_FILE, `${JSON.stringify(config, null, 2)}\n`, {
+    mode: 0o600,
+    exclusive: options.exclusive,
+  });
 }
 
 /**

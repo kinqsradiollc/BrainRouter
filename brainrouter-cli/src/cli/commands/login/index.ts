@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import type { CommandContext } from '../_context.js';
-import { saveConfig, type ServerConfig } from '@kinqs/brainrouter-core/config';
+import type { ServerConfig } from '@kinqs/brainrouter-core/config';
 import { McpClientWrapper } from '@kinqs/brainrouter-core/mcp';
 import { maskApiKey } from '@kinqs/brainrouter-core/provider';
 import { runPicker, runTextField } from '../../ink/prompt/runPicker.js';
@@ -9,6 +9,16 @@ const promptText = runTextField;
 import { buildTheme, type Theme } from '../../theme/theme.js';
 import { readPreferences } from '@kinqs/brainrouter-core/session';
 import { editLlm, promptBrainrouterApiKey } from '../config/index.js';
+import {
+  editableMcpHttpUrl,
+  normalizeMcpHttpUrl,
+  redactMcpHttpUrlsInText,
+  validateMcpHttpUrl,
+} from '../../mcpUrl.js';
+import {
+  persistSelectedBrainrouterProfile,
+  runtimeMcpStateWithSelectedBrainrouter,
+} from '../../../entry/mcpStartup.js';
 
 /**
  * `/login` slash command — 0.3.7 redesign on the new internal picker.
@@ -68,20 +78,15 @@ export async function tryHandleLoginCommand(ctx: CommandContext): Promise<boolea
         theme,
         title: 'Remote MCP URL',
         subtitle: 'Paste the full URL (e.g. https://brainrouter.example.com/mcp).',
-        prefilled: ctx.config.servers['remote']?.url ?? '',
+        prefilled: editableMcpHttpUrl(ctx.config.servers['remote']?.url),
         placeholder: 'https://...',
-        validate: (raw) => {
-          const v = raw.trim();
-          if (!v) return 'URL required';
-          try { new URL(v); } catch { return 'not a valid URL'; }
-          return undefined;
-        },
+        validate: validateMcpHttpUrl,
       });
       if (urlResult.kind !== 'accept') {
         console.log(chalk.yellow('\n  /login cancelled.\n'));
         return true;
       }
-      const url = urlResult.text.trim();
+      const url = normalizeMcpHttpUrl(urlResult.text);
       const apiKey = await promptBrainrouterApiKey(theme, 'remote', ctx.config.servers['remote']?.apiKey);
       if (apiKey === undefined) {
         console.log(chalk.yellow('\n  /login cancelled.\n'));
@@ -112,12 +117,23 @@ export async function tryHandleLoginCommand(ctx: CommandContext): Promise<boolea
       console.log(chalk.green(`\n  ✓ Probe succeeded (${probe.latencyMs}ms).`));
     }
 
-    ctx.config.servers[profileName] = serverConfig;
-    ctx.config.activeServer = profileName;
-    saveConfig(ctx.config);
+    try {
+      persistSelectedBrainrouterProfile(ctx.config, profileName, serverConfig);
+      ctx.repl.runtimeMcp = runtimeMcpStateWithSelectedBrainrouter(
+        ctx.repl.runtimeMcp,
+        profileName,
+        serverConfig,
+        ctx.config.activeServer,
+      );
+    } catch (err: any) {
+      console.log(chalk.red(
+        `  ✗ Could not save MCP profile: ${redactMcpHttpUrlsInText(String(err?.message ?? err))}\n`,
+      ));
+      return true;
+    }
     const apiKeyDisplay = serverConfig.apiKey ? maskApiKey(serverConfig.apiKey) : '(no key)';
     console.log(chalk.green(`  ✓ MCP profile "${profileName}" saved as active. ${apiKeyDisplay}`));
-    console.log(chalk.gray('    Run /mcp reconnect to pick up the new transport without restarting.\n'));
+    console.log(chalk.gray(`    Run /mcp reconnect ${profileName} to pick up the new transport without restarting.\n`));
 
     // 0.3.7 — follow-on LLM credential step. Pre-0.3.7 `/login`
     // *only* handled the MCP profile; users who wanted to refresh
@@ -165,6 +181,6 @@ async function probeMcpProfile(serverConfig: ServerConfig, name: string): Promis
     return { ok: true, latencyMs: Date.now() - start };
   } catch (err: any) {
     try { await wrapper.close(); } catch { /* ignore */ }
-    return { ok: false, error: String(err?.message ?? err) };
+    return { ok: false, error: redactMcpHttpUrlsInText(String(err?.message ?? err)) };
   }
 }

@@ -951,6 +951,36 @@ test('Agent.setLLMConfig: partial updates leave untouched fields alone', () => {
   });
 });
 
+test('Agent.replaceLLMConfig: provider switches clear absent optional fields exactly', () => {
+  withTempWorkspace((workspace) => {
+    const agent = makeAgent(workspace);
+    agent.replaceLLMConfig({
+      provider: 'azure-openai',
+      apiKey: 'azure-key',
+      model: 'gpt-5',
+      endpoint: 'https://example.openai.azure.com',
+      apiVersion: '2025-04-01-preview',
+      models: ['gpt-5', 'gpt-5-mini'],
+      free: true,
+      passthroughUnknown: true,
+      cachedModels: ['gpt-5'],
+      cachedAt: '2026-07-21T00:00:00.000Z',
+    });
+
+    const replacement = {
+      provider: 'openai',
+      apiKey: 'openai-key',
+      model: 'gpt-5.2',
+      models: ['gpt-5.2'],
+    };
+    agent.replaceLLMConfig(replacement);
+
+    assert.deepEqual(agent.getLLMConfig(), replacement);
+    replacement.models.push('mutated-after-replacement');
+    assert.deepEqual(agent.getLLMConfig().models, ['gpt-5.2'], 'the live snapshot does not alias caller arrays');
+  });
+});
+
 test('Agent.setAccessMode / getAccessMode round-trips and tracks current mode', () => {
   withTempWorkspace((workspace) => {
     const agent = makeAgent(workspace);

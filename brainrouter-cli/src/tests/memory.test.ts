@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { buildMemoryBriefing, selectCitedRecordIds } from '@kinqs/brainrouter-core/memory';
 import { decideMemoryBriefing } from '@kinqs/brainrouter-core/memory';
@@ -372,6 +373,40 @@ test('initAgentMd respects pre-existing AGENTS.md', () => {
   });
 });
 
+test('initAgentMd rejects live and dangling instruction symlinks without writing outside the workspace', { skip: process.platform === 'win32' }, () => {
+  withTempWorkspace((workspace) => {
+    const external = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-agentmd-external-'));
+    try {
+      const liveTarget = path.join(external, 'live.md');
+      fs.writeFileSync(liveTarget, '# External instructions\n');
+      fs.symlinkSync(liveTarget, path.join(workspace, 'AGENT.md'));
+      assert.throws(() => initAgentMd(workspace), /Unsafe project instruction path/);
+      assert.equal(fs.readFileSync(liveTarget, 'utf8'), '# External instructions\n');
+
+      fs.rmSync(path.join(workspace, 'AGENT.md'));
+      const danglingTarget = path.join(external, 'dangling.md');
+      fs.symlinkSync(danglingTarget, path.join(workspace, 'AGENT.md'));
+      assert.throws(() => initAgentMd(workspace), /Unsafe project instruction path/);
+      assert.equal(fs.existsSync(danglingTarget), false);
+    } finally {
+      fs.rmSync(external, { recursive: true, force: true });
+    }
+  });
+});
+
+test('initAgentMd never overwrites an instruction file created at its commit boundary', () => {
+  withTempWorkspace((workspace) => {
+    const target = path.join(workspace, 'AGENT.md');
+    assert.throws(
+      () => initAgentMd(workspace, {
+        beforeCommit: () => fs.writeFileSync(target, '# Concurrent instructions\n'),
+      }),
+      (error: NodeJS.ErrnoException) => error.code === 'EEXIST',
+    );
+    assert.equal(fs.readFileSync(target, 'utf8'), '# Concurrent instructions\n');
+  });
+});
+
 test('initAgentMd populates AGENT.md from repo signals when package.json present', () => {
   withTempWorkspace((workspace) => {
     fs.writeFileSync(path.join(workspace, 'package.json'), JSON.stringify({
@@ -387,6 +422,28 @@ test('initAgentMd populates AGENT.md from repo signals when package.json present
     assert.match(body, /TypeScript/);
     assert.match(body, /npm run build/);
     assert.match(body, /npm test/);
+  });
+});
+
+test('initAgentMd ignores symlinked, oversized, and non-regular repo signal inputs', { skip: process.platform === 'win32' }, () => {
+  withTempWorkspace((workspace) => {
+    const external = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-agentmd-signals-'));
+    try {
+      const externalPackage = path.join(external, 'package.json');
+      fs.writeFileSync(externalPackage, JSON.stringify({ scripts: { build: 'outside' } }));
+      fs.symlinkSync(externalPackage, path.join(workspace, 'package.json'));
+      fs.writeFileSync(path.join(workspace, 'pyproject.toml'), 'pytest'.repeat(60_000));
+      fs.mkdirSync(path.join(workspace, 'requirements.txt'));
+
+      const result = initAgentMd(workspace);
+      const body = fs.readFileSync(result.path, 'utf8');
+      assert.doesNotMatch(body, /Node\.js|- Build \/ dev: `npm run build`/);
+      assert.match(body, /Python/);
+      assert.doesNotMatch(body, /- Test: `pytest`/);
+      assert.equal(fs.readFileSync(externalPackage, 'utf8'), JSON.stringify({ scripts: { build: 'outside' } }));
+    } finally {
+      fs.rmSync(external, { recursive: true, force: true });
+    }
   });
 });
 

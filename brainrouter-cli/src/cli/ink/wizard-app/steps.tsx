@@ -1,8 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Box, Text } from 'ink';
 import Spinner from 'ink-spinner';
-import fs from 'node:fs';
-import path from 'node:path';
 import { Frame } from '../prompt/Frame.js';
 import { Picker, type PickerResult, type PickerRow } from '../prompt/Picker.js';
 import { TextField } from '../prompt/TextField.js';
@@ -22,6 +20,7 @@ import { fetchOpenAiCompatibleModels } from '../../wizard/modelsApi.js';
 import type { ThemeMode } from '../../theme/theme.js';
 import { progressBadge } from './shared.js';
 import { formatMcpForBadge, probeMcp } from './mcpProbe.js';
+import { normalizeMcpHttpUrl, redactMcpHttpUrl, validateMcpHttpUrl } from '../../mcpUrl.js';
 
 // --- Steps -------------------------------------------------------------
 
@@ -33,10 +32,10 @@ export function WelcomeStep({ accent, onAdvance, onAbort }: { accent: string; on
   return (
     <Picker
       title='🧠  BrainRouter'
-      subtitle='A memory-native coding agent that runs in your terminal. This wizard takes ~60 seconds and writes to ~/.config/brainrouter/config.json plus <workspace>/.brainrouter/cli/preferences.json. Press ENTER to start, q to abort.'
+      subtitle='Configure BrainRouter for this user: theme, provider, model, and MCP. Workspace profile and project instructions follow as a separate setup. Press ENTER to start, q to abort.'
       badge='Welcome'
       rows={[
-        { id: 'start', label: 'Start setup', description: 'Theme → Provider → API key → Model → MCP → AGENT.md' },
+        { id: 'start', label: 'Start global setup', description: 'Theme → Provider → API key → Model → MCP' },
         { id: 'abort', label: 'Abort', description: 'Exit without saving anything' },
       ]}
       accentColor={accent}
@@ -66,6 +65,29 @@ export function ThemeStep({ accent, onPick, onAbort }: { accent: string; onPick:
   );
 }
 
+type ParsedCustomEndpoint =
+  | { ok: true; endpoint: string; local: boolean }
+  | { ok: false; error: string };
+
+function parseCustomEndpoint(raw: string): ParsedCustomEndpoint {
+  const endpoint = raw.trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(endpoint);
+  } catch {
+    return { ok: false, error: 'Enter a valid http or https URL.' };
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return { ok: false, error: 'Endpoint URL must use http or https.' };
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  const local = hostname === 'localhost'
+    || hostname === '127.0.0.1'
+    || hostname === '0.0.0.0'
+    || hostname === '[::1]';
+  return { ok: true, endpoint, local };
+}
+
 export function ProviderStep({ accent, onPick, onAbort }: { accent: string; onPick: (p: ProviderEntry, customEndpoint?: string) => void; onAbort: () => void }) {
   const detected = detectProviderFromEnv();
   const rows: PickerRow[] = PROVIDER_CATALOG.map((p) => {
@@ -88,21 +110,26 @@ export function ProviderStep({ accent, onPick, onAbort }: { accent: string; onPi
       allowOther
       otherLabel='Other endpoint'
       otherDescription='OpenAI-compatible /v1/chat/completions URL'
+      validateOther={(raw) => {
+        const parsed = parseCustomEndpoint(raw);
+        return parsed.ok ? undefined : parsed.error;
+      }}
       accentColor={accent}
       onResolve={(r) => {
         if (r.kind === 'cancelled') return onAbort();
         if (r.kind === 'other') {
-          const url = r.text;
+          const parsed = parseCustomEndpoint(r.text);
+          if (!parsed.ok) return;
           const custom: ProviderEntry = {
             id: 'custom',
             label: 'Custom endpoint',
-            hint: url,
-            endpoint: url,
+            hint: parsed.endpoint,
+            endpoint: parsed.endpoint,
             envKey: 'BRAINROUTER_LLM_API_KEY',
-            local: /localhost|127\.0\.0\.1|::1|0\.0\.0\.0/.test(url),
+            local: parsed.local,
             models: [],
           };
-          onPick(custom, url);
+          onPick(custom, parsed.endpoint);
           return;
         }
         const provider = PROVIDER_CATALOG.find((p) => p.id === r.id);
@@ -126,6 +153,7 @@ export function ApiKeyStep({ accent, provider, onAccept, onAbort }: { accent: st
       badge={`${progressBadge('apiKey')} · ${provider.label}`}
       prefilled={envValue}
       placeholder={provider.local ? '(blank OK for local endpoints)' : 'paste your API key here'}
+      mask
       accentColor={accent}
       validate={(raw) => {
         const v = validateApiKey(raw, provider);
@@ -258,19 +286,14 @@ export function McpStep({ accent, draft, onAccept, onAbort }: {
         prefilled=''
         placeholder='https://...'
         accentColor={accent}
-        validate={(raw) => {
-          const v = raw.trim();
-          if (!v) return 'URL is required';
-          try { new URL(v); } catch { return 'not a valid URL'; }
-          return undefined;
-        }}
+        validate={validateMcpHttpUrl}
         onResolve={(r) => {
           if (r.kind !== 'accept') return setStage('pick');
           // Carry the URL into the api-key stage; the BrainRouter MCP
           // server's HTTP transport requires a Bearer token whenever
           // auth is enabled, so we always offer the input (blank OK
           // for servers without auth).
-          setPendingPick({ kind: 'remote-http', url: r.text.trim() });
+          setPendingPick({ kind: 'remote-http', url: normalizeMcpHttpUrl(r.text) });
           setStage('mcp-apikey');
         }}
       />
@@ -296,6 +319,7 @@ export function McpStep({ accent, draft, onAccept, onAbort }: {
         badge={progressBadge('mcp')}
         prefilled={envValue}
         placeholder='(blank OK)'
+        mask
         accentColor={accent}
         onResolve={(r) => {
           // Esc cancels the whole step back to the picker so the user
@@ -356,43 +380,6 @@ export function McpStep({ accent, draft, onAccept, onAbort }: {
   );
 }
 
-export function AgentMdStep({ accent, workspaceRoot, onPick, onAbort }: {
-  accent: string;
-  workspaceRoot: string;
-  onPick: (write: boolean) => void;
-  onAbort: () => void;
-}) {
-  const agentMdPath = path.join(workspaceRoot, 'AGENT.md');
-  const claudeMdPath = path.join(workspaceRoot, 'CLAUDE.md');
-  const exists = fs.existsSync(agentMdPath) || fs.existsSync(claudeMdPath);
-  const rows: PickerRow[] = exists
-    ? [
-        { id: 'skip',      label: 'Skip',      value: 'keep existing file', description: 'Leave the current AGENT.md / CLAUDE.md alone' },
-        { id: 'overwrite', label: 'Overwrite', value: 'replace contents',   description: 'Drop the starter template over the existing file' },
-      ]
-    : [
-        { id: 'write', label: 'Write AGENT.md', value: 'recommended', description: 'Scaffold a starter template in the workspace root' },
-        { id: 'skip',  label: 'Skip',           value: 'no file',     description: 'Write AGENT.md manually later' },
-      ];
-  return (
-    <Picker
-      title='AGENT.md'
-      subtitle={exists
-        ? 'Workspace already has AGENT.md / CLAUDE.md — skipping by default. Pick "Overwrite" only if you really want to replace it.'
-        : 'AGENT.md gives every coding agent (Claude Code, Codex, BrainRouter, …) a single hub of repo conventions. Recommended.'}
-      badge={progressBadge('agentMd')}
-      rows={rows}
-      initialCursor={0}
-      accentColor={accent}
-      onResolve={(r) => {
-        if (r.kind === 'cancelled') return onAbort();
-        if (r.kind !== 'pick') return;
-        onPick(r.id === 'write' || r.id === 'overwrite');
-      }}
-    />
-  );
-}
-
 export function DoneStep({ state, accent, onCommit }: { state: WizardState; accent: string; onCommit: () => void }) {
   useEffect(() => {
     onCommit();
@@ -405,9 +392,8 @@ export function DoneStep({ state, accent, onCommit }: { state: WizardState; acce
         <SummaryRow label='model'    value={state.draft.model ?? '(unset)'} />
         <SummaryRow label='api key'  value={maskApiKey(state.draft.apiKey ?? '')} />
         <SummaryRow label='mcp'      value={formatMcpSummary(state.draft.mcp)} />
-        <SummaryRow label='agent.md' value={state.draft.writeAgentMd ? 'written' : 'skipped'} />
         <Box marginTop={1}>
-          <Text color="gray" dimColor>Config saved to ~/.config/brainrouter/config.json. Re-run any time with /init. Tweak individual knobs with /config.</Text>
+          <Text color="gray" dimColor>Config saved to ~/.config/brainrouter/config.json. Re-run with /init config. Workspace setup follows separately.</Text>
         </Box>
         {state.warnings.length > 0 ? (
           <Box flexDirection='column' marginTop={1}>
@@ -444,8 +430,8 @@ function formatMcpSummary(pick?: McpPick): string {
   }
   if (pick.kind === 'remote-http') {
     return pick.apiKey
-      ? `remote · ${pick.url} · key ${maskApiKey(pick.apiKey)}`
-      : `remote · ${pick.url} · no key`;
+      ? `remote · ${redactMcpHttpUrl(pick.url)} · key ${maskApiKey(pick.apiKey)}`
+      : `remote · ${redactMcpHttpUrl(pick.url)} · no key`;
   }
   return 'skipped (offline-only)';
 }

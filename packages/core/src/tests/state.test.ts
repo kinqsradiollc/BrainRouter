@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { getStateDir, getStateFile } from '../storage/store.js';
 import { appendTranscriptEntry, listTranscripts, readTranscriptEntries, redactText } from '../session/transcript/sessionStore.js';
@@ -492,13 +493,19 @@ test('cliState: migration neutralizes the legacy <workspace>/.brainrouter (rescu
     fs.mkdirSync(path.join(legacy, 'workflows', 'feat-x'), { recursive: true });
     fs.writeFileSync(path.join(legacy, 'cli', 'tasks.json'), JSON.stringify({ items: [] }));
     fs.writeFileSync(path.join(legacy, 'workflows', 'feat-x', 'spec.md'), '# Committable spec');
+    const manifestBytes = '{\n  "version": 2,\n  "name": "keep-byte-for-byte"\n}\n';
+    fs.writeFileSync(path.join(legacy, 'workspace.json'), manifestBytes);
+    fs.writeFileSync(path.join(legacy, 'future-project-artifact.json'), '{"keep":true}\n');
 
     getStateDir(workspace); // triggers migration
 
-    // Legacy cli/ and hooks/ deleted in place; workflows/ kept in workspace.
+    // Personal state is deleted in place; every other project artifact is
+    // preserved by default so future committable types need no allowlist.
     assert.equal(fs.existsSync(path.join(legacy, 'cli')), false);
     assert.equal(fs.existsSync(path.join(legacy, 'hooks')), false);
     assert.equal(fs.existsSync(path.join(legacy, 'workflows', 'feat-x', 'spec.md')), true);
+    assert.equal(fs.readFileSync(path.join(legacy, 'workspace.json'), 'utf8'), manifestBytes);
+    assert.equal(fs.readFileSync(path.join(legacy, 'future-project-artifact.json'), 'utf8'), '{"keep":true}\n');
     // The rescued state lives in the user-global home, NOT in an in-workspace archive.
     const home = getWorkspaceStateRoot(workspace);
     assert.equal(fs.existsSync(path.join(home, 'cli', 'tasks.json')), true);
@@ -507,22 +514,699 @@ test('cliState: migration neutralizes the legacy <workspace>/.brainrouter (rescu
   });
 });
 
-test('cliState: migration sweeps a pre-existing stale <workspace>/.brainrouter.migrated archive', async () => {
+test('cliState: migration never follows a symlinked workspace-local .brainrouter directory', { skip: process.platform === 'win32' }, async () => {
   const { getStateDir } = await import('../storage/store.js');
   withTempWorkspace((workspace) => {
-    // Simulate an older build that left an archive folder behind.
+    const external = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-external-state-'));
+    try {
+      fs.mkdirSync(path.join(external, 'cli'), { recursive: true });
+      const sentinel = path.join(external, 'cli', 'sentinel.json');
+      fs.writeFileSync(sentinel, '{"keep":true}\n');
+      fs.symlinkSync(external, path.join(workspace, '.brainrouter'));
+
+      getStateDir(workspace);
+
+      assert.equal(fs.readFileSync(sentinel, 'utf8'), '{"keep":true}\n');
+      assert.equal(fs.lstatSync(path.join(workspace, '.brainrouter')).isSymbolicLink(), true);
+    } finally {
+      fs.rmSync(external, { recursive: true, force: true });
+    }
+  });
+});
+
+test('cliState: a prior migration marker does not discard newly reintroduced legacy state', async () => {
+  const {
+    _resetLegacyWorkspaceMigrationForTests,
+    getStateDir,
+    getWorkspaceStateRoot,
+  } = await import('../storage/store.js');
+  withTempWorkspace((workspace) => {
+    const stateRoot = getWorkspaceStateRoot(workspace);
+    fs.writeFileSync(path.join(stateRoot, '.migrated-from-workspace'), 'older migration\n');
+    const legacyFile = path.join(workspace, '.brainrouter', 'cli', 'new-from-older-version.json');
+    fs.mkdirSync(path.dirname(legacyFile), { recursive: true });
+    fs.writeFileSync(legacyFile, '{"fresh":true}\n');
+
+    _resetLegacyWorkspaceMigrationForTests(workspace);
+    const stateDir = getStateDir(workspace);
+
+    assert.equal(fs.readFileSync(path.join(stateDir, 'new-from-older-version.json'), 'utf8'), '{"fresh":true}\n');
+    assert.equal(fs.existsSync(path.join(workspace, '.brainrouter', 'cli')), false);
+  });
+});
+
+test('cliState: differing destination collisions preserve both legacy and global bytes', async () => {
+  const {
+    _resetLegacyWorkspaceMigrationForTests,
+    getStateDir,
+    getWorkspaceStateRoot,
+  } = await import('../storage/store.js');
+  withTempWorkspace((workspace) => {
+    const stateRoot = getWorkspaceStateRoot(workspace);
+    const destination = path.join(stateRoot, 'cli', 'tasks.json');
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.writeFileSync(destination, '{"version":"global"}\n');
+    const source = path.join(workspace, '.brainrouter', 'cli', 'tasks.json');
+    fs.mkdirSync(path.dirname(source), { recursive: true });
+    fs.writeFileSync(source, '{"version":"legacy"}\n');
+
+    _resetLegacyWorkspaceMigrationForTests(workspace);
+    getStateDir(workspace);
+
+    assert.equal(fs.readFileSync(source, 'utf8'), '{"version":"legacy"}\n');
+    assert.equal(fs.readFileSync(destination, 'utf8'), '{"version":"global"}\n');
+    assert.equal(fs.existsSync(path.join(stateRoot, '.migrated-from-workspace')), false);
+  });
+});
+
+test('cliState: byte-equivalent destination collisions permit verified source cleanup', async () => {
+  const {
+    _resetLegacyWorkspaceMigrationForTests,
+    getStateDir,
+    getWorkspaceStateRoot,
+  } = await import('../storage/store.js');
+  withTempWorkspace((workspace) => {
+    const bytes = '{"same":true}\n';
+    const stateRoot = getWorkspaceStateRoot(workspace);
+    const destination = path.join(stateRoot, 'cli', 'tasks.json');
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.writeFileSync(destination, bytes);
+    const sourceRoot = path.join(workspace, '.brainrouter', 'cli');
+    fs.mkdirSync(sourceRoot, { recursive: true });
+    fs.writeFileSync(path.join(sourceRoot, 'tasks.json'), bytes);
+
+    _resetLegacyWorkspaceMigrationForTests(workspace);
+    getStateDir(workspace);
+
+    assert.equal(fs.existsSync(sourceRoot), false);
+    assert.equal(fs.readFileSync(destination, 'utf8'), bytes);
+    assert.equal(fs.existsSync(path.join(stateRoot, '.migrated-from-workspace')), true);
+  });
+});
+
+test('cliState: byte-equivalent collisions with different modes preserve both files', { skip: process.platform === 'win32' }, async () => {
+  const {
+    _resetLegacyWorkspaceMigrationForTests,
+    getStateDir,
+    getWorkspaceStateRoot,
+  } = await import('../storage/store.js');
+  withTempWorkspace((workspace) => {
+    const bytes = '{"same":true}\n';
+    const stateRoot = getWorkspaceStateRoot(workspace);
+    const destination = path.join(stateRoot, 'cli', 'tasks.json');
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.writeFileSync(destination, bytes, { mode: 0o644 });
+    fs.chmodSync(destination, 0o644);
+    const source = path.join(workspace, '.brainrouter', 'cli', 'tasks.json');
+    fs.mkdirSync(path.dirname(source), { recursive: true });
+    fs.writeFileSync(source, bytes, { mode: 0o600 });
+    fs.chmodSync(source, 0o600);
+
+    _resetLegacyWorkspaceMigrationForTests(workspace);
+    getStateDir(workspace);
+
+    assert.equal(fs.readFileSync(source, 'utf8'), bytes);
+    assert.equal(fs.statSync(source).mode & 0o777, 0o600);
+    assert.equal(fs.readFileSync(destination, 'utf8'), bytes);
+    assert.equal(fs.statSync(destination).mode & 0o777, 0o644);
+    assert.equal(fs.existsSync(path.join(stateRoot, '.migrated-from-workspace')), false);
+  });
+});
+
+test('cliState: migration preserves an unowned source quarantine after interruption', async () => {
+  const {
+    _resetLegacyWorkspaceMigrationForTests,
+    getStateDir,
+    getWorkspaceStateRoot,
+  } = await import('../storage/store.js');
+  withTempWorkspace((workspace) => {
+    const stateRoot = getWorkspaceStateRoot(workspace);
+    const quarantine = path.join(
+      workspace,
+      '.brainrouter',
+      '.cli.migration-source.123.0123456789abcdef01234567',
+    );
+    fs.mkdirSync(quarantine, { recursive: true });
+    fs.writeFileSync(path.join(quarantine, 'tasks.json'), '{"interrupted":true}\n');
+
+    _resetLegacyWorkspaceMigrationForTests(workspace);
+    getStateDir(workspace);
+
+    assert.equal(fs.readFileSync(path.join(quarantine, 'tasks.json'), 'utf8'), '{"interrupted":true}\n');
+    assert.equal(fs.existsSync(path.join(stateRoot, 'cli', 'tasks.json')), false);
+    assert.equal(fs.existsSync(path.join(stateRoot, '.migrated-from-workspace')), false);
+  });
+});
+
+test('cliState: migration preserves an unowned cleanup tombstone after interruption', async () => {
+  const {
+    _resetLegacyWorkspaceMigrationForTests,
+    getStateDir,
+    getWorkspaceStateRoot,
+  } = await import('../storage/store.js');
+  withTempWorkspace((workspace) => {
+    const cleanupTombstone = path.join(
+      workspace,
+      '.brainrouter',
+      '.cli.migration-cleanup.123.0123456789abcdef01234567',
+    );
+    fs.mkdirSync(cleanupTombstone, { recursive: true });
+    fs.writeFileSync(path.join(cleanupTombstone, 'tasks.json'), '{"cleanup":"interrupted"}\n');
+
+    _resetLegacyWorkspaceMigrationForTests(workspace);
+    const stateRoot = getWorkspaceStateRoot(workspace);
+    _resetLegacyWorkspaceMigrationForTests(workspace);
+    getStateDir(workspace);
+
+    assert.equal(fs.readFileSync(path.join(cleanupTombstone, 'tasks.json'), 'utf8'), '{"cleanup":"interrupted"}\n');
+    assert.equal(fs.existsSync(path.join(stateRoot, 'cli', 'tasks.json')), false);
+    assert.equal(fs.existsSync(path.join(stateRoot, '.migrated-from-workspace')), false);
+  });
+});
+
+test('cliState: a trusted receipt resumes an interrupted source quarantine', async () => {
+  const {
+    _resetLegacyWorkspaceMigrationForTests,
+    getStateDir,
+    getWorkspaceStateRoot,
+  } = await import('../storage/store.js');
+  withTempWorkspace((workspace) => {
+    const stateRoot = getWorkspaceStateRoot(workspace);
+    const source = path.join(fs.realpathSync(workspace), '.brainrouter', 'cli');
+    const token = '2147483647.0123456789abcdef01234567';
+    const quarantine = path.join(
+      path.dirname(source),
+      `.cli.migration-source.${token}`,
+    );
+    fs.mkdirSync(quarantine, { recursive: true });
+    fs.writeFileSync(path.join(quarantine, 'tasks.json'), '{"crash":"recover"}\n');
+    const expected = fs.lstatSync(quarantine);
+    const destination = path.join(stateRoot, 'cli');
+    const receiptPath = path.join(stateRoot, `.cli.legacy-migration.${token}.json`);
+    fs.writeFileSync(receiptPath, `${JSON.stringify({
+      version: 1,
+      phase: 'prepared',
+      source,
+      destination,
+      token,
+      candidates: [quarantine],
+      expected: {
+        mode: expected.mode & 0o777,
+        dev: expected.dev,
+        ino: expected.ino,
+      },
+    })}\n`);
+
+    _resetLegacyWorkspaceMigrationForTests(workspace);
+    const stateDir = getStateDir(workspace);
+
+    assert.equal(fs.readFileSync(path.join(stateDir, 'tasks.json'), 'utf8'), '{"crash":"recover"}\n');
+    assert.equal(fs.existsSync(quarantine), false);
+    assert.equal(fs.existsSync(receiptPath), false);
+  });
+});
+
+test('cliState: a rename loser receipt cannot block recovery or later migration', async () => {
+  const {
+    _resetLegacyWorkspaceMigrationForTests,
+    getStateDir,
+    getWorkspaceStateRoot,
+  } = await import('../storage/store.js');
+  withTempWorkspace((workspace) => {
+    const stateRoot = getWorkspaceStateRoot(workspace);
+    const source = path.join(fs.realpathSync(workspace), '.brainrouter', 'cli');
+    const destination = path.join(stateRoot, 'cli');
+    const winnerToken = '2147483647.0123456789abcdef01234567';
+    const loserToken = '2147483647.1123456789abcdef01234567';
+    const winnerQuarantine = path.join(
+      path.dirname(source),
+      `.cli.migration-source.${winnerToken}`,
+    );
+    const loserQuarantine = path.join(
+      path.dirname(source),
+      `.cli.migration-source.${loserToken}`,
+    );
+    fs.mkdirSync(winnerQuarantine, { recursive: true });
+    fs.writeFileSync(path.join(winnerQuarantine, 'old.json'), '{"generation":"old"}\n');
+    const expected = fs.lstatSync(winnerQuarantine);
+
+    const receiptValue = (token: string, candidate: string) => ({
+      version: 1,
+      phase: 'prepared',
+      source,
+      destination,
+      token,
+      candidates: [candidate],
+      expected: {
+        mode: expected.mode & 0o777,
+        dev: expected.dev,
+        ino: expected.ino,
+      },
+    });
+    const winnerReceipt = path.join(
+      stateRoot,
+      `.cli.legacy-migration.${winnerToken}.json`,
+    );
+    const loserReceipt = path.join(
+      stateRoot,
+      `.cli.legacy-migration.${loserToken}.json`,
+    );
+    fs.writeFileSync(
+      winnerReceipt,
+      `${JSON.stringify(receiptValue(winnerToken, winnerQuarantine))}\n`,
+    );
+    fs.writeFileSync(
+      loserReceipt,
+      `${JSON.stringify(receiptValue(loserToken, loserQuarantine))}\n`,
+    );
+
+    _resetLegacyWorkspaceMigrationForTests(workspace);
+    const stateDir = getStateDir(workspace);
+
+    assert.equal(
+      fs.readFileSync(path.join(stateDir, 'old.json'), 'utf8'),
+      '{"generation":"old"}\n',
+    );
+    assert.equal(fs.existsSync(winnerQuarantine), false);
+    assert.equal(fs.existsSync(winnerReceipt), false);
+    assert.equal(fs.existsSync(loserReceipt), false);
+
+    fs.mkdirSync(source, { recursive: true });
+    fs.writeFileSync(path.join(source, 'new.json'), '{"generation":"new"}\n');
+    _resetLegacyWorkspaceMigrationForTests(workspace);
+    getStateDir(workspace);
+
+    assert.equal(fs.existsSync(source), false);
+    assert.equal(
+      fs.readFileSync(path.join(stateDir, 'new.json'), 'utf8'),
+      '{"generation":"new"}\n',
+    );
+  });
+});
+
+test('cliState: dead receipt rescues its old candidate without consuming a recreated source', async () => {
+  const {
+    _resetLegacyWorkspaceMigrationForTests,
+    getStateDir,
+    getWorkspaceStateRoot,
+  } = await import('../storage/store.js');
+  withTempWorkspace((workspace) => {
+    const stateRoot = getWorkspaceStateRoot(workspace);
+    const source = path.join(fs.realpathSync(workspace), '.brainrouter', 'cli');
+    const token = '2147483647.1123456789abcdef01234567';
+    const quarantine = path.join(path.dirname(source), `.cli.migration-source.${token}`);
+    fs.mkdirSync(quarantine, { recursive: true });
+    fs.writeFileSync(path.join(quarantine, 'old.json'), '{"generation":"old"}\n');
+    const expected = fs.lstatSync(quarantine);
+    fs.mkdirSync(source);
+    fs.writeFileSync(path.join(source, 'new.json'), '{"generation":"new"}\n');
+    const destination = path.join(stateRoot, 'cli');
+    const receiptPath = path.join(stateRoot, `.cli.legacy-migration.${token}.json`);
+    fs.writeFileSync(receiptPath, `${JSON.stringify({
+      version: 1,
+      phase: 'prepared',
+      source,
+      destination,
+      token,
+      candidates: [quarantine],
+      expected: {
+        mode: expected.mode & 0o777,
+        dev: expected.dev,
+        ino: expected.ino,
+      },
+    })}\n`);
+
+    _resetLegacyWorkspaceMigrationForTests(workspace);
+    const stateDir = getStateDir(workspace);
+    assert.equal(fs.readFileSync(path.join(stateDir, 'old.json'), 'utf8'), '{"generation":"old"}\n');
+    assert.equal(fs.readFileSync(path.join(source, 'new.json'), 'utf8'), '{"generation":"new"}\n');
+    assert.equal(fs.existsSync(quarantine), false);
+    assert.equal(fs.existsSync(receiptPath), false);
+    assert.equal(fs.existsSync(path.join(stateRoot, '.migrated-from-workspace')), false);
+
+    _resetLegacyWorkspaceMigrationForTests(workspace);
+    getStateDir(workspace);
+    assert.equal(fs.existsSync(source), false);
+    assert.equal(fs.readFileSync(path.join(stateDir, 'new.json'), 'utf8'), '{"generation":"new"}\n');
+  });
+});
+
+test('cliState: cleanup-ready receipt is retired after a crash following source deletion', async () => {
+  const {
+    _resetLegacyWorkspaceMigrationForTests,
+    _setLegacyWorkspaceMigrationHookForTests,
+    getStateDir,
+  } = await import('../storage/store.js');
+  withTempWorkspace((workspace) => {
+    const source = path.join(fs.realpathSync(workspace), '.brainrouter', 'cli');
+    fs.mkdirSync(source, { recursive: true });
+    fs.writeFileSync(path.join(source, 'tasks.json'), '{"cleanup":"durable"}\n');
+    let interrupted = false;
+    _setLegacyWorkspaceMigrationHookForTests((event) => {
+      if (!interrupted && event.stage === 'after-cleanup-removal' && event.source === source) {
+        interrupted = true;
+        throw new Error('simulated crash after cleanup removal');
+      }
+    });
+
+    try {
+      const stateDir = getStateDir(workspace);
+      const stateRoot = path.dirname(stateDir);
+      assert.equal(interrupted, true);
+      assert.equal(fs.readFileSync(path.join(stateDir, 'tasks.json'), 'utf8'), '{"cleanup":"durable"}\n');
+      assert.equal(fs.existsSync(source), false);
+      assert.equal(
+        fs.readdirSync(stateRoot).some((name) => name.includes('.legacy-migration.')),
+        true,
+      );
+
+      _setLegacyWorkspaceMigrationHookForTests(undefined);
+      _resetLegacyWorkspaceMigrationForTests(workspace);
+      getStateDir(workspace);
+      assert.equal(
+        fs.readdirSync(stateRoot).some((name) => name.includes('.legacy-migration.')),
+        false,
+      );
+    } finally {
+      _setLegacyWorkspaceMigrationHookForTests(undefined);
+    }
+  });
+});
+
+test('cliState: near-miss receipt names never authorize quarantine cleanup', async () => {
+  const {
+    _resetLegacyWorkspaceMigrationForTests,
+    getStateDir,
+    getWorkspaceStateRoot,
+  } = await import('../storage/store.js');
+  withTempWorkspace((workspace) => {
+    const stateRoot = getWorkspaceStateRoot(workspace);
+    const source = path.join(fs.realpathSync(workspace), '.brainrouter', 'cli');
+    const token = '2147483647.0123456789abcdef01234567';
+    const quarantine = path.join(path.dirname(source), `.cli.migration-source.${token}`);
+    fs.mkdirSync(quarantine, { recursive: true });
+    fs.writeFileSync(path.join(quarantine, 'tasks.json'), '{"keep":true}\n');
+    const expected = fs.lstatSync(quarantine);
+    const nearMiss = path.join(stateRoot, `XcliYlegacy-migrationZ${token}Qjson`);
+    fs.writeFileSync(nearMiss, `${JSON.stringify({
+      version: 1,
+      phase: 'prepared',
+      source,
+      destination: path.join(stateRoot, 'cli'),
+      token,
+      candidates: [quarantine],
+      expected: { mode: expected.mode & 0o777, dev: expected.dev, ino: expected.ino },
+    })}\n`);
+
+    _resetLegacyWorkspaceMigrationForTests(workspace);
+    getStateDir(workspace);
+
+    assert.equal(fs.readFileSync(path.join(quarantine, 'tasks.json'), 'utf8'), '{"keep":true}\n');
+    assert.equal(fs.existsSync(nearMiss), true);
+  });
+});
+
+test('cliState: migration refuses a workspace parent swapped to a symlink', { skip: process.platform === 'win32' }, async () => {
+  const {
+    _resetLegacyWorkspaceMigrationForTests,
+    _setLegacyWorkspaceMigrationHookForTests,
+    getStateDir,
+  } = await import('../storage/store.js');
+  withTempWorkspace((workspace) => {
+    const root = fs.realpathSync(workspace);
+    const legacyRoot = path.join(root, '.brainrouter');
+    const source = path.join(legacyRoot, 'cli');
+    const displacedRoot = `${legacyRoot}.displaced`;
+    const external = fs.mkdtempSync(path.join(os.tmpdir(), 'br-legacy-parent-external-'));
+    fs.mkdirSync(source, { recursive: true });
+    fs.writeFileSync(path.join(source, 'tasks.json'), '{"owned":"legacy"}\n');
+    let swapped = false;
+    _setLegacyWorkspaceMigrationHookForTests((event) => {
+      if (swapped || event.stage !== 'before-quarantine' || event.source !== source) return;
+      swapped = true;
+      fs.renameSync(legacyRoot, displacedRoot);
+      fs.symlinkSync(external, legacyRoot);
+    });
+
+    try {
+      getStateDir(workspace);
+      assert.equal(swapped, true);
+      assert.equal(fs.existsSync(path.join(external, 'cli')), false);
+      assert.equal(
+        fs.readFileSync(path.join(displacedRoot, 'cli', 'tasks.json'), 'utf8'),
+        '{"owned":"legacy"}\n',
+      );
+    } finally {
+      _setLegacyWorkspaceMigrationHookForTests(undefined);
+      if (fs.lstatSync(legacyRoot).isSymbolicLink()) fs.unlinkSync(legacyRoot);
+      fs.renameSync(displacedRoot, legacyRoot);
+      _resetLegacyWorkspaceMigrationForTests(workspace);
+      getStateDir(workspace);
+      fs.rmSync(external, { recursive: true, force: true });
+    }
+  });
+});
+
+test('cliState: a canonical source recreated after quarantine survives for the next migration', async () => {
+  const {
+    _resetLegacyWorkspaceMigrationForTests,
+    _setLegacyWorkspaceMigrationHookForTests,
+    getStateDir,
+    getWorkspaceStateRoot,
+  } = await import('../storage/store.js');
+  withTempWorkspace((workspace) => {
+    const sourceRoot = path.join(fs.realpathSync(workspace), '.brainrouter', 'cli');
+    fs.mkdirSync(sourceRoot, { recursive: true });
+    fs.writeFileSync(path.join(sourceRoot, 'old.json'), '{"generation":"old"}\n');
+    let raced = false;
+    _setLegacyWorkspaceMigrationHookForTests((event) => {
+      if (raced || event.stage !== 'after-quarantine' || event.source !== sourceRoot) return;
+      raced = true;
+      fs.mkdirSync(sourceRoot);
+      fs.writeFileSync(path.join(sourceRoot, 'new.json'), '{"generation":"new"}\n');
+    });
+
+    try {
+      const stateDir = getStateDir(workspace);
+      const stateRoot = getWorkspaceStateRoot(workspace);
+      assert.equal(fs.readFileSync(path.join(stateDir, 'old.json'), 'utf8'), '{"generation":"old"}\n');
+      assert.equal(fs.readFileSync(path.join(sourceRoot, 'new.json'), 'utf8'), '{"generation":"new"}\n');
+      assert.equal(fs.existsSync(path.join(stateRoot, '.migrated-from-workspace')), false);
+
+      _setLegacyWorkspaceMigrationHookForTests(undefined);
+      _resetLegacyWorkspaceMigrationForTests(workspace);
+      getStateDir(workspace);
+
+      assert.equal(fs.existsSync(sourceRoot), false);
+      assert.equal(fs.readFileSync(path.join(stateDir, 'new.json'), 'utf8'), '{"generation":"new"}\n');
+      assert.equal(fs.existsSync(path.join(stateRoot, '.migrated-from-workspace')), true);
+    } finally {
+      _setLegacyWorkspaceMigrationHookForTests(undefined);
+    }
+  });
+});
+
+test('cliState: cleanup preserves a quarantined version changed after rescue', async () => {
+  const {
+    _setLegacyWorkspaceMigrationHookForTests,
+    getStateDir,
+    getWorkspaceStateRoot,
+  } = await import('../storage/store.js');
+  withTempWorkspace((workspace) => {
+    const sourceRoot = path.join(fs.realpathSync(workspace), '.brainrouter', 'cli');
+    fs.mkdirSync(sourceRoot, { recursive: true });
+    fs.writeFileSync(path.join(sourceRoot, 'tasks.json'), '{"version":1}\n');
+    let changed = false;
+    _setLegacyWorkspaceMigrationHookForTests((event) => {
+      if (changed || event.stage !== 'before-quarantine-cleanup' || event.source !== sourceRoot) return;
+      changed = true;
+      fs.writeFileSync(path.join(event.quarantine, 'tasks.json'), '{"version":2}\n');
+    });
+
+    try {
+      const stateDir = getStateDir(workspace);
+      const stateRoot = getWorkspaceStateRoot(workspace);
+      assert.equal(fs.readFileSync(path.join(stateDir, 'tasks.json'), 'utf8'), '{"version":1}\n');
+      assert.equal(fs.readFileSync(path.join(sourceRoot, 'tasks.json'), 'utf8'), '{"version":2}\n');
+      assert.equal(fs.existsSync(path.join(stateRoot, '.migrated-from-workspace')), false);
+    } finally {
+      _setLegacyWorkspaceMigrationHookForTests(undefined);
+    }
+  });
+});
+
+test('cliState: cleanup never deletes a replacement swapped onto its tombstone path', async () => {
+  const {
+    _setLegacyWorkspaceMigrationHookForTests,
+    getStateDir,
+    getWorkspaceStateRoot,
+  } = await import('../storage/store.js');
+  withTempWorkspace((workspace) => {
+    const sourceRoot = path.join(fs.realpathSync(workspace), '.brainrouter', 'cli');
+    fs.mkdirSync(sourceRoot, { recursive: true });
+    fs.writeFileSync(path.join(sourceRoot, 'tasks.json'), '{"owned":"legacy"}\n');
+    let cleanupTombstone: string | undefined;
+    let displacedOwnedSource: string | undefined;
+    _setLegacyWorkspaceMigrationHookForTests((event) => {
+      if (cleanupTombstone || event.stage !== 'after-cleanup-tombstone' || event.source !== sourceRoot) return;
+      cleanupTombstone = event.quarantine;
+      displacedOwnedSource = `${event.quarantine}.displaced`;
+      fs.renameSync(event.quarantine, displacedOwnedSource);
+      fs.mkdirSync(event.quarantine);
+      fs.writeFileSync(path.join(event.quarantine, 'replacement.json'), '{"concurrent":true}\n');
+    });
+
+    try {
+      const stateDir = getStateDir(workspace);
+      const stateRoot = getWorkspaceStateRoot(workspace);
+      assert.ok(cleanupTombstone);
+      assert.ok(displacedOwnedSource);
+      assert.equal(
+        fs.readFileSync(path.join(cleanupTombstone, 'replacement.json'), 'utf8'),
+        '{"concurrent":true}\n',
+      );
+      assert.equal(
+        fs.readFileSync(path.join(displacedOwnedSource, 'tasks.json'), 'utf8'),
+        '{"owned":"legacy"}\n',
+      );
+      assert.equal(fs.readFileSync(path.join(stateDir, 'tasks.json'), 'utf8'), '{"owned":"legacy"}\n');
+      assert.equal(fs.existsSync(path.join(stateRoot, '.migrated-from-workspace')), false);
+    } finally {
+      _setLegacyWorkspaceMigrationHookForTests(undefined);
+    }
+  });
+});
+
+test('cliState: migration preserves symlinked legacy roots without following their targets', { skip: process.platform === 'win32' }, async () => {
+  const {
+    _resetLegacyWorkspaceMigrationForTests,
+    getStateDir,
+    getWorkspaceStateRoot,
+  } = await import('../storage/store.js');
+  withTempWorkspace((workspace) => {
+    const stateRoot = getWorkspaceStateRoot(workspace);
+    const external = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-external-legacy-root-'));
+    try {
+      const sentinel = path.join(external, 'sentinel.json');
+      fs.writeFileSync(sentinel, '{"keep":true}\n');
+      const legacyRoot = path.join(workspace, '.brainrouter');
+      fs.mkdirSync(legacyRoot, { recursive: true });
+      const legacyCli = path.join(legacyRoot, 'cli');
+      fs.symlinkSync(external, legacyCli);
+
+      _resetLegacyWorkspaceMigrationForTests(workspace);
+      const stateDir = getStateDir(workspace);
+
+      assert.equal(fs.lstatSync(legacyCli).isSymbolicLink(), true);
+      assert.equal(fs.readFileSync(sentinel, 'utf8'), '{"keep":true}\n');
+      assert.equal(fs.existsSync(path.join(stateDir, 'sentinel.json')), false);
+      assert.equal(fs.existsSync(path.join(stateRoot, '.migrated-from-workspace')), false);
+    } finally {
+      fs.rmSync(external, { recursive: true, force: true });
+    }
+  });
+});
+
+test('cliState: migration preserves a legacy tree containing nested symlinks', { skip: process.platform === 'win32' }, async () => {
+  const {
+    _resetLegacyWorkspaceMigrationForTests,
+    getStateDir,
+    getWorkspaceStateRoot,
+  } = await import('../storage/store.js');
+  withTempWorkspace((workspace) => {
+    const stateRoot = getWorkspaceStateRoot(workspace);
+    const external = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-external-legacy-child-'));
+    try {
+      const sentinel = path.join(external, 'sentinel.json');
+      fs.writeFileSync(sentinel, '{"keep":true}\n');
+      const legacyCli = path.join(workspace, '.brainrouter', 'cli');
+      fs.mkdirSync(legacyCli, { recursive: true });
+      fs.writeFileSync(path.join(legacyCli, 'safe.json'), '{"copy":true}\n');
+      fs.symlinkSync(external, path.join(legacyCli, 'linked'));
+
+      _resetLegacyWorkspaceMigrationForTests(workspace);
+      const stateDir = getStateDir(workspace);
+
+      assert.equal(fs.existsSync(legacyCli), true, 'an unsupported child keeps the source root in place');
+      assert.equal(fs.readFileSync(path.join(stateDir, 'safe.json'), 'utf8'), '{"copy":true}\n');
+      assert.equal(fs.existsSync(path.join(stateDir, 'linked')), false);
+      assert.equal(fs.readFileSync(sentinel, 'utf8'), '{"keep":true}\n');
+      assert.equal(fs.existsSync(path.join(stateRoot, '.migrated-from-workspace')), false);
+    } finally {
+      fs.rmSync(external, { recursive: true, force: true });
+    }
+  });
+});
+
+test('cliState: migration never writes through a symlinked rescue destination', { skip: process.platform === 'win32' }, async () => {
+  const {
+    _resetLegacyWorkspaceMigrationForTests,
+    getWorkspaceStateRoot,
+  } = await import('../storage/store.js');
+  withTempWorkspace((workspace) => {
+    const stateRoot = getWorkspaceStateRoot(workspace);
+    const external = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-external-rescue-destination-'));
+    try {
+      fs.symlinkSync(external, path.join(stateRoot, 'cli'));
+      const source = path.join(workspace, '.brainrouter', 'cli', 'tasks.json');
+      fs.mkdirSync(path.dirname(source), { recursive: true });
+      fs.writeFileSync(source, '{"legacy":true}\n');
+
+      _resetLegacyWorkspaceMigrationForTests(workspace);
+      getWorkspaceStateRoot(workspace);
+
+      assert.equal(fs.readFileSync(source, 'utf8'), '{"legacy":true}\n');
+      assert.equal(fs.existsSync(path.join(external, 'tasks.json')), false);
+      assert.equal(fs.lstatSync(path.join(stateRoot, 'cli')).isSymbolicLink(), true);
+      assert.equal(fs.existsSync(path.join(stateRoot, '.migrated-from-workspace')), false);
+    } finally {
+      fs.rmSync(path.join(stateRoot, 'cli'), { force: true });
+      fs.rmSync(external, { recursive: true, force: true });
+    }
+  });
+});
+
+test('cliState: migration never follows a symlinked completion marker', { skip: process.platform === 'win32' }, async () => {
+  const {
+    _resetLegacyWorkspaceMigrationForTests,
+    getStateDir,
+    getWorkspaceStateRoot,
+  } = await import('../storage/store.js');
+  withTempWorkspace((workspace) => {
+    const stateRoot = getWorkspaceStateRoot(workspace);
+    const external = path.join(stateRoot, 'external-marker');
+    fs.writeFileSync(external, 'do-not-overwrite\n');
+    fs.symlinkSync(external, path.join(stateRoot, '.migrated-from-workspace'));
+    const source = path.join(fs.realpathSync(workspace), '.brainrouter', 'cli', 'tasks.json');
+    fs.mkdirSync(path.dirname(source), { recursive: true });
+    fs.writeFileSync(source, '{"legacy":true}\n');
+
+    _resetLegacyWorkspaceMigrationForTests(workspace);
+    getStateDir(workspace);
+
+    assert.equal(fs.readFileSync(external, 'utf8'), 'do-not-overwrite\n');
+    assert.equal(fs.readFileSync(source, 'utf8'), '{"legacy":true}\n');
+    assert.equal(fs.lstatSync(path.join(stateRoot, '.migrated-from-workspace')).isSymbolicLink(), true);
+  });
+});
+
+test('cliState: migration preserves an unverified <workspace>/.brainrouter.migrated archive', async () => {
+  const { getStateDir } = await import('../storage/store.js');
+  withTempWorkspace((workspace) => {
     const staleArchive = path.join(workspace, '.brainrouter.migrated');
     fs.mkdirSync(path.join(staleArchive, 'cli'), { recursive: true });
-    fs.writeFileSync(path.join(staleArchive, 'cli', 'tasks.json'), JSON.stringify({ items: [] }));
+    const archivedBytes = '{"unverified":"must survive"}\n';
+    fs.writeFileSync(path.join(staleArchive, 'cli', 'tasks.json'), archivedBytes);
+    fs.writeFileSync(path.join(staleArchive, 'future-project-artifact'), 'keep\n');
     // A legacy tree must exist for the migration body to run at all.
     const legacy = path.join(workspace, '.brainrouter');
     fs.mkdirSync(path.join(legacy, 'cli'), { recursive: true });
     fs.writeFileSync(path.join(legacy, 'cli', 'tasks.json'), JSON.stringify({ items: [] }));
 
-    getStateDir(workspace); // triggers migration + sweep
+    getStateDir(workspace);
 
-    // The stale archive is gone after migration completes.
-    assert.equal(fs.existsSync(staleArchive), false);
+    assert.equal(fs.readFileSync(path.join(staleArchive, 'cli', 'tasks.json'), 'utf8'), archivedBytes);
+    assert.equal(fs.readFileSync(path.join(staleArchive, 'future-project-artifact'), 'utf8'), 'keep\n');
   });
 });
 
@@ -536,6 +1220,22 @@ test('cliState: BRAINROUTER_HOME pins the user-global state root', async () => {
     // Encoded directory should include the workspace basename and an 8-char hash.
     const tail = path.basename(wsRoot);
     assert.match(tail, /-[0-9a-f]{8}$/);
+  });
+});
+
+test('cliState: migration skips a BRAINROUTER_HOME nested inside legacy personal state', () => {
+  withTempWorkspace((workspace) => {
+    const legacyCli = path.join(workspace, '.brainrouter', 'cli');
+    fs.mkdirSync(legacyCli, { recursive: true });
+    const sentinel = path.join(legacyCli, 'keep.json');
+    fs.writeFileSync(sentinel, '{"keep":true}\n');
+    process.env.BRAINROUTER_HOME = legacyCli;
+
+    const stateDir = getStateDir(workspace);
+
+    assert.equal(fs.readFileSync(sentinel, 'utf8'), '{"keep":true}\n');
+    assert.equal(stateDir.startsWith(path.join(fs.realpathSync(legacyCli), 'workspaces')), true);
+    assert.equal(fs.existsSync(path.join(path.dirname(stateDir), '.migrated-from-workspace')), false);
   });
 });
 

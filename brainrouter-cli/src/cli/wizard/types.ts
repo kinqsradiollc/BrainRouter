@@ -4,6 +4,8 @@
  * The wizard walks the user through a small, ordered sequence of
  * decisions. Each step has its own decision shape; together they fill
  * in a `WizardDraft` that the Done step commits to disk.
+ * Project instructions are intentionally absent: AGENT.md and the workspace
+ * manifest belong to the separate per-project onboarding lifecycle.
  *
  * Why a typed Step enum + draft (instead of one giant async function
  * with awaits in sequence)? Three reasons:
@@ -29,7 +31,6 @@ export type Step =
   | 'apiKey'
   | 'model'
   | 'mcp'
-  | 'agentMd'
   | 'done';
 
 /** Ordered list — used by the runner to compute "next" and "previous". */
@@ -40,7 +41,6 @@ export const STEP_ORDER: readonly Step[] = [
   'apiKey',
   'model',
   'mcp',
-  'agentMd',
   'done',
 ] as const;
 
@@ -69,7 +69,6 @@ export interface WizardDraft {
   apiKey?: string;
   model?: string;
   mcp?: McpPick;
-  writeAgentMd?: boolean;
 }
 
 /**

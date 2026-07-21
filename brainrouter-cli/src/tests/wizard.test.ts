@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import React from 'react';
+import { render } from 'ink-testing-library';
 import {
   initWizardState,
   nextStep,
@@ -8,6 +10,7 @@ import {
   STEP_ORDER,
 } from '../cli/wizard/types.js';
 import {
+  type ProviderEntry,
   detectProviderFromEnv,
   findProvider,
   maskApiKey,
@@ -19,12 +22,72 @@ import {
   LOCAL_PLACEHOLDER_KEY,
 } from '@kinqs/brainrouter-core/provider';
 import { initPickerState, reducePicker } from '../cli/prompt/cliPrompt.js';
+import {
+  applyWizardDraftToConfig,
+  wizardSkipsMcpForLaunch,
+} from '../cli/ink/wizard/runWizard.js';
+import { ApiKeyStep, McpStep, ProviderStep } from '../cli/ink/wizard-app/steps.js';
+import {
+  editableMcpHttpUrl,
+  normalizeMcpHttpUrl,
+  redactMcpHttpUrl,
+  redactMcpHttpUrlsInText,
+  validateMcpHttpUrl,
+} from '../cli/mcpUrl.js';
+
+test('MCP endpoint URLs keep credentials in the dedicated key field', () => {
+  assert.equal(validateMcpHttpUrl('https://brain.example/mcp'), undefined);
+  assert.equal(normalizeMcpHttpUrl(' https://brain.example/mcp '), 'https://brain.example/mcp');
+  assert.match(validateMcpHttpUrl('https://user:secret@brain.example/mcp') ?? '', /must not contain credentials/);
+  assert.match(validateMcpHttpUrl('https://brain.example/mcp?X-Amz-Signature=secret') ?? '', /query parameter/);
+  assert.match(validateMcpHttpUrl('https://brain.example/mcp?token%25253Dsecret') ?? '', /query parameter/);
+  assert.match(validateMcpHttpUrl('https://brain.example/mcp?foo=sk-supersecretvalue') ?? '', /query value/);
+  assert.match(
+    validateMcpHttpUrl('https://brain.example/mcp?foo=eyJhbGciOiJIUzI1NiJ9%25252EeyJzdWIiOiIxMjM0NTY3ODkwIn0%25252Ec2lnbmF0dXJlMTIz') ?? '',
+    /query value/,
+  );
+  assert.match(validateMcpHttpUrl('https://brain.example/mcp#token=secret') ?? '', /fragments/);
+  assert.match(validateMcpHttpUrl('https://brain.example/mcp/sk-supersecretvalue') ?? '', /path appears to contain credentials/);
+  assert.match(
+    validateMcpHttpUrl('https://brain.example/mcp/token%25252Fabc1234567890ABCDEF1234567890abcdef') ?? '',
+    /path appears to contain credentials/,
+  );
+  assert.match(validateMcpHttpUrl('file:///tmp/mcp') ?? '', /http or https/);
+});
+
+test('legacy MCP endpoint display never renders URL credentials', () => {
+  const unsafe = 'https://user:secret@brain.example/mcp?token=query-secret#fragment-secret';
+  const rendered = redactMcpHttpUrl(unsafe);
+
+  assert.equal(rendered, 'https://brain.example/mcp?[redacted]#[redacted]');
+  assert.doesNotMatch(rendered, /secret|token/);
+  assert.equal(editableMcpHttpUrl(unsafe), '');
+  const error = redactMcpHttpUrlsInText(`failed\u001b[31m ${unsafe}`);
+  assert.doesNotMatch(error, /secret|token|\u001b/);
+  assert.equal(
+    redactMcpHttpUrl('https://brain.example/mcp/sk-supersecretvalue'),
+    'https://brain.example/mcp/[redacted]',
+  );
+  assert.equal(
+    redactMcpHttpUrl('https://brain.example/mcp/0123456789abcdef0123456789abcdef'),
+    'https://brain.example/mcp/[redacted]',
+  );
+  assert.equal(
+    redactMcpHttpUrl('https://brain.example/mcp/token%25252Fabc1234567890ABCDEF1234567890abcdef'),
+    'https://brain.example/[redacted]',
+  );
+});
 
 // --- Step ordering -----------------------------------------------------
 
 test('STEP_ORDER starts at welcome and ends at done', () => {
   assert.equal(STEP_ORDER[0], 'welcome');
   assert.equal(STEP_ORDER[STEP_ORDER.length - 1], 'done');
+  assert.deepEqual(
+    STEP_ORDER,
+    ['welcome', 'theme', 'provider', 'apiKey', 'model', 'mcp', 'done'],
+    'global setup must not contain workspace profile or AGENT.md steps',
+  );
 });
 
 test('nextStep / prevStep walk the ordered list and return undefined at the edges', () => {
@@ -96,6 +159,224 @@ test('reduceWizard commit only fires on the done step', () => {
   assert.equal(s.currentStep, 'done');
   const committed = reduceWizard(s, { kind: 'commit' });
   assert.equal(committed.committed, true);
+});
+
+test('global MCP Skip is launch-only and preserves existing profiles', () => {
+  const existing = {
+    activeServer: 'brain',
+    servers: {
+      brain: { type: 'stdio' as const, command: 'brainrouter-mcp', identity: 'brainrouter' as const },
+      github: { type: 'http' as const, url: 'https://example.test/mcp', identity: 'third-party' as const },
+    },
+  };
+  const next = applyWizardDraftToConfig(existing, { mcp: { kind: 'skip' } });
+
+  assert.deepEqual(next, existing);
+  assert.notEqual(next, existing, 'config application should not mutate the loaded object');
+  assert.notEqual(next.servers, existing.servers);
+
+  const committed = {
+    ...initWizardState(),
+    currentStep: 'done' as const,
+    committed: true,
+    draft: { mcp: { kind: 'skip' as const } },
+  };
+  assert.equal(wizardSkipsMcpForLaunch(committed), true);
+  assert.equal(wizardSkipsMcpForLaunch({ ...committed, committed: false, aborted: true }), false);
+});
+
+test('fresh global MCP Skip leaves an empty durable server catalog', () => {
+  const next = applyWizardDraftToConfig(
+    { activeServer: '', servers: {} },
+    { mcp: { kind: 'skip' } },
+  );
+  assert.deepEqual(next.servers, {});
+  assert.equal(next.activeServer, '');
+});
+
+test('global wizard never overwrites an unrelated MCP profile with a built-in transport name', () => {
+  const existing = {
+    activeServer: 'remote',
+    servers: {
+      remote: {
+        type: 'http' as const,
+        url: 'https://third-party.example/mcp',
+        identity: 'third-party' as const,
+      },
+    },
+  };
+  const next = applyWizardDraftToConfig(existing, {
+    mcp: { kind: 'remote-http', url: 'https://brain.example/mcp', apiKey: 'brain-key' },
+  });
+
+  assert.deepEqual(next.servers.remote, existing.servers.remote);
+  assert.deepEqual(next.servers['brainrouter-remote'], {
+    type: 'http',
+    url: 'https://brain.example/mcp',
+    apiKey: 'brain-key',
+    identity: 'brainrouter',
+  });
+  assert.equal(next.activeServer, 'brainrouter-remote');
+  assert.equal(next.activeBrainrouterServer, 'brainrouter-remote');
+});
+
+test('global wizard does not claim an occupied brainrouter-prefixed profile by name alone', () => {
+  const current = {
+    activeServer: 'remote',
+    servers: {
+      remote: {
+        type: 'http' as const,
+        url: 'https://first-party.example/mcp',
+        identity: 'third-party' as const,
+      },
+      'brainrouter-remote': {
+        type: 'http' as const,
+        url: 'https://another.example/mcp',
+      },
+    },
+  };
+  const next = applyWizardDraftToConfig(current, {
+    mcp: { kind: 'remote-http', url: 'https://brain.example/mcp', apiKey: 'brain-key' },
+  });
+
+  assert.equal(next.servers.remote.url, 'https://first-party.example/mcp');
+  assert.equal(next.servers['brainrouter-remote'].url, 'https://another.example/mcp');
+  assert.equal(next.servers['brainrouter-remote-2'].url, 'https://brain.example/mcp');
+  assert.equal(next.activeServer, 'brainrouter-remote-2');
+  assert.equal(next.activeBrainrouterServer, 'brainrouter-remote-2');
+});
+
+test('global wizard updates an existing BrainRouter-owned transport profile in place', () => {
+  const next = applyWizardDraftToConfig({
+    activeServer: 'local-http',
+    servers: {
+      'local-http': {
+        type: 'http',
+        url: 'http://localhost:3747/mcp',
+        identity: 'brainrouter',
+        apiKey: 'old',
+      },
+    },
+  }, { mcp: { kind: 'local-http', apiKey: 'new' } });
+
+  assert.equal(Object.keys(next.servers).length, 1);
+  assert.equal(next.servers['local-http'].apiKey, 'new');
+  assert.equal(next.activeServer, 'local-http');
+  assert.equal(next.activeBrainrouterServer, 'local-http');
+});
+
+test('global wizard masks provider and MCP credentials while they are entered', async () => {
+  const providerSecret = 'sk-provider-secret-that-must-not-render';
+  const mcpSecret = 'mcp-secret-that-must-not-render';
+  const previousProviderKey = process.env.OPENAI_API_KEY;
+  const previousMcpKey = process.env.BRAINROUTER_API_KEY;
+  let providerView: ReturnType<typeof render> | undefined;
+  let mcpView: ReturnType<typeof render> | undefined;
+  try {
+    process.env.OPENAI_API_KEY = providerSecret;
+    process.env.BRAINROUTER_API_KEY = mcpSecret;
+
+    providerView = render(React.createElement(ApiKeyStep, {
+      accent: 'white',
+      provider: findProvider('openai')!,
+      onAccept: () => {},
+      onAbort: () => {},
+    }));
+    assert.doesNotMatch(providerView.lastFrame() ?? '', new RegExp(providerSecret));
+
+    mcpView = render(React.createElement(McpStep, {
+      accent: 'white',
+      draft: {},
+      onAccept: () => {},
+      onAbort: () => {},
+    }));
+    mcpView.stdin.write('\u001b[B');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    mcpView.stdin.write('\r');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const mcpFrame = mcpView.lastFrame() ?? '';
+    assert.match(mcpFrame, /BrainRouter API key/);
+    assert.doesNotMatch(mcpFrame, new RegExp(mcpSecret));
+  } finally {
+    providerView?.unmount();
+    mcpView?.unmount();
+    if (previousProviderKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = previousProviderKey;
+    if (previousMcpKey === undefined) delete process.env.BRAINROUTER_API_KEY;
+    else process.env.BRAINROUTER_API_KEY = previousMcpKey;
+  }
+});
+
+test('global wizard keeps an invalid custom LLM endpoint open with an error', async () => {
+  let picked: ProviderEntry | undefined;
+  const view = render(React.createElement(ProviderStep, {
+    accent: 'white',
+    onPick: (provider: ProviderEntry) => { picked = provider; },
+    onAbort: () => {},
+  }));
+  try {
+    view.stdin.write('G');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    view.stdin.write('\r');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    view.stdin.write('not-a-url');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    view.stdin.write('\r');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(picked, undefined);
+    assert.match(view.lastFrame() ?? '', /Enter a valid http or https URL/);
+  } finally {
+    view.unmount();
+  }
+});
+
+test('custom cloud endpoint paths containing localhost still require an API key', async () => {
+  let picked: ProviderEntry | undefined;
+  let customEndpoint: string | undefined;
+  const providerView = render(React.createElement(ProviderStep, {
+    accent: 'white',
+    onPick: (provider: ProviderEntry, endpoint?: string) => {
+      picked = provider;
+      customEndpoint = endpoint;
+    },
+    onAbort: () => {},
+  }));
+  try {
+    providerView.stdin.write('G');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    providerView.stdin.write('\r');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    providerView.stdin.write('https://evil.test/localhost/v1');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    providerView.stdin.write('\r');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  } finally {
+    providerView.unmount();
+  }
+
+  assert.equal(customEndpoint, 'https://evil.test/localhost/v1');
+  assert.equal(picked?.local, false);
+
+  const previousCustomKey = process.env.BRAINROUTER_LLM_API_KEY;
+  delete process.env.BRAINROUTER_LLM_API_KEY;
+  let accepted = false;
+  const apiKeyView = render(React.createElement(ApiKeyStep, {
+    accent: 'white',
+    provider: picked!,
+    onAccept: () => { accepted = true; },
+    onAbort: () => {},
+  }));
+  try {
+    apiKeyView.stdin.write('\r');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(accepted, false);
+    assert.match(apiKeyView.lastFrame() ?? '', /API key is required/);
+  } finally {
+    apiKeyView.unmount();
+    if (previousCustomKey === undefined) delete process.env.BRAINROUTER_LLM_API_KEY;
+    else process.env.BRAINROUTER_LLM_API_KEY = previousCustomKey;
+  }
 });
 
 // --- Provider catalog --------------------------------------------------

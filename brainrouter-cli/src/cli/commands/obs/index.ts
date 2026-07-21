@@ -18,6 +18,7 @@ import { getStateFile } from '@kinqs/brainrouter-core/storage';
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 import type { CommandContext } from '../_context.js';
 import { formatTranscriptContent } from '../_helpers.js';
+import { buildScrubbedConfigJson } from '../config/rawConfig.js';
 
 
 export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean> {
@@ -416,7 +417,8 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
       console.log(`  Workspace: ${chalk.cyan(agent.workspaceRoot)}`);
       console.log(`  CLI state: ${chalk.cyan(path.join(agent.workspaceRoot, '.brainrouter/cli'))}`);
       console.log(`  Profile:   ${chalk.cyan(config.activeServer || '(none configured)')}`);
-      const activeProfile = config.servers?.[config.activeServer];
+      const scrubbedConfig = JSON.parse(buildScrubbedConfigJson(config)) as typeof config;
+      const activeProfile = scrubbedConfig.servers?.[config.activeServer];
       // Guard the same #59-class deref: JSON.stringify(undefined) is `undefined`
       // (not a string), so .split('\n') would throw when no profile resolves.
       console.log(`  Server:    ${activeProfile

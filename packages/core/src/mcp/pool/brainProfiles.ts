@@ -45,6 +45,37 @@ export function selectMcpServerIds(
 }
 
 /**
+ * Resolve the persisted memory-plane profile without confusing it with the
+ * independently highlighted MCP profile. Older configs only have
+ * `activeServer`; accept that fallback only when config can identify it as a
+ * BrainRouter profile. A separately persisted active brain may remain
+ * config-unknown because its identity was learned from the live tool catalog.
+ */
+export function resolvePreferredBrainrouterServerId(
+  servers: Record<string, ServerConfig>,
+  activeBrainrouterServer?: string,
+  activeServer?: string,
+): string | undefined {
+  if (activeBrainrouterServer && servers[activeBrainrouterServer]) {
+    const identity = resolveIdentityFromConfig(
+      servers[activeBrainrouterServer],
+      activeBrainrouterServer,
+    );
+    if (identity !== 'third-party') return activeBrainrouterServer;
+  }
+  if (
+    activeServer
+    && servers[activeServer]
+    && resolveIdentityFromConfig(servers[activeServer], activeServer) === 'brainrouter'
+  ) {
+    return activeServer;
+  }
+  return Object.keys(servers).find((serverId) =>
+    resolveIdentityFromConfig(servers[serverId], serverId) === 'brainrouter',
+  );
+}
+
+/**
  * REMOTE-BRAIN (Workstream A, ADR-005) — rewrite the active BrainRouter profile
  * to talk to a remote Streamable-HTTP brain at `brainUrl`.
  *
@@ -74,7 +105,10 @@ export function applyBrainUrlOverride(
 
   const ids = Object.keys(servers);
   const brainrouterIds = ids.filter((id) => resolveIdentityFromConfig(servers[id], id) === 'brainrouter');
-  const targetId = (activeServer && brainrouterIds.includes(activeServer))
+  const activeIdentity = activeServer && servers[activeServer]
+    ? resolveIdentityFromConfig(servers[activeServer], activeServer)
+    : undefined;
+  const targetId = (activeServer && servers[activeServer] && activeIdentity !== 'third-party')
     ? activeServer
     : brainrouterIds[0] ?? 'brainrouter';
 
@@ -145,7 +179,17 @@ export async function probeBrainHealth(
  * configured stdio BrainRouter profile, or null when none exists. Used to decide
  * whether to fall back to the embedded brain when a remote is unreachable.
  */
-export function embeddedBrainId(servers: Record<string, ServerConfig>): string | null {
+export function embeddedBrainId(
+  servers: Record<string, ServerConfig>,
+  preferredServerId?: string,
+): string | null {
+  if (
+    preferredServerId
+    && servers[preferredServerId]?.type === 'stdio'
+    && resolveIdentityFromConfig(servers[preferredServerId], preferredServerId) !== 'third-party'
+  ) {
+    return preferredServerId;
+  }
   for (const id of Object.keys(servers)) {
     const s = servers[id];
     if (s?.type === "stdio" && resolveIdentityFromConfig(s, id) === "brainrouter") return id;

@@ -16,6 +16,7 @@ import type readline from 'node:readline';
 import type { Agent } from '@kinqs/brainrouter-core/agent';
 import type { McpClientPool as McpClientWrapper } from '@kinqs/brainrouter-core/mcp';
 import type { Config } from '@kinqs/brainrouter-core/config';
+import type { RuntimeLaunchPolicy, RuntimeMcpState } from '../../entry/mcpStartup.js';
 
 /**
  * Lifecycle / REPL-scoped state that command handlers can read or mutate.
@@ -24,6 +25,10 @@ import type { Config } from '@kinqs/brainrouter-core/config';
  * one instance per session and threads it through every dispatch call.
  */
 export interface ReplContext {
+  /** Original launch constraints reused by in-session config reconciliation. */
+  launchPolicy: RuntimeLaunchPolicy;
+  /** Transient remote/fallback/workspace projection; never persisted. */
+  runtimeMcp?: RuntimeMcpState;
   /** Refresh the readline prompt (color reflects access mode + status segments). */
   refreshPromptForMode: () => void;
   /** Replace the startup banner in the active chat scrollback, if the UI supports it. */

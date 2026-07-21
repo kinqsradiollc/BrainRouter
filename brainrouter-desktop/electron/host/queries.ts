@@ -22,11 +22,12 @@ import {
   fetchAccountConnectorStatuses,
   fetchAutomationAccountStatus,
   fetchGithubAccountStatus,
-  resolveBrainRouterAccountApi,
-  resolveBrainRouterAccountContext,
+  resolveBrainRouterAccountApi as resolveFirstBrainRouterAccountApi,
+  resolveBrainRouterAccountContext as resolveFirstBrainRouterAccountContext,
   resolveDesktopAccountIdentity,
   startAccountConnectorOAuth,
   timeoutFetch,
+  type BrainRouterAccountApi,
 } from '../accountIntegration.js';
 // host/helpers — pure, closure-free helpers (config scrubbing, Track↔GitHub
 // normalization, computer-use/secret bridges, endpoint model probing, transcript
@@ -78,12 +79,15 @@ import {
   findConfigSchemaField,
   loadConfig,
   saveConfig,
+  saveConfigOrThrow,
   getCliKnobs,
   resolveCliKnobs,
   _resetCliKnobsCache,
   applyRuleEdit,
   setConfigValueAtPath,
+  type Config,
   type LLMConfig,
+  type ServerConfig,
 } from '@kinqs/brainrouter-core/config';
 import { aggregateCatalog, buildModelRegistry, getRouterPolicy } from '@kinqs/brainrouter-core/router';
 import {
@@ -101,7 +105,13 @@ import {
 } from '@kinqs/brainrouter-core/runtime';
 // 0.4.15 — named providers + per-sub-agent model routing (pure transforms).
 import { setProvider, removeProvider, setAgentModel, normalizeProviderModels, PROVIDER_CATALOG } from '@kinqs/brainrouter-core/provider';
-import { childSessionKey } from '@kinqs/brainrouter-core/mcp';
+import {
+  childSessionKey,
+  resolveIdentityFromConfig,
+  resolvePreferredBrainrouterServerId,
+  type McpClientPool,
+  type McpServerStatus,
+} from '@kinqs/brainrouter-core/mcp';
 import {
   listTranscripts,
   loadTranscript,
@@ -349,6 +359,822 @@ import { desktopSessionModePatchFromArgs, mergeSessionModePrefs } from '../sessi
 import type { HostContext, TrackPrView } from './context.js';
 import type { QueryHandler } from '../hostCore.js';
 
+type DesktopMcpPool = Pick<
+  McpClientPool,
+  | 'connectOne'
+  | 'getStatus'
+  | 'getStatuses'
+  | 'removeOne'
+  | 'setReconnectLlmConfig'
+  | 'startReconnectSupervisor'
+  | 'stopReconnectSupervisor'
+>;
+
+export interface DesktopMcpLifecycleDeps {
+  loadConfig: () => Config;
+  persistConfig: (config: Config) => void;
+  mcpClient: DesktopMcpPool;
+  workspaceRoot: string;
+  getLlm: () => LLMConfig;
+}
+
+export interface DesktopMcpMutationResult {
+  ok: boolean;
+  id?: string;
+  online?: boolean;
+  idle?: boolean;
+  activeServer?: string;
+  activeBrainrouterServer?: string;
+  warning?: string;
+  error?: string;
+}
+
+export interface DesktopBrainRouterAccount {
+  url: string;
+  mcpUrl: string;
+  userId: string;
+  displayName: string;
+  email: string;
+}
+
+interface StoredDesktopBrainRouterAccount extends DesktopBrainRouterAccount {
+  brainId?: string;
+  prevBrain?: ServerConfig | null;
+}
+
+type DesktopAccountConfig = Config & {
+  cli?: NonNullable<Config['cli']> & { account?: StoredDesktopBrainRouterAccount };
+};
+
+function cloneConfig(config: Config): Config {
+  return structuredClone(config);
+}
+
+/** Put the selected memory-plane profile first for legacy account resolvers. */
+export function desktopAccountConfigForResolution(config: unknown): unknown {
+  if (!config || typeof config !== 'object') return config;
+  const candidate = config as Partial<Config>;
+  if (!candidate.servers || typeof candidate.servers !== 'object') return config;
+  const preferred = resolvePreferredBrainrouterServerId(
+    candidate.servers,
+    candidate.activeBrainrouterServer,
+    candidate.activeServer,
+  );
+  if (!preferred || !candidate.servers[preferred]) return config;
+  return {
+    ...candidate,
+    servers: {
+      [preferred]: candidate.servers[preferred],
+      ...candidate.servers,
+    },
+  };
+}
+
+/** Account API credentials always come from the selected BrainRouter profile. */
+export function resolveSelectedDesktopBrainRouterAccountApi(config: unknown): BrainRouterAccountApi | null {
+  return resolveFirstBrainRouterAccountApi(desktopAccountConfigForResolution(config));
+}
+
+const resolveBrainRouterAccountApi = resolveSelectedDesktopBrainRouterAccountApi;
+const resolveBrainRouterAccountContext = (config: unknown) =>
+  resolveFirstBrainRouterAccountContext(desktopAccountConfigForResolution(config));
+
+/** Resolve a saved profile's identity even when an inactive profile has no pool status. */
+export function resolveDesktopMcpIdentity(
+  serverId: string,
+  server: ServerConfig,
+  status?: McpServerStatus,
+): McpServerStatus['identity'] {
+  return status?.identity && status.identity !== 'unknown'
+    ? status.identity
+    : resolveIdentityFromConfig(server, serverId);
+}
+
+const DESKTOP_MCP_SENSITIVE_NAME_PARTS = [
+  'apikey',
+  'accesskey',
+  'privatekey',
+  'secretaccesskey',
+  'accesstoken',
+  'refreshtoken',
+  'idtoken',
+  'clientsecret',
+  'authorization',
+  'credential',
+  'password',
+  'passwd',
+  'secret',
+  'token',
+  'signature',
+  'connectionstring',
+  'databaseurl',
+  'dsn',
+  'cookie',
+];
+const DESKTOP_MCP_URL_MAX_BYTES = 16 * 1024;
+const DESKTOP_MCP_MAX_PERCENT_DECODE_PASSES = 8;
+const DESKTOP_MCP_OBVIOUS_SECRET = /(?:\bsk-[A-Za-z0-9_-]{12,}|\b(?:gh[opusr]|github_pat)_[A-Za-z0-9_]{12,}|\bxox[baprs]-\S{8,}|\bAKIA[A-Z0-9]{16}|\bBearer\s+\S{4,})/i;
+
+function decodeDesktopMcpUrlComponentTolerantly(value: string): string {
+  let decoded = value;
+  for (let pass = 0; pass < DESKTOP_MCP_MAX_PERCENT_DECODE_PASSES; pass += 1) {
+    const next = decoded.replace(/(?:%[0-9A-Fa-f]{2})+/g, (encoded) =>
+      Buffer.from(encoded.replaceAll('%', ''), 'hex').toString('utf8'));
+    if (next === decoded) break;
+    decoded = next;
+  }
+  return decoded;
+}
+
+function normalizeDesktopMcpCredentialName(name: string): string {
+  return decodeDesktopMcpUrlComponentTolerantly(name)
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function isDesktopMcpSensitiveCredentialName(name: string): boolean {
+  const normalized = normalizeDesktopMcpCredentialName(name);
+  return normalized === 'key'
+    || normalized === 'sig'
+    || normalized === 'auth'
+    || normalized.endsWith('apikey')
+    || normalized.endsWith('accesskey')
+    || normalized.endsWith('privatekey')
+    || normalized.endsWith('connectionstring')
+    || normalized.endsWith('databaseurl')
+    || normalized.endsWith('signature')
+    || DESKTOP_MCP_SENSITIVE_NAME_PARTS.some((part) => normalized === part || normalized.endsWith(part));
+}
+
+function containsDesktopMcpObviousCredentialValue(value: string): boolean {
+  const decoded = decodeDesktopMcpUrlComponentTolerantly(value);
+  return /(?:sk-[A-Za-z0-9_-]{12,}|(?:gh[opusr]|github_pat)_[A-Za-z0-9_]{12,}|xox[baprs]-[^/]{8,}|AKIA[A-Z0-9]{16})/i.test(decoded)
+    || /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|credential|password|signature|token|secret)\s*[:=]\s*\S+/i.test(decoded)
+    || /[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/.test(decoded)
+    || /\b[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/i.test(decoded);
+}
+
+function isDesktopMcpCredentialPathLabel(segment: string): boolean {
+  const normalized = normalizeDesktopMcpCredentialName(segment);
+  return normalized === 'key'
+    || normalized === 'auth'
+    || normalized === 'sig'
+    || DESKTOP_MCP_SENSITIVE_NAME_PARTS.some((part) => normalized === part);
+}
+
+function hasDesktopMcpSensitivePathMaterial(pathname: string): boolean {
+  // Decode before splitting so encoded separators cannot hide a token/value path.
+  const segments = decodeDesktopMcpUrlComponentTolerantly(pathname).split('/');
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index]!;
+    if (containsDesktopMcpObviousCredentialValue(segment)) return true;
+    if (index > 0 && isDesktopMcpCredentialPathLabel(segments[index - 1]!) && segment) return true;
+  }
+  return false;
+}
+
+/** Validate an MCP HTTP endpoint before it crosses the desktop persistence boundary. */
+export function validateDesktopMcpHttpUrl(raw: string): string | undefined {
+  const value = raw.trim();
+  if (!value) return 'MCP URL is required.';
+  if (Buffer.byteLength(value) > DESKTOP_MCP_URL_MAX_BYTES) return 'MCP URL is too long.';
+
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return 'MCP URL is invalid.';
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return 'MCP URL must use http or https.';
+  }
+  if (parsed.username || parsed.password) {
+    return 'Put credentials in the API key or headers field, not the URL.';
+  }
+  if (hasDesktopMcpSensitivePathMaterial(parsed.pathname)) {
+    return 'The MCP URL path appears to contain credentials. Use the API key or headers field.';
+  }
+  for (const [name, queryValue] of parsed.searchParams) {
+    if (isDesktopMcpSensitiveCredentialName(name)) {
+      return 'The MCP URL query appears to contain credentials. Use the API key or headers field.';
+    }
+    if (containsDesktopMcpObviousCredentialValue(queryValue)) {
+      return 'The MCP URL query value appears to contain credentials. Use the API key or headers field.';
+    }
+  }
+  if (parsed.hash) return 'MCP URL fragments are not supported.';
+  return undefined;
+}
+
+/** Renderer-safe representation for legacy hand-edited MCP endpoints. */
+export function redactDesktopMcpEndpoint(raw: string | undefined): string | null {
+  if (!raw) return null;
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '[invalid URL]';
+    const segments = parsed.pathname.split('/');
+    const pathname = segments.map((segment, index) => {
+      if (!segment) return segment;
+      const decoded = decodeDesktopMcpUrlComponentTolerantly(segment);
+      const previous = index > 0 ? segments[index - 1] : '';
+      if (
+        containsDesktopMcpObviousCredentialValue(decoded)
+        || isDesktopMcpCredentialPathLabel(previous)
+        || (decoded.length >= 32 && /^[A-Za-z0-9_+=.-]+$/.test(decoded) && /[A-Za-z]/.test(decoded) && /[0-9]/.test(decoded))
+      ) {
+        return '[redacted]';
+      }
+      return segment;
+    }).join('/');
+    const safePathname = pathname === parsed.pathname && hasDesktopMcpSensitivePathMaterial(parsed.pathname)
+      ? '/[redacted]'
+      : pathname;
+    return `${parsed.origin}${safePathname}${parsed.search ? '?[redacted]' : ''}${parsed.hash ? '#[redacted]' : ''}`;
+  } catch {
+    return '[invalid URL]';
+  }
+}
+
+/** Do not send credentials embedded in legacy stdio arguments to the renderer. */
+export function redactDesktopMcpCommand(profile: ServerConfig): string | null {
+  if (profile.type !== 'stdio') return null;
+  let redactNextCredential = false;
+  let redactNextBearer = false;
+  let redactNextHeaderValue = false;
+
+  const redactHeaderArgument = (argument: string): string | undefined => {
+    const separator = argument.search(/[:=]/);
+    if (separator <= 0) return undefined;
+    const name = argument.slice(0, separator).trim();
+    if (!isDesktopMcpSensitiveCredentialName(name)) return undefined;
+
+    const prefix = argument.slice(0, separator + 1);
+    const value = argument.slice(separator + 1).trim();
+    if (!value) {
+      redactNextHeaderValue = true;
+      return prefix;
+    }
+    if (/^Bearer$/i.test(value)) {
+      redactNextBearer = true;
+      return `${prefix} Bearer`;
+    }
+    if (/^Bearer\s+/i.test(value)) return `${prefix} Bearer [redacted]`;
+    return `${prefix} [redacted]`;
+  };
+
+  const args = (profile.args ?? []).map((arg) => {
+    if (redactNextCredential) {
+      redactNextCredential = false;
+      return '[redacted]';
+    }
+    if (redactNextBearer) {
+      redactNextBearer = false;
+      return '[redacted]';
+    }
+    if (redactNextHeaderValue) {
+      redactNextHeaderValue = false;
+      if (/^Bearer$/i.test(arg)) {
+        redactNextBearer = true;
+        return arg;
+      }
+      return '[redacted]';
+    }
+
+    if (/^https?:\/\//i.test(arg)) return redactDesktopMcpEndpoint(arg) ?? '[invalid URL]';
+
+    const separator = arg.indexOf('=');
+    const headerSeparator = arg.indexOf(':');
+    if (headerSeparator > 0 && (separator < 0 || headerSeparator < separator)) {
+      const redactedHeader = redactHeaderArgument(arg);
+      if (redactedHeader !== undefined) return redactedHeader;
+    }
+
+    const name = separator >= 0 ? arg.slice(0, separator) : arg;
+    if (separator >= 0 && isDesktopMcpSensitiveCredentialName(name.replace(/^-+/, ''))) {
+      return `${arg.slice(0, separator + 1)}[redacted]`;
+    }
+    if (separator >= 0) {
+      const value = arg.slice(separator + 1);
+      if (/^https?:\/\//i.test(value)) {
+        return `${arg.slice(0, separator + 1)}${redactDesktopMcpEndpoint(value) ?? '[invalid URL]'}`;
+      }
+      const redactedValue = redactHeaderArgument(value);
+      if (redactedValue !== undefined) {
+        return `${arg.slice(0, separator + 1)}${redactedValue}`;
+      }
+      if (containsDesktopMcpObviousCredentialValue(value) || DESKTOP_MCP_OBVIOUS_SECRET.test(value)) {
+        return `${arg.slice(0, separator + 1)}[redacted]`;
+      }
+    }
+
+    const optionName = name.replace(/^-+/, '');
+    if (optionName !== name && isDesktopMcpSensitiveCredentialName(optionName)) {
+      redactNextCredential = true;
+      return arg;
+    }
+    if (/^Bearer$/i.test(arg)) {
+      redactNextBearer = true;
+      return arg;
+    }
+    if (separator < 0 && isDesktopMcpSensitiveCredentialName(arg)) {
+      redactNextHeaderValue = true;
+      return arg;
+    }
+    if (containsDesktopMcpObviousCredentialValue(arg) || DESKTOP_MCP_OBVIOUS_SECRET.test(arg)) {
+      return '[redacted]';
+    }
+    return arg;
+  });
+  return [profile.command, ...args].filter(Boolean).join(' ');
+}
+
+export function desktopMcpProfileForWorkspace(
+  config: Config,
+  serverId: string,
+  workspaceRoot: string,
+): ServerConfig {
+  const profile = structuredClone(config.servers[serverId]);
+  const preferredBrainrouterServerId = resolvePreferredBrainrouterServerId(
+    config.servers,
+    config.activeBrainrouterServer,
+    config.activeServer,
+  );
+  const isBrainrouter = resolveIdentityFromConfig(profile, serverId) === 'brainrouter'
+    || preferredBrainrouterServerId === serverId;
+  if (profile.type !== 'stdio' || !isBrainrouter) return profile;
+
+  const args = profile.args ?? [];
+  const rootIndex = args.indexOf('--root');
+  profile.args = rootIndex >= 0
+    ? [...args.slice(0, rootIndex + 1), workspaceRoot, ...args.slice(rootIndex + 2)]
+    : [...args, '--root', workspaceRoot];
+  return profile;
+}
+
+function otherDesktopBrainrouterIds(
+  config: Config,
+  targetId: string,
+  statuses: readonly McpServerStatus[],
+): string[] {
+  const ids = new Set<string>();
+  const preferred = resolvePreferredBrainrouterServerId(
+    config.servers,
+    config.activeBrainrouterServer,
+    config.activeServer,
+  );
+  if (preferred && preferred !== targetId) ids.add(preferred);
+  for (const [serverId, profile] of Object.entries(config.servers)) {
+    if (serverId !== targetId && resolveIdentityFromConfig(profile, serverId) === 'brainrouter') {
+      ids.add(serverId);
+    }
+  }
+  for (const status of statuses) {
+    if (status.serverId !== targetId && status.identity === 'brainrouter') ids.add(status.serverId);
+  }
+  return [...ids];
+}
+
+/**
+ * Desktop's transactional MCP mutation surface. It serializes Settings clicks,
+ * uses fresh config for every operation, and never reports a durable mutation
+ * as successful when the atomic config write failed.
+ */
+export function createDesktopMcpLifecycle(deps: DesktopMcpLifecycleDeps) {
+  let mutationTail: Promise<void> = Promise.resolve();
+  const serialized = <T>(operation: () => Promise<T>): Promise<T> => {
+    const result = mutationTail.then(operation, operation);
+    mutationTail = result.then(() => undefined, () => undefined);
+    return result;
+  };
+
+  const preferredBrainrouterId = (config: Config): string | undefined =>
+    resolvePreferredBrainrouterServerId(
+      config.servers,
+      config.activeBrainrouterServer,
+      config.activeServer,
+    );
+
+  const connectProfile = async (
+    config: Config,
+    serverId: string,
+  ): Promise<{ status?: McpServerStatus; identity: McpServerStatus['identity'] }> => {
+    const profile = config.servers[serverId];
+    if (!profile) return { identity: 'unknown' };
+    const effectiveProfile = desktopMcpProfileForWorkspace(
+      config,
+      serverId,
+      deps.workspaceRoot,
+    );
+    const llm = structuredClone(deps.getLlm());
+    const retireBrainrouterServerIds = otherDesktopBrainrouterIds(
+      config,
+      serverId,
+      deps.mcpClient.getStatuses(),
+    );
+
+    deps.mcpClient.stopReconnectSupervisor();
+    try {
+      deps.mcpClient.setReconnectLlmConfig(llm);
+      await deps.mcpClient.connectOne(serverId, effectiveProfile, llm, 5_000, {
+        retireBrainrouterServerIds,
+        brainrouterPriority: Number.MAX_SAFE_INTEGER,
+      });
+    } finally {
+      deps.mcpClient.startReconnectSupervisor();
+    }
+    const status = deps.mcpClient.getStatus(serverId);
+    return {
+      status,
+      identity: resolveDesktopMcpIdentity(serverId, profile, status),
+    };
+  };
+
+  const restorePreviousBrain = async (
+    previousConfig: Config,
+    previousBrainrouterId: string | undefined,
+    switchedId: string,
+  ): Promise<void> => {
+    if (previousBrainrouterId === switchedId) return;
+    if (previousBrainrouterId && previousConfig.servers[previousBrainrouterId]) {
+      const restored = await connectProfile(previousConfig, previousBrainrouterId).catch(() => undefined);
+      if (restored?.status?.status === 'connected') return;
+    }
+    await deps.mcpClient.removeOne(switchedId).catch(() => undefined);
+  };
+
+  const persistBrainrouterSelection = (
+    config: Config,
+    serverId: string,
+    highlight: boolean,
+  ): Config => {
+    const next = cloneConfig(config);
+    next.servers[serverId] = { ...next.servers[serverId], identity: 'brainrouter' };
+    next.activeBrainrouterServer = serverId;
+    if (highlight) next.activeServer = serverId;
+    return next;
+  };
+
+  return {
+    commitAccountSignIn: (input: {
+      profile: ServerConfig;
+      account: DesktopBrainRouterAccount;
+    }): Promise<DesktopMcpMutationResult> => serialized(async () => {
+      const current = deps.loadConfig() as DesktopAccountConfig;
+      const serverId = preferredBrainrouterId(current) ?? 'brainrouter';
+      const existingAccount = current.cli?.account;
+      const reuseStoredPrevious = existingAccount !== undefined
+        && (existingAccount.brainId === undefined || existingAccount.brainId === serverId)
+        && Object.prototype.hasOwnProperty.call(existingAccount, 'prevBrain');
+      const prevBrain = reuseStoredPrevious
+        ? structuredClone(existingAccount.prevBrain ?? null)
+        : structuredClone(current.servers[serverId] ?? null);
+      const next = cloneConfig(current) as DesktopAccountConfig;
+      next.servers[serverId] = {
+        ...structuredClone(input.profile),
+        identity: 'brainrouter',
+      };
+      next.activeBrainrouterServer = serverId;
+      next.cli = {
+        ...(next.cli ?? {}),
+        brainUrl: input.account.mcpUrl,
+        account: {
+          ...structuredClone(input.account),
+          brainId: serverId,
+          prevBrain,
+        },
+      };
+
+      try {
+        deps.persistConfig(next);
+      } catch (error) {
+        return {
+          ok: false,
+          id: serverId,
+          error: `BrainRouter account could not be saved: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+      return {
+        ok: true,
+        id: serverId,
+        activeServer: next.activeServer,
+        activeBrainrouterServer: serverId,
+      };
+    }),
+
+    /** Connect only a profile whose account config has already committed. */
+    connectCommittedAccountBrain: (serverId: string): Promise<DesktopMcpMutationResult> => serialized(async () => {
+      const current = deps.loadConfig() as DesktopAccountConfig;
+      if (current.cli?.account?.brainId !== serverId) {
+        return { ok: false, id: serverId, error: `BrainRouter account profile "${serverId}" is no longer selected.` };
+      }
+      const profile = current.servers[serverId];
+      if (!profile || resolveIdentityFromConfig(profile, serverId) !== 'brainrouter') {
+        return { ok: false, id: serverId, error: `No committed BrainRouter account profile named "${serverId}".` };
+      }
+      const connected = await connectProfile(current, serverId).catch(() => ({
+        status: undefined,
+        identity: 'brainrouter' as const,
+      }));
+      if (connected.status?.status !== 'connected' || connected.identity !== 'brainrouter') {
+        return {
+          ok: true,
+          id: serverId,
+          online: false,
+          activeBrainrouterServer: serverId,
+          warning: `BrainRouter account "${serverId}" was saved but is currently offline.`,
+        };
+      }
+      return {
+        ok: true,
+        id: serverId,
+        online: true,
+        activeBrainrouterServer: serverId,
+      };
+    }),
+
+    signOutAccount: (options: {
+      beforeDisconnect?: () => Promise<void>;
+    } = {}): Promise<DesktopMcpMutationResult> => serialized(async () => {
+      const current = deps.loadConfig() as DesktopAccountConfig;
+      const existingAccount = current.cli?.account;
+      const storedBrainId = existingAccount?.brainId;
+      const preferred = preferredBrainrouterId(current);
+      const serverId = storedBrainId && current.servers[storedBrainId]
+        ? storedBrainId
+        : preferred;
+      const canRestorePrevious = existingAccount !== undefined
+        && (storedBrainId === undefined || storedBrainId === serverId);
+      const prevBrain = canRestorePrevious
+        ? structuredClone(existingAccount.prevBrain ?? null)
+        : null;
+      const next = cloneConfig(current) as DesktopAccountConfig;
+
+      if (serverId) {
+        if (prevBrain) next.servers[serverId] = prevBrain;
+        else delete next.servers[serverId];
+      }
+      if (next.cli) {
+        delete next.cli.brainUrl;
+        delete next.cli.account;
+      }
+      if (serverId && next.activeServer === serverId && !next.servers[serverId]) {
+        next.activeServer = Object.keys(next.servers)[0] ?? '';
+      }
+      if (serverId && next.servers[serverId]) {
+        next.activeBrainrouterServer = serverId;
+      } else if (!next.servers[next.activeBrainrouterServer ?? '']) {
+        next.activeBrainrouterServer = resolvePreferredBrainrouterServerId(
+          next.servers,
+          undefined,
+          next.activeServer,
+        );
+      }
+
+      try {
+        deps.persistConfig(next);
+      } catch (error) {
+        return {
+          ok: false,
+          id: serverId,
+          error: `BrainRouter account sign-out could not be saved: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+
+      await options.beforeDisconnect?.().catch(() => undefined);
+      if (!serverId) return { ok: true };
+
+      deps.mcpClient.stopReconnectSupervisor();
+      try {
+        await deps.mcpClient.removeOne(serverId);
+      } catch (error) {
+        return {
+          ok: true,
+          id: serverId,
+          online: false,
+          activeBrainrouterServer: next.activeBrainrouterServer,
+          warning: `Signed out, but live MCP cleanup failed and automatic reconnect remains paused until restart: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+      deps.mcpClient.startReconnectSupervisor();
+
+      if (next.servers[serverId]) {
+        const restored = await connectProfile(next, serverId).catch(() => undefined);
+        if (restored?.status?.status !== 'connected') {
+          return {
+            ok: true,
+            id: serverId,
+            online: false,
+            activeBrainrouterServer: next.activeBrainrouterServer,
+            warning: `Signed out, but restored BrainRouter profile "${serverId}" is offline.`,
+          };
+        }
+      }
+      return {
+        ok: true,
+        id: serverId,
+        activeServer: next.activeServer,
+        activeBrainrouterServer: next.activeBrainrouterServer,
+      };
+    }),
+
+    reconnect: (serverId: string): Promise<DesktopMcpMutationResult> => serialized(async () => {
+      const current = deps.loadConfig();
+      if (!current.servers[serverId]) return { ok: false, error: `No MCP server named "${serverId}".` };
+      const previousBrainrouterId = preferredBrainrouterId(current);
+      const connected = await connectProfile(current, serverId).catch(() => ({
+        status: undefined,
+        identity: 'unknown' as const,
+      }));
+      if (connected.status?.status !== 'connected') {
+        return { ok: false, id: serverId, online: false, error: `MCP server "${serverId}" could not connect.` };
+      }
+      if (connected.identity !== 'brainrouter') {
+        return { ok: true, id: serverId, online: true };
+      }
+
+      const next = persistBrainrouterSelection(current, serverId, false);
+      try {
+        deps.persistConfig(next);
+      } catch (error) {
+        await restorePreviousBrain(current, previousBrainrouterId, serverId);
+        return {
+          ok: false,
+          id: serverId,
+          error: `BrainRouter server reconnected, but its active selection could not be saved: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+      return {
+        ok: true,
+        id: serverId,
+        online: true,
+        activeBrainrouterServer: serverId,
+      };
+    }),
+
+    setActive: (serverId: string): Promise<DesktopMcpMutationResult> => serialized(async () => {
+      const current = deps.loadConfig();
+      const profile = current.servers[serverId];
+      if (!profile) return { ok: false, error: `No MCP server named "${serverId}".` };
+      const currentStatus = deps.mcpClient.getStatus(serverId);
+      if (resolveDesktopMcpIdentity(serverId, profile, currentStatus) !== 'brainrouter') {
+        return { ok: false, error: `MCP server "${serverId}" is not a BrainRouter profile.` };
+      }
+
+      const previousBrainrouterId = preferredBrainrouterId(current);
+      const connected = await connectProfile(current, serverId).catch(() => ({
+        status: undefined,
+        identity: 'brainrouter' as const,
+      }));
+      if (connected.status?.status !== 'connected' || connected.identity !== 'brainrouter') {
+        return { ok: false, id: serverId, online: false, error: `BrainRouter server "${serverId}" could not connect.` };
+      }
+
+      const next = persistBrainrouterSelection(current, serverId, true);
+      try {
+        deps.persistConfig(next);
+      } catch (error) {
+        await restorePreviousBrain(current, previousBrainrouterId, serverId);
+        return {
+          ok: false,
+          id: serverId,
+          error: `BrainRouter server switched live, but the selection could not be saved: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+      return {
+        ok: true,
+        id: serverId,
+        online: true,
+        activeServer: serverId,
+        activeBrainrouterServer: serverId,
+      };
+    }),
+
+    add: (serverId: string, profile: ServerConfig): Promise<DesktopMcpMutationResult> => serialized(async () => {
+      const current = deps.loadConfig();
+      if (current.servers[serverId]) return { ok: false, error: `A server named "${serverId}" already exists.` };
+      const previousBrainrouterId = preferredBrainrouterId(current);
+      const next = cloneConfig(current);
+      next.servers[serverId] = structuredClone(profile);
+      if (!next.activeServer || !next.servers[next.activeServer]) next.activeServer = serverId;
+      try {
+        deps.persistConfig(next);
+      } catch (error) {
+        return {
+          ok: false,
+          id: serverId,
+          error: `MCP server could not be saved: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+
+      const configuredIdentity = resolveIdentityFromConfig(profile, serverId);
+      if (configuredIdentity === 'brainrouter' && previousBrainrouterId) {
+        return { ok: true, id: serverId, online: false, idle: true };
+      }
+
+      const connected = await connectProfile(next, serverId).catch(() => ({
+        status: undefined,
+        identity: configuredIdentity,
+      }));
+      if (connected.status?.status !== 'connected') {
+        return {
+          ok: true,
+          id: serverId,
+          online: false,
+          warning: `MCP server "${serverId}" was saved but is currently offline.`,
+        };
+      }
+      if (connected.identity !== 'brainrouter') {
+        return { ok: true, id: serverId, online: true };
+      }
+
+      const selected = persistBrainrouterSelection(next, serverId, false);
+      try {
+        deps.persistConfig(selected);
+      } catch (error) {
+        try { deps.persistConfig(current); } catch { /* best-effort durable rollback */ }
+        await deps.mcpClient.removeOne(serverId).catch(() => undefined);
+        await restorePreviousBrain(current, previousBrainrouterId, serverId);
+        return {
+          ok: false,
+          id: serverId,
+          error: `BrainRouter server was detected, but its selection could not be saved: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+      return {
+        ok: true,
+        id: serverId,
+        online: true,
+        activeBrainrouterServer: serverId,
+      };
+    }),
+
+    remove: (serverId: string): Promise<DesktopMcpMutationResult> => serialized(async () => {
+      const current = deps.loadConfig();
+      if (!current.servers[serverId]) return { ok: false, error: `No MCP server named "${serverId}".` };
+      const previousBrainrouterId = preferredBrainrouterId(current);
+      const next = cloneConfig(current);
+      delete next.servers[serverId];
+      if (next.activeServer === serverId) next.activeServer = Object.keys(next.servers)[0] ?? '';
+      if (next.activeBrainrouterServer === serverId || !next.servers[next.activeBrainrouterServer ?? '']) {
+        next.activeBrainrouterServer = resolvePreferredBrainrouterServerId(
+          next.servers,
+          undefined,
+          next.activeServer,
+        );
+      }
+
+      try {
+        deps.persistConfig(next);
+      } catch (error) {
+        return {
+          ok: false,
+          id: serverId,
+          error: `MCP server could not be removed from config: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+      try {
+        await deps.mcpClient.removeOne(serverId);
+      } catch (error) {
+        try { deps.persistConfig(current); } catch { /* best-effort durable rollback */ }
+        const removedIdentity = resolveDesktopMcpIdentity(
+          serverId,
+          current.servers[serverId],
+          deps.mcpClient.getStatus(serverId),
+        );
+        if (removedIdentity !== 'brainrouter' || previousBrainrouterId === serverId) {
+          await connectProfile(current, serverId).catch(() => undefined);
+        }
+        return {
+          ok: false,
+          id: serverId,
+          error: `MCP server removal could not be applied live: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+
+      const replacementId = previousBrainrouterId === serverId
+        ? next.activeBrainrouterServer
+        : undefined;
+      if (replacementId) {
+        const replacement = await connectProfile(next, replacementId).catch(() => undefined);
+        if (replacement?.status?.status !== 'connected') {
+          return {
+            ok: true,
+            id: serverId,
+            online: false,
+            activeBrainrouterServer: replacementId,
+            warning: `MCP server "${serverId}" was removed, but replacement brain "${replacementId}" is offline.`,
+          };
+        }
+      }
+      return {
+        ok: true,
+        id: serverId,
+        activeBrainrouterServer: next.activeBrainrouterServer,
+      };
+    }),
+  };
+}
+
 export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
   const {
     browser,
@@ -438,7 +1264,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
     const host = normalized.slice(0, slash);
     const repo = normalized.slice(slash + 1);
     const config = loadConfig();
-    const status = await fetchAccountConnectorStatuses(config, ['gitlab']);
+    const status = await fetchAccountConnectorStatuses(desktopAccountConfigForResolution(config), ['gitlab']);
     const connector = status.connectors.find((entry) => entry.source === 'gitlab');
     const accountApi = resolveBrainRouterAccountApi(config);
     const oauth = connector?.connected && accountApi && status.orgId
@@ -474,6 +1300,13 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       ])),
     };
   };
+  const mcpLifecycle = createDesktopMcpLifecycle({
+    loadConfig,
+    persistConfig: saveConfigOrThrow,
+    mcpClient,
+    workspaceRoot,
+    getLlm,
+  });
   return {
       // Read-only surfaces — same pure modules the TUI commands use.
       // DESK-6m — sidebar sessions merged with their UI meta (title override,
@@ -1423,7 +2256,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const cfg = resolveGithubConfigForWorkspace(workspaceRoot, typeof a.repo === 'string' ? a.repo : undefined);
         const config = loadConfig();
         const accountApi = resolveBrainRouterAccountApi(config);
-        const accountStatus = await fetchGithubAccountStatus(config);
+        const accountStatus = await fetchGithubAccountStatus(desktopAccountConfigForResolution(config));
         const oauth = accountApi && accountStatus.connected && accountStatus.orgId
           ? { ...accountApi, orgId: accountStatus.orgId, ...(accountStatus.orgName ? { orgName: accountStatus.orgName } : {}) }
           : null;
@@ -1461,7 +2294,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         migrateTrackGithubToConnector(workspaceRoot);
         const local = githubIntegrationSnapshot(workspaceRoot);
         const gitContext = readGitTrackContext(workspaceRoot);
-        const account = await fetchGithubAccountStatus(loadConfig());
+        const account = await fetchGithubAccountStatus(desktopAccountConfigForResolution(loadConfig()));
         return {
           ...local,
           provider: 'github' as const,
@@ -1594,7 +2427,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         // workspace's git remote. Falls back to the legacy PAT/gh path otherwise.
         const config = loadConfig();
         const accountApi = resolveBrainRouterAccountApi(config);
-        const accountStatus = await fetchGithubAccountStatus(config);
+        const accountStatus = await fetchGithubAccountStatus(desktopAccountConfigForResolution(config));
         const oauth = accountApi && accountStatus.connected && accountStatus.orgId
           ? { ...accountApi, orgId: accountStatus.orgId, ...(accountStatus.orgName ? { orgName: accountStatus.orgName } : {}) }
           : null;
@@ -2146,20 +2979,34 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           hooks: readHooks(workspaceRoot),
           servers: Object.entries(fresh.servers ?? {}).map(([id, cfg]) => {
             const s = mcpStatuses.get(id);
+            const identity = resolveDesktopMcpIdentity(id, cfg, s);
             return {
               id,
               online: s?.status === 'connected',
-              identity: s?.identity ?? 'unknown', // WS9 — brainrouter | third-party | unknown (brain-vs-tools grouping)
-              detail: s && s.identity !== 'unknown' ? s.identity : undefined,
+              identity, // live discovery first; config fallback keeps idle brains selectable
+              detail: identity !== 'unknown' ? identity : undefined,
               type: cfg.type,
-              url: cfg.type === 'http' ? cfg.url ?? null : null,
-              command: cfg.type === 'stdio' ? [cfg.command, ...(cfg.args ?? [])].filter(Boolean).join(' ') : null,
+              url: cfg.type === 'http' ? redactDesktopMcpEndpoint(cfg.url) : null,
+              command: redactDesktopMcpCommand(cfg),
               hasKey: !!cfg.apiKey,
               envCount: Object.keys(cfg.env ?? {}).length,
               headerCount: Object.keys(cfg.headers ?? {}).length,
             };
           }),
-          activeServer: fresh.activeServer ?? null, // WS9 — which brainrouter server is the ACTIVE brain (only one)
+          // The Settings MCP panel historically reads `activeServer` as the
+          // active brain. Preserve that response contract while exposing the
+          // independent banner highlight explicitly for newer renderers.
+          activeServer: resolvePreferredBrainrouterServerId(
+            fresh.servers,
+            fresh.activeBrainrouterServer,
+            fresh.activeServer,
+          ) ?? null,
+          activeBrainrouterServer: resolvePreferredBrainrouterServerId(
+            fresh.servers,
+            fresh.activeBrainrouterServer,
+            fresh.activeServer,
+          ) ?? null,
+          highlightedServer: fresh.activeServer ?? null,
           // §multi-provider — named providers (API KEYS MASKED, never sent to the
           // renderer) + the per-sub-agent-role model routing.
           providers: providerEntries.map(([name, p]) => ({
@@ -3427,21 +4274,21 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         return { ok: true, mode };
       },
       'action:reconnect-mcp': async (args) => {
-        const id = typeof args.id === 'string' ? args.id : '';
-        await mcpClient.reconnectOne(id);
-        return { ok: true };
+        const id = typeof args.id === 'string' ? args.id.trim() : '';
+        if (!id) throw new Error('No server id.');
+        const result = await mcpLifecycle.reconnect(id);
+        if (!result.ok) throw new Error(result.error ?? `MCP server "${id}" could not reconnect.`);
+        return result;
       },
-      // WS9 — choose which BrainRouter brain is ACTIVE (only one at a time; the
-      // user can keep several configured). selectMcpServerIds already enforces
-      // single-active at connect time; this persists the choice + reconnects.
+      // Choose which BrainRouter brain is ACTIVE (only one at a time). The
+      // durable memory-plane selection is separate from the banner highlight,
+      // although an explicit "Use as active" click intentionally updates both.
       'action:set-active-server': async (args) => {
-        const id = typeof args.id === 'string' ? args.id : '';
-        if (!id) return { ok: false, error: 'No server id.' };
-        const fresh = loadConfig();
-        (fresh as { activeServer?: string }).activeServer = id;
-        saveConfig(fresh);
-        try { await mcpClient.reconnectOne(id); } catch { /* offline brains surface in status */ }
-        return { ok: true, activeServer: id };
+        const id = typeof args.id === 'string' ? args.id.trim() : '';
+        if (!id) throw new Error('No server id.');
+        const result = await mcpLifecycle.setActive(id);
+        if (!result.ok) throw new Error(result.error ?? `BrainRouter server "${id}" could not be selected.`);
+        return result;
       },
       // T6 — add an MCP server: write the profile to config.json (shared with the
       // CLI) and connect it now. type 'stdio' needs a command; 'http' needs a url.
@@ -3452,9 +4299,19 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         // Optional auth/headers/env (a "KEY=value\nKEY2=value2" string → record).
         const kvPairs = (raw: unknown): Record<string, string> => {
           const out: Record<string, string> = {};
-          if (raw && typeof raw === 'object') return raw as Record<string, string>;
+          if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+            for (const [key, value] of Object.entries(raw)) {
+              const normalized = key.trim();
+              if (normalized && !['__proto__', 'prototype', 'constructor'].includes(normalized) && typeof value === 'string') {
+                out[normalized] = value;
+              }
+            }
+            return out;
+          }
           if (typeof raw === 'string') for (const line of raw.split('\n')) {
-            const i = line.indexOf('='); if (i > 0) out[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+            const i = line.indexOf('=');
+            const key = i > 0 ? line.slice(0, i).trim() : '';
+            if (key && !['__proto__', 'prototype', 'constructor'].includes(key)) out[key] = line.slice(i + 1).trim();
           }
           return out;
         };
@@ -3467,21 +4324,19 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
               ...(Object.keys(env).length ? { env } : {}) };
         const required = cfg.type === 'http' ? cfg.url : cfg.command;
         if (!required) return { ok: false, error: `A ${type} server needs a ${type === 'http' ? 'url' : 'command'}.` };
-        const fresh = loadConfig() as { servers?: Record<string, unknown> };
-        fresh.servers = fresh.servers ?? {};
-        if (fresh.servers[id]) return { ok: false, error: `A server named "${id}" already exists.` };
-        fresh.servers[id] = cfg;
-        saveConfig(fresh as never);
-        try { await mcpClient.connectOne(id, cfg as never, loadConfig().llm ?? getLlm(), 5_000); } catch { /* offline — config saved, connect on next boot */ }
-        return { ok: true, id };
+        if (cfg.type === 'http') {
+          const urlError = validateDesktopMcpHttpUrl(cfg.url);
+          if (urlError) return { ok: false, error: urlError };
+          cfg.url = new URL(cfg.url).toString();
+        }
+        return mcpLifecycle.add(id, cfg);
       },
       'action:remove-mcp': async (args) => {
         const id = String(args.id ?? '').trim();
-        if (!id) return { ok: false, error: 'No server id.' };
-        try { await mcpClient.disconnectOne(id); } catch { /* already gone */ }
-        const fresh = loadConfig() as { servers?: Record<string, unknown> };
-        if (fresh.servers && fresh.servers[id]) { delete fresh.servers[id]; saveConfig(fresh as never); }
-        return { ok: true, id };
+        if (!id) throw new Error('No server id.');
+        const result = await mcpLifecycle.remove(id);
+        if (!result.ok) throw new Error(result.error ?? `MCP server "${id}" could not be removed.`);
+        return result;
       },
       // ADR-016 C0 — sign in to a BrainRouter backend and point the active brain
       // at it over HTTP with the returned per-user apiKey, so memory becomes
@@ -3513,57 +4368,65 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         if (!apiKey) return { ok: false, error: 'Sign-in succeeded but returned no API key.' };
         if (!secretBridge) return { ok: false, error: 'Secure credential storage is unavailable. Sign-in was not saved.' };
         const accountBearer = String(data.jwt ?? '').trim() || apiKey;
+        let previousAccessToken: string | undefined;
+        let previousRefreshToken: string | undefined;
+        try {
+          [previousAccessToken, previousRefreshToken] = await Promise.all([
+            secretBridge.get('account:access-token'),
+            secretBridge.get('account:refresh-token'),
+          ]);
+        } catch (error) {
+          return { ok: false, error: `Secure credential storage failed: ${error instanceof Error ? error.message : String(error)}` };
+        }
         try {
           await secretBridge.set('account:access-token', accountBearer);
           const refreshToken = String(data.refreshToken ?? '').trim();
           if (refreshToken) await secretBridge.set('account:refresh-token', refreshToken);
           else await secretBridge.delete('account:refresh-token');
         } catch (error) {
+          await Promise.allSettled([
+            previousAccessToken
+              ? secretBridge.set('account:access-token', previousAccessToken)
+              : secretBridge.delete('account:access-token'),
+            previousRefreshToken
+              ? secretBridge.set('account:refresh-token', previousRefreshToken)
+              : secretBridge.delete('account:refresh-token'),
+          ]);
           return { ok: false, error: `Secure credential storage failed: ${error instanceof Error ? error.message : String(error)}` };
         }
-        const isBrain = (id: string, s: { identity?: string } | undefined) => s?.identity === 'brainrouter' || /^brainrouter/i.test(id);
-        const fresh = loadConfig() as { servers?: Record<string, unknown>; cli?: Record<string, unknown> };
-        fresh.servers = fresh.servers ?? {};
-        const brainId = Object.keys(fresh.servers).find((id) => isBrain(id, fresh.servers![id] as { identity?: string })) ?? 'brainrouter';
-        const prevBrain = fresh.servers[brainId] ?? null;
         const mcpUrl = `${baseUrl}/mcp`;
         const account = { url: baseUrl, mcpUrl, userId: data.userId ?? '', displayName: data.displayName ?? email, email: data.email ?? email };
-        fresh.servers[brainId] = { type: 'http', url: mcpUrl, apiKey, identity: 'brainrouter' };
-        fresh.cli = fresh.cli ?? {};
-        fresh.cli.brainUrl = mcpUrl;
-        // Account bearer + refresh credentials live only in Electron safeStorage.
-        fresh.cli.account = { ...account, prevBrain };
-        saveConfig(fresh as never);
+        const committed = await mcpLifecycle.commitAccountSignIn({
+          profile: { type: 'http', url: mcpUrl, apiKey, identity: 'brainrouter' },
+          account,
+        });
+        if (!committed.ok || !committed.id) {
+          await Promise.allSettled([
+            previousAccessToken
+              ? secretBridge.set('account:access-token', previousAccessToken)
+              : secretBridge.delete('account:access-token'),
+            previousRefreshToken
+              ? secretBridge.set('account:refresh-token', previousRefreshToken)
+              : secretBridge.delete('account:refresh-token'),
+          ]);
+          return { ok: false, error: committed.error ?? 'BrainRouter account could not be saved.' };
+        }
         _resetCliKnobsCache();
         // Credential persistence is the sign-in commit point. MCP reconnect and
         // model-catalog hydration are independent background work: neither may
         // keep the Account screen spinning or hide already-usable BYOK models.
-        void (async () => {
-          try { await mcpClient.disconnectOne(brainId); } catch { /* not connected */ }
-          try {
-            await mcpClient.connectOne(brainId, fresh.servers![brainId] as never, loadConfig().llm ?? getLlm(), 5_000);
-            await ensureBrainSession(mcpClient, workspaceRoot); // show this device on the Account page
-          } catch { /* normal offline degradation; reconnect remains best-effort */ }
-        })();
+        void mcpLifecycle.connectCommittedAccountBrain(committed.id).then(async (live) => {
+          if (live.online) await ensureBrainSession(mcpClient, workspaceRoot);
+        }).catch(() => undefined);
         void refreshAccountModelCatalog(true);
         return { ok: true, account };
       },
       'action:auth-signout': async () => {
-        const isBrain = (id: string, s: { identity?: string } | undefined) => s?.identity === 'brainrouter' || /^brainrouter/i.test(id);
-        const fresh = loadConfig() as { servers?: Record<string, unknown>; cli?: { account?: { prevBrain?: unknown } } & Record<string, unknown> };
-        const prevBrain = fresh.cli?.account?.prevBrain ?? null;
-        const brainId = fresh.servers ? Object.keys(fresh.servers).find((id) => isBrain(id, fresh.servers![id] as { identity?: string })) : undefined;
-        if (brainId && fresh.servers) {
-          if (prevBrain) fresh.servers[brainId] = prevBrain;
-          else delete fresh.servers[brainId];
-        }
-        if (fresh.cli) { delete fresh.cli.brainUrl; delete fresh.cli.account; }
-        saveConfig(fresh as never);
-        void endBrainSession(mcpClient);
+        const result = await mcpLifecycle.signOutAccount({
+          beforeDisconnect: () => endBrainSession(mcpClient),
+        });
+        if (!result.ok) return result;
         _resetCliKnobsCache();
-        try { if (brainId) await mcpClient.disconnectOne(brainId); } catch { /* already gone */ }
-        try { if (brainId && fresh.servers?.[brainId]) await mcpClient.connectOne(brainId, fresh.servers[brainId] as never, loadConfig().llm ?? getLlm(), 5_000); }
-        catch { /* embedded brain reconnects on next boot */ }
         if (secretBridge) {
           await Promise.allSettled([
             secretBridge.delete('account:access-token'),
@@ -3571,7 +4434,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           ]);
         }
         await refreshAccountModelCatalog(true);
-        return { ok: true };
+        return result;
       },
       'auth-status': () => {
         const fresh = loadConfig() as { cli?: { account?: { url?: string; userId?: string; displayName?: string; email?: string } }; servers?: Record<string, { identity?: string; apiKey?: string; url?: string }> };
@@ -3618,7 +4481,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       },
       // ADR-017 D5 — recent PR reviews the bot ran (for the desktop PR Reviews panel),
       // read with the signed-in apiKey (the backend enforces reviews:read).
-      'automation-account-status': async () => fetchAutomationAccountStatus(loadConfig()),
+      'automation-account-status': async () => fetchAutomationAccountStatus(desktopAccountConfigForResolution(loadConfig())),
       'reviews': async () => {
         const config = loadConfig();
         if (!resolveBrainRouterAccountApi(config)) return { signedIn: false, canRun: false, reviews: [] };
@@ -3703,7 +4566,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // ADR-016 C2 — GitHub connector via the backend's server-mediated OAuth broker.
       // The desktop is a thin client: it asks the backend (with the signed-in apiKey)
       // for the authorize URL, opens it in the system browser, then polls status.
-      'account-connectors-status': async () => fetchAccountConnectorStatuses(loadConfig(), [
+      'account-connectors-status': async () => fetchAccountConnectorStatuses(desktopAccountConfigForResolution(loadConfig()), [
         'gitlab',
         'slack',
         'google-drive',
@@ -3758,7 +4621,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         try{const account=await resolveBrainRouterAccountContext(loadConfig());if(!account)return{ok:false,error:'No active BrainRouter organization.'};const headers=brainRouterAccountHeaders(account);const status=await fetch(`${account.baseUrl}/api/connectors/${encodeURIComponent(source)}/status`,{headers});const data=await status.json() as {connector?:{id?:string}|null};if(!status.ok||!data.connector?.id)return{ok:false,error:'Connect this OAuth account before saving sync settings.'};const r=await fetch(`${account.baseUrl}/api/connectors/${encodeURIComponent(data.connector.id)}`,{method:'PATCH',headers:brainRouterAccountHeaders(account,true),body:JSON.stringify({name:String(args.name??source),enabled:true,config:args.config??{}})});return r.ok?{ok:true}:{ok:false,error:`HTTP ${r.status}`};}catch(e){return{ok:false,error:e instanceof Error?e.message:'failed'};}
       },
       'github-connect-status': async () => {
-        return fetchGithubAccountStatus(loadConfig());
+        return fetchGithubAccountStatus(desktopAccountConfigForResolution(loadConfig()));
       },
       'github-connect-start': async () => {
         if (!resolveBrainRouterAccountApi(loadConfig())) return { ok: false, error: 'Sign in to BrainRouter first (Settings → Account).' };

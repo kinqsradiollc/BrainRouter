@@ -45,6 +45,8 @@ export interface PickerProps {
   allowOther?: boolean;
   otherLabel?: string;
   otherDescription?: string;
+  /** Validate a submitted free-form answer. Return an error to keep editing. */
+  validateOther?: (value: string) => string | undefined;
   prefilledOther?: string;
   onCursorChange?: (id: string, index: number) => string[] | undefined;
   /** Hex / named color for the panel border + title. Defaults to the interaction accent. */
@@ -111,6 +113,7 @@ export function Picker(props: PickerProps) {
     props.prefilledOther !== undefined ? 'other' : 'pick',
   );
   const [otherText, setOtherText] = useState(props.prefilledOther ?? '');
+  const [otherError, setOtherError] = useState<string | undefined>(undefined);
   const [preview, setPreview] = useState<string[] | undefined>(undefined);
 
   // Picker is intentionally "exit-agnostic" — it just calls
@@ -171,6 +174,7 @@ export function Picker(props: PickerProps) {
       if (key.escape) {
         setPhase('pick');
         setOtherText('');
+        setOtherError(undefined);
       }
       return;
     }
@@ -258,10 +262,18 @@ export function Picker(props: PickerProps) {
             <Text color="cyan">› </Text>
             <TextInput
               value={otherText}
-              onChange={setOtherText}
+              onChange={(value) => {
+                setOtherText(value);
+                if (otherError) setOtherError(undefined);
+              }}
               onSubmit={(value) => {
                 const trimmed = value.trim();
                 if (!trimmed) return;
+                const error = props.validateOther?.(trimmed);
+                if (error !== undefined) {
+                  setOtherError(error);
+                  return;
+                }
                 if (props.multiSelect) {
                   finish({
                     kind: 'multi',
@@ -275,6 +287,11 @@ export function Picker(props: PickerProps) {
               }}
             />
           </Box>
+          {otherError ? (
+            <Box marginTop={1}>
+              <Text color="red">✗ {otherError}</Text>
+            </Box>
+          ) : null}
         </Box>
       )}
       {preview && preview.length > 0 ? (

@@ -60,7 +60,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/recap', desc: 'Instant summary of this session — last prompt/answer, files touched, open plan/goal' },
       { cmd: '/chapters', desc: 'Table of contents from the agent\'s mark_chapter markers' },
       { cmd: '/side <q>  /btw <q>', desc: 'Ephemeral side conversation in a forked session' },
-      { cmd: '/init', desc: 'Re-run the onboarding wizard (Theme → Provider → API key → Model → MCP → AGENT.md)' },
+      { cmd: '/init', desc: 'Set up this workspace; --edit revises it, config re-runs global provider/model setup' },
       { cmd: '! <command>', desc: 'Shell escape — run a shell command from the composer (sandboxed when cli.sandbox=on)' },
       { cmd: '# <note>', desc: 'Quick memory capture — save a note to the brain without an LLM turn' },
       { cmd: '/exit  /quit', desc: 'Close MCP connection and exit' },
