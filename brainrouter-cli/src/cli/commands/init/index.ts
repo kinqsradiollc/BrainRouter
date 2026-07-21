@@ -2,31 +2,35 @@ import chalk from 'chalk';
 import type { CommandContext } from '../_context.js';
 import { initAgentMd } from '../../../prompt/initAgentMd.js';
 import { runWizard } from '../../ink/wizard/runWizard.js';
+import { runProjectOnboarding, suggestWorkspaceProfile } from './projectOnboard.js';
 
 /**
- * `/init` slash command — 0.3.7 redesign.
+ * `/init` slash command — ADR-021 W2 redesign.
  *
- * Two behaviours under one verb, picked by the first argument:
+ * The CLI has TWO onboardings, and `/init` now fronts the PROJECT one:
  *
- *   - `/init` (bare) — re-run the onboarding wizard inside the REPL.
- *     The REPL already owns the readline, so the wizard reuses it
- *     (`ownsReadline: false`). Aborting at any step leaves disk
- *     untouched.
- *   - `/init agentmd` — back-compat alias for the 0.3.6 behaviour
- *     that only scaffolded AGENT.md (the wizard now folds this in as
- *     its final step, but users with muscle memory keep the lever).
- *
- * The auto-trigger on REPL start (when no `~/.config/brainrouter/config.json`
- * exists) calls `runWizard` directly from `index.ts` with
- * `ownsReadline: true`. That's a separate entry point — this slash
- * handler is only for the in-REPL invocation.
+ *   - `/init` (bare) — PROJECT onboarding for the current workspace: profile
+ *     picker (with a deterministic detected suggestion), persona choice for
+ *     engineering, optional AGENT.md scaffold, then writes
+ *     `.brainrouter/workspace.json` via the core manifest chokepoint. In an
+ *     already-onboarded workspace it prints the manifest summary instead.
+ *     Cancelling at any step writes nothing.
+ *   - `/init config` — the GLOBAL first-run wizard (endpoint/model/MCP; the
+ *     pre-W2 bare behaviour). The auto-trigger on REPL start (no
+ *     `~/.config/brainrouter/config.json`) still calls `runWizard` directly
+ *     from `index.ts` — that entry point is unchanged.
+ *   - `/init scan` — print the detected profile suggestion + reasons only;
+ *     never writes.
+ *   - `/init agentmd` — back-compat alias for the 0.3.6 behaviour that only
+ *     scaffolds AGENT.md.
  */
 export async function tryHandleInitCommand(ctx: CommandContext): Promise<boolean> {
   const { command, args, agent, repl } = ctx;
   if (command !== '/init') return false;
+  const sub = args[0]?.toLowerCase();
 
   // Back-compat: explicit subcommand keeps the 0.3.6 one-shot behaviour.
-  if (args[0]?.toLowerCase() === 'agentmd' || args[0]?.toLowerCase() === 'agent') {
+  if (sub === 'agentmd' || sub === 'agent') {
     const result = initAgentMd(agent.workspaceRoot);
     if (result.status === 'created') {
       console.log(chalk.green(`\n✓ Created ${result.path}`));
@@ -38,26 +42,44 @@ export async function tryHandleInitCommand(ctx: CommandContext): Promise<boolean
     return true;
   }
 
-  // Wizard mode. Ink owns stdin while the wizard is mounted; once it
-  // unmounts the REPL's readline resumes naturally because we kept the
-  // process.stdin handle around (Ink restores raw mode on exit).
-  try {
-    const result = await runWizard({
-      workspaceRoot: agent.workspaceRoot,
-    });
-    if (result.config?.llm) {
-      // Live-update the in-flight agent so the next turn uses the new
-      // model / endpoint without forcing a restart. Keep the wrapper's
-      // existing MCP connection — switching MCP needs a restart for
-      // now (next item on the polish list).
-      const llm = result.config.llm;
-      agent.setModel(llm.model);
-      // The agent's internal openai client cached the endpoint at
-      // construction time — repl users may need a fresh CLI process
-      // for endpoint changes to fully take effect.
-      console.log(chalk.gray('  (note: endpoint / API-key changes apply on the next CLI restart)\n'));
+  // Read-only profile detection — show what bare `/init` would suggest.
+  if (sub === 'scan') {
+    const suggestion = suggestWorkspaceProfile(agent.workspaceRoot);
+    console.log(`\n${chalk.bold('Detected profile')}: ${suggestion.profile}`);
+    console.log(chalk.gray(`  ${suggestion.reasons.join('; ')}`));
+    console.log(chalk.gray('  Run `/init` to onboard this workspace with it.\n'));
+    return true;
+  }
+
+  // GLOBAL config wizard (the pre-W2 bare behaviour). Ink owns stdin while
+  // mounted; the REPL's readline resumes naturally on unmount.
+  if (sub === 'config' || sub === 'setup') {
+    try {
+      const result = await runWizard({
+        workspaceRoot: agent.workspaceRoot,
+      });
+      if (result.config?.llm) {
+        // Live-update the in-flight agent so the next turn uses the new
+        // model / endpoint without forcing a restart. Keep the wrapper's
+        // existing MCP connection — switching MCP needs a restart for now.
+        const llm = result.config.llm;
+        agent.setModel(llm.model);
+        // The agent's internal openai client cached the endpoint at
+        // construction time — repl users may need a fresh CLI process
+        // for endpoint changes to fully take effect.
+        console.log(chalk.gray('  (note: endpoint / API-key changes apply on the next CLI restart)\n'));
+      }
+      repl.refreshPromptForMode();
+    } catch (err: any) {
+      console.error(chalk.red(`\n/init config failed: ${err?.message ?? err}\n`));
     }
-    repl.refreshPromptForMode();
+    return true;
+  }
+
+  // Bare `/init` — PROJECT onboarding (prints the summary when already onboarded).
+  try {
+    await runProjectOnboarding(agent.workspaceRoot);
+    console.log(chalk.gray('  Global setup wizard: `/init config` · instruction file: `/init agentmd`\n'));
   } catch (err: any) {
     console.error(chalk.red(`\n/init failed: ${err?.message ?? err}\n`));
   }
