@@ -31,6 +31,12 @@ const SENSITIVE_QUERY_PARTS = [
 ];
 const MCP_HTTP_URL_MAX_BYTES = 16 * 1024;
 export const MCP_ERROR_TEXT_MAX_CHARS = 16 * 1024;
+const MCP_ERROR_EXACT_CREDENTIAL_MAX_CHARS = 1024 * 1024;
+const MCP_ERROR_EXACT_CREDENTIAL_MAX_VALUES = 512;
+const MCP_ERROR_EXACT_CREDENTIAL_MAX_TOTAL_CHARS = 2 * 1024 * 1024;
+const MCP_ERROR_CONFIG_SERVER_MAX_COUNT = 128;
+const MCP_ERROR_CONFIG_ENTRY_MAX_COUNT = 256;
+const MCP_ERROR_STDIO_ARG_MAX_COUNT = 1_024;
 const MAX_PERCENT_DECODE_PASSES = 8;
 const MCP_ERROR_TRUNCATION_MARKER = ' … [truncated]';
 const MCP_ERROR_CREDENTIAL_ASSIGNMENTS = [
@@ -244,6 +250,10 @@ function capMcpErrorText(text: string): string {
     + MCP_ERROR_TRUNCATION_MARKER;
 }
 
+function sanitizeMcpErrorControls(text: string): string {
+  return text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ');
+}
+
 function isMcpErrorUrlTerminator(character: string): boolean {
   const code = character.charCodeAt(0);
   return code <= 0x20 || code === 0x7f || character === '<' || character === '>'
@@ -313,8 +323,7 @@ function redactMcpJwtLikeTokens(text: string): string {
  */
 export function redactMcpHttpUrlsInText(text: string): string {
   const bounded = capMcpErrorText(text);
-  let redacted = bounded
-    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ')
+  let redacted = sanitizeMcpErrorControls(bounded)
     .replace(/\bBearer[ \t]{1,65536}[^\s,;]{4,65536}/gi, 'Bearer [redacted]');
   redacted = redactMcpErrorUrls(redacted);
   redacted = redactMcpCredentialAssignments(redacted)
@@ -341,23 +350,53 @@ function isStdioEnvOption(name: string): boolean {
   return normalized === 'e' || normalized === 'env' || normalized === 'environment';
 }
 
-function addExactCredentialValue(values: Set<string>, raw: string | undefined): void {
-  const value = raw?.trim();
+interface ExactCredentialBudget {
+  count: number;
+  totalChars: number;
+}
+
+function addExactCredentialValue(
+  values: Set<string>,
+  raw: string | undefined,
+  budget: ExactCredentialBudget,
+): void {
+  if (
+    raw === undefined
+    || raw.length > MCP_ERROR_EXACT_CREDENTIAL_MAX_CHARS + 2
+    || values.has(raw)
+    || budget.count >= MCP_ERROR_EXACT_CREDENTIAL_MAX_VALUES
+    || budget.totalChars >= MCP_ERROR_EXACT_CREDENTIAL_MAX_TOTAL_CHARS
+  ) return;
+  const value = raw.trim();
   if (!value) return;
-  values.add(value);
+
+  const add = (candidate: string): void => {
+    if (
+      !candidate
+      || candidate.length > MCP_ERROR_EXACT_CREDENTIAL_MAX_CHARS
+      || values.has(candidate)
+      || budget.count >= MCP_ERROR_EXACT_CREDENTIAL_MAX_VALUES
+      || budget.totalChars + candidate.length > MCP_ERROR_EXACT_CREDENTIAL_MAX_TOTAL_CHARS
+    ) return;
+    values.add(candidate);
+    budget.count += 1;
+    budget.totalChars += candidate.length;
+  };
+  add(value);
 
   const unquoted = ((value.startsWith('"') && value.endsWith('"'))
     || (value.startsWith("'") && value.endsWith("'")))
     ? value.slice(1, -1).trim()
     : value;
-  if (unquoted && unquoted !== value) values.add(unquoted);
+  if (unquoted !== value) add(unquoted);
 
   const bearer = /^Bearer\s+(.+)$/i.exec(unquoted);
-  if (bearer?.[1]) values.add(bearer[1].trim());
+  if (bearer?.[1]) add(bearer[1].trim());
 }
 
 function collectHeaderCredentialValue(
   values: Set<string>,
+  budget: ExactCredentialBudget,
   expression: string | undefined,
   following?: string,
   afterFollowing?: string,
@@ -371,20 +410,21 @@ function collectHeaderCredentialValue(
 
   const inlineValue = match?.[2]?.trim() ?? '';
   if (/^Bearer$/i.test(inlineValue)) {
-    addExactCredentialValue(values, following);
+    addExactCredentialValue(values, following, budget);
   } else if (inlineValue) {
-    addExactCredentialValue(values, inlineValue);
+    addExactCredentialValue(values, inlineValue, budget);
   } else if (/^Bearer$/i.test(following ?? '')) {
-    addExactCredentialValue(values, afterFollowing);
+    addExactCredentialValue(values, afterFollowing, budget);
   } else {
-    addExactCredentialValue(values, following);
+    addExactCredentialValue(values, following, budget);
   }
 }
 
 function configuredMcpStdioArgCredentialValues(server: ServerConfig): string[] {
   if (server.type !== 'stdio') return [];
   const values = new Set<string>();
-  const args = server.args ?? [];
+  const budget: ExactCredentialBudget = { count: 0, totalChars: 0 };
+  const args = (server.args ?? []).slice(0, MCP_ERROR_STDIO_ARG_MAX_COUNT);
 
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index]!;
@@ -392,29 +432,30 @@ function configuredMcpStdioArgCredentialValues(server: ServerConfig): string[] {
     const afterFollowing = args[index + 2];
 
     if (/^Bearer$/i.test(argument)) {
-      addExactCredentialValue(values, following);
+      addExactCredentialValue(values, following, budget);
     } else {
-      collectHeaderCredentialValue(values, argument, following, afterFollowing);
+      collectHeaderCredentialValue(values, budget, argument, following, afterFollowing);
     }
 
     const equalsIndex = argument.indexOf('=');
     if (equalsIndex > 0) {
       const label = argument.slice(0, equalsIndex).replace(/^-+/, '');
       const value = argument.slice(equalsIndex + 1);
-      if (isSensitiveCredentialName(label)) addExactCredentialValue(values, value);
+      if (isSensitiveCredentialName(label)) addExactCredentialValue(values, value, budget);
       if (isStdioHeaderOption(label)) {
-        collectHeaderCredentialValue(values, value, following, afterFollowing, true);
+        collectHeaderCredentialValue(values, budget, value, following, afterFollowing, true);
       }
       continue;
     }
 
     const optionName = argument.replace(/^-+/, '');
     if (optionName !== argument && isSensitiveCredentialName(optionName)) {
-      addExactCredentialValue(values, following);
+      addExactCredentialValue(values, following, budget);
     }
     if (optionName !== argument && isStdioHeaderOption(optionName)) {
       collectHeaderCredentialValue(
         values,
+        budget,
         following,
         afterFollowing,
         args[index + 3],
@@ -425,32 +466,180 @@ function configuredMcpStdioArgCredentialValues(server: ServerConfig): string[] {
   return [...values];
 }
 
+function addConfiguredMcpCredential(
+  values: Set<string>,
+  raw: unknown,
+  budget: ExactCredentialBudget,
+): void {
+  if (
+    typeof raw !== 'string'
+    || !raw
+    || raw.length > MCP_ERROR_EXACT_CREDENTIAL_MAX_CHARS
+    || values.has(raw)
+    || budget.count >= MCP_ERROR_EXACT_CREDENTIAL_MAX_VALUES
+    || budget.totalChars + raw.length > MCP_ERROR_EXACT_CREDENTIAL_MAX_TOTAL_CHARS
+  ) return;
+  const value = sanitizeMcpErrorControls(raw);
+  if (
+    !value.trim()
+    || value.length > MCP_ERROR_EXACT_CREDENTIAL_MAX_CHARS
+    || values.has(value)
+    || budget.count >= MCP_ERROR_EXACT_CREDENTIAL_MAX_VALUES
+    || budget.totalChars + value.length > MCP_ERROR_EXACT_CREDENTIAL_MAX_TOTAL_CHARS
+  ) return;
+  values.add(value);
+  budget.count += 1;
+  budget.totalChars += value.length;
+}
+
 export function configuredMcpCredentialValues(config: Config, serverId?: string): string[] {
   const values = new Set<string>();
-  const servers = serverId && config.servers[serverId]
-    ? [config.servers[serverId]]
-    : Object.values(config.servers ?? {});
-  for (const server of servers.slice(0, 128)) {
-    if (server.apiKey) values.add(server.apiKey);
-    for (const value of configuredMcpStdioArgCredentialValues(server)) values.add(value);
-    for (const entries of [server.env, server.headers]) {
-      for (const value of Object.values(entries ?? {}).slice(0, 128)) {
-        if (typeof value === 'string') values.add(value);
-      }
+  const budget: ExactCredentialBudget = { count: 0, totalChars: 0 };
+  const configuredServers = config.servers ?? {};
+  const selected = serverId !== undefined
+    && Object.prototype.hasOwnProperty.call(configuredServers, serverId)
+    ? configuredServers[serverId]
+    : undefined;
+  const servers = (serverId !== undefined ? (selected ? [selected] : []) : Object.values(configuredServers))
+    .filter((server): server is ServerConfig => Boolean(server) && typeof server === 'object')
+    .slice(0, MCP_ERROR_CONFIG_SERVER_MAX_COUNT);
+
+  // Keep transport-bound credentials ahead of lower-confidence legacy stdio
+  // argument values when a malformed hand-edited config exceeds the work cap.
+  for (const server of servers) {
+    if (server.type === 'http') addConfiguredMcpCredential(values, server.apiKey, budget);
+  }
+  for (const server of servers) {
+    if (server.type !== 'http') continue;
+    for (const value of Object.values(server.headers ?? {}).slice(0, MCP_ERROR_CONFIG_ENTRY_MAX_COUNT)) {
+      addConfiguredMcpCredential(values, value, budget);
     }
   }
-  return [...values]
-    .filter((value) => value.length >= 4 && value.length <= 4_096)
-    .sort((left, right) => right.length - left.length);
+  for (const server of servers) {
+    if (server.type !== 'stdio') continue;
+    for (const value of Object.values(server.env ?? {}).slice(0, MCP_ERROR_CONFIG_ENTRY_MAX_COUNT)) {
+      addConfiguredMcpCredential(values, value, budget);
+    }
+  }
+  for (const server of servers) {
+    for (const value of configuredMcpStdioArgCredentialValues(server)) {
+      addConfiguredMcpCredential(values, value, budget);
+    }
+  }
+  // Legacy hand-edited profiles can retain fields unused by their transport.
+  // They cannot displace active transport credentials, but still redact them
+  // when budget remains because logout and migration errors may echo them.
+  for (const server of servers) {
+    if (server.type !== 'stdio') continue;
+    addConfiguredMcpCredential(values, server.apiKey, budget);
+    for (const value of Object.values(server.headers ?? {}).slice(0, MCP_ERROR_CONFIG_ENTRY_MAX_COUNT)) {
+      addConfiguredMcpCredential(values, value, budget);
+    }
+  }
+  for (const server of servers) {
+    if (server.type !== 'http') continue;
+    for (const value of Object.values(server.env ?? {}).slice(0, MCP_ERROR_CONFIG_ENTRY_MAX_COUNT)) {
+      addConfiguredMcpCredential(values, value, budget);
+    }
+  }
+  return [...values].sort((left, right) => right.length - left.length);
+}
+
+function mcpSecretPrefixTable(secret: string): Int32Array {
+  const table = new Int32Array(secret.length);
+  let prefixLength = 0;
+  for (let index = 1; index < secret.length; index += 1) {
+    while (prefixLength > 0 && secret[index] !== secret[prefixLength]) {
+      prefixLength = table[prefixLength - 1]!;
+    }
+    if (secret[index] === secret[prefixLength]) prefixLength += 1;
+    table[index] = prefixLength;
+  }
+  return table;
+}
+
+function markMcpSecretMatches(
+  text: string,
+  secret: string,
+  redactedPositions: Uint8Array,
+): boolean {
+  const prefixTable = mcpSecretPrefixTable(secret);
+  let matched = 0;
+  let intervalStart = -1;
+  let intervalEnd = -1;
+  let foundAny = false;
+
+  const addInterval = (start: number, end: number): void => {
+    if (intervalStart < 0) {
+      intervalStart = start;
+      intervalEnd = end;
+      return;
+    }
+    if (start <= intervalEnd) {
+      intervalEnd = Math.max(intervalEnd, end);
+      return;
+    }
+    redactedPositions.fill(1, intervalStart, intervalEnd);
+    foundAny = true;
+    intervalStart = start;
+    intervalEnd = end;
+  };
+
+  for (let index = 0; index < text.length; index += 1) {
+    while (matched > 0 && text[index] !== secret[matched]) {
+      matched = prefixTable[matched - 1]!;
+    }
+    if (text[index] === secret[matched]) matched += 1;
+    if (matched === secret.length) {
+      addInterval(index - secret.length + 1, index + 1);
+      matched = prefixTable[matched - 1]!;
+    }
+  }
+
+  // If output ends part-way through a configured value, the matched suffix is
+  // still credential material. This closes truncation and transport-side
+  // partial-reflection leaks without scanning beyond the fixed error window.
+  if (matched > 0) addInterval(text.length - matched, text.length);
+  if (intervalStart >= 0) {
+    redactedPositions.fill(1, intervalStart, intervalEnd);
+    foundAny = true;
+  }
+  return foundAny;
+}
+
+function redactExactMcpCredentials(text: string, secrets: readonly string[]): string {
+  const redactedPositions = new Uint8Array(text.length);
+  let foundAny = false;
+
+  for (const secret of secrets) {
+    if (secret && markMcpSecretMatches(text, secret, redactedPositions)) foundAny = true;
+  }
+  if (!foundAny) return text;
+
+  const parts: string[] = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    const masked = redactedPositions[cursor] === 1;
+    let end = cursor + 1;
+    while (end < text.length && (redactedPositions[end] === 1) === masked) end += 1;
+    parts.push(masked ? '[redacted]' : text.slice(cursor, end));
+    cursor = end;
+  }
+  return parts.join('');
 }
 
 /** Scrub a transport error using generic patterns plus the profile's exact saved secrets. */
 export function redactMcpErrorText(text: string, config: Config, serverId?: string): string {
-  let redacted = redactMcpHttpUrlsInText(text);
-  for (const secret of configuredMcpCredentialValues(config, serverId)) {
-    redacted = redacted.split(secret).join('[redacted]');
-  }
-  return redacted;
+  const inputWasTruncated = text.length > MCP_ERROR_TEXT_MAX_CHARS;
+  const exactWindow = sanitizeMcpErrorControls(inputWasTruncated
+    ? text.slice(0, MCP_ERROR_TEXT_MAX_CHARS - MCP_ERROR_TRUNCATION_MARKER.length)
+    : text);
+  let redacted = redactExactMcpCredentials(
+    exactWindow,
+    configuredMcpCredentialValues(config, serverId),
+  );
+  if (inputWasTruncated) redacted += MCP_ERROR_TRUNCATION_MARKER;
+  return redactMcpHttpUrlsInText(redacted);
 }
 
 /** Safe argument rendering for legacy stdio profiles with inline secrets. */

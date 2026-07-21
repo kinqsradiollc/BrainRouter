@@ -140,6 +140,166 @@ test('MCP error redaction handles inline and split authorization values', () => 
   assert.equal(error, '[redacted] | [redacted] | [redacted] | [redacted]');
 });
 
+test('MCP exact error redaction covers the full accepted API-key size range', () => {
+  for (const secret of ['x', 'xyz', 'q'.repeat(4_097)]) {
+    const config: Config = {
+      activeServer: 'remote',
+      servers: { remote: { type: 'http', url: 'https://mcp.example.test', apiKey: secret } },
+    };
+    const error = redactMcpErrorText(`transport reflected ${secret}`, config, 'remote');
+
+    assert.equal(error.includes(secret), false);
+    assert.match(error, /\[redacted\]/);
+    assert.ok(error.length <= MCP_ERROR_TEXT_MAX_CHARS);
+  }
+});
+
+test('MCP exact error redaction collapses repeated replacements without output expansion', () => {
+  const secret = 'aB9!';
+  const config: Config = {
+    activeServer: 'remote',
+    servers: { remote: { type: 'http', url: 'https://mcp.example.test', apiKey: secret } },
+  };
+  const error = redactMcpErrorText(
+    secret.repeat(MCP_ERROR_TEXT_MAX_CHARS / secret.length),
+    config,
+    'remote',
+  );
+
+  assert.equal(error.includes(secret), false);
+  assert.equal(error, '[redacted]');
+  assert.ok(error.length <= MCP_ERROR_TEXT_MAX_CHARS);
+});
+
+test('MCP exact redaction matches a maximum-size key across the final output boundary', () => {
+  const prefix = 'LONG-SECRET-';
+  const secret = prefix + 'q'.repeat(MCP_ERROR_TEXT_MAX_CHARS - prefix.length);
+  const config: Config = {
+    activeServer: 'remote',
+    servers: { remote: { type: 'http', url: 'https://mcp.example.test', apiKey: secret } },
+  };
+  const error = redactMcpErrorText(`transport reflected ${secret}`, config, 'remote');
+
+  assert.equal(error.includes(prefix), false);
+  assert.equal(error.includes('q'.repeat(256)), false);
+  assert.match(error, /\[redacted\]/);
+  assert.ok(error.length <= MCP_ERROR_TEXT_MAX_CHARS);
+});
+
+test('MCP exact redaction covers accepted large HTTP header and stdio environment values', () => {
+  const headerSecret = `HEADER-SECRET-${'H'.repeat(20 * 1024)}`;
+  const envSecret = `ENV-SECRET-${'E'.repeat(20 * 1024)}`;
+  const config: Config = {
+    activeServer: 'remote',
+    servers: {
+      remote: {
+        type: 'http',
+        url: 'https://mcp.example.test',
+        headers: { 'X-Custom-Auth': headerSecret },
+      },
+      local: {
+        type: 'stdio',
+        command: 'connector-mcp',
+        env: { CUSTOM_SECRET: envSecret },
+      },
+    },
+  };
+
+  for (const [serverId, secret, prefix, repeated] of [
+    ['remote', headerSecret, 'HEADER-SECRET-', 'H'.repeat(256)],
+    ['local', envSecret, 'ENV-SECRET-', 'E'.repeat(256)],
+  ] as const) {
+    const error = redactMcpErrorText(`transport reflected ${secret}`, config, serverId);
+    assert.equal(error.includes(prefix), false);
+    assert.equal(error.includes(repeated), false);
+    assert.match(error, /\[redacted\]/);
+    assert.ok(error.length <= MCP_ERROR_TEXT_MAX_CHARS);
+  }
+});
+
+test('MCP exact redaction masks overlapping and boundary-truncated low-entropy keys', () => {
+  const secret = 'q'.repeat(MCP_ERROR_TEXT_MAX_CHARS);
+  const config: Config = {
+    activeServer: 'remote',
+    servers: { remote: { type: 'http', url: 'https://mcp.example.test', apiKey: secret } },
+  };
+
+  for (const reflected of [secret + secret.slice(1), secret + secret.slice(secret.length / 2)]) {
+    const error = redactMcpErrorText(reflected, config, 'remote');
+    assert.equal(error.includes('q'.repeat(256)), false);
+    assert.match(error, /\[redacted\]/);
+    assert.ok(error.length <= MCP_ERROR_TEXT_MAX_CHARS);
+  }
+
+  const inWindowSecret = 'r'.repeat(4_096);
+  const inWindowConfig: Config = {
+    activeServer: 'remote',
+    servers: {
+      remote: { type: 'http', url: 'https://mcp.example.test', apiKey: inWindowSecret },
+    },
+  };
+  const overlapping = redactMcpErrorText(
+    inWindowSecret + inWindowSecret.slice(1),
+    inWindowConfig,
+    'remote',
+  );
+  assert.equal(overlapping.includes('r'.repeat(256)), false);
+  assert.equal(overlapping, '[redacted]');
+});
+
+test('MCP exact redaction never pulls a later partial secret across the original output boundary', () => {
+  const firstPrefix = 'FIRST-SECRET-';
+  const secondPrefix = 'SECOND-SECRET-';
+  const first = firstPrefix + 'A'.repeat(MCP_ERROR_TEXT_MAX_CHARS - firstPrefix.length);
+  const second = secondPrefix + 'B'.repeat(MCP_ERROR_TEXT_MAX_CHARS - secondPrefix.length);
+  const config: Config = {
+    activeServer: 'remote',
+    servers: {
+      remote: {
+        type: 'http',
+        url: 'https://mcp.example.test',
+        apiKey: first,
+        headers: { 'X-Second-Auth': second },
+      },
+    },
+  };
+  const error = redactMcpErrorText(`${first}${'.'.repeat(4_096)}${second}`, config, 'remote');
+
+  assert.equal(error.includes(firstPrefix), false);
+  assert.equal(error.includes(secondPrefix), false);
+  assert.equal(error.includes('A'.repeat(256)), false);
+  assert.equal(error.includes('B'.repeat(256)), false);
+  assert.match(error, /\[redacted\]/);
+  assert.ok(error.length <= MCP_ERROR_TEXT_MAX_CHARS);
+});
+
+test('MCP exact credential budgets ignore fields unused by the selected transport', () => {
+  const ignoredApiKey = 'A'.repeat(1024 * 1024);
+  const ignoredHeader = 'B'.repeat(1024 * 1024);
+  const actualEnvSecret = 'ACTUAL-ENV-SECRET-9173';
+  const config: Config = {
+    activeServer: 'local',
+    servers: {
+      local: {
+        type: 'stdio',
+        command: 'connector-mcp',
+        apiKey: ignoredApiKey,
+        headers: { 'X-Ignored': ignoredHeader },
+        env: { TOKEN: actualEnvSecret },
+      },
+    },
+  };
+
+  const configured = configuredMcpCredentialValues(config, 'local');
+  assert.equal(configured.includes(actualEnvSecret), true);
+  assert.equal(redactMcpErrorText(actualEnvSecret, config, 'local'), '[redacted]');
+});
+
+test('MCP exact error redaction selects configured profiles by own property only', () => {
+  const config: Config = { activeServer: 'remote', servers: {} };
+  assert.deepEqual(configuredMcpCredentialValues(config, '__proto__'), []);
+});
+
 test('MCP logout strips inline stdio credentials without deleting safe file and path arguments', () => {
   const safe = [
     '--private-key-path',
