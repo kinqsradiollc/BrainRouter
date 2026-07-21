@@ -26,6 +26,7 @@ import {
   type CliOnboardingSequenceOptions,
   type CliOnboardingSequenceResult,
 } from './onboardingSequence.js';
+import { replaceConfigContents } from '../../configCommit.js';
 
 /**
  * `/init` slash command for global and workspace setup lifecycles.
@@ -85,23 +86,7 @@ export async function disconnectMcpForLaunch(
 
 /** Replace a shared config object's contents without invalidating its identity. */
 export function synchronizeConfigInPlace(target: Config, committed: Config): void {
-  const mutable = target as unknown as Record<string, unknown>;
-  for (const key of Object.keys(mutable)) {
-    if (!Object.prototype.hasOwnProperty.call(committed, key)) delete mutable[key];
-  }
-  // A forward/hand-edited JSON config may contain an own `__proto__` key.
-  // Object.assign would invoke the legacy setter and poison the long-lived
-  // shared config object's prototype, so copy every field as data instead.
-  Object.setPrototypeOf(mutable, Object.prototype);
-  const cloned = structuredClone(committed) as unknown as Record<string, unknown>;
-  for (const [key, value] of Object.entries(cloned)) {
-    Object.defineProperty(mutable, key, {
-      value,
-      enumerable: true,
-      configurable: true,
-      writable: true,
-    });
-  }
+  replaceConfigContents(target, committed);
 }
 
 export interface LiveMcpReconcileResult {

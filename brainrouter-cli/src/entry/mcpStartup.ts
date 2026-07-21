@@ -22,6 +22,7 @@ import {
   type ServerConfig,
 } from '@kinqs/brainrouter-core/config';
 import { applyActiveLlmProfile } from '@kinqs/brainrouter-core/provider';
+import { commitConfigProjection } from '../cli/configCommit.js';
 import { DEFAULT_LLM } from './shared.js';
 
 /** Launch-only choices that must survive an in-session config rewrite. */
@@ -181,22 +182,11 @@ export function persistSelectedBrainrouterProfile(
   if (!/^[a-z0-9][a-z0-9_-]*$/i.test(profileName)) {
     throw new Error('Invalid BrainRouter profile name.');
   }
-  const hadProfile = Object.prototype.hasOwnProperty.call(config.servers, profileName);
-  const previousProfile = config.servers[profileName];
-  const previousActiveServer = config.activeServer;
-  const previousActiveBrainrouterServer = config.activeBrainrouterServer;
-  config.servers[profileName] = { ...cloneServerConfig(server), identity: 'brainrouter' };
-  config.activeServer = profileName;
-  config.activeBrainrouterServer = profileName;
-  try {
-    persist(config);
-  } catch (error) {
-    if (hadProfile && previousProfile) config.servers[profileName] = previousProfile;
-    else delete config.servers[profileName];
-    config.activeServer = previousActiveServer;
-    config.activeBrainrouterServer = previousActiveBrainrouterServer;
-    throw error;
-  }
+  commitConfigProjection(config, (candidate) => {
+    candidate.servers[profileName] = { ...cloneServerConfig(server), identity: 'brainrouter' };
+    candidate.activeServer = profileName;
+    candidate.activeBrainrouterServer = profileName;
+  }, persist);
 }
 
 function serverConfigForWorkspace(server: ServerConfig, workspaceRoot: string): ServerConfig {

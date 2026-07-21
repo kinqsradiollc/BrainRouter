@@ -16,6 +16,7 @@ import {
   stripMcpStdioCredentials,
 } from '../../mcpUrl.js';
 import type { RuntimeMcpState } from '../../../entry/mcpStartup.js';
+import { commitConfigProjection } from '../../configCommit.js';
 
 interface ClearedCredentialMap {
   entries: Record<string, string>;
@@ -127,16 +128,9 @@ export function persistBrainrouterLogout(
       };
   if (cleared.removed.length === 0) return [];
 
-  if (previousServer && cleared.server) config.servers[profile] = cleared.server;
-  if (hadLlm) config.llm = cleared.llm;
-  try {
-    persist(config);
-  } catch (error) {
-    if (previousServer) config.servers[profile] = previousServer;
-    else delete config.servers[profile];
-    if (hadLlm) config.llm = previousLlm;
-    else delete config.llm;
-    throw error;
-  }
+  commitConfigProjection(config, (candidate) => {
+    if (previousServer && cleared.server) candidate.servers[profile] = cleared.server;
+    if (hadLlm) candidate.llm = cleared.llm;
+  }, persist);
   return cleared.removed;
 }

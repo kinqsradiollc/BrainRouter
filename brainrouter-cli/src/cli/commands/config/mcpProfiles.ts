@@ -4,9 +4,10 @@
 // self-contained.
 import chalk from 'chalk';
 import type { CommandContext } from '../_context.js';
-import { saveConfigOrThrow, type ServerConfig } from '@kinqs/brainrouter-core/config';
+import type { ServerConfig } from '@kinqs/brainrouter-core/config';
 import {
   McpClientWrapper,
+  resolveIdentityFromConfig,
   resolvePreferredBrainrouterServerId,
   selectMcpServerIds,
 } from '@kinqs/brainrouter-core/mcp';
@@ -34,6 +35,12 @@ import {
   redactMcpStdioCommand,
   validateMcpHttpUrl,
 } from '../../mcpUrl.js';
+import { commitConfigProjection } from '../../configCommit.js';
+
+interface NewMcpProfile {
+  id: string;
+  server: ServerConfig;
+}
 
 /**
  * `/config` → MCP row. 0.3.7 multi-MCP redesign — now a profile
@@ -87,28 +94,28 @@ export async function editMcp(ctx: CommandContext): Promise<boolean> {
     });
     if (result.kind !== 'pick' || result.id === ROW_DONE) return true;
     if (result.id === ROW_ADD) {
-      const previousActive = ctx.config.activeServer;
-      const previousActiveBrainrouter = ctx.config.activeBrainrouterServer;
-      const addedId = await addMcpProfile(ctx, theme);
-      if (addedId) {
-        const addedBrainrouter = isBrainrouterProfile(ctx, addedId);
+      const added = await addMcpProfile(ctx, theme);
+      if (added) {
+        const { id: addedId, server } = added;
+        const addedBrainrouter = server.identity === 'brainrouter';
         const otherBrainrouterIds = addedBrainrouter
           ? otherBrainrouterProfileIds(ctx, addedId)
           : [];
         const shouldConnect = !addedBrainrouter || otherBrainrouterIds.length === 0;
-        if (!ctx.config.activeServer || !ctx.config.servers[ctx.config.activeServer]) {
-          ctx.config.activeServer = addedId;
-        }
-        if (addedBrainrouter && !ctx.config.activeBrainrouterServer && shouldConnect) {
-          ctx.config.activeBrainrouterServer = addedId;
-        }
         try {
-          saveConfigOrThrow(ctx.config);
+          commitConfigProjection(ctx.config, (candidate) => {
+            candidate.servers[addedId] = server;
+            if (!candidate.activeServer || !candidate.servers[candidate.activeServer]) {
+              candidate.activeServer = addedId;
+            }
+            if (addedBrainrouter && !candidate.activeBrainrouterServer && shouldConnect) {
+              candidate.activeBrainrouterServer = addedId;
+            }
+          });
         } catch (err: any) {
-          delete ctx.config.servers[addedId];
-          ctx.config.activeServer = previousActive;
-          ctx.config.activeBrainrouterServer = previousActiveBrainrouter;
-          console.log(chalk.red(`\n  ✗ Could not save MCP server: ${redactMcpErrorText(String(err?.message ?? err), ctx.config)}\n`));
+          const redactionConfig = structuredClone(ctx.config);
+          redactionConfig.servers[addedId] = server;
+          console.log(chalk.red(`\n  ✗ Could not save MCP server: ${redactMcpErrorText(String(err?.message ?? err), redactionConfig, addedId)}\n`));
           continue;
         }
         console.log(chalk.green(`\n  ✓ "${addedId}" added.`));
@@ -138,9 +145,11 @@ export async function editMcp(ctx: CommandContext): Promise<boolean> {
  *   4. Fields (command for stdio, URL for http)
  *   5. API key (env pre-fill for BrainRouter; blank OK for any
  *      unauthenticated transport)
- * Returns the new profile id on success, undefined on cancel.
+ * Returns the reviewed profile on success, undefined on cancel. Persistence is
+ * deliberately owned by the caller so cancellation and write failure cannot
+ * leak a partial profile into the shared config.
  */
-async function addMcpProfile(ctx: CommandContext, theme: Theme): Promise<string | undefined> {
+async function addMcpProfile(ctx: CommandContext, theme: Theme): Promise<NewMcpProfile | undefined> {
   const nameRes = await promptText({
     theme,
     title: 'New MCP server — name',
@@ -255,8 +264,7 @@ async function addMcpProfile(ctx: CommandContext, theme: Theme): Promise<string 
       identity,
     };
   }
-  ctx.config.servers[name] = server;
-  return name;
+  return { id: name, server };
 }
 
 /** Persist one profile edit atomically from the interactive config manager. */
@@ -265,16 +273,16 @@ function persistMcpServerUpdate(
   id: string,
   next: ServerConfig,
 ): boolean {
-  const previous = ctx.config.servers[id];
-  ctx.config.servers[id] = next;
   try {
-    saveConfigOrThrow(ctx.config);
+    commitConfigProjection(ctx.config, (candidate) => {
+      candidate.servers[id] = next;
+    });
     dropRuntimeMcpServerOverlay(ctx, id);
     return true;
   } catch (err: any) {
-    if (previous) ctx.config.servers[id] = previous;
-    else delete ctx.config.servers[id];
-    console.log(chalk.red(`  ✗ Could not save "${id}": ${redactMcpErrorText(String(err?.message ?? err), ctx.config, id)}\n`));
+    const redactionConfig = structuredClone(ctx.config);
+    redactionConfig.servers[id] = next;
+    console.log(chalk.red(`  ✗ Could not save "${id}": ${redactMcpErrorText(String(err?.message ?? err), redactionConfig, id)}\n`));
     return false;
   }
 }
@@ -441,27 +449,22 @@ async function editExistingMcpProfile(ctx: CommandContext, theme: Theme, id: str
         ],
       });
       if (confirm.kind === 'pick' && confirm.id === 'remove') {
-        const previousServer = ctx.config.servers[id];
-        const previousActive = ctx.config.activeServer;
-        const previousActiveBrainrouter = ctx.config.activeBrainrouterServer;
-        delete ctx.config.servers[id];
-        if (ctx.config.activeBrainrouterServer === id) {
-          ctx.config.activeBrainrouterServer = Object.keys(ctx.config.servers).find((serverId) =>
-            isBrainrouterProfile(ctx, serverId),
-          );
-        }
-        if (ctx.config.activeServer === id) {
-          // Pick the next surviving profile as the new highlight, or
-          // clear it if none remain.
-          const remaining = Object.keys(ctx.config.servers);
-          ctx.config.activeServer = remaining[0] ?? '';
-        }
         try {
-          saveConfigOrThrow(ctx.config);
+          commitConfigProjection(ctx.config, (candidate) => {
+            delete candidate.servers[id];
+            if (candidate.activeBrainrouterServer === id) {
+              candidate.activeBrainrouterServer = Object.entries(candidate.servers).find(
+                ([serverId, profile]) => serverId !== id
+                  && resolveIdentityFromConfig(profile, serverId) === 'brainrouter',
+              )?.[0];
+            }
+            if (candidate.activeServer === id) {
+              // Pick the next surviving profile as the new highlight, or
+              // clear it if none remain.
+              candidate.activeServer = Object.keys(candidate.servers)[0] ?? '';
+            }
+          });
         } catch (err: any) {
-          ctx.config.servers[id] = previousServer;
-          ctx.config.activeServer = previousActive;
-          ctx.config.activeBrainrouterServer = previousActiveBrainrouter;
           console.log(chalk.red(`  ✗ Could not remove "${id}": ${redactMcpErrorText(String(err?.message ?? err), ctx.config, id)}\n`));
           continue;
         }
@@ -505,17 +508,13 @@ async function setActiveProfile(ctx: CommandContext, theme: Theme, profileIds: s
     initialCursor: Math.max(0, profileIds.indexOf(ctx.config.activeServer)),
   });
   if (result.kind !== 'pick') return;
-  const previousActive = ctx.config.activeServer;
-  const previousActiveBrainrouter = ctx.config.activeBrainrouterServer;
-  ctx.config.activeServer = result.id;
-  if (isBrainrouterProfile(ctx, result.id)) {
-    ctx.config.activeBrainrouterServer = result.id;
-  }
   try {
-    saveConfigOrThrow(ctx.config);
+    const brainrouter = isBrainrouterProfile(ctx, result.id);
+    commitConfigProjection(ctx.config, (candidate) => {
+      candidate.activeServer = result.id;
+      if (brainrouter) candidate.activeBrainrouterServer = result.id;
+    });
   } catch (err: any) {
-    ctx.config.activeServer = previousActive;
-    ctx.config.activeBrainrouterServer = previousActiveBrainrouter;
     console.log(chalk.red(`\n  ✗ Could not save highlighted server: ${redactMcpErrorText(String(err?.message ?? err), ctx.config)}\n`));
     return;
   }

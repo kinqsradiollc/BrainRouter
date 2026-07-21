@@ -105,7 +105,8 @@ test('BrainRouter logout restores the exact prior records when persistence fails
   let persistenceSawClearedCredentials = false;
 
   assert.throws(() => persistBrainrouterLogout(config, 'brain', (candidate) => {
-    persistenceSawClearedCredentials = candidate.servers.brain?.apiKey === undefined
+    persistenceSawClearedCredentials = candidate !== config
+      && candidate.servers.brain?.apiKey === undefined
       && candidate.servers.brain?.headers?.Authorization === undefined
       && candidate.servers.brain?.env?.BRAINROUTER_API_KEY === undefined
       && !candidate.servers.brain?.args?.includes('argument-secret')

@@ -10,6 +10,7 @@ import type { ServerConfig } from '@kinqs/brainrouter-core/config';
 import { validateDesktopMcpHttpUrl } from './desktopMcpUrl.js';
 
 const RESERVED_SERVER_IDS = new Set(['__proto__', 'constructor', 'prototype']);
+const MCP_ADD_INPUT_KEYS = new Set(['id', 'type', 'url', 'apiKey', 'headers']);
 const SERVER_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 const HEADER_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
@@ -53,11 +54,11 @@ function headerEntries(raw: unknown): HeaderEntriesResult {
 
   if (typeof raw === 'string') {
     if (Buffer.byteLength(raw) > MAX_HEADERS_BYTES) return fail('MCP headers are too large.');
+    if (raw.includes('\r')) return fail('MCP headers cannot contain carriage returns.');
     const lines = raw.split('\n');
     if (lines.length > MAX_HEADER_COUNT + 1) return fail('Too many MCP headers.');
     const entries: Array<readonly [string, string]> = [];
-    for (const rawLine of lines) {
-      const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+    for (const line of lines) {
       if (!line.trim()) continue;
       const separator = line.indexOf('=');
       if (separator <= 0) return fail('Each MCP header must use Header-Name=value.');
@@ -118,6 +119,9 @@ export function parseDesktopMcpAddInput(args: Record<string, unknown>): DesktopM
 
   if (args.type !== 'http') {
     return fail('Desktop can add remote HTTP MCP servers only. Configure local stdio servers with brainrouter config.');
+  }
+  if (Object.keys(args).some((key) => !MCP_ADD_INPUT_KEYS.has(key))) {
+    return fail('The MCP server request contains unsupported fields.');
   }
 
   const url = typeof args.url === 'string' ? args.url.trim() : '';

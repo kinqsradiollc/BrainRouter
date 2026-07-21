@@ -26,7 +26,9 @@ test('LLM editor persistence restores the exact previous config when the strict 
   let writerSawReplacement = false;
 
   assert.throws(() => persistLlmConfig(config, replacement, (candidate) => {
-    writerSawReplacement = candidate.llm === replacement;
+    writerSawReplacement = candidate !== config
+      && candidate.llm !== replacement
+      && JSON.stringify(candidate.llm) === JSON.stringify(replacement);
     throw new Error('config write denied');
   }), /config write denied/);
 
@@ -45,11 +47,14 @@ test('LLM editor persistence restores an absent optional field and commits befor
   assert.equal(Object.prototype.hasOwnProperty.call(config, 'llm'), false);
 
   persistLlmConfig(config, replacement, (candidate) => {
-    assert.strictEqual(candidate.llm, replacement);
+    assert.notStrictEqual(candidate, config);
+    assert.notStrictEqual(candidate.llm, replacement);
+    assert.deepEqual(candidate.llm, replacement);
     events.push('persist-success');
   });
   events.push('caller-live-update');
 
   assert.deepEqual(events, ['persist', 'persist-success', 'caller-live-update']);
-  assert.strictEqual(config.llm, replacement);
+  assert.notStrictEqual(config.llm, replacement);
+  assert.deepEqual(config.llm, replacement);
 });

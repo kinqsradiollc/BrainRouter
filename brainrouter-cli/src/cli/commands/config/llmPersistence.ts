@@ -4,25 +4,15 @@
  * the complete config is durable; a failed write restores the exact prior
  * optional-property state and object identity.
  */
-import {
-  saveConfigOrThrow,
-  type Config,
-  type LLMConfig,
-} from '@kinqs/brainrouter-core/config';
+import type { Config, LLMConfig } from '@kinqs/brainrouter-core/config';
+import { commitConfigProjection } from '../../configCommit.js';
 
 export function persistLlmConfig(
   config: Config,
   next: LLMConfig,
-  persist: (value: Config) => void = saveConfigOrThrow,
+  persist?: (value: Config) => void,
 ): void {
-  const hadLlm = Object.prototype.hasOwnProperty.call(config, 'llm');
-  const previous = config.llm;
-  config.llm = next;
-  try {
-    persist(config);
-  } catch (error) {
-    if (hadLlm) config.llm = previous;
-    else delete config.llm;
-    throw error;
-  }
+  commitConfigProjection(config, (candidate) => {
+    candidate.llm = structuredClone(next);
+  }, persist);
 }

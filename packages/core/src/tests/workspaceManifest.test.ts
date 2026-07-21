@@ -24,7 +24,11 @@ import {
   serializeWorkspaceManifest,
   workspaceManifestPath,
 } from '../workspace/manifest.js';
-import { readWorkspaceFileBounded, writeWorkspaceFileAtomic } from '../workspace/fileWrite.js';
+import {
+  _setWorkspaceFileAccessHookForTests,
+  readWorkspaceFileBounded,
+  writeWorkspaceFileAtomic,
+} from '../workspace/fileWrite.js';
 import {
   beginWorkspaceOnboardingPairTransaction,
   endWorkspaceOnboardingPairTransaction,
@@ -334,6 +338,31 @@ test('workspace reads and writes reject a parent-directory symlink swap', { skip
     assert.equal(fs.readFileSync(path.join(displaced, 'workspace.json'), 'utf8'), 'original');
   } finally {
     fs.rmSync(ws, { recursive: true, force: true });
+    fs.rmSync(external, { recursive: true, force: true });
+  }
+});
+
+test('workspace writes reject a workspace-root swap before creating parents', { skip: process.platform === 'win32' }, () => {
+  const ws = tmpWorkspace();
+  const external = fs.mkdtempSync(path.join(os.tmpdir(), 'br-wsm-root-swap-external-'));
+  const displaced = `${ws}-displaced`;
+  try {
+    _setWorkspaceFileAccessHookForTests(() => {
+      fs.renameSync(ws, displaced);
+      fs.symlinkSync(external, ws);
+      _setWorkspaceFileAccessHookForTests(undefined);
+    });
+
+    assert.throws(
+      () => writeWorkspaceFileAtomic(ws, '.brainrouter/workspace.json', '{}\n'),
+      /Workspace directory changed during access/,
+    );
+    assert.equal(fs.existsSync(path.join(external, '.brainrouter')), false);
+    assert.equal(fs.existsSync(path.join(displaced, '.brainrouter')), false);
+  } finally {
+    _setWorkspaceFileAccessHookForTests(undefined);
+    fs.rmSync(ws, { recursive: true, force: true });
+    fs.rmSync(displaced, { recursive: true, force: true });
     fs.rmSync(external, { recursive: true, force: true });
   }
 });

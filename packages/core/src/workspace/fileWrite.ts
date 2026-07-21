@@ -33,6 +33,22 @@ export interface WorkspaceFileReadOptions {
   beforeOpen?: () => void;
 }
 
+export interface WorkspaceFileAccessTestEvent {
+  stage: 'before-parent-create';
+  workspaceRoot: string;
+  relativePath: string;
+}
+
+let workspaceFileAccessHookForTests:
+  ((event: WorkspaceFileAccessTestEvent) => void) | undefined;
+
+/** Test seam for deterministic workspace-root replacement races. */
+export function _setWorkspaceFileAccessHookForTests(
+  hook?: (event: WorkspaceFileAccessTestEvent) => void,
+): void {
+  workspaceFileAccessHookForTests = hook;
+}
+
 /**
  * A short-lived capability for sibling operations in one verified workspace
  * directory. On Linux, child paths are anchored through the open directory
@@ -55,8 +71,9 @@ export function openWorkspaceFileParentGuard(
 ): WorkspaceFileParentGuard {
   const root = fs.realpathSync(workspaceRoot);
   const segments = workspacePathSegments(relativePath);
-  ensureSafeParents(root, segments.slice(0, -1), { create: options.createParents });
-  const parent = openWorkspaceParentGuard(root, segments.slice(0, -1));
+  const parent = openWorkspaceParentGuard(root, segments.slice(0, -1), {
+    createParents: options.createParents,
+  });
   const fileName = segments.at(-1)!;
   const canonicalTarget = path.join(root, ...segments);
   try {
@@ -112,7 +129,6 @@ export function readWorkspaceFileBounded(
 
   const root = fs.realpathSync(workspaceRoot);
   const segments = workspacePathSegments(relativePath);
-  ensureSafeParents(root, segments.slice(0, -1));
   const target = path.join(root, ...segments);
   const guard = openWorkspaceParentGuard(root, segments.slice(0, -1));
   const accessTarget = guard.childPath(segments.at(-1)!);
@@ -164,18 +180,19 @@ export function resolveWorkspaceFileForWrite(workspaceRoot: string, relativePath
   const root = fs.realpathSync(workspaceRoot);
   const segments = workspacePathSegments(relativePath);
   const target = path.join(root, ...segments);
-  const completeParents = ensureSafeParents(root, segments.slice(0, -1), { allowMissing: true });
-  if (completeParents) {
-    const guard = openWorkspaceParentGuard(root, segments.slice(0, -1));
-    try {
-      guard.assertStable();
-      assertRegularTarget(guard.childPath(segments.at(-1)!));
-      guard.assertStable();
-    } finally {
-      guard.close();
-    }
-  } else {
-    assertRegularTarget(target);
+  let guard: WorkspaceParentGuard;
+  try {
+    guard = openWorkspaceParentGuard(root, segments.slice(0, -1));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return target;
+    throw error;
+  }
+  try {
+    guard.assertStable();
+    assertRegularTarget(guard.childPath(segments.at(-1)!));
+    guard.assertStable();
+  } finally {
+    guard.close();
   }
   return target;
 }
@@ -198,8 +215,9 @@ export function writeWorkspaceFileAtomic(
   const root = fs.realpathSync(workspaceRoot);
   const segments = workspacePathSegments(relativePath);
   const target = path.join(root, ...segments);
-  ensureSafeParents(root, segments.slice(0, -1), { create: true });
-  const guard = openWorkspaceParentGuard(root, segments.slice(0, -1));
+  const guard = openWorkspaceParentGuard(root, segments.slice(0, -1), {
+    createParents: true,
+  });
   const accessTarget = guard.childPath(segments.at(-1)!);
   try {
     guard.assertStable();
@@ -229,7 +247,6 @@ export function resolveWorkspaceFileForRead(workspaceRoot: string, relativePath:
   const root = fs.realpathSync(workspaceRoot);
   const segments = workspacePathSegments(relativePath);
   const target = path.join(root, ...segments);
-  ensureSafeParents(root, segments.slice(0, -1));
   const guard = openWorkspaceParentGuard(root, segments.slice(0, -1));
   try {
     guard.assertStable();
@@ -253,31 +270,6 @@ function workspacePathSegments(relativePath: string): string[] {
   return segments;
 }
 
-function ensureSafeParents(
-  root: string,
-  segments: string[],
-  options: { create?: boolean; allowMissing?: boolean } = {},
-): boolean {
-  let current = root;
-  for (const segment of segments) {
-    current = path.join(current, segment);
-    let stat: fs.Stats | undefined;
-    try {
-      stat = fs.lstatSync(current);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      if (options.allowMissing) return false;
-      if (!options.create) throw error;
-      fs.mkdirSync(current, { mode: 0o755 });
-      stat = fs.lstatSync(current);
-    }
-    if (stat.isSymbolicLink() || !stat.isDirectory()) {
-      throw new Error(`Unsafe workspace directory: ${path.relative(root, current)}`);
-    }
-  }
-  return true;
-}
-
 interface GuardedDirectory {
   target: string;
   stat: fs.Stats;
@@ -291,30 +283,56 @@ interface WorkspaceParentGuard {
   close(): void;
 }
 
-function openWorkspaceParentGuard(root: string, parentSegments: string[]): WorkspaceParentGuard {
-  const targets = [root];
-  let current = root;
-  for (const segment of parentSegments) {
-    current = path.join(current, segment);
-    targets.push(current);
-  }
-
+function openWorkspaceParentGuard(
+  root: string,
+  parentSegments: string[],
+  options: { createParents?: boolean } = {},
+): WorkspaceParentGuard {
   const directories: GuardedDirectory[] = [];
+  let canonicalTarget = root;
   try {
-    for (const target of targets) {
-      const stat = fs.lstatSync(target);
-      if (stat.isSymbolicLink() || !stat.isDirectory()) {
-        throw new Error(`Unsafe workspace directory: ${path.relative(root, target) || '.'}`);
+    for (let index = 0; index <= parentSegments.length; index += 1) {
+      const segment = index === 0 ? undefined : parentSegments[index - 1]!;
+      if (segment) canonicalTarget = path.join(canonicalTarget, segment);
+      const parent = directories.at(-1);
+      const parentAccessRoot = parent?.descriptor === undefined
+        ? parent?.target
+        : descriptorDirectoryPath(parent.descriptor) ?? parent.target;
+      const accessTarget = segment && parentAccessRoot
+        ? path.join(parentAccessRoot, segment)
+        : root;
+
+      if (directories.length > 0) assertGuardedDirectories(root, directories);
+      let stat: fs.Stats;
+      try {
+        stat = fs.lstatSync(accessTarget);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || !options.createParents || !segment) {
+          throw error;
+        }
+        workspaceFileAccessHookForTests?.({
+          stage: 'before-parent-create',
+          workspaceRoot: root,
+          relativePath: path.relative(root, canonicalTarget),
+        });
+        assertGuardedDirectories(root, directories);
+        fs.mkdirSync(accessTarget, { mode: 0o755 });
+        assertGuardedDirectories(root, directories);
+        stat = fs.lstatSync(accessTarget);
       }
-      const descriptor = openDirectoryDescriptor(target);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) {
+        throw new Error(`Unsafe workspace directory: ${path.relative(root, canonicalTarget) || '.'}`);
+      }
+      const descriptor = openDirectoryDescriptor(accessTarget);
       if (descriptor !== undefined) {
         const opened = fs.fstatSync(descriptor);
         if (!opened.isDirectory() || !sameFilesystemEntry(stat, opened)) {
           fs.closeSync(descriptor);
-          throw new Error(`Workspace directory changed during access: ${path.relative(root, target) || '.'}`);
+          throw new Error(`Workspace directory changed during access: ${path.relative(root, canonicalTarget) || '.'}`);
         }
       }
-      directories.push({ target, stat, descriptor });
+      if (directories.length > 0) assertGuardedDirectories(root, directories);
+      directories.push({ target: canonicalTarget, stat, descriptor });
     }
   } catch (error) {
     closeGuardedDirectories(directories);
@@ -329,26 +347,7 @@ function openWorkspaceParentGuard(root: string, parentSegments: string[]): Works
     childPath: (name) => descriptorRoot === undefined
       ? path.join(parent.target, name)
       : path.join(descriptorRoot, name),
-    assertStable: () => {
-      for (const directory of directories) {
-        let pathStat: fs.Stats;
-        try {
-          pathStat = fs.lstatSync(directory.target);
-        } catch {
-          throw new Error(`Workspace directory changed during access: ${path.relative(root, directory.target) || '.'}`);
-        }
-        if (pathStat.isSymbolicLink() || !pathStat.isDirectory() ||
-            !sameFilesystemEntry(directory.stat, pathStat)) {
-          throw new Error(`Workspace directory changed during access: ${path.relative(root, directory.target) || '.'}`);
-        }
-        if (directory.descriptor !== undefined) {
-          const opened = fs.fstatSync(directory.descriptor);
-          if (!opened.isDirectory() || !sameFilesystemEntry(directory.stat, opened)) {
-            throw new Error(`Workspace directory changed during access: ${path.relative(root, directory.target) || '.'}`);
-          }
-        }
-      }
-    },
+    assertStable: () => assertGuardedDirectories(root, directories),
     fsync: () => {
       parent.descriptor === undefined
         ? fsyncDirectory(parent.target)
@@ -356,6 +355,27 @@ function openWorkspaceParentGuard(root: string, parentSegments: string[]): Works
     },
     close: () => closeGuardedDirectories(directories),
   };
+}
+
+function assertGuardedDirectories(root: string, directories: GuardedDirectory[]): void {
+  for (const directory of directories) {
+    let pathStat: fs.Stats;
+    try {
+      pathStat = fs.lstatSync(directory.target);
+    } catch {
+      throw new Error(`Workspace directory changed during access: ${path.relative(root, directory.target) || '.'}`);
+    }
+    if (pathStat.isSymbolicLink() || !pathStat.isDirectory() ||
+        !sameFilesystemEntry(directory.stat, pathStat)) {
+      throw new Error(`Workspace directory changed during access: ${path.relative(root, directory.target) || '.'}`);
+    }
+    if (directory.descriptor !== undefined) {
+      const opened = fs.fstatSync(directory.descriptor);
+      if (!opened.isDirectory() || !sameFilesystemEntry(directory.stat, opened)) {
+        throw new Error(`Workspace directory changed during access: ${path.relative(root, directory.target) || '.'}`);
+      }
+    }
+  }
 }
 
 function fsyncDescriptor(descriptor: number): void {

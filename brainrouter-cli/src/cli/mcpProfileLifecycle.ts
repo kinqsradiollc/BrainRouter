@@ -8,6 +8,7 @@ import {
   type McpServerStatus,
 } from '@kinqs/brainrouter-core/mcp';
 import type { CommandContext } from './commands/_context.js';
+import { commitConfigProjection } from './configCommit.js';
 import {
   configForRuntimeMcpResolution,
   configWithRuntimeMcpState,
@@ -186,15 +187,12 @@ export async function reconcileLiveMcpProfile(
         || (options.persistHighlightedProfile === true && ctx.config.activeServer !== serverId)
       )
     ) {
-      const previousActiveBrainrouterServer = ctx.config.activeBrainrouterServer;
-      const previousActiveServer = ctx.config.activeServer;
-      ctx.config.activeBrainrouterServer = serverId;
-      if (options.persistHighlightedProfile === true) ctx.config.activeServer = serverId;
       try {
-        (options.persistConfig ?? saveConfigOrThrow)(ctx.config);
+        commitConfigProjection(ctx.config, (candidate) => {
+          candidate.activeBrainrouterServer = serverId;
+          if (options.persistHighlightedProfile === true) candidate.activeServer = serverId;
+        }, options.persistConfig ?? saveConfigOrThrow);
       } catch (error) {
-        ctx.config.activeBrainrouterServer = previousActiveBrainrouterServer;
-        ctx.config.activeServer = previousActiveServer;
         throw new McpProfilePersistenceError(status, error);
       }
     }

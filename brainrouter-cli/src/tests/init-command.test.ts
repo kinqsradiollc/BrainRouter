@@ -173,21 +173,21 @@ test('`/init config` applies the full committed LLM config and synchronizes shar
   ]);
 });
 
-test('config synchronization treats __proto__ as data without polluting shared state', () => {
+test('config synchronization drops prototype-polluting top-level keys', () => {
   const target = { activeServer: 'old', servers: {} } as Config & Record<string, unknown>;
   const committed = JSON.parse(
-    '{"activeServer":"","servers":{},"__proto__":{"polluted":true}}',
+    '{"activeServer":"","servers":{},"__proto__":{"polluted":true},"constructor":{"prototype":{"polluted":true}},"prototype":{"polluted":true}}',
   ) as Config;
 
   synchronizeConfigInPlace(target, committed);
 
   assert.equal(Object.getPrototypeOf(target), Object.prototype);
   assert.equal((target as { polluted?: boolean }).polluted, undefined);
-  assert.equal(Object.hasOwn(target, '__proto__'), true, 'forward fields remain own data properties');
-  assert.deepEqual(target.__proto__, { polluted: true });
+  assert.equal(Object.hasOwn(target, '__proto__'), false);
+  assert.equal(Object.hasOwn(target, 'constructor'), false);
+  assert.equal(Object.hasOwn(target, 'prototype'), false);
 
   synchronizeConfigInPlace(target, { activeServer: '', servers: {} });
-  assert.equal(Object.hasOwn(target, '__proto__'), false, 'later snapshots can remove the forward field');
   assert.equal(Object.getPrototypeOf(target), Object.prototype);
 });
 

@@ -25,10 +25,7 @@ test('desktop MCP input accepts a bounded HTTP profile', () => {
     type: 'http',
     url: 'https://mcp.example.test/mcp',
     apiKey: 'test-key',
-    headers: 'X-Project=alpha\r\nX-Mode=review',
-    command: 'sh',
-    args: '-c ignored',
-    env: 'NODE_OPTIONS=--require=ignored',
+    headers: 'X-Project=alpha\nX-Mode=review',
   });
 
   assert.equal(result.ok, true);
@@ -40,6 +37,26 @@ test('desktop MCP input accepts a bounded HTTP profile', () => {
     apiKey: 'test-key',
     headers: { 'X-Project': 'alpha', 'X-Mode': 'review' },
   });
+});
+
+test('desktop MCP input rejects execution and unknown fields on HTTP requests', () => {
+  for (const extra of [
+    { command: 'sh' },
+    { args: ['-c', 'arbitrary-command'] },
+    { env: { NODE_OPTIONS: '--require=arbitrary-module' } },
+    { unexpected: true },
+  ]) {
+    const result = parseDesktopMcpAddInput({
+      id: 'remote-tools',
+      type: 'http',
+      url: 'https://mcp.example.test/mcp',
+      ...extra,
+    });
+    assert.deepEqual(result, {
+      ok: false,
+      error: 'The MCP server request contains unsupported fields.',
+    });
+  }
 });
 
 test('desktop MCP input validates and normalizes the URL before returning config', () => {
@@ -71,6 +88,7 @@ test('desktop MCP input validates and normalizes the URL before returning config
 test('desktop MCP input rejects header and API-key control characters', () => {
   const cases = [
     { headers: { 'X-Project': 'alpha\r\nInjected: yes' } },
+    { headers: 'X-Project=alpha\r\nInjected=yes' },
     { headers: { 'Bad:Name': 'alpha' } },
     { headers: { 'X-Project': 'alpha\0omega' } },
     { apiKey: 'token\r\nInjected: yes' },
