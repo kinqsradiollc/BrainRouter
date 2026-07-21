@@ -277,8 +277,8 @@ captured into cognitive memory through its current engine.
 | W1 | Done | Manifest + initial presets | Core manifest tests |
 | W2 | Done, gaps tracked in W2b | CLI project-onboarding baseline | CLI helper tests |
 | W3a | Done | Desktop manifest IPC + shared suggestion | Desktop main-process tests |
-| W1c | Implemented | One engineer, capability schema/resolver, legacy normalization, committable manifest | Focused checks + full workspace verify |
-| W2b | Todo | Two-flow chain, transactional state machine, editor, complete scan/command semantics | Startup/command/cancel/edit tests |
+| W1c | Done | One engineer, capability schema/resolver, legacy normalization, committable manifest | Focused checks + full workspace verify |
+| W2b | Foundation implemented | Ordered global/workspace setup, recoverable writes, editor re-entry, strict model/MCP/account lifecycle | Startup/command/cancel/edit/crash-recovery tests; assisted scan remains W3c-core |
 | W3b | In progress, uncommitted | Baseline desktop dialog | Renderer lifecycle tests + live visual QA |
 | W3c | Todo | Shared proposal schema, conversational suggestion, bounded initializer in CLI/Desktop | Deterministic/model/failure/confirmation tests |
 | W3d | Todo | Finish Setup + Workspace Settings editor | Round-trip/unknown-field/re-entry tests |
@@ -296,6 +296,14 @@ captured into cognitive memory through its current engine.
 | B3 | Todo | Availability-aware recommendations and opt-in distillation | Catalog/provenance/no-recursion tests |
 | C3 | Todo | Dashboard library expansion + Desktop knowledge panel | SDK, stale-scope, host bridge, UI inventory/live QA |
 | Final | Todo | Full suite, live CLI/Desktop/backend/dashboard walkthrough, docs/changelog | Green CI/security review and merged PRs |
+
+The W2b foundation treats global config plus its completion marker, and project
+instructions plus the workspace manifest, as recoverable logical commits. A
+durable config change must succeed before live runtime state changes. A requested
+BrainRouter profile becomes the selected live profile only after its connection
+succeeds; failed switches preserve the previously usable brain. Conversational
+proposal generation, `/init scan`, and `/init agent` remain W3c-core work and are
+not implied by this foundation status.
 
 ## Required Regression Matrix
 

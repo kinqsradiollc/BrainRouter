@@ -1,3 +1,11 @@
+/**
+ * Crash-recoverable ownership claims for workspace manifest replacement (0.4.17).
+ *
+ * Moving an existing manifest aside makes replacement rollback possible, but a
+ * process can die between filesystem operations; durable receipts prove which
+ * inode and desired replacement the transaction owns. Recovery is bounded,
+ * never disturbs live owners, and fails closed when ownership is ambiguous.
+ */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';

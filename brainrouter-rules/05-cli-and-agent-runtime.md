@@ -222,6 +222,24 @@ the skill body (the single source of truth). See [`09`](09-docs-skills-and-plugi
 
 - **Evidence:** `brainrouter-cli/src/cli/prompt/skillCatalog.ts:31,33,96`
 
+### 16. Setup and connection state are commit-first, recoverable, and never optimistic
+
+Global setup commits the user config and completion marker through the recoverable
+coordinator; project setup commits the approved instruction file and
+`.brainrouter/workspace.json` through the core onboarding transaction. Do not
+replace either pair with independent writes. Durable config persistence must
+succeed before mutating the live Agent, MCP pool, or runtime projection. A
+requested BrainRouter profile becomes the selected live profile only after its
+connection succeeds; a failed switch keeps the previous usable selection.
+
+- **Why:** optimistic runtime changes or half-written setup pairs can strand a
+  workspace, leak stale credentials back into memory, or make a later reconnect
+  target a server that never connected.
+- **Evidence:** `brainrouter-cli/src/cli/wizard/globalPersistence.ts`,
+  `packages/core/src/workspace/onboardingTransaction.ts`,
+  `brainrouter-cli/src/cli/mcpProfileLifecycle.ts`,
+  `brainrouter-cli/src/entry/mcpStartup.ts`
+
 ---
 
 ## Comments & tests

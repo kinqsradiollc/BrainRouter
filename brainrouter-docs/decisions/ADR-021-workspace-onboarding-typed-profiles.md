@@ -1,6 +1,6 @@
 # ADR-021 — Workspace Onboarding: Typed Profiles, Dynamic Capabilities & Knowledge
 
-**Status:** Accepted (phased; W0–W3a shipped) · **Builds on** ADR-010
+**Status:** Accepted (phased; W0–W3a shipped; transactional CLI foundation implemented) · **Builds on** ADR-010
 (org/team/user tenancy), ADR-017 (production flows), ADR-019 (org/project
 switching), ADR-020 (memory self-improvement) · **Touches** `packages/core`,
 `brainrouter-cli`, `brainrouter-desktop`, `brainrouter`, and the dashboard.
@@ -162,10 +162,14 @@ distilled facts enter cognitive memory through its existing engine.
 
 - **W0–W3a (shipped)** — bundled starter skills; core manifest/presets; CLI
   project onboarding baseline; desktop manifest IPC and shared suggestion.
-- **W1c** — correct the manifest/presets/writers to one engineer plus dynamic
-  capabilities, add legacy normalization, and make `workspace.json` committable.
-- **W2b/W3b** — complete CLI editing/two-flow chaining and desktop onboarding,
-  re-entry, editable selections, accessibility, and lifecycle tests.
+- **W1c (shipped)** — one engineer plus dynamic capabilities, legacy
+  normalization, and a committable `workspace.json`.
+- **W2b foundation (implemented)** — ordered global/workspace setup, edit
+  re-entry, recoverable global and project writes, and commit-first model,
+  MCP-profile, account, and live-brain reconciliation. Assisted scan and setup
+  commands remain in W3c.
+- **W3b** — complete desktop onboarding, re-entry, editable selections,
+  accessibility, and renderer lifecycle tests.
 - **W3c** — conversational suggestion and bounded setup agent with deterministic
   fallback and confirmation-only writes.
 - **W4** — shared runtime persona/capability/skill/tool/briefing/memory wiring,

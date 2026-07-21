@@ -1,3 +1,11 @@
+/**
+ * Durable same-directory atomic file replacement for core persistence (0.4.17).
+ *
+ * Staging, file fsync, identity reporting, and parent-directory fsync prevent
+ * readers from observing partial contents and let callers prove the staged
+ * version. Existing targets and staged paths must be regular non-symlink files;
+ * exclusive writes never replace a concurrent creator.
+ */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';

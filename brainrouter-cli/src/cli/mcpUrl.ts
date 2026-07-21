@@ -1,3 +1,11 @@
+/**
+ * Credential-safe MCP endpoint and command handling for BrainRouter CLI (0.4.17).
+ *
+ * Centralizes HTTP validation plus URL/stdio editing, redaction, and logout
+ * sanitization so setup and error surfaces never expose saved or legacy inline
+ * credentials. Parsing and decoding are bounded; unsafe URL material fails
+ * validation, and editable projections return empty instead of prefilling a secret.
+ */
 import type { Config, ServerConfig } from '@kinqs/brainrouter-core/config';
 
 const SENSITIVE_QUERY_PARTS = [

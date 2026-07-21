@@ -1,3 +1,11 @@
+/**
+ * Recoverable global setup persistence for BrainRouter CLI (0.4.17).
+ *
+ * Commits the user config and onboarding marker as one logical state transition
+ * even though the filesystem cannot replace both atomically. Private, bounded
+ * receipts and exact-version claims support crash recovery and compare-and-swap;
+ * concurrent ownership is never overwritten, and ambiguous files are preserved.
+ */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

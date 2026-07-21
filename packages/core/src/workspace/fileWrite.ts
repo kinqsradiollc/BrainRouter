@@ -1,3 +1,11 @@
+/**
+ * Workspace-confined filesystem access for BrainRouter artifacts (0.4.17).
+ *
+ * Resolves, reads, and atomically writes project-relative files without allowing
+ * traversal or symlink escapes. Directory identity is anchored or revalidated
+ * across each operation, reads are caller-bounded, and public results remain
+ * canonical workspace paths even when descriptor paths are used internally.
+ */
 import fs from 'node:fs';
 import path from 'node:path';
 import {

@@ -1,3 +1,11 @@
+/**
+ * BrainRouter MCP profile-name allocation for CLI setup (0.4.17).
+ *
+ * Converts a transport choice into a stable configured id so repeat setup edits
+ * the same BrainRouter entry without overwriting an unrelated MCP server. An
+ * occupied name is reusable only when its config proves ownership, and fallback
+ * allocation is bounded by the current server catalog.
+ */
 import type { ServerConfig } from '@kinqs/brainrouter-core/config';
 import { resolveIdentityFromConfig } from '@kinqs/brainrouter-core/mcp';
 import type { McpPick } from './types.js';

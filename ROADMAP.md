@@ -85,6 +85,24 @@ execution, inbound triggers, and other expanded authority stay opt-in.
       account-managed automations, and server-backed pull-request review history.
 - [x] GitHub pull-request review operations with separate security and code
       lenses, repository policies, evidence, and live job status.
+
+### Workspace onboarding and project intelligence
+
+- [x] A safe, committable workspace manifest with editable profiles,
+      capabilities, skills, tools, memory posture, and instruction pointer.
+- [x] One `engineer` persona with frontend available as a task-time engineering
+      capability rather than a separate agent.
+- [x] Ordered global/project CLI setup with recoverable paired writes and
+      commit-first model, MCP, login/logout, and desktop account transitions.
+- [ ] Conversational project description, bounded local scan, validated model
+      proposal, deterministic fallback, and confirmation-only writes.
+- [ ] Complete desktop onboarding, Finish Setup, Workspace Settings, stale-root
+      protection, accessibility, and live visual QA.
+- [ ] Per-turn persona/capability/skill/tool/briefing/memory activation with exact
+      legacy behavior when no manifest exists.
+- [ ] Organization/Project-scoped knowledge ingest, typed jobs, hybrid retrieval,
+      citations, recommendations, and dashboard/desktop management.
+
 - [ ] Complete the repository-wide build, test, browser, and Electron acceptance
       gate; reconcile release notes; bump versions; tag and publish.
 

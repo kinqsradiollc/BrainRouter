@@ -1,3 +1,12 @@
+/**
+ * Recoverable two-file workspace onboarding coordinator (0.4.17).
+ *
+ * Treats project instructions and `.brainrouter/workspace.json` as one logical
+ * commit even though the filesystem cannot replace both atomically. Durable,
+ * bounded receipts record exact before, desired, and committed versions;
+ * recovery changes only files attributable to a dead transaction and leaves
+ * ambiguous state untouched for manual recovery.
+ */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';

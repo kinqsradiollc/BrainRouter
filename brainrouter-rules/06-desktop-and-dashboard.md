@@ -170,11 +170,26 @@ per-concern sibling directories with a thin, behavior-identical entrypoint (see
 
 - **Evidence:** `brainrouter-desktop/electron/host.ts:1`, `brainrouter-desktop/src/track/Dropdown.tsx:12`
 
+### 13. Desktop account transitions persist before serialized live MCP cleanup
+
+Desktop sign-in and sign-out use strict config persistence before changing live
+MCP state or reporting success. Sign-in targets the explicitly selected
+BrainRouter profile and records it as the active brain only after the durable
+commit. Sign-out removes credentials durably, then performs serialized live
+cleanup with reconnects paused; a cleanup failure returns a committed warning and
+must not resurrect the removed profile or credential.
+
+- **Why:** disconnecting first can reconnect from stale durable state, while
+  swallowing a persistence error makes the renderer report an account transition
+  that did not survive restart.
+- **Evidence:** `brainrouter-desktop/electron/host/queries.ts`,
+  `brainrouter-desktop/electron/host/mcpLifecycle.test.ts`
+
 ---
 
 ## Dashboard (`brainrouter-dashboard/`)
 
-### 13. Pages: `'use client'` + memoized SDK client + hooks package + `AuthGuard`
+### 14. Pages: `'use client'` + memoized SDK client + hooks package + `AuthGuard`
 
 Every data page is a `'use client'` component that gets its API client via
 `useMemo(() => getClient(), [])` from `lib/client.ts` (wrapping the SDK's
@@ -189,7 +204,7 @@ or hand-rolled `fetch()` calls — go through the SDK + hooks.
   through `getClient()`.
 - **Evidence:** `brainrouter-dashboard/app/scenes/page.tsx:1`, `brainrouter-dashboard/lib/client-auth.ts:26`
 
-### 14. ⛔ The server counterpart: per-resource express routers, `requireAnyAuth` + `req.userId` scoping, ALWAYS await
+### 15. ⛔ The server counterpart: per-resource express routers, `requireAnyAuth` + `req.userId` scoping, ALWAYS await
 
 The dashboard's server side is one small express `Router` per resource under
 `brainrouter/src/api/routes/` (`memory/stats.ts`, `memory/scenes.ts`, …), each
@@ -200,7 +215,7 @@ route or tool must be awaited** — an unawaited call passed to `res.json` seria
 
 - **Evidence:** `brainrouter/src/api/routes/memory/stats.ts:8`
 
-### 15. Dashboard styling: canonical tokens in `globals.css`, dark-primary, self-hosted fonts
+### 16. Dashboard styling: canonical tokens in `globals.css`, dark-primary, self-hosted fonts
 
 Visuals use the canonical design tokens at the top of `app/globals.css`
 (`--surface-*`, `--text-*`, `--accent`, `--heat-*`, `--radius-*`, `--shadow-*`);
