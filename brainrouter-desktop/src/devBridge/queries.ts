@@ -3,6 +3,7 @@
 // destructured helpers below and S.<scalar> for reassignable scalars. Behavior-identical.
 import type { ConnectorRecord } from '@kinqs/brainrouter-types';
 import { devAtlasEnriched, devAtlasGraph } from './atlas.js';
+import { validateDevMcpHttpUrl } from './mcpInput.js';
 import type { DevState } from './state.js';
 
 // Record shapes reused by a few handlers, derived from the live state so the
@@ -1424,7 +1425,27 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       if (op === 'add') { if (r && !list.includes(r)) list.push(r); } else { const i = list.indexOf(r); if (i >= 0) list.splice(i, 1); }
       return { ok: true, permissions: { allow: [...devRules.allow], deny: [...devRules.deny] } };
     },
-    'action:add-mcp': (a) => { const id = String(a.id ?? '').trim(); if (!id || devServers.some((s) => s.id === id)) return { ok: false, error: 'invalid or duplicate id' }; if (a.type !== 'http') return { ok: false, error: 'Desktop can add remote HTTP MCP servers only.' }; devServers.push({ id, online: true, identity: 'third-party', type: 'http', url: String(a.url ?? ''), command: null, detail: 'http' }); return { ok: true, id }; },
+    'action:add-mcp': (a) => {
+      const id = String(a.id ?? '').trim();
+      if (!id || devServers.some((s) => s.id === id)) {
+        return { ok: false, error: 'invalid or duplicate id' };
+      }
+      if (a.type !== 'http') {
+        return { ok: false, error: 'Desktop can add remote HTTP MCP servers only.' };
+      }
+      const parsedUrl = validateDevMcpHttpUrl(a.url);
+      if (!parsedUrl.ok) return parsedUrl;
+      devServers.push({
+        id,
+        online: true,
+        identity: 'third-party',
+        type: 'http',
+        url: parsedUrl.url,
+        command: null,
+        detail: 'http',
+      });
+      return { ok: true, id };
+    },
     'action:remove-mcp': (a) => { const i = devServers.findIndex((s) => s.id === a.id); if (i >= 0) devServers.splice(i, 1); return { ok: i >= 0, id: a.id }; },
     'action:term-exec': (a) => ({ out: `$ ${String(a.cmd ?? '')}\n(demo) command executed in the workspace`, code: 0 }),
     'command:dispatch': (a) => {
