@@ -25,6 +25,7 @@ import {
   type BrowserControlRequestMessage,
 } from '@kinqs/brainrouter-core/browser';
 import { isWorkspaceTrusted, trustWorkspace, untrustWorkspace, listTrustedWorkspaces } from '@kinqs/brainrouter-core/workspace';
+import { getWorkspaceManifestInfo, saveWorkspaceManifestFromPayload } from './workspaceOnboarding.js';
 import { listTranscripts, type TranscriptSummary } from '@kinqs/brainrouter-core/session';
 import { getStateDir } from '@kinqs/brainrouter-core/storage';
 // T1 — global dashboard disk reads (no live host needed): running tasks + last
@@ -832,6 +833,20 @@ app.whenReady().then(() => {
     if (!isWorkspaceTrusted(workspaceRoot)) return { opened: false, needsTrust: true };
     openWorkspaceWindow(workspaceRoot);
     return { opened: true };
+  });
+  // ADR-021 W3a — workspace onboarding manifest bridge. The renderer never
+  // touches `.brainrouter/workspace.json`; main goes through the core
+  // chokepoint. Trust is enforced like workspace:open (defense-in-depth).
+  ipcMain.handle('workspace:manifest-get', (_e, root: unknown) => {
+    if (typeof root !== 'string' || !fs.existsSync(root)) return { ok: false, error: 'Unknown workspace.' };
+    if (!isWorkspaceTrusted(root)) return { ok: false, error: 'Workspace is not trusted.' };
+    return { ok: true, ...getWorkspaceManifestInfo(root) };
+  });
+  ipcMain.handle('workspace:manifest-save', (_e, root: unknown, payload: unknown) => {
+    if (typeof root !== 'string' || !fs.existsSync(root)) return { saved: false, error: 'Unknown workspace.' };
+    if (!isWorkspaceTrusted(root)) return { saved: false, error: 'Workspace is not trusted.' };
+    const shaped = payload && typeof payload === 'object' ? (payload as { profile?: unknown; defaultAgent?: unknown }) : {};
+    return saveWorkspaceManifestFromPayload(root, { profile: shaped.profile, defaultAgent: shaped.defaultAgent });
   });
   // T1 — trust persistence lives in the shared CLI store (not renderer
   // localStorage), so CLI + desktop agree and it survives reinstalls.

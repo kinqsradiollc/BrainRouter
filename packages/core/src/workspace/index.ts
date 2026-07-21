@@ -5,3 +5,4 @@
 export * from './workspace.js';
 export * from './workspaceTrust.js';
 export * from './manifest.js';
+export * from './profileSuggest.js';
