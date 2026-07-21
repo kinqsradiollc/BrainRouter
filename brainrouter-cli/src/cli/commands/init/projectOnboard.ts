@@ -22,7 +22,7 @@ import {
   type WorkspaceManifest,
   type WorkspaceProfileId,
 } from '@kinqs/brainrouter-core/workspace';
-import { askChoice, askYesNo, getActiveReadline, NoTTYError } from '../../prompt/cliPrompt.js';
+import { askYesNo, getActiveReadline, NoTTYError } from '../../prompt/cliPrompt.js';
 import { initAgentMd } from '../../../prompt/initAgentMd.js';
 
 // The suggestion logic moved to core (W3a) so desktop onboarding guesses
@@ -52,6 +52,7 @@ export function formatManifestSummary(manifest: WorkspaceManifest): string {
   const lines = [
     `${chalk.bold('Workspace')}: ${manifest.name}  ${chalk.gray(`(profile: ${manifest.profile})`)}`,
     `  agents: ${manifest.agents.default || chalk.gray('(none)')}${manifest.agents.enabled.length > 1 ? chalk.gray(` +${manifest.agents.enabled.length - 1} enabled`) : ''}`,
+    `  capabilities: ${manifest.capabilities.enabled.join(', ') || chalk.gray('(none)')}${manifest.capabilities.disabled.length ? ` (${manifest.capabilities.disabled.length} disabled)` : ''}`,
     `  skills: ${manifest.skills.packs.length} pack(s), ${manifest.skills.enabled.length} enabled${manifest.skills.disabled.length ? `, ${manifest.skills.disabled.length} disabled` : ''}`,
     `  tools:  ${manifest.tools.profiles.join(', ') || chalk.gray('(none)')}`,
     `  memory: ${manifest.memory.tags.join(', ') || chalk.gray('(no tags)')}`,
@@ -102,27 +103,10 @@ export async function runProjectOnboarding(workspaceRoot: string): Promise<boole
     return false;
   }
 
-  // Engineering hosts more than one persona — let the user pick the default.
-  let overrides: Parameters<typeof createWorkspaceManifest>[0]['overrides'];
-  if (profile === 'engineering') {
-    try {
-      const persona = await askChoice('Default agent persona for this workspace?', [
-        { label: 'engineer', description: 'General software engineering — code, tests, reviews, releases.' },
-        { label: 'frontend-builder', description: 'Design-system-first frontend building over the same engineering profile.' },
-      ]);
-      if (persona === 'frontend-builder') {
-        overrides = { agents: { default: 'frontend-builder', enabled: ['frontend-builder', 'engineer'] } };
-      }
-    } catch {
-      // Persona pick cancelled → keep the preset default; profile choice stands.
-    }
-  }
-
   const manifest = createWorkspaceManifest({
     name: path.basename(workspaceRoot),
     profile,
     by: 'wizard',
-    overrides,
   });
   const target = saveWorkspaceManifest(workspaceRoot, manifest);
   console.log(chalk.green(`\n✓ Onboarded — wrote ${path.relative(workspaceRoot, target)}`));

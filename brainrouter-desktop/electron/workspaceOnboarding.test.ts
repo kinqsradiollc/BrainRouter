@@ -44,22 +44,22 @@ test('manifest-save: valid profile writes through the chokepoint; round-trips', 
   } finally { fs.rmSync(ws, { recursive: true, force: true }); }
 });
 
-test('manifest-save: engineering persona pick promotes frontend-builder to default', () => {
+test('manifest-save: engineering writes one engineer with frontend available as a capability', () => {
   const ws = tmpWorkspace();
   try {
-    const result = saveWorkspaceManifestFromPayload(ws, { profile: 'engineering', defaultAgent: 'frontend-builder' });
+    const result = saveWorkspaceManifestFromPayload(ws, { profile: 'engineering' });
     assert.ok(result.saved);
-    assert.equal(result.saved && result.manifest.agents.default, 'frontend-builder');
-    assert.ok(result.saved && result.manifest.agents.enabled.includes('engineer'), 'engineer stays enabled');
+    assert.equal(result.saved && result.manifest.agents.default, 'engineer');
+    assert.deepEqual(result.saved && result.manifest.agents.enabled, ['engineer']);
+    assert.deepEqual(result.saved && result.manifest.capabilities.enabled, ['frontend']);
+    assert.ok(result.saved && !JSON.stringify(result.manifest).includes('frontend-builder'));
   } finally { fs.rmSync(ws, { recursive: true, force: true }); }
 });
 
-test('manifest-save REJECTS: unknown profile, foreign persona, malformed persona, double onboard', () => {
+test('manifest-save REJECTS: unknown profile and double onboard', () => {
   const ws = tmpWorkspace();
   try {
     assert.equal(saveWorkspaceManifestFromPayload(ws, { profile: 'astrology' }).saved, false);
-    assert.equal(saveWorkspaceManifestFromPayload(ws, { profile: 'research', defaultAgent: 'engineer' }).saved, false, 'persona not offered by the profile');
-    assert.equal(saveWorkspaceManifestFromPayload(ws, { profile: 'engineering', defaultAgent: '../evil' }).saved, false, 'malformed persona id');
     assert.equal(loadWorkspaceManifest(ws), null, 'rejected payloads write NOTHING');
 
     assert.ok(saveWorkspaceManifestFromPayload(ws, { profile: 'study' }).saved);

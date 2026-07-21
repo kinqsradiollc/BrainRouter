@@ -69,11 +69,13 @@ test('resolveProfileAnswer: garbage and out-of-range → null (wizard re-asks)',
   assert.equal(resolveProfileAnswer('zzz', 'custom'), null);
 });
 
-test('formatManifestSummary includes profile, persona, and edit pointer', () => {
+test('formatManifestSummary includes profile, engineer capability, and edit pointer', () => {
   const manifest = createWorkspaceManifest({ name: 'demo', profile: 'engineering', by: 'wizard', at: '2026-07-21T00:00:00Z' });
   const summary = formatManifestSummary(manifest);
   assert.ok(summary.includes('demo'));
   assert.ok(summary.includes('engineering'));
   assert.ok(summary.includes('engineer'));
+  assert.ok(summary.includes('capabilities: frontend'));
+  assert.ok(!summary.includes('frontend-builder'));
   assert.ok(summary.includes('.brainrouter/workspace.json'));
 });

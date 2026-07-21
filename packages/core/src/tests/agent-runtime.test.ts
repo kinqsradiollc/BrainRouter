@@ -12,6 +12,20 @@ function resetCliKnobsForAgentRuntimeTest(extra: Parameters<typeof setCliKnobOve
   setCliKnobOverride({ providerRequestFormat: {}, ...extra });
 }
 
+async function waitForValue<T>(
+  read: () => T,
+  ready: (value: T) => boolean,
+  attempts = 200,
+  intervalMs = 25,
+): Promise<T> {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const value = read();
+    if (ready(value)) return value;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return read();
+}
+
 test.beforeEach(() => {
   resetCliKnobsForAgentRuntimeTest();
 });
@@ -2192,9 +2206,11 @@ test('orchestration: task_agent wait timeout returns envelope without failing th
       assert.equal(result.status, 'timeout');
       assert.equal(result.childStatus, 'running');
       assert.match(result.id, /^agent-/);
-      await new Promise((resolve) => setTimeout(resolve, 150));
       const { getSession } = await import('../orchestration/session/orchestrator.js');
-      const record = getSession(workspace, result.id);
+      const record = await waitForValue(
+        () => getSession(workspace, result.id),
+        (session) => session?.status === 'completed',
+      );
       assert.equal(record?.status, 'completed');
       assert.match(record?.finalOutput ?? '', /too late|never reached/);
     } finally {
@@ -2233,9 +2249,11 @@ test('orchestration: background child timeout arg does not kill the child', asyn
         ctx,
       );
       const result = JSON.parse(raw);
-      await new Promise((resolve) => setTimeout(resolve, 150));
       const { getSession } = await import('../orchestration/session/orchestrator.js');
-      const record = getSession(workspace, result.id);
+      const record = await waitForValue(
+        () => getSession(workspace, result.id),
+        (session) => session?.status === 'completed',
+      );
       assert.equal(record?.status, 'completed');
       assert.equal(record?.error, undefined);
       assert.match(record?.finalOutput ?? '', /too late/);
@@ -2413,7 +2431,7 @@ function makeStubMcp(): any {
   };
 }
 
-test('R4: three read_file calls in one response run concurrently — total elapsed < sum of latencies', async () => {
+test('R4: three read_file calls in one response overlap in flight', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     // Three files we'll read; the slow-read is enforced by monkey-patching
     // fs.readFileSync? No — readFileSync is sync, can't yield. Instead we
@@ -2430,9 +2448,17 @@ test('R4: three read_file calls in one response run concurrently — total elaps
     // await sleep(50). That preserves true async concurrency.
     const { Agent } = await import('../agent/agent.js');
     const origExec = (Agent.prototype as any).executeLocalTool;
+    let activeReads = 0;
+    let maxActiveReads = 0;
     (Agent.prototype as any).executeLocalTool = async function (name: string, args: any) {
       if (name === 'read_file') {
-        await new Promise((res) => setTimeout(res, 50));
+        activeReads++;
+        maxActiveReads = Math.max(maxActiveReads, activeReads);
+        try {
+          await new Promise((res) => setTimeout(res, 50));
+        } finally {
+          activeReads--;
+        }
       }
       return origExec.call(this, name, args);
     };
@@ -2452,16 +2478,10 @@ test('R4: three read_file calls in one response run concurrently — total elaps
       const agent = new Agent(makeStubMcp(), { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
         workspaceRoot: workspace, launchCwd: workspace, silent: true,
       });
-      const t0 = Date.now();
       await agent.runTurn('read three files', {
         onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {},
       });
-      const elapsed = Date.now() - t0;
-      // Three 50 ms reads serialized would take ≥150 ms. Concurrent should
-      // settle in ~50 ms plus the second-LLM-call round-trip (still well
-      // under 150 ms in a stubbed test). Give a generous bound to keep CI
-      // stable but tight enough to fail if execution falls back to serial.
-      assert.ok(elapsed < 130, `expected concurrent reads (<130 ms), got ${elapsed} ms`);
+      assert.equal(maxActiveReads, 3, 'all three read_file calls must overlap instead of running serially');
       assert.equal(agent.lastTurnToolCalls, 3, 'all three tool calls must count toward lastTurnToolCalls');
     } finally {
       restore();

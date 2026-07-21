@@ -42,8 +42,6 @@ export function getWorkspaceManifestInfo(workspaceRoot: string): WorkspaceManife
 
 export interface ManifestSavePayload {
   profile: unknown;
-  /** Optional persona override (the engineering engineer/frontend-builder pick). */
-  defaultAgent?: unknown;
 }
 
 export type ManifestSaveResult =
@@ -52,31 +50,21 @@ export type ManifestSaveResult =
 
 /**
  * Validate the renderer's onboarding submission and write the manifest.
- * Unknown profiles and malformed persona ids are REJECTED (never coerced) —
- * the renderer shows the error instead of silently onboarding wrong. An
- * already-onboarded workspace is also rejected: edits go through the future
- * settings editor, not the add-workspace modal.
+ * Unknown profiles are REJECTED (never coerced) — the renderer shows the error
+ * instead of silently onboarding wrong. An already-onboarded workspace is also
+ * rejected: edits go through the future settings editor, not the add-workspace
+ * modal. Profile presets own their agent/capability defaults; the renderer
+ * cannot substitute a second engineering persona.
  */
 export function saveWorkspaceManifestFromPayload(workspaceRoot: string, payload: ManifestSavePayload): ManifestSaveResult {
   const profile = typeof payload.profile === 'string' ? payload.profile : '';
   if (!isWorkspaceProfileId(profile)) return { saved: false, error: `Unknown profile: ${String(payload.profile)}` };
   if (loadWorkspaceManifest(workspaceRoot) !== null) return { saved: false, error: 'Workspace is already onboarded.' };
 
-  let overrides: Parameters<typeof createWorkspaceManifest>[0]['overrides'];
-  if (payload.defaultAgent !== undefined) {
-    const persona = typeof payload.defaultAgent === 'string' ? payload.defaultAgent.trim() : '';
-    if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(persona)) return { saved: false, error: 'Invalid persona id.' };
-    const preset = WORKSPACE_PROFILES.find((entry) => entry.id === profile)!;
-    if (!preset.agents.enabled.includes(persona)) return { saved: false, error: `Persona ${persona} is not offered by the ${profile} profile.` };
-    const enabled = [persona, ...preset.agents.enabled.filter((id) => id !== persona)];
-    overrides = { agents: { default: persona, enabled } };
-  }
-
   const manifest = createWorkspaceManifest({
     name: path.basename(workspaceRoot),
     profile,
     by: 'wizard',
-    overrides,
   });
   saveWorkspaceManifest(workspaceRoot, manifest);
   return { saved: true, manifest };

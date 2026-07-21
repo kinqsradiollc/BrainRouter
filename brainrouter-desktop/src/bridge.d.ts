@@ -40,9 +40,15 @@ declare global {
         ok: boolean; error?: string; onboarded?: boolean;
         manifest?: Record<string, unknown> | null;
         suggestion?: { profile: string; reasons: string[] };
-        profiles?: Array<{ id: string; label: string; description: string; agents: { default: string; enabled: string[] } }>;
+        profiles?: Array<{
+          id: string;
+          label: string;
+          description: string;
+          agents: { default: string; enabled: string[] };
+          capabilities?: { enabled: string[]; disabled?: string[] };
+        }>;
       }>;
-      saveWorkspaceManifest?(workspaceRoot: string, payload: { profile: string; defaultAgent?: string }): Promise<{
+      saveWorkspaceManifest?(workspaceRoot: string, payload: { profile: string }): Promise<{
         saved: boolean; error?: string; manifest?: Record<string, unknown>;
       }>;
       /** T1 — workspace trust, backed by the shared CLI store (not localStorage). */

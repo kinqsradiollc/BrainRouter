@@ -845,8 +845,8 @@ app.whenReady().then(() => {
   ipcMain.handle('workspace:manifest-save', (_e, root: unknown, payload: unknown) => {
     if (typeof root !== 'string' || !fs.existsSync(root)) return { saved: false, error: 'Unknown workspace.' };
     if (!isWorkspaceTrusted(root)) return { saved: false, error: 'Workspace is not trusted.' };
-    const shaped = payload && typeof payload === 'object' ? (payload as { profile?: unknown; defaultAgent?: unknown }) : {};
-    return saveWorkspaceManifestFromPayload(root, { profile: shaped.profile, defaultAgent: shaped.defaultAgent });
+    const shaped = payload && typeof payload === 'object' ? (payload as { profile?: unknown }) : {};
+    return saveWorkspaceManifestFromPayload(root, { profile: shaped.profile });
   });
   // T1 — trust persistence lives in the shared CLI store (not renderer
   // localStorage), so CLI + desktop agree and it survives reinstalls.
