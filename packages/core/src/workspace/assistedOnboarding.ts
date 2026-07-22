@@ -64,6 +64,11 @@ export interface AssistedOnboardingResult {
 }
 
 export interface AssistedOnboardingOptions {
+  /**
+   * Absolute workspace capability selected and authorized by the host. This is
+   * never a model-supplied or repository-relative path; hosts must apply their
+   * own workspace-access policy before invoking the in-process core service.
+   */
   workspaceRoot: string;
   workspaceName?: string;
   description?: string;
@@ -80,6 +85,10 @@ export interface AssistedOnboardingOptions {
 export async function proposeWorkspaceOnboarding(
   options: AssistedOnboardingOptions,
 ): Promise<AssistedOnboardingResult> {
+  if (!path.isAbsolute(options.workspaceRoot)) {
+    throw new Error('Assisted onboarding requires an absolute host-selected workspace root.');
+  }
+  const workspaceRoot = path.resolve(options.workspaceRoot);
   const selectedInstructionPath = normalizeWorkspaceInstructionTarget(
     options.selectedInstructionPath ?? 'AGENT.md',
   );
@@ -89,8 +98,8 @@ export async function proposeWorkspaceOnboarding(
   const date = options.now?.() ?? new Date();
   if (!Number.isFinite(date.getTime())) throw new Error('Invalid assisted-onboarding timestamp.');
   const at = date.toISOString();
-  const workspaceName = options.workspaceName ?? path.basename(path.resolve(options.workspaceRoot));
-  const scan = scanRepository(options.workspaceRoot, options.scanOptions);
+  const workspaceName = options.workspaceName ?? path.basename(workspaceRoot);
+  const scan = scanRepository(workspaceRoot, options.scanOptions);
   const deterministicSuggestion = suggestWorkspaceProfileFromScan(scan);
   const fallback = deterministicProposal({
     workspaceName,

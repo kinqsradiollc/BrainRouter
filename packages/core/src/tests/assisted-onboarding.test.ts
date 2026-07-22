@@ -196,3 +196,10 @@ test('assisted onboarding rejects an unsafe selected instruction target before m
     assert.equal(called, false);
   });
 });
+
+test('assisted onboarding requires an absolute host-selected workspace capability', async () => {
+  await assert.rejects(
+    proposeWorkspaceOnboarding({ workspaceRoot: '../not-a-workspace' }),
+    /absolute host-selected workspace root/,
+  );
+});
