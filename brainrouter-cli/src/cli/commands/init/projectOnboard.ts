@@ -1,39 +1,81 @@
-/**
- * PROJECT onboarding (ADR-021 W2) — the second of the CLI's two onboardings.
- *
- * Distinct from the GLOBAL first-run wizard (endpoint/model/MCP, marker at
- * `~/.config/brainrouter/.onboarded`): this flow onboards ONE workspace by
- * writing `.brainrouter/workspace.json` through the core manifest chokepoint.
- * Fully offline — no brain connection. Cancelling at any step writes nothing.
- *
- * The profile SUGGESTION is deterministic (filesystem signals only, no LLM):
- * the wizard shows why it guessed what it guessed, and the user always picks.
- */
+/** Reviewed project onboarding for one CLI workspace. */
 import fs from 'node:fs';
 import path from 'node:path';
 import chalk from 'chalk';
 import {
   WORKSPACE_PROFILES,
-  createWorkspaceManifest,
-  isWorkspaceOnboarded,
+  commitReviewedWorkspaceOnboarding,
+  inspectWorkspaceOnboardingReview,
+  isWorkspaceProfileId,
   loadWorkspaceManifest,
-  saveWorkspaceManifest,
   suggestWorkspaceProfile,
+  workspaceManifestPath,
   type WorkspaceManifest,
+  type WorkspaceOnboardSource,
   type WorkspaceProfileId,
 } from '@kinqs/brainrouter-core/workspace';
-import { askYesNo, getActiveReadline, NoTTYError } from '../../prompt/cliPrompt.js';
-import { initAgentMd } from '../../../prompt/initAgentMd.js';
+import { runPicker, runTextField, type PickerRow } from '../../ink/prompt/runPicker.js';
+import {
+  applyProjectOnboardingEdits,
+  createProjectOnboardingDraft,
+  parseProjectOnboardingList,
+  type ProjectOnboardingFieldEdits,
+} from './onboardingDraft.js';
 
-// The suggestion logic moved to core (W3a) so desktop onboarding guesses
-// identically; re-exported here to keep this module's surface stable.
 export { suggestWorkspaceProfile, type ProfileSuggestion } from '@kinqs/brainrouter-core/workspace';
 
-/**
- * Parse the user's answer to the numbered profile prompt. Accepts an index
- * (1-based), a profile id, or a unique label prefix; empty input takes the
- * suggested default. Returns null for unparseable input (the wizard re-asks).
- */
+export type ProjectOnboardingPromptId =
+  | 'start'
+  | 'profile'
+  | 'agent-default'
+  | 'agents-enabled'
+  | 'capabilities-enabled'
+  | 'capabilities-disabled'
+  | 'skill-packs'
+  | 'skills-enabled'
+  | 'skills-disabled'
+  | 'tool-profiles'
+  | 'tools-denied'
+  | 'memory-tags'
+  | 'memory-capture-hint'
+  | 'instructions'
+  | 'confirm';
+
+export interface ProjectOnboardingPromptRequest {
+  id: ProjectOnboardingPromptId;
+  kind: 'choice' | 'text';
+  title: string;
+  subtitle?: string;
+  badge?: string;
+  rows?: PickerRow[];
+  initialChoice?: string;
+  initialValue?: string;
+}
+
+export type ProjectOnboardingPromptResponse =
+  | { kind: 'submit'; value: string }
+  | { kind: 'skip' }
+  | { kind: 'cancel' };
+
+export type ProjectOnboardingPrompt = (
+  request: ProjectOnboardingPromptRequest,
+) => Promise<ProjectOnboardingPromptResponse>;
+
+export type ProjectOnboardingResult =
+  | { status: 'committed'; manifest: WorkspaceManifest; manifestPath: string }
+  | { status: 'existing'; manifest: WorkspaceManifest }
+  | { status: 'skipped' }
+  | { status: 'cancelled' };
+
+export interface ProjectOnboardingOptions {
+  edit?: boolean;
+  source?: WorkspaceOnboardSource;
+  prompt?: ProjectOnboardingPrompt;
+  now?: () => string;
+  print?: (message: string) => void;
+}
+
+/** Parse a legacy numbered profile answer for compatibility with callers. */
 export function resolveProfileAnswer(input: string, suggested: WorkspaceProfileId): WorkspaceProfileId | null {
   const answer = input.trim().toLowerCase();
   if (answer === '') return suggested;
@@ -47,81 +89,243 @@ export function resolveProfileAnswer(input: string, suggested: WorkspaceProfileI
   return matches.length === 1 ? matches[0].id : null;
 }
 
-/** Human summary of an existing manifest — the onboarded `/init` output. */
+/** Human summary used for existing workspaces and the final review screen. */
 export function formatManifestSummary(manifest: WorkspaceManifest): string {
   const lines = [
     `${chalk.bold('Workspace')}: ${manifest.name}  ${chalk.gray(`(profile: ${manifest.profile})`)}`,
-    `  agents: ${manifest.agents.default || chalk.gray('(none)')}${manifest.agents.enabled.length > 1 ? chalk.gray(` +${manifest.agents.enabled.length - 1} enabled`) : ''}`,
-    `  capabilities: ${manifest.capabilities.enabled.join(', ') || chalk.gray('(none)')}${manifest.capabilities.disabled.length ? ` (${manifest.capabilities.disabled.length} disabled)` : ''}`,
-    `  skills: ${manifest.skills.packs.length} pack(s), ${manifest.skills.enabled.length} enabled${manifest.skills.disabled.length ? `, ${manifest.skills.disabled.length} disabled` : ''}`,
-    `  tools:  ${manifest.tools.profiles.join(', ') || chalk.gray('(none)')}`,
-    `  memory: ${manifest.memory.tags.join(', ') || chalk.gray('(no tags)')}`,
-    chalk.gray(`  onboarded ${manifest.onboarded.at || '(unknown)'} via ${manifest.onboarded.by} — edit .brainrouter/workspace.json or re-run /init scan`),
+    `  default agent: ${manifest.agents.default || chalk.gray('(none)')}`,
+    `  enabled agents: ${formatList(manifest.agents.enabled)}`,
+    `  capabilities: ${formatList(manifest.capabilities.enabled)}${formatDisabled(manifest.capabilities.disabled)}`,
+    `  skill packs: ${formatList(manifest.skills.packs)}`,
+    `  enabled skills: ${formatList(manifest.skills.enabled)}${formatDisabled(manifest.skills.disabled)}`,
+    `  tool profiles: ${formatList(manifest.tools.profiles)}${manifest.tools.deny.length ? `; denied: ${manifest.tools.deny.join(', ')}` : ''}`,
+    `  memory tags: ${formatList(manifest.memory.tags)}`,
+    `  instructions: ${manifest.instructions || chalk.gray('(none)')}`,
+    chalk.gray(`  onboarded ${manifest.onboarded.at || '(unknown)'} via ${manifest.onboarded.by} — edit with /init --edit (.brainrouter/workspace.json)`),
   ];
   return lines.join('\n');
 }
 
-function askLine(question: string): Promise<string> {
-  const rl = getActiveReadline();
-  if (!rl) throw new NoTTYError('project onboarding needs an interactive terminal');
-  return new Promise((resolve) => rl.question(question, resolve));
+/** Production adapter: an ambient chat overlay or a standalone Ink prompt. */
+export async function promptProjectOnboarding(
+  request: ProjectOnboardingPromptRequest,
+): Promise<ProjectOnboardingPromptResponse> {
+  if (request.kind === 'choice') {
+    const rows = request.rows ?? [];
+    const initialCursor = Math.max(0, rows.findIndex((row) => row.id === request.initialChoice));
+    const result = await runPicker({
+      title: request.title,
+      subtitle: request.subtitle,
+      badge: request.badge,
+      rows,
+      initialCursor,
+    });
+    if (result.kind !== 'pick') return { kind: 'cancel' };
+    if (result.id === 'skip') return { kind: 'skip' };
+    return { kind: 'submit', value: result.id };
+  }
+  const result = await runTextField({
+    title: request.title,
+    subtitle: request.subtitle,
+    badge: request.badge,
+    prefilled: request.initialValue ?? '',
+    placeholder: '(leave blank for none)',
+  });
+  return result.kind === 'accept'
+    ? { kind: 'submit', value: result.text }
+    : { kind: 'cancel' };
 }
 
 /**
- * Interactive project onboarding. Returns true when a manifest was written.
- * Every step is skippable; aborting (Ctrl+C at a picker, or `q`) writes
- * NOTHING — an un-onboarded workspace stays exactly as it was.
+ * Run create or edit onboarding. Every field stays in memory until the final
+ * confirmation, where the core compares all reviewed revisions and commits.
  */
-export async function runProjectOnboarding(workspaceRoot: string): Promise<boolean> {
-  if (isWorkspaceOnboarded(workspaceRoot)) {
-    const manifest = loadWorkspaceManifest(workspaceRoot);
-    if (manifest) console.log(`\n${formatManifestSummary(manifest)}\n`);
-    return false;
+export async function runProjectOnboarding(
+  workspaceRoot: string,
+  options: ProjectOnboardingOptions = {},
+): Promise<ProjectOnboardingResult> {
+  const root = path.resolve(workspaceRoot);
+  const reviewBeforeLoad = inspectWorkspaceOnboardingReview(root);
+  const existing = loadWorkspaceManifest(root);
+  const review = inspectWorkspaceOnboardingReview(root);
+  if (!sameRevision(reviewBeforeLoad.revision, review.revision)) {
+    throw new Error('Workspace manifest changed while setup was starting. Re-run /init to review the latest version.');
   }
-
-  const suggestion = suggestWorkspaceProfile(workspaceRoot);
-  console.log(chalk.bold('\n◆ Project onboarding — what kind of workspace is this?\n'));
-  WORKSPACE_PROFILES.forEach((preset, index) => {
-    const marker = preset.id === suggestion.profile ? chalk.cyan(' (detected)') : '';
-    console.log(`  ${index + 1}. ${chalk.bold(preset.label)}${marker} — ${chalk.gray(preset.description)}`);
+  if (!existing && fs.existsSync(workspaceManifestPath(root))) {
+    throw new Error(
+      'Workspace manifest exists but cannot be read safely. Repair or remove .brainrouter/workspace.json before retrying; no project files were written.',
+    );
+  }
+  const print = options.print ?? console.log;
+  if (existing && !options.edit) {
+    print(`\n${formatManifestSummary(existing)}\n`);
+    return { status: 'existing', manifest: existing };
+  }
+  const prompt = options.prompt ?? promptProjectOnboarding;
+  const suggestion = suggestWorkspaceProfile(root);
+  const editing = !!existing && !!options.edit;
+  const start = await prompt({
+    id: 'start',
+    kind: 'choice',
+    title: editing ? 'Edit workspace setup' : 'Set up this workspace',
+    subtitle: editing
+      ? 'Review every saved field. Nothing changes until the final confirmation.'
+      : `Detected ${suggestion.profile}: ${suggestion.reasons.join('; ')}. Review every field before saving.`,
+    badge: 'Workspace',
+    rows: editing
+      ? [
+          { id: 'continue', label: 'Review and edit', description: 'Load the current workspace profile' },
+          { id: 'cancel', label: 'Cancel', description: 'Leave project files unchanged' },
+        ]
+      : [
+          { id: 'continue', label: 'Start setup', description: 'Profile, agents, capabilities, skills, tools, and memory' },
+          { id: 'skip', label: 'Skip for now', description: 'Start without writing project files' },
+        ],
+    initialChoice: 'continue',
   });
-  console.log(chalk.gray(`\n  detected: ${suggestion.reasons.join('; ')}`));
+  if (start.kind === 'skip') return skipped(print);
+  if (start.kind !== 'submit' || start.value !== 'continue') return cancelled(print);
 
-  let profile: WorkspaceProfileId | null = null;
-  for (let attempt = 0; attempt < 3 && profile === null; attempt += 1) {
-    const suggestedIndex = WORKSPACE_PROFILES.findIndex((preset) => preset.id === suggestion.profile) + 1;
-    const answer = await askLine(chalk.bold(`\nChoice [${suggestedIndex}] (q to cancel): `));
-    if (answer.trim().toLowerCase() === 'q') {
-      console.log(chalk.gray('\nCancelled — nothing written.\n'));
-      return false;
-    }
-    profile = resolveProfileAnswer(answer, suggestion.profile);
-    if (profile === null) console.log(chalk.yellow('  Enter a number from the list, a profile name, or press ENTER for the default.'));
-  }
-  if (profile === null) {
-    console.log(chalk.gray('\nNo valid choice — nothing written.\n'));
-    return false;
-  }
-
-  const manifest = createWorkspaceManifest({
-    name: path.basename(workspaceRoot),
-    profile,
-    by: 'wizard',
+  const profileResponse = await prompt({
+    id: 'profile',
+    kind: 'choice',
+    title: 'Workspace profile',
+    subtitle: 'Profiles are editable presets. Detection never overrides your selection.',
+    badge: 'Step 1 of 4',
+    rows: WORKSPACE_PROFILES.map((preset) => ({
+      id: preset.id,
+      label: preset.label,
+      value: preset.id === suggestion.profile ? 'detected' : undefined,
+      description: preset.description,
+    })),
+    initialChoice: existing?.profile ?? suggestion.profile,
   });
-  const target = saveWorkspaceManifest(workspaceRoot, manifest);
-  console.log(chalk.green(`\n✓ Onboarded — wrote ${path.relative(workspaceRoot, target)}`));
-
-  // Fold in the instruction-file scaffold (the 0.3.6 `/init agentmd` step).
-  const hasInstructions = ['AGENT.md', 'AGENTS.md', 'CLAUDE.md'].some((name) => fs.existsSync(path.join(workspaceRoot, name)));
-  if (!hasInstructions) {
-    try {
-      if (await askYesNo('Scaffold AGENT.md for this project?', true)) {
-        const result = initAgentMd(workspaceRoot);
-        if (result.status === 'created') console.log(chalk.green(`✓ Created ${path.relative(workspaceRoot, result.path)}`));
-      }
-    } catch { /* no TTY for the follow-up — manifest is already written, fine */ }
+  if (profileResponse.kind !== 'submit' || !isWorkspaceProfileId(profileResponse.value)) {
+    return cancelled(print);
   }
 
-  console.log(`\n${formatManifestSummary(manifest)}\n`);
-  return true;
+  const draft = createProjectOnboardingDraft({
+    workspaceRoot: root,
+    profile: profileResponse.value,
+    existing,
+    source: options.source,
+    now: options.now,
+  });
+  const edits = await collectProjectOnboardingEdits(prompt, draft);
+  if (!edits) return cancelled(print);
+  const reviewed = applyProjectOnboardingEdits(draft, edits);
+  print(`\n${formatManifestSummary(reviewed)}\n`);
+
+  const confirm = await prompt({
+    id: 'confirm',
+    kind: 'choice',
+    title: editing ? 'Save workspace settings?' : 'Finish workspace setup?',
+    subtitle: 'This is the only step that writes the workspace manifest.',
+    badge: 'Step 4 of 4 · review',
+    rows: [
+      { id: 'save', label: editing ? 'Save changes' : 'Finish setup', description: '.brainrouter/workspace.json' },
+      { id: 'cancel', label: 'Cancel', description: 'Leave project files unchanged' },
+    ],
+    initialChoice: 'save',
+  });
+  if (confirm.kind !== 'submit' || confirm.value !== 'save') return cancelled(print);
+
+  const committed = commitReviewedWorkspaceOnboarding(root, {
+    manifest: reviewed,
+    expected: review.revision,
+  });
+  print(chalk.green(`\n✓ Onboarded — wrote ${path.relative(root, committed.manifestPath)}`));
+  print(`\n${formatManifestSummary(committed.manifest)}\n`);
+  return { status: 'committed', manifest: committed.manifest, manifestPath: committed.manifestPath };
+}
+
+async function collectProjectOnboardingEdits(
+  prompt: ProjectOnboardingPrompt,
+  draft: WorkspaceManifest,
+): Promise<ProjectOnboardingFieldEdits | null> {
+  const agentDefault = await requestText(prompt, 'agent-default', 'Default domain agent', draft.agents.default, 'Step 2 of 4 · agents');
+  if (agentDefault === null) return null;
+  const agentsEnabled = await requestList(prompt, 'agents-enabled', 'Enabled domain agents', draft.agents.enabled, 'Step 2 of 4 · agents');
+  if (!agentsEnabled) return null;
+  const capabilitiesEnabled = await requestList(prompt, 'capabilities-enabled', 'Available task capabilities', draft.capabilities.enabled, 'Step 2 of 4 · capabilities');
+  if (!capabilitiesEnabled) return null;
+  const capabilitiesDisabled = await requestList(prompt, 'capabilities-disabled', 'Disabled task capabilities', draft.capabilities.disabled, 'Step 2 of 4 · capabilities');
+  if (!capabilitiesDisabled) return null;
+  const skillPacks = await requestList(prompt, 'skill-packs', 'Skill packs', draft.skills.packs, 'Step 3 of 4 · skills');
+  if (!skillPacks) return null;
+  const skillsEnabled = await requestList(prompt, 'skills-enabled', 'Enabled skills', draft.skills.enabled, 'Step 3 of 4 · skills');
+  if (!skillsEnabled) return null;
+  const skillsDisabled = await requestList(prompt, 'skills-disabled', 'Disabled skills', draft.skills.disabled, 'Step 3 of 4 · skills');
+  if (!skillsDisabled) return null;
+  const toolProfiles = await requestList(prompt, 'tool-profiles', 'Tool profiles', draft.tools.profiles, 'Step 3 of 4 · tools');
+  if (!toolProfiles) return null;
+  const toolsDenied = await requestList(prompt, 'tools-denied', 'Denied tools', draft.tools.deny, 'Step 3 of 4 · tools');
+  if (!toolsDenied) return null;
+  const memoryTags = await requestList(prompt, 'memory-tags', 'Memory tags', draft.memory.tags, 'Step 3 of 4 · memory');
+  if (!memoryTags) return null;
+  const memoryCaptureHint = await requestText(prompt, 'memory-capture-hint', 'Memory capture hint', draft.memory.captureHint, 'Step 3 of 4 · memory');
+  if (memoryCaptureHint === null) return null;
+  const instructions = await requestText(prompt, 'instructions', 'Instruction file pointer', draft.instructions, 'Step 3 of 4 · instructions');
+  if (instructions === null) return null;
+  return {
+    agentDefault,
+    agentsEnabled,
+    capabilitiesEnabled,
+    capabilitiesDisabled,
+    skillPacks,
+    skillsEnabled,
+    skillsDisabled,
+    toolProfiles,
+    toolsDenied,
+    memoryTags,
+    memoryCaptureHint,
+    instructions,
+  };
+}
+
+async function requestText(
+  prompt: ProjectOnboardingPrompt,
+  id: ProjectOnboardingPromptId,
+  title: string,
+  initialValue: string,
+  badge: string,
+): Promise<string | null> {
+  const result = await prompt({ id, kind: 'text', title, badge, initialValue });
+  return result.kind === 'submit' ? result.value : null;
+}
+
+async function requestList(
+  prompt: ProjectOnboardingPrompt,
+  id: ProjectOnboardingPromptId,
+  title: string,
+  initial: string[],
+  badge: string,
+): Promise<string[] | null> {
+  const value = await requestText(prompt, id, title, initial.join(', '), badge);
+  return value === null ? null : parseProjectOnboardingList(value);
+}
+
+function formatList(values: string[]): string {
+  return values.join(', ') || chalk.gray('(none)');
+}
+
+function formatDisabled(values: string[]): string {
+  return values.length > 0 ? `; disabled: ${values.join(', ')}` : '';
+}
+
+function sameRevision(
+  left: { root: string; manifest: string; instruction: string },
+  right: { root: string; manifest: string; instruction: string },
+): boolean {
+  return left.root === right.root && left.manifest === right.manifest && left.instruction === right.instruction;
+}
+
+function skipped(print: (message: string) => void): ProjectOnboardingResult {
+  print(chalk.gray('\nSkipped — nothing written. Run /init when you are ready.\n'));
+  return { status: 'skipped' };
+}
+
+function cancelled(print: (message: string) => void): ProjectOnboardingResult {
+  print(chalk.gray('\nCancelled — nothing written.\n'));
+  return { status: 'cancelled' };
 }
