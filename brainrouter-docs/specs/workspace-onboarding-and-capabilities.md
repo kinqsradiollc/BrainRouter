@@ -232,6 +232,12 @@ normalizes bounded names and descriptions, and scopes every base query by
 organization plus Project. Missing, foreign, and concurrently deleted bases use
 the same not-found result; an identifier alone is never sufficient for access.
 
+The authenticated REST adapter exposes scoped base CRUD at
+`/api/knowledge/projects/:projectId/bases`. It derives the actor from bearer and
+active-organization middleware, forwards only base content fields, and omits
+organization and creator identities from responses. Stable failures map to 400,
+403, 404, and 409 without weakening the domain service's ID isolation.
+
 Desktop resolves the active git remote against accessible Projects and requires
 an explicit create/link or selection when there are zero or multiple matches.
 Dashboard uses its selected organization and Project. HTTP MCP sessions reconnect
@@ -327,7 +333,7 @@ captured into cognitive memory through its current engine.
 | W4b | Done | Skill catalog/packs + explicit tool-profile mapping | CLI/Desktop parity and policy tests |
 | W4c | Done | Briefing + memory tags | Capture/briefing/no-manifest tests |
 | W6 | Done | Client bootstrap deprecation | Offline core proposal coverage + downstream template-doc compatibility tests |
-| B1a | In progress (store) | Project/RBAC contract, schema, internal store, scoped base CRUD/list | Migration + role/access + scoped CRUD tests; REST/MCP adapters remain |
+| B1a | In progress (REST) | Project/RBAC contract, schema, internal store, scoped base CRUD/list | Migration + role/access + scoped CRUD + REST adapter tests; MCP adapter remains |
 | B1b/B2 | Todo | Text ingest, typed parse jobs, status, scoped retry | 202/status/retry/idempotency/fairness tests |
 | B1c | Todo | Hybrid retrieval and citation APIs/tools | FTS/vector/fallback/tenancy tests |
 | B1d | Todo | Additional document parsers | Per-format bounds/redaction tests |

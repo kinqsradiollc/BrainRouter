@@ -182,6 +182,10 @@ restricted Projects that the actor cannot access all resolve identically.
 Knowledge-base CRUD is exposed first as a transport-neutral service backed by
 queries that include organization and Project scope on every read and write;
 adapters cannot address a base by its identifier alone.
+The REST adapter derives its actor from authenticated request context, exposes
+base CRUD beneath a Project-scoped path, and does not accept or return tenant
+organization, user, role, or administrator fields. The MCP adapter follows as
+an independent review slice.
 
 ## Delivery order
 
@@ -202,9 +206,10 @@ adapters cannot address a base by its identifier alone.
 - **C1/C2/C4 (shipped)** — skill tool allowlists, plugin-delivered
   profile/capability packs with selected same-ID specialist executors, and the
   frontend design-artifact workflow without a separate frontend persona.
-- **B1a (schema + access + base store shipped)** — project-consistent knowledge
+- **B1a (schema + access + base store + REST shipped)** — project-consistent knowledge
   storage, central read/write roles, a server-derived actor, exact Project
-  access resolution, and scoped base CRUD. API work follows independently.
+  access resolution, scoped base CRUD, and authenticated REST routes. MCP
+  exposure follows independently.
 - **B1b–B3** — async parsing and retrieval; profile-aware recommendations and
   opt-in sourced distillation.
 - **C3** — dashboard and desktop knowledge management after the server contracts
