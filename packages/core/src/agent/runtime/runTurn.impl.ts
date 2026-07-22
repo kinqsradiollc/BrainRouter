@@ -44,7 +44,7 @@ import { startSpan, traceEvent } from '../../telemetry/tracing/tracing.js';
 import { localToolSpecsFromExecutors } from '../../tool/registry/executors.js';
 import { normalizeToolName } from '../../tool/specs/names.js';
 import { hideWorkerToolsFor, isRegisteredLocalTool, registryEntry, registryToolAllowed } from '../../tool/registry/registry.js';
-import { applyToolScope, rankAndCapTools } from '../../tool/policy/toolBudget.js';
+import { applyToolScope, rankAndCapTools, toolNameMatchesAny } from '../../tool/policy/toolBudget.js';
 import { resolveToolVisible } from '../../tool/policy/toolPolicy.js';
 import { extractCacheStats } from '../../util/tokens/cacheStats.js';
 import { unsynthesizedChildIds, mergePendingChildIds, buildPendingChildStatusHint } from '../../util/agentloop/childResume.js';
@@ -219,6 +219,11 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // here so it filters BOTH local tools (below) and MCP tools (further down).
     const effectiveDisallowed = [...this.disallowedTools, ...this.activeSkillDisallowedTools];
     const disallowedLocalSet = new Set(effectiveDisallowed);
+    // A skill allowlist can only subtract from the surface that every
+    // existing access/role/capability/scope gate already permits. `undefined`
+    // preserves legacy behavior; a declared empty list intentionally hides all.
+    const skillAllowsTool = (name: string): boolean => this.activeSkillAllowedTools === undefined ||
+      toolNameMatchesAny(name, this.activeSkillAllowedTools);
     let filteredLocalTools = localToolSpecsFromExecutors({
       resultExpansionAvailable: this.resultCache.size() > 0,
       workflowActive: Boolean(getCurrentWorkflow(this.workspaceRoot, this.sessionKey)),
@@ -238,7 +243,8 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       const hardVisible =
         allowed.has(t.name) &&
         (!this.toolScope?.local.length || this.toolScope.local.includes(t.name)) &&
-        !disallowedLocalSet.has(t.name);
+        !disallowedLocalSet.has(t.name) &&
+        skillAllowsTool(t.name);
       if (!hardVisible) return false;
       // No model-strength tool clamp: EVERY model — weak or strong — sees the
       // full tool surface. The old HONK-L2 profile hid the long tail from
@@ -275,7 +281,8 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // model-safe BrainRouter MCP tools in one turn, using the pool's
     // `mcp_<serverId>_<tool>` namespaces. BrainRouter's auto-pipeline/admin
     // tools stay hidden because the CLI owns those flows.
-    let visibleMcpTools = mcpTools.filter((t: any) => this.isModelVisibleMcpTool(t));
+    let visibleMcpTools = mcpTools.filter((t: any) =>
+      this.isModelVisibleMcpTool(t) && skillAllowsTool(String(t?.name ?? '')));
     // MAS-P4-T1: tool-surface budgeting. First apply the agent def's scope
     // (whitelist `toolScope.mcp` + blacklist `disallowedTools`), then cap the
     // catalog to `cli.agentMcpToolBudget`, keeping the tools most relevant to
@@ -335,7 +342,8 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       return registryToolAllowed(tool.name, this.accessMode)
         && (!this.toolScope?.local.length || this.toolScope.local.includes(tool.name) || this.toolScope.local.includes(ownerName))
         && !disallowedLocalSet.has(tool.name)
-        && !disallowedLocalSet.has(ownerName);
+        && !disallowedLocalSet.has(ownerName)
+        && skillAllowsTool(tool.name);
     });
     const allTools = [...filteredLocalTools, ...delegateTools, ...visibleMcpTools];
     const mcpToolByName = new Map<string, any>();
@@ -1919,6 +1927,12 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
               try { recordDenial(this.workspaceRoot, this.sessionKey, name, reason); } catch { /* best-effort */ }
               throw new Error(reason);
             };
+            // Defense in depth: a model can emit a stale/guessed tool name
+            // even when it was absent from the request surface. Recheck the
+            // active skill allowlist at dispatch for local, delegate, and MCP.
+            if (!skillAllowsTool(name)) {
+              denyAndRecord(`Tool "${name}" denied by the active skill allowed-tools policy.`);
+            }
             // CC-P3.2 — declarative cli.permissions rules run FIRST: a deny match
             // blocks outright; an allow match downgrades an `ask` below (it never
             // overrides a mode-based deny — rules can't escalate read mode).

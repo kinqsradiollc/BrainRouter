@@ -2,7 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { McpClient } from '@kinqs/brainrouter-core/mcp';
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';
-import { skillSearchRoots, parseDisallowedToolsFrontmatter, type SkillListItem } from './skillCatalog.js';
+import {
+  skillSearchRoots,
+  parseAllowedToolsFrontmatter,
+  parseDisallowedToolsFrontmatter,
+  type SkillListItem,
+} from './skillCatalog.js';
 
 export interface SkillResolution {
   name: string;
@@ -14,6 +19,8 @@ export interface SkillResolution {
    * `disallowedTools` blacklist path. Empty when the skill declares none.
    */
   disallowedTools?: string[];
+  /** Optional per-turn allowlist. `undefined` means no skill restriction. */
+  allowedTools?: string[];
 }
 
 export interface RunSkillOptions {
@@ -61,7 +68,13 @@ export async function resolveSkill(
     const res: any = await mcpClient.callTool('get_skill', { name, section });
     if (!res.isError && Array.isArray(res.content) && res.content[0]?.text) {
       const body = res.content[0].text as string;
-      return { name, body, source: 'mcp', disallowedTools: parseDisallowedToolsFrontmatter(body) };
+      return {
+        name,
+        body,
+        source: 'mcp',
+        disallowedTools: parseDisallowedToolsFrontmatter(body),
+        allowedTools: parseAllowedToolsFrontmatter(body),
+      };
     }
   } catch {
     // Fall through to filesystem lookup.
@@ -69,7 +82,13 @@ export async function resolveSkill(
 
   const body = readSkillFromFilesystem(workspaceRoot, name);
   if (body) {
-    return { name, body, source: 'filesystem', disallowedTools: parseDisallowedToolsFrontmatter(body) };
+    return {
+      name,
+      body,
+      source: 'filesystem',
+      disallowedTools: parseDisallowedToolsFrontmatter(body),
+      allowedTools: parseAllowedToolsFrontmatter(body),
+    };
   }
 
   return {
@@ -77,6 +96,7 @@ export async function resolveSkill(
     body: `(No SKILL.md found for "${name}". Use your general judgement and the agentic-engineering-workflow defaults.)`,
     source: 'fallback',
     disallowedTools: [],
+    allowedTools: undefined,
   };
 }
 
@@ -176,23 +196,35 @@ function triggerMatchesPrompt(prompt: string, trigger: string): boolean {
  * CC-SKILLS-D1 — resolve an ordered list of skills and compose their bodies
  * into one multi-phase instruction block ahead of the user input. Unresolved
  * (fallback) skills are skipped so a typo doesn't poison the whole stack. The
- * union of every resolved skill's `disallowed-tools` is returned so the caller
- * can apply the strictest blacklist for the turn.
+ * union of every resolved skill's `disallowed-tools` and intersection of each
+ * declared `allowed-tools` list are returned so the caller applies the strictest
+ * per-turn policy. Skills without an allowlist do not widen or narrow it.
  */
 export async function resolveStackedSkills(
   mcpClient: McpClient,
   names: string[],
   workspaceRoot: string,
-): Promise<{ resolved: SkillResolution[]; disallowedTools: string[] }> {
+): Promise<{ resolved: SkillResolution[]; disallowedTools: string[]; allowedTools?: string[] }> {
   const resolved: SkillResolution[] = [];
   const disallowed = new Set<string>();
+  let allowed: string[] | undefined;
   for (const name of names) {
     const skill = await resolveSkill(mcpClient, name, workspaceRoot, 'full');
     if (skill.source === 'fallback') continue; // skip unknown — don't poison the stack
     resolved.push(skill);
     for (const t of skill.disallowedTools ?? []) disallowed.add(t);
+    if (skill.allowedTools !== undefined) {
+      const declared = skill.allowedTools;
+      allowed = allowed === undefined
+        ? [...declared]
+        : allowed.filter((tool) => declared.includes(tool));
+    }
   }
-  return { resolved, disallowedTools: [...disallowed] };
+  return {
+    resolved,
+    disallowedTools: [...disallowed],
+    ...(allowed === undefined ? {} : { allowedTools: allowed }),
+  };
 }
 
 /**
@@ -242,7 +274,7 @@ export function isValidSkillName(name: string): boolean {
 
 /**
  * CC-SKILLS-D4 — the SKILL.md template a fresh `/skill init <name>` scaffolds.
- * Uses BrainRouter's OWN frontmatter (name/description/disallowed-tools) — no
+ * Uses BrainRouter's OWN frontmatter (name/description/tool policy) — no
  * '.claude' anything. Pure so tests can assert the shape.
  */
 export function renderSkillTemplate(name: string): string {
@@ -250,6 +282,8 @@ export function renderSkillTemplate(name: string): string {
     '---',
     `name: ${name}`,
     `description: One-line summary of when to use the ${name} skill.`,
+    '# Optionally allow only these tools for the turn, e.g.:',
+    '# allowed-tools: [read_file, grep_search]',
     '# CC-SKILLS-D3 — optionally forbid tools for the turn this skill runs, e.g.:',
     '# disallowed-tools: [run_command, write_file]',
     '---',

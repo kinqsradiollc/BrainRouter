@@ -244,13 +244,27 @@ export function extractFrontmatterBlock(raw: string): string {
  * trimmed list (empty when the key is absent). Pure — no filesystem access.
  */
 export function parseDisallowedToolsFrontmatter(raw: string): string[] {
+  return parseToolListFrontmatter(raw, 'disallowed-tools') ?? [];
+}
+
+/**
+ * Parse an optional `allowed-tools` turn allowlist from SKILL.md.
+ * `undefined` means the skill declares no additional restriction; a declared
+ * empty list means the skill intentionally exposes no tools. Forms match
+ * `disallowed-tools` so the dependency-free frontmatter contract stays small.
+ */
+export function parseAllowedToolsFrontmatter(raw: string): string[] | undefined {
+  return parseToolListFrontmatter(raw, 'allowed-tools');
+}
+
+function parseToolListFrontmatter(raw: string, key: 'allowed-tools' | 'disallowed-tools'): string[] | undefined {
   const block = extractFrontmatterBlock(raw);
-  if (!block) return [];
+  if (!block) return undefined;
   const lines = block.split(/\r?\n/);
-  const idx = lines.findIndex((l) => /^disallowed-tools\s*:/.test(l));
-  if (idx < 0) return [];
-  const header = lines[idx];
-  const inline = header.replace(/^disallowed-tools\s*:/, '').trim();
+  const keyPattern = new RegExp(`^${key}\\s*:`);
+  const idx = lines.findIndex((line) => keyPattern.test(line));
+  if (idx < 0) return undefined;
+  const inline = lines[idx].replace(keyPattern, '').trim();
   const out: string[] = [];
   const pushTokens = (s: string) => {
     for (const tok of s.replace(/^\[|\]$/g, '').split(/[,\s]+/)) {

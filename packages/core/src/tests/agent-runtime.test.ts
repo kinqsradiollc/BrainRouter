@@ -2888,6 +2888,98 @@ test('runTurn recovery: malformed JSON arguments surface as a structured tool_re
   });
 });
 
+test('runTurn skill allowlist filters local and MCP surfaces and rejects a guessed hidden tool', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const originalFetch = globalThis.fetch;
+    let llmCalls = 0;
+    let firstRequestBody: any;
+    let mcpCalls = 0;
+    const toolEvents: Array<{ name: string; ok: boolean; summary: string; preview?: string }> = [];
+    globalThis.fetch = (async (_url: any, opts: any) => {
+      llmCalls++;
+      const body = JSON.parse(opts.body);
+      if (llmCalls === 1) {
+        firstRequestBody = body;
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: '',
+              tool_calls: [{
+                id: 'hidden_1',
+                type: 'function',
+                function: { name: 'write_file', arguments: '{"path":"blocked.txt","content":"no"}' },
+              }],
+            },
+          }],
+          usage: { prompt_tokens: 100, completion_tokens: 10 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'done' } }],
+        usage: { prompt_tokens: 50, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const toolSchema = { type: 'object', properties: {} };
+      const stubMcp: any = {
+        listTools: async () => ({
+          tools: [
+            {
+              name: 'mcp_docs_search',
+              __rawName: 'search',
+              __serverId: 'docs',
+              description: 'Search documentation',
+              inputSchema: toolSchema,
+            },
+            {
+              name: 'mcp_docs_delete',
+              __rawName: 'delete',
+              __serverId: 'docs',
+              description: 'Delete documentation',
+              inputSchema: toolSchema,
+            },
+          ],
+        }),
+        callTool: async () => {
+          mcpCalls++;
+          return { content: [{ text: 'called' }] };
+        },
+        close: async () => {},
+      };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'm' }, {
+        workspaceRoot: workspace, launchCwd: workspace, silent: true,
+      });
+      agent.activeSkillAllowedTools = ['read_file', 'search'];
+
+      const answer = await agent.runTurn('inspect safely', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: (name, result) => toolEvents.push({
+          name,
+          ok: result.success,
+          summary: result.summary,
+          preview: result.preview,
+        }),
+      });
+
+      assert.equal(answer, 'done');
+      const exposed = firstRequestBody.tools.map((tool: any) => tool.function.name);
+      assert.ok(exposed.includes('read_file'), 'explicitly allowed local tool is exposed');
+      assert.ok(exposed.includes('mcp_docs_search'), 'bare MCP allow entry matches the namespaced tool');
+      assert.ok(!exposed.includes('write_file'), 'unlisted local tool is hidden');
+      assert.ok(!exposed.includes('run_command'), 'unlisted shell tool is hidden');
+      assert.ok(!exposed.includes('mcp_docs_delete'), 'unlisted MCP tool is hidden');
+      assert.equal(mcpCalls, 0, 'the denied local guess never falls through to MCP dispatch');
+      const denied = toolEvents.find((event) => event.name === 'write_file');
+      assert.ok(denied, 'guessed hidden tool emits a result event');
+      assert.equal(denied!.ok, false);
+      assert.match(`${denied!.summary} ${denied!.preview ?? ''}`, /allowed-tools policy/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
 test('runTurn recovery: unknown tool name surfaces "did you mean" via normalizeToolName', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const originalFetch = globalThis.fetch;

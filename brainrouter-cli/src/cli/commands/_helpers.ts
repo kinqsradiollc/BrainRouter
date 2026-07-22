@@ -144,6 +144,10 @@ export async function runSkillByName(
     // CC-SKILLS-D3 — apply the skill's `disallowed-tools` for this turn (cleared
     // by turnRunner alongside activeSkill once the turn settles).
     agent.activeSkillDisallowedTools = skill.disallowedTools ?? [];
+    agent.activeSkillAllowedTools = skill.allowedTools;
+    if (agent.activeSkillAllowedTools !== undefined) {
+      console.log(chalk.gray(`  Allowed tools this turn: ${agent.activeSkillAllowedTools.join(', ') || '(none)'}`));
+    }
     if (agent.activeSkillDisallowedTools.length > 0) {
       console.log(chalk.gray(`  Disallowed tools this turn: ${agent.activeSkillDisallowedTools.join(', ')}`));
     }

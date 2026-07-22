@@ -114,7 +114,9 @@ simple `key: value` scalars, block scalars (`key: |` with 2-space indented lines
 and simple `- item` lists. Required keys: `name`, `description`. Optional: `hints`
 (agent guidance), `memory_hints` (a **separate** key the brain's
 `memory_register_skill_hints` tool reads — don't confuse the two),
-`disallowed-tools`.
+`allowed-tools`, `disallowed-tools`. Tool lists accept flow form
+(`allowed-tools: [read_file, grep_search]`) or a simple `- item` block list; a
+declared empty allowlist intentionally exposes no tools.
 
 - **Why:** nested/advanced YAML silently fails to parse; the codebase deliberately
   avoids pulling a YAML engine.
@@ -128,11 +130,18 @@ agents), `## Usage`, `## Detailed Instructions`, `### Phase N` blocks,
 `## Verification` (checklist), `## Red Flags`, `## Common Rationalizations`. Keep
 these exact heading names; a skill without a `## Workflow` section serves nothing
 useful by default. Skills may declare `disallowed-tools` to blacklist tools for the
-turn they run; slash commands map to skills via `SLASH_TO_SKILL` in
-`skillRunner.ts` — author heavy workflow content in the skill body (the single
-source of truth), keep the CLI prompt thin.
+turn they run, and `allowed-tools` to subtract everything except the named tools
+from that turn's already-authorized surface. An allowlist never overrides access,
+role, capability, agent scope, or deny rules; `disallowed-tools` still wins when a
+tool appears in both lists. Stacked skills union their deny lists and intersect
+the allowlists they actually declare. Slash commands map to skills via
+`SLASH_TO_SKILL` in `skillRunner.ts` — author heavy workflow content in the skill
+body (the single source of truth), keep the CLI prompt thin.
 
-- **Evidence:** `brainrouter/src/types.ts:20`, `brainrouter/src/loader.ts:187`, `brainrouter-cli/src/prompt/skillRunner.ts:29`
+- **Evidence:** `brainrouter/src/types.ts:20`, `brainrouter/src/loader.ts:187`,
+  `brainrouter-cli/src/prompt/skillCatalog.ts`,
+  `brainrouter-cli/src/prompt/skillRunner.ts`,
+  `packages/core/src/agent/runtime/runTurn.impl.ts`
 
 ### 10. Skill names are globally unique; know the shadowing precedence
 
