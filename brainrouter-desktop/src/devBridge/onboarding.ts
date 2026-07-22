@@ -5,6 +5,8 @@ import { parseOnboardingDraft } from '../components/dialogs/onboardingEditorMode
 // Keep the browser-development mock aligned with the core reviewed-proposal
 // boundary without pulling the Node-oriented proposal parser into the bundle.
 const DEV_MAX_INSTRUCTION_BYTES = 64 * 1024;
+const DEV_MAX_DESCRIPTION_BYTES = 4 * 1024;
+const DEV_ONBOARDING_AT = '2026-01-01T00:00:00.000Z';
 
 export interface DevOnboardingState {
   manifests: Map<string, Record<string, unknown>>;
@@ -46,6 +48,60 @@ export function getDevWorkspaceManifest(state: DevOnboardingState, root: string)
         bytes: instruction ? new TextEncoder().encode(instruction).length : 0,
         sha256: instruction === undefined ? null : counterDigest(state.instructionRevisions.get(root) ?? 0),
       },
+    },
+  };
+}
+
+/** Browser-development mirror of the host's bounded, no-write proposal query. */
+export function proposeDevWorkspaceOnboarding(root: string, payload: unknown): Record<string, unknown> {
+  const record = isRecord(payload) ? payload : {};
+  const description = typeof record.description === 'string' ? record.description.trim() : '';
+  if (new TextEncoder().encode(description).length > DEV_MAX_DESCRIPTION_BYTES) {
+    throw new Error(`Project description exceeds ${DEV_MAX_DESCRIPTION_BYTES} bytes.`);
+  }
+  const deterministicOnly = record.mode === 'deterministic';
+  const profile = WORKSPACE_PROFILES.find((entry) => entry.id === 'engineering');
+  if (!profile) throw new Error('Engineering workspace profile is unavailable.');
+
+  const manifest = {
+    version: 1,
+    name: root.split(/[\\/]/).filter(Boolean).at(-1) ?? 'workspace',
+    profile: profile.id,
+    onboarded: { at: DEV_ONBOARDING_AT, by: 'agent' },
+    agents: { default: profile.agents.default, enabled: [...profile.agents.enabled] },
+    capabilities: { enabled: [...profile.capabilities.enabled], disabled: [] },
+    skills: { packs: [...profile.skills.packs], enabled: [...profile.skills.enabled], disabled: [] },
+    tools: { profiles: [...profile.tools.profiles], deny: [] },
+    memory: { tags: [...profile.memory.tags], captureHint: profile.memory.captureHint },
+    instructions: 'AGENT.md',
+  };
+  return {
+    proposal: {
+      source: deterministicOnly ? 'deterministic' : 'model',
+      manifest,
+      reasons: description
+        ? ['Matched the project description.', 'Detected a TypeScript application.']
+        : ['Detected a TypeScript application.'],
+      ...(deterministicOnly ? {} : {
+        instruction: {
+          path: 'AGENT.md',
+          contents: '# Workspace instructions\n\n- Keep changes focused and verify them before completion.\n',
+        },
+      }),
+    },
+    modelAttempted: !deterministicOnly,
+    ...(deterministicOnly ? { fallbackReason: 'model-unavailable' } : {}),
+    scan: {
+      markers: ['package.json', 'tsconfig.json'],
+      stats: {
+        entriesVisited: 42,
+        directoriesVisited: 8,
+        filesRead: 12,
+        bytesRead: 24_576,
+        ignoredEntries: 3,
+        unreadableEntries: 0,
+      },
+      stoppedBy: [],
     },
   };
 }
