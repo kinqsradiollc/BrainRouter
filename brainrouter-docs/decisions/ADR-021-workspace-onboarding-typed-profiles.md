@@ -1,6 +1,6 @@
 # ADR-021 — Workspace Onboarding: Typed Profiles, Dynamic Capabilities & Knowledge
 
-**Status:** Accepted (phased; W0–W3a shipped) · **Builds on** ADR-010
+**Status:** Accepted (phased; W0–W6 shipped; knowledge phases remain) · **Builds on** ADR-010
 (org/team/user tenancy), ADR-017 (production flows), ADR-019 (org/project
 switching), ADR-020 (memory self-improvement) · **Touches** `packages/core`,
 `brainrouter-cli`, `brainrouter-desktop`, `brainrouter`, and the dashboard.
@@ -177,8 +177,10 @@ distilled facts enter cognitive memory through its existing engine.
   fallback and confirmation-only writes.
 - **W4** — shared runtime persona/capability/skill/tool/briefing/memory wiring,
   including delegated tasks and strict no-manifest compatibility tests.
-- **W5/W6** — domain persona definitions, packs/docs, and client bootstrap-path
-  deprecation. Persona definitions needed by runtime land before their use.
+- **W5/W6 (shipped)** — domain persona definitions, packs/docs, and client
+  bootstrap-path deprecation. First-party project setup is package-local and
+  offline-capable; server skill and template-doc tools remain available for
+  downstream clients.
 - **C1/C2/C4** — skill tool allowlists, plugin-delivered profile/capability packs,
   and the frontend design-artifact workflow.
 - **B1–B3** — project/RBAC foundation and knowledge store; async parsing and

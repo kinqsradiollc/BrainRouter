@@ -191,6 +191,21 @@ tests prove the output is unchanged.
 - Model failures, timeouts, invalid JSON, or unavailable credentials fall back
   to deterministic results without blocking manual setup.
 
+## Bootstrap Compatibility Boundary
+
+BrainRouter CLI and Desktop project setup use the shared package-local
+workspace contracts and bundled starter skills. Their onboarding paths do not
+call `list_template_docs`, `get_template_doc`, or `get_skill`, so creating or
+editing a workspace remains available without a live brain connection.
+
+The server tools are deprecated only as a first-party onboarding dependency:
+
+- `get_skill`, skill search, and skill CRUD remain the server-backed library
+  for non-onboarding workflows;
+- `list_template_docs` and `get_template_doc` remain compatible for downstream
+  clients that serve project-specific documentation through the brain;
+- no tool is removed or silently redirected by this deprecation.
+
 ## Knowledge Subsystem Contract
 
 ### Identity and authorization
@@ -281,17 +296,17 @@ captured into cognitive memory through its current engine.
 | W2 | Done, gaps tracked in W2b | CLI project-onboarding baseline | CLI helper tests |
 | W3a | Done | Desktop manifest IPC + shared suggestion | Desktop main-process tests |
 | W1c | Implemented | One engineer, capability schema/resolver, legacy normalization, committable manifest | Focused checks + full workspace verify |
-| W2b | Todo | Two-flow chain, transactional state machine, editor, complete scan/command semantics | Startup/command/cancel/edit tests |
-| W3b | In progress, uncommitted | Baseline desktop dialog | Renderer lifecycle tests + live visual QA |
-| W3c | Todo | Shared proposal schema, conversational suggestion, bounded initializer in CLI/Desktop | Deterministic/model/failure/confirmation tests |
-| W3d | Todo | Finish Setup + Workspace Settings editor | Round-trip/unknown-field/re-entry tests |
-| W5a | Todo | Domain persona overlay registry, excluding any frontend persona | Catalog/shadowing/briefing tests |
-| C1 | Todo | `allowed-tools` parsing and effective per-turn intersection | Parser + local/MCP enforcement tests |
-| C2/C4 | Todo | Profile plugins and engineering frontend/design flow | Plugin discovery + skill workflow tests |
-| W4a | Todo | Persona/capability prompt activation for root + children | Exact no-manifest and positive/negative activation tests |
-| W4b | Todo | Skill catalog/packs + explicit tool-profile mapping | CLI/Desktop parity and policy tests |
-| W4c | Todo | Briefing + memory tags | Capture/briefing/no-manifest tests |
-| W6 | Todo | Client bootstrap deprecation | No client dependency + downstream compatibility tests |
+| W2b | Done | Two-flow chain, transactional state machine, editor, complete scan/command semantics | Startup/command/cancel/edit tests |
+| W3b | Done | Baseline desktop dialog | Renderer lifecycle tests + live visual QA |
+| W3c | Done | Shared proposal schema, conversational suggestion, bounded initializer in CLI/Desktop | Deterministic/model/failure/confirmation tests |
+| W3d | Done | Finish Setup + Workspace Settings editor | Round-trip/unknown-field/re-entry tests |
+| W5a | Done | Domain persona overlay registry, excluding any frontend persona | Catalog/shadowing/briefing tests |
+| C1 | Done | `allowed-tools` parsing and effective per-turn intersection | Parser + local/MCP enforcement tests |
+| C2/C4 | Partial | Profile plugins and engineering frontend/design flow | Plugin discovery + skill workflow tests; specialist execution definitions remain |
+| W4a | Done | Persona/capability prompt activation for root + children | Exact no-manifest and positive/negative activation tests |
+| W4b | Done | Skill catalog/packs + explicit tool-profile mapping | CLI/Desktop parity and policy tests |
+| W4c | Done | Briefing + memory tags | Capture/briefing/no-manifest tests |
+| W6 | Done | Client bootstrap deprecation | Offline core proposal coverage + downstream template-doc compatibility tests |
 | B1a | Todo | Project/RBAC contract, schema, internal store, scoped base CRUD/list | Role/cross-org/restricted-project/Postgres tests |
 | B1b/B2 | Todo | Text ingest, typed parse jobs, status, scoped retry | 202/status/retry/idempotency/fairness tests |
 | B1c | Todo | Hybrid retrieval and citation APIs/tools | FTS/vector/fallback/tenancy tests |

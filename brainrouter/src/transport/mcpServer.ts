@@ -192,7 +192,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       },
       {
         name: 'list_template_docs',
-        description: 'List all project-specific template documentation.',
+        description: 'Compatibility tool for downstream clients: list project-specific template documentation. BrainRouter onboarding uses client-local contracts instead.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -202,7 +202,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       },
       {
         name: 'get_template_doc',
-        description: 'Read a project template document or section.',
+        description: 'Compatibility tool for downstream clients: read a project template document or section. BrainRouter onboarding uses client-local contracts instead.',
         inputSchema: {
           type: 'object',
           properties: {
