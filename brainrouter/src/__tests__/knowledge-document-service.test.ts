@@ -9,7 +9,11 @@ import type { KnowledgeDocumentStore } from "../knowledge/store.js";
 
 const at = "2026-07-22T02:00:00.000Z";
 
-function setup(options: { projectVisible?: boolean; baseVisible?: boolean } = {}) {
+function setup(options: {
+  projectVisible?: boolean;
+  baseVisible?: boolean;
+  documentVisible?: boolean;
+} = {}) {
   const base: KnowledgeBaseRecord = {
     baseId: "base-1",
     orgId: "org-1",
@@ -19,6 +23,24 @@ function setup(options: { projectVisible?: boolean; baseVisible?: boolean } = {}
     createdBy: "user-1",
     createdAt: at,
     updatedAt: at,
+  };
+  const document: KnowledgeDocumentRecord = {
+    documentId: "document-1",
+    baseId: "base-1",
+    orgId: "org-1",
+    projectId: "project-1",
+    title: "Runbook",
+    sourceName: "runbook.md",
+    sourceFormat: "markdown",
+    contentText: "Sensitive body",
+    contentSha256: "a".repeat(64),
+    status: "ready",
+    statusMessage: null,
+    parseVersion: 1,
+    createdBy: "user-1",
+    createdAt: at,
+    updatedAt: at,
+    readyAt: at,
   };
   const store: KnowledgeDocumentStore = {
     getAccessibleProject: vi.fn(async () => options.projectVisible === false ? null : {
@@ -46,8 +68,21 @@ function setup(options: { projectVisible?: boolean; baseVisible?: boolean } = {}
     failKnowledgeDocumentParse: vi.fn(async () => null),
     listKnowledgeChunks: vi.fn(async () => []),
     upsertKnowledgeChunkEmbeddings: vi.fn(async () => 0),
+    getKnowledgeDocumentProcessing: vi.fn(async () => ({
+      document,
+      jobState: "done" as const,
+      attempts: 1,
+      maxAttempts: 3,
+      chunkCount: 2,
+      embeddingCount: 2,
+    })),
+    retryKnowledgeDocumentProcessing: vi.fn(async () => ({
+      document,
+      jobState: "pending" as const,
+      enqueued: true,
+    })),
     createKnowledgeDocument: vi.fn(async () => undefined),
-    getKnowledgeDocument: vi.fn(async () => null),
+    getKnowledgeDocument: vi.fn(async () => options.documentVisible === false ? null : document),
     getKnowledgeDocumentByContentHash: vi.fn(async () => null),
     listKnowledgeDocuments: vi.fn(async () => []),
     updateKnowledgeDocumentStatus: vi.fn(async () => null),
@@ -172,5 +207,89 @@ describe("KnowledgeDocumentService", () => {
     await expect(raced.service.ingestText(developer, "project-1", "base-1", {
       title: "Docs", sourceFormat: "text", content: "Body",
     })).resolves.toEqual({ ok: false, code: "not_found" });
+  });
+
+  it("returns a content-free status view through exact ancestry", async () => {
+    const { service, store } = setup();
+    const result = await service.status(viewer, " project-1 ", " base-1 ", " document-1 ");
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        documentId: "document-1",
+        title: "Runbook",
+        sourceName: "runbook.md",
+        sourceFormat: "markdown",
+        status: "ready",
+        statusMessage: null,
+        parseVersion: 1,
+        updatedAt: at,
+        readyAt: at,
+        processing: {
+          jobState: "done",
+          attempts: 1,
+          maxAttempts: 3,
+          retryable: true,
+          chunkCount: 2,
+          embeddingCount: 2,
+        },
+      },
+    });
+    expect(store.getKnowledgeDocument).toHaveBeenCalledWith(
+      "document-1", "base-1", "org-1", "project-1",
+    );
+    expect(store.getKnowledgeDocumentProcessing).toHaveBeenCalledWith({
+      orgId: "org-1",
+      projectId: "project-1",
+      baseId: "base-1",
+      documentId: "document-1",
+      parseVersion: 1,
+    });
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain("Sensitive body");
+    expect(serialized).not.toContain("contentSha256");
+    expect(serialized).not.toContain("createdBy");
+    expect(serialized).not.toContain("orgId");
+    expect(serialized).not.toContain("projectId");
+    expect(serialized).not.toContain("job-created");
+  });
+
+  it("hides foreign document ancestry and authorizes status before retry", async () => {
+    const missing = setup({ documentVisible: false });
+    await expect(missing.service.status(viewer, "project-1", "base-1", "foreign"))
+      .resolves.toEqual({ ok: false, code: "not_found" });
+    expect(missing.store.getKnowledgeDocumentProcessing).not.toHaveBeenCalled();
+
+    const viewerSetup = setup();
+    await expect(viewerSetup.service.retry(viewer, "project-1", "base-1", "document-1"))
+      .resolves.toEqual({ ok: false, code: "forbidden" });
+    expect(viewerSetup.store.getKnowledgeBase).not.toHaveBeenCalled();
+    expect(viewerSetup.store.retryKnowledgeDocumentProcessing).not.toHaveBeenCalled();
+  });
+
+  it("retries with a server-owned id and never returns that id", async () => {
+    const { service, store } = setup();
+    await expect(service.retry(developer, "project-1", "base-1", "document-1"))
+      .resolves.toEqual({
+        ok: true,
+        value: { documentId: "document-1", jobState: "pending", enqueued: true },
+      });
+    expect(store.retryKnowledgeDocumentProcessing).toHaveBeenCalledWith({
+      orgId: "org-1",
+      projectId: "project-1",
+      baseId: "base-1",
+      documentId: "document-1",
+      parseVersion: 1,
+    }, "job-created", at);
+
+    vi.mocked(store.retryKnowledgeDocumentProcessing).mockResolvedValueOnce({
+      document: await store.getKnowledgeDocument("document-1", "base-1", "org-1", "project-1") as KnowledgeDocumentRecord,
+      jobState: "running",
+      enqueued: false,
+    });
+    await expect(service.retry(developer, "project-1", "base-1", "document-1"))
+      .resolves.toEqual({
+        ok: true,
+        value: { documentId: "document-1", jobState: "running", enqueued: false },
+      });
   });
 });

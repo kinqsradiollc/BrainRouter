@@ -108,7 +108,9 @@ import type {
   KnowledgeChunkRecord,
   KnowledgeDocumentEnqueueResult,
   KnowledgeDocumentListFilters,
+  KnowledgeDocumentProcessingRecord,
   KnowledgeDocumentRecord,
+  KnowledgeDocumentRetryRecord,
   KnowledgeDocumentStatusUpdate,
   KnowledgeParseCommitResult,
   KnowledgeParseJobInput,
@@ -509,6 +511,8 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public failKnowledgeDocumentParse(input: KnowledgeParseJobInput, statusMessage: string, updatedAt: string): Promise<KnowledgeDocumentRecord | null> { return knowledgeDocuments.failKnowledgeDocumentParse(this.exec, input, statusMessage, updatedAt); }
   public listKnowledgeChunks(documentId: string, baseId: string, orgId: string, projectId: string): Promise<KnowledgeChunkRecord[]> { return knowledgeDocuments.listKnowledgeChunks(this.exec, documentId, baseId, orgId, projectId); }
   public upsertKnowledgeChunkEmbeddings(input: KnowledgeParseJobInput, embeddings: KnowledgeChunkEmbeddingInput[], updatedAt: string): Promise<number> { return knowledgeDocuments.upsertKnowledgeChunkEmbeddings(this.exec, input, embeddings, updatedAt); }
+  public getKnowledgeDocumentProcessing(input: KnowledgeParseJobInput): Promise<KnowledgeDocumentProcessingRecord | null> { return knowledgeDocuments.getKnowledgeDocumentProcessing(this.exec, input); }
+  public retryKnowledgeDocumentProcessing(input: KnowledgeParseJobInput, jobId: string, now: string): Promise<KnowledgeDocumentRetryRecord | null> { return knowledgeDocuments.retryKnowledgeDocumentProcessing(this.exec, input, jobId, now); }
   public getKnowledgeDocument(documentId: string, baseId: string, orgId: string, projectId: string): Promise<KnowledgeDocumentRecord | null> { return knowledgeDocuments.getKnowledgeDocument(this.exec, documentId, baseId, orgId, projectId); }
   public getKnowledgeDocumentByContentHash(contentSha256: string, baseId: string, orgId: string, projectId: string): Promise<KnowledgeDocumentRecord | null> { return knowledgeDocuments.getKnowledgeDocumentByContentHash(this.exec, contentSha256, baseId, orgId, projectId); }
   public listKnowledgeDocuments(baseId: string, orgId: string, projectId: string, filters?: KnowledgeDocumentListFilters): Promise<KnowledgeDocumentRecord[]> { return knowledgeDocuments.listKnowledgeDocuments(this.exec, baseId, orgId, projectId, filters); }

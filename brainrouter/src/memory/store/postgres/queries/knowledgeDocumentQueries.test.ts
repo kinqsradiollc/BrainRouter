@@ -10,9 +10,11 @@ import {
   failKnowledgeDocumentParse,
   getKnowledgeDocument,
   getKnowledgeDocumentByContentHash,
+  getKnowledgeDocumentProcessing,
   listKnowledgeDocuments,
   listKnowledgeChunks,
   markKnowledgeDocumentParsing,
+  retryKnowledgeDocumentProcessing,
   updateKnowledgeDocumentStatus,
   upsertKnowledgeChunkEmbeddings,
 } from "./knowledgeDocumentQueries.js";
@@ -337,5 +339,115 @@ describe("knowledge document queries", () => {
       embedding_text: "[0.25,-0.5,0.75]",
     }]);
     expect(params[5]).toBe(at);
+  });
+
+  it("returns scoped lifecycle state and aggregate processing counts", async () => {
+    const client = {
+      query: vi.fn()
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ ...row, status: "failed" }] })
+        .mockResolvedValueOnce({
+          rowCount: 1,
+          rows: [{ status: "failed", attempts: 3, max_attempts: 3 }],
+        })
+        .mockResolvedValueOnce({
+          rowCount: 1,
+          rows: [{ chunk_count: 2, embedding_count: 4 }],
+        }),
+    };
+    const exec = executor();
+    exec.tx = vi.fn(async (fn: (value: unknown) => Promise<unknown>) => fn(client));
+
+    await expect(getKnowledgeDocumentProcessing(exec, parseInput)).resolves.toEqual({
+      document: { ...record, status: "failed" },
+      jobState: "failed",
+      attempts: 3,
+      maxAttempts: 3,
+      chunkCount: 2,
+      embeddingCount: 4,
+    });
+    expect(client.query.mock.calls[0][0]).toContain(
+      "document_id = $1 AND base_id = $2 AND org_id = $3 AND project_id = $4",
+    );
+    expect(client.query.mock.calls[0][0]).toContain("parse_version = $5");
+    const [jobSql, jobParams] = client.query.mock.calls[1];
+    expect(jobSql).toContain("kind = $1 AND tenant = $2");
+    expect(jobParams.slice(0, 2)).toEqual([KNOWLEDGE_PARSE_JOB_KIND, "org-1"]);
+    expect(JSON.parse(jobParams[2])).toEqual(parseInput);
+    expect(client.query.mock.calls[2][0]).toContain(
+      "chunk.document_id = $1 AND chunk.base_id = $2",
+    );
+    expect(client.query.mock.calls[2][1]).toEqual([
+      "doc-1", "base-1", "org-1", "project-1",
+    ]);
+  });
+
+  it("deduplicates retry while an exact scoped job is active", async () => {
+    const client = {
+      query: vi.fn()
+        .mockResolvedValueOnce({ rowCount: 1, rows: [row] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ status: "running" }] }),
+    };
+    const exec = executor();
+    exec.tx = vi.fn(async (fn: (value: unknown) => Promise<unknown>) => fn(client));
+
+    await expect(retryKnowledgeDocumentProcessing(exec, parseInput, "unused", at))
+      .resolves.toEqual({ document: record, jobState: "running", enqueued: false });
+    expect(client.query).toHaveBeenCalledTimes(2);
+    expect(client.query.mock.calls[0][0]).toContain("FOR UPDATE");
+    const [activeSql, activeParams] = client.query.mock.calls[1];
+    expect(activeSql).toContain("kind = $1 AND tenant = $2");
+    expect(activeSql).toContain("status IN ('pending', 'running')");
+    expect(activeParams.slice(0, 2)).toEqual([KNOWLEDGE_PARSE_JOB_KIND, "org-1"]);
+    expect(JSON.parse(activeParams[2])).toEqual(parseInput);
+  });
+
+  it("resets a failed document and enqueues a content-free retry", async () => {
+    const failedRow = { ...row, status: "failed", status_message: "safe failure" };
+    const queuedRow = { ...row, status: "queued", updated_at: new Date(at) };
+    const client = {
+      query: vi.fn()
+        .mockResolvedValueOnce({ rowCount: 1, rows: [failedRow] })
+        .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [queuedRow] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [] }),
+    };
+    const exec = executor();
+    exec.tx = vi.fn(async (fn: (value: unknown) => Promise<unknown>) => fn(client));
+
+    await expect(retryKnowledgeDocumentProcessing(exec, parseInput, "retry-job", at))
+      .resolves.toEqual({ document: record, jobState: "pending", enqueued: true });
+    expect(client.query.mock.calls[2][0]).toContain(
+      "SET status = 'queued', status_message = NULL, ready_at = NULL",
+    );
+    const [insertSql, insertParams] = client.query.mock.calls[3];
+    expect(insertSql).toContain("INSERT INTO memory_jobs");
+    expect(insertParams[0]).toBe("retry-job");
+    expect(insertParams[1]).toBe(KNOWLEDGE_PARSE_JOB_KIND);
+    expect(insertParams[3]).toBe("org-1");
+    expect(JSON.parse(insertParams[4])).toEqual(parseInput);
+    expect(insertParams.join(" ")).not.toContain("# Runbook");
+  });
+
+  it("keeps a ready document ready while retrying its embeddings", async () => {
+    const readyRow = { ...row, status: "ready", ready_at: new Date(at) };
+    const client = {
+      query: vi.fn()
+        .mockResolvedValueOnce({ rowCount: 1, rows: [readyRow] })
+        .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [] }),
+    };
+    const exec = executor();
+    exec.tx = vi.fn(async (fn: (value: unknown) => Promise<unknown>) => fn(client));
+
+    await expect(retryKnowledgeDocumentProcessing(exec, parseInput, "embed-retry", at))
+      .resolves.toEqual({
+        document: { ...record, status: "ready", readyAt: at },
+        jobState: "pending",
+        enqueued: true,
+      });
+    expect(client.query).toHaveBeenCalledTimes(3);
+    expect(client.query.mock.calls[2][0]).toContain("INSERT INTO memory_jobs");
+    expect(client.query.mock.calls.some(([sql]: [string]) => sql.includes("UPDATE knowledge_documents")))
+      .toBe(false);
   });
 });

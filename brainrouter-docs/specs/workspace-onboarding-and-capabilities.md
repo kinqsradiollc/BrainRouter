@@ -285,7 +285,10 @@ and tenant-fair job runner.
 - Parsing, chunking, and embedding run asynchronously and idempotently.
 - Document status (`queued`, `parsing`, `ready`, `failed`) is the UI truth.
 - Retry is scoped by job kind, tenant, Project, and base; generic job retry is
-  never exposed.
+  never exposed. The internal status view omits document content, hashes,
+  tenant ancestry, creator identity, job identifiers, and queue errors. Retry
+  serializes on the exact document version, reuses active work, and creates a
+  new audit job only when no pending or running parse exists.
 - Knowledge vectors are isolated from cognitive vector-dimension rebuilds.
 - Hybrid retrieval fuses FTS and exact cosine results, falls back to FTS when
   embeddings fail, and returns document/chunk provenance and citations.
@@ -361,7 +364,7 @@ captured into cognitive memory through its current engine.
 | W4c | Done | Briefing + memory tags | Capture/briefing/no-manifest tests |
 | W6 | Done | Client bootstrap deprecation | Offline core proposal coverage + downstream template-doc compatibility tests |
 | B1a | Done | Project/RBAC contract, schema, internal store, REST base CRUD, MCP base list/create | Migration + role/access + scoped CRUD + authenticated adapter tests |
-| B1b/B2 | In progress (internal processing) | Text ingest, typed parse jobs, status, scoped retry | Safe ingest + atomic enqueue + idempotent chunk/status/optional embedding complete; 202/status/retry adapters remain |
+| B1b/B2 | In progress (adapters) | Text ingest, typed parse jobs, status, scoped retry | Safe ingest + atomic enqueue + idempotent chunk/status/optional embedding + content-free status/scoped retry service complete; 202/status/retry adapters remain |
 | B1c | Todo | Hybrid retrieval and citation APIs/tools | FTS/vector/fallback/tenancy tests |
 | B1d | Todo | Additional document parsers | Per-format bounds/redaction tests |
 | B3 | Todo | Availability-aware recommendations and opt-in distillation | Catalog/provenance/no-recursion tests |

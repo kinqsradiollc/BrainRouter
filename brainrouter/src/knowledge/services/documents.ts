@@ -11,8 +11,10 @@ import type {
   IngestKnowledgeTextInput,
   KnowledgeDocumentEnqueueResult,
   KnowledgeDocumentRecord,
+  KnowledgeDocumentRetryView,
   KnowledgeDocumentServiceFailure,
   KnowledgeDocumentServiceResult,
+  KnowledgeDocumentStatusView,
   KnowledgeSourceFormat,
 } from "../contracts/document.js";
 import type { KnowledgeDocumentStore } from "../store.js";
@@ -86,6 +88,101 @@ export class KnowledgeDocumentService {
       if (isForeignKeyViolation(error)) return NOT_FOUND;
       throw error;
     }
+  }
+
+  async status(
+    actor: KnowledgeActor,
+    projectId: string,
+    baseId: string,
+    documentId: string,
+  ): Promise<KnowledgeDocumentServiceResult<KnowledgeDocumentStatusView>> {
+    const scope = await this.#resolveDocument(actor, "read", projectId, baseId, documentId);
+    if (!scope.ok) return scope;
+    const processing = await this.store.getKnowledgeDocumentProcessing({
+      orgId: actor.orgId,
+      projectId: scope.projectId,
+      baseId: scope.document.baseId,
+      documentId: scope.document.documentId,
+      parseVersion: scope.document.parseVersion,
+    });
+    if (!processing) return NOT_FOUND;
+    const { document } = processing;
+    return {
+      ok: true,
+      value: {
+        documentId: document.documentId,
+        title: document.title,
+        sourceName: document.sourceName,
+        sourceFormat: document.sourceFormat,
+        status: document.status,
+        statusMessage: document.statusMessage,
+        parseVersion: document.parseVersion,
+        updatedAt: document.updatedAt,
+        readyAt: document.readyAt,
+        processing: {
+          jobState: processing.jobState,
+          attempts: processing.attempts,
+          maxAttempts: processing.maxAttempts,
+          retryable: processing.jobState !== "pending" && processing.jobState !== "running",
+          chunkCount: processing.chunkCount,
+          embeddingCount: processing.embeddingCount,
+        },
+      },
+    };
+  }
+
+  async retry(
+    actor: KnowledgeActor,
+    projectId: string,
+    baseId: string,
+    documentId: string,
+  ): Promise<KnowledgeDocumentServiceResult<KnowledgeDocumentRetryView>> {
+    const scope = await this.#resolveDocument(actor, "write", projectId, baseId, documentId);
+    if (!scope.ok) return scope;
+    const retried = await this.store.retryKnowledgeDocumentProcessing({
+      orgId: actor.orgId,
+      projectId: scope.projectId,
+      baseId: scope.document.baseId,
+      documentId: scope.document.documentId,
+      parseVersion: scope.document.parseVersion,
+    }, this.#jobIdGenerator(), this.#now());
+    if (!retried) return NOT_FOUND;
+    return {
+      ok: true,
+      value: {
+        documentId: retried.document.documentId,
+        jobState: retried.jobState,
+        enqueued: retried.enqueued,
+      },
+    };
+  }
+
+  async #resolveDocument(
+    actor: KnowledgeActor,
+    action: "read" | "write",
+    projectId: string,
+    baseId: string,
+    documentId: string,
+  ): Promise<
+    | { ok: true; projectId: string; document: KnowledgeDocumentRecord }
+    | KnowledgeDocumentServiceFailure
+  > {
+    const project = await resolveKnowledgeProject(actor, projectId, this.store);
+    if (!project) return NOT_FOUND;
+    if (!canUseKnowledge(actor, action)) return FORBIDDEN;
+    const normalizedBaseId = baseId.trim();
+    const normalizedDocumentId = documentId.trim();
+    if (!normalizedBaseId || !normalizedDocumentId) return NOT_FOUND;
+    const base = await this.store.getKnowledgeBase(normalizedBaseId, actor.orgId, project.projectId);
+    if (!base) return NOT_FOUND;
+    const document = await this.store.getKnowledgeDocument(
+      normalizedDocumentId,
+      base.baseId,
+      actor.orgId,
+      project.projectId,
+    );
+    if (!document) return NOT_FOUND;
+    return { ok: true, projectId: project.projectId, document };
   }
 }
 
