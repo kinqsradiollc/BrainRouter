@@ -84,3 +84,14 @@ test('/init config keeps a committed global setup active when workspace setup fa
   assert.ok(messages.some((message) => message.includes('OPENAI_API_KEY=[REDACTED]')));
   assert.equal(refreshes.count, 1);
 });
+
+test('/init scan delegates to the bounded reviewed scan flow', async () => {
+  const { ctx } = context();
+  ctx.args = ['scan'];
+  const roots: string[] = [];
+  assert.equal(await tryHandleInitCommand(ctx, {
+    runSequence: async () => { throw new Error('unexpected sequence'); },
+    runScan: async (root) => { roots.push(root); },
+  }), true);
+  assert.deepEqual(roots, ['/workspace']);
+});

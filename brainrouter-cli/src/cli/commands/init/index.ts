@@ -2,7 +2,8 @@ import chalk from 'chalk';
 import type { CommandContext } from '../_context.js';
 import { initAgentMd } from '../../../prompt/initAgentMd.js';
 import { safeOnboardingError } from './onboardingErrors.js';
-import { runProjectOnboarding, suggestWorkspaceProfile } from './projectOnboard.js';
+import { runProjectOnboarding } from './projectOnboard.js';
+import { runProjectOnboardingScan } from './projectOnboardingScan.js';
 import {
   runCliOnboardingSequence,
   type CliOnboardingSequenceOptions,
@@ -22,13 +23,15 @@ import {
  *   - `/init --edit` — reopen the same reviewed editor for an existing manifest.
  *   - `/init config` — rerun GLOBAL provider/model/MCP setup, then offer
  *     workspace setup only after the global commit succeeds.
- *   - `/init scan` — print the detected profile suggestion + reasons only;
- *     never writes.
+ *   - `/init scan` — build a bounded deterministic proposal, review every
+ *     field and optional instruction diff, then write only after confirmation.
+ *   - `/init agent` — reserved for the bounded model-assisted initializer.
  *   - `/init agentmd` — back-compat alias for the 0.3.6 behaviour that only
  *     scaffolds AGENT.md.
  */
 export interface InitCommandDependencies {
   runSequence(options: CliOnboardingSequenceOptions): Promise<CliOnboardingSequenceResult>;
+  runScan?(workspaceRoot: string): Promise<unknown>;
 }
 
 const DEFAULT_DEPENDENCIES: InitCommandDependencies = {
@@ -44,7 +47,7 @@ export async function tryHandleInitCommand(
   const sub = args[0]?.toLowerCase();
 
   // Back-compat: explicit subcommand keeps the 0.3.6 one-shot behaviour.
-  if (sub === 'agentmd' || sub === 'agent') {
+  if (sub === 'agentmd') {
     const result = initAgentMd(agent.workspaceRoot);
     if (result.status === 'created') {
       console.log(chalk.green(`\n✓ Created ${result.path}`));
@@ -56,12 +59,18 @@ export async function tryHandleInitCommand(
     return true;
   }
 
-  // Read-only profile detection — show what bare `/init` would suggest.
+  // Bounded deterministic scan + the shared editable confirmation flow.
   if (sub === 'scan') {
-    const suggestion = suggestWorkspaceProfile(agent.workspaceRoot);
-    console.log(`\n${chalk.bold('Detected profile')}: ${suggestion.profile}`);
-    console.log(chalk.gray(`  ${suggestion.reasons.join('; ')}`));
-    console.log(chalk.gray('  Run `/init` to onboard this workspace with it.\n'));
+    try {
+      await (dependencies.runScan ?? runProjectOnboardingScan)(agent.workspaceRoot);
+    } catch (err: any) {
+      console.error(chalk.red(`\n/init scan failed: ${safeOnboardingError(err)}\n`));
+    }
+    return true;
+  }
+
+  if (sub === 'agent') {
+    console.log(chalk.gray('\nThe assisted workspace initializer is not available yet. Use `/init scan` for the bounded offline flow.\n'));
     return true;
   }
 
