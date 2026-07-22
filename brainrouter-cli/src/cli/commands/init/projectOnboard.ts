@@ -39,6 +39,7 @@ export type ProjectOnboardingPromptId =
   | 'memory-tags'
   | 'memory-capture-hint'
   | 'instructions'
+  | 'instruction-change'
   | 'confirm';
 
 export interface ProjectOnboardingPromptRequest {
@@ -239,7 +240,7 @@ export async function runProjectOnboarding(
   return { status: 'committed', manifest: committed.manifest, manifestPath: committed.manifestPath };
 }
 
-async function collectProjectOnboardingEdits(
+export async function collectProjectOnboardingEdits(
   prompt: ProjectOnboardingPrompt,
   draft: WorkspaceManifest,
 ): Promise<ProjectOnboardingFieldEdits | null> {
