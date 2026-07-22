@@ -234,6 +234,10 @@ and tenant-fair job runner.
 
 - Bases and documents carry `org_id` + `project_id` with composite consistency
   constraints.
+- The schema also carries that ancestry through chunks and embeddings, rejects
+  cross-project attachment at the database boundary, deduplicates persisted
+  content within each base, and keeps knowledge vectors independent from
+  cognitive-vector rebuilds.
 - Ingest v1 accepts bounded plain text/Markdown and persists metadata plus
   normalized, redacted parsed content; it does not persist unredacted raw data.
 - Parsing, chunking, and embedding run asynchronously and idempotently.
@@ -312,7 +316,7 @@ captured into cognitive memory through its current engine.
 | W4b | Done | Skill catalog/packs + explicit tool-profile mapping | CLI/Desktop parity and policy tests |
 | W4c | Done | Briefing + memory tags | Capture/briefing/no-manifest tests |
 | W6 | Done | Client bootstrap deprecation | Offline core proposal coverage + downstream template-doc compatibility tests |
-| B1a | Todo | Project/RBAC contract, schema, internal store, scoped base CRUD/list | Role/cross-org/restricted-project/Postgres tests |
+| B1a | In progress (schema) | Project/RBAC contract, schema, internal store, scoped base CRUD/list | Migration contract + Postgres ancestry/dedupe/status/FTS/vector tests; actor/store/API remain |
 | B1b/B2 | Todo | Text ingest, typed parse jobs, status, scoped retry | 202/status/retry/idempotency/fairness tests |
 | B1c | Todo | Hybrid retrieval and citation APIs/tools | FTS/vector/fallback/tenancy tests |
 | B1d | Todo | Additional document parsers | Per-format bounds/redaction tests |
