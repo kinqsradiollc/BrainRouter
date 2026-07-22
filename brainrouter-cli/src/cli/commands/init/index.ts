@@ -5,16 +5,16 @@ import { runWizard } from '../../ink/wizard/runWizard.js';
 import { runProjectOnboarding, suggestWorkspaceProfile } from './projectOnboard.js';
 
 /**
- * `/init` slash command — ADR-021 W2 redesign.
+ * `/init` fronts the two distinct setup lifecycles.
  *
  * The CLI has TWO onboardings, and `/init` now fronts the PROJECT one:
  *
  *   - `/init` (bare) — PROJECT onboarding for the current workspace: profile
- *     picker (with a deterministic detected suggestion), persona choice for
- *     engineering, optional AGENT.md scaffold, then writes
- *     `.brainrouter/workspace.json` via the core manifest chokepoint. In an
+ *     reviewed editor for agents, capabilities, skills, tools, and memory,
+ *     then writes `.brainrouter/workspace.json` only after confirmation. In an
  *     already-onboarded workspace it prints the manifest summary instead.
  *     Cancelling at any step writes nothing.
+ *   - `/init --edit` — reopen the same reviewed editor for an existing manifest.
  *   - `/init config` — the GLOBAL first-run wizard (endpoint/model/MCP; the
  *     pre-W2 bare behaviour). The auto-trigger on REPL start (no
  *     `~/.config/brainrouter/config.json`) still calls `runWizard` directly
@@ -48,6 +48,15 @@ export async function tryHandleInitCommand(ctx: CommandContext): Promise<boolean
     console.log(`\n${chalk.bold('Detected profile')}: ${suggestion.profile}`);
     console.log(chalk.gray(`  ${suggestion.reasons.join('; ')}`));
     console.log(chalk.gray('  Run `/init` to onboard this workspace with it.\n'));
+    return true;
+  }
+
+  if (sub === '--edit') {
+    try {
+      await runProjectOnboarding(agent.workspaceRoot, { edit: true });
+    } catch (err: any) {
+      console.error(chalk.red(`\n/init --edit failed: ${err?.message ?? err}\n`));
+    }
     return true;
   }
 
