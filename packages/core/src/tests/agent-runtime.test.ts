@@ -1066,6 +1066,14 @@ test('agent: removeTaggedSystemMessage is idempotent and clears stale entries', 
   // Replace removes the first version and adds the second.
   assert.equal(agent.chatHistory.filter((m: any) => m.content?.includes('first version')).length, 0);
   assert.equal(agent.chatHistory.filter((m: any) => m.content?.includes('second version')).length, 1);
+  agent.replaceTaggedSystemMessage('later', 'later directive');
+  const stableIndex = agent.chatHistory.findIndex((m: any) => m.content?.includes('second version'));
+  agent.replaceTaggedSystemMessage('demo', 'second version');
+  assert.equal(
+    agent.chatHistory.findIndex((m: any) => m.content?.includes('second version')),
+    stableIndex,
+    'byte-identical replacements preserve stable directive ordering',
+  );
   // Remove drops the second.
   agent.removeTaggedSystemMessage('demo');
   assert.equal(agent.chatHistory.filter((m: any) => m.content?.includes('second version')).length, 0);

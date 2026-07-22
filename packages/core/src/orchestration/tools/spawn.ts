@@ -329,6 +329,7 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
     // buildRolePrompt() above — passing it again as a separate field would
     // append a second copy and waste 1.5–3k tokens per child turn.
     roleOverlay: undefined,
+    workspaceAgentId: role.name,
     accessMode: access,
     silent: true,
     forceFleetSandbox: role.forceSandbox || ctx.ancestorFleet, // HONK-H0 — fleet role OR fleet ancestor → locked-down posture

@@ -425,12 +425,15 @@ export interface LastBriefingDetails {
 // import it back for the one class use below.
 export type { ChatCompletionPayload, ResponsesPayload } from './transport/llmTransport.js';
 import type { PromptLayeredMessage } from './transport/llmTransport.js';
+import type { WorkspaceCapabilityResolution } from '../workspace/capabilities.js';
 
 export interface AgentOptions {
   workspaceRoot: string;
   launchCwd: string;
   sessionKey?: string;
   roleOverlay?: string;
+  /** Domain persona selected for workspace capability resolution. */
+  workspaceAgentId?: string;
   accessMode?: AccessMode;
   silent?: boolean;
   /**
@@ -762,6 +765,19 @@ export class Agent {
   public turnsSinceLastFullBriefing = 0;
   public recentToolFailure?: string;
   public roleOverlay?: string;
+  /** Domain persona for this runtime; harness roles fall back to the manifest default. */
+  public workspaceAgentId?: string;
+  /** Domain persona actually resolved for the current turn. */
+  public activeWorkspacePersonaId?: string;
+  /** Latest task-scoped resolution. Prompt, skill, and tool layers consume this independently. */
+  public activeWorkspaceCapabilities: WorkspaceCapabilityResolution = {
+    active: [],
+    reasons: [],
+    skillPacks: [],
+    skills: [],
+    toolProfiles: [],
+    promptBlocks: [],
+  };
   public accessMode: AccessMode;
   /** POLICY-1 — audit trail of execution-policy decisions on mutating tools. */
   public policyAudit: Array<{ tool: string; action: ActionKind; decision: PolicyDecision; reason: string }> = [];
@@ -859,6 +875,7 @@ export class Agent {
     // userId-scoped, so cross-CLI recall continuity is unaffected.
     this.sessionKey = options.sessionKey ?? randomUUID();
     this.roleOverlay = options.roleOverlay;
+    this.workspaceAgentId = options.workspaceAgentId;
     this.accessMode = options.accessMode ?? 'shell';
     this.silent = options.silent ?? false;
     this.sandboxEnforceWhenSilent = getCliKnobs().sandboxEnforceWhenSilent;
@@ -1527,10 +1544,18 @@ export class Agent {
    */
   public replaceTaggedSystemMessage(tag: string, content: string): void {
     const marker = `<!--brainrouter:${tag}-->\n`;
+    const nextContent = `${marker}${content}`;
+    const matchingEntries = this.chatHistory.filter(
+      (msg) => msg.role === 'system' && typeof msg.content === 'string' && msg.content.startsWith(marker),
+    );
+    // Stable directives (for example a workspace persona) are refreshed every
+    // turn. Preserve their position when their bytes have not changed so other
+    // tagged messages do not reorder an otherwise stable prompt suffix.
+    if (matchingEntries.length === 1 && matchingEntries[0]?.content === nextContent) return;
     this.chatHistory = this.chatHistory.filter(
       (msg) => !(msg.role === 'system' && typeof msg.content === 'string' && msg.content.startsWith(marker)),
     );
-    this.chatHistory.push({ role: 'system', content: `${marker}${content}` });
+    this.chatHistory.push({ role: 'system', content: nextContent });
   }
 
   /**

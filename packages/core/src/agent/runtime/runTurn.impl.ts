@@ -78,6 +78,7 @@ import { getCurrentWorkflow } from '../../workflow/run/workflowArtifacts.js';
 import { getToolSummary, getToolPreview } from '../support/toolSummary.js';
 import { trackChildObservation, parseChildDrainTimeouts, formatChildDrainTimeoutAnswer, summarizeWaitedChildOutputs } from '../support/childObservation.js';
 import { sanitizeToolCallsForHistory, explainUnknownToolName } from '../agent.js';
+import { refreshWorkspaceCapabilityState } from '../workspaceCapabilityState.js';
 import {
   buildChatCompletionPayload, buildResponsesPayload, resolveRequestFormat, resolveWireEffort,
   callOpenAI, callOpenAIStream, InterruptError, isInterrupt, activeProviderDef, effortForTurnSelection,
@@ -125,6 +126,10 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // The model-visible copy is still pushed into chatHistory at its ordered
     // position below (after the goal anchor); only the durable record moves up.
     this.recordTranscript(opts?.hiddenPrompt ? { role: 'user', content: prompt, name: 'goal' } : { role: 'user', content: prompt });
+    // Workspace capabilities are task-scoped and additive. Resolve before tool
+    // construction so later policy slices can consume the same immutable turn
+    // state; this first slice publishes only the tagged prompt contribution.
+    refreshWorkspaceCapabilityState(this, prompt);
     // MAR-4 — snapshot children carried over from the previous turn BEFORE the reset,
     // so a "is it done?" question this turn can resolve those exact ids.
     const carriedPendingChildIds = [...this.lastTurnPendingChildIds];
