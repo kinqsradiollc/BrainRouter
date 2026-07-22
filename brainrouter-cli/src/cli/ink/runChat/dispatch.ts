@@ -198,7 +198,12 @@ export function createOnSubmit(ctx: RunChatContext): (text: string, push: PushSc
           // MC-E2 — keyword triggers COMPOSE with an explicit stack: dormant
           // skills whose trigger word appears in the remaining input fill the
           // stack's leftover slots (same skillsStackMax cap, explicit first).
-          const triggered = scanKeywordTriggers(stacked.rest, agent.workspaceRoot, stacked.skills);
+          const triggered = scanKeywordTriggers(
+            stacked.rest,
+            agent.workspaceRoot,
+            stacked.skills,
+            agent.workspaceAgentId,
+          );
           const names = [...stacked.skills, ...triggered.map((h) => h.name)];
           const { resolved, disallowedTools, allowedTools } = await resolveStackedSkills(mcpClient, names, agent.workspaceRoot)
             .catch(() => ({ resolved: [], disallowedTools: [] as string[], allowedTools: undefined }));
@@ -238,7 +243,7 @@ export function createOnSubmit(ctx: RunChatContext): (text: string, push: PushSc
     // (same stacked-skill composition path, same cap). Kill-switch:
     // `cli.skillsKeywordTriggers`. Best-effort — any failure falls back to
     // the plain turn untouched.
-    const triggered = scanKeywordTriggers(text, agent.workspaceRoot);
+    const triggered = scanKeywordTriggers(text, agent.workspaceRoot, [], agent.workspaceAgentId);
     if (triggered.length) {
       const { resolved, disallowedTools, allowedTools } = await resolveStackedSkills(mcpClient, triggered.map((h) => h.name), agent.workspaceRoot)
         .catch(() => ({ resolved: [], disallowedTools: [] as string[], allowedTools: undefined }));
@@ -264,10 +269,19 @@ export function createOnSubmit(ctx: RunChatContext): (text: string, push: PushSc
  * enforced inside `matchTriggeredSkills`. Never throws — trigger scanning is
  * additive and must not break prompt dispatch.
  */
-function scanKeywordTriggers(prompt: string, workspaceRoot: string, exclude: string[] = []): TriggeredSkillHit[] {
+function scanKeywordTriggers(
+  prompt: string,
+  workspaceRoot: string,
+  exclude: string[] = [],
+  activeAgent?: string,
+): TriggeredSkillHit[] {
   try {
     if (!getCliKnobs().skillsKeywordTriggers) return [];
-    return matchTriggeredSkills(prompt, listFilesystemSkills(workspaceRoot), { exclude });
+    return matchTriggeredSkills(
+      prompt,
+      listFilesystemSkills(workspaceRoot, { task: prompt, activeAgent }),
+      { exclude },
+    );
   } catch {
     return [];
   }

@@ -4,6 +4,12 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 import { getOrgConventionRepoRoots, loadPluginsWithKnobs } from '@kinqs/brainrouter-core/plugin';
+import {
+  inspectWorkspaceProfilePlugins,
+  loadWorkspaceManifest,
+  resolveWorkspaceCapabilities,
+  resolveWorkspaceSkillSelection,
+} from '@kinqs/brainrouter-core/workspace';
 
 const requireFromHere = createRequire(import.meta.url);
 
@@ -41,10 +47,79 @@ export interface SkillListItem {
 
 const WORKSPACE_SKILL_ROOTS = ['skills', '.brainrouter/skills'];
 
-export function listFilesystemSkills(workspaceRoot: string): SkillListItem[] {
+export interface WorkspaceSkillCatalogContext {
+  /** Current task text, used only for task-scoped capability activation. */
+  task?: string;
+  /** Files already known to be in scope for the current task. */
+  files?: readonly string[];
+  /** Active domain persona; defaults to the manifest's configured default. */
+  activeAgent?: string;
+}
+
+export interface SkillSearchRootOptions extends WorkspaceSkillCatalogContext {
+  includeBundled?: boolean;
+  /** Explicit lookup keeps disabled package skills invokable. */
+  visibility?: 'ambient' | 'explicit';
+}
+
+export interface WorkspaceSkillCatalogPolicy {
+  /** False means callers must preserve the legacy catalog exactly. */
+  managed: boolean;
+  selectedSkillRoots: string[];
+  explicitSkillRoots: string[];
+  /** Standard profile/capability ids controlled by manifest selection. */
+  managedSkillIds: string[];
+  ambientSkillIds: string[];
+  disabledSkillIds: string[];
+}
+
+export function resolveWorkspaceSkillCatalogPolicy(
+  workspaceRoot: string,
+  context: WorkspaceSkillCatalogContext = {},
+): WorkspaceSkillCatalogPolicy {
+  const manifest = loadWorkspaceManifest(workspaceRoot);
+  if (!manifest) {
+    return {
+      managed: false,
+      selectedSkillRoots: [],
+      explicitSkillRoots: [],
+      managedSkillIds: [],
+      ambientSkillIds: [],
+      disabledSkillIds: [],
+    };
+  }
+
+  const catalog = inspectWorkspaceProfilePlugins();
+  const capabilities = resolveWorkspaceCapabilities({
+    manifest,
+    task: context.task,
+    files: context.files,
+    activeAgent: context.activeAgent,
+  });
+  const selection = resolveWorkspaceSkillSelection({
+    manifest,
+    activeCapabilities: capabilities.active,
+    catalog,
+  });
+  return {
+    managed: selection.managed,
+    selectedSkillRoots: selection.skillRoots,
+    explicitSkillRoots: catalog.available.map((plugin) => plugin.skillsRoot),
+    managedSkillIds: [...catalog.available, ...catalog.unavailable]
+      .flatMap((plugin) => [...plugin.skillIds]),
+    ambientSkillIds: selection.ambientSkillIds,
+    disabledSkillIds: selection.disabledSkillIds,
+  };
+}
+
+export function listFilesystemSkills(
+  workspaceRoot: string,
+  context: WorkspaceSkillCatalogContext = {},
+): SkillListItem[] {
   const knobs = getCliKnobs();
   // CC-CONFIG-A1 — safe mode loads NO skills at all (isolate a bad skill).
   if (knobs.safeMode) return [];
+  const policy = resolveWorkspaceSkillCatalogPolicy(workspaceRoot, context);
   // First entry per name WINS (roots are ordered workspace → local → bundled),
   // consistent with resolveSkill's precedence. CC-SKILLS-D2: we no longer drop
   // the shadowed copies silently — we record the collision so the /skills
@@ -53,9 +128,12 @@ export function listFilesystemSkills(workspaceRoot: string): SkillListItem[] {
   const shadowScopes = new Map<string, string[]>();
   // CC-CONFIG-A6 — optionally hide BUNDLED skills (shipped with the install),
   // leaving only workspace-authored skill roots (skills/, .brainrouter/skills).
-  for (const root of skillSearchRoots(workspaceRoot, { includeBundled: !knobs.skillsHideBundled })) {
+  for (const root of buildSkillSearchRoots(workspaceRoot, {
+    ...context,
+    includeBundled: !knobs.skillsHideBundled,
+  }, policy)) {
     if (!fs.existsSync(root)) continue;
-    const scope = inferRootScope(root, workspaceRoot);
+    const scope = inferRootScope(root, workspaceRoot, policy.explicitSkillRoots);
     for (const filePath of findSkillFiles(root)) {
       const parsed = parseSkillFile(filePath);
       if (!parsed) continue;
@@ -91,7 +169,27 @@ export function listFilesystemSkills(workspaceRoot: string): SkillListItem[] {
       winner.shadowedBy = hidden;
     }
   }
-  return Array.from(winners.values()).sort(sortSkills);
+  return applyWorkspaceSkillCatalogPolicy(Array.from(winners.values()), policy);
+}
+
+/** Apply manifest ambient visibility to MCP or filesystem list results. */
+export function applyWorkspaceSkillCatalogPolicy(
+  skills: SkillListItem[],
+  policy: WorkspaceSkillCatalogPolicy,
+): SkillListItem[] {
+  if (!policy.managed) return skills.sort(sortSkills);
+  const disabled = new Set(policy.disabledSkillIds);
+  const managed = new Set(policy.managedSkillIds);
+  const ambient = new Set(policy.ambientSkillIds);
+  const priority = new Map(policy.ambientSkillIds.map((id, index) => [id, index]));
+  return skills
+    .filter((skill) =>
+      !disabled.has(skill.name) && (!managed.has(skill.name) || ambient.has(skill.name)))
+    .sort((a, b) => {
+      const aPriority = priority.get(a.name) ?? Number.MAX_SAFE_INTEGER;
+      const bPriority = priority.get(b.name) ?? Number.MAX_SAFE_INTEGER;
+      return aPriority - bPriority || sortSkills(a, b);
+    });
 }
 
 export function mergeSkillLists(primary: SkillListItem[], fallback: SkillListItem[]): SkillListItem[] {
@@ -111,11 +209,27 @@ export function sortSkills(a: SkillListItem, b: SkillListItem): number {
 
 export function skillSearchRoots(
   workspaceRoot: string,
-  opts: { includeBundled?: boolean } = {},
+  opts: SkillSearchRootOptions = {},
+): string[] {
+  const policy = resolveWorkspaceSkillCatalogPolicy(workspaceRoot, opts);
+  return buildSkillSearchRoots(workspaceRoot, opts, policy);
+}
+
+function buildSkillSearchRoots(
+  workspaceRoot: string,
+  opts: SkillSearchRootOptions,
+  policy: WorkspaceSkillCatalogPolicy,
 ): string[] {
   const includeBundled = opts.includeBundled !== false;
   const roots: string[] = [];
   for (const sub of WORKSPACE_SKILL_ROOTS) roots.push(path.join(workspaceRoot, sub));
+
+  if (policy.managed) {
+    const selectedRoots = opts.visibility === 'explicit'
+      ? policy.explicitSkillRoots
+      : policy.selectedSkillRoots;
+    roots.push(...selectedRoots);
+  }
 
   // PLUGIN-MARKETPLACE P1 — enabled plugins contribute skill dirs here, between
   // the workspace roots (which still win) and the bundled install roots. A
@@ -169,12 +283,17 @@ function resolveInstalledMcpPackageDir(): string | undefined {
  *   local      — `<ws>/.brainrouter/skills` (workspace-private overrides)
  *   bundled    — everything shipped with the install (MCP pkg + monorepo root)
  */
-function inferRootScope(root: string, workspaceRoot: string): string {
+function inferRootScope(
+  root: string,
+  workspaceRoot: string,
+  packageProfileRoots: readonly string[] = [],
+): string {
   const resolvedWorkspace = path.resolve(workspaceRoot);
   const resolvedRoot = path.resolve(root);
   // PLUGIN-MARKETPLACE P1 — a skill root under a `.brainrouter/plugins/<name>/`
   // tree (user OR workspace scope) is a PLUGIN root, not a plain local override.
   if (isOrgConventionRoot(resolvedRoot)) return 'org';
+  if (packageProfileRoots.some((profileRoot) => path.resolve(profileRoot) === resolvedRoot)) return 'plugin';
   if (resolvedRoot.includes(`${path.sep}.brainrouter${path.sep}plugins${path.sep}`)) return 'plugin';
   if (resolvedRoot === path.join(resolvedWorkspace, '.brainrouter', 'skills')) return 'local';
   if (resolvedRoot.startsWith(path.join(resolvedWorkspace, '.brainrouter'))) return 'local';

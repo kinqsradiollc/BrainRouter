@@ -26,7 +26,13 @@ import { recordPlanDecision, readPlanHistory, diffSnapshots } from '@kinqs/brain
 import { getLoopState, parseInterval, startLoop, stopLoop } from '../../../runtime/background/loopRunner.js';
 import type { CommandContext } from '../_context.js';
 import { SLASH_TO_SKILL, scaffoldSkill } from '../../../prompt/skillRunner.js';
-import { listFilesystemSkills, mergeSkillLists, skillSearchRoots } from '../../../prompt/skillCatalog.js';
+import {
+  applyWorkspaceSkillCatalogPolicy,
+  listFilesystemSkills,
+  mergeSkillLists,
+  resolveWorkspaceSkillCatalogPolicy,
+  skillSearchRoots,
+} from '../../../prompt/skillCatalog.js';
 import { buildGoalKickoffPrompt, runSkillByName, runSkillCommand } from '../_helpers.js';
 import { collectReviewDiff } from '../../../runtime/platform/gitContext.js';
 import { buildReviewPrompt } from '../reviewPrompt/index.js';
@@ -48,7 +54,11 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       try {
         const roots = skillSearchRoots(agent.workspaceRoot);
         const res = await callMcpTool<any>(mcpClient, 'list_skills', { scope: 'all' });
-        const mcpSkills = !res.isError ? normalizeSkillsList(res.parsed) : undefined;
+        const mcpSkillsRaw = !res.isError ? normalizeSkillsList(res.parsed) : undefined;
+        const policy = resolveWorkspaceSkillCatalogPolicy(agent.workspaceRoot);
+        const mcpSkills = mcpSkillsRaw
+          ? applyWorkspaceSkillCatalogPolicy(mcpSkillsRaw, policy)
+          : undefined;
         const filesystemSkills = listFilesystemSkills(agent.workspaceRoot);
         const skillsList = mcpSkills ? mergeSkillLists(mcpSkills, filesystemSkills) : filesystemSkills;
         spinner.stop();
@@ -74,7 +84,11 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       try {
         const res = await callMcpTool<any>(mcpClient, 'list_skills', { scope: 'all' });
         spinner.stop();
-        const mcpSkills = !res.isError ? normalizeSkillsList(res.parsed) : undefined;
+        const mcpSkillsRaw = !res.isError ? normalizeSkillsList(res.parsed) : undefined;
+        const policy = resolveWorkspaceSkillCatalogPolicy(agent.workspaceRoot);
+        const mcpSkills = mcpSkillsRaw
+          ? applyWorkspaceSkillCatalogPolicy(mcpSkillsRaw, policy)
+          : undefined;
         const filesystemSkills = listFilesystemSkills(agent.workspaceRoot);
         const skillsList = mcpSkills
           ? mergeSkillLists(mcpSkills, filesystemSkills)
