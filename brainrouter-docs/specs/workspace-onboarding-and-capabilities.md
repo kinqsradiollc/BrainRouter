@@ -221,6 +221,12 @@ authentication, then verify organization, Project, membership, and role. A
 foreign or inaccessible identifier returns 404. Request payloads do not set
 `orgId`, `userId`, or role.
 
+The shared actor contract grants knowledge read access to every organization
+role and write access to developer, admin, and owner roles. Project resolution
+uses one exact tenant-bound query: organization administrators may access every
+Project in that organization, while other members may access open Projects and
+restricted Projects where they have explicit membership.
+
 Desktop resolves the active git remote against accessible Projects and requires
 an explicit create/link or selection when there are zero or multiple matches.
 Dashboard uses its selected organization and Project. HTTP MCP sessions reconnect
@@ -316,7 +322,7 @@ captured into cognitive memory through its current engine.
 | W4b | Done | Skill catalog/packs + explicit tool-profile mapping | CLI/Desktop parity and policy tests |
 | W4c | Done | Briefing + memory tags | Capture/briefing/no-manifest tests |
 | W6 | Done | Client bootstrap deprecation | Offline core proposal coverage + downstream template-doc compatibility tests |
-| B1a | In progress (schema) | Project/RBAC contract, schema, internal store, scoped base CRUD/list | Migration contract + Postgres ancestry/dedupe/status/FTS/vector tests; actor/store/API remain |
+| B1a | In progress (schema + access) | Project/RBAC contract, schema, internal store, scoped base CRUD/list | Migration + role matrix + exact Project access tests; base store/API remain |
 | B1b/B2 | Todo | Text ingest, typed parse jobs, status, scoped retry | 202/status/retry/idempotency/fairness tests |
 | B1c | Todo | Hybrid retrieval and citation APIs/tools | FTS/vector/fallback/tenancy tests |
 | B1d | Todo | Additional document parsers | Per-format bounds/redaction tests |

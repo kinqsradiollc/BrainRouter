@@ -15,6 +15,8 @@ import type { SharedMemory } from "../memory/store/postgres/queries/memorySharin
 import type { ProjectRecord, ProjectMemberRecord } from "../memory/store/postgres/queries/projectQueries.js";
 import type { OrgStatsRow, OrgAuditRow } from "../memory/store/postgres/queries/adminConsoleQueries.js";
 
+export type { ProjectRecord, ProjectMemberRecord } from "../memory/store/postgres/queries/projectQueries.js";
+
 export interface TenancyStore {
   createOrganization(input: { orgId: string; name: string; slug: string; plan?: OrgPlan }): Promise<OrganizationRecord>;
   getOrganization(orgId: string): Promise<OrganizationRecord | null>;
@@ -69,6 +71,7 @@ export interface MemorySharingStore {
 export interface ProjectStore {
   createProject(rec: ProjectRecord): Promise<void>;
   getProject(projectId: string): Promise<ProjectRecord | null>;
+  getAccessibleProject(projectId: string, orgId: string, userId: string, canAccessRestricted: boolean): Promise<ProjectRecord | null>;
   countProjects(orgId: string): Promise<number>;
   updateProject(projectId: string, patch: { name?: string; repoUrl?: string | null; restricted?: boolean }): Promise<ProjectRecord | null>;
   deleteProject(projectId: string): Promise<void>;
