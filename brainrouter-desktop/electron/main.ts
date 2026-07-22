@@ -834,19 +834,27 @@ app.whenReady().then(() => {
     openWorkspaceWindow(workspaceRoot);
     return { opened: true };
   });
-  // ADR-021 W3a — workspace onboarding manifest bridge. The renderer never
+  // Workspace onboarding manifest bridge. The renderer never
   // touches `.brainrouter/workspace.json`; main goes through the core
-  // chokepoint. Trust is enforced like workspace:open (defense-in-depth).
-  ipcMain.handle('workspace:manifest-get', (_e, root: unknown) => {
+  // chokepoint. Trust, top-frame ownership, and the window's active workspace
+  // are all enforced so a stale or embedded renderer cannot cross projects.
+  ipcMain.handle('workspace:manifest-get', (event, root: unknown) => {
     if (typeof root !== 'string' || !fs.existsSync(root)) return { ok: false, error: 'Unknown workspace.' };
+    const wp = wins.get(event.sender.id);
+    if (!wp || event.senderFrame !== wp.win.webContents.mainFrame || wp.pool.activeRoot !== root) {
+      return { ok: false, error: 'Workspace is no longer active.' };
+    }
     if (!isWorkspaceTrusted(root)) return { ok: false, error: 'Workspace is not trusted.' };
     return { ok: true, ...getWorkspaceManifestInfo(root) };
   });
-  ipcMain.handle('workspace:manifest-save', (_e, root: unknown, payload: unknown) => {
+  ipcMain.handle('workspace:manifest-save', (event, root: unknown, payload: unknown) => {
     if (typeof root !== 'string' || !fs.existsSync(root)) return { saved: false, error: 'Unknown workspace.' };
+    const wp = wins.get(event.sender.id);
+    if (!wp || event.senderFrame !== wp.win.webContents.mainFrame || wp.pool.activeRoot !== root) {
+      return { saved: false, stale: true, error: 'Workspace is no longer active.' };
+    }
     if (!isWorkspaceTrusted(root)) return { saved: false, error: 'Workspace is not trusted.' };
-    const shaped = payload && typeof payload === 'object' ? (payload as { profile?: unknown }) : {};
-    return saveWorkspaceManifestFromPayload(root, { profile: shaped.profile });
+    return saveWorkspaceManifestFromPayload(root, payload);
   });
   // T1 — trust persistence lives in the shared CLI store (not renderer
   // localStorage), so CLI + desktop agree and it survives reinstalls.
