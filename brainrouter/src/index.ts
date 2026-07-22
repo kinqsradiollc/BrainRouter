@@ -37,6 +37,10 @@ import fs from "node:fs";
 import { Registry } from './registry.js';
 import { resolveRegistryConfig } from './resolver.js';
 import { buildMcpServer } from './transport/mcpServer.js';
+import {
+  matchesMcpSessionIdentity,
+  type McpSessionIdentity,
+} from './transport/mcpSessionIdentity.js';
 import { recordHttp, routeBucket, renderPrometheus, metricsSnapshot } from './observability/metrics.js';
 import { collectSystemStatus } from './observability/status.js';
 import { modelGateway } from './services/modelGateway/modelGateway.js';
@@ -128,7 +132,11 @@ memoryEngine.autoScanSkillHints(uniqueSkillsDirs);
 if (USE_HTTP) {
   // ── HTTP / Streamable-HTTP transport ────────────────────────────────────────
   // Each client session gets its own Server + Transport instance.
-  const sessions = new Map<string, { server: Server; transport: StreamableHTTPServerTransport }>();
+  const sessions = new Map<string, {
+    server: Server;
+    transport: StreamableHTTPServerTransport;
+    identity: McpSessionIdentity;
+  }>();
   // Tracks which User-Agents we've already warned about for missing
   // `text/event-stream` in their Accept header — one warning per UA
   // so a chatty client doesn't drown the logs.
@@ -375,17 +383,28 @@ if (USE_HTTP) {
       return;
     }
     const defaultOrgId = orgCtx?.orgId;
+    const requestIdentity: McpSessionIdentity = {
+      userId: effectiveUserId,
+      orgId: defaultOrgId,
+      role: orgCtx?.role,
+      isAdmin: user.isAdmin,
+    };
 
     if (req.method === 'POST' && !sessionId) {
       // New session — initialise
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (id) => {
-          sessions.set(id, { server: mcpServer, transport });
+          sessions.set(id, { server: mcpServer, transport, identity: requestIdentity });
         },
       });
 
-      const mcpServer = buildMcpServer(registry, { defaultUserId: effectiveUserId, isAdmin: user.isAdmin, defaultOrgId });
+      const mcpServer = buildMcpServer(registry, {
+        defaultUserId: effectiveUserId,
+        isAdmin: user.isAdmin,
+        defaultOrgId,
+        defaultRole: orgCtx?.role,
+      });
 
       transport.onclose = () => {
         const id = [...sessions.entries()].find(([, v]) => v.transport === transport)?.[0];
@@ -401,6 +420,10 @@ if (USE_HTTP) {
     const session = sessionId ? sessions.get(sessionId) : undefined;
     if (!session) {
       res.status(404).json({ error: 'Session not found. Send a POST without mcp-session-id to initialise.' });
+      return;
+    }
+    if (!matchesMcpSessionIdentity(session.identity, requestIdentity)) {
+      res.status(403).json({ error: 'MCP session authentication context changed. Reconnect to continue.' });
       return;
     }
 

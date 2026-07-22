@@ -238,10 +238,18 @@ active-organization middleware, forwards only base content fields, and omits
 organization and creator identities from responses. Stable failures map to 400,
 403, 404, and 409 without weakening the domain service's ID isolation.
 
+Authenticated HTTP MCP sessions expose `knowledge_list` and
+`knowledge_base_create` only when the server has pinned user, organization, and
+role context. Stdio sessions do not advertise or execute knowledge tools
+without equivalent trusted tenant context. Tool inputs cannot override actor
+identity, role, or administrator status, and tool results omit organization and
+creator identities.
+
 Desktop resolves the active git remote against accessible Projects and requires
 an explicit create/link or selection when there are zero or multiple matches.
-Dashboard uses its selected organization and Project. HTTP MCP sessions reconnect
-when organization context changes.
+Dashboard uses its selected organization and Project. HTTP MCP sessions reject
+requests and require reconnect when their authenticated user, organization,
+role, or administrator context changes.
 
 ### Storage and processing
 
@@ -269,8 +277,10 @@ and tenant-fair job runner.
 
 ### Serving and distillation
 
-`knowledge_list`, `knowledge_ingest`, and `knowledge_search` are available over
-authenticated REST/MCP adapters. Profile recommendation intersects the shared
+Base list/create are available through authenticated REST and MCP adapters; the
+MCP tool names are `knowledge_list` and `knowledge_base_create`.
+`knowledge_ingest` and `knowledge_search` follow with their respective
+processing and retrieval slices. Profile recommendation intersects the shared
 profile catalog with actually available packs/personas and is never an ACL.
 Opt-in distillation writes provenance-linked derived knowledge documents and
 prevents recursive self-distillation. Only separately reviewed facts may be
@@ -333,7 +343,7 @@ captured into cognitive memory through its current engine.
 | W4b | Done | Skill catalog/packs + explicit tool-profile mapping | CLI/Desktop parity and policy tests |
 | W4c | Done | Briefing + memory tags | Capture/briefing/no-manifest tests |
 | W6 | Done | Client bootstrap deprecation | Offline core proposal coverage + downstream template-doc compatibility tests |
-| B1a | In progress (REST) | Project/RBAC contract, schema, internal store, scoped base CRUD/list | Migration + role/access + scoped CRUD + REST adapter tests; MCP adapter remains |
+| B1a | Done | Project/RBAC contract, schema, internal store, REST base CRUD, MCP base list/create | Migration + role/access + scoped CRUD + authenticated adapter tests |
 | B1b/B2 | Todo | Text ingest, typed parse jobs, status, scoped retry | 202/status/retry/idempotency/fairness tests |
 | B1c | Todo | Hybrid retrieval and citation APIs/tools | FTS/vector/fallback/tenancy tests |
 | B1d | Todo | Additional document parsers | Per-format bounds/redaction tests |

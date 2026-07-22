@@ -15,6 +15,8 @@ import { isClientDisconnectError } from '../transport-errors.js';
 import { recordToolCall } from '../observability/metrics.js';
 import { VERSION } from '../version.js';
 import { memoryEngine } from '../memory/engine.js';
+import { knowledgeActorFromAuth } from '../knowledge/contracts/actor.js';
+import type { Role } from '../tenancy/rbac.js';
 
 // Import tools — grouped per domain; each barrel re-exports its modules' public
 // surface (schemas + handlers). See tools/<domain>/index.ts.
@@ -103,16 +105,26 @@ import {
   connectorListToolSchema, handleConnectorList,
   connectorRunToolSchema, handleConnectorRun,
 } from '../tools/atlas/index.js';
+import {
+  knowledgeListToolSchema, handleKnowledgeList,
+  knowledgeBaseCreateToolSchema, handleKnowledgeBaseCreate,
+} from '../tools/knowledge/index.js';
 
 const STDIO_DEFAULT_USER_ID = process.env.BRAINROUTER_USER_ID ?? "default";
 
 export // ─── Server factory ───────────────────────────────────────────────────────────
-function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; isAdmin?: boolean; defaultOrgId?: string }): Server {
+function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; isAdmin?: boolean; defaultOrgId?: string; defaultRole?: Role }): Server {
   const defaultUserId = options?.defaultUserId ?? STDIO_DEFAULT_USER_ID;
   const isAdmin = options?.isAdmin ?? false;
   // C1 (ADR-016) — the caller's active org, pinned server-side so recall can
   // surface org-shared memory. Never client-supplied (not in any tool schema).
   const defaultOrgId = options?.defaultOrgId;
+  const knowledgeActor = knowledgeActorFromAuth({
+    userId: defaultUserId,
+    orgId: defaultOrgId,
+    role: options?.defaultRole,
+    isAdmin,
+  });
   // Connectors are workspace-scoped file state (connectors.json under the
   // BrainRouter home). Use the resolved local workspace root; fall back to cwd.
   const connectorWorkspaceRoot = registry.getLocalRoot() ?? process.cwd();
@@ -306,6 +318,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       fleetSnapshotGetToolSchema,
       connectorListToolSchema,
       connectorRunToolSchema,
+      ...(knowledgeActor ? [knowledgeListToolSchema, knowledgeBaseCreateToolSchema] : []),
     ],
   }));
 
@@ -473,6 +486,12 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
           return await handleConnectorList(request.params.arguments, { workspaceRoot: connectorWorkspaceRoot });
         case 'connector_run':
           return await handleConnectorRun(request.params.arguments, { workspaceRoot: connectorWorkspaceRoot, defaultUserId });
+        case 'knowledge_list':
+          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
+          return await handleKnowledgeList(request.params.arguments, { actor: knowledgeActor });
+        case 'knowledge_base_create':
+          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
+          return await handleKnowledgeBaseCreate(request.params.arguments, { actor: knowledgeActor });
         default:
           throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
       }

@@ -184,8 +184,12 @@ queries that include organization and Project scope on every read and write;
 adapters cannot address a base by its identifier alone.
 The REST adapter derives its actor from authenticated request context, exposes
 base CRUD beneath a Project-scoped path, and does not accept or return tenant
-organization, user, role, or administrator fields. The MCP adapter follows as
-an independent review slice.
+organization, user, role, or administrator fields. Authenticated HTTP MCP
+sessions advertise base list/create tools only when user, organization, and
+role are all pinned by the server. Stdio sessions do not expose knowledge tools
+without an equivalent trusted organization context. MCP requests cannot
+override tenant identity, role, or administrator status, and responses omit
+organization and creator identities.
 
 ## Delivery order
 
@@ -206,10 +210,10 @@ an independent review slice.
 - **C1/C2/C4 (shipped)** — skill tool allowlists, plugin-delivered
   profile/capability packs with selected same-ID specialist executors, and the
   frontend design-artifact workflow without a separate frontend persona.
-- **B1a (schema + access + base store + REST shipped)** — project-consistent knowledge
+- **B1a (shipped)** — project-consistent knowledge
   storage, central read/write roles, a server-derived actor, exact Project
-  access resolution, scoped base CRUD, and authenticated REST routes. MCP
-  exposure follows independently.
+  access resolution, scoped base CRUD, authenticated REST routes, and
+  authenticated HTTP MCP base list/create tools.
 - **B1b–B3** — async parsing and retrieval; profile-aware recommendations and
   opt-in sourced distillation.
 - **C3** — dashboard and desktop knowledge management after the server contracts
