@@ -5,6 +5,7 @@
 export * from './workspace.js';
 export * from './workspaceTrust.js';
 export * from './manifest.js';
+export * from './onboardingTransaction.js';
 export * from './capabilities.js';
 export * from './profileSuggest.js';
 export * from './fileWrite.js';
