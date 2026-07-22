@@ -72,6 +72,8 @@ export interface SidebarProps {
   toggleProject: (root: string) => void;
   reorderProject: (dragged: string, target: string) => void;
   addProject: () => void;
+  workspaceOnboarded?: boolean;
+  openWorkspaceSetup: () => void;
   openAccountSettings: () => void;
 }
 
@@ -83,6 +85,7 @@ export function Sidebar(p: SidebarProps): React.ReactElement | null {
     renamingKey, renameDraft, setRenameDraft, setRenamingKey, commitRename,
     ungroupedSessions, setVisibleCount, groupedSessions, archivedCount, setShowArchived, showArchived,
     expandedProjects, projSessions, runningWs, runningSessions, workspaceRunCount, openProject, toggleProject, reorderProject, addProject,
+    workspaceOnboarded, openWorkspaceSetup,
   } = p;
   const [projectSearchOpen, setProjectSearchOpen] = useState(false);
   const [projectQuery, setProjectQuery] = useState('');
@@ -229,6 +232,11 @@ export function Sidebar(p: SidebarProps): React.ReactElement | null {
                 </div>
                 {active ? (
                   <div className="project-sessions">
+                    <button type="button" className={`workspace-setup-action${workspaceOnboarded === true ? '' : ' pending'}`}
+                      onClick={openWorkspaceSetup}>
+                      <Icon name={workspaceOnboarded === true ? 'gear' : 'spark'} size={12} />
+                      {workspaceOnboarded === true ? 'Workspace settings' : 'Finish setup'}
+                    </button>
                     {/* DESK-5w/6m — chats with per-chat menu; background tasks
                         live in the Background tasks/Dashboard surfaces. */}
                     {visibleProjectSessions.map((s, i) => renderSessionNode(s, i))}

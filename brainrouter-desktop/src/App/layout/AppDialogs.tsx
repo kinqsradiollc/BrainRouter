@@ -8,6 +8,7 @@ import React from 'react';
 import { CommandPalette } from '../../palette.js';
 import { SettingsDialog, type ConfigSnapshot, type UsageHistory } from '../../settings.js';
 import type { MarketplaceState } from '../../settings/marketplace/index.js';
+import { OnboardingDialog } from '../../components/dialogs/OnboardingDialog.js';
 import { InteractionDialogs } from '../../components/dialogs/InteractionDialogs.js';
 import { ExportAndMenuDialogs } from '../../components/dialogs/ExportAndMenuDialogs.js';
 import { InfoAndGateDialogs } from '../../components/dialogs/InfoAndGateDialogs.js';
@@ -66,6 +67,9 @@ export interface AppDialogsProps {
   trustAsk: React.ComponentProps<typeof InteractionDialogs>['trustAsk'];
   setTrustAsk: React.ComponentProps<typeof InteractionDialogs>['setTrustAsk'];
   switchToWorkspace: (root: string, resumeKey?: string) => void;
+  onboardAsk: string | null;
+  setOnboardAsk: (root: string | null) => void;
+  onWorkspaceOnboarded: (root: string) => void;
   // Export + session-menu dialogs
   sessionMenu: React.ComponentProps<typeof ExportAndMenuDialogs>['sessionMenu'];
   sessions: SessionRow[];
@@ -101,7 +105,7 @@ export function AppDialogs(p: AppDialogsProps): React.ReactElement {
     usageHistory, tokens, catalog, setPreference, endpointModels, providerModels, probedModels, probeLoading,
     probeError, setProbeLoading, setProbeError, setProbedModels, toolCatalog, market, execMode, codeFont, setCodeFont,
     theme, setTheme, chatWidth, setChatWidth, chatSize, setChatSize, accent, setAccent, interaction, picked,
-    setPicked, answerInteraction, trustAsk, setTrustAsk, switchToWorkspace, sessionMenu, sessions,
+    setPicked, answerInteraction, trustAsk, setTrustAsk, onboardAsk, setOnboardAsk, onWorkspaceOnboarded, switchToWorkspace, sessionMenu, sessions,
     closeSessionMenu, openExternal, togglePin, toggleComplete, startRename, forkSessionAction, moveToGroup,
     sessionGroups, toggleArchive, deleteSessionAction, infoDialog, setInfoDialog, gateBlock, setGateBlock,
     activeRoot, ensurePanel, setReviewRunningByWs, setReviewByWs, pendingGitRef, runGit, setToast, setGitBusy, toast,
@@ -156,6 +160,8 @@ export function AppDialogs(p: AppDialogsProps): React.ReactElement {
 
       <InteractionDialogs interaction={interaction} picked={picked} setPicked={setPicked} answerInteraction={answerInteraction}
         trustAsk={trustAsk} setTrustAsk={setTrustAsk} switchToWorkspace={switchToWorkspace} />
+
+      <OnboardingDialog root={onboardAsk} onClose={() => setOnboardAsk(null)} onSaved={onWorkspaceOnboarded} />
 
       <ExportAndMenuDialogs pop={pop} setPop={setPop} q={q} sessionMenu={sessionMenu} sessions={sessions}
         closeSessionMenu={closeSessionMenu} openExternal={openExternal} togglePin={togglePin} toggleComplete={toggleComplete}

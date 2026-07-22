@@ -66,6 +66,9 @@ export function App(): React.ReactElement {
     activeWsRef, workspaceGenRef, pendingWorkspaceRef, pendingResumeRef, trustAsk, setTrustAsk, runningWs, setRunningWs,
     setSessionRunning,
   } = useSessionState();
+  const [onboardAsk, setOnboardAsk] = useState<string | null>(null);
+  const [onboardedByRoot, setOnboardedByRoot] = useState<Record<string, boolean>>({});
+  const onboardingDismissedRef = useRef<Set<string>>(new Set());
 
   const cachedSessionRowsRef = useRef<Record<string, ChatRow[]>>({});
   const [rows, setRowsState] = useState<ChatRow[]>([]);
@@ -107,6 +110,28 @@ export function App(): React.ReactElement {
   const [hostUp, setHostUp] = useState(false);
   const [interaction, setInteraction] = useState<InteractionRequest | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
+
+  // Ask once after the active host becomes authoritative. Root, generation,
+  // and cancellation guards prevent a late response from reopening setup for
+  // a project the user has already left.
+  useEffect(() => {
+    if (!hostUp) {
+      setOnboardAsk(null);
+      return;
+    }
+    const root = info.workspaceRoot;
+    if (!root || !window.brainrouter.workspaceManifest) return;
+    setOnboardAsk((current) => current === root ? current : null);
+    const generation = workspaceGenRef.current;
+    let cancelled = false;
+    void window.brainrouter.workspaceManifest(root).then((result) => {
+      if (cancelled || workspaceGenRef.current !== generation || activeWsRef.current !== root || !result.ok) return;
+      const onboarded = result.onboarded === true;
+      setOnboardedByRoot((current) => ({ ...current, [root]: onboarded }));
+      if (!onboarded && !onboardingDismissedRef.current.has(root)) setOnboardAsk(root);
+    }).catch(() => { /* the persistent sidebar action remains available for retry */ });
+    return () => { cancelled = true; };
+  }, [activeWsRef, hostUp, info.workspaceRoot, workspaceGenRef]);
   const [railOpen, setRailOpen] = useState(() => {
     const saved = localStorage.getItem('br-rail-open');
     return saved !== null ? saved === '1' : true;
@@ -647,6 +672,12 @@ export function App(): React.ReactElement {
         setShowArchived={setShowArchived} showArchived={showArchived}
         expandedProjects={expandedProjects} projSessions={projSessions} runningWs={runningWorkspaces} runningSessions={runningSessions} workspaceRunCount={workspaceRunCount}
         openProject={openProject} toggleProject={toggleProject} reorderProject={reorderProject} addProject={addProject}
+        workspaceOnboarded={activeSidebarRoot ? onboardedByRoot[activeSidebarRoot] : undefined}
+        openWorkspaceSetup={() => {
+          if (!activeSidebarRoot) return;
+          onboardingDismissedRef.current.delete(activeSidebarRoot);
+          setOnboardAsk(activeSidebarRoot);
+        }}
         openAccountSettings={() => openSettings('account')} />
 
       <MainContent
@@ -700,6 +731,14 @@ export function App(): React.ReactElement {
         accent={accent} setAccent={setAccent}
         interaction={interaction} picked={picked} setPicked={setPicked} answerInteraction={answerInteraction}
         trustAsk={trustAsk} setTrustAsk={setTrustAsk} switchToWorkspace={switchToWorkspace}
+        onboardAsk={onboardAsk} setOnboardAsk={(root) => {
+          if (root === null && onboardAsk) onboardingDismissedRef.current.add(onboardAsk);
+          setOnboardAsk(root);
+        }}
+        onWorkspaceOnboarded={(root) => {
+          onboardingDismissedRef.current.delete(root);
+          setOnboardedByRoot((current) => ({ ...current, [root]: true }));
+        }}
         sessionMenu={sessionMenu} sessions={sessions} closeSessionMenu={closeSessionMenu} openExternal={openExternal}
         togglePin={togglePin} toggleComplete={toggleComplete} startRename={startRename} forkSessionAction={forkSessionAction}
         moveToGroup={moveToGroup} sessionGroups={sessionGroups} toggleArchive={toggleArchive} deleteSessionAction={deleteSessionAction}

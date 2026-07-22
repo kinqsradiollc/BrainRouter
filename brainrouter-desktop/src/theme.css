@@ -2139,6 +2139,9 @@ select.toolbar-input { cursor: pointer; }
 }
 
 /* ── Reviewed workspace onboarding editor ─────────────────────────────────── */
+.workspace-setup-action { width: calc(100% - 18px); margin: 3px 9px 7px; padding: 6px 8px; display: flex; align-items: center; gap: 7px; border: 1px solid var(--border); border-radius: var(--r-sm); background: transparent; color: var(--text-dim); font-size: 11.5px; cursor: pointer; }
+.workspace-setup-action:hover { color: var(--text); border-color: var(--border-strong); background: var(--raised); }
+.workspace-setup-action.pending { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: var(--accent-soft); }
 .onboard-overlay { padding: 18px; }
 .onboard-dialog { display: flex; flex-direction: column; width: min(820px, 94vw); max-height: min(900px, 92vh); overflow: hidden; }
 .onboard-dialog > .set-desc { margin: 2px 0 12px; line-height: 1.45; }
