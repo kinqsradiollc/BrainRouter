@@ -98,3 +98,38 @@ test('reviewed onboarding rejects unsafe instruction contents before either file
     assert.equal(fs.existsSync(path.join(env.root, 'AGENT.md')), false);
   } finally { env.cleanup(); }
 });
+
+test('reviewed onboarding binds the manifest pointer to an approved instruction', () => {
+  const env = workspace();
+  try {
+    const review = inspectWorkspaceOnboardingReview(env.root);
+    assert.throws(() => commitReviewedWorkspaceOnboarding(env.root, {
+      expected: review.revision,
+      manifest: createWorkspaceManifest({
+        name: 'mismatch',
+        profile: 'engineering',
+        by: 'agent',
+        overrides: { instructions: '' },
+      }),
+      instruction: { path: 'AGENT.md', contents: '# Project instructions\n' },
+    }), /must point to the reviewed instruction proposal/);
+    assert.equal(loadWorkspaceManifest(env.root), null);
+    assert.equal(fs.existsSync(path.join(env.root, 'AGENT.md')), false);
+  } finally { env.cleanup(); }
+});
+
+test('reviewed onboarding rejects a revision from a different workspace root', () => {
+  const env = workspace();
+  const otherRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'br-reviewed-other-'));
+  try {
+    const review = inspectWorkspaceOnboardingReview(env.root);
+    assert.throws(() => commitReviewedWorkspaceOnboarding(otherRoot, {
+      expected: review.revision,
+      manifest: createWorkspaceManifest({ name: 'wrong-root', profile: 'engineering', by: 'wizard' }),
+    }), /changed during review/);
+    assert.equal(loadWorkspaceManifest(otherRoot), null);
+  } finally {
+    fs.rmSync(otherRoot, { recursive: true, force: true });
+    env.cleanup();
+  }
+});

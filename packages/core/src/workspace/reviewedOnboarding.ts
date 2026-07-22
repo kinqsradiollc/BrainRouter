@@ -46,6 +46,7 @@ const INSTRUCTION_RELPATH = 'AGENT.md';
 const INSTRUCTION_SNAPSHOT_MAX_BYTES = 4 * 1024 * 1024;
 
 export interface WorkspaceOnboardingReviewRevision {
+  root: string;
   manifest: string;
   instruction: string;
 }
@@ -83,17 +84,20 @@ export function inspectWorkspaceOnboardingReview(
   workspaceRoot: string,
 ): WorkspaceOnboardingReviewState {
   recoverInterruptedWorkspaceOnboardingPair(workspaceRoot);
+  const root = fs.realpathSync(workspaceRoot);
+  const rootBefore = requireStableWorkspaceRoot(root);
   const manifest = snapshotWorkspaceFile(
-    workspaceRoot,
+    root,
     WORKSPACE_MANIFEST_RELPATH,
     WORKSPACE_MANIFEST_MAX_BYTES,
   );
   const instruction = snapshotWorkspaceFile(
-    workspaceRoot,
+    root,
     INSTRUCTION_RELPATH,
     INSTRUCTION_SNAPSHOT_MAX_BYTES,
   );
-  return reviewState(manifest, instruction);
+  assertWorkspaceRootUnchanged(root, rootBefore);
+  return reviewState(root, rootBefore, manifest, instruction);
 }
 
 /** Persist the exact normalized proposal only after both reviewed revisions match. */
@@ -103,18 +107,22 @@ export function commitReviewedWorkspaceOnboarding(
 ): ReviewedWorkspaceOnboardingResult {
   assertRevision(input.expected);
   recoverInterruptedWorkspaceOnboardingPair(workspaceRoot);
+  const root = fs.realpathSync(workspaceRoot);
+  const rootBefore = requireStableWorkspaceRoot(root);
   const manifestBefore = snapshotWorkspaceFile(
-    workspaceRoot,
+    root,
     WORKSPACE_MANIFEST_RELPATH,
     WORKSPACE_MANIFEST_MAX_BYTES,
   );
   const instructionBefore = snapshotWorkspaceFile(
-    workspaceRoot,
+    root,
     INSTRUCTION_RELPATH,
     INSTRUCTION_SNAPSHOT_MAX_BYTES,
   );
-  const observed = reviewState(manifestBefore, instructionBefore);
-  if (observed.revision.manifest !== input.expected.manifest ||
+  assertWorkspaceRootUnchanged(root, rootBefore);
+  const observed = reviewState(root, rootBefore, manifestBefore, instructionBefore);
+  if (observed.revision.root !== input.expected.root ||
+      observed.revision.manifest !== input.expected.manifest ||
       observed.revision.instruction !== input.expected.instruction) {
     throw new Error('Workspace setup changed during review. Reload it before saving.');
   }
@@ -122,6 +130,9 @@ export function commitReviewedWorkspaceOnboarding(
   const manifest = normalizeWorkspaceManifest(input.manifest);
   const manifestDesired = serializeWorkspaceManifest(manifest);
   const instructionDesired = validateInstruction(input.instruction);
+  if (instructionDesired !== undefined && manifest.instructions !== INSTRUCTION_RELPATH) {
+    throw new Error('Workspace manifest must point to the reviewed instruction proposal.');
+  }
   let pair: WorkspaceOnboardingPairTransaction | undefined;
   let failure: unknown;
   let manifestPath = '';
@@ -219,7 +230,8 @@ function validateInstruction(
 }
 
 function assertRevision(revision: WorkspaceOnboardingReviewRevision): void {
-  if (!revision || !/^[0-9a-f]{64}$/.test(revision.manifest) ||
+  if (!revision || !/^[0-9a-f]{64}$/.test(revision.root) ||
+      !/^[0-9a-f]{64}$/.test(revision.manifest) ||
       !/^[0-9a-f]{64}$/.test(revision.instruction)) {
     throw new Error('Invalid workspace setup revision.');
   }
@@ -237,11 +249,14 @@ function assertSnapshotUnchanged(
 }
 
 function reviewState(
+  root: string,
+  rootStat: import('node:fs').Stats,
   manifest: WorkspaceOnboardingFileSnapshot,
   instruction: WorkspaceOnboardingFileSnapshot,
 ): WorkspaceOnboardingReviewState {
   return {
     revision: {
+      root: sha256(Buffer.from(JSON.stringify({ root, dev: rootStat.dev, ino: rootStat.ino }))),
       manifest: snapshotRevision(manifest),
       instruction: snapshotRevision(instruction),
     },
@@ -252,6 +267,21 @@ function reviewState(
       sha256: instruction.contents ? sha256(instruction.contents) : null,
     },
   };
+}
+
+function requireStableWorkspaceRoot(root: string): import('node:fs').Stats {
+  const stat = fs.lstatSync(root);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error('Unsafe workspace root.');
+  }
+  return stat;
+}
+
+function assertWorkspaceRootUnchanged(root: string, expected: import('node:fs').Stats): void {
+  const current = requireStableWorkspaceRoot(root);
+  if (current.dev !== expected.dev || current.ino !== expected.ino) {
+    throw new Error('Workspace root changed during review inspection.');
+  }
 }
 
 function snapshotRevision(snapshot: WorkspaceOnboardingFileSnapshot): string {
