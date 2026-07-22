@@ -179,6 +179,9 @@ authentication context. Central RBAC grants `knowledge:read` to every member
 role and `knowledge:write` to developer, admin, and owner roles. Exact Project
 lookup binds actor organization and user identity in SQL; missing, foreign, and
 restricted Projects that the actor cannot access all resolve identically.
+Knowledge-base CRUD is exposed first as a transport-neutral service backed by
+queries that include organization and Project scope on every read and write;
+adapters cannot address a base by its identifier alone.
 
 ## Delivery order
 
@@ -199,9 +202,9 @@ restricted Projects that the actor cannot access all resolve identically.
 - **C1/C2/C4 (shipped)** — skill tool allowlists, plugin-delivered
   profile/capability packs with selected same-ID specialist executors, and the
   frontend design-artifact workflow without a separate frontend persona.
-- **B1a (schema + access contract shipped)** — project-consistent knowledge
-  storage, central read/write roles, a server-derived actor, and exact Project
-  access resolution. Base store and API work follows as independent slices.
+- **B1a (schema + access + base store shipped)** — project-consistent knowledge
+  storage, central read/write roles, a server-derived actor, exact Project
+  access resolution, and scoped base CRUD. API work follows independently.
 - **B1b–B3** — async parsing and retrieval; profile-aware recommendations and
   opt-in sourced distillation.
 - **C3** — dashboard and desktop knowledge management after the server contracts
