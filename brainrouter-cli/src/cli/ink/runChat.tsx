@@ -66,6 +66,8 @@ export interface RunChatOptions {
   mcpClient: McpClientWrapper;
   config: Config;
   workspace?: WorkspaceInfo;
+  /** True when this launch has no MCP targets, whether by choice or configuration. */
+  localOnlyLaunch?: boolean;
   /**
    * Optional federation handle from `attachFederation`. When provided,
    * `runChat` swaps its `onInboxText` to push incoming /dm + broadcast
@@ -108,11 +110,16 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
   // const banner = renderBanner(buildBannerInputs(config, agent, mcpClient), theme);
   const banner = '';
 
+  const localOnly = opts.localOnlyLaunch === true;
   const offlineWarning = mcpClient.isConnected()
     ? undefined
-    : theme.warning('  ⚠️  OFFLINE MODE — MCP server unreachable. Memory recall, skills, and capture are disabled.')
-      + '\n' + theme.muted('       Local tools (file edits, shell, web fetch, spawn_agent) still work.')
-      + '\n' + theme.muted('       Start the MCP server and restart the CLI to restore full functionality.');
+    : localOnly
+      ? theme.warning('  LOCAL-ONLY MODE — MCP is not enabled for this launch. Memory recall, skills, and capture are disabled.')
+        + '\n' + theme.muted('       Local tools (file edits, shell, web fetch, spawn_agent) still work.')
+        + '\n' + theme.muted('       Run /init config or /login when you want to connect an MCP profile.')
+      : theme.warning('  ⚠️  OFFLINE MODE — MCP server unreachable. Memory recall, skills, and capture are disabled.')
+        + '\n' + theme.muted('       Local tools (file edits, shell, web fetch, spawn_agent) still work.')
+        + '\n' + theme.muted('       Start the MCP server and restart the CLI to restore full functionality.');
 
   const hint = theme.muted('  Type ') + theme.info('/help')
     + theme.muted(' for commands · ') + theme.info('/where')
