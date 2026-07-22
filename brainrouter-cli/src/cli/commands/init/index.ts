@@ -2,6 +2,7 @@ import chalk from 'chalk';
 import type { CommandContext } from '../_context.js';
 import { initAgentMd } from '../../../prompt/initAgentMd.js';
 import { runWizard } from '../../ink/wizard/runWizard.js';
+import { safeOnboardingError } from './onboardingErrors.js';
 import { runProjectOnboarding, suggestWorkspaceProfile } from './projectOnboard.js';
 
 /**
@@ -55,7 +56,7 @@ export async function tryHandleInitCommand(ctx: CommandContext): Promise<boolean
     try {
       await runProjectOnboarding(agent.workspaceRoot, { edit: true });
     } catch (err: any) {
-      console.error(chalk.red(`\n/init --edit failed: ${err?.message ?? err}\n`));
+      console.error(chalk.red(`\n/init --edit failed: ${safeOnboardingError(err)}\n`));
     }
     return true;
   }
@@ -80,7 +81,7 @@ export async function tryHandleInitCommand(ctx: CommandContext): Promise<boolean
       }
       repl.refreshPromptForMode();
     } catch (err: any) {
-      console.error(chalk.red(`\n/init config failed: ${err?.message ?? err}\n`));
+      console.error(chalk.red(`\n/init config failed: ${safeOnboardingError(err)}\n`));
     }
     return true;
   }
@@ -90,7 +91,7 @@ export async function tryHandleInitCommand(ctx: CommandContext): Promise<boolean
     await runProjectOnboarding(agent.workspaceRoot);
     console.log(chalk.gray('  Global setup wizard: `/init config` · instruction file: `/init agentmd`\n'));
   } catch (err: any) {
-    console.error(chalk.red(`\n/init failed: ${err?.message ?? err}\n`));
+    console.error(chalk.red(`\n/init failed: ${safeOnboardingError(err)}\n`));
   }
   return true;
 }
