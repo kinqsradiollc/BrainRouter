@@ -10,6 +10,7 @@ import {
 } from '@kinqs/brainrouter-core/workspace';
 import {
   getWorkspaceManifestInfo,
+  previewWorkspaceInstructionFromPayload,
   saveWorkspaceManifestFromPayload,
   type ManifestSavePayload,
 } from './workspaceOnboarding.js';
@@ -62,6 +63,68 @@ test('manifest-get returns suggestion, complete profiles, and opaque review revi
     assert.match(info.review.revision.root, /^[0-9a-f]{64}$/);
     assert.match(info.review.revision.manifest, /^[0-9a-f]{64}$/);
     assert.equal(info.review.instruction.existed, false);
+  } finally { env.cleanup(); }
+});
+
+test('instruction-preview returns exact safe text without writing either file', () => {
+  const env = tmpWorkspace({ 'AGENT.md': '# Existing\n' });
+  try {
+    const info = getWorkspaceManifestInfo(env.root);
+    const result = previewWorkspaceInstructionFromPayload(env.root, {
+      expected: info.review.revision,
+      instruction: { path: 'AGENT.md', contents: '# Proposed\n' },
+    });
+    assert.deepEqual(result, {
+      ok: true,
+      path: 'AGENT.md',
+      existed: true,
+      original: '# Existing\n',
+      proposed: '# Proposed\n',
+      originalBytes: 11,
+      proposedBytes: 11,
+    });
+    assert.equal(fs.readFileSync(path.join(env.root, 'AGENT.md'), 'utf8'), '# Existing\n');
+    assert.equal(loadWorkspaceManifest(env.root), null);
+  } finally { env.cleanup(); }
+});
+
+test('instruction-preview rejects stale revisions without exposing concurrent text', () => {
+  const env = tmpWorkspace({ 'AGENT.md': '# Original\n' });
+  try {
+    const info = getWorkspaceManifestInfo(env.root);
+    fs.writeFileSync(path.join(env.root, 'AGENT.md'), '# Concurrent private change\n');
+    const result = previewWorkspaceInstructionFromPayload(env.root, {
+      expected: info.review.revision,
+      instruction: { path: 'AGENT.md', contents: '# Proposed\n' },
+    });
+    assert.deepEqual(result, {
+      ok: false,
+      stale: true,
+      error: 'Workspace setup changed while the instruction was being reviewed.',
+    });
+    assert.equal(JSON.stringify(result).includes('Concurrent private change'), false);
+  } finally { env.cleanup(); }
+});
+
+test('instruction-preview fails closed on secret-bearing or malformed content', () => {
+  const env = tmpWorkspace({ 'AGENT.md': 'OPENAI_API_KEY=sk-do-not-expose\n' });
+  try {
+    const info = getWorkspaceManifestInfo(env.root);
+    const unsafeExisting = previewWorkspaceInstructionFromPayload(env.root, {
+      expected: info.review.revision,
+      instruction: { path: 'AGENT.md', contents: '# Proposed\n' },
+    });
+    assert.equal(unsafeExisting.ok, false);
+    assert.equal(JSON.stringify(unsafeExisting).includes('sk-do-not-expose'), false);
+
+    const malformed = previewWorkspaceInstructionFromPayload(env.root, {
+      expected: info.review.revision,
+      instruction: { path: '../AGENT.md', contents: '# Proposed\n' },
+      extra: true,
+    });
+    assert.equal(malformed.ok, false);
+    assert.equal(fs.readFileSync(path.join(env.root, 'AGENT.md'), 'utf8'), 'OPENAI_API_KEY=sk-do-not-expose\n');
+    assert.equal(loadWorkspaceManifest(env.root), null);
   } finally { env.cleanup(); }
 });
 

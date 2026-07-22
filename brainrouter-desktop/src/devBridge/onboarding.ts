@@ -85,6 +85,38 @@ export function saveDevWorkspaceManifest(
   return { saved: true, manifest, review: getDevWorkspaceManifest(state, root).review };
 }
 
+/** Browser-development mirror of the read-only, stale-safe preview query. */
+export function previewDevWorkspaceInstruction(
+  state: DevOnboardingState,
+  root: string,
+  payload: unknown,
+): Record<string, unknown> {
+  if (!isRecord(payload) || !hasExactKeys(payload, ['expected', 'instruction'])) {
+    return { ok: false, error: 'Workspace instruction preview contains unsafe, oversized, or malformed content.' };
+  }
+  if (!sameRevision(payload.expected, revision(state, root))) {
+    return {
+      ok: false,
+      stale: true,
+      error: 'Workspace setup changed while the instruction was being reviewed.',
+    };
+  }
+  const instruction = parseInstruction(payload.instruction);
+  if (!instruction) {
+    return { ok: false, error: 'Workspace instruction preview contains unsafe, oversized, or malformed content.' };
+  }
+  const original = state.instructions.get(root) ?? '';
+  return {
+    ok: true,
+    path: 'AGENT.md',
+    existed: state.instructions.has(root),
+    original,
+    proposed: instruction.contents,
+    originalBytes: new TextEncoder().encode(original).length,
+    proposedBytes: new TextEncoder().encode(instruction.contents).length,
+  };
+}
+
 function revision(state: DevOnboardingState, root: string): Record<string, string> {
   return {
     root: rootDigest(root),
@@ -94,12 +126,14 @@ function revision(state: DevOnboardingState, root: string): Record<string, strin
 }
 
 function sameRevision(value: unknown, expected: Record<string, string>): boolean {
-  return isRecord(value) && value.root === expected.root && value.manifest === expected.manifest &&
+  return isRecord(value) && hasExactKeys(value, ['root', 'manifest', 'instruction']) &&
+    value.root === expected.root && value.manifest === expected.manifest &&
     value.instruction === expected.instruction;
 }
 
 function parseInstruction(value: unknown): { path: 'AGENT.md'; contents: string } | null {
-  if (!isRecord(value) || value.path !== 'AGENT.md' || typeof value.contents !== 'string') return null;
+  if (!isRecord(value) || !hasExactKeys(value, ['path', 'contents']) ||
+      value.path !== 'AGENT.md' || typeof value.contents !== 'string') return null;
   const bytes = new TextEncoder().encode(value.contents).length;
   if (bytes < 1 || bytes > DEV_MAX_INSTRUCTION_BYTES) return null;
   return { path: 'AGENT.md', contents: value.contents };
@@ -119,5 +153,12 @@ function counterDigest(value: number): string {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function hasExactKeys(value: Record<string, unknown>, expected: string[]): boolean {
+  const keys = Object.keys(value);
+  return keys.length === expected.length && keys.every((key) => expected.includes(key));
 }

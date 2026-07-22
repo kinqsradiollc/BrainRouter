@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   createDevOnboardingState,
   getDevWorkspaceManifest,
+  previewDevWorkspaceInstruction,
   saveDevWorkspaceManifest,
 } from './onboarding.js';
 
@@ -91,4 +92,55 @@ test('rejects empty and oversized instruction replacements', () => {
     ...base,
     instruction: { path: 'AGENT.md', contents: 'x'.repeat(65_537) },
   }).saved, false);
+});
+
+test('previews exact instruction changes without mutating browser-development state', () => {
+  const state = createDevOnboardingState();
+  state.instructions.set(root, '# Existing\n');
+  const current = getDevWorkspaceManifest(state, root);
+  const result = previewDevWorkspaceInstruction(state, root, {
+    expected: (current.review as { revision: unknown }).revision,
+    instruction: { path: 'AGENT.md', contents: '# Proposed\n' },
+  });
+  assert.deepEqual(result, {
+    ok: true,
+    path: 'AGENT.md',
+    existed: true,
+    original: '# Existing\n',
+    proposed: '# Proposed\n',
+    originalBytes: 11,
+    proposedBytes: 11,
+  });
+  assert.equal(state.instructions.get(root), '# Existing\n');
+  assert.equal(state.manifests.has(root), false);
+});
+
+test('browser-development instruction preview rejects stale and malformed requests', () => {
+  const state = createDevOnboardingState();
+  const current = getDevWorkspaceManifest(state, root);
+  const expected = (current.review as { revision: unknown }).revision;
+  state.instructionRevisions.set(root, 1);
+  assert.deepEqual(previewDevWorkspaceInstruction(state, root, {
+    expected,
+    instruction: { path: 'AGENT.md', contents: '# Proposed\n' },
+  }), {
+    ok: false,
+    stale: true,
+    error: 'Workspace setup changed while the instruction was being reviewed.',
+  });
+  assert.equal(previewDevWorkspaceInstruction(state, root, {
+    expected: (getDevWorkspaceManifest(state, root).review as { revision: unknown }).revision,
+    instruction: { path: '../AGENT.md', contents: '# Proposed\n' },
+  }).ok, false);
+  assert.equal(previewDevWorkspaceInstruction(state, root, {
+    expected: (getDevWorkspaceManifest(state, root).review as { revision: unknown }).revision,
+    instruction: { path: 'AGENT.md', contents: '# Proposed\n', extra: true },
+  }).ok, false);
+  assert.equal(previewDevWorkspaceInstruction(state, root, {
+    expected: {
+      ...(getDevWorkspaceManifest(state, root).review as { revision: Record<string, unknown> }).revision,
+      extra: true,
+    },
+    instruction: { path: 'AGENT.md', contents: '# Proposed\n' },
+  }).ok, false);
 });

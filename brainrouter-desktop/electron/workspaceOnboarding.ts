@@ -8,6 +8,7 @@ import {
   isWorkspaceProfileId,
   loadWorkspaceManifest,
   normalizeWorkspaceManifest,
+  previewReviewedWorkspaceInstruction,
   suggestWorkspaceProfile,
   type ProfileSuggestion,
   type WorkspaceManifest,
@@ -52,6 +53,52 @@ export interface ManifestSavePayload {
 export type ManifestSaveResult =
   | { saved: true; manifest: WorkspaceManifest; review: ReturnType<typeof inspectWorkspaceOnboardingReview> }
   | { saved: false; error: string; stale?: boolean };
+
+export type WorkspaceInstructionPreviewResult =
+  | {
+      ok: true;
+      path: 'AGENT.md';
+      existed: boolean;
+      original: string;
+      proposed: string;
+      originalBytes: number;
+      proposedBytes: number;
+    }
+  | { ok: false; error: string; stale?: boolean };
+
+/**
+ * Validate an instruction-preview query and expose exact text only through the
+ * core no-follow, secret-safe, stale-revision gate. This function never writes.
+ */
+export function previewWorkspaceInstructionFromPayload(
+  workspaceRoot: string,
+  payload: unknown,
+): WorkspaceInstructionPreviewResult {
+  try {
+    const record = plainRecord(payload, 'instruction preview payload');
+    exactKeys(record, ['expected', 'instruction'], 'instruction preview payload');
+    const expected = parseRevision(record.expected);
+    const instruction = parseInstruction(record.instruction, 'AGENT.md');
+    if (!instruction) throw new Error('Instruction proposal is required.');
+    return {
+      ok: true,
+      ...previewReviewedWorkspaceInstruction(workspaceRoot, { expected, instruction }),
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    if (message.includes('changed during review')) {
+      return {
+        ok: false,
+        stale: true,
+        error: 'Workspace setup changed while the instruction was being reviewed.',
+      };
+    }
+    if (/unsafe|exceeds|invalid|proposal is required/i.test(message)) {
+      return { ok: false, error: 'Workspace instruction preview contains unsafe, oversized, or malformed content.' };
+    }
+    return { ok: false, error: 'Workspace instruction preview is unavailable.' };
+  }
+}
 
 /** Validate one complete editor submission, preserve safe unknown fields, and commit it. */
 export function saveWorkspaceManifestFromPayload(
