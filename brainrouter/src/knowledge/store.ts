@@ -4,6 +4,7 @@ import type {
 } from "./contracts/base.js";
 import type {
   KnowledgeDocumentListFilters,
+  KnowledgeDocumentEnqueueResult,
   KnowledgeDocumentRecord,
   KnowledgeDocumentStatusUpdate,
 } from "./contracts/document.js";
@@ -23,6 +24,10 @@ export interface KnowledgeBaseStore extends KnowledgeProjectAccessStore {
 }
 
 export interface KnowledgeDocumentStore extends KnowledgeBaseStore {
+  enqueueKnowledgeDocument(
+    record: KnowledgeDocumentRecord,
+    jobId: string,
+  ): Promise<KnowledgeDocumentEnqueueResult>;
   createKnowledgeDocument(record: KnowledgeDocumentRecord): Promise<void>;
   getKnowledgeDocument(
     documentId: string,
