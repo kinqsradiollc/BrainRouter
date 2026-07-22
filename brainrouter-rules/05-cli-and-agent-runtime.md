@@ -222,6 +222,19 @@ the skill body (the single source of truth). See [`09`](09-docs-skills-and-plugi
 
 - **Evidence:** `brainrouter-cli/src/cli/prompt/skillCatalog.ts:31,33,96`
 
+### 16. Workspace tool profiles filter each Agent turn; never mutate the extension registry
+
+Manifest `tools.profiles` and task-time capability profiles resolve through the
+single mapping in `workspace/toolProfiles.ts`. Apply that selection to the
+model-visible local surface and re-check it at dispatch. Profile assignments are
+explicit: unassigned control-plane/security tools and unknown extension tools
+retain their existing behavior, while a missing manifest is an exact no-op.
+Manifest tool/extension denies subtract after profile selection and user
+force-on overrides cannot bypass the gate. Never reload, unregister, or mutate
+process-global extensions to represent one workspace or one task.
+
+- **Evidence:** `packages/core/src/workspace/toolProfiles.ts`, `packages/core/src/tests/workspace-tool-profiles.test.ts`, `packages/core/src/agent/runtime/runTurn.impl.ts`
+
 ---
 
 ## Comments & tests

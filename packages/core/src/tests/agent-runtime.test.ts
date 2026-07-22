@@ -3060,6 +3060,120 @@ test('runTurn serves package-owned get_skill without calling a stale global MCP 
   });
 });
 
+test('runTurn applies manifest tool profiles to the model-visible local surface', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'blank', profile: 'custom', by: 'wizard' }),
+    );
+    const originalFetch = globalThis.fetch;
+    let llmCalls = 0;
+    let firstRequestBody: any;
+    let secondRequestBody: any;
+    globalThis.fetch = (async (_url: any, opts: any) => {
+      llmCalls += 1;
+      const body = JSON.parse(opts.body);
+      if (llmCalls === 1) {
+        firstRequestBody = body;
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: '',
+              tool_calls: [{
+                id: 'hidden_write',
+                type: 'function',
+                function: { name: 'write_file', arguments: '{"path":"blocked.txt","content":"no"}' },
+              }],
+            },
+          }],
+          usage: { prompt_tokens: 50, completion_tokens: 5 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      secondRequestBody = body;
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'done' } }],
+        usage: { prompt_tokens: 50, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({ content: [] }),
+        close: async () => {},
+      };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'm' }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        silent: true,
+      });
+      agent.setAccessMode('shell');
+      assert.equal(await agent.runTurn('Inspect the project.', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: () => {},
+      }), 'done');
+
+      const names = new Set((firstRequestBody.tools ?? []).map((tool: any) => tool.function?.name));
+      assert.equal(names.has('read_file'), true, 'baseline filesystem reads remain available');
+      assert.equal(names.has('update_plan'), true, 'control-plane tools remain available');
+      assert.equal(names.has('write_file'), false, 'custom empty profile does not grant coding writes');
+      assert.equal(names.has('run_command'), false, 'custom empty profile does not grant terminal execution');
+      assert.equal(names.has('web_search'), false, 'custom empty profile does not grant browser research');
+      assert.equal(fs.existsSync(path.join(workspace, 'blocked.txt')), false, 'a stale hidden call cannot write');
+      const denied = secondRequestBody.messages.find((message: any) => message.tool_call_id === 'hidden_write');
+      assert.match(denied?.content ?? '', /workspace tool-profile policy/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('runTurn combines engineering manifest profiles with task-time frontend profiles', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'app', profile: 'engineering', by: 'wizard' }),
+    );
+    const originalFetch = globalThis.fetch;
+    let requestBody: any;
+    globalThis.fetch = (async (_url: any, opts: any) => {
+      requestBody = JSON.parse(opts.body);
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'done' } }],
+        usage: { prompt_tokens: 50, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({ content: [] }),
+        close: async () => {},
+      };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'm' }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        silent: true,
+      });
+      agent.setAccessMode('shell');
+      assert.equal(await agent.runTurn('Build a responsive React dashboard.', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: () => {},
+      }), 'done');
+
+      const names = new Set((requestBody.tools ?? []).map((tool: any) => tool.function?.name));
+      assert.equal(names.has('write_file'), true);
+      assert.equal(names.has('run_command'), true);
+      assert.equal(names.has('web_search'), true);
+      assert.equal(names.has('artifact_write'), true, 'frontend design profile adds its reviewed artifact tool');
+      assert.deepEqual(agent.activeWorkspaceCapabilities.toolProfiles, ['browser', 'design']);
+      assert.equal(agent.activeWorkspacePersonaId, 'engineer');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
 test('runTurn recovery: unknown tool name surfaces "did you mean" via normalizeToolName', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const originalFetch = globalThis.fetch;

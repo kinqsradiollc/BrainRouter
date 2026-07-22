@@ -44,6 +44,7 @@ import { startSpan, traceEvent } from '../../telemetry/tracing/tracing.js';
 import { localToolSpecsFromExecutors } from '../../tool/registry/executors.js';
 import { normalizeToolName } from '../../tool/specs/names.js';
 import { hideWorkerToolsFor, isRegisteredLocalTool, registryEntry, registryToolAllowed } from '../../tool/registry/registry.js';
+import { extensionToolOwner } from '../../extension/registry.js';
 import { applyToolScope, rankAndCapTools, toolNameMatchesAny } from '../../tool/policy/toolBudget.js';
 import { resolveToolVisible } from '../../tool/policy/toolPolicy.js';
 import { extractCacheStats } from '../../util/tokens/cacheStats.js';
@@ -83,6 +84,11 @@ import {
   adaptWorkspaceSkillCatalogText,
   resolveWorkspaceManagedSkill,
 } from '../../workspace/skillToolAdapter.js';
+import { loadWorkspaceManifest } from '../../workspace/manifest.js';
+import {
+  resolveWorkspaceToolSelection,
+  workspaceToolAllowed,
+} from '../../workspace/toolProfiles.js';
 import {
   buildChatCompletionPayload, buildResponsesPayload, resolveRequestFormat, resolveWireEffort,
   callOpenAI, callOpenAIStream, InterruptError, isInterrupt, activeProviderDef, effortForTurnSelection,
@@ -187,6 +193,17 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     }
 
     const allowed = this.allowedToolsForAccess();
+    const workspaceToolSelection = resolveWorkspaceToolSelection({
+      manifest: loadWorkspaceManifest(this.workspaceRoot),
+      activeToolProfiles: this.activeWorkspaceCapabilities.toolProfiles,
+    });
+    const workspaceAllowsLocalTool = (name: string): boolean => {
+      const canonicalName = registryEntry(name)?.name ?? name;
+      return workspaceToolAllowed(workspaceToolSelection, {
+        toolId: canonicalName,
+        extensionId: extensionToolOwner(canonicalName)?.extension,
+      });
+    };
     // Worker-thread tools are registered so the model can call them, but only a
     // depth-0, non-worker orchestrator should SEE them (workers can't spawn
     // workers; a child owns none) — hide the surface from everyone else.
@@ -248,6 +265,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         allowed.has(t.name) &&
         (!this.toolScope?.local.length || this.toolScope.local.includes(t.name)) &&
         !disallowedLocalSet.has(t.name) &&
+        workspaceAllowsLocalTool(t.name) &&
         skillAllowsTool(t.name);
       if (!hardVisible) return false;
       // No model-strength tool clamp: EVERY model — weak or strong — sees the
@@ -286,7 +304,9 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // `mcp_<serverId>_<tool>` namespaces. BrainRouter's auto-pipeline/admin
     // tools stay hidden because the CLI owns those flows.
     let visibleMcpTools = mcpTools.filter((t: any) =>
-      this.isModelVisibleMcpTool(t) && skillAllowsTool(String(t?.name ?? '')));
+      this.isModelVisibleMcpTool(t)
+      && !workspaceToolSelection.deniedIds.has(String(t?.name ?? ''))
+      && skillAllowsTool(String(t?.name ?? '')));
     // MAS-P4-T1: tool-surface budgeting. First apply the agent def's scope
     // (whitelist `toolScope.mcp` + blacklist `disallowedTools`), then cap the
     // catalog to `cli.agentMcpToolBudget`, keeping the tools most relevant to
@@ -347,6 +367,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         && (!this.toolScope?.local.length || this.toolScope.local.includes(tool.name) || this.toolScope.local.includes(ownerName))
         && !disallowedLocalSet.has(tool.name)
         && !disallowedLocalSet.has(ownerName)
+        && workspaceAllowsLocalTool(tool.name)
         && skillAllowsTool(tool.name);
     });
     const allTools = [...filteredLocalTools, ...delegateTools, ...visibleMcpTools];
@@ -1936,6 +1957,12 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
             // active skill allowlist at dispatch for local, delegate, and MCP.
             if (!skillAllowsTool(name)) {
               denyAndRecord(`Tool "${name}" denied by the active skill allowed-tools policy.`);
+            }
+            if (isLocal && !workspaceAllowsLocalTool(name)) {
+              denyAndRecord(`Tool "${name}" denied by the active workspace tool-profile policy.`);
+            }
+            if (!isLocal && workspaceToolSelection.deniedIds.has(name)) {
+              denyAndRecord(`Tool "${name}" denied by the active workspace tool policy.`);
             }
             // CC-P3.2 — declarative cli.permissions rules run FIRST: a deny match
             // blocks outright; an allow match downgrades an `ask` below (it never

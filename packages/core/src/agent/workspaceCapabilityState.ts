@@ -16,6 +16,7 @@ import {
   findDomainPersona,
   renderDomainPersonaBriefing,
 } from '../workspace/domainPersonas.js';
+import { workspaceToolProfileIds } from '../workspace/toolProfiles.js';
 
 export interface WorkspaceCapabilityStateHost {
   workspaceRoot: string;
@@ -51,7 +52,12 @@ export function refreshWorkspaceCapabilityState(
     host.removeTaggedSystemMessage(WORKSPACE_PERSONA_TAG);
   }
 
-  const resolution = resolveWorkspaceCapabilities({ manifest, activeAgent, task });
+  const resolution = resolveWorkspaceCapabilities({
+    manifest,
+    activeAgent,
+    task,
+    availability: { toolProfiles: workspaceToolProfileIds() },
+  });
   host.activeWorkspaceCapabilities = resolution;
 
   if (resolution.promptBlocks.length === 0) {
