@@ -108,6 +108,9 @@ import {
 import {
   knowledgeListToolSchema, handleKnowledgeList,
   knowledgeBaseCreateToolSchema, handleKnowledgeBaseCreate,
+  knowledgeIngestToolSchema, handleKnowledgeIngest,
+  knowledgeStatusToolSchema, handleKnowledgeStatus,
+  knowledgeRetryToolSchema, handleKnowledgeRetry,
 } from '../tools/knowledge/index.js';
 
 const STDIO_DEFAULT_USER_ID = process.env.BRAINROUTER_USER_ID ?? "default";
@@ -318,7 +321,13 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       fleetSnapshotGetToolSchema,
       connectorListToolSchema,
       connectorRunToolSchema,
-      ...(knowledgeActor ? [knowledgeListToolSchema, knowledgeBaseCreateToolSchema] : []),
+      ...(knowledgeActor ? [
+        knowledgeListToolSchema,
+        knowledgeBaseCreateToolSchema,
+        knowledgeIngestToolSchema,
+        knowledgeStatusToolSchema,
+        knowledgeRetryToolSchema,
+      ] : []),
     ],
   }));
 
@@ -492,6 +501,15 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
         case 'knowledge_base_create':
           if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
           return await handleKnowledgeBaseCreate(request.params.arguments, { actor: knowledgeActor });
+        case 'knowledge_ingest':
+          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
+          return await handleKnowledgeIngest(request.params.arguments, { actor: knowledgeActor });
+        case 'knowledge_status':
+          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
+          return await handleKnowledgeStatus(request.params.arguments, { actor: knowledgeActor });
+        case 'knowledge_retry':
+          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
+          return await handleKnowledgeRetry(request.params.arguments, { actor: knowledgeActor });
         default:
           throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
       }
