@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   createWorkspaceManifest,
+  loadWorkspaceManifest,
   saveWorkspaceManifest,
   serializeWorkspaceManifest,
   workspaceManifestPath,
@@ -85,7 +86,7 @@ test('pair recovery restores an instruction when the manifest was not committed'
     endWorkspaceOnboardingPairTransaction(transaction);
     transaction = undefined;
 
-    recoverInterruptedWorkspaceOnboardingPair(state.workspace);
+    assert.equal(loadWorkspaceManifest(state.workspace)?.name, 'before');
     assert.equal(fs.readFileSync(instructionPath, 'utf8'), '# Before\n');
     assert.equal(fs.statSync(instructionPath).mode & 0o777, 0o640);
     assert.equal(JSON.parse(fs.readFileSync(workspaceManifestPath(state.workspace), 'utf8')).name, 'before');
