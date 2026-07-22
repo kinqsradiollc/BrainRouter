@@ -58,7 +58,27 @@ describe("RBAC roles + capabilities (ADR-010)", () => {
     expect(can("viewer", "connectors:manage")).toBe(false);
     expect(can("viewer", "reviews:read")).toBe(false);
     expect(can("viewer", "reviews:run")).toBe(false);
-    expect(capabilitiesFor("viewer")).toEqual(["models:read", "remote:read", "memory:read", "vulnerabilities:read"]);
+    expect(capabilitiesFor("viewer")).toEqual([
+      "models:read",
+      "remote:read",
+      "memory:read",
+      "knowledge:read",
+      "vulnerabilities:read",
+    ]);
+  });
+
+  it("keeps project knowledge readable by every role and writable by developer or above", () => {
+    expect(ROLES.filter((role) => can(role, "knowledge:read")).sort()).toEqual([
+      "admin",
+      "developer",
+      "owner",
+      "viewer",
+    ]);
+    expect(ROLES.filter((role) => can(role, "knowledge:write")).sort()).toEqual([
+      "admin",
+      "developer",
+      "owner",
+    ]);
   });
 
   it("every member can read the safe model catalog while only admins manage it", () => {

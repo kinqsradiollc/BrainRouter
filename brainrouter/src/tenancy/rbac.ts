@@ -40,6 +40,8 @@ export const CAPABILITIES = [
   'memory:write',     // create/update one's own memory records
   'memory:read',      // read own + org-shared memory
   'memory:share',     // mark a record org-visible (private → org)
+  'knowledge:read',   // read project knowledge bases/documents/search results
+  'knowledge:write',  // create/update project knowledge bases/documents
   'vulnerabilities:read',   // browse the CVE catalog + this org's scans/findings
   'vulnerabilities:scan',   // run repository inventory scans + OSV matching
   'vulnerabilities:manage', // refresh sources, triage findings, manage watches
@@ -68,6 +70,8 @@ export const ROLE_CAPABILITIES: Record<Role, ReadonlySet<Capability>> = {
     'memory:write',
     'memory:read',
     'memory:share',
+    'knowledge:read',
+    'knowledge:write',
     'vulnerabilities:read',
     'vulnerabilities:scan',
     'vulnerabilities:manage',
@@ -82,10 +86,12 @@ export const ROLE_CAPABILITIES: Record<Role, ReadonlySet<Capability>> = {
     'memory:write',
     'memory:read',
     'memory:share',
+    'knowledge:read',
+    'knowledge:write',
     'vulnerabilities:read',
     'vulnerabilities:scan',
   ]),
-  viewer: new Set<Capability>(['models:read', 'remote:read', 'memory:read', 'vulnerabilities:read']),
+  viewer: new Set<Capability>(['models:read', 'remote:read', 'memory:read', 'knowledge:read', 'vulnerabilities:read']),
 };
 
 /** Narrow an unknown value to a canonical {@link Role} (strict — no legacy names). */

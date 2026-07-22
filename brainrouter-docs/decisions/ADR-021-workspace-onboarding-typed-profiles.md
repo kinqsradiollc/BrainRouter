@@ -174,6 +174,12 @@ knowledge embeddings are separate from cognitive-memory indexes; knowledge
 vectors record their model and dimensions and use exact, dimension-filtered
 retrieval until a later scale-driven indexing decision is justified.
 
+Knowledge authorization has a transport-neutral actor derived only from trusted
+authentication context. Central RBAC grants `knowledge:read` to every member
+role and `knowledge:write` to developer, admin, and owner roles. Exact Project
+lookup binds actor organization and user identity in SQL; missing, foreign, and
+restricted Projects that the actor cannot access all resolve identically.
+
 ## Delivery order
 
 - **W0–W3a (shipped)** — bundled starter skills; core manifest/presets; CLI
@@ -193,9 +199,9 @@ retrieval until a later scale-driven indexing decision is justified.
 - **C1/C2/C4 (shipped)** — skill tool allowlists, plugin-delivered
   profile/capability packs with selected same-ID specialist executors, and the
   frontend design-artifact workflow without a separate frontend persona.
-- **B1a (schema shipped)** — project-consistent knowledge bases, documents,
-  chunks, FTS, and isolated vector storage. Actor/RBAC/store/API work follows as
-  independent slices.
+- **B1a (schema + access contract shipped)** — project-consistent knowledge
+  storage, central read/write roles, a server-derived actor, and exact Project
+  access resolution. Base store and API work follows as independent slices.
 - **B1b–B3** — async parsing and retrieval; profile-aware recommendations and
   opt-in sourced distillation.
 - **C3** — dashboard and desktop knowledge management after the server contracts

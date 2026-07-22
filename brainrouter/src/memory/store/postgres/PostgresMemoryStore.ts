@@ -475,6 +475,7 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   // ── projects + per-project access (ADR-014 P-E) ──────────────────────────
   public createProject(rec: projects.ProjectRecord): Promise<void> { return projects.createProject(this.exec, rec); }
   public getProject(projectId: string): Promise<projects.ProjectRecord | null> { return projects.getProject(this.exec, projectId); }
+  public getAccessibleProject(projectId: string, orgId: string, userId: string, canAccessRestricted: boolean): Promise<projects.ProjectRecord | null> { return projects.getAccessibleProject(this.exec, projectId, orgId, userId, canAccessRestricted); }
   public countProjects(orgId: string): Promise<number> { return projects.countProjects(this.exec, orgId); }
   public updateProject(projectId: string, patch: { name?: string; repoUrl?: string | null; restricted?: boolean }): Promise<projects.ProjectRecord | null> { return projects.updateProject(this.exec, projectId, patch); }
   public deleteProject(projectId: string): Promise<void> { return projects.deleteProject(this.exec, projectId); }

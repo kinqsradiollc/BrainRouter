@@ -45,6 +45,25 @@ export async function getProject(exec: Executor, projectId: string): Promise<Pro
   return row ? projRow(row) : null;
 }
 
+/** Resolve one Project without leaking whether a foreign or restricted id exists. */
+export async function getAccessibleProject(
+  exec: Executor,
+  projectId: string,
+  orgId: string,
+  userId: string,
+  canAccessRestricted: boolean,
+): Promise<ProjectRecord | null> {
+  const row = await exec.one<any>(
+    `SELECT p.* FROM projects p
+      WHERE p.project_id = $1
+        AND p.org_id = $2
+        AND ( p.restricted = false OR $4 = true
+              OR EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.project_id AND pm.user_id = $3) )`,
+    [projectId, orgId, userId, canAccessRestricted],
+  );
+  return row ? projRow(row) : null;
+}
+
 export async function countProjects(exec: Executor, orgId: string): Promise<number> {
   const row = await exec.one<any>(`SELECT COUNT(*)::int AS n FROM projects WHERE org_id = $1`, [orgId]);
   return Number(row?.n ?? 0);
