@@ -214,10 +214,10 @@ organization and creator identities.
   storage, central read/write roles, a server-derived actor, exact Project
   access resolution, scoped base CRUD, authenticated REST routes, and
   authenticated HTTP MCP base list/create tools.
-- **B1b (document store shipped)** — typed document lifecycle records and
-  ancestry-scoped create/read/hash/list/status persistence with per-base dedupe.
-  Normalization/redaction, atomic parse-job enqueue, and processing follow as
-  independent slices.
+- **B1b (ingest foundation shipped)** — typed document lifecycle records;
+  ancestry-scoped persistence; bounded plain-text/Markdown normalization,
+  redaction, and persisted-content dedupe; plus atomic enqueue of an ID-only,
+  tenant-scoped parse job. Processing and public adapters follow independently.
 - **B1c–B3** — async retrieval; profile-aware recommendations and
   opt-in sourced distillation.
 - **C3** — dashboard and desktop knowledge management after the server contracts

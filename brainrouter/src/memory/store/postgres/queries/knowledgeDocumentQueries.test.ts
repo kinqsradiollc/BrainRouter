@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import type { KnowledgeDocumentRecord } from "../../../../knowledge/contracts/document.js";
+import {
+  KNOWLEDGE_PARSE_JOB_KIND,
+  type KnowledgeDocumentRecord,
+} from "../../../../knowledge/contracts/document.js";
 import {
   createKnowledgeDocument,
+  enqueueKnowledgeDocument,
   getKnowledgeDocument,
   getKnowledgeDocumentByContentHash,
   listKnowledgeDocuments,
@@ -116,5 +120,55 @@ describe("knowledge document queries", () => {
     expect(params).toEqual([
       "doc-1", "base-1", "org-1", "project-1", "ready", null, at, at,
     ]);
+  });
+
+  it("atomically inserts a document and content-free tenant parse job", async () => {
+    const client = {
+      query: vi.fn()
+        .mockResolvedValueOnce({ rowCount: 1, rows: [row] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [] }),
+    };
+    const exec = executor();
+    exec.tx = vi.fn(async (fn: (value: unknown) => Promise<unknown>) => fn(client));
+
+    await expect(enqueueKnowledgeDocument(exec, record, "job-1")).resolves.toEqual({
+      document: record,
+      created: true,
+      jobId: "job-1",
+    });
+    expect(exec.tx).toHaveBeenCalledOnce();
+    expect(client.query).toHaveBeenCalledTimes(2);
+    const [jobSql, jobParams] = client.query.mock.calls[1];
+    expect(jobSql).toContain("INSERT INTO memory_jobs");
+    expect(jobParams[1]).toBe(KNOWLEDGE_PARSE_JOB_KIND);
+    expect(jobParams[3]).toBe("org-1");
+    expect(JSON.parse(jobParams[4])).toEqual({
+      orgId: "org-1",
+      projectId: "project-1",
+      baseId: "base-1",
+      documentId: "doc-1",
+      parseVersion: 1,
+    });
+    expect(jobParams.join(" ")).not.toContain("# Runbook");
+  });
+
+  it("returns the scoped dedupe row without creating another parse job", async () => {
+    const client = {
+      query: vi.fn()
+        .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [row] }),
+    };
+    const exec = executor();
+    exec.tx = vi.fn(async (fn: (value: unknown) => Promise<unknown>) => fn(client));
+
+    await expect(enqueueKnowledgeDocument(exec, record, "unused-job")).resolves.toEqual({
+      document: record,
+      created: false,
+      jobId: null,
+    });
+    expect(client.query).toHaveBeenCalledTimes(2);
+    expect(client.query.mock.calls[1][0]).toContain(
+      "content_sha256 = $1 AND base_id = $2 AND org_id = $3 AND project_id = $4",
+    );
   });
 });

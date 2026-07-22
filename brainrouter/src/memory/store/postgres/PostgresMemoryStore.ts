@@ -103,6 +103,7 @@ import { mapWithConcurrency, readEmbedConcurrency } from "../../util/concurrency
 import type { Executor } from "./queries/executor.js";
 import type { KnowledgeBaseRecord, UpdateKnowledgeBaseInput } from "../../../knowledge/contracts/base.js";
 import type {
+  KnowledgeDocumentEnqueueResult,
   KnowledgeDocumentListFilters,
   KnowledgeDocumentRecord,
   KnowledgeDocumentStatusUpdate,
@@ -497,6 +498,7 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public updateKnowledgeBase(baseId: string, orgId: string, projectId: string, patch: UpdateKnowledgeBaseInput & { updatedAt: string }): Promise<KnowledgeBaseRecord | null> { return knowledgeBases.updateKnowledgeBase(this.exec, baseId, orgId, projectId, patch); }
   public deleteKnowledgeBase(baseId: string, orgId: string, projectId: string): Promise<boolean> { return knowledgeBases.deleteKnowledgeBase(this.exec, baseId, orgId, projectId); }
   public createKnowledgeDocument(record: KnowledgeDocumentRecord): Promise<void> { return knowledgeDocuments.createKnowledgeDocument(this.exec, record); }
+  public enqueueKnowledgeDocument(record: KnowledgeDocumentRecord, jobId: string): Promise<KnowledgeDocumentEnqueueResult> { return knowledgeDocuments.enqueueKnowledgeDocument(this.exec, record, jobId); }
   public getKnowledgeDocument(documentId: string, baseId: string, orgId: string, projectId: string): Promise<KnowledgeDocumentRecord | null> { return knowledgeDocuments.getKnowledgeDocument(this.exec, documentId, baseId, orgId, projectId); }
   public getKnowledgeDocumentByContentHash(contentSha256: string, baseId: string, orgId: string, projectId: string): Promise<KnowledgeDocumentRecord | null> { return knowledgeDocuments.getKnowledgeDocumentByContentHash(this.exec, contentSha256, baseId, orgId, projectId); }
   public listKnowledgeDocuments(baseId: string, orgId: string, projectId: string, filters?: KnowledgeDocumentListFilters): Promise<KnowledgeDocumentRecord[]> { return knowledgeDocuments.listKnowledgeDocuments(this.exec, baseId, orgId, projectId, filters); }

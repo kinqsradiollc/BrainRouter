@@ -1,8 +1,11 @@
 import type {
+  KnowledgeDocumentEnqueueResult,
   KnowledgeDocumentListFilters,
+  KnowledgeParseJobInput,
   KnowledgeDocumentRecord,
   KnowledgeDocumentStatusUpdate,
 } from "../../../../knowledge/contracts/document.js";
+import { KNOWLEDGE_PARSE_JOB_KIND } from "../../../../knowledge/contracts/document.js";
 import type { Executor } from "./executor.js";
 
 const COLUMNS = `document_id, base_id, org_id, project_id, title, source_name,
@@ -38,6 +41,27 @@ function rowToRecord(row: any): KnowledgeDocumentRecord {
   };
 }
 
+function insertParams(record: KnowledgeDocumentRecord): unknown[] {
+  return [
+    record.documentId,
+    record.baseId,
+    record.orgId,
+    record.projectId,
+    record.title,
+    record.sourceName,
+    record.sourceFormat,
+    record.contentText,
+    record.contentSha256,
+    record.status,
+    record.statusMessage,
+    record.parseVersion,
+    record.createdBy,
+    record.createdAt,
+    record.updatedAt,
+    record.readyAt,
+  ];
+}
+
 export async function createKnowledgeDocument(
   exec: Executor,
   record: KnowledgeDocumentRecord,
@@ -48,25 +72,61 @@ export async function createKnowledgeDocument(
         source_format, content_text, content_sha256, status, status_message,
         parse_version, created_by, created_at, updated_at, ready_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
-    [
-      record.documentId,
-      record.baseId,
-      record.orgId,
-      record.projectId,
-      record.title,
-      record.sourceName,
-      record.sourceFormat,
-      record.contentText,
-      record.contentSha256,
-      record.status,
-      record.statusMessage,
-      record.parseVersion,
-      record.createdBy,
-      record.createdAt,
-      record.updatedAt,
-      record.readyAt,
-    ],
+    insertParams(record),
   );
+}
+
+export async function enqueueKnowledgeDocument(
+  exec: Executor,
+  record: KnowledgeDocumentRecord,
+  jobId: string,
+): Promise<KnowledgeDocumentEnqueueResult> {
+  return exec.tx(async (client) => {
+    const inserted = await client.query(
+      `INSERT INTO knowledge_documents
+         (document_id, base_id, org_id, project_id, title, source_name,
+          source_format, content_text, content_sha256, status, status_message,
+          parse_version, created_by, created_at, updated_at, ready_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+       ON CONFLICT (org_id, project_id, base_id, content_sha256) DO NOTHING
+       RETURNING ${COLUMNS}`,
+      insertParams(record),
+    );
+    if ((inserted.rowCount ?? 0) === 0) {
+      const existing = (await client.query(
+        `SELECT ${COLUMNS} FROM knowledge_documents
+          WHERE content_sha256 = $1 AND base_id = $2 AND org_id = $3 AND project_id = $4`,
+        [record.contentSha256, record.baseId, record.orgId, record.projectId],
+      )).rows[0];
+      if (!existing) throw new Error("Knowledge document dedupe row disappeared.");
+      return { document: rowToRecord(existing), created: false, jobId: null };
+    }
+
+    const input: KnowledgeParseJobInput = {
+      orgId: record.orgId,
+      projectId: record.projectId,
+      baseId: record.baseId,
+      documentId: record.documentId,
+      parseVersion: record.parseVersion,
+    };
+    await client.query(
+      `INSERT INTO memory_jobs
+         (id, kind, status, priority, attempts, max_attempts, run_after,
+          locked_at, parent_job_id, tenant, input_json, output_json, error,
+          created_at, updated_at)
+       VALUES ($1,$2,'pending',50,0,3,$3,NULL,NULL,$4,$5,NULL,NULL,$6,$7)`,
+      [
+        jobId,
+        KNOWLEDGE_PARSE_JOB_KIND,
+        record.createdAt,
+        record.orgId,
+        JSON.stringify(input),
+        record.createdAt,
+        record.updatedAt,
+      ],
+    );
+    return { document: rowToRecord(inserted.rows[0]), created: true, jobId };
+  });
 }
 
 export async function getKnowledgeDocument(
