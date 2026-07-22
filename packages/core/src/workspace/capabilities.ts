@@ -54,6 +54,8 @@ const FRONTEND_CONTRIBUTION: CapabilityContribution = {
   ],
 };
 
+const KNOWN_WORKSPACE_CAPABILITY_IDS = ['frontend'] as const;
+
 const EMPTY_RESOLUTION: WorkspaceCapabilityResolution = {
   active: [],
   reasons: [],
@@ -120,6 +122,11 @@ export function resolveWorkspaceCapabilities(input: WorkspaceCapabilityResolutio
   }
 
   return { active, reasons, skillPacks, skills, toolProfiles, promptBlocks };
+}
+
+/** Capability ids this runtime can safely activate and brief. */
+export function workspaceCapabilityIds(): string[] {
+  return [...KNOWN_WORKSPACE_CAPABILITY_IDS];
 }
 
 function detectFrontendReasons(task: string | undefined, files: readonly string[] | undefined): string[] {

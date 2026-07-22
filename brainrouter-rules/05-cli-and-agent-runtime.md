@@ -235,6 +235,17 @@ process-global extensions to represent one workspace or one task.
 
 - **Evidence:** `packages/core/src/workspace/toolProfiles.ts`, `packages/core/src/tests/workspace-tool-profiles.test.ts`, `packages/core/src/agent/runtime/runTurn.impl.ts`
 
+### 17. Workspace profile briefings replace by tag at the per-turn capability chokepoint
+
+For a readable manifest, resolve the active persona and task capabilities first,
+then publish one bounded profile briefing through
+`refreshWorkspaceCapabilityState`. Only runtime-known capability ids are
+rendered. Reuse the tagged system-message slot so workspace switches replace
+profile/persona state instead of accumulating it; a missing manifest retracts
+the tag and preserves the pre-onboarding prompt exactly.
+
+- **Evidence:** `packages/core/src/agent/workspaceCapabilityState.ts`, `packages/core/src/tests/workspace-capability-state.test.ts`
+
 ---
 
 ## Comments & tests
