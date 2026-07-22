@@ -8,6 +8,7 @@ import {
   onboardingSavePayload,
   parseOnboardingCsv,
   parseOnboardingEditor,
+  parseOnboardingInstructionPreview,
   parseOnboardingProposal,
   type OnboardingProfile,
 } from './onboardingEditorModel.js';
@@ -117,6 +118,16 @@ test('parses model proposals and accepts only the fixed instruction target', () 
   });
   assert.ok(unsafe);
   assert.equal(unsafe.instruction, null);
+
+  const oversized = parseOnboardingProposal({
+    proposal: {
+      source: 'model',
+      manifest: draft,
+      instruction: { path: 'AGENT.md', contents: 'x'.repeat(65_537) },
+    },
+  });
+  assert.ok(oversized);
+  assert.equal(oversized.instruction, null);
 });
 
 test('validates assisted descriptions by UTF-8 bytes and formats deterministic fallback status', () => {
@@ -133,6 +144,53 @@ test('validates assisted descriptions by UTF-8 bytes and formats deterministic f
   assert.equal(parsed.source, 'wizard');
   assert.deepEqual(parsed.scanStats, { filesRead: 4, stoppedBy: ['deadline'] });
   assert.match(onboardingProposalStatus(parsed), /deterministic proposal was used/);
+});
+
+test('parses exact instruction previews and rejects altered or oversized renderer payloads', () => {
+  assert.deepEqual(parseOnboardingInstructionPreview({
+    ok: true,
+    path: 'AGENT.md',
+    existed: true,
+    original: '# Current\n',
+    proposed: '# Proposed\n',
+    originalBytes: 10,
+    proposedBytes: 11,
+  }), {
+    ok: true,
+    path: 'AGENT.md',
+    existed: true,
+    original: '# Current\n',
+    proposed: '# Proposed\n',
+    originalBytes: 10,
+    proposedBytes: 11,
+  });
+  assert.deepEqual(parseOnboardingInstructionPreview({
+    ok: false,
+    stale: true,
+    error: 'Workspace setup changed while the instruction was being reviewed.',
+  }), {
+    ok: false,
+    stale: true,
+    error: 'Workspace setup changed while the instruction was being reviewed.',
+  });
+  assert.equal(parseOnboardingInstructionPreview({
+    ok: true,
+    path: 'AGENT.md',
+    existed: false,
+    original: '',
+    proposed: '# Proposed\n',
+    originalBytes: 0,
+    proposedBytes: 12,
+  }), null);
+  assert.equal(parseOnboardingInstructionPreview({
+    ok: true,
+    path: 'AGENT.md',
+    existed: false,
+    original: '',
+    proposed: 'x'.repeat(65_537),
+    originalBytes: 0,
+    proposedBytes: 65_537,
+  }), null);
 });
 
 test('formats review previews and comma-separated editor fields deterministically', () => {

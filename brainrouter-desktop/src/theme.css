@@ -2179,6 +2179,21 @@ select.toolbar-input { cursor: pointer; }
 .onboard-diff-label { display: flex; justify-content: space-between; gap: 12px; margin: 7px 0 5px; color: var(--text-dim); font-size: 10.5px; }
 .onboard-diff { max-height: 260px; overflow: auto; margin: 0; padding: 10px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--input); color: var(--text-dim); font: 10.5px/1.45 var(--mono); white-space: pre-wrap; word-break: break-word; }
 .onboard-no-instruction { margin-top: 8px; color: var(--text-faint); font-size: 11px; }
+.onboard-instruction-review { margin-top: 11px; padding-top: 11px; border-top: 1px solid var(--border); }
+.onboard-instruction-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.onboard-instruction-heading > div { display: flex; flex-direction: column; gap: 3px; }
+.onboard-instruction-heading strong { color: var(--text); font-size: 11.5px; }
+.onboard-instruction-heading span { color: var(--text-faint); font-size: 10.5px; line-height: 1.4; }
+.onboard-instruction-heading > button { flex: 0 0 auto; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--raised); color: var(--text-dim); font-size: 11px; cursor: pointer; }
+.onboard-instruction-heading > button:hover:not(:disabled) { color: var(--text); border-color: var(--border-strong); }
+.onboard-instruction-heading > button:disabled { opacity: .45; cursor: default; }
+.onboard-instruction-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 8px; }
+.onboard-instruction-grid .onboard-diff { min-height: 96px; max-height: 220px; }
+.onboard-instruction-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 9px; }
+.onboard-instruction-actions button { padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--r-sm); background: transparent; color: var(--text-dim); font-size: 11px; cursor: pointer; }
+.onboard-instruction-actions button:hover:not(:disabled) { color: var(--text); border-color: var(--border-strong); background: var(--raised); }
+.onboard-instruction-actions button.selected { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.onboard-instruction-actions button:disabled { opacity: .45; cursor: default; }
 .onboard-status { min-height: 20px; padding-top: 4px; color: var(--text-dim); font-size: 11.5px; line-height: 1.4; }
 .onboard-error { color: var(--err); }
 .onboard-dialog .dialog-actions { flex: 0 0 auto; margin-top: 8px; }
@@ -2187,6 +2202,10 @@ select.toolbar-input { cursor: pointer; }
   .onboard-fields h3 { grid-column: auto; }
   .onboard-assist-heading { flex-direction: column; }
   .onboard-assist-heading > .approve { width: 100%; }
+  .onboard-instruction-heading { flex-direction: column; }
+  .onboard-instruction-heading > button { width: 100%; }
+  .onboard-instruction-grid { grid-template-columns: 1fr; }
+  .onboard-instruction-actions { flex-direction: column; }
 }
 @keyframes toastUp { from { opacity: 0; transform: translate(-50%, 8px); } }
 /* DESK-5f — exit animations (paired with .closing + delayed unmount) */
