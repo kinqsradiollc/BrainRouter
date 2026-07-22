@@ -206,6 +206,7 @@
     "config",
     "agents",
     "packs",
+    "profile-plugins",
     "extensions",
     "skills"
   ],
