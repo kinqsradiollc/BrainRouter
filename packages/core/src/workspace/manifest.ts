@@ -26,6 +26,8 @@ import {
   type WorkspaceProfileId,
 } from './profiles.js';
 import { readWorkspaceFileBounded, writeWorkspaceFileAtomic } from './fileWrite.js';
+import { recoverInterruptedWorkspaceManifestClaim } from './manifestClaim.js';
+import { recoverInterruptedWorkspaceOnboardingPair } from './onboardingTransaction.js';
 
 export const WORKSPACE_MANIFEST_VERSION = 1;
 export const WORKSPACE_MANIFEST_RELPATH = path.join('.brainrouter', 'workspace.json');
@@ -117,6 +119,10 @@ export function isWorkspaceOnboarded(workspaceRoot: string): boolean {
 export function loadWorkspaceManifest(workspaceRoot: string): WorkspaceManifest | null {
   let raw: unknown;
   try {
+    // Restore any owned pre-write inode before the pair coordinator classifies
+    // the manifest side of an interrupted onboarding commit.
+    recoverInterruptedWorkspaceManifestClaim(workspaceRoot);
+    recoverInterruptedWorkspaceOnboardingPair(workspaceRoot);
     raw = JSON.parse(
       readWorkspaceFileBounded(
         workspaceRoot,
