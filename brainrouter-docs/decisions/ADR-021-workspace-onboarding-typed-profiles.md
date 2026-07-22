@@ -217,7 +217,9 @@ organization and creator identities.
 - **B1b (ingest foundation shipped)** — typed document lifecycle records;
   ancestry-scoped persistence; bounded plain-text/Markdown normalization,
   redaction, and persisted-content dedupe; plus atomic enqueue of an ID-only,
-  tenant-scoped parse job. Processing and public adapters follow independently.
+  tenant-scoped parse job. The internal runner now performs version-checked,
+  deterministic, transactional chunk replacement with idempotent ready/failed
+  status truth. Embeddings and public status/retry adapters follow independently.
 - **B1c–B3** — async retrieval; profile-aware recommendations and
   opt-in sourced distillation.
 - **C3** — dashboard and desktop knowledge management after the server contracts

@@ -5,10 +5,14 @@ import {
 } from "../../../../knowledge/contracts/document.js";
 import {
   createKnowledgeDocument,
+  commitKnowledgeDocumentParse,
   enqueueKnowledgeDocument,
+  failKnowledgeDocumentParse,
   getKnowledgeDocument,
   getKnowledgeDocumentByContentHash,
   listKnowledgeDocuments,
+  listKnowledgeChunks,
+  markKnowledgeDocumentParsing,
   updateKnowledgeDocumentStatus,
 } from "./knowledgeDocumentQueries.js";
 
@@ -49,6 +53,14 @@ const record: KnowledgeDocumentRecord = {
   createdAt: at,
   updatedAt: at,
   readyAt: null,
+};
+
+const parseInput = {
+  orgId: "org-1",
+  projectId: "project-1",
+  baseId: "base-1",
+  documentId: "doc-1",
+  parseVersion: 1,
 };
 
 function executor(result: unknown = row) {
@@ -170,5 +182,127 @@ describe("knowledge document queries", () => {
     expect(client.query.mock.calls[1][0]).toContain(
       "content_sha256 = $1 AND base_id = $2 AND org_id = $3 AND project_id = $4",
     );
+  });
+
+  it("marks parsing and failure only through ancestry plus parse version", async () => {
+    const parsingExec = executor({ ...row, status: "parsing" });
+    await expect(markKnowledgeDocumentParsing(parsingExec, parseInput, at))
+      .resolves.toEqual({ ...record, status: "parsing" });
+    expect(parsingExec.one.mock.calls[0][0]).toContain("parse_version = $5 AND status <> 'ready'");
+    expect(parsingExec.one.mock.calls[0][1]).toEqual([
+      "doc-1", "base-1", "org-1", "project-1", 1, at,
+    ]);
+
+    const failedExec = executor({ ...row, status: "failed", status_message: "safe" });
+    await expect(failKnowledgeDocumentParse(failedExec, parseInput, "safe", at))
+      .resolves.toEqual({ ...record, status: "failed", statusMessage: "safe" });
+    expect(failedExec.one.mock.calls[0][0]).toContain("parse_version = $5 AND status <> 'ready'");
+    expect(failedExec.one.mock.calls[0][1]).toEqual([
+      "doc-1", "base-1", "org-1", "project-1", 1, "safe", at,
+    ]);
+  });
+
+  it("transactionally replaces chunks and marks the document ready", async () => {
+    const readyRow = { ...row, status: "ready", updated_at: new Date(at), ready_at: new Date(at) };
+    const client = {
+      query: vi.fn()
+        .mockResolvedValueOnce({ rowCount: 1, rows: [row] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [readyRow] }),
+    };
+    const exec = executor();
+    exec.tx = vi.fn(async (fn: (value: unknown) => Promise<unknown>) => fn(client));
+    const chunks = [{
+      chunkId: "chunk-1",
+      ordinal: 0,
+      content: "# Runbook",
+      contentSha256: "b".repeat(64),
+      tokenCount: 3,
+      charStart: null,
+      charEnd: null,
+      locator: { startLine: 1, endLine: 1 },
+    }];
+
+    await expect(commitKnowledgeDocumentParse(exec, parseInput, chunks, at)).resolves.toEqual({
+      document: { ...record, status: "ready", readyAt: at },
+      chunksWritten: 1,
+      alreadyReady: false,
+    });
+    expect(exec.tx).toHaveBeenCalledOnce();
+    expect(client.query).toHaveBeenCalledTimes(4);
+    expect(client.query.mock.calls[0][0]).toContain("FOR UPDATE");
+    expect(client.query.mock.calls[1][0]).toContain("DELETE FROM knowledge_chunks");
+    expect(client.query.mock.calls[2][0]).toContain("jsonb_to_recordset");
+    expect(JSON.parse(client.query.mock.calls[2][1][4])).toEqual([{
+      chunk_id: "chunk-1",
+      ordinal: 0,
+      content: "# Runbook",
+      content_sha256: "b".repeat(64),
+      token_count: 3,
+      char_start: null,
+      char_end: null,
+      locator_json: { startLine: 1, endLine: 1 },
+    }]);
+    expect(client.query.mock.calls[3][0]).toContain("SET status = 'ready'");
+  });
+
+  it("treats a locked ready document as an idempotent no-op", async () => {
+    const readyRow = { ...row, status: "ready", ready_at: new Date(at) };
+    const client = {
+      query: vi.fn()
+        .mockResolvedValueOnce({ rowCount: 1, rows: [readyRow] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ count: "2" }] }),
+    };
+    const exec = executor();
+    exec.tx = vi.fn(async (fn: (value: unknown) => Promise<unknown>) => fn(client));
+
+    await expect(commitKnowledgeDocumentParse(exec, parseInput, [], at)).resolves.toEqual({
+      document: { ...record, status: "ready", readyAt: at },
+      chunksWritten: 2,
+      alreadyReady: true,
+    });
+    expect(client.query).toHaveBeenCalledTimes(2);
+    expect(client.query.mock.calls[1][0]).toContain("COUNT(*)");
+  });
+
+  it("lists parsed chunks through the complete document ancestry", async () => {
+    const chunkRow = {
+      chunk_id: "chunk-1",
+      document_id: "doc-1",
+      base_id: "base-1",
+      org_id: "org-1",
+      project_id: "project-1",
+      ordinal: 0,
+      content: "# Runbook",
+      content_sha256: "b".repeat(64),
+      token_count: 3,
+      char_start: null,
+      char_end: null,
+      locator_json: { startLine: 1, endLine: 1 },
+      created_at: new Date(at),
+    };
+    const exec = executor();
+    exec.rows.mockResolvedValueOnce([chunkRow]);
+    await expect(listKnowledgeChunks(exec, "doc-1", "base-1", "org-1", "project-1"))
+      .resolves.toEqual([{
+        chunkId: "chunk-1",
+        documentId: "doc-1",
+        baseId: "base-1",
+        orgId: "org-1",
+        projectId: "project-1",
+        ordinal: 0,
+        content: "# Runbook",
+        contentSha256: "b".repeat(64),
+        tokenCount: 3,
+        charStart: null,
+        charEnd: null,
+        locator: { startLine: 1, endLine: 1 },
+        createdAt: at,
+      }]);
+    expect(exec.rows.mock.calls[0][0]).toContain(
+      "document_id = $1 AND base_id = $2 AND org_id = $3 AND project_id = $4",
+    );
+    expect(exec.rows.mock.calls[0][1]).toEqual(["doc-1", "base-1", "org-1", "project-1"]);
   });
 });

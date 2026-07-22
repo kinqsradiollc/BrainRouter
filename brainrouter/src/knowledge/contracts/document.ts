@@ -55,6 +55,31 @@ export interface KnowledgeParseJobInput {
   parseVersion: number;
 }
 
+export interface KnowledgeChunkInput {
+  chunkId: string;
+  ordinal: number;
+  content: string;
+  contentSha256: string;
+  tokenCount: number;
+  charStart: number | null;
+  charEnd: number | null;
+  locator: Record<string, unknown>;
+}
+
+export interface KnowledgeChunkRecord extends KnowledgeChunkInput {
+  documentId: string;
+  baseId: string;
+  orgId: string;
+  projectId: string;
+  createdAt: string;
+}
+
+export interface KnowledgeParseCommitResult {
+  document: KnowledgeDocumentRecord;
+  chunksWritten: number;
+  alreadyReady: boolean;
+}
+
 export interface KnowledgeDocumentEnqueueResult {
   document: KnowledgeDocumentRecord;
   created: boolean;

@@ -29,6 +29,11 @@ import { runDomainPentest } from "../../integrations/domainPentest.js";
 import { runVulnerabilitySync, type VulnerabilitySyncStore } from "../../services/vulnerabilitySync/executor.js";
 import { buildVulnerabilityReviewContext, type VulnerabilityReviewContextStore } from "../../vulnerability/context.js";
 import { runVulnerabilityScan, type VulnerabilityScanStore } from "../../services/vulnerabilitySync/scan.js";
+import { KNOWLEDGE_PARSE_JOB_KIND } from "../../knowledge/contracts/document.js";
+import {
+  processKnowledgeParseJob,
+  type KnowledgeParseProcessorStore,
+} from "../../knowledge/services/parse-processor.js";
 
 /**
  * 0.4.3 (MEM-10) — engine operations the depth-agent executors call. Declared
@@ -226,8 +231,15 @@ const EXECUTORS: Record<string, JobExecutor> = {
   "domain-pentest": async (input, ctx) => runDomainPentest(input, ctx),
 };
 
+const INTERNAL_EXECUTORS: Record<string, JobExecutor> = {
+  [KNOWLEDGE_PARSE_JOB_KIND]: async (input, ctx) => processKnowledgeParseJob(
+    input,
+    ctx.store as unknown as KnowledgeParseProcessorStore,
+  ),
+};
+
 export function getJobExecutor(agentId: string): JobExecutor | undefined {
-  return EXECUTORS[agentId];
+  return EXECUTORS[agentId] ?? INTERNAL_EXECUTORS[agentId];
 }
 
 /** Agent ids the async runner can execute on demand. */
