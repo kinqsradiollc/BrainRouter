@@ -69,10 +69,65 @@ test('frontend task paths activate the engineer prompt and reviewed task-time to
     assert.deepEqual(resolved.toolProfiles, ['browser', 'design']);
     assert.equal(calls.length, 2);
     assert.equal(calls[0]?.tag, 'workspace-domain-persona');
+    assert.match(calls[0]?.content ?? '', /Profile: Engineering \(engineering\)/);
+    assert.match(calls[0]?.content ?? '', /Available task capabilities: frontend/);
+    assert.match(calls[0]?.content ?? '', /Active task capabilities: frontend/);
     assert.match(calls[0]?.content ?? '', /Active domain persona: Engineer/);
     assert.equal(calls[1]?.kind, 'replace');
     assert.equal(calls[1]?.tag, 'workspace-capabilities');
     assert.match(calls[1]?.content ?? '', /Stay in the engineer persona/);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('switching workspaces replaces profile, persona, and capability briefing state', () => {
+  const engineering = fs.mkdtempSync(path.join(os.tmpdir(), 'br-cap-state-switch-engineering-'));
+  const research = fs.mkdtempSync(path.join(os.tmpdir(), 'br-cap-state-switch-research-'));
+  try {
+    saveWorkspaceManifest(
+      engineering,
+      createWorkspaceManifest({ name: 'app', profile: 'engineering', by: 'wizard' }),
+    );
+    saveWorkspaceManifest(
+      research,
+      createWorkspaceManifest({ name: 'sources', profile: 'research', by: 'wizard' }),
+    );
+    const { host, messages } = makeHost(engineering);
+    refreshWorkspaceCapabilityState(host, 'Build a responsive dashboard.');
+    host.workspaceRoot = research;
+    refreshWorkspaceCapabilityState(host, 'Compare the cited sources.');
+
+    const rendered = messages().map((message) => message.content).join('\n');
+    assert.match(rendered, /Profile: Research \(research\)/);
+    assert.match(rendered, /Active domain persona: Researcher/);
+    assert.match(rendered, /Available task capabilities: none/);
+    assert.match(rendered, /Active task capabilities: none/);
+    assert.doesNotMatch(rendered, /Profile: Engineering/);
+    assert.doesNotMatch(rendered, /Active domain persona: Engineer/);
+    assert.doesNotMatch(rendered, /Frontend engineering capability is active/);
+  } finally {
+    fs.rmSync(engineering, { recursive: true, force: true });
+    fs.rmSync(research, { recursive: true, force: true });
+  }
+});
+
+test('custom workspaces still brief the reviewed profile without inventing a persona', () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'br-cap-state-custom-'));
+  try {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'blank', profile: 'custom', by: 'wizard' }),
+    );
+    const { host, calls } = makeHost(workspace);
+    refreshWorkspaceCapabilityState(host, 'Inspect this workspace.');
+
+    assert.equal(host.activeWorkspacePersonaId, undefined);
+    assert.equal(calls[0]?.kind, 'replace');
+    assert.equal(calls[0]?.tag, 'workspace-domain-persona');
+    assert.match(calls[0]?.content ?? '', /Profile: Custom \(custom\)/);
+    assert.match(calls[0]?.content ?? '', /Available task capabilities: none/);
+    assert.doesNotMatch(calls[0]?.content ?? '', /Active domain persona:/);
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
   }
