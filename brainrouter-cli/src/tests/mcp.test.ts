@@ -13,6 +13,7 @@ import type { Config } from '@kinqs/brainrouter-core/config';
 import { normalizeSkillsList } from '../cli/commands/workflow/index.js';
 import { tryHandleMcpCommand } from '../cli/commands/mcp/index.js';
 import {
+  isBrainrouterProfile,
   McpProfilePersistenceError,
   reconcileLiveMcpProfile,
   resolveEffectiveMcpProfile,
@@ -24,6 +25,18 @@ test('McpClientWrapper.isConnected is false before connect', async () => {
   const { McpClientWrapper } = await import('@kinqs/brainrouter-core/mcp');
   const wrapper = new McpClientWrapper();
   assert.equal(wrapper.isConnected(), false);
+});
+
+test('profile identity lookup rejects inherited and reserved server ids', () => {
+  const context = {
+    config: { activeServer: '', servers: {} },
+    repl: { launchPolicy: {} },
+    mcpClient: { getStatus: () => undefined },
+  } as unknown as CommandContext;
+
+  for (const serverId of ['__proto__', 'constructor', 'prototype']) {
+    assert.equal(isBrainrouterProfile(context, serverId), false);
+  }
 });
 
 test('resolveIdentityFromConfig: explicit identity wins over heuristics (10a)', async () => {

@@ -66,20 +66,22 @@ export function writeFileAtomic(
     fs.closeSync(descriptor);
     descriptor = undefined;
 
-    const staged = fs.lstatSync(temporary);
-    if (staged.isSymbolicLink() || !staged.isFile()) {
+    const stagedStat = fs.lstatSync(temporary);
+    if (stagedStat.isSymbolicLink() || !stagedStat.isFile()) {
       throw new Error(`Unsafe staged file: ${temporary}`);
     }
-    options.onStaged?.({
+    const stagedVersion: AtomicFileStagedVersion = {
       temporaryPath: temporary,
-      mode: staged.mode & 0o777,
-      dev: staged.dev,
-      ino: staged.ino,
-      size: staged.size,
-      mtimeMs: staged.mtimeMs,
+      mode: stagedStat.mode & 0o777,
+      dev: stagedStat.dev,
+      ino: stagedStat.ino,
+      size: stagedStat.size,
+      mtimeMs: stagedStat.mtimeMs,
       sha256: crypto.createHash('sha256').update(contents).digest('hex'),
-    });
+    };
+    options.onStaged?.(stagedVersion);
     options.beforeCommit?.();
+    assertStagedFileVersion(temporary, stagedStat, stagedVersion.sha256);
     if (options.exclusive) {
       // A hard link is the portable Node primitive with create-if-absent
       // semantics. Unlike rename, it fails with EEXIST when another writer
@@ -96,6 +98,48 @@ export function writeFileAtomic(
     }
     try { fs.rmSync(temporary, { force: true }); } catch { /* best-effort temp cleanup */ }
   }
+}
+
+function assertStagedFileVersion(
+  temporary: string,
+  expected: fs.Stats,
+  expectedSha256: string,
+): void {
+  const noFollow = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
+  let descriptor: number | undefined;
+  try {
+    const beforeOpen = fs.lstatSync(temporary);
+    if (beforeOpen.isSymbolicLink() || !beforeOpen.isFile() || !sameStableFile(expected, beforeOpen)) {
+      throw new Error(`Staged file changed before commit: ${temporary}`);
+    }
+    descriptor = fs.openSync(temporary, fs.constants.O_RDONLY | noFollow);
+    const opened = fs.fstatSync(descriptor);
+    if (!opened.isFile() || !sameStableFile(expected, opened)) {
+      throw new Error(`Staged file changed before commit: ${temporary}`);
+    }
+    const actualSha256 = crypto.createHash('sha256').update(fs.readFileSync(descriptor)).digest('hex');
+    const afterRead = fs.fstatSync(descriptor);
+    const afterPath = fs.lstatSync(temporary);
+    if (actualSha256 !== expectedSha256 || !sameStableFile(expected, afterRead) ||
+        afterPath.isSymbolicLink() || !afterPath.isFile() || !sameStableFile(expected, afterPath)) {
+      throw new Error(`Staged file changed before commit: ${temporary}`);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(`Staged file changed before commit: ${temporary}`);
+    }
+    throw error;
+  } finally {
+    if (descriptor !== undefined) {
+      try { fs.closeSync(descriptor); } catch { /* preserve the original failure */ }
+    }
+  }
+}
+
+function sameStableFile(left: fs.Stats, right: fs.Stats): boolean {
+  return left.dev === right.dev && left.ino === right.ino &&
+    left.size === right.size && left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs;
 }
 
 function lstatIfPresent(target: string): fs.Stats | undefined {

@@ -22,10 +22,10 @@ import { redactMcpErrorText, redactMcpHttpUrl, redactMcpStdioCommand } from '../
 
 export async function tryHandleUiStatusCommand(ctx: CommandContext): Promise<boolean> {
   const { command, args, agent, mcpClient, config } = ctx;
+  const runtimeConfig = configWithRuntimeMcpState(config, ctx.repl.runtimeMcp);
   switch (command) {
     case '/status':
     {
-      const runtimeConfig = configWithRuntimeMcpState(config, ctx.repl.runtimeMcp);
       console.log(chalk.bold('\n🖥️  BrainRouter Status:'));
       for (const line of describeActiveServer(config)) console.log(line);
 
@@ -238,9 +238,11 @@ export async function tryHandleUiStatusCommand(ctx: CommandContext): Promise<boo
     {
       console.log(chalk.bold('\nBrainRouter Doctor:'));
       console.log(`  Config file: ${chalk.blue(getConfigPath())}`);
-      console.log(`  Active profile: ${chalk.green(config.activeServer)}`);
+      console.log(`  Active profile: ${chalk.green(runtimeConfig.activeServer)}`);
 
-      const server = config.servers[config.activeServer];
+      const server = Object.hasOwn(runtimeConfig.servers, runtimeConfig.activeServer)
+        ? runtimeConfig.servers[runtimeConfig.activeServer]
+        : undefined;
       if (!server) {
         console.log(chalk.red('  Server profile: missing'));
         return true;
@@ -268,7 +270,7 @@ export async function tryHandleUiStatusCommand(ctx: CommandContext): Promise<boo
         }
       } catch (err: any) {
         spinner.fail(chalk.red('MCP connection check failed.'));
-        console.warn(chalk.yellow(`  Warning: ${redactMcpErrorText(String(err?.message ?? err), config)}`));
+        console.warn(chalk.yellow(`  Warning: ${redactMcpErrorText(String(err?.message ?? err), runtimeConfig)}`));
       }
 
       // Memory health: are captures actually being extracted into searchable
@@ -290,14 +292,14 @@ export async function tryHandleUiStatusCommand(ctx: CommandContext): Promise<boo
               : chalk.green(`  Memory extraction: healthy (${total} cognitive records, ${pending} pending)`);
           console.log(headline);
           if (ext.lastErrorMessage) {
-            console.log(chalk.gray(`    Last error: ${String(ext.lastErrorMessage).slice(0, 160)}`));
+            console.log(chalk.gray(`    Last error: ${redactMcpErrorText(String(ext.lastErrorMessage), runtimeConfig).slice(0, 160)}`));
           }
           if (errs > 0 || !diagRes.parsed?.envKeys?.some?.((k: string) => /BRAINROUTER_LLM_API_KEY|OPENAI_API_KEY/.test(k))) {
             console.log(chalk.gray('    Hint: set OPENAI_API_KEY (or BRAINROUTER_LLM_API_KEY) before launching brainrouter so the MCP child can run extraction.'));
           }
         }
       } catch (err: any) {
-        console.log(chalk.yellow(`  Memory extraction: unable to query (${err?.message ?? err})`));
+        console.log(chalk.yellow(`  Memory extraction: unable to query (${redactMcpErrorText(String(err?.message ?? err), runtimeConfig)})`));
       }
 
       const plan = readPlan(agent.workspaceRoot, agent.sessionKey);

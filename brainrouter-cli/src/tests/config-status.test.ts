@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { selfHealConfig, type Config } from '@kinqs/brainrouter-core/config';
 import { describeActiveServer } from '../cli/commands/serverStatus/index.js';
 import { editableMcpStdioCommand } from '../cli/mcpUrl.js';
@@ -201,6 +204,48 @@ test('/status redacts credentials from runtime-only MCP profiles', async () => {
   } finally {
     console.log = originalLog;
     console.warn = originalWarn;
+  }
+
+  const output = lines.join('\n');
+  assert.doesNotMatch(output, new RegExp(runtimeSecret));
+  assert.match(output, /\[redacted\]/);
+});
+
+test('/doctor redacts runtime-only credentials from connection and diagnostic errors', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-doctor-'));
+  const runtimeSecret = 'runtime-only-doctor-secret-value';
+  const context = {
+    command: '/doctor',
+    args: [],
+    config: {
+      activeServer: 'durable',
+      servers: { durable: { type: 'http', url: 'https://example.test/mcp' } },
+    },
+    agent: { workspaceRoot, sessionKey: 'session:doctor' },
+    mcpClient: {
+      listTools: async () => { throw new Error(`connection rejected ${runtimeSecret}`); },
+      callTool: async () => { throw new Error(`diagnostics rejected ${runtimeSecret}`); },
+    },
+    repl: {
+      launchPolicy: {},
+      runtimeMcp: {
+        servers: {
+          runtime: { type: 'http', url: 'https://runtime.example.test/mcp', apiKey: runtimeSecret },
+        },
+      },
+    },
+  } as unknown as CommandContext;
+  const lines: string[] = [];
+  const originalLog = console.log;
+  const originalWarn = console.warn;
+  console.log = (...values: unknown[]) => { lines.push(values.map(String).join(' ')); };
+  console.warn = (...values: unknown[]) => { lines.push(values.map(String).join(' ')); };
+  try {
+    assert.equal(await tryHandleUiStatusCommand(context), true);
+  } finally {
+    console.log = originalLog;
+    console.warn = originalWarn;
+    fs.rmSync(workspaceRoot, { recursive: true, force: true });
   }
 
   const output = lines.join('\n');

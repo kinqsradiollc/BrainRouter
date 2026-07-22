@@ -367,6 +367,19 @@ test('workspace writes reject a workspace-root swap before creating parents', { 
   }
 });
 
+test('workspace paths reject Windows drive-relative prefixes on every platform', () => {
+  const ws = tmpWorkspace();
+  try {
+    assert.throws(
+      () => writeWorkspaceFileAtomic(ws, 'C:outside.txt', 'blocked'),
+      /Unsafe workspace-relative path/,
+    );
+    assert.equal(fs.existsSync(path.join(ws, 'C:outside.txt')), false);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
+
 test('manifest loading accepts the byte limit and rejects larger committed input', () => {
   const ws = tmpWorkspace();
   try {

@@ -260,7 +260,8 @@ export function resolveWorkspaceFileForRead(workspaceRoot: string, relativePath:
 }
 
 function workspacePathSegments(relativePath: string): string[] {
-  if (!relativePath || relativePath.includes('\0') || path.isAbsolute(relativePath) || path.win32.isAbsolute(relativePath)) {
+  if (!relativePath || relativePath.includes('\0') || path.isAbsolute(relativePath) ||
+      path.win32.isAbsolute(relativePath) || path.win32.parse(relativePath).root) {
     throw new Error(`Unsafe workspace-relative path: ${relativePath}`);
   }
   const segments = relativePath.replaceAll('\\', '/').split('/');

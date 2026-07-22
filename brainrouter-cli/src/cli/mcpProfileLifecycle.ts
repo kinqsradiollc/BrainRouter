@@ -19,7 +19,10 @@ import {
 
 export function isBrainrouterProfile(ctx: CommandContext, serverId: string): boolean {
   const liveIdentity = ctx.mcpClient.getStatus(serverId)?.identity;
-  const profile = configWithRuntimeMcpState(ctx.config, ctx.repl.runtimeMcp).servers[serverId];
+  const effectiveServers = configWithRuntimeMcpState(ctx.config, ctx.repl.runtimeMcp).servers;
+  const profile = Object.hasOwn(effectiveServers, serverId)
+    ? effectiveServers[serverId]
+    : undefined;
   return liveIdentity === 'brainrouter'
     || (profile != null && resolveIdentityFromConfig(profile, serverId) === 'brainrouter');
 }
@@ -88,7 +91,9 @@ async function resolveEffectiveMcpProfileState(
   serverId: string,
 ): Promise<EffectiveMcpProfileResolution> {
   const effectiveConfig = configForRuntimeMcpResolution(ctx.config, ctx.repl.runtimeMcp);
-  const configuredProfile = effectiveConfig.servers[serverId];
+  const configuredProfile = Object.hasOwn(effectiveConfig.servers, serverId)
+    ? effectiveConfig.servers[serverId]
+    : undefined;
   const resolverConfig = configuredProfile
     && (
       effectiveConfig.activeBrainrouterServer === serverId
@@ -108,7 +113,9 @@ async function resolveEffectiveMcpProfileState(
   if (launch.status !== 'ready') {
     throw new Error(`MCP profile "${serverId}" is not available under the current launch policy.`);
   }
-  const profile = launch.targetServers[serverId];
+  const profile = Object.hasOwn(launch.targetServers, serverId)
+    ? launch.targetServers[serverId]
+    : undefined;
   if (!profile) {
     throw new Error(`MCP profile "${serverId}" is blocked by the current launch policy.`);
   }
