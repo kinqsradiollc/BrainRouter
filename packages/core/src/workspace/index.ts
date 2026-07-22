@@ -14,3 +14,5 @@ export * from './repositoryScan.js';
 export * from './onboardingProposal.js';
 export * from './onboardingProposalPrompt.js';
 export * from './assistedOnboarding.js';
+export * from './workspaceContentSafety.js';
+export * from './reviewedOnboarding.js';
