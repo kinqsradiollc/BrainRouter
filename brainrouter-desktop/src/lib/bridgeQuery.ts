@@ -16,7 +16,12 @@ interface QueryResultEvent {
   error?: string;
 }
 
-export function bridgeQuery<T>(name: string, args?: Record<string, unknown>, timeoutMs = 25_000): Promise<T> {
+export function bridgeQuery<T>(
+  name: string,
+  args?: Record<string, unknown>,
+  timeoutMs = 25_000,
+  expectedWorkspaceRoot?: string,
+): Promise<T> {
   const id = `bq-${++bridgeQuerySeq}-${name}`;
   return new Promise<T>((resolve, reject) => {
     let done = false;
@@ -30,7 +35,10 @@ export function bridgeQuery<T>(name: string, args?: Record<string, unknown>, tim
     const off = window.brainrouter.onEvent((msg: unknown) => {
       // Events arrive workspace-wrapped ({workspaceRoot, event}) from the host
       // and bare from the dev bridge — accept both shapes.
-      const e = ((msg as { event?: QueryResultEvent }).event ?? msg) as QueryResultEvent;
+      const wrapped = msg as { workspaceRoot?: unknown; event?: QueryResultEvent };
+      if (expectedWorkspaceRoot && typeof wrapped.workspaceRoot === 'string' &&
+          wrapped.workspaceRoot !== expectedWorkspaceRoot) return;
+      const e = (wrapped.event ?? msg) as QueryResultEvent;
       if (e?.kind !== 'query-result' || e.id !== id) return;
       finish(() => (e.ok ? resolve(e.result as T) : reject(new Error(e.error || `${name} failed`))));
     });
