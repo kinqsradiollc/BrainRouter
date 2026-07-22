@@ -56,7 +56,7 @@ export type ManifestSaveResult =
 /** Validate one complete editor submission, preserve safe unknown fields, and commit it. */
 export function saveWorkspaceManifestFromPayload(
   workspaceRoot: string,
-  payload: ManifestSavePayload,
+  payload: unknown,
 ): ManifestSaveResult {
   try {
     const record = plainRecord(payload, 'workspace setup payload');

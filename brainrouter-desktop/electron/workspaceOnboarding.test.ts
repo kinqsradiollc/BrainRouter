@@ -155,5 +155,10 @@ test('manifest-save rejects malformed review revisions without writing', () => {
     const result = saveWorkspaceManifestFromPayload(env.root, input);
     assert.equal(result.saved, false);
     assert.equal(loadWorkspaceManifest(env.root), null);
+
+    const withExtra = { ...payload(env.root, 'study'), unexpected: true };
+    assert.equal(saveWorkspaceManifestFromPayload(env.root, withExtra).saved, false);
+    assert.equal(saveWorkspaceManifestFromPayload(env.root, null).saved, false);
+    assert.equal(loadWorkspaceManifest(env.root), null);
   } finally { env.cleanup(); }
 });
