@@ -120,6 +120,13 @@ capture tags. Capability tool profiles map explicitly to existing extension/tool
 IDs; they do not mutate process-global extension settings. Desktop and CLI use
 the same core resolution. A missing/unreadable manifest yields an exact no-op.
 
+Markdown agent files supply domain identity; optional same-ID JSON files supply
+executable child policy. With a readable manifest, reserved orchestration
+harness roles remain available while other JSON executors are model-visible and
+spawnable only when named by `agents.default` or `agents.enabled`. The raw
+registry remains available for inventory and diagnostics, and the no-manifest
+path retains its complete legacy executor catalog.
+
 Profile and capability context also propagates to delegated agents. A child
 resolves capabilities from its delegated task instead of blindly inheriting the
 parent’s active overlay.

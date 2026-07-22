@@ -1,9 +1,21 @@
+/**
+ * W4b executable agent-definition registry.
+ *
+ * `loadRegistry` is the complete precedence-resolved inventory used by catalog
+ * and golden tests. Runtime consumers use `loadActiveRegistry`, `listAll`, and
+ * `findById`: once a workspace manifest exists, those surfaces retain every
+ * reserved harness role but expose custom executors only when the manifest
+ * names them as its default or explicitly enables them. Missing or unreadable
+ * manifests deliberately preserve the legacy registry byte-for-byte.
+ */
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 // MAS-P5-T4: enabled packs contribute agent defs as their own tier.
 import { listPacks } from '../../pack/packs.js';
 import { readPackState, isPackEnabled } from '../../pack/packStore.js';
+import { RESERVED_HARNESS_ROLE_IDS } from '../../workspace/domainPersonas.js';
+import { loadWorkspaceManifest } from '../../workspace/manifest.js';
 import {
   listAgentDefinitionFiles,
   readAgentDefinitionFile,
@@ -52,7 +64,7 @@ function loadFromDir(
 }
 
 /**
- * Load all agent definitions from three tiers (builtin → user-global → workspace).
+ * Load all agent definitions from four tiers (builtin → pack → user-global → workspace).
  * Same `id` from a higher-priority source wins; distinct ids coexist.
  */
 /** MAS-P5-T4: agent defs contributed by enabled packs (resolved tiers). */
@@ -93,10 +105,25 @@ export function loadRegistry(workspaceRoot?: string): LoadedDefinition[] {
   return Array.from(merged.values());
 }
 
+/** Return the definitions that may be surfaced or executed in this workspace. */
+export function loadActiveRegistry(workspaceRoot?: string): LoadedDefinition[] {
+  const registry = loadRegistry(workspaceRoot);
+  if (!workspaceRoot) return registry;
+
+  const manifest = loadWorkspaceManifest(workspaceRoot);
+  if (!manifest) return registry;
+
+  const activeIds = new Set(manifest.agents.enabled);
+  if (manifest.agents.default) activeIds.add(manifest.agents.default);
+  return registry.filter((loaded) => (
+    RESERVED_HARNESS_ROLE_IDS.has(loaded.def.id) || activeIds.has(loaded.def.id)
+  ));
+}
+
 export function findById(id: string, workspaceRoot?: string): LoadedDefinition | undefined {
-  return loadRegistry(workspaceRoot).find((l) => l.def.id === id);
+  return loadActiveRegistry(workspaceRoot).find((l) => l.def.id === id);
 }
 
 export function listAll(workspaceRoot?: string): LoadedDefinition[] {
-  return loadRegistry(workspaceRoot);
+  return loadActiveRegistry(workspaceRoot);
 }
