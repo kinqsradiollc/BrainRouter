@@ -271,6 +271,19 @@ package's top-level `agents/` directory.
 
 - **Evidence:** `packages/core/src/workspace/profilePlugins.ts`, `packages/core/profile-plugins/`, `packages/core/package.json`
 
+### 15b. Manifest skill selection is task-scoped data, not global plugin state
+
+Resolve reviewed `skills.packs`, explicit skill enables/disables, and already
+activated capabilities through `packages/core/src/workspace/skillSelection.ts`.
+The resolver may expose selected package plugin roots and an ambient skill
+allowlist to CLI/Desktop adapters, but it must never mutate process-wide plugin
+or extension state. A missing manifest is an exact no-op. Capability plugins
+such as frontend require task-time capability activation; merely adding their
+ID to the manifest pack list cannot activate them. Explicit skill disables win
+over profile, capability, and individual enable contributions.
+
+- **Evidence:** `packages/core/src/workspace/skillSelection.ts`, `packages/core/src/tests/workspace-skill-selection.test.ts`
+
 ### 16. ⛔ Executable plugin capabilities are consent-gated through the existing exec policy
 
 Command-type hooks and MCP command-servers shipped by a plugin stay **disabled**

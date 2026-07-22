@@ -48,6 +48,7 @@ test('C2 frontend stays a capability plugin and owns the design verification ski
   const frontend = findWorkspaceProfilePlugin('frontend');
 
   assert.ok(frontend);
+  assert.equal(frontend.kind, 'capability');
   assert.equal(frontend.pluginName, 'capability-frontend');
   assert.deepEqual(frontend.skillIds, ['a11y-skill', 'browser-testing-skill', 'taste-skill']);
   assert.equal(WORKSPACE_PROFILE_PLUGIN_DEFINITIONS.some((plugin) => plugin.pluginName.includes('builder')), false);

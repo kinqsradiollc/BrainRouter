@@ -18,3 +18,4 @@ export * from './workspaceContentSafety.js';
 export * from './reviewedOnboarding.js';
 export * from './domainPersonas.js';
 export * from './profilePlugins.js';
+export * from './skillSelection.js';

@@ -15,6 +15,7 @@ export type WorkspaceProfilePluginId = 'study' | 'research' | 'data' | 'writing'
 
 export interface WorkspaceProfilePluginDefinition {
   id: WorkspaceProfilePluginId;
+  kind: 'profile' | 'capability';
   pluginName: string;
   skillIds: readonly string[];
 }
@@ -43,26 +44,31 @@ export interface WorkspaceProfilePluginCatalogOptions {
 export const WORKSPACE_PROFILE_PLUGIN_DEFINITIONS: readonly WorkspaceProfilePluginDefinition[] = [
   {
     id: 'study',
+    kind: 'profile',
     pluginName: 'profile-study',
     skillIds: ['learning-plan-skill', 'retrieval-practice-skill'],
   },
   {
     id: 'research',
+    kind: 'profile',
     pluginName: 'profile-research',
     skillIds: ['evidence-research-skill', 'source-synthesis-skill'],
   },
   {
     id: 'data',
+    kind: 'profile',
     pluginName: 'profile-data',
     skillIds: ['data-analysis-skill', 'experiment-validation-skill'],
   },
   {
     id: 'writing',
+    kind: 'profile',
     pluginName: 'profile-writing',
     skillIds: ['structured-writing-skill', 'revision-skill'],
   },
   {
     id: 'frontend',
+    kind: 'capability',
     pluginName: 'capability-frontend',
     skillIds: ['a11y-skill', 'browser-testing-skill', 'taste-skill'],
   },
