@@ -54,7 +54,7 @@ test('missing manifests do not add a model-visible capability prompt', () => {
   }
 });
 
-test('frontend task paths activate the engineer capability prompt without granting tools', () => {
+test('frontend task paths activate the engineer prompt and reviewed task-time tool profiles', () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'br-cap-state-engineer-'));
   try {
     const manifest = createWorkspaceManifest({ name: 'demo', profile: 'engineering', by: 'wizard' });
@@ -66,7 +66,7 @@ test('frontend task paths activate the engineer capability prompt without granti
     assert.equal(host.activeWorkspacePersonaId, 'engineer', 'reserved harness role falls back to domain default');
     assert.deepEqual(resolved.active, ['frontend']);
     assert.deepEqual(resolved.skills, [], 'prompt activation does not grant catalog entries');
-    assert.deepEqual(resolved.toolProfiles, [], 'prompt activation does not grant tools');
+    assert.deepEqual(resolved.toolProfiles, ['browser', 'design']);
     assert.equal(calls.length, 2);
     assert.equal(calls[0]?.tag, 'workspace-domain-persona');
     assert.match(calls[0]?.content ?? '', /Active domain persona: Engineer/);

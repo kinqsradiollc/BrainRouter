@@ -20,3 +20,4 @@ export * from './domainPersonas.js';
 export * from './profilePlugins.js';
 export * from './skillSelection.js';
 export * from './skillToolAdapter.js';
+export * from './toolProfiles.js';
