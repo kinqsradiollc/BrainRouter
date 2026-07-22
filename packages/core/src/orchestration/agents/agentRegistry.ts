@@ -1,35 +1,16 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 // MAS-P5-T4: enabled packs contribute agent defs as their own tier.
 import { listPacks } from '../../pack/packs.js';
 import { readPackState, isPackEnabled } from '../../pack/packStore.js';
+import {
+  listAgentDefinitionFiles,
+  readAgentDefinitionFile,
+  type AgentDefinition,
+} from './agentDefinitionFile.js';
 
-export type Tier = 'chat' | 'reasoning' | 'worker';
-export type AccessMode = 'read' | 'write' | 'shell';
-
-export interface AgentDefinition {
-  id: string;
-  displayName: string;
-  whenToUse: string;
-  prompt: string;
-  model: string | null;
-  effort: string | null;
-  defaultAccess: AccessMode;
-  toolScope: { local: string[]; mcp: string[] };
-  disallowedTools: string[];
-  /** AGENTS-WIZARD — default ownership glob applied to write/shell children
-   *  spawned from this def when the spawner doesn't pass an explicit one. */
-  ownership?: string | null;
-  maxIterations: number;
-  timeoutMs: number;
-  maxResultChars: number;
-  subagents: string[];
-  delegateName: string;
-  tier: Tier;
-  outputContract: unknown;
-}
+export type { AccessMode, AgentDefinition, Tier } from './agentDefinitionFile.js';
 
 export type DefinitionSource = 'builtin' | 'pack' | 'user' | 'workspace';
 
@@ -51,24 +32,16 @@ function getWorkspaceAgentsDir(workspaceRoot: string): string {
   return path.join(workspaceRoot, '.brainrouter', 'agents');
 }
 
-function loadFromDir(dir: string, source: DefinitionSource): LoadedDefinition[] {
-  if (!fs.existsSync(dir)) return [];
-  let entries: string[];
-  try {
-    entries = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
-  } catch {
-    return [];
-  }
+function loadFromDir(
+  dir: string,
+  source: DefinitionSource,
+  boundaryRoot = dir,
+  containmentRoot = boundaryRoot,
+): LoadedDefinition[] {
   const results: LoadedDefinition[] = [];
-  for (const entry of entries) {
-    const filePath = path.join(dir, entry);
+  for (const filePath of listAgentDefinitionFiles(dir, boundaryRoot, containmentRoot)) {
     try {
-      const raw = fs.readFileSync(filePath, 'utf-8');
-      const def = JSON.parse(raw) as AgentDefinition;
-      if (!def.id || typeof def.id !== 'string') {
-        console.error(`[agentRegistry] Skipping ${filePath}: missing or invalid "id" field.`);
-        continue;
-      }
+      const def = readAgentDefinitionFile(filePath, boundaryRoot, containmentRoot);
       results.push({ def, source, filePath });
     } catch (err) {
       console.error(`[agentRegistry] Skipping ${filePath}: ${(err as Error).message}`);
@@ -88,7 +61,14 @@ function loadEnabledPackAgents(workspaceRoot?: string): LoadedDefinition[] {
     if (enabled.length === 0) return [];
     return listPacks(workspaceRoot)
       .filter((p) => isPackEnabled(enabled, p.name))
-      .flatMap((p) => loadFromDir(p.agentsDir, 'pack'));
+      .flatMap((p) => {
+        const sourceRoot = p.source === 'workspace' && workspaceRoot
+          ? workspaceRoot
+          : p.source === 'user'
+            ? path.dirname(path.dirname(p.dir))
+            : path.dirname(p.dir);
+        return loadFromDir(p.agentsDir, 'pack', sourceRoot, p.dir);
+      });
   } catch {
     return [];
   }
@@ -97,9 +77,10 @@ function loadEnabledPackAgents(workspaceRoot?: string): LoadedDefinition[] {
 export function loadRegistry(workspaceRoot?: string): LoadedDefinition[] {
   const builtin = loadFromDir(BUILTIN_AGENTS_DIR, 'builtin');
   const packs = loadEnabledPackAgents(workspaceRoot);
-  const user = loadFromDir(getUserAgentsDir(), 'user');
+  const userAgentsDir = getUserAgentsDir();
+  const user = loadFromDir(userAgentsDir, 'user', path.dirname(userAgentsDir));
   const workspace = workspaceRoot
-    ? loadFromDir(getWorkspaceAgentsDir(workspaceRoot), 'workspace')
+    ? loadFromDir(getWorkspaceAgentsDir(workspaceRoot), 'workspace', workspaceRoot)
     : [];
 
   // Precedence: builtin (lowest) → pack → user → workspace (highest).

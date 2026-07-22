@@ -159,6 +159,22 @@ other personas**; skills are the only mandatory hops inside a persona's workflow
 
 - **Evidence:** `agents/README.md`, `agents/code-reviewer.md:1`
 
+### 11a. Markdown supplies identity; JSON supplies optional executable policy and is a bounded trust boundary
+
+An agent `<id>.md` defines the domain identity shown to the model. A same-ID
+`<id>.json` may separately define child access, tool scope, ownership, limits,
+and delegation behavior; JSON alone never creates a domain persona. Executable
+definitions are read only from regular UTF-8 files under their declared source
+root, capped at 64 KiB, validated field-by-field, and rejected when their ID does
+not match the filename. Never cast arbitrary parsed JSON to `AgentDefinition` or
+follow linked project/pack agent paths.
+
+- **Why:** project and pack JSON becomes both a model-visible tool and child
+  execution policy, so partial objects, path escapes, or arbitrary tool names
+  would cross an execution boundary rather than merely affect display text.
+- **Evidence:** `packages/core/src/orchestration/agents/agentDefinitionFile.ts`,
+  `packages/core/src/workspace/domainPersonas.ts`
+
 ---
 
 ## Plugins & marketplace
