@@ -56,3 +56,25 @@ test('single-call mode does not retry a provider that rejects forced tools', asy
     globalThis.fetch = originalFetch;
   }
 });
+
+test('bounded LLM calls reject invalid limits before contacting the provider', async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return new Response('{}');
+  };
+  try {
+    for (const maxResponseBytes of [0, 16 * 1024 * 1024 + 1, Number.NaN]) {
+      await assert.rejects(
+        callOpenAI(LOCAL_LLM, [{ role: 'user', content: 'classify' }], [], {
+          maxResponseBytes,
+        }),
+        /Invalid LLM response byte limit/,
+      );
+    }
+    assert.equal(calls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

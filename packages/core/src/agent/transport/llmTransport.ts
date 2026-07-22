@@ -352,12 +352,19 @@ export interface BuildPayloadOptions {
 }
 
 const MIN_BOUNDED_RESPONSE_BYTES = 1;
+const MAX_BOUNDED_RESPONSE_BYTES = 16 * 1024 * 1024;
+
+function assertValidResponseByteLimit(maxBytes: number | undefined): void {
+  if (maxBytes === undefined) return;
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < MIN_BOUNDED_RESPONSE_BYTES ||
+      maxBytes > MAX_BOUNDED_RESPONSE_BYTES) {
+    throw new Error('Invalid LLM response byte limit.');
+  }
+}
 
 async function readResponseText(response: Response, maxBytes?: number): Promise<string> {
   if (maxBytes === undefined) return response.text();
-  if (!Number.isSafeInteger(maxBytes) || maxBytes < MIN_BOUNDED_RESPONSE_BYTES) {
-    throw new Error('Invalid LLM response byte limit.');
-  }
+  assertValidResponseByteLimit(maxBytes);
 
   const declaredLength = Number(response.headers.get('content-length'));
   if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
@@ -930,6 +937,9 @@ export async function callOpenAI(
   tools: any[],
   options: BuildPayloadOptions = {},
 ) {
+  // Reject malformed or effectively unbounded opt-in limits before contacting
+  // a provider. Callers that need the legacy unrestricted behavior omit it.
+  assertValidResponseByteLimit(options.maxResponseBytes);
   // Normalize the endpoint to a base URL (everything UP TO `/chat/completions`
   // exclusive). Earlier callers stored the full chat-completions URL in
   // `config.endpoint` (e.g. "https://api.openai.com/v1/chat/completions")
