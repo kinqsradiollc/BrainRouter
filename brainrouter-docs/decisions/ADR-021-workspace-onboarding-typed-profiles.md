@@ -223,7 +223,10 @@ organization and creator identities.
   tagged embeddings. Missing providers preserve FTS-ready documents; embedding
   failures remain safely retryable. A transport-neutral, content-free status
   view and exact-scope retry service now deduplicate active work without
-  exposing generic job identifiers. Public status/retry adapters follow independently.
+  exposing generic job identifiers. Authenticated REST text ingest returns an
+  accepted, content-free document view and exposes Project-scoped status and
+  retry without generic job identifiers; authenticated MCP adapters follow
+  independently.
 - **B1c–B3** — async retrieval; profile-aware recommendations and
   opt-in sourced distillation.
 - **C3** — dashboard and desktop knowledge management after the server contracts
