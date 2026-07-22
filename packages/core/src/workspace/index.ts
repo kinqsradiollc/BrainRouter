@@ -11,3 +11,6 @@ export * from './capabilities.js';
 export * from './profileSuggest.js';
 export * from './fileWrite.js';
 export * from './repositoryScan.js';
+export * from './onboardingProposal.js';
+export * from './onboardingProposalPrompt.js';
+export * from './assistedOnboarding.js';
