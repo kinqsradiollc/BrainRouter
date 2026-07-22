@@ -1,6 +1,21 @@
 import { z } from "zod";
 import { memoryEngine } from "../../memory/engine.js";
 import { workspaceTagFromPath, projectTagFromName } from "@kinqs/brainrouter-types";
+import { redactSensitiveMemoryText } from "../../memory/util/redaction.js";
+import {
+  MEMORY_CAPTURE_MAX_TAGS,
+  MEMORY_CAPTURE_TAG_PATTERN,
+  normalizeMemoryTags,
+} from "../../memory/capture/memoryTags.js";
+
+const memoryTagsSchema = z.array(
+  z.string()
+    .trim()
+    .min(1)
+    .max(128)
+    .regex(MEMORY_CAPTURE_TAG_PATTERN)
+    .refine((tag) => redactSensitiveMemoryText(tag) === tag, "Memory tags cannot contain credential material."),
+).max(MEMORY_CAPTURE_MAX_TAGS).transform(normalizeMemoryTags);
 
 export const memoryCaptureTurnToolSchema = {
   name: "memory_capture_turn",
@@ -41,6 +56,12 @@ export const memoryCaptureTurnToolSchema = {
         type: "string",
         description: "Skill-specific extraction hints provided by the active skill."
       },
+      memoryTags: {
+        type: "array",
+        items: { type: "string", pattern: "^[a-z0-9][a-z0-9._:-]{0,127}$", maxLength: 128 },
+        maxItems: 32,
+        description: "Reviewed semantic tags from the active workspace manifest. Stored separately from activeSkill."
+      },
       workspaceRoot: {
         type: "string",
         description: "Absolute path of the workspace this turn belongs to — hashed to a stable workspace_tag for per-workspace scoping."
@@ -70,6 +91,7 @@ export async function handleMemoryCaptureTurn(args: any, options?: { defaultUser
     })).transform((a) => a.slice(0, 1000)),
     activeSkill: z.string().optional(),
     skillHints: z.string().optional(),
+    memoryTags: memoryTagsSchema.optional(),
     workspaceRoot: z.string().optional(),
     projectName: z.string().optional()
   }).parse(args);
@@ -87,6 +109,7 @@ export async function handleMemoryCaptureTurn(args: any, options?: { defaultUser
       messages: params.messages,
       activeSkill: params.activeSkill,
       skillHints: params.skillHints,
+      memoryTags: params.memoryTags,
       workspaceTag: workspaceTagFromPath(params.workspaceRoot),
       projectTag: projectTagFromName(params.projectName)
     });

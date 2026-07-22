@@ -235,3 +235,38 @@ describe("cognitive extractor JSON escape repair", () => {
     expect(result.records).toHaveLength(0);
   });
 });
+
+describe("cognitive extractor workspace memory tags", () => {
+  it("copies durable sensory context into cognitive metadata without replacing model metadata", async () => {
+    const raw = `[
+      {
+        "scene_name": "Workspace context",
+        "memories": [
+          {
+            "type": "codebase_fact",
+            "content": "The application uses a shared component library.",
+            "priority": 70,
+            "sourceKind": "model_inference",
+            "verificationStatus": "unverified",
+            "metadata": { "source": "turn" }
+          }
+        ]
+      }
+    ]`;
+
+    const result = await extractCognitiveMemories({
+      messages: [makeMessage("The application uses a shared component library.")],
+      userId: "user_test",
+      sessionKey: "session_test",
+      sessionId: "session_test",
+      llmRunner: makeRunner(raw),
+      memoryTags: ["engineering", "ui:react"],
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.records[0]?.metadata).toEqual({
+      source: "turn",
+      memoryTags: ["engineering", "ui:react"],
+    });
+  });
+});

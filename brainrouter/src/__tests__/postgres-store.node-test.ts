@@ -191,7 +191,7 @@ test("PostgresMemoryStore: core round-trip against a fresh pgvector database", a
   assert.ok(vecHits[0].score >= vecHits[vecHits.length - 1].score, "vector results ordered by descending similarity");
 
   // ── sensory stream ──
-  const s1: SensoryRecord = { id: "sen-1", userId: "u1", sessionKey: "sess-1", sessionId: "sid-1", role: "user", messageText: "first turn", recordedAt: iso(-2000), timestamp: Date.now() - 2000, skillTag: "" };
+  const s1: SensoryRecord = { id: "sen-1", userId: "u1", sessionKey: "sess-1", sessionId: "sid-1", role: "user", messageText: "first turn", recordedAt: iso(-2000), timestamp: Date.now() - 2000, skillTag: "", memoryTags: ["engineering", "ui:react"] };
   const s2: SensoryRecord = { id: "sen-2", userId: "u1", sessionKey: "sess-1", sessionId: "sid-1", role: "assistant", messageText: "second turn", recordedAt: iso(-1000), timestamp: Date.now() - 1000, skillTag: "" };
   await store.upsertSensory(s1);
   await store.upsertSensory(s2);
@@ -199,6 +199,8 @@ test("PostgresMemoryStore: core round-trip against a fresh pgvector database", a
   assert.equal(recent.length, 2, "both sensory rows returned");
   assert.equal(recent[0].id, "sen-1", "sensory messages chronological (oldest first)");
   assert.equal(recent[1].id, "sen-2");
+  assert.deepEqual(recent[0].memoryTags, ["engineering", "ui:react"], "workspace memory tags round-trip until extraction");
+  assert.deepEqual(recent[1].memoryTags, [], "legacy captures normalize to an empty tag list");
   assert.equal(typeof recent[0].timestamp, "number", "bigint timestamp coerced to a number");
   assert.equal(await store.getUnextractedSensoryCount("u1", "sess-1"), 2);
   await store.markSensoryExtracted("u1", "sess-1", ["sen-1"]);

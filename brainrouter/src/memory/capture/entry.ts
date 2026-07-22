@@ -2,6 +2,7 @@ import type { SensoryRecord, CaptureResult, CognitiveExtractionStatus } from "@k
 import { redactSensitiveMemoryText } from "../util/redaction.js";
 import crypto from "node:crypto";
 import { CaptureExtraction } from "./extraction.js";
+import { normalizeMemoryTags } from "./memoryTags.js";
 
 /**
  * Capture entry point: the public `MemoryCapturePipeline`. `captureTurn` writes
@@ -18,15 +19,17 @@ export class MemoryCapturePipeline extends CaptureExtraction {
     messages: { role: string; content: string; timestamp: number }[];
     activeSkill?: string;
     skillHints?: string;
+    memoryTags?: string[];
     orgId?: string | null;
     projectId?: string | null;
     workspaceTag?: string | null;
     projectTag?: string | null;
   }): Promise<CaptureResult> {
-    const { userId, sessionKey, sessionId = "", messages, activeSkill, skillHints, orgId, projectId, workspaceTag, projectTag } = params;
+    const { userId, sessionKey, sessionId = "", messages, activeSkill, skillHints, memoryTags, orgId, projectId, workspaceTag, projectTag } = params;
 
     const nowStr = new Date().toISOString();
     const sensoryRecords: SensoryRecord[] = [];
+    const normalizedMemoryTags = normalizeMemoryTags(memoryTags ?? []);
 
     // 1. Write Sensory Records atomically
     for (let i = 0; i < messages.length; i++) {
@@ -41,6 +44,7 @@ export class MemoryCapturePipeline extends CaptureExtraction {
         recordedAt: nowStr,
         timestamp: msg.timestamp,
         skillTag: activeSkill || "",
+        ...(normalizedMemoryTags.length > 0 ? { memoryTags: [...normalizedMemoryTags] } : {}),
       };
 
       await this.store.upsertSensory(record);

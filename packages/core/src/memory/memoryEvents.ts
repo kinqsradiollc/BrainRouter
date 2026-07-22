@@ -19,6 +19,7 @@
 
 import type { McpClientPool } from '../mcp/mcpPool.js';
 import { hasMcpTool } from '../mcp/mcpUtils.js';
+import { resolveWorkspaceMemoryCaptureContext } from '../workspace/memoryCapture.js';
 
 export type RouteOutcome = 'success' | 'failure' | 'escalated';
 
@@ -78,6 +79,9 @@ async function emitViaCapture(
     const toolNames = ctx.toolNames ?? (await safeListToolNames(ctx.mcpClient));
     if (!hasMcpTool(toolNames, 'memory_capture_turn')) return null;
     const now = Date.now();
+    const workspaceMemoryContext = ctx.workspaceRoot
+      ? resolveWorkspaceMemoryCaptureContext(ctx.workspaceRoot)
+      : null;
     const res = await ctx.mcpClient.callTool('memory_capture_turn', {
       sessionKey: ctx.sessionKey,
       messages: [
@@ -87,6 +91,7 @@ async function emitViaCapture(
       activeSkill: parts.activeSkill,
       ...(ctx.workspaceRoot ? { workspaceRoot: ctx.workspaceRoot } : {}),
       ...(ctx.projectName ? { projectName: ctx.projectName } : {}),
+      ...(workspaceMemoryContext ?? {}),
     });
     if (!res || (res as any).isError) return null;
     return readRecordId(res);

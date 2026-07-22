@@ -20,6 +20,8 @@ export interface SensoryRecord {
   recordedAt: string;
   timestamp: number;
   skillTag: string;
+  /** Semantic workspace-profile tags retained until deferred extraction. */
+  memoryTags?: string[];
 }
 
 export type MemoryType =
