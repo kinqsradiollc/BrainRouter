@@ -331,6 +331,14 @@ export interface BuildPayloadOptions {
    */
   tool_choice?: 'auto' | { type: 'function'; function: { name: string } };
   /**
+   * Optional hard ceiling for the complete provider response body. The body is
+   * rejected while it is being read, before an unbounded JSON string/object is
+   * allocated. Intended for one-shot classifiers and other bounded adapters.
+   */
+  maxResponseBytes?: number;
+  /** Disable compatibility retries when the caller's contract permits one request only. */
+  allowCompatibilityRetry?: boolean;
+  /**
    * Router gateway — verbatim OpenAI request params to forward to the upstream
    * (temperature, top_p, max_tokens/max_completion_tokens, stop,
    * presence/frequency_penalty, seed, response_format, n, logprobs,
@@ -341,6 +349,59 @@ export interface BuildPayloadOptions {
    * overrides model/messages/tools/tool_choice.
    */
   passthrough?: Record<string, unknown>;
+}
+
+const MIN_BOUNDED_RESPONSE_BYTES = 1;
+const MAX_BOUNDED_RESPONSE_BYTES = 16 * 1024 * 1024;
+
+function assertValidResponseByteLimit(maxBytes: number | undefined): void {
+  if (maxBytes === undefined) return;
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < MIN_BOUNDED_RESPONSE_BYTES ||
+      maxBytes > MAX_BOUNDED_RESPONSE_BYTES) {
+    throw new Error('Invalid LLM response byte limit.');
+  }
+}
+
+async function readResponseText(response: Response, maxBytes?: number): Promise<string> {
+  if (maxBytes === undefined) return response.text();
+  assertValidResponseByteLimit(maxBytes);
+
+  const declaredLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error(`LLM response exceeded the ${maxBytes}-byte limit.`);
+  }
+  if (!response.body) return '';
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error(`LLM response exceeded the ${maxBytes}-byte limit.`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), total).toString('utf8');
+}
+
+async function readResponseJson(response: Response, maxBytes?: number): Promise<any> {
+  if (maxBytes === undefined) return response.json() as Promise<any>;
+  const text = await readResponseText(response, maxBytes);
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error('LLM endpoint returned invalid JSON.');
+  }
 }
 
 /** OpenAI chat params the gateway may forward verbatim (never model/messages/tools). */
@@ -856,7 +917,7 @@ async function callNativeProvider(
   }
 
   if (!res.ok) {
-    const errText = await res.text();
+    const errText = await readResponseText(res, options.maxResponseBytes);
     const apiErr: any = new Error(`${format} API error: ${res.status} ${res.statusText} - ${errText}`);
     apiErr.status = res.status;
     const retryAfterMs = parseRetryAfterMs(res.headers.get('retry-after'));
@@ -864,7 +925,7 @@ async function callNativeProvider(
     throw apiErr;
   }
 
-  const data = await res.json() as any;
+  const data = await readResponseJson(res, options.maxResponseBytes);
   return format === 'anthropic-messages'
     ? normalizeAnthropicOutput(data, endpoint, config.model)
     : normalizeGeminiOutput(data, endpoint, config.model);
@@ -876,6 +937,9 @@ export async function callOpenAI(
   tools: any[],
   options: BuildPayloadOptions = {},
 ) {
+  // Reject malformed or effectively unbounded opt-in limits before contacting
+  // a provider. Callers that need the legacy unrestricted behavior omit it.
+  assertValidResponseByteLimit(options.maxResponseBytes);
   // Normalize the endpoint to a base URL (everything UP TO `/chat/completions`
   // exclusive). Earlier callers stored the full chat-completions URL in
   // `config.endpoint` (e.g. "https://api.openai.com/v1/chat/completions")
@@ -977,14 +1041,15 @@ export async function callOpenAI(
 
   let res = await postBody(body);
   if (!res.ok) {
-    const errText = await res.text();
-    let retryBody = isInvalidReasoningEffortError(res.status, errText)
+    const errText = await readResponseText(res, options.maxResponseBytes);
+    const compatibilityRetriesEnabled = options.allowCompatibilityRetry !== false;
+    let retryBody = compatibilityRetriesEnabled && isInvalidReasoningEffortError(res.status, errText)
       ? stripReasoningEffortFromBody(body)
       : undefined;
     let retryKind = retryBody ? 'reasoning_effort' : '';
     // HONK-L4 — if the endpoint rejected tools/tool_choice, drop them and retry
     // (degrade to a plain-content answer) instead of hard-failing the turn.
-    if (!retryBody && isToolsUnsupportedError(res.status, errText)) {
+    if (compatibilityRetriesEnabled && !retryBody && isToolsUnsupportedError(res.status, errText)) {
       retryBody = stripToolsFromBody(body);
       if (retryBody) retryKind = 'tools_unsupported';
     }
@@ -994,7 +1059,7 @@ export async function callOpenAI(
     // rejects `reasoning_effort`. If we sent it, strip it and retry ONCE before
     // giving up, rather than hard-failing the turn. (stripReasoningEffortFromBody
     // returns undefined when there was nothing to strip, so this is a no-op then.)
-    if (!retryBody && res.status === 400) {
+    if (compatibilityRetriesEnabled && !retryBody && res.status === 400) {
       const stripped = stripReasoningEffortFromBody(body);
       if (stripped) { retryBody = stripped; retryKind = 'reasoning_effort'; }
     }
@@ -1007,7 +1072,7 @@ export async function callOpenAI(
       });
       res = await postBody(retryBody);
       if (res.ok) {
-        const retryData = await res.json() as any;
+        const retryData = await readResponseJson(res, options.maxResponseBytes);
         if (requestFormat === 'responses') {
           return normalizeResponsesOutput(retryData, endpoint, config.model);
         }
@@ -1016,7 +1081,7 @@ export async function callOpenAI(
     }
     // RECONNECT — attach the structured status + any `Retry-After` so the resilient
     // loop classifies it (429/5xx → reconnect) and honors the server's backoff.
-    const finalErrText = retryBody ? await res.text() : errText;
+    const finalErrText = retryBody ? await readResponseText(res, options.maxResponseBytes) : errText;
     const apiErr: any = new Error(`OpenAI API error: ${res.status} ${res.statusText} - ${finalErrText}`);
     apiErr.status = res.status;
     const retryAfterMs = parseRetryAfterMs(res.headers.get('retry-after'));
@@ -1024,7 +1089,7 @@ export async function callOpenAI(
     throw apiErr;
   }
 
-  const data = await res.json() as any;
+  const data = await readResponseJson(res, options.maxResponseBytes);
   if (requestFormat === 'responses') {
     return normalizeResponsesOutput(data, endpoint, config.model);
   }
