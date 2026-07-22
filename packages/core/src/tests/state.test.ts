@@ -492,13 +492,19 @@ test('cliState: migration neutralizes the legacy <workspace>/.brainrouter (rescu
     fs.mkdirSync(path.join(legacy, 'workflows', 'feat-x'), { recursive: true });
     fs.writeFileSync(path.join(legacy, 'cli', 'tasks.json'), JSON.stringify({ items: [] }));
     fs.writeFileSync(path.join(legacy, 'workflows', 'feat-x', 'spec.md'), '# Committable spec');
+    fs.writeFileSync(path.join(legacy, 'workspace.json'), '{"profile":"engineering"}\n');
+    const claimName = '.workspace.json.123.0123456789abcdef01234567.claim';
+    fs.writeFileSync(path.join(legacy, claimName), '{"profile":"research"}\n');
 
     getStateDir(workspace); // triggers migration
 
-    // Legacy cli/ and hooks/ deleted in place; workflows/ kept in workspace.
+    // Legacy cli/ and hooks/ are deleted in place; every committable workspace
+    // artifact and an in-flight manifest recovery claim remain untouched.
     assert.equal(fs.existsSync(path.join(legacy, 'cli')), false);
     assert.equal(fs.existsSync(path.join(legacy, 'hooks')), false);
     assert.equal(fs.existsSync(path.join(legacy, 'workflows', 'feat-x', 'spec.md')), true);
+    assert.equal(fs.readFileSync(path.join(legacy, 'workspace.json'), 'utf8'), '{"profile":"engineering"}\n');
+    assert.equal(fs.readFileSync(path.join(legacy, claimName), 'utf8'), '{"profile":"research"}\n');
     // The rescued state lives in the user-global home, NOT in an in-workspace archive.
     const home = getWorkspaceStateRoot(workspace);
     assert.equal(fs.existsSync(path.join(home, 'cli', 'tasks.json')), true);

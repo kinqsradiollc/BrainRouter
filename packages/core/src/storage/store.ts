@@ -69,6 +69,14 @@ export function getStateDir(workspaceRoot: string): string {
 }
 
 let migrationAttempted = new Set<string>();
+const WORKSPACE_LOCAL_PRESERVED_ENTRIES = new Set(['workflows', 'workspace.json']);
+const WORKSPACE_MANIFEST_CLAIM_PATTERN = /^\.workspace\.json\.[0-9]+\.[0-9a-f]{24}\.claim$/;
+
+function isWorkspaceLocalArtifact(entryName: string): boolean {
+  return WORKSPACE_LOCAL_PRESERVED_ENTRIES.has(entryName) ||
+    WORKSPACE_MANIFEST_CLAIM_PATTERN.test(entryName);
+}
+
 function migrateLegacyWorkspaceState(workspaceRoot: string, newRoot: string): void {
   if (migrationAttempted.has(workspaceRoot)) return;
   migrationAttempted.add(workspaceRoot);
@@ -97,14 +105,14 @@ function migrateLegacyWorkspaceState(workspaceRoot: string, newRoot: string): vo
     // Now neutralize the legacy directory so the agent's list_dir / read_file
     // don't see stale state in the workspace tree. The important state has
     // already been rescue-copied into the new home above (guaranteed by the
-    // marker check), so anything that ISN'T a workflows/ folder is DELETED
-    // outright — we no longer create a `.brainrouter.migrated/` archive in
-    // the project tree. If only workflows/ remains, the workspace-local
-    // .brainrouter/ stays as the canonical home for committable artifacts.
+    // marker check), so legacy state is deleted outright. Committable
+    // workflows, the workspace manifest, and a crash-recovery claim for that
+    // manifest remain project-local — we no longer create a
+    // `.brainrouter.migrated/` archive in the project tree.
     const entries = fs.readdirSync(legacyRoot, { withFileTypes: true });
     let removedAny = false;
     for (const entry of entries) {
-      if (entry.name === 'workflows') continue;
+      if (isWorkspaceLocalArtifact(entry.name)) continue;
       const from = path.join(legacyRoot, entry.name);
       try {
         fs.rmSync(from, { recursive: true, force: true });
