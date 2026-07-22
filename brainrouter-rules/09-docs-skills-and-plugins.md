@@ -282,7 +282,19 @@ such as frontend require task-time capability activation; merely adding their
 ID to the manifest pack list cannot activate them. Explicit skill disables win
 over profile, capability, and individual enable contributions.
 
-- **Evidence:** `packages/core/src/workspace/skillSelection.ts`, `packages/core/src/tests/workspace-skill-selection.test.ts`
+CLI catalog adapters insert selected package roots after workspace-authored
+roots and before ordinary plugin/bundled roots. They apply the same ambient
+disable and priority policy to filesystem and MCP list results, and re-resolve
+task capabilities from the current prompt before keyword-trigger matching.
+In a managed workspace, package profile/capability skill IDs stay hidden until
+selected even if a legacy bundled root contains a same-ID copy; the selected
+package plugin root wins ahead of that bundled copy.
+Explicit `/skill` lookup may search every available package profile root so a
+disabled skill remains intentionally invokable, but the resolved skill's
+per-turn tool allow/deny policy still applies. Never add package profile roots
+to a workspace with no readable manifest.
+
+- **Evidence:** `packages/core/src/workspace/skillSelection.ts`, `packages/core/src/tests/workspace-skill-selection.test.ts`, `brainrouter-cli/src/prompt/skillCatalog.ts`, `brainrouter-cli/src/tests/workspace-skill-catalog.test.ts`
 
 ### 16. ⛔ Executable plugin capabilities are consent-gated through the existing exec policy
 

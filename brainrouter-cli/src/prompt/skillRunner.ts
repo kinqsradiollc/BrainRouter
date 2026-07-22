@@ -337,7 +337,10 @@ export function scaffoldSkill(
 }
 
 function readSkillFromFilesystem(workspaceRoot: string, name: string): string | undefined {
-  for (const root of skillSearchRoots(workspaceRoot)) {
+  // Explicit invocation remains available for package-owned profile skills
+  // even when the manifest hides them from ambient listing and triggers. The
+  // resolved skill's allow/deny policy is still enforced by the turn runtime.
+  for (const root of skillSearchRoots(workspaceRoot, { visibility: 'explicit' })) {
     if (!fs.existsSync(root)) continue;
     const match = findSkillDir(root, name);
     if (match) {
