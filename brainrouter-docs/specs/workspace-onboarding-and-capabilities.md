@@ -272,6 +272,10 @@ and tenant-fair job runner.
   endings, redacts secrets before hashing or persistence, and atomically creates
   the document with a tenant-scoped versioned parse job. The job payload carries
   ancestry and document identifiers only, never source content.
+- The parse job is internal-only, validates the complete ancestry and parse
+  version, creates deterministic content-hashed chunks, and transactionally
+  replaces chunks before marking the document ready. A repeated ready job is a
+  no-op; failures expose only a safe document status message.
 - Parsing, chunking, and embedding run asynchronously and idempotently.
 - Document status (`queued`, `parsing`, `ready`, `failed`) is the UI truth.
 - Retry is scoped by job kind, tenant, Project, and base; generic job retry is
@@ -351,7 +355,7 @@ captured into cognitive memory through its current engine.
 | W4c | Done | Briefing + memory tags | Capture/briefing/no-manifest tests |
 | W6 | Done | Client bootstrap deprecation | Offline core proposal coverage + downstream template-doc compatibility tests |
 | B1a | Done | Project/RBAC contract, schema, internal store, REST base CRUD, MCP base list/create | Migration + role/access + scoped CRUD + authenticated adapter tests |
-| B1b/B2 | In progress (ingest enqueue) | Text ingest, typed parse jobs, status, scoped retry | Safe preparation + atomic ID-only enqueue complete; processing/202/status/retry/fairness remain |
+| B1b/B2 | In progress (text processing) | Text ingest, typed parse jobs, status, scoped retry | Safe ingest + atomic enqueue + idempotent chunk/status processing complete; embeddings/202/status/retry/fairness remain |
 | B1c | Todo | Hybrid retrieval and citation APIs/tools | FTS/vector/fallback/tenancy tests |
 | B1d | Todo | Additional document parsers | Per-format bounds/redaction tests |
 | B3 | Todo | Availability-aware recommendations and opt-in distillation | Catalog/provenance/no-recursion tests |

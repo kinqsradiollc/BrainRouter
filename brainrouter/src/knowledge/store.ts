@@ -7,6 +7,10 @@ import type {
   KnowledgeDocumentEnqueueResult,
   KnowledgeDocumentRecord,
   KnowledgeDocumentStatusUpdate,
+  KnowledgeChunkInput,
+  KnowledgeChunkRecord,
+  KnowledgeParseCommitResult,
+  KnowledgeParseJobInput,
 } from "./contracts/document.js";
 import type { KnowledgeProjectAccessStore } from "./services/project-access.js";
 
@@ -28,6 +32,26 @@ export interface KnowledgeDocumentStore extends KnowledgeBaseStore {
     record: KnowledgeDocumentRecord,
     jobId: string,
   ): Promise<KnowledgeDocumentEnqueueResult>;
+  markKnowledgeDocumentParsing(
+    input: KnowledgeParseJobInput,
+    updatedAt: string,
+  ): Promise<KnowledgeDocumentRecord | null>;
+  commitKnowledgeDocumentParse(
+    input: KnowledgeParseJobInput,
+    chunks: KnowledgeChunkInput[],
+    readyAt: string,
+  ): Promise<KnowledgeParseCommitResult | null>;
+  failKnowledgeDocumentParse(
+    input: KnowledgeParseJobInput,
+    statusMessage: string,
+    updatedAt: string,
+  ): Promise<KnowledgeDocumentRecord | null>;
+  listKnowledgeChunks(
+    documentId: string,
+    baseId: string,
+    orgId: string,
+    projectId: string,
+  ): Promise<KnowledgeChunkRecord[]>;
   createKnowledgeDocument(record: KnowledgeDocumentRecord): Promise<void>;
   getKnowledgeDocument(
     documentId: string,

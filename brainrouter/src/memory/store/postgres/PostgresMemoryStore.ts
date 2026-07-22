@@ -103,10 +103,14 @@ import { mapWithConcurrency, readEmbedConcurrency } from "../../util/concurrency
 import type { Executor } from "./queries/executor.js";
 import type { KnowledgeBaseRecord, UpdateKnowledgeBaseInput } from "../../../knowledge/contracts/base.js";
 import type {
+  KnowledgeChunkInput,
+  KnowledgeChunkRecord,
   KnowledgeDocumentEnqueueResult,
   KnowledgeDocumentListFilters,
   KnowledgeDocumentRecord,
   KnowledgeDocumentStatusUpdate,
+  KnowledgeParseCommitResult,
+  KnowledgeParseJobInput,
 } from "../../../knowledge/contracts/document.js";
 import type { VecContext } from "./queries/searchQueries.js";
 import {
@@ -499,6 +503,10 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public deleteKnowledgeBase(baseId: string, orgId: string, projectId: string): Promise<boolean> { return knowledgeBases.deleteKnowledgeBase(this.exec, baseId, orgId, projectId); }
   public createKnowledgeDocument(record: KnowledgeDocumentRecord): Promise<void> { return knowledgeDocuments.createKnowledgeDocument(this.exec, record); }
   public enqueueKnowledgeDocument(record: KnowledgeDocumentRecord, jobId: string): Promise<KnowledgeDocumentEnqueueResult> { return knowledgeDocuments.enqueueKnowledgeDocument(this.exec, record, jobId); }
+  public markKnowledgeDocumentParsing(input: KnowledgeParseJobInput, updatedAt: string): Promise<KnowledgeDocumentRecord | null> { return knowledgeDocuments.markKnowledgeDocumentParsing(this.exec, input, updatedAt); }
+  public commitKnowledgeDocumentParse(input: KnowledgeParseJobInput, chunks: KnowledgeChunkInput[], readyAt: string): Promise<KnowledgeParseCommitResult | null> { return knowledgeDocuments.commitKnowledgeDocumentParse(this.exec, input, chunks, readyAt); }
+  public failKnowledgeDocumentParse(input: KnowledgeParseJobInput, statusMessage: string, updatedAt: string): Promise<KnowledgeDocumentRecord | null> { return knowledgeDocuments.failKnowledgeDocumentParse(this.exec, input, statusMessage, updatedAt); }
+  public listKnowledgeChunks(documentId: string, baseId: string, orgId: string, projectId: string): Promise<KnowledgeChunkRecord[]> { return knowledgeDocuments.listKnowledgeChunks(this.exec, documentId, baseId, orgId, projectId); }
   public getKnowledgeDocument(documentId: string, baseId: string, orgId: string, projectId: string): Promise<KnowledgeDocumentRecord | null> { return knowledgeDocuments.getKnowledgeDocument(this.exec, documentId, baseId, orgId, projectId); }
   public getKnowledgeDocumentByContentHash(contentSha256: string, baseId: string, orgId: string, projectId: string): Promise<KnowledgeDocumentRecord | null> { return knowledgeDocuments.getKnowledgeDocumentByContentHash(this.exec, contentSha256, baseId, orgId, projectId); }
   public listKnowledgeDocuments(baseId: string, orgId: string, projectId: string, filters?: KnowledgeDocumentListFilters): Promise<KnowledgeDocumentRecord[]> { return knowledgeDocuments.listKnowledgeDocuments(this.exec, baseId, orgId, projectId, filters); }

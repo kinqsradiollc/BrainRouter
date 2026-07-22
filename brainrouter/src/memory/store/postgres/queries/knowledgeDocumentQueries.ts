@@ -1,7 +1,10 @@
 import type {
+  KnowledgeChunkInput,
+  KnowledgeChunkRecord,
   KnowledgeDocumentEnqueueResult,
   KnowledgeDocumentListFilters,
   KnowledgeParseJobInput,
+  KnowledgeParseCommitResult,
   KnowledgeDocumentRecord,
   KnowledgeDocumentStatusUpdate,
 } from "../../../../knowledge/contracts/document.js";
@@ -18,6 +21,20 @@ function toIso(value: unknown): string {
 
 function nullableIso(value: unknown): string | null {
   return value == null ? null : toIso(value);
+}
+
+function jsonObject(value: unknown): Record<string, unknown> {
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 }
 
 function rowToRecord(row: any): KnowledgeDocumentRecord {
@@ -127,6 +144,161 @@ export async function enqueueKnowledgeDocument(
     );
     return { document: rowToRecord(inserted.rows[0]), created: true, jobId };
   });
+}
+
+export async function markKnowledgeDocumentParsing(
+  exec: Executor,
+  input: KnowledgeParseJobInput,
+  updatedAt: string,
+): Promise<KnowledgeDocumentRecord | null> {
+  const row = await exec.one(
+    `UPDATE knowledge_documents
+        SET status = 'parsing', status_message = NULL, updated_at = $6, ready_at = NULL
+      WHERE document_id = $1 AND base_id = $2 AND org_id = $3 AND project_id = $4
+        AND parse_version = $5 AND status <> 'ready'
+      RETURNING ${COLUMNS}`,
+    [input.documentId, input.baseId, input.orgId, input.projectId, input.parseVersion, updatedAt],
+  );
+  if (row) return rowToRecord(row);
+  return getKnowledgeDocument(
+    exec,
+    input.documentId,
+    input.baseId,
+    input.orgId,
+    input.projectId,
+  );
+}
+
+export async function commitKnowledgeDocumentParse(
+  exec: Executor,
+  input: KnowledgeParseJobInput,
+  chunks: KnowledgeChunkInput[],
+  readyAt: string,
+): Promise<KnowledgeParseCommitResult | null> {
+  return exec.tx(async (client) => {
+    const current = (await client.query(
+      `SELECT ${COLUMNS} FROM knowledge_documents
+        WHERE document_id = $1 AND base_id = $2 AND org_id = $3 AND project_id = $4
+          AND parse_version = $5
+        FOR UPDATE`,
+      [input.documentId, input.baseId, input.orgId, input.projectId, input.parseVersion],
+    )).rows[0];
+    if (!current) return null;
+    const document = rowToRecord(current);
+    if (document.status === "ready") {
+      const count = (await client.query(
+        `SELECT COUNT(*) AS count FROM knowledge_chunks
+          WHERE document_id = $1 AND base_id = $2 AND org_id = $3 AND project_id = $4`,
+        [input.documentId, input.baseId, input.orgId, input.projectId],
+      )).rows[0];
+      return { document, chunksWritten: Number(count?.count ?? 0), alreadyReady: true };
+    }
+
+    await client.query(
+      `DELETE FROM knowledge_chunks
+        WHERE document_id = $1 AND base_id = $2 AND org_id = $3 AND project_id = $4`,
+      [input.documentId, input.baseId, input.orgId, input.projectId],
+    );
+    if (chunks.length > 0) {
+      await client.query(
+        `INSERT INTO knowledge_chunks
+           (chunk_id, document_id, base_id, org_id, project_id, ordinal, content,
+            content_sha256, token_count, char_start, char_end, locator_json)
+         SELECT chunk.chunk_id, $1, $2, $3, $4, chunk.ordinal, chunk.content,
+                chunk.content_sha256, chunk.token_count, chunk.char_start,
+                chunk.char_end, chunk.locator_json
+           FROM jsonb_to_recordset($5::jsonb) AS chunk(
+             chunk_id text, ordinal integer, content text, content_sha256 text,
+             token_count integer, char_start integer, char_end integer,
+             locator_json jsonb
+           )`,
+        [
+          input.documentId,
+          input.baseId,
+          input.orgId,
+          input.projectId,
+          JSON.stringify(chunks.map((chunk) => ({
+            chunk_id: chunk.chunkId,
+            ordinal: chunk.ordinal,
+            content: chunk.content,
+            content_sha256: chunk.contentSha256,
+            token_count: chunk.tokenCount,
+            char_start: chunk.charStart,
+            char_end: chunk.charEnd,
+            locator_json: chunk.locator,
+          }))),
+        ],
+      );
+    }
+    const ready = (await client.query(
+      `UPDATE knowledge_documents
+          SET status = 'ready', status_message = NULL, updated_at = $6, ready_at = $6
+        WHERE document_id = $1 AND base_id = $2 AND org_id = $3 AND project_id = $4
+          AND parse_version = $5
+        RETURNING ${COLUMNS}`,
+      [input.documentId, input.baseId, input.orgId, input.projectId, input.parseVersion, readyAt],
+    )).rows[0];
+    if (!ready) throw new Error("Knowledge document disappeared during parse commit.");
+    return { document: rowToRecord(ready), chunksWritten: chunks.length, alreadyReady: false };
+  });
+}
+
+export async function failKnowledgeDocumentParse(
+  exec: Executor,
+  input: KnowledgeParseJobInput,
+  statusMessage: string,
+  updatedAt: string,
+): Promise<KnowledgeDocumentRecord | null> {
+  const row = await exec.one(
+    `UPDATE knowledge_documents
+        SET status = 'failed', status_message = $6, updated_at = $7, ready_at = NULL
+      WHERE document_id = $1 AND base_id = $2 AND org_id = $3 AND project_id = $4
+        AND parse_version = $5 AND status <> 'ready'
+      RETURNING ${COLUMNS}`,
+    [
+      input.documentId,
+      input.baseId,
+      input.orgId,
+      input.projectId,
+      input.parseVersion,
+      statusMessage,
+      updatedAt,
+    ],
+  );
+  return row ? rowToRecord(row) : null;
+}
+
+export async function listKnowledgeChunks(
+  exec: Executor,
+  documentId: string,
+  baseId: string,
+  orgId: string,
+  projectId: string,
+): Promise<KnowledgeChunkRecord[]> {
+  const rows = await exec.rows(
+    `SELECT chunk_id, document_id, base_id, org_id, project_id, ordinal,
+            content, content_sha256, token_count, char_start, char_end,
+            locator_json, created_at
+       FROM knowledge_chunks
+      WHERE document_id = $1 AND base_id = $2 AND org_id = $3 AND project_id = $4
+      ORDER BY ordinal ASC`,
+    [documentId, baseId, orgId, projectId],
+  );
+  return rows.map((row: any) => ({
+    chunkId: String(row.chunk_id),
+    documentId: String(row.document_id),
+    baseId: String(row.base_id),
+    orgId: String(row.org_id),
+    projectId: String(row.project_id),
+    ordinal: Number(row.ordinal),
+    content: String(row.content),
+    contentSha256: String(row.content_sha256),
+    tokenCount: Number(row.token_count),
+    charStart: row.char_start == null ? null : Number(row.char_start),
+    charEnd: row.char_end == null ? null : Number(row.char_end),
+    locator: jsonObject(row.locator_json),
+    createdAt: toIso(row.created_at),
+  }));
 }
 
 export async function getKnowledgeDocument(
