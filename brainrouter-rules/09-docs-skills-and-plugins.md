@@ -166,15 +166,20 @@ An agent `<id>.md` defines the domain identity shown to the model. A same-ID
 and delegation behavior; JSON alone never creates a domain persona. Executable
 definitions are read only from regular UTF-8 files under their declared source
 root, capped at 64 KiB, validated field-by-field, and rejected when their ID does
-not match the filename. Project writers must validate the exact serialized JSON
-through the same parser and use guarded atomic workspace persistence; never cast
-arbitrary parsed JSON to `AgentDefinition`, follow linked project/pack agent
-paths, or write executable definitions directly with `writeFileSync`.
+not match the filename. Once a workspace manifest exists, runtime lookup keeps
+reserved harness roles active and exposes any other JSON definition only when
+its ID is the manifest default or appears in `agents.enabled`; missing or
+unreadable manifests preserve the full legacy catalog. Project writers must
+validate the exact serialized JSON through the same parser and use guarded
+atomic workspace persistence; never cast arbitrary parsed JSON to
+`AgentDefinition`, follow linked project/pack agent paths, or write executable
+definitions directly with `writeFileSync`.
 
 - **Why:** project and pack JSON becomes both a model-visible tool and child
   execution policy, so partial objects, path escapes, or arbitrary tool names
   would cross an execution boundary rather than merely affect display text.
 - **Evidence:** `packages/core/src/orchestration/agents/agentDefinitionFile.ts`,
+  `packages/core/src/orchestration/agents/agentRegistry.ts`,
   `packages/core/src/workspace/domainPersonas.ts`,
   `brainrouter-cli/src/orchestration/agentDefinitionWriter.ts`
 

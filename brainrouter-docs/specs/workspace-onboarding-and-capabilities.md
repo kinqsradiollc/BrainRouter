@@ -163,6 +163,9 @@ For an onboarded workspace:
 - session creation selects `agents.default` and injects its domain-persona
   briefing;
 - the picker offers every enabled domain agent;
+- reserved orchestration roles remain executable, while other JSON execution
+  definitions appear only when selected by `agents.default` or
+  `agents.enabled`;
 - enabled skill packs are prioritized, disabled skills are absent from ambient
   suggestions, and explicit invocation remains policy-gated;
 - active capabilities contribute per-turn packs/skills/tool profiles;

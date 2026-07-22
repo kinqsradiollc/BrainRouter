@@ -3,7 +3,44 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { withTempWorkspace } from './_helpers.js';
-import { loadRegistry, findById, listAll, type AgentDefinition } from '../orchestration/agents/agentRegistry.js';
+import {
+  findById,
+  listAll,
+  loadActiveRegistry,
+  loadRegistry,
+  type AgentDefinition,
+} from '../orchestration/agents/agentRegistry.js';
+import { synthesizeDelegateTools } from '../orchestration/tools/toolNames.js';
+import { createWorkspaceManifest, saveWorkspaceManifest } from '../workspace/manifest.js';
+
+function writeAgentDefinition(
+  workspace: string,
+  id: string,
+  overrides: Partial<AgentDefinition> = {},
+): void {
+  const agentsDir = path.join(workspace, '.brainrouter', 'agents');
+  fs.mkdirSync(agentsDir, { recursive: true });
+  const definition: AgentDefinition = {
+    id,
+    displayName: id,
+    whenToUse: `Use ${id} for its enabled project work.`,
+    prompt: `Follow the ${id} project execution policy.`,
+    model: null,
+    effort: null,
+    defaultAccess: 'read',
+    toolScope: { local: [], mcp: [] },
+    disallowedTools: [],
+    maxIterations: 10,
+    timeoutMs: 30_000,
+    maxResultChars: 2_000,
+    subagents: [],
+    delegateName: `delegate_${id.replaceAll('-', '_')}`,
+    tier: 'worker',
+    outputContract: null,
+    ...overrides,
+  };
+  fs.writeFileSync(path.join(agentsDir, `${id}.json`), JSON.stringify(definition), 'utf8');
+}
 
 test('built-in registry loads all canonical roles', () => {
   const defs = loadRegistry();
@@ -298,5 +335,88 @@ test('W4b legacy CLI delegate names normalize to a routable typed tool', () => {
       'delegate_project_specialist',
       'legacy generated definitions remain usable after validation',
     );
+  });
+});
+
+test('W4b active registry is exactly the raw registry when no manifest exists', () => {
+  withTempWorkspace((workspace) => {
+    writeAgentDefinition(workspace, 'legacy-visible');
+
+    assert.deepEqual(loadActiveRegistry(workspace), loadRegistry(workspace));
+    assert.deepEqual(listAll(workspace), loadRegistry(workspace));
+    assert.equal(findById('legacy-visible', workspace)?.source, 'workspace');
+  });
+});
+
+test('W4b manifest activates only its default and enabled custom definitions', () => {
+  withTempWorkspace((workspace) => {
+    writeAgentDefinition(workspace, 'default-specialist');
+    writeAgentDefinition(workspace, 'enabled-specialist');
+    writeAgentDefinition(workspace, 'hidden-specialist');
+    saveWorkspaceManifest(workspace, createWorkspaceManifest({
+      name: 'filtered',
+      profile: 'custom',
+      by: 'wizard',
+      overrides: {
+        agents: { default: 'default-specialist', enabled: ['enabled-specialist'] },
+      },
+    }));
+
+    const rawIds = loadRegistry(workspace).map((entry) => entry.def.id);
+    const activeIds = loadActiveRegistry(workspace).map((entry) => entry.def.id);
+    assert.ok(rawIds.includes('hidden-specialist'), 'raw inventory remains complete');
+    assert.ok(activeIds.includes('default-specialist'), 'default is active even when omitted from enabled');
+    assert.ok(activeIds.includes('enabled-specialist'), 'enabled same-id project JSON is active');
+    assert.equal(activeIds.includes('hidden-specialist'), false, 'unlisted custom JSON is not executable');
+  });
+});
+
+test('W4b manifest always preserves reserved harness definitions and their overrides', () => {
+  withTempWorkspace((workspace) => {
+    writeAgentDefinition(workspace, 'explorer', { displayName: 'Project explorer', tier: 'reasoning' });
+    saveWorkspaceManifest(workspace, createWorkspaceManifest({
+      name: 'harness',
+      profile: 'custom',
+      by: 'wizard',
+    }));
+
+    const active = loadActiveRegistry(workspace);
+    assert.deepEqual(
+      active.filter((entry) => entry.source === 'builtin').map((entry) => entry.def.id).sort(),
+      ['architect', 'fleet', 'intake', 'reviewer', 'verifier', 'worker'],
+    );
+    assert.equal(findById('explorer', workspace)?.source, 'workspace');
+    assert.equal(findById('explorer', workspace)?.def.displayName, 'Project explorer');
+  });
+});
+
+test('W4b unreadable manifests preserve exact legacy registry behavior', () => {
+  withTempWorkspace((workspace) => {
+    writeAgentDefinition(workspace, 'corrupt-fallback');
+    fs.writeFileSync(path.join(workspace, '.brainrouter', 'workspace.json'), '{ broken', 'utf8');
+
+    assert.deepEqual(loadActiveRegistry(workspace), loadRegistry(workspace));
+    assert.equal(findById('corrupt-fallback', workspace)?.source, 'workspace');
+  });
+});
+
+test('W4b runtime lookup and delegate tools expose only the active manifest catalog', () => {
+  withTempWorkspace((workspace) => {
+    writeAgentDefinition(workspace, 'visible-specialist');
+    writeAgentDefinition(workspace, 'hidden-specialist');
+    saveWorkspaceManifest(workspace, createWorkspaceManifest({
+      name: 'runtime',
+      profile: 'custom',
+      by: 'wizard',
+      overrides: {
+        agents: { default: '', enabled: ['visible-specialist'] },
+      },
+    }));
+
+    const toolNames = synthesizeDelegateTools(listAll(workspace)).map((tool) => tool.name);
+    assert.ok(toolNames.includes('delegate_visible_specialist'));
+    assert.equal(toolNames.includes('delegate_hidden_specialist'), false);
+    assert.equal(findById('visible-specialist', workspace)?.source, 'workspace');
+    assert.equal(findById('hidden-specialist', workspace), undefined);
   });
 });
