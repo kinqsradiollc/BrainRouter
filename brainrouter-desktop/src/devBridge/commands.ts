@@ -3,10 +3,12 @@
 // shared dev state (./state) + the query map (./queries). Behavior-identical.
 import type { AgentCommand, AgentEvent, AgentEventMessage } from '@kinqs/brainrouter-agent-protocol';
 import type { DevState } from './state.js';
+import { getDevWorkspaceManifest, saveDevWorkspaceManifest } from './onboarding.js';
 
 export function installBridge(S: DevState, queries: Record<string, (args: Record<string, unknown>) => unknown>): void {
   const {
     listeners, recentsListeners, runningSessions, emit, devSessionModels, resolvedModel, trustedRoots, SESSIONS_BY_ROOT, mergeMeta,
+    onboarding,
   } = S;
   (window as unknown as { brainrouter: unknown }).brainrouter = {
     // Demo workspace contexts so the activity-bar workspace switcher renders in
@@ -243,6 +245,11 @@ export function installBridge(S: DevState, queries: Record<string, (args: Record
       emit({ kind: 'session-changed', sessionKey: `dev:${root.split('/').pop()}`, loadedMessages: 0, model: 'claude-opus-4-8' }, 350);
       return { opened: true };
     },
+    // Browser development mirrors the main-process read/review/save contract in
+    // memory, including opaque revisions and stale-write rejection.
+    workspaceManifest: async (root: string) => getDevWorkspaceManifest(onboarding, root),
+    saveWorkspaceManifest: async (root: string, payload: Record<string, unknown>) =>
+      saveDevWorkspaceManifest(onboarding, root, payload),
     // T1 — workspace trust mocks (real impl is the shared CLI store via main).
     isWorkspaceTrusted: async (root: string) => ({ trusted: trustedRoots.has(root) }),
     trustWorkspace: async (root: string) => { trustedRoots.add(root); return { trusted: true }; },

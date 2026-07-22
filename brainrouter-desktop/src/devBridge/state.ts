@@ -5,6 +5,7 @@
 // visible everywhere; collections + helpers are shared by reference. Behavior-identical.
 import type { AgentEvent, AgentEventMessage } from '@kinqs/brainrouter-agent-protocol';
 import type { ConnectorCatalogEntry, ConnectorRecord } from '@kinqs/brainrouter-types';
+import { createDevOnboardingState } from './onboarding.js';
 
 export function createDevState() {
   const listeners = new Set<(msg: AgentEventMessage) => void>();
@@ -65,6 +66,7 @@ export function createDevState() {
   let wsRecents = ['/Users/dev/BrainRouter', '/Users/dev/side-project', '/Users/dev/TradingAgents'];
   // T1 — mock trust set (existing projects pre-trusted so the dev UI isn't gated).
   const trustedRoots = new Set<string>(wsRecents);
+  const onboarding = createDevOnboardingState();
   const SESSIONS_BY_ROOT: Record<string, unknown[]> = {
     '/Users/dev/BrainRouter': [
       { sessionKey: 'dev:fix-recall-blend', firstUserMessage: 'fix the reranker blend regression', modifiedAt: new Date(Date.now() - 3600_000).toISOString(), turnCount: 24, lastRole: 'assistant' },
@@ -595,6 +597,7 @@ export function createDevState() {
     devSessionModels,
     resolvedModel,
     trustedRoots,
+    onboarding,
     SESSIONS_BY_ROOT,
     devMeta,
     mergeMeta,
