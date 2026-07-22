@@ -18,12 +18,15 @@ export interface WorkspaceProfilePluginDefinition {
   kind: 'profile' | 'capability';
   pluginName: string;
   skillIds: readonly string[];
+  /** Optional same-id executable policies contributed only with this profile pack. */
+  agentIds: readonly string[];
 }
 
 export interface AvailableWorkspaceProfilePlugin extends WorkspaceProfilePluginDefinition {
   root: string;
   version: string;
   skillsRoot: string;
+  agentsRoot?: string;
   plugin: DiscoveredPlugin;
 }
 
@@ -47,30 +50,35 @@ export const WORKSPACE_PROFILE_PLUGIN_DEFINITIONS: readonly WorkspaceProfilePlug
     kind: 'profile',
     pluginName: 'profile-study',
     skillIds: ['learning-plan-skill', 'retrieval-practice-skill'],
+    agentIds: ['tutor'],
   },
   {
     id: 'research',
     kind: 'profile',
     pluginName: 'profile-research',
     skillIds: ['evidence-research-skill', 'source-synthesis-skill'],
+    agentIds: ['researcher'],
   },
   {
     id: 'data',
     kind: 'profile',
     pluginName: 'profile-data',
     skillIds: ['data-analysis-skill', 'experiment-validation-skill'],
+    agentIds: ['data-scientist'],
   },
   {
     id: 'writing',
     kind: 'profile',
     pluginName: 'profile-writing',
     skillIds: ['structured-writing-skill', 'revision-skill'],
+    agentIds: ['writer'],
   },
   {
     id: 'frontend',
     kind: 'capability',
     pluginName: 'capability-frontend',
     skillIds: ['a11y-skill', 'browser-testing-skill', 'taste-skill'],
+    agentIds: [],
   },
 ] as const;
 
@@ -116,7 +124,27 @@ export function inspectWorkspaceProfilePlugins(
       unavailable.push({ ...definition, reason: `missing regular skill file: ${missingSkill}` });
       continue;
     }
-    available.push({ ...definition, root: pluginRoot, version, skillsRoot, plugin });
+    const agentsRoot = plugin.contributes.agents;
+    if (definition.agentIds.length > 0) {
+      if (!agentsRoot || !isContainedDirectory(pluginRoot, agentsRoot)) {
+        unavailable.push({ ...definition, reason: 'regular contained agents contribution is required' });
+        continue;
+      }
+      const missingAgent = definition.agentIds.find((agentId) =>
+        !isRegularFile(path.join(agentsRoot, `${agentId}.json`)));
+      if (missingAgent) {
+        unavailable.push({ ...definition, reason: `missing regular agent file: ${missingAgent}` });
+        continue;
+      }
+    }
+    available.push({
+      ...definition,
+      root: pluginRoot,
+      version,
+      skillsRoot,
+      ...(agentsRoot ? { agentsRoot } : {}),
+      plugin,
+    });
   }
 
   return { available, unavailable };
@@ -133,6 +161,14 @@ export function findWorkspaceProfilePlugin(
 function isRegularSkillFile(filePath: string): boolean {
   try {
     return fs.lstatSync(path.dirname(filePath)).isDirectory() && fs.lstatSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function isRegularFile(filePath: string): boolean {
+  try {
+    return fs.lstatSync(filePath).isFile();
   } catch {
     return false;
   }

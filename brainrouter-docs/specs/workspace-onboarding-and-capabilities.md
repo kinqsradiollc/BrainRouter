@@ -166,6 +166,11 @@ For an onboarded workspace:
 - reserved orchestration roles remain executable, while other JSON execution
   definitions appear only when selected by `agents.default` or
   `agents.enabled`;
+- selected research, data, study, and writing profile packs contribute one
+  same-ID JSON execution policy for their domain persona; pack selection adds
+  inventory, while the agent selection remains the execution gate;
+- engineering keeps its single `engineer` persona and the task-scoped frontend
+  capability contributes skills and tools, never a second persona or executor;
 - enabled skill packs are prioritized, disabled skills are absent from ambient
   suggestions, and explicit invocation remains policy-gated;
 - active capabilities contribute per-turn packs/skills/tool profiles;
@@ -302,7 +307,7 @@ captured into cognitive memory through its current engine.
 | W3d | Done | Finish Setup + Workspace Settings editor | Round-trip/unknown-field/re-entry tests |
 | W5a | Done | Domain persona overlay registry, excluding any frontend persona | Catalog/shadowing/briefing tests |
 | C1 | Done | `allowed-tools` parsing and effective per-turn intersection | Parser + local/MCP enforcement tests |
-| C2/C4 | Partial | Profile plugins and engineering frontend/design flow | Plugin discovery + skill workflow tests; specialist execution definitions remain |
+| C2/C4 | Done | Profile plugins, scoped specialist executors, and engineering frontend/design flow | Plugin discovery + skill/executor workflow tests |
 | W4a | Done | Persona/capability prompt activation for root + children | Exact no-manifest and positive/negative activation tests |
 | W4b | Done | Skill catalog/packs + explicit tool-profile mapping | CLI/Desktop parity and policy tests |
 | W4c | Done | Briefing + memory tags | Capture/briefing/no-manifest tests |

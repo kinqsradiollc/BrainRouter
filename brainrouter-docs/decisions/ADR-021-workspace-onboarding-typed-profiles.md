@@ -181,8 +181,9 @@ distilled facts enter cognitive memory through its existing engine.
   bootstrap-path deprecation. First-party project setup is package-local and
   offline-capable; server skill and template-doc tools remain available for
   downstream clients.
-- **C1/C2/C4** — skill tool allowlists, plugin-delivered profile/capability packs,
-  and the frontend design-artifact workflow.
+- **C1/C2/C4 (shipped)** — skill tool allowlists, plugin-delivered
+  profile/capability packs with selected same-ID specialist executors, and the
+  frontend design-artifact workflow without a separate frontend persona.
 - **B1–B3** — project/RBAC foundation and knowledge store; async parsing and
   retrieval; profile-aware recommendations and opt-in sourced distillation.
 - **C3** — dashboard and desktop knowledge management after the server contracts

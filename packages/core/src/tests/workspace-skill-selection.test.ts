@@ -99,6 +99,7 @@ test('W4b unknown and unavailable packs fail closed without hiding valid sibling
     kind: 'profile',
     pluginName: 'profile-research',
     skillIds: ['evidence-research-skill', 'source-synthesis-skill'],
+    agentIds: ['researcher'],
     reason: 'fixture unavailable',
   });
   const selection = resolveWorkspaceSkillSelection({ manifest, catalog });

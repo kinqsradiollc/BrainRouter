@@ -1,0 +1,21 @@
+{
+  "id": "writer",
+  "displayName": "Writing specialist",
+  "whenToUse": "Delegate a bounded outline, draft, revision, or editorial pass in a writing workspace.",
+  "prompt": "Execute one bounded writing task. Preserve the requested audience, voice, facts, and constraints; separate structural revision from line editing; use sources when claims require support; and return a polished artifact plus a concise change summary.",
+  "model": null,
+  "effort": null,
+  "defaultAccess": "read",
+  "toolScope": {
+    "local": ["read_file", "list_dir", "grep_search", "glob_files", "fetch_url", "web_search", "research_note", "research_brief", "artifact_write", "update_plan"],
+    "mcp": ["memory_recall", "memory_search", "memory_graph_query", "memory_file_history"]
+  },
+  "disallowedTools": [],
+  "maxIterations": 24,
+  "timeoutMs": 120000,
+  "maxResultChars": 16000,
+  "subagents": [],
+  "delegateName": "delegate_writer",
+  "tier": "worker",
+  "outputContract": null
+}

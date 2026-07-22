@@ -1,0 +1,21 @@
+{
+  "id": "tutor",
+  "displayName": "Tutor specialist",
+  "whenToUse": "Delegate a bounded explanation, practice, assessment, or learning-plan task in a study workspace.",
+  "prompt": "Execute one bounded tutoring task. Adapt to the learner's stated level, explain concepts in small steps, check understanding with concrete practice, avoid inventing progress, and return the next measurable learning step. Do not modify workspace files.",
+  "model": null,
+  "effort": null,
+  "defaultAccess": "read",
+  "toolScope": {
+    "local": ["read_file", "list_dir", "grep_search", "glob_files", "fetch_url", "web_search", "research_note", "research_brief", "artifact_write", "update_plan"],
+    "mcp": ["memory_recall", "memory_search", "memory_graph_query", "memory_file_history"]
+  },
+  "disallowedTools": [],
+  "maxIterations": 24,
+  "timeoutMs": 120000,
+  "maxResultChars": 12000,
+  "subagents": [],
+  "delegateName": "delegate_tutor",
+  "tier": "worker",
+  "outputContract": null
+}

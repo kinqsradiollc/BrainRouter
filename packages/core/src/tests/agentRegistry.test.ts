@@ -420,3 +420,70 @@ test('W4b runtime lookup and delegate tools expose only the active manifest cata
     assert.equal(findById('hidden-specialist', workspace), undefined);
   });
 });
+
+test('C2 selected profile packs contribute only their matching active executor', () => {
+  const cases = [
+    { profile: 'research' as const, id: 'researcher', access: 'read' },
+    { profile: 'data-science' as const, id: 'data-scientist', access: 'shell' },
+    { profile: 'study' as const, id: 'tutor', access: 'read' },
+    { profile: 'writing' as const, id: 'writer', access: 'read' },
+  ];
+  const specialistIds = new Set(cases.map(({ id }) => id));
+
+  for (const item of cases) {
+    withTempWorkspace((workspace) => {
+      saveWorkspaceManifest(workspace, createWorkspaceManifest({
+        name: item.profile,
+        profile: item.profile,
+        by: 'wizard',
+      }));
+
+      const rawSpecialists = loadRegistry(workspace)
+        .filter((entry) => specialistIds.has(entry.def.id))
+        .map((entry) => entry.def.id);
+      assert.deepEqual(rawSpecialists, [item.id]);
+      const active = findById(item.id, workspace);
+      assert.equal(active?.source, 'pack');
+      assert.equal(active?.def.defaultAccess, item.access);
+      assert.ok(
+        synthesizeDelegateTools(listAll(workspace)).some((tool) => tool.name === active?.def.delegateName),
+      );
+    });
+  }
+});
+
+test('C2 profile executors stay absent without a selected profile pack', () => {
+  const specialistIds = new Set(['researcher', 'data-scientist', 'tutor', 'writer']);
+  withTempWorkspace((workspace) => {
+    assert.equal(loadRegistry(workspace).some((entry) => specialistIds.has(entry.def.id)), false);
+
+    saveWorkspaceManifest(workspace, createWorkspaceManifest({
+      name: 'engineering',
+      profile: 'engineering',
+      by: 'wizard',
+    }));
+    assert.equal(loadRegistry(workspace).some((entry) => specialistIds.has(entry.def.id)), false);
+    assert.equal(findById('frontend-builder', workspace), undefined);
+  });
+});
+
+test('C2 selecting a pack contributes inventory but cannot bypass agent activation', () => {
+  withTempWorkspace((workspace) => {
+    saveWorkspaceManifest(workspace, createWorkspaceManifest({
+      name: 'custom research',
+      profile: 'custom',
+      by: 'wizard',
+      overrides: {
+        agents: { default: '', enabled: [] },
+        skills: { packs: ['research'], enabled: [], disabled: [] },
+      },
+    }));
+
+    assert.equal(loadRegistry(workspace).some((entry) => entry.def.id === 'researcher'), true);
+    assert.equal(findById('researcher', workspace), undefined);
+    assert.equal(
+      synthesizeDelegateTools(listAll(workspace)).some((tool) => tool.name === 'delegate_researcher'),
+      false,
+    );
+  });
+});

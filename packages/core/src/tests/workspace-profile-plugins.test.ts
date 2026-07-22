@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { summarizeProvides } from '../plugin/discovery.js';
+import { parseAgentDefinition } from '../orchestration/agents/agentRegistry.js';
 import {
   findWorkspaceProfilePlugin,
   inspectWorkspaceProfilePlugins,
@@ -24,6 +25,17 @@ test('C2 package-owned profile plugins use the standard versioned plugin contrac
     assert.equal(plugin.plugin.manifest.version, plugin.version);
     assert.equal(plugin.plugin.manifest.name, plugin.pluginName);
     assert.equal(summarizeProvides(plugin.plugin).skills, plugin.skillIds.length);
+    assert.equal(summarizeProvides(plugin.plugin).agents, plugin.agentIds.length);
+    if (plugin.agentIds.length === 0) {
+      assert.equal(plugin.agentsRoot, undefined);
+    } else {
+      const agentsRoot = plugin.agentsRoot;
+      assert.ok(agentsRoot);
+      for (const agentId of plugin.agentIds) {
+        const body: string = fs.readFileSync(path.join(agentsRoot, `${agentId}.json`), 'utf8');
+        assert.equal(parseAgentDefinition(body, agentId).id, agentId);
+      }
+    }
   }
 });
 
@@ -51,7 +63,24 @@ test('C2 frontend stays a capability plugin and owns the design verification ski
   assert.equal(frontend.kind, 'capability');
   assert.equal(frontend.pluginName, 'capability-frontend');
   assert.deepEqual(frontend.skillIds, ['a11y-skill', 'browser-testing-skill', 'taste-skill']);
+  assert.deepEqual(frontend.agentIds, []);
+  assert.equal(frontend.agentsRoot, undefined);
   assert.equal(WORKSPACE_PROFILE_PLUGIN_DEFINITIONS.some((plugin) => plugin.pluginName.includes('builder')), false);
+});
+
+test('C2 profile plugins declare only their matching domain executor', () => {
+  const catalog = inspectWorkspaceProfilePlugins();
+  const agentsByProfile = Object.fromEntries(
+    catalog.available.map((plugin) => [plugin.id, plugin.agentIds]),
+  );
+
+  assert.deepEqual(agentsByProfile, {
+    study: ['tutor'],
+    research: ['researcher'],
+    data: ['data-scientist'],
+    writing: ['writer'],
+    frontend: [],
+  });
 });
 
 test('C2 missing package artifacts are reported as unavailable instead of throwing', (t) => {
@@ -77,6 +106,19 @@ test('C2 malformed package-owned versions fail availability without affecting si
   assert.deepEqual(catalog.available.map((plugin) => plugin.id), ['study', 'research', 'data', 'writing']);
   assert.equal(catalog.unavailable[0]?.id, 'frontend');
   assert.match(catalog.unavailable[0]?.reason ?? '', /semantic/);
+});
+
+test('C2 a missing profile executor fails that plugin closed without affecting siblings', (t) => {
+  const source = path.dirname(inspectWorkspaceProfilePlugins().available[0].root);
+  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'profile-plugin-agent-'));
+  t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
+  fs.cpSync(source, fixtureRoot, { recursive: true });
+  fs.rmSync(path.join(fixtureRoot, 'research', 'agents', 'researcher.json'));
+
+  const catalog = inspectWorkspaceProfilePlugins({ root: fixtureRoot });
+  assert.deepEqual(catalog.available.map((plugin) => plugin.id), ['study', 'data', 'writing', 'frontend']);
+  assert.equal(catalog.unavailable[0]?.id, 'research');
+  assert.match(catalog.unavailable[0]?.reason ?? '', /missing regular agent file: researcher/);
 });
 
 test('C2 the published core package declares its profile plugin assets', () => {
