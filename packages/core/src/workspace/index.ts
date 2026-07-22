@@ -17,3 +17,4 @@ export * from './assistedOnboarding.js';
 export * from './workspaceContentSafety.js';
 export * from './reviewedOnboarding.js';
 export * from './domainPersonas.js';
+export * from './profilePlugins.js';

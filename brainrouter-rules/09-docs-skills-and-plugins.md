@@ -255,6 +255,22 @@ skills and plugin loading entirely.
 
 - **Evidence:** `packages/core/src/plugin/discovery.ts:1`, `brainrouter-cli/src/prompt/skillCatalog.ts:104`
 
+### 15a. Package-owned profile plugins use the standard manifest and stay inert until selected
+
+Workspace profile and task-time capability bundles live under
+`packages/core/profile-plugins/<pack-id>/`, each with the same
+`.brainrouter-plugin/plugin.json` and `skills/` conventions as an installed
+plugin. Their public availability/version catalog is owned by
+`packages/core/src/workspace/profilePlugins.ts`, and `packages/core/package.json`
+must ship the entire `profile-plugins/` asset tree. These artifacts are not
+top-level bundled skills and are never added to the ambient catalog merely
+because the package is installed; a later workspace resolver must select the
+pack explicitly. Keep optional specialist JSON execution definitions inside the
+selected bundle rather than adding unconditional domain executors under the
+package's top-level `agents/` directory.
+
+- **Evidence:** `packages/core/src/workspace/profilePlugins.ts`, `packages/core/profile-plugins/`, `packages/core/package.json`
+
 ### 16. ⛔ Executable plugin capabilities are consent-gated through the existing exec policy
 
 Command-type hooks and MCP command-servers shipped by a plugin stay **disabled**
