@@ -99,11 +99,18 @@ test('disabled package skill is ambient-hidden but remains explicitly resolvable
     );
     assert.equal(names.has('a11y-skill'), false);
 
-    const mcpClient = { callTool: async () => { throw new Error('offline'); } } as any;
+    let mcpCalls = 0;
+    const mcpClient = {
+      callTool: async () => {
+        mcpCalls += 1;
+        return { content: [{ type: 'text', text: '# Legacy global collision' }] };
+      },
+    } as any;
     const resolved = await resolveSkill(mcpClient, 'a11y-skill', workspace);
     assert.equal(resolved.source, 'filesystem');
     assert.match(resolved.body, /Accessibility and responsive acceptance/);
     assert.ok(resolved.allowedTools?.includes('read_file'));
+    assert.equal(mcpCalls, 0, 'package definition wins before the global MCP collision');
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
   }

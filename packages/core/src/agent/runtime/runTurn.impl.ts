@@ -80,6 +80,10 @@ import { trackChildObservation, parseChildDrainTimeouts, formatChildDrainTimeout
 import { sanitizeToolCallsForHistory, explainUnknownToolName } from '../agent.js';
 import { refreshWorkspaceCapabilityState } from '../workspaceCapabilityState.js';
 import {
+  adaptWorkspaceSkillCatalogText,
+  resolveWorkspaceManagedSkill,
+} from '../../workspace/skillToolAdapter.js';
+import {
   buildChatCompletionPayload, buildResponsesPayload, resolveRequestFormat, resolveWireEffort,
   callOpenAI, callOpenAIStream, InterruptError, isInterrupt, activeProviderDef, effortForTurnSelection,
   minimalReasoningEffort, abortableDelay,
@@ -2072,12 +2076,38 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
             // key the poller/registry actually used (otherwise the read
             // misses the federation-key inbox and comes back empty).
             const mcpArgs = applyFederationIdentity(name, args, this.federationSessionKey) as Record<string, any>;
-            await this.approveMcpToolCall(name, mcpToolByName.get(name), mcpArgs);
-            const mcpRes = await this.mcpClient.callTool(name, mcpArgs, { signal: this.turnAbort?.signal });
+            const mcpTool = mcpToolByName.get(name);
+            await this.approveMcpToolCall(name, mcpTool, mcpArgs);
+            const rawMcpName = String(mcpTool?.__rawName ?? this.rawMcpToolName(name));
+            const mcpServerId = typeof mcpTool?.__serverId === 'string'
+              ? mcpTool.__serverId
+              : this.serverIdFromMcpToolName(name);
+            const mcpStatus = mcpServerId && typeof (this.mcpClient as any).getStatus === 'function'
+              ? (this.mcpClient as any).getStatus(mcpServerId)
+              : undefined;
+            const isBrainrouterSkillTool = ['list_skills', 'get_skill', 'search_skills'].includes(rawMcpName)
+              && (!mcpServerId || mcpStatus?.identity === 'brainrouter');
+            const localSkillResult = isBrainrouterSkillTool
+              && rawMcpName === 'get_skill'
+              && typeof mcpArgs.name === 'string'
+              && mcpArgs.file === undefined
+              ? resolveWorkspaceManagedSkill(this.workspaceRoot, mcpArgs.name, mcpArgs.section ?? 'workflow')
+              : undefined;
+            const mcpRes = localSkillResult
+              ?? await this.mcpClient.callTool(name, mcpArgs, { signal: this.turnAbort?.signal });
             if (mcpRes.isError) {
               isError = true;
             }
             resultText = extractToolText(mcpRes);
+            if (isBrainrouterSkillTool && (rawMcpName === 'list_skills' || rawMcpName === 'search_skills')) {
+              resultText = adaptWorkspaceSkillCatalogText({
+                workspaceRoot: this.workspaceRoot,
+                activeCapabilities: this.activeWorkspaceCapabilities.active,
+                text: resultText,
+                tool: rawMcpName,
+                args: mcpArgs,
+              });
+            }
             summary = `MCP: ${resultText.length} chars returned`;
           }
         } catch (err: any) {

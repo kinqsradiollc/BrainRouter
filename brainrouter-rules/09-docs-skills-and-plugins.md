@@ -294,7 +294,17 @@ disabled skill remains intentionally invokable, but the resolved skill's
 per-turn tool allow/deny policy still applies. Never add package profile roots
 to a workspace with no readable manifest.
 
-- **Evidence:** `packages/core/src/workspace/skillSelection.ts`, `packages/core/src/tests/workspace-skill-selection.test.ts`, `brainrouter-cli/src/prompt/skillCatalog.ts`, `brainrouter-cli/src/tests/workspace-skill-catalog.test.ts`
+The shared Agent runtime applies that same selection at the BrainRouter MCP
+skill-tool boundary. Adapt `list_skills` and `search_skills` results per Agent
+turn, and serve an explicit package-owned `get_skill` from the validated package
+asset so Desktop, CLI, and delegated agents cannot receive a stale same-name
+global copy. Do not change the backend's process-global registry or intercept a
+third-party MCP server that merely exposes a coincidentally named tool. A
+workspace-local same-name skill keeps normal local precedence. Full explicit
+reads retain frontmatter so the existing skill tool-policy parser remains
+authoritative.
+
+- **Evidence:** `packages/core/src/workspace/skillSelection.ts`, `packages/core/src/workspace/skillToolAdapter.ts`, `packages/core/src/tests/workspace-skill-selection.test.ts`, `packages/core/src/tests/workspace-skill-tool-adapter.test.ts`, `brainrouter-cli/src/prompt/skillCatalog.ts`, `brainrouter-cli/src/tests/workspace-skill-catalog.test.ts`
 
 ### 16. ⛔ Executable plugin capabilities are consent-gated through the existing exec policy
 

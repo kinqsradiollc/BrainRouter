@@ -1,0 +1,213 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createWorkspaceManifest, saveWorkspaceManifest } from '../workspace/manifest.js';
+import {
+  adaptWorkspaceSkillCatalogText,
+  resolveWorkspaceManagedSkill,
+} from '../workspace/skillToolAdapter.js';
+
+function makeWorkspace(): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-skill-tools-'));
+}
+
+function names(text: string): string[] {
+  return (JSON.parse(text) as Array<{ name: string }>).map((entry) => entry.name);
+}
+
+test('missing manifest preserves MCP catalog text and package lookup exactly', () => {
+  const workspace = makeWorkspace();
+  try {
+    const text = '[{"name":"taste-skill","scope":"global"}]';
+    assert.equal(adaptWorkspaceSkillCatalogText({
+      workspaceRoot: workspace,
+      text,
+      tool: 'list_skills',
+    }), text);
+    assert.equal(resolveWorkspaceManagedSkill(workspace, 'taste-skill', 'full'), undefined);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('selected profile skills lead the managed catalog and replace global collisions', () => {
+  const workspace = makeWorkspace();
+  try {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'study', profile: 'study', by: 'wizard' }),
+    );
+    const adapted = adaptWorkspaceSkillCatalogText({
+      workspaceRoot: workspace,
+      text: JSON.stringify([
+        { name: 'ordinary-skill', category: 'agent', scope: 'global' },
+        { name: 'retrieval-practice-skill', description: 'legacy copy', category: 'legacy', scope: 'global' },
+        { name: 'taste-skill', category: 'design', scope: 'global' },
+      ]),
+      tool: 'list_skills',
+    });
+    const entries = JSON.parse(adapted) as Array<Record<string, unknown>>;
+    assert.deepEqual(names(adapted), [
+      'learning-plan-skill',
+      'retrieval-practice-skill',
+      'ordinary-skill',
+    ]);
+    assert.equal(entries[1].scope, 'plugin');
+    assert.equal(entries[1].category, 'study');
+    assert.notEqual(entries[1].description, 'legacy copy');
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('frontend package skills appear only for the active task capability', () => {
+  const workspace = makeWorkspace();
+  try {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'app', profile: 'engineering', by: 'wizard' }),
+    );
+    const remote = JSON.stringify([
+      { name: 'taste-skill', category: 'design', scope: 'global' },
+      { name: 'ordinary-skill', category: 'agent', scope: 'global' },
+    ]);
+    const inactive = adaptWorkspaceSkillCatalogText({
+      workspaceRoot: workspace,
+      text: remote,
+      tool: 'list_skills',
+    });
+    const active = adaptWorkspaceSkillCatalogText({
+      workspaceRoot: workspace,
+      activeCapabilities: ['frontend'],
+      text: remote,
+      tool: 'list_skills',
+    });
+    assert.deepEqual(names(inactive), ['ordinary-skill']);
+    assert.deepEqual(names(active), [
+      'a11y-skill',
+      'browser-testing-skill',
+      'taste-skill',
+      'ordinary-skill',
+    ]);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('disabled package skills stay ambient-hidden but explicit reads use package policy', () => {
+  const workspace = makeWorkspace();
+  try {
+    const manifest = createWorkspaceManifest({ name: 'app', profile: 'engineering', by: 'wizard' });
+    manifest.skills.disabled = ['a11y-skill'];
+    saveWorkspaceManifest(workspace, manifest);
+
+    const adapted = adaptWorkspaceSkillCatalogText({
+      workspaceRoot: workspace,
+      activeCapabilities: ['frontend'],
+      text: JSON.stringify([{ name: 'a11y-skill', scope: 'global' }]),
+      tool: 'list_skills',
+    });
+    assert.equal(names(adapted).includes('a11y-skill'), false);
+
+    const full = resolveWorkspaceManagedSkill(workspace, 'a11y-skill', 'full');
+    assert.ok(full);
+    assert.equal(full.metadata.scope, 'plugin');
+    assert.match(full.content[0].text, /^---\nname: a11y-skill/m);
+    assert.match(full.content[0].text, /allowed-tools:/);
+    const workflow = resolveWorkspaceManagedSkill(workspace, 'a11y-skill', 'workflow');
+    assert.match(workflow?.content[0].text ?? '', /^## Workflow/m);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('workspace-authored same-name skill keeps explicit lookup precedence', () => {
+  const workspace = makeWorkspace();
+  try {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'app', profile: 'engineering', by: 'wizard' }),
+    );
+    const skillDir = path.join(workspace, 'skills', 'custom-accessibility');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillDir, 'SKILL.md'),
+      '---\nname: a11y-skill\ndescription: workspace override\n---\n# Local\n',
+    );
+    assert.equal(resolveWorkspaceManagedSkill(workspace, 'a11y-skill', 'full'), undefined);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('symlinked workspace skill roots cannot shadow package skills', () => {
+  const workspace = makeWorkspace();
+  const outside = makeWorkspace();
+  try {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'app', profile: 'engineering', by: 'wizard' }),
+    );
+    const skillDir = path.join(outside, 'custom-accessibility');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillDir, 'SKILL.md'),
+      '---\nname: a11y-skill\ndescription: outside override\n---\n# Outside\n',
+    );
+    fs.symlinkSync(outside, path.join(workspace, 'skills'));
+
+    const resolved = resolveWorkspaceManagedSkill(workspace, 'a11y-skill', 'full');
+    assert.ok(resolved);
+    assert.doesNotMatch(resolved.content[0].text, /outside override/i);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('managed catalog leaves malformed MCP payloads untouched', () => {
+  const workspace = makeWorkspace();
+  try {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'study', profile: 'study', by: 'wizard' }),
+    );
+    const text = '{not-json';
+    assert.equal(adaptWorkspaceSkillCatalogText({
+      workspaceRoot: workspace,
+      text,
+      tool: 'list_skills',
+    }), text);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('search applies query and scope to selected package additions', () => {
+  const workspace = makeWorkspace();
+  try {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'research', profile: 'research', by: 'wizard' }),
+    );
+    const global = adaptWorkspaceSkillCatalogText({
+      workspaceRoot: workspace,
+      text: '[]',
+      tool: 'search_skills',
+      args: { query: 'evidence', scope: 'global' },
+    });
+    const local = adaptWorkspaceSkillCatalogText({
+      workspaceRoot: workspace,
+      text: '[]',
+      tool: 'search_skills',
+      args: { query: 'evidence', scope: 'local' },
+    });
+    assert.deepEqual(names(global), ['evidence-research-skill']);
+    assert.deepEqual(names(local), []);
+    assert.equal((JSON.parse(global) as Array<Record<string, unknown>>)[0].relevance, 'name match');
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
