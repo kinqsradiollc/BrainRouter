@@ -342,7 +342,11 @@ export async function tryHandleGuardCommand(
       try {
         removed = (dependencies.persistLogout ?? persistBrainrouterLogout)(config, profile);
       } catch (err: any) {
-        console.log(chalk.red(`\nCould not persist logout: ${err?.message ?? err}\n`));
+        let message = redactMcpErrorText(String(err?.message ?? err), redactionConfig, profile);
+        if (runtimeRedactionConfig) {
+          message = redactMcpErrorText(message, runtimeRedactionConfig, profile);
+        }
+        console.log(chalk.red(`\nCould not persist logout: ${message}\n`));
         return true;
       }
       const clearedRuntime = runtimeServer

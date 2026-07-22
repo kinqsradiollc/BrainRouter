@@ -212,6 +212,42 @@ test('/logout keeps the durable logout when live removal fails and redacts both 
   assert.doesNotMatch(lines.join('\n'), /server-secret|runtime-launch-secret/);
 });
 
+test('/logout redacts durable and runtime credentials from persistence errors', async () => {
+  const config = credentialedConfig();
+  const runtimeSecret = 'runtime-persist-secret';
+  const lines: string[] = [];
+  const context = {
+    command: '/logout',
+    args: [],
+    config,
+    agent: { setLLMConfig: () => undefined },
+    mcpClient: { removeOne: async () => undefined },
+    repl: {
+      runtimeMcp: {
+        servers: {
+          brain: { ...structuredClone(config.servers.brain!), apiKey: runtimeSecret },
+        },
+        activeServer: 'brain',
+        activeBrainrouterServer: 'brain',
+      },
+    },
+  } as unknown as CommandContext;
+  const originalLog = console.log;
+  console.log = (...values: unknown[]) => { lines.push(values.map(String).join(' ')); };
+  try {
+    await tryHandleGuardCommand(context, {
+      persistLogout: () => {
+        throw new Error(`write rejected for server-secret and ${runtimeSecret}`);
+      },
+    });
+  } finally {
+    console.log = originalLog;
+  }
+
+  assert.match(lines.join('\n'), /Could not persist logout/);
+  assert.doesNotMatch(lines.join('\n'), /server-secret|runtime-persist-secret/);
+});
+
 test('/logout invalidates a stale runtime credential even when the durable profile is already clear', async () => {
   const config = credentialedConfig();
   config.servers.brain = clearBrainrouterCredentials(config.servers.brain!, undefined).server;

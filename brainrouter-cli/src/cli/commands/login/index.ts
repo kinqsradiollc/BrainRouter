@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import type { CommandContext } from '../_context.js';
-import type { ServerConfig } from '@kinqs/brainrouter-core/config';
+import type { Config, ServerConfig } from '@kinqs/brainrouter-core/config';
 import { McpClientWrapper } from '@kinqs/brainrouter-core/mcp';
 import { maskApiKey } from '@kinqs/brainrouter-core/provider';
 import { runPicker, runTextField } from '../../ink/prompt/runPicker.js';
@@ -12,7 +12,7 @@ import { editLlm, promptBrainrouterApiKey } from '../config/index.js';
 import {
   editableMcpHttpUrl,
   normalizeMcpHttpUrl,
-  redactMcpHttpUrlsInText,
+  redactMcpErrorText,
   validateMcpHttpUrl,
 } from '../../mcpUrl.js';
 import {
@@ -126,8 +126,15 @@ export async function tryHandleLoginCommand(ctx: CommandContext): Promise<boolea
         ctx.config.activeServer,
       );
     } catch (err: any) {
+      const redactionConfig = {
+        ...ctx.config,
+        servers: {
+          ...ctx.config.servers,
+          [profileName]: serverConfig,
+        },
+      };
       console.log(chalk.red(
-        `  ✗ Could not save MCP profile: ${redactMcpHttpUrlsInText(String(err?.message ?? err))}\n`,
+        `  ✗ Could not save MCP profile: ${redactMcpErrorText(String(err?.message ?? err), redactionConfig, profileName)}\n`,
       ));
       return true;
     }
@@ -181,6 +188,14 @@ async function probeMcpProfile(serverConfig: ServerConfig, name: string): Promis
     return { ok: true, latencyMs: Date.now() - start };
   } catch (err: any) {
     try { await wrapper.close(); } catch { /* ignore */ }
-    return { ok: false, error: redactMcpHttpUrlsInText(String(err?.message ?? err)) };
+    const redactionConfig: Config = {
+      activeServer: name,
+      activeBrainrouterServer: name,
+      servers: { [name]: serverConfig },
+    };
+    return {
+      ok: false,
+      error: redactMcpErrorText(String(err?.message ?? err), redactionConfig, name),
+    };
   }
 }

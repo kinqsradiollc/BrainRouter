@@ -81,12 +81,12 @@ export function registerChatCommand(program: Command): void {
         skipMcpForLaunch = onboarding.skipMcpForLaunch;
         if (onboarding.workspace === 'failed') {
           console.error(chalk.yellow(
-            `Workspace setup could not finish (${onboarding.workspaceError ?? 'unknown error'}). `
-            + 'Your global provider/MCP setup was saved; continuing with workspace defaults. Run `/init` to retry.',
+            'Workspace setup could not finish. Your global provider/MCP setup was saved; '
+            + 'continuing with workspace defaults. Run `/init` to retry.',
           ));
         }
-      } catch (err: any) {
-        console.error(chalk.red(`Onboarding failed: ${err?.message ?? err}`));
+      } catch {
+        console.error(chalk.red('Onboarding failed before setup could be saved. Run `brainrouter` again to retry.'));
         process.exit(1);
       }
 
