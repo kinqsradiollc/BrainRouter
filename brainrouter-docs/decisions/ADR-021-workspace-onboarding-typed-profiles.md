@@ -165,6 +165,15 @@ persisted in the first version. Retrieval remains independent from cognitive
 recall ranking and returns provenance-rich citations. Only explicitly accepted
 distilled facts enter cognitive memory through its existing engine.
 
+The additive schema foundation uses `knowledge_bases`, `knowledge_documents`,
+`knowledge_chunks`, and `knowledge_chunk_embeddings`. Every descendant repeats
+organization and Project ancestry and proves it through composite foreign keys.
+Documents deduplicate by persisted-content hash within a base and expose
+`queued`, `parsing`, `ready`, or `failed` as their lifecycle truth. Chunk FTS and
+knowledge embeddings are separate from cognitive-memory indexes; knowledge
+vectors record their model and dimensions and use exact, dimension-filtered
+retrieval until a later scale-driven indexing decision is justified.
+
 ## Delivery order
 
 - **W0–W3a (shipped)** — bundled starter skills; core manifest/presets; CLI
@@ -184,8 +193,11 @@ distilled facts enter cognitive memory through its existing engine.
 - **C1/C2/C4 (shipped)** — skill tool allowlists, plugin-delivered
   profile/capability packs with selected same-ID specialist executors, and the
   frontend design-artifact workflow without a separate frontend persona.
-- **B1–B3** — project/RBAC foundation and knowledge store; async parsing and
-  retrieval; profile-aware recommendations and opt-in sourced distillation.
+- **B1a (schema shipped)** — project-consistent knowledge bases, documents,
+  chunks, FTS, and isolated vector storage. Actor/RBAC/store/API work follows as
+  independent slices.
+- **B1b–B3** — async parsing and retrieval; profile-aware recommendations and
+  opt-in sourced distillation.
 - **C3** — dashboard and desktop knowledge management after the server contracts
   and job status APIs are stable.
 
