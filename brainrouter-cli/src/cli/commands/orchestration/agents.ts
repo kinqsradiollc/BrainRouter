@@ -10,6 +10,7 @@ import path from 'node:path';
 import chalk from 'chalk';
 import { callMcpTool, childSessionKey } from '@kinqs/brainrouter-core/mcp';
 import { validateAgentDefinition, buildAgentDefinition, previewAgentDefinition } from '../../../orchestration/agentDefValidation.js';
+import { writeProjectAgentDefinition } from '../../../orchestration/agentDefinitionWriter.js';
 import { localToolSpecsFromExecutors } from '@kinqs/brainrouter-core/tool';
 import { listRoles, listAll as listAgentDefs, formatSessionSummary, getSession, listSessions, reconcileStale, updateSession, parseChildOutput } from '@kinqs/brainrouter-core/orchestration';
 import { activeRun, formatActivePhase } from '@kinqs/brainrouter-core/workflow';
@@ -83,18 +84,17 @@ export async function handleAgents(ctx: CommandContext): Promise<boolean> {
       console.log(chalk.gray('\n  Re-run without --dry-run to write it.\n'));
       return true;
     }
-    const dir = path.join(agent.workspaceRoot, '.brainrouter', 'agents');
-    const file = path.join(dir, `${id}.json`);
-    if (fs.existsSync(file) && !args.includes('--force')) {
-      console.log(chalk.yellow(`\n${id}.json already exists — pass --force to overwrite.\n`));
-      return true;
-    }
     try {
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(file, JSON.stringify(built, null, 2), 'utf8');
+      const file = writeProjectAgentDefinition(agent.workspaceRoot, built, {
+        force: args.includes('--force'),
+      });
       console.log(chalk.green(`\n✓ Wrote agent definition: ${path.relative(agent.workspaceRoot, file)}`));
       console.log(chalk.gray('  Loads on next /agents (workspace tier).\n'));
     } catch (err: any) {
+      if (err?.code === 'EEXIST' && !args.includes('--force')) {
+        console.log(chalk.yellow(`\n${id}.json already exists — pass --force to overwrite.\n`));
+        return true;
+      }
       console.log(chalk.red(`\nFailed to write: ${err?.message ?? err}\n`));
     }
     return true;

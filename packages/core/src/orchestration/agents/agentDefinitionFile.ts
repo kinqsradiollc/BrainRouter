@@ -34,7 +34,7 @@ export interface AgentDefinition {
   outputContract: unknown;
 }
 
-const MAX_DEFINITION_BYTES = 64 * 1024;
+export const AGENT_DEFINITION_MAX_BYTES = 64 * 1024;
 const MAX_PROMPT_CHARS = 32 * 1024;
 const MAX_SHORT_TEXT_CHARS = 2 * 1024;
 const MAX_NAME_CHARS = 128;
@@ -89,6 +89,15 @@ export function readAgentDefinitionFile(
   containmentRoot = boundaryRoot,
 ): AgentDefinition {
   const raw = readBoundedRegularFile(filePath, boundaryRoot, containmentRoot);
+  return parseAgentDefinition(raw, path.basename(filePath, '.json'));
+}
+
+/** Validate serialized JSON before either a writer or registry may trust it. */
+export function parseAgentDefinition(raw: string, expectedId: string): AgentDefinition {
+  const byteLength = Buffer.byteLength(raw, 'utf8');
+  if (byteLength <= 0 || byteLength > AGENT_DEFINITION_MAX_BYTES) {
+    throw new Error(`Agent definition must be 1-${AGENT_DEFINITION_MAX_BYTES} bytes.`);
+  }
   let value: unknown;
   try {
     value = JSON.parse(raw);
@@ -97,7 +106,6 @@ export function readAgentDefinitionFile(
   }
   if (!isRecord(value)) throw new Error('Agent definition must be a JSON object.');
 
-  const expectedId = path.basename(filePath, '.json');
   const id = requiredString(value.id, 'id', MAX_NAME_CHARS);
   if (!AGENT_ID.test(id) || id !== expectedId) {
     throw new Error('Agent definition id must be kebab-case and match its filename.');
@@ -172,8 +180,8 @@ function readBoundedRegularFile(filePath: string, boundaryRoot: string, containm
     const noFollow = fs.constants.O_NOFOLLOW ?? 0;
     fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow);
     const stat = fs.fstatSync(fd);
-    if (!stat.isFile() || stat.size <= 0 || stat.size > MAX_DEFINITION_BYTES) {
-      throw new Error(`Agent definition must be 1-${MAX_DEFINITION_BYTES} bytes.`);
+    if (!stat.isFile() || stat.size <= 0 || stat.size > AGENT_DEFINITION_MAX_BYTES) {
+      throw new Error(`Agent definition must be 1-${AGENT_DEFINITION_MAX_BYTES} bytes.`);
     }
 
     // Re-bind the opened descriptor to its current real path. The earlier
@@ -198,15 +206,15 @@ function readBoundedRegularFile(filePath: string, boundaryRoot: string, containm
 
     // Do not trust the pre-read stat size: a concurrently modified file must
     // still be unable to make this trust boundary allocate or read unboundedly.
-    const buffer = Buffer.allocUnsafe(MAX_DEFINITION_BYTES + 1);
+    const buffer = Buffer.allocUnsafe(AGENT_DEFINITION_MAX_BYTES + 1);
     let bytesRead = 0;
     while (bytesRead < buffer.length) {
       const count = fs.readSync(fd, buffer, bytesRead, buffer.length - bytesRead, bytesRead);
       if (count === 0) break;
       bytesRead += count;
     }
-    if (bytesRead === 0 || bytesRead > MAX_DEFINITION_BYTES) {
-      throw new Error(`Agent definition must be 1-${MAX_DEFINITION_BYTES} bytes.`);
+    if (bytesRead === 0 || bytesRead > AGENT_DEFINITION_MAX_BYTES) {
+      throw new Error(`Agent definition must be 1-${AGENT_DEFINITION_MAX_BYTES} bytes.`);
     }
     return new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, bytesRead));
   } catch (err) {

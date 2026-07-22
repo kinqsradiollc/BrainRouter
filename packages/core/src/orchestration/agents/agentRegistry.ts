@@ -11,6 +11,7 @@ import {
 } from './agentDefinitionFile.js';
 
 export type { AccessMode, AgentDefinition, Tier } from './agentDefinitionFile.js';
+export { AGENT_DEFINITION_MAX_BYTES, parseAgentDefinition } from './agentDefinitionFile.js';
 
 export type DefinitionSource = 'builtin' | 'pack' | 'user' | 'workspace';
 
