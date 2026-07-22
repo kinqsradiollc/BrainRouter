@@ -1,9 +1,13 @@
 import chalk from 'chalk';
 import type { CommandContext } from '../_context.js';
 import { initAgentMd } from '../../../prompt/initAgentMd.js';
-import { runWizard } from '../../ink/wizard/runWizard.js';
 import { safeOnboardingError } from './onboardingErrors.js';
 import { runProjectOnboarding, suggestWorkspaceProfile } from './projectOnboard.js';
+import {
+  runCliOnboardingSequence,
+  type CliOnboardingSequenceOptions,
+  type CliOnboardingSequenceResult,
+} from './onboardingSequence.js';
 
 /**
  * `/init` fronts the two distinct setup lifecycles.
@@ -16,16 +20,25 @@ import { runProjectOnboarding, suggestWorkspaceProfile } from './projectOnboard.
  *     already-onboarded workspace it prints the manifest summary instead.
  *     Cancelling at any step writes nothing.
  *   - `/init --edit` — reopen the same reviewed editor for an existing manifest.
- *   - `/init config` — the GLOBAL first-run wizard (endpoint/model/MCP; the
- *     pre-W2 bare behaviour). The auto-trigger on REPL start (no
- *     `~/.config/brainrouter/config.json`) still calls `runWizard` directly
- *     from `index.ts` — that entry point is unchanged.
+ *   - `/init config` — rerun GLOBAL provider/model/MCP setup, then offer
+ *     workspace setup only after the global commit succeeds.
  *   - `/init scan` — print the detected profile suggestion + reasons only;
  *     never writes.
  *   - `/init agentmd` — back-compat alias for the 0.3.6 behaviour that only
  *     scaffolds AGENT.md.
  */
-export async function tryHandleInitCommand(ctx: CommandContext): Promise<boolean> {
+export interface InitCommandDependencies {
+  runSequence(options: CliOnboardingSequenceOptions): Promise<CliOnboardingSequenceResult>;
+}
+
+const DEFAULT_DEPENDENCIES: InitCommandDependencies = {
+  runSequence: runCliOnboardingSequence,
+};
+
+export async function tryHandleInitCommand(
+  ctx: CommandContext,
+  dependencies: InitCommandDependencies = DEFAULT_DEPENDENCIES,
+): Promise<boolean> {
   const { command, args, agent, repl } = ctx;
   if (command !== '/init') return false;
   const sub = args[0]?.toLowerCase();
@@ -61,13 +74,18 @@ export async function tryHandleInitCommand(ctx: CommandContext): Promise<boolean
     return true;
   }
 
-  // GLOBAL config wizard (the pre-W2 bare behaviour). Ink owns stdin while
-  // mounted; the REPL's readline resumes naturally on unmount.
+  // Global setup commits first; only then may the sequence offer project setup.
   if (sub === 'config' || sub === 'setup') {
     try {
-      const result = await runWizard({
+      const result = await dependencies.runSequence({
         workspaceRoot: agent.workspaceRoot,
+        global: 'always',
       });
+      if (result.status === 'global-aborted') {
+        console.log(chalk.gray('\nGlobal setup cancelled — workspace setup was not started.\n'));
+        repl.refreshPromptForMode();
+        return true;
+      }
       if (result.config?.llm) {
         // Live-update the in-flight agent so the next turn uses the new
         // model / endpoint without forcing a restart. Keep the wrapper's
@@ -78,6 +96,13 @@ export async function tryHandleInitCommand(ctx: CommandContext): Promise<boolean
         // construction time — repl users may need a fresh CLI process
         // for endpoint changes to fully take effect.
         console.log(chalk.gray('  (note: endpoint / API-key changes apply on the next CLI restart)\n'));
+      }
+      if (result.workspace === 'failed') {
+        const workspaceError = safeOnboardingError(result.workspaceError ?? 'unknown error');
+        console.error(chalk.yellow(
+          `  Workspace setup could not finish (${workspaceError}). `
+          + 'Global setup is active; run `/init` to retry the project step.\n',
+        ));
       }
       repl.refreshPromptForMode();
     } catch (err: any) {
