@@ -1,70 +1,164 @@
-/**
- * ADR-021 W3a — the main-process onboarding bridge: manifest info assembly and
- * strict payload validation (reject, never coerce). Runs against real tmp
- * workspaces; the IPC layer in main.ts is a thin trusted-root guard over these.
- */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { loadWorkspaceManifest } from '@kinqs/brainrouter-core/workspace';
-import { getWorkspaceManifestInfo, saveWorkspaceManifestFromPayload } from './workspaceOnboarding.js';
+import {
+  createWorkspaceManifest,
+  loadWorkspaceManifest,
+  saveWorkspaceManifest,
+} from '@kinqs/brainrouter-core/workspace';
+import {
+  getWorkspaceManifestInfo,
+  saveWorkspaceManifestFromPayload,
+  type ManifestSavePayload,
+} from './workspaceOnboarding.js';
 
-function tmpWorkspace(files: Record<string, string> = {}): string {
+function tmpWorkspace(files: Record<string, string> = {}): { root: string; cleanup: () => void } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'br-onboard-ipc-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'br-onboard-home-'));
+  const previous = process.env.BRAINROUTER_HOME;
+  process.env.BRAINROUTER_HOME = home;
   for (const [rel, body] of Object.entries(files)) {
     fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
     fs.writeFileSync(path.join(root, rel), body, 'utf8');
   }
-  return root;
+  return {
+    root,
+    cleanup: () => {
+      if (previous === undefined) delete process.env.BRAINROUTER_HOME;
+      else process.env.BRAINROUTER_HOME = previous;
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    },
+  };
 }
 
-test('manifest-get: un-onboarded workspace → suggestion + full profile catalog', () => {
-  const ws = tmpWorkspace({ 'package.json': '{}' });
+function payload(root: string, profileId: string): ManifestSavePayload {
+  const info = getWorkspaceManifestInfo(root);
+  const profile = info.profiles.find((candidate) => candidate.id === profileId);
+  assert.ok(profile);
+  return {
+    expected: info.review.revision,
+    source: 'wizard',
+    profile: profile.id,
+    agents: { default: profile.agents.default, enabled: [...profile.agents.enabled] },
+    capabilities: { enabled: [...profile.capabilities.enabled], disabled: [] },
+    skills: { packs: [...profile.skills.packs], enabled: [...profile.skills.enabled], disabled: [] },
+    tools: { profiles: [...profile.tools.profiles], deny: [] },
+    memory: { tags: [...profile.memory.tags], captureHint: profile.memory.captureHint },
+    instructions: 'AGENT.md',
+  };
+}
+
+test('manifest-get returns suggestion, complete profiles, and opaque review revisions', () => {
+  const env = tmpWorkspace({ 'package.json': '{}' });
   try {
-    const info = getWorkspaceManifestInfo(ws);
+    const info = getWorkspaceManifestInfo(env.root);
     assert.equal(info.onboarded, false);
     assert.equal(info.manifest, null);
     assert.equal(info.suggestion.profile, 'engineering');
-    assert.ok(info.profiles.length >= 6);
     assert.ok(info.profiles.some((preset) => preset.id === 'custom'));
-  } finally { fs.rmSync(ws, { recursive: true, force: true }); }
+    assert.match(info.review.revision.root, /^[0-9a-f]{64}$/);
+    assert.match(info.review.revision.manifest, /^[0-9a-f]{64}$/);
+    assert.equal(info.review.instruction.existed, false);
+  } finally { env.cleanup(); }
 });
 
-test('manifest-save: valid profile writes through the chokepoint; round-trips', () => {
-  const ws = tmpWorkspace();
+test('manifest-save writes one engineer with frontend available as a capability', () => {
+  const env = tmpWorkspace();
   try {
-    const result = saveWorkspaceManifestFromPayload(ws, { profile: 'research' });
-    assert.ok(result.saved);
-    const loaded = loadWorkspaceManifest(ws);
-    assert.equal(loaded?.profile, 'research');
-    assert.equal(loaded?.agents.default, 'researcher');
-    assert.equal(loaded?.onboarded.by, 'wizard');
-  } finally { fs.rmSync(ws, { recursive: true, force: true }); }
-});
-
-test('manifest-save: engineering writes one engineer with frontend available as a capability', () => {
-  const ws = tmpWorkspace();
-  try {
-    const result = saveWorkspaceManifestFromPayload(ws, { profile: 'engineering' });
+    const result = saveWorkspaceManifestFromPayload(env.root, payload(env.root, 'engineering'));
     assert.ok(result.saved);
     assert.equal(result.saved && result.manifest.agents.default, 'engineer');
     assert.deepEqual(result.saved && result.manifest.agents.enabled, ['engineer']);
     assert.deepEqual(result.saved && result.manifest.capabilities.enabled, ['frontend']);
     assert.ok(result.saved && !JSON.stringify(result.manifest).includes('frontend-builder'));
-  } finally { fs.rmSync(ws, { recursive: true, force: true }); }
+  } finally { env.cleanup(); }
 });
 
-test('manifest-save REJECTS: unknown profile and double onboard', () => {
-  const ws = tmpWorkspace();
+test('manifest-save preserves the staged profile-card contract without allowing re-onboarding', () => {
+  const env = tmpWorkspace();
   try {
-    assert.equal(saveWorkspaceManifestFromPayload(ws, { profile: 'astrology' }).saved, false);
-    assert.equal(loadWorkspaceManifest(ws), null, 'rejected payloads write NOTHING');
+    const first = saveWorkspaceManifestFromPayload(env.root, { profile: 'research' });
+    assert.ok(first.saved);
+    assert.equal(first.saved && first.manifest.profile, 'research');
+    const second = saveWorkspaceManifestFromPayload(env.root, { profile: 'writing' });
+    assert.equal(second.saved, false);
+    assert.equal(loadWorkspaceManifest(env.root)?.profile, 'research');
+  } finally { env.cleanup(); }
+});
 
-    assert.ok(saveWorkspaceManifestFromPayload(ws, { profile: 'study' }).saved);
-    const second = saveWorkspaceManifestFromPayload(ws, { profile: 'writing' });
-    assert.equal(second.saved, false, 'already-onboarded workspaces are not re-onboarded here');
-    assert.equal(loadWorkspaceManifest(ws)?.profile, 'study', 'first manifest untouched');
-  } finally { fs.rmSync(ws, { recursive: true, force: true }); }
+test('manifest-save supports complete edit re-entry and preserves safe unknown fields', () => {
+  const env = tmpWorkspace();
+  try {
+    const initial = createWorkspaceManifest({ name: 'kept-name', profile: 'study', by: 'import' });
+    initial.extra = { futureOption: { enabled: true } };
+    saveWorkspaceManifest(env.root, initial);
+
+    const edit = payload(env.root, 'writing');
+    edit.tools = { profiles: ['notes'], deny: ['terminal'] };
+    const result = saveWorkspaceManifestFromPayload(env.root, edit);
+    assert.ok(result.saved);
+    assert.equal(result.saved && result.manifest.profile, 'writing');
+    assert.equal(result.saved && result.manifest.name, 'kept-name');
+    assert.deepEqual(result.saved && result.manifest.extra, { futureOption: { enabled: true } });
+    assert.deepEqual(result.saved && result.manifest.tools.deny, ['terminal']);
+  } finally { env.cleanup(); }
+});
+
+test('manifest-save rejects stale reviews without overwriting concurrent changes', () => {
+  const env = tmpWorkspace();
+  try {
+    const stale = payload(env.root, 'research');
+    saveWorkspaceManifest(env.root, createWorkspaceManifest({ name: 'concurrent', profile: 'study', by: 'wizard' }));
+    const result = saveWorkspaceManifestFromPayload(env.root, stale);
+    assert.equal(result.saved, false);
+    assert.equal(!result.saved && result.stale, true);
+    assert.equal(loadWorkspaceManifest(env.root)?.name, 'concurrent');
+  } finally { env.cleanup(); }
+});
+
+test('manifest-save commits an explicitly approved instruction replacement', () => {
+  const env = tmpWorkspace({ 'AGENT.md': '# Existing\n' });
+  try {
+    const input = payload(env.root, 'research');
+    input.source = 'agent';
+    input.instruction = { path: 'AGENT.md', contents: '# Reviewed instructions\n\nUse verified sources.\n' };
+    const result = saveWorkspaceManifestFromPayload(env.root, input);
+    assert.ok(result.saved);
+    assert.equal(fs.readFileSync(path.join(env.root, 'AGENT.md'), 'utf8'), '# Reviewed instructions\n\nUse verified sources.\n');
+    assert.equal(loadWorkspaceManifest(env.root)?.profile, 'research');
+  } finally { env.cleanup(); }
+});
+
+test('manifest-save rejects unknown profiles and unsafe instruction targets with no writes', () => {
+  const env = tmpWorkspace();
+  try {
+    const unknown = payload(env.root, 'study');
+    unknown.profile = 'astrology';
+    assert.equal(saveWorkspaceManifestFromPayload(env.root, unknown).saved, false);
+    assert.equal(loadWorkspaceManifest(env.root), null);
+
+    const unsafe = payload(env.root, 'study');
+    unsafe.instruction = { path: '../AGENT.md', contents: '# Unsafe\n' };
+    assert.equal(saveWorkspaceManifestFromPayload(env.root, unsafe).saved, false);
+    assert.equal(loadWorkspaceManifest(env.root), null);
+  } finally { env.cleanup(); }
+});
+
+test('manifest-save rejects malformed review revisions without writing', () => {
+  const env = tmpWorkspace();
+  try {
+    const input = payload(env.root, 'study');
+    input.expected = { manifest: '0'.repeat(64), instruction: '0'.repeat(64) };
+    const result = saveWorkspaceManifestFromPayload(env.root, input);
+    assert.equal(result.saved, false);
+    assert.equal(loadWorkspaceManifest(env.root), null);
+
+    const withExtra = { ...payload(env.root, 'study'), unexpected: true };
+    assert.equal(saveWorkspaceManifestFromPayload(env.root, withExtra).saved, false);
+    assert.equal(saveWorkspaceManifestFromPayload(env.root, null).saved, false);
+    assert.equal(loadWorkspaceManifest(env.root), null);
+  } finally { env.cleanup(); }
 });
