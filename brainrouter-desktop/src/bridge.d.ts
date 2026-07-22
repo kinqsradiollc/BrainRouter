@@ -33,23 +33,30 @@ declare global {
       /** Open a workspace in a SEPARATE window (git worktrees) — never swaps the
        *  current window's active workspace / projects / chat. */
       openWorkspaceWindow(workspaceRoot: string): Promise<{ opened: boolean; needsTrust?: boolean }>;
-      /** ADR-021 W3a — onboarding manifest bridge: renderer reads state and
+      /** Workspace onboarding bridge: renderer reads state and
        *  submits choices; MAIN owns all `.brainrouter/workspace.json` access
        *  through the core chokepoint. */
       workspaceManifest?(workspaceRoot: string): Promise<{
         ok: boolean; error?: string; onboarded?: boolean;
         manifest?: Record<string, unknown> | null;
         suggestion?: { profile: string; reasons: string[] };
+        review?: {
+          revision: { root: string; manifest: string; instruction: string };
+          instruction: { path: 'AGENT.md'; existed: boolean; bytes: number; sha256: string | null };
+        };
         profiles?: Array<{
           id: string;
           label: string;
           description: string;
           agents: { default: string; enabled: string[] };
           capabilities?: { enabled: string[]; disabled?: string[] };
+          skills?: { packs: string[]; enabled: string[]; disabled?: string[] };
+          tools?: { profiles: string[]; deny?: string[] };
+          memory?: { tags: string[]; captureHint: string };
         }>;
       }>;
-      saveWorkspaceManifest?(workspaceRoot: string, payload: { profile: string }): Promise<{
-        saved: boolean; error?: string; manifest?: Record<string, unknown>;
+      saveWorkspaceManifest?(workspaceRoot: string, payload: Record<string, unknown>): Promise<{
+        saved: boolean; error?: string; stale?: boolean; manifest?: Record<string, unknown>;
       }>;
       /** T1 — workspace trust, backed by the shared CLI store (not localStorage). */
       isWorkspaceTrusted(workspaceRoot: string): Promise<{ trusted: boolean }>;

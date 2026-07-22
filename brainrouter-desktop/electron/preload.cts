@@ -46,11 +46,11 @@ contextBridge.exposeInMainWorld('brainrouter', {
   openWorkspaceWindow(workspaceRoot: string): Promise<{ opened: boolean; needsTrust?: boolean }> {
     return ipcRenderer.invoke('workspace:open-window', workspaceRoot);
   },
-  // ADR-021 W3a — onboarding manifest bridge (main owns all file access).
+  // Onboarding manifest bridge (main owns all file access).
   workspaceManifest(workspaceRoot: string): Promise<Record<string, unknown>> {
     return ipcRenderer.invoke('workspace:manifest-get', workspaceRoot);
   },
-  saveWorkspaceManifest(workspaceRoot: string, payload: { profile: string; defaultAgent?: string }): Promise<Record<string, unknown>> {
+  saveWorkspaceManifest(workspaceRoot: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
     return ipcRenderer.invoke('workspace:manifest-save', workspaceRoot, payload);
   },
   // T1 — workspace trust, backed by the shared CLI store (not localStorage).
