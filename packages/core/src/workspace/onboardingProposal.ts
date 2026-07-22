@@ -29,7 +29,7 @@ const PROFILE_IDS = WORKSPACE_PROFILES.map((profile) => profile.id) as [
 const IDENTIFIER_PATTERN = /^[a-z0-9][a-z0-9._:-]{0,127}$/;
 const DISPLAY_CONTROL_PATTERN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
 const UNSAFE_INSTRUCTION_CONTENT_PATTERN =
-  /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\p{Cf}\p{Zl}\p{Zp}]/u;
+  /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\p{Cf}\p{Zl}\p{Zp}]/u;
 const MANIFEST_TARGET = '.brainrouter/workspace.json';
 
 const identifierSchema = z.string().trim().min(1).max(128).regex(IDENTIFIER_PATTERN);

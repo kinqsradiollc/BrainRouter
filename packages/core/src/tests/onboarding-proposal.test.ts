@@ -222,16 +222,18 @@ test('assisted proposal rejects an instruction draft when instructions are disab
 });
 
 test('assisted proposal rejects unsafe instruction-file control characters', () => {
-  assert.equal(
-    parseWorkspaceOnboardingProposal(JSON.stringify(validProposal({
-      instructions: { path: 'AGENT.md', contents: '# Proposed\n\u0000' },
-    })), {
-      workspaceName: 'example',
-      selectedInstructionPath: 'AGENT.md',
-      at: NOW,
-    }),
-    null,
-  );
+  for (const contents of ['# Proposed\n\u0000', '# Forged\rstatus']) {
+    assert.equal(
+      parseWorkspaceOnboardingProposal(JSON.stringify(validProposal({
+        instructions: { path: 'AGENT.md', contents },
+      })), {
+        workspaceName: 'example',
+        selectedInstructionPath: 'AGENT.md',
+        at: NOW,
+      }),
+      null,
+    );
+  }
 });
 
 test('assisted proposal rejects credential material in instruction drafts', () => {
