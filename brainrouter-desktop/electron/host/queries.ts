@@ -74,6 +74,7 @@ import { buildStoryPrompt, validateStories, FlowStepSchema, DeviceSchema, type S
 import { isLoopbackHttpSrc } from '../webviewPolicy.js';
 import type { BrowserStep, BrowserStepResult } from '../browserHost.js';
 import { completeWorkspaceOnboardingWithModel } from '../workspaceOnboardingModel.js';
+import { previewWorkspaceInstructionFromPayload } from '../workspaceOnboarding.js';
 import {
   CLI_CONFIG_SCHEMA,
   findConfigSchemaField,
@@ -1072,6 +1073,11 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           },
         };
       },
+      // Read-only exact instruction text for the reviewed AI diff. The helper
+      // validates the opaque revision and fails closed on unsafe existing or
+      // proposed text; it never grants general renderer file access.
+      'workspace-onboarding-preview-instruction': (args) =>
+        previewWorkspaceInstructionFromPayload(workspaceRoot, args),
       // §2 W3 — Write-mode selection inline AI. A one-shot, read-only model call
       // (no tools) that polishes / rewrites / continues the selected prose; the
       // panel reviews the result as an accept/reject diff before it lands.
