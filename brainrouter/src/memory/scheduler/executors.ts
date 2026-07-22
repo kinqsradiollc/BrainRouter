@@ -32,6 +32,7 @@ import { runVulnerabilityScan, type VulnerabilityScanStore } from "../../service
 import { KNOWLEDGE_PARSE_JOB_KIND } from "../../knowledge/contracts/document.js";
 import {
   processKnowledgeParseJob,
+  type KnowledgeEmbeddingProvider,
   type KnowledgeParseProcessorStore,
 } from "../../knowledge/services/parse-processor.js";
 
@@ -42,6 +43,7 @@ import {
  * structurally satisfies it; the runner injects the live engine into the ctx.
  */
 export interface JobEngineOps {
+  resolveKnowledgeEmbeddingProvider?(orgId: string): Promise<KnowledgeEmbeddingProvider | null>;
   exportVault(userId: string, baseDir?: string): Promise<{ dir: string; written: number; unchanged: number; total: number }>;
   reconcilePendingBlackboard(userId: string): Promise<{ reconciled: number; duplicate: number; rejected: number; items: Array<{ id: string; status: string }> }>;
   commitBlackboardItem(userId: string, itemId: string): Promise<{ committed: boolean; recordId?: string; reason?: string }>;
@@ -232,10 +234,23 @@ const EXECUTORS: Record<string, JobExecutor> = {
 };
 
 const INTERNAL_EXECUTORS: Record<string, JobExecutor> = {
-  [KNOWLEDGE_PARSE_JOB_KIND]: async (input, ctx) => processKnowledgeParseJob(
-    input,
-    ctx.store as unknown as KnowledgeParseProcessorStore,
-  ),
+  [KNOWLEDGE_PARSE_JOB_KIND]: async (input, ctx) => {
+    const leaseStore = ctx.store as IMemoryStore & {
+      heartbeatMemoryJob?(jobId: string): Promise<boolean>;
+    };
+    return processKnowledgeParseJob(
+      input,
+      ctx.store as unknown as KnowledgeParseProcessorStore,
+      {
+        ...(ctx.engine?.resolveKnowledgeEmbeddingProvider
+          ? { resolveEmbeddingProvider: (orgId: string) => ctx.engine!.resolveKnowledgeEmbeddingProvider!(orgId) }
+          : {}),
+        ...(ctx.jobId && leaseStore.heartbeatMemoryJob
+          ? { heartbeat: async () => { await leaseStore.heartbeatMemoryJob!(ctx.jobId!); } }
+          : {}),
+      },
+    );
+  },
 };
 
 export function getJobExecutor(agentId: string): JobExecutor | undefined {

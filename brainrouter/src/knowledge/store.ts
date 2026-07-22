@@ -8,6 +8,7 @@ import type {
   KnowledgeDocumentRecord,
   KnowledgeDocumentStatusUpdate,
   KnowledgeChunkInput,
+  KnowledgeChunkEmbeddingInput,
   KnowledgeChunkRecord,
   KnowledgeParseCommitResult,
   KnowledgeParseJobInput,
@@ -52,6 +53,11 @@ export interface KnowledgeDocumentStore extends KnowledgeBaseStore {
     orgId: string,
     projectId: string,
   ): Promise<KnowledgeChunkRecord[]>;
+  upsertKnowledgeChunkEmbeddings(
+    input: KnowledgeParseJobInput,
+    embeddings: KnowledgeChunkEmbeddingInput[],
+    updatedAt: string,
+  ): Promise<number>;
   createKnowledgeDocument(record: KnowledgeDocumentRecord): Promise<void>;
   getKnowledgeDocument(
     documentId: string,

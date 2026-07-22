@@ -276,6 +276,12 @@ and tenant-fair job runner.
   version, creates deterministic content-hashed chunks, and transactionally
   replaces chunks before marking the document ready. A repeated ready job is a
   no-op; failures expose only a safe document status message.
+- After chunks are ready, the job resolves an immutable embedding provider for
+  the owning organization, bounds and validates same-dimension vectors, and
+  idempotently upserts model/dimension-tagged rows through the complete chunk
+  ancestry. Provider absence preserves FTS readiness; provider failures expose
+  no upstream detail and use the queue's bounded retry path. Lease heartbeats do
+  not grow the visible progress log.
 - Parsing, chunking, and embedding run asynchronously and idempotently.
 - Document status (`queued`, `parsing`, `ready`, `failed`) is the UI truth.
 - Retry is scoped by job kind, tenant, Project, and base; generic job retry is
@@ -355,7 +361,7 @@ captured into cognitive memory through its current engine.
 | W4c | Done | Briefing + memory tags | Capture/briefing/no-manifest tests |
 | W6 | Done | Client bootstrap deprecation | Offline core proposal coverage + downstream template-doc compatibility tests |
 | B1a | Done | Project/RBAC contract, schema, internal store, REST base CRUD, MCP base list/create | Migration + role/access + scoped CRUD + authenticated adapter tests |
-| B1b/B2 | In progress (text processing) | Text ingest, typed parse jobs, status, scoped retry | Safe ingest + atomic enqueue + idempotent chunk/status processing complete; embeddings/202/status/retry/fairness remain |
+| B1b/B2 | In progress (internal processing) | Text ingest, typed parse jobs, status, scoped retry | Safe ingest + atomic enqueue + idempotent chunk/status/optional embedding complete; 202/status/retry adapters remain |
 | B1c | Todo | Hybrid retrieval and citation APIs/tools | FTS/vector/fallback/tenancy tests |
 | B1d | Todo | Additional document parsers | Per-format bounds/redaction tests |
 | B3 | Todo | Availability-aware recommendations and opt-in distillation | Catalog/provenance/no-recursion tests |

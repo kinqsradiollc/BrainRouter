@@ -421,6 +421,18 @@ export async function appendJobProgress(exec: Executor, id: string, event: Memor
   );
 }
 
+/** Renew only a live worker lease without growing the user-visible progress log. */
+export async function heartbeatMemoryJob(
+  exec: Executor,
+  id: string,
+  now = new Date().toISOString(),
+): Promise<boolean> {
+  return (await exec.run(
+    "UPDATE memory_jobs SET locked_at = $1, updated_at = $1 WHERE id = $2 AND status = 'running'",
+    [now, id],
+  )) > 0;
+}
+
 export async function listMemoryJobs(exec: Executor, filters?: MemoryJobListFilters): Promise<MemoryJobRecord[]> {
   const where: string[] = [];
   const params: any[] = [];

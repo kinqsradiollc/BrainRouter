@@ -14,6 +14,7 @@ import {
   listKnowledgeChunks,
   markKnowledgeDocumentParsing,
   updateKnowledgeDocumentStatus,
+  upsertKnowledgeChunkEmbeddings,
 } from "./knowledgeDocumentQueries.js";
 
 const at = "2026-07-22T00:00:00.000Z";
@@ -304,5 +305,37 @@ describe("knowledge document queries", () => {
       "document_id = $1 AND base_id = $2 AND org_id = $3 AND project_id = $4",
     );
     expect(exec.rows.mock.calls[0][1]).toEqual(["doc-1", "base-1", "org-1", "project-1"]);
+  });
+
+  it("upserts model and dimension tagged embeddings only through scoped chunks", async () => {
+    const client = {
+      query: vi.fn()
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ exists: 1 }] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [] }),
+    };
+    const exec = executor();
+    exec.tx = vi.fn(async (fn: (value: unknown) => Promise<unknown>) => fn(client));
+    await expect(upsertKnowledgeChunkEmbeddings(exec, parseInput, [{
+      chunkId: "chunk-1",
+      embeddingModel: "embed-model",
+      dimensions: 3,
+      embedding: [0.25, -0.5, 0.75],
+    }], at)).resolves.toBe(1);
+
+    expect(client.query.mock.calls[0][0]).toContain(
+      "document_id = $1 AND base_id = $2 AND org_id = $3 AND project_id = $4",
+    );
+    expect(client.query.mock.calls[0][0]).toContain("parse_version = $5 AND status = 'ready'");
+    const [sql, params] = client.query.mock.calls[1];
+    expect(sql).toContain("JOIN knowledge_chunks chunk");
+    expect(sql).toContain("ON CONFLICT (chunk_id, embedding_model) DO UPDATE");
+    expect(params.slice(0, 4)).toEqual(["doc-1", "base-1", "org-1", "project-1"]);
+    expect(JSON.parse(params[4])).toEqual([{
+      chunk_id: "chunk-1",
+      embedding_model: "embed-model",
+      dimensions: 3,
+      embedding_text: "[0.25,-0.5,0.75]",
+    }]);
+    expect(params[5]).toBe(at);
   });
 });

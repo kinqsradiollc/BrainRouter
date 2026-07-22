@@ -4,6 +4,7 @@ import {
   claimNextMemoryJob,
   enqueueMemoryJob,
   getReviewLifecycleSummaryForOrg,
+  heartbeatMemoryJob,
   listReviewAnalyticsForOrg,
   listReviewFindingsForOrg,
   listReviewJobSummariesForOrg,
@@ -40,6 +41,15 @@ function writeExecutor() {
 }
 
 describe("review dashboard job projections", () => {
+  it("renews only a running job lease without appending progress", async () => {
+    const { exec, runs } = writeExecutor();
+    await expect(heartbeatMemoryJob(exec, "job-1", "N")).resolves.toBe(true);
+    expect(runs).toEqual([{
+      sql: "UPDATE memory_jobs SET locked_at = $1, updated_at = $1 WHERE id = $2 AND status = 'running'",
+      params: ["N", "job-1"],
+    }]);
+  });
+
   it("loads latest PR states without progress or finding-detail payloads", async () => {
     const exec = executor();
     await listReviewJobSummariesForOrg(exec, "org-1");

@@ -51,6 +51,10 @@ export class EmbeddingService {
     return this.dimensions;
   }
 
+  getModel(): string {
+    return this.model;
+  }
+
   isReady(): boolean {
     return this.ready;
   }
