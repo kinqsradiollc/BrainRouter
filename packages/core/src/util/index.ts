@@ -9,3 +9,4 @@ export * from './tokens/index.js';
 export * from './agentloop/index.js';
 export * from './concurrency/index.js';
 export * from './result/index.js';
+export * from './fs/index.js';
