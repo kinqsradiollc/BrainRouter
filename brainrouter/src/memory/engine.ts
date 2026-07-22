@@ -27,7 +27,7 @@ import type { ModelPolicyStore } from "../providers/modelPolicyStore.js";
 import type { RemoteAccessStore } from "../remote/store.js";
 import type { IntegrationStore } from "../integrations/store.js";
 import type { ConnectorStore } from "../connectors/store.js";
-import type { KnowledgeBaseStore } from "../knowledge/store.js";
+import type { KnowledgeDocumentStore } from "../knowledge/store.js";
 import { resolveGithubAccountToken } from "../connectors/githubAccountToken.js";
 import { isSsrfBlockedHost } from "../connectors/gitlabTrackProxy.js";
 import { resolveProviderConfig } from "../providers/resolver.js";
@@ -488,9 +488,9 @@ export class MemoryEngine {
     return this.store as unknown as ProjectStore;
   }
 
-  /** Project-scoped knowledge bases and their exact access query. */
-  public get knowledge(): KnowledgeBaseStore {
-    return this.store as unknown as KnowledgeBaseStore;
+  /** Project-scoped knowledge persistence and exact access queries. */
+  public get knowledge(): KnowledgeDocumentStore {
+    return this.store as unknown as KnowledgeDocumentStore;
   }
 
   /** ADR-014 P-F — admin console + audit trail store. */

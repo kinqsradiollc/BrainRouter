@@ -298,10 +298,12 @@ and tenant-fair job runner.
 ### Serving and distillation
 
 Base list/create are available through authenticated REST and MCP adapters; the
-MCP tool names are `knowledge_list` and `knowledge_base_create`.
-`knowledge_ingest` and `knowledge_search` follow with their respective
-processing and retrieval slices. Profile recommendation intersects the shared
-profile catalog with actually available packs/personas and is never an ACL.
+MCP tool names are `knowledge_list` and `knowledge_base_create`. Authenticated
+REST also exposes accepted text ingest, content-free processing status, and
+exact-scope retry. `knowledge_ingest` and `knowledge_search` follow with their
+respective MCP processing and retrieval slices. Profile recommendation
+intersects the shared profile catalog with actually available packs/personas
+and is never an ACL.
 Opt-in distillation writes provenance-linked derived knowledge documents and
 prevents recursive self-distillation. Only separately reviewed facts may be
 captured into cognitive memory through its current engine.
@@ -364,7 +366,7 @@ captured into cognitive memory through its current engine.
 | W4c | Done | Briefing + memory tags | Capture/briefing/no-manifest tests |
 | W6 | Done | Client bootstrap deprecation | Offline core proposal coverage + downstream template-doc compatibility tests |
 | B1a | Done | Project/RBAC contract, schema, internal store, REST base CRUD, MCP base list/create | Migration + role/access + scoped CRUD + authenticated adapter tests |
-| B1b/B2 | In progress (adapters) | Text ingest, typed parse jobs, status, scoped retry | Safe ingest + atomic enqueue + idempotent chunk/status/optional embedding + content-free status/scoped retry service complete; 202/status/retry adapters remain |
+| B1b/B2 | In progress (MCP adapter) | Text ingest, typed parse jobs, status, scoped retry | Safe ingest + atomic enqueue + idempotent chunk/status/optional embedding + authenticated REST 202/status/retry complete; authenticated MCP adapter remains |
 | B1c | Todo | Hybrid retrieval and citation APIs/tools | FTS/vector/fallback/tenancy tests |
 | B1d | Todo | Additional document parsers | Per-format bounds/redaction tests |
 | B3 | Todo | Availability-aware recommendations and opt-in distillation | Catalog/provenance/no-recursion tests |
