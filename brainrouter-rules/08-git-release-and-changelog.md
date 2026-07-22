@@ -33,18 +33,27 @@ per-slice commit subjects as `*` bullets plus a verification line.
   sessions exist in history — treat them as mistakes, not precedent.
 - **Evidence:** `.github/PULL_REQUEST_TEMPLATE.md`
 
-### 3. PR bodies follow the template; refactor PRs state verification counts
+### 3. PRs contain one independently shippable feature slice
 
 Use the template sections (Summary / Why / Changes / Test plan checkboxes / Docs &
 changelog checkboxes / Breaking changes defaulting to "none"). New env vars must be
 documented in `brainrouter/.env.example` or `brainrouter-cli/.env.example`.
 Behavior-preserving refactor PRs end the body with an explicit verification line
 (e.g. "Behavior-preserving split; public surface unchanged. Verified: 732 cli tests
-pass."). Multi-slice PRs keep one `* type(scope): …` bullet per slice so the squash
-body reads as a mini-changelog.
+pass.").
 
-- **Why:** the squash body is the permanent history entry; the verification line is
-  how reviewers distinguish mechanical refactors from behavior changes.
+One PR carries one independently shippable feature slice. Split a larger program
+into dependency-ordered PRs, merge each slice into the release branch, then base or
+retarget the next slice on that updated branch. Each slice must receive its own CI
+run and fresh security review. Do not create an umbrella PR merely because changes
+share an ADR, roadmap item, or release target. A single slice may span tightly
+coupled workspaces when separating them would leave the product broken; list each
+coupled change as one `* type(scope): …` bullet so the squash body remains readable.
+
+- **Why:** small independently valid diffs are easier to adjust, revert, and audit;
+  a fresh security result then describes exactly the feature being shipped. The
+  squash body remains the permanent history entry, and the verification line helps
+  reviewers distinguish mechanical refactors from behavior changes.
 - **Evidence:** `.github/PULL_REQUEST_TEMPLATE.md`
 
 ---
