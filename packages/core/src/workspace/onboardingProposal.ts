@@ -221,6 +221,7 @@ function normalizeInstructionTarget(candidate: string, allowEmpty: boolean): str
   const trimmed = candidate.trim();
   if (trimmed === '') return allowEmpty ? '' : null;
   if (DISPLAY_CONTROL_PATTERN.test(trimmed) ||
+      /^[A-Za-z]:/u.test(trimmed) ||
       path.isAbsolute(trimmed) || path.win32.isAbsolute(trimmed)) {
     return null;
   }

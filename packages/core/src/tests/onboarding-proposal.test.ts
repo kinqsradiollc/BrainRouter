@@ -261,6 +261,8 @@ test('assisted proposal rejects credential material in instruction drafts', () =
 test('assisted proposal rejects instruction targets the manifest would rewrite or alias', () => {
   const unsafeTargets = [
     '~/AGENT.md',
+    'C:AGENT.md',
+    'C:../AGENT.md',
     'sk-abcdefghijkl/AGENT.md',
     '.BRAINROUTER/workspace.json',
     '.brainrouter./workspace.json',
