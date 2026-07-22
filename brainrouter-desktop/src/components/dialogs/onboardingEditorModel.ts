@@ -45,6 +45,18 @@ export interface OnboardingInstructionDraft {
   contents: string;
 }
 
+export type ParsedOnboardingInstructionPreview =
+  | {
+      ok: true;
+      path: 'AGENT.md';
+      existed: boolean;
+      original: string;
+      proposed: string;
+      originalBytes: number;
+      proposedBytes: number;
+    }
+  | { ok: false; error: string; stale: boolean };
+
 export interface LoadedOnboardingEditor {
   profiles: OnboardingProfile[];
   existing: OnboardingDraft | null;
@@ -66,6 +78,7 @@ export interface ParsedOnboardingProposal {
 
 const DIGEST = /^[0-9a-f]{64}$/;
 const MAX_LIST_ITEMS = 256;
+const MAX_INSTRUCTION_BYTES = 64 * 1024;
 export const ONBOARDING_DESCRIPTION_MAX_BYTES = 4 * 1024;
 const FALLBACK_REASONS = new Set([
   'model-unavailable', 'model-timeout', 'model-error', 'invalid-model-output',
@@ -119,6 +132,36 @@ export function parseOnboardingProposal(value: unknown): ParsedOnboardingProposa
       ...(bytesRead === undefined ? {} : { bytesRead }),
       stoppedBy,
     },
+  };
+}
+
+/** Parse the exact, read-only instruction preview returned by the host. */
+export function parseOnboardingInstructionPreview(value: unknown): ParsedOnboardingInstructionPreview | null {
+  if (!isRecord(value) || typeof value.ok !== 'boolean') return null;
+  if (value.ok === false) {
+    const keys = value.stale === undefined ? ['ok', 'error'] : ['ok', 'error', 'stale'];
+    if (!hasExactKeys(value, keys) || !boundedString(value.error, 512) ||
+        !(value.stale === undefined || typeof value.stale === 'boolean')) return null;
+    return { ok: false, error: value.error, stale: value.stale === true };
+  }
+  if (!hasExactKeys(value, [
+    'ok', 'path', 'existed', 'original', 'proposed', 'originalBytes', 'proposedBytes',
+  ]) || value.path !== 'AGENT.md' || typeof value.existed !== 'boolean' ||
+      !boundedString(value.original, MAX_INSTRUCTION_BYTES, true) ||
+      !boundedString(value.proposed, MAX_INSTRUCTION_BYTES) ||
+      parseNonNegativeInteger(value.originalBytes) === undefined ||
+      parseNonNegativeInteger(value.proposedBytes) === undefined) return null;
+  const originalBytes = new TextEncoder().encode(value.original).length;
+  const proposedBytes = new TextEncoder().encode(value.proposed).length;
+  if (value.originalBytes !== originalBytes || value.proposedBytes !== proposedBytes) return null;
+  return {
+    ok: true,
+    path: 'AGENT.md',
+    existed: value.existed,
+    original: value.original,
+    proposed: value.proposed,
+    originalBytes,
+    proposedBytes,
   };
 }
 
@@ -248,7 +291,8 @@ function parseInstructionSummary(value: unknown): OnboardingInstructionSummary |
 }
 
 function parseInstructionDraft(value: unknown): OnboardingInstructionDraft | null {
-  if (!isRecord(value) || value.path !== 'AGENT.md' || typeof value.contents !== 'string') return null;
+  if (!isRecord(value) || !hasExactKeys(value, ['path', 'contents']) || value.path !== 'AGENT.md' ||
+      !boundedString(value.contents, MAX_INSTRUCTION_BYTES)) return null;
   return { path: 'AGENT.md', contents: value.contents };
 }
 
@@ -272,6 +316,11 @@ function boundedString(value: unknown, maxBytes: number, allowEmpty = false): va
 
 function parseNonNegativeInteger(value: unknown): number | undefined {
   return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : undefined;
+}
+
+function hasExactKeys(value: Record<string, unknown>, expected: string[]): boolean {
+  const actual = Object.keys(value).sort();
+  return actual.length === expected.length && expected.slice().sort().every((key, index) => actual[index] === key);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

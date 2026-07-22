@@ -15,12 +15,18 @@ import {
   onboardingSavePayload,
   parseOnboardingCsv,
   parseOnboardingEditor,
+  parseOnboardingInstructionPreview,
   parseOnboardingProposal,
   ONBOARDING_DESCRIPTION_MAX_BYTES,
   type LoadedOnboardingEditor,
   type OnboardingDraft,
+  type OnboardingInstructionDraft,
   type OnboardingProfile,
+  type ParsedOnboardingInstructionPreview,
 } from './onboardingEditorModel.js';
+
+type ExactInstructionPreview = Extract<ParsedOnboardingInstructionPreview, { ok: true }>;
+type InstructionDecision = 'pending' | 'include' | 'exclude' | null;
 
 export function OnboardingDialog({ root, onClose, onSaved }: {
   root: string | null;
@@ -40,20 +46,26 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [proposing, setProposing] = useState(false);
+  const [reviewingInstruction, setReviewingInstruction] = useState(false);
   const [description, setDescription] = useState('');
   const [saveSource, setSaveSource] = useState<'wizard' | 'agent'>('wizard');
-  const [instructionOffered, setInstructionOffered] = useState(false);
+  const [instructionDraft, setInstructionDraft] = useState<OnboardingInstructionDraft | null>(null);
+  const [instructionPreview, setInstructionPreview] = useState<ExactInstructionPreview | null>(null);
+  const [instructionDecision, setInstructionDecision] = useState<InstructionDecision>(null);
   onCloseRef.current = onClose;
-  busyRef.current = saving || proposing;
+  busyRef.current = saving || proposing || reviewingInstruction;
 
   const load = (workspaceRoot: string, staleMessage = ''): void => {
     const generation = ++requestGeneration.current;
     setLoading(true);
     setSaving(false);
     setProposing(false);
+    setReviewingInstruction(false);
     setDescription('');
     setSaveSource('wizard');
-    setInstructionOffered(false);
+    setInstructionDraft(null);
+    setInstructionPreview(null);
+    setInstructionDecision(null);
     setError('');
     setNotice('');
     setEditor(null);
@@ -141,13 +153,15 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
     if (!replacement) return;
     setDraft(replacement);
     setSaveSource('wizard');
-    setInstructionOffered(false);
+    setInstructionDraft(null);
+    setInstructionPreview(null);
+    setInstructionDecision(null);
     setNotice('Preset applied. Review and edit every field before saving.');
     setError('');
   };
 
   const propose = (): void => {
-    if (!root || !editor || proposing || saving) return;
+    if (!root || !editor || proposing || saving || reviewingInstruction) return;
     if (descriptionProblem) {
       setError(descriptionProblem);
       return;
@@ -155,6 +169,9 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
     const workspaceRoot = root;
     const generation = ++requestGeneration.current;
     setProposing(true);
+    setInstructionDraft(null);
+    setInstructionPreview(null);
+    setInstructionDecision(null);
     setError('');
     setNotice('Scanning the project and preparing a reviewable proposal…');
     void bridgeQuery<unknown>(
@@ -173,7 +190,9 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
       }
       setDraft(proposal.draft);
       setSaveSource(proposal.source);
-      setInstructionOffered(proposal.instruction !== null);
+      setInstructionDraft(proposal.instruction);
+      setInstructionPreview(null);
+      setInstructionDecision(proposal.instruction ? 'pending' : null);
       setNotice(onboardingProposalStatus(proposal));
       setError('');
       setProposing(false);
@@ -185,8 +204,52 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
     });
   };
 
+  const reviewInstruction = (): void => {
+    if (!root || !editor || !instructionDraft || proposing || saving || reviewingInstruction) return;
+    const workspaceRoot = root;
+    const generation = ++requestGeneration.current;
+    setReviewingInstruction(true);
+    setInstructionPreview(null);
+    setInstructionDecision('pending');
+    setError('');
+    setNotice('Loading the exact current and proposed AGENT.md text…');
+    void bridgeQuery<unknown>(
+      'workspace-onboarding-preview-instruction',
+      { expected: editor.revision, instruction: instructionDraft },
+      15_000,
+      workspaceRoot,
+    ).then((raw) => {
+      if (generation !== requestGeneration.current || root !== workspaceRoot) return;
+      const result = parseOnboardingInstructionPreview(raw);
+      if (!result) {
+        setReviewingInstruction(false);
+        setNotice('');
+        setError('The instruction preview was incomplete. Review it again before saving.');
+        return;
+      }
+      if (!result.ok) {
+        if (result.stale) {
+          load(workspaceRoot, `${result.error} The latest setup has been reloaded.`);
+          return;
+        }
+        setReviewingInstruction(false);
+        setNotice('');
+        setError(result.error);
+        return;
+      }
+      setInstructionPreview(result);
+      setReviewingInstruction(false);
+      setNotice('Exact AGENT.md text loaded. Choose whether to include it before saving.');
+    }).catch(() => {
+      if (generation !== requestGeneration.current || root !== workspaceRoot) return;
+      setReviewingInstruction(false);
+      setNotice('');
+      setError('Could not load the exact instruction diff. Review it again before saving.');
+    });
+  };
+
   const save = (): void => {
-    if (!root || !draft || !editor || saving || proposing) return;
+    if (!root || !draft || !editor || saving || proposing || reviewingInstruction || instructionDecision === 'pending') return;
     const generation = ++requestGeneration.current;
     setSaving(true);
     setError('');
@@ -195,6 +258,8 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
       draft,
       revision: editor.revision,
       source: saveSource,
+      instruction: instructionDraft,
+      includeInstruction: instructionDecision === 'include',
     });
     const request = window.brainrouter.saveWorkspaceManifest?.(root, payload);
     if (!request) {
@@ -229,10 +294,11 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
 
   return (
     <div className="overlay onboard-overlay" onMouseDown={(event) => {
-      if (event.target === event.currentTarget && !saving && !proposing) onClose();
+      if (event.target === event.currentTarget && !saving && !proposing && !reviewingInstruction) onClose();
     }}>
       <div ref={dialogRef} className="dialog onboard-dialog" role="dialog" aria-modal="true"
-        aria-labelledby={titleId} aria-describedby={descriptionId} aria-busy={loading || saving || proposing}>
+        aria-labelledby={titleId} aria-describedby={descriptionId}
+        aria-busy={loading || saving || proposing || reviewingInstruction}>
         <div className="dialog-title" id={titleId}>{editing ? 'Workspace settings' : `Set up ${workspaceName}`}</div>
         <div className="set-desc" id={descriptionId}>
           Choose a preset, then review every field before saving. Frontend stays an engineer capability and
@@ -249,14 +315,16 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
                   <h3 id={`${titleId}-assist`}>Describe your project</h3>
                   <p>Use the active managed model and a bounded repository scan to prepare every workspace field for review.</p>
                 </div>
-                <button type="button" className="approve" disabled={proposing || saving || Boolean(descriptionProblem)}
+                <button type="button" className="approve"
+                  disabled={proposing || saving || reviewingInstruction || Boolean(descriptionProblem)}
                   onClick={propose}>
                   {proposing ? 'Preparing…' : 'Set up with AI'}
                 </button>
               </div>
               <label className="onboard-assist-input">
                 <span>What are you building, and how should the agents help?</span>
-                <textarea value={description} disabled={proposing || saving} maxLength={ONBOARDING_DESCRIPTION_MAX_BYTES}
+                <textarea value={description} disabled={proposing || saving || reviewingInstruction}
+                  maxLength={ONBOARDING_DESCRIPTION_MAX_BYTES}
                   placeholder="For example: A responsive TypeScript dashboard with an API, tests, and accessible UI."
                   onChange={(event) => { setDescription(event.target.value); setError(''); }} />
                 <small className={descriptionProblem ? 'onboard-error' : ''}>
@@ -276,7 +344,7 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
                 {editor.profiles.map((profile) => (
                   <button type="button" key={profile.id}
                     className={`onboard-card${draft.profile === profile.id ? ' selected' : ''}`}
-                    disabled={proposing || saving}
+                    disabled={proposing || saving || reviewingInstruction}
                     aria-pressed={draft.profile === profile.id}
                     onClick={() => chooseProfile(profile)}>
                     <span className="onboard-card-label">
@@ -293,44 +361,51 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
             <section className="onboard-section onboard-fields" aria-labelledby={`${titleId}-details`}>
               <h3 id={`${titleId}-details`}>Agents, capabilities, skills, and tools</h3>
               <TextField label="Default domain agent" value={draft.agents.default}
-                disabled={proposing || saving}
+                disabled={proposing || saving || reviewingInstruction}
                 hint="Use engineer for software work; frontend is activated as a task-specific capability."
                 onChange={(value) => patchDraft({ agents: { ...draft.agents, default: value } })} />
               <ListField label="Enabled agents" values={draft.agents.enabled}
-                disabled={proposing || saving}
+                disabled={proposing || saving || reviewingInstruction}
                 onChange={(values) => patchDraft({ agents: { ...draft.agents, enabled: values } })} />
               <ListField label="Available capabilities" values={draft.capabilities.enabled}
-                disabled={proposing || saving}
+                disabled={proposing || saving || reviewingInstruction}
                 hint="Available for task-time activation; not injected on every turn."
                 onChange={(values) => patchDraft({ capabilities: { ...draft.capabilities, enabled: values } })} />
               <ListField label="Disabled capabilities" values={draft.capabilities.disabled}
-                disabled={proposing || saving}
+                disabled={proposing || saving || reviewingInstruction}
                 onChange={(values) => patchDraft({ capabilities: { ...draft.capabilities, disabled: values } })} />
               <ListField label="Skill packs" values={draft.skills.packs}
-                disabled={proposing || saving}
+                disabled={proposing || saving || reviewingInstruction}
                 onChange={(values) => patchDraft({ skills: { ...draft.skills, packs: values } })} />
               <ListField label="Enabled skills" values={draft.skills.enabled}
-                disabled={proposing || saving}
+                disabled={proposing || saving || reviewingInstruction}
                 onChange={(values) => patchDraft({ skills: { ...draft.skills, enabled: values } })} />
               <ListField label="Disabled skills" values={draft.skills.disabled}
-                disabled={proposing || saving}
+                disabled={proposing || saving || reviewingInstruction}
                 onChange={(values) => patchDraft({ skills: { ...draft.skills, disabled: values } })} />
               <ListField label="Tool profiles" values={draft.tools.profiles}
-                disabled={proposing || saving}
+                disabled={proposing || saving || reviewingInstruction}
                 onChange={(values) => patchDraft({ tools: { ...draft.tools, profiles: values } })} />
               <ListField label="Denied tools" values={draft.tools.deny}
-                disabled={proposing || saving}
+                disabled={proposing || saving || reviewingInstruction}
                 onChange={(values) => patchDraft({ tools: { ...draft.tools, deny: values } })} />
               <ListField label="Memory tags" values={draft.memory.tags}
-                disabled={proposing || saving}
+                disabled={proposing || saving || reviewingInstruction}
                 onChange={(values) => patchDraft({ memory: { ...draft.memory, tags: values } })} />
               <TextField label="Memory capture hint" value={draft.memory.captureHint}
-                disabled={proposing || saving}
+                disabled={proposing || saving || reviewingInstruction}
                 onChange={(value) => patchDraft({ memory: { ...draft.memory, captureHint: value } })} />
               <TextField label="Instruction file" value={draft.instructions}
-                disabled={proposing || saving}
+                disabled={proposing || saving || reviewingInstruction}
                 hint="Project-relative pointer; generated instruction proposals are limited to AGENT.md."
-                onChange={(value) => patchDraft({ instructions: value })} />
+                onChange={(value) => {
+                  patchDraft({ instructions: value });
+                  if (value !== 'AGENT.md') {
+                    setInstructionDraft(null);
+                    setInstructionPreview(null);
+                    setInstructionDecision(null);
+                  }
+                }} />
             </section>
 
             <section className="onboard-section" aria-labelledby={`${titleId}-review`}>
@@ -340,11 +415,54 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
                 <span>{preview.length} characters</span>
               </div>
               <pre className="onboard-diff">{preview}</pre>
-              <div className="onboard-no-instruction">
-                {instructionOffered
-                  ? 'The proposed instruction-file change is not included until its exact diff is reviewed.'
-                  : 'No instruction-file change is included.'}
-              </div>
+              {instructionDraft ? (
+                <div className="onboard-instruction-review">
+                  <div className="onboard-instruction-heading">
+                    <div>
+                      <strong>Optional AGENT.md change</strong>
+                      <span>Review the exact current and proposed text, then explicitly include or reject it.</span>
+                    </div>
+                    <button type="button" className="deny" disabled={saving || proposing || reviewingInstruction}
+                      onClick={reviewInstruction}>
+                      {reviewingInstruction ? 'Loading exact diff…' : instructionPreview ? 'Refresh exact diff' : 'Review exact diff'}
+                    </button>
+                  </div>
+                  {instructionPreview ? (
+                    <>
+                      <div className="onboard-instruction-grid">
+                        <div>
+                          <div className="onboard-diff-label">
+                            <span>{instructionPreview.existed ? 'Current AGENT.md' : 'Current AGENT.md (new file)'}</span>
+                            <span>{instructionPreview.originalBytes} bytes</span>
+                          </div>
+                          <pre className="onboard-diff">{instructionPreview.original}</pre>
+                        </div>
+                        <div>
+                          <div className="onboard-diff-label">
+                            <span>Proposed AGENT.md</span>
+                            <span>{instructionPreview.proposedBytes} bytes</span>
+                          </div>
+                          <pre className="onboard-diff">{instructionPreview.proposed}</pre>
+                        </div>
+                      </div>
+                      <div className="onboard-instruction-actions" role="group" aria-label="AGENT.md decision">
+                        <button type="button" className={instructionDecision === 'exclude' ? 'selected' : ''}
+                          aria-pressed={instructionDecision === 'exclude'} disabled={saving || proposing || reviewingInstruction}
+                          onClick={() => { setInstructionDecision('exclude'); setNotice('AGENT.md will remain unchanged.'); }}>
+                          Keep unchanged
+                        </button>
+                        <button type="button" className={instructionDecision === 'include' ? 'selected' : ''}
+                          aria-pressed={instructionDecision === 'include'} disabled={saving || proposing || reviewingInstruction}
+                          onClick={() => { setInstructionDecision('include'); setNotice('The reviewed AGENT.md change will be included.'); }}>
+                          Include reviewed change
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="onboard-no-instruction">The instruction change is excluded until exact review and a decision.</div>
+                  )}
+                </div>
+              ) : <div className="onboard-no-instruction">No instruction-file change is included.</div>}
             </section>
           </div>
         )}
@@ -353,10 +471,12 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
           {error ? <span className="onboard-error">{error}</span> : notice ? <span>{notice}</span> : null}
         </div>
         <div className="dialog-actions">
-          <button type="button" className="deny" disabled={saving || proposing} onClick={onClose}>
+          <button type="button" className="deny" disabled={saving || proposing || reviewingInstruction} onClick={onClose}>
             {editing ? 'Cancel' : 'Skip for now'}
           </button>
-          <button type="button" className="approve" disabled={!draft || !editor || loading || saving || proposing} onClick={save}>
+          <button type="button" className="approve"
+            disabled={!draft || !editor || loading || saving || proposing || reviewingInstruction || instructionDecision === 'pending'}
+            onClick={save}>
             {saving ? 'Saving…' : editing ? 'Save workspace settings' : 'Finish setup'}
           </button>
         </div>
