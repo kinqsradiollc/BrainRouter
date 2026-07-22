@@ -4,10 +4,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  ONBOARDING_PROPOSAL_MAX_INSTRUCTION_BYTES,
   commitReviewedWorkspaceOnboarding,
   createWorkspaceManifest,
   inspectWorkspaceOnboardingReview,
   loadWorkspaceManifest,
+  previewReviewedWorkspaceInstruction,
   saveWorkspaceManifest,
 } from '../workspace/index.js';
 
@@ -60,6 +62,64 @@ test('reviewed onboarding commits an approved instruction and manifest as one pa
     assert.equal(fs.readFileSync(path.join(env.root, 'AGENT.md'), 'utf8'), '# Project instructions\n\nUse verified sources.\n');
     assert.equal(loadWorkspaceManifest(env.root)?.profile, 'research');
     assert.equal(result.instructionPath, 'AGENT.md');
+  } finally { env.cleanup(); }
+});
+
+test('reviewed onboarding previews exact safe instruction text without writing', () => {
+  const env = workspace();
+  try {
+    fs.writeFileSync(path.join(env.root, 'AGENT.md'), '# Existing\n', 'utf8');
+    const review = inspectWorkspaceOnboardingReview(env.root);
+    const preview = previewReviewedWorkspaceInstruction(env.root, {
+      expected: review.revision,
+      instruction: { path: 'AGENT.md', contents: '# Proposed\n\nUse tests.\n' },
+    });
+
+    assert.deepEqual(preview, {
+      path: 'AGENT.md',
+      existed: true,
+      original: '# Existing\n',
+      proposed: '# Proposed\n\nUse tests.\n',
+      originalBytes: 11,
+      proposedBytes: 23,
+    });
+    assert.equal(fs.readFileSync(path.join(env.root, 'AGENT.md'), 'utf8'), '# Existing\n');
+    assert.equal(loadWorkspaceManifest(env.root), null);
+  } finally { env.cleanup(); }
+});
+
+test('reviewed onboarding preview rejects stale, secret-bearing, and non-UTF-8 source text', () => {
+  const env = workspace();
+  try {
+    const target = path.join(env.root, 'AGENT.md');
+    fs.writeFileSync(target, '# Initial\n', 'utf8');
+    const stale = inspectWorkspaceOnboardingReview(env.root);
+    fs.writeFileSync(target, '# Concurrent\n', 'utf8');
+    assert.throws(() => previewReviewedWorkspaceInstruction(env.root, {
+      expected: stale.revision,
+      instruction: { path: 'AGENT.md', contents: '# Safe proposal\n' },
+    }), /changed during review/);
+
+    fs.writeFileSync(target, 'OPENAI_API_KEY=sk-do-not-preview\n', 'utf8');
+    const secret = inspectWorkspaceOnboardingReview(env.root);
+    assert.throws(() => previewReviewedWorkspaceInstruction(env.root, {
+      expected: secret.revision,
+      instruction: { path: 'AGENT.md', contents: '# Safe proposal\n' },
+    }), /unsafe to preview/);
+
+    fs.writeFileSync(target, Buffer.from([0xff, 0xfe, 0xfd]));
+    const binary = inspectWorkspaceOnboardingReview(env.root);
+    assert.throws(() => previewReviewedWorkspaceInstruction(env.root, {
+      expected: binary.revision,
+      instruction: { path: 'AGENT.md', contents: '# Safe proposal\n' },
+    }), /unsafe to preview/);
+
+    fs.writeFileSync(target, 'x'.repeat(ONBOARDING_PROPOSAL_MAX_INSTRUCTION_BYTES + 1), 'utf8');
+    const oversized = inspectWorkspaceOnboardingReview(env.root);
+    assert.throws(() => previewReviewedWorkspaceInstruction(env.root, {
+      expected: oversized.revision,
+      instruction: { path: 'AGENT.md', contents: '# Safe proposal\n' },
+    }), /Unsafe AGENT\.md/);
   } finally { env.cleanup(); }
 });
 

@@ -6,6 +6,9 @@
  * a newer manifest or instruction file. When an instruction replacement is
  * approved, the existing durable pair coordinator makes it and the manifest
  * one recoverable logical change.
+ *
+ * Existing instruction text crosses this boundary only through the explicit
+ * preview call after revision, file, size, UTF-8, control, and secret checks.
  */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -79,7 +82,21 @@ export interface ReviewedWorkspaceOnboardingResult {
   review: WorkspaceOnboardingReviewState;
 }
 
-/** Inspect only bounded metadata; existing instruction contents never leave core. */
+export interface ReviewedWorkspaceInstructionPreviewInput {
+  expected: WorkspaceOnboardingReviewRevision;
+  instruction: NonNullable<ReviewedWorkspaceOnboardingInput['instruction']>;
+}
+
+export interface ReviewedWorkspaceInstructionPreview {
+  path: typeof INSTRUCTION_RELPATH;
+  existed: boolean;
+  original: string;
+  proposed: string;
+  originalBytes: number;
+  proposedBytes: number;
+}
+
+/** Inspect only bounded metadata; content requires the explicit preview gate. */
 export function inspectWorkspaceOnboardingReview(
   workspaceRoot: string,
 ): WorkspaceOnboardingReviewState {
@@ -98,6 +115,49 @@ export function inspectWorkspaceOnboardingReview(
   );
   assertWorkspaceRootUnchanged(root, rootBefore);
   return reviewState(root, rootBefore, manifest, instruction);
+}
+
+/** Read the exact review pair without exposing unsafe or stale project text. */
+export function previewReviewedWorkspaceInstruction(
+  workspaceRoot: string,
+  input: ReviewedWorkspaceInstructionPreviewInput,
+): ReviewedWorkspaceInstructionPreview {
+  assertRevision(input.expected);
+  const proposed = validateInstruction(input.instruction);
+  if (proposed === undefined) throw new Error('Workspace instruction proposal is required.');
+
+  // Preview is intentionally read-only. The inspect and commit chokepoints own
+  // durable transaction recovery; commit rechecks the opaque revision after
+  // recovery before any requested write is accepted.
+  const root = fs.realpathSync(workspaceRoot);
+  const rootBefore = requireStableWorkspaceRoot(root);
+  const manifest = snapshotWorkspaceFile(
+    root,
+    WORKSPACE_MANIFEST_RELPATH,
+    WORKSPACE_MANIFEST_MAX_BYTES,
+  );
+  const instruction = snapshotWorkspaceFile(
+    root,
+    INSTRUCTION_RELPATH,
+    ONBOARDING_PROPOSAL_MAX_INSTRUCTION_BYTES,
+  );
+  assertWorkspaceRootUnchanged(root, rootBefore);
+  assertExpectedReview(reviewState(root, rootBefore, manifest, instruction), input.expected);
+
+  const originalBytes = instruction.contents ?? Buffer.alloc(0);
+  const original = originalBytes.toString('utf8');
+  if (!Buffer.from(original, 'utf8').equals(originalBytes) || unsafeInstructionContent(original)) {
+    throw new Error('Existing workspace instruction file is unsafe to preview.');
+  }
+
+  return {
+    path: INSTRUCTION_RELPATH,
+    existed: instruction.existed,
+    original,
+    proposed,
+    originalBytes: originalBytes.length,
+    proposedBytes: Buffer.byteLength(proposed),
+  };
 }
 
 /** Persist the exact normalized proposal only after both reviewed revisions match. */
@@ -121,11 +181,7 @@ export function commitReviewedWorkspaceOnboarding(
   );
   assertWorkspaceRootUnchanged(root, rootBefore);
   const observed = reviewState(root, rootBefore, manifestBefore, instructionBefore);
-  if (observed.revision.root !== input.expected.root ||
-      observed.revision.manifest !== input.expected.manifest ||
-      observed.revision.instruction !== input.expected.instruction) {
-    throw new Error('Workspace setup changed during review. Reload it before saving.');
-  }
+  assertExpectedReview(observed, input.expected);
 
   const manifest = normalizeWorkspaceManifest(input.manifest);
   const manifestDesired = serializeWorkspaceManifest(manifest);
@@ -222,11 +278,15 @@ function validateInstruction(
   if (bytes < 1 || bytes > ONBOARDING_PROPOSAL_MAX_INSTRUCTION_BYTES) {
     throw new Error('Workspace instruction proposal exceeds the review limit.');
   }
-  if (containsWorkspaceSecretMaterial(instruction.contents) ||
-      /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\p{Cf}\p{Zl}\p{Zp}]/u.test(instruction.contents)) {
+  if (unsafeInstructionContent(instruction.contents)) {
     throw new Error('Workspace instruction proposal contains unsafe content.');
   }
   return instruction.contents;
+}
+
+function unsafeInstructionContent(contents: string): boolean {
+  return containsWorkspaceSecretMaterial(contents) ||
+    /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\p{Cf}\p{Zl}\p{Zp}]/u.test(contents);
 }
 
 function assertRevision(revision: WorkspaceOnboardingReviewRevision): void {
@@ -234,6 +294,17 @@ function assertRevision(revision: WorkspaceOnboardingReviewRevision): void {
       !/^[0-9a-f]{64}$/.test(revision.manifest) ||
       !/^[0-9a-f]{64}$/.test(revision.instruction)) {
     throw new Error('Invalid workspace setup revision.');
+  }
+}
+
+function assertExpectedReview(
+  observed: WorkspaceOnboardingReviewState,
+  expected: WorkspaceOnboardingReviewRevision,
+): void {
+  if (observed.revision.root !== expected.root ||
+      observed.revision.manifest !== expected.manifest ||
+      observed.revision.instruction !== expected.instruction) {
+    throw new Error('Workspace setup changed during review. Reload it before saving.');
   }
 }
 
