@@ -426,6 +426,7 @@ export interface LastBriefingDetails {
 export type { ChatCompletionPayload, ResponsesPayload } from './transport/llmTransport.js';
 import type { PromptLayeredMessage } from './transport/llmTransport.js';
 import type { WorkspaceCapabilityResolution } from '../workspace/capabilities.js';
+import { resolveWorkspaceMemoryCaptureContext } from '../workspace/memoryCapture.js';
 
 export interface AgentOptions {
   workspaceRoot: string;
@@ -1786,9 +1787,11 @@ export class Agent {
         callbacks?.onMemoryEvent?.({ kind: 'skipped', reason: policy.reason ?? 'capture blocked by policy' });
         return;
       }
+      const workspaceMemoryContext = resolveWorkspaceMemoryCaptureContext(this.workspaceRoot);
       const captureRes = await this.mcpClient.callTool('memory_capture_turn', {
         sessionKey: this.sessionKey,
         activeSkill: this.activeSkill,
+        ...(workspaceMemoryContext ?? {}),
         messages: [
           { role: 'user', content: userContent, timestamp },
           { role: 'assistant', content: assistantContent, timestamp: Date.now() },

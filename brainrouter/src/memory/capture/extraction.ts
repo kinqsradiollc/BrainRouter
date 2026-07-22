@@ -11,6 +11,7 @@ import { runAsJob } from "../scheduler/runner.js";
 import { resolveDedupMode, contentHash, isDuplicate, type DedupCandidate } from "../pipeline/cognitive/apply-dedup.js";
 import { NeuralSparkEngine } from "../pipeline/skill/neural-spark.js";
 import { CapturePersistence } from "./persistence.js";
+import { memoryTagsFromSensory } from "./memoryTags.js";
 
 /**
  * Cognitive-extraction concern: pull the pending sensory window, run the
@@ -40,6 +41,7 @@ export class CaptureExtraction extends CapturePersistence {
     }
 
     const existingSceneNames = (await this.store.getTopContextualFocus(userId, 20)).map(s => s.sceneName);
+    const memoryTags = memoryTagsFromSensory(recentSensory);
     const resolvedSkillHints = skillHints ?? (activeSkill ? (await this.store.getSkillHints(activeSkill)) ?? undefined : undefined);
     const { result: extractionResult } = await runAsJob(
       this.store,
@@ -53,6 +55,7 @@ export class CaptureExtraction extends CapturePersistence {
           sessionId,
           llmRunner,
           activeSkill,
+          memoryTags,
           existingSceneNames,
           skillHints: resolvedSkillHints,
           orgId,

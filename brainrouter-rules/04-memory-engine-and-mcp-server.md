@@ -247,6 +247,18 @@ forever.
 
 - **Evidence:** `brainrouter/src/memory/pipeline/cognitive/cognitive-extractor.ts:259,268,280`
 
+### 18. Workspace memory tags survive the sensory-to-cognitive handoff
+
+Semantic workspace tags are a bounded identifier list separate from the
+single active-skill ranking field. Normalize them at the MCP and capture
+boundaries, persist them on sensory rows, and recover them from those rows when
+deferred or backlog extraction runs. Copy non-empty tags into cognitive
+metadata, with the latest captured context replacing older tags; never rely
+only on in-memory call arguments because extraction may resume after the
+originating client or process is gone.
+
+- **Evidence:** `brainrouter/src/memory/capture/memoryTags.ts`, `brainrouter/src/memory/capture/entry.ts`, `brainrouter/src/memory/capture/extraction.ts`, `brainrouter/src/memory/pipeline/cognitive/cognitive-extractor.ts`
+
 ---
 
 ## Cross-cutting notes for this package

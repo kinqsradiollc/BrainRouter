@@ -52,6 +52,7 @@ export async function extractCognitiveMemories(params: {
   previousSceneName?: string;
   existingSceneNames?: string[];
   activeSkill?: string;
+  memoryTags?: string[];
   skillHints?: string;
   orgId?: string | null;
   workspaceTag?: string | null;
@@ -60,7 +61,7 @@ export async function extractCognitiveMemories(params: {
   const {
     messages, userId, sessionKey, sessionId, llmRunner,
     maxMessagesPerExtraction = 10, maxBackgroundMessages = 5,
-    previousSceneName, existingSceneNames, activeSkill, skillHints,
+    previousSceneName, existingSceneNames, activeSkill, memoryTags = [], skillHints,
     orgId = null, workspaceTag = null, projectTag = null
   } = params;
 
@@ -205,7 +206,9 @@ export async function extractCognitiveMemories(params: {
         timestampEnd: "",
         createdTime: nowStr,
         updatedTime: nowStr,
-        metadata: mem.metadata,
+        metadata: memoryTags.length > 0
+          ? { ...mem.metadata, memoryTags: [...memoryTags] }
+          : mem.metadata,
         confidence: mem.confidence ?? config.defaultConfidence,
         status: "active",
         sourceKind: mem.sourceKind,

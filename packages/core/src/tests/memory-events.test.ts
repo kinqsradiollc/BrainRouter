@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { emitAgentRouteFeedback } from '../memory/memoryEvents.js';
+import { createWorkspaceManifest, saveWorkspaceManifest } from '../workspace/manifest.js';
 
 /**
  * MAS-P2-M6 — `agent_route_feedback` emitter tests.
@@ -80,6 +84,42 @@ test('emit: writes a memory_capture_turn call with the structured payload', asyn
   const userContent = calls[0].args.messages[0].content;
   assert.match(userContent, /agent_route_feedback/);
   assert.match(userContent, /explorer/);
+});
+
+test('emit: includes reviewed workspace memory tags for orchestration events', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'br-event-memory-tags-'));
+  try {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'tagged-events', profile: 'engineering', by: 'wizard' }),
+    );
+    const { client, calls } = captureClient({});
+
+    await emitAgentRouteFeedback(
+      { mcpClient: client, sessionKey: 'sk', workspaceRoot: workspace },
+      { task: 'implement the reviewed proposal', chosenAgentId: 'engineer', outcome: 'success' },
+    );
+
+    assert.deepEqual(calls[0].args.memoryTags, ['engineering']);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('emit: omits memory tags when the workspace has no manifest', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'br-event-memory-legacy-'));
+  try {
+    const { client, calls } = captureClient({});
+
+    await emitAgentRouteFeedback(
+      { mcpClient: client, sessionKey: 'sk', workspaceRoot: workspace },
+      { task: 'keep legacy event capture', chosenAgentId: 'engineer', outcome: 'success' },
+    );
+
+    assert.equal(Object.hasOwn(calls[0].args, 'memoryTags'), false);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
 });
 
 test('emit: long task is truncated to 240 chars before capture (no payload bloat)', async () => {
