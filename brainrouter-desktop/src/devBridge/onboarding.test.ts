@@ -1,11 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { parseOnboardingProposal } from '../components/dialogs/onboardingEditorModel.js';
 import {
   createDevOnboardingState,
   getDevWorkspaceManifest,
   previewDevWorkspaceInstruction,
+  proposeDevWorkspaceOnboarding,
   saveDevWorkspaceManifest,
 } from './onboarding.js';
+import { createQueries } from './queries.js';
+import { createDevState } from './state.js';
 
 const root = '/Users/dev/example';
 
@@ -36,6 +40,60 @@ test('starts un-onboarded with the shared engineer/frontend profile catalog', ()
   assert.deepEqual((engineering.agents as { enabled: string[] }).enabled, ['engineer']);
   assert.deepEqual((engineering.capabilities as { enabled: string[] }).enabled, ['frontend']);
   assert.ok(!JSON.stringify(engineering).includes('frontend-builder'));
+});
+
+test('proposes a complete model-backed engineering draft without mutating state', () => {
+  const state = createDevOnboardingState();
+  const before = getDevWorkspaceManifest(state, root);
+  const result = proposeDevWorkspaceOnboarding(root, {
+    description: '  A responsive TypeScript dashboard.  ',
+  });
+  const parsed = result as {
+    proposal: {
+      source: string;
+      manifest: Record<string, unknown>;
+      instruction?: Record<string, unknown>;
+    };
+    modelAttempted: boolean;
+    scan: { markers: string[]; stats: Record<string, number>; stoppedBy: string[] };
+  };
+  assert.equal(parsed.proposal.source, 'model');
+  assert.equal(parsed.modelAttempted, true);
+  assert.equal(parsed.proposal.manifest.profile, 'engineering');
+  assert.deepEqual((parsed.proposal.manifest.agents as { enabled: string[] }).enabled, ['engineer']);
+  assert.deepEqual((parsed.proposal.manifest.capabilities as { enabled: string[] }).enabled, ['frontend']);
+  assert.equal(parsed.proposal.instruction?.path, 'AGENT.md');
+  assert.deepEqual(parsed.scan.markers, ['package.json', 'tsconfig.json']);
+  assert.deepEqual(parsed.scan.stoppedBy, []);
+  const rendererProposal = parseOnboardingProposal(result);
+  assert.ok(rendererProposal);
+  assert.equal(rendererProposal.source, 'agent');
+  assert.equal(rendererProposal.draft.profile, 'engineering');
+  assert.deepEqual(getDevWorkspaceManifest(state, root), before);
+});
+
+test('mirrors deterministic fallback metadata and the description byte ceiling', () => {
+  const deterministic = proposeDevWorkspaceOnboarding(root, { mode: 'deterministic' }) as {
+    proposal: Record<string, unknown>;
+    modelAttempted: boolean;
+    fallbackReason?: string;
+  };
+  assert.equal(deterministic.proposal.source, 'deterministic');
+  assert.equal(Object.hasOwn(deterministic.proposal, 'instruction'), false);
+  assert.equal(deterministic.modelAttempted, false);
+  assert.equal(deterministic.fallbackReason, 'model-unavailable');
+  assert.throws(
+    () => proposeDevWorkspaceOnboarding(root, { description: 'é'.repeat(2_049) }),
+    /exceeds 4096 bytes/,
+  );
+});
+
+test('registers the assisted proposal under the production query name', () => {
+  const queries = createQueries(createDevState());
+  const result = queries['workspace-onboarding-propose']?.({ description: 'A web application.' }) as {
+    proposal?: { source?: string };
+  };
+  assert.equal(result.proposal?.source, 'model');
 });
 
 test('saves reviewed fields in memory and advances the opaque revision', () => {
