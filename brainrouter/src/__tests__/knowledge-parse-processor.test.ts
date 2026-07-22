@@ -39,6 +39,14 @@ function document(overrides: Partial<KnowledgeDocumentRecord> = {}): KnowledgeDo
 }
 
 function setup(record: KnowledgeDocumentRecord | null = document()) {
+  const chunkRecords = record ? buildKnowledgeChunks(record).map((chunk) => ({
+    ...chunk,
+    documentId: record.documentId,
+    baseId: record.baseId,
+    orgId: record.orgId,
+    projectId: record.projectId,
+    createdAt: at,
+  })) : [];
   const store: KnowledgeParseProcessorStore = {
     getKnowledgeDocument: vi.fn(async () => record),
     markKnowledgeDocumentParsing: vi.fn(async () => record ? { ...record, status: "parsing" as const } : null),
@@ -48,6 +56,8 @@ function setup(record: KnowledgeDocumentRecord | null = document()) {
       alreadyReady: record.status === "ready",
     } : null),
     failKnowledgeDocumentParse: vi.fn(async () => record ? { ...record, status: "failed" as const } : null),
+    listKnowledgeChunks: vi.fn(async () => chunkRecords),
+    upsertKnowledgeChunkEmbeddings: vi.fn(async (_input, embeddings) => embeddings.length),
   };
   return { store };
 }
@@ -88,6 +98,8 @@ describe("knowledge parse processor", () => {
     await expect(processKnowledgeParseJob(input, store, { now: () => at })).resolves.toEqual({
       documentId: "document-1",
       chunksWritten: 1,
+      embeddingsWritten: 0,
+      embeddingModel: null,
       alreadyReady: false,
       status: "ready",
     });
@@ -98,6 +110,69 @@ describe("knowledge parse processor", () => {
       at,
     );
     expect(store.failKnowledgeDocumentParse).not.toHaveBeenCalled();
+  });
+
+  it("embeds ready chunks with an organization-scoped provider and heartbeat", async () => {
+    const { store } = setup();
+    const heartbeat = vi.fn(async () => undefined);
+    await expect(processKnowledgeParseJob(input, store, {
+      now: () => at,
+      heartbeat,
+      resolveEmbeddingProvider: vi.fn(async (orgId) => ({
+        model: `embed-${orgId}`,
+        embed: vi.fn(async () => new Float32Array([0.25, -0.5, 0.75])),
+      })),
+    })).resolves.toMatchObject({
+      embeddingsWritten: 1,
+      embeddingModel: "embed-org-1",
+      status: "ready",
+    });
+    expect(heartbeat).toHaveBeenCalled();
+    expect(store.listKnowledgeChunks).toHaveBeenCalledWith(
+      "document-1", "base-1", "org-1", "project-1",
+    );
+    expect(store.upsertKnowledgeChunkEmbeddings).toHaveBeenCalledWith(input, [{
+      chunkId: expect.stringMatching(/^kchunk_/),
+      embeddingModel: "embed-org-1",
+      dimensions: 3,
+      embedding: [0.25, -0.5, 0.75],
+    }], at);
+  });
+
+  it("keeps provider absence as FTS-ready and sanitizes embedding failures", async () => {
+    const unavailable = setup();
+    await expect(processKnowledgeParseJob(input, unavailable.store, {
+      now: () => at,
+      resolveEmbeddingProvider: vi.fn(async () => null),
+    })).resolves.toMatchObject({ embeddingsWritten: 0, embeddingModel: null, status: "ready" });
+    expect(unavailable.store.upsertKnowledgeChunkEmbeddings).not.toHaveBeenCalled();
+
+    const broken = setup();
+    await expect(processKnowledgeParseJob(input, broken.store, {
+      now: () => at,
+      resolveEmbeddingProvider: vi.fn(async () => ({
+        model: "embed-model",
+        embed: async () => { throw new Error("upstream secret response"); },
+      })),
+    })).rejects.toThrow("Knowledge chunk embedding failed.");
+
+    const mixed = setup();
+    const [firstChunk] = await mixed.store.listKnowledgeChunks(
+      "document-1", "base-1", "org-1", "project-1",
+    );
+    vi.mocked(mixed.store.listKnowledgeChunks).mockResolvedValueOnce([
+      firstChunk!,
+      { ...firstChunk!, chunkId: "kchunk-second", ordinal: 1 },
+    ]);
+    let call = 0;
+    await expect(processKnowledgeParseJob(input, mixed.store, {
+      now: () => at,
+      resolveEmbeddingProvider: vi.fn(async () => ({
+        model: "embed-model",
+        embed: async () => new Float32Array(call++ === 0 ? [0.1, 0.2] : [0.1, 0.2, 0.3]),
+      })),
+    })).rejects.toThrow("Knowledge chunk embedding failed.");
+    expect(mixed.store.upsertKnowledgeChunkEmbeddings).not.toHaveBeenCalled();
   });
 
   it("keeps an already-ready document idempotent without rebuilding chunks", async () => {

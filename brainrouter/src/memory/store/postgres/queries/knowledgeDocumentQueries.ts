@@ -1,4 +1,5 @@
 import type {
+  KnowledgeChunkEmbeddingInput,
   KnowledgeChunkInput,
   KnowledgeChunkRecord,
   KnowledgeDocumentEnqueueResult,
@@ -9,6 +10,7 @@ import type {
   KnowledgeDocumentStatusUpdate,
 } from "../../../../knowledge/contracts/document.js";
 import { KNOWLEDGE_PARSE_JOB_KIND } from "../../../../knowledge/contracts/document.js";
+import { toVectorLiteral } from "../converters.js";
 import type { Executor } from "./executor.js";
 
 const COLUMNS = `document_id, base_id, org_id, project_id, title, source_name,
@@ -299,6 +301,67 @@ export async function listKnowledgeChunks(
     locator: jsonObject(row.locator_json),
     createdAt: toIso(row.created_at),
   }));
+}
+
+export async function upsertKnowledgeChunkEmbeddings(
+  exec: Executor,
+  input: KnowledgeParseJobInput,
+  embeddings: KnowledgeChunkEmbeddingInput[],
+  updatedAt: string,
+): Promise<number> {
+  if (embeddings.length === 0) return 0;
+  return exec.tx(async (client) => {
+    const document = await client.query(
+      `SELECT 1 FROM knowledge_documents
+        WHERE document_id = $1 AND base_id = $2 AND org_id = $3 AND project_id = $4
+          AND parse_version = $5 AND status = 'ready'
+        FOR SHARE`,
+      [input.documentId, input.baseId, input.orgId, input.projectId, input.parseVersion],
+    );
+    if ((document.rowCount ?? 0) !== 1) {
+      throw new Error("Knowledge document is unavailable for embedding.");
+    }
+    const payload = embeddings.map((embedding) => ({
+      chunk_id: embedding.chunkId,
+      embedding_model: embedding.embeddingModel,
+      dimensions: embedding.dimensions,
+      embedding_text: toVectorLiteral(embedding.embedding),
+    }));
+    const result = await client.query(
+      `WITH payload AS (
+         SELECT * FROM jsonb_to_recordset($5::jsonb) AS item(
+           chunk_id text, embedding_model text, dimensions integer, embedding_text text
+         )
+       )
+       INSERT INTO knowledge_chunk_embeddings
+         (chunk_id, document_id, base_id, org_id, project_id, embedding_model,
+          dimensions, embedding, created_at, updated_at)
+       SELECT chunk.chunk_id, chunk.document_id, chunk.base_id, chunk.org_id,
+              chunk.project_id, payload.embedding_model, payload.dimensions,
+              payload.embedding_text::vector, $6, $6
+         FROM payload
+         JOIN knowledge_chunks chunk
+           ON chunk.chunk_id = payload.chunk_id
+          AND chunk.document_id = $1 AND chunk.base_id = $2
+          AND chunk.org_id = $3 AND chunk.project_id = $4
+       ON CONFLICT (chunk_id, embedding_model) DO UPDATE
+         SET dimensions = EXCLUDED.dimensions,
+             embedding = EXCLUDED.embedding,
+             updated_at = EXCLUDED.updated_at`,
+      [
+        input.documentId,
+        input.baseId,
+        input.orgId,
+        input.projectId,
+        JSON.stringify(payload),
+        updatedAt,
+      ],
+    );
+    if ((result.rowCount ?? 0) !== embeddings.length) {
+      throw new Error("Knowledge chunks changed during embedding.");
+    }
+    return result.rowCount ?? 0;
+  });
 }
 
 export async function getKnowledgeDocument(

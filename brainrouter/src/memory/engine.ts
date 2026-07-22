@@ -39,6 +39,7 @@ import { MemoryRecallPipeline } from "./recall.js";
 import { normalizeRecallSettings, recallSettingsToOverrides, type RecallOverrides } from "./recall/orgRecallSettings.js";
 import { MemoryJobRunner } from "./scheduler/runner.js";
 import { EmbeddingService } from "./store/embedding.js";
+import type { KnowledgeEmbeddingProvider } from "../knowledge/services/parse-processor.js";
 import { RerankerService } from "./store/reranker.js";
 import { scanSkillsForHints } from "./skills/skill-hints-loader.js";
 import { distillFocusScenes } from "./pipeline/focus/contextual-focus-builder.js";
@@ -564,6 +565,27 @@ export class MemoryEngine {
     } catch {
       /* best-effort — keep the env-built config on any DB error */
     }
+  }
+
+  /** Resolve one immutable organization-scoped embedder for an internal job. */
+  public async resolveKnowledgeEmbeddingProvider(orgId: string): Promise<KnowledgeEmbeddingProvider | null> {
+    const provider = await resolveProviderConfig(this.providers, orgId, "embedding");
+    if (!provider) return null;
+    const service = new EmbeddingService({
+      endpoint: provider.endpoint,
+      apiKey: provider.apiKey,
+      model: provider.model,
+    });
+    // Keyless local embedding providers are valid once endpoint + model exist.
+    service.reconfigure({
+      endpoint: provider.endpoint,
+      apiKey: provider.apiKey,
+      model: provider.model,
+    });
+    return {
+      model: service.getModel(),
+      embed: (text: string) => service.embed(text),
+    };
   }
 
   /**

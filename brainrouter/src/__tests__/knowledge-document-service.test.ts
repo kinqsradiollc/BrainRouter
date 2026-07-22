@@ -45,6 +45,7 @@ function setup(options: { projectVisible?: boolean; baseVisible?: boolean } = {}
     commitKnowledgeDocumentParse: vi.fn(async () => null),
     failKnowledgeDocumentParse: vi.fn(async () => null),
     listKnowledgeChunks: vi.fn(async () => []),
+    upsertKnowledgeChunkEmbeddings: vi.fn(async () => 0),
     createKnowledgeDocument: vi.fn(async () => undefined),
     getKnowledgeDocument: vi.fn(async () => null),
     getKnowledgeDocumentByContentHash: vi.fn(async () => null),

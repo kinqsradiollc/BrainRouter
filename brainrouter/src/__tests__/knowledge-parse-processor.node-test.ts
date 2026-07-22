@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
+import pg from "pg";
 import { knowledgeActorFromAuth } from "../knowledge/contracts/actor.js";
 import type { KnowledgeBaseRecord } from "../knowledge/contracts/base.js";
 import { KNOWLEDGE_PARSE_JOB_KIND } from "../knowledge/contracts/document.js";
@@ -9,9 +10,10 @@ import { MemoryJobRunner } from "../memory/scheduler/runner.js";
 import { createTestStore } from "./helpers/pgTestStore.js";
 
 const at = "2026-07-22T05:00:00.000Z";
+const { Client } = pg;
 
 test("knowledge parse jobs become ready with scoped chunks and rerun idempotently", async () => {
-  const { store, cleanup } = await createTestStore({ vecDim: 0 });
+  const { store, url, cleanup } = await createTestStore({ vecDim: 0 });
   try {
     await store.createUser("parse-user", "parse-user", "Parse User");
     await store.createOrganization({ orgId: "parse-org", name: "Parse Org", slug: "parse-org" });
@@ -62,7 +64,16 @@ test("knowledge parse jobs become ready with scoped chunks and rerun idempotentl
     };
     const runner = new MemoryJobRunner(
       store as unknown as IMemoryStore,
-      { store: store as unknown as IMemoryStore, llmRunner: { run: async () => "" } as never },
+      {
+        store: store as unknown as IMemoryStore,
+        llmRunner: { run: async () => "" } as never,
+        engine: {
+          resolveKnowledgeEmbeddingProvider: async (orgId: string) => ({
+            model: `embed-${orgId}`,
+            embed: async () => new Float32Array([0.25, -0.5, 0.75]),
+          }),
+        } as never,
+      },
       { maxPerTick: 4, perTenantLimit: 2 },
     );
     await runner.tick();
@@ -72,6 +83,8 @@ test("knowledge parse jobs become ready with scoped chunks and rerun idempotentl
     assert.deepEqual(firstJob?.output, {
       documentId: "parse-document",
       chunksWritten: 1,
+      embeddingsWritten: 1,
+      embeddingModel: "embed-parse-org",
       alreadyReady: false,
       status: "ready",
     });
@@ -94,6 +107,24 @@ test("knowledge parse jobs become ready with scoped chunks and rerun idempotentl
     assert.deepEqual(await store.listKnowledgeChunks(
       "parse-document", "parse-base", "parse-org", "foreign-project",
     ), []);
+    const client = new Client({ connectionString: url });
+    await client.connect();
+    try {
+      const embedded = await client.query(
+        `SELECT embedding_model, dimensions, embedding::text AS embedding
+           FROM knowledge_chunk_embeddings
+          WHERE document_id = $1 AND base_id = $2 AND org_id = $3 AND project_id = $4`,
+        ["parse-document", "parse-base", "parse-org", "parse-project"],
+      );
+      assert.equal(embedded.rowCount, 1);
+      assert.deepEqual(embedded.rows[0], {
+        embedding_model: "embed-parse-org",
+        dimensions: 3,
+        embedding: "[0.25,-0.5,0.75]",
+      });
+    } finally {
+      await client.end();
+    }
 
     await store.enqueueMemoryJob(
       { kind: KNOWLEDGE_PARSE_JOB_KIND, input: jobInput, maxAttempts: 1 },
@@ -105,6 +136,8 @@ test("knowledge parse jobs become ready with scoped chunks and rerun idempotentl
     assert.deepEqual(repeated?.output, {
       documentId: "parse-document",
       chunksWritten: 1,
+      embeddingsWritten: 1,
+      embeddingModel: "embed-parse-org",
       alreadyReady: true,
       status: "ready",
     });
@@ -112,6 +145,17 @@ test("knowledge parse jobs become ready with scoped chunks and rerun idempotentl
       "parse-document", "parse-base", "parse-org", "parse-project",
     );
     assert.deepEqual(repeatedChunks.map((chunk) => chunk.chunkId), chunks.map((chunk) => chunk.chunkId));
+    const verify = new Client({ connectionString: url });
+    await verify.connect();
+    try {
+      const count = await verify.query(
+        "SELECT COUNT(*)::int AS count FROM knowledge_chunk_embeddings WHERE document_id = $1",
+        ["parse-document"],
+      );
+      assert.equal(count.rows[0]?.count, 1);
+    } finally {
+      await verify.end();
+    }
   } finally {
     await cleanup();
   }

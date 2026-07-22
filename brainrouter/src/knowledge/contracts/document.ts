@@ -74,6 +74,13 @@ export interface KnowledgeChunkRecord extends KnowledgeChunkInput {
   createdAt: string;
 }
 
+export interface KnowledgeChunkEmbeddingInput {
+  chunkId: string;
+  embeddingModel: string;
+  dimensions: number;
+  embedding: number[];
+}
+
 export interface KnowledgeParseCommitResult {
   document: KnowledgeDocumentRecord;
   chunksWritten: number;

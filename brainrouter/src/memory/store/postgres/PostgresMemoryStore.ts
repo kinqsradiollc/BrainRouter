@@ -103,6 +103,7 @@ import { mapWithConcurrency, readEmbedConcurrency } from "../../util/concurrency
 import type { Executor } from "./queries/executor.js";
 import type { KnowledgeBaseRecord, UpdateKnowledgeBaseInput } from "../../../knowledge/contracts/base.js";
 import type {
+  KnowledgeChunkEmbeddingInput,
   KnowledgeChunkInput,
   KnowledgeChunkRecord,
   KnowledgeDocumentEnqueueResult,
@@ -507,6 +508,7 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public commitKnowledgeDocumentParse(input: KnowledgeParseJobInput, chunks: KnowledgeChunkInput[], readyAt: string): Promise<KnowledgeParseCommitResult | null> { return knowledgeDocuments.commitKnowledgeDocumentParse(this.exec, input, chunks, readyAt); }
   public failKnowledgeDocumentParse(input: KnowledgeParseJobInput, statusMessage: string, updatedAt: string): Promise<KnowledgeDocumentRecord | null> { return knowledgeDocuments.failKnowledgeDocumentParse(this.exec, input, statusMessage, updatedAt); }
   public listKnowledgeChunks(documentId: string, baseId: string, orgId: string, projectId: string): Promise<KnowledgeChunkRecord[]> { return knowledgeDocuments.listKnowledgeChunks(this.exec, documentId, baseId, orgId, projectId); }
+  public upsertKnowledgeChunkEmbeddings(input: KnowledgeParseJobInput, embeddings: KnowledgeChunkEmbeddingInput[], updatedAt: string): Promise<number> { return knowledgeDocuments.upsertKnowledgeChunkEmbeddings(this.exec, input, embeddings, updatedAt); }
   public getKnowledgeDocument(documentId: string, baseId: string, orgId: string, projectId: string): Promise<KnowledgeDocumentRecord | null> { return knowledgeDocuments.getKnowledgeDocument(this.exec, documentId, baseId, orgId, projectId); }
   public getKnowledgeDocumentByContentHash(contentSha256: string, baseId: string, orgId: string, projectId: string): Promise<KnowledgeDocumentRecord | null> { return knowledgeDocuments.getKnowledgeDocumentByContentHash(this.exec, contentSha256, baseId, orgId, projectId); }
   public listKnowledgeDocuments(baseId: string, orgId: string, projectId: string, filters?: KnowledgeDocumentListFilters): Promise<KnowledgeDocumentRecord[]> { return knowledgeDocuments.listKnowledgeDocuments(this.exec, baseId, orgId, projectId, filters); }
@@ -1096,6 +1098,9 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
 
   public appendJobProgress(id: string, event: import("@kinqs/brainrouter-types").MemoryJobProgressEvent): Promise<void> {
     return job.appendJobProgress(this.exec, id, event);
+  }
+  public heartbeatMemoryJob(id: string): Promise<boolean> {
+    return job.heartbeatMemoryJob(this.exec, id);
   }
 
   /** ADR-017 D5 — recent PR-review jobs for an org's Reviews dashboard (newest-first). */
