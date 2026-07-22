@@ -4,6 +4,8 @@ import type {
   KnowledgeChunkRecord,
   KnowledgeDocumentEnqueueResult,
   KnowledgeDocumentListFilters,
+  KnowledgeDocumentProcessingRecord,
+  KnowledgeDocumentRetryRecord,
   KnowledgeParseJobInput,
   KnowledgeParseCommitResult,
   KnowledgeDocumentRecord,
@@ -362,6 +364,112 @@ export async function upsertKnowledgeChunkEmbeddings(
     }
     return result.rowCount ?? 0;
   });
+}
+
+export async function getKnowledgeDocumentProcessing(
+  exec: Executor,
+  input: KnowledgeParseJobInput,
+): Promise<KnowledgeDocumentProcessingRecord | null> {
+  return exec.tx(async (client) => {
+    const documentRow = (await client.query(
+      `SELECT ${COLUMNS} FROM knowledge_documents
+        WHERE document_id = $1 AND base_id = $2 AND org_id = $3 AND project_id = $4
+          AND parse_version = $5`,
+      [input.documentId, input.baseId, input.orgId, input.projectId, input.parseVersion],
+    )).rows[0];
+    if (!documentRow) return null;
+    const scopeJson = JSON.stringify(input);
+    const jobRow = (await client.query(
+      `SELECT status, attempts, max_attempts
+         FROM memory_jobs
+        WHERE kind = $1 AND tenant = $2 AND input_json::jsonb @> $3::jsonb
+        ORDER BY created_at DESC, updated_at DESC, id DESC
+        LIMIT 1`,
+      [KNOWLEDGE_PARSE_JOB_KIND, input.orgId, scopeJson],
+    )).rows[0];
+    const counts = (await client.query(
+      `SELECT COUNT(DISTINCT chunk.chunk_id)::int AS chunk_count,
+              COUNT(embedding.chunk_id)::int AS embedding_count
+         FROM knowledge_chunks chunk
+         LEFT JOIN knowledge_chunk_embeddings embedding
+           ON embedding.chunk_id = chunk.chunk_id
+          AND embedding.document_id = chunk.document_id
+          AND embedding.base_id = chunk.base_id
+          AND embedding.org_id = chunk.org_id
+          AND embedding.project_id = chunk.project_id
+        WHERE chunk.document_id = $1 AND chunk.base_id = $2
+          AND chunk.org_id = $3 AND chunk.project_id = $4`,
+      [input.documentId, input.baseId, input.orgId, input.projectId],
+    )).rows[0];
+    return {
+      document: rowToRecord(documentRow),
+      jobState: processingJobState(jobRow?.status),
+      attempts: Number(jobRow?.attempts ?? 0),
+      maxAttempts: Number(jobRow?.max_attempts ?? 0),
+      chunkCount: Number(counts?.chunk_count ?? 0),
+      embeddingCount: Number(counts?.embedding_count ?? 0),
+    };
+  });
+}
+
+export async function retryKnowledgeDocumentProcessing(
+  exec: Executor,
+  input: KnowledgeParseJobInput,
+  jobId: string,
+  now: string,
+): Promise<KnowledgeDocumentRetryRecord | null> {
+  return exec.tx(async (client) => {
+    let documentRow = (await client.query(
+      `SELECT ${COLUMNS} FROM knowledge_documents
+        WHERE document_id = $1 AND base_id = $2 AND org_id = $3 AND project_id = $4
+          AND parse_version = $5
+        FOR UPDATE`,
+      [input.documentId, input.baseId, input.orgId, input.projectId, input.parseVersion],
+    )).rows[0];
+    if (!documentRow) return null;
+    const scopeJson = JSON.stringify(input);
+    const active = (await client.query(
+      `SELECT status FROM memory_jobs
+        WHERE kind = $1 AND tenant = $2 AND input_json::jsonb @> $3::jsonb
+          AND status IN ('pending', 'running')
+        ORDER BY created_at DESC, updated_at DESC, id DESC
+        LIMIT 1`,
+      [KNOWLEDGE_PARSE_JOB_KIND, input.orgId, scopeJson],
+    )).rows[0];
+    if (active) {
+      return {
+        document: rowToRecord(documentRow),
+        jobState: active.status === "running" ? "running" : "pending",
+        enqueued: false,
+      };
+    }
+    if (String(documentRow.status) !== "ready") {
+      documentRow = (await client.query(
+        `UPDATE knowledge_documents
+            SET status = 'queued', status_message = NULL, ready_at = NULL, updated_at = $6
+          WHERE document_id = $1 AND base_id = $2 AND org_id = $3 AND project_id = $4
+            AND parse_version = $5
+          RETURNING ${COLUMNS}`,
+        [input.documentId, input.baseId, input.orgId, input.projectId, input.parseVersion, now],
+      )).rows[0];
+    }
+    await client.query(
+      `INSERT INTO memory_jobs
+         (id, kind, status, priority, attempts, max_attempts, run_after,
+          locked_at, parent_job_id, tenant, input_json, output_json, progress_json,
+          error, created_at, updated_at)
+       VALUES ($1,$2,'pending',50,0,3,$3,NULL,NULL,$4,$5,NULL,'[]',NULL,$6,$7)`,
+      [jobId, KNOWLEDGE_PARSE_JOB_KIND, now, input.orgId, scopeJson, now, now],
+    );
+    return { document: rowToRecord(documentRow), jobState: "pending", enqueued: true };
+  });
+}
+
+function processingJobState(value: unknown): KnowledgeDocumentProcessingRecord["jobState"] {
+  return value === "pending" || value === "running" || value === "done"
+    || value === "failed" || value === "cancelled"
+    ? value
+    : "missing";
 }
 
 export async function getKnowledgeDocument(

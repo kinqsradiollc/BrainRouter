@@ -93,6 +93,53 @@ export interface KnowledgeDocumentEnqueueResult {
   jobId: string | null;
 }
 
+export const KNOWLEDGE_PROCESSING_JOB_STATES = [
+  "missing", "pending", "running", "done", "failed", "cancelled",
+] as const;
+export type KnowledgeProcessingJobState = (typeof KNOWLEDGE_PROCESSING_JOB_STATES)[number];
+
+export interface KnowledgeDocumentProcessingRecord {
+  document: KnowledgeDocumentRecord;
+  jobState: KnowledgeProcessingJobState;
+  attempts: number;
+  maxAttempts: number;
+  chunkCount: number;
+  embeddingCount: number;
+}
+
+/** Content-free view safe for authenticated client transports. */
+export interface KnowledgeDocumentStatusView {
+  documentId: string;
+  title: string;
+  sourceName: string;
+  sourceFormat: KnowledgeSourceFormat;
+  status: KnowledgeDocumentStatus;
+  statusMessage: string | null;
+  parseVersion: number;
+  updatedAt: string;
+  readyAt: string | null;
+  processing: {
+    jobState: KnowledgeProcessingJobState;
+    attempts: number;
+    maxAttempts: number;
+    retryable: boolean;
+    chunkCount: number;
+    embeddingCount: number;
+  };
+}
+
+export interface KnowledgeDocumentRetryRecord {
+  document: KnowledgeDocumentRecord;
+  jobState: "pending" | "running";
+  enqueued: boolean;
+}
+
+export interface KnowledgeDocumentRetryView {
+  documentId: string;
+  jobState: "pending" | "running";
+  enqueued: boolean;
+}
+
 export type KnowledgeDocumentServiceFailure = {
   ok: false;
   code: "not_found" | "forbidden" | "invalid";

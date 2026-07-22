@@ -7,6 +7,8 @@ import type {
   KnowledgeDocumentEnqueueResult,
   KnowledgeDocumentRecord,
   KnowledgeDocumentStatusUpdate,
+  KnowledgeDocumentProcessingRecord,
+  KnowledgeDocumentRetryRecord,
   KnowledgeChunkInput,
   KnowledgeChunkEmbeddingInput,
   KnowledgeChunkRecord,
@@ -58,6 +60,14 @@ export interface KnowledgeDocumentStore extends KnowledgeBaseStore {
     embeddings: KnowledgeChunkEmbeddingInput[],
     updatedAt: string,
   ): Promise<number>;
+  getKnowledgeDocumentProcessing(
+    input: KnowledgeParseJobInput,
+  ): Promise<KnowledgeDocumentProcessingRecord | null>;
+  retryKnowledgeDocumentProcessing(
+    input: KnowledgeParseJobInput,
+    jobId: string,
+    now: string,
+  ): Promise<KnowledgeDocumentRetryRecord | null>;
   createKnowledgeDocument(record: KnowledgeDocumentRecord): Promise<void>;
   getKnowledgeDocument(
     documentId: string,

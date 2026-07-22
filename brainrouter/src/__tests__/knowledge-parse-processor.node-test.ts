@@ -42,9 +42,10 @@ test("knowledge parse jobs become ready with scoped chunks and rerun idempotentl
     const actor = knowledgeActorFromAuth({
       userId: "parse-user", orgId: "parse-org", role: "developer",
     })!;
+    const jobIds = ["parse-job-first", "parse-job-retry", "parse-job-unused"];
     const service = new KnowledgeDocumentService(store, {
       documentIdGenerator: () => "parse-document",
-      jobIdGenerator: () => "parse-job-first",
+      jobIdGenerator: () => jobIds.shift() ?? "parse-job-overflow",
       now: () => at,
     });
     const ingested = await service.ingestText(actor, "parse-project", "parse-base", {
@@ -79,6 +80,7 @@ test("knowledge parse jobs become ready with scoped chunks and rerun idempotentl
     await runner.tick();
 
     const firstJob = await store.getMemoryJob("parse-job-first");
+    assert.ok(firstJob);
     assert.equal(firstJob?.status, "done");
     assert.deepEqual(firstJob?.output, {
       documentId: "parse-document",
@@ -91,9 +93,46 @@ test("knowledge parse jobs become ready with scoped chunks and rerun idempotentl
     const ready = await store.getKnowledgeDocument(
       "parse-document", "parse-base", "parse-org", "parse-project",
     );
+    assert.ok(ready);
     assert.equal(ready?.status, "ready");
     assert.equal(ready?.statusMessage, null);
     assert.equal(ready?.readyAt !== null, true);
+    const status = await service.status(actor, "parse-project", "parse-base", "parse-document");
+    assert.equal(status.ok, true);
+    if (!status.ok) return;
+    assert.deepEqual(status.value, {
+      documentId: "parse-document",
+      title: "Runbook",
+      sourceName: "runbook.md",
+      sourceFormat: "markdown",
+      status: "ready",
+      statusMessage: null,
+      parseVersion: 1,
+      updatedAt: ready.updatedAt,
+      readyAt: ready.readyAt,
+      processing: {
+        jobState: "done",
+        attempts: firstJob.attempts,
+        maxAttempts: firstJob.maxAttempts,
+        retryable: true,
+        chunkCount: 1,
+        embeddingCount: 1,
+      },
+    });
+    const serializedStatus = JSON.stringify(status);
+    assert.equal(serializedStatus.includes("First procedure"), false);
+    assert.equal(serializedStatus.includes("contentSha256"), false);
+    assert.equal(serializedStatus.includes("createdBy"), false);
+    assert.equal(serializedStatus.includes("orgId"), false);
+    assert.equal(serializedStatus.includes("projectId"), false);
+    assert.deepEqual(
+      await service.status(actor, "foreign-project", "parse-base", "parse-document"),
+      { ok: false, code: "not_found" },
+    );
+    assert.deepEqual(
+      await service.status(actor, "parse-project", "foreign-base", "parse-document"),
+      { ok: false, code: "not_found" },
+    );
     const chunks = await store.listKnowledgeChunks(
       "parse-document", "parse-base", "parse-org", "parse-project",
     );
@@ -126,12 +165,22 @@ test("knowledge parse jobs become ready with scoped chunks and rerun idempotentl
       await client.end();
     }
 
-    await store.enqueueMemoryJob(
-      { kind: KNOWLEDGE_PARSE_JOB_KIND, input: jobInput, maxAttempts: 1 },
-      { idGenerator: () => "parse-job-repeat", now: at },
+    assert.deepEqual(
+      await service.retry(actor, "parse-project", "parse-base", "parse-document"),
+      {
+        ok: true,
+        value: { documentId: "parse-document", jobState: "pending", enqueued: true },
+      },
+    );
+    assert.deepEqual(
+      await service.retry(actor, "parse-project", "parse-base", "parse-document"),
+      {
+        ok: true,
+        value: { documentId: "parse-document", jobState: "pending", enqueued: false },
+      },
     );
     await runner.tick();
-    const repeated = await store.getMemoryJob("parse-job-repeat");
+    const repeated = await store.getMemoryJob("parse-job-retry");
     assert.equal(repeated?.status, "done");
     assert.deepEqual(repeated?.output, {
       documentId: "parse-document",
@@ -145,6 +194,15 @@ test("knowledge parse jobs become ready with scoped chunks and rerun idempotentl
       "parse-document", "parse-base", "parse-org", "parse-project",
     );
     assert.deepEqual(repeatedChunks.map((chunk) => chunk.chunkId), chunks.map((chunk) => chunk.chunkId));
+    const repeatedStatus = await service.status(
+      actor, "parse-project", "parse-base", "parse-document",
+    );
+    assert.equal(repeatedStatus.ok, true);
+    if (repeatedStatus.ok) {
+      assert.equal(repeatedStatus.value.processing.jobState, "done");
+      assert.equal(repeatedStatus.value.processing.chunkCount, 1);
+      assert.equal(repeatedStatus.value.processing.embeddingCount, 1);
+    }
     const verify = new Client({ connectionString: url });
     await verify.connect();
     try {
@@ -153,6 +211,12 @@ test("knowledge parse jobs become ready with scoped chunks and rerun idempotentl
         ["parse-document"],
       );
       assert.equal(count.rows[0]?.count, 1);
+      const jobs = await verify.query(
+        `SELECT COUNT(*)::int AS count FROM memory_jobs
+          WHERE kind = $1 AND tenant = $2 AND input_json::jsonb @> $3::jsonb`,
+        [KNOWLEDGE_PARSE_JOB_KIND, "parse-org", JSON.stringify(jobInput)],
+      );
+      assert.equal(jobs.rows[0]?.count, 2);
     } finally {
       await verify.end();
     }
