@@ -49,7 +49,7 @@ export function validateAgentDefinition(def: AgentDefDraft, ctx?: ValidationCont
     if (typeof v !== 'string' || v.trim() === '') errors.push(`${field} is required`);
   };
   req(def.id, 'id');
-  if (typeof def.id === 'string' && def.id && !/^[a-z0-9][a-z0-9-]*$/.test(def.id)) {
+  if (typeof def.id === 'string' && def.id && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(def.id)) {
     errors.push('id must be kebab-case (lowercase letters, digits, hyphens)');
   }
   req(def.displayName, 'displayName');
@@ -152,7 +152,7 @@ export function buildAgentDefinition(draft: AgentDefDraft): BuiltAgentDefinition
     timeoutMs: draft.timeoutMs ?? 300_000,
     maxResultChars: 30_000,
     subagents: [],
-    delegateName: id,
+    delegateName: `delegate_${id.replaceAll('-', '_')}`,
     tier: 'worker',
     outputContract: null,
   };

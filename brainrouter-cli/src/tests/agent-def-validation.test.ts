@@ -27,6 +27,14 @@ test('CLI-13 validateAgentDefinition: missing required fields + bad id', () => {
   assert.ok(r.errors.some((e) => /kebab-case/.test(e)));
 });
 
+test('CLI-13 validateAgentDefinition: ids use the runtime kebab-case grammar', () => {
+  for (const id of ['trailing-', 'double--hyphen', '-leading']) {
+    const r = validateAgentDefinition({ ...valid, id });
+    assert.equal(r.valid, false, `${id} must be rejected before writing`);
+    assert.ok(r.errors.some((e) => /kebab-case/.test(e)));
+  }
+});
+
 test('CLI-13 validateAgentDefinition: invalid access mode + tool-scope overlap', () => {
   const r = validateAgentDefinition({ ...valid, defaultAccess: 'admin', disallowedTools: ['write_file'] });
   assert.equal(r.valid, false);
@@ -50,7 +58,7 @@ test('CLI-13 buildAgentDefinition: fills the complete def with sane defaults', (
   assert.equal(def.tier, 'worker');
   assert.equal(def.model, null);
   assert.equal(def.maxIterations, 25);
-  assert.equal(def.delegateName, 'doc-writer');
+  assert.equal(def.delegateName, 'delegate_doc_writer');
   assert.deepEqual(def.subagents, []);
   assert.equal(def.ownership, null); // none declared → null
 });
