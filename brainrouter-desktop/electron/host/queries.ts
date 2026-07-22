@@ -73,6 +73,7 @@ import { buildStoryPrompt, validateStories, FlowStepSchema, DeviceSchema, type S
 // IPC boundary: the browser:* channel is agent-reachable, so validate every input.
 import { isLoopbackHttpSrc } from '../webviewPolicy.js';
 import type { BrowserStep, BrowserStepResult } from '../browserHost.js';
+import { completeWorkspaceOnboardingWithModel } from '../workspaceOnboardingModel.js';
 import {
   CLI_CONFIG_SCHEMA,
   findConfigSchemaField,
@@ -178,7 +179,13 @@ import { loadExtensions } from '@kinqs/brainrouter-core/extension';
 import { listExtensions } from '@kinqs/brainrouter-core/extension';
 import { isExtensionEnabled, setExtensionEnabled } from '@kinqs/brainrouter-core/extension';
 import { extensionContributionSummary } from '@kinqs/brainrouter-core/extension';
-import { isWorkspaceTrusted, trustWorkspace, untrustWorkspace } from '@kinqs/brainrouter-core/workspace';
+import {
+  ONBOARDING_DESCRIPTION_MAX_BYTES,
+  isWorkspaceTrusted,
+  proposeWorkspaceOnboarding,
+  trustWorkspace,
+  untrustWorkspace,
+} from '@kinqs/brainrouter-core/workspace';
 import { readPlan, formatPlan, seedPlanFromRequirement, updatePlan } from '@kinqs/brainrouter-core/task';
 // DURABLE BACKGROUND TASKS (0.4.15 workflow gaps) — plan-revision + review work
 // runs as visible, file-backed tasks (shared with the CLI store) so progress +
@@ -1034,6 +1041,37 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // §2 Write mode — save a prose file through the same guarded write the
       // editor uses (writeWorkspaceEntry: escape/symlink/stale guards in fsRead).
       'write-save': (args) => writeWorkspaceEntry(workspaceRoot, typeof args.path === 'string' ? args.path : '', typeof args.content === 'string' ? args.content : ''),
+      // One bounded, read-only setup proposal. Core owns scanning, parsing, and
+      // deterministic fallback; the separate main-process IPC owns reviewed
+      // filesystem commit after the renderer presents every proposed field.
+      'workspace-onboarding-propose': async (args) => {
+        const description = typeof args.description === 'string' ? args.description.trim() : '';
+        if (Buffer.byteLength(description) > ONBOARDING_DESCRIPTION_MAX_BYTES) {
+          throw new Error(`Project description exceeds ${ONBOARDING_DESCRIPTION_MAX_BYTES} bytes.`);
+        }
+        const deterministicOnly = args.mode === 'deterministic';
+        const result = await proposeWorkspaceOnboarding({
+          workspaceRoot,
+          description,
+          selectedInstructionPath: 'AGENT.md',
+          ...(deterministicOnly ? {} : {
+            complete: (request) => completeWorkspaceOnboardingWithModel(
+              llmForSession(getActiveAgent().sessionKey),
+              request,
+            ),
+          }),
+        });
+        return {
+          proposal: result.proposal,
+          modelAttempted: result.modelAttempted,
+          ...(result.fallbackReason ? { fallbackReason: result.fallbackReason } : {}),
+          scan: {
+            markers: result.scan.markers,
+            stats: result.scan.stats,
+            stoppedBy: result.scan.stoppedBy,
+          },
+        };
+      },
       // §2 W3 — Write-mode selection inline AI. A one-shot, read-only model call
       // (no tools) that polishes / rewrites / continues the selected prose; the
       // panel reviews the result as an accept/reject diff before it lands.
