@@ -2,6 +2,11 @@ import type {
   KnowledgeBaseRecord,
   UpdateKnowledgeBaseInput,
 } from "./contracts/base.js";
+import type {
+  KnowledgeDocumentListFilters,
+  KnowledgeDocumentRecord,
+  KnowledgeDocumentStatusUpdate,
+} from "./contracts/document.js";
 import type { KnowledgeProjectAccessStore } from "./services/project-access.js";
 
 export interface KnowledgeBaseStore extends KnowledgeProjectAccessStore {
@@ -15,4 +20,33 @@ export interface KnowledgeBaseStore extends KnowledgeProjectAccessStore {
     patch: UpdateKnowledgeBaseInput & { updatedAt: string },
   ): Promise<KnowledgeBaseRecord | null>;
   deleteKnowledgeBase(baseId: string, orgId: string, projectId: string): Promise<boolean>;
+}
+
+export interface KnowledgeDocumentStore extends KnowledgeBaseStore {
+  createKnowledgeDocument(record: KnowledgeDocumentRecord): Promise<void>;
+  getKnowledgeDocument(
+    documentId: string,
+    baseId: string,
+    orgId: string,
+    projectId: string,
+  ): Promise<KnowledgeDocumentRecord | null>;
+  getKnowledgeDocumentByContentHash(
+    contentSha256: string,
+    baseId: string,
+    orgId: string,
+    projectId: string,
+  ): Promise<KnowledgeDocumentRecord | null>;
+  listKnowledgeDocuments(
+    baseId: string,
+    orgId: string,
+    projectId: string,
+    filters?: KnowledgeDocumentListFilters,
+  ): Promise<KnowledgeDocumentRecord[]>;
+  updateKnowledgeDocumentStatus(
+    documentId: string,
+    baseId: string,
+    orgId: string,
+    projectId: string,
+    update: KnowledgeDocumentStatusUpdate,
+  ): Promise<KnowledgeDocumentRecord | null>;
 }

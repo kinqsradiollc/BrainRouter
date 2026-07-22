@@ -265,6 +265,9 @@ and tenant-fair job runner.
   cognitive-vector rebuilds.
 - Ingest v1 accepts bounded plain text/Markdown and persists metadata plus
   normalized, redacted parsed content; it does not persist unredacted raw data.
+- The internal document store uses the complete base/organization/Project
+  ancestry for identifier and content-hash reads, bounded status listings, and
+  lifecycle updates. Persisted-content dedupe remains per base.
 - Parsing, chunking, and embedding run asynchronously and idempotently.
 - Document status (`queued`, `parsing`, `ready`, `failed`) is the UI truth.
 - Retry is scoped by job kind, tenant, Project, and base; generic job retry is
@@ -344,7 +347,7 @@ captured into cognitive memory through its current engine.
 | W4c | Done | Briefing + memory tags | Capture/briefing/no-manifest tests |
 | W6 | Done | Client bootstrap deprecation | Offline core proposal coverage + downstream template-doc compatibility tests |
 | B1a | Done | Project/RBAC contract, schema, internal store, REST base CRUD, MCP base list/create | Migration + role/access + scoped CRUD + authenticated adapter tests |
-| B1b/B2 | Todo | Text ingest, typed parse jobs, status, scoped retry | 202/status/retry/idempotency/fairness tests |
+| B1b/B2 | In progress (document store) | Text ingest, typed parse jobs, status, scoped retry | Scoped persistence complete; 202/status/retry/idempotency/fairness remain |
 | B1c | Todo | Hybrid retrieval and citation APIs/tools | FTS/vector/fallback/tenancy tests |
 | B1d | Todo | Additional document parsers | Per-format bounds/redaction tests |
 | B3 | Todo | Availability-aware recommendations and opt-in distillation | Catalog/provenance/no-recursion tests |
