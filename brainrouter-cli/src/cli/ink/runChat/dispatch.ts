@@ -200,12 +200,14 @@ export function createOnSubmit(ctx: RunChatContext): (text: string, push: PushSc
           // stack's leftover slots (same skillsStackMax cap, explicit first).
           const triggered = scanKeywordTriggers(stacked.rest, agent.workspaceRoot, stacked.skills);
           const names = [...stacked.skills, ...triggered.map((h) => h.name)];
-          const { resolved, disallowedTools } = await resolveStackedSkills(mcpClient, names, agent.workspaceRoot)
-            .catch(() => ({ resolved: [], disallowedTools: [] as string[] }));
+          const { resolved, disallowedTools, allowedTools } = await resolveStackedSkills(mcpClient, names, agent.workspaceRoot)
+            .catch(() => ({ resolved: [], disallowedTools: [] as string[], allowedTools: undefined }));
           if (resolved.length >= 1) {
             agent.activeSkill = resolved[0].name;
             agent.activeSkillDisallowedTools = disallowedTools;
-            push.notice(`Stacked skills: ${resolved.map((s) => s.name).join(' → ')}${disallowedTools.length ? `  (disallowed: ${disallowedTools.join(', ')})` : ''}`, 'info');
+            agent.activeSkillAllowedTools = allowedTools;
+            const allowedNote = allowedTools === undefined ? '' : `  (allowed: ${allowedTools.join(', ') || 'none'})`;
+            push.notice(`Stacked skills: ${resolved.map((s) => s.name).join(' → ')}${allowedNote}${disallowedTools.length ? `  (disallowed: ${disallowedTools.join(', ')})` : ''}`, 'info');
             noticeSkillReady(push, triggered, resolved.map((s) => s.name));
             const prompt = buildStackedSkillPrompt(resolved, { input: stacked.rest });
             await ctx.runChatTurn(prompt);
@@ -238,11 +240,12 @@ export function createOnSubmit(ctx: RunChatContext): (text: string, push: PushSc
     // the plain turn untouched.
     const triggered = scanKeywordTriggers(text, agent.workspaceRoot);
     if (triggered.length) {
-      const { resolved, disallowedTools } = await resolveStackedSkills(mcpClient, triggered.map((h) => h.name), agent.workspaceRoot)
-        .catch(() => ({ resolved: [], disallowedTools: [] as string[] }));
+      const { resolved, disallowedTools, allowedTools } = await resolveStackedSkills(mcpClient, triggered.map((h) => h.name), agent.workspaceRoot)
+        .catch(() => ({ resolved: [], disallowedTools: [] as string[], allowedTools: undefined }));
       if (resolved.length >= 1) {
         agent.activeSkill = resolved[0].name;
         agent.activeSkillDisallowedTools = disallowedTools;
+        agent.activeSkillAllowedTools = allowedTools;
         noticeSkillReady(push, triggered, resolved.map((s) => s.name));
         await ctx.runChatTurn(buildStackedSkillPrompt(resolved, { input: text }));
         return;

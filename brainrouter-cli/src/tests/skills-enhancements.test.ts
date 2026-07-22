@@ -13,6 +13,7 @@ import {
   isValidSkillName,
 } from '../prompt/skillRunner.js';
 import {
+  parseAllowedToolsFrontmatter,
   parseDisallowedToolsFrontmatter,
   listFilesystemSkills,
   skillSearchRoots,
@@ -210,6 +211,52 @@ test('D3 resolveSkill surfaces disallowedTools parsed from frontmatter', async (
   }
 });
 
+// ── Skill-level allowed-tools frontmatter ─────────────────────────────────
+
+test('parseAllowedToolsFrontmatter distinguishes absent, empty, flow, and block forms', () => {
+  assert.equal(parseAllowedToolsFrontmatter('---\nname: x\n---\n# x'), undefined);
+  assert.deepEqual(parseAllowedToolsFrontmatter('---\nname: x\nallowed-tools: []\n---\n# x'), []);
+  assert.deepEqual(
+    parseAllowedToolsFrontmatter('---\nname: x\nallowed-tools: [read_file, mcp_docs_search]\n---\n# x'),
+    ['read_file', 'mcp_docs_search'],
+  );
+  assert.deepEqual(parseAllowedToolsFrontmatter([
+    '---',
+    'name: x',
+    'allowed-tools:',
+    '  - read_file',
+    '  - grep_search',
+    'description: y',
+    '---',
+  ].join('\n')), ['read_file', 'grep_search']);
+});
+
+test('resolveSkill surfaces allowedTools and stacked skills intersect declared lists', async () => {
+  const ws = mkWorkspace();
+  try {
+    const first = path.join(ws, 'skills', 'first');
+    const second = path.join(ws, 'skills', 'second');
+    const unrestricted = path.join(ws, 'skills', 'unrestricted');
+    fs.mkdirSync(first, { recursive: true });
+    fs.mkdirSync(second, { recursive: true });
+    fs.mkdirSync(unrestricted, { recursive: true });
+    fs.writeFileSync(path.join(first, 'SKILL.md'),
+      '---\nname: first\nallowed-tools: [read_file, grep_search]\n---\n# first\n');
+    fs.writeFileSync(path.join(second, 'SKILL.md'),
+      '---\nname: second\nallowed-tools: [read_file, write_file]\n---\n# second\n');
+    fs.writeFileSync(path.join(unrestricted, 'SKILL.md'),
+      '---\nname: unrestricted\n---\n# unrestricted\n');
+    const stubClient: any = { callTool: async () => { throw new Error('no mcp'); } };
+    const resolved = await resolveSkill(stubClient, 'first', ws);
+    assert.deepEqual(resolved.allowedTools, ['read_file', 'grep_search']);
+
+    const stacked = await resolveStackedSkills(stubClient, ['first', 'unrestricted', 'second'], ws);
+    assert.deepEqual(stacked.allowedTools, ['read_file']);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
+
 // ── D4 — /skill init scaffold + robust in-repo autoload ───────────────────
 
 test('D4 isValidSkillName accepts kebab/underscore, rejects paths and dots-only', () => {
@@ -223,6 +270,8 @@ test('D4 isValidSkillName accepts kebab/underscore, rejects paths and dots-only'
 test('D4 renderSkillTemplate uses BrainRouter frontmatter and never references a legacy vendor path', () => {
   const tpl = renderSkillTemplate('demo');
   assert.match(tpl, /^---\nname: demo/);
+  assert.match(tpl, /# allowed-tools: \[read_file, grep_search\]/);
+  assert.match(tpl, /# disallowed-tools: \[run_command, write_file\]/);
   assert.match(tpl, /# demo/);
   const legacyPathPattern = new RegExp(`\\${['.', 'clau', 'de'].join('')}`, 'i');
   assert.doesNotMatch(tpl, legacyPathPattern);

@@ -819,6 +819,12 @@ export class Agent {
    */
   public activeSkillDisallowedTools: string[] = [];
   /**
+   * Optional per-turn skill allowlist. `undefined` preserves the normal
+   * authorized surface; a declared empty list intentionally exposes no tools.
+   * This can only subtract after access, role, capability, and scope gates.
+   */
+  public activeSkillAllowedTools?: string[];
+  /**
    * Parent trace context (set by spawn_agent for child agents). When present,
    * the per-turn span uses these as its trace/parent so OTEL viewers can
    * stitch the fan-out tree together. Top-level (REPL) agents leave these

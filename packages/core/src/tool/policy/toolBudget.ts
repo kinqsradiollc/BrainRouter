@@ -21,6 +21,14 @@ export interface BudgetableTool {
   description?: string;
 }
 
+/** Exact match, plus bare-name suffix matching for namespaced MCP tools. */
+export function toolNameMatchesAny(name: string, entries: Iterable<string>): boolean {
+  for (const entry of entries) {
+    if (entry && (name === entry || (name.startsWith('mcp_') && name.endsWith(`_${entry}`)))) return true;
+  }
+  return false;
+}
+
 function tokenize(text: string): string[] {
   return (text || "")
     .toLowerCase()
@@ -51,13 +59,9 @@ export function applyToolScope<T extends BudgetableTool>(
   if (!scope) return tools;
   const allow = (scope.allow ?? []).filter(Boolean);
   const disallow = new Set((scope.disallow ?? []).filter(Boolean));
-  const matches = (name: string, list: Iterable<string>): boolean => {
-    for (const entry of list) if (name === entry || name.endsWith(`_${entry}`)) return true;
-    return false;
-  };
   return tools.filter((t) => {
-    if (disallow.size && matches(t.name, disallow)) return false;
-    if (allow.length && !matches(t.name, allow)) return false;
+    if (disallow.size && toolNameMatchesAny(t.name, disallow)) return false;
+    if (allow.length && !toolNameMatchesAny(t.name, allow)) return false;
     return true;
   });
 }
