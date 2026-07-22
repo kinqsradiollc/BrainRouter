@@ -1,7 +1,6 @@
-import fs from 'node:fs';
 import type { Command } from 'commander';
 import chalk from 'chalk';
-import { loadConfig, getConfigPath, setCliKnobOverride, hydrateConfigDefaultsOnDisk, resolveCliKnobs, type LLMConfig } from '@kinqs/brainrouter-core/config';
+import { loadConfig, setCliKnobOverride, hydrateConfigDefaultsOnDisk, resolveCliKnobs, type LLMConfig } from '@kinqs/brainrouter-core/config';
 import { resolveSessionLlmConfig } from '@kinqs/brainrouter-core/session';
 import { McpClientPool, selectMcpServerIds, applyBrainUrlOverride, probeBrainHealth, embeddedBrainId } from '@kinqs/brainrouter-core/mcp';
 import { applyActiveLlmProfile } from '@kinqs/brainrouter-core/provider';
@@ -13,9 +12,33 @@ import { Agent } from '@kinqs/brainrouter-core/agent';
 import { cliPrompter } from '../cli/prompt/cliPrompt.js';
 import { runChat } from '../cli/ink/runChat.js';
 import { applyWorkspaceRoot, findWorkspaceRoot } from '@kinqs/brainrouter-core/workspace';
-import { runWizard, isOnboarded } from '../cli/ink/wizard/runWizard.js';
 import { DEFAULT_LLM } from './shared.js';
 import { refreshCliOrgConventionRepos } from './orgConvention.js';
+import { safeOnboardingError } from '../cli/commands/init/onboardingErrors.js';
+import { runCliOnboardingSequence } from '../cli/commands/init/onboardingSequence.js';
+
+export interface ChatMcpStartupDecision {
+  allowed: boolean;
+  localOnly: boolean;
+  error?: string;
+}
+
+/** Resolve explicit strict/profile flags against setup-time MCP Skip. */
+export function decideChatMcpStartup(input: {
+  serverIds: string[];
+  requestedProfile?: string;
+  strictMcp: boolean;
+  mcpSkipped: boolean;
+}): ChatMcpStartupDecision {
+  if (input.strictMcp && (input.mcpSkipped || input.serverIds.length === 0)) {
+    return { allowed: false, localOnly: false, error: '--strict-mcp requires an MCP profile for this launch.' };
+  }
+  if (input.mcpSkipped) return { allowed: true, localOnly: true };
+  if (input.requestedProfile && !input.serverIds.includes(input.requestedProfile)) {
+    return { allowed: false, localOnly: false, error: `Profile "${input.requestedProfile}" not found in config.` };
+  }
+  return { allowed: true, localOnly: input.serverIds.length === 0 };
+}
 
 export function registerChatCommand(program: Command): void {
   // Chat Command (default)
@@ -60,26 +83,26 @@ export function registerChatCommand(program: Command): void {
       // the launch CWD + detection reason on demand. Keeping a duplicate
       // stale-chrome line above the banner undermines the banner-first design.
 
-      // 0.3.7 — first-run auto-trigger. When no config exists OR the
-      // onboarded marker is missing, drop the user straight into the
-      // wizard before constructing the Agent / MCP client. This replaces
-      // the pre-0.3.7 "Error: No BrainRouter config found ... run
-      // `brainrouter login`" exit-with-error path. The wizard owns its
-      // own readline for the wizard's lifetime; when it returns we
-      // continue into the REPL with the freshly-saved config.
-      if (!fs.existsSync(getConfigPath()) || !isOnboarded()) {
-        try {
-          const wizardResult = await runWizard({
-            workspaceRoot: workspace.workspaceRoot,
-          });
-          if (wizardResult.state.aborted) {
-            console.error(chalk.gray('Wizard aborted before saving — exiting. Run `brainrouter` again any time to retry.'));
-            process.exit(0);
-          }
-        } catch (err: any) {
-          console.error(chalk.red(`Wizard failed: ${err?.message ?? err}`));
-          process.exit(1);
+      let startupOnboarding: Awaited<ReturnType<typeof runCliOnboardingSequence>>;
+      try {
+        startupOnboarding = await runCliOnboardingSequence({
+          workspaceRoot: workspace.workspaceRoot,
+          global: 'if-needed',
+        });
+        if (startupOnboarding.status === 'global-aborted') {
+          console.error(chalk.gray('Global setup aborted before saving — exiting. Run `brainrouter` again any time to retry.'));
+          process.exit(0);
         }
+        if (startupOnboarding.workspace === 'failed') {
+          const workspaceError = safeOnboardingError(startupOnboarding.workspaceError ?? 'unknown error');
+          console.error(chalk.yellow(
+            `Workspace setup could not finish (${workspaceError}). `
+            + 'The session will continue; run `/init` to retry.\n',
+          ));
+        }
+      } catch (err: any) {
+        console.error(chalk.red(`Setup failed: ${safeOnboardingError(err)}`));
+        process.exit(1);
       }
 
       // CONFIG-HYDRATE — self-fill config.json with any missing safe cli.* knobs so
@@ -124,17 +147,20 @@ export function registerChatCommand(program: Command): void {
       // to exactly one server for explicit single-server mode.
       const requestedProfile = options.profile as string | undefined;
       const allServerIds = Object.keys(config.servers);
-      if (allServerIds.length === 0) {
-        console.error(chalk.red('Error: No MCP server profiles in config.'));
-        console.error(chalk.gray('Run `/login` inside the REPL or `brainrouter login` to add a profile.'));
-        process.exit(1);
-      }
-      if (requestedProfile && !config.servers[requestedProfile]) {
-        console.error(chalk.red(`Error: Profile "${requestedProfile}" not found in config.`));
+      const mcpStartup = decideChatMcpStartup({
+        serverIds: allServerIds,
+        requestedProfile,
+        strictMcp: options.strictMcp === true,
+        mcpSkipped: startupOnboarding.mcpSkipped,
+      });
+      if (!mcpStartup.allowed) {
+        console.error(chalk.red(`Error: ${mcpStartup.error}`));
         console.error(chalk.gray(`Available profiles: ${allServerIds.join(', ')}.`));
         process.exit(1);
       }
-      let targetIds = selectMcpServerIds(config.servers, config.activeServer, requestedProfile);
+      let targetIds = mcpStartup.localOnly
+        ? []
+        : selectMcpServerIds(config.servers, config.activeServer, requestedProfile);
 
       // CC-CONFIG-A1 — SAFE MODE: connect ONLY the BrainRouter brain, dropping any
       // custom / third-party MCP servers so a misbehaving external server can't
@@ -189,7 +215,7 @@ export function registerChatCommand(program: Command): void {
       // single-underscore prefix regex.
       setKnownMcpServerIds(mcpClient.getServerIds());
       const failures = statuses.filter((s) => s.status === 'failed');
-      if (failures.length === statuses.length) {
+      if (statuses.length > 0 && failures.length === statuses.length) {
         // Every server failed — equivalent to the pre-0.3.7 "MCP
         // unreachable" path; same --strict-mcp semantics apply.
         const summary = failures.map((s) => `${s.serverId}: ${s.error ?? 'unknown error'}`).join('\n  ');
@@ -270,7 +296,14 @@ export function registerChatCommand(program: Command): void {
       process.once('SIGINT', onSignal);
       process.once('SIGTERM', onSignal);
       try {
-        await runChat({ agent, mcpClient, config, workspace, federation });
+        await runChat({
+          agent,
+          mcpClient,
+          config,
+          workspace,
+          federation,
+          localOnlyLaunch: mcpStartup.localOnly,
+        });
       } finally {
         process.off('SIGINT', onSignal);
         process.off('SIGTERM', onSignal);
