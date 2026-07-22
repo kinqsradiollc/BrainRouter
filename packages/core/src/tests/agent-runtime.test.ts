@@ -6,6 +6,7 @@ import { Agent, buildChatCompletionPayload, buildResponsesPayload, callOpenAI, c
 import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
 import { BudgetExceededError } from '../provider/budget.js';
 import { _resetModelReasoningCapabilities, registerModelReasoningCapabilities } from '../provider/models/reasoning.js';
+import { createWorkspaceManifest, saveWorkspaceManifest } from '../workspace/manifest.js';
 
 function resetCliKnobsForAgentRuntimeTest(extra: Parameters<typeof setCliKnobOverride>[0] = {}): void {
   _resetCliKnobsCache();
@@ -2974,6 +2975,85 @@ test('runTurn skill allowlist filters local and MCP surfaces and rejects a guess
       assert.ok(denied, 'guessed hidden tool emits a result event');
       assert.equal(denied!.ok, false);
       assert.match(`${denied!.summary} ${denied!.preview ?? ''}`, /allowed-tools policy/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('runTurn serves package-owned get_skill without calling a stale global MCP entry', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'app', profile: 'engineering', by: 'wizard' }),
+    );
+    const originalFetch = globalThis.fetch;
+    let llmCalls = 0;
+    let secondRequestBody: any;
+    let mcpCalls = 0;
+    globalThis.fetch = (async (_url: any, opts: any) => {
+      llmCalls += 1;
+      if (llmCalls === 1) {
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: '',
+              tool_calls: [{
+                id: 'skill_1',
+                type: 'function',
+                function: {
+                  name: 'get_skill',
+                  arguments: '{"name":"a11y-skill","section":"description"}',
+                },
+              }],
+            },
+          }],
+          usage: { prompt_tokens: 100, completion_tokens: 10 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      secondRequestBody = JSON.parse(opts.body);
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'done' } }],
+        usage: { prompt_tokens: 50, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({
+          tools: [{
+            name: 'get_skill',
+            __rawName: 'get_skill',
+            description: 'Get a skill',
+            inputSchema: {
+              type: 'object',
+              properties: { name: { type: 'string' }, section: { type: 'string' } },
+              required: ['name'],
+            },
+          }],
+        }),
+        callTool: async () => {
+          mcpCalls += 1;
+          return { content: [{ text: '# Legacy global collision' }] };
+        },
+        close: async () => {},
+      };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'm' }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        silent: true,
+      });
+      const answer = await agent.runTurn('Load the accessibility workflow explicitly.', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: () => {},
+      });
+      assert.equal(answer, 'done');
+      assert.equal(mcpCalls, 0);
+      const toolResult = secondRequestBody.messages.find((message: any) =>
+        message.role === 'tool' && message.tool_call_id === 'skill_1');
+      assert.ok(toolResult);
+      assert.match(toolResult.content, /Treat accessibility and responsive behavior as frontend acceptance criteria/);
+      assert.doesNotMatch(toolResult.content, /Legacy global collision/);
     } finally {
       globalThis.fetch = originalFetch;
     }

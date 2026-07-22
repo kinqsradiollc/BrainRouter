@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { McpClient } from '@kinqs/brainrouter-core/mcp';
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';
+import { resolveWorkspaceManagedSkill } from '@kinqs/brainrouter-core/workspace';
 import {
   skillSearchRoots,
   parseAllowedToolsFrontmatter,
@@ -64,6 +65,23 @@ export async function resolveSkill(
   workspaceRoot: string,
   section: RunSkillOptions['section'] = 'full',
 ): Promise<SkillResolution> {
+  // A reviewed workspace manifest gives package-owned profile skills explicit
+  // precedence over same-name legacy MCP entries. This is a per-request read;
+  // it does not install or enable the package globally. Disabled/inactive
+  // package skills remain explicitly invokable, then their tool policy is
+  // enforced for the turn exactly like any filesystem skill.
+  const managed = resolveWorkspaceManagedSkill(workspaceRoot, name, section);
+  if (managed) {
+    const body = managed.content[0]?.text ?? '';
+    return {
+      name,
+      body,
+      source: 'filesystem',
+      disallowedTools: parseDisallowedToolsFrontmatter(body),
+      allowedTools: parseAllowedToolsFrontmatter(body),
+    };
+  }
+
   try {
     const res: any = await mcpClient.callTool('get_skill', { name, section });
     if (!res.isError && Array.isArray(res.content) && res.content[0]?.text) {
