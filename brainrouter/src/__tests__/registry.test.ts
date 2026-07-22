@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Registry } from '../registry.js';
+import { getTemplateDoc } from '../tools/docs/get_template_doc.js';
+import { listTemplateDocs } from '../tools/docs/list_template_docs.js';
 import { writeFileSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -27,7 +29,7 @@ describe('registry.ts', () => {
     );
     writeFileSync(
       join(localRoot, 'docs', 'api', 'API.md'),
-      '# API'
+      '# API\n\n## Setup\n\nDownstream setup guidance.\n'
     );
     writeFileSync(join(globalRoot, 'agents', 'global-persona.md'), 'global persona content');
     writeFileSync(join(localRoot, 'agents', 'local-persona.md'), 'local persona content');
@@ -66,6 +68,22 @@ describe('registry.ts', () => {
     const docs = registry.listDocs();
     expect(docs.length).toBe(1);
     expect(docs[0].name).toBe('api');
+  });
+
+  it('keeps template-doc list and read tools compatible for downstream clients', async () => {
+    const registry = new Registry({ globalRoot, localRoot });
+    registry.build();
+
+    const listed = await listTemplateDocs(registry, {});
+    const rows = JSON.parse(listed.content[0].text) as Array<Record<string, unknown>>;
+    expect(rows).toEqual([
+      expect.objectContaining({ name: 'api', category: 'api' }),
+    ]);
+    expect(rows[0]).not.toHaveProperty('filePath');
+
+    const fetched = await getTemplateDoc(registry, { name: 'api', section: 'setup' });
+    expect(fetched.content[0].text).toContain('Downstream setup guidance.');
+    expect(fetched.metadata.tokenEstimate).toBeGreaterThan(0);
   });
 
   it('should index both global and local personas (agents)', () => {

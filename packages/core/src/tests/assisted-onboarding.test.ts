@@ -78,7 +78,7 @@ test('assisted onboarding makes one forced-tool call and returns a normalized mo
   });
 });
 
-test('assisted onboarding is deterministic and no-write when no model is available', async () => {
+test('assisted onboarding is deterministic and no-write without a model or server bootstrap connection', async () => {
   await withWorkspace(async (workspace) => {
     const beforeEntries = fs.readdirSync(workspace, { recursive: true }).map(String).sort();
     const beforePackage = fs.readFileSync(path.join(workspace, 'package.json'), 'utf8');
