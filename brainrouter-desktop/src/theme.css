@@ -2137,6 +2137,39 @@ select.toolbar-input { cursor: pointer; }
     scroll-behavior: auto !important;
   }
 }
+
+/* ── Reviewed workspace onboarding editor ─────────────────────────────────── */
+.onboard-overlay { padding: 18px; }
+.onboard-dialog { display: flex; flex-direction: column; width: min(820px, 94vw); max-height: min(900px, 92vh); overflow: hidden; }
+.onboard-dialog > .set-desc { margin: 2px 0 12px; line-height: 1.45; }
+.onboard-scroll { overflow: auto; min-height: 0; margin: 0 -6px; padding: 0 6px 4px; }
+.onboard-loading { display: flex; align-items: center; gap: 8px; min-height: 120px; color: var(--text-dim); }
+.onboard-section { margin: 0 0 14px; padding: 13px; border: 1px solid var(--border); border-radius: var(--r-md); background: color-mix(in srgb, var(--raised) 60%, transparent); }
+.onboard-section h3 { margin: 0 0 9px; color: var(--text); font-size: 12px; font-weight: 650; letter-spacing: .01em; }
+.onboard-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 4px 0 10px; }
+.onboard-card { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-height: 78px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--raised); text-align: left; cursor: pointer; transition: border-color 120ms ease, background 120ms ease; }
+.onboard-card:hover { border-color: var(--border-strong); }
+.onboard-card.selected { border-color: var(--accent); background: var(--accent-soft); }
+.onboard-card-label { color: var(--text); font-size: 13px; font-weight: 600; }
+.onboard-detected { margin-left: 6px; color: var(--accent); font-size: 9px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; }
+.onboard-card-desc { color: var(--text-dim); font-size: 11px; line-height: 1.35; }
+.onboard-reasons { color: var(--text-faint); font-size: 11px; }
+.onboard-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
+.onboard-fields h3 { grid-column: 1 / -1; margin-bottom: 0; }
+.onboard-field { display: flex; flex-direction: column; gap: 5px; color: var(--text-dim); font-size: 11px; }
+.onboard-field input { width: 100%; box-sizing: border-box; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--r-sm); outline: none; background: var(--input); color: var(--text); font: inherit; font-size: 12px; }
+.onboard-field input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.onboard-field small { color: var(--text-faint); line-height: 1.35; }
+.onboard-diff-label { display: flex; justify-content: space-between; gap: 12px; margin: 7px 0 5px; color: var(--text-dim); font-size: 10.5px; }
+.onboard-diff { max-height: 260px; overflow: auto; margin: 0; padding: 10px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--input); color: var(--text-dim); font: 10.5px/1.45 var(--mono); white-space: pre-wrap; word-break: break-word; }
+.onboard-no-instruction { margin-top: 8px; color: var(--text-faint); font-size: 11px; }
+.onboard-status { min-height: 20px; padding-top: 4px; color: var(--text-dim); font-size: 11.5px; line-height: 1.4; }
+.onboard-error { color: var(--err); }
+.onboard-dialog .dialog-actions { flex: 0 0 auto; margin-top: 8px; }
+@media (max-width: 680px) {
+  .onboard-grid, .onboard-fields { grid-template-columns: 1fr; }
+  .onboard-fields h3 { grid-column: auto; }
+}
 @keyframes toastUp { from { opacity: 0; transform: translate(-50%, 8px); } }
 /* DESK-5f — exit animations (paired with .closing + delayed unmount) */
 @keyframes popOut { to { opacity: 0; transform: scale(0.97) translateY(4px); } }
