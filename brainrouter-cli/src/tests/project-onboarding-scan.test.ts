@@ -14,6 +14,7 @@ import {
 } from '@kinqs/brainrouter-core/workspace';
 import {
   formatInstructionDiff,
+  runProjectOnboardingAgent,
   runProjectOnboardingScan,
 } from '../cli/commands/init/projectOnboardingScan.js';
 import type {
@@ -66,6 +67,18 @@ function resultFor(proposal: WorkspaceOnboardingProposal): AssistedOnboardingRes
   };
 }
 
+function modelProposal(): string {
+  return JSON.stringify({
+    profile: 'engineering',
+    reasons: ['The project description and bounded repository evidence indicate a web application.'],
+    agents: { default: 'engineer', enabled: ['engineer'] },
+    capabilities: { enabled: ['frontend'], disabled: [] },
+    skills: { packs: ['engineering'], enabled: ['frontend-design'], disabled: [] },
+    tools: { profiles: ['browser'], deny: [] },
+    memory: { tags: ['customer-portal'], captureHint: 'Capture product and architecture decisions.' },
+  });
+}
+
 test('deterministic scan reviews a complete proposal before creating the manifest', async () => {
   const root = makeWorkspace();
   const output: string[] = [];
@@ -84,6 +97,89 @@ test('deterministic scan reviews a complete proposal before creating the manifes
     assert.equal(fs.existsSync(path.join(root, 'AGENT.md')), false);
     assert.ok(output.some((message) => message.includes('Workspace scan')));
     assert.ok(output.some((message) => message.includes('tool profiles')));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('assisted initializer makes one bounded proposal call and reviews the model result', async () => {
+  const root = makeWorkspace();
+  const output: string[] = [];
+  let calls = 0;
+  try {
+    fs.writeFileSync(path.join(root, 'package.json'), '{"name":"portal"}\n');
+    const result = await runProjectOnboardingAgent(
+      root,
+      { provider: 'openai', model: 'managed-model', apiKey: 'secret', endpoint: 'https://example.invalid' },
+      'Build a responsive customer portal',
+      {
+        complete: async (request) => {
+          calls += 1;
+          assert.match(request.user, /Build a responsive customer portal/);
+          assert.equal(request.toolChoice.function.name, 'propose_workspace_onboarding');
+          return modelProposal();
+        },
+        prompt: reviewingPrompt(),
+        print: (message) => output.push(message),
+      },
+    );
+    assert.equal(calls, 1);
+    assert.equal(result.status, 'committed');
+    assert.equal(loadWorkspaceManifest(root)?.agents.default, 'engineer');
+    assert.deepEqual(loadWorkspaceManifest(root)?.capabilities.enabled, ['frontend']);
+    assert.ok(output.some((message) => message.includes('Proposal source') && message.includes('managed model')));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('assisted initializer safely labels a model failure and reviews the deterministic fallback', async () => {
+  const root = makeWorkspace();
+  const output: string[] = [];
+  let calls = 0;
+  try {
+    fs.writeFileSync(path.join(root, 'package.json'), '{}\n');
+    const result = await runProjectOnboardingAgent(
+      root,
+      { provider: 'openai', model: 'managed-model', apiKey: 'secret', endpoint: 'https://example.invalid' },
+      undefined,
+      {
+        complete: async () => {
+          calls += 1;
+          throw new Error('provider failed with OPENAI_API_KEY=sk-do-not-print');
+        },
+        prompt: reviewingPrompt(),
+        print: (message) => output.push(message),
+      },
+    );
+    assert.equal(calls, 1);
+    assert.equal(result.status, 'committed');
+    assert.equal(loadWorkspaceManifest(root)?.agents.default, 'engineer');
+    assert.ok(output.some((message) => message.includes('deterministic fallback (model request failed)')));
+    assert.equal(output.some((message) => message.includes('sk-do-not-print')), false);
+    assert.equal(output.some((message) => message.includes('OPENAI_API_KEY')), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('assisted initializer labels invalid model output without exposing it', async () => {
+  const root = makeWorkspace();
+  const output: string[] = [];
+  try {
+    const result = await runProjectOnboardingAgent(
+      root,
+      { provider: 'openai', model: 'managed-model', apiKey: '', endpoint: 'https://example.invalid' },
+      'A documentation workspace',
+      {
+        complete: async () => 'invalid-response-with-private-provider-detail',
+        prompt: reviewingPrompt(),
+        print: (message) => output.push(message),
+      },
+    );
+    assert.equal(result.status, 'committed');
+    assert.ok(output.some((message) => message.includes('deterministic fallback (model response was invalid)')));
+    assert.equal(output.some((message) => message.includes('private-provider-detail')), false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

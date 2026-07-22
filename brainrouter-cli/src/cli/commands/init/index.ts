@@ -1,9 +1,13 @@
 import chalk from 'chalk';
+import type { LLMConfig } from '@kinqs/brainrouter-core/config';
 import type { CommandContext } from '../_context.js';
 import { initAgentMd } from '../../../prompt/initAgentMd.js';
 import { safeOnboardingError } from './onboardingErrors.js';
 import { runProjectOnboarding } from './projectOnboard.js';
-import { runProjectOnboardingScan } from './projectOnboardingScan.js';
+import {
+  runProjectOnboardingAgent,
+  runProjectOnboardingScan,
+} from './projectOnboardingScan.js';
 import {
   runCliOnboardingSequence,
   type CliOnboardingSequenceOptions,
@@ -25,13 +29,15 @@ import {
  *     workspace setup only after the global commit succeeds.
  *   - `/init scan` — build a bounded deterministic proposal, review every
  *     field and optional instruction diff, then write only after confirmation.
- *   - `/init agent` — reserved for the bounded model-assisted initializer.
+ *   - `/init agent [description]` — use the active session model for one
+ *     bounded proposal, then review it through the same confirmation flow.
  *   - `/init agentmd` — back-compat alias for the 0.3.6 behaviour that only
  *     scaffolds AGENT.md.
  */
 export interface InitCommandDependencies {
   runSequence(options: CliOnboardingSequenceOptions): Promise<CliOnboardingSequenceResult>;
   runScan?(workspaceRoot: string): Promise<unknown>;
+  runAgent?(workspaceRoot: string, llm: LLMConfig, description?: string): Promise<unknown>;
 }
 
 const DEFAULT_DEPENDENCIES: InitCommandDependencies = {
@@ -70,7 +76,16 @@ export async function tryHandleInitCommand(
   }
 
   if (sub === 'agent') {
-    console.log(chalk.gray('\nThe assisted workspace initializer is not available yet. Use `/init scan` for the bounded offline flow.\n'));
+    try {
+      const description = args.slice(1).join(' ').trim() || undefined;
+      await (dependencies.runAgent ?? runProjectOnboardingAgent)(
+        agent.workspaceRoot,
+        agent.getLlmConfig(),
+        description,
+      );
+    } catch (err: any) {
+      console.error(chalk.red(`\n/init agent failed: ${safeOnboardingError(err)}\n`));
+    }
     return true;
   }
 

@@ -3,6 +3,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import chalk from 'chalk';
 import {
+  completeWorkspaceOnboardingWithModel,
+} from '@kinqs/brainrouter-core/agent';
+import type { LLMConfig } from '@kinqs/brainrouter-core/config';
+import {
   WORKSPACE_PROFILES,
   commitReviewedWorkspaceOnboarding,
   inspectWorkspaceOnboardingReview,
@@ -14,6 +18,7 @@ import {
   workspaceManifestPath,
   type AssistedOnboardingOptions,
   type AssistedOnboardingResult,
+  type WorkspaceOnboardingModelCompletion,
   type WorkspaceOnboardingProposal,
   type WorkspaceOnboardingReviewRevision,
 } from '@kinqs/brainrouter-core/workspace';
@@ -35,6 +40,36 @@ export interface ProjectOnboardingScanOptions {
   prompt?: ProjectOnboardingPrompt;
   print?: (message: string) => void;
   propose?: (options: AssistedOnboardingOptions) => Promise<AssistedOnboardingResult>;
+}
+
+export interface ProjectOnboardingAgentOptions extends Omit<ProjectOnboardingScanOptions, 'propose'> {
+  /** Test seam; production uses the shared forced-tool model adapter. */
+  complete?: WorkspaceOnboardingModelCompletion;
+}
+
+/**
+ * Make one bounded proposal call through the active session model, then use
+ * the same editable, stale-safe review and commit boundary as `/init scan`.
+ */
+export async function runProjectOnboardingAgent(
+  workspaceRoot: string,
+  llm: LLMConfig,
+  description?: string,
+  options: ProjectOnboardingAgentOptions = {},
+): Promise<ProjectOnboardingResult> {
+  const {
+    complete = (request) => completeWorkspaceOnboardingWithModel(llm, request),
+    ...reviewOptions
+  } = options;
+  const userDescription = description?.trim();
+  return runProjectOnboardingScan(workspaceRoot, {
+    ...reviewOptions,
+    propose: (proposalOptions) => proposeWorkspaceOnboarding({
+      ...proposalOptions,
+      ...(userDescription ? { description: userDescription } : {}),
+      complete,
+    }),
+  });
 }
 
 /**
@@ -61,7 +96,7 @@ export async function runProjectOnboardingScan(
   });
   const review = inspectWorkspaceOnboardingReview(root);
   if (!sameRevision(reviewBefore.revision, review.revision)) {
-    throw new Error('Workspace setup changed during the scan. Re-run /init scan to review the latest version.');
+    throw new Error('Workspace setup changed during the scan. Re-run workspace onboarding to review the latest version.');
   }
 
   const proposal: WorkspaceOnboardingProposal = {
@@ -229,7 +264,21 @@ export function formatInstructionDiff(original: string, proposed: string): strin
 function formatScanSummary(result: AssistedOnboardingResult): string {
   const { stats, stoppedBy } = result.scan;
   const limit = stoppedBy.length > 0 ? `; limits: ${stoppedBy.join(', ')}` : '';
-  return `\n${chalk.bold('Workspace scan')}: ${stats.filesRead} files, ${stats.entriesVisited} entries, ${stats.bytesRead} bytes${limit}\n`;
+  return [
+    `\n${chalk.bold('Workspace scan')}: ${stats.filesRead} files, ${stats.entriesVisited} entries, ${stats.bytesRead} bytes${limit}`,
+    `${chalk.bold('Proposal source')}: ${proposalSourceLabel(result)}\n`,
+  ].join('\n');
+}
+
+function proposalSourceLabel(result: AssistedOnboardingResult): string {
+  if (result.proposal.source === 'model') return 'managed model';
+  if (!result.modelAttempted) return 'deterministic scan';
+  switch (result.fallbackReason) {
+    case 'model-timeout': return 'deterministic fallback (model timed out)';
+    case 'invalid-model-output': return 'deterministic fallback (model response was invalid)';
+    case 'model-error': return 'deterministic fallback (model request failed)';
+    default: return 'deterministic fallback (model unavailable)';
+  }
 }
 
 function prefixDiffLines(value: string, prefix: ' ' | '-' | '+'): string[] {
