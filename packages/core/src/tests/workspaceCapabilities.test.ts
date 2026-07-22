@@ -66,6 +66,17 @@ test('frontend source and configuration files activate the capability determinis
   ]);
 });
 
+test('frontend file paths named in task text activate without a separate file list', () => {
+  const manifest = createWorkspaceManifest({ name: 'demo', profile: 'engineering', by: 'wizard' });
+  const resolved = resolveWorkspaceCapabilities({
+    manifest,
+    task: 'Please repair src/components/Card.tsx and then verify it.',
+  });
+
+  assert.deepEqual(resolved.active, ['frontend']);
+  assert.deepEqual(resolved.reasons, ['task names a frontend source or presentation file']);
+});
+
 test('irrelevant signals leave an enabled capability inactive', () => {
   const manifest = createWorkspaceManifest({ name: 'demo', profile: 'engineering', by: 'wizard' });
   assert.deepEqual(

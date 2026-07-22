@@ -83,6 +83,7 @@ export function spawnWorkerThread(
     workspaceRoot: input.workspaceRoot,
     launchCwd: input.launchCwd,
     sessionKey: `${input.parentSessionKey}:worker:${worker.id}`,
+    workspaceAgentId: input.role,
     accessMode: input.parentAccessMode ?? 'write',
     silent: true,
     // HONK-H0 — a fleet role OR a fleet ancestor locks this worker down too.

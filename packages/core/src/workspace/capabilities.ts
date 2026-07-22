@@ -82,6 +82,10 @@ const FRONTEND_TASK_SIGNALS: ReadonlyArray<{ pattern: RegExp; reason: string }> 
     pattern: /\b(?:ui|web|react|vue|svelte|angular) (?:component|navigation|theme|modal|dialog|form|layout)\b/i,
     reason: 'task names a concrete frontend surface',
   },
+  {
+    pattern: /(?:^|[\s"'`(])[^\s"'`()]+\.(?:css|scss|sass|less|html?|jsx|tsx|vue|svelte)(?=$|[\s"'`,;:)]|\.(?:\s|$))/i,
+    reason: 'task names a frontend source or presentation file',
+  },
 ];
 
 const FRONTEND_FILE_PATTERN =

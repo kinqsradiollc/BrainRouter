@@ -99,6 +99,7 @@ async function continueChildAgent(
     launchCwd: childLaunchCwd,
     sessionKey: childKey,
     roleOverlay: undefined,
+    workspaceAgentId: role.name,
     accessMode: record.access,
     silent: true,
     forceFleetSandbox: role.forceSandbox || ctx.ancestorFleet, // HONK-H0 — fleet role OR fleet ancestor → locked-down posture
