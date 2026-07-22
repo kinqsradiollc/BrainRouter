@@ -102,6 +102,11 @@ import {
 import { mapWithConcurrency, readEmbedConcurrency } from "../../util/concurrency.js";
 import type { Executor } from "./queries/executor.js";
 import type { KnowledgeBaseRecord, UpdateKnowledgeBaseInput } from "../../../knowledge/contracts/base.js";
+import type {
+  KnowledgeDocumentListFilters,
+  KnowledgeDocumentRecord,
+  KnowledgeDocumentStatusUpdate,
+} from "../../../knowledge/contracts/document.js";
 import type { VecContext } from "./queries/searchQueries.js";
 import {
   DEFAULT_TTL_SECONDS,
@@ -133,6 +138,7 @@ import * as orgPersona from "./queries/orgPersonaQueries.js";
 import * as sharing from "./queries/memorySharingQueries.js";
 import * as projects from "./queries/projectQueries.js";
 import * as knowledgeBases from "./queries/knowledgeBaseQueries.js";
+import * as knowledgeDocuments from "./queries/knowledgeDocumentQueries.js";
 import * as adminConsole from "./queries/adminConsoleQueries.js";
 import * as providerCfg from "./queries/providerConfigQueries.js";
 import * as modelPolicy from "./queries/modelPolicyQueries.js";
@@ -490,6 +496,11 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public listKnowledgeBases(orgId: string, projectId: string): Promise<KnowledgeBaseRecord[]> { return knowledgeBases.listKnowledgeBases(this.exec, orgId, projectId); }
   public updateKnowledgeBase(baseId: string, orgId: string, projectId: string, patch: UpdateKnowledgeBaseInput & { updatedAt: string }): Promise<KnowledgeBaseRecord | null> { return knowledgeBases.updateKnowledgeBase(this.exec, baseId, orgId, projectId, patch); }
   public deleteKnowledgeBase(baseId: string, orgId: string, projectId: string): Promise<boolean> { return knowledgeBases.deleteKnowledgeBase(this.exec, baseId, orgId, projectId); }
+  public createKnowledgeDocument(record: KnowledgeDocumentRecord): Promise<void> { return knowledgeDocuments.createKnowledgeDocument(this.exec, record); }
+  public getKnowledgeDocument(documentId: string, baseId: string, orgId: string, projectId: string): Promise<KnowledgeDocumentRecord | null> { return knowledgeDocuments.getKnowledgeDocument(this.exec, documentId, baseId, orgId, projectId); }
+  public getKnowledgeDocumentByContentHash(contentSha256: string, baseId: string, orgId: string, projectId: string): Promise<KnowledgeDocumentRecord | null> { return knowledgeDocuments.getKnowledgeDocumentByContentHash(this.exec, contentSha256, baseId, orgId, projectId); }
+  public listKnowledgeDocuments(baseId: string, orgId: string, projectId: string, filters?: KnowledgeDocumentListFilters): Promise<KnowledgeDocumentRecord[]> { return knowledgeDocuments.listKnowledgeDocuments(this.exec, baseId, orgId, projectId, filters); }
+  public updateKnowledgeDocumentStatus(documentId: string, baseId: string, orgId: string, projectId: string, update: KnowledgeDocumentStatusUpdate): Promise<KnowledgeDocumentRecord | null> { return knowledgeDocuments.updateKnowledgeDocumentStatus(this.exec, documentId, baseId, orgId, projectId, update); }
   // Meetings (ADR-018) — index table + revocable public share tokens.
   public createMeeting(m: meetings.CreateMeetingInput): Promise<void> { return meetings.createMeeting(this.exec, m); }
   public listMeetings(orgId: string, userId: string, limit?: number): Promise<meetings.MeetingRow[]> { return meetings.listMeetings(this.exec, orgId, userId, limit); }

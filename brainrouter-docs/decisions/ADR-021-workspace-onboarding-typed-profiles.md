@@ -214,7 +214,11 @@ organization and creator identities.
   storage, central read/write roles, a server-derived actor, exact Project
   access resolution, scoped base CRUD, authenticated REST routes, and
   authenticated HTTP MCP base list/create tools.
-- **B1b–B3** — async parsing and retrieval; profile-aware recommendations and
+- **B1b (document store shipped)** — typed document lifecycle records and
+  ancestry-scoped create/read/hash/list/status persistence with per-base dedupe.
+  Normalization/redaction, atomic parse-job enqueue, and processing follow as
+  independent slices.
+- **B1c–B3** — async retrieval; profile-aware recommendations and
   opt-in sourced distillation.
 - **C3** — dashboard and desktop knowledge management after the server contracts
   and job status APIs are stable.
