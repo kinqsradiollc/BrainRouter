@@ -9,7 +9,8 @@ import { _resetModelReasoningCapabilities, registerModelReasoningCapabilities } 
 
 function resetCliKnobsForAgentRuntimeTest(extra: Parameters<typeof setCliKnobOverride>[0] = {}): void {
   _resetCliKnobsCache();
-  setCliKnobOverride({ providerRequestFormat: {}, ...extra });
+  // Keep the suite independent from the developer's real global config.
+  setCliKnobOverride({ providerRequestFormat: {}, recallMode: 'gated', ...extra });
 }
 
 async function waitForValue<T>(
