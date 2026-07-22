@@ -2149,6 +2149,19 @@ select.toolbar-input { cursor: pointer; }
 .onboard-loading { display: flex; align-items: center; gap: 8px; min-height: 120px; color: var(--text-dim); }
 .onboard-section { margin: 0 0 14px; padding: 13px; border: 1px solid var(--border); border-radius: var(--r-md); background: color-mix(in srgb, var(--raised) 60%, transparent); }
 .onboard-section h3 { margin: 0 0 9px; color: var(--text); font-size: 12px; font-weight: 650; letter-spacing: .01em; }
+.onboard-assist { border-color: color-mix(in srgb, var(--accent) 36%, var(--border)); background: color-mix(in srgb, var(--accent-soft) 54%, var(--raised)); }
+.onboard-assist-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.onboard-assist-heading h3 { margin-bottom: 4px; }
+.onboard-assist-heading p { margin: 0; color: var(--text-dim); font-size: 11px; line-height: 1.4; }
+.onboard-assist-heading > .approve { flex: 0 0 auto; padding: 7px 12px; border: 0; border-radius: var(--r-sm); background: var(--accent); color: #fff; font-size: 11.5px; font-weight: 650; white-space: nowrap; cursor: pointer; }
+.onboard-assist-heading > .approve:hover:not(:disabled) { filter: brightness(1.08); }
+.onboard-assist-heading > .approve:disabled { opacity: .45; cursor: default; }
+.onboard-assist-input { display: flex; flex-direction: column; gap: 5px; margin-top: 10px; color: var(--text-dim); font-size: 11px; }
+.onboard-assist-input textarea { width: 100%; min-height: 70px; resize: vertical; box-sizing: border-box; padding: 8px 9px; border: 1px solid var(--border); border-radius: var(--r-sm); outline: none; background: var(--input); color: var(--text); font: inherit; font-size: 12px; line-height: 1.45; }
+.onboard-assist-input textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.onboard-assist-input small { color: var(--text-faint); text-align: right; }
+.onboard-assist-input small.onboard-error { color: var(--err); }
+.onboard-assist-progress { display: flex; align-items: center; gap: 7px; margin-top: 9px; color: var(--accent); font-size: 11px; }
 .onboard-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 4px 0 10px; }
 .onboard-card { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-height: 78px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--raised); text-align: left; cursor: pointer; transition: border-color 120ms ease, background 120ms ease; }
 .onboard-card:hover { border-color: var(--border-strong); }
@@ -2172,6 +2185,8 @@ select.toolbar-input { cursor: pointer; }
 @media (max-width: 680px) {
   .onboard-grid, .onboard-fields { grid-template-columns: 1fr; }
   .onboard-fields h3 { grid-column: auto; }
+  .onboard-assist-heading { flex-direction: column; }
+  .onboard-assist-heading > .approve { width: 100%; }
 }
 @keyframes toastUp { from { opacity: 0; transform: translate(-50%, 8px); } }
 /* DESK-5f — exit animations (paired with .closing + delayed unmount) */

@@ -61,10 +61,15 @@ export interface ParsedOnboardingProposal {
   reasons: string[];
   fallbackReason?: string;
   markers: string[];
+  scanStats: { filesRead?: number; bytesRead?: number; stoppedBy: string[] };
 }
 
 const DIGEST = /^[0-9a-f]{64}$/;
 const MAX_LIST_ITEMS = 256;
+export const ONBOARDING_DESCRIPTION_MAX_BYTES = 4 * 1024;
+const FALLBACK_REASONS = new Set([
+  'model-unavailable', 'model-timeout', 'model-error', 'invalid-model-output',
+]);
 
 export function parseOnboardingEditor(value: unknown): LoadedOnboardingEditor | null {
   if (!isRecord(value) || value.ok !== true || !Array.isArray(value.profiles)) return null;
@@ -95,9 +100,13 @@ export function parseOnboardingProposal(value: unknown): ParsedOnboardingProposa
   const reasons = parseStringList(value.proposal.reasons, 12) ?? [];
   const scan = isRecord(value.scan) ? value.scan : null;
   const markers = parseStringList(scan?.markers, 64) ?? [];
-  const fallbackReason = typeof value.fallbackReason === 'string'
-    ? value.fallbackReason.slice(0, 128)
+  const stats = isRecord(scan?.stats) ? scan.stats : null;
+  const stoppedBy = parseStringList(scan?.stoppedBy, 8) ?? [];
+  const fallbackReason = typeof value.fallbackReason === 'string' && FALLBACK_REASONS.has(value.fallbackReason)
+    ? value.fallbackReason
     : undefined;
+  const filesRead = parseNonNegativeInteger(stats?.filesRead);
+  const bytesRead = parseNonNegativeInteger(stats?.bytesRead);
   return {
     draft,
     instruction: parseInstructionDraft(value.proposal.instruction),
@@ -105,7 +114,37 @@ export function parseOnboardingProposal(value: unknown): ParsedOnboardingProposa
     reasons,
     ...(fallbackReason ? { fallbackReason } : {}),
     markers,
+    scanStats: {
+      ...(filesRead === undefined ? {} : { filesRead }),
+      ...(bytesRead === undefined ? {} : { bytesRead }),
+      stoppedBy,
+    },
   };
+}
+
+/** Match the host's UTF-8 byte ceiling before starting a proposal request. */
+export function onboardingDescriptionError(value: string): string | null {
+  return new TextEncoder().encode(value.trim()).length > ONBOARDING_DESCRIPTION_MAX_BYTES
+    ? `Project description exceeds ${ONBOARDING_DESCRIPTION_MAX_BYTES} bytes.`
+    : null;
+}
+
+/** Human-readable, bounded status for the applied proposal and its scan. */
+export function onboardingProposalStatus(proposal: ParsedOnboardingProposal): string {
+  const parts = [proposal.source === 'agent'
+    ? 'AI proposal applied. Review and edit every field before saving.'
+    : 'Repository scan proposal applied. Review and edit every field before saving.'];
+  if (proposal.scanStats.filesRead !== undefined) {
+    parts.push(`Scanned ${proposal.scanStats.filesRead} files.`);
+  }
+  if (proposal.markers.length > 0) parts.push(`Detected ${proposal.markers.join(', ')}.`);
+  if (proposal.fallbackReason) {
+    parts.push('The managed model was unavailable or returned an invalid response, so the deterministic proposal was used.');
+  }
+  if (proposal.instruction) {
+    parts.push('An instruction-file proposal is available but is not included until its exact diff is reviewed.');
+  }
+  return parts.join(' ');
 }
 
 export function draftFromOnboardingProfile(profile: OnboardingProfile | undefined): OnboardingDraft | null {
@@ -229,6 +268,10 @@ function parseStringList(value: unknown, max = MAX_LIST_ITEMS, optional = false)
 function boundedString(value: unknown, maxBytes: number, allowEmpty = false): value is string {
   return typeof value === 'string' && (allowEmpty || value.length > 0) &&
     new TextEncoder().encode(value).length <= maxBytes;
+}
+
+function parseNonNegativeInteger(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

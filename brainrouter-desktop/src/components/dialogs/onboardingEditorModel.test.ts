@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   draftFromOnboardingProfile,
+  onboardingDescriptionError,
   onboardingDraftPreview,
+  onboardingProposalStatus,
   onboardingSavePayload,
   parseOnboardingCsv,
   parseOnboardingEditor,
@@ -95,19 +97,42 @@ test('parses model proposals and accepts only the fixed instruction target', () 
       instruction: { path: 'AGENT.md', contents: '# Project\n' },
     },
     fallbackReason: 'model-timeout',
-    scan: { markers: ['package.json'] },
+    scan: {
+      markers: ['package.json'],
+      stats: { filesRead: 12, bytesRead: 4096 },
+      stoppedBy: [],
+    },
   });
   assert.ok(parsed);
   assert.equal(parsed.source, 'agent');
   assert.deepEqual(parsed.instruction, { path: 'AGENT.md', contents: '# Project\n' });
   assert.equal(parsed.fallbackReason, 'model-timeout');
   assert.deepEqual(parsed.markers, ['package.json']);
+  assert.deepEqual(parsed.scanStats, { filesRead: 12, bytesRead: 4096, stoppedBy: [] });
+  assert.match(onboardingProposalStatus(parsed), /AI proposal applied/);
+  assert.match(onboardingProposalStatus(parsed), /not included until its exact diff is reviewed/);
 
   const unsafe = parseOnboardingProposal({
     proposal: { source: 'model', manifest: draft, instruction: { path: '../AGENT.md', contents: 'unsafe' } },
   });
   assert.ok(unsafe);
   assert.equal(unsafe.instruction, null);
+});
+
+test('validates assisted descriptions by UTF-8 bytes and formats deterministic fallback status', () => {
+  assert.equal(onboardingDescriptionError('A TypeScript application.'), null);
+  assert.match(onboardingDescriptionError('é'.repeat(2_049)) ?? '', /exceeds 4096 bytes/);
+
+  const draft = draftFromOnboardingProfile(engineering);
+  const parsed = parseOnboardingProposal({
+    proposal: { source: 'deterministic', manifest: draft, reasons: ['package.json'] },
+    fallbackReason: 'model-error',
+    scan: { markers: ['package.json'], stats: { filesRead: 4 }, stoppedBy: ['deadline'] },
+  });
+  assert.ok(parsed);
+  assert.equal(parsed.source, 'wizard');
+  assert.deepEqual(parsed.scanStats, { filesRead: 4, stoppedBy: ['deadline'] });
+  assert.match(onboardingProposalStatus(parsed), /deterministic proposal was used/);
 });
 
 test('formats review previews and comma-separated editor fields deterministically', () => {
