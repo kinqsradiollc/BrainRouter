@@ -204,7 +204,10 @@ export function summarizeProvides(plugin: DiscoveredPlugin): PluginProvides {
   const c = plugin.contributes;
   return {
     skills: c.skills ? countSkillDirs(c.skills) : 0,
-    agents: c.agents ? countFilesByExt(c.agents, ['.md']) : 0,
+    // Markdown files provide prompt/persona overlays; JSON files provide
+    // executable agent policy. Both are agent contributions disclosed to the
+    // user before a plugin is enabled.
+    agents: c.agents ? countFilesByExt(c.agents, ['.md', '.json']) : 0,
     commands: c.commands ? countFilesByExt(c.commands, ['.md']) : 0,
     hooks: c.hooks ? countHooks(c.hooks) : 0,
     mcpServers: c.mcpServers ? countMcpServers(c.mcpServers) : 0,
