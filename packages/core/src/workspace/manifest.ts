@@ -141,14 +141,18 @@ export function loadWorkspaceManifest(workspaceRoot: string): WorkspaceManifest 
 export function saveWorkspaceManifest(
   workspaceRoot: string,
   manifest: WorkspaceManifest,
-  options: { exclusive?: boolean } = {},
+  options: {
+    exclusive?: boolean;
+    /** Additional compare-before-save validation for reviewed edits. */
+    beforeCommit?: () => void;
+  } = {},
 ): string {
   const serialized = serializeWorkspaceManifest(manifest);
   return writeWorkspaceFileAtomic(
     workspaceRoot,
     WORKSPACE_MANIFEST_RELPATH,
     serialized,
-    { exclusive: options.exclusive },
+    { exclusive: options.exclusive, beforeCommit: options.beforeCommit },
   );
 }
 
