@@ -238,12 +238,13 @@ active-organization middleware, forwards only base content fields, and omits
 organization and creator identities from responses. Stable failures map to 400,
 403, 404, and 409 without weakening the domain service's ID isolation.
 
-Authenticated HTTP MCP sessions expose `knowledge_list` and
-`knowledge_base_create` only when the server has pinned user, organization, and
-role context. Stdio sessions do not advertise or execute knowledge tools
-without equivalent trusted tenant context. Tool inputs cannot override actor
-identity, role, or administrator status, and tool results omit organization and
-creator identities.
+Authenticated HTTP MCP sessions expose `knowledge_list`,
+`knowledge_base_create`, `knowledge_ingest`, `knowledge_status`, and
+`knowledge_retry` only when the server has pinned user, organization, and role
+context. Stdio sessions do not advertise or execute knowledge tools without
+equivalent trusted tenant context. Tool inputs cannot override actor identity,
+role, or administrator status. Document tool results also omit content, hashes,
+tenant ancestry, creator identity, queue errors, and generic job identifiers.
 
 Desktop resolves the active git remote against accessible Projects and requires
 an explicit create/link or selection when there are zero or multiple matches.
@@ -299,11 +300,11 @@ and tenant-fair job runner.
 
 Base list/create are available through authenticated REST and MCP adapters; the
 MCP tool names are `knowledge_list` and `knowledge_base_create`. Authenticated
-REST also exposes accepted text ingest, content-free processing status, and
-exact-scope retry. `knowledge_ingest` and `knowledge_search` follow with their
-respective MCP processing and retrieval slices. Profile recommendation
-intersects the shared profile catalog with actually available packs/personas
-and is never an ACL.
+REST and MCP expose accepted text ingest, content-free processing status, and
+exact-scope retry; the document MCP tools are `knowledge_ingest`,
+`knowledge_status`, and `knowledge_retry`. `knowledge_search` follows with the
+retrieval slice. Profile recommendation intersects the shared profile catalog
+with actually available packs/personas and is never an ACL.
 Opt-in distillation writes provenance-linked derived knowledge documents and
 prevents recursive self-distillation. Only separately reviewed facts may be
 captured into cognitive memory through its current engine.
@@ -366,7 +367,7 @@ captured into cognitive memory through its current engine.
 | W4c | Done | Briefing + memory tags | Capture/briefing/no-manifest tests |
 | W6 | Done | Client bootstrap deprecation | Offline core proposal coverage + downstream template-doc compatibility tests |
 | B1a | Done | Project/RBAC contract, schema, internal store, REST base CRUD, MCP base list/create | Migration + role/access + scoped CRUD + authenticated adapter tests |
-| B1b/B2 | In progress (MCP adapter) | Text ingest, typed parse jobs, status, scoped retry | Safe ingest + atomic enqueue + idempotent chunk/status/optional embedding + authenticated REST 202/status/retry complete; authenticated MCP adapter remains |
+| B1b/B2 | Done | Text ingest, typed parse jobs, status, scoped retry | Safe ingest + atomic enqueue + idempotent chunk/status/optional embedding + authenticated REST and MCP ingest/status/retry |
 | B1c | Todo | Hybrid retrieval and citation APIs/tools | FTS/vector/fallback/tenancy tests |
 | B1d | Todo | Additional document parsers | Per-format bounds/redaction tests |
 | B3 | Todo | Availability-aware recommendations and opt-in distillation | Catalog/provenance/no-recursion tests |
