@@ -16,6 +16,12 @@ import type {
   KnowledgeParseJobInput,
 } from "./contracts/document.js";
 import type { KnowledgeProjectAccessStore } from "./services/project-access.js";
+import type {
+  KnowledgeLexicalSearchHit,
+  KnowledgeSearchScope,
+  KnowledgeVectorSearchHit,
+  KnowledgeVectorSearchInput,
+} from "./contracts/search.js";
 
 export interface KnowledgeBaseStore extends KnowledgeProjectAccessStore {
   createKnowledgeBase(record: KnowledgeBaseRecord): Promise<void>;
@@ -31,6 +37,14 @@ export interface KnowledgeBaseStore extends KnowledgeProjectAccessStore {
 }
 
 export interface KnowledgeDocumentStore extends KnowledgeBaseStore {
+  searchKnowledgeChunksByText(
+    scope: KnowledgeSearchScope,
+    query: string,
+  ): Promise<KnowledgeLexicalSearchHit[]>;
+  searchKnowledgeChunksByVector(
+    scope: KnowledgeSearchScope,
+    input: KnowledgeVectorSearchInput,
+  ): Promise<KnowledgeVectorSearchHit[]>;
   enqueueKnowledgeDocument(
     record: KnowledgeDocumentRecord,
     jobId: string,

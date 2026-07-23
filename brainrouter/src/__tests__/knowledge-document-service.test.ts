@@ -58,6 +58,8 @@ function setup(options: {
     listKnowledgeBases: vi.fn(async () => [base]),
     updateKnowledgeBase: vi.fn(async () => base),
     deleteKnowledgeBase: vi.fn(async () => true),
+    searchKnowledgeChunksByText: vi.fn(async () => []),
+    searchKnowledgeChunksByVector: vi.fn(async () => []),
     enqueueKnowledgeDocument: vi.fn(async (document: KnowledgeDocumentRecord, jobId: string) => ({
       document,
       created: true,
