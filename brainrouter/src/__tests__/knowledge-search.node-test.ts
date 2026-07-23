@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import pg from "pg";
+import { knowledgeActorFromAuth } from "../knowledge/contracts/actor.js";
 import type { KnowledgeBaseRecord } from "../knowledge/contracts/base.js";
 import type { KnowledgeDocumentRecord, KnowledgeParseJobInput } from "../knowledge/contracts/document.js";
+import { KnowledgeSearchService } from "../knowledge/services/search.js";
 import { createTestStore } from "./helpers/pgTestStore.js";
 
 const { Client } = pg;
@@ -184,6 +186,48 @@ test("knowledge search primitives isolate ancestry, readiness, bases, models, an
       dimensions: 2,
       embedding: [1, 0],
     })).map((hit) => hit.chunkId), ["search-chunk-ready"]);
+
+    const actor = knowledgeActorFromAuth({
+      userId: "search-user",
+      orgId: "search-org-a",
+      role: "developer",
+    });
+    assert.ok(actor);
+    const hybridService = new KnowledgeSearchService(store, {
+      resolveEmbeddingProvider: async () => ({
+        model: "search-model",
+        embed: async () => new Float32Array([1, 0, 0]),
+      }),
+    });
+    const hybrid = await hybridService.search(actor, "search-project-a", {
+      query: "signing key",
+      baseIds: ["search-base-a"],
+      limit: 5,
+    });
+    assert.equal(hybrid.ok, true);
+    if (hybrid.ok) {
+      assert.equal(hybrid.value.mode, "hybrid");
+      assert.deepEqual(hybrid.value.hits.map((hit) => hit.citation.chunkId), ["search-chunk-ready"]);
+      assert.deepEqual(hybrid.value.hits[0]?.matchedBy, ["lexical", "vector"]);
+      assert.deepEqual(hybrid.value.hits[0]?.citation.locator, { section: "Recovery" });
+      assert.equal("orgId" in hybrid.value.hits[0]!, false);
+      assert.equal("embedding" in hybrid.value.hits[0]!, false);
+    }
+
+    const fallback = await new KnowledgeSearchService(store, {
+      resolveEmbeddingProvider: async () => ({
+        model: "search-model",
+        embed: async () => { throw new Error("private upstream detail"); },
+      }),
+    }).search(actor, "search-project-a", {
+      query: "signing key",
+      baseIds: ["search-base-a"],
+    });
+    assert.equal(fallback.ok, true);
+    if (fallback.ok) {
+      assert.equal(fallback.value.mode, "lexical");
+      assert.deepEqual(fallback.value.hits.map((hit) => hit.citation.chunkId), ["search-chunk-ready"]);
+    }
 
     const after = await client.query<{ documents: number; chunks: number; embeddings: number }>(
       `SELECT
