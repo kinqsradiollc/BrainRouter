@@ -1,14 +1,18 @@
 import { createHash, randomUUID } from "node:crypto";
+import { extractPdf } from "@kinqs/brainrouter-core/attachment";
 import { redactSensitiveMemoryText } from "../../memory/util/redaction.js";
 import { canUseKnowledge } from "../contracts/actor.js";
 import type { KnowledgeActor } from "../contracts/actor.js";
 import {
   KNOWLEDGE_PARSE_VERSION,
-  KNOWLEDGE_SOURCE_FORMATS,
+  KNOWLEDGE_INLINE_SOURCE_FORMATS,
   MAX_KNOWLEDGE_HTML_BYTES,
+  MAX_KNOWLEDGE_PDF_BASE64_CHARS,
+  MAX_KNOWLEDGE_PDF_BYTES,
   MAX_KNOWLEDGE_TEXT_BYTES,
 } from "../contracts/document.js";
 import type {
+  IngestKnowledgePdfInput,
   IngestKnowledgeTextInput,
   KnowledgeDocumentEnqueueResult,
   KnowledgeDocumentRecord,
@@ -16,6 +20,7 @@ import type {
   KnowledgeDocumentServiceFailure,
   KnowledgeDocumentServiceResult,
   KnowledgeDocumentStatusView,
+  KnowledgeInlineSourceFormat,
   KnowledgeSourceFormat,
 } from "../contracts/document.js";
 import type { KnowledgeDocumentStore } from "../store.js";
@@ -24,6 +29,8 @@ import { resolveKnowledgeProject } from "./project-access.js";
 
 const NOT_FOUND: KnowledgeDocumentServiceFailure = { ok: false, code: "not_found" };
 const FORBIDDEN: KnowledgeDocumentServiceFailure = { ok: false, code: "forbidden" };
+const PDF_HEADER_SCAN_BYTES = 1024;
+const MAX_PDF_EXTRACTED_CHARS = Math.floor(MAX_KNOWLEDGE_TEXT_BYTES / 2);
 
 export interface KnowledgeDocumentServiceOptions {
   documentIdGenerator?: () => string;
@@ -62,17 +69,46 @@ export class KnowledgeDocumentService {
 
     const normalized = normalizeTextInput(input);
     if (!normalized.ok) return normalized;
+    return this.#enqueueNormalized(actor, project.projectId, base.baseId, normalized.value);
+  }
+
+  async ingestPdf(
+    actor: KnowledgeActor,
+    projectId: string,
+    baseId: string,
+    input: IngestKnowledgePdfInput,
+  ): Promise<KnowledgeDocumentServiceResult<KnowledgeDocumentEnqueueResult>> {
+    const project = await resolveKnowledgeProject(actor, projectId, this.store);
+    if (!project) return NOT_FOUND;
+    if (!canUseKnowledge(actor, "write")) return FORBIDDEN;
+
+    const normalizedBaseId = baseId.trim();
+    if (!normalizedBaseId) return NOT_FOUND;
+    const base = await this.store.getKnowledgeBase(normalizedBaseId, actor.orgId, project.projectId);
+    if (!base) return NOT_FOUND;
+
+    const normalized = normalizePdfInput(input);
+    if (!normalized.ok) return normalized;
+    return this.#enqueueNormalized(actor, project.projectId, base.baseId, normalized.value);
+  }
+
+  async #enqueueNormalized(
+    actor: KnowledgeActor,
+    projectId: string,
+    baseId: string,
+    normalized: NormalizedDocumentInput,
+  ): Promise<KnowledgeDocumentServiceResult<KnowledgeDocumentEnqueueResult>> {
     const now = this.#now();
     const record: KnowledgeDocumentRecord = {
       documentId: this.#documentIdGenerator(),
-      baseId: base.baseId,
+      baseId,
       orgId: actor.orgId,
-      projectId: project.projectId,
-      title: normalized.value.title,
-      sourceName: normalized.value.sourceName,
-      sourceFormat: normalized.value.sourceFormat,
-      contentText: normalized.value.contentText,
-      contentSha256: sha256(normalized.value.contentText),
+      projectId,
+      title: normalized.title,
+      sourceName: normalized.sourceName,
+      sourceFormat: normalized.sourceFormat,
+      contentText: normalized.contentText,
+      contentSha256: sha256(normalized.contentText),
       status: "queued",
       statusMessage: null,
       parseVersion: KNOWLEDGE_PARSE_VERSION,
@@ -188,7 +224,7 @@ export class KnowledgeDocumentService {
   }
 }
 
-type NormalizedTextInput = {
+type NormalizedDocumentInput = {
   title: string;
   sourceName: string;
   sourceFormat: KnowledgeSourceFormat;
@@ -197,12 +233,12 @@ type NormalizedTextInput = {
 
 function normalizeTextInput(
   input: IngestKnowledgeTextInput,
-): KnowledgeDocumentServiceResult<NormalizedTextInput> {
+): KnowledgeDocumentServiceResult<NormalizedDocumentInput> {
   const title = normalizeMetadata(input.title, 500, false);
   if (title === null) return { ok: false, code: "invalid", field: "title" };
   const sourceName = normalizeMetadata(input.sourceName ?? "", 500, true);
   if (sourceName === null) return { ok: false, code: "invalid", field: "sourceName" };
-  if (!isSourceFormat(input.sourceFormat)) {
+  if (!isInlineSourceFormat(input.sourceFormat)) {
     return { ok: false, code: "invalid", field: "sourceFormat" };
   }
   if (typeof input.content !== "string"
@@ -220,7 +256,27 @@ function normalizeTextInput(
   return { ok: true, value: { title, sourceName, sourceFormat: input.sourceFormat, contentText } };
 }
 
-function maxSourceBytes(sourceFormat: KnowledgeSourceFormat): number {
+function normalizePdfInput(
+  input: IngestKnowledgePdfInput,
+): KnowledgeDocumentServiceResult<NormalizedDocumentInput> {
+  const title = normalizeMetadata(input.title, 500, false);
+  if (title === null) return { ok: false, code: "invalid", field: "title" };
+  const sourceName = normalizeMetadata(input.sourceName ?? "", 500, true);
+  if (sourceName === null) return { ok: false, code: "invalid", field: "sourceName" };
+  const pdf = decodeCanonicalPdf(input.contentBase64);
+  if (!pdf) return { ok: false, code: "invalid", field: "contentBase64" };
+
+  const extracted = extractPdf(pdf, { maxChars: MAX_PDF_EXTRACTED_CHARS });
+  const normalizedContent = normalizeExtractedPdfText(extracted.text);
+  const contentText = redactSensitiveMemoryText(normalizedContent);
+  if (!contentText
+    || Buffer.byteLength(contentText, "utf8") > MAX_KNOWLEDGE_TEXT_BYTES) {
+    return { ok: false, code: "invalid", field: "contentBase64" };
+  }
+  return { ok: true, value: { title, sourceName, sourceFormat: "pdf", contentText } };
+}
+
+function maxSourceBytes(sourceFormat: KnowledgeInlineSourceFormat): number {
   return sourceFormat === "html" ? MAX_KNOWLEDGE_HTML_BYTES : MAX_KNOWLEDGE_TEXT_BYTES;
 }
 
@@ -231,9 +287,59 @@ function normalizeMetadata(value: unknown, max: number, allowEmpty: boolean): st
   return normalized;
 }
 
-function isSourceFormat(value: unknown): value is KnowledgeSourceFormat {
+function isInlineSourceFormat(value: unknown): value is KnowledgeInlineSourceFormat {
   return typeof value === "string"
-    && (KNOWLEDGE_SOURCE_FORMATS as readonly string[]).includes(value);
+    && (KNOWLEDGE_INLINE_SOURCE_FORMATS as readonly string[]).includes(value);
+}
+
+function decodeCanonicalPdf(value: unknown): Buffer | null {
+  if (typeof value !== "string"
+    || value.length < 8
+    || value.length > MAX_KNOWLEDGE_PDF_BASE64_CHARS
+    || value.length % 4 !== 0
+    || !hasCanonicalBase64Shape(value)) {
+    return null;
+  }
+  const decoded = Buffer.from(value, "base64");
+  if (decoded.length < 1
+    || decoded.length > MAX_KNOWLEDGE_PDF_BYTES
+    || decoded.toString("base64") !== value) {
+    return null;
+  }
+  const header = decoded.subarray(0, Math.min(PDF_HEADER_SCAN_BYTES, decoded.length));
+  return header.includes(Buffer.from("%PDF-", "ascii")) ? decoded : null;
+}
+
+function hasCanonicalBase64Shape(value: string): boolean {
+  const firstPadding = value.indexOf("=");
+  const contentEnd = firstPadding === -1 ? value.length : firstPadding;
+  const paddingLength = value.length - contentEnd;
+  if (paddingLength > 2) return false;
+  if (paddingLength === 1 && contentEnd % 4 !== 3) return false;
+  if (paddingLength === 2 && contentEnd % 4 !== 2) return false;
+  for (let index = 0; index < contentEnd; index += 1) {
+    const code = value.charCodeAt(index);
+    const allowed = (code >= 0x41 && code <= 0x5a)
+      || (code >= 0x61 && code <= 0x7a)
+      || (code >= 0x30 && code <= 0x39)
+      || code === 0x2b
+      || code === 0x2f;
+    if (!allowed) return false;
+  }
+  for (let index = contentEnd; index < value.length; index += 1) {
+    if (value.charCodeAt(index) !== 0x3d) return false;
+  }
+  return true;
+}
+
+function normalizeExtractedPdfText(value: string): string {
+  return value
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
+    .replace(/[^\S\n]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function sha256(content: string): string {

@@ -300,8 +300,11 @@ and tenant-fair job runner.
   production-safe. Inline HTML is supported with a 1 MiB UTF-8 input cap;
   executable/metadata/template content and all tag attributes are discarded,
   extracted text is redacted before persistence, and URLs or host paths are
-  never fetched. Binary PDF and DOCX ingestion remain separate parser slices
-  with their own binary bounds and the same no-raw-content persistence rule.
+  never fetched. Authenticated REST PDF ingest accepts canonical base64 only,
+  validates a PDF signature within the first 1,024 bytes, caps decoded input at
+  2 MiB, performs bounded local text extraction, and persists only normalized,
+  redacted text before queuing the standard ID-only parse job. PDF MCP parity
+  and DOCX ingestion remain separate slices with the same no-raw-content rule.
 
 ### Serving and distillation
 
@@ -377,7 +380,7 @@ captured into cognitive memory through its current engine.
 | B1a | Done | Project/RBAC contract, schema, internal store, REST base CRUD, MCP base list/create | Migration + role/access + scoped CRUD + authenticated adapter tests |
 | B1b/B2 | Done | Text ingest, typed parse jobs, status, scoped retry | Safe ingest + atomic enqueue + idempotent chunk/status/optional embedding + authenticated REST and MCP ingest/status/retry |
 | B1c | Done | Hybrid retrieval and citation APIs/tools | FTS/vector/fallback/tenancy tests |
-| B1d | In progress | Bounded inline HTML shipped; binary document parsers remain | Per-format bounds/redaction/no-fetch tests |
+| B1d | In progress | Bounded inline HTML and authenticated REST PDF ingest shipped; PDF MCP and DOCX remain | Per-format bounds/redaction/no-fetch tests |
 | B3 | Todo | Availability-aware recommendations and opt-in distillation | Catalog/provenance/no-recursion tests |
 | C3 | Todo | Dashboard library expansion + Desktop knowledge panel | SDK, stale-scope, host bridge, UI inventory/live QA |
 | Final | Todo | Full suite, live CLI/Desktop/backend/dashboard walkthrough, docs/changelog | Green CI/security review and merged PRs |
