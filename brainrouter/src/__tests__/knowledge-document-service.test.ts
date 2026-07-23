@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import { knowledgeActorFromAuth } from "../knowledge/contracts/actor.js";
 import type { KnowledgeBaseRecord } from "../knowledge/contracts/base.js";
 import type { KnowledgeDocumentRecord } from "../knowledge/contracts/document.js";
-import { MAX_KNOWLEDGE_TEXT_BYTES } from "../knowledge/contracts/document.js";
+import {
+  MAX_KNOWLEDGE_HTML_BYTES,
+  MAX_KNOWLEDGE_TEXT_BYTES,
+} from "../knowledge/contracts/document.js";
 import { KnowledgeDocumentService } from "../knowledge/services/documents.js";
 import type { KnowledgeDocumentStore } from "../knowledge/store.js";
 
@@ -172,13 +175,39 @@ describe("KnowledgeDocumentService", () => {
     });
   });
 
+  it("extracts and redacts bounded HTML before persistence or enqueue", async () => {
+    const { service, store } = setup();
+    const expectedContent = "Deployment\n[REDACTED]\nRead the guide";
+    const result = await service.ingestText(developer, "project-1", "base-1", {
+      title: "Deployment page",
+      sourceName: "deployment.html",
+      sourceFormat: "html",
+      content: `<html><head><title>Not persisted</title></head><body>
+        <h1>Deployment</h1><p>SECRET_TOKEN=abc123</p>
+        <script>fetch('https://internal.invalid/credential')</script>
+        <a href="file:///private/host/path">Read the guide</a>
+      </body></html>`,
+    });
+
+    expect(result).toMatchObject({ ok: true, value: { created: true } });
+    const [record] = vi.mocked(store.enqueueKnowledgeDocument).mock.calls[0];
+    expect(record).toMatchObject({
+      sourceFormat: "html",
+      contentText: expectedContent,
+      contentSha256: createHash("sha256").update(expectedContent).digest("hex"),
+    });
+    expect(JSON.stringify(record)).not.toMatch(/<script|internal\.invalid|file:\/\/|abc123/);
+  });
+
   it("rejects invalid metadata, formats, empty content, and oversized raw bytes", async () => {
     const cases = [
       [{ title: "", sourceFormat: "text", content: "Body" }, "title"],
       [{ title: "Docs", sourceName: "x".repeat(501), sourceFormat: "text", content: "Body" }, "sourceName"],
-      [{ title: "Docs", sourceFormat: "html", content: "Body" }, "sourceFormat"],
+      [{ title: "Docs", sourceFormat: "pdf", content: "Body" }, "sourceFormat"],
       [{ title: "Docs", sourceFormat: "text", content: " \r\n " }, "content"],
       [{ title: "Docs", sourceFormat: "text", content: "é".repeat((MAX_KNOWLEDGE_TEXT_BYTES / 2) + 1) }, "content"],
+      [{ title: "Docs", sourceFormat: "html", content: "é".repeat((MAX_KNOWLEDGE_HTML_BYTES / 2) + 1) }, "content"],
+      [{ title: "Docs", sourceFormat: "html", content: "<script>only hidden text</script>" }, "content"],
     ] as const;
     for (const [input, field] of cases) {
       const { service, store } = setup();

@@ -492,12 +492,43 @@ describe("authenticated knowledge MCP tools", () => {
         projectId: "project-a",
         baseId: "kb-1",
         title: "Architecture notes",
-        sourceFormat: "html",
+        sourceFormat: "pdf",
         content: "Unsupported format",
       },
     })).rejects.toThrow("Invalid arguments");
     expect(mocks.getAccessibleProject).not.toHaveBeenCalled();
     expect(mocks.enqueueKnowledgeDocument).not.toHaveBeenCalled();
+  });
+
+  it("accepts inline HTML but persists only extracted and redacted text", async () => {
+    const client = await connect({
+      defaultUserId: "developer-1",
+      defaultOrgId: "org-a",
+      defaultRole: "developer",
+    });
+
+    const result = await client.callTool({
+      name: "knowledge_ingest",
+      arguments: {
+        projectId: "project-a",
+        baseId: "kb-1",
+        title: "Deployment page",
+        sourceName: "deployment.html",
+        sourceFormat: "html",
+        content: "<h1>Deployment</h1><script>private()</script><p>SECRET_TOKEN=abc123</p>",
+      },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(mocks.enqueueKnowledgeDocument).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceFormat: "html",
+        contentText: "Deployment\n[REDACTED]",
+      }),
+      expect.stringMatching(/^kjob_/),
+    );
+    expect(JSON.stringify(mocks.enqueueKnowledgeDocument.mock.calls[0]?.[0]))
+      .not.toMatch(/<script|private\(\)|abc123/);
   });
 
   it("sanitizes unexpected persistence failures", async () => {
