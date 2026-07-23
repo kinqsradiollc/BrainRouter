@@ -297,7 +297,11 @@ and tenant-fair job runner.
 - Hybrid retrieval fuses FTS and exact cosine results, falls back to FTS when
   embeddings fail, and returns document/chunk provenance and citations.
 - Additional formats land one parser at a time after the text pipeline is
-  production-safe.
+  production-safe. Inline HTML is supported with a 1 MiB UTF-8 input cap;
+  executable/metadata/template content and all tag attributes are discarded,
+  extracted text is redacted before persistence, and URLs or host paths are
+  never fetched. Binary PDF and DOCX ingestion remain separate parser slices
+  with their own binary bounds and the same no-raw-content persistence rule.
 
 ### Serving and distillation
 
@@ -373,7 +377,7 @@ captured into cognitive memory through its current engine.
 | B1a | Done | Project/RBAC contract, schema, internal store, REST base CRUD, MCP base list/create | Migration + role/access + scoped CRUD + authenticated adapter tests |
 | B1b/B2 | Done | Text ingest, typed parse jobs, status, scoped retry | Safe ingest + atomic enqueue + idempotent chunk/status/optional embedding + authenticated REST and MCP ingest/status/retry |
 | B1c | Done | Hybrid retrieval and citation APIs/tools | FTS/vector/fallback/tenancy tests |
-| B1d | Todo | Additional document parsers | Per-format bounds/redaction tests |
+| B1d | In progress | Bounded inline HTML shipped; binary document parsers remain | Per-format bounds/redaction/no-fetch tests |
 | B3 | Todo | Availability-aware recommendations and opt-in distillation | Catalog/provenance/no-recursion tests |
 | C3 | Todo | Dashboard library expansion + Desktop knowledge panel | SDK, stale-scope, host bridge, UI inventory/live QA |
 | Final | Todo | Full suite, live CLI/Desktop/backend/dashboard walkthrough, docs/changelog | Green CI/security review and merged PRs |

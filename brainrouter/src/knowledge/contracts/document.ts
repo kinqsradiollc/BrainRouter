@@ -1,12 +1,13 @@
 export const KNOWLEDGE_DOCUMENT_STATUSES = ["queued", "parsing", "ready", "failed"] as const;
 export type KnowledgeDocumentStatus = (typeof KNOWLEDGE_DOCUMENT_STATUSES)[number];
 
-export const KNOWLEDGE_SOURCE_FORMATS = ["text", "markdown"] as const;
+export const KNOWLEDGE_SOURCE_FORMATS = ["text", "markdown", "html"] as const;
 export type KnowledgeSourceFormat = (typeof KNOWLEDGE_SOURCE_FORMATS)[number];
 
 export const KNOWLEDGE_PARSE_VERSION = 1;
 export const KNOWLEDGE_PARSE_JOB_KIND = `knowledge-parse-v${KNOWLEDGE_PARSE_VERSION}`;
 export const MAX_KNOWLEDGE_TEXT_BYTES = 2 * 1024 * 1024;
+export const MAX_KNOWLEDGE_HTML_BYTES = 1 * 1024 * 1024;
 
 export interface KnowledgeDocumentRecord {
   documentId: string;

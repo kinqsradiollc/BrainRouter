@@ -5,7 +5,10 @@
  */
 
 import { z } from "zod";
-import { KNOWLEDGE_SOURCE_FORMATS, MAX_KNOWLEDGE_TEXT_BYTES } from "../../knowledge/contracts/document.js";
+import {
+  KNOWLEDGE_SOURCE_FORMATS,
+  MAX_KNOWLEDGE_TEXT_BYTES,
+} from "../../knowledge/contracts/document.js";
 import {
   knowledgeDocumentOperations,
   knowledgeDocumentToolFailure,
@@ -17,7 +20,7 @@ import {
 
 export const knowledgeIngestToolSchema = {
   name: "knowledge_ingest",
-  description: "Accept plain text or Markdown for asynchronous ingest into one accessible Project knowledge base. Requires authenticated knowledge write access.",
+  description: "Accept plain text, Markdown, or inline HTML for asynchronous ingest into one accessible Project knowledge base. HTML is extracted locally and never fetched. Requires authenticated knowledge write access.",
   inputSchema: {
     type: "object",
     properties: {
@@ -26,7 +29,7 @@ export const knowledgeIngestToolSchema = {
       title: { type: "string", minLength: 1, maxLength: 500, description: "Document title (1-500 characters)." },
       sourceName: { type: "string", maxLength: 500, description: "Optional source label (up to 500 characters)." },
       sourceFormat: { type: "string", enum: KNOWLEDGE_SOURCE_FORMATS, description: "Input format." },
-      content: { type: "string", minLength: 1, maxLength: MAX_KNOWLEDGE_TEXT_BYTES, description: "Plain text or Markdown content (up to 2 MiB UTF-8)." },
+      content: { type: "string", minLength: 1, maxLength: MAX_KNOWLEDGE_TEXT_BYTES, description: "Inline content (text/Markdown up to 2 MiB UTF-8; HTML up to 1 MiB UTF-8). URLs and host paths are not fetched." },
     },
     required: ["projectId", "baseId", "title", "sourceFormat", "content"],
     additionalProperties: false,

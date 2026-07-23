@@ -5,6 +5,7 @@ import type { KnowledgeActor } from "../contracts/actor.js";
 import {
   KNOWLEDGE_PARSE_VERSION,
   KNOWLEDGE_SOURCE_FORMATS,
+  MAX_KNOWLEDGE_HTML_BYTES,
   MAX_KNOWLEDGE_TEXT_BYTES,
 } from "../contracts/document.js";
 import type {
@@ -18,6 +19,7 @@ import type {
   KnowledgeSourceFormat,
 } from "../contracts/document.js";
 import type { KnowledgeDocumentStore } from "../store.js";
+import { extractKnowledgeHtmlText } from "./html-parser.js";
 import { resolveKnowledgeProject } from "./project-access.js";
 
 const NOT_FOUND: KnowledgeDocumentServiceFailure = { ok: false, code: "not_found" };
@@ -204,16 +206,22 @@ function normalizeTextInput(
     return { ok: false, code: "invalid", field: "sourceFormat" };
   }
   if (typeof input.content !== "string"
-    || Buffer.byteLength(input.content, "utf8") > MAX_KNOWLEDGE_TEXT_BYTES) {
+    || Buffer.byteLength(input.content, "utf8") > maxSourceBytes(input.sourceFormat)) {
     return { ok: false, code: "invalid", field: "content" };
   }
-  const normalizedContent = input.content.replace(/\r\n?/g, "\n").trim();
+  const normalizedContent = input.sourceFormat === "html"
+    ? extractKnowledgeHtmlText(input.content)
+    : input.content.replace(/\r\n?/g, "\n").trim();
   const contentText = redactSensitiveMemoryText(normalizedContent);
   if (!contentText
     || Buffer.byteLength(contentText, "utf8") > MAX_KNOWLEDGE_TEXT_BYTES) {
     return { ok: false, code: "invalid", field: "content" };
   }
   return { ok: true, value: { title, sourceName, sourceFormat: input.sourceFormat, contentText } };
+}
+
+function maxSourceBytes(sourceFormat: KnowledgeSourceFormat): number {
+  return sourceFormat === "html" ? MAX_KNOWLEDGE_HTML_BYTES : MAX_KNOWLEDGE_TEXT_BYTES;
 }
 
 function normalizeMetadata(value: unknown, max: number, allowEmpty: boolean): string | null {
