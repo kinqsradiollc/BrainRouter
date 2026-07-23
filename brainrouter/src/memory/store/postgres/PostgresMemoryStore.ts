@@ -115,6 +115,12 @@ import type {
   KnowledgeParseCommitResult,
   KnowledgeParseJobInput,
 } from "../../../knowledge/contracts/document.js";
+import type {
+  KnowledgeLexicalSearchHit,
+  KnowledgeSearchScope,
+  KnowledgeVectorSearchHit,
+  KnowledgeVectorSearchInput,
+} from "../../../knowledge/contracts/search.js";
 import type { VecContext } from "./queries/searchQueries.js";
 import {
   DEFAULT_TTL_SECONDS,
@@ -147,6 +153,7 @@ import * as sharing from "./queries/memorySharingQueries.js";
 import * as projects from "./queries/projectQueries.js";
 import * as knowledgeBases from "./queries/knowledgeBaseQueries.js";
 import * as knowledgeDocuments from "./queries/knowledgeDocumentQueries.js";
+import * as knowledgeSearch from "./queries/knowledgeSearchQueries.js";
 import * as adminConsole from "./queries/adminConsoleQueries.js";
 import * as providerCfg from "./queries/providerConfigQueries.js";
 import * as modelPolicy from "./queries/modelPolicyQueries.js";
@@ -517,6 +524,8 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public getKnowledgeDocumentByContentHash(contentSha256: string, baseId: string, orgId: string, projectId: string): Promise<KnowledgeDocumentRecord | null> { return knowledgeDocuments.getKnowledgeDocumentByContentHash(this.exec, contentSha256, baseId, orgId, projectId); }
   public listKnowledgeDocuments(baseId: string, orgId: string, projectId: string, filters?: KnowledgeDocumentListFilters): Promise<KnowledgeDocumentRecord[]> { return knowledgeDocuments.listKnowledgeDocuments(this.exec, baseId, orgId, projectId, filters); }
   public updateKnowledgeDocumentStatus(documentId: string, baseId: string, orgId: string, projectId: string, update: KnowledgeDocumentStatusUpdate): Promise<KnowledgeDocumentRecord | null> { return knowledgeDocuments.updateKnowledgeDocumentStatus(this.exec, documentId, baseId, orgId, projectId, update); }
+  public searchKnowledgeChunksByText(scope: KnowledgeSearchScope, query: string): Promise<KnowledgeLexicalSearchHit[]> { return knowledgeSearch.searchKnowledgeChunksByText(this.exec, scope, query); }
+  public searchKnowledgeChunksByVector(scope: KnowledgeSearchScope, input: KnowledgeVectorSearchInput): Promise<KnowledgeVectorSearchHit[]> { return knowledgeSearch.searchKnowledgeChunksByVector(this.exec, scope, input); }
   // Meetings (ADR-018) — index table + revocable public share tokens.
   public createMeeting(m: meetings.CreateMeetingInput): Promise<void> { return meetings.createMeeting(this.exec, m); }
   public listMeetings(orgId: string, userId: string, limit?: number): Promise<meetings.MeetingRow[]> { return meetings.listMeetings(this.exec, orgId, userId, limit); }
