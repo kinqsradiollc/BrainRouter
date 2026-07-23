@@ -111,6 +111,7 @@ import {
   knowledgeIngestToolSchema, handleKnowledgeIngest,
   knowledgeStatusToolSchema, handleKnowledgeStatus,
   knowledgeRetryToolSchema, handleKnowledgeRetry,
+  knowledgeSearchToolSchema, handleKnowledgeSearch,
 } from '../tools/knowledge/index.js';
 
 const STDIO_DEFAULT_USER_ID = process.env.BRAINROUTER_USER_ID ?? "default";
@@ -327,6 +328,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
         knowledgeIngestToolSchema,
         knowledgeStatusToolSchema,
         knowledgeRetryToolSchema,
+        knowledgeSearchToolSchema,
       ] : []),
     ],
   }));
@@ -510,6 +512,9 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
         case 'knowledge_retry':
           if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
           return await handleKnowledgeRetry(request.params.arguments, { actor: knowledgeActor });
+        case 'knowledge_search':
+          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
+          return await handleKnowledgeSearch(request.params.arguments, { actor: knowledgeActor });
         default:
           throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
       }

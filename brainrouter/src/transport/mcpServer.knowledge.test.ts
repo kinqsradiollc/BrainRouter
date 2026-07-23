@@ -11,6 +11,9 @@ const mocks = vi.hoisted(() => ({
   getKnowledgeDocument: vi.fn(),
   getKnowledgeDocumentProcessing: vi.fn(),
   retryKnowledgeDocumentProcessing: vi.fn(),
+  searchKnowledgeChunksByText: vi.fn(),
+  searchKnowledgeChunksByVector: vi.fn(),
+  resolveKnowledgeEmbeddingProvider: vi.fn(),
 }));
 
 vi.mock("../memory/engine.js", () => ({
@@ -24,7 +27,10 @@ vi.mock("../memory/engine.js", () => ({
       getKnowledgeDocument: mocks.getKnowledgeDocument,
       getKnowledgeDocumentProcessing: mocks.getKnowledgeDocumentProcessing,
       retryKnowledgeDocumentProcessing: mocks.retryKnowledgeDocumentProcessing,
+      searchKnowledgeChunksByText: mocks.searchKnowledgeChunksByText,
+      searchKnowledgeChunksByVector: mocks.searchKnowledgeChunksByVector,
     },
+    resolveKnowledgeEmbeddingProvider: mocks.resolveKnowledgeEmbeddingProvider,
   },
 }));
 
@@ -109,6 +115,27 @@ describe("authenticated knowledge MCP tools", () => {
       enqueued: true,
       jobId: "kjob-retry-private",
     });
+    const searchHit = {
+      chunkId: "chunk-1",
+      documentId: "kdoc-1",
+      baseId: "kb-1",
+      orgId: "org-a",
+      projectId: "project-a",
+      documentTitle: "Architecture notes",
+      sourceName: "notes.md",
+      ordinal: 0,
+      content: "Rotate the signing key before deployment.",
+      tokenCount: 7,
+      charStart: 0,
+      charEnd: 40,
+      locator: { section: "Deployment", absolutePath: "/private/notes.md" },
+    };
+    mocks.searchKnowledgeChunksByText.mockResolvedValue([{ ...searchHit, textRank: 0.8 }]);
+    mocks.searchKnowledgeChunksByVector.mockResolvedValue([{ ...searchHit, vectorScore: 0.9 }]);
+    mocks.resolveKnowledgeEmbeddingProvider.mockResolvedValue({
+      model: "search-model",
+      embed: vi.fn(async () => new Float32Array([1, 0, 0])),
+    });
   });
 
   afterEach(async () => {
@@ -138,9 +165,14 @@ describe("authenticated knowledge MCP tools", () => {
     expect(tools.tools.map((tool) => tool.name)).not.toContain("knowledge_ingest");
     expect(tools.tools.map((tool) => tool.name)).not.toContain("knowledge_status");
     expect(tools.tools.map((tool) => tool.name)).not.toContain("knowledge_retry");
+    expect(tools.tools.map((tool) => tool.name)).not.toContain("knowledge_search");
     await expect(client.callTool({
       name: "knowledge_list",
       arguments: { projectId: "project-a", orgId: "org-a", role: "owner" },
+    })).rejects.toThrow("Authenticated organization context required");
+    await expect(client.callTool({
+      name: "knowledge_search",
+      arguments: { projectId: "project-a", query: "signing key" },
     })).rejects.toThrow("Authenticated organization context required");
     expect(mocks.getAccessibleProject).not.toHaveBeenCalled();
   });
@@ -163,6 +195,7 @@ describe("authenticated knowledge MCP tools", () => {
       "knowledge_ingest",
       "knowledge_status",
       "knowledge_retry",
+      "knowledge_search",
     ]));
     expect(mocks.getAccessibleProject).toHaveBeenCalledWith(
       "project-a",
@@ -506,5 +539,139 @@ describe("authenticated knowledge MCP tools", () => {
       error: { code: "not_found" },
     });
     expect(mocks.listKnowledgeBases).not.toHaveBeenCalled();
+  });
+
+  it("searches with the session actor and returns citation-safe hybrid results", async () => {
+    const client = await connect({
+      defaultUserId: "viewer-1",
+      defaultOrgId: "org-a",
+      defaultRole: "viewer",
+    });
+    const result = await client.callTool({
+      name: "knowledge_search",
+      arguments: {
+        projectId: "project-a",
+        query: "signing key",
+        baseIds: ["kb-1"],
+        limit: 5,
+        orgId: "org-foreign",
+        userId: "attacker",
+        role: "owner",
+        embedding: [9, 9, 9],
+        embeddingModel: "attacker-model",
+      },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(mocks.getAccessibleProject).toHaveBeenCalledWith(
+      "project-a",
+      "org-a",
+      "viewer-1",
+      false,
+    );
+    expect(mocks.listKnowledgeBases).toHaveBeenCalledWith("org-a", "project-a");
+    expect(mocks.searchKnowledgeChunksByText).toHaveBeenCalledWith({
+      orgId: "org-a",
+      projectId: "project-a",
+      baseIds: ["kb-1"],
+      limit: 20,
+    }, "signing key");
+    expect(mocks.resolveKnowledgeEmbeddingProvider).toHaveBeenCalledWith("org-a");
+    expect(mocks.searchKnowledgeChunksByVector).toHaveBeenCalledWith(
+      expect.objectContaining({ orgId: "org-a", projectId: "project-a", baseIds: ["kb-1"] }),
+      { embeddingModel: "search-model", dimensions: 3, embedding: expect.any(Float32Array) },
+    );
+    const payload = parseTextResult(result);
+    expect(payload).toEqual({
+      search: {
+        mode: "hybrid",
+        hits: [{
+          content: "Rotate the signing key before deployment.",
+          score: 2 / 61,
+          matchedBy: ["lexical", "vector"],
+          citation: {
+            projectId: "project-a",
+            baseId: "kb-1",
+            documentId: "kdoc-1",
+            chunkId: "chunk-1",
+            documentTitle: "Architecture notes",
+            sourceName: "notes.md",
+            ordinal: 0,
+            charStart: 0,
+            charEnd: 40,
+            locator: { section: "Deployment" },
+          },
+        }],
+      },
+    });
+    const serialized = JSON.stringify(payload);
+    expect(serialized).not.toContain("org-a");
+    expect(serialized).not.toContain("viewer-1");
+    expect(serialized).not.toContain("attacker-model");
+    expect(serialized).not.toContain("absolutePath");
+  });
+
+  it("falls back to lexical search without exposing embedding provider failures", async () => {
+    mocks.resolveKnowledgeEmbeddingProvider.mockRejectedValueOnce(
+      new Error("private provider credential detail"),
+    );
+    const client = await connect({
+      defaultUserId: "viewer-1",
+      defaultOrgId: "org-a",
+      defaultRole: "viewer",
+    });
+    const result = await client.callTool({
+      name: "knowledge_search",
+      arguments: { projectId: "project-a", query: "signing key" },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(parseTextResult(result)).toMatchObject({ search: { mode: "lexical" } });
+    expect(mocks.searchKnowledgeChunksByVector).not.toHaveBeenCalled();
+    expect(JSON.stringify(parseTextResult(result))).not.toContain("credential");
+  });
+
+  it("validates search input and base ancestry before retrieval", async () => {
+    const client = await connect({
+      defaultUserId: "viewer-1",
+      defaultOrgId: "org-a",
+      defaultRole: "viewer",
+    });
+    await expect(client.callTool({
+      name: "knowledge_search",
+      arguments: { projectId: "project-a", query: "" },
+    })).rejects.toThrow("Invalid arguments");
+
+    const foreignBase = await client.callTool({
+      name: "knowledge_search",
+      arguments: {
+        projectId: "project-a",
+        query: "signing key",
+        baseIds: ["kb-foreign"],
+      },
+    });
+    expect(foreignBase.isError).toBe(true);
+    expect(parseTextResult(foreignBase)).toEqual({ error: { code: "not_found" } });
+    expect(mocks.searchKnowledgeChunksByText).not.toHaveBeenCalled();
+    expect(mocks.searchKnowledgeChunksByVector).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes unexpected search persistence failures", async () => {
+    mocks.searchKnowledgeChunksByText.mockRejectedValueOnce(
+      new Error("private database credential detail"),
+    );
+    const client = await connect({
+      defaultUserId: "viewer-1",
+      defaultOrgId: "org-a",
+      defaultRole: "viewer",
+    });
+    const result = await client.callTool({
+      name: "knowledge_search",
+      arguments: { projectId: "project-a", query: "signing key" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(parseTextResult(result)).toEqual({ error: { code: "internal_error" } });
+    expect(JSON.stringify(parseTextResult(result))).not.toContain("credential");
   });
 });
