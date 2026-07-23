@@ -191,6 +191,15 @@ without an equivalent trusted organization context. MCP requests cannot
 override tenant identity, role, or administrator status, and responses omit
 organization and creator identities.
 
+Hybrid retrieval is served through authenticated, Project-scoped REST and MCP
+adapters. The service bounds lexical and vector candidates, resolves embeddings
+from the actor's organization, applies deterministic reciprocal-rank fusion,
+and falls back to lexical results when embedding or vector search is
+unavailable. Results contain chunk content plus allowlisted source citations;
+they omit tenant custody, stored vectors, provider failures, and parser-local
+paths. MCP sessions advertise `knowledge_search` only with the same complete
+server-pinned identity used by the other knowledge tools.
+
 ## Delivery order
 
 - **W0–W3a (shipped)** — bundled starter skills; core manifest/presets; CLI
@@ -228,8 +237,11 @@ organization and creator identities.
   retry without generic job identifiers. Authenticated MCP ingest, status, and
   retry now apply the same actor, ancestry, role, response-secrecy, and
   generic-job-ID constraints.
-- **B1c–B3** — async retrieval; profile-aware recommendations and
-  opt-in sourced distillation.
+- **B1c (shipped)** — bounded FTS and exact vector candidates, deterministic
+  hybrid fusion with lexical fallback, citation-safe results, authenticated
+  Project-scoped REST search, and session-pinned MCP search.
+- **B1d/B3** — additional bounded document parsers; profile-aware
+  recommendations and opt-in sourced distillation.
 - **C3** — dashboard and desktop knowledge management after the server contracts
   and job status APIs are stable.
 
