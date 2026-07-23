@@ -63,7 +63,11 @@ import { githubConnectorRouter, githubConnectorAdminRouter } from './api/routes/
 import { providersRouter, agentModelsRouter, recallSettingsRouter, integrationsRouter, reviewsRouter, pentestsRouter, adminEmailRouter, adminOrgsRouter, adminModelsRouter } from './api/routes/admin/index.js';
 import { modelsRouter } from './api/routes/models/index.js';
 import { remoteRouter } from './api/routes/remote/index.js';
-import { knowledgeBasesRouter, knowledgeDocumentsRouter } from './api/routes/knowledge/index.js';
+import {
+  knowledgeBasesRouter,
+  knowledgeDocumentsRouter,
+  knowledgeSearchRouter,
+} from './api/routes/knowledge/index.js';
 import { triggersRouter } from './api/routes/triggers/index.js';
 import {
   memoriesRouter,
@@ -278,6 +282,7 @@ if (USE_HTTP) {
   app.use("/api/models", modelsRouter);
   app.use("/api/knowledge", knowledgeBasesRouter);
   app.use("/api/knowledge", knowledgeDocumentsRouter);
+  app.use("/api/knowledge", knowledgeSearchRouter);
   app.use("/api/remote", remoteRouter);
   app.use("/api/admin/agent-models", agentModelsRouter);
   app.use("/api/admin/recall-settings", recallSettingsRouter);
