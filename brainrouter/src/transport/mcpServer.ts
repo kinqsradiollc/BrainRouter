@@ -115,6 +115,9 @@ import {
   knowledgeRetryToolSchema, handleKnowledgeRetry,
   knowledgeSearchToolSchema, handleKnowledgeSearch,
 } from '../tools/knowledge/index.js';
+import {
+  workspaceProfileRecommendToolSchema, handleWorkspaceProfileRecommend,
+} from '../tools/workspace/index.js';
 
 const STDIO_DEFAULT_USER_ID = process.env.BRAINROUTER_USER_ID ?? "default";
 
@@ -197,6 +200,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
           required: ['name'],
         },
       },
+      workspaceProfileRecommendToolSchema,
       {
         name: 'get_reference',
         description: 'Fetch a reference document.',
@@ -364,6 +368,8 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
         case 'get_skill':     return await getSkill(registry, getSkillSchema.parse(request.params.arguments));
         case 'search_skills': return await searchSkills(registry, searchSkillsSchema.parse(request.params.arguments));
         case 'get_persona':   return await getPersona(registry, getPersonaSchema.parse(request.params.arguments));
+        case 'workspace_profile_recommend':
+          return await handleWorkspaceProfileRecommend(registry, request.params.arguments);
         case 'get_reference': return await getReference(registry, getReferenceSchema.parse(request.params.arguments));
         case 'list_template_docs': return await listTemplateDocs(registry, listTemplateDocsSchema.parse(request.params.arguments));
         case 'get_template_doc':   return await getTemplateDoc(registry, getTemplateDocSchema.parse(request.params.arguments));

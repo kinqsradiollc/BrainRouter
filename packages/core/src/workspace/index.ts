@@ -18,6 +18,7 @@ export * from './workspaceContentSafety.js';
 export * from './reviewedOnboarding.js';
 export * from './domainPersonas.js';
 export * from './profilePlugins.js';
+export * from './profileRecommendations.js';
 export * from './skillSelection.js';
 export * from './skillToolAdapter.js';
 export * from './toolProfiles.js';
