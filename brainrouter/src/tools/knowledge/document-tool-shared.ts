@@ -13,12 +13,19 @@ import type {
   KnowledgeDocumentServiceFailure,
   KnowledgeDocumentServiceResult,
   KnowledgeDocumentStatusView,
+  IngestKnowledgePdfInput,
   IngestKnowledgeTextInput,
 } from "../../knowledge/contracts/document.js";
 import { KnowledgeDocumentService } from "../../knowledge/services/documents.js";
 import { memoryEngine } from "../../memory/engine.js";
 
 export interface KnowledgeDocumentToolOperations {
+  ingestPdf(
+    actor: KnowledgeActor,
+    projectId: string,
+    baseId: string,
+    input: IngestKnowledgePdfInput,
+  ): Promise<KnowledgeDocumentServiceResult<KnowledgeDocumentEnqueueResult>>;
   ingestText(
     actor: KnowledgeActor,
     projectId: string,
