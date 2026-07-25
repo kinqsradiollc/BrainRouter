@@ -329,8 +329,14 @@ catalog with actually available packs, capabilities, personas, and starter
 skills. Its result is advisory and has no authorization or runtime-policy
 effect.
 Opt-in distillation writes provenance-linked derived knowledge documents and
-prevents recursive self-distillation. Only separately reviewed facts may be
-captured into cognitive memory through its current engine.
+prevents recursive self-distillation. The authenticated
+`POST /api/knowledge/projects/:projectId/bases/:baseId/distill` action requires
+explicit confirmation, uses only ready non-derived documents in that exact
+Project/base ancestry, validates bounded structured model output, and stores
+source edges atomically with each derived Markdown document and its parse job.
+The database boundary independently rejects derived or unready source inputs.
+Only separately reviewed facts may be captured into cognitive memory through
+its current engine; distillation itself never writes cognitive memory.
 
 ## Surface Requirements
 
@@ -393,7 +399,7 @@ captured into cognitive memory through its current engine.
 | B1b/B2 | Done | Text ingest, typed parse jobs, status, scoped retry | Safe ingest + atomic enqueue + idempotent chunk/status/optional embedding + authenticated REST and MCP ingest/status/retry |
 | B1c | Done | Hybrid retrieval and citation APIs/tools | FTS/vector/fallback/tenancy tests |
 | B1d | Done | Bounded inline HTML plus REST/MCP PDF and DOCX ingest | Per-format bounds/redaction/no-fetch tests |
-| B3 | In progress | Availability-aware recommendations shipped; opt-in distillation remains | Catalog/provenance/no-recursion tests |
+| B3 | Done | Availability-aware recommendations and opt-in derived-note distillation | Catalog/provenance/no-recursion tests |
 | C3 | Todo | Dashboard library expansion + Desktop knowledge panel | SDK, stale-scope, host bridge, UI inventory/live QA |
 | Final | Todo | Full suite, live CLI/Desktop/backend/dashboard walkthrough, docs/changelog | Green CI/security review and merged PRs |
 

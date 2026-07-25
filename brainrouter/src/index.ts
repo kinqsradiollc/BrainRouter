@@ -65,6 +65,7 @@ import { modelsRouter } from './api/routes/models/index.js';
 import { remoteRouter } from './api/routes/remote/index.js';
 import {
   knowledgeBasesRouter,
+  knowledgeDistillationRouter,
   knowledgeDocumentsRouter,
   knowledgeSearchRouter,
 } from './api/routes/knowledge/index.js';
@@ -281,6 +282,7 @@ if (USE_HTTP) {
   app.use("/api/admin/models", adminModelsRouter);
   app.use("/api/models", modelsRouter);
   app.use("/api/knowledge", knowledgeBasesRouter);
+  app.use("/api/knowledge", knowledgeDistillationRouter);
   app.use("/api/knowledge", knowledgeDocumentsRouter);
   app.use("/api/knowledge", knowledgeSearchRouter);
   app.use("/api/remote", remoteRouter);
