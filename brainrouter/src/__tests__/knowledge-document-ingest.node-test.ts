@@ -82,6 +82,32 @@ test("knowledge text ingest persists redacted content and atomically queues one 
     assert.equal(duplicate.value.jobId, null);
     assert.equal((await store.listMemoryJobs({ kind: KNOWLEDGE_PARSE_JOB_KIND })).length, 1);
 
+    const rawPdf = Buffer.from(
+      "%PDF-1.4\n1 0 obj <</Type /Page>> endobj\nBT (PDF\\nSECRET_TOKEN=pdf123) Tj ET\n%%EOF",
+      "latin1",
+    ).toString("base64");
+    const pdf = await service.ingestPdf(actor, "ingest-project", "ingest-base", {
+      title: "PDF runbook",
+      sourceName: "runbook.pdf",
+      contentBase64: rawPdf,
+    });
+    assert.equal(pdf.ok, true);
+    if (!pdf.ok) return;
+    assert.equal(pdf.value.created, true);
+    assert.equal(pdf.value.jobId, "ingest-job-3");
+    assert.equal(pdf.value.document.sourceFormat, "pdf");
+    assert.equal(pdf.value.document.contentText, "PDF\n[REDACTED]");
+    const pdfJob = await store.getMemoryJob("ingest-job-3");
+    assert.deepEqual(pdfJob?.input, {
+      orgId: "ingest-org",
+      projectId: "ingest-project",
+      baseId: "ingest-base",
+      documentId: "ingest-document-3",
+      parseVersion: 1,
+    });
+    assert.equal(JSON.stringify(pdfJob?.input).includes(rawPdf), false);
+    assert.equal((await store.listMemoryJobs({ kind: KNOWLEDGE_PARSE_JOB_KIND })).length, 2);
+
     await store.enqueueMemoryJob(
       { kind: "collision-sentinel", input: { orgId: "ingest-org" } },
       { idGenerator: () => "ingest-job-collision", now: at },

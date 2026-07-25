@@ -1,13 +1,18 @@
 export const KNOWLEDGE_DOCUMENT_STATUSES = ["queued", "parsing", "ready", "failed"] as const;
 export type KnowledgeDocumentStatus = (typeof KNOWLEDGE_DOCUMENT_STATUSES)[number];
 
-export const KNOWLEDGE_SOURCE_FORMATS = ["text", "markdown", "html"] as const;
+export const KNOWLEDGE_INLINE_SOURCE_FORMATS = ["text", "markdown", "html"] as const;
+export type KnowledgeInlineSourceFormat = (typeof KNOWLEDGE_INLINE_SOURCE_FORMATS)[number];
+
+export const KNOWLEDGE_SOURCE_FORMATS = [...KNOWLEDGE_INLINE_SOURCE_FORMATS, "pdf"] as const;
 export type KnowledgeSourceFormat = (typeof KNOWLEDGE_SOURCE_FORMATS)[number];
 
 export const KNOWLEDGE_PARSE_VERSION = 1;
 export const KNOWLEDGE_PARSE_JOB_KIND = `knowledge-parse-v${KNOWLEDGE_PARSE_VERSION}`;
 export const MAX_KNOWLEDGE_TEXT_BYTES = 2 * 1024 * 1024;
 export const MAX_KNOWLEDGE_HTML_BYTES = 1 * 1024 * 1024;
+export const MAX_KNOWLEDGE_PDF_BYTES = 2 * 1024 * 1024;
+export const MAX_KNOWLEDGE_PDF_BASE64_CHARS = 4 * Math.ceil(MAX_KNOWLEDGE_PDF_BYTES / 3);
 
 export interface KnowledgeDocumentRecord {
   documentId: string;
@@ -44,8 +49,15 @@ export interface KnowledgeDocumentStatusUpdate {
 export interface IngestKnowledgeTextInput {
   title: string;
   sourceName?: string;
-  sourceFormat: KnowledgeSourceFormat;
+  sourceFormat: KnowledgeInlineSourceFormat;
   content: string;
+}
+
+export interface IngestKnowledgePdfInput {
+  title: string;
+  sourceName?: string;
+  /** Canonical padded base64 only; data URLs and local paths are rejected. */
+  contentBase64: string;
 }
 
 export interface KnowledgeParseJobInput {
@@ -144,7 +156,7 @@ export interface KnowledgeDocumentRetryView {
 export type KnowledgeDocumentServiceFailure = {
   ok: false;
   code: "not_found" | "forbidden" | "invalid";
-  field?: "baseId" | "title" | "sourceName" | "sourceFormat" | "content";
+  field?: "baseId" | "title" | "sourceName" | "sourceFormat" | "content" | "contentBase64";
 };
 
 export type KnowledgeDocumentServiceResult<T> =

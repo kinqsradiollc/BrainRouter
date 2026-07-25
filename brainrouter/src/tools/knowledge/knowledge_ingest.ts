@@ -6,7 +6,7 @@
 
 import { z } from "zod";
 import {
-  KNOWLEDGE_SOURCE_FORMATS,
+  KNOWLEDGE_INLINE_SOURCE_FORMATS,
   MAX_KNOWLEDGE_TEXT_BYTES,
 } from "../../knowledge/contracts/document.js";
 import {
@@ -28,7 +28,7 @@ export const knowledgeIngestToolSchema = {
       baseId: { type: "string", minLength: 1, maxLength: 256, description: "The knowledge base id within that Project." },
       title: { type: "string", minLength: 1, maxLength: 500, description: "Document title (1-500 characters)." },
       sourceName: { type: "string", maxLength: 500, description: "Optional source label (up to 500 characters)." },
-      sourceFormat: { type: "string", enum: KNOWLEDGE_SOURCE_FORMATS, description: "Input format." },
+      sourceFormat: { type: "string", enum: KNOWLEDGE_INLINE_SOURCE_FORMATS, description: "Inline input format." },
       content: { type: "string", minLength: 1, maxLength: MAX_KNOWLEDGE_TEXT_BYTES, description: "Inline content (text/Markdown up to 2 MiB UTF-8; HTML up to 1 MiB UTF-8). URLs and host paths are not fetched." },
     },
     required: ["projectId", "baseId", "title", "sourceFormat", "content"],
@@ -39,7 +39,7 @@ export const knowledgeIngestToolSchema = {
 const ingestInput = knowledgeProjectBaseInput.extend({
   title: z.string().min(1).max(500),
   sourceName: z.string().max(500).optional(),
-  sourceFormat: z.enum(KNOWLEDGE_SOURCE_FORMATS),
+  sourceFormat: z.enum(KNOWLEDGE_INLINE_SOURCE_FORMATS),
   content: z.string().min(1).max(MAX_KNOWLEDGE_TEXT_BYTES),
 });
 

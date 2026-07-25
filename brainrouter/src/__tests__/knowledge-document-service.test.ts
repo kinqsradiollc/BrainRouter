@@ -5,6 +5,7 @@ import type { KnowledgeBaseRecord } from "../knowledge/contracts/base.js";
 import type { KnowledgeDocumentRecord } from "../knowledge/contracts/document.js";
 import {
   MAX_KNOWLEDGE_HTML_BYTES,
+  MAX_KNOWLEDGE_PDF_BASE64_CHARS,
   MAX_KNOWLEDGE_TEXT_BYTES,
 } from "../knowledge/contracts/document.js";
 import { KnowledgeDocumentService } from "../knowledge/services/documents.js";
@@ -109,6 +110,14 @@ const viewer = knowledgeActorFromAuth({
   userId: "viewer-1", orgId: "org-1", role: "viewer",
 })!;
 
+function pdfBase64(text = "Deployment\nSECRET_TOKEN=abc123"): string {
+  const literal = text.replace(/[\\()]/g, "\\$&").replace(/\n/g, "\\n");
+  return Buffer.from(
+    `%PDF-1.4\n1 0 obj <</Type /Page>> endobj\nBT (${literal}) Tj ET\n%%EOF`,
+    "latin1",
+  ).toString("base64");
+}
+
 describe("KnowledgeDocumentService", () => {
   it("hides inaccessible Projects before permission and payload validation", async () => {
     const { service, store } = setup({ projectVisible: false });
@@ -197,6 +206,57 @@ describe("KnowledgeDocumentService", () => {
       contentSha256: createHash("sha256").update(expectedContent).digest("hex"),
     });
     expect(JSON.stringify(record)).not.toMatch(/<script|internal\.invalid|file:\/\/|abc123/);
+  });
+
+  it("extracts and redacts a bounded PDF without persisting its binary payload", async () => {
+    const { service, store } = setup();
+    const rawContent = pdfBase64();
+    const expectedContent = "Deployment\n[REDACTED]";
+    const result = await service.ingestPdf(developer, "project-1", "base-1", {
+      title: "Deployment guide",
+      sourceName: "deployment.pdf",
+      contentBase64: rawContent,
+    });
+
+    expect(result).toMatchObject({ ok: true, value: { created: true } });
+    const [record, jobId] = vi.mocked(store.enqueueKnowledgeDocument).mock.calls[0];
+    expect(jobId).toBe("job-created");
+    expect(record).toMatchObject({
+      sourceFormat: "pdf",
+      contentText: expectedContent,
+      contentSha256: createHash("sha256").update(expectedContent).digest("hex"),
+    });
+    const serializedRecord = JSON.stringify(record);
+    expect(serializedRecord).not.toContain(rawContent);
+    expect(serializedRecord).not.toContain("abc123");
+  });
+
+  it("rejects non-canonical, oversized, non-PDF, and text-free PDF payloads", async () => {
+    const cases = [
+      "file:///private/runbook.pdf",
+      "data:application/pdf;base64,JVBERi0xLjQ=",
+      Buffer.from("not a PDF").toString("base64"),
+      Buffer.from("%PDF-1.4\n%%EOF", "latin1").toString("base64"),
+      "A".repeat(MAX_KNOWLEDGE_PDF_BASE64_CHARS + 1),
+    ];
+    for (const contentBase64 of cases) {
+      const { service, store } = setup();
+      await expect(service.ingestPdf(developer, "project-1", "base-1", {
+        title: "Invalid PDF",
+        contentBase64,
+      })).resolves.toEqual({ ok: false, code: "invalid", field: "contentBase64" });
+      expect(store.enqueueKnowledgeDocument).not.toHaveBeenCalled();
+    }
+  });
+
+  it("authorizes PDF writes before decoding attacker-controlled content", async () => {
+    const { service, store } = setup();
+    await expect(service.ingestPdf(viewer, "project-1", "base-1", {
+      title: "Escalation attempt",
+      contentBase64: "not-base64",
+    })).resolves.toEqual({ ok: false, code: "forbidden" });
+    expect(store.getKnowledgeBase).not.toHaveBeenCalled();
+    expect(store.enqueueKnowledgeDocument).not.toHaveBeenCalled();
   });
 
   it("rejects invalid metadata, formats, empty content, and oversized raw bytes", async () => {

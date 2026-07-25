@@ -7,6 +7,7 @@ import { Router, type Response } from 'express';
 import { sendError } from '../../../contracts/http.js';
 import { knowledgeActorFromAuth, type KnowledgeActor } from '../../../knowledge/contracts/actor.js';
 import type {
+  IngestKnowledgePdfInput,
   IngestKnowledgeTextInput,
   KnowledgeDocumentEnqueueResult,
   KnowledgeDocumentRecord,
@@ -26,6 +27,12 @@ export interface KnowledgeDocumentOperations {
     projectId: string,
     baseId: string,
     input: IngestKnowledgeTextInput,
+  ): Promise<KnowledgeDocumentServiceResult<KnowledgeDocumentEnqueueResult>>;
+  ingestPdf(
+    actor: KnowledgeActor,
+    projectId: string,
+    baseId: string,
+    input: IngestKnowledgePdfInput,
   ): Promise<KnowledgeDocumentServiceResult<KnowledgeDocumentEnqueueResult>>;
   status(
     actor: KnowledgeActor,
@@ -53,6 +60,21 @@ export function createKnowledgeDocumentsRouter(service: KnowledgeDocumentOperati
       sourceName: req.body?.sourceName,
       sourceFormat: req.body?.sourceFormat,
       content: req.body?.content,
+    });
+    if (!result.ok) return sendKnowledgeFailure(res, result);
+    res.status(202).json({
+      document: toKnowledgeDocumentView(result.value.document),
+      created: result.value.created,
+    });
+  });
+
+  router.post('/projects/:projectId/bases/:baseId/documents/pdf', async (req: AuthedRequest, res) => {
+    const actor = actorFromRequest(req, res);
+    if (!actor) return;
+    const result = await service.ingestPdf(actor, String(req.params.projectId), String(req.params.baseId), {
+      title: req.body?.title,
+      sourceName: req.body?.sourceName,
+      contentBase64: req.body?.contentBase64,
     });
     if (!result.ok) return sendKnowledgeFailure(res, result);
     res.status(202).json({

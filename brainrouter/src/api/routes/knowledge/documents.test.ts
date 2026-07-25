@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { KnowledgeActor } from '../../../knowledge/contracts/actor.js';
 import type {
+  IngestKnowledgePdfInput,
   IngestKnowledgeTextInput,
   KnowledgeDocumentEnqueueResult,
   KnowledgeDocumentRecord,
@@ -130,6 +131,7 @@ describe('knowledge document REST adapter', () => {
   let server: ReturnType<express.Express['listen']> | undefined;
   let baseUrl = '';
   let service: KnowledgeDocumentOperations;
+  let ingestPdf: ReturnType<typeof vi.fn>;
   let ingestText: ReturnType<typeof vi.fn>;
   let status: ReturnType<typeof vi.fn>;
   let retry: ReturnType<typeof vi.fn>;
@@ -151,6 +153,17 @@ describe('knowledge document REST adapter', () => {
         jobId: 'internal-job-id',
       }),
     );
+    ingestPdf = vi.fn().mockResolvedValue(
+      ok<KnowledgeDocumentEnqueueResult>({
+        document: document({
+          title: 'Deployment guide',
+          sourceName: 'deployment.pdf',
+          sourceFormat: 'pdf',
+        }),
+        created: true,
+        jobId: 'internal-pdf-job-id',
+      }),
+    );
     status = vi.fn().mockResolvedValue(ok(statusView()));
     retry = vi.fn().mockResolvedValue(
       ok<KnowledgeDocumentRetryView>({
@@ -159,7 +172,7 @@ describe('knowledge document REST adapter', () => {
         enqueued: true,
       }),
     );
-    service = { ingestText, status, retry } as KnowledgeDocumentOperations;
+    service = { ingestText, ingestPdf, status, retry } as KnowledgeDocumentOperations;
 
     const app = express();
     app.use(express.json({ limit: '3mb' }));
@@ -297,6 +310,66 @@ describe('knowledge document REST adapter', () => {
       body: { created: false, document: { documentId: 'kdoc-1', status: 'ready' } },
     });
     expect(JSON.stringify(response.body)).not.toContain('jobId');
+  });
+
+  it('accepts only a server-scoped PDF payload and returns no content or queue id', async () => {
+    const contentBase64 = Buffer.from('%PDF-1.4\nBT (Deployment) Tj ET\n%%EOF', 'latin1')
+      .toString('base64');
+    const response = await requestJson(
+      new URL(`${baseUrl}/api/knowledge/projects/project-a/bases/kb-1/documents/pdf`),
+      'POST',
+      developerHeaders,
+      {
+        title: 'Deployment guide',
+        sourceName: 'deployment.pdf',
+        contentBase64,
+        path: '/private/deployment.pdf',
+        url: 'https://internal.invalid/deployment.pdf',
+        orgId: 'org-foreign',
+        projectId: 'project-foreign',
+        baseId: 'kb-foreign',
+        userId: 'attacker',
+        role: 'owner',
+        jobId: 'attacker-job',
+      },
+    );
+
+    expect(response.status).toBe(202);
+    expect(ingestPdf).toHaveBeenCalledWith(
+      {
+        userId: 'developer-1',
+        orgId: 'org-a',
+        role: 'developer',
+        isSystemAdmin: false,
+      } satisfies KnowledgeActor,
+      'project-a',
+      'kb-1',
+      {
+        title: 'Deployment guide',
+        sourceName: 'deployment.pdf',
+        contentBase64,
+      } satisfies IngestKnowledgePdfInput,
+    );
+    expect(response.body).toEqual({
+      document: {
+        documentId: 'kdoc-1',
+        title: 'Deployment guide',
+        sourceName: 'deployment.pdf',
+        sourceFormat: 'pdf',
+        status: 'queued',
+        statusMessage: null,
+        parseVersion: 1,
+        updatedAt: timestamp,
+        readyAt: null,
+      },
+      created: true,
+    });
+    const serialized = JSON.stringify(response.body);
+    expect(serialized).not.toContain(contentBase64);
+    expect(serialized).not.toContain('internal-pdf-job-id');
+    expect(serialized).not.toContain('/private/deployment.pdf');
+    expect(serialized).not.toContain('internal.invalid');
+    expect(serialized).not.toContain('org-a');
   });
 
   it('lets a viewer read exact-scope status without leaking internal fields', async () => {
