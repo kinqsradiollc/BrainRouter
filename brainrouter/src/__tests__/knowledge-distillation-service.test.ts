@@ -231,6 +231,11 @@ describe("KnowledgeDistillationService", () => {
         sourceDocumentIds: ["source-1"],
       },
       {
+        title: "Unsafe reference link",
+        markdown: "[open][payload]\n\n[payload]: javascript:alert(1)",
+        sourceDocumentIds: ["source-1"],
+      },
+      {
         title: "Unexpected field",
         markdown: "Supported body",
         sourceDocumentIds: ["source-1"],

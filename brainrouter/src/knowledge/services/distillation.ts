@@ -319,7 +319,8 @@ function normalizeGeneratedText(value: unknown, maxChars: number): string | null
 
 function isSafeGeneratedMarkdown(value: string): boolean {
   return !/<\/?[a-z][^>]*>/i.test(value)
-    && !/\]\(\s*(?:data|javascript|vbscript):/i.test(value);
+    && !/\]\(\s*(?:data|javascript|vbscript):/i.test(value)
+    && !/^\s*\[[^[\]]*\]:\s*(?:data|javascript|vbscript):/im.test(value);
 }
 
 function hasOnlyKeys(
