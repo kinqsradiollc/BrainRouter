@@ -4,7 +4,7 @@ export type KnowledgeDocumentStatus = (typeof KNOWLEDGE_DOCUMENT_STATUSES)[numbe
 export const KNOWLEDGE_INLINE_SOURCE_FORMATS = ["text", "markdown", "html"] as const;
 export type KnowledgeInlineSourceFormat = (typeof KNOWLEDGE_INLINE_SOURCE_FORMATS)[number];
 
-export const KNOWLEDGE_SOURCE_FORMATS = [...KNOWLEDGE_INLINE_SOURCE_FORMATS, "pdf"] as const;
+export const KNOWLEDGE_SOURCE_FORMATS = [...KNOWLEDGE_INLINE_SOURCE_FORMATS, "pdf", "docx"] as const;
 export type KnowledgeSourceFormat = (typeof KNOWLEDGE_SOURCE_FORMATS)[number];
 
 export const KNOWLEDGE_PARSE_VERSION = 1;
@@ -13,6 +13,8 @@ export const MAX_KNOWLEDGE_TEXT_BYTES = 2 * 1024 * 1024;
 export const MAX_KNOWLEDGE_HTML_BYTES = 1 * 1024 * 1024;
 export const MAX_KNOWLEDGE_PDF_BYTES = 2 * 1024 * 1024;
 export const MAX_KNOWLEDGE_PDF_BASE64_CHARS = 4 * Math.ceil(MAX_KNOWLEDGE_PDF_BYTES / 3);
+export const MAX_KNOWLEDGE_DOCX_BYTES = 4 * 1024 * 1024;
+export const MAX_KNOWLEDGE_DOCX_BASE64_CHARS = 4 * Math.ceil(MAX_KNOWLEDGE_DOCX_BYTES / 3);
 
 export interface KnowledgeDocumentRecord {
   documentId: string;
@@ -54,6 +56,13 @@ export interface IngestKnowledgeTextInput {
 }
 
 export interface IngestKnowledgePdfInput {
+  title: string;
+  sourceName?: string;
+  /** Canonical padded base64 only; data URLs and local paths are rejected. */
+  contentBase64: string;
+}
+
+export interface IngestKnowledgeDocxInput {
   title: string;
   sourceName?: string;
   /** Canonical padded base64 only; data URLs and local paths are rejected. */

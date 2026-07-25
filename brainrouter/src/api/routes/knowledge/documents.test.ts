@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { KnowledgeActor } from '../../../knowledge/contracts/actor.js';
 import type {
+  IngestKnowledgeDocxInput,
   IngestKnowledgePdfInput,
   IngestKnowledgeTextInput,
   KnowledgeDocumentEnqueueResult,
@@ -131,6 +132,7 @@ describe('knowledge document REST adapter', () => {
   let server: ReturnType<express.Express['listen']> | undefined;
   let baseUrl = '';
   let service: KnowledgeDocumentOperations;
+  let ingestDocx: ReturnType<typeof vi.fn>;
   let ingestPdf: ReturnType<typeof vi.fn>;
   let ingestText: ReturnType<typeof vi.fn>;
   let status: ReturnType<typeof vi.fn>;
@@ -164,6 +166,17 @@ describe('knowledge document REST adapter', () => {
         jobId: 'internal-pdf-job-id',
       }),
     );
+    ingestDocx = vi.fn().mockResolvedValue(
+      ok<KnowledgeDocumentEnqueueResult>({
+        document: document({
+          title: 'Deployment runbook',
+          sourceName: 'deployment.docx',
+          sourceFormat: 'docx',
+        }),
+        created: true,
+        jobId: 'internal-docx-job-id',
+      }),
+    );
     status = vi.fn().mockResolvedValue(ok(statusView()));
     retry = vi.fn().mockResolvedValue(
       ok<KnowledgeDocumentRetryView>({
@@ -172,7 +185,7 @@ describe('knowledge document REST adapter', () => {
         enqueued: true,
       }),
     );
-    service = { ingestText, ingestPdf, status, retry } as KnowledgeDocumentOperations;
+    service = { ingestText, ingestPdf, ingestDocx, status, retry } as KnowledgeDocumentOperations;
 
     const app = express();
     app.use(express.json({ limit: '3mb' }));
@@ -368,6 +381,65 @@ describe('knowledge document REST adapter', () => {
     expect(serialized).not.toContain(contentBase64);
     expect(serialized).not.toContain('internal-pdf-job-id');
     expect(serialized).not.toContain('/private/deployment.pdf');
+    expect(serialized).not.toContain('internal.invalid');
+    expect(serialized).not.toContain('org-a');
+  });
+
+  it('accepts only a server-scoped DOCX payload and returns no content or queue id', async () => {
+    const contentBase64 = Buffer.from('PK\u0003\u0004bounded-docx').toString('base64');
+    const response = await requestJson(
+      new URL(`${baseUrl}/api/knowledge/projects/project-a/bases/kb-1/documents/docx`),
+      'POST',
+      developerHeaders,
+      {
+        title: 'Deployment runbook',
+        sourceName: 'deployment.docx',
+        contentBase64,
+        path: '/private/deployment.docx',
+        url: 'https://internal.invalid/deployment.docx',
+        orgId: 'org-foreign',
+        projectId: 'project-foreign',
+        baseId: 'kb-foreign',
+        userId: 'attacker',
+        role: 'owner',
+        jobId: 'attacker-job',
+      },
+    );
+
+    expect(response.status).toBe(202);
+    expect(ingestDocx).toHaveBeenCalledWith(
+      {
+        userId: 'developer-1',
+        orgId: 'org-a',
+        role: 'developer',
+        isSystemAdmin: false,
+      } satisfies KnowledgeActor,
+      'project-a',
+      'kb-1',
+      {
+        title: 'Deployment runbook',
+        sourceName: 'deployment.docx',
+        contentBase64,
+      } satisfies IngestKnowledgeDocxInput,
+    );
+    expect(response.body).toEqual({
+      document: {
+        documentId: 'kdoc-1',
+        title: 'Deployment runbook',
+        sourceName: 'deployment.docx',
+        sourceFormat: 'docx',
+        status: 'queued',
+        statusMessage: null,
+        parseVersion: 1,
+        updatedAt: timestamp,
+        readyAt: null,
+      },
+      created: true,
+    });
+    const serialized = JSON.stringify(response.body);
+    expect(serialized).not.toContain(contentBase64);
+    expect(serialized).not.toContain('internal-docx-job-id');
+    expect(serialized).not.toContain('/private/deployment.docx');
     expect(serialized).not.toContain('internal.invalid');
     expect(serialized).not.toContain('org-a');
   });

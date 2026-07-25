@@ -6,12 +6,15 @@ import type { KnowledgeActor } from "../contracts/actor.js";
 import {
   KNOWLEDGE_PARSE_VERSION,
   KNOWLEDGE_INLINE_SOURCE_FORMATS,
+  MAX_KNOWLEDGE_DOCX_BASE64_CHARS,
+  MAX_KNOWLEDGE_DOCX_BYTES,
   MAX_KNOWLEDGE_HTML_BYTES,
   MAX_KNOWLEDGE_PDF_BASE64_CHARS,
   MAX_KNOWLEDGE_PDF_BYTES,
   MAX_KNOWLEDGE_TEXT_BYTES,
 } from "../contracts/document.js";
 import type {
+  IngestKnowledgeDocxInput,
   IngestKnowledgePdfInput,
   IngestKnowledgeTextInput,
   KnowledgeDocumentEnqueueResult,
@@ -24,6 +27,7 @@ import type {
   KnowledgeSourceFormat,
 } from "../contracts/document.js";
 import type { KnowledgeDocumentStore } from "../store.js";
+import { extractKnowledgeDocxText } from "./docx-parser.js";
 import { extractKnowledgeHtmlText } from "./html-parser.js";
 import { resolveKnowledgeProject } from "./project-access.js";
 
@@ -88,6 +92,26 @@ export class KnowledgeDocumentService {
     if (!base) return NOT_FOUND;
 
     const normalized = normalizePdfInput(input);
+    if (!normalized.ok) return normalized;
+    return this.#enqueueNormalized(actor, project.projectId, base.baseId, normalized.value);
+  }
+
+  async ingestDocx(
+    actor: KnowledgeActor,
+    projectId: string,
+    baseId: string,
+    input: IngestKnowledgeDocxInput,
+  ): Promise<KnowledgeDocumentServiceResult<KnowledgeDocumentEnqueueResult>> {
+    const project = await resolveKnowledgeProject(actor, projectId, this.store);
+    if (!project) return NOT_FOUND;
+    if (!canUseKnowledge(actor, "write")) return FORBIDDEN;
+
+    const normalizedBaseId = baseId.trim();
+    if (!normalizedBaseId) return NOT_FOUND;
+    const base = await this.store.getKnowledgeBase(normalizedBaseId, actor.orgId, project.projectId);
+    if (!base) return NOT_FOUND;
+
+    const normalized = normalizeDocxInput(input);
     if (!normalized.ok) return normalized;
     return this.#enqueueNormalized(actor, project.projectId, base.baseId, normalized.value);
   }
@@ -276,6 +300,26 @@ function normalizePdfInput(
   return { ok: true, value: { title, sourceName, sourceFormat: "pdf", contentText } };
 }
 
+function normalizeDocxInput(
+  input: IngestKnowledgeDocxInput,
+): KnowledgeDocumentServiceResult<NormalizedDocumentInput> {
+  const title = normalizeMetadata(input.title, 500, false);
+  if (title === null) return { ok: false, code: "invalid", field: "title" };
+  const sourceName = normalizeMetadata(input.sourceName ?? "", 500, true);
+  if (sourceName === null) return { ok: false, code: "invalid", field: "sourceName" };
+  const docx = decodeCanonicalDocx(input.contentBase64);
+  if (!docx) return { ok: false, code: "invalid", field: "contentBase64" };
+
+  const extracted = extractKnowledgeDocxText(docx);
+  if (!extracted) return { ok: false, code: "invalid", field: "contentBase64" };
+  const contentText = redactSensitiveMemoryText(extracted);
+  if (!contentText
+    || Buffer.byteLength(contentText, "utf8") > MAX_KNOWLEDGE_TEXT_BYTES) {
+    return { ok: false, code: "invalid", field: "contentBase64" };
+  }
+  return { ok: true, value: { title, sourceName, sourceFormat: "docx", contentText } };
+}
+
 function maxSourceBytes(sourceFormat: KnowledgeInlineSourceFormat): number {
   return sourceFormat === "html" ? MAX_KNOWLEDGE_HTML_BYTES : MAX_KNOWLEDGE_TEXT_BYTES;
 }
@@ -308,6 +352,27 @@ function decodeCanonicalPdf(value: unknown): Buffer | null {
   }
   const header = decoded.subarray(0, Math.min(PDF_HEADER_SCAN_BYTES, decoded.length));
   return header.includes(Buffer.from("%PDF-", "ascii")) ? decoded : null;
+}
+
+function decodeCanonicalDocx(value: unknown): Buffer | null {
+  if (typeof value !== "string"
+    || value.length < 8
+    || value.length > MAX_KNOWLEDGE_DOCX_BASE64_CHARS
+    || value.length % 4 !== 0
+    || !hasCanonicalBase64Shape(value)) {
+    return null;
+  }
+  const decoded = Buffer.from(value, "base64");
+  if (decoded.length < 4
+    || decoded.length > MAX_KNOWLEDGE_DOCX_BYTES
+    || decoded.toString("base64") !== value
+    || decoded[0] !== 0x50
+    || decoded[1] !== 0x4b
+    || decoded[2] !== 0x03
+    || decoded[3] !== 0x04) {
+    return null;
+  }
+  return decoded;
 }
 
 function hasCanonicalBase64Shape(value: string): boolean {

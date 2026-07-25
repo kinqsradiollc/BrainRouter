@@ -305,8 +305,13 @@ and tenant-fair job runner.
   2 MiB, performs bounded local text extraction, and persists only normalized,
   redacted text before queuing the standard ID-only parse job. The dedicated
   authenticated `knowledge_ingest_pdf` MCP tool reuses that exact service
-  boundary with session-pinned identity and a content-free response. DOCX
-  ingestion remains a separate slice with the same no-raw-content rule.
+  boundary with session-pinned identity and a content-free response.
+  Authenticated REST DOCX ingest uses a distinct canonical-base64 contract with
+  a 4 MiB compressed cap, validates ZIP entry count, paths, compression
+  methods, declared and actual expansion, compression ratios, package parts,
+  CRCs, XML depth, and safe entities, and never follows package relationships.
+  Only normalized, redacted main-document text is persisted; DOCX MCP parity
+  remains a separate slice with the same no-raw-content rule.
 
 ### Serving and distillation
 
@@ -314,10 +319,11 @@ Base list/create are available through authenticated REST and MCP adapters; the
 MCP tool names are `knowledge_list` and `knowledge_base_create`. Authenticated
 REST and MCP expose accepted text ingest, content-free processing status, and
 exact-scope retry; the document MCP tools are `knowledge_ingest`,
-`knowledge_ingest_pdf`, `knowledge_status`, and `knowledge_retry`. Authenticated REST retrieval and the
-`knowledge_search` MCP tool expose the same bounded, citation-bearing hybrid
-result contract. Profile recommendation intersects the shared profile catalog
-with actually available packs/personas and is never an ACL.
+`knowledge_ingest_pdf`, `knowledge_status`, and `knowledge_retry`.
+Authenticated REST retrieval and the `knowledge_search` MCP tool expose the
+same bounded, citation-bearing hybrid result contract. Profile recommendation
+intersects the shared profile catalog with actually available packs/personas
+and is never an ACL.
 Opt-in distillation writes provenance-linked derived knowledge documents and
 prevents recursive self-distillation. Only separately reviewed facts may be
 captured into cognitive memory through its current engine.
@@ -382,7 +388,7 @@ captured into cognitive memory through its current engine.
 | B1a | Done | Project/RBAC contract, schema, internal store, REST base CRUD, MCP base list/create | Migration + role/access + scoped CRUD + authenticated adapter tests |
 | B1b/B2 | Done | Text ingest, typed parse jobs, status, scoped retry | Safe ingest + atomic enqueue + idempotent chunk/status/optional embedding + authenticated REST and MCP ingest/status/retry |
 | B1c | Done | Hybrid retrieval and citation APIs/tools | FTS/vector/fallback/tenancy tests |
-| B1d | In progress | Bounded inline HTML and authenticated REST/MCP PDF ingest shipped; DOCX remains | Per-format bounds/redaction/no-fetch tests |
+| B1d | In progress | Bounded inline HTML, REST/MCP PDF, and REST DOCX ingest shipped; DOCX MCP remains | Per-format bounds/redaction/no-fetch tests |
 | B3 | Todo | Availability-aware recommendations and opt-in distillation | Catalog/provenance/no-recursion tests |
 | C3 | Todo | Dashboard library expansion + Desktop knowledge panel | SDK, stale-scope, host bridge, UI inventory/live QA |
 | Final | Todo | Full suite, live CLI/Desktop/backend/dashboard walkthrough, docs/changelog | Green CI/security review and merged PRs |
