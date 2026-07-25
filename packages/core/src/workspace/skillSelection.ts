@@ -49,7 +49,7 @@ export interface WorkspaceSkillSelectionInput {
   catalog?: WorkspaceProfilePluginCatalog;
 }
 
-const BUNDLED_PACK_IDS = new Set(['engineering']);
+export const BUNDLED_WORKSPACE_SKILL_PACK_IDS: ReadonlySet<string> = new Set(['engineering']);
 const PROFILE_PLUGIN_PACK_IDS: ReadonlySet<string> = new Set(
   WORKSPACE_PROFILE_PLUGIN_DEFINITIONS
     .filter((plugin) => plugin.kind === 'profile')
@@ -86,7 +86,7 @@ export function resolveWorkspaceSkillSelection(
   const missing: UnavailableWorkspaceSkillBundle[] = [];
 
   for (const id of unique(manifest.skills.packs)) {
-    if (BUNDLED_PACK_IDS.has(id)) {
+    if (BUNDLED_WORKSPACE_SKILL_PACK_IDS.has(id)) {
       bundles.push({ id, source: 'bundled', skillIds: [] });
       continue;
     }
