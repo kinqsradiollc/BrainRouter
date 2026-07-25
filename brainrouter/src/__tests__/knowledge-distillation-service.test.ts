@@ -216,6 +216,11 @@ describe("KnowledgeDistillationService", () => {
   it("rejects raw HTML, dangerous Markdown links, and undeclared output fields", async () => {
     for (const note of [
       {
+        title: "<script>alert(1)</script>",
+        markdown: "Supported body",
+        sourceDocumentIds: ["source-1"],
+      },
+      {
         title: "Unsafe HTML",
         markdown: "<script>alert(1)</script>",
         sourceDocumentIds: ["source-1"],

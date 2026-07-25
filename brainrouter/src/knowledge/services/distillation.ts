@@ -286,6 +286,7 @@ function validateGeneratedNotes(
     );
     if (!title
       || !markdown
+      || !isSafeGeneratedMarkdown(title)
       || !isSafeGeneratedMarkdown(markdown)
       || !Array.isArray(note.sourceDocumentIds)) {
       throw new Error("Invalid knowledge distillation note.");
