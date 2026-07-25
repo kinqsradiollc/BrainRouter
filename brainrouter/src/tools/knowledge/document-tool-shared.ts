@@ -13,6 +13,7 @@ import type {
   KnowledgeDocumentServiceFailure,
   KnowledgeDocumentServiceResult,
   KnowledgeDocumentStatusView,
+  IngestKnowledgeDocxInput,
   IngestKnowledgePdfInput,
   IngestKnowledgeTextInput,
 } from "../../knowledge/contracts/document.js";
@@ -20,6 +21,12 @@ import { KnowledgeDocumentService } from "../../knowledge/services/documents.js"
 import { memoryEngine } from "../../memory/engine.js";
 
 export interface KnowledgeDocumentToolOperations {
+  ingestDocx(
+    actor: KnowledgeActor,
+    projectId: string,
+    baseId: string,
+    input: IngestKnowledgeDocxInput,
+  ): Promise<KnowledgeDocumentServiceResult<KnowledgeDocumentEnqueueResult>>;
   ingestPdf(
     actor: KnowledgeActor,
     projectId: string,
