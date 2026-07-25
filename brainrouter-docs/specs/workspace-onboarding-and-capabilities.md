@@ -311,7 +311,8 @@ and tenant-fair job runner.
   methods, declared and actual expansion, compression ratios, package parts,
   CRCs, XML depth, and safe entities, and never follows package relationships.
   Only normalized, redacted main-document text is persisted; DOCX MCP parity
-  remains a separate slice with the same no-raw-content rule.
+  uses the same service boundary, session-pinned identity, and content-free
+  response.
 
 ### Serving and distillation
 
@@ -319,7 +320,8 @@ Base list/create are available through authenticated REST and MCP adapters; the
 MCP tool names are `knowledge_list` and `knowledge_base_create`. Authenticated
 REST and MCP expose accepted text ingest, content-free processing status, and
 exact-scope retry; the document MCP tools are `knowledge_ingest`,
-`knowledge_ingest_pdf`, `knowledge_status`, and `knowledge_retry`.
+`knowledge_ingest_pdf`, `knowledge_ingest_docx`, `knowledge_status`, and
+`knowledge_retry`.
 Authenticated REST retrieval and the `knowledge_search` MCP tool expose the
 same bounded, citation-bearing hybrid result contract. Profile recommendation
 intersects the shared profile catalog with actually available packs/personas
@@ -388,7 +390,7 @@ captured into cognitive memory through its current engine.
 | B1a | Done | Project/RBAC contract, schema, internal store, REST base CRUD, MCP base list/create | Migration + role/access + scoped CRUD + authenticated adapter tests |
 | B1b/B2 | Done | Text ingest, typed parse jobs, status, scoped retry | Safe ingest + atomic enqueue + idempotent chunk/status/optional embedding + authenticated REST and MCP ingest/status/retry |
 | B1c | Done | Hybrid retrieval and citation APIs/tools | FTS/vector/fallback/tenancy tests |
-| B1d | In progress | Bounded inline HTML, REST/MCP PDF, and REST DOCX ingest shipped; DOCX MCP remains | Per-format bounds/redaction/no-fetch tests |
+| B1d | Done | Bounded inline HTML plus REST/MCP PDF and DOCX ingest | Per-format bounds/redaction/no-fetch tests |
 | B3 | Todo | Availability-aware recommendations and opt-in distillation | Catalog/provenance/no-recursion tests |
 | C3 | Todo | Dashboard library expansion + Desktop knowledge panel | SDK, stale-scope, host bridge, UI inventory/live QA |
 | Final | Todo | Full suite, live CLI/Desktop/backend/dashboard walkthrough, docs/changelog | Green CI/security review and merged PRs |

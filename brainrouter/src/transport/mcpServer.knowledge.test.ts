@@ -1,5 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { strToU8, zipSync } from "fflate";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -71,6 +72,35 @@ function parseTextResult(result: unknown) {
   const content = (result as { content?: unknown })?.content as Array<{ text?: unknown }>;
   if (typeof content[0]?.text !== "string") throw new Error("Expected a text tool result");
   return JSON.parse(content[0].text) as unknown;
+}
+
+function docxBase64(text: string): string {
+  const documentBody = text.split("\n").map((line) => {
+    const escaped = line
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll("\"", "&quot;")
+      .replaceAll("'", "&apos;");
+    return `<w:p><w:r><w:t>${escaped}</w:t></w:r></w:p>`;
+  }).join("");
+  return Buffer.from(zipSync({
+    "[Content_Types].xml": strToU8(`<?xml version="1.0" encoding="UTF-8"?>
+      <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+        <Override PartName="/word/document.xml"
+          ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+      </Types>`),
+    "_rels/.rels": strToU8(`<?xml version="1.0" encoding="UTF-8"?>
+      <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+        <Relationship Id="rId1"
+          Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"
+          Target="word/document.xml"/>
+      </Relationships>`),
+    "word/document.xml": strToU8(`<?xml version="1.0" encoding="UTF-8"?>
+      <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+        <w:body>${documentBody}</w:body>
+      </w:document>`),
+  }, { level: 6 })).toString("base64");
 }
 
 describe("authenticated knowledge MCP tools", () => {
@@ -163,6 +193,7 @@ describe("authenticated knowledge MCP tools", () => {
     expect(tools.tools.map((tool) => tool.name)).not.toContain("knowledge_list");
     expect(tools.tools.map((tool) => tool.name)).not.toContain("knowledge_base_create");
     expect(tools.tools.map((tool) => tool.name)).not.toContain("knowledge_ingest");
+    expect(tools.tools.map((tool) => tool.name)).not.toContain("knowledge_ingest_docx");
     expect(tools.tools.map((tool) => tool.name)).not.toContain("knowledge_ingest_pdf");
     expect(tools.tools.map((tool) => tool.name)).not.toContain("knowledge_status");
     expect(tools.tools.map((tool) => tool.name)).not.toContain("knowledge_retry");
@@ -174,6 +205,15 @@ describe("authenticated knowledge MCP tools", () => {
     await expect(client.callTool({
       name: "knowledge_search",
       arguments: { projectId: "project-a", query: "signing key" },
+    })).rejects.toThrow("Authenticated organization context required");
+    await expect(client.callTool({
+      name: "knowledge_ingest_docx",
+      arguments: {
+        projectId: "project-a",
+        baseId: "kb-1",
+        title: "Unscoped DOCX",
+        contentBase64: docxBase64("Private"),
+      },
     })).rejects.toThrow("Authenticated organization context required");
     await expect(client.callTool({
       name: "knowledge_ingest_pdf",
@@ -203,6 +243,7 @@ describe("authenticated knowledge MCP tools", () => {
       "knowledge_list",
       "knowledge_base_create",
       "knowledge_ingest",
+      "knowledge_ingest_docx",
       "knowledge_ingest_pdf",
       "knowledge_status",
       "knowledge_retry",
@@ -418,6 +459,81 @@ describe("authenticated knowledge MCP tools", () => {
     expect(serialized).not.toContain("attacker.invalid");
   });
 
+  it("ingests a DOCX with the session actor while keeping package content and queue ids private", async () => {
+    const contentBase64 = docxBase64("Deployment\nSECRET_TOKEN=abc123");
+    mocks.enqueueKnowledgeDocument.mockImplementationOnce(async (record, jobId) => ({
+      document: record,
+      created: true,
+      jobId,
+    }));
+    const client = await connect({
+      defaultUserId: "developer-1",
+      defaultOrgId: "org-a",
+      defaultRole: "developer",
+    });
+    const result = await client.callTool({
+      name: "knowledge_ingest_docx",
+      arguments: {
+        projectId: "project-a",
+        baseId: "kb-1",
+        title: "Deployment guide",
+        sourceName: "deployment.docx",
+        contentBase64,
+        orgId: "org-foreign",
+        userId: "attacker",
+        role: "owner",
+        isSystemAdmin: true,
+        jobId: "kjob-attacker",
+        path: "/private/deployment.docx",
+        url: "https://attacker.invalid/deployment.docx",
+      },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(mocks.getAccessibleProject).toHaveBeenCalledWith(
+      "project-a",
+      "org-a",
+      "developer-1",
+      false,
+    );
+    expect(mocks.enqueueKnowledgeDocument).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseId: "kb-1",
+        orgId: "org-a",
+        projectId: "project-a",
+        createdBy: "developer-1",
+        title: "Deployment guide",
+        sourceName: "deployment.docx",
+        sourceFormat: "docx",
+        contentText: "Deployment\n[REDACTED]",
+      }),
+      expect.stringMatching(/^kjob_/),
+    );
+    const payload = parseTextResult(result);
+    expect(payload).toEqual({
+      document: {
+        documentId: expect.stringMatching(/^kdoc_/),
+        title: "Deployment guide",
+        sourceName: "deployment.docx",
+        sourceFormat: "docx",
+        status: "queued",
+        statusMessage: null,
+        parseVersion: 1,
+        updatedAt: expect.any(String),
+        readyAt: null,
+      },
+      created: true,
+    });
+    const serialized = JSON.stringify(payload);
+    expect(serialized).not.toContain(contentBase64);
+    expect(serialized).not.toContain("abc123");
+    expect(serialized).not.toContain("developer-1");
+    expect(serialized).not.toContain("org-a");
+    expect(serialized).not.toContain("kjob_");
+    expect(serialized).not.toContain("/private/deployment.docx");
+    expect(serialized).not.toContain("attacker.invalid");
+  });
+
   it("returns exact-scope content-free status to readers", async () => {
     const client = await connect({
       defaultUserId: "viewer-1",
@@ -510,7 +626,7 @@ describe("authenticated knowledge MCP tools", () => {
     expect(JSON.stringify(payload)).not.toContain("kjob-attacker");
   });
 
-  it("allows viewer status reads but rejects text/PDF ingest and retry role spoofing", async () => {
+  it("allows viewer status reads but rejects text/PDF/DOCX ingest and retry role spoofing", async () => {
     const client = await connect({
       defaultUserId: "viewer-1",
       defaultOrgId: "org-a",
@@ -548,11 +664,22 @@ describe("authenticated knowledge MCP tools", () => {
           .toString("base64"),
       },
     });
+    const docx = await client.callTool({
+      name: "knowledge_ingest_docx",
+      arguments: {
+        projectId: "project-a",
+        baseId: "kb-1",
+        title: "Escalation DOCX",
+        contentBase64: docxBase64("Should not persist"),
+      },
+    });
 
     expect(ingest.isError).toBe(true);
     expect(parseTextResult(ingest)).toEqual({ error: { code: "forbidden" } });
     expect(pdf.isError).toBe(true);
     expect(parseTextResult(pdf)).toEqual({ error: { code: "forbidden" } });
+    expect(docx.isError).toBe(true);
+    expect(parseTextResult(docx)).toEqual({ error: { code: "forbidden" } });
     expect(retry.isError).toBe(true);
     expect(parseTextResult(retry)).toEqual({ error: { code: "forbidden" } });
     expect(mocks.enqueueKnowledgeDocument).not.toHaveBeenCalled();
@@ -572,6 +699,29 @@ describe("authenticated knowledge MCP tools", () => {
         baseId: "kb-1",
         title: "Invalid PDF",
         contentBase64: "file:///private/runbook.pdf",
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(parseTextResult(result)).toEqual({
+      error: { code: "invalid", field: "contentBase64" },
+    });
+    expect(mocks.enqueueKnowledgeDocument).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed DOCX payloads without persisting attacker content", async () => {
+    const client = await connect({
+      defaultUserId: "developer-1",
+      defaultOrgId: "org-a",
+      defaultRole: "developer",
+    });
+    const result = await client.callTool({
+      name: "knowledge_ingest_docx",
+      arguments: {
+        projectId: "project-a",
+        baseId: "kb-1",
+        title: "Invalid DOCX",
+        contentBase64: "file:///private/runbook.docx",
       },
     });
 
