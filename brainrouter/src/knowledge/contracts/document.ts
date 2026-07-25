@@ -7,8 +7,17 @@ export type KnowledgeInlineSourceFormat = (typeof KNOWLEDGE_INLINE_SOURCE_FORMAT
 export const KNOWLEDGE_SOURCE_FORMATS = [...KNOWLEDGE_INLINE_SOURCE_FORMATS, "pdf", "docx"] as const;
 export type KnowledgeSourceFormat = (typeof KNOWLEDGE_SOURCE_FORMATS)[number];
 
+export const KNOWLEDGE_DOCUMENT_ORIGINS = ["source", "derived"] as const;
+export type KnowledgeDocumentOrigin = (typeof KNOWLEDGE_DOCUMENT_ORIGINS)[number];
+
 export const KNOWLEDGE_PARSE_VERSION = 1;
 export const KNOWLEDGE_PARSE_JOB_KIND = `knowledge-parse-v${KNOWLEDGE_PARSE_VERSION}`;
+export const KNOWLEDGE_DISTILLATION_VERSION = 1;
+export const MAX_KNOWLEDGE_DISTILLATION_SOURCES = 20;
+export const MAX_KNOWLEDGE_DISTILLATION_NOTES = 12;
+export const MAX_KNOWLEDGE_DISTILLATION_SOURCE_CHARS = 80_000;
+export const MAX_KNOWLEDGE_DISTILLATION_NOTE_CHARS = 40_000;
+export const MAX_KNOWLEDGE_DISTILLATION_TOTAL_CHARS = 240_000;
 export const MAX_KNOWLEDGE_TEXT_BYTES = 2 * 1024 * 1024;
 export const MAX_KNOWLEDGE_HTML_BYTES = 1 * 1024 * 1024;
 export const MAX_KNOWLEDGE_PDF_BYTES = 2 * 1024 * 1024;
@@ -27,6 +36,8 @@ export interface KnowledgeDocumentRecord {
   /** Normalized and redacted content only; raw ingest payloads are never stored. */
   contentText: string;
   contentSha256: string;
+  origin: KnowledgeDocumentOrigin;
+  distillationVersion: number | null;
   status: KnowledgeDocumentStatus;
   statusMessage: string | null;
   parseVersion: number;
@@ -38,8 +49,46 @@ export interface KnowledgeDocumentRecord {
 
 export interface KnowledgeDocumentListFilters {
   status?: KnowledgeDocumentStatus;
+  origin?: KnowledgeDocumentOrigin;
   limit?: number;
 }
+
+export interface DistillKnowledgeBaseInput {
+  /** Explicit acknowledgement; distillation never runs implicitly. */
+  confirmed: boolean;
+  /** Omit to use the newest ready source documents within the bounded limit. */
+  documentIds?: readonly string[];
+  maxNotes?: number;
+}
+
+export interface KnowledgeDerivedDocumentInput {
+  document: KnowledgeDocumentRecord;
+  sourceDocumentIds: string[];
+  jobId: string;
+}
+
+export interface KnowledgeDerivedDocumentResult {
+  document: KnowledgeDocumentRecord;
+  sourceDocumentIds: string[];
+  created: boolean;
+  jobId: string | null;
+}
+
+export interface KnowledgeDistillationResult {
+  documents: KnowledgeDerivedDocumentResult[];
+  sourceDocumentIds: string[];
+  distillationVersion: number;
+}
+
+export type KnowledgeDistillationFailure = {
+  ok: false;
+  code: "not_found" | "forbidden" | "invalid" | "unavailable";
+  field?: "confirmed" | "documentIds" | "maxNotes";
+};
+
+export type KnowledgeDistillationServiceResult<T> =
+  | { ok: true; value: T }
+  | KnowledgeDistillationFailure;
 
 export interface KnowledgeDocumentStatusUpdate {
   status: KnowledgeDocumentStatus;

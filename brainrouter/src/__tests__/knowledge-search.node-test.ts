@@ -71,6 +71,8 @@ test("knowledge search primitives isolate ancestry, readiness, bases, models, an
       sourceFormat: "markdown",
       contentText: "normalized source",
       contentSha256: hashChar.repeat(64),
+      origin: "source",
+      distillationVersion: null,
       status: "queued",
       statusMessage: null,
       parseVersion: 1,

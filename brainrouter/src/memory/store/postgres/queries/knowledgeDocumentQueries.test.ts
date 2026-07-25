@@ -6,12 +6,14 @@ import {
 import {
   createKnowledgeDocument,
   commitKnowledgeDocumentParse,
+  enqueueDerivedKnowledgeDocuments,
   enqueueKnowledgeDocument,
   failKnowledgeDocumentParse,
   getKnowledgeDocument,
   getKnowledgeDocumentByContentHash,
   getKnowledgeDocumentProcessing,
   listKnowledgeDocuments,
+  listKnowledgeDocumentSourceIds,
   listKnowledgeChunks,
   markKnowledgeDocumentParsing,
   retryKnowledgeDocumentProcessing,
@@ -30,6 +32,8 @@ const row = {
   source_format: "markdown",
   content_text: "# Runbook",
   content_sha256: "a".repeat(64),
+  origin: "source",
+  distillation_version: null,
   status: "queued",
   status_message: null,
   parse_version: 1,
@@ -49,6 +53,8 @@ const record: KnowledgeDocumentRecord = {
   sourceFormat: "markdown",
   contentText: "# Runbook",
   contentSha256: "a".repeat(64),
+  origin: "source",
+  distillationVersion: null,
   status: "queued",
   statusMessage: null,
   parseVersion: 1,
@@ -85,7 +91,7 @@ describe("knowledge document queries", () => {
     expect(sql).toContain("INSERT INTO knowledge_documents");
     expect(params).toEqual([
       "doc-1", "base-1", "org-1", "project-1", "Runbook", "runbook.md",
-      "markdown", "# Runbook", "a".repeat(64), "queued", null, 1,
+      "markdown", "# Runbook", "a".repeat(64), "source", null, "queued", null, 1,
       "user-1", at, at, null,
     ]);
   });
@@ -104,17 +110,19 @@ describe("knowledge document queries", () => {
     expect(hashParams).toEqual(["a".repeat(64), "base-1", "org-1", "project-1"]);
   });
 
-  it("bounds scoped listings and optionally filters by status", async () => {
+  it("bounds scoped listings and optionally filters by status and origin", async () => {
     const exec = executor();
     await expect(listKnowledgeDocuments(exec, "base-1", "org-1", "project-1", {
       status: "queued",
+      origin: "source",
       limit: 50_000,
     })).resolves.toEqual([record]);
     const [sql, params] = exec.rows.mock.calls[0];
     expect(sql).toContain("base_id = $1 AND org_id = $2 AND project_id = $3");
     expect(sql).toContain("status = $4");
-    expect(sql).toContain("LIMIT $5");
-    expect(params).toEqual(["base-1", "org-1", "project-1", "queued", 500]);
+    expect(sql).toContain("origin = $5");
+    expect(sql).toContain("LIMIT $6");
+    expect(params).toEqual(["base-1", "org-1", "project-1", "queued", "source", 500]);
 
     await listKnowledgeDocuments(exec, "base-1", "org-1", "project-1", { limit: Number.NaN });
     expect(exec.rows.mock.calls[1][1]).toEqual(["base-1", "org-1", "project-1", 100]);
@@ -185,6 +193,101 @@ describe("knowledge document queries", () => {
     expect(client.query.mock.calls[1][0]).toContain(
       "content_sha256 = $1 AND base_id = $2 AND org_id = $3 AND project_id = $4",
     );
+  });
+
+  it("atomically stores derived notes only from ready source documents", async () => {
+    const derivedRow = {
+      ...row,
+      document_id: "derived-1",
+      title: "Derived",
+      content_text: "# Derived",
+      content_sha256: "b".repeat(64),
+      origin: "derived",
+      distillation_version: 1,
+    };
+    const derivedRecord: KnowledgeDocumentRecord = {
+      ...record,
+      documentId: "derived-1",
+      title: "Derived",
+      contentText: "# Derived",
+      contentSha256: "b".repeat(64),
+      origin: "derived",
+      distillationVersion: 1,
+    };
+    const client = {
+      query: vi.fn()
+        .mockResolvedValueOnce({ rowCount: 1, rows: [{ document_id: "doc-1" }] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [derivedRow] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [] })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [] }),
+    };
+    const exec = executor();
+    exec.tx = vi.fn(async (fn: (value: unknown) => Promise<unknown>) => fn(client));
+
+    await expect(enqueueDerivedKnowledgeDocuments(exec, [{
+      document: derivedRecord,
+      sourceDocumentIds: ["doc-1"],
+      jobId: "derived-job",
+    }])).resolves.toEqual([{
+      document: derivedRecord,
+      sourceDocumentIds: ["doc-1"],
+      created: true,
+      jobId: "derived-job",
+    }]);
+    expect(client.query.mock.calls[0][0]).toContain(
+      "status = 'ready' AND origin = 'source'",
+    );
+    expect(client.query.mock.calls[0][1]).toEqual([
+      "base-1", "org-1", "project-1", ["doc-1"],
+    ]);
+    expect(client.query.mock.calls[2][0]).toContain(
+      "INSERT INTO knowledge_document_provenance",
+    );
+    expect(client.query.mock.calls[3][0]).toContain("INSERT INTO memory_jobs");
+    expect(client.query.mock.calls[3][1].join(" ")).not.toContain("# Derived");
+  });
+
+  it("fails closed before writes when a derived or unready source is requested", async () => {
+    const client = {
+      query: vi.fn().mockResolvedValueOnce({ rowCount: 0, rows: [] }),
+    };
+    const exec = executor();
+    exec.tx = vi.fn(async (fn: (value: unknown) => Promise<unknown>) => fn(client));
+
+    await expect(enqueueDerivedKnowledgeDocuments(exec, [{
+      document: {
+        ...record,
+        documentId: "derived-1",
+        contentSha256: "b".repeat(64),
+        origin: "derived",
+        distillationVersion: 1,
+      },
+      sourceDocumentIds: ["derived-source"],
+      jobId: "unused",
+    }])).rejects.toThrow("sources are unavailable");
+    expect(client.query).toHaveBeenCalledOnce();
+  });
+
+  it("lists provenance through the complete derived-document ancestry", async () => {
+    const exec = executor();
+    exec.rows.mockResolvedValueOnce([
+      { source_document_id: "source-2" },
+      { source_document_id: "source-1" },
+    ]);
+
+    await expect(listKnowledgeDocumentSourceIds(
+      exec,
+      "derived-1",
+      "base-1",
+      "org-1",
+      "project-1",
+    )).resolves.toEqual(["source-2", "source-1"]);
+    expect(exec.rows.mock.calls[0][0]).toContain(
+      "derived_document_id = $1 AND base_id = $2",
+    );
+    expect(exec.rows.mock.calls[0][1]).toEqual([
+      "derived-1", "base-1", "org-1", "project-1",
+    ]);
   });
 
   it("marks parsing and failure only through ancestry plus parse version", async () => {

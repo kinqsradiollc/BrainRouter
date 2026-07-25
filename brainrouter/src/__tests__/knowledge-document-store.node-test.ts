@@ -48,6 +48,8 @@ test("knowledge documents preserve full ancestry, dedupe per base, and expose sc
       sourceFormat: "markdown",
       contentText: "# Redacted runbook",
       contentSha256: "a".repeat(64),
+      origin: "source",
+      distillationVersion: null,
       status: "queued",
       statusMessage: null,
       parseVersion: 1,
@@ -107,6 +109,52 @@ test("knowledge documents preserve full ancestry, dedupe per base, and expose sc
       "document-project-b",
       { status: "failed", statusMessage: "hidden", updatedAt: readyAt, readyAt: null },
     ), null);
+
+    const derived: KnowledgeDocumentRecord = {
+      ...document("document-derived"),
+      title: "Derived note",
+      contentText: "# Derived note",
+      contentSha256: "b".repeat(64),
+      origin: "derived",
+      distillationVersion: 1,
+    };
+    const distilled = await store.enqueueDerivedKnowledgeDocuments([{
+      document: derived,
+      sourceDocumentIds: ["document-a"],
+      jobId: "document-derived-job",
+    }]);
+    assert.deepEqual(distilled, [{
+      document: derived,
+      sourceDocumentIds: ["document-a"],
+      created: true,
+      jobId: "document-derived-job",
+    }]);
+    assert.deepEqual(await store.listKnowledgeDocumentSourceIds(
+      "document-derived",
+      "document-base-a",
+      "document-org",
+      "document-project-a",
+    ), ["document-a"]);
+    await store.updateKnowledgeDocumentStatus(
+      "document-derived",
+      "document-base-a",
+      "document-org",
+      "document-project-a",
+      { status: "ready", statusMessage: null, updatedAt: readyAt, readyAt },
+    );
+    await assert.rejects(
+      store.enqueueDerivedKnowledgeDocuments([{
+        document: {
+          ...derived,
+          documentId: "document-recursive",
+          contentText: "# Recursive",
+          contentSha256: "c".repeat(64),
+        },
+        sourceDocumentIds: ["document-derived"],
+        jobId: "document-recursive-job",
+      }]),
+      /sources are unavailable/,
+    );
 
     await assert.rejects(
       store.createKnowledgeDocument({

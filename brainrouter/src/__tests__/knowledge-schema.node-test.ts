@@ -19,6 +19,14 @@ function migrationSql(): string {
   return migration.sql;
 }
 
+function distillationMigrationSql(): string {
+  const migration = loadMigrations(migrationsDir).find(
+    (item) => item.id === "045_knowledge_distillation",
+  );
+  assert.ok(migration, "045_knowledge_distillation migration is present");
+  return migration.sql;
+}
+
 test("knowledge schema is project-consistent, status-bounded, searchable, and vector-isolated", () => {
   const sql = migrationSql();
 
@@ -43,6 +51,18 @@ test("knowledge schema is project-consistent, status-bounded, searchable, and ve
   assert.match(sql, /vector_dims\(embedding\) = dimensions/);
   assert.doesNotMatch(sql, /(?:ALTER|DROP|TRUNCATE) TABLE cognitive_vec/i);
   assert.doesNotMatch(sql, /\braw_(?:content|text|bytes|payload)\b/i);
+});
+
+test("knowledge distillation schema identifies derived notes and tenant-bound provenance", () => {
+  const sql = distillationMigrationSql();
+
+  assert.match(sql, /origin IN \('source', 'derived'\)/);
+  assert.match(sql, /origin = 'source' AND distillation_version IS NULL/);
+  assert.match(sql, /origin = 'derived' AND distillation_version > 0/);
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS knowledge_document_provenance/);
+  assert.match(sql, /FOREIGN KEY \(derived_document_id, base_id, org_id, project_id\)/);
+  assert.match(sql, /FOREIGN KEY \(source_document_id, base_id, org_id, project_id\)/);
+  assert.match(sql, /derived_document_id <> source_document_id/);
 });
 
 test("knowledge schema enforces tenant ancestry, per-base dedupe, status, vector dimensions, FTS, and cascades", async () => {
@@ -152,6 +172,53 @@ test("knowledge schema enforces tenant ancestry, per-base dedupe, status, vector
         `UPDATE knowledge_documents SET status = 'complete' WHERE document_id = 'document-a'`,
       ),
       (error: unknown) => (error as { code?: string }).code === "23514",
+    );
+    await client.query(
+      `INSERT INTO knowledge_documents
+         (document_id, base_id, org_id, project_id, title, source_format,
+          content_text, content_sha256, origin, distillation_version, status, created_by)
+       VALUES ('derived-a', 'base-a', 'org-knowledge-a', 'project-knowledge-a',
+               'Derived note', 'markdown', 'derived', $1, 'derived', 1, 'queued',
+               'knowledge-user')`,
+      ["d".repeat(64)],
+    );
+    await client.query(
+      `INSERT INTO knowledge_document_provenance
+         (derived_document_id, source_document_id, base_id, org_id, project_id)
+       VALUES ('derived-a', 'document-a', 'base-a', 'org-knowledge-a',
+               'project-knowledge-a')`,
+    );
+    await assert.rejects(
+      client.query(
+        `UPDATE knowledge_documents SET distillation_version = 1
+          WHERE document_id = 'document-a'`,
+      ),
+      (error: unknown) => (error as { code?: string }).code === "23514",
+    );
+    await assert.rejects(
+      client.query(
+        `UPDATE knowledge_documents SET origin = 'source'
+          WHERE document_id = 'derived-a'`,
+      ),
+      (error: unknown) => (error as { code?: string }).code === "23514",
+    );
+    await assert.rejects(
+      client.query(
+        `INSERT INTO knowledge_document_provenance
+           (derived_document_id, source_document_id, base_id, org_id, project_id)
+         VALUES ('derived-a', 'derived-a', 'base-a', 'org-knowledge-a',
+                 'project-knowledge-a')`,
+      ),
+      (error: unknown) => (error as { code?: string }).code === "23514",
+    );
+    await assert.rejects(
+      client.query(
+        `INSERT INTO knowledge_document_provenance
+           (derived_document_id, source_document_id, base_id, org_id, project_id)
+         VALUES ('derived-a', 'document-second-base', 'base-a', 'org-knowledge-a',
+                 'project-knowledge-a')`,
+      ),
+      (error: unknown) => (error as { code?: string }).code === "23503",
     );
 
     await client.query(

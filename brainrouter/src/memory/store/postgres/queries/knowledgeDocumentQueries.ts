@@ -3,6 +3,8 @@ import type {
   KnowledgeChunkInput,
   KnowledgeChunkRecord,
   KnowledgeDocumentEnqueueResult,
+  KnowledgeDerivedDocumentInput,
+  KnowledgeDerivedDocumentResult,
   KnowledgeDocumentListFilters,
   KnowledgeDocumentProcessingRecord,
   KnowledgeDocumentRetryRecord,
@@ -16,8 +18,9 @@ import { toVectorLiteral } from "../converters.js";
 import type { Executor } from "./executor.js";
 
 const COLUMNS = `document_id, base_id, org_id, project_id, title, source_name,
-  source_format, content_text, content_sha256, status, status_message,
-  parse_version, created_by, created_at, updated_at, ready_at`;
+  source_format, content_text, content_sha256, origin, distillation_version,
+  status, status_message, parse_version, created_by, created_at, updated_at,
+  ready_at`;
 
 function toIso(value: unknown): string {
   return value instanceof Date ? value.toISOString() : String(value);
@@ -52,6 +55,10 @@ function rowToRecord(row: any): KnowledgeDocumentRecord {
     sourceFormat: row.source_format,
     contentText: String(row.content_text),
     contentSha256: String(row.content_sha256),
+    origin: row.origin === "derived" ? "derived" : "source",
+    distillationVersion: row.distillation_version == null
+      ? null
+      : Number(row.distillation_version),
     status: row.status,
     statusMessage: row.status_message == null ? null : String(row.status_message),
     parseVersion: Number(row.parse_version),
@@ -73,6 +80,8 @@ function insertParams(record: KnowledgeDocumentRecord): unknown[] {
     record.sourceFormat,
     record.contentText,
     record.contentSha256,
+    record.origin,
+    record.distillationVersion,
     record.status,
     record.statusMessage,
     record.parseVersion,
@@ -90,9 +99,10 @@ export async function createKnowledgeDocument(
   await exec.run(
     `INSERT INTO knowledge_documents
        (document_id, base_id, org_id, project_id, title, source_name,
-        source_format, content_text, content_sha256, status, status_message,
-        parse_version, created_by, created_at, updated_at, ready_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+        source_format, content_text, content_sha256, origin,
+        distillation_version, status, status_message, parse_version, created_by, created_at,
+        updated_at, ready_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
     insertParams(record),
   );
 }
@@ -106,9 +116,10 @@ export async function enqueueKnowledgeDocument(
     const inserted = await client.query(
       `INSERT INTO knowledge_documents
          (document_id, base_id, org_id, project_id, title, source_name,
-          source_format, content_text, content_sha256, status, status_message,
-          parse_version, created_by, created_at, updated_at, ready_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+          source_format, content_text, content_sha256, origin,
+          distillation_version, status, status_message, parse_version, created_by, created_at,
+          updated_at, ready_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
        ON CONFLICT (org_id, project_id, base_id, content_sha256) DO NOTHING
        RETURNING ${COLUMNS}`,
       insertParams(record),
@@ -147,6 +158,117 @@ export async function enqueueKnowledgeDocument(
       ],
     );
     return { document: rowToRecord(inserted.rows[0]), created: true, jobId };
+  });
+}
+
+/**
+ * Atomically persist derived Markdown notes, exact source edges, and parse jobs.
+ *
+ * Source validation is repeated inside the transaction and requires ready
+ * non-derived documents. This database boundary is the recursion guard even if
+ * a future caller bypasses the service-level source selection.
+ */
+export async function enqueueDerivedKnowledgeDocuments(
+  exec: Executor,
+  inputs: KnowledgeDerivedDocumentInput[],
+): Promise<KnowledgeDerivedDocumentResult[]> {
+  if (inputs.length === 0) return [];
+  return exec.tx(async (client) => {
+    const results: KnowledgeDerivedDocumentResult[] = [];
+    for (const input of inputs) {
+      const record = input.document;
+      const sourceDocumentIds = [...new Set(input.sourceDocumentIds)];
+      if (record.origin !== "derived"
+        || !record.distillationVersion
+        || sourceDocumentIds.length === 0
+        || sourceDocumentIds.includes(record.documentId)) {
+        throw new Error("Invalid derived knowledge document.");
+      }
+      const sources = await client.query(
+        `SELECT document_id
+           FROM knowledge_documents
+          WHERE base_id = $1 AND org_id = $2 AND project_id = $3
+            AND document_id = ANY($4::text[])
+            AND status = 'ready' AND origin = 'source'
+          FOR SHARE`,
+        [record.baseId, record.orgId, record.projectId, sourceDocumentIds],
+      );
+      if ((sources.rowCount ?? 0) !== sourceDocumentIds.length) {
+        throw new Error("Derived knowledge sources are unavailable.");
+      }
+
+      const inserted = await client.query(
+        `INSERT INTO knowledge_documents
+           (document_id, base_id, org_id, project_id, title, source_name,
+            source_format, content_text, content_sha256, origin,
+            distillation_version, status, status_message, parse_version,
+            created_by, created_at, updated_at, ready_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+         ON CONFLICT (org_id, project_id, base_id, content_sha256) DO NOTHING
+         RETURNING ${COLUMNS}`,
+        insertParams(record),
+      );
+      const created = (inserted.rowCount ?? 0) === 1;
+      const documentRow = created
+        ? inserted.rows[0]
+        : (await client.query(
+          `SELECT ${COLUMNS} FROM knowledge_documents
+            WHERE content_sha256 = $1 AND base_id = $2 AND org_id = $3 AND project_id = $4
+            FOR SHARE`,
+          [record.contentSha256, record.baseId, record.orgId, record.projectId],
+        )).rows[0];
+      if (!documentRow || documentRow.origin !== "derived") {
+        throw new Error("Derived knowledge content conflicts with a source document.");
+      }
+      const document = rowToRecord(documentRow);
+      await client.query(
+        `INSERT INTO knowledge_document_provenance
+           (derived_document_id, source_document_id, base_id, org_id, project_id, created_at)
+         SELECT $1, source_document_id, $2, $3, $4, $5
+           FROM unnest($6::text[]) AS source_document_id
+         ON CONFLICT DO NOTHING`,
+        [
+          document.documentId,
+          document.baseId,
+          document.orgId,
+          document.projectId,
+          record.createdAt,
+          sourceDocumentIds,
+        ],
+      );
+      if (created) {
+        const parseInput: KnowledgeParseJobInput = {
+          orgId: document.orgId,
+          projectId: document.projectId,
+          baseId: document.baseId,
+          documentId: document.documentId,
+          parseVersion: document.parseVersion,
+        };
+        await client.query(
+          `INSERT INTO memory_jobs
+             (id, kind, status, priority, attempts, max_attempts, run_after,
+              locked_at, parent_job_id, tenant, input_json, output_json, error,
+              created_at, updated_at)
+           VALUES ($1,$2,'pending',50,0,3,$3,NULL,NULL,$4,$5,NULL,NULL,$6,$7)`,
+          [
+            input.jobId,
+            KNOWLEDGE_PARSE_JOB_KIND,
+            document.createdAt,
+            document.orgId,
+            JSON.stringify(parseInput),
+            document.createdAt,
+            document.updatedAt,
+          ],
+        );
+      }
+      results.push({
+        document,
+        sourceDocumentIds,
+        created,
+        jobId: created ? input.jobId : null,
+      });
+    }
+    return results;
   });
 }
 
@@ -487,6 +609,24 @@ export async function getKnowledgeDocument(
   return row ? rowToRecord(row) : null;
 }
 
+export async function listKnowledgeDocumentSourceIds(
+  exec: Executor,
+  derivedDocumentId: string,
+  baseId: string,
+  orgId: string,
+  projectId: string,
+): Promise<string[]> {
+  const rows = await exec.rows(
+    `SELECT source_document_id
+       FROM knowledge_document_provenance
+      WHERE derived_document_id = $1 AND base_id = $2
+        AND org_id = $3 AND project_id = $4
+      ORDER BY source_document_id ASC`,
+    [derivedDocumentId, baseId, orgId, projectId],
+  );
+  return rows.map((row: any) => String(row.source_document_id));
+}
+
 export async function getKnowledgeDocumentByContentHash(
   exec: Executor,
   contentSha256: string,
@@ -514,6 +654,10 @@ export async function listKnowledgeDocuments(
   if (filters.status) {
     params.push(filters.status);
     where.push(`status = $${params.length}`);
+  }
+  if (filters.origin) {
+    params.push(filters.origin);
+    where.push(`origin = $${params.length}`);
   }
   const requestedLimit = filters.limit ?? 100;
   const limit = Number.isFinite(requestedLimit)

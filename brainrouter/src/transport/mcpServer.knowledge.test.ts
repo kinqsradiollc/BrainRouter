@@ -59,6 +59,8 @@ const document = {
   sourceFormat: "markdown" as const,
   contentText: "private persisted content",
   contentSha256: "private-content-hash",
+  origin: "source" as const,
+  distillationVersion: null,
   status: "queued" as const,
   statusMessage: null,
   parseVersion: 1,

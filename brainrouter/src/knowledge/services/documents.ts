@@ -133,6 +133,8 @@ export class KnowledgeDocumentService {
       sourceFormat: normalized.sourceFormat,
       contentText: normalized.contentText,
       contentSha256: sha256(normalized.contentText),
+      origin: "source",
+      distillationVersion: null,
       status: "queued",
       statusMessage: null,
       parseVersion: KNOWLEDGE_PARSE_VERSION,
