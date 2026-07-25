@@ -91,6 +91,8 @@ function document(overrides: Partial<KnowledgeDocumentRecord> = {}): KnowledgeDo
     sourceFormat: 'markdown',
     contentText: 'Internal content that must not leave the service boundary.',
     contentSha256: 'secret-content-hash',
+    origin: 'source',
+    distillationVersion: null,
     status: 'queued',
     statusMessage: null,
     parseVersion: 1,

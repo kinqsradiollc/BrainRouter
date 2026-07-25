@@ -5,6 +5,8 @@ import type {
 import type {
   KnowledgeDocumentListFilters,
   KnowledgeDocumentEnqueueResult,
+  KnowledgeDerivedDocumentInput,
+  KnowledgeDerivedDocumentResult,
   KnowledgeDocumentRecord,
   KnowledgeDocumentStatusUpdate,
   KnowledgeDocumentProcessingRecord,
@@ -49,6 +51,9 @@ export interface KnowledgeDocumentStore extends KnowledgeBaseStore {
     record: KnowledgeDocumentRecord,
     jobId: string,
   ): Promise<KnowledgeDocumentEnqueueResult>;
+  enqueueDerivedKnowledgeDocuments(
+    inputs: KnowledgeDerivedDocumentInput[],
+  ): Promise<KnowledgeDerivedDocumentResult[]>;
   markKnowledgeDocumentParsing(
     input: KnowledgeParseJobInput,
     updatedAt: string,
@@ -89,6 +94,12 @@ export interface KnowledgeDocumentStore extends KnowledgeBaseStore {
     orgId: string,
     projectId: string,
   ): Promise<KnowledgeDocumentRecord | null>;
+  listKnowledgeDocumentSourceIds(
+    derivedDocumentId: string,
+    baseId: string,
+    orgId: string,
+    projectId: string,
+  ): Promise<string[]>;
   getKnowledgeDocumentByContentHash(
     contentSha256: string,
     baseId: string,

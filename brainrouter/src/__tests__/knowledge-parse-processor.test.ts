@@ -27,6 +27,8 @@ function document(overrides: Partial<KnowledgeDocumentRecord> = {}): KnowledgeDo
     sourceFormat: "markdown",
     contentText: "First line\nSecond line",
     contentSha256: "a".repeat(64),
+    origin: "source",
+    distillationVersion: null,
     status: "queued",
     statusMessage: null,
     parseVersion: 1,
