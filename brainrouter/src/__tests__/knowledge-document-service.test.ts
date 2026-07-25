@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
+import { strToU8, zipSync } from "fflate";
 import { describe, expect, it, vi } from "vitest";
 import { knowledgeActorFromAuth } from "../knowledge/contracts/actor.js";
 import type { KnowledgeBaseRecord } from "../knowledge/contracts/base.js";
 import type { KnowledgeDocumentRecord } from "../knowledge/contracts/document.js";
 import {
+  MAX_KNOWLEDGE_DOCX_BASE64_CHARS,
   MAX_KNOWLEDGE_HTML_BYTES,
   MAX_KNOWLEDGE_PDF_BASE64_CHARS,
   MAX_KNOWLEDGE_TEXT_BYTES,
@@ -116,6 +118,26 @@ function pdfBase64(text = "Deployment\nSECRET_TOKEN=abc123"): string {
     `%PDF-1.4\n1 0 obj <</Type /Page>> endobj\nBT (${literal}) Tj ET\n%%EOF`,
     "latin1",
   ).toString("base64");
+}
+
+function docxBase64(documentText = "Deployment\nSECRET_TOKEN=abc123"): string {
+  const paragraphs = documentText
+    .split("\n")
+    .map((line) => `<w:p><w:r><w:t>${line}</w:t></w:r></w:p>`)
+    .join("");
+  return Buffer.from(zipSync({
+    "[Content_Types].xml": strToU8(`<Types>
+      <Override PartName="/word/document.xml"
+        ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+    </Types>`),
+    "_rels/.rels": strToU8(`<Relationships>
+      <Relationship Type="officeDocument" Target="word/document.xml"/>
+    </Relationships>`),
+    "word/document.xml": strToU8(`<w:document
+      xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+      <w:body>${paragraphs}</w:body>
+    </w:document>`),
+  }, { level: 6 })).toString("base64");
 }
 
 describe("KnowledgeDocumentService", () => {
@@ -252,6 +274,59 @@ describe("KnowledgeDocumentService", () => {
   it("authorizes PDF writes before decoding attacker-controlled content", async () => {
     const { service, store } = setup();
     await expect(service.ingestPdf(viewer, "project-1", "base-1", {
+      title: "Escalation attempt",
+      contentBase64: "not-base64",
+    })).resolves.toEqual({ ok: false, code: "forbidden" });
+    expect(store.getKnowledgeBase).not.toHaveBeenCalled();
+    expect(store.enqueueKnowledgeDocument).not.toHaveBeenCalled();
+  });
+
+  it("extracts and redacts a bounded DOCX without persisting package content", async () => {
+    const { service, store } = setup();
+    const rawContent = docxBase64();
+    const expectedContent = "Deployment\n[REDACTED]";
+    const result = await service.ingestDocx(developer, "project-1", "base-1", {
+      title: "Deployment runbook",
+      sourceName: "deployment.docx",
+      contentBase64: rawContent,
+    });
+
+    expect(result).toMatchObject({ ok: true, value: { created: true } });
+    const [record, jobId] = vi.mocked(store.enqueueKnowledgeDocument).mock.calls[0];
+    expect(jobId).toBe("job-created");
+    expect(record).toMatchObject({
+      sourceFormat: "docx",
+      contentText: expectedContent,
+      contentSha256: createHash("sha256").update(expectedContent).digest("hex"),
+    });
+    const serializedRecord = JSON.stringify(record);
+    expect(serializedRecord).not.toContain(rawContent);
+    expect(serializedRecord).not.toContain("abc123");
+    expect(serializedRecord).not.toContain("[Content_Types].xml");
+  });
+
+  it("rejects non-canonical, oversized, non-DOCX, and text-free DOCX payloads", async () => {
+    const textFreeDocx = docxBase64("");
+    const cases = [
+      "file:///private/runbook.docx",
+      "data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,UEsDBA==",
+      Buffer.from("not a DOCX").toString("base64"),
+      textFreeDocx,
+      "A".repeat(MAX_KNOWLEDGE_DOCX_BASE64_CHARS + 1),
+    ];
+    for (const contentBase64 of cases) {
+      const { service, store } = setup();
+      await expect(service.ingestDocx(developer, "project-1", "base-1", {
+        title: "Invalid DOCX",
+        contentBase64,
+      })).resolves.toEqual({ ok: false, code: "invalid", field: "contentBase64" });
+      expect(store.enqueueKnowledgeDocument).not.toHaveBeenCalled();
+    }
+  });
+
+  it("authorizes DOCX writes before decoding attacker-controlled content", async () => {
+    const { service, store } = setup();
+    await expect(service.ingestDocx(viewer, "project-1", "base-1", {
       title: "Escalation attempt",
       contentBase64: "not-base64",
     })).resolves.toEqual({ ok: false, code: "forbidden" });
