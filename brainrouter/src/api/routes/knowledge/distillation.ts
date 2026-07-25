@@ -15,6 +15,8 @@ import { memoryEngine } from "../../../memory/engine.js";
 import { requireAnyAuth, type AuthedRequest } from "../../middleware/auth.js";
 import { withOrgContext } from "../../middleware/tenancy.js";
 
+const MAX_SCOPE_ID_LENGTH = 512;
+
 export interface KnowledgeDistillationOperations {
   distill(
     actor: KnowledgeActor,
@@ -36,10 +38,15 @@ export function createKnowledgeDistillationRouter(
   ) => {
     const actor = actorFromRequest(req, res);
     if (!actor) return;
+    const projectId = boundedRouteId(req.params.projectId);
+    const baseId = boundedRouteId(req.params.baseId);
+    if (!projectId || !baseId) {
+      return sendError(res, 400, "Invalid knowledge resource identifier");
+    }
     const result = await service.distill(
       actor,
-      String(req.params.projectId),
-      String(req.params.baseId),
+      projectId,
+      baseId,
       {
         confirmed: req.body?.confirmed,
         documentIds: req.body?.documentIds,
@@ -74,6 +81,12 @@ function actorFromRequest(req: AuthedRequest, res: Response): KnowledgeActor | n
   });
   if (!actor) sendError(res, 500, "Knowledge authorization context is unavailable");
   return actor;
+}
+
+function boundedRouteId(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized && normalized.length <= MAX_SCOPE_ID_LENGTH ? normalized : null;
 }
 
 function sendKnowledgeFailure(

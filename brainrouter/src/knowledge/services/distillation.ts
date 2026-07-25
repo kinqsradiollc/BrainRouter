@@ -200,8 +200,8 @@ function sourcePrompt(sources: KnowledgeDocumentRecord[]): string {
   return JSON.stringify({
     sources: sources.map((source) => ({
       documentId: source.documentId,
-      title: source.title,
-      content: source.contentText.slice(0, perSource),
+      title: redactSensitiveMemoryText(source.title).slice(0, MAX_NOTE_TITLE_CHARS),
+      content: redactSensitiveMemoryText(source.contentText).slice(0, perSource),
       truncated: source.contentText.length > perSource,
     })),
   });
@@ -260,7 +260,11 @@ function validateGeneratedNotes(
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Invalid knowledge distillation output.");
   }
-  const notes = (value as Record<string, unknown>).notes;
+  const root = value as Record<string, unknown>;
+  if (!hasOnlyKeys(root, ["notes"])) {
+    throw new Error("Invalid knowledge distillation output.");
+  }
+  const notes = root.notes;
   if (!Array.isArray(notes) || notes.length < 1 || notes.length > maxNotes) {
     throw new Error("Invalid knowledge distillation output.");
   }
@@ -272,12 +276,18 @@ function validateGeneratedNotes(
       throw new Error("Invalid knowledge distillation note.");
     }
     const note = valueNote as Record<string, unknown>;
+    if (!hasOnlyKeys(note, ["title", "markdown", "sourceDocumentIds"])) {
+      throw new Error("Invalid knowledge distillation note.");
+    }
     const title = normalizeGeneratedText(note.title, MAX_NOTE_TITLE_CHARS);
     const markdown = normalizeGeneratedText(
       note.markdown,
       MAX_KNOWLEDGE_DISTILLATION_NOTE_CHARS,
     );
-    if (!title || !markdown || !Array.isArray(note.sourceDocumentIds)) {
+    if (!title
+      || !markdown
+      || !isSafeGeneratedMarkdown(markdown)
+      || !Array.isArray(note.sourceDocumentIds)) {
       throw new Error("Invalid knowledge distillation note.");
     }
     const sourceDocumentIds = [...new Set(note.sourceDocumentIds.map((sourceId) =>
@@ -304,6 +314,19 @@ function normalizeGeneratedText(value: unknown, maxChars: number): string | null
   if (typeof value !== "string" || value.length > maxChars) return null;
   const normalized = redactSensitiveMemoryText(value.replace(/\r\n?/g, "\n").trim());
   return normalized && normalized.length <= maxChars ? normalized : null;
+}
+
+function isSafeGeneratedMarkdown(value: string): boolean {
+  return !/<\/?[a-z][^>]*>/i.test(value)
+    && !/\]\(\s*(?:data|javascript|vbscript):/i.test(value);
+}
+
+function hasOnlyKeys(
+  value: Record<string, unknown>,
+  allowedKeys: readonly string[],
+): boolean {
+  const allowed = new Set(allowedKeys);
+  return Object.keys(value).every((key) => allowed.has(key));
 }
 
 function boundedId(value: unknown): string | null {

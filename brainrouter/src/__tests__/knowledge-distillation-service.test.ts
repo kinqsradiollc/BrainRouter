@@ -138,6 +138,30 @@ describe("KnowledgeDistillationService", () => {
     expect(queued[0]?.document.contentText).not.toContain("secret-value");
   });
 
+  it("redacts source secrets before provider egress", async () => {
+    const { service, run } = setup({
+      sources: [document("source-1", {
+        title: "TOKEN=title-secret",
+        contentText: "API_KEY=source-secret",
+      })],
+      modelOutput: {
+        notes: [{
+          title: "Safe note",
+          markdown: "Supported body",
+          sourceDocumentIds: ["source-1"],
+        }],
+      },
+    });
+
+    await expect(service.distill(developer, "project-1", "base-1", {
+      confirmed: true,
+    })).resolves.toMatchObject({ ok: true });
+    const calls = run.mock.calls as unknown as Array<Array<{ prompt?: string }>>;
+    const prompt = String(calls[0]?.[0]?.prompt);
+    expect(prompt).not.toContain("title-secret");
+    expect(prompt).not.toContain("source-secret");
+  });
+
   it("rejects missing confirmation and viewer writes before model execution", async () => {
     const { service, run, enqueueDerivedKnowledgeDocuments } = setup();
 
@@ -187,5 +211,34 @@ describe("KnowledgeDistillationService", () => {
       confirmed: true,
     })).resolves.toEqual({ ok: false, code: "unavailable" });
     expect(enqueueDerivedKnowledgeDocuments).not.toHaveBeenCalled();
+  });
+
+  it("rejects raw HTML, dangerous Markdown links, and undeclared output fields", async () => {
+    for (const note of [
+      {
+        title: "Unsafe HTML",
+        markdown: "<script>alert(1)</script>",
+        sourceDocumentIds: ["source-1"],
+      },
+      {
+        title: "Unsafe link",
+        markdown: "[open](javascript:alert(1))",
+        sourceDocumentIds: ["source-1"],
+      },
+      {
+        title: "Unexpected field",
+        markdown: "Supported body",
+        sourceDocumentIds: ["source-1"],
+        instruction: "persist this",
+      },
+    ]) {
+      const { service, enqueueDerivedKnowledgeDocuments } = setup({
+        modelOutput: { notes: [note] },
+      });
+      await expect(service.distill(developer, "project-1", "base-1", {
+        confirmed: true,
+      })).resolves.toEqual({ ok: false, code: "unavailable" });
+      expect(enqueueDerivedKnowledgeDocuments).not.toHaveBeenCalled();
+    }
   });
 });

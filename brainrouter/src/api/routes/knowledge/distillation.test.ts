@@ -182,4 +182,19 @@ describe("knowledge distillation REST adapter", () => {
     expect(JSON.stringify(unavailable.body)).toContain("distillation is unavailable");
     expect(JSON.stringify(unavailable.body)).not.toContain("provider");
   });
+
+  it("rejects oversized path identifiers before calling the service", async () => {
+    const oversizedEndpoint = new URL(
+      `http://127.0.0.1:${endpoint.port}/api/knowledge/projects/${
+        "p".repeat(513)
+      }/bases/base-1/distill`,
+    );
+    const response = await requestJson(oversizedEndpoint, {
+      Authorization: "Bearer br_developer",
+      "X-BrainRouter-Org": "org-a",
+    }, { confirmed: true });
+
+    expect(response.status).toBe(400);
+    expect(distill).not.toHaveBeenCalled();
+  });
 });
