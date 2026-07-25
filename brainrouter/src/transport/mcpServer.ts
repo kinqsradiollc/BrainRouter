@@ -109,6 +109,7 @@ import {
   knowledgeListToolSchema, handleKnowledgeList,
   knowledgeBaseCreateToolSchema, handleKnowledgeBaseCreate,
   knowledgeIngestToolSchema, handleKnowledgeIngest,
+  knowledgeIngestPdfToolSchema, handleKnowledgeIngestPdf,
   knowledgeStatusToolSchema, handleKnowledgeStatus,
   knowledgeRetryToolSchema, handleKnowledgeRetry,
   knowledgeSearchToolSchema, handleKnowledgeSearch,
@@ -326,6 +327,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
         knowledgeListToolSchema,
         knowledgeBaseCreateToolSchema,
         knowledgeIngestToolSchema,
+        knowledgeIngestPdfToolSchema,
         knowledgeStatusToolSchema,
         knowledgeRetryToolSchema,
         knowledgeSearchToolSchema,
@@ -506,6 +508,9 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
         case 'knowledge_ingest':
           if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
           return await handleKnowledgeIngest(request.params.arguments, { actor: knowledgeActor });
+        case 'knowledge_ingest_pdf':
+          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
+          return await handleKnowledgeIngestPdf(request.params.arguments, { actor: knowledgeActor });
         case 'knowledge_status':
           if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
           return await handleKnowledgeStatus(request.params.arguments, { actor: knowledgeActor });

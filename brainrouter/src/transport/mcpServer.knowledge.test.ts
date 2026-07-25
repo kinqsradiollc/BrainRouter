@@ -163,6 +163,7 @@ describe("authenticated knowledge MCP tools", () => {
     expect(tools.tools.map((tool) => tool.name)).not.toContain("knowledge_list");
     expect(tools.tools.map((tool) => tool.name)).not.toContain("knowledge_base_create");
     expect(tools.tools.map((tool) => tool.name)).not.toContain("knowledge_ingest");
+    expect(tools.tools.map((tool) => tool.name)).not.toContain("knowledge_ingest_pdf");
     expect(tools.tools.map((tool) => tool.name)).not.toContain("knowledge_status");
     expect(tools.tools.map((tool) => tool.name)).not.toContain("knowledge_retry");
     expect(tools.tools.map((tool) => tool.name)).not.toContain("knowledge_search");
@@ -173,6 +174,15 @@ describe("authenticated knowledge MCP tools", () => {
     await expect(client.callTool({
       name: "knowledge_search",
       arguments: { projectId: "project-a", query: "signing key" },
+    })).rejects.toThrow("Authenticated organization context required");
+    await expect(client.callTool({
+      name: "knowledge_ingest_pdf",
+      arguments: {
+        projectId: "project-a",
+        baseId: "kb-1",
+        title: "Unscoped PDF",
+        contentBase64: "JVBERi0xLjQ=",
+      },
     })).rejects.toThrow("Authenticated organization context required");
     expect(mocks.getAccessibleProject).not.toHaveBeenCalled();
   });
@@ -193,6 +203,7 @@ describe("authenticated knowledge MCP tools", () => {
       "knowledge_list",
       "knowledge_base_create",
       "knowledge_ingest",
+      "knowledge_ingest_pdf",
       "knowledge_status",
       "knowledge_retry",
       "knowledge_search",
@@ -329,6 +340,84 @@ describe("authenticated knowledge MCP tools", () => {
     expect(serialized).not.toContain("kjob-private");
   });
 
+  it("ingests a PDF with the session actor while keeping binary content and queue ids private", async () => {
+    const contentBase64 = Buffer.from(
+      "%PDF-1.4\n1 0 obj <</Type /Page>> endobj\nBT (Deployment\\nSECRET_TOKEN=abc123) Tj ET\n%%EOF",
+      "latin1",
+    ).toString("base64");
+    mocks.enqueueKnowledgeDocument.mockImplementationOnce(async (record, jobId) => ({
+      document: record,
+      created: true,
+      jobId,
+    }));
+    const client = await connect({
+      defaultUserId: "developer-1",
+      defaultOrgId: "org-a",
+      defaultRole: "developer",
+    });
+    const result = await client.callTool({
+      name: "knowledge_ingest_pdf",
+      arguments: {
+        projectId: "project-a",
+        baseId: "kb-1",
+        title: "Deployment guide",
+        sourceName: "deployment.pdf",
+        contentBase64,
+        orgId: "org-foreign",
+        userId: "attacker",
+        role: "owner",
+        isSystemAdmin: true,
+        jobId: "kjob-attacker",
+        path: "/private/deployment.pdf",
+        url: "https://attacker.invalid/deployment.pdf",
+      },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(mocks.getAccessibleProject).toHaveBeenCalledWith(
+      "project-a",
+      "org-a",
+      "developer-1",
+      false,
+    );
+    expect(mocks.enqueueKnowledgeDocument).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseId: "kb-1",
+        orgId: "org-a",
+        projectId: "project-a",
+        createdBy: "developer-1",
+        title: "Deployment guide",
+        sourceName: "deployment.pdf",
+        sourceFormat: "pdf",
+        contentText: "Deployment\n[REDACTED]",
+      }),
+      expect.stringMatching(/^kjob_/),
+    );
+    const payload = parseTextResult(result);
+    expect(payload).toEqual({
+      document: {
+        documentId: expect.stringMatching(/^kdoc_/),
+        title: "Deployment guide",
+        sourceName: "deployment.pdf",
+        sourceFormat: "pdf",
+        status: "queued",
+        statusMessage: null,
+        parseVersion: 1,
+        updatedAt: expect.any(String),
+        readyAt: null,
+      },
+      created: true,
+    });
+    const serialized = JSON.stringify(payload);
+    expect(serialized).not.toContain(contentBase64);
+    expect(serialized).not.toContain("abc123");
+    expect(serialized).not.toContain("developer-1");
+    expect(serialized).not.toContain("org-a");
+    expect(serialized).not.toContain("kjob_");
+    expect(serialized).not.toContain("/private/deployment.pdf");
+    expect(serialized).not.toContain("attacker.invalid");
+  });
+
   it("returns exact-scope content-free status to readers", async () => {
     const client = await connect({
       defaultUserId: "viewer-1",
@@ -421,7 +510,7 @@ describe("authenticated knowledge MCP tools", () => {
     expect(JSON.stringify(payload)).not.toContain("kjob-attacker");
   });
 
-  it("allows viewer status reads but rejects ingest and retry role spoofing", async () => {
+  it("allows viewer status reads but rejects text/PDF ingest and retry role spoofing", async () => {
     const client = await connect({
       defaultUserId: "viewer-1",
       defaultOrgId: "org-a",
@@ -449,13 +538,48 @@ describe("authenticated knowledge MCP tools", () => {
         isSystemAdmin: true,
       },
     });
+    const pdf = await client.callTool({
+      name: "knowledge_ingest_pdf",
+      arguments: {
+        projectId: "project-a",
+        baseId: "kb-1",
+        title: "Escalation PDF",
+        contentBase64: Buffer.from("%PDF-1.4\nBT (Should not persist) Tj ET\n%%EOF", "latin1")
+          .toString("base64"),
+      },
+    });
 
     expect(ingest.isError).toBe(true);
     expect(parseTextResult(ingest)).toEqual({ error: { code: "forbidden" } });
+    expect(pdf.isError).toBe(true);
+    expect(parseTextResult(pdf)).toEqual({ error: { code: "forbidden" } });
     expect(retry.isError).toBe(true);
     expect(parseTextResult(retry)).toEqual({ error: { code: "forbidden" } });
     expect(mocks.enqueueKnowledgeDocument).not.toHaveBeenCalled();
     expect(mocks.retryKnowledgeDocumentProcessing).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed PDF payloads without persisting attacker content", async () => {
+    const client = await connect({
+      defaultUserId: "developer-1",
+      defaultOrgId: "org-a",
+      defaultRole: "developer",
+    });
+    const result = await client.callTool({
+      name: "knowledge_ingest_pdf",
+      arguments: {
+        projectId: "project-a",
+        baseId: "kb-1",
+        title: "Invalid PDF",
+        contentBase64: "file:///private/runbook.pdf",
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(parseTextResult(result)).toEqual({
+      error: { code: "invalid", field: "contentBase64" },
+    });
+    expect(mocks.enqueueKnowledgeDocument).not.toHaveBeenCalled();
   });
 
   it("returns not found before processing an inaccessible document ancestry", async () => {
