@@ -11,11 +11,13 @@ import type {
   IngestKnowledgePdfInput,
   IngestKnowledgeTextInput,
   KnowledgeDocumentEnqueueResult,
+  KnowledgeDocumentListItemView,
   KnowledgeDocumentRecord,
   KnowledgeDocumentRetryView,
   KnowledgeDocumentServiceFailure,
   KnowledgeDocumentServiceResult,
   KnowledgeDocumentStatusView,
+  ListKnowledgeDocumentsInput,
 } from '../../../knowledge/contracts/document.js';
 import { KnowledgeDocumentService } from '../../../knowledge/services/documents.js';
 import { memoryEngine } from '../../../memory/engine.js';
@@ -23,6 +25,12 @@ import { requireAnyAuth, type AuthedRequest } from '../../middleware/auth.js';
 import { withOrgContext } from '../../middleware/tenancy.js';
 
 export interface KnowledgeDocumentOperations {
+  list(
+    actor: KnowledgeActor,
+    projectId: string,
+    baseId: string,
+    input: ListKnowledgeDocumentsInput,
+  ): Promise<KnowledgeDocumentServiceResult<KnowledgeDocumentListItemView[]>>;
   ingestText(
     actor: KnowledgeActor,
     projectId: string,
@@ -58,6 +66,18 @@ export interface KnowledgeDocumentOperations {
 export function createKnowledgeDocumentsRouter(service: KnowledgeDocumentOperations): Router {
   const router = Router();
   router.use(requireAnyAuth, withOrgContext);
+
+  router.get('/projects/:projectId/bases/:baseId/documents', async (req: AuthedRequest, res) => {
+    const actor = actorFromRequest(req, res);
+    if (!actor) return;
+    const result = await service.list(actor, String(req.params.projectId), String(req.params.baseId), {
+      status: req.query.status,
+      origin: req.query.origin,
+      limit: req.query.limit,
+    });
+    if (!result.ok) return sendKnowledgeFailure(res, result);
+    res.json({ documents: result.value });
+  });
 
   router.post('/projects/:projectId/bases/:baseId/documents/text', async (req: AuthedRequest, res) => {
     const actor = actorFromRequest(req, res);
