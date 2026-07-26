@@ -1,0 +1,162 @@
+{
+  "schemaVersion": 1,
+  "kind": "orchestration-profile",
+  "id": "writing",
+  "displayName": "Writing orchestration",
+  "defaultMode": "explicit",
+  "fallbackStrategyId": "direct-writing",
+  "rolePolicy": {
+    "availableRoles": [
+      "reviewer"
+    ],
+    "disabledRoles": [
+      "fleet"
+    ]
+  },
+  "limits": {
+    "maxParallel": 2,
+    "maxStages": 4,
+    "maxChildrenPerStage": 2,
+    "maxTotalChildren": 2,
+    "maxDepth": 2,
+    "maxRetries": 1
+  },
+  "strategies": [
+    {
+      "id": "direct-writing",
+      "description": "Keep a bounded writing request on the primary writer.",
+      "activation": {
+        "signals": [
+          "small-scope"
+        ],
+        "explicitOnly": false
+      },
+      "stages": [
+        {
+          "id": "complete",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [],
+          "objective": "Complete the bounded writing request directly while preserving author intent, factual constraints, and unresolved uncertainty.",
+          "skillIds": [],
+          "optional": false
+        }
+      ]
+    },
+    {
+      "id": "outline-draft-revise",
+      "description": "Outline, draft, and revise on the primary writer without delegating authorship.",
+      "activation": {
+        "signals": [
+          "writing-revision"
+        ],
+        "explicitOnly": false
+      },
+      "stages": [
+        {
+          "id": "outline",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [],
+          "objective": "Confirm audience, purpose, voice, constraints, controlling idea, evidence gaps, and a section outline before drafting.",
+          "skillIds": [
+            "structured-writing-skill"
+          ],
+          "optional": false
+        },
+        {
+          "id": "draft",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "outline"
+          ],
+          "objective": "Draft against the reviewed outline with logical continuity, explicit evidence provenance, and visible unresolved factual questions.",
+          "skillIds": [
+            "structured-writing-skill"
+          ],
+          "optional": false
+        },
+        {
+          "id": "revise",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "draft"
+          ],
+          "objective": "Revise from purpose and structure through evidence, clarity, voice, and mechanics while preserving non-negotiable author intent.",
+          "skillIds": [
+            "revision-skill"
+          ],
+          "optional": false
+        }
+      ]
+    },
+    {
+      "id": "critique-revision",
+      "description": "Delegate bounded read-only critique against an explicit rubric, then keep revision on the primary writer.",
+      "activation": {
+        "signals": [
+          "critique"
+        ],
+        "explicitOnly": false
+      },
+      "stages": [
+        {
+          "id": "prepare",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [],
+          "objective": "Freeze the artifact version and state the audience, intended effect, non-negotiable meaning, factual constraints, and critique rubric.",
+          "skillIds": [
+            "structured-writing-skill"
+          ],
+          "optional": false
+        },
+        {
+          "id": "critique",
+          "executor": {
+            "kind": "role",
+            "roleId": "reviewer"
+          },
+          "after": [
+            "prepare"
+          ],
+          "objective": "Critique the frozen artifact against the supplied rubric for purpose, structure, evidence, consistency, clarity, and voice without editing it.",
+          "skillIds": [],
+          "fanOut": {
+            "min": 1,
+            "max": 2
+          },
+          "optional": false,
+          "expectedOutput": {
+            "contractId": "reviewer",
+            "requiredSections": [
+              "headline",
+              "findings"
+            ]
+          }
+        },
+        {
+          "id": "revise",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "critique"
+          ],
+          "objective": "Evaluate the critique against author intent, make accepted revisions in impact order, and surface rejected or decision-dependent feedback.",
+          "skillIds": [
+            "revision-skill"
+          ],
+          "optional": false
+        }
+      ]
+    }
+  ]
+}

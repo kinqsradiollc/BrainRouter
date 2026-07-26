@@ -1137,6 +1137,29 @@ access, tools, or budgets.
 - Support primary stages without child creation.
 - Verify no normal Study or Writing strategy gains write-capable children.
 
+Study ships with `direct-tutoring`, `diagnose-teach-check`, `remediate`, and
+`source-explanation`. Diagnosis, objective mapping, explanation, assessment,
+and remediation stay on the primary tutor so the same conversational agent
+retains learner context and owns the advance-or-remediate decision. Assessment
+is evidence against an objective-specific gate rather than a stage-completion
+counter. Source explanation is the exception that may fan out: up to two
+read-only explorers can gather bounded source material, after which teaching
+and checking return to the primary tutor.
+
+Writing ships with `direct-writing`, `outline-draft-revise`, and
+`critique-revision`. Outline, draft, and every accepted edit stay on the
+primary writer. A critique strategy freezes the artifact and rubric before up
+to two read-only reviewers report findings; their output is advisory and
+cannot become an automatic write. The primary writer evaluates feedback
+against author intent and surfaces rejected or decision-dependent changes.
+
+Both profiles retain preset mode `explicit`. Matching task signals alone still
+resolve to their direct primary fallback until a user-reviewed strategy is
+selected; adaptive managed selection belongs to P23-7. Primary stages use the
+active-turn lifecycle directly and cannot compile into child packets. Every
+role stage in both bundled plans resolves only to a read-access role, so skill
+metadata cannot introduce a write-capable child.
+
 ### P23-7 — Adaptive managed selection
 
 - Add the bounded strategy-selection response schema and deadline.
