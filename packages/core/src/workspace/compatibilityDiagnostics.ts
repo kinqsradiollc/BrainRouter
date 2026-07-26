@@ -12,6 +12,7 @@ export type WorkspaceCompatibilityDiagnosticCode =
   | 'persona_collision'
   | 'legacy_manifest_agents'
   | 'legacy_orchestration_defaults'
+  | 'typescript_orchestration_defaults'
   | 'implicit_same_id_pairing'
   | 'legacy_frontend_persona';
 
@@ -104,6 +105,7 @@ function isCompatibilityCode(value: string): value is WorkspaceCompatibilityDiag
     'persona_collision',
     'legacy_manifest_agents',
     'legacy_orchestration_defaults',
+    'typescript_orchestration_defaults',
     'implicit_same_id_pairing',
     'legacy_frontend_persona',
   ].includes(value);

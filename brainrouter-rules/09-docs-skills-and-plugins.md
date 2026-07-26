@@ -211,6 +211,9 @@ linked project/pack agent paths, or write executable definitions directly with
 Legacy Markdown persona use, persona collisions, legacy manifest-agent
 translation, synthesized orchestration defaults, implicit same-ID pairing, and
 the frontend-persona translation must be visible through typed diagnostics.
+The `profiles.ts` orchestration fallback records its own distinct
+`typescript_orchestration_defaults` reader code only when bundled plan
+resolution actually falls back.
 Telemetry records only the diagnostic code, surface, coarse source, and count;
 never record persona ids, paths, manifest values, prompts, or file contents.
 Deduplicate compatibility events per workspace/process and aggregate local
@@ -220,6 +223,7 @@ manifests, including their serialized client alias, emit no migration signal.
 - **Evidence:** `packages/core/src/workspace/compatibilityDiagnostics.ts`,
   `packages/core/src/workspace/domainPersonas.ts`,
   `packages/core/src/workspace/manifest.ts`,
+  `packages/core/src/workspace/profileOrchestrationDefaults.ts`,
   `packages/core/src/tests/migration-compatibility-diagnostics.test.ts`
 
 ### 11c. Orchestration profiles resolve whole definitions and fail closed

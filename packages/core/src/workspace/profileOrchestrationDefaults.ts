@@ -5,6 +5,8 @@
  * but new drafts prefer the same validated package data the resolver uses.
  */
 import { findBundledOrchestrationProfile } from '../orchestration/profiles/orchestrationProfileCatalog.js';
+import type { OrchestrationProfileDefinition } from '../orchestration/profiles/orchestrationProfileDefinitionFile.js';
+import { recordWorkspaceCompatibilityDiagnostics } from './compatibilityDiagnostics.js';
 import {
   WORKSPACE_PROFILES,
   getWorkspaceProfile,
@@ -21,11 +23,17 @@ export interface WorkspaceProfileOrchestrationDefaults {
   planId: string | null;
 }
 
+export interface ResolveWorkspaceProfileOrchestrationDefaultsOptions {
+  /** Test/package-validation seam; production always uses the bundled catalog. */
+  findPlan?: (profileId: WorkspaceProfileId) => OrchestrationProfileDefinition | undefined;
+}
+
 export function resolveWorkspaceProfileOrchestrationDefaults(
   profileId: WorkspaceProfileId,
+  options: ResolveWorkspaceProfileOrchestrationDefaultsOptions = {},
 ): WorkspaceProfileOrchestrationDefaults {
   try {
-    const plan = findBundledOrchestrationProfile(profileId);
+    const plan = (options.findPlan ?? findBundledOrchestrationProfile)(profileId);
     if (plan) {
       return {
         mode: plan.defaultMode,
@@ -40,6 +48,13 @@ export function resolveWorkspaceProfileOrchestrationDefaults(
     // Package corruption is diagnosed by catalog tests. Onboarding remains
     // usable through the one-release compatibility source.
   }
+  recordWorkspaceCompatibilityDiagnostics('profile-orchestration-defaults', [{
+    code: 'typescript_orchestration_defaults',
+    surface: 'manifest',
+    severity: 'info',
+    source: 'bundled',
+    message: 'TypeScript workspace-profile orchestration defaults supplied a compatibility fallback.',
+  }]);
   const preset = getWorkspaceProfile(profileId) ?? getWorkspaceProfile('custom')!;
   return {
     mode: preset.orchestration.mode,

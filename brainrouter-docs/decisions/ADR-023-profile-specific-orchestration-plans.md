@@ -1,6 +1,6 @@
 # ADR-023 — Profile-Specific Orchestration Plans
 
-**Status:** Accepted for `release/0.4.17` · **Builds on** ADR-021 (workspace
+**Status:** Implemented for `release/0.4.17` · **Builds on** ADR-021 (workspace
 profiles) and ADR-022 (persona, orchestration, and context contracts) ·
 **Refines** ADR-022 sections 4, 5, 7, and 9 without changing their authority
 boundaries.
@@ -1011,8 +1011,18 @@ tool merely because its checkbox is selected.
   installed CLI or Desktop runtime resolves it.
 - `profiles.ts` orchestration defaults remain a compatibility source until all
   onboarding consumers resolve the JSON plan catalog.
-- Removing the compatibility source requires one release of diagnostics and a
-  separate PR.
+- CLI and Desktop onboarding now resolve catalog entries and plan provenance
+  from one host-owned plugin/workspace snapshot. They revalidate catalog state
+  before write; disabled plugin skills remain visible but blocked, and live MCP
+  tool names remain non-persistable.
+- The TypeScript fallback emits the content-free
+  `typescript_orchestration_defaults` reader code only when bundled plan
+  resolution actually falls back.
+- Removing the compatibility source requires a separate PR after the complete
+  `release/0.4.17` support window. `release/0.4.18` is therefore the earliest
+  eligible removal target. That PR must audit every consumer and summarize the
+  available local compatibility telemetry; any observed fallback use blocks
+  removal. Opt-in telemetry absence alone is not proof of zero use.
 
 ## Implementation plan
 
@@ -1226,12 +1236,26 @@ no-write test.
 - Surface trusted plugin tool/skill contributions with provenance in the
   catalog; never persist volatile MCP tool names.
 
+Implemented as separate reviewed slices: plugin manifests and disclosure carry
+orchestration-profile contributions; whole definitions resolve
+workspace-local → workspace → enabled plugin → bundled with fail-closed claims;
+the selection catalog projects bounded enabled/disabled plugin skill metadata
+and stable extension-tool owner provenance; and CLI/Desktop preview and save
+flows consume the same resolved source snapshot. Plan provenance is visible in
+both onboarding reviews, while skip remains a terminal no-write action.
+
 ### P23-10 — Compatibility telemetry and cleanup
 
 - Record content-free use of the `profiles.ts` orchestration compatibility
   source.
 - Review adoption evidence after one supported-release window.
 - Remove the duplicate TypeScript orchestration defaults in a separate PR.
+
+The telemetry reader is implemented in `release/0.4.17`. Cleanup is
+intentionally not part of this ADR's release implementation: the support
+window cannot be simulated during development, and the compatibility table is
+the fail-safe for damaged or incomplete package assets. The follow-up removal
+gate is recorded in the Compatibility section above.
 
 ## Acceptance criteria
 
@@ -1293,6 +1317,9 @@ no-write test.
 29. Choosing **Skip setup for now** in CLI or Desktop creates no manifest,
     selection, completion marker, or partial draft; reopening onboarding later
     starts a fresh reviewed proposal.
+30. Use of the TypeScript orchestration-default fallback emits only a bounded
+    compatibility code, surface, coarse source, and count; it never emits
+    profile IDs, plan contents, prompts, paths, or workspace content.
 
 ## Non-goals
 
