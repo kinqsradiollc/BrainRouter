@@ -514,7 +514,7 @@ test('W4b runtime lookup and delegate tools expose only the active manifest cata
   });
 });
 
-test('selected profile packs contribute specialist inventory without implicitly activating it', () => {
+test('selected profile packs never create same-id specialist inventory', () => {
   const cases = [
     { profile: 'research' as const, id: 'researcher' },
     { profile: 'data-science' as const, id: 'data-scientist' },
@@ -534,7 +534,7 @@ test('selected profile packs contribute specialist inventory without implicitly 
       const rawSpecialists = loadRegistry(workspace)
         .filter((entry) => specialistIds.has(entry.def.id))
         .map((entry) => entry.def.id);
-      assert.deepEqual(rawSpecialists, [item.id]);
+      assert.deepEqual(rawSpecialists, []);
       const active = findById(item.id, workspace);
       assert.equal(active, undefined);
       assert.equal(
@@ -547,7 +547,7 @@ test('selected profile packs contribute specialist inventory without implicitly 
   }
 });
 
-test('C2 profile executors stay absent without a selected profile pack', () => {
+test('C2 profile personas never become executable orchestration roles', () => {
   const specialistIds = new Set(['researcher', 'data-scientist', 'tutor', 'writer']);
   withTempWorkspace((workspace) => {
     assert.equal(loadRegistry(workspace).some((entry) => specialistIds.has(entry.def.id)), false);
@@ -562,7 +562,7 @@ test('C2 profile executors stay absent without a selected profile pack', () => {
   });
 });
 
-test('C2 selecting a pack contributes inventory but cannot bypass agent activation', () => {
+test('C2 selecting a pack does not create executable inventory', () => {
   withTempWorkspace((workspace) => {
     saveWorkspaceManifest(workspace, createWorkspaceManifest({
       name: 'custom research',
@@ -573,7 +573,7 @@ test('C2 selecting a pack contributes inventory but cannot bypass agent activati
       },
     }));
 
-    assert.equal(loadRegistry(workspace).some((entry) => entry.def.id === 'researcher'), true);
+    assert.equal(loadRegistry(workspace).some((entry) => entry.def.id === 'researcher'), false);
     assert.equal(findById('researcher', workspace), undefined);
     assert.equal(
       synthesizeDelegateTools(listAll(workspace)).some((tool) => tool.name === 'delegate_researcher'),

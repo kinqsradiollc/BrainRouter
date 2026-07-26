@@ -21,7 +21,7 @@ test('W4b a profile pack selects its versioned standard-plugin root and skills',
 
   assert.equal(selection.managed, true);
   assert.deepEqual(selection.bundles.map(({ id, source, version }) => ({ id, source, version })), [
-    { id: 'research', source: 'profile-plugin', version: '1.0.0' },
+    { id: 'research', source: 'profile-plugin', version: '2.0.0' },
   ]);
   assert.equal(selection.skillRoots.length, 1);
   assert.deepEqual(selection.ambientSkillIds, [
@@ -99,7 +99,7 @@ test('W4b unknown and unavailable packs fail closed without hiding valid sibling
     kind: 'profile',
     pluginName: 'profile-research',
     skillIds: ['evidence-research-skill', 'source-synthesis-skill'],
-    agentIds: ['researcher'],
+    personaIds: ['researcher'],
     reason: 'fixture unavailable',
   });
   const selection = resolveWorkspaceSkillSelection({ manifest, catalog });

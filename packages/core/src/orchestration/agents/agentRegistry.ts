@@ -15,7 +15,6 @@ import { fileURLToPath } from 'node:url';
 import { listPacks } from '../../pack/packs.js';
 import { readPackState, isPackEnabled } from '../../pack/packStore.js';
 import { loadWorkspaceManifest } from '../../workspace/manifest.js';
-import { inspectWorkspaceProfilePlugins } from '../../workspace/profilePlugins.js';
 import {
   listAgentDefinitionFiles,
   readAgentDefinitionFile,
@@ -87,38 +86,9 @@ function loadEnabledPackAgents(workspaceRoot?: string): LoadedDefinition[] {
   }
 }
 
-/** Package-owned profile executors stay inert until the reviewed manifest selects their pack. */
-function loadSelectedProfilePluginAgents(workspaceRoot?: string): LoadedDefinition[] {
-  if (!workspaceRoot) return [];
-  try {
-    const manifest = loadWorkspaceManifest(workspaceRoot);
-    if (!manifest) return [];
-    const selectedPacks = new Set(manifest.skills.packs);
-    return inspectWorkspaceProfilePlugins().available
-      .filter((plugin) => (
-        plugin.kind === 'profile' &&
-        selectedPacks.has(plugin.id) &&
-        plugin.agentsRoot
-      ))
-      .flatMap((plugin) => loadFromDir(
-        plugin.agentsRoot!,
-        'pack',
-        plugin.root,
-        plugin.root,
-      ));
-  } catch {
-    return [];
-  }
-}
-
 export function loadRegistry(workspaceRoot?: string): LoadedDefinition[] {
   const builtin = loadFromDir(BUILTIN_AGENTS_DIR, 'builtin');
-  // Explicitly installed packs retain same-tier precedence over package-owned
-  // profile defaults; user and workspace definitions still win above both.
-  const packs = [
-    ...loadSelectedProfilePluginAgents(workspaceRoot),
-    ...loadEnabledPackAgents(workspaceRoot),
-  ];
+  const packs = loadEnabledPackAgents(workspaceRoot);
   const userAgentsDir = getUserAgentsDir();
   const user = loadFromDir(userAgentsDir, 'user', path.dirname(userAgentsDir));
   const workspace = workspaceRoot
