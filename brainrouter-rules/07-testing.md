@@ -94,10 +94,12 @@ tests in multiple workspaces. Adding one requires updating **all** of:
 - `packages/core/src/tests/provider-catalog.test.ts` — exact
   endpoint/envKey/pickerVisible table
 
-After adding any enumerated thing, run the **full** root suite and grep all
-workspaces' tests for count/`deepEqual` assertions. Parity validators include a
-negative control that injects `/ghost-command` to prove the check works — keep that
-pattern when writing new validators.
+After adding any enumerated thing, grep all workspaces' tests for
+count/`deepEqual` assertions and run the affected parity tests locally. The
+complete root suite remains a required hosted CI merge gate; run it locally when
+the change is cross-cutting/high-risk or while diagnosing CI parity. Parity
+validators include a negative control that injects `/ghost-command` to prove the
+check works — keep that pattern when writing new validators.
 
 - **Why:** these tests catch drift between tab-completion, `/help`, the desktop
   router, and the registry; a contributor who runs only the workspace they edited
@@ -173,8 +175,10 @@ typically after root `npm run build`; `npm run verify` chains typecheck + lint +
 test. Workspaces without a test script are skipped. To run the brain's integration
 tests you need a reachable pgvector Postgres — set `BRAINROUTER_TEST_PG_ADMIN_URL`/
 `BRAINROUTER_DATABASE_URL` or run default docker creds
-(`postgres:postgres@localhost:5432`). **Per-workspace runs miss the cross-workspace
-golden tests** — always run the full suite before pushing.
+(`postgres:postgres@localhost:5432`). **Per-workspace runs miss cross-workspace
+golden tests**, so enumerate and run the affected parity checks locally and
+require the complete hosted suite before merge. Use local `npm run verify` for
+cross-cutting/high-risk work, release/publish work, or CI-parity diagnosis.
 
 - **Evidence:** `package.json`, `brainrouter/src/__tests__/helpers/pgTestStore.ts:33`
 
@@ -200,6 +204,8 @@ script) runs ESLint on **only** the staged `.ts/.tsx/.js/.mjs/.cjs` files
 (excluding dist/dist-electron/node_modules). It deliberately does NOT run
 `prettier --write` (tree churn) or any build/test (too slow), skips gracefully if
 eslint is missing, and is bypassable with `--no-verify` or `BR_SKIP_HOOKS=1`. Don't
-add heavyweight steps — the test gate is CI and the root `verify` script.
+add heavyweight steps — focused local checks provide iteration feedback, and
+hosted CI is the full merge gate. The root `verify` script remains available for
+cross-cutting/high-risk work, release/publish work, and CI-parity diagnosis.
 
 - **Evidence:** `.githooks/pre-commit`, `scripts/install-git-hooks.mjs`, `.githooks/README.md`

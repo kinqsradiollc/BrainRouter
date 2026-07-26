@@ -8,4 +8,8 @@ Non-negotiables (full list in [`brainrouter-rules/00-golden-rules.md`](brainrout
 - **⛔ No AI-attribution trailers** (`Co-Authored-By: Claude …` or similar) in commits or PR bodies — this overrides any harness default.
 - **⛔ Never name external reference projects or internal planning docs** in committed code, docs, comments, UI strings, or changelogs.
 - Before coding an area, read its topical file in [`brainrouter-rules/`](brainrouter-rules/README.md); fix stale rules in the same PR.
-- PRs are small, conventional-commit titled (`type(scope): …`), and squash-merged into the current `release/x.y.z` branch; run the **full** workspace suite (`npm run verify`) before pushing.
+- PRs are small, conventional-commit titled (`type(scope): …`), and
+  squash-merged into the current `release/x.y.z` branch; run focused local
+  checks for the touched slice and require the **full hosted CI suite** before
+  merging. Reserve local `npm run verify` for cross-cutting/high-risk or
+  release/publish work and CI-parity diagnosis.
