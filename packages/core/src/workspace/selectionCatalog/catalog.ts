@@ -13,7 +13,11 @@ import {
 import { BUNDLED_WORKSPACE_SKILL_PACK_IDS } from '../skillSelection.js';
 import { WORKSPACE_TOOL_PROFILES } from '../toolProfiles.js';
 import { labelForId, pushCatalogEntry, safeCatalogText, safeProvenance } from './safety.js';
-import { readSkillCatalogRoot, readSkillFile } from './skillMetadata.js';
+import {
+  readContributedSkillCatalogRoot,
+  readSkillCatalogRoot,
+  readSkillFile,
+} from './skillMetadata.js';
 import { isSelectableWorkspaceCatalogToolId } from './toolEligibility.js';
 import {
   WORKSPACE_SELECTION_CATALOG_MAX_ENTRIES,
@@ -24,6 +28,7 @@ import {
 } from './types.js';
 
 const BUNDLED_SKILLS_ROOT = fileURLToPath(new URL('../../../skills', import.meta.url));
+const MAX_CONTRIBUTED_SKILL_ENTRIES = 128;
 
 /** Build a fresh, bounded snapshot from the registries used by the runtime. */
 export function buildWorkspaceSelectionCatalog(
@@ -31,6 +36,11 @@ export function buildWorkspaceSelectionCatalog(
 ): WorkspaceSelectionCatalog {
   const entries: WorkspaceSelectionCatalogEntry[] = [];
   const executors = new Map(localToolExecutors().map((executor) => [executor.toolName(), executor]));
+  const plugins = inspectWorkspaceProfilePlugins();
+  const packageSkillIds = new Set([
+    ...plugins.available.flatMap((plugin) => [...plugin.skillIds]),
+    ...plugins.unavailable.flatMap((plugin) => [...plugin.skillIds]),
+  ]);
 
   for (const profile of WORKSPACE_TOOL_PROFILES) {
     pushCatalogEntry(entries, {
@@ -83,8 +93,47 @@ export function buildWorkspaceSelectionCatalog(
     });
   }
 
+  const knownSkillIds = new Set<string>();
+  let contributedSkillEntries = 0;
+  const contributedRoots = [...(options.contributedSkillRoots ?? [])]
+    .sort((left, right) =>
+      Number(right.selectable) - Number(left.selectable)
+      || left.pluginName.localeCompare(right.pluginName)
+      || left.path.localeCompare(right.path));
+  const addContributedRoot = (root: typeof contributedRoots[number]): void => {
+    for (const skill of readContributedSkillCatalogRoot(root.path)) {
+      if (contributedSkillEntries >= MAX_CONTRIBUTED_SKILL_ENTRIES) break;
+      if (packageSkillIds.has(skill.id)) continue;
+      if (knownSkillIds.has(skill.id)) continue;
+      knownSkillIds.add(skill.id);
+      contributedSkillEntries += 1;
+      const blockedReason = root.selectable
+        ? undefined
+        : safeCatalogText(root.blockedReason, 'Plugin is disabled.');
+      pushCatalogEntry(entries, {
+        id: skill.id,
+        kind: 'skill',
+        label: skill.label,
+        description: skill.description,
+        category: skill.category,
+        source: 'plugin',
+        provenance: safeProvenance(root.pluginName, 'plugin'),
+        persistable: true,
+        selectable: blockedReason === undefined,
+        ...(blockedReason ? { blockedReason } : {}),
+        requiredCapabilityOrExtension: safeProvenance(root.pluginName, 'plugin'),
+        runtimeAvailabilityPrerequisites: blockedReason ? ['plugin-enabled'] : [],
+      });
+    }
+  };
+  for (const root of contributedRoots.filter((candidate) => candidate.selectable)) {
+    addContributedRoot(root);
+  }
+
   const bundledSkills = readSkillCatalogRoot(BUNDLED_SKILLS_ROOT);
   for (const skill of bundledSkills) {
+    if (knownSkillIds.has(skill.id)) continue;
+    knownSkillIds.add(skill.id);
     pushCatalogEntry(entries, {
       id: skill.id,
       kind: 'skill',
@@ -97,6 +146,11 @@ export function buildWorkspaceSelectionCatalog(
       selectable: true,
       runtimeAvailabilityPrerequisites: [],
     });
+  }
+  // Disabled plugin metadata remains discoverable but cannot shadow the
+  // enabled/bundled skill that the runtime would actually resolve.
+  for (const root of contributedRoots.filter((candidate) => !candidate.selectable)) {
+    addContributedRoot(root);
   }
   for (const packId of BUNDLED_WORKSPACE_SKILL_PACK_IDS) {
     pushCatalogEntry(entries, {
@@ -114,7 +168,6 @@ export function buildWorkspaceSelectionCatalog(
     });
   }
 
-  const plugins = inspectWorkspaceProfilePlugins();
   for (const plugin of plugins.available) {
     const source = plugin.kind === 'capability' ? 'capability-plugin' : 'profile-plugin';
     pushCatalogEntry(entries, {
@@ -135,6 +188,8 @@ export function buildWorkspaceSelectionCatalog(
       expandsTo: [...plugin.skillIds],
     });
     for (const id of plugin.skillIds) {
+      if (knownSkillIds.has(id)) continue;
+      knownSkillIds.add(id);
       const skill = readSkillFile(
         path.join(plugin.skillsRoot, id, 'SKILL.md'),
         id,

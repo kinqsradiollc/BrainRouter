@@ -41,9 +41,54 @@ export function readSkillCatalogRoot(root: string): SafeSkillDescriptor[] {
   return result;
 }
 
+/** Read one-level plugin skill directories without exposing bodies or paths. */
+export function readContributedSkillCatalogRoot(root: string): SafeSkillDescriptor[] {
+  const result: SafeSkillDescriptor[] = [];
+  let realRoot: string;
+  try {
+    if (fs.lstatSync(root).isSymbolicLink()) return result;
+    realRoot = fs.realpathSync(root);
+    if (!fs.lstatSync(realRoot).isDirectory()) return result;
+  } catch {
+    return result;
+  }
+  for (const skillDirectory of readDirectories(realRoot)) {
+    const descriptor = readSkillFileWithFrontmatterId(
+      path.join(realRoot, skillDirectory, 'SKILL.md'),
+      'plugin-skills',
+      realRoot,
+    );
+    if (descriptor) result.push(descriptor);
+    if (result.length >= WORKSPACE_SELECTION_CATALOG_MAX_ENTRIES) return result;
+  }
+  return result;
+}
+
 export function readSkillFile(
   filePath: string,
   expectedId: string,
+  fallbackCategory: string,
+  containmentRoot?: string,
+): SafeSkillDescriptor | undefined {
+  return readSkillFileMetadata(
+    filePath,
+    expectedId,
+    fallbackCategory,
+    containmentRoot,
+  );
+}
+
+function readSkillFileWithFrontmatterId(
+  filePath: string,
+  fallbackCategory: string,
+  containmentRoot: string,
+): SafeSkillDescriptor | undefined {
+  return readSkillFileMetadata(filePath, undefined, fallbackCategory, containmentRoot);
+}
+
+function readSkillFileMetadata(
+  filePath: string,
+  expectedId: string | undefined,
   fallbackCategory: string,
   containmentRoot?: string,
 ): SafeSkillDescriptor | undefined {
@@ -73,10 +118,13 @@ export function readSkillFile(
     if (read > MAX_SKILL_FILE_BYTES) return undefined;
     const raw = bytes.subarray(0, read).toString('utf8');
     const frontmatter = raw.match(/^\uFEFF?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1];
-    if (!frontmatter || frontmatterScalar(frontmatter, 'name') !== expectedId) return undefined;
+    if (!frontmatter) return undefined;
+    const id = frontmatterScalar(frontmatter, 'name');
+    if (!id || !WORKSPACE_SELECTION_STABLE_ID.test(id)) return undefined;
+    if (expectedId !== undefined && id !== expectedId) return undefined;
     return {
-      id: expectedId,
-      label: safeCatalogText(frontmatterScalar(frontmatter, 'label'), labelForId(expectedId)),
+      id,
+      label: safeCatalogText(frontmatterScalar(frontmatter, 'label'), labelForId(id)),
       description: safeCatalogText(frontmatterScalar(frontmatter, 'description'), 'No description available.'),
       category: safeCatalogText(frontmatterScalar(frontmatter, 'category'), fallbackCategory),
     };

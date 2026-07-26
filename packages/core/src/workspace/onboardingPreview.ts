@@ -5,6 +5,11 @@
  * skill bodies, role prompts, secrets, paths, credentials, or live MCP payloads.
  */
 import { findBundledOrchestrationProfile } from '../orchestration/profiles/orchestrationProfileCatalog.js';
+import {
+  findResolvedOrchestrationProfile,
+  type ResolvedOrchestrationProfileCatalog,
+  type ResolvedOrchestrationProfileSource,
+} from '../orchestration/profiles/orchestrationProfileSources.js';
 import type { WorkspaceManifest } from './manifest.js';
 import { getWorkspaceProfile } from './profiles.js';
 import {
@@ -30,6 +35,7 @@ export interface WorkspaceOnboardingPreview {
     mode: 'off' | 'explicit' | 'adaptive';
     selectedStrategyId: string;
     selectionReason: 'mode-off' | 'setup-preview-fallback';
+    source: ResolvedOrchestrationProfileSource;
     strategies: Array<{
       id: string;
       description: string;
@@ -73,8 +79,16 @@ export interface WorkspaceOnboardingPreview {
 export function buildWorkspaceOnboardingPreview(
   manifest: WorkspaceManifest,
   catalog: WorkspaceSelectionCatalog = buildWorkspaceSelectionCatalog(),
+  orchestrationProfiles?: ResolvedOrchestrationProfileCatalog,
 ): WorkspaceOnboardingPreview {
-  const plan = findBundledOrchestrationProfile(manifest.profile);
+  const resolvedPlan = orchestrationProfiles
+    ? findResolvedOrchestrationProfile(orchestrationProfiles, manifest.profile)
+    : undefined;
+  const plan = orchestrationProfiles
+    ? resolvedPlan?.definition
+    : findBundledOrchestrationProfile(manifest.profile);
+  const planSource: ResolvedOrchestrationProfileSource = resolvedPlan?.source
+    ?? { kind: 'bundled', provenance: 'bundled' };
   const preset = getWorkspaceProfile(manifest.profile);
   const disabledRoles = new Set(manifest.orchestration.disabledRoles);
   const planRoles = new Set(plan?.rolePolicy.availableRoles ?? []);
@@ -106,6 +120,7 @@ export function buildWorkspaceOnboardingPreview(
           selectionReason: manifest.orchestration.mode === 'off'
             ? 'mode-off'
             : 'setup-preview-fallback',
+          source: planSource,
           strategies: plan.strategies.map((strategy) => ({
             id: strategy.id,
             description: strategy.description,

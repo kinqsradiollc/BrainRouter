@@ -61,6 +61,7 @@ export function bundledOrchestrationProfileReferences(options: {
   agentsDir?: string;
   skillsDir?: string;
   profileSkillIds?: Iterable<string>;
+  additionalSkillIds?: Iterable<string>;
 } = {}): OrchestrationProfileReferenceCatalog {
   const agentsDir = options.agentsDir ?? BUNDLED_AGENTS_DIR;
   const roles = new Map(
@@ -75,9 +76,12 @@ export function bundledOrchestrationProfileReferences(options: {
   const profileSkillIds = options.profileSkillIds === undefined
     ? inspectWorkspaceProfilePlugins().available.flatMap((plugin) => [...plugin.skillIds])
     : [...options.profileSkillIds];
+  const additionalSkillIds = options.additionalSkillIds === undefined
+    ? []
+    : [...options.additionalSkillIds];
   return {
     roles,
-    skillIds: new Set([...coreSkillIds, ...profileSkillIds]),
+    skillIds: new Set([...coreSkillIds, ...profileSkillIds, ...additionalSkillIds]),
     signalIds: ORCHESTRATION_ACTIVATION_SIGNAL_IDS,
   };
 }
