@@ -76,6 +76,10 @@ test('P23-3 skips unavailable optional stages and falls back for mandatory gaps'
   }));
   assert.equal(optionalSkip.strategyId, 'delivery');
   assert.equal(optionalSkip.stages.some((stage) => stage.id === 'inspect'), false);
+  assert.deepEqual(
+    optionalSkip.stages.find((stage) => stage.id === 'implement')?.after,
+    [],
+  );
   assert.deepEqual(optionalSkip.skippedStages, [{
     code: 'skill-unavailable',
     referenceId: 'planning-skill',
