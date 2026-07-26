@@ -1,6 +1,5 @@
 import type { LocalToolEntry } from '../../tool/registry/registry.js';
 import type { LocalToolAvailabilityContext } from '../../tool/registry/executors.js';
-import type { WorkspaceProfilePluginCatalog } from '../profilePlugins.js';
 
 export const WORKSPACE_SELECTION_CATALOG_MAX_ENTRIES = 512;
 export const WORKSPACE_SELECTION_STABLE_ID = /^[a-z][a-z0-9_-]{0,127}$/;
@@ -53,13 +52,11 @@ export interface LiveRuntimeToolDescriptor {
 
 export interface WorkspaceSelectionCatalogOptions {
   availability?: LocalToolAvailabilityContext;
-  profilePlugins?: WorkspaceProfilePluginCatalog;
   /**
    * Safe live names only. These rows are informational and can never be copied
    * into a manifest selection.
    */
   runtimeTools?: readonly LiveRuntimeToolDescriptor[];
-  bundledSkillsRoot?: string;
 }
 
 export interface ReviewedWorkspaceToolSelection {

@@ -52,7 +52,8 @@ export function readSkillFile(
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_SKILL_FILE_BYTES) return undefined;
     const realFile = fs.realpathSync(filePath);
     if (containmentRoot) {
-      const relative = path.relative(containmentRoot, realFile);
+      const realContainmentRoot = fs.realpathSync(containmentRoot);
+      const relative = path.relative(realContainmentRoot, realFile);
       if (relative.startsWith('..') || path.isAbsolute(relative)) return undefined;
     }
     const raw = fs.readFileSync(realFile, 'utf8');

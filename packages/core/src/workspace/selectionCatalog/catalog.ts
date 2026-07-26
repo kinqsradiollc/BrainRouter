@@ -82,7 +82,7 @@ export function buildWorkspaceSelectionCatalog(
     });
   }
 
-  const bundledSkills = readSkillCatalogRoot(options.bundledSkillsRoot ?? BUNDLED_SKILLS_ROOT);
+  const bundledSkills = readSkillCatalogRoot(BUNDLED_SKILLS_ROOT);
   for (const skill of bundledSkills) {
     pushCatalogEntry(entries, {
       id: skill.id,
@@ -113,7 +113,7 @@ export function buildWorkspaceSelectionCatalog(
     });
   }
 
-  const plugins = options.profilePlugins ?? inspectWorkspaceProfilePlugins();
+  const plugins = inspectWorkspaceProfilePlugins();
   for (const plugin of plugins.available) {
     const source = plugin.kind === 'capability' ? 'capability-plugin' : 'profile-plugin';
     pushCatalogEntry(entries, {
@@ -134,7 +134,12 @@ export function buildWorkspaceSelectionCatalog(
       expandsTo: [...plugin.skillIds],
     });
     for (const id of plugin.skillIds) {
-      const skill = readSkillFile(path.join(plugin.skillsRoot, id, 'SKILL.md'), id, plugin.id);
+      const skill = readSkillFile(
+        path.join(plugin.skillsRoot, id, 'SKILL.md'),
+        id,
+        plugin.id,
+        plugin.skillsRoot,
+      );
       pushCatalogEntry(entries, {
         id,
         kind: 'skill',

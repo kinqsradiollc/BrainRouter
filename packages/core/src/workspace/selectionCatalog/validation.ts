@@ -68,16 +68,49 @@ export function migrateWorkspaceManifestToolSelection(input: {
   }
   const validated = validateReviewedWorkspaceToolSelection(input.reviewed, input.catalog);
   if (!validated.ok) throw reviewError(validated.issues);
-  return normalizeWorkspaceManifest({
-    ...input.manifest,
+  const source = normalizeWorkspaceManifest(input.manifest);
+  const migrated: WorkspaceManifest = {
     version: WORKSPACE_MANIFEST_EXPLICIT_TOOL_SELECTION_VERSION,
+    name: source.name,
+    profile: source.profile,
+    onboarded: { at: source.onboarded.at, by: source.onboarded.by },
+    persona: {
+      default: source.persona.default,
+      enabled: [...source.persona.enabled],
+    },
+    orchestration: {
+      mode: source.orchestration.mode,
+      availableRoles: [...source.orchestration.availableRoles],
+      disabledRoles: [...source.orchestration.disabledRoles],
+      maxParallel: source.orchestration.maxParallel,
+    },
+    agents: {
+      default: source.persona.default,
+      enabled: [...source.persona.enabled],
+    },
+    capabilities: {
+      enabled: [...source.capabilities.enabled],
+      disabled: [...source.capabilities.disabled],
+    },
+    skills: {
+      packs: [...source.skills.packs],
+      enabled: [...source.skills.enabled],
+      disabled: [...source.skills.disabled],
+    },
     tools: {
       mode: 'explicit-catalog',
       profiles: validated.value.profiles,
       enabled: validated.value.enabled,
       deny: validated.value.deny,
     },
-  });
+    memory: {
+      tags: [...source.memory.tags],
+      captureHint: source.memory.captureHint,
+    },
+    instructions: source.instructions,
+  };
+  if (source.extra) migrated.extra = source.extra;
+  return normalizeWorkspaceManifest(migrated);
 }
 
 /** Content-free counts suitable for a migration badge or local diagnostic. */

@@ -144,3 +144,23 @@ test('v2 ignores catalog-only fields and retains legacy baseline behavior', () =
   assert.equal(allowed(selection, 'custom_extension_tool', 'custom-extension'), true);
   assert.equal(workspaceDynamicMcpAllowed(selection), true);
 });
+
+test('manifest v3 ignores unknown, dynamic, and hidden tool IDs at runtime', () => {
+  const manifest = createWorkspaceManifest({ name: 'blank', profile: 'custom', by: 'wizard' });
+  manifest.version = 3;
+  manifest.tools = {
+    mode: 'explicit-catalog',
+    profiles: ['future-tools'],
+    enabled: ['future_tool', 'delegate_unreviewed', 'spawn_agent', 'web_search'],
+    deny: ['future_deny'],
+  };
+  const selection = resolveWorkspaceToolSelection({ manifest });
+
+  assert.deepEqual(selection.activeProfileIds, []);
+  assert.deepEqual([...selection.allowedToolIds], ['web_search']);
+  assert.deepEqual([...selection.deniedIds], []);
+  assert.equal(allowed(selection, 'future_tool', 'future-extension'), false);
+  assert.equal(allowed(selection, 'delegate_agent', 'orchestration'), false);
+  assert.equal(allowed(selection, 'spawn_agent', 'orchestration'), false);
+  assert.equal(allowed(selection, 'web_search', 'web-research'), true);
+});

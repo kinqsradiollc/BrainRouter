@@ -136,6 +136,25 @@ test('P23-3b stale catalog snapshots fail before migration', () => {
   );
 });
 
+test('P23-3b migration whitelists manifest fields instead of spreading hostile properties', () => {
+  const catalog = buildWorkspaceSelectionCatalog();
+  const hostile = createWorkspaceManifest({ name: 'app', profile: 'custom', by: 'wizard' });
+  Object.defineProperty(hostile, '__proto__', {
+    value: { polluted: true },
+    enumerable: true,
+  });
+
+  const migrated = migrateWorkspaceManifestToolSelection({
+    manifest: hostile,
+    reviewed: { profiles: [], enabled: [], deny: [] },
+    catalog,
+  }) as WorkspaceManifestWithPollution;
+
+  assert.equal(Object.getPrototypeOf(migrated), Object.prototype);
+  assert.equal(migrated.polluted, undefined);
+  assert.equal(Object.hasOwn(migrated, '__proto__'), false);
+});
+
 test('P23-3b skill selections use the same catalog and reject unknown IDs', () => {
   const catalog = buildWorkspaceSelectionCatalog();
   const valid = validateReviewedWorkspaceSkillSelection({
@@ -216,3 +235,7 @@ test('P23-3b v3 normalization strips credentials and local paths from selections
     fs.rmSync(workspace, { recursive: true, force: true });
   }
 });
+
+type WorkspaceManifestWithPollution = ReturnType<typeof createWorkspaceManifest> & {
+  polluted?: boolean;
+};
