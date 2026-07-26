@@ -63,7 +63,15 @@ export const WORKSPACE_PROFILE_PLUGIN_DEFINITIONS: readonly WorkspaceProfilePlug
     id: 'research',
     kind: 'profile',
     pluginName: 'profile-research',
-    skillIds: ['evidence-research-skill', 'source-synthesis-skill'],
+    skillIds: [
+      'research-question-skill',
+      'source-strategy-skill',
+      'evidence-research-skill',
+      'claim-ledger-skill',
+      'source-synthesis-skill',
+      'citation-verification-skill',
+      'research-review-skill',
+    ],
     personaIds: ['researcher'],
   },
   {

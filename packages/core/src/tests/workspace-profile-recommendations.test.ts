@@ -36,7 +36,15 @@ test('B3 recommends the research pack, persona, and starter skills from live cat
   })), [{
     id: 'research',
     source: 'profile-plugin',
-    skillIds: ['evidence-research-skill', 'source-synthesis-skill'],
+    skillIds: [
+      'research-question-skill',
+      'source-strategy-skill',
+      'evidence-research-skill',
+      'claim-ledger-skill',
+      'source-synthesis-skill',
+      'citation-verification-skill',
+      'research-review-skill',
+    ],
   }]);
   assert.deepEqual(recommendation.starterSkillIds, ['planning-skill', 'handover-skill']);
   assert.deepEqual(recommendation.unavailable, []);

@@ -1,7 +1,7 @@
 ---
 name: source-synthesis-skill
-description: Combine a set of sources into a concise, provenance-preserving synthesis that exposes agreement, conflict, and gaps.
-allowed-tools: [read_file, grep_search, glob_files, fetch_url, research_note, research_brief, write_file, edit_file]
+description: Turn a reviewed claim ledger into a provenance-preserving synthesis that exposes agreement, conflict, inference, and gaps.
+allowed-tools: [read_file, grep_search, glob_files, research_note, research_brief, write_file, edit_file]
 ---
 
 # Source synthesis
@@ -14,22 +14,22 @@ easy to inspect.
 
 ## When to Use
 
-Use after evidence gathering, when consolidating documents, comparing proposals,
-preparing a briefing, or turning research notes into a decision-ready artifact.
+Use only after evidence has been normalized into a claim ledger, when preparing
+a briefing, comparison, report, or decision-ready answer.
 
 ## Workflow
 
-1. Normalize each source into its scope, method, date, claims, evidence, and
-   limitations. Exclude material that cannot support the target question.
-2. Cluster claims by theme or decision criterion rather than by source order.
-3. Within each cluster, identify agreement, direct contradiction, different
-   assumptions, and evidence that is merely complementary.
-4. Weight claims by relevance and source quality. Preserve minority evidence
-   when it is credible; do not manufacture consensus.
-5. Draft the synthesis with citations beside each supported claim and label any
-   cross-source inference as analysis.
-6. Close with confidence by conclusion, unresolved gaps, and what evidence
-   would most efficiently change the result.
+1. Confirm the ledger covers the approved question and that material claims
+   identify support, contradiction, uncertainty, and source provenance.
+2. Cluster claims by sub-question or decision criterion, never by source order.
+3. Within each cluster, distinguish agreement, direct contradiction, different
+   assumptions, complementary evidence, and analyst inference.
+4. Weight conclusions by relevance and evidence quality. Preserve credible
+   minority evidence and do not convert missing evidence into consensus.
+5. Draft from the ledger, placing citation anchors beside the claims they
+   support and keeping source fact separate from analysis.
+6. Close with conclusion-level confidence, unresolved conflicts, and the
+   smallest next evidence probe that could materially change the answer.
 
 ## Verification
 

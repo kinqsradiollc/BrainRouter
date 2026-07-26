@@ -14,6 +14,14 @@ import {
 
 test('C2 package-owned profile plugins use the standard versioned plugin contract', () => {
   const catalog = inspectWorkspaceProfilePlugins();
+  const expectedVersions = new Map([
+    ['research', '2.1.0'],
+    ['study', '2.0.0'],
+    ['data', '2.0.0'],
+    ['writing', '2.0.0'],
+    ['frontend', '1.0.0'],
+    ['backend', '1.0.0'],
+  ]);
 
   assert.deepEqual(catalog.unavailable, []);
   assert.deepEqual(
@@ -21,7 +29,7 @@ test('C2 package-owned profile plugins use the standard versioned plugin contrac
     ['study', 'research', 'data', 'writing', 'frontend', 'backend'],
   );
   for (const plugin of catalog.available) {
-    assert.equal(plugin.version, plugin.kind === 'profile' ? '2.0.0' : '1.0.0');
+    assert.equal(plugin.version, expectedVersions.get(plugin.id));
     assert.equal(plugin.plugin.manifest.version, plugin.version);
     assert.equal(plugin.plugin.manifest.name, plugin.pluginName);
     assert.equal(summarizeProvides(plugin.plugin).skills, plugin.skillIds.length);
@@ -38,6 +46,23 @@ test('C2 package-owned profile plugins use the standard versioned plugin contrac
       }
     }
   }
+});
+
+test('research profile exposes separate task-selectable workflow skills', () => {
+  const research = findWorkspaceProfilePlugin('research');
+
+  assert.ok(research);
+  assert.equal(research.kind, 'profile');
+  assert.equal(research.version, '2.1.0');
+  assert.deepEqual(research.skillIds, [
+    'research-question-skill',
+    'source-strategy-skill',
+    'evidence-research-skill',
+    'claim-ledger-skill',
+    'source-synthesis-skill',
+    'citation-verification-skill',
+    'research-review-skill',
+  ]);
 });
 
 test('C2 every declared profile skill is discoverable and machine-addressable', () => {

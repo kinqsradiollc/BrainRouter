@@ -244,9 +244,38 @@ test('search applies query and scope to selected package additions', () => {
       tool: 'search_skills',
       args: { query: 'evidence', scope: 'local' },
     });
-    assert.deepEqual(names(global), ['evidence-research-skill']);
+    assert.deepEqual(names(global), [
+      'research-question-skill',
+      'evidence-research-skill',
+      'research-review-skill',
+    ]);
     assert.deepEqual(names(local), []);
-    assert.equal((JSON.parse(global) as Array<Record<string, unknown>>)[0].relevance, 'name match');
+    const entries = JSON.parse(global) as Array<Record<string, unknown>>;
+    assert.equal(entries.find((entry) => entry.name === 'evidence-research-skill')?.relevance, 'name match');
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('research workflow bodies load independently for the current task', () => {
+  const workspace = makeWorkspace();
+  try {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'research', profile: 'research', by: 'wizard' }),
+    );
+
+    const question = resolveWorkspaceManagedSkill(workspace, 'research-question-skill', 'workflow');
+    assert.match(question?.content[0].text ?? '', /Express one primary question/);
+    assert.doesNotMatch(question?.content[0].text ?? '', /Enumerate every citation anchor/);
+
+    const citation = resolveWorkspaceManagedSkill(workspace, 'citation-verification-skill', 'workflow');
+    assert.match(citation?.content[0].text ?? '', /Enumerate every citation anchor/);
+    assert.doesNotMatch(citation?.content[0].text ?? '', /Cluster claims by sub-question/);
+
+    const review = resolveWorkspaceManagedSkill(workspace, 'research-review-skill', 'workflow');
+    assert.match(review?.content[0].text ?? '', /Classify findings as blocking/);
+    assert.doesNotMatch(review?.content[0].text ?? '', /Retrieve small result sets/);
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
   }
