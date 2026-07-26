@@ -242,6 +242,18 @@ test('manifest-save writes persona and orchestration independently', () => {
   } finally { env.cleanup(); }
 });
 
+test('manifest-save rejects a capability outside the selected profile catalog', () => {
+  const env = tmpWorkspace();
+  try {
+    const input = payload(env.root, 'research');
+    input.capabilities = { enabled: ['frontend'], disabled: [] };
+    const result = saveWorkspaceManifestFromPayload(env.root, input);
+    assert.equal(result.saved, false);
+    assert.equal(result.error, 'Workspace setup could not be saved.');
+    assert.equal(loadWorkspaceManifest(env.root), null);
+  } finally { env.cleanup(); }
+});
+
 test('manifest-save preserves the staged profile-card contract without allowing re-onboarding', () => {
   const env = tmpWorkspace();
   try {

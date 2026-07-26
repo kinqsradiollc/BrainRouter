@@ -21,6 +21,19 @@ function preview(): Record<string, unknown> {
       recommended: true,
       denied: false,
     }, {
+      id: 'frontend',
+      kind: 'capability',
+      label: 'Frontend',
+      description: 'Task-time UI expertise.',
+      source: 'capability-plugin',
+      provenance: 'capability-frontend',
+      persistable: true,
+      selectable: true,
+      expandsTo: ['skill-pack:frontend', 'skill:a11y-skill'],
+      selected: true,
+      recommended: true,
+      denied: false,
+    }, {
       id: 'coding',
       kind: 'tool-group',
       label: 'Files and code',
@@ -72,7 +85,8 @@ test('parses safe catalog metadata and primary-only Custom preview', () => {
     maxChildren: 0,
   }]);
   assert.equal(parsed.catalog[0]?.kind, 'role');
-  assert.deepEqual(parsed.catalog[1]?.expandsTo, ['read_file', 'apply_patch']);
+  assert.equal(parsed.catalog[1]?.kind, 'capability');
+  assert.deepEqual(parsed.catalog[2]?.expandsTo, ['read_file', 'apply_patch']);
 });
 
 test('rejects malformed fingerprints, oversized catalogs, and executable-looking catalog data', () => {

@@ -447,13 +447,28 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
                     disabledRoles,
                   },
                 })} />
-              <ListField label="Available capabilities" values={draft.capabilities.enabled}
-                disabled={proposing || saving || reviewingInstruction}
-                hint="Available for task-time activation; not injected on every turn."
-                onChange={(values) => patchDraft({ capabilities: { ...draft.capabilities, enabled: values } })} />
-              <ListField label="Disabled capabilities" values={draft.capabilities.disabled}
-                disabled={proposing || saving || reviewingInstruction}
-                onChange={(values) => patchDraft({ capabilities: { ...draft.capabilities, disabled: values } })} />
+              <CatalogField label="Available task capabilities" values={draft.capabilities.enabled}
+                kinds={['capability']} preview={planPreview} hideUnavailable
+                emptyLabel="No optional capabilities are contributed for this profile."
+                disabled={proposing || saving || reviewingInstruction || previewing}
+                onChange={(enabled) => patchDraft({
+                  capabilities: {
+                    enabled,
+                    disabled: draft.capabilities.disabled
+                      .filter((capability) => !enabled.includes(capability)),
+                  },
+                })} />
+              <CatalogField label="Disabled task capabilities" values={draft.capabilities.disabled}
+                kinds={['capability']} preview={planPreview} allowBlocked hideUnavailable
+                emptyLabel="No optional capabilities are contributed for this profile."
+                disabled={proposing || saving || reviewingInstruction || previewing}
+                onChange={(disabled) => patchDraft({
+                  capabilities: {
+                    enabled: draft.capabilities.enabled
+                      .filter((capability) => !disabled.includes(capability)),
+                    disabled,
+                  },
+                })} />
               <CatalogField label="Skill packs" values={draft.skills.packs}
                 kinds={['skill-pack']} preview={planPreview}
                 disabled={proposing || saving || reviewingInstruction || previewing}

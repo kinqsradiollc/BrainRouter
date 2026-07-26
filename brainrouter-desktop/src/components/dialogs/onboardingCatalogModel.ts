@@ -1,5 +1,5 @@
 /** Pure, bounded renderer parser for Core's safe onboarding preview/catalog. */
-export type OnboardingCatalogKind = 'role' | 'tool-group' | 'tool' | 'skill-pack' | 'skill' | 'runtime-tool';
+export type OnboardingCatalogKind = 'role' | 'capability' | 'tool-group' | 'tool' | 'skill-pack' | 'skill' | 'runtime-tool';
 
 export interface OnboardingCatalogRow {
   id: string;
@@ -11,6 +11,7 @@ export interface OnboardingCatalogRow {
   persistable: boolean;
   selectable: boolean;
   blockedReason?: string;
+  managedByCapability?: string;
   expandsTo: string[];
   selected: boolean;
   recommended: boolean;
@@ -59,7 +60,7 @@ export interface OnboardingPlanPreview {
 
 const DIGEST = /^[0-9a-f]{64}$/;
 const KINDS = new Set<OnboardingCatalogKind>([
-  'role', 'tool-group', 'tool', 'skill-pack', 'skill', 'runtime-tool',
+  'role', 'capability', 'tool-group', 'tool', 'skill-pack', 'skill', 'runtime-tool',
 ]);
 
 export function parseOnboardingPreview(value: unknown): OnboardingPlanPreview | null {
@@ -99,6 +100,7 @@ function parseCatalogRow(value: unknown): OnboardingCatalogRow | null {
       typeof value.denied !== 'boolean') return null;
   const expandsTo = value.expandsTo === undefined ? [] : stringList(value.expandsTo);
   if (!expandsTo || !(value.blockedReason === undefined || bounded(value.blockedReason, 2048))) return null;
+  if (!(value.managedByCapability === undefined || bounded(value.managedByCapability, 128))) return null;
   return {
     id: value.id,
     kind: value.kind as OnboardingCatalogKind,
@@ -109,6 +111,9 @@ function parseCatalogRow(value: unknown): OnboardingCatalogRow | null {
     persistable: value.persistable,
     selectable: value.selectable,
     ...(value.blockedReason ? { blockedReason: value.blockedReason } : {}),
+    ...(value.managedByCapability
+      ? { managedByCapability: value.managedByCapability }
+      : {}),
     expandsTo,
     selected: value.selected,
     recommended: value.recommended,

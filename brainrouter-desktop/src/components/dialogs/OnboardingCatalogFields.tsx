@@ -6,13 +6,15 @@ import {
   type OnboardingPlanPreview,
 } from './onboardingCatalogModel.js';
 
-export function CatalogField({ label, values, kinds, preview, allowBlocked = false, disabled = false, onChange }: {
+export function CatalogField({ label, values, kinds, preview, allowBlocked = false, hideUnavailable = false, disabled = false, emptyLabel, onChange }: {
   label: string;
   values: string[];
   kinds: OnboardingCatalogKind[];
   preview: OnboardingPlanPreview | null;
   allowBlocked?: boolean;
+  hideUnavailable?: boolean;
   disabled?: boolean;
+  emptyLabel?: string;
   onChange: (values: string[]) => void;
 }): React.ReactElement {
   const [filter, setFilter] = useState('');
@@ -20,6 +22,8 @@ export function CatalogField({ label, values, kinds, preview, allowBlocked = fal
   const query = filter.trim().toLowerCase();
   const rows = (preview?.catalog ?? [])
     .filter((row) => kindSet.has(row.kind) && row.persistable)
+    .filter((row) => !(row.kind === 'skill-pack' && row.managedByCapability))
+    .filter((row) => !hideUnavailable || row.selectable || values.includes(row.id))
     .filter((row) => !query || `${row.label} ${row.id} ${row.description} ${row.provenance}`
       .toLowerCase().includes(query));
   const selected = new Set(values);
@@ -62,7 +66,9 @@ export function CatalogField({ label, values, kinds, preview, allowBlocked = fal
                 </span>
               </label>
             );
-          }) : <div className="onboard-catalog-empty">No catalog choices match this filter.</div>}
+          }) : <div className="onboard-catalog-empty">
+            {emptyLabel ?? 'No catalog choices match this filter.'}
+          </div>}
         </div>
       </div>
     </details>
