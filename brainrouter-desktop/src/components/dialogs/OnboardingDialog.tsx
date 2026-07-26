@@ -414,7 +414,7 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
               <h3 id={`${titleId}-details`}>Persona, orchestration, capabilities, skills, and tools</h3>
               <TextField label="Default domain persona" value={draft.persona.default}
                 disabled={proposing || saving || reviewingInstruction}
-                hint="Use engineer for software work; frontend and backend activate as task-specific capabilities."
+                hint="The profile's domain persona; optional capabilities add task expertise without creating another persona."
                 onChange={(value) => patchDraft({ persona: { ...draft.persona, default: value } })} />
               <ListField label="Enabled personas" values={draft.persona.enabled}
                 disabled={proposing || saving || reviewingInstruction}
