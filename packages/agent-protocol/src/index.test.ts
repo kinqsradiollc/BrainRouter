@@ -26,6 +26,11 @@ test('createCallbackBridge: every callback maps to its event kind with payload f
   cb.onReasoningDelta('thinking…');
   cb.onToolStart('read_file', { path: 'a.ts' }, 'c1');
   cb.onToolEnd('read_file', { success: true, summary: '42 lines', preview: 'line1' }, 'c1');
+  cb.onToolEnd('delegate_agent', {
+    success: false,
+    summary: 'delegation not started',
+    delegationState: 'not-started',
+  }, 'c2');
   cb.onChildToolStart({ childId: 'agent-1', role: 'explorer', tool: 'grep_search', args: { query: 'x' } });
   cb.onChildToolEnd({ childId: 'agent-1', role: 'explorer', tool: 'grep_search', ok: true, summary: 'hit', durationMs: 12 });
   cb.onChildComplete({ childId: 'agent-1', role: 'explorer', status: 'completed', preview: 'found it' });
@@ -41,21 +46,38 @@ test('createCallbackBridge: every callback maps to its event kind with payload f
 
   assert.deepEqual(events.map((e) => e.kind), [
     'status', 'assistant-turn-start', 'assistant-delta', 'assistant-delta', 'assistant-turn-end',
-    'reasoning-delta', 'tool-start', 'tool-end', 'child-tool-start', 'child-tool-end',
+    'reasoning-delta', 'tool-start', 'tool-end', 'tool-end', 'child-tool-start', 'child-tool-end',
     'child-complete', 'plan-update', 'compaction', 'memory', 'requirement-event',
     'artifact-event', 'annotation-event', 'provenance', 'approval-decision', 'usage-live',
   ]);
   // LIVE usage forwards the turn's running totals untouched (UI adds it to the base).
-  assert.deepEqual(events[19], { kind: 'usage-live', promptTokens: 1200, completionTokens: 340, calls: 3, cachedTokens: 900 });
+  assert.deepEqual(events[20], { kind: 'usage-live', promptTokens: 1200, completionTokens: 340, calls: 3, cachedTokens: 900 });
   assert.deepEqual(events[6], { kind: 'tool-start', tool: 'read_file', args: { path: 'a.ts' }, callId: 'c1' });
-  assert.deepEqual(events[7], { kind: 'tool-end', tool: 'read_file', ok: true, summary: '42 lines', preview: 'line1', callId: 'c1' });
-  const plan = events[11] as Extract<AgentEvent, { kind: 'plan-update' }>;
+  assert.deepEqual(events[7], {
+    kind: 'tool-end',
+    tool: 'read_file',
+    ok: true,
+    summary: '42 lines',
+    preview: 'line1',
+    callId: 'c1',
+    delegationState: undefined,
+  });
+  assert.deepEqual(events[8], {
+    kind: 'tool-end',
+    tool: 'delegate_agent',
+    ok: false,
+    summary: 'delegation not started',
+    preview: undefined,
+    callId: 'c2',
+    delegationState: 'not-started',
+  });
+  const plan = events[12] as Extract<AgentEvent, { kind: 'plan-update' }>;
   assert.equal(plan.items[0].status, 'in_progress');
   assert.equal(plan.explanation, 'because');
-  const requirement = events[14] as Extract<AgentEvent, { kind: 'requirement-event' }>;
+  const requirement = events[15] as Extract<AgentEvent, { kind: 'requirement-event' }>;
   assert.equal(requirement.requirementId, 'req_1');
   assert.deepEqual(requirement.provenance?.linkedMemoryIds, ['mem_1']);
-  const annotation = events[16] as Extract<AgentEvent, { kind: 'annotation-event' }>;
+  const annotation = events[17] as Extract<AgentEvent, { kind: 'annotation-event' }>;
   assert.equal(annotation.targetKind, 'file');
 });
 

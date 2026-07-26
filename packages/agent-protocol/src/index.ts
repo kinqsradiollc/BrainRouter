@@ -81,7 +81,15 @@ export type AgentEvent =
   | { kind: 'assistant-turn-end' }
   | { kind: 'reasoning-delta'; text: string }
   | { kind: 'tool-start'; tool: string; args: Record<string, unknown>; callId?: string }
-  | { kind: 'tool-end'; tool: string; ok: boolean; summary: string; preview?: string; callId?: string }
+  | {
+      kind: 'tool-end';
+      tool: string;
+      ok: boolean;
+      summary: string;
+      preview?: string;
+      callId?: string;
+      delegationState?: 'accepted' | 'not-started';
+    }
   | { kind: 'child-tool-start'; childId: string; role: string; tool: string; args: Record<string, unknown> }
   | { kind: 'child-tool-end'; childId: string; role: string; tool: string; ok: boolean; summary: string; preview?: string; durationMs: number }
   | { kind: 'child-complete'; childId: string; role: string; status: 'completed' | 'failed'; preview?: string; error?: string }
@@ -323,7 +331,16 @@ export interface BridgedCallbacks {
   onStatusUpdate: (text: string) => void;
   onNotice: (notice: { level: 'info' | 'warn'; message: string }) => void;
   onToolStart: (tool: string, args: Record<string, unknown>, callId?: string) => void;
-  onToolEnd: (tool: string, result: { success: boolean; summary: string; preview?: string }, callId?: string) => void;
+  onToolEnd: (
+    tool: string,
+    result: {
+      success: boolean;
+      summary: string;
+      preview?: string;
+      delegationState?: 'accepted' | 'not-started';
+    },
+    callId?: string,
+  ) => void;
   onAssistantTurnStart: () => void;
   onAssistantDelta: (chunk: string) => void;
   onAssistantTurnEnd: () => void;
@@ -368,7 +385,15 @@ export function createCallbackBridge(emit: EmitEvent): BridgedCallbacks {
     onUsageUpdate: (usage) => emit({ kind: 'usage-live', promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, calls: usage.calls, cachedTokens: usage.cachedTokens }),
     onToolStart: (tool, args, callId) => emit({ kind: 'tool-start', tool, args: args ?? {}, callId }),
     onToolEnd: (tool, result, callId) =>
-      emit({ kind: 'tool-end', tool, ok: result.success, summary: result.summary, preview: result.preview, callId }),
+      emit({
+        kind: 'tool-end',
+        tool,
+        ok: result.success,
+        summary: result.summary,
+        preview: result.preview,
+        callId,
+        delegationState: result.delegationState,
+      }),
     onAssistantTurnStart: () => emit({ kind: 'assistant-turn-start' }),
     onAssistantDelta: (text) => emit({ kind: 'assistant-delta', text }),
     onAssistantTurnEnd: () => emit({ kind: 'assistant-turn-end' }),

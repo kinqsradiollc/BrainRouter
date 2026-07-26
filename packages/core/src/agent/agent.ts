@@ -296,7 +296,16 @@ export interface RunTurnCallbacks {
   // result with its OWN start row; parallel same-name calls no longer collide on a
   // name-keyed map. Optional → existing callers are unaffected.
   onToolStart: (name: string, args: Record<string, any>, callId?: string) => void;
-  onToolEnd: (name: string, result: { success: boolean; summary: string; preview?: string }, callId?: string) => void;
+  onToolEnd: (
+    name: string,
+    result: {
+      success: boolean;
+      summary: string;
+      preview?: string;
+      delegationState?: 'accepted' | 'not-started';
+    },
+    callId?: string,
+  ) => void;
   /**
    * Optional: invoked whenever the agent calls update_plan during a turn,
    * so the REPL can render a live ✓ / ⏳ / ☐ checklist instead of leaving the

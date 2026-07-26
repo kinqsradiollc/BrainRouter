@@ -342,7 +342,18 @@ export function lastTranscriptRole(filePath: string): 'user' | 'assistant' | und
 export type ReconRow =
   | { kind: 'user'; text: string; ts?: number }
   | { kind: 'assistant'; text: string; ts?: number }
-  | { kind: 'tool-group'; items: Array<{ tool: string; summary: string; preview?: string; ok: boolean; file?: string }>; ts?: number };
+  | {
+      kind: 'tool-group';
+      items: Array<{
+        tool: string;
+        summary: string;
+        preview?: string;
+        ok: boolean;
+        file?: string;
+        delegationState?: 'accepted' | 'not-started';
+      }>;
+      ts?: number;
+    };
 
 /** Parse a persisted ISO `timestamp` to epoch ms; undefined when absent/bad. */
 export function entryTs(e: { timestamp?: unknown }): number | undefined {
@@ -357,7 +368,14 @@ export function reconstructTranscriptRows(
 ): ReconRow[] {
   const rows: ReconRow[] = [];
   const callMeta = new Map<string, { name: string; args: Record<string, unknown> }>();
-  let group: Array<{ tool: string; summary: string; preview?: string; ok: boolean; file?: string }> | null = null;
+  let group: Array<{
+    tool: string;
+    summary: string;
+    preview?: string;
+    ok: boolean;
+    file?: string;
+    delegationState?: 'accepted' | 'not-started';
+  }> | null = null;
   let groupTs: number | undefined;
   const flush = (): void => { if (group && group.length) rows.push({ kind: 'tool-group', items: group, ts: groupTs }); group = null; groupTs = undefined; };
   const firstLine = (s: string): string => {
@@ -394,7 +412,16 @@ export function reconstructTranscriptRows(
       const filePath = /edit|write|patch|apply/i.test(name) && typeof a.path === 'string' ? (a.path as string) : undefined;
       if (!group) group = [];
       groupTs = ts ?? groupTs; // the group's time = its last tool's time
-      group.push({ tool: name, summary: summarize(name, a, text), preview: text ? text.slice(0, 3_000) : undefined, ok: !e.isError, file: filePath });
+      group.push({
+        tool: name,
+        summary: summarize(name, a, text),
+        preview: text ? text.slice(0, 3_000) : undefined,
+        ok: !e.isError,
+        file: filePath,
+        delegationState: e.isError && /^Delegation not started:/i.test(text)
+          ? 'not-started'
+          : undefined,
+      });
     }
   }
   flush();

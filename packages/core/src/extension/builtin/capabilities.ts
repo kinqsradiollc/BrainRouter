@@ -1,5 +1,6 @@
 import type { LocalToolExecutor, LocalToolInvocation, LocalToolSpec, ToolExposure } from '../../tool/registry/executors.js';
 import type { LocalToolEntry } from '../../tool/registry/registry.js';
+import { OrchestrationRuntimeUnavailableError } from '../../orchestration/runtime/activeTurnRuntime.js';
 import { extensionToolEntries, registerExtensionTool, requiredExtensionToolNames } from '../registry.js';
 import { BUILTIN_TOOL_SPECS } from './toolSpecs.js';
 import { REQUIRED_CORE_TOOL_CATALOG } from './toolCatalog.js';
@@ -49,7 +50,9 @@ class BuiltinToolExecutor implements LocalToolExecutor {
     let output: string;
     const invokedName = invocation.invokedName ?? this.entry.name;
     if (this.entry.runtimePort === 'orchestration') {
-      if (!invocation.orchestrationRuntime) throw new Error(`${this.entry.name}: orchestration runtime is unavailable outside an active turn.`);
+      if (!invocation.orchestrationRuntime) {
+        throw new OrchestrationRuntimeUnavailableError(invokedName, 'missing-port');
+      }
       output = await invocation.orchestrationRuntime.invoke(invokedName, invocation.args, { workflowLaunch: this.entry.workflowLaunch === true });
     } else {
       if (!invocation.builtinRuntime) throw new Error(`${this.entry.name}: required core extension has no runtime context.`);

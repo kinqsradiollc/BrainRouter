@@ -7,7 +7,16 @@
 export type PopId = '' | 'mode' | 'model' | 'effort' | 'ctx' | 'export' | 'branch' | 'branch-env' | 'plus' | 'splus' | 'bplus' | 'repo' | 'local' | 'commit' | 'title' | 'editor';
 
 export type PlanItem = { step: string; status: 'pending' | 'in_progress' | 'completed'; acceptance?: string };
-export type ToolItem = { id: number | string; tool: string; summary: string; preview?: string; ok: boolean; child?: string; file?: string };
+export type ToolItem = {
+  id: number | string;
+  tool: string;
+  summary: string;
+  preview?: string;
+  ok: boolean;
+  child?: string;
+  file?: string;
+  delegationState?: 'accepted' | 'not-started';
+};
 
 /** One recalled memory shown in a pre-turn briefing row. */
 export type BriefingRecord = { id: string; type?: string; priority?: number; content?: string; source?: string; score?: number };
