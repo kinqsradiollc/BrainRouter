@@ -1125,7 +1125,10 @@ catalog membership alone is not activation. A resolved child stage compiles
 into the existing bounded delegated-task packet with profile, strategy, stage,
 role, validated stage-skill, expected-output, tool/access-ceiling, and budget
 fields. Primary stages cannot compile into child packets, and no parent
-conversation is copied.
+conversation is copied. A fan-out assignment is bounded, control-character
+checked, and serialized separately as untrusted scope data; it is never
+concatenated into the trusted stage objective and cannot override policy,
+access, tools, or budgets.
 
 ### P23-6 — Study and Writing primary-agent plans
 

@@ -12,6 +12,9 @@ import {
 import type { ResolvedOrchestrationStage } from '../profiles/orchestrationProfileResolver.js';
 import { getOutputContract } from '../roles/outputContracts.js';
 
+const MAX_ASSIGNMENT_CHARS = 4_000;
+const UNSAFE_CONTROL_CHARACTERS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
+
 export interface BuildOrchestrationStageTaskPacketInputs extends Omit<
   BuildDelegatedTaskPacketInputs,
   'task' | 'roleId' | 'expectedOutput'
@@ -47,10 +50,7 @@ export function buildOrchestrationStageTaskPacket(
     'orchestration profile id',
   );
   const strategyId = requiredIdentifier(rawStrategyId, 'orchestration strategy id');
-  const assignment = rawAssignment?.trim();
-  const task = assignment
-    ? `${stage.objective}\n\nAssigned slice:\n${assignment}`
-    : stage.objective;
+  const assignment = boundedAssignment(rawAssignment);
   const contract = getOutputContract(roleId);
   if (!contract || stage.expectedOutput.contractId !== contract.id) {
     throw new Error(
@@ -69,7 +69,7 @@ export function buildOrchestrationStageTaskPacket(
 
   const packet = buildDelegatedTaskPacket({
     ...packetInput,
-    task,
+    task: stage.objective,
     roleId,
     capabilities,
     expectedOutput: {
@@ -86,8 +86,23 @@ export function buildOrchestrationStageTaskPacket(
       strategyId,
       stageId,
       skillIds: stageSkillIds,
+      ...(assignment ? { assignment } : {}),
     },
   };
+}
+
+function boundedAssignment(value?: string): string | undefined {
+  const normalized = value?.trim();
+  if (!normalized) return undefined;
+  if (
+    normalized.length > MAX_ASSIGNMENT_CHARS
+    || UNSAFE_CONTROL_CHARACTERS.test(normalized)
+  ) {
+    throw new Error(
+      `orchestration stage assignment must be at most ${MAX_ASSIGNMENT_CHARS} safe text characters.`,
+    );
+  }
+  return normalized;
 }
 
 function requiredIdentifier(value: string, label: string): string {
