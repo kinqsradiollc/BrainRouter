@@ -206,6 +206,7 @@
     "config",
     "personas",
     "agents",
+    "orchestration-profiles",
     "packs",
     "profile-plugins",
     "extensions",
