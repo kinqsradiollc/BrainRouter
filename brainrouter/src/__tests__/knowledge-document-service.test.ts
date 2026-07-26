@@ -425,6 +425,84 @@ describe("KnowledgeDocumentService", () => {
     expect(serialized).not.toContain("job-created");
   });
 
+  it("lists bounded document metadata through exact Project and base ancestry", async () => {
+    const { service, store } = setup();
+    const listed = await store.getKnowledgeDocument(
+      "document-1", "base-1", "org-1", "project-1",
+    ) as KnowledgeDocumentRecord;
+    vi.mocked(store.listKnowledgeDocuments).mockResolvedValueOnce([listed]);
+
+    const result = await service.list(viewer, " project-1 ", " base-1 ", {
+      status: "ready",
+      origin: "source",
+      limit: "25",
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      value: [{
+        documentId: "document-1",
+        title: "Runbook",
+        sourceName: "runbook.md",
+        sourceFormat: "markdown",
+        origin: "source",
+        status: "ready",
+        statusMessage: null,
+        parseVersion: 1,
+        createdAt: at,
+        updatedAt: at,
+        readyAt: at,
+      }],
+    });
+    expect(store.listKnowledgeDocuments).toHaveBeenCalledWith(
+      "base-1",
+      "org-1",
+      "project-1",
+      { status: "ready", origin: "source", limit: 25 },
+    );
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain("Sensitive body");
+    expect(serialized).not.toContain("contentSha256");
+    expect(serialized).not.toContain("createdBy");
+    expect(serialized).not.toContain("orgId");
+    expect(serialized).not.toContain("projectId");
+  });
+
+  it("authorizes document listing before validating bounded filters", async () => {
+    const hidden = setup({ projectVisible: false });
+    await expect(hidden.service.list(viewer, "foreign", "base-1", {
+      status: "not-a-status",
+      limit: "unbounded",
+    })).resolves.toEqual({ ok: false, code: "not_found" });
+    expect(hidden.store.getKnowledgeBase).not.toHaveBeenCalled();
+    expect(hidden.store.listKnowledgeDocuments).not.toHaveBeenCalled();
+
+    const invalidScope = setup();
+    await expect(invalidScope.service.list(
+      viewer,
+      "x".repeat(513),
+      "base-1",
+      {},
+    )).resolves.toEqual({ ok: false, code: "not_found" });
+    expect(invalidScope.store.getAccessibleProject).not.toHaveBeenCalled();
+    expect(invalidScope.store.listKnowledgeDocuments).not.toHaveBeenCalled();
+
+    const invalidCases = [
+      [{ status: ["ready"] }, "status"],
+      [{ status: "unknown" }, "status"],
+      [{ origin: "recursive" }, "origin"],
+      [{ limit: "1.5" }, "limit"],
+      [{ limit: 0 }, "limit"],
+      [{ limit: 501 }, "limit"],
+    ] as const;
+    for (const [input, field] of invalidCases) {
+      const current = setup();
+      await expect(current.service.list(viewer, "project-1", "base-1", input))
+        .resolves.toEqual({ ok: false, code: "invalid", field });
+      expect(current.store.listKnowledgeDocuments).not.toHaveBeenCalled();
+    }
+  });
+
   it("hides foreign document ancestry and authorizes status before retry", async () => {
     const missing = setup({ documentVisible: false });
     await expect(missing.service.status(viewer, "project-1", "base-1", "foreign"))

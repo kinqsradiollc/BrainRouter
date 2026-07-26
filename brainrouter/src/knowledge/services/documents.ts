@@ -4,6 +4,8 @@ import { redactSensitiveMemoryText } from "../../memory/util/redaction.js";
 import { canUseKnowledge } from "../contracts/actor.js";
 import type { KnowledgeActor } from "../contracts/actor.js";
 import {
+  KNOWLEDGE_DOCUMENT_ORIGINS,
+  KNOWLEDGE_DOCUMENT_STATUSES,
   KNOWLEDGE_PARSE_VERSION,
   KNOWLEDGE_INLINE_SOURCE_FORMATS,
   MAX_KNOWLEDGE_DOCX_BASE64_CHARS,
@@ -17,6 +19,8 @@ import type {
   IngestKnowledgeDocxInput,
   IngestKnowledgePdfInput,
   IngestKnowledgeTextInput,
+  KnowledgeDocumentListFilters,
+  KnowledgeDocumentListItemView,
   KnowledgeDocumentEnqueueResult,
   KnowledgeDocumentRecord,
   KnowledgeDocumentRetryView,
@@ -25,6 +29,7 @@ import type {
   KnowledgeDocumentStatusView,
   KnowledgeInlineSourceFormat,
   KnowledgeSourceFormat,
+  ListKnowledgeDocumentsInput,
 } from "../contracts/document.js";
 import type { KnowledgeDocumentStore } from "../store.js";
 import { extractKnowledgeDocxText } from "./docx-parser.js";
@@ -35,6 +40,7 @@ const NOT_FOUND: KnowledgeDocumentServiceFailure = { ok: false, code: "not_found
 const FORBIDDEN: KnowledgeDocumentServiceFailure = { ok: false, code: "forbidden" };
 const PDF_HEADER_SCAN_BYTES = 1024;
 const MAX_PDF_EXTRACTED_CHARS = Math.floor(MAX_KNOWLEDGE_TEXT_BYTES / 2);
+const MAX_SCOPE_ID_LENGTH = 512;
 
 export interface KnowledgeDocumentServiceOptions {
   documentIdGenerator?: () => string;
@@ -114,6 +120,33 @@ export class KnowledgeDocumentService {
     const normalized = normalizeDocxInput(input);
     if (!normalized.ok) return normalized;
     return this.#enqueueNormalized(actor, project.projectId, base.baseId, normalized.value);
+  }
+
+  async list(
+    actor: KnowledgeActor,
+    projectId: string,
+    baseId: string,
+    input: ListKnowledgeDocumentsInput = {},
+  ): Promise<KnowledgeDocumentServiceResult<KnowledgeDocumentListItemView[]>> {
+    const normalizedProjectId = normalizeScopeId(projectId);
+    const normalizedBaseId = normalizeScopeId(baseId);
+    if (!normalizedProjectId || !normalizedBaseId) return NOT_FOUND;
+    const project = await resolveKnowledgeProject(actor, normalizedProjectId, this.store);
+    if (!project) return NOT_FOUND;
+    if (!canUseKnowledge(actor, "read")) return FORBIDDEN;
+
+    const base = await this.store.getKnowledgeBase(normalizedBaseId, actor.orgId, project.projectId);
+    if (!base) return NOT_FOUND;
+
+    const filters = normalizeListFilters(input);
+    if (!filters.ok) return filters;
+    const documents = await this.store.listKnowledgeDocuments(
+      base.baseId,
+      actor.orgId,
+      project.projectId,
+      filters.value,
+    );
+    return { ok: true, value: documents.map(toKnowledgeDocumentListItem) };
   }
 
   async #enqueueNormalized(
@@ -256,6 +289,62 @@ type NormalizedDocumentInput = {
   sourceFormat: KnowledgeSourceFormat;
   contentText: string;
 };
+
+function normalizeScopeId(value: string): string | null {
+  const normalized = value.trim();
+  return normalized && normalized.length <= MAX_SCOPE_ID_LENGTH ? normalized : null;
+}
+
+function normalizeListFilters(
+  input: ListKnowledgeDocumentsInput,
+): KnowledgeDocumentServiceResult<KnowledgeDocumentListFilters> {
+  const filters: KnowledgeDocumentListFilters = {};
+  if (input.status !== undefined) {
+    if (typeof input.status !== "string"
+      || !(KNOWLEDGE_DOCUMENT_STATUSES as readonly string[]).includes(input.status)) {
+      return { ok: false, code: "invalid", field: "status" };
+    }
+    filters.status = input.status as KnowledgeDocumentListFilters["status"];
+  }
+  if (input.origin !== undefined) {
+    if (typeof input.origin !== "string"
+      || !(KNOWLEDGE_DOCUMENT_ORIGINS as readonly string[]).includes(input.origin)) {
+      return { ok: false, code: "invalid", field: "origin" };
+    }
+    filters.origin = input.origin as KnowledgeDocumentListFilters["origin"];
+  }
+  if (input.limit !== undefined) {
+    const limit = typeof input.limit === "string" && /^\d+$/.test(input.limit)
+      ? Number(input.limit)
+      : input.limit;
+    if (typeof limit !== "number"
+      || !Number.isSafeInteger(limit)
+      || limit < 1
+      || limit > 500) {
+      return { ok: false, code: "invalid", field: "limit" };
+    }
+    filters.limit = limit;
+  }
+  return { ok: true, value: filters };
+}
+
+function toKnowledgeDocumentListItem(
+  document: KnowledgeDocumentRecord,
+): KnowledgeDocumentListItemView {
+  return {
+    documentId: document.documentId,
+    title: document.title,
+    sourceName: document.sourceName,
+    sourceFormat: document.sourceFormat,
+    origin: document.origin,
+    status: document.status,
+    statusMessage: document.statusMessage,
+    parseVersion: document.parseVersion,
+    createdAt: document.createdAt,
+    updatedAt: document.updatedAt,
+    readyAt: document.readyAt,
+  };
+}
 
 function normalizeTextInput(
   input: IngestKnowledgeTextInput,

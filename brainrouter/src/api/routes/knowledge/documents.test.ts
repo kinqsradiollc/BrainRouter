@@ -8,6 +8,7 @@ import type {
   IngestKnowledgePdfInput,
   IngestKnowledgeTextInput,
   KnowledgeDocumentEnqueueResult,
+  KnowledgeDocumentListItemView,
   KnowledgeDocumentRecord,
   KnowledgeDocumentRetryView,
   KnowledgeDocumentServiceResult,
@@ -126,6 +127,22 @@ function statusView(): KnowledgeDocumentStatusView {
   };
 }
 
+function listItem(): KnowledgeDocumentListItemView {
+  return {
+    documentId: 'kdoc-1',
+    title: 'Architecture notes',
+    sourceName: 'architecture.md',
+    sourceFormat: 'markdown',
+    origin: 'source',
+    status: 'ready',
+    statusMessage: null,
+    parseVersion: 1,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    readyAt: timestamp,
+  };
+}
+
 function ok<T>(value: T): KnowledgeDocumentServiceResult<T> {
   return { ok: true, value };
 }
@@ -137,6 +154,7 @@ describe('knowledge document REST adapter', () => {
   let ingestDocx: ReturnType<typeof vi.fn>;
   let ingestPdf: ReturnType<typeof vi.fn>;
   let ingestText: ReturnType<typeof vi.fn>;
+  let list: ReturnType<typeof vi.fn>;
   let status: ReturnType<typeof vi.fn>;
   let retry: ReturnType<typeof vi.fn>;
 
@@ -179,6 +197,7 @@ describe('knowledge document REST adapter', () => {
         jobId: 'internal-docx-job-id',
       }),
     );
+    list = vi.fn().mockResolvedValue(ok([listItem()]));
     status = vi.fn().mockResolvedValue(ok(statusView()));
     retry = vi.fn().mockResolvedValue(
       ok<KnowledgeDocumentRetryView>({
@@ -187,7 +206,7 @@ describe('knowledge document REST adapter', () => {
         enqueued: true,
       }),
     );
-    service = { ingestText, ingestPdf, ingestDocx, status, retry } as KnowledgeDocumentOperations;
+    service = { list, ingestText, ingestPdf, ingestDocx, status, retry } as KnowledgeDocumentOperations;
 
     const app = express();
     app.use(express.json({ limit: '3mb' }));
@@ -464,6 +483,46 @@ describe('knowledge document REST adapter', () => {
     expect(serialized).not.toContain('contentText');
     expect(serialized).not.toContain('contentSha256');
     expect(serialized).not.toContain('jobId');
+  });
+
+  it('lists filtered document metadata for a viewer without leaking content or ancestry', async () => {
+    const response = await requestJson(
+      new URL(
+        `${baseUrl}/api/knowledge/projects/project-a/bases/kb-1/documents`
+        + '?status=ready&origin=source&limit=25',
+      ),
+      'GET',
+      viewerHeaders,
+    );
+
+    expect(response).toEqual({ status: 200, body: { documents: [listItem()] } });
+    expect(list).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'viewer-1', orgId: 'org-a', role: 'viewer' }),
+      'project-a',
+      'kb-1',
+      { status: 'ready', origin: 'source', limit: '25' },
+    );
+    const serialized = JSON.stringify(response.body);
+    expect(serialized).not.toContain('contentText');
+    expect(serialized).not.toContain('contentSha256');
+    expect(serialized).not.toContain('createdBy');
+    expect(serialized).not.toContain('org-a');
+    expect(serialized).not.toContain('project-a');
+    expect(serialized).not.toContain('jobId');
+  });
+
+  it('maps invalid document-list filters to a stable client error', async () => {
+    list.mockResolvedValueOnce({ ok: false, code: 'invalid', field: 'limit' });
+    const response = await requestJson(
+      new URL(`${baseUrl}/api/knowledge/projects/project-a/bases/kb-1/documents?limit=all`),
+      'GET',
+      viewerHeaders,
+    );
+
+    expect(response).toMatchObject({
+      status: 400,
+      body: { code: 'bad_request', details: { field: 'limit' } },
+    });
   });
 
   it('retries the exact route scope and ignores body-based role or scope elevation', async () => {

@@ -318,8 +318,9 @@ and tenant-fair job runner.
 
 Base list/create are available through authenticated REST and MCP adapters; the
 MCP tool names are `knowledge_list` and `knowledge_base_create`. Authenticated
-REST and MCP expose accepted text ingest, content-free processing status, and
-exact-scope retry; the document MCP tools are `knowledge_ingest`,
+REST exposes bounded, content-free document listing within one authorized
+Project/base. REST and MCP expose accepted text ingest, content-free processing
+status, and exact-scope retry; the document MCP tools are `knowledge_ingest`,
 `knowledge_ingest_pdf`, `knowledge_ingest_docx`, `knowledge_status`, and
 `knowledge_retry`.
 Authenticated REST retrieval and the `knowledge_search` MCP tool expose the

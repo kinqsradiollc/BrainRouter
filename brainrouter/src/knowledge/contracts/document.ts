@@ -53,6 +53,28 @@ export interface KnowledgeDocumentListFilters {
   limit?: number;
 }
 
+/** Untrusted transport input normalized by the document service after access checks. */
+export interface ListKnowledgeDocumentsInput {
+  status?: unknown;
+  origin?: unknown;
+  limit?: unknown;
+}
+
+/** Bounded, content-free list item safe for authenticated client transports. */
+export interface KnowledgeDocumentListItemView {
+  documentId: string;
+  title: string;
+  sourceName: string;
+  sourceFormat: KnowledgeSourceFormat;
+  origin: KnowledgeDocumentOrigin;
+  status: KnowledgeDocumentStatus;
+  statusMessage: string | null;
+  parseVersion: number;
+  createdAt: string;
+  updatedAt: string;
+  readyAt: string | null;
+}
+
 export interface DistillKnowledgeBaseInput {
   /** Explicit acknowledgement; distillation never runs implicitly. */
   confirmed: boolean;
@@ -214,7 +236,16 @@ export interface KnowledgeDocumentRetryView {
 export type KnowledgeDocumentServiceFailure = {
   ok: false;
   code: "not_found" | "forbidden" | "invalid";
-  field?: "baseId" | "title" | "sourceName" | "sourceFormat" | "content" | "contentBase64";
+  field?:
+    | "baseId"
+    | "title"
+    | "sourceName"
+    | "sourceFormat"
+    | "content"
+    | "contentBase64"
+    | "status"
+    | "origin"
+    | "limit";
 };
 
 export type KnowledgeDocumentServiceResult<T> =
