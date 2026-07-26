@@ -65,6 +65,7 @@ function writePlugin(root: string, name: string, version = '1.0.0'): void {
   }));
   w('skills/demo/SKILL.md', `---\nname: ${name}-demo\ndescription: demo\n---\n# demo\n`);
   w('agents/helper.md', '# helper\n');
+  w('orchestration-profiles/helper.json', '{}\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -94,6 +95,7 @@ test('publish: buildRegistryEntry computes the correct tree integrity + a valid 
   assert.equal(built.entry.lastUpdated, '2026-07-03');
   assert.equal(built.entry.provides.skills, 1);
   assert.equal(built.entry.provides.agents, 1);
+  assert.equal(built.entry.provides.orchestrationProfiles, 1);
 
   // The emitted entry round-trips through the registry index validator.
   const idx = validateRegistryIndex({ plugins: [built.entry] });

@@ -1,10 +1,10 @@
 /**
  * PLUGIN-MARKETPLACE P1 — plugin core tests.
  *
- * Covers: manifest validation (good + bad), a fixture plugin loading its
- * skill+agent+command+hook into the aggregate contributions, safeMode skipping
- * loading entirely, and atomic install (staging failure leaves a prior copy
- * intact). All state is confined to a temp `BRAINROUTER_HOME` + temp workspace.
+ * Covers manifest validation, a fixture plugin loading every inert contribution
+ * kind into the aggregate, safeMode skipping loading entirely, and atomic
+ * install behavior. All state is confined to a temp `BRAINROUTER_HOME` + temp
+ * workspace.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -32,7 +32,7 @@ function mkTmp(prefix: string): string {
   return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 }
 
-/** Write a full fixture plugin (skill+agent+command+hook+mcp) at <dir>/<name>. */
+/** Write a full fixture plugin at <dir>/<name>. */
 function writeFixturePlugin(dir: string, name: string): string {
   const root = path.join(dir, name);
   const w = (rel: string, content: string): void => {
@@ -58,6 +58,7 @@ function writeFixturePlugin(dir: string, name: string): string {
     instructions: ['Help with the requested task.'],
   }));
   w('agents/helper.md', '# helper agent\n');
+  w('orchestration-profiles/helper.json', '{}\n');
   w('commands/greet.md', 'Say hi to $ARGUMENTS\n');
   w('hooks/hooks.json', JSON.stringify({ hooks: [{ event: 'pre-tool', command: 'echo hi' }] }));
   w('mcp.json', JSON.stringify({ mcpServers: { local: { type: 'stdio', command: '${BRAINROUTER_PLUGIN_ROOT}/server.js', args: ['--root', '${BRAINROUTER_PLUGIN_ROOT}'] } } }));
@@ -124,7 +125,7 @@ test('classifySource: distinguishes local paths from git urls', () => {
 // Loader — fixture plugin feeds the subsystems
 // ---------------------------------------------------------------------------
 
-test('loadPlugins: an enabled fixture plugin contributes skill+agent+command+hook+mcp', (t) => {
+test('loadPlugins: an enabled fixture plugin contributes every declared component', (t) => {
   const home = mkTmp('br-plug-home-');
   const ws = mkTmp('br-plug-ws-');
   const priorHome = process.env.BRAINROUTER_HOME;
@@ -144,16 +145,33 @@ test('loadPlugins: an enabled fixture plugin contributes skill+agent+command+hoo
   assert.equal(off.disabled.length, 1);
   assert.equal(off.disabled[0].name, 'acme-devkit');
 
-  // Enable it → skills/agents/commands populate; hooks + MCP are gated behind the
-  // P3 consent model, so grant the shell + mcp capability too to see the full surface.
+  // Enable it → inert contributions populate; hooks + MCP are gated behind the
+  // P3 consent model, so grant shell + MCP too to see the full surface.
   const cfg = baseCfg({ plugins: { enabled: { 'acme-devkit': true }, approved: { 'acme-devkit': { shell: true, mcp: true } } } });
   const on = loadPlugins(ws, cfg);
   assert.equal(on.loaded.length, 1);
   const p = on.loaded[0];
   assert.equal(p.scope, 'user');
+  assert.deepEqual({
+    skills: p.provides.skills,
+    personas: p.provides.personas,
+    agents: p.provides.agents,
+    orchestrationProfiles: p.provides.orchestrationProfiles,
+    commands: p.provides.commands,
+    hooks: p.provides.hooks,
+    mcpServers: p.provides.mcpServers,
+  }, {
+    skills: 1,
+    personas: 1,
+    agents: 1,
+    orchestrationProfiles: 1,
+    commands: 1,
+    hooks: 1,
+    mcpServers: 1,
+  });
   assert.deepEqual(
-    { skills: p.provides.skills, personas: p.provides.personas, agents: p.provides.agents, commands: p.provides.commands, hooks: p.provides.hooks, mcpServers: p.provides.mcpServers },
-    { skills: 1, personas: 1, agents: 1, commands: 1, hooks: 1, mcpServers: 1 },
+    on.contributions.orchestrationProfileFiles.map((entry) => path.basename(entry.path)),
+    ['helper.json'],
   );
   assert.equal(on.contributions.skillRoots.length, 1);
   assert.ok(on.contributions.skillRoots[0].endsWith(path.join('acme-devkit', 'skills')));

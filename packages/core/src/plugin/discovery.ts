@@ -5,7 +5,8 @@
  * actually contributes (auto-discovering the convention dirs when `contributes`
  * omits them). The result is inert DATA — the loader feeds
  * these paths into the existing subsystems (skills / personas / agents /
- * commands / hooks / mcp / connectors / workflows). No parallel runtime.
+ * orchestration profiles / commands / hooks / mcp / connectors / workflows).
+ * No parallel runtime.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -27,8 +28,9 @@ export interface DiscoveredPlugin {
   manifest: PluginManifest;
   /**
    * Absolute paths of each contributed component, present only when the path
-   * exists on disk. `skills`/`personas`/`agents`/`commands`/`workflows`/
-   * `connectors` are DIRECTORIES; `hooks`/`mcpServers` are FILES.
+   * exists on disk. `skills`/`personas`/`agents`/`orchestrationProfiles`/
+   * `commands`/`workflows`/`connectors` are DIRECTORIES; `hooks`/`mcpServers`
+   * are FILES.
    */
   contributes: Partial<Record<PluginComponentKind, string>>;
   warnings: string[];
@@ -61,6 +63,7 @@ const DIR_KINDS: ReadonlySet<PluginComponentKind> = new Set([
   'skills',
   'personas',
   'agents',
+  'orchestrationProfiles',
   'commands',
   'workflows',
   'connectors',
@@ -152,6 +155,7 @@ export interface PluginProvides {
   skills: number;
   personas: number;
   agents: number;
+  orchestrationProfiles: number;
   commands: number;
   hooks: number;
   mcpServers: number;
@@ -216,6 +220,9 @@ export function summarizeProvides(plugin: DiscoveredPlugin): PluginProvides {
     // Legacy Markdown prompt overlays remain disclosed as agents during the
     // persona-format compatibility window.
     agents: c.agents ? countFilesByExt(c.agents, ['.md', '.json']) : 0,
+    orchestrationProfiles: c.orchestrationProfiles
+      ? countFilesByExt(c.orchestrationProfiles, ['.json'])
+      : 0,
     commands: c.commands ? countFilesByExt(c.commands, ['.md']) : 0,
     hooks: c.hooks ? countHooks(c.hooks) : 0,
     mcpServers: c.mcpServers ? countMcpServers(c.mcpServers) : 0,
