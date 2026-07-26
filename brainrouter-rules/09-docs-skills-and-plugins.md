@@ -222,6 +222,22 @@ manifests, including their serialized client alias, emit no migration signal.
   `packages/core/src/workspace/manifest.ts`,
   `packages/core/src/tests/migration-compatibility-diagnostics.test.ts`
 
+### 11c. Orchestration profiles resolve whole definitions and fail closed
+
+Orchestration-profile JSON resolves first-match-wins from workspace-local
+`.brainrouter/orchestration-profiles/` → committable
+`orchestration-profiles/` → enabled plugin contributions → bundled package
+assets. Definitions never deep-merge. A higher-precedence file claims its ID
+even when invalid, so a malformed override produces an unavailable diagnostic
+and direct-primary fallback rather than silently activating a lower source.
+Every source uses the same bounded, no-follow parser and exact role, skill,
+signal, and output-contract reference catalog. Diagnostics disclose safe source
+provenance and collisions without absolute paths or file contents.
+
+- **Evidence:** `packages/core/src/orchestration/profiles/orchestrationProfileSources.ts`,
+  `packages/core/src/orchestration/profiles/orchestrationProfileDefinitionFile.ts`,
+  `packages/core/src/tests/orchestration-profile-sources.test.ts`
+
 ---
 
 ## Plugins & marketplace
