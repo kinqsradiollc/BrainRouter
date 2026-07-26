@@ -1088,7 +1088,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       'workspace-onboarding-preview-instruction': (args) =>
         previewWorkspaceInstructionFromPayload(workspaceRoot, args),
       'workspace-onboarding-preview': (args) =>
-        previewWorkspaceOnboardingFromPayload(workspaceRoot, args),
+        previewWorkspaceOnboardingFromPayload(workspaceRoot, args, loadConfig()),
       // §2 W3 — Write-mode selection inline AI. A one-shot, read-only model call
       // (no tools) that polishes / rewrites / continues the selected prose; the
       // panel reviews the result as an accept/reject diff before it lands.

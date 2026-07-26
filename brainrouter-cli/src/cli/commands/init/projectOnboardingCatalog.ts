@@ -54,7 +54,7 @@ export function formatPlanPreview(preview: WorkspaceOnboardingPreview): string[]
     `${stage.id}→${stage.executorKind === 'primary' ? 'primary' : stage.roleId}${stage.optional ? '?' : ''}`)
     .join(', ') ?? '(none)';
   return [
-    `  orchestration plan: ${preview.plan.displayName} (${preview.plan.id}); setup strategy: ${preview.plan.selectedStrategyId}`,
+    `  orchestration plan: ${preview.plan.displayName} (${preview.plan.id}); source: ${preview.plan.source.provenance}; setup strategy: ${preview.plan.selectedStrategyId}`,
     `  setup stages: ${stages}`,
     `  effective roles: ${formatList(preview.roles.effective)}`,
     `  effective skills: ${formatList(preview.skills.effective)}`,

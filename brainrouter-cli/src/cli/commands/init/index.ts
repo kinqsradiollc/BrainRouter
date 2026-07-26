@@ -1,5 +1,5 @@
 import chalk from 'chalk';
-import type { LLMConfig } from '@kinqs/brainrouter-core/config';
+import { loadConfig, type LLMConfig } from '@kinqs/brainrouter-core/config';
 import type { CommandContext } from '../_context.js';
 import { initAgentMd } from '../../../prompt/initAgentMd.js';
 import { safeOnboardingError } from './onboardingErrors.js';
@@ -68,7 +68,8 @@ export async function tryHandleInitCommand(
   // Bounded deterministic scan + the shared editable confirmation flow.
   if (sub === 'scan') {
     try {
-      await (dependencies.runScan ?? runProjectOnboardingScan)(agent.workspaceRoot);
+      await (dependencies.runScan ?? ((root) =>
+        runProjectOnboardingScan(root, { getConfig: loadConfig })))(agent.workspaceRoot);
     } catch (err: any) {
       console.error(chalk.red(`\n/init scan failed: ${safeOnboardingError(err)}\n`));
     }
@@ -78,7 +79,8 @@ export async function tryHandleInitCommand(
   if (sub === 'agent') {
     try {
       const description = args.slice(1).join(' ').trim() || undefined;
-      await (dependencies.runAgent ?? runProjectOnboardingAgent)(
+      await (dependencies.runAgent ?? ((root, llm, description) =>
+        runProjectOnboardingAgent(root, llm, description, { getConfig: loadConfig })))(
         agent.workspaceRoot,
         agent.getLlmConfig(),
         description,
@@ -91,7 +93,7 @@ export async function tryHandleInitCommand(
 
   if (sub === '--edit') {
     try {
-      await runProjectOnboarding(agent.workspaceRoot, { edit: true });
+      await runProjectOnboarding(agent.workspaceRoot, { edit: true, getConfig: loadConfig });
     } catch (err: any) {
       console.error(chalk.red(`\n/init --edit failed: ${safeOnboardingError(err)}\n`));
     }
@@ -137,7 +139,7 @@ export async function tryHandleInitCommand(
 
   // Bare `/init` — PROJECT onboarding (prints the summary when already onboarded).
   try {
-    await runProjectOnboarding(agent.workspaceRoot);
+    await runProjectOnboarding(agent.workspaceRoot, { getConfig: loadConfig });
     console.log(chalk.gray('  Global setup wizard: `/init config` · instruction file: `/init agentmd`\n'));
   } catch (err: any) {
     console.error(chalk.red(`\n/init failed: ${safeOnboardingError(err)}\n`));

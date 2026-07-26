@@ -172,6 +172,7 @@ export function buildDevOnboardingPreview(value: unknown): Record<string, unknow
       mode: draft.orchestration.mode,
       selectedStrategyId: fallback.strategyId,
       selectionReason: draft.orchestration.mode === 'off' ? 'mode-off' : 'setup-preview-fallback',
+      source: { kind: 'bundled', provenance: 'bundled' },
       strategies: [{
         id: fallback.strategyId,
         description: 'Keep setup on the primary agent until task evidence selects another eligible strategy.',

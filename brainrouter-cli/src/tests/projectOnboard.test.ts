@@ -77,6 +77,7 @@ test('formatManifestSummary includes persona, orchestration, capability, and edi
   assert.ok(summary.includes('engineer'));
   assert.ok(summary.includes('orchestration: adaptive'));
   assert.ok(summary.includes('max parallel: 4'));
+  assert.ok(summary.includes('source: bundled'));
   assert.ok(summary.includes('capabilities: frontend'));
   assert.ok(!summary.includes('frontend-builder'));
   assert.ok(summary.includes('.brainrouter/workspace.json'));

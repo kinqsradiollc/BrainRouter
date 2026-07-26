@@ -88,7 +88,10 @@ export function PlanPreviewCard({ preview, loading }: {
         <>
           <div className="onboard-plan-title">
             <strong>{preview.plan.displayName}</strong>
-            <span>{preview.plan.mode} · fallback {preview.plan.selectedStrategyId}</span>
+            <span>
+              {preview.plan.mode} · {preview.plan.source.provenance}
+              {' '}· fallback {preview.plan.selectedStrategyId}
+            </span>
           </div>
           <div className="onboard-stage-list">
             {(strategy?.stages ?? []).map((stage, index) => (

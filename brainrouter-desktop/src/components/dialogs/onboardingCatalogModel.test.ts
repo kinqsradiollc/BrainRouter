@@ -27,6 +27,7 @@ function preview(): Record<string, unknown> {
       displayName: 'Custom orchestration',
       mode: 'off',
       selectedStrategyId: 'direct',
+      source: { kind: 'bundled', provenance: 'bundled' },
       strategies: [{
         id: 'direct',
         description: 'Complete directly.',
@@ -50,6 +51,7 @@ test('parses safe catalog metadata and primary-only Custom preview', () => {
   const parsed = parseOnboardingPreview(preview());
   assert.ok(parsed);
   assert.equal(parsed.plan?.selectedStrategyId, 'direct');
+  assert.deepEqual(parsed.plan?.source, { kind: 'bundled', provenance: 'bundled' });
   assert.deepEqual(parsed.plan?.strategies[0]?.stages, [{
     id: 'complete',
     executorKind: 'primary',

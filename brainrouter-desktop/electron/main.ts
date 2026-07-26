@@ -845,7 +845,7 @@ app.whenReady().then(() => {
       return { ok: false, error: 'Workspace is no longer active.' };
     }
     if (!isWorkspaceTrusted(root)) return { ok: false, error: 'Workspace is not trusted.' };
-    return { ok: true, ...getWorkspaceManifestInfo(root) };
+    return { ok: true, ...getWorkspaceManifestInfo(root, loadConfig()) };
   });
   ipcMain.handle('workspace:manifest-save', (event, root: unknown, payload: unknown) => {
     if (typeof root !== 'string' || !fs.existsSync(root)) return { saved: false, error: 'Unknown workspace.' };
@@ -854,7 +854,7 @@ app.whenReady().then(() => {
       return { saved: false, stale: true, error: 'Workspace is no longer active.' };
     }
     if (!isWorkspaceTrusted(root)) return { saved: false, error: 'Workspace is not trusted.' };
-    return saveWorkspaceManifestFromPayload(root, payload);
+    return saveWorkspaceManifestFromPayload(root, payload, loadConfig());
   });
   // T1 — trust persistence lives in the shared CLI store (not renderer
   // localStorage), so CLI + desktop agree and it survives reinstalls.

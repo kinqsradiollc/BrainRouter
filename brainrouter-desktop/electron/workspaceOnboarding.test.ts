@@ -60,6 +60,41 @@ function payload(root: string, profileId: string): ManifestSavePayload {
   };
 }
 
+function writeCustomPlan(root: string): void {
+  const directory = path.join(root, 'orchestration-profiles');
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, 'custom.json'), JSON.stringify({
+    schemaVersion: 1,
+    kind: 'orchestration-profile',
+    id: 'custom',
+    displayName: 'Workspace custom orchestration',
+    defaultMode: 'off',
+    fallbackStrategyId: 'direct',
+    rolePolicy: { availableRoles: [], disabledRoles: [] },
+    limits: {
+      maxParallel: 1,
+      maxStages: 1,
+      maxChildrenPerStage: 1,
+      maxTotalChildren: 1,
+      maxDepth: 1,
+      maxRetries: 0,
+    },
+    strategies: [{
+      id: 'direct',
+      description: 'Complete directly.',
+      activation: { signals: ['small-scope'], explicitOnly: false },
+      stages: [{
+        id: 'complete',
+        executor: { kind: 'primary' },
+        after: [],
+        objective: 'Complete the task directly.',
+        skillIds: [],
+        optional: false,
+      }],
+    }],
+  }));
+}
+
 test('manifest-get returns suggestion, complete profiles, and opaque review revisions', () => {
   const env = tmpWorkspace({ 'package.json': '{}' });
   try {
@@ -73,6 +108,28 @@ test('manifest-get returns suggestion, complete profiles, and opaque review revi
     assert.match(info.review.revision.root, /^[0-9a-f]{64}$/);
     assert.match(info.review.revision.manifest, /^[0-9a-f]{64}$/);
     assert.equal(info.review.instruction.existed, false);
+  } finally { env.cleanup(); }
+});
+
+test('manifest-get and draft preview consume the same resolved workspace plan source', () => {
+  const env = tmpWorkspace();
+  try {
+    writeCustomPlan(env.root);
+    const info = getWorkspaceManifestInfo(env.root);
+    assert.equal(info.preview.plan?.displayName, 'Workspace custom orchestration');
+    assert.deepEqual(info.preview.plan?.source, {
+      kind: 'workspace',
+      provenance: 'workspace',
+    });
+    const input = payload(env.root, 'custom');
+    const {
+      expected: _expected,
+      source: _source,
+      catalogFingerprint: _catalogFingerprint,
+      ...draft
+    } = input;
+    const result = previewWorkspaceOnboardingFromPayload(env.root, draft);
+    assert.equal(result.ok && result.preview.plan?.source.kind, 'workspace');
   } finally { env.cleanup(); }
 });
 
