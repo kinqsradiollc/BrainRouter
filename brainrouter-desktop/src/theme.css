@@ -5246,6 +5246,65 @@ select.ctl option { background: var(--surface); color: var(--text); }
 .mem-error { color: var(--err); font-size: 12px; padding: 8px 10px; }
 .mem-raw { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px; margin: 8px; font-size: 12px; white-space: pre-wrap; color: var(--text-dim); }
 
+/* ===== C3 — Project knowledge panel ===== */
+.knowledge-panel { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.knowledge-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 2px 6px; }
+.knowledge-heading > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.knowledge-heading strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 14px; }
+.knowledge-eyebrow { color: var(--text-faint); font-size: 10px; font-weight: 650; letter-spacing: .07em; text-transform: uppercase; }
+.knowledge-state { margin: auto 0; padding: 18px 12px; display: flex; flex-direction: column; align-items: flex-start; gap: 7px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); color: var(--text-dim); line-height: 1.45; }
+.knowledge-state strong { color: var(--text); }
+.knowledge-state.error { border-color: color-mix(in srgb, var(--err) 38%, var(--border)); }
+.knowledge-section { min-width: 0; display: flex; flex-direction: column; gap: 7px; padding: 9px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); }
+.knowledge-section-title { min-width: 0; display: flex; align-items: center; gap: 7px; color: var(--text); font-size: 11.5px; font-weight: 650; }
+.knowledge-section-title small { color: var(--text-faint); font-family: var(--mono); font-weight: 500; }
+.knowledge-section-title .knowledge-upload { margin-left: auto; }
+.knowledge-base-list,
+.knowledge-document-list,
+.knowledge-results { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.knowledge-base,
+.knowledge-document { width: 100%; min-width: 0; display: grid; gap: 3px; padding: 7px 8px; text-align: left; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg); color: var(--text-dim); cursor: pointer; }
+.knowledge-base:hover,
+.knowledge-document:hover { border-color: var(--border-strong); background: var(--ov-025); }
+.knowledge-base.active,
+.knowledge-document.active { border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); background: var(--accent-soft); }
+.knowledge-base strong,
+.knowledge-document strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 12px; }
+.knowledge-base span,
+.knowledge-document span:not(.knowledge-status) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-faint); font-size: 10.5px; }
+.knowledge-document { grid-template-columns: auto minmax(0, 1fr); align-items: center; }
+.knowledge-document > strong,
+.knowledge-document > span:last-child { grid-column: 2; }
+.knowledge-status { grid-row: 1 / span 2; align-self: center; padding: 2px 5px; border-radius: 999px; font-size: 9px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; }
+.knowledge-status.ready { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.knowledge-status.failed { color: var(--err); background: color-mix(in srgb, var(--err) 12%, transparent); }
+.knowledge-status.working { color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+.knowledge-create { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr) auto; gap: 5px; }
+.knowledge-create > * { min-width: 0; }
+.knowledge-upload { position: relative; overflow: hidden; cursor: pointer; }
+.knowledge-upload.disabled { opacity: .55; cursor: default; }
+.knowledge-upload input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.knowledge-detail { min-width: 0; display: flex; flex-direction: column; gap: 7px; padding: 8px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg); }
+.knowledge-detail-head { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.knowledge-detail-head strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.knowledge-stats { margin: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; }
+.knowledge-stats > div { min-width: 0; padding: 5px 6px; border-radius: var(--r-sm); background: var(--ov-025); }
+.knowledge-stats dt { color: var(--text-faint); font-size: 9.5px; }
+.knowledge-stats dd { margin: 2px 0 0; overflow: hidden; text-overflow: ellipsis; color: var(--text); font-family: var(--mono); font-size: 10.5px; }
+.knowledge-error { color: var(--err); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
+.knowledge-date,
+.knowledge-mode { color: var(--text-faint); font-size: 10.5px; }
+.knowledge-search { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px; }
+.knowledge-search > * { min-width: 0; }
+.knowledge-hit { min-width: 0; margin: 0; padding: 8px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg); }
+.knowledge-hit p { margin: 0; color: var(--text-dim); font-size: 11.5px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.knowledge-hit footer { margin-top: 6px; color: var(--text-faint); font-size: 10px; overflow-wrap: anywhere; }
+.knowledge-notice { padding: 7px 8px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--ov-025); color: var(--text-dim); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
+@container panel (max-width: 380px) {
+  .knowledge-create { grid-template-columns: minmax(0, 1fr); }
+  .knowledge-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 /* ==========================================================================
  * BrainRouter interface parity — shared dashboard/desktop design contract.
  * The workbench keeps its Electron layout behavior; these final rules align
