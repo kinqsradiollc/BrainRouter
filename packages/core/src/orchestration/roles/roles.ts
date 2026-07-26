@@ -1,4 +1,10 @@
 import { describeContractForPrompt, getOutputContract } from './outputContracts.js';
+import {
+  domainNeutralRolePrompt,
+  type ActiveProfilePromptContext,
+} from './rolePromptSelection.js';
+
+export type { ActiveProfilePromptContext } from './rolePromptSelection.js';
 
 export type AccessMode = 'read' | 'write' | 'shell';
 
@@ -175,16 +181,27 @@ export function bestFitRoleName(name: string): string {
   return 'explorer'; // safe read-only default
 }
 
-export function resolveRole(name: string): AgentRole {
+export function resolveRole(
+  name: string,
+  promptContext?: ActiveProfilePromptContext,
+): AgentRole {
   const exact = BUILT_IN_ROLES[(name ?? '').trim()];
-  if (exact) return exact;
+  const compatibilityRole = exact ?? BUILT_IN_ROLES[bestFitRoleName(name)];
+  const neutral = domainNeutralRolePrompt(compatibilityRole.name, promptContext);
+  if (neutral) {
+    return {
+      ...compatibilityRole,
+      description: neutral.description,
+      promptOverlay: neutral.prompt,
+    };
+  }
   // Unknown/custom role → best-fit built-in instead of throwing (don't kill a
   // workflow just because the model named an agent `security-auditor`).
-  return BUILT_IN_ROLES[bestFitRoleName(name)];
+  return compatibilityRole;
 }
 
-export function listRoles(): AgentRole[] {
-  return Object.values(BUILT_IN_ROLES);
+export function listRoles(promptContext?: ActiveProfilePromptContext): AgentRole[] {
+  return Object.keys(BUILT_IN_ROLES).map((name) => resolveRole(name, promptContext));
 }
 
 export function buildRolePrompt(role: AgentRole, basePrompt: string, taskPrompt: string): string {

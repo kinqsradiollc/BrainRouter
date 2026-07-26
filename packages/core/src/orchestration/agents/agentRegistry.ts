@@ -20,6 +20,12 @@ import {
   readAgentDefinitionFile,
   type AgentDefinition,
 } from './agentDefinitionFile.js';
+import {
+  engineeringCompatibilityAgentDescription,
+  engineeringCompatibilityAgentPrompt,
+  hasActiveProfilePromptContext,
+  type ActiveProfilePromptContext,
+} from '../roles/rolePromptSelection.js';
 
 export type { AccessMode, AgentDefinition, Tier } from './agentDefinitionFile.js';
 export { AGENT_DEFINITION_MAX_BYTES, parseAgentDefinition } from './agentDefinitionFile.js';
@@ -86,7 +92,10 @@ function loadEnabledPackAgents(workspaceRoot?: string): LoadedDefinition[] {
   }
 }
 
-export function loadRegistry(workspaceRoot?: string): LoadedDefinition[] {
+export function loadRegistry(
+  workspaceRoot?: string,
+  promptContext?: ActiveProfilePromptContext,
+): LoadedDefinition[] {
   const builtin = loadFromDir(BUILTIN_AGENTS_DIR, 'builtin');
   const packs = loadEnabledPackAgents(workspaceRoot);
   const userAgentsDir = getUserAgentsDir();
@@ -101,12 +110,16 @@ export function loadRegistry(workspaceRoot?: string): LoadedDefinition[] {
   for (const loaded of [...builtin, ...packs, ...user, ...workspace]) {
     merged.set(loaded.def.id, loaded);
   }
-  return Array.from(merged.values());
+  return Array.from(merged.values()).map((loaded) =>
+    selectBuiltInPrompt(loaded, promptContext));
 }
 
 /** Return the definitions that may be surfaced or executed in this workspace. */
-export function loadActiveRegistry(workspaceRoot?: string): LoadedDefinition[] {
-  const registry = loadRegistry(workspaceRoot);
+export function loadActiveRegistry(
+  workspaceRoot?: string,
+  promptContext?: ActiveProfilePromptContext,
+): LoadedDefinition[] {
+  const registry = loadRegistry(workspaceRoot, promptContext);
   if (!workspaceRoot) return registry;
 
   const manifest = loadWorkspaceManifest(workspaceRoot);
@@ -120,10 +133,38 @@ export function loadActiveRegistry(workspaceRoot?: string): LoadedDefinition[] {
   return registry.filter((loaded) => activeIds.has(loaded.def.id));
 }
 
-export function findById(id: string, workspaceRoot?: string): LoadedDefinition | undefined {
-  return loadActiveRegistry(workspaceRoot).find((l) => l.def.id === id);
+export function findById(
+  id: string,
+  workspaceRoot?: string,
+  promptContext?: ActiveProfilePromptContext,
+): LoadedDefinition | undefined {
+  return loadActiveRegistry(workspaceRoot, promptContext).find((l) => l.def.id === id);
 }
 
-export function listAll(workspaceRoot?: string): LoadedDefinition[] {
-  return loadActiveRegistry(workspaceRoot);
+export function listAll(
+  workspaceRoot?: string,
+  promptContext?: ActiveProfilePromptContext,
+): LoadedDefinition[] {
+  return loadActiveRegistry(workspaceRoot, promptContext);
+}
+
+function selectBuiltInPrompt(
+  loaded: LoadedDefinition,
+  promptContext?: ActiveProfilePromptContext,
+): LoadedDefinition {
+  if (loaded.source !== 'builtin' || hasActiveProfilePromptContext(promptContext)) {
+    return loaded;
+  }
+  const prompt = engineeringCompatibilityAgentPrompt(loaded.def.id);
+  const whenToUse = engineeringCompatibilityAgentDescription(loaded.def.id);
+  if (!prompt || !whenToUse) return loaded;
+  if (prompt === loaded.def.prompt && whenToUse === loaded.def.whenToUse) return loaded;
+  return {
+    ...loaded,
+    def: {
+      ...loaded.def,
+      prompt,
+      whenToUse,
+    },
+  };
 }
