@@ -19,10 +19,38 @@ import {
 } from '../orchestration/profiles/orchestrationProfileDefinitionFile.js';
 
 const REFERENCES: OrchestrationProfileReferenceCatalog = {
-  roleIds: new Set(['explorer', 'worker', 'reviewer', 'fleet']),
+  roles: new Map([
+    ['explorer', {
+      defaultAccess: 'read',
+      outputContract: {
+        id: 'explorer',
+        sectionAliases: new Set(['headline', 'files-read', 'facts']),
+      },
+    }],
+    ['worker', {
+      defaultAccess: 'write',
+      outputContract: {
+        id: 'worker',
+        sectionAliases: new Set(['headline', 'files-changed', 'summary']),
+      },
+    }],
+    ['reviewer', {
+      defaultAccess: 'read',
+      outputContract: {
+        id: 'reviewer',
+        sectionAliases: new Set(['headline', 'findings', 'out-of-scope']),
+      },
+    }],
+    ['fleet', {
+      defaultAccess: 'shell',
+      outputContract: {
+        id: 'worker',
+        sectionAliases: new Set(['headline', 'files-changed', 'summary']),
+      },
+    }],
+  ]),
   skillIds: new Set(['planning-skill', 'testing-skill', 'verify-loop']),
   signalIds: new Set(['small-scope', 'implementation']),
-  outputContractIds: new Set(['findings', 'worker']),
 };
 
 function definition(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -32,6 +60,7 @@ function definition(overrides: Record<string, unknown> = {}): Record<string, unk
     id: 'engineering',
     displayName: 'Engineering orchestration',
     defaultMode: 'adaptive',
+    fallbackStrategyId: 'direct',
     rolePolicy: {
       availableRoles: ['explorer', 'worker', 'reviewer'],
       disabledRoles: ['fleet'],
@@ -74,8 +103,8 @@ function definition(overrides: Record<string, unknown> = {}): Record<string, unk
             fanOut: { min: 1, max: 2 },
             optional: true,
             expectedOutput: {
-              contractId: 'findings',
-              requiredSections: ['scope', 'evidence'],
+              contractId: 'explorer',
+              requiredSections: ['headline', 'files-read', 'facts'],
             },
           },
           {
@@ -88,7 +117,7 @@ function definition(overrides: Record<string, unknown> = {}): Record<string, unk
             optional: false,
             expectedOutput: {
               contractId: 'worker',
-              requiredSections: ['changes', 'verification'],
+              requiredSections: ['files-changed', 'summary'],
             },
           },
         ],
@@ -132,6 +161,7 @@ test('P23-1 parses a bounded orchestration profile with typed stage executors', 
   assert.equal(parsed.schemaVersion, 1);
   assert.equal(parsed.kind, 'orchestration-profile');
   assert.equal(parsed.defaultMode, 'adaptive');
+  assert.equal(parsed.fallbackStrategyId, 'direct');
   assert.deepEqual(parsed.rolePolicy, {
     availableRoles: ['explorer', 'worker', 'reviewer'],
     disabledRoles: ['fleet'],
@@ -187,7 +217,7 @@ test('P23-1 rejects missing dependencies and cyclic stage graphs', () => {
   assert.throws(() => parse(cyclic), /stage graph must be acyclic/);
 });
 
-test('P23-1 rejects unknown role, skill, signal, and output-contract references', () => {
+test('P23-1 rejects unknown role, skill, signal, and role-contract references', () => {
   const unknownRole = definition();
   (unknownRole.rolePolicy as Record<string, unknown>).availableRoles = ['explorer', 'invented'];
   assert.throws(() => parse(unknownRole), /rolePolicy.availableRoles contains unknown references: invented/);
@@ -209,7 +239,7 @@ test('P23-1 rejects unknown role, skill, signal, and output-contract references'
   (contractStage.expectedOutput as Record<string, unknown>).contractId = 'invented-contract';
   assert.throws(
     () => parse(unknownContract),
-    /expectedOutput.contractId contains unknown references: invented-contract/,
+    /expectedOutput.contractId must use role explorer contract explorer/,
   );
 });
 
@@ -226,9 +256,88 @@ test('P23-1 rejects fan-out and aggregate child counts beyond plan limits', () =
   fanOutStage.fanOut = { min: 1, max: 4 };
   assert.throws(() => parse(oversizedFanOut), /fanOut.max must be an integer between 1 and 3/);
 
+  const unsafeWriterFanOut = definition();
+  const unsafeWriterStrategy =
+    (unsafeWriterFanOut.strategies as Array<Record<string, unknown>>)[1]!;
+  const unsafeWriterStage =
+    (unsafeWriterStrategy.stages as Array<Record<string, unknown>>)[1]!;
+  unsafeWriterStage.fanOut = { min: 1, max: 2 };
+  assert.throws(
+    () => parse(unsafeWriterFanOut),
+    /write-capable role fanOut.max must be 1 without enforced execution isolation/,
+  );
+
   const aggregate = definition();
   (aggregate.limits as Record<string, unknown>).maxTotalChildren = 2;
   assert.throws(() => parse(aggregate), /can create 3 children, exceeding limits.maxTotalChildren 2/);
+});
+
+test('P23-1a requires an explicit dependency-free primary fallback strategy', () => {
+  const missing = definition();
+  delete missing.fallbackStrategyId;
+  assert.throws(() => parse(missing), /fallbackStrategyId must be a string/);
+
+  assert.throws(
+    () => parse(definition({ fallbackStrategyId: 'unknown' })),
+    /fallbackStrategyId references unknown strategy unknown/,
+  );
+
+  const childFallback = definition({ fallbackStrategyId: 'delivery' });
+  assert.throws(
+    () => parse(childFallback),
+    /fallback strategy delivery must contain only primary executors/,
+  );
+
+  const skilledFallback = definition();
+  const direct =
+    (skilledFallback.strategies as Array<Record<string, unknown>>)[0]!;
+  const directStage = (direct.stages as Array<Record<string, unknown>>)[0]!;
+  directStage.skillIds = ['planning-skill'];
+  assert.throws(
+    () => parse(skilledFallback),
+    /fallback strategy direct must not require skills/,
+  );
+});
+
+test('P23-1a binds role stages to owned contracts and canonical section aliases', () => {
+  const missingOutput = definition();
+  const missingOutputStrategy =
+    (missingOutput.strategies as Array<Record<string, unknown>>)[1]!;
+  const missingOutputStage =
+    (missingOutputStrategy.stages as Array<Record<string, unknown>>)[0]!;
+  delete missingOutputStage.expectedOutput;
+  assert.throws(
+    () => parse(missingOutput),
+    /role executor must declare expectedOutput/,
+  );
+
+  const unknownSection = definition();
+  const unknownSectionStrategy =
+    (unknownSection.strategies as Array<Record<string, unknown>>)[1]!;
+  const unknownSectionStage =
+    (unknownSectionStrategy.stages as Array<Record<string, unknown>>)[0]!;
+  (unknownSectionStage.expectedOutput as Record<string, unknown>).requiredSections = [
+    'headline',
+    'invented-section',
+  ];
+  assert.throws(
+    () => parse(unknownSection),
+    /expectedOutput.requiredSections contains unknown references: invented-section/,
+  );
+
+  const primaryOutput = definition();
+  const primaryOutputStrategy =
+    (primaryOutput.strategies as Array<Record<string, unknown>>)[0]!;
+  const primaryOutputStage =
+    (primaryOutputStrategy.stages as Array<Record<string, unknown>>)[0]!;
+  primaryOutputStage.expectedOutput = {
+    contractId: 'explorer',
+    requiredSections: ['headline'],
+  };
+  assert.throws(
+    () => parse(primaryOutput),
+    /primary executor cannot declare expectedOutput/,
+  );
 });
 
 test('P23-1 rejects malformed, oversized, mismatched, and secret-bearing definitions', () => {
