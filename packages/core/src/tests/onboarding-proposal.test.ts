@@ -16,7 +16,13 @@ function validProposal(overrides: Record<string, unknown> = {}): Record<string, 
   return {
     profile: 'engineering',
     reasons: ['The repository contains a web application.'],
-    agents: { default: 'engineer', enabled: ['engineer'] },
+    persona: { default: 'engineer', enabled: ['engineer'] },
+    orchestration: {
+      mode: 'adaptive',
+      availableRoles: ['explorer', 'worker', 'reviewer', 'verifier'],
+      disabledRoles: ['fleet'],
+      maxParallel: 4,
+    },
     capabilities: { enabled: ['frontend'], disabled: [] },
     skills: { packs: ['engineering'], enabled: ['testing-skill'], disabled: [] },
     tools: { profiles: ['coding', 'browser'], deny: [] },
@@ -27,9 +33,15 @@ function validProposal(overrides: Record<string, unknown> = {}): Record<string, 
 
 test('assisted proposal extracts fenced JSON and normalizes through the manifest contract', () => {
   const raw = validProposal({
-    agents: {
+    persona: {
       default: 'frontend-builder',
       enabled: ['frontend-builder', 'reviewer', 'reviewer'],
+    },
+    orchestration: {
+      mode: 'adaptive',
+      availableRoles: ['worker', 'reviewer', 'reviewer', 'fleet'],
+      disabledRoles: ['fleet', 'fleet'],
+      maxParallel: 3,
     },
     capabilities: {
       enabled: ['frontend', 'frontend', 'future-capability'],
@@ -67,8 +79,14 @@ test('assisted proposal extracts fenced JSON and normalizes through the manifest
   assert.equal(proposal.source, 'model');
   assert.equal(proposal.manifest.onboarded.at, NOW);
   assert.equal(proposal.manifest.onboarded.by, 'agent');
-  assert.equal(proposal.manifest.agents.default, 'engineer');
-  assert.deepEqual(proposal.manifest.agents.enabled, ['engineer', 'reviewer']);
+  assert.equal(proposal.manifest.persona.default, 'engineer');
+  assert.deepEqual(proposal.manifest.persona.enabled, ['engineer', 'reviewer']);
+  assert.deepEqual(proposal.manifest.orchestration, {
+    mode: 'adaptive',
+    availableRoles: ['worker', 'reviewer'],
+    disabledRoles: ['fleet'],
+    maxParallel: 3,
+  });
   assert.deepEqual(proposal.manifest.capabilities.enabled, ['future-capability']);
   assert.deepEqual(proposal.manifest.capabilities.disabled, ['frontend']);
   assert.deepEqual(proposal.manifest.skills.packs, ['engineering']);
@@ -96,6 +114,17 @@ test('assisted proposal rejects unknown fields and unknown profiles', () => {
   );
   assert.equal(
     parseWorkspaceOnboardingProposal(JSON.stringify(validProposal({ profile: 'frontend' })), {
+      workspaceName: 'example',
+      selectedInstructionPath: 'AGENT.md',
+      at: NOW,
+    }),
+    null,
+  );
+  const legacy = validProposal();
+  legacy.agents = legacy.persona;
+  delete legacy.persona;
+  assert.equal(
+    parseWorkspaceOnboardingProposal(JSON.stringify(legacy), {
       workspaceName: 'example',
       selectedInstructionPath: 'AGENT.md',
       at: NOW,
@@ -144,7 +173,7 @@ test('assisted proposal enforces collection, identifier, and string caps', () =>
   );
   assert.equal(
     parseWorkspaceOnboardingProposal(JSON.stringify(validProposal({
-      agents: { default: '../engineer', enabled: [] },
+      persona: { default: '../engineer', enabled: [] },
     })), {
       workspaceName: 'example',
       selectedInstructionPath: 'AGENT.md',

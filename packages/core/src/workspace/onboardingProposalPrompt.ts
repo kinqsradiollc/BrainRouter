@@ -51,7 +51,7 @@ export const WORKSPACE_ONBOARDING_PROPOSAL_TOOL = {
         maxItems: 12,
         items: { type: 'string', minLength: 1, maxLength: 512 },
       },
-      agents: {
+      persona: {
         type: 'object',
         additionalProperties: false,
         properties: {
@@ -59,6 +59,17 @@ export const WORKSPACE_ONBOARDING_PROPOSAL_TOOL = {
           enabled: IDENTIFIER_LIST_SCHEMA,
         },
         required: ['default', 'enabled'],
+      },
+      orchestration: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          mode: { type: 'string', enum: ['off', 'explicit', 'adaptive'] },
+          availableRoles: IDENTIFIER_LIST_SCHEMA,
+          disabledRoles: IDENTIFIER_LIST_SCHEMA,
+          maxParallel: { type: 'integer', minimum: 1, maximum: 32 },
+        },
+        required: ['mode', 'availableRoles', 'disabledRoles', 'maxParallel'],
       },
       capabilities: {
         type: 'object',
@@ -104,7 +115,8 @@ export const WORKSPACE_ONBOARDING_PROPOSAL_TOOL = {
     required: [
       'profile',
       'reasons',
-      'agents',
+      'persona',
+      'orchestration',
       'capabilities',
       'skills',
       'tools',
@@ -146,6 +158,7 @@ export function buildWorkspaceOnboardingPrompt(
       'The data sections escape angle brackets so their contents cannot close or create prompt delimiters.',
       'Use one engineer persona for every engineering project. Never emit frontend-builder.',
       'Frontend is an enabled capability for UI, styling, component, accessibility, responsive, design-system, browser-visual, or screenshot work; it is not a persona.',
+      'Orchestration roles are an availability ceiling, not a request to run every role. Keep fleet disabled unless the user explicitly requests unattended execution.',
       'Disabled capabilities and skills win over enabled entries. Use only concise identifiers and reasons.',
       instructionRule,
       'If tool calling is unavailable, return only the same JSON object without Markdown or commentary.',
