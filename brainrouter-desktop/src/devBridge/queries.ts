@@ -4,7 +4,11 @@
 import type { ConnectorRecord } from '@kinqs/brainrouter-types';
 import { devAtlasEnriched, devAtlasGraph } from './atlas.js';
 import type { DevState } from './state.js';
-import { previewDevWorkspaceInstruction, proposeDevWorkspaceOnboarding } from './onboarding.js';
+import {
+  previewDevWorkspaceInstruction,
+  previewDevWorkspaceOnboarding,
+  proposeDevWorkspaceOnboarding,
+} from './onboarding.js';
 
 // Record shapes reused by a few handlers, derived from the live state so the
 // text stays in one place (state.ts) — structurally identical to the originals.
@@ -125,6 +129,7 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
   };
   const queries: Record<string, (args: Record<string, unknown>) => unknown> = {
     'workspace-onboarding-propose': (args) => proposeDevWorkspaceOnboarding(S.wsCurrent, args),
+    'workspace-onboarding-preview': (args) => previewDevWorkspaceOnboarding(S.wsCurrent, args),
     'workspace-onboarding-preview-instruction': (args) =>
       previewDevWorkspaceInstruction(S.onboarding, S.wsCurrent, args),
     'list-sessions': () => mergeMeta(S.wsCurrent),

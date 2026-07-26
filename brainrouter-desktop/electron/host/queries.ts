@@ -74,7 +74,10 @@ import { buildStoryPrompt, validateStories, FlowStepSchema, DeviceSchema, type S
 import { isLoopbackHttpSrc } from '../webviewPolicy.js';
 import type { BrowserStep, BrowserStepResult } from '../browserHost.js';
 import { completeWorkspaceOnboardingWithModel } from '../workspaceOnboardingModel.js';
-import { previewWorkspaceInstructionFromPayload } from '../workspaceOnboarding.js';
+import {
+  previewWorkspaceInstructionFromPayload,
+  previewWorkspaceOnboardingFromPayload,
+} from '../workspaceOnboarding.js';
 import {
   CLI_CONFIG_SCHEMA,
   findConfigSchemaField,
@@ -1084,6 +1087,8 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // proposed text; it never grants general renderer file access.
       'workspace-onboarding-preview-instruction': (args) =>
         previewWorkspaceInstructionFromPayload(workspaceRoot, args),
+      'workspace-onboarding-preview': (args) =>
+        previewWorkspaceOnboardingFromPayload(workspaceRoot, args),
       // §2 W3 — Write-mode selection inline AI. A one-shot, read-only model call
       // (no tools) that polishes / rewrites / continues the selected prose; the
       // panel reviews the result as an accept/reject diff before it lands.

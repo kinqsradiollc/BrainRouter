@@ -8,6 +8,14 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { bridgeQuery } from '../../lib/bridgeQuery.js';
 import {
+  parseOnboardingPreview,
+  type OnboardingPlanPreview,
+} from './onboardingCatalogModel.js';
+import {
+  CatalogField,
+  PlanPreviewCard,
+} from './OnboardingCatalogFields.js';
+import {
   draftFromOnboardingProfile,
   onboardingDescriptionError,
   onboardingDraftPreview,
@@ -37,6 +45,7 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
   const descriptionId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
   const requestGeneration = useRef(0);
+  const previewGeneration = useRef(0);
   const onCloseRef = useRef(onClose);
   const busyRef = useRef(false);
   const [editor, setEditor] = useState<LoadedOnboardingEditor | null>(null);
@@ -47,6 +56,8 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
   const [saving, setSaving] = useState(false);
   const [proposing, setProposing] = useState(false);
   const [reviewingInstruction, setReviewingInstruction] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
+  const [planPreview, setPlanPreview] = useState<OnboardingPlanPreview | null>(null);
   const [description, setDescription] = useState('');
   const [saveSource, setSaveSource] = useState<'wizard' | 'agent'>('wizard');
   const [instructionDraft, setInstructionDraft] = useState<OnboardingInstructionDraft | null>(null);
@@ -70,6 +81,7 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
     setNotice('');
     setEditor(null);
     setDraft(null);
+    setPlanPreview(null);
     const request = window.brainrouter.workspaceManifest?.(workspaceRoot);
     if (!request) {
       setError('Workspace setup is unavailable.');
@@ -89,6 +101,7 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
       }
       setEditor(loaded);
       setDraft(loaded.draft);
+      setPlanPreview(loaded.preview);
       setNotice(staleMessage);
       setLoading(false);
     }).catch(() => {
@@ -107,6 +120,41 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
     // selected workspace changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [root]);
+
+  useEffect(() => {
+    if (!root || !draft || !editor) return;
+    const workspaceRoot = root;
+    const generation = ++previewGeneration.current;
+    setPreviewing(true);
+    const timer = window.setTimeout(() => {
+      void bridgeQuery<unknown>(
+        'workspace-onboarding-preview',
+        { ...draft },
+        15_000,
+        workspaceRoot,
+      ).then((raw) => {
+        if (generation !== previewGeneration.current || root !== workspaceRoot) return;
+        const result = raw && typeof raw === 'object' && 'preview' in raw
+          ? parseOnboardingPreview((raw as { preview?: unknown }).preview)
+          : null;
+        setPreviewing(false);
+        if (result) setPlanPreview(result);
+        else {
+          setPlanPreview(null);
+          setError('The plan and catalog preview is unavailable. Review the setup again before saving.');
+        }
+      }).catch(() => {
+        if (generation !== previewGeneration.current || root !== workspaceRoot) return;
+        setPreviewing(false);
+        setPlanPreview(null);
+        setError('The plan and catalog preview is unavailable. Review the setup again before saving.');
+      });
+    }, 120);
+    return () => {
+      window.clearTimeout(timer);
+      previewGeneration.current += 1;
+    };
+  }, [draft, editor, root]);
 
   useEffect(() => {
     if (!root || loading || !draft) return;
@@ -152,6 +200,7 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
     const replacement = draftFromOnboardingProfile(profile);
     if (!replacement) return;
     setDraft(replacement);
+    setPlanPreview(null);
     setSaveSource('wizard');
     setInstructionDraft(null);
     setInstructionPreview(null);
@@ -189,6 +238,7 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
         return;
       }
       setDraft(proposal.draft);
+      setPlanPreview(null);
       setSaveSource(proposal.source);
       setInstructionDraft(proposal.instruction);
       setInstructionPreview(null);
@@ -249,7 +299,8 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
   };
 
   const save = (): void => {
-    if (!root || !draft || !editor || saving || proposing || reviewingInstruction || instructionDecision === 'pending') return;
+    if (!root || !draft || !editor || !planPreview || previewing ||
+        saving || proposing || reviewingInstruction || instructionDecision === 'pending') return;
     const generation = ++requestGeneration.current;
     setSaving(true);
     setError('');
@@ -258,6 +309,7 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
       draft,
       revision: editor.revision,
       source: saveSource,
+      catalogFingerprint: planPreview.catalogFingerprint,
       instruction: instructionDraft,
       includeInstruction: instructionDecision === 'include',
     });
@@ -402,20 +454,29 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
               <ListField label="Disabled capabilities" values={draft.capabilities.disabled}
                 disabled={proposing || saving || reviewingInstruction}
                 onChange={(values) => patchDraft({ capabilities: { ...draft.capabilities, disabled: values } })} />
-              <ListField label="Skill packs" values={draft.skills.packs}
-                disabled={proposing || saving || reviewingInstruction}
+              <CatalogField label="Skill packs" values={draft.skills.packs}
+                kinds={['skill-pack']} preview={planPreview}
+                disabled={proposing || saving || reviewingInstruction || previewing}
                 onChange={(values) => patchDraft({ skills: { ...draft.skills, packs: values } })} />
-              <ListField label="Enabled skills" values={draft.skills.enabled}
-                disabled={proposing || saving || reviewingInstruction}
+              <CatalogField label="Enabled individual skills" values={draft.skills.enabled}
+                kinds={['skill']} preview={planPreview}
+                disabled={proposing || saving || reviewingInstruction || previewing}
                 onChange={(values) => patchDraft({ skills: { ...draft.skills, enabled: values } })} />
-              <ListField label="Disabled skills" values={draft.skills.disabled}
-                disabled={proposing || saving || reviewingInstruction}
+              <CatalogField label="Disabled skills" values={draft.skills.disabled}
+                kinds={['skill']} preview={planPreview} allowBlocked
+                disabled={proposing || saving || reviewingInstruction || previewing}
                 onChange={(values) => patchDraft({ skills: { ...draft.skills, disabled: values } })} />
-              <ListField label="Tool profiles" values={draft.tools.profiles}
-                disabled={proposing || saving || reviewingInstruction}
+              <CatalogField label="Tool groups" values={draft.tools.profiles}
+                kinds={['tool-group']} preview={planPreview}
+                disabled={proposing || saving || reviewingInstruction || previewing}
                 onChange={(values) => patchDraft({ tools: { ...draft.tools, profiles: values } })} />
-              <ListField label="Denied tools" values={draft.tools.deny}
-                disabled={proposing || saving || reviewingInstruction}
+              <CatalogField label="Additional individual tools" values={draft.tools.enabled}
+                kinds={['tool']} preview={planPreview}
+                disabled={proposing || saving || reviewingInstruction || previewing}
+                onChange={(values) => patchDraft({ tools: { ...draft.tools, enabled: values } })} />
+              <CatalogField label="Denied tool groups or tools" values={draft.tools.deny}
+                kinds={['tool-group', 'tool']} preview={planPreview} allowBlocked
+                disabled={proposing || saving || reviewingInstruction || previewing}
                 onChange={(values) => patchDraft({ tools: { ...draft.tools, deny: values } })} />
               <ListField label="Memory tags" values={draft.memory.tags}
                 disabled={proposing || saving || reviewingInstruction}
@@ -435,6 +496,8 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
                   }
                 }} />
             </section>
+
+            <PlanPreviewCard preview={planPreview} loading={previewing} />
 
             <section className="onboard-section" aria-labelledby={`${titleId}-review`}>
               <h3 id={`${titleId}-review`}>Review file changes</h3>
@@ -503,7 +566,8 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
             {editing ? 'Cancel' : 'Skip for now'}
           </button>
           <button type="button" className="approve"
-            disabled={!draft || !editor || loading || saving || proposing || reviewingInstruction || instructionDecision === 'pending'}
+            disabled={!draft || !editor || !planPreview || loading || previewing ||
+              saving || proposing || reviewingInstruction || instructionDecision === 'pending'}
             onClick={save}>
             {saving ? 'Saving…' : editing ? 'Save workspace settings' : 'Finish setup'}
           </button>
