@@ -161,6 +161,21 @@ and rewind points. Any new code iterating user entries applies this filter
 - **Evidence:** `brainrouter-cli/src/tests/guard-message-hidden.test.ts:8`,
   `brainrouter-cli/src/orchestration/agentTranscriptView.ts`
 
+### 11a. Every model request crosses the typed context-envelope boundary before pairing repair
+
+Build root request context with `buildRootContextEnvelope`, then materialize its
+wire messages and apply `sanitizeToolCallPairing`; never bypass either boundary.
+Each layer declares a replacement key, provenance, priority, token/character
+budget, compaction policy, child-inheritance posture, and trust/secret flags.
+Required policy, active persona/capability/orchestration, workspace guidance,
+and selected skill instructions are protected from summarization. The envelope
+is request-scoped and in-memory; never turn it into another durable memory or
+knowledge store.
+
+- **Evidence:** `packages/core/src/context/contextEnvelope.ts`,
+  `packages/core/src/agent/runtime/runTurn.impl.ts`,
+  `packages/core/src/tests/context-envelope.test.ts`
+
 ---
 
 ## TUI (Ink) conventions
