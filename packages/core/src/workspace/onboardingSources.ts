@@ -6,7 +6,14 @@
  * Returned data contains only safe catalog metadata and bounded diagnostics.
  */
 import type { Config } from '../config/configTypes.js';
-import { bundledOrchestrationProfileReferences } from '../orchestration/profiles/orchestrationProfileCatalog.js';
+import {
+  loadRegistry,
+  type DefinitionSource,
+} from '../orchestration/agents/agentRegistry.js';
+import {
+  bundledOrchestrationProfileReferences,
+  orchestrationProfileRoleReference,
+} from '../orchestration/profiles/orchestrationProfileCatalog.js';
 import {
   resolveOrchestrationProfileSources,
   type ResolvedOrchestrationProfileCatalog,
@@ -15,6 +22,7 @@ import { loadPlugins } from '../plugin/loader.js';
 import {
   buildWorkspaceSelectionCatalog,
   type ContributedWorkspaceSkillRoot,
+  type WorkspaceRoleCatalogDescriptor,
   type WorkspaceSelectionCatalog,
 } from './selectionCatalog.js';
 
@@ -50,12 +58,32 @@ export function buildWorkspaceOnboardingSources(
         }]
       : []),
   ];
-  const catalog = buildWorkspaceSelectionCatalog({ contributedSkillRoots });
+  const loadedRoles = loadRegistry(workspaceRoot);
+  const roles = loadedRoles.map((loaded): WorkspaceRoleCatalogDescriptor => ({
+    id: loaded.def.id,
+    label: loaded.def.displayName,
+    description: loaded.def.whenToUse,
+    source: roleSource(loaded.source),
+    provenance: roleProvenance(loaded.source),
+  }));
+  const catalog = buildWorkspaceSelectionCatalog({ contributedSkillRoots, roles });
   const enabledPluginSkillIds = catalog.entries
     .filter((entry) => entry.kind === 'skill' && entry.source === 'plugin' && entry.selectable)
     .map((entry) => entry.id);
   const references = bundledOrchestrationProfileReferences({
     additionalSkillIds: enabledPluginSkillIds,
+    additionalRoles: loadedRoles.flatMap((loaded) => {
+      try {
+        return [[
+          loaded.def.id,
+          orchestrationProfileRoleReference(loaded.def),
+        ] as const];
+      } catch {
+        // 0.4.17 — keep the role visible, but do not let a plan reference it
+        // until its output-contract metadata passes the strict plan boundary.
+        return [];
+      }
+    }),
   });
   const orchestrationProfiles = resolveOrchestrationProfileSources({
     workspaceRoot,
@@ -63,4 +91,18 @@ export function buildWorkspaceOnboardingSources(
     references,
   });
   return { catalog, orchestrationProfiles };
+}
+
+function roleSource(
+  source: DefinitionSource,
+): WorkspaceRoleCatalogDescriptor['source'] {
+  if (source === 'builtin') return 'bundled';
+  return source;
+}
+
+function roleProvenance(source: DefinitionSource): string {
+  if (source === 'builtin') return 'bundled-roles';
+  if (source === 'pack') return 'enabled-pack';
+  if (source === 'user') return 'user-config';
+  return 'workspace-local';
 }

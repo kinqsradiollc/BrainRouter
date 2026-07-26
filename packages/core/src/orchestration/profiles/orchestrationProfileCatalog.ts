@@ -62,6 +62,7 @@ export function bundledOrchestrationProfileReferences(options: {
   skillsDir?: string;
   profileSkillIds?: Iterable<string>;
   additionalSkillIds?: Iterable<string>;
+  additionalRoles?: Iterable<readonly [string, OrchestrationProfileRoleReference]>;
 } = {}): OrchestrationProfileReferenceCatalog {
   const agentsDir = options.agentsDir ?? BUNDLED_AGENTS_DIR;
   const roles = new Map(
@@ -69,7 +70,7 @@ export function bundledOrchestrationProfileReferences(options: {
       .map((filePath) => readAgentDefinitionFile(filePath))
       .map((definition) => [
         definition.id,
-        roleReference(definition),
+        orchestrationProfileRoleReference(definition),
       ] as const),
   );
   const coreSkillIds = listBundledSkillIds(options.skillsDir ?? BUNDLED_SKILLS_DIR);
@@ -79,6 +80,7 @@ export function bundledOrchestrationProfileReferences(options: {
   const additionalSkillIds = options.additionalSkillIds === undefined
     ? []
     : [...options.additionalSkillIds];
+  for (const [id, reference] of options.additionalRoles ?? []) roles.set(id, reference);
   return {
     roles,
     skillIds: new Set([...coreSkillIds, ...profileSkillIds, ...additionalSkillIds]),
@@ -143,7 +145,9 @@ function listBundledSkillIds(root: string): Set<string> {
   return result;
 }
 
-function roleReference(definition: AgentDefinition): OrchestrationProfileRoleReference {
+export function orchestrationProfileRoleReference(
+  definition: AgentDefinition,
+): OrchestrationProfileRoleReference {
   if (definition.outputContract === null) {
     return {
       defaultAccess: definition.defaultAccess,
@@ -152,13 +156,13 @@ function roleReference(definition: AgentDefinition): OrchestrationProfileRoleRef
   }
   if (typeof definition.outputContract !== 'string') {
     throw new Error(
-      `Bundled orchestration role ${definition.id} has an invalid output contract reference.`,
+      `Orchestration role ${definition.id} has an invalid output contract reference.`,
     );
   }
   const contract = BUILT_IN_OUTPUT_CONTRACTS[definition.outputContract];
   if (!contract) {
     throw new Error(
-      `Bundled orchestration role ${definition.id} references unknown output contract ${definition.outputContract}.`,
+      `Orchestration role ${definition.id} references unknown output contract ${definition.outputContract}.`,
     );
   }
   return {

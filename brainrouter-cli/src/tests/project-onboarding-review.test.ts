@@ -22,6 +22,7 @@ function makeWorkspace(): string {
 function acceptingPrompt(options: {
   profile?: string;
   text?: Partial<Record<ProjectOnboardingPromptId, string>>;
+  choices?: Partial<Record<ProjectOnboardingPromptId, string[]>>;
   beforeConfirm?: () => void;
 } = {}): ProjectOnboardingPrompt {
   return async (request) => {
@@ -35,7 +36,10 @@ function acceptingPrompt(options: {
       return { kind: 'submit', value: 'save' };
     }
     if (request.multiSelect) {
-      return { kind: 'submit', value: request.initialChoices ?? [] };
+      return {
+        kind: 'submit',
+        value: options.choices?.[request.id] ?? request.initialChoices ?? [],
+      };
     }
     return { kind: 'submit', value: options.text?.[request.id] ?? request.initialValue ?? '' };
   };
@@ -112,10 +116,12 @@ test('edit mode preserves safe forward fields while applying reviewed changes', 
       edit: true,
       prompt: acceptingPrompt({
         text: {
-          'orchestration-available': 'worker, reviewer, fleet',
-          'orchestration-disabled': 'fleet',
           'orchestration-max-parallel': 'not-a-number',
           'capabilities-enabled': 'frontend, browser',
+        },
+        choices: {
+          'orchestration-available': ['worker', 'reviewer', 'fleet'],
+          'orchestration-disabled': ['fleet'],
         },
       }),
       print: () => undefined,

@@ -104,6 +104,7 @@ test('manifest-get returns suggestion, complete profiles, and opaque review revi
     assert.equal(info.suggestion.profile, 'engineering');
     assert.ok(info.profiles.some((preset) => preset.id === 'custom'));
     assert.equal(info.preview.plan?.id, 'engineering');
+    assert.equal(info.preview.catalog.some((row) => row.kind === 'role' && row.id === 'worker'), true);
     assert.equal(info.preview.catalog.some((row) => row.kind === 'tool-group' && row.id === 'coding'), true);
     assert.match(info.review.revision.root, /^[0-9a-f]{64}$/);
     assert.match(info.review.revision.manifest, /^[0-9a-f]{64}$/);
@@ -335,6 +336,14 @@ test('manifest-save rejects malformed review revisions without writing', () => {
       maxParallel: 33,
     };
     assert.equal(saveWorkspaceManifestFromPayload(env.root, invalidParallelism).saved, false);
+    const unknownRole = payload(env.root, 'study');
+    unknownRole.orchestration = {
+      mode: 'explicit',
+      availableRoles: ['invented'],
+      disabledRoles: [],
+      maxParallel: 2,
+    };
+    assert.equal(saveWorkspaceManifestFromPayload(env.root, unknownRole).saved, false);
     const staleCatalog = payload(env.root, 'study');
     staleCatalog.catalogFingerprint = 'f'.repeat(64);
     assert.equal(saveWorkspaceManifestFromPayload(env.root, staleCatalog).saved, false);

@@ -96,7 +96,7 @@ export function loadRegistry(
   workspaceRoot?: string,
   promptContext?: ActiveProfilePromptContext,
 ): LoadedDefinition[] {
-  const builtin = loadFromDir(BUILTIN_AGENTS_DIR, 'builtin');
+  const builtin = loadBundledRegistry(promptContext);
   const packs = loadEnabledPackAgents(workspaceRoot);
   const userAgentsDir = getUserAgentsDir();
   const user = loadFromDir(userAgentsDir, 'user', path.dirname(userAgentsDir));
@@ -111,6 +111,14 @@ export function loadRegistry(
     merged.set(loaded.def.id, loaded);
   }
   return Array.from(merged.values()).map((loaded) =>
+    selectBuiltInPrompt(loaded, promptContext));
+}
+
+/** Read only the bundled role tier for deterministic catalogs and tests. */
+export function loadBundledRegistry(
+  promptContext?: ActiveProfilePromptContext,
+): LoadedDefinition[] {
+  return loadFromDir(BUILTIN_AGENTS_DIR, 'builtin').map((loaded) =>
     selectBuiltInPrompt(loaded, promptContext));
 }
 

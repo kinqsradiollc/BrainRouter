@@ -5,6 +5,7 @@ export const WORKSPACE_SELECTION_CATALOG_MAX_ENTRIES = 512;
 export const WORKSPACE_SELECTION_STABLE_ID = /^[a-z][a-z0-9_-]{0,127}$/;
 
 export type WorkspaceSelectionCatalogKind =
+  | 'role'
   | 'tool-group'
   | 'tool'
   | 'skill-pack'
@@ -18,6 +19,9 @@ export type WorkspaceSelectionCatalogSource =
   | 'plugin'
   | 'profile-plugin'
   | 'capability-plugin'
+  | 'pack'
+  | 'user'
+  | 'workspace'
   | 'runtime';
 
 export interface WorkspaceSelectionCatalogEntry {
@@ -60,10 +64,21 @@ export interface ContributedWorkspaceSkillRoot {
   blockedReason?: string;
 }
 
+/** Prompt-free role metadata resolved by the host from the runtime registry. */
+export interface WorkspaceRoleCatalogDescriptor {
+  id: string;
+  label: string;
+  description: string;
+  source: Extract<WorkspaceSelectionCatalogSource, 'bundled' | 'pack' | 'user' | 'workspace'>;
+  provenance: string;
+}
+
 export interface WorkspaceSelectionCatalogOptions {
   availability?: LocalToolAvailabilityContext;
   /** Skill roots derived from normal plugin discovery, never renderer input. */
   contributedSkillRoots?: readonly ContributedWorkspaceSkillRoot[];
+  /** Precedence-resolved executable roles; role prompts never cross this boundary. */
+  roles?: readonly WorkspaceRoleCatalogDescriptor[];
   /**
    * Safe live names only. These rows are informational and can never be copied
    * into a manifest selection.
@@ -83,6 +98,11 @@ export interface ReviewedWorkspaceSkillSelection {
   disabled: readonly string[];
 }
 
+export interface ReviewedWorkspaceRoleSelection {
+  availableRoles: readonly string[];
+  disabledRoles: readonly string[];
+}
+
 export type WorkspaceSelectionReviewIssueCode =
   | 'invalid-id'
   | 'unknown-entry'
@@ -92,7 +112,15 @@ export type WorkspaceSelectionReviewIssueCode =
   | 'stale-catalog';
 
 export interface WorkspaceSelectionReviewIssue {
-  field: 'profiles' | 'enabled' | 'deny' | 'packs' | 'disabled' | 'catalog';
+  field:
+    | 'availableRoles'
+    | 'disabledRoles'
+    | 'profiles'
+    | 'enabled'
+    | 'deny'
+    | 'packs'
+    | 'disabled'
+    | 'catalog';
   id?: string;
   code: WorkspaceSelectionReviewIssueCode;
   reason: string;

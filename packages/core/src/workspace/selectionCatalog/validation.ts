@@ -5,6 +5,7 @@ import {
 } from '../manifest.js';
 import {
   WORKSPACE_SELECTION_STABLE_ID,
+  type ReviewedWorkspaceRoleSelection,
   type ReviewedWorkspaceSkillSelection,
   type ReviewedWorkspaceToolSelection,
   type WorkspaceSelectionCatalog,
@@ -13,6 +14,36 @@ import {
   type WorkspaceSelectionReviewResult,
   type WorkspaceToolSelectionMigrationDiagnostic,
 } from './types.js';
+
+/** Validate orchestration allow/deny choices against the executable role registry. */
+export function validateReviewedWorkspaceRoleSelection(
+  proposal: ReviewedWorkspaceRoleSelection,
+  catalog: WorkspaceSelectionCatalog,
+): WorkspaceSelectionReviewResult<{
+  availableRoles: string[];
+  disabledRoles: string[];
+}> {
+  const issues: WorkspaceSelectionReviewIssue[] = [];
+  const availableRoles = validateField(
+    proposal.availableRoles,
+    'availableRoles',
+    ['role'],
+    true,
+    catalog,
+    issues,
+  );
+  const disabledRoles = validateField(
+    proposal.disabledRoles,
+    'disabledRoles',
+    ['role'],
+    false,
+    catalog,
+    issues,
+  );
+  return issues.length > 0
+    ? { ok: false, issues }
+    : { ok: true, value: { availableRoles, disabledRoles } };
+}
 
 /** Validate a reviewed tool proposal against one exact catalog snapshot. */
 export function validateReviewedWorkspaceToolSelection(

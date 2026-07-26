@@ -65,6 +65,17 @@ test('P23-8 preview exposes only reviewed IDs, plan stages, concrete tool expans
     row.kind === 'tool-group' && row.id === 'coding')?.selected, true);
   assert.equal(preview.catalog.find((row) =>
     row.kind === 'tool' && row.id === 'web_search')?.selected, true);
+  assert.deepEqual(
+    preview.catalog
+      .filter((row) => row.kind === 'role' && row.selectable)
+      .map((row) => row.id)
+      .sort(),
+    ['architect', 'explorer', 'reviewer', 'verifier', 'worker'],
+  );
+  const fleet = preview.catalog.find((row) => row.kind === 'role' && row.id === 'fleet');
+  assert.equal(fleet?.selectable, false);
+  assert.equal(fleet?.denied, true);
+  assert.match(fleet?.blockedReason ?? '', /selected orchestration plan/);
   assert.equal(preview.ceilings.effectiveMaxParallel, 4);
 
   const previewKeys = new Set<string>();
