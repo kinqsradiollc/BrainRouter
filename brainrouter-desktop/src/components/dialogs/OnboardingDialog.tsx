@@ -301,8 +301,8 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
         aria-busy={loading || saving || proposing || reviewingInstruction}>
         <div className="dialog-title" id={titleId}>{editing ? 'Workspace settings' : `Set up ${workspaceName}`}</div>
         <div className="set-desc" id={descriptionId}>
-          Choose a preset, then review every field before saving. Frontend stays an engineer capability and
-          activates only for relevant tasks. Nothing is written until you finish setup.
+          Choose a preset, then review every field before saving. Frontend and backend stay engineer capabilities
+          and activate only for relevant tasks. Nothing is written until you finish setup.
         </div>
 
         {loading || !draft || !editor ? (
@@ -362,7 +362,7 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
               <h3 id={`${titleId}-details`}>Persona, orchestration, capabilities, skills, and tools</h3>
               <TextField label="Default domain persona" value={draft.persona.default}
                 disabled={proposing || saving || reviewingInstruction}
-                hint="Use engineer for software work; frontend is activated as a task-specific capability."
+                hint="Use engineer for software work; frontend and backend activate as task-specific capabilities."
                 onChange={(value) => patchDraft({ persona: { ...draft.persona, default: value } })} />
               <ListField label="Enabled personas" values={draft.persona.enabled}
                 disabled={proposing || saving || reviewingInstruction}

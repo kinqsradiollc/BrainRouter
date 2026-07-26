@@ -41,7 +41,7 @@ test('reviewed onboarding creates the normalized manifest only after confirmatio
 
     assert.equal(result.manifest.profile, 'engineering');
     assert.equal(result.manifest.agents.default, 'engineer');
-    assert.deepEqual(result.manifest.capabilities.enabled, ['frontend']);
+    assert.deepEqual(result.manifest.capabilities.enabled, ['frontend', 'backend']);
     assert.equal(loadWorkspaceManifest(env.root)?.name, 'sample');
     assert.equal(fs.existsSync(path.join(env.root, 'AGENT.md')), false);
     assert.notDeepEqual(result.review.revision.manifest, review.revision.manifest);

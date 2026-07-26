@@ -12,13 +12,13 @@ import {
 
 const root = '/Users/dev/example';
 
-test('engineering drafts use one engineer with frontend as a task capability', () => {
+test('engineering drafts use one engineer with frontend and backend task capabilities', () => {
   const draft = createProjectOnboardingDraft({ workspaceRoot: root, profile: 'engineering' });
   assert.equal(draft.persona.default, 'engineer');
   assert.deepEqual(draft.persona.enabled, ['engineer']);
   assert.equal(draft.orchestration.mode, 'adaptive');
   assert.deepEqual(draft.orchestration.disabledRoles, ['fleet']);
-  assert.deepEqual(draft.capabilities.enabled, ['frontend']);
+  assert.deepEqual(draft.capabilities.enabled, ['frontend', 'backend']);
   assert.ok(!JSON.stringify(draft).includes('frontend-builder'));
 });
 
@@ -49,7 +49,7 @@ test('profile changes reset preset fields while retaining identity and safe forw
   assert.deepEqual(draft.extra, { futureFlag: true });
   assert.deepEqual(draft.persona.enabled, ['engineer']);
   assert.equal(draft.orchestration.mode, 'adaptive');
-  assert.deepEqual(draft.capabilities.enabled, ['frontend']);
+  assert.deepEqual(draft.capabilities.enabled, ['frontend', 'backend']);
 });
 
 test('reviewed edits de-duplicate fields, include the default persona, and honor denies', () => {

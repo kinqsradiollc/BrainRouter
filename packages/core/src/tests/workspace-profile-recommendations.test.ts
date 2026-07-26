@@ -42,7 +42,7 @@ test('B3 recommends the research pack, persona, and starter skills from live cat
   assert.deepEqual(recommendation.unavailable, []);
 });
 
-test('B3 keeps engineering as one persona and recommends frontend only as a capability', () => {
+test('B3 keeps engineering as one persona and recommends frontend and backend capabilities', () => {
   const recommendation = recommendWorkspaceProfileServing('engineering', {
     profilePlugins: inspectWorkspaceProfilePlugins(),
     personaIds: PERSONAS,
@@ -59,7 +59,7 @@ test('B3 keeps engineering as one persona and recommends frontend only as a capa
     source: 'bundled',
     skillIds: [],
   }]);
-  assert.deepEqual(recommendation.capabilities.map((capability) => capability.id), ['frontend']);
+  assert.deepEqual(recommendation.capabilities.map((capability) => capability.id), ['frontend', 'backend']);
   assert.equal(JSON.stringify(recommendation).includes('frontend-builder'), false);
 });
 

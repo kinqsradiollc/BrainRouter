@@ -52,6 +52,24 @@ test('W4b engineering keeps starter skills bundled and activates frontend only p
   assert.ok(frontend.ambientSkillIds.includes('taste-skill'));
 });
 
+test('W4b backend skills activate only for the live task capability', () => {
+  const manifest = createWorkspaceManifest({ name: 'service', profile: 'engineering', by: 'wizard' });
+  const inactive = resolveWorkspaceSkillSelection({ manifest });
+  assert.equal(inactive.bundles.some((bundle) => bundle.id === 'backend'), false);
+
+  const active = resolveWorkspaceSkillSelection({ manifest, activeCapabilities: ['backend'] });
+  assert.deepEqual(active.bundles.map(({ id, source }) => ({ id, source })), [
+    { id: 'engineering', source: 'bundled' },
+    { id: 'backend', source: 'capability-plugin' },
+  ]);
+  assert.ok(active.ambientSkillIds.includes('api-service-design-skill'));
+  assert.ok(active.ambientSkillIds.includes('authorization-boundary-skill'));
+  assert.ok(active.ambientSkillIds.includes('data-integrity-migration-skill'));
+  assert.ok(active.ambientSkillIds.includes('background-work-skill'));
+  assert.ok(active.ambientSkillIds.includes('production-readiness-skill'));
+  assert.ok(active.ambientSkillIds.includes('backend-testing-skill'));
+});
+
 test('W4b a caller cannot activate a capability that the manifest disables or omits', () => {
   const manifest = createWorkspaceManifest({ name: 'app', profile: 'engineering', by: 'wizard' });
   manifest.capabilities.disabled.push('frontend');

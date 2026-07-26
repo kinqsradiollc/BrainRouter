@@ -154,7 +154,7 @@ test('manifest-save writes persona and orchestration independently', () => {
       disabledRoles: ['fleet'],
       maxParallel: 3,
     });
-    assert.deepEqual(result.saved && result.manifest.capabilities.enabled, ['frontend']);
+    assert.deepEqual(result.saved && result.manifest.capabilities.enabled, ['frontend', 'backend']);
     assert.ok(result.saved && !JSON.stringify(result.manifest).includes('frontend-builder'));
   } finally { env.cleanup(); }
 });

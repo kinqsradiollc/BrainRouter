@@ -54,7 +54,23 @@ const FRONTEND_CONTRIBUTION: CapabilityContribution = {
   ],
 };
 
-const KNOWN_WORKSPACE_CAPABILITY_IDS = ['frontend'] as const;
+const BACKEND_CONTRIBUTION: CapabilityContribution = {
+  skillPacks: ['backend'],
+  skills: [
+    'api-service-design-skill',
+    'authorization-boundary-skill',
+    'data-integrity-migration-skill',
+    'background-work-skill',
+    'production-readiness-skill',
+    'backend-testing-skill',
+  ],
+  toolProfiles: ['coding', 'terminal'],
+  promptBlocks: [
+    'Backend engineering capability is active for this task. Stay in the engineer persona, preserve service and data contracts, validate every trust boundary, make concurrency and failure behavior explicit, prefer reversible migrations and idempotent operations, and verify production-relevant failure paths. This capability does not itself grant shell, network, database, or write access.',
+  ],
+};
+
+const KNOWN_WORKSPACE_CAPABILITY_IDS = ['frontend', 'backend'] as const;
 
 const EMPTY_RESOLUTION: WorkspaceCapabilityResolution = {
   active: [],
@@ -94,6 +110,29 @@ const FRONTEND_FILE_PATTERN =
   /\.(?:css|scss|sass|less|html?|jsx|tsx|vue|svelte)$|\.(?:component|stories)\.(?:js|ts)$/i;
 const FRONTEND_CONFIG_PATTERN = /(?:^|\/)(?:(?:tailwind|postcss|vite|next|nuxt)\.config\.[^/]+|design\.md)$/i;
 
+const BACKEND_TASK_SIGNALS: ReadonlyArray<{ pattern: RegExp; reason: string }> = [
+  {
+    pattern:
+      /\b(back[ -]?end|server(?:-side)?|api|endpoint|rest(?:ful)?|graphql|rpc|webhook|middleware|service layer|microservice)\b/i,
+    reason: 'task describes server or API work',
+  },
+  {
+    pattern:
+      /\b(authentication|authorization|authn|authz|rbac|permission|database|sql|schema|migration|transaction|orm|repository layer|data repository)\b|\b(?:access|refresh|bearer|api) token\b|\bsession token\b(?!\s+budget)|\bsession (?:cookie|store|authentication)\b/i,
+    reason: 'task names a backend trust or persistence concern',
+  },
+  {
+    pattern:
+      /\b(background job|queue|worker process|retry|idempotenc\w*|lease|cache|redis|docker|kubernetes|service latency|request latency|throughput|observability|distributed tracing|service metrics)\b/i,
+    reason: 'task names backend concurrency, deployment, or operations work',
+  },
+];
+
+const BACKEND_FILE_PATTERN =
+  /(?:^|\/)(?:api|backend|server|services?|controllers?|routes?|repositories?|middleware|workers?|jobs?|queues?|migrations?|db|database)(?:\/|$)|\.(?:sql|prisma)$/i;
+const BACKEND_CONFIG_PATTERN =
+  /(?:^|\/)(?:dockerfile(?:\.[^/]+)?|docker-compose(?:\.[^/]+)?\.ya?ml|compose(?:\.[^/]+)?\.ya?ml|helm|k8s|kubernetes|terraform)(?:\/|$)/i;
+
 /** Resolve additive capabilities for one task without reading disk or mutating the manifest. */
 export function resolveWorkspaceCapabilities(input: WorkspaceCapabilityResolutionInput): WorkspaceCapabilityResolution {
   if (!input.manifest) return emptyResolution();
@@ -121,6 +160,18 @@ export function resolveWorkspaceCapabilities(input: WorkspaceCapabilityResolutio
     }
   }
 
+  if (engineerIsActive && enabled.has('backend')) {
+    const backendReasons = detectBackendReasons(input.task, input.files);
+    if (backendReasons.length > 0) {
+      active.push('backend');
+      reasons.push(...backendReasons);
+      appendAvailable(skillPacks, BACKEND_CONTRIBUTION.skillPacks, input.availability?.skillPacks);
+      appendAvailable(skills, BACKEND_CONTRIBUTION.skills, input.availability?.skills);
+      appendAvailable(toolProfiles, BACKEND_CONTRIBUTION.toolProfiles, input.availability?.toolProfiles);
+      appendUnique(promptBlocks, BACKEND_CONTRIBUTION.promptBlocks);
+    }
+  }
+
   return { active, reasons, skillPacks, skills, toolProfiles, promptBlocks };
 }
 
@@ -142,6 +193,23 @@ function detectFrontendReasons(task: string | undefined, files: readonly string[
   }
   if (normalizedFiles.some((file) => FRONTEND_CONFIG_PATTERN.test(file))) {
     reasons.push('task includes a frontend build or styling configuration');
+  }
+  return reasons;
+}
+
+function detectBackendReasons(task: string | undefined, files: readonly string[] | undefined): string[] {
+  const reasons: string[] = [];
+  const taskText = task?.trim() ?? '';
+  for (const signal of BACKEND_TASK_SIGNALS) {
+    if (signal.pattern.test(taskText)) appendUnique(reasons, [signal.reason]);
+  }
+
+  const normalizedFiles = (files ?? []).map((file) => file.replaceAll('\\', '/'));
+  if (normalizedFiles.some((file) => BACKEND_FILE_PATTERN.test(file))) {
+    reasons.push('task includes a backend service or persistence file');
+  }
+  if (normalizedFiles.some((file) => BACKEND_CONFIG_PATTERN.test(file))) {
+    reasons.push('task includes backend deployment or operations configuration');
   }
   return reasons;
 }

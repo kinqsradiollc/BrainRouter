@@ -71,7 +71,7 @@ test('cancellation at profile, field, or confirmation writes nothing', async (t)
   }
 });
 
-test('final confirmation saves the reviewed persona, orchestration, and frontend capability shape', async () => {
+test('final confirmation saves the reviewed persona, orchestration, and engineering capability shape', async () => {
   const root = makeWorkspace();
   try {
     const result = await runProjectOnboarding(root, {
@@ -89,7 +89,7 @@ test('final confirmation saves the reviewed persona, orchestration, and frontend
       disabledRoles: ['fleet'],
       maxParallel: 4,
     });
-    assert.deepEqual(saved.capabilities.enabled, ['frontend']);
+    assert.deepEqual(saved.capabilities.enabled, ['frontend', 'backend']);
     assert.ok(!JSON.stringify(saved).includes('frontend-builder'));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

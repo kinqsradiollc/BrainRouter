@@ -106,7 +106,7 @@ test('assisted onboarding is deterministic and no-write without a model or serve
     assert.equal(result.proposal.manifest.profile, 'engineering');
     assert.equal(result.proposal.manifest.persona.default, 'engineer');
     assert.equal(result.proposal.manifest.orchestration.mode, 'adaptive');
-    assert.deepEqual(result.proposal.manifest.capabilities.enabled, ['frontend']);
+    assert.deepEqual(result.proposal.manifest.capabilities.enabled, ['frontend', 'backend']);
     assert.deepEqual(fs.readdirSync(workspace, { recursive: true }).map(String).sort(), beforeEntries);
     assert.equal(fs.readFileSync(path.join(workspace, 'package.json'), 'utf8'), beforePackage);
     assert.equal(fs.existsSync(path.join(workspace, '.brainrouter')), false);

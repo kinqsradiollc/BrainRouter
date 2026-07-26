@@ -35,7 +35,7 @@ test('createWorkspaceManifest applies the profile preset', () => {
     disabledRoles: ['fleet'],
     maxParallel: 4,
   });
-  assert.deepEqual(manifest.capabilities, { enabled: ['frontend'], disabled: [] });
+  assert.deepEqual(manifest.capabilities, { enabled: ['frontend', 'backend'], disabled: [] });
   assert.ok(manifest.skills.enabled.includes('planning-skill'));
   assert.ok(manifest.tools.profiles.includes('coding'));
   assert.ok(!manifest.tools.profiles.includes('design'), 'design tooling activates with frontend task signals');
@@ -240,7 +240,7 @@ test('profile presets are self-consistent (every profile usable by the wizard)',
   assert.deepEqual(engineering.agents, { default: 'engineer', enabled: ['engineer'] });
   assert.equal(engineering.orchestration.mode, 'adaptive');
   assert.equal(engineering.orchestration.disabledRoles.includes('fleet'), true);
-  assert.deepEqual(engineering.capabilities.enabled, ['frontend']);
+  assert.deepEqual(engineering.capabilities.enabled, ['frontend', 'backend']);
   assert.ok(!engineering.tools.profiles.includes('design'), 'design is not a baseline engineering tool profile');
   for (const preset of WORKSPACE_PROFILES) {
     assert.ok(preset.label.trim().length > 0, `${preset.id}: label`);

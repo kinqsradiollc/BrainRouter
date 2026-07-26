@@ -57,7 +57,7 @@ test('profile manifest contributes selected package skills without exposing othe
   }
 });
 
-test('frontend package skills activate only for a live engineer frontend task', () => {
+test('engineering capability skills activate only for matching live tasks', () => {
   const workspace = makeWorkspace();
   try {
     saveWorkspaceManifest(
@@ -73,9 +73,13 @@ test('frontend package skills activate only for a live engineer frontend task', 
         .map((skill) => skill.name),
     );
     assert.equal(backendNames.has('taste-skill'), false);
+    assert.equal(backendNames.has('api-service-design-skill'), true);
+    assert.equal(backendNames.has('authorization-boundary-skill'), true);
+    assert.equal(backendNames.has('backend-testing-skill'), true);
     assert.equal(frontendNames.has('taste-skill'), true);
     assert.equal(frontendNames.has('a11y-skill'), true);
     assert.equal(frontendNames.has('browser-testing-skill'), true);
+    assert.equal(frontendNames.has('api-service-design-skill'), false);
     assert.equal(
       listFilesystemSkills(workspace, { task: 'Fix the responsive React dashboard.' })
         .find((skill) => skill.name === 'a11y-skill')?.scope,

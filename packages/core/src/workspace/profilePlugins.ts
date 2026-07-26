@@ -12,7 +12,13 @@ import { fileURLToPath } from 'node:url';
 import { discoverPlugin, type DiscoveredPlugin } from '../plugin/discovery.js';
 import { readPersonaDefinitionFile } from './personaDefinitionFile.js';
 
-export type WorkspaceProfilePluginId = 'study' | 'research' | 'data' | 'writing' | 'frontend';
+export type WorkspaceProfilePluginId =
+  | 'study'
+  | 'research'
+  | 'data'
+  | 'writing'
+  | 'frontend'
+  | 'backend';
 
 export interface WorkspaceProfilePluginDefinition {
   id: WorkspaceProfilePluginId;
@@ -79,6 +85,20 @@ export const WORKSPACE_PROFILE_PLUGIN_DEFINITIONS: readonly WorkspaceProfilePlug
     kind: 'capability',
     pluginName: 'capability-frontend',
     skillIds: ['a11y-skill', 'browser-testing-skill', 'taste-skill'],
+    personaIds: [],
+  },
+  {
+    id: 'backend',
+    kind: 'capability',
+    pluginName: 'capability-backend',
+    skillIds: [
+      'api-service-design-skill',
+      'authorization-boundary-skill',
+      'data-integrity-migration-skill',
+      'background-work-skill',
+      'production-readiness-skill',
+      'backend-testing-skill',
+    ],
     personaIds: [],
   },
 ] as const;

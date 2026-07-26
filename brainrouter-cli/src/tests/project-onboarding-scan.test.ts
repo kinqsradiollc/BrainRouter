@@ -103,7 +103,7 @@ test('deterministic scan reviews a complete proposal before creating the manifes
     assert.equal(saved.persona.default, 'engineer');
     assert.deepEqual(saved.persona.enabled, ['engineer']);
     assert.equal(saved.orchestration.mode, 'adaptive');
-    assert.deepEqual(saved.capabilities.enabled, ['frontend']);
+    assert.deepEqual(saved.capabilities.enabled, ['frontend', 'backend']);
     assert.equal(fs.existsSync(path.join(root, 'AGENT.md')), false);
     assert.ok(output.some((message) => message.includes('Workspace scan')));
     assert.ok(output.some((message) => message.includes('tool profiles')));
