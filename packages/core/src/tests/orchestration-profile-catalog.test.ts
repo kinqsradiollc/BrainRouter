@@ -33,6 +33,8 @@ test('P23-2 bundled orchestration profile files and parsed ids have exact parity
     'data-science.json',
     'engineering.json',
     'research.json',
+    'study.json',
+    'writing.json',
   ]);
   assert.deepEqual(profiles.map((profile) => `${profile.id}.json`), files);
   assert.equal(profiles.every((profile) => profile.kind === 'orchestration-profile'), true);
