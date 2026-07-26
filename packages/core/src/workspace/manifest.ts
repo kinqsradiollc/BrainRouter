@@ -2,8 +2,8 @@
  * The workspace manifest — `.brainrouter/workspace.json` (ADR-021 W1).
  *
  * One committable file declares what KIND of project a workspace is (profile)
- * and which agents/capabilities/skills/tools/memory posture fit it, plus the
- * durable "onboarded" marker. This module is the SINGLE chokepoint for the file:
+ * and which persona/capabilities/orchestration/skills/tools/memory posture fit
+ * it, plus the durable "onboarded" marker. This module is the SINGLE chokepoint:
  * schema, load, save, validation, and preset application — no other module
  * parses the JSON (same discipline as config.ts for CLI knobs).
  *
@@ -25,11 +25,12 @@ import {
   isWorkspaceProfileId,
   type WorkspaceProfileId,
 } from './profiles.js';
+import { RESERVED_ORCHESTRATION_ROLE_IDS } from './personaDefinitionFile.js';
 import { readWorkspaceFileBounded, writeWorkspaceFileAtomic } from './fileWrite.js';
 import { recoverInterruptedWorkspaceManifestClaim } from './manifestClaim.js';
 import { recoverInterruptedWorkspaceOnboardingPair } from './onboardingTransaction.js';
 
-export const WORKSPACE_MANIFEST_VERSION = 1;
+export const WORKSPACE_MANIFEST_VERSION = 2;
 export const WORKSPACE_MANIFEST_RELPATH = path.join('.brainrouter', 'workspace.json');
 /** Hard cap for parsing committed workspace metadata into memory. */
 export const WORKSPACE_MANIFEST_MAX_BYTES = 256 * 1024;
@@ -40,12 +41,21 @@ export const WORKSPACE_MANIFEST_MAX_NORMALIZATION_NODES = 4 * 1024;
 const WORKSPACE_MANIFEST_MAX_PERCENT_DECODE_PASSES = 16;
 
 export type WorkspaceOnboardSource = 'wizard' | 'agent' | 'import';
+export type WorkspaceOrchestrationMode = 'off' | 'explicit' | 'adaptive';
 
 export interface WorkspaceManifest {
   version: number;
   name: string;
   profile: WorkspaceProfileId;
   onboarded: { at: string; by: WorkspaceOnboardSource };
+  persona: { default: string; enabled: string[] };
+  orchestration: {
+    mode: WorkspaceOrchestrationMode;
+    availableRoles: string[];
+    disabledRoles: string[];
+    maxParallel: number;
+  };
+  /** @deprecated Serialized manifest-v1/client compatibility alias for `persona`. */
   agents: { default: string; enabled: string[] };
   capabilities: { enabled: string[]; disabled: string[] };
   skills: { packs: string[]; enabled: string[]; disabled: string[] };
@@ -58,7 +68,8 @@ export interface WorkspaceManifest {
 }
 
 const KNOWN_KEYS = new Set([
-  'version', 'name', 'profile', 'onboarded', 'agents', 'capabilities', 'skills', 'tools', 'memory', 'instructions',
+  'version', 'name', 'profile', 'onboarded', 'persona', 'orchestration', 'agents',
+  'capabilities', 'skills', 'tools', 'memory', 'instructions',
 ]);
 const UNSAFE_OBJECT_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 
@@ -184,16 +195,30 @@ export function createWorkspaceManifest(input: {
   profile: WorkspaceProfileId;
   by: WorkspaceOnboardSource;
   at?: string;
-  overrides?: Partial<Pick<WorkspaceManifest, 'agents' | 'capabilities' | 'skills' | 'tools' | 'memory' | 'instructions'>>;
+  overrides?: Partial<Pick<
+    WorkspaceManifest,
+    'persona' | 'orchestration' | 'agents' | 'capabilities' | 'skills' | 'tools' | 'memory' | 'instructions'
+  >>;
 }): WorkspaceManifest {
   const preset = getWorkspaceProfile(input.profile) ?? getWorkspaceProfile('custom')!;
   const overrides = input.overrides ?? {};
+  const persona = overrides.persona ?? overrides.agents ?? {
+    default: preset.persona.default,
+    enabled: [...preset.persona.enabled],
+  };
   const manifest: WorkspaceManifest = {
     version: WORKSPACE_MANIFEST_VERSION,
     name: isBoundedString(input.name) ? input.name.trim() || 'workspace' : 'workspace',
     profile: preset.id,
     onboarded: { at: input.at ?? new Date().toISOString(), by: input.by },
-    agents: overrides.agents ?? { default: preset.agents.default, enabled: [...preset.agents.enabled] },
+    persona,
+    orchestration: overrides.orchestration ?? {
+      mode: preset.orchestration.mode,
+      availableRoles: [...preset.orchestration.availableRoles],
+      disabledRoles: [...preset.orchestration.disabledRoles],
+      maxParallel: preset.orchestration.maxParallel,
+    },
+    agents: persona,
     capabilities: overrides.capabilities ?? { enabled: [...preset.capabilities.enabled], disabled: [] },
     skills: overrides.skills ?? { packs: [...preset.skills.packs], enabled: [...preset.skills.enabled], disabled: [] },
     tools: overrides.tools ?? { profiles: [...preset.tools.profiles], deny: [] },
@@ -217,8 +242,11 @@ function normalizeManifest(
     profileInput !== undefined && isWorkspaceProfileId(profileInput) ? profileInput : 'custom';
   const onboardedRaw = asRecord(raw.onboarded);
   const agentsRaw = asRecord(raw.agents);
-  const rawAgentDefault = safeKnownString(agentsRaw.default, '', budget);
-  const rawAgentEnabled = safeStringArray(agentsRaw.enabled, budget);
+  const personaRaw = Object.keys(asRecord(raw.persona)).length > 0
+    ? asRecord(raw.persona)
+    : agentsRaw;
+  const rawAgentDefault = safeKnownString(personaRaw.default, '', budget);
+  const rawAgentEnabled = safeStringArray(personaRaw.enabled, budget);
   const legacyFrontendPersona =
     rawAgentDefault === 'frontend-builder' || rawAgentEnabled.includes('frontend-builder');
   const agentDefault = rawAgentDefault === 'frontend-builder'
@@ -228,6 +256,29 @@ function normalizeManifest(
     uniqueStrings(rawAgentEnabled.map((agent) => agent === 'frontend-builder' ? 'engineer' : agent)),
     legacyFrontendPersona ? 'engineer' : undefined,
   );
+  const persona = { default: agentDefault, enabled: agentEnabled };
+  const orchestrationRaw = asRecord(raw.orchestration);
+  const hasV2Orchestration = Object.keys(orchestrationRaw).length > 0;
+  const legacyRoles = [
+    ...[...RESERVED_ORCHESTRATION_ROLE_IDS].filter((id) => id !== 'primary'),
+    ...agentEnabled,
+  ];
+  const rawAvailableRoles = hasV2Orchestration
+    ? safeStringArray(orchestrationRaw.availableRoles, budget)
+    : legacyRoles;
+  const disabledRoles = hasV2Orchestration
+    ? uniqueStrings(safeStringArray(orchestrationRaw.disabledRoles, budget))
+    : [];
+  const disabledRoleSet = new Set(disabledRoles);
+  const availableRoles = uniqueStrings(rawAvailableRoles).filter((id) => !disabledRoleSet.has(id));
+  const rawMode = boundedInputString(orchestrationRaw.mode, budget);
+  const orchestrationMode: WorkspaceOrchestrationMode = hasV2Orchestration &&
+    (rawMode === 'off' || rawMode === 'explicit' || rawMode === 'adaptive')
+    ? rawMode
+    : hasV2Orchestration ? 'off' : 'adaptive';
+  const maxParallel = hasV2Orchestration
+    ? boundedInteger(orchestrationRaw.maxParallel, 1, 32, 1)
+    : 4;
   const capabilitiesRaw = asRecord(raw.capabilities);
   const disabledCapabilities = uniqueStrings(safeStringArray(capabilitiesRaw.disabled, budget));
   const disabledCapabilitySet = new Set(disabledCapabilities);
@@ -254,14 +305,21 @@ function normalizeManifest(
   if (explicitExtra !== undefined) collectExtraEntries(explicitExtra, extra, budget, extraState);
   collectExtraEntries(raw, extra, budget, extraState, explicitExtra !== undefined);
   const normalized: WorkspaceManifest = {
-    version: typeof raw.version === 'number' && Number.isFinite(raw.version) ? raw.version : WORKSPACE_MANIFEST_VERSION,
+    version: WORKSPACE_MANIFEST_VERSION,
     name,
     profile,
     onboarded: {
       at: onboardedAt,
       by: by === 'wizard' || by === 'agent' || by === 'import' ? by : 'import',
     },
-    agents: { default: agentDefault, enabled: agentEnabled },
+    persona,
+    orchestration: {
+      mode: orchestrationMode,
+      availableRoles,
+      disabledRoles,
+      maxParallel,
+    },
+    agents: persona,
     capabilities: { enabled: enabledCapabilities, disabled: disabledCapabilities },
     skills: {
       packs: skillPacks,
@@ -312,7 +370,16 @@ function fitManifestToSerializedLimit(manifest: WorkspaceManifest): WorkspaceMan
     { values: manifest.skills.packs, assign: (values) => { manifest.skills.packs = values; } },
     { values: manifest.tools.profiles, assign: (values) => { manifest.tools.profiles = values; } },
     { values: manifest.capabilities.enabled, assign: (values) => { manifest.capabilities.enabled = values; } },
-    { values: manifest.agents.enabled, assign: (values) => { manifest.agents.enabled = values; } },
+    { values: manifest.persona.enabled, assign: (values) => {
+      manifest.persona.enabled = values;
+      manifest.agents.enabled = values;
+    } },
+    { values: manifest.orchestration.availableRoles, assign: (values) => {
+      manifest.orchestration.availableRoles = values;
+    } },
+    { values: manifest.orchestration.disabledRoles, assign: (values) => {
+      manifest.orchestration.disabledRoles = values;
+    } },
     { values: manifest.skills.disabled, assign: (values) => { manifest.skills.disabled = values; } },
     { values: manifest.capabilities.disabled, assign: (values) => { manifest.capabilities.disabled = values; } },
     { values: manifest.tools.deny, assign: (values) => { manifest.tools.deny = values; } },
@@ -340,6 +407,8 @@ function fitManifestToSerializedLimit(manifest: WorkspaceManifest): WorkspaceMan
     name: 'workspace',
     profile: manifest.profile,
     onboarded: { at: '', by: manifest.onboarded.by },
+    persona: { default: '', enabled: [] },
+    orchestration: { mode: 'off', availableRoles: [], disabledRoles: [], maxParallel: 1 },
     agents: { default: '', enabled: [] },
     capabilities: { enabled: [], disabled: [] },
     skills: { packs: [], enabled: [], disabled: [] },
@@ -367,6 +436,17 @@ function appendRequiredString(values: string[], required: string | undefined): s
   if (values.length >= WORKSPACE_MANIFEST_MAX_COLLECTION_ENTRIES) values.pop();
   values.push(required);
   return values;
+}
+
+function boundedInteger(
+  value: unknown,
+  minimum: number,
+  maximum: number,
+  fallback: number,
+): number {
+  return Number.isInteger(value) && (value as number) >= minimum && (value as number) <= maximum
+    ? value as number
+    : fallback;
 }
 
 function isSensitiveExtraKey(key: string): boolean {

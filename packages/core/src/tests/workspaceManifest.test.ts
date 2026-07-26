@@ -24,9 +24,17 @@ function tmpWorkspace(): string {
 
 test('createWorkspaceManifest applies the profile preset', () => {
   const manifest = createWorkspaceManifest({ name: 'demo', profile: 'engineering', by: 'wizard' });
+  assert.equal(manifest.version, 2);
   assert.equal(manifest.profile, 'engineering');
+  assert.deepEqual(manifest.persona, { default: 'engineer', enabled: ['engineer'] });
   assert.equal(manifest.agents.default, 'engineer');
   assert.deepEqual(manifest.agents.enabled, ['engineer']);
+  assert.deepEqual(manifest.orchestration, {
+    mode: 'adaptive',
+    availableRoles: ['explorer', 'architect', 'worker', 'reviewer', 'verifier'],
+    disabledRoles: ['fleet'],
+    maxParallel: 4,
+  });
   assert.deepEqual(manifest.capabilities, { enabled: ['frontend'], disabled: [] });
   assert.ok(manifest.skills.enabled.includes('planning-skill'));
   assert.ok(manifest.tools.profiles.includes('coding'));
@@ -39,7 +47,14 @@ test('createWorkspaceManifest applies the profile preset', () => {
 
 test('custom profile starts empty — nothing imposed', () => {
   const manifest = createWorkspaceManifest({ name: 'x', profile: 'custom', by: 'wizard' });
+  assert.deepEqual(manifest.persona, { default: '', enabled: [] });
   assert.equal(manifest.agents.default, '');
+  assert.deepEqual(manifest.orchestration, {
+    mode: 'off',
+    availableRoles: [],
+    disabledRoles: [],
+    maxParallel: 1,
+  });
   assert.deepEqual(manifest.capabilities, { enabled: [], disabled: [] });
   assert.deepEqual(manifest.skills.packs, []);
   assert.deepEqual(manifest.tools.profiles, []);
@@ -53,13 +68,53 @@ test('save → load round-trips, marks onboarded, and preserves unknown fields',
     manifest.extra = { futureField: { keep: true } };
     saveWorkspaceManifest(ws, manifest);
     assert.equal(isWorkspaceOnboarded(ws), true);
+    const persisted = JSON.parse(fs.readFileSync(workspaceManifestPath(ws), 'utf8')) as {
+      version: number;
+      persona: unknown;
+      orchestration: unknown;
+    };
+    assert.equal(persisted.version, 2);
+    assert.deepEqual(persisted.persona, manifest.persona);
+    assert.deepEqual(persisted.orchestration, manifest.orchestration);
 
     const loaded = loadWorkspaceManifest(ws);
     assert.ok(loaded);
+    assert.equal(loaded.version, 2);
     assert.equal(loaded.profile, 'research');
+    assert.equal(loaded.persona.default, 'researcher');
     assert.equal(loaded.agents.default, 'researcher');
     assert.equal(loaded.onboarded.at, '2026-07-21T00:00:00Z');
     assert.deepEqual(loaded.extra, { futureField: { keep: true } }, 'unknown fields survive the round-trip');
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test('manifest v2 orchestration is bounded, deduplicated, and deny-first', () => {
+  const ws = tmpWorkspace();
+  try {
+    fs.mkdirSync(path.join(ws, '.brainrouter'), { recursive: true });
+    fs.writeFileSync(workspaceManifestPath(ws), JSON.stringify({
+      version: 2,
+      profile: 'custom',
+      persona: { default: 'engineer', enabled: ['engineer'] },
+      orchestration: {
+        mode: 'adaptive',
+        availableRoles: ['worker', 'reviewer', 'worker', 'fleet'],
+        disabledRoles: ['fleet', 'fleet'],
+        maxParallel: 99,
+      },
+    }), 'utf8');
+
+    const loaded = loadWorkspaceManifest(ws);
+    assert.ok(loaded);
+    assert.deepEqual(loaded.orchestration, {
+      mode: 'adaptive',
+      availableRoles: ['worker', 'reviewer'],
+      disabledRoles: ['fleet'],
+      maxParallel: 1,
+    });
+    assert.deepEqual(loaded.persona, { default: 'engineer', enabled: ['engineer'] });
   } finally {
     fs.rmSync(ws, { recursive: true, force: true });
   }
@@ -181,7 +236,10 @@ test('profile presets are self-consistent (every profile usable by the wizard)',
   // Frontend is a task-scoped engineering capability, not a top-level profile or persona.
   assert.ok(!WORKSPACE_PROFILES.some((preset) => (preset.id as string) === 'frontend'));
   const engineering = WORKSPACE_PROFILES.find((preset) => preset.id === 'engineering')!;
+  assert.deepEqual(engineering.persona, { default: 'engineer', enabled: ['engineer'] });
   assert.deepEqual(engineering.agents, { default: 'engineer', enabled: ['engineer'] });
+  assert.equal(engineering.orchestration.mode, 'adaptive');
+  assert.equal(engineering.orchestration.disabledRoles.includes('fleet'), true);
   assert.deepEqual(engineering.capabilities.enabled, ['frontend']);
   assert.ok(!engineering.tools.profiles.includes('design'), 'design is not a baseline engineering tool profile');
   for (const preset of WORKSPACE_PROFILES) {
@@ -189,8 +247,8 @@ test('profile presets are self-consistent (every profile usable by the wizard)',
     assert.ok(preset.description.trim().length > 0, `${preset.id}: description`);
     assert.equal(getWorkspaceProfile(preset.id), preset);
     if (preset.id !== 'custom') {
-      assert.ok(preset.agents.default.length > 0, `${preset.id}: names a default persona`);
-      assert.ok(preset.agents.enabled.includes(preset.agents.default), `${preset.id}: default persona is enabled`);
+      assert.ok(preset.persona.default.length > 0, `${preset.id}: names a default persona`);
+      assert.ok(preset.persona.enabled.includes(preset.persona.default), `${preset.id}: default persona is enabled`);
     }
   }
 });
@@ -207,6 +265,8 @@ test('legacy frontend-builder manifests normalize to engineer plus the frontend 
 
     const loaded = loadWorkspaceManifest(ws);
     assert.ok(loaded);
+    assert.equal(loaded.version, 2);
+    assert.equal(loaded.persona.default, 'engineer');
     assert.equal(loaded.agents.default, 'engineer');
     assert.deepEqual(loaded.agents.enabled, ['worker', 'engineer']);
     assert.deepEqual(
@@ -214,6 +274,8 @@ test('legacy frontend-builder manifests normalize to engineer plus the frontend 
       { enabled: ['future-capability', 'frontend'], disabled: ['blocked-capability'] },
       'unknown capability ids survive legacy migration',
     );
+    assert.ok(loaded.orchestration.availableRoles.includes('worker'));
+    assert.ok(loaded.orchestration.availableRoles.includes('reviewer'));
     saveWorkspaceManifest(ws, loaded);
     assert.deepEqual(
       loadWorkspaceManifest(ws)?.capabilities,

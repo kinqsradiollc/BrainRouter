@@ -38,11 +38,11 @@ export function refreshWorkspaceCapabilityState(
   task: string,
 ): WorkspaceCapabilityResolution {
   const manifest = loadWorkspaceManifest(host.workspaceRoot);
-  const requestedPersona = manifest && host.workspaceAgentId && manifest.agents.enabled.includes(host.workspaceAgentId)
+  const requestedPersona = manifest && host.workspaceAgentId && manifest.persona.enabled.includes(host.workspaceAgentId)
     ? findDomainPersona(host.workspaceAgentId, host.workspaceRoot)
     : undefined;
-  const defaultPersona = manifest && manifest.agents.enabled.includes(manifest.agents.default)
-    ? findDomainPersona(manifest.agents.default, host.workspaceRoot)
+  const defaultPersona = manifest && manifest.persona.enabled.includes(manifest.persona.default)
+    ? findDomainPersona(manifest.persona.default, host.workspaceRoot)
     : undefined;
   const activePersona = requestedPersona ?? defaultPersona;
   const activeAgent = activePersona?.id;

@@ -25,6 +25,15 @@ export interface WorkspaceProfilePreset {
   label: string;
   description: string;
   /** Default domain persona id + the personas surfaced for this profile. */
+  persona: { default: string; enabled: string[] };
+  /** Roles the runtime may expose; availability never means invocation. */
+  orchestration: {
+    mode: 'off' | 'explicit' | 'adaptive';
+    availableRoles: string[];
+    disabledRoles: string[];
+    maxParallel: number;
+  };
+  /** @deprecated Manifest-v1/client compatibility alias for `persona`. */
   agents: { default: string; enabled: string[] };
   /** Optional capability sets available for task-scoped activation. */
   capabilities: { enabled: string[] };
@@ -42,6 +51,13 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
     id: 'engineering',
     label: 'Engineering',
     description: 'Building and maintaining software — code, tests, reviews, releases. Frontend and design work activates additional engineering capabilities when needed.',
+    persona: { default: 'engineer', enabled: ['engineer'] },
+    orchestration: {
+      mode: 'adaptive',
+      availableRoles: ['explorer', 'architect', 'worker', 'reviewer', 'verifier'],
+      disabledRoles: ['fleet'],
+      maxParallel: 4,
+    },
     agents: { default: 'engineer', enabled: ['engineer'] },
     capabilities: { enabled: ['frontend'] },
     skills: {
@@ -67,6 +83,13 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
     id: 'research',
     label: 'Research',
     description: 'Evidence gathering and synthesis — sources, citations, findings.',
+    persona: { default: 'researcher', enabled: ['researcher'] },
+    orchestration: {
+      mode: 'adaptive',
+      availableRoles: ['explorer', 'reviewer'],
+      disabledRoles: ['fleet'],
+      maxParallel: 3,
+    },
     agents: { default: 'researcher', enabled: ['researcher'] },
     capabilities: { enabled: [] },
     skills: { packs: ['research'], enabled: ['planning-skill', 'handover-skill'] },
@@ -77,6 +100,13 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
     id: 'data-science',
     label: 'Data science',
     description: 'Datasets, experiments, notebooks, and visual reporting.',
+    persona: { default: 'data-scientist', enabled: ['data-scientist'] },
+    orchestration: {
+      mode: 'adaptive',
+      availableRoles: ['explorer', 'worker', 'verifier'],
+      disabledRoles: ['fleet'],
+      maxParallel: 4,
+    },
     agents: { default: 'data-scientist', enabled: ['data-scientist'] },
     capabilities: { enabled: [] },
     skills: { packs: ['data'], enabled: ['planning-skill', 'testing-skill', 'verify-loop'] },
@@ -87,6 +117,13 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
     id: 'study',
     label: 'Study',
     description: 'Learning a subject — tutoring, practice, and progress over time.',
+    persona: { default: 'tutor', enabled: ['tutor'] },
+    orchestration: {
+      mode: 'explicit',
+      availableRoles: ['explorer'],
+      disabledRoles: ['fleet'],
+      maxParallel: 2,
+    },
     agents: { default: 'tutor', enabled: ['tutor'] },
     capabilities: { enabled: [] },
     skills: { packs: ['study'], enabled: ['planning-skill', 'handover-skill'] },
@@ -97,6 +134,13 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
     id: 'writing',
     label: 'Writing',
     description: 'Long-form writing — outline, draft, revise, and style passes.',
+    persona: { default: 'writer', enabled: ['writer'] },
+    orchestration: {
+      mode: 'explicit',
+      availableRoles: ['reviewer'],
+      disabledRoles: ['fleet'],
+      maxParallel: 2,
+    },
     agents: { default: 'writer', enabled: ['writer'] },
     capabilities: { enabled: [] },
     skills: { packs: ['writing'], enabled: ['planning-skill', 'handover-skill'] },
@@ -107,6 +151,13 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
     id: 'custom',
     label: 'Custom',
     description: 'Start empty and pick agents, skills, and tools yourself.',
+    persona: { default: '', enabled: [] },
+    orchestration: {
+      mode: 'off',
+      availableRoles: [],
+      disabledRoles: [],
+      maxParallel: 1,
+    },
     agents: { default: '', enabled: [] },
     capabilities: { enabled: [] },
     skills: { packs: [], enabled: [] },

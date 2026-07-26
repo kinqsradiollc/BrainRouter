@@ -425,7 +425,7 @@ test('W4b active registry is exactly the raw registry when no manifest exists', 
   });
 });
 
-test('W4b manifest activates only its default and enabled custom definitions', () => {
+test('manifest orchestration exposes only explicitly available custom roles', () => {
   withTempWorkspace((workspace) => {
     writeAgentDefinition(workspace, 'default-specialist');
     writeAgentDefinition(workspace, 'enabled-specialist');
@@ -435,33 +435,44 @@ test('W4b manifest activates only its default and enabled custom definitions', (
       profile: 'custom',
       by: 'wizard',
       overrides: {
-        agents: { default: 'default-specialist', enabled: ['enabled-specialist'] },
+        persona: { default: 'engineer', enabled: ['engineer'] },
+        orchestration: {
+          mode: 'adaptive',
+          availableRoles: ['default-specialist', 'enabled-specialist'],
+          disabledRoles: [],
+          maxParallel: 2,
+        },
       },
     }));
 
     const rawIds = loadRegistry(workspace).map((entry) => entry.def.id);
     const activeIds = loadActiveRegistry(workspace).map((entry) => entry.def.id);
     assert.ok(rawIds.includes('hidden-specialist'), 'raw inventory remains complete');
-    assert.ok(activeIds.includes('default-specialist'), 'default is active even when omitted from enabled');
-    assert.ok(activeIds.includes('enabled-specialist'), 'enabled same-id project JSON is active');
+    assert.ok(activeIds.includes('default-specialist'), 'available custom role is active');
+    assert.ok(activeIds.includes('enabled-specialist'), 'second available custom role is active');
     assert.equal(activeIds.includes('hidden-specialist'), false, 'unlisted custom JSON is not executable');
   });
 });
 
-test('W4b manifest always preserves reserved harness definitions and their overrides', () => {
+test('manifest orchestration gates reserved roles and preserves an available workspace override', () => {
   withTempWorkspace((workspace) => {
     writeAgentDefinition(workspace, 'explorer', { displayName: 'Project explorer', tier: 'reasoning' });
     saveWorkspaceManifest(workspace, createWorkspaceManifest({
       name: 'harness',
       profile: 'custom',
       by: 'wizard',
+      overrides: {
+        orchestration: {
+          mode: 'adaptive',
+          availableRoles: ['explorer'],
+          disabledRoles: [],
+          maxParallel: 1,
+        },
+      },
     }));
 
     const active = loadActiveRegistry(workspace);
-    assert.deepEqual(
-      active.filter((entry) => entry.source === 'builtin').map((entry) => entry.def.id).sort(),
-      ['architect', 'fleet', 'intake', 'reviewer', 'verifier', 'worker'],
-    );
+    assert.deepEqual(active.map((entry) => entry.def.id), ['explorer']);
     assert.equal(findById('explorer', workspace)?.source, 'workspace');
     assert.equal(findById('explorer', workspace)?.def.displayName, 'Project explorer');
   });
@@ -486,7 +497,12 @@ test('W4b runtime lookup and delegate tools expose only the active manifest cata
       profile: 'custom',
       by: 'wizard',
       overrides: {
-        agents: { default: '', enabled: ['visible-specialist'] },
+        orchestration: {
+          mode: 'adaptive',
+          availableRoles: ['visible-specialist'],
+          disabledRoles: [],
+          maxParallel: 1,
+        },
       },
     }));
 
@@ -498,12 +514,12 @@ test('W4b runtime lookup and delegate tools expose only the active manifest cata
   });
 });
 
-test('C2 selected profile packs contribute only their matching active executor', () => {
+test('selected profile packs contribute specialist inventory without implicitly activating it', () => {
   const cases = [
-    { profile: 'research' as const, id: 'researcher', access: 'read' },
-    { profile: 'data-science' as const, id: 'data-scientist', access: 'shell' },
-    { profile: 'study' as const, id: 'tutor', access: 'read' },
-    { profile: 'writing' as const, id: 'writer', access: 'read' },
+    { profile: 'research' as const, id: 'researcher' },
+    { profile: 'data-science' as const, id: 'data-scientist' },
+    { profile: 'study' as const, id: 'tutor' },
+    { profile: 'writing' as const, id: 'writer' },
   ];
   const specialistIds = new Set(cases.map(({ id }) => id));
 
@@ -520,10 +536,12 @@ test('C2 selected profile packs contribute only their matching active executor',
         .map((entry) => entry.def.id);
       assert.deepEqual(rawSpecialists, [item.id]);
       const active = findById(item.id, workspace);
-      assert.equal(active?.source, 'pack');
-      assert.equal(active?.def.defaultAccess, item.access);
-      assert.ok(
-        synthesizeDelegateTools(listAll(workspace)).some((tool) => tool.name === active?.def.delegateName),
+      assert.equal(active, undefined);
+      assert.equal(
+        synthesizeDelegateTools(listAll(workspace)).some(
+          (tool) => tool.name === `delegate_${item.id.replaceAll('-', '_')}`,
+        ),
+        false,
       );
     });
   }
@@ -551,7 +569,6 @@ test('C2 selecting a pack contributes inventory but cannot bypass agent activati
       profile: 'custom',
       by: 'wizard',
       overrides: {
-        agents: { default: '', enabled: [] },
         skills: { packs: ['research'], enabled: [], disabled: [] },
       },
     }));
