@@ -88,19 +88,30 @@ export function WorktreesPanel({ worktrees, diffs, onCreate, onRemove, onOpen, o
     }).catch(() => setSshHosts([]));
   }, []);
 
-  React.useEffect(() => {
+  const refreshFanoutAdapters = React.useCallback(() => {
     void bridgeQuery<{ adapters: AdapterView[] }>('hosted-agent-catalog', {}, 10_000).then((result) => {
-      const installed = (result.adapters ?? []).filter((adapter) => adapter.installed);
-      setFanoutAdapters(installed);
-      setPickedAdapters(installed.slice(0, Math.min(3, installed.length)).map((adapter) => adapter.id));
-    }).catch(() => setFanoutAdapters([]));
+      const adapters = result.adapters ?? [];
+      const installed = adapters.filter((adapter) => adapter.installed);
+      setFanoutAdapters(adapters);
+      setPickedAdapters((current) => (
+        current.length ? current.filter((id) => installed.some((adapter) => adapter.id === id))
+          : installed.slice(0, Math.min(3, installed.length)).map((adapter) => adapter.id)
+      ));
+    }).catch(() => {});
+  }, []);
+
+  React.useEffect(() => {
+    refreshFanoutAdapters();
     void refreshFanout();
     refreshRelay();
     refreshSshHosts();
+    // A persisted open panel can mount while the Desktop host is still
+    // registering queries. Retry once instead of leaving an empty adapter list.
+    const adapterRetry = window.setTimeout(refreshFanoutAdapters, 1_500);
     const timer = window.setInterval(() => void refreshFanout(), 2_000);
     const relayTimer = window.setInterval(refreshRelay, 2_000);
-    return () => { window.clearInterval(timer); window.clearInterval(relayTimer); };
-  }, [refreshFanout, refreshRelay, refreshSshHosts]);
+    return () => { window.clearTimeout(adapterRetry); window.clearInterval(timer); window.clearInterval(relayTimer); };
+  }, [refreshFanout, refreshFanoutAdapters, refreshRelay, refreshSshHosts]);
 
   const discoverSshKey = async (): Promise<void> => {
     setSshBusy(true); setSshError('');
@@ -158,7 +169,7 @@ export function WorktreesPanel({ worktrees, diffs, onCreate, onRemove, onOpen, o
   };
 
   const startFanout = async (): Promise<void> => {
-    if (!fanoutTask.trim() || pickedAdapters.length < 2) return;
+    if (!fanoutTask.trim() || pickedAdapters.length < 2 || pickedAdapters.length > 8) return;
     setFanoutBusy(true); setFanoutError('');
     try {
       await bridgeQuery('fanout-start', { task: fanoutTask, adapterIds: pickedAdapters, trusted: fanoutTrusted, executionHostId }, 20_000);
@@ -180,6 +191,9 @@ export function WorktreesPanel({ worktrees, diffs, onCreate, onRemove, onOpen, o
     setOpenPath(next);
     if (next && diffs[next] === undefined) onDiff(next);
   };
+  const selectedFanoutAdapters = fanoutAdapters.filter((adapter) => pickedAdapters.includes(adapter.id));
+  const trustRequiredAdapters = selectedFanoutAdapters.filter((adapter) => adapter.requiresWorkspaceTrust);
+  const fanoutTrustMissing = trustRequiredAdapters.length > 0 && !fanoutTrusted;
   return (
     <div className="scroll wt-panel">
       <section className="mobile-relay-section">
@@ -200,7 +214,7 @@ export function WorktreesPanel({ worktrees, diffs, onCreate, onRemove, onOpen, o
         </div>
       </section>
       <section className="fanout-section">
-        <div className="tasks-section"><span>Parallel agent candidates</span><button className="tasks-clear" type="button" onClick={() => void refreshFanout()}>Refresh</button></div>
+        <div className="tasks-section"><span>Parallel agent candidates</span><button className="tasks-clear" type="button" onClick={() => { refreshFanoutAdapters(); void refreshFanout(); }}>Refresh</button></div>
         <details className="ssh-hosts-card">
           <summary>Execution hosts <span>{executionHostId === 'local' ? 'Local' : sshHosts.find((host) => host.id === executionHostId)?.label ?? 'Remote'}</span></summary>
           <div className="ssh-host-list">
@@ -222,42 +236,46 @@ export function WorktreesPanel({ worktrees, diffs, onCreate, onRemove, onOpen, o
           <textarea value={fanoutTask} onChange={(event) => setFanoutTask(event.target.value)} placeholder="Describe one task to run across isolated candidates" rows={3} />
           <div className="fanout-adapters">
             {fanoutAdapters.map((adapter) => (
-              <label key={adapter.id}><input type="checkbox" checked={pickedAdapters.includes(adapter.id)} onChange={(event) => {
+              <label key={adapter.id}><input type="checkbox" disabled={!adapter.installed} checked={pickedAdapters.includes(adapter.id)} onChange={(event) => {
                 setPickedAdapters((current) => event.target.checked ? [...current, adapter.id] : current.filter((id) => id !== adapter.id));
-              }} /> {adapter.label}</label>
+              }} /> {adapter.label}{adapter.installed ? '' : ' (not installed)'}</label>
             ))}
           </div>
           <div className="fanout-compose-actions">
-            <label><input type="checkbox" checked={fanoutTrusted} onChange={(event) => setFanoutTrusted(event.target.checked)} /> Trust isolated worktrees</label>
-            <Button onClick={() => void startFanout()} disabled={fanoutBusy || !fanoutTask.trim() || pickedAdapters.length < 2}>Run {pickedAdapters.length} candidates</Button>
+            <label><input type="checkbox" disabled={!trustRequiredAdapters.length} checked={fanoutTrusted} onChange={(event) => setFanoutTrusted(event.target.checked)} /> Trust isolated worktrees{trustRequiredAdapters.length ? ` for ${trustRequiredAdapters.map((adapter) => adapter.label).join(', ')}` : ''}</label>
+            <Button onClick={() => void startFanout()} disabled={fanoutBusy || !fanoutTask.trim() || pickedAdapters.length < 2 || pickedAdapters.length > 8 || fanoutTrustMissing}>Run {pickedAdapters.length} candidates</Button>
           </div>
           {pickedAdapters.length < 2 ? <span className="sched-note">Choose at least two installed agents.</span> : null}
+          {fanoutTrustMissing ? <span className="sched-note">Review and accept isolated-worktree trust before launching the selected adapters.</span> : null}
           {fanoutError ? <div className="empty error">{fanoutError}</div> : null}
         </div>
         {fanoutRuns.map((run) => (
           <div key={run.id} className="fanout-run">
             <div className="fanout-run-head">
               <div><strong>{run.task}</strong><span className="wt-tag">{run.status}</span></div>
-              <Button onClick={() => void fanoutAction('fanout-rank', { runId: run.id })} disabled={fanoutBusy}>Compare + rank</Button>
+              <Button onClick={() => void fanoutAction('fanout-rank', { runId: run.id })} disabled={fanoutBusy || run.status === 'failed'}>Compare + rank</Button>
             </div>
             <div className="fanout-grid">
-              {run.candidates.map((candidate) => (
-                <article key={candidate.id} className={`fanout-candidate${run.winnerId === candidate.id ? ' winner' : ''}`}>
-                  <header><strong>{candidate.adapterId}</strong><span className={`terminal-agent-status status-${candidate.status}`}>{candidate.status}</span>{candidate.rank ? <span className="wt-tag">#{candidate.rank} · {candidate.score}</span> : null}</header>
-                  <div className="fanout-meta">{candidate.changedFiles} changed file{candidate.changedFiles === 1 ? '' : 's'} · {candidate.executionHostId && candidate.executionHostId !== 'local' ? sshHosts.find((host) => host.id === candidate.executionHostId)?.label ?? 'SSH host' : 'local'}</div>
-                  <pre className="fanout-terminal">{(terminalSnapshots[candidate.id] || 'Waiting for terminal output…').slice(-4_000)}</pre>
-                  {candidate.diffSummary ? <pre className="fanout-diff-summary">{candidate.diffSummary.slice(0, 2_000)}</pre> : null}
-                  {candidate.error ? <div className="empty error">{candidate.error}</div> : null}
-                  <div className="fanout-followup"><input value={followups[candidate.id] ?? ''} onChange={(event) => setFollowups((current) => ({ ...current, [candidate.id]: event.target.value }))} placeholder="Follow-up" /><Button onClick={() => { const text = followups[candidate.id] ?? ''; if (text.trim()) { void fanoutAction('fanout-control', { candidateId: candidate.id, action: 'follow-up', text }); setFollowups((current) => ({ ...current, [candidate.id]: '' })); } }}>Send</Button></div>
-                  <div className="wt-actions">
-                    <Button onClick={() => void fanoutAction('fanout-control', { candidateId: candidate.id, action: 'approve' })}>Approve</Button>
-                    <Button onClick={() => void fanoutAction('fanout-control', { candidateId: candidate.id, action: 'interrupt' })}>Interrupt</Button>
-                    <Button onClick={() => void fanoutAction('fanout-promote', { runId: run.id, candidateId: candidate.id, mode: 'merge' })} disabled={!candidate.changedFiles}>Merge winner</Button>
-                    <Button onClick={() => void fanoutAction('fanout-promote', { runId: run.id, candidateId: candidate.id, mode: 'pr' })} disabled={!candidate.changedFiles}>Draft PR</Button>
-                    <Button variant="danger" onClick={() => void fanoutAction('fanout-cleanup', { runId: run.id, candidateId: candidate.id })}>Clean up</Button>
-                  </div>
-                </article>
-              ))}
+              {run.candidates.map((candidate) => {
+                const candidateActive = !!candidate.terminalId && !['done', 'failed'].includes(candidate.status);
+                return (
+                  <article key={candidate.id} className={`fanout-candidate${run.winnerId === candidate.id ? ' winner' : ''}`}>
+                    <header><strong>{candidate.adapterId}</strong><span className={`terminal-agent-status status-${candidate.status}`}>{candidate.status}</span>{candidate.rank ? <span className="wt-tag">#{candidate.rank} · {candidate.score}</span> : null}</header>
+                    <div className="fanout-meta">{candidate.changedFiles} changed file{candidate.changedFiles === 1 ? '' : 's'} · {candidate.executionHostId && candidate.executionHostId !== 'local' ? sshHosts.find((host) => host.id === candidate.executionHostId)?.label ?? 'SSH host' : 'local'}</div>
+                    <pre className="fanout-terminal">{(terminalSnapshots[candidate.id] || (candidateActive ? 'Waiting for terminal output…' : 'No live terminal — this candidate is not running.')).slice(-4_000)}</pre>
+                    {candidate.diffSummary ? <pre className="fanout-diff-summary">{candidate.diffSummary.slice(0, 2_000)}</pre> : null}
+                    {candidate.error ? <div className="empty error">{candidate.error}</div> : null}
+                    <div className="fanout-followup"><input disabled={!candidateActive} value={followups[candidate.id] ?? ''} onChange={(event) => setFollowups((current) => ({ ...current, [candidate.id]: event.target.value }))} placeholder="Follow-up" /><Button disabled={!candidateActive} onClick={() => { const text = followups[candidate.id] ?? ''; if (text.trim()) { void fanoutAction('fanout-control', { candidateId: candidate.id, action: 'follow-up', text }); setFollowups((current) => ({ ...current, [candidate.id]: '' })); } }}>Send</Button></div>
+                    <div className="wt-actions">
+                      <Button disabled={!candidateActive} onClick={() => void fanoutAction('fanout-control', { candidateId: candidate.id, action: 'approve' })}>Approve</Button>
+                      <Button disabled={!candidateActive} onClick={() => void fanoutAction('fanout-control', { candidateId: candidate.id, action: 'interrupt' })}>Interrupt</Button>
+                      <Button onClick={() => void fanoutAction('fanout-promote', { runId: run.id, candidateId: candidate.id, mode: 'merge' })} disabled={!candidate.changedFiles}>Merge winner</Button>
+                      <Button onClick={() => void fanoutAction('fanout-promote', { runId: run.id, candidateId: candidate.id, mode: 'pr' })} disabled={!candidate.changedFiles}>Draft PR</Button>
+                      <Button variant="danger" disabled={!candidate.worktreeRoot} onClick={() => void fanoutAction('fanout-cleanup', { runId: run.id, candidateId: candidate.id })}>Clean up</Button>
+                    </div>
+                  </article>
+                );
+              })}
             </div>
             {run.promotion ? <div className={run.promotion.ok ? 'sched-note' : 'empty error'}>{run.promotion.ok ? `Winner promoted by ${run.promotion.mode}.` : run.promotion.error}{run.promotion.url ? ` ${run.promotion.url}` : ''}</div> : null}
           </div>
