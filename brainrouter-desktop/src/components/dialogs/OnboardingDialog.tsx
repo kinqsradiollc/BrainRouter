@@ -322,7 +322,7 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
                 </button>
               </div>
               <label className="onboard-assist-input">
-                <span>What are you building, and how should the agents help?</span>
+                  <span>What are you building, and how should the primary agent and delegated roles help?</span>
                 <textarea value={description} disabled={proposing || saving || reviewingInstruction}
                   maxLength={ONBOARDING_DESCRIPTION_MAX_BYTES}
                   placeholder="For example: A responsive TypeScript dashboard with an API, tests, and accessible UI."
@@ -359,14 +359,42 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
             </section>
 
             <section className="onboard-section onboard-fields" aria-labelledby={`${titleId}-details`}>
-              <h3 id={`${titleId}-details`}>Agents, capabilities, skills, and tools</h3>
-              <TextField label="Default domain agent" value={draft.agents.default}
+              <h3 id={`${titleId}-details`}>Persona, orchestration, capabilities, skills, and tools</h3>
+              <TextField label="Default domain persona" value={draft.persona.default}
                 disabled={proposing || saving || reviewingInstruction}
                 hint="Use engineer for software work; frontend is activated as a task-specific capability."
-                onChange={(value) => patchDraft({ agents: { ...draft.agents, default: value } })} />
-              <ListField label="Enabled agents" values={draft.agents.enabled}
+                onChange={(value) => patchDraft({ persona: { ...draft.persona, default: value } })} />
+              <ListField label="Enabled personas" values={draft.persona.enabled}
                 disabled={proposing || saving || reviewingInstruction}
-                onChange={(values) => patchDraft({ agents: { ...draft.agents, enabled: values } })} />
+                onChange={(values) => patchDraft({ persona: { ...draft.persona, enabled: values } })} />
+              <ChoiceField label="Orchestration mode" value={draft.orchestration.mode}
+                disabled={proposing || saving || reviewingInstruction}
+                hint="Available roles are a ceiling. Off keeps work with the primary agent."
+                onChange={(mode) => patchDraft({
+                  orchestration: { ...draft.orchestration, mode },
+                })} />
+              <NumberField label="Maximum parallel roles" value={draft.orchestration.maxParallel}
+                disabled={proposing || saving || reviewingInstruction}
+                onChange={(maxParallel) => patchDraft({
+                  orchestration: { ...draft.orchestration, maxParallel },
+                })} />
+              <ListField label="Available orchestration roles" values={draft.orchestration.availableRoles}
+                disabled={proposing || saving || reviewingInstruction}
+                hint="Roles may be selected only when the chosen mode permits delegation."
+                onChange={(availableRoles) => patchDraft({
+                  orchestration: { ...draft.orchestration, availableRoles },
+                })} />
+              <ListField label="Disabled orchestration roles" values={draft.orchestration.disabledRoles}
+                disabled={proposing || saving || reviewingInstruction}
+                hint="Disabled roles always win over available roles."
+                onChange={(disabledRoles) => patchDraft({
+                  orchestration: {
+                    ...draft.orchestration,
+                    availableRoles: draft.orchestration.availableRoles
+                      .filter((role) => !disabledRoles.includes(role)),
+                    disabledRoles,
+                  },
+                })} />
               <ListField label="Available capabilities" values={draft.capabilities.enabled}
                 disabled={proposing || saving || reviewingInstruction}
                 hint="Available for task-time activation; not injected on every turn."
@@ -510,4 +538,48 @@ function ListField({ label, values, hint, disabled = false, onChange }: {
 }): React.ReactElement {
   return <TextField label={label} value={values.join(', ')} hint={hint} disabled={disabled}
     onChange={(value) => onChange(parseOnboardingCsv(value))} />;
+}
+
+function ChoiceField({ label, value, hint, disabled = false, onChange }: {
+  label: string;
+  value: 'off' | 'explicit' | 'adaptive';
+  hint?: string;
+  disabled?: boolean;
+  onChange: (value: 'off' | 'explicit' | 'adaptive') => void;
+}): React.ReactElement {
+  return (
+    <div className="onboard-field">
+      <span>{label}</span>
+      <div className="onboard-choice" role="group" aria-label={label}>
+        {(['off', 'explicit', 'adaptive'] as const).map((mode) => (
+          <button type="button" key={mode} disabled={disabled}
+            className={value === mode ? 'selected' : ''}
+            aria-pressed={value === mode}
+            onClick={() => onChange(mode)}>
+            {mode[0].toUpperCase() + mode.slice(1)}
+          </button>
+        ))}
+      </div>
+      {hint ? <small>{hint}</small> : null}
+    </div>
+  );
+}
+
+function NumberField({ label, value, disabled = false, onChange }: {
+  label: string;
+  value: number;
+  disabled?: boolean;
+  onChange: (value: number) => void;
+}): React.ReactElement {
+  return (
+    <label className="onboard-field">
+      <span>{label}</span>
+      <input type="number" min={1} max={32} step={1} value={value} disabled={disabled}
+        onChange={(event) => {
+          const next = Number(event.target.value);
+          if (Number.isInteger(next) && next >= 1 && next <= 32) onChange(next);
+        }} />
+      <small>Between 1 and 32 concurrent delegated roles.</small>
+    </label>
+  );
 }

@@ -21,7 +21,8 @@ function proposal(info: Record<string, unknown>): Record<string, unknown> {
     expected: (info.review as { revision: Record<string, string> }).revision,
     source: 'wizard',
     profile: engineering.id,
-    agents: engineering.agents,
+    persona: engineering.persona,
+    orchestration: engineering.orchestration,
     capabilities: engineering.capabilities,
     skills: engineering.skills,
     tools: engineering.tools,
@@ -30,14 +31,15 @@ function proposal(info: Record<string, unknown>): Record<string, unknown> {
   };
 }
 
-test('starts un-onboarded with the shared engineer/frontend profile catalog', () => {
+test('starts un-onboarded with separate persona and orchestration profile fields', () => {
   const info = getDevWorkspaceManifest(createDevOnboardingState(), root);
   assert.equal(info.onboarded, false);
   assert.equal(info.manifest, null);
   const profiles = info.profiles as Array<Record<string, unknown>>;
   const engineering = profiles.find((profile) => profile.id === 'engineering');
   assert.ok(engineering);
-  assert.deepEqual((engineering.agents as { enabled: string[] }).enabled, ['engineer']);
+  assert.deepEqual((engineering.persona as { enabled: string[] }).enabled, ['engineer']);
+  assert.equal((engineering.orchestration as { mode: string }).mode, 'adaptive');
   assert.deepEqual((engineering.capabilities as { enabled: string[] }).enabled, ['frontend']);
   assert.ok(!JSON.stringify(engineering).includes('frontend-builder'));
 });
@@ -59,8 +61,10 @@ test('proposes a complete model-backed engineering draft without mutating state'
   };
   assert.equal(parsed.proposal.source, 'model');
   assert.equal(parsed.modelAttempted, true);
+  assert.equal(parsed.proposal.manifest.version, 2);
   assert.equal(parsed.proposal.manifest.profile, 'engineering');
-  assert.deepEqual((parsed.proposal.manifest.agents as { enabled: string[] }).enabled, ['engineer']);
+  assert.deepEqual((parsed.proposal.manifest.persona as { enabled: string[] }).enabled, ['engineer']);
+  assert.equal((parsed.proposal.manifest.orchestration as { mode: string }).mode, 'adaptive');
   assert.deepEqual((parsed.proposal.manifest.capabilities as { enabled: string[] }).enabled, ['frontend']);
   assert.equal(parsed.proposal.instruction?.path, 'AGENT.md');
   assert.deepEqual(parsed.scan.markers, ['package.json', 'tsconfig.json']);
@@ -110,6 +114,7 @@ test('saves reviewed fields in memory and advances the opaque revision', () => {
     (before.review as { revision: unknown }).revision,
   );
   assert.equal((after.manifest as { name: string }).name, 'example');
+  assert.equal((after.manifest as { version: number }).version, 2);
 });
 
 test('rejects stale reviews and tracks an approved instruction replacement', () => {

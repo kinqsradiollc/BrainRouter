@@ -64,11 +64,17 @@ export function proposeDevWorkspaceOnboarding(root: string, payload: unknown): R
   if (!profile) throw new Error('Engineering workspace profile is unavailable.');
 
   const manifest = {
-    version: 1,
+    version: 2,
     name: root.split(/[\\/]/).filter(Boolean).at(-1) ?? 'workspace',
     profile: profile.id,
     onboarded: { at: DEV_ONBOARDING_AT, by: 'agent' },
-    agents: { default: profile.agents.default, enabled: [...profile.agents.enabled] },
+    persona: { default: profile.persona.default, enabled: [...profile.persona.enabled] },
+    orchestration: {
+      mode: profile.orchestration.mode,
+      availableRoles: [...profile.orchestration.availableRoles],
+      disabledRoles: [...profile.orchestration.disabledRoles],
+      maxParallel: profile.orchestration.maxParallel,
+    },
     capabilities: { enabled: [...profile.capabilities.enabled], disabled: [] },
     skills: { packs: [...profile.skills.packs], enabled: [...profile.skills.enabled], disabled: [] },
     tools: { profiles: [...profile.tools.profiles], deny: [] },
@@ -127,7 +133,7 @@ export function saveDevWorkspaceManifest(
   const current = state.manifests.get(root);
   const currentOnboarded = isRecord(current?.onboarded) ? current.onboarded : null;
   const manifest = {
-    version: 1,
+    version: 2,
     name: root.split(/[\\/]/).filter(Boolean).at(-1) ?? 'workspace',
     ...draft,
     onboarded: currentOnboarded ?? { at: new Date().toISOString(), by: source },

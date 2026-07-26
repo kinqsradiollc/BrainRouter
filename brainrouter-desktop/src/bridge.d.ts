@@ -48,7 +48,13 @@ declare global {
           id: string;
           label: string;
           description: string;
-          agents: { default: string; enabled: string[] };
+          persona: { default: string; enabled: string[] };
+          orchestration: {
+            mode: 'off' | 'explicit' | 'adaptive';
+            availableRoles: string[];
+            disabledRoles: string[];
+            maxParallel: number;
+          };
           capabilities?: { enabled: string[]; disabled?: string[] };
           skills?: { packs: string[]; enabled: string[]; disabled?: string[] };
           tools?: { profiles: string[]; deny?: string[] };
