@@ -25,3 +25,4 @@ export * from './skillSelection.js';
 export * from './skillToolAdapter.js';
 export * from './toolProfiles.js';
 export * from './memoryCapture.js';
+export * from './compatibilityDiagnostics.js';

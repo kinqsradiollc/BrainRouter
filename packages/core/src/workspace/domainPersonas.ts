@@ -19,6 +19,10 @@ import {
   type PersonaDefinition,
 } from './personaDefinitionFile.js';
 import { containsWorkspaceSecretMaterial } from './workspaceContentSafety.js';
+import {
+  recordWorkspaceCompatibilityDiagnostics,
+  type WorkspaceCompatibilityDiagnostic,
+} from './compatibilityDiagnostics.js';
 
 export type DomainPersonaSource = 'workspace' | 'local' | 'plugin' | 'bundled';
 
@@ -43,6 +47,11 @@ export interface DomainPersonaCatalogOptions {
   bundledPersonasDir?: string;
   /** Override only for package-layout tests. */
   bundledDir?: string;
+}
+
+export interface DomainPersonaCatalog {
+  personas: DomainPersonaDefinition[];
+  diagnostics: WorkspaceCompatibilityDiagnostic[];
 }
 
 interface PersonaCandidate {
@@ -72,6 +81,14 @@ export function listDomainPersonas(
   workspaceRoot: string,
   options: DomainPersonaCatalogOptions = {},
 ): DomainPersonaDefinition[] {
+  return inspectDomainPersonas(workspaceRoot, options).personas;
+}
+
+/** Load personas plus migration/collision diagnostics using the same precedence. */
+export function inspectDomainPersonas(
+  workspaceRoot: string,
+  options: DomainPersonaCatalogOptions = {},
+): DomainPersonaCatalog {
   const pluginCandidates = resolvePluginPersonaFiles(
     workspaceRoot,
     options.pluginPersonaFiles,
@@ -125,9 +142,21 @@ export function listDomainPersonas(
 
   const winners = new Map<string, DomainPersonaDefinition>();
   const shadowedScopes = new Map<string, string[]>();
+  const diagnostics: WorkspaceCompatibilityDiagnostic[] = [];
   for (const candidate of candidates) {
     const parsed = parseDomainPersona(candidate);
     if (!parsed) continue;
+    if (candidate.format === 'legacy-markdown') {
+      diagnostics.push({
+        code: 'legacy_markdown_persona',
+        surface: 'persona',
+        severity: 'info',
+        source: candidate.source,
+        filePath: candidate.filePath,
+        message: `Legacy Markdown persona ${parsed.qualifiedName} was normalized in memory.`,
+        count: 1,
+      });
+    }
     if (!winners.has(parsed.id)) {
       winners.set(parsed.id, parsed);
       continue;
@@ -135,6 +164,15 @@ export function listDomainPersonas(
     const scopes = shadowedScopes.get(parsed.id) ?? [];
     if (!scopes.includes(candidate.scope)) scopes.push(candidate.scope);
     shadowedScopes.set(parsed.id, scopes);
+    diagnostics.push({
+      code: 'persona_collision',
+      surface: 'persona',
+      severity: 'warning',
+      source: candidate.source,
+      filePath: candidate.filePath,
+      message: `Persona ${parsed.qualifiedName} is shadowed by ${winners.get(parsed.id)!.qualifiedName}.`,
+      count: 1,
+    });
   }
 
   for (const [id, scopes] of shadowedScopes) {
@@ -144,7 +182,9 @@ export function listDomainPersonas(
       winner.shadowedBy = scopes;
     }
   }
-  return [...winners.values()].sort((a, b) => a.id.localeCompare(b.id));
+  const personas = [...winners.values()].sort((a, b) => a.id.localeCompare(b.id));
+  recordWorkspaceCompatibilityDiagnostics(workspaceRoot, diagnostics);
+  return { personas, diagnostics };
 }
 
 /** Resolve one active domain identity. Unknown and harness-role ids fail closed. */
