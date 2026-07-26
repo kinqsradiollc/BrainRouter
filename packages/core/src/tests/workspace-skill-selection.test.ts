@@ -21,14 +21,19 @@ test('W4b a profile pack selects its versioned standard-plugin root and skills',
 
   assert.equal(selection.managed, true);
   assert.deepEqual(selection.bundles.map(({ id, source, version }) => ({ id, source, version })), [
-    { id: 'research', source: 'profile-plugin', version: '2.0.0' },
+    { id: 'research', source: 'profile-plugin', version: '2.1.0' },
   ]);
   assert.equal(selection.skillRoots.length, 1);
   assert.deepEqual(selection.ambientSkillIds, [
     'planning-skill',
     'handover-skill',
+    'research-question-skill',
+    'source-strategy-skill',
     'evidence-research-skill',
+    'claim-ledger-skill',
     'source-synthesis-skill',
+    'citation-verification-skill',
+    'research-review-skill',
   ]);
   assert.deepEqual(selection.unavailable, []);
 });
@@ -116,7 +121,15 @@ test('W4b unknown and unavailable packs fail closed without hiding valid sibling
     id: 'research',
     kind: 'profile',
     pluginName: 'profile-research',
-    skillIds: ['evidence-research-skill', 'source-synthesis-skill'],
+    skillIds: [
+      'research-question-skill',
+      'source-strategy-skill',
+      'evidence-research-skill',
+      'claim-ledger-skill',
+      'source-synthesis-skill',
+      'citation-verification-skill',
+      'research-review-skill',
+    ],
     personaIds: ['researcher'],
     reason: 'fixture unavailable',
   });

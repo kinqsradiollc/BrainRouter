@@ -1,7 +1,7 @@
 {
   "name": "profile-research",
-  "version": "2.0.0",
-  "description": "Source-grounded investigation, evidence ledgers, and synthesis.",
+  "version": "2.1.0",
+  "description": "Task-selectable research planning, evidence, synthesis, citation, and review workflows.",
   "category": "research",
   "keywords": ["research", "evidence", "citations"]
 }
