@@ -1562,7 +1562,7 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     // Marketplace panel renders populated in browser-dev (no Electron host).
     'plugin-list': () => ({
       plugins: [
-        { name: 'acme-devkit', scope: 'user', version: '1.2.0', description: 'Skills, agents, and a review workflow for web dev.', author: 'Acme', category: 'development', enabled: true, provides: { skills: 3, agents: 1, workflows: 1 }, requiresConsent: false, shellApproved: false, mcpApproved: false, updateAvailable: '1.3.0' },
+        { name: 'acme-devkit', scope: 'user', version: '1.2.0', description: 'Skills, agents, and a review workflow for web dev.', author: 'Acme', category: 'development', enabled: true, provides: { skills: 3, agents: 1, orchestrationProfiles: 1, workflows: 1 }, requiresConsent: false, shellApproved: false, mcpApproved: false, updateAvailable: '1.3.0' },
         { name: 'sec-hooks', scope: 'user', version: '0.4.0', description: 'Pre-commit secret scanners (command hooks).', author: 'SecOps', category: 'security', enabled: false, provides: { hooks: 2, mcpServers: 1 }, requiresConsent: true, shellApproved: false, mcpApproved: false },
       ],
       skippedForSafeMode: false,
@@ -1570,7 +1570,7 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     }),
     'plugin-search': (a) => {
       const all = [
-        { id: 'acme-devkit', name: 'acme-devkit', repo: 'git+https://github.com/acme/devkit.git', version: '1.3.0', category: 'development', tags: ['web', 'react'], stars: 128, lastUpdated: '2026-06-30', author: 'Acme', description: 'Skills, agents, and a review workflow for web dev.', provides: { skills: 3, agents: 1, workflows: 1 } },
+        { id: 'acme-devkit', name: 'acme-devkit', repo: 'git+https://github.com/acme/devkit.git', version: '1.3.0', category: 'development', tags: ['web', 'react'], stars: 128, lastUpdated: '2026-06-30', author: 'Acme', description: 'Skills, agents, and a review workflow for web dev.', provides: { skills: 3, agents: 1, orchestrationProfiles: 1, workflows: 1 } },
         { id: 'sec-hooks', name: 'sec-hooks', repo: 'git+https://github.com/secops/hooks.git', version: '0.4.0', category: 'security', tags: ['security', 'hooks'], stars: 64, lastUpdated: '2026-06-12', author: 'SecOps', description: 'Pre-commit secret scanners (command hooks).', provides: { hooks: 2, mcpServers: 1 } },
         { id: 'jira-connector', name: 'jira-connector', repo: 'git+https://github.com/atlas/jira.git', version: '2.1.0', category: 'productivity', tags: ['jira', 'connector'], stars: 42, lastUpdated: '2026-05-20', author: 'Atlas', description: 'A Jira connector plus a Track-sync workflow.', provides: { connectors: 1, workflows: 1, skills: 1 } },
       ];

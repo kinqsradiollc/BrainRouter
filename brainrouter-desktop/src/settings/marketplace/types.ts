@@ -9,6 +9,7 @@
 export interface PluginProvidesView {
   skills?: number;
   agents?: number;
+  orchestrationProfiles?: number;
   commands?: number;
   hooks?: number;
   mcpServers?: number;
@@ -92,6 +93,7 @@ export function describeProvides(p: PluginProvidesView): string {
   const push = (n: number | undefined, one: string): void => { if (n) parts.push(`${n} ${n === 1 ? one : `${one}s`}`); };
   push(p.skills, 'skill');
   push(p.agents, 'agent');
+  push(p.orchestrationProfiles, 'orchestration profile');
   push(p.commands, 'command');
   push(p.hooks, 'hook');
   push(p.mcpServers, 'MCP server');
