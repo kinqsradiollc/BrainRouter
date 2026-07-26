@@ -17,13 +17,13 @@ const DEV_CAPABILITIES = [
     id: 'frontend',
     label: 'Frontend',
     description: 'Task-time UI, accessibility, responsive, and browser-visual expertise.',
-    expandsTo: ['frontend', 'a11y-skill', 'browser-testing-skill', 'taste-skill', 'browser', 'design'],
+    expandsTo: ['a11y-skill', 'browser-testing-skill', 'taste-skill', 'browser', 'design'],
   },
   {
     id: 'backend',
     label: 'Backend',
     description: 'Task-time service, authorization, data, production, and backend-test expertise.',
-    expandsTo: ['backend', 'api-service-design-skill', 'backend-testing-skill', 'coding', 'terminal'],
+    expandsTo: ['api-service-design-skill', 'backend-testing-skill', 'coding', 'terminal'],
   },
 ] as const;
 const DEV_TOOL_GROUPS = [
