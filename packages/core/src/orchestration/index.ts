@@ -12,6 +12,7 @@ export * from './delegation/delegationPolicy.js';
 export * from './delegation/autoChain.js';
 export * from './agents/agentRegistry.js';
 export * from './profiles/orchestrationProfileCatalog.js';
+export * from './profiles/orchestrationProfileSources.js';
 export * from './profiles/orchestrationProfileDefinitionFile.js';
 export * from './profiles/orchestrationProfileResolver.js';
 export * from './profiles/adaptiveStrategySelection.js';
