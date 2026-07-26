@@ -983,6 +983,16 @@ The initial cross-profile catalog is:
 | Technical documentation | Writing, Engineering | Repository-grounded API/reference/tutorial structure, runnable examples, terminology consistency, and documentation review | `coding`, `browser`, `artifacts` |
 | Installed custom capability | Custom | Contribution-defined, schema-validated payload | None unless explicitly reviewed |
 
+The alternatives are:
+
+| Approach | Advantages | Disadvantages | Decision |
+|---|---|---|---|
+| Keep optional capabilities Engineering-only | Smallest catalog and no new packs | Makes the abstraction profile-specific in practice; Research, Data, Study, and Writing cannot express common specializations | Rejected |
+| Rename every profile skill pack as a capability | Reuses existing packages and produces rows quickly | Duplicates the profile itself, mixes persistent domain identity with task-time activation, and repeats the current UI confusion | Rejected |
+| Show every installed capability for every profile | Maximum discoverability and fewer compatibility rules | Encourages nonsensical combinations, expands proposal ambiguity, and makes validation less useful | Rejected except for explicit Custom setup |
+| Generate arbitrary capabilities from the project description | Highly flexible and needs no bundled catalog | Produces unstable IDs and unreviewed payloads; cannot support deterministic validation, upgrades, or blocked-state explanations | Rejected |
+| Separate compatible choices from recommended defaults | Consistent picker across profiles, deterministic validation, safe managed recommendations, and room for installed contributions | Requires explicit capability metadata and several small pack implementations | Accepted |
+
 The profile pack continues to provide the normal domain workflow. These
 capabilities are narrower additions, not renamed copies of Research, Data,
 Study, Writing, or Engineering. A deterministic scan or managed onboarding
