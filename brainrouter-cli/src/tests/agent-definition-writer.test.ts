@@ -31,8 +31,14 @@ function definition(prompt = 'Inspect project documentation.'): ReturnType<typeo
 test('project agent writer emits a canonical, private, runtime-loadable definition', () => {
   withWorkspace((workspace) => {
     const file = writeProjectAgentDefinition(workspace, definition());
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as { delegateName: string };
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+      schemaVersion: number;
+      kind: string;
+      delegateName: string;
+    };
 
+    assert.equal(parsed.schemaVersion, 1);
+    assert.equal(parsed.kind, 'orchestration-role');
     assert.equal(parsed.delegateName, 'delegate_doc_writer');
     assert.equal(fs.statSync(file).mode & 0o777, 0o600);
     assert.equal(findById('doc-writer', workspace)?.def.delegateName, 'delegate_doc_writer');

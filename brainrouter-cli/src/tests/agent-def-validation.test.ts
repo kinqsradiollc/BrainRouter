@@ -51,6 +51,8 @@ test('CLI-13 validateAgentDefinition: non-positive numeric bounds', () => {
 
 test('CLI-13 buildAgentDefinition: fills the complete def with sane defaults', () => {
   const def = buildAgentDefinition({ id: 'doc-writer', prompt: 'write docs', defaultAccess: 'write', toolScope: { local: ['read_file'], mcp: [] } });
+  assert.equal(def.schemaVersion, 1);
+  assert.equal(def.kind, 'orchestration-role');
   assert.equal(def.id, 'doc-writer');
   assert.equal(def.displayName, 'doc-writer'); // defaults to id
   assert.equal(def.defaultAccess, 'write');

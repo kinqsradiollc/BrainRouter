@@ -1,4 +1,6 @@
 {
+  "schemaVersion": 1,
+  "kind": "orchestration-role",
   "id": "worker",
   "displayName": "Worker",
   "whenToUse": "Implementation-focused. May edit files when granted write access.",

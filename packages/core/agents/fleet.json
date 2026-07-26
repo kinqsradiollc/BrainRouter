@@ -1,4 +1,6 @@
 {
+  "schemaVersion": 1,
+  "kind": "orchestration-role",
   "id": "fleet",
   "displayName": "Fleet executor",
   "whenToUse": "Unattended fleet executor. Implements a self-contained task end-to-end in an isolated, sandboxed worktree; its work is delivered as a PR.",

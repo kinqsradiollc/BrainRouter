@@ -1,4 +1,6 @@
 {
+  "schemaVersion": 1,
+  "kind": "orchestration-role",
   "id": "explorer",
   "displayName": "Explorer",
   "whenToUse": "Read-only codebase investigation. Returns concrete file paths, line ranges, and a short list of facts.",

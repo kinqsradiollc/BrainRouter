@@ -1,4 +1,6 @@
 {
+  "schemaVersion": 1,
+  "kind": "orchestration-role",
   "id": "tutor",
   "displayName": "Tutor specialist",
   "whenToUse": "Delegate a bounded explanation, practice, assessment, or learning-plan task in a study workspace.",

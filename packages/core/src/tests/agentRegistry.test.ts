@@ -8,10 +8,16 @@ import {
   listAll,
   loadActiveRegistry,
   loadRegistry,
+  parseAgentDefinition,
   type AgentDefinition,
 } from '../orchestration/agents/agentRegistry.js';
 import { synthesizeDelegateTools } from '../orchestration/tools/toolNames.js';
 import { createWorkspaceManifest, saveWorkspaceManifest } from '../workspace/manifest.js';
+
+const ORCHESTRATION_ROLE_HEADER = {
+  schemaVersion: 1 as const,
+  kind: 'orchestration-role' as const,
+};
 
 function writeAgentDefinition(
   workspace: string,
@@ -21,6 +27,7 @@ function writeAgentDefinition(
   const agentsDir = path.join(workspace, '.brainrouter', 'agents');
   fs.mkdirSync(agentsDir, { recursive: true });
   const definition: AgentDefinition = {
+    ...ORCHESTRATION_ROLE_HEADER,
     id,
     displayName: id,
     whenToUse: `Use ${id} for its enabled project work.`,
@@ -51,12 +58,77 @@ test('built-in registry loads all canonical roles', () => {
 test('all built-in definitions carry required fields', () => {
   for (const loaded of loadRegistry()) {
     const { def } = loaded;
+    assert.equal(def.schemaVersion, 1, `${def.id}: wrong schemaVersion`);
+    assert.equal(def.kind, 'orchestration-role', `${def.id}: wrong kind`);
     assert.ok(def.id, `${def.id}: missing id`);
     assert.ok(def.tier, `${def.id}: missing tier`);
     assert.ok(def.defaultAccess, `${def.id}: missing defaultAccess`);
     assert.ok(def.prompt, `${def.id}: missing prompt`);
     assert.equal(loaded.source, 'builtin');
   }
+});
+
+test('legacy executable definitions normalize to the orchestration-role contract', () => {
+  const parsed = parseAgentDefinition(JSON.stringify({
+    id: 'legacy-role',
+    displayName: 'Legacy role',
+    whenToUse: 'Use for legacy compatibility verification.',
+    prompt: 'Complete the bounded delegated task.',
+    model: null,
+    effort: null,
+    defaultAccess: 'read',
+    toolScope: { local: [], mcp: [] },
+    disallowedTools: [],
+    maxIterations: 10,
+    timeoutMs: 30_000,
+    maxResultChars: 2_000,
+    subagents: [],
+    delegateName: 'delegate_legacy_role',
+    tier: 'worker',
+    outputContract: null,
+  }), 'legacy-role');
+
+  assert.equal(parsed.schemaVersion, 1);
+  assert.equal(parsed.kind, 'orchestration-role');
+});
+
+test('executable definitions reject persona-only, unknown, and wrong discriminator fields', () => {
+  const valid = {
+    ...ORCHESTRATION_ROLE_HEADER,
+    id: 'bounded-role',
+    displayName: 'Bounded role',
+    whenToUse: 'Use for a bounded task.',
+    prompt: 'Complete the bounded task.',
+    model: null,
+    effort: null,
+    defaultAccess: 'read',
+    toolScope: { local: [], mcp: [] },
+    disallowedTools: [],
+    maxIterations: 10,
+    timeoutMs: 30_000,
+    maxResultChars: 2_000,
+    subagents: [],
+    delegateName: 'delegate_bounded_role',
+    tier: 'worker',
+    outputContract: null,
+  };
+
+  assert.throws(
+    () => parseAgentDefinition(JSON.stringify({ ...valid, instructions: ['Act as a persona.'] }), 'bounded-role'),
+    /persona-only fields: instructions/,
+  );
+  assert.throws(
+    () => parseAgentDefinition(JSON.stringify({ ...valid, arbitraryPolicy: true }), 'bounded-role'),
+    /unknown fields: arbitraryPolicy/,
+  );
+  assert.throws(
+    () => parseAgentDefinition(JSON.stringify({ ...valid, kind: 'persona' }), 'bounded-role'),
+    /kind must be "orchestration-role"/,
+  );
+  assert.throws(
+    () => parseAgentDefinition(JSON.stringify({ ...valid, schemaVersion: 2 }), 'bounded-role'),
+    /schemaVersion must be 1/,
+  );
 });
 
 test('explorer, architect, reviewer are reasoning tier', () => {
@@ -89,6 +161,7 @@ test('workspace definition overrides builtin with same id', () => {
     const agentsDir = path.join(workspace, '.brainrouter', 'agents');
     fs.mkdirSync(agentsDir, { recursive: true });
     const custom: AgentDefinition = {
+      ...ORCHESTRATION_ROLE_HEADER,
       id: 'explorer',
       displayName: 'Custom Explorer',
       whenToUse: 'custom',
@@ -132,6 +205,7 @@ test('workspace-only id coexists with builtins', () => {
     const agentsDir = path.join(workspace, '.brainrouter', 'agents');
     fs.mkdirSync(agentsDir, { recursive: true });
     const custom: AgentDefinition = {
+      ...ORCHESTRATION_ROLE_HEADER,
       id: 'my-custom-agent',
       displayName: 'My Custom Agent',
       whenToUse: 'custom',
@@ -207,6 +281,7 @@ test('W4b agent definitions require the id to match the JSON filename', () => {
     const agentsDir = path.join(workspace, '.brainrouter', 'agents');
     fs.mkdirSync(agentsDir, { recursive: true });
     const custom: AgentDefinition = {
+      ...ORCHESTRATION_ROLE_HEADER,
       id: 'actual-id',
       displayName: 'Actual id',
       whenToUse: 'Use for a bounded task.',
@@ -269,6 +344,7 @@ test('W4b pack agent directories cannot escape either the source root or pack ro
     fs.mkdirSync(packRoot, { recursive: true });
     fs.mkdirSync(siblingAgents, { recursive: true });
     const escaped: AgentDefinition = {
+      ...ORCHESTRATION_ROLE_HEADER,
       id: 'escaped',
       displayName: 'Escaped',
       whenToUse: 'Never load this definition.',
@@ -311,6 +387,7 @@ test('W4b legacy CLI delegate names normalize to a routable typed tool', () => {
     const agentsDir = path.join(workspace, '.brainrouter', 'agents');
     fs.mkdirSync(agentsDir, { recursive: true });
     const custom: AgentDefinition = {
+      ...ORCHESTRATION_ROLE_HEADER,
       id: 'project-specialist',
       displayName: 'Project specialist',
       whenToUse: 'Use for project-specific work.',

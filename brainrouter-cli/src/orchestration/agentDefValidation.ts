@@ -110,6 +110,8 @@ export function validateAgentDefinition(def: AgentDefDraft, ctx?: ValidationCont
 
 /** A complete AgentDefinition (the JSON `/agents create` writes), defaults filled. */
 export interface BuiltAgentDefinition {
+  schemaVersion: 1;
+  kind: 'orchestration-role';
   id: string;
   displayName: string;
   whenToUse: string;
@@ -138,6 +140,8 @@ export interface BuiltAgentDefinition {
 export function buildAgentDefinition(draft: AgentDefDraft): BuiltAgentDefinition {
   const id = draft.id!;
   return {
+    schemaVersion: 1,
+    kind: 'orchestration-role',
     id,
     displayName: draft.displayName ?? id,
     whenToUse: draft.whenToUse ?? '',
