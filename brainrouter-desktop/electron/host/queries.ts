@@ -354,6 +354,7 @@ import { listSessions } from '@kinqs/brainrouter-core/orchestration';
 import { localToolSpecsFromExecutors, isProtectedCoreTool } from '@kinqs/brainrouter-core/tool';
 import { readRun } from '@kinqs/brainrouter-core/workflow';
 import { desktopSessionModePatchFromArgs, mergeSessionModePrefs } from '../sessionModeBridge.js';
+import { buildWorkspaceKnowledgeQueries } from '../knowledgeBridge.js';
 import type { HostContext, TrackPrView } from './context.js';
 import type { QueryHandler } from '../hostCore.js';
 
@@ -482,7 +483,12 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       ])),
     };
   };
+  const workspaceKnowledgeQueries = buildWorkspaceKnowledgeQueries({
+    getConfig: loadConfig,
+    getRemoteUrl: () => wsGit.remoteUrl,
+  });
   return {
+      ...workspaceKnowledgeQueries,
       // Read-only surfaces — same pure modules the TUI commands use.
       // DESK-6m — sidebar sessions merged with their UI meta (title override,
       // pinned/archived/status/group) and sorted pinned-first; the renderer's
