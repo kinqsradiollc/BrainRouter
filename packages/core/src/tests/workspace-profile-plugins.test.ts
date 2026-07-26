@@ -16,7 +16,7 @@ test('C2 package-owned profile plugins use the standard versioned plugin contrac
   const catalog = inspectWorkspaceProfilePlugins();
   const expectedVersions = new Map([
     ['research', '2.1.0'],
-    ['study', '2.0.0'],
+    ['study', '2.1.0'],
     ['data', '2.0.0'],
     ['writing', '2.0.0'],
     ['frontend', '1.0.0'],
@@ -62,6 +62,22 @@ test('research profile exposes separate task-selectable workflow skills', () => 
     'source-synthesis-skill',
     'citation-verification-skill',
     'research-review-skill',
+  ]);
+});
+
+test('study profile exposes separate task-selectable tutoring workflows', () => {
+  const study = findWorkspaceProfilePlugin('study');
+
+  assert.ok(study);
+  assert.equal(study.kind, 'profile');
+  assert.equal(study.version, '2.1.0');
+  assert.deepEqual(study.skillIds, [
+    'learner-diagnostic-skill',
+    'learning-plan-skill',
+    'tutoring-explanation-skill',
+    'learning-assessment-skill',
+    'error-remediation-skill',
+    'retrieval-practice-skill',
   ]);
 });
 

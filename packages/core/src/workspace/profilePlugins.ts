@@ -56,7 +56,14 @@ export const WORKSPACE_PROFILE_PLUGIN_DEFINITIONS: readonly WorkspaceProfilePlug
     id: 'study',
     kind: 'profile',
     pluginName: 'profile-study',
-    skillIds: ['learning-plan-skill', 'retrieval-practice-skill'],
+    skillIds: [
+      'learner-diagnostic-skill',
+      'learning-plan-skill',
+      'tutoring-explanation-skill',
+      'learning-assessment-skill',
+      'error-remediation-skill',
+      'retrieval-practice-skill',
+    ],
     personaIds: ['tutor'],
   },
   {
