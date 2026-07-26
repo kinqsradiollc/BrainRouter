@@ -14,6 +14,7 @@ import {
   normalizeWorkspaceManifest,
   previewReviewedWorkspaceInstruction,
   suggestWorkspaceProfile,
+  validateReviewedWorkspaceCapabilitySelection,
   validateReviewedWorkspaceSkillSelection,
   validateReviewedWorkspaceRoleSelection,
   workspaceProfilesForOnboarding,
@@ -186,6 +187,15 @@ export function saveWorkspaceManifestFromPayload(
       disabledRoles: draft.orchestration.disabledRoles,
     }, catalog);
     if (!roles.ok) throw new Error('Reviewed workspace role selection is unavailable.');
+    const capabilityCatalog = {
+      ...catalog,
+      entries: buildWorkspaceOnboardingPreview(draft, catalog).catalog,
+    };
+    const capabilities = validateReviewedWorkspaceCapabilitySelection(
+      draft.capabilities,
+      capabilityCatalog,
+    );
+    if (!capabilities.ok) throw new Error('Reviewed workspace capability selection is unavailable.');
     const skills = validateReviewedWorkspaceSkillSelection(draft.skills, catalog);
     if (!skills.ok) throw new Error('Reviewed workspace skill selection is unavailable.');
     const manifest = migrateWorkspaceManifestToolSelection({
@@ -196,6 +206,7 @@ export function saveWorkspaceManifestFromPayload(
           availableRoles: roles.value.availableRoles,
           disabledRoles: roles.value.disabledRoles,
         },
+        capabilities: capabilities.value,
         skills: skills.value,
       },
       reviewed: {

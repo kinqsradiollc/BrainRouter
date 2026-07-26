@@ -12,6 +12,20 @@ const DEV_ROLES = [
   ['verifier', 'Verifier', 'Runs checks against acceptance criteria.'],
   ['worker', 'Worker', 'Produces one bounded artifact or change.'],
 ] as const;
+const DEV_CAPABILITIES = [
+  {
+    id: 'frontend',
+    label: 'Frontend',
+    description: 'Task-time UI, accessibility, responsive, and browser-visual expertise.',
+    expandsTo: ['a11y-skill', 'browser-testing-skill', 'taste-skill', 'browser', 'design'],
+  },
+  {
+    id: 'backend',
+    label: 'Backend',
+    description: 'Task-time service, authorization, data, production, and backend-test expertise.',
+    expandsTo: ['api-service-design-skill', 'backend-testing-skill', 'coding', 'terminal'],
+  },
+] as const;
 const DEV_TOOL_GROUPS = [
   {
     id: 'coding',
@@ -101,12 +115,14 @@ export function buildDevOnboardingPreview(value: unknown): Record<string, unknow
   const packIds = [...new Set(WORKSPACE_PROFILES.flatMap((profile) => profile.skills.packs))];
   const selectedGroups = new Set(draft.tools.profiles);
   const selectedTools = new Set(draft.tools.enabled);
+  const selectedCapabilities = new Set(draft.capabilities.enabled);
   const selectedPacks = new Set(draft.skills.packs);
   const selectedSkills = new Set(draft.skills.enabled);
   const denied = new Set(draft.tools.deny);
   const recommended = WORKSPACE_PROFILES.find((profile) => profile.id === draft.profile);
   const recommendedGroups = new Set(recommended?.tools.profiles ?? []);
   const recommendedRoles = new Set(recommended?.orchestration.availableRoles ?? []);
+  const recommendedCapabilities = new Set(recommended?.capabilities.enabled ?? []);
   const recommendedPacks = new Set(recommended?.skills.packs ?? []);
   const recommendedSkills = new Set(recommended?.skills.enabled ?? []);
   const catalog = [
@@ -132,6 +148,26 @@ export function buildDevOnboardingPreview(value: unknown): Record<string, unknow
         selected: draft.orchestration.availableRoles.includes(id),
         recommended: recommendedRoles.has(id),
         denied: draft.orchestration.disabledRoles.includes(id),
+      };
+    }),
+    ...DEV_CAPABILITIES.map((capability) => {
+      const selectable = draft.profile === 'custom'
+        || recommendedCapabilities.has(capability.id);
+      return {
+        ...capability,
+        kind: 'capability',
+        category: 'workspace-capabilities',
+        source: 'capability-plugin',
+        provenance: `capability-${capability.id}`,
+        persistable: true,
+        selectable,
+        ...(selectable ? {} : {
+          blockedReason: 'Not contributed for the selected workspace profile.',
+        }),
+        runtimeAvailabilityPrerequisites: [],
+        selected: selectedCapabilities.has(capability.id),
+        recommended: recommendedCapabilities.has(capability.id),
+        denied: draft.capabilities.disabled.includes(capability.id),
       };
     }),
     ...DEV_TOOL_GROUPS.map((group) => ({
