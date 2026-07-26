@@ -806,10 +806,11 @@ Manifest v2 uses `mode: "legacy-groups"` on read. It preserves today's behavior:
 the existing group gate applies to its managed surface while tools outside that
 legacy registry retain their present visibility. Migration to
 `explicit-catalog` is a reviewed user action; it is never inferred from an old
-list. Existing onboarding continues writing v2 until the catalog picker and
-exact manifest diff are available; Core exposes a stale-safe reviewed migration
-instead of changing the current writer underneath those surfaces. A no-manifest
-workspace remains an exact no-op.
+list. Each onboarding surface continues writing v2 until its catalog picker and
+exact review are available, then explicitly writes v3 from the reviewed catalog
+snapshot. Core exposes a stale-safe reviewed migration instead of changing an
+older writer underneath that surface. A no-manifest workspace remains an exact
+no-op.
 
 Task-time capability detection cannot add an unselected tool group under
 `explicit-catalog`; capabilities only subtract through their existing runtime
@@ -1198,6 +1199,18 @@ because it may restate user content.
   performs no onboarding write, preserves no-manifest behavior, and supports
   starting setup again later.
 - Preserve user review before any manifest write.
+
+P23-8 ships as two independently reviewed product slices. The Core/CLI slice
+adds the sixth `custom` plan, derives all onboarding orchestration defaults from
+the packaged plan catalog, exposes one safe plan/catalog preview, and replaces
+CLI free-text skill/tool IDs with catalog multi-select controls. Its final
+review shows fallback strategy, stages, effective roles, skills, concrete
+tools, and concurrency ceilings, then writes explicit-catalog v3 only after
+confirmation. The Desktop slice consumes the same Core preview/catalog through
+the existing host bridge and must land separately with renderer tests and live
+UI review. Both retain **Skip setup for now** as a terminal no-write action;
+the CLI path returns before catalog review and remains covered by a filesystem
+no-write test.
 
 ### P23-9 — Plugin and workspace contributions
 

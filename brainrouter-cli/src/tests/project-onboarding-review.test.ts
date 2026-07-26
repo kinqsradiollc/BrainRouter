@@ -34,6 +34,9 @@ function acceptingPrompt(options: {
       options.beforeConfirm?.();
       return { kind: 'submit', value: 'save' };
     }
+    if (request.multiSelect) {
+      return { kind: 'submit', value: request.initialChoices ?? [] };
+    }
     return { kind: 'submit', value: options.text?.[request.id] ?? request.initialValue ?? '' };
   };
 }
@@ -90,6 +93,8 @@ test('final confirmation saves the reviewed persona, orchestration, and engineer
       maxParallel: 4,
     });
     assert.deepEqual(saved.capabilities.enabled, ['frontend', 'backend']);
+    assert.equal(saved.version, 3);
+    assert.equal(saved.tools.mode, 'explicit-catalog');
     assert.ok(!JSON.stringify(saved).includes('frontend-builder'));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

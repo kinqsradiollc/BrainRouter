@@ -7,7 +7,8 @@ import {
 } from '@kinqs/brainrouter-core/agent';
 import type { LLMConfig } from '@kinqs/brainrouter-core/config';
 import {
-  WORKSPACE_PROFILES,
+  buildWorkspaceOnboardingPreview,
+  buildWorkspaceSelectionCatalog,
   commitReviewedWorkspaceOnboarding,
   inspectWorkspaceOnboardingReview,
   isWorkspaceProfileId,
@@ -15,6 +16,7 @@ import {
   normalizeWorkspaceManifest,
   previewReviewedWorkspaceInstruction,
   proposeWorkspaceOnboarding,
+  workspaceProfilesForOnboarding,
   workspaceManifestPath,
   type AssistedOnboardingOptions,
   type AssistedOnboardingResult,
@@ -32,8 +34,8 @@ import {
   type ProjectOnboardingResult,
 } from './projectOnboard.js';
 import {
-  applyProjectOnboardingEdits,
   createProjectOnboardingDraft,
+  finalizeCatalogReviewedProjectOnboarding,
 } from './onboardingDraft.js';
 
 export interface ProjectOnboardingScanOptions {
@@ -129,6 +131,7 @@ export async function reviewProjectOnboardingProposal(
   const root = path.resolve(workspaceRoot);
   const prompt = options.prompt ?? promptProjectOnboarding;
   const print = options.print ?? console.log;
+  const catalog = buildWorkspaceSelectionCatalog();
   const start = await prompt({
     id: 'start',
     kind: 'choice',
@@ -149,7 +152,7 @@ export async function reviewProjectOnboardingProposal(
     title: 'Workspace profile',
     subtitle: 'The scan is a starting point. You control the saved profile.',
     badge: 'Step 1 of 4',
-    rows: WORKSPACE_PROFILES.map((preset) => ({
+    rows: workspaceProfilesForOnboarding().map((preset) => ({
       id: preset.id,
       label: preset.label,
       value: preset.id === proposal.manifest.profile ? 'proposed' : undefined,
@@ -157,7 +160,11 @@ export async function reviewProjectOnboardingProposal(
     })),
     initialChoice: proposal.manifest.profile,
   });
-  if (profileResponse.kind !== 'submit' || !isWorkspaceProfileId(profileResponse.value)) {
+  if (
+    profileResponse.kind !== 'submit'
+    || typeof profileResponse.value !== 'string'
+    || !isWorkspaceProfileId(profileResponse.value)
+  ) {
     return cancelled(print);
   }
 
@@ -167,10 +174,10 @@ export async function reviewProjectOnboardingProposal(
     existing: proposal.manifest,
     source: 'agent',
   });
-  const edits = await collectProjectOnboardingEdits(prompt, draft);
+  const edits = await collectProjectOnboardingEdits(prompt, draft, catalog);
   if (!edits) return cancelled(print);
-  const reviewed = applyProjectOnboardingEdits(draft, edits);
-  print(`\n${formatManifestSummary(reviewed)}\n`);
+  const reviewed = finalizeCatalogReviewedProjectOnboarding(draft, edits, catalog);
+  print(`\n${formatManifestSummary(reviewed, buildWorkspaceOnboardingPreview(reviewed, catalog))}\n`);
 
   let instruction: WorkspaceOnboardingProposal['instruction'];
   if (proposal.instruction && proposal.instruction.path !== 'AGENT.md') {

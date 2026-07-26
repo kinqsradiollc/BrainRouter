@@ -4,23 +4,32 @@ import path from 'node:path';
 import chalk from 'chalk';
 import {
   WORKSPACE_PROFILES,
+  buildWorkspaceOnboardingPreview,
+  buildWorkspaceSelectionCatalog,
   commitReviewedWorkspaceOnboarding,
   inspectWorkspaceOnboardingReview,
   isWorkspaceProfileId,
   loadWorkspaceManifest,
   suggestWorkspaceProfile,
+  workspaceProfilesForOnboarding,
   workspaceManifestPath,
+  type WorkspaceOnboardingPreview,
+  type WorkspaceSelectionCatalog,
   type WorkspaceManifest,
   type WorkspaceOnboardSource,
   type WorkspaceProfileId,
 } from '@kinqs/brainrouter-core/workspace';
 import { runPicker, runTextField, type PickerRow } from '../../ink/prompt/runPicker.js';
 import {
-  applyProjectOnboardingEdits,
   createProjectOnboardingDraft,
+  finalizeCatalogReviewedProjectOnboarding,
   parseProjectOnboardingList,
   type ProjectOnboardingFieldEdits,
 } from './onboardingDraft.js';
+import {
+  formatPlanPreview,
+  requestCatalogSelection,
+} from './projectOnboardingCatalog.js';
 
 export { suggestWorkspaceProfile, type ProfileSuggestion } from '@kinqs/brainrouter-core/workspace';
 
@@ -39,6 +48,7 @@ export type ProjectOnboardingPromptId =
   | 'skills-enabled'
   | 'skills-disabled'
   | 'tool-profiles'
+  | 'tools-enabled'
   | 'tools-denied'
   | 'memory-tags'
   | 'memory-capture-hint'
@@ -54,11 +64,14 @@ export interface ProjectOnboardingPromptRequest {
   badge?: string;
   rows?: PickerRow[];
   initialChoice?: string;
+  initialChoices?: string[];
+  multiSelect?: boolean;
+  allowEmptySelection?: boolean;
   initialValue?: string;
 }
 
 export type ProjectOnboardingPromptResponse =
-  | { kind: 'submit'; value: string }
+  | { kind: 'submit'; value: string | string[] }
   | { kind: 'skip' }
   | { kind: 'cancel' };
 
@@ -95,7 +108,10 @@ export function resolveProfileAnswer(input: string, suggested: WorkspaceProfileI
 }
 
 /** Human summary used for existing workspaces and the final review screen. */
-export function formatManifestSummary(manifest: WorkspaceManifest): string {
+export function formatManifestSummary(
+  manifest: WorkspaceManifest,
+  preview: WorkspaceOnboardingPreview = buildWorkspaceOnboardingPreview(manifest),
+): string {
   const lines = [
     `${chalk.bold('Workspace')}: ${manifest.name}  ${chalk.gray(`(profile: ${manifest.profile})`)}`,
     `  default persona: ${manifest.persona.default || chalk.gray('(none)')}`,
@@ -104,7 +120,8 @@ export function formatManifestSummary(manifest: WorkspaceManifest): string {
     `  capabilities: ${formatList(manifest.capabilities.enabled)}${formatDisabled(manifest.capabilities.disabled)}`,
     `  skill packs: ${formatList(manifest.skills.packs)}`,
     `  enabled skills: ${formatList(manifest.skills.enabled)}${formatDisabled(manifest.skills.disabled)}`,
-    `  tool profiles: ${formatList(manifest.tools.profiles)}${manifest.tools.deny.length ? `; denied: ${manifest.tools.deny.join(', ')}` : ''}`,
+    `  tool profiles: ${formatList(manifest.tools.profiles)}${manifest.tools.enabled?.length ? `; individual: ${manifest.tools.enabled.join(', ')}` : ''}${manifest.tools.deny.length ? `; denied: ${manifest.tools.deny.join(', ')}` : ''}`,
+    ...formatPlanPreview(preview),
     `  memory tags: ${formatList(manifest.memory.tags)}`,
     `  instructions: ${manifest.instructions || chalk.gray('(none)')}`,
     chalk.gray(`  onboarded ${manifest.onboarded.at || '(unknown)'} via ${manifest.onboarded.by} — edit with /init --edit (.brainrouter/workspace.json)`),
@@ -125,7 +142,11 @@ export async function promptProjectOnboarding(
       badge: request.badge,
       rows,
       initialCursor,
+      multiSelect: request.multiSelect,
+      initialSelected: request.initialChoices,
+      allowEmptySelection: request.allowEmptySelection,
     });
+    if (result.kind === 'multi') return { kind: 'submit', value: result.ids };
     if (result.kind !== 'pick') return { kind: 'cancel' };
     if (result.id === 'skip') return { kind: 'skip' };
     return { kind: 'submit', value: result.id };
@@ -191,6 +212,7 @@ export async function runProjectOnboarding(
   });
   if (start.kind === 'skip') return skipped(print);
   if (start.kind !== 'submit' || start.value !== 'continue') return cancelled(print);
+  const catalog = buildWorkspaceSelectionCatalog();
 
   const profileResponse = await prompt({
     id: 'profile',
@@ -198,7 +220,7 @@ export async function runProjectOnboarding(
     title: 'Workspace profile',
     subtitle: 'Profiles are editable presets. Detection never overrides your selection.',
     badge: 'Step 1 of 4',
-    rows: WORKSPACE_PROFILES.map((preset) => ({
+    rows: workspaceProfilesForOnboarding().map((preset) => ({
       id: preset.id,
       label: preset.label,
       value: preset.id === suggestion.profile ? 'detected' : undefined,
@@ -206,7 +228,11 @@ export async function runProjectOnboarding(
     })),
     initialChoice: existing?.profile ?? suggestion.profile,
   });
-  if (profileResponse.kind !== 'submit' || !isWorkspaceProfileId(profileResponse.value)) {
+  if (
+    profileResponse.kind !== 'submit'
+    || typeof profileResponse.value !== 'string'
+    || !isWorkspaceProfileId(profileResponse.value)
+  ) {
     return cancelled(print);
   }
 
@@ -217,10 +243,10 @@ export async function runProjectOnboarding(
     source: options.source,
     now: options.now,
   });
-  const edits = await collectProjectOnboardingEdits(prompt, draft);
+  const edits = await collectProjectOnboardingEdits(prompt, draft, catalog);
   if (!edits) return cancelled(print);
-  const reviewed = applyProjectOnboardingEdits(draft, edits);
-  print(`\n${formatManifestSummary(reviewed)}\n`);
+  const reviewed = finalizeCatalogReviewedProjectOnboarding(draft, edits, catalog);
+  print(`\n${formatManifestSummary(reviewed, buildWorkspaceOnboardingPreview(reviewed, catalog))}\n`);
 
   const confirm = await prompt({
     id: 'confirm',
@@ -248,6 +274,7 @@ export async function runProjectOnboarding(
 export async function collectProjectOnboardingEdits(
   prompt: ProjectOnboardingPrompt,
   draft: WorkspaceManifest,
+  catalog: WorkspaceSelectionCatalog = buildWorkspaceSelectionCatalog(),
 ): Promise<ProjectOnboardingFieldEdits | null> {
   const personaDefault = await requestText(prompt, 'persona-default', 'Default domain persona', draft.persona.default, 'Step 2 of 4 · persona');
   if (personaDefault === null) return null;
@@ -288,15 +315,35 @@ export async function collectProjectOnboardingEdits(
   if (!capabilitiesEnabled) return null;
   const capabilitiesDisabled = await requestList(prompt, 'capabilities-disabled', 'Disabled task capabilities', draft.capabilities.disabled, 'Step 2 of 4 · capabilities');
   if (!capabilitiesDisabled) return null;
-  const skillPacks = await requestList(prompt, 'skill-packs', 'Skill packs', draft.skills.packs, 'Step 3 of 4 · skills');
+  const skillPacks = await requestCatalogSelection(
+    prompt, catalog, 'skill-packs', 'Skill packs', 'skill-pack',
+    draft.skills.packs, 'Step 3 of 4 · skills', true,
+  );
   if (!skillPacks) return null;
-  const skillsEnabled = await requestList(prompt, 'skills-enabled', 'Enabled skills', draft.skills.enabled, 'Step 3 of 4 · skills');
+  const skillsEnabled = await requestCatalogSelection(
+    prompt, catalog, 'skills-enabled', 'Enabled individual skills', 'skill',
+    draft.skills.enabled, 'Step 3 of 4 · skills', true,
+  );
   if (!skillsEnabled) return null;
-  const skillsDisabled = await requestList(prompt, 'skills-disabled', 'Disabled skills', draft.skills.disabled, 'Step 3 of 4 · skills');
+  const skillsDisabled = await requestCatalogSelection(
+    prompt, catalog, 'skills-disabled', 'Disabled skills', 'skill',
+    draft.skills.disabled, 'Step 3 of 4 · skills', false,
+  );
   if (!skillsDisabled) return null;
-  const toolProfiles = await requestList(prompt, 'tool-profiles', 'Tool profiles', draft.tools.profiles, 'Step 3 of 4 · tools');
+  const toolProfiles = await requestCatalogSelection(
+    prompt, catalog, 'tool-profiles', 'Tool groups', 'tool-group',
+    draft.tools.profiles, 'Step 3 of 4 · tools', true,
+  );
   if (!toolProfiles) return null;
-  const toolsDenied = await requestList(prompt, 'tools-denied', 'Denied tools', draft.tools.deny, 'Step 3 of 4 · tools');
+  const toolsEnabled = await requestCatalogSelection(
+    prompt, catalog, 'tools-enabled', 'Additional individual tools', 'tool',
+    draft.tools.enabled ?? [], 'Step 3 of 4 · tools', true,
+  );
+  if (!toolsEnabled) return null;
+  const toolsDenied = await requestCatalogSelection(
+    prompt, catalog, 'tools-denied', 'Denied tool groups or tools', ['tool-group', 'tool'],
+    draft.tools.deny, 'Step 3 of 4 · tools', false,
+  );
   if (!toolsDenied) return null;
   const memoryTags = await requestList(prompt, 'memory-tags', 'Memory tags', draft.memory.tags, 'Step 3 of 4 · memory');
   if (!memoryTags) return null;
@@ -317,6 +364,7 @@ export async function collectProjectOnboardingEdits(
     skillsEnabled,
     skillsDisabled,
     toolProfiles,
+    toolsEnabled,
     toolsDenied,
     memoryTags,
     memoryCaptureHint,
@@ -355,7 +403,7 @@ async function requestText(
   badge: string,
 ): Promise<string | null> {
   const result = await prompt({ id, kind: 'text', title, badge, initialValue });
-  return result.kind === 'submit' ? result.value : null;
+  return result.kind === 'submit' && typeof result.value === 'string' ? result.value : null;
 }
 
 async function requestList(

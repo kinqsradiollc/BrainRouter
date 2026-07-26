@@ -25,6 +25,7 @@ import {
   isWorkspaceProfileId,
   type WorkspaceProfileId,
 } from './profiles.js';
+import { resolveWorkspaceProfileOrchestrationDefaults } from './profileOrchestrationDefaults.js';
 import { RESERVED_ORCHESTRATION_ROLE_IDS } from './personaDefinitionFile.js';
 import { readWorkspaceFileBounded, writeWorkspaceFileAtomic } from './fileWrite.js';
 import { recoverInterruptedWorkspaceManifestClaim } from './manifestClaim.js';
@@ -296,6 +297,7 @@ export function createWorkspaceManifest(input: {
   >>;
 }): WorkspaceManifest {
   const preset = getWorkspaceProfile(input.profile) ?? getWorkspaceProfile('custom')!;
+  const orchestrationDefaults = resolveWorkspaceProfileOrchestrationDefaults(preset.id);
   const overrides = input.overrides ?? {};
   const persona = overrides.persona ?? overrides.agents ?? {
     default: preset.persona.default,
@@ -308,10 +310,10 @@ export function createWorkspaceManifest(input: {
     onboarded: { at: input.at ?? new Date().toISOString(), by: input.by },
     persona,
     orchestration: overrides.orchestration ?? {
-      mode: preset.orchestration.mode,
-      availableRoles: [...preset.orchestration.availableRoles],
-      disabledRoles: [...preset.orchestration.disabledRoles],
-      maxParallel: preset.orchestration.maxParallel,
+      mode: orchestrationDefaults.mode,
+      availableRoles: orchestrationDefaults.availableRoles,
+      disabledRoles: orchestrationDefaults.disabledRoles,
+      maxParallel: orchestrationDefaults.maxParallel,
     },
     agents: persona,
     capabilities: overrides.capabilities ?? { enabled: [...preset.capabilities.enabled], disabled: [] },
