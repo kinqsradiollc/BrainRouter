@@ -48,6 +48,22 @@ import {
   BrainChatRequest,
   BrainChatResponse,
 } from "@kinqs/brainrouter-types";
+import type {
+  BrainRouterRequestOptions,
+  CreateKnowledgeBaseInput,
+  IngestKnowledgeBinaryInput,
+  IngestKnowledgeTextInput,
+  KnowledgeBaseResponse,
+  KnowledgeBasesResponse,
+  KnowledgeDocumentEnqueueResponse,
+  KnowledgeDocumentRetryResponse,
+  KnowledgeDocumentsResponse,
+  KnowledgeDocumentStatusResponse,
+  KnowledgeSearchResponse,
+  ListKnowledgeDocumentsInput,
+  SearchKnowledgeInput,
+  UpdateKnowledgeBaseInput,
+} from "./knowledge.js";
 
 export class BrainRouterApiError extends Error {
   constructor(
@@ -116,7 +132,11 @@ export class BrainRouterClient {
   }
 
   /** Single fetch path for every verb, with one transparent refresh-and-retry on 401. */
-  private async request<T>(method: string, path: string, opts?: { query?: object; body?: unknown }): Promise<T> {
+  private async request<T>(
+    method: string,
+    path: string,
+    opts?: { query?: object; body?: unknown; signal?: AbortSignal },
+  ): Promise<T> {
     const url = `${this.baseUrl}${path}${this.qs(opts?.query)}`;
     const hasBody = opts?.body !== undefined;
     const fire = (tokenOverride?: string) =>
@@ -124,6 +144,7 @@ export class BrainRouterClient {
         method,
         headers: { ...(hasBody ? { "Content-Type": "application/json" } : {}), ...this.headers(tokenOverride) },
         body: hasBody ? JSON.stringify(opts!.body) : undefined,
+        signal: opts?.signal,
       });
 
     let res = await fire();
@@ -139,12 +160,34 @@ export class BrainRouterClient {
     return res.json() as Promise<T>;
   }
 
-  private get<T>(path: string, params?: object): Promise<T> { return this.request<T>("GET", path, { query: params }); }
-  private post<T>(path: string, body: unknown): Promise<T> { return this.request<T>("POST", path, { body }); }
-  private put<T>(path: string, body: unknown): Promise<T> { return this.request<T>("PUT", path, { body }); }
-  private patch<T>(path: string, body: unknown): Promise<T> { return this.request<T>("PATCH", path, { body }); }
-  private deleteReq<T>(path: string): Promise<T> { return this.request<T>("DELETE", path); }
+  private get<T>(path: string, params?: object, options?: BrainRouterRequestOptions): Promise<T> {
+    return this.request<T>("GET", path, { query: params, signal: options?.signal });
+  }
+  private post<T>(path: string, body: unknown, options?: BrainRouterRequestOptions): Promise<T> {
+    return this.request<T>("POST", path, { body, signal: options?.signal });
+  }
+  private put<T>(path: string, body: unknown, options?: BrainRouterRequestOptions): Promise<T> {
+    return this.request<T>("PUT", path, { body, signal: options?.signal });
+  }
+  private patch<T>(path: string, body: unknown, options?: BrainRouterRequestOptions): Promise<T> {
+    return this.request<T>("PATCH", path, { body, signal: options?.signal });
+  }
+  private deleteReq<T>(path: string, options?: BrainRouterRequestOptions): Promise<T> {
+    return this.request<T>("DELETE", path, { signal: options?.signal });
+  }
   private deleteWithBody<T>(path: string, body: unknown): Promise<T> { return this.request<T>("DELETE", path, { body }); }
+
+  private knowledgeProjectPath(projectId: string): string {
+    return `/api/knowledge/projects/${encodeURIComponent(projectId)}`;
+  }
+
+  private knowledgeBasePath(projectId: string, baseId: string): string {
+    return `${this.knowledgeProjectPath(projectId)}/bases/${encodeURIComponent(baseId)}`;
+  }
+
+  private knowledgeDocumentPath(projectId: string, baseId: string, documentId: string): string {
+    return `${this.knowledgeBasePath(projectId, baseId)}/documents/${encodeURIComponent(documentId)}`;
+  }
 
   private async toError(res: Response) {
     const body = await res.text();
@@ -166,6 +209,142 @@ export class BrainRouterClient {
   signOut() { return this.post<{ success: boolean }>("/api/auth/signout", {}); }
   updateMe(body: { displayName: string }) { return this.put<{ success: boolean }>("/api/auth/me", body); }
   rotateApiKey() { return this.post<{ apiKey: string }>("/api/auth/rotate-key", {}); }
+
+  // Project-scoped knowledge operations
+  listKnowledgeBases(projectId: string, options?: BrainRouterRequestOptions) {
+    return this.get<KnowledgeBasesResponse>(
+      `${this.knowledgeProjectPath(projectId)}/bases`,
+      undefined,
+      options,
+    );
+  }
+
+  createKnowledgeBase(
+    projectId: string,
+    body: CreateKnowledgeBaseInput,
+    options?: BrainRouterRequestOptions,
+  ) {
+    return this.post<KnowledgeBaseResponse>(
+      `${this.knowledgeProjectPath(projectId)}/bases`,
+      body,
+      options,
+    );
+  }
+
+  getKnowledgeBase(projectId: string, baseId: string, options?: BrainRouterRequestOptions) {
+    return this.get<KnowledgeBaseResponse>(
+      this.knowledgeBasePath(projectId, baseId),
+      undefined,
+      options,
+    );
+  }
+
+  updateKnowledgeBase(
+    projectId: string,
+    baseId: string,
+    body: UpdateKnowledgeBaseInput,
+    options?: BrainRouterRequestOptions,
+  ) {
+    return this.patch<KnowledgeBaseResponse>(
+      this.knowledgeBasePath(projectId, baseId),
+      body,
+      options,
+    );
+  }
+
+  deleteKnowledgeBase(projectId: string, baseId: string, options?: BrainRouterRequestOptions) {
+    return this.deleteReq<void>(this.knowledgeBasePath(projectId, baseId), options);
+  }
+
+  listKnowledgeDocuments(
+    projectId: string,
+    baseId: string,
+    filters?: ListKnowledgeDocumentsInput,
+    options?: BrainRouterRequestOptions,
+  ) {
+    return this.get<KnowledgeDocumentsResponse>(
+      `${this.knowledgeBasePath(projectId, baseId)}/documents`,
+      filters,
+      options,
+    );
+  }
+
+  ingestKnowledgeText(
+    projectId: string,
+    baseId: string,
+    body: IngestKnowledgeTextInput,
+    options?: BrainRouterRequestOptions,
+  ) {
+    return this.post<KnowledgeDocumentEnqueueResponse>(
+      `${this.knowledgeBasePath(projectId, baseId)}/documents/text`,
+      body,
+      options,
+    );
+  }
+
+  ingestKnowledgePdf(
+    projectId: string,
+    baseId: string,
+    body: IngestKnowledgeBinaryInput,
+    options?: BrainRouterRequestOptions,
+  ) {
+    return this.post<KnowledgeDocumentEnqueueResponse>(
+      `${this.knowledgeBasePath(projectId, baseId)}/documents/pdf`,
+      body,
+      options,
+    );
+  }
+
+  ingestKnowledgeDocx(
+    projectId: string,
+    baseId: string,
+    body: IngestKnowledgeBinaryInput,
+    options?: BrainRouterRequestOptions,
+  ) {
+    return this.post<KnowledgeDocumentEnqueueResponse>(
+      `${this.knowledgeBasePath(projectId, baseId)}/documents/docx`,
+      body,
+      options,
+    );
+  }
+
+  getKnowledgeDocumentStatus(
+    projectId: string,
+    baseId: string,
+    documentId: string,
+    options?: BrainRouterRequestOptions,
+  ) {
+    return this.get<KnowledgeDocumentStatusResponse>(
+      `${this.knowledgeDocumentPath(projectId, baseId, documentId)}/status`,
+      undefined,
+      options,
+    );
+  }
+
+  retryKnowledgeDocument(
+    projectId: string,
+    baseId: string,
+    documentId: string,
+    options?: BrainRouterRequestOptions,
+  ) {
+    return this.post<KnowledgeDocumentRetryResponse>(
+      `${this.knowledgeDocumentPath(projectId, baseId, documentId)}/retry`,
+      {},
+      options,
+    );
+  }
+
+  searchKnowledge(
+    projectId: string,
+    body: SearchKnowledgeInput,
+    options?: BrainRouterRequestOptions,
+  ) {
+    return this.post<KnowledgeSearchResponse>(
+      `${this.knowledgeProjectPath(projectId)}/search`,
+      body,
+      options,
+    );
+  }
 
   // Admin User Operations
   getUsers(params?: CursorPaginationParams) { return this.get<{ users: PublicUserRecord[]; nextCursor: string | null; limit: number; hasMore: boolean }>("/api/users", params); }
