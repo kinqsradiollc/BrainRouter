@@ -56,6 +56,11 @@ export interface WorkspaceProfileServingRecommendation {
   advisory: true;
   authorizationEffect: 'none';
   complete: boolean;
+  persona: {
+    default: string;
+    enabled: string[];
+  };
+  /** @deprecated Client compatibility alias for `persona`. */
   agents: {
     default: string;
     enabled: string[];
@@ -125,8 +130,8 @@ export function recommendWorkspaceProfileServing(
   );
 
   const requestedPersonas = unique([
-    preset.agents.default,
-    ...preset.agents.enabled,
+    preset.persona.default,
+    ...preset.persona.enabled,
   ].filter(Boolean));
   const enabledPersonas = requestedPersonas.filter((id) => {
     if (availablePersonas.has(id)) return true;
@@ -149,8 +154,12 @@ export function recommendWorkspaceProfileServing(
     advisory: true,
     authorizationEffect: 'none',
     complete: unavailable.length === 0,
+    persona: {
+      default: availablePersonas.has(preset.persona.default) ? preset.persona.default : '',
+      enabled: enabledPersonas,
+    },
     agents: {
-      default: availablePersonas.has(preset.agents.default) ? preset.agents.default : '',
+      default: availablePersonas.has(preset.persona.default) ? preset.persona.default : '',
       enabled: enabledPersonas,
     },
     skillPacks,

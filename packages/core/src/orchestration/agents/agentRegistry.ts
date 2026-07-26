@@ -3,10 +3,10 @@
  *
  * `loadRegistry` is the complete precedence-resolved inventory used by catalog
  * and golden tests. Runtime consumers use `loadActiveRegistry`, `listAll`, and
- * `findById`: once a workspace manifest exists, those surfaces retain every
- * reserved harness role but expose custom executors only when the manifest
- * names them as its default or explicitly enables them. Missing or unreadable
- * manifests deliberately preserve the legacy registry byte-for-byte.
+ * `findById`: once a workspace manifest exists, those surfaces expose only the
+ * orchestration roles available under its explicit mode/allow/deny policy.
+ * Missing or unreadable manifests deliberately preserve the legacy registry
+ * byte-for-byte.
  */
 import path from 'node:path';
 import os from 'node:os';
@@ -14,7 +14,6 @@ import { fileURLToPath } from 'node:url';
 // MAS-P5-T4: enabled packs contribute agent defs as their own tier.
 import { listPacks } from '../../pack/packs.js';
 import { readPackState, isPackEnabled } from '../../pack/packStore.js';
-import { RESERVED_HARNESS_ROLE_IDS } from '../../workspace/domainPersonas.js';
 import { loadWorkspaceManifest } from '../../workspace/manifest.js';
 import { inspectWorkspaceProfilePlugins } from '../../workspace/profilePlugins.js';
 import {
@@ -143,11 +142,12 @@ export function loadActiveRegistry(workspaceRoot?: string): LoadedDefinition[] {
   const manifest = loadWorkspaceManifest(workspaceRoot);
   if (!manifest) return registry;
 
-  const activeIds = new Set(manifest.agents.enabled);
-  if (manifest.agents.default) activeIds.add(manifest.agents.default);
-  return registry.filter((loaded) => (
-    RESERVED_HARNESS_ROLE_IDS.has(loaded.def.id) || activeIds.has(loaded.def.id)
-  ));
+  if (manifest.orchestration.mode === 'off') return [];
+  const disabledIds = new Set(manifest.orchestration.disabledRoles);
+  const activeIds = new Set(
+    manifest.orchestration.availableRoles.filter((id) => !disabledIds.has(id)),
+  );
+  return registry.filter((loaded) => activeIds.has(loaded.def.id));
 }
 
 export function findById(id: string, workspaceRoot?: string): LoadedDefinition | undefined {

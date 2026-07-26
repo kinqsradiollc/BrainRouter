@@ -176,7 +176,8 @@ test('project JSON execution policy becomes a domain identity only with a same-i
       outputContract: null,
     }), 'utf8');
     const manifest = createWorkspaceManifest({ name: 'demo', profile: 'engineering', by: 'wizard' });
-    manifest.agents.enabled.push('specialist');
+    manifest.persona.enabled.push('specialist');
+    manifest.orchestration.availableRoles.push('specialist');
     saveWorkspaceManifest(workspace, manifest);
 
     assert.equal(findById('specialist', workspace)?.source, 'workspace', 'JSON remains an executable definition');

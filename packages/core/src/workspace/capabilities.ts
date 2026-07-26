@@ -12,7 +12,7 @@
 import type { WorkspaceManifest } from './manifest.js';
 
 export interface WorkspaceCapabilityResolutionInput {
-  manifest: Pick<WorkspaceManifest, 'agents' | 'capabilities'> | null | undefined;
+  manifest: Pick<WorkspaceManifest, 'persona' | 'capabilities'> | null | undefined;
   /** Current user task or requirement text. */
   task?: string;
   /** Files currently in scope for the task, expressed relative or absolute. */
@@ -98,8 +98,8 @@ const FRONTEND_CONFIG_PATTERN = /(?:^|\/)(?:(?:tailwind|postcss|vite|next|nuxt)\
 export function resolveWorkspaceCapabilities(input: WorkspaceCapabilityResolutionInput): WorkspaceCapabilityResolution {
   if (!input.manifest) return emptyResolution();
 
-  const activeAgent = input.activeAgent ?? input.manifest.agents.default;
-  const engineerIsActive = activeAgent === 'engineer' && input.manifest.agents.enabled.includes('engineer');
+  const activeAgent = input.activeAgent ?? input.manifest.persona.default;
+  const engineerIsActive = activeAgent === 'engineer' && input.manifest.persona.enabled.includes('engineer');
   const disabled = new Set(input.manifest.capabilities.disabled);
   const enabled = new Set(input.manifest.capabilities.enabled.filter((id) => !disabled.has(id)));
   const active: string[] = [];
