@@ -893,6 +893,14 @@ They must:
   **denied** states, with the effective-policy reason for a blocked item;
 - render roles, tool groups, tools, packs, and skills as selectable catalog
   entries rather than requiring an implementation ID to be typed;
+- render contributed capabilities such as Frontend and Backend as selectable
+  catalog entries. A capability owns its skill pack and tool-profile
+  recommendations, so those payloads appear nested under the capability and
+  are not presented as duplicate peer choices;
+- show the capability section for every profile, with an explicit empty state
+  when that profile currently contributes none. Engineering is initially the
+  only bundled profile with optional Frontend and Backend capabilities; this is
+  a catalog fact rather than an Engineering-only UI special case;
 - offer profile recommendations first, then an "Advanced" view for individual
   tool and skill selections;
 - explain whether a recommendation came from the workspace profile, a reviewed
