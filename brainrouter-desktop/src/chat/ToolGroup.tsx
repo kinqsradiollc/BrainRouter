@@ -29,16 +29,18 @@ export function ToolGroup({ row, live, inlineDiffs, onRequestDiff, onOpenFile, o
   // plus the distinct verbs it ran.
   const last = row.items[row.items.length - 1];
   const single = row.items.length === 1 ? row.items[0] : null;
-  const headTone = single ? toolVisual(single.tool).tone : 'default';
+  const headTone = single
+    ? toolVisual(single.tool, single.ok ? 'succeeded' : 'failed', single.delegationState).tone
+    : 'default';
   let head: React.ReactElement;
   if (live && last) {
-    const lv = toolVisual(last.tool);
+    const lv = toolVisual(last.tool, 'pending');
     head = (<>
       <span className="step-ic running"><span className="spinner" /></span>
       <span className="step-verb">{last.child ? `[${last.child}] ` : ''}Using {lv.verb.toLowerCase()}…</span>
     </>);
   } else if (single) {
-    const v = toolVisual(single.tool);
+    const v = toolVisual(single.tool, single.ok ? 'succeeded' : 'failed', single.delegationState);
     const target = single.file ? basename(single.file) : single.summary;
     head = (<>
       <span className="step-ic"><Icon name={v.icon} size={12} /></span>
@@ -46,7 +48,9 @@ export function ToolGroup({ row, live, inlineDiffs, onRequestDiff, onOpenFile, o
       {target ? <span className="step-target">{target}</span> : null}
     </>);
   } else {
-    const verbs = [...new Set(row.items.map((i) => toolVisual(i.tool).verb))];
+    const verbs = [...new Set(row.items.map(
+      (i) => toolVisual(i.tool, i.ok ? 'succeeded' : 'failed', i.delegationState).verb,
+    ))];
     head = (<>
       <span className="step-ic"><Icon name="spark" size={12} /></span>
       <span className="step-verb">{row.items.length} steps</span>
@@ -65,7 +69,7 @@ export function ToolGroup({ row, live, inlineDiffs, onRequestDiff, onOpenFile, o
       {open ? (
         <div className="step-body">
           {row.items.map((t) => {
-            const v = toolVisual(t.tool);
+            const v = toolVisual(t.tool, t.ok ? 'succeeded' : 'failed', t.delegationState);
             const isEdit = v.tone === 'edit';
             const showPathSub = t.file && t.summary && basename(t.file) !== t.summary;
             return (

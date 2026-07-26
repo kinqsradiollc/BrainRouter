@@ -24,6 +24,10 @@ import { extractToolText } from '../../mcp/mcpUtils.js';
 import { reconnectBackoffMs, probeConnectivity } from '../../mcp/reconnect/reconnect.js';
 import { listAll as listAgentDefinitions } from '../../orchestration/agents/agentRegistry.js';
 import { executeOrchestrationTool, synthesizeDelegateTools, OrchestrationContext } from '../../orchestration/tools.js';
+import {
+  createActiveTurnOrchestrationRuntime,
+  isOrchestrationRuntimeUnavailableError,
+} from '../../orchestration/runtime/activeTurnRuntime.js';
 import { buildFanOutHint, shouldSuggestFanOut } from '../../prompt/planning/breadthHint.js';
 import { buildNextActionMessages, parseNextActionPlan, nextActionDirective, planWantsFanOut, shouldSkipPlanner } from '../../prompt/planning/nextAction.js';
 import { compactToolOutput } from '../../prompt/compaction/toolCompaction.js';
@@ -47,7 +51,13 @@ import { readPlan } from '../../task/taskStore.js';
 import { startSpan, traceEvent } from '../../telemetry/tracing/tracing.js';
 import { localToolSpecsFromExecutors } from '../../tool/registry/executors.js';
 import { normalizeToolName } from '../../tool/specs/names.js';
-import { hideWorkerToolsFor, isRegisteredLocalTool, registryEntry, registryToolAllowed } from '../../tool/registry/registry.js';
+import {
+  hideWorkerToolsFor,
+  isRegisteredLocalTool,
+  registryDelegationLaunchTool,
+  registryEntry,
+  registryToolAllowed,
+} from '../../tool/registry/registry.js';
 import { extensionToolOwner } from '../../extension/registry.js';
 import { applyToolScope, rankAndCapTools, toolNameMatchesAny } from '../../tool/policy/toolBudget.js';
 import { resolveToolVisible } from '../../tool/policy/toolPolicy.js';
@@ -133,6 +143,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // DESK-6 — fresh abort controller per turn (AFTER the reset), so a stale
     // pre-turn abort can never poison this turn's first LLM call.
     this.turnAbort = new AbortController();
+    const turnSessionKey = this.sessionKey;
     // Persist the user's message to the transcript IMMEDIATELY — before recall,
     // the next-action planner, or the main LLM call. Previously this happened
     // only after those server round-trips, so a turn that errored mid-flight
@@ -1830,8 +1841,21 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         }));
         for (const name of normalizedNames) {
           callbacks.onToolStart(name, {});
-          callbacks.onToolEnd(name, { success: false, summary: `repeat sequence guard tripped (${previousSequenceRepeats + 1}× ${sequenceLabel})`, preview: resultText });
-          traceEvent('brainrouter.tool', { tool: name, ok: false, local: isRegisteredLocalTool(name), session_key: this.sessionKey, guard: 'repeat_sequence' }, { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId });
+          const delegationLaunch = registryDelegationLaunchTool(name);
+          callbacks.onToolEnd(name, {
+            success: false,
+            summary: `repeat sequence guard tripped (${previousSequenceRepeats + 1}× ${sequenceLabel})`,
+            preview: resultText,
+            ...(delegationLaunch ? { delegationState: 'not-started' as const } : {}),
+          });
+          traceEvent('brainrouter.tool', {
+            tool: name,
+            ok: false,
+            local: isRegisteredLocalTool(name),
+            session_key: this.sessionKey,
+            guard: 'repeat_sequence',
+            ...(delegationLaunch ? { delegation_state: 'not_started' } : {}),
+          }, { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId });
         }
         for (const entry of processed) {
           this.chatHistory.push(entry.toolMsg);
@@ -1846,11 +1870,16 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
 
       const processOneToolCall = async (tc: any, name: string): Promise<{ toolMsg: any; fullResultText: string; systemMsg?: any }> => {
         this.lastTurnToolCalls += 1;
+        const delegationLaunch = registryDelegationLaunchTool(name);
         // INTERRUPT — skip queued tools once a stop is requested; the loop-top
         // check then ends the turn before the next LLM call.
         if (this.interruptRequested) {
           const skipped = 'Skipped: turn interrupted by user.';
-          callbacks.onToolEnd(name, { success: false, summary: 'turn interrupted — tool skipped' }, tc.id);
+          callbacks.onToolEnd(name, {
+            success: false,
+            summary: 'turn interrupted — tool skipped',
+            ...(delegationLaunch ? { delegationState: 'not-started' as const } : {}),
+          }, tc.id);
           return { toolMsg: { role: 'tool', tool_call_id: tc.id, name, content: skipped, isError: true }, fullResultText: skipped };
         }
         // CC-P6.5 — classify this call for the verification gate (wrote files vs
@@ -1893,6 +1922,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         let resultText = '';
         let isError = false;
         let summary = '';
+        let runtimeUnavailable = false;
 
         // If the LLM emitted malformed JSON for arguments, fail the tool call
         // up-front with a clear error so it can self-correct next turn.
@@ -1900,8 +1930,19 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           isError = true;
           resultText = argParseError;
           summary = 'malformed JSON args';
-          callbacks.onToolEnd(name, { success: false, summary }, tc.id);
-          traceEvent('brainrouter.tool', { tool: name, ok: false, local: isLocal, session_key: this.sessionKey, guard: 'bad_args' }, { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId });
+          callbacks.onToolEnd(name, {
+            success: false,
+            summary,
+            ...(delegationLaunch ? { delegationState: 'not-started' as const } : {}),
+          }, tc.id);
+          traceEvent('brainrouter.tool', {
+            tool: name,
+            ok: false,
+            local: isLocal,
+            session_key: this.sessionKey,
+            guard: 'bad_args',
+            ...(delegationLaunch ? { delegation_state: 'not_started' } : {}),
+          }, { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId });
           const toolMsg = { role: 'tool', tool_call_id: tc.id, name, content: resultText, isError };
           return { toolMsg, fullResultText: resultText };
         }
@@ -1919,8 +1960,19 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
             'Pick a different action: read a different file, write the output you have, spawn a worker child, or call `goal_blocked` if no further path remains.',
           ].join(' ');
           summary = `repeat guard tripped (${repeatCount + 1}× ${name})`;
-          callbacks.onToolEnd(name, { success: false, summary }, tc.id);
-          traceEvent('brainrouter.tool', { tool: name, ok: false, local: isLocal, session_key: this.sessionKey, guard: 'repeat' }, { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId });
+          callbacks.onToolEnd(name, {
+            success: false,
+            summary,
+            ...(delegationLaunch ? { delegationState: 'not-started' as const } : {}),
+          }, tc.id);
+          traceEvent('brainrouter.tool', {
+            tool: name,
+            ok: false,
+            local: isLocal,
+            session_key: this.sessionKey,
+            guard: 'repeat',
+            ...(delegationLaunch ? { delegation_state: 'not_started' } : {}),
+          }, { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId });
           const toolMsg = { role: 'tool', tool_call_id: tc.id, name, content: resultText, isError };
           return { toolMsg, fullResultText: resultText };
         }
@@ -2088,9 +2140,12 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           }
           if (isLocal) {
             let lifecycleSummarySuffix = '';
-            resultText = await this.executeLocalTool(name, args, {
-              orchestrationRuntime: {
-                invoke: async (toolName, toolArgs, metadata) => {
+            let assertOrchestrationActive: (toolName: string) => void = () => {};
+            const activeOrchestrationRuntime = createActiveTurnOrchestrationRuntime({
+              ownerSessionKey: turnSessionKey,
+              currentSessionKey: () => this.sessionKey,
+              signal: this.turnAbort!.signal,
+              invoke: async (toolName, toolArgs, metadata) => {
                   // High-cost workflow launch policy is extension metadata, not
                   // a native-name check in the turn loop.
                   if (metadata.workflowLaunch && this.silent) {
@@ -2099,26 +2154,40 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
                   if (metadata.workflowLaunch && !(await this.confirmRunWorkflowLaunch(toolArgs))) {
                     throw new Error(`${toolName} declined — the high-cost workflow launch was not approved.`);
                   }
+                  // Approval is asynchronous; the user may interrupt or switch
+                  // sessions while the prompt is open. Re-check the same owner
+                  // immediately before any work is accepted.
+                  assertOrchestrationActive(toolName);
                   const output = await executeOrchestrationTool(toolName, toolArgs, buildOrchestrationContext());
                   trackChildObservation(toolName, toolArgs, output, spawnedChildIdsThisTurn, waitedChildIdsThisTurn);
                   if (isChildSynthesisTool(toolName) && resultHasChildOutput(output)) childOutputDeliveredThisTurn = true;
                   return output;
-                },
-              },
-              lifecycleRuntime: {
-                afterInvoke: (kind, toolArgs) => {
-                  if (kind === 'track-automation') {
-                    let automationCount = 0;
-                    try { automationCount = this.applyTrackCodeSignalAutomation(toolArgs, callbacks); } catch { /* best-effort */ }
-                    if (automationCount > 0) lifecycleSummarySuffix = ` | automation advanced ${automationCount} Track item${automationCount === 1 ? '' : 's'}`;
-                  } else if (kind === 'goal-reconcile') {
-                    try { this.autoReconcileGoalCompletion(callbacks); } catch { /* best-effort */ }
-                  } else if (kind === 'plan-update' && Array.isArray(toolArgs.plan) && callbacks.onPlanUpdate) {
-                    callbacks.onPlanUpdate(toolArgs.plan, toolArgs.explanation);
-                  }
-                },
               },
             });
+            assertOrchestrationActive = activeOrchestrationRuntime.assertActive;
+            try {
+              resultText = await this.executeLocalTool(name, args, {
+                orchestrationRuntime: activeOrchestrationRuntime.port,
+                lifecycleRuntime: {
+                  afterInvoke: (kind, toolArgs) => {
+                    if (kind === 'track-automation') {
+                      let automationCount = 0;
+                      try { automationCount = this.applyTrackCodeSignalAutomation(toolArgs, callbacks); } catch { /* best-effort */ }
+                      if (automationCount > 0) lifecycleSummarySuffix = ` | automation advanced ${automationCount} Track item${automationCount === 1 ? '' : 's'}`;
+                    } else if (kind === 'goal-reconcile') {
+                      try { this.autoReconcileGoalCompletion(callbacks); } catch { /* best-effort */ }
+                    } else if (kind === 'plan-update' && Array.isArray(toolArgs.plan) && callbacks.onPlanUpdate) {
+                      callbacks.onPlanUpdate(toolArgs.plan, toolArgs.explanation);
+                    }
+                  },
+                },
+              });
+            } finally {
+              // A required extension may invoke the port only while its own
+              // active tool call is on the stack. Captured/deferred calls fail
+              // terminally instead of replaying after the owning turn.
+              activeOrchestrationRuntime.close();
+            }
             summary = getToolSummary(name, args, resultText) + lifecycleSummarySuffix;
           } else if (this.lastBudgetHiddenTools.has(name)) {
             // MAS-P4-T1: the model called an MCP tool that was trimmed from
@@ -2177,13 +2246,18 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         } catch (err: any) {
           isError = true;
           const message = err?.message ?? String(err);
+          runtimeUnavailable = isOrchestrationRuntimeUnavailableError(err);
           // -32601 is JSON-RPC's MethodNotFound. We hit it most often when
           // the LLM hallucinates a tool name — typically a skill name
           // ("incremental-implementation", "spec-driven", "...-skill") that
           // it has confused for an invocable tool. Surface a correction so
           // the next iteration self-corrects instead of retrying garbage.
           const denial = classifyDenial(message);
-          if (/-32601|Unknown tool|MethodNotFound/i.test(message)) {
+          if (runtimeUnavailable) {
+            const subject = delegationLaunch ? 'Delegation' : 'Orchestration action';
+            resultText = `${subject} not started: ${message}`;
+            summary = `${subject.toLowerCase()} not started — active-turn orchestration lifecycle ended; do not retry`;
+          } else if (/-32601|Unknown tool|MethodNotFound/i.test(message)) {
             const hint = explainUnknownToolName(name);
             // 0.3.8-I4: surface a "did you mean: X?" suggestion when the
             // LLM-emitted name normalises to a real registered tool (case,
@@ -2225,13 +2299,26 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           : (resultText
               ? `${resultText.length > 400 ? resultText.slice(0, 400) + '…' : resultText}`
               : (summary || undefined));
-        callbacks.onToolEnd(name, { success: !isError, summary: finalSummary, preview }, tc.id);
-        traceEvent('brainrouter.tool', {
+        const delegationState = delegationLaunch
+          ? (isError ? 'not-started' : 'accepted')
+          : undefined;
+        callbacks.onToolEnd(name, {
+          success: !isError,
+          summary: finalSummary,
+          preview,
+          ...(delegationState ? { delegationState } : {}),
+        }, tc.id);
+        const toolTrace: Record<string, unknown> = {
           tool: name,
           ok: !isError,
           local: isLocal,
           session_key: this.sessionKey,
-        }, { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId });
+        };
+        if (delegationLaunch) {
+          toolTrace.delegation_state = delegationState === 'not-started' ? 'not_started' : 'accepted';
+          if (runtimeUnavailable) toolTrace.lifecycle_reason = 'runtime_unavailable';
+        }
+        traceEvent('brainrouter.tool', toolTrace, { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId });
         if (this.hookAdvisoryActive()) {
           const postResults = runHooks(this.workspaceRoot, 'post-tool', {
             tool: name,
@@ -2355,7 +2442,12 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
             if (processed[k]) continue;
             const tc = toolCalls[k];
             const name = normalizedNames[k];
-            callbacks.onToolEnd(name, { success: false, summary: 'turn interrupted — tool skipped' }, tc.id);
+            const delegationLaunch = registryDelegationLaunchTool(name);
+            callbacks.onToolEnd(name, {
+              success: false,
+              summary: 'turn interrupted — tool skipped',
+              ...(delegationLaunch ? { delegationState: 'not-started' as const } : {}),
+            }, tc.id);
             processed[k] = {
               toolMsg: { role: 'tool', tool_call_id: tc.id, name, content: 'Skipped: turn interrupted by user.', isError: true },
               fullResultText: 'Skipped: turn interrupted by user.',

@@ -55,6 +55,12 @@ export function registryToolParallelSafe(name: string): boolean {
   return registryEntry(name)?.parallelSafe === true;
 }
 
+/** True only for orchestration tools whose successful call accepts new work. */
+export function registryDelegationLaunchTool(name: string): boolean {
+  const entry = registryEntry(name);
+  return Boolean(entry?.childAccessPolicy || entry?.workflowLaunch);
+}
+
 export function hideWorkerToolsFor(depth: number, tier?: string): boolean {
   return depth > 0 || tier === 'worker';
 }

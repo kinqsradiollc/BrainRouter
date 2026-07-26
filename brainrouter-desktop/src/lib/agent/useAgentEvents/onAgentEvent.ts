@@ -144,7 +144,15 @@ export function createOnAgentEvent(deps: OnAgentEventDeps): (msg: AgentEventMess
         if (!e.ok) turnFailsRef.current += 1;
         const editedFile = fileFromSummary(e.tool, e.summary);
         if (e.ok && editedFile) turnEditsRef.current.set(editedFile, /write|create/i.test(e.tool) ? 'A' : 'M');
-        pushTool({ id: rid(), tool: e.tool, summary: e.summary, preview: e.preview, ok: e.ok, file: editedFile });
+        pushTool({
+          id: rid(),
+          tool: e.tool,
+          summary: e.summary,
+          preview: e.preview,
+          ok: e.ok,
+          file: editedFile,
+          delegationState: e.delegationState,
+        });
         setToolLog((t) => [...t.slice(-199), { id: rid(), tool: e.tool, ok: e.ok, summary: e.summary }]);
         // §AV-3 — near-live artifacts: when the agent authors/updates an artifact
         // in-band (artifact_write), refresh the list immediately so the Artifacts

@@ -652,7 +652,7 @@ export function createHandleQueryResult(ctx: AgentEventsCtx): (rawId: string, re
       }
       case 'q-grep': if (Array.isArray(result)) setGrepHits(result as import('../../../panels/index.js').GrepHit[]); return;
       case 'q-transcript': {
-        const data = result as { sessionKey?: string; rows?: Array<{ kind: string; text?: string; tools?: number; ts?: number; items?: Array<{ tool: string; summary: string; preview?: string; ok: boolean; file?: string }> }> };
+        const data = result as { sessionKey?: string; rows?: Array<{ kind: string; text?: string; tools?: number; ts?: number; items?: Array<{ tool: string; summary: string; preview?: string; ok: boolean; file?: string; delegationState?: 'accepted' | 'not-started' }> }> };
         if (data?.sessionKey && data.sessionKey !== sessionKeyRef.current) return;
         const mapped: ChatRow[] = (data?.rows ?? []).map((r, index) => {
           // DESK-6t — use the persisted per-message timestamp so resumed history
@@ -664,7 +664,15 @@ export function createHandleQueryResult(ctx: AgentEventsCtx): (rawId: string, re
           // DESK-5p — reconstructed tool calls render as the live tool-group card.
           if (r.kind === 'tool-group') return {
             id: stableId, kind: 'tool-group' as const, ts,
-            items: (r.items ?? []).map((it, itemIndex) => ({ id: `${stableId}-item-${itemIndex}`, tool: it.tool, summary: it.summary, preview: it.preview, ok: it.ok, file: it.file })),
+            items: (r.items ?? []).map((it, itemIndex) => ({
+              id: `${stableId}-item-${itemIndex}`,
+              tool: it.tool,
+              summary: it.summary,
+              preview: it.preview,
+              ok: it.ok,
+              file: it.file,
+              delegationState: it.delegationState,
+            })),
           };
           return { id: stableId, kind: 'status' as const, text: `Used ${r.tools ?? 0} tool${(r.tools ?? 0) === 1 ? '' : 's'}`, ts };
         });
@@ -684,7 +692,7 @@ export function createHandleQueryResult(ctx: AgentEventsCtx): (rawId: string, re
       }
       // DESK-5w — a background task's conversation, opened read-only over the chat.
       case 'q-task-transcript': {
-        const data = result as { id: string; kind: string; role?: string; goal?: string; status?: string; rows?: Array<{ kind: string; text?: string; ts?: number; items?: Array<{ tool: string; summary: string; preview?: string; ok: boolean; file?: string }> }> };
+        const data = result as { id: string; kind: string; role?: string; goal?: string; status?: string; rows?: Array<{ kind: string; text?: string; ts?: number; items?: Array<{ tool: string; summary: string; preview?: string; ok: boolean; file?: string; delegationState?: 'accepted' | 'not-started' }> }> };
         const mapped: ChatRow[] = (data?.rows ?? []).map((r, i) => {
           const ts = r.ts ?? Date.now();
           // DESK-6v — STABLE, index-based keys: the 2.5s live poll re-sends the
@@ -692,7 +700,20 @@ export function createHandleQueryResult(ctx: AgentEventsCtx): (rawId: string, re
           // (the flashing). Stable keys let it reconcile in place instead.
           if (r.kind === 'user') return { id: i, kind: 'user' as const, text: r.text ?? '', ts };
           if (r.kind === 'assistant') return { id: i, kind: 'assistant' as const, text: r.text ?? '', ts };
-          if (r.kind === 'tool-group') return { id: i, kind: 'tool-group' as const, ts, items: (r.items ?? []).map((it, j) => ({ id: j, tool: it.tool, summary: it.summary, preview: it.preview, ok: it.ok, file: it.file })) };
+          if (r.kind === 'tool-group') return {
+            id: i,
+            kind: 'tool-group' as const,
+            ts,
+            items: (r.items ?? []).map((it, j) => ({
+              id: j,
+              tool: it.tool,
+              summary: it.summary,
+              preview: it.preview,
+              ok: it.ok,
+              file: it.file,
+              delegationState: it.delegationState,
+            })),
+          };
           return { id: i, kind: 'status' as const, text: r.text ?? '', ts };
         });
         // §review-visibility — a RUNNING task whose transcript is still empty
