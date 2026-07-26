@@ -176,6 +176,23 @@ knowledge store.
   `packages/core/src/agent/runtime/runTurn.impl.ts`,
   `packages/core/src/tests/context-envelope.test.ts`
 
+### 11b. Context compaction is staged, progress-bounded, and fail-closed
+
+Compaction may replace older conversation, tool, plan, memory-briefing, and
+source layers only with a provenance-labelled summary. Exclude protected policy,
+persona, capability, orchestration, workspace-guidance, and skill layers from
+the summarizer; include any prior summary so repeated compaction remains
+resumable. Preserve the latest user turn and unresolved constraints, citations,
+failures, authorization boundaries, and checks not run. Every stage records
+before/after size, makes measurable progress within the envelope's hard
+iteration ceiling, and returns the original envelope unchanged when protected
+context cannot fit. Summary prompts never copy secret values.
+
+- **Evidence:** `packages/core/src/context/envelope/compaction.ts`,
+  `packages/core/src/agent/runtime/session.impl.ts`,
+  `packages/core/src/prompt/compaction/compactor.ts`,
+  `packages/core/src/tests/context-compaction.test.ts`
+
 ---
 
 ## TUI (Ink) conventions

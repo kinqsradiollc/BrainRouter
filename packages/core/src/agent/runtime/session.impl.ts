@@ -16,6 +16,14 @@ import { readPlan } from '../../task/taskStore.js';
 import { recordPlanDecision, readPlanHistory, linkPlanDecision, planStepSignature } from '../../task/planHistoryStore.js';
 import { type PrefixComponents, computePrefixComponents, computePrefixFingerprint, accumulatePrefixStability, prefixStabilityRatio } from '../../context/contextRegions.js';
 import { contextWindowForBudget } from '../../context/contextWindow.js';
+import {
+  buildRootContextEnvelope,
+  contextCompactionMessages,
+  inspectContextEnvelope,
+  lastUserMessageFromEnvelope,
+  materializeContextEnvelope,
+} from '../../context/contextEnvelope.js';
+import { compactContextEnvelope } from '../../context/envelope/compaction.js';
 import { recordFileMutation } from '../../storage/fileSnapshotStore.js';
 import { shouldReindex, reindexSignature, languageHint, type ReindexGate } from '../../util/indexing/autoReindex.js';
 import { gitChurnSignal } from '../../git/gitChurn.js';
@@ -35,10 +43,19 @@ export async function compactHistory(this: Agent): Promise<{ summary: string; es
     // CC-P4.2 — advisory pre-compact hook (notify/log; cannot block).
     if (this.hookAdvisoryActive()) { try { runHooks(this.workspaceRoot, 'pre-compact', { payload: { messages: this.chatHistory.length } }); } catch { /* advisory */ } }
     const before = this.chatHistory.length;
-    const userMessages = this.chatHistory.filter((m) => m.role === 'user');
-    const lastUserMessage = userMessages.length > 0 ? String(userMessages[userMessages.length - 1].content ?? '') : undefined;
+    const contextWindowTokens = contextWindowForBudget(this.llmConfig.model);
+    const systemMessage = this.createSystemMessage();
+    const envelope = buildRootContextEnvelope([systemMessage as any, ...this.chatHistory.slice(1)], {
+      executionId: this.sessionKey,
+      budget: {
+        maxChars: contextWindowTokens * 4,
+        maxTokens: contextWindowTokens,
+      },
+    });
+    const inspection = inspectContextEnvelope(envelope);
+    const lastUserMessage = lastUserMessageFromEnvelope(envelope);
     const result = await runCompaction(this.llmConfig, {
-      messages: this.chatHistory.map((m) => ({
+      messages: contextCompactionMessages(envelope).map((m) => ({
         role: m.role,
         content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? ''),
         name: m.name,
@@ -47,12 +64,27 @@ export async function compactHistory(this: Agent): Promise<{ summary: string; es
       lastUserMessage,
     });
     const compactSystemMessage = renderCompactSystemMessage(result.summary);
-    const systemMessage = this.createSystemMessage();
-    const next: any[] = [systemMessage];
-    if (!appendDeveloperPromptLayer(systemMessage, compactSystemMessage)) {
-      next.push({ role: 'system', content: compactSystemMessage });
+    const targetChars = Math.max(
+      1,
+      Math.min(
+        Math.max(inspection.totalChars - 1, 1),
+        Math.floor(contextWindowTokens * 4 * 0.65),
+      ),
+    );
+    const compacted = compactContextEnvelope(envelope, {
+      targetChars,
+      summary: compactSystemMessage,
+    });
+    if (compacted.status === 'cannot-fit') {
+      throw new Error(`context compaction failed closed: ${compacted.reason ?? 'required context does not fit'}`);
     }
-    if (lastUserMessage) next.push({ role: 'user', content: lastUserMessage });
+    const next: any[] = materializeContextEnvelope(compacted.envelope);
+    const summaryIndex = next.findIndex((message, index) => (
+      index > 0 && message?.meta?.contextLayer === 'conversation-summary'
+    ));
+    if (summaryIndex > 0 && appendDeveloperPromptLayer(next[0], String(next[summaryIndex].content ?? ''))) {
+      next.splice(summaryIndex, 1);
+    }
     this.chatHistory = next;
     this.initialized = true;
     // 9b: compaction just dropped the prior briefing as collateral —

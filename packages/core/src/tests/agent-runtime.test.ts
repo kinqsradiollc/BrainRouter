@@ -659,8 +659,9 @@ test('compactHistory: stores compacted state in prompt layers without chat devel
     const agent: any = makeAgent(workspace);
     agent.chatHistory = [
       agent.createSystemMessage(),
-      { role: 'user', content: 'first request' },
-      { role: 'assistant', content: 'first answer' },
+      { role: 'user', content: `first request ${'context '.repeat(200)}` },
+      { role: 'assistant', content: `first answer ${'evidence '.repeat(200)}` },
+      { role: 'system', content: '<!--brainrouter:goal-anchor-->\nPreserve unresolved constraint alpha.' },
       { role: 'user', content: 'continue from here' },
     ];
 
@@ -681,6 +682,9 @@ test('compactHistory: stores compacted state in prompt layers without chat devel
       const result = await agent.compactHistory();
       assert.equal(result?.summary, 'Important compacted state.');
       assert.deepEqual(capturedCompactionBody.messages.map((m: any) => m.role), ['system', 'user']);
+      assert.match(capturedCompactionBody.messages[0].content, /Never copy passwords, API keys/);
+      assert.match(capturedCompactionBody.messages[1].content, /Preserve unresolved constraint alpha/);
+      assert.doesNotMatch(capturedCompactionBody.messages[1].content, /You are BrainRouter CLI/);
 
       const history = agent.chatHistory;
       assert.equal(history.length, 2);
@@ -725,8 +729,8 @@ test('compactHistory: normalizes full chat endpoint URLs and local auth', async 
     });
     agent.chatHistory = [
       agent.createSystemMessage(),
-      { role: 'user', content: 'first request' },
-      { role: 'assistant', content: 'first answer' },
+      { role: 'user', content: `first request ${'context '.repeat(200)}` },
+      { role: 'assistant', content: `first answer ${'evidence '.repeat(200)}` },
       { role: 'user', content: 'continue from here' },
     ];
 

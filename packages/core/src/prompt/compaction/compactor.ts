@@ -35,6 +35,8 @@ const COMPACT_SYSTEM_PROMPT = [
   '- Your entire response must be plain text: an <analysis> block followed by a <summary> block.',
   '',
   'You are compacting a long agent conversation so it can continue in a fresh context window. The next turn will see ONLY your <summary> block — everything in the transcript that you do not preserve here is lost.',
+  'Never copy passwords, API keys, access tokens, credentials, private keys, session secrets, or other secret values into the summary. Preserve only the secret name, purpose, storage location, or reference alias needed to continue. If the latest user message contains a secret value, replace that value with `[REDACTED SECRET]` rather than quoting it.',
+  'Preserve unresolved user constraints, decisions, citations, failures, authorization boundaries, and checks not run. Do not broaden authority while summarizing.',
   '',
   '## Phase 1 — <analysis>',
   'Open with `<analysis>` and reason through what the conversation actually contains before writing the summary. Note: what the user is really trying to accomplish; which decisions are load-bearing vs incidental; which files / record IDs / error messages MUST survive; which exploratory dead-ends can be discarded. Close with `</analysis>`. This block is stripped after compaction; treat it as a scratchpad.',
@@ -91,7 +93,6 @@ export interface CompactionResult {
 export async function runCompaction(llm: LLMConfig, input: CompactionInput): Promise<CompactionResult> {
   const startedAt = Date.now();
   const flattened = input.messages
-    .filter((m) => m.role !== 'system')
     .map((m) => `### ${m.role.toUpperCase()}${m.name ? ` (${m.name})` : ''}\n${m.content}`)
     .join('\n\n');
 
