@@ -50,13 +50,17 @@ test('selected profile skills lead the managed catalog and replace global collis
     });
     const entries = JSON.parse(adapted) as Array<Record<string, unknown>>;
     assert.deepEqual(names(adapted), [
+      'learner-diagnostic-skill',
       'learning-plan-skill',
+      'tutoring-explanation-skill',
+      'learning-assessment-skill',
+      'error-remediation-skill',
       'retrieval-practice-skill',
       'ordinary-skill',
     ]);
-    assert.equal(entries[1].scope, 'plugin');
-    assert.equal(entries[1].category, 'study');
-    assert.notEqual(entries[1].description, 'legacy copy');
+    assert.equal(entries[5].scope, 'plugin');
+    assert.equal(entries[5].category, 'study');
+    assert.notEqual(entries[5].description, 'legacy copy');
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
   }
@@ -276,6 +280,30 @@ test('research workflow bodies load independently for the current task', () => {
     const review = resolveWorkspaceManagedSkill(workspace, 'research-review-skill', 'workflow');
     assert.match(review?.content[0].text ?? '', /Classify findings as blocking/);
     assert.doesNotMatch(review?.content[0].text ?? '', /Retrieve small result sets/);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('tutoring workflow bodies load independently for the current task', () => {
+  const workspace = makeWorkspace();
+  try {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'study', profile: 'study', by: 'wizard' }),
+    );
+
+    const diagnostic = resolveWorkspaceManagedSkill(workspace, 'learner-diagnostic-skill', 'workflow');
+    assert.match(diagnostic?.content[0].text ?? '', /Give one or two low-stakes diagnostic tasks/);
+    assert.doesNotMatch(diagnostic?.content[0].text ?? '', /Apply the smallest correction/);
+
+    const assessment = resolveWorkspaceManagedSkill(workspace, 'learning-assessment-skill', 'workflow');
+    assert.match(assessment?.content[0].text ?? '', /Choose evidence appropriate to type/);
+    assert.doesNotMatch(assessment?.content[0].text ?? '', /Present one coherent model/);
+
+    const remediation = resolveWorkspaceManagedSkill(workspace, 'error-remediation-skill', 'workflow');
+    assert.match(remediation?.content[0].text ?? '', /Apply the smallest correction/);
+    assert.doesNotMatch(remediation?.content[0].text ?? '', /schedule the next prerequisite-valid objective/i);
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
   }

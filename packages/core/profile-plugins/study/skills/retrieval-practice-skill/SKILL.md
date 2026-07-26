@@ -1,6 +1,6 @@
 ---
 name: retrieval-practice-skill
-description: Create and run practice that reveals misconceptions through recall, application, feedback, and spaced re-checks.
+description: Schedule and run recall or transfer practice for previously taught objectives, with answer commitment, feedback, and spaced re-checks.
 allowed-tools: [read_file, grep_search, glob_files, research_note, write_file, edit_file]
 ---
 
@@ -14,31 +14,32 @@ than reward recognition alone.
 
 ## When to Use
 
-Use for quizzes, flashcards, oral checks, worked problems, exam preparation,
-mastery reviews, or a tutoring turn after an explanation.
+Use after explanation or remediation, for quizzes, flashcards, oral checks,
+worked problems, exam preparation, or a due spaced review. Use the separate
+assessment workflow when making a formal mastery decision.
 
 ## Workflow
 
-1. Select a small set of target concepts and write the expected evidence of
-   understanding before creating questions.
-2. Mix direct recall, explanation in the learner's own words, comparison, and
-   transfer to a new example. Avoid answer cues that make guessing sufficient.
-3. Ask one meaningful item at a time when interacting live. Let the learner
-   commit to an answer before revealing feedback.
-4. Diagnose the error category: missing fact, faulty model, skipped step, or
-   inability to transfer. Explain the smallest correction and ask a nearby but
-   non-identical follow-up.
-5. Record confidence separately from correctness and schedule uncertain or
-   incorrect concepts for a later re-check.
-6. Summarize demonstrated strengths, unresolved misconceptions, and the next
-   practice set without overstating mastery.
+1. Select one or a few taught objectives from the objective map, prioritizing
+   due reviews, uncertain performance, and prerequisite value.
+2. Match the prompt to objective type: recall for memory, unaided steps and
+   transfer for procedure, own-words reasoning for concept, and a justified
+   decision for design judgment.
+3. Ask one meaningful item at a time in live tutoring and require an answer
+   commitment before hints, choices, or feedback reveal the solution.
+4. Vary representation and context across attempts. Do not count a verbatim
+   repeat or recognition cue as independent evidence.
+5. Record correctness, reasoning quality, help used, confidence, and error
+   pattern separately. Route a material error to remediation.
+6. Schedule the next re-check from demonstrated performance and spacing, then
+   return formal mastery decisions to the assessment gate.
 
 ## Verification
 
 - [ ] Questions require recall or application rather than recognition alone.
 - [ ] Feedback explains why, not only whether, an answer is correct.
-- [ ] Incorrect concepts receive a changed follow-up and later re-check.
-- [ ] Mastery claims are tied to observable answers or work.
+- [ ] Material errors route to remediation and a changed later re-check.
+- [ ] Practice results remain evidence inputs rather than unreviewed mastery claims.
 
 ## Red Flags
 

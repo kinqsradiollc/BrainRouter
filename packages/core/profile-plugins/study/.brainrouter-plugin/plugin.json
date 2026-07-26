@@ -1,7 +1,7 @@
 {
   "name": "profile-study",
-  "version": "2.0.0",
-  "description": "Adaptive learning plans, practice, and evidence-based progress checks.",
+  "version": "2.1.0",
+  "description": "Task-selectable diagnosis, objective mapping, explanation, assessment, remediation, and retrieval practice.",
   "category": "productivity",
   "keywords": ["study", "learning", "practice"]
 }
