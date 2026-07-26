@@ -96,7 +96,6 @@ export function buildWorkspaceSelectionCatalog(
       ...(blockedReason ? { blockedReason } : {}),
       runtimeAvailabilityPrerequisites: blockedReason ? ['plugin-enabled'] : [],
       expandsTo: [
-        capability.skillPackId,
         ...capability.skillIds,
         ...capability.toolProfileIds,
       ],
