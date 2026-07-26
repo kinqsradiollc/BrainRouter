@@ -187,7 +187,7 @@ export function RuntimeSection({ knobs, setPath, runtimes = [], archives = [], p
   );
 }
 
-/** MC-A3/MC-C5 — named app-preview ports reserved by runtimes (name → port). */
+/** MC-A3/MC-C5 — durable named port defaults; live endpoints belong to Servers. */
 function PreviewPortsEditor({ ports, onChange }: { ports: Record<string, number>; onChange: (next: Record<string, number>) => void }): React.ReactElement {
   const [name, setName] = useState('');
   const [port, setPort] = useState('');
@@ -201,9 +201,11 @@ function PreviewPortsEditor({ ports, onChange }: { ports: Record<string, number>
   };
   const remove = (key: string): void => { const next = { ...ports }; delete next[key]; onChange(next); };
   return (
-    <SetGroup title="App-preview ports" collapsible defaultOpen={false}>
-      <div className="set-desc" style={{ marginBottom: 8 }}>Named ports a runtime reserves for a dev server the agent starts (loopback only). (cli.runtime.previewPorts)</div>
-      {entries.length === 0 ? <div className="empty">No preview ports reserved.</div> : entries.map(([key, val]) => (
+    <SetGroup title="Runtime preview port reservations" collapsible defaultOpen={false}>
+      <div className="set-desc" style={{ marginBottom: 8 }}>
+        Durable loopback port defaults for runtime previews. Live registered endpoints appear in the Servers view. (cli.runtime.previewPorts)
+      </div>
+      {entries.length === 0 ? <div className="empty">No runtime preview ports reserved.</div> : entries.map(([key, val]) => (
         <div key={key} className="rule-row">
           <span className="rule-kind allow">{key}</span>
           <span className="rule-text">127.0.0.1:{val}</span>
