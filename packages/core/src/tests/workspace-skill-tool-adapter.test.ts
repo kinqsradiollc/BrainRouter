@@ -96,6 +96,46 @@ test('frontend package skills appear only for the active task capability', () =>
   }
 });
 
+test('backend package skills appear only for the active task capability', () => {
+  const workspace = makeWorkspace();
+  try {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'service', profile: 'engineering', by: 'wizard' }),
+    );
+    const remote = JSON.stringify([
+      { name: 'api-service-design-skill', category: 'legacy', scope: 'global' },
+      { name: 'ordinary-skill', category: 'agent', scope: 'global' },
+    ]);
+    const inactive = adaptWorkspaceSkillCatalogText({
+      workspaceRoot: workspace,
+      text: remote,
+      tool: 'list_skills',
+    });
+    const active = adaptWorkspaceSkillCatalogText({
+      workspaceRoot: workspace,
+      activeCapabilities: ['backend'],
+      text: remote,
+      tool: 'list_skills',
+    });
+
+    assert.deepEqual(names(inactive), ['ordinary-skill']);
+    assert.deepEqual(names(active), [
+      'api-service-design-skill',
+      'authorization-boundary-skill',
+      'data-integrity-migration-skill',
+      'background-work-skill',
+      'production-readiness-skill',
+      'backend-testing-skill',
+      'ordinary-skill',
+    ]);
+    const explicit = resolveWorkspaceManagedSkill(workspace, 'authorization-boundary-skill', 'workflow');
+    assert.match(explicit?.content[0].text ?? '', /Map trust boundaries from ingress to side effect/);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test('disabled package skills stay ambient-hidden but explicit reads use package policy', () => {
   const workspace = makeWorkspace();
   try {

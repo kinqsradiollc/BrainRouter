@@ -70,12 +70,36 @@ test('frontend task paths activate the engineer prompt and reviewed task-time to
     assert.equal(calls.length, 2);
     assert.equal(calls[0]?.tag, 'workspace-domain-persona');
     assert.match(calls[0]?.content ?? '', /Profile: Engineering \(engineering\)/);
-    assert.match(calls[0]?.content ?? '', /Available task capabilities: frontend/);
+    assert.match(calls[0]?.content ?? '', /Available task capabilities: frontend, backend/);
     assert.match(calls[0]?.content ?? '', /Active task capabilities: frontend/);
     assert.match(calls[0]?.content ?? '', /Active domain persona: Engineer/);
     assert.equal(calls[1]?.kind, 'replace');
     assert.equal(calls[1]?.tag, 'workspace-capabilities');
     assert.match(calls[1]?.content ?? '', /Stay in the engineer persona/);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('backend tasks activate the engineer prompt without granting new tool groups', () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'br-cap-state-backend-'));
+  try {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'service', profile: 'engineering', by: 'wizard' }),
+    );
+    const { host, calls } = makeHost(workspace);
+    const resolved = refreshWorkspaceCapabilityState(
+      host,
+      'Add authorization checks to the API endpoint and database transaction.',
+    );
+
+    assert.equal(host.activeWorkspacePersonaId, 'engineer');
+    assert.deepEqual(resolved.active, ['backend']);
+    assert.deepEqual(resolved.skills, [], 'prompt activation does not grant catalog entries');
+    assert.deepEqual(resolved.toolProfiles, ['coding', 'terminal']);
+    assert.match(calls[0]?.content ?? '', /Active task capabilities: backend/);
+    assert.match(calls[1]?.content ?? '', /does not itself grant shell, network, database, or write access/);
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
   }

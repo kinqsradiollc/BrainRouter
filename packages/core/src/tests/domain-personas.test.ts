@@ -47,7 +47,7 @@ function writeJsonPersona(
   return file;
 }
 
-test('bundled catalog defines the five domain identities and no frontend persona', () => {
+test('bundled catalog defines the five domain identities and no frontend or backend persona', () => {
   withWorkspace((workspace) => {
     const personas = listDomainPersonas(workspace, { pluginAgentFiles: [] });
     assert.deepEqual(personas.map((persona) => persona.id), [
@@ -58,6 +58,7 @@ test('bundled catalog defines the five domain identities and no frontend persona
       'writer',
     ]);
     assert.equal(personas.some((persona) => persona.id === 'frontend-builder'), false);
+    assert.equal(personas.some((persona) => persona.id === 'backend-engineer'), false);
     assert.equal(personas.every((persona) => persona.source === 'bundled'), true);
   });
 });

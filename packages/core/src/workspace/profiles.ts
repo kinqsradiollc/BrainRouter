@@ -50,7 +50,7 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
   {
     id: 'engineering',
     label: 'Engineering',
-    description: 'Building and maintaining software — code, tests, reviews, releases. Frontend and design work activates additional engineering capabilities when needed.',
+    description: 'Building and maintaining software — code, tests, reviews, releases. Frontend and backend expertise activates as task-specific capabilities when needed.',
     persona: { default: 'engineer', enabled: ['engineer'] },
     orchestration: {
       mode: 'adaptive',
@@ -59,7 +59,7 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
       maxParallel: 4,
     },
     agents: { default: 'engineer', enabled: ['engineer'] },
-    capabilities: { enabled: ['frontend'] },
+    capabilities: { enabled: ['frontend', 'backend'] },
     skills: {
       packs: ['engineering'],
       enabled: [

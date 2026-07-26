@@ -40,7 +40,7 @@ test('starts un-onboarded with separate persona and orchestration profile fields
   assert.ok(engineering);
   assert.deepEqual((engineering.persona as { enabled: string[] }).enabled, ['engineer']);
   assert.equal((engineering.orchestration as { mode: string }).mode, 'adaptive');
-  assert.deepEqual((engineering.capabilities as { enabled: string[] }).enabled, ['frontend']);
+  assert.deepEqual((engineering.capabilities as { enabled: string[] }).enabled, ['frontend', 'backend']);
   assert.ok(!JSON.stringify(engineering).includes('frontend-builder'));
 });
 
@@ -65,7 +65,7 @@ test('proposes a complete model-backed engineering draft without mutating state'
   assert.equal(parsed.proposal.manifest.profile, 'engineering');
   assert.deepEqual((parsed.proposal.manifest.persona as { enabled: string[] }).enabled, ['engineer']);
   assert.equal((parsed.proposal.manifest.orchestration as { mode: string }).mode, 'adaptive');
-  assert.deepEqual((parsed.proposal.manifest.capabilities as { enabled: string[] }).enabled, ['frontend']);
+  assert.deepEqual((parsed.proposal.manifest.capabilities as { enabled: string[] }).enabled, ['frontend', 'backend']);
   assert.equal(parsed.proposal.instruction?.path, 'AGENT.md');
   assert.deepEqual(parsed.scan.markers, ['package.json', 'tsconfig.json']);
   assert.deepEqual(parsed.scan.stoppedBy, []);

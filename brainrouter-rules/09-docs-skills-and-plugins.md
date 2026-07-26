@@ -296,9 +296,9 @@ activated capabilities through `packages/core/src/workspace/skillSelection.ts`.
 The resolver may expose selected package plugin roots and an ambient skill
 allowlist to CLI/Desktop adapters, but it must never mutate process-wide plugin
 or extension state. A missing manifest is an exact no-op. Capability plugins
-such as frontend require task-time capability activation; merely adding their
-ID to the manifest pack list cannot activate them. Explicit skill disables win
-over profile, capability, and individual enable contributions.
+such as frontend and backend require task-time capability activation; merely
+adding their ID to the manifest pack list cannot activate them. Explicit skill
+disables win over profile, capability, and individual enable contributions.
 
 CLI catalog adapters insert selected package roots after workspace-authored
 roots and before ordinary plugin/bundled roots. They apply the same ambient
