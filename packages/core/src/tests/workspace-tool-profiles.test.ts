@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createWorkspaceManifest } from '../workspace/manifest.js';
 import {
   resolveWorkspaceToolSelection,
+  workspaceDynamicMcpAllowed,
   workspaceToolAllowed,
   workspaceToolProfileIds,
 } from '../workspace/toolProfiles.js';
@@ -87,4 +88,79 @@ test('unknown profile ids never grant a registered tool group', () => {
   assert.deepEqual(selection.activeProfileIds, []);
   assert.equal(allowed(selection, 'write_file', 'filesystem'), false);
   assert.deepEqual(workspaceToolProfileIds(), ['coding', 'terminal', 'browser', 'notes', 'design']);
+});
+
+test('manifest v3 explicit selections hide every unselected local tool', () => {
+  const manifest = createWorkspaceManifest({ name: 'app', profile: 'custom', by: 'wizard' });
+  manifest.version = 3;
+  manifest.tools = {
+    mode: 'explicit-catalog',
+    profiles: ['coding'],
+    enabled: ['web_search', 'list_mcp_resources'],
+    deny: ['apply_patch'],
+  };
+  const selection = resolveWorkspaceToolSelection({
+    manifest,
+    activeToolProfiles: ['design'],
+  });
+
+  assert.equal(selection.mode, 'explicit-catalog');
+  assert.deepEqual(selection.activeProfileIds, ['coding']);
+  assert.equal(allowed(selection, 'read_file', 'filesystem'), true);
+  assert.equal(allowed(selection, 'edit_file', 'filesystem'), true);
+  assert.equal(allowed(selection, 'apply_patch', 'filesystem'), false);
+  assert.equal(allowed(selection, 'web_search', 'web-research'), true);
+  assert.equal(allowed(selection, 'update_plan', 'planning-state'), false);
+  assert.equal(allowed(selection, 'custom_extension_tool', 'custom-extension'), false);
+  assert.equal(allowed(selection, 'browser_screenshot', 'browser'), false);
+  assert.equal(workspaceDynamicMcpAllowed(selection), true);
+});
+
+test('manifest v3 keeps dynamic MCP closed until a stable MCP surface is reviewed', () => {
+  const manifest = createWorkspaceManifest({ name: 'blank', profile: 'custom', by: 'wizard' });
+  manifest.version = 3;
+  manifest.tools = {
+    mode: 'explicit-catalog',
+    profiles: [],
+    enabled: [],
+    deny: [],
+  };
+  const selection = resolveWorkspaceToolSelection({ manifest });
+
+  assert.equal(workspaceDynamicMcpAllowed(selection), false);
+  manifest.tools.enabled = ['mcp_search'];
+  assert.equal(workspaceDynamicMcpAllowed(resolveWorkspaceToolSelection({ manifest })), true);
+});
+
+test('v2 ignores catalog-only fields and retains legacy baseline behavior', () => {
+  const manifest = createWorkspaceManifest({ name: 'blank', profile: 'custom', by: 'wizard' });
+  manifest.tools.mode = 'explicit-catalog';
+  manifest.tools.enabled = ['web_search'];
+  const selection = resolveWorkspaceToolSelection({ manifest });
+
+  assert.equal(selection.mode, 'legacy-groups');
+  assert.equal(allowed(selection, 'read_file', 'filesystem'), true);
+  assert.equal(allowed(selection, 'web_search', 'web-research'), false);
+  assert.equal(allowed(selection, 'custom_extension_tool', 'custom-extension'), true);
+  assert.equal(workspaceDynamicMcpAllowed(selection), true);
+});
+
+test('manifest v3 ignores unknown, dynamic, and hidden tool IDs at runtime', () => {
+  const manifest = createWorkspaceManifest({ name: 'blank', profile: 'custom', by: 'wizard' });
+  manifest.version = 3;
+  manifest.tools = {
+    mode: 'explicit-catalog',
+    profiles: ['future-tools'],
+    enabled: ['future_tool', 'delegate_unreviewed', 'spawn_agent', 'web_search'],
+    deny: ['future_deny'],
+  };
+  const selection = resolveWorkspaceToolSelection({ manifest });
+
+  assert.deepEqual(selection.activeProfileIds, []);
+  assert.deepEqual([...selection.allowedToolIds], ['web_search']);
+  assert.deepEqual([...selection.deniedIds], []);
+  assert.equal(allowed(selection, 'future_tool', 'future-extension'), false);
+  assert.equal(allowed(selection, 'delegate_agent', 'orchestration'), false);
+  assert.equal(allowed(selection, 'spawn_agent', 'orchestration'), false);
+  assert.equal(allowed(selection, 'web_search', 'web-research'), true);
 });

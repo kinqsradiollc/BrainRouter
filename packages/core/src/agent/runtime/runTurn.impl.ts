@@ -101,6 +101,7 @@ import {
 import { loadWorkspaceManifest } from '../../workspace/manifest.js';
 import {
   resolveWorkspaceToolSelection,
+  workspaceDynamicMcpAllowed,
   workspaceToolAllowed,
 } from '../../workspace/toolProfiles.js';
 import {
@@ -212,6 +213,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       manifest: loadWorkspaceManifest(this.workspaceRoot),
       activeToolProfiles: this.activeWorkspaceCapabilities.toolProfiles,
     });
+    const workspaceAllowsDynamicMcp = workspaceDynamicMcpAllowed(workspaceToolSelection);
     const workspaceAllowsLocalTool = (name: string): boolean => {
       const canonicalName = registryEntry(name)?.name ?? name;
       return workspaceToolAllowed(workspaceToolSelection, {
@@ -321,6 +323,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // tools stay hidden because the CLI owns those flows.
     let visibleMcpTools = mcpTools.filter((t: any) =>
       this.isModelVisibleMcpTool(t)
+      && workspaceAllowsDynamicMcp
       && !workspaceToolSelection.deniedIds.has(String(t?.name ?? ''))
       && skillAllowsTool(String(t?.name ?? '')));
     // MAS-P4-T1: tool-surface budgeting. First apply the agent def's scope
@@ -2037,21 +2040,27 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
             // CC-SAFETY-B2 — record any denial into the bounded, session-scoped
             // recent-denials ring so `/recent-denials` can surface WHY the agent
             // kept getting blocked. Best-effort; never breaks the gate.
+            const diagnosticToolName = String(name)
+              .replace(/[^A-Za-z0-9_.:-]/g, '?')
+              .slice(0, 120);
             const denyAndRecord = (reason: string): never => {
-              try { recordDenial(this.workspaceRoot, this.sessionKey, name, reason); } catch { /* best-effort */ }
+              try { recordDenial(this.workspaceRoot, this.sessionKey, diagnosticToolName, reason); } catch { /* best-effort */ }
               throw new Error(reason);
             };
             // Defense in depth: a model can emit a stale/guessed tool name
             // even when it was absent from the request surface. Recheck the
             // active skill allowlist at dispatch for local, delegate, and MCP.
             if (!skillAllowsTool(name)) {
-              denyAndRecord(`Tool "${name}" denied by the active skill allowed-tools policy.`);
+              denyAndRecord(`Tool "${diagnosticToolName}" denied by the active skill allowed-tools policy.`);
             }
             if (isLocal && !workspaceAllowsLocalTool(name)) {
-              denyAndRecord(`Tool "${name}" denied by the active workspace tool-profile policy.`);
+              denyAndRecord(`Tool "${diagnosticToolName}" denied by the active workspace tool-profile policy.`);
             }
             if (!isLocal && workspaceToolSelection.deniedIds.has(name)) {
-              denyAndRecord(`Tool "${name}" denied by the active workspace tool policy.`);
+              denyAndRecord(`Tool "${diagnosticToolName}" denied by the active workspace tool policy.`);
+            }
+            if (!isLocal && !workspaceAllowsDynamicMcp) {
+              denyAndRecord(`Tool "${diagnosticToolName}" denied because this workspace has no reviewed MCP surface.`);
             }
             // CC-P3.2 — declarative cli.permissions rules run FIRST: a deny match
             // blocks outright; an allow match downgrades an `ask` below (it never

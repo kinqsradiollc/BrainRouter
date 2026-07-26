@@ -35,6 +35,8 @@ import {
 } from './compatibilityDiagnostics.js';
 
 export const WORKSPACE_MANIFEST_VERSION = 2;
+/** Reviewed catalog-backed tool selection. Existing onboarding stays on v2 until its picker ships. */
+export const WORKSPACE_MANIFEST_EXPLICIT_TOOL_SELECTION_VERSION = 3;
 export const WORKSPACE_MANIFEST_RELPATH = path.join('.brainrouter', 'workspace.json');
 /** Hard cap for parsing committed workspace metadata into memory. */
 export const WORKSPACE_MANIFEST_MAX_BYTES = 256 * 1024;
@@ -46,6 +48,7 @@ const WORKSPACE_MANIFEST_MAX_PERCENT_DECODE_PASSES = 16;
 
 export type WorkspaceOnboardSource = 'wizard' | 'agent' | 'import';
 export type WorkspaceOrchestrationMode = 'off' | 'explicit' | 'adaptive';
+export type WorkspaceToolSelectionMode = 'legacy-groups' | 'explicit-catalog';
 
 export interface WorkspaceManifest {
   version: number;
@@ -63,7 +66,14 @@ export interface WorkspaceManifest {
   agents: { default: string; enabled: string[] };
   capabilities: { enabled: string[]; disabled: string[] };
   skills: { packs: string[]; enabled: string[]; disabled: string[] };
-  tools: { profiles: string[]; deny: string[] };
+  tools: {
+    /** Present on v3 manifests. V2 is interpreted as `legacy-groups` without rewriting it. */
+    mode?: WorkspaceToolSelectionMode;
+    profiles: string[];
+    /** Present on v3 manifests; stable local catalog IDs only. */
+    enabled?: string[];
+    deny: string[];
+  };
   memory: { tags: string[]; captureHint: string };
   /** Instruction-file pointer (e.g. "AGENT.md") — a reference, never content. */
   instructions: string;
@@ -381,7 +391,11 @@ function normalizeManifest(
   const enabledSkills = safeStringArray(skillsRaw.enabled, budget);
   const disabledSkills = safeStringArray(skillsRaw.disabled, budget);
   const toolProfiles = safeStringArray(toolsRaw.profiles, budget);
+  const enabledTools = safeStringArray(toolsRaw.enabled, budget);
   const deniedTools = safeStringArray(toolsRaw.deny, budget);
+  const version = raw.version === WORKSPACE_MANIFEST_EXPLICIT_TOOL_SELECTION_VERSION
+    ? WORKSPACE_MANIFEST_EXPLICIT_TOOL_SELECTION_VERSION
+    : WORKSPACE_MANIFEST_VERSION;
   const memoryTags = safeStringArray(memoryRaw.tags, budget);
   const memoryCaptureHint = safeKnownString(memoryRaw.captureHint, '', budget);
   const instructions = safeInstructionPointer(raw.instructions, budget);
@@ -390,7 +404,7 @@ function normalizeManifest(
   if (explicitExtra !== undefined) collectExtraEntries(explicitExtra, extra, budget, extraState);
   collectExtraEntries(raw, extra, budget, extraState, explicitExtra !== undefined);
   const normalized: WorkspaceManifest = {
-    version: WORKSPACE_MANIFEST_VERSION,
+    version,
     name,
     profile,
     onboarded: {
@@ -412,6 +426,9 @@ function normalizeManifest(
       disabled: disabledSkills,
     },
     tools: {
+      ...(version === WORKSPACE_MANIFEST_EXPLICIT_TOOL_SELECTION_VERSION
+        ? { mode: 'explicit-catalog' as const, enabled: enabledTools }
+        : {}),
       profiles: toolProfiles,
       deny: deniedTools,
     },
@@ -453,6 +470,11 @@ function fitManifestToSerializedLimit(manifest: WorkspaceManifest): WorkspaceMan
     { values: manifest.memory.tags, assign: (values) => { manifest.memory.tags = values; } },
     { values: manifest.skills.enabled, assign: (values) => { manifest.skills.enabled = values; } },
     { values: manifest.skills.packs, assign: (values) => { manifest.skills.packs = values; } },
+    { values: manifest.tools.enabled ?? [], assign: (values) => {
+      if (manifest.version === WORKSPACE_MANIFEST_EXPLICIT_TOOL_SELECTION_VERSION) {
+        manifest.tools.enabled = values;
+      }
+    } },
     { values: manifest.tools.profiles, assign: (values) => { manifest.tools.profiles = values; } },
     { values: manifest.capabilities.enabled, assign: (values) => { manifest.capabilities.enabled = values; } },
     { values: manifest.persona.enabled, assign: (values) => {
@@ -488,7 +510,7 @@ function fitManifestToSerializedLimit(manifest: WorkspaceManifest): WorkspaceMan
   // Bounded scalar fields cannot reach the file cap, but retain a fail-closed
   // fallback if future schema additions invalidate that invariant.
   return {
-    version: WORKSPACE_MANIFEST_VERSION,
+    version: manifest.version,
     name: 'workspace',
     profile: manifest.profile,
     onboarded: { at: '', by: manifest.onboarded.by },
@@ -497,7 +519,9 @@ function fitManifestToSerializedLimit(manifest: WorkspaceManifest): WorkspaceMan
     agents: { default: '', enabled: [] },
     capabilities: { enabled: [], disabled: [] },
     skills: { packs: [], enabled: [], disabled: [] },
-    tools: { profiles: [], deny: [] },
+    tools: manifest.version === WORKSPACE_MANIFEST_EXPLICIT_TOOL_SELECTION_VERSION
+      ? { mode: 'explicit-catalog', profiles: [], enabled: [], deny: [] }
+      : { profiles: [], deny: [] },
     memory: { tags: [], captureHint: '' },
     instructions: 'AGENT.md',
   };

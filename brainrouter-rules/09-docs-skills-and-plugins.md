@@ -340,6 +340,25 @@ authoritative.
 
 - **Evidence:** `packages/core/src/workspace/skillSelection.ts`, `packages/core/src/workspace/skillToolAdapter.ts`, `packages/core/src/tests/workspace-skill-selection.test.ts`, `packages/core/src/tests/workspace-skill-tool-adapter.test.ts`, `brainrouter-cli/src/prompt/skillCatalog.ts`, `brainrouter-cli/src/tests/workspace-skill-catalog.test.ts`
 
+### 15c. Reviewed workspace pickers consume the Core selection catalog
+
+Onboarding and workspace-edit surfaces must obtain tool groups, stable local
+tools, skill packs, and skills from
+`packages/core/src/workspace/selectionCatalog.ts`. Do not duplicate these IDs,
+descriptions, provenance labels, or availability rules in CLI/Desktop code.
+The catalog projects only bounded metadata from the authoritative registries:
+never skill bodies, raw plugin prompts, filesystem paths, credentials, or raw
+MCP discovery responses. Installed package contributions carry their stable
+plugin provenance; unavailable known entries remain visible but blocked.
+
+Dynamic MCP tool names may be displayed as live, non-persistable rows. Reviewed
+tool/skill writes reject typos, unavailable entries, wrong entry kinds, and
+live-only names. Rebuild the catalog immediately before write and compare its
+content-free fingerprint so a stale review cannot grant a contribution that
+changed after display.
+
+- **Evidence:** `packages/core/src/workspace/selectionCatalog.ts`, `packages/core/src/tests/workspace-selection-catalog.test.ts`
+
 ### 16. ⛔ Executable plugin capabilities are consent-gated through the existing exec policy
 
 Command-type hooks and MCP command-servers shipped by a plugin stay **disabled**

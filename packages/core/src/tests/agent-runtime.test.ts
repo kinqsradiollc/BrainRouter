@@ -7,6 +7,10 @@ import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
 import { BudgetExceededError } from '../provider/budget.js';
 import { _resetModelReasoningCapabilities, registerModelReasoningCapabilities } from '../provider/models/reasoning.js';
 import { createWorkspaceManifest, saveWorkspaceManifest } from '../workspace/manifest.js';
+import {
+  buildWorkspaceSelectionCatalog,
+  migrateWorkspaceManifestToolSelection,
+} from '../workspace/selectionCatalog.js';
 
 function resetCliKnobsForAgentRuntimeTest(extra: Parameters<typeof setCliKnobOverride>[0] = {}): void {
   _resetCliKnobsCache();
@@ -3126,6 +3130,154 @@ test('runTurn applies manifest tool profiles to the model-visible local surface'
       assert.equal(fs.existsSync(path.join(workspace, 'blocked.txt')), false, 'a stale hidden call cannot write');
       const denied = secondRequestBody.messages.find((message: any) => message.tool_call_id === 'hidden_write');
       assert.match(denied?.content ?? '', /workspace tool-profile policy/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('runTurn applies explicit catalog selection to exposure and dispatch', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const catalog = buildWorkspaceSelectionCatalog();
+    saveWorkspaceManifest(
+      workspace,
+      migrateWorkspaceManifestToolSelection({
+        manifest: createWorkspaceManifest({ name: 'blank', profile: 'custom', by: 'wizard' }),
+        reviewed: { profiles: [], enabled: ['web_search'], deny: [] },
+        catalog,
+      }),
+    );
+    const originalFetch = globalThis.fetch;
+    let llmCalls = 0;
+    let firstRequestBody: any;
+    let secondRequestBody: any;
+    globalThis.fetch = (async (_url: any, opts: any) => {
+      llmCalls += 1;
+      const body = JSON.parse(opts.body);
+      if (llmCalls === 1) {
+        firstRequestBody = body;
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: '',
+              tool_calls: [{
+                id: 'unselected_plan',
+                type: 'function',
+                function: { name: 'update_plan', arguments: '{"items":[]}' },
+              }],
+            },
+          }],
+          usage: { prompt_tokens: 50, completion_tokens: 5 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      secondRequestBody = body;
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'done' } }],
+        usage: { prompt_tokens: 50, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({ content: [] }),
+        close: async () => {},
+      };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'm' }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        silent: true,
+      });
+      agent.setAccessMode('shell');
+      assert.equal(await agent.runTurn('Search only.', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: () => {},
+      }), 'done');
+
+      const names = new Set((firstRequestBody.tools ?? []).map((tool: any) => tool.function?.name));
+      assert.deepEqual([...names], ['web_search']);
+      const denied = secondRequestBody.messages.find((message: any) => message.tool_call_id === 'unselected_plan');
+      assert.match(denied?.content ?? '', /workspace tool-profile policy/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('runTurn keeps live MCP names closed without a reviewed stable MCP surface', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const catalog = buildWorkspaceSelectionCatalog();
+    saveWorkspaceManifest(
+      workspace,
+      migrateWorkspaceManifestToolSelection({
+        manifest: createWorkspaceManifest({ name: 'blank', profile: 'custom', by: 'wizard' }),
+        reviewed: { profiles: [], enabled: [], deny: [] },
+        catalog,
+      }),
+    );
+    const originalFetch = globalThis.fetch;
+    let llmCalls = 0;
+    let firstRequestBody: any;
+    let secondRequestBody: any;
+    let mcpCalls = 0;
+    globalThis.fetch = (async (_url: any, opts: any) => {
+      llmCalls += 1;
+      const body = JSON.parse(opts.body);
+      if (llmCalls === 1) {
+        firstRequestBody = body;
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: '',
+              tool_calls: [{
+                id: 'unreviewed_mcp',
+                type: 'function',
+                function: { name: 'mcp_docs_search', arguments: '{}' },
+              }],
+            },
+          }],
+          usage: { prompt_tokens: 50, completion_tokens: 5 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      secondRequestBody = body;
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'done' } }],
+        usage: { prompt_tokens: 50, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({
+          tools: [{
+            name: 'mcp_docs_search',
+            __rawName: 'search',
+            __serverId: 'docs',
+            description: 'Search documentation',
+            inputSchema: { type: 'object', properties: {} },
+          }],
+        }),
+        callTool: async () => {
+          mcpCalls += 1;
+          return { content: [{ text: 'called' }] };
+        },
+        close: async () => {},
+      };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'm' }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        silent: true,
+      });
+      assert.equal(await agent.runTurn('Do not use tools.', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: () => {},
+      }), 'done');
+
+      const names = new Set((firstRequestBody.tools ?? []).map((tool: any) => tool.function?.name));
+      assert.equal(names.has('mcp_docs_search'), false);
+      assert.equal(mcpCalls, 0);
+      const denied = secondRequestBody.messages.find((message: any) => message.tool_call_id === 'unreviewed_mcp');
+      assert.match(denied?.content ?? '', /no reviewed MCP surface/i);
     } finally {
       globalThis.fetch = originalFetch;
     }
