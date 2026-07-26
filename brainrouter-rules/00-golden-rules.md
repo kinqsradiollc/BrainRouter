@@ -82,8 +82,8 @@ else, remember these. Each links to the topical file with the full context.
 
 17. **⛔ Golden/parity tests pin enumerated surfaces** (roles, agents, providers,
     slash commands). Adding one breaks exact-count/`deepEqual` assertions in
-    *other* workspaces. After adding an enumerated thing, run the **full** root
-    suite. → [`07`](07-testing.md)
+    *other* workspaces. Run the affected cross-workspace parity tests locally
+    and require the **full hosted CI suite** before merge. → [`07`](07-testing.md)
 
 18. **Match the file/package you're editing, don't reformat the tree.** Quote
     style and file-naming differ per workspace; Prettier is configured but the
@@ -99,6 +99,8 @@ else, remember these. Each links to the topical file with the full context.
     `repl.ts`); every new deep doc/spec/ADR is linked from
     `brainrouter-docs/README.md`. → [`05`](05-cli-and-agent-runtime.md), [`09`](09-docs-skills-and-plugins.md)
 
-21. **Run the full workspace suite locally before pushing** (`npm run verify` =
-    typecheck + lint + test). The brain's integration tests need a reachable
-    pgvector Postgres. → [`07`](07-testing.md)
+21. **Keep local validation proportional and require full hosted CI before
+    merge.** Run focused tests plus lint/typecheck for small slices. Run local
+    `npm run verify` (typecheck + lint + test) for cross-cutting/high-risk
+    changes, release/publish work, or CI-parity diagnosis; the brain's
+    integration tests need reachable pgvector Postgres. → [`07`](07-testing.md)

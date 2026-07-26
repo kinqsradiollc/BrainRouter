@@ -63,7 +63,13 @@ npm test -w @kinqs/brainrouter-cli         # node --test over dist
 npm test -w brainrouter-desktop            # typecheck + electron-main + renderer tests
 ```
 
-- **Run the full workspace suite before pushing**, not just the workspace you touched — adding an enumerated thing (tool, panel, extension, theme) breaks **golden inventory tests in other workspaces**.
+- **Keep local validation proportional.** During implementation and small
+  follow-ups, run the narrowest relevant tests plus lint/typecheck for the
+  touched surface. For enumerated things (tool, panel, extension, theme), also
+  run the affected cross-workspace golden/parity tests. The full workspace
+  suite is a required hosted CI merge gate; run `npm run verify` locally for
+  cross-cutting/high-risk changes, release or publish work, or when reproducing
+  a CI failure.
 - Local `~/.config/brainrouter/config.json` can leak into CLI test runs; re-run with a clean `HOME` before concluding a test is broken.
 - UI work: verify in the running app (desktop or dashboard), not just typecheck. Screenshot-driven iteration is the norm; don't commit UI changes without the owner seeing the result.
 - Full-stack dev: `deploy/dev/docker-compose.dev.yml` is the live-reload stack (bind-mount + `tsx watch`, self-migrates).
@@ -75,7 +81,11 @@ npm test -w brainrouter-desktop            # typecheck + electron-main + rendere
 - **Branch model:** each version is a `release/x.y.z` train (see the highest `release/*` on origin — e.g. `release/0.4.17`). Feature PRs are **small, focused, squash-merged into the release branch**. One PR carries one independently shippable feature slice; split larger programs into dependency-ordered PRs and merge each slice before opening or retargeting the next. Every slice gets its own CI and fresh security review. Do not use an umbrella PR to combine changes merely because they share an ADR, roadmap item, or release. `main` and `release/*` are branch-protected (PR + green "Build & Test (Node 22.x)" required). Never bypass required checks without the owner's explicit OK.
 - **Commits:** conventional `type(scope): description` — type ∈ feat/fix/refactor/docs/chore; scope = workspace or domain (core, cli, desktop, brainrouter, dashboard, types, config, release, …). The squash subject becomes permanent history; make it state the user-visible outcome. Check style with `git log --oneline -40`.
 - **PR bodies:** follow [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md) (Summary / Why / Changes / Test plan / Docs & changelog / Breaking changes). A single shippable slice may span tightly coupled workspaces; list each coupled change as one `* type(scope): …` bullet. Split independently useful or independently reviewable slices into separate PRs. Refactor PRs end with an explicit verification line ("Behavior-preserving; N tests pass").
-- **Automated review:** every PR gets a **BrainRouter security review** check plus CI (build/test, lint/typecheck, mobile, dep audit). Address blocking findings; a clean/neutral review passes.
+- **Automated review:** every PR gets a **BrainRouter security review** plus CI
+  (build/test, lint/typecheck, mobile, dep audit). Do not routinely post a
+  manual `/security-review` command. Address valid blocking findings from the
+  current head; if a bot finding is clearly inapplicable, record the rationale
+  and follow the repository owner's merge decision. Hosted CI must still pass.
 - **Changelog:** update `brainrouter-changelog/<in-flight-version>.md` and mirror to root `CHANGELOG.md` [Unreleased]; tick the matching `brainrouter-roadmap/` item. New env vars (server-side only) go in `brainrouter/.env.example`.
 - **Local review policy:** [`REVIEW.md`](REVIEW.md) calibrates the local workspace reviewers (Desktop review + CLI `/review`) — Important vs Nit severity, ≤5 nits, `preExisting` awareness-only.
 
@@ -125,6 +135,14 @@ Read the skill's `SKILL.md` from the filesystem and follow it.
 
 **Plan** — create/update a `task.md` checklist; if the request is ambiguous, draft a micro-spec and get explicit approval; write an ADR when the decision has lasting consequences.
 
-**Execute** — implement in small verifiable steps; tests first for new behavior; build + run the affected workspace's tests after each significant change; keep the diff free of unrelated edits.
+**Execute** — implement in small verifiable steps; tests first for new behavior;
+run focused tests plus lint/typecheck for the affected slice after significant
+changes; keep the diff free of unrelated edits. Add a focused build or live UI
+run when it is needed to exercise the changed behavior.
 
-**Ship** — run `npm run verify` (or the full per-workspace suites); update changelog/roadmap; open one independently shippable slice as a small PR to the current release branch; address its fresh security review and merge it before advancing dependent slices; record completed items in `task.md` and summarize in `walkthrough.md`.
+**Ship** — open one independently shippable slice as a small PR to the current
+release branch; wait for its complete hosted CI suite and automated security
+review; address valid blocking findings and merge it before advancing dependent
+slices. Update changelog/roadmap when required; record completed items in
+`task.md` and summarize in `walkthrough.md`. Run local `npm run verify` only for
+cross-cutting/high-risk changes, release/publish work, or CI-parity diagnosis.
