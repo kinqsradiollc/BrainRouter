@@ -2110,6 +2110,111 @@ h4, h5, h6 { font-size: 13px; font-weight: 500; }
 .knowledge-source-panel { margin-top: 50px; }
 .knowledge-source-filters { max-width: 680px; margin-bottom: 16px; display: grid; grid-template-columns: minmax(240px, 1fr) 220px; gap: 8px; }
 .knowledge-source-panel .analytics-table { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.project-knowledge-library { margin-top: 50px; }
+.project-knowledge-library__heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; }
+.project-knowledge-library__heading > div { min-width: 0; }
+.project-knowledge-library__controls {
+  padding: 16px;
+  display: grid;
+  grid-template-columns: minmax(190px, .42fr) minmax(0, 1fr);
+  align-items: end;
+  gap: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: linear-gradient(115deg, var(--tone-knowledge-wash), transparent 52%), var(--surface-raised);
+}
+.project-knowledge-library label > span,
+.project-knowledge-library__status > span,
+.project-knowledge-library__upload > span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+.project-knowledge-library__base-form {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(160px, .75fr) minmax(180px, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+.project-knowledge-library__toolbar {
+  margin-top: 12px;
+  padding: 14px;
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(140px, .34fr) minmax(150px, .38fr);
+  align-items: end;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.project-knowledge-library__upload input {
+  width: 100%;
+  min-height: 36px;
+  margin-top: 5px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.project-knowledge-library__upload input::file-selector-button {
+  height: 32px;
+  margin-right: 10px;
+  padding: 0 10px;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-overlay);
+  cursor: pointer;
+}
+.project-knowledge-library__upload small { display: block; margin-top: 3px; color: var(--text-muted); font-size: 9px; }
+.project-knowledge-library__documents {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 300px);
+  gap: 12px;
+}
+.project-knowledge-library__documents > * { min-width: 0; }
+.project-knowledge-library__documents .analytics-table { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.project-knowledge-library__documents tr.is-selected { background: var(--tone-knowledge-wash); }
+.project-knowledge-library__document-button {
+  width: 100%;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+  color: var(--text);
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.project-knowledge-library__document-button strong { max-width: 34ch; overflow: hidden; text-overflow: ellipsis; font-size: 12px; white-space: nowrap; }
+.project-knowledge-library__document-button span { max-width: 40ch; overflow: hidden; text-overflow: ellipsis; color: var(--text-muted); font-size: 10px; white-space: nowrap; }
+.project-knowledge-library__status {
+  min-height: 230px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-raised);
+}
+.project-knowledge-library__status h3 { margin: 18px 0 8px; overflow-wrap: anywhere; }
+.project-knowledge-library__status > p { color: var(--text-muted); font-size: 11px; line-height: 17px; overflow-wrap: anywhere; }
+.project-knowledge-library__status dl { margin: 14px 0; border-top: 1px solid var(--border); }
+.project-knowledge-library__status dl > div { min-height: 32px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--border); }
+.project-knowledge-library__status dt { color: var(--text-muted); font-size: 10px; }
+.project-knowledge-library__status dd { margin: 0; color: var(--text-secondary); font: 10px var(--font-mono); text-align: right; }
+.project-knowledge-library__error { color: var(--danger) !important; }
+.project-knowledge-library__search { margin-top: 34px; padding-top: 28px; border-top: 1px solid var(--border); }
+.project-knowledge-library__search form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; }
+.project-knowledge-library__search form .settings-input { margin-top: 0; }
+.project-knowledge-library__results { margin-top: 14px; display: grid; gap: 8px; }
+.project-knowledge-library__results > p { margin: 0 0 4px; color: var(--text-muted); font-size: 10px; text-transform: capitalize; }
+.project-knowledge-library__results article { padding: 14px 16px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-raised); }
+.project-knowledge-library__results article > p { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 19px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.project-knowledge-library__results footer { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 5px 12px; color: var(--text-muted); font-size: 9px; }
+.project-knowledge-library__results footer strong { color: var(--text); font-weight: 550; }
 
 .content-scroll > div { width: 100%; max-width: none !important; }
 .main-content .card h3,
@@ -2225,6 +2330,12 @@ h4, h5, h6 { font-size: 13px; font-weight: 500; }
   .knowledge-link-grid { grid-template-columns: 1fr; }
   .knowledge-link-card { min-height: 180px; }
   .knowledge-source-filters { grid-template-columns: 1fr; }
+  .project-knowledge-library__controls,
+  .project-knowledge-library__documents { grid-template-columns: 1fr; }
+  .project-knowledge-library__base-form { grid-template-columns: 1fr 1fr; }
+  .project-knowledge-library__base-form .premium-button { grid-column: 1 / -1; justify-self: start; }
+  .project-knowledge-library__toolbar { grid-template-columns: 1fr 1fr; }
+  .project-knowledge-library__upload { grid-column: 1 / -1; }
 }
 
 /* CVE intelligence — dense evidence-first catalog and repository exposure. */
