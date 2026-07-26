@@ -204,6 +204,7 @@
   "files": [
     "dist",
     "config",
+    "personas",
     "agents",
     "packs",
     "profile-plugins",
