@@ -821,25 +821,65 @@ ordinary access, scope, approval, and dispatch gates.
 
 #### 12.3 Recommended starting selections are defaults, not grants
 
-The existing profile defaults establish the compatibility baseline. The
-catalog-driven picker presents these as recommended checked bundles, explains
-their concrete tools, and lets the user narrow them before review:
+The first implementation grouped unrelated authority behind convenient names:
+`terminal` also includes computer control and connector execution, `notes`
+combines research state with artifact production, and `design` combines
+artifact production with interactive browser control. Those groups remain
+valid compatibility aliases for workspaces that already reviewed them, but
+they are too coarse to be new-profile defaults.
 
-| Workspace profile | Current/recommended tool selection | Normal purpose | Not a default grant |
+Core therefore adds smaller, stable groups. Once persisted, a group ID's
+expansion is immutable within the manifest version; a later release may add a
+new group but must not silently add tools to an already reviewed group.
+
+| Group | Concrete responsibility | Authority posture |
+|---|---|---|
+| `coding` | Read/search code, LSP, file edits, patches, and notebook edits | Normal for Engineering and Data Science; still bounded by access mode |
+| `shell` | Run, observe, wait for, and stop commands | Normal for Engineering and Data Science; excludes computer control and connectors |
+| `browser` | Fetch pages and search public sources | Read/network research surface; not interactive browser control |
+| `research-notes` | Maintain source notes and research briefs | Session/workspace research state, not a document artifact |
+| `artifacts` | Produce structured artifact records | Normal production surface for every bundled non-Custom profile |
+| `planning-session` | Plans, goals, task tracking, chapter markers, and user-choice requests | Recommended interaction surface; selections do not auto-create a goal or plan |
+| `orchestration` | Route tasks and use active-turn child agents, including observe/wait/close/continue operations | Requires an enabled plan/role and the owning active-turn runtime |
+| `interactive-browser` | Use installed browser-control extension tools | Capability- and runtime-sensitive; normally proposed for frontend/full-stack work |
+| `mcp-resources` | Discover and read configured MCP resources through stable control tools | Opens live discovery only; dynamic server tool names are never persisted |
+| `connectors` | List configured connectors and run an explicitly authorized connector | Connector execution retains its shell/network and approval gates |
+| `computer-control` | Operate an available computer-control session | High-authority, runtime-sensitive, never a broad profile default |
+| `workflow-launch` | Launch reviewed workflows/graphs and observe active workflow progress | High-cost explicit choice; child plans do not imply this grant |
+| `background-workers` | Launch and manage durable root-owned worker threads | Root-only explicit choice; not implied by ordinary orchestration |
+| `security-review` | Inspect review traffic and record/finalize security findings | Specialized review surface, never inferred from Engineering alone |
+
+Conditional availability tools such as result expansion and model switching stay
+individually selectable in Advanced. Hidden compatibility tools remain
+non-selectable. The legacy `terminal`, `notes`, and `design` expansions are not
+recommended for a newly reviewed v3 manifest.
+
+The catalog-driven picker presents the following checked recommendations. A
+recommendation is still only a request entering the intersection in section
+12.2; it is not an access, runtime, extension, role, or approval grant.
+
+| Workspace profile | Recommended checked groups | Capability-sensitive proposal | Advanced, not preselected |
 |---|---|---|---|
-| Engineering | `coding`, `terminal`, `browser` | Read/edit code, use LSP, run bounded verification, and research when needed | Computer control, connectors, MCP, workflows, and every child role still require their own policy and availability |
-| Research | `browser`, `notes` | Gather sources and maintain research notes/artifacts | File edits, shell, and child fan-out are not baseline research tools |
-| Data Science | `coding`, `terminal`, `browser` | Read/edit notebooks or analysis code, run experiments, and research methods/data | External connectors, computer control, and write-capable children remain explicit choices |
-| Study | `browser`, `notes` | Source lookup plus learning notes/artifacts | Shell, file-editing, and ordinary child fan-out are not baseline tutoring tools |
-| Writing | `notes`, `browser` | Draft/revise artifacts and research sources | File-editing and shell require an explicit authoring/project choice |
-| Custom | Empty | Start from direct primary execution and select only understood entries | No hidden profile bundle or inferred tool grant |
+| Engineering | `coding`, `shell`, `browser`, `artifacts`, `planning-session`, `orchestration` | Add `interactive-browser` for reviewed frontend/full-stack work; backend remains the same engineer persona and may add it when browser/API inspection is useful | MCP resources, connectors, computer control, workflow launch, background workers, security review |
+| Research | `browser`, `research-notes`, `artifacts`, `planning-session`, `orchestration` | Add `coding` and `shell` for computational/repository research; add interactive browser only when source access needs it | MCP resources/connectors when a reviewed corpus needs them; workflow launch, background workers, computer control, security review |
+| Data Science | `coding`, `shell`, `browser`, `research-notes`, `artifacts`, `planning-session`, `orchestration` | Add interactive browser for dashboard/data-portal work | MCP resources/connectors for reviewed data sources; workflow launch, background workers, computer control, security review |
+| Study | `browser`, `research-notes`, `artifacts`, `planning-session` | Add `orchestration` only when the learner selects a plan that uses an explorer; add coding/shell for programming labs | MCP resources/connectors for a reviewed course corpus; interactive browser, workflow launch, background workers, computer control, security review |
+| Writing | `browser`, `research-notes`, `artifacts`, `planning-session` | Add `orchestration` when the writer selects a reviewer strategy; add coding only for repository-backed documentation | MCP resources/connectors for reviewed source libraries; interactive browser, shell, workflow launch, background workers, computer control, security review |
+| Custom | Empty | A deterministic scan or managed proposal may recommend checked entries, but the user must review them | Everything remains searchable and individually selectable; no hidden bundle |
 
-The picker groups the complete built-in catalog by user intent—files and code,
-terminal and computer control, web and research, notes and artifacts,
-MCP/LSP/connectors, planning/session state, orchestration/workflows, and
-security review—while retaining the exact catalog ID and policy metadata in the
-details view. It is therefore possible to choose a small Custom surface without
-having to know the implementation group names.
+This matrix deliberately treats artifacts as a production primitive, not a
+frontend-only design feature. Engineering, including backend-only work,
+Research, Data Science, Study, and Writing can all create artifacts. Frontend
+and full-stack capability detection may additionally recommend interactive
+browser control, but task-time capability activation cannot silently add that
+group to an `explicit-catalog` workspace. The user reviews and persists the
+proposal during onboarding or later workspace editing.
+
+Profiles also do not receive every tool merely because a task could eventually
+benefit from it. Live connectors depend on configured external systems,
+computer control acts outside the repository, workflow/worker launch can incur
+substantial cost, and security-review tools have a specialized runtime. These
+remain discoverable, explained choices.
 
 #### 12.4 Reviewed picker UX in Desktop and CLI
 
@@ -851,12 +891,32 @@ They must:
   group, tool, pack, and skill;
 - distinguish **recommended**, **selected**, **available**, **blocked**, and
   **denied** states, with the effective-policy reason for a blocked item;
+- render roles, tool groups, tools, packs, and skills as selectable catalog
+  entries rather than requiring an implementation ID to be typed;
+- render contributed capabilities such as Frontend and Backend as selectable
+  catalog entries. A capability owns its skill pack and tool-profile
+  recommendations, so those payloads appear nested under the capability and
+  are not presented as duplicate peer choices;
+- show the capability section for every profile, with an explicit empty state
+  when that profile currently contributes none. Engineering is initially the
+  only bundled profile with optional Frontend and Backend capabilities; this is
+  a catalog fact rather than an Engineering-only UI special case;
 - offer profile recommendations first, then an "Advanced" view for individual
   tool and skill selections;
+- explain whether a recommendation came from the workspace profile, a reviewed
+  capability/subtype proposal, repository evidence, or the user;
 - allow Custom to begin empty, search/filter the catalog, select a group or
   individual entries, and review the exact manifest diff before save;
 - show dynamic MCP tools as live, non-persisted information rather than
   checkboxes that imply a durable tool contract;
+- keep selected-but-currently-unavailable entries reviewable and removable, but
+  never advertise them to the model as executable;
+- for orchestration entries, distinguish "selected for this workspace" from
+  "available in this active turn"; an unavailable-turn failure is terminal and
+  the UI must not encourage blind retries;
+- provide **Skip setup for now** before the final write; skipping discards the
+  draft, writes no manifest or instruction change, and preserves no-manifest
+  runtime behavior;
 - preserve keyboard accessibility and provide the equivalent numbered picker
   and review summary in the CLI;
 - re-resolve the proposed selection immediately before write and show any
@@ -877,7 +937,7 @@ tool merely because its checkbox is selected.
 | Verification meaning | Tests/build/runtime evidence | Citation support and source consistency | Reproduction and metric checks | Assessment and retrieval practice | Requirement/style conformance | User-defined |
 | Write-capable role | Worker when authorized | None by default | Worker when authorized | None | Primary only | None by default |
 | Final synthesis | Primary engineer | Primary researcher | Primary data scientist | Primary tutor | Primary writer | Primary |
-| Recommended tool bundles | coding, terminal, browser | browser, notes | coding, terminal, browser | browser, notes | notes, browser | none |
+| Recommended tool bundles | coding, shell, browser, artifacts, planning-session, orchestration | browser, research-notes, artifacts, planning-session, orchestration | coding, shell, browser, research-notes, artifacts, planning-session, orchestration | browser, research-notes, artifacts, planning-session | browser, research-notes, artifacts, planning-session | none |
 
 ## Security and authority invariants
 
@@ -917,6 +977,11 @@ tool merely because its checkbox is selected.
     package archives before any installed runtime may depend on them.
 21. Skipping onboarding creates no reviewed authority or partial workspace
     state; no-manifest behavior remains unchanged until setup is completed.
+22. A persisted tool-group expansion is immutable within the manifest version;
+    new authority requires a new reviewed group or individual selection.
+23. Selecting an orchestration group cannot make a tool executable outside its
+    owning active turn; unavailable entries are not model-visible and produce a
+    terminal, non-retryable diagnostic if invoked through a stale path.
 
 ## Alternatives considered
 
