@@ -2040,24 +2040,27 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
             // CC-SAFETY-B2 — record any denial into the bounded, session-scoped
             // recent-denials ring so `/recent-denials` can surface WHY the agent
             // kept getting blocked. Best-effort; never breaks the gate.
+            const diagnosticToolName = String(name)
+              .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '?')
+              .slice(0, 120);
             const denyAndRecord = (reason: string): never => {
-              try { recordDenial(this.workspaceRoot, this.sessionKey, name, reason); } catch { /* best-effort */ }
+              try { recordDenial(this.workspaceRoot, this.sessionKey, diagnosticToolName, reason); } catch { /* best-effort */ }
               throw new Error(reason);
             };
             // Defense in depth: a model can emit a stale/guessed tool name
             // even when it was absent from the request surface. Recheck the
             // active skill allowlist at dispatch for local, delegate, and MCP.
             if (!skillAllowsTool(name)) {
-              denyAndRecord(`Tool "${name}" denied by the active skill allowed-tools policy.`);
+              denyAndRecord(`Tool "${diagnosticToolName}" denied by the active skill allowed-tools policy.`);
             }
             if (isLocal && !workspaceAllowsLocalTool(name)) {
-              denyAndRecord(`Tool "${name}" denied by the active workspace tool-profile policy.`);
+              denyAndRecord(`Tool "${diagnosticToolName}" denied by the active workspace tool-profile policy.`);
             }
             if (!isLocal && workspaceToolSelection.deniedIds.has(name)) {
-              denyAndRecord(`Tool "${name}" denied by the active workspace tool policy.`);
+              denyAndRecord(`Tool "${diagnosticToolName}" denied by the active workspace tool policy.`);
             }
             if (!isLocal && !workspaceAllowsDynamicMcp) {
-              denyAndRecord(`Tool "${name}" denied because this workspace has no reviewed MCP surface.`);
+              denyAndRecord(`Tool "${diagnosticToolName}" denied because this workspace has no reviewed MCP surface.`);
             }
             // CC-P3.2 — declarative cli.permissions rules run FIRST: a deny match
             // blocks outright; an allow match downgrades an `ask` below (it never
