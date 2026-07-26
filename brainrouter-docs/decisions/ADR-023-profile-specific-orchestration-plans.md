@@ -1,7 +1,8 @@
 # ADR-023 — Profile-Specific Orchestration Plans
 
-**Status:** Implemented for `release/0.4.17` · **Builds on** ADR-021 (workspace
-profiles) and ADR-022 (persona, orchestration, and context contracts) ·
+**Status:** Accepted; implementation in progress for `release/0.4.17` ·
+**Builds on** ADR-021 (workspace profiles) and ADR-022 (persona,
+orchestration, and context contracts) ·
 **Refines** ADR-022 sections 4, 5, 7, and 9 without changing their authority
 boundaries.
 
@@ -54,9 +55,12 @@ Engineering keeps the current investigate/design/build/review/verify behavior.
 Research, Study, Writing, and Data Science receive different plans rather than
 being forced through an engineering-shaped child-agent loop.
 
-Tool and skill selection becomes catalog-backed: profile bundles are readable
-recommendations, Custom can select individual safe entries, and every effective
-selection remains beneath the existing authority and runtime ceilings.
+Tool, capability, and skill selection becomes catalog-backed. A workspace
+profile owns the primary persona and baseline pack; optional capabilities are
+separately selectable specializations; capability-owned packs remain nested
+under their capability instead of appearing as duplicate skill-pack choices.
+Custom can select individual safe entries, and every effective selection
+remains beneath the existing authority and runtime ceilings.
 
 ## Context
 
@@ -881,7 +885,111 @@ computer control acts outside the repository, workflow/worker launch can incur
 substantial cost, and security-review tools have a specialized runtime. These
 remain discoverable, explained choices.
 
-#### 12.4 Reviewed picker UX in Desktop and CLI
+#### 12.4 Use one visible ownership hierarchy
+
+The common setup flow must not present a profile, its optional capabilities,
+and their implementation packs as peers. In particular, **Engineering**,
+**Frontend**, and **Backend** are not three interchangeable skill packs:
+Engineering is a workspace profile, while Frontend and Backend are optional
+task capabilities owned by that profile.
+
+The reviewed UI hierarchy is:
+
+| Surface | Contract | Common-flow presentation |
+|---|---|---|
+| Workspace profile | Primary domain, persona, orchestration defaults, baseline skills, tools, and memory posture | Choose exactly one profile card |
+| Included profile setup | The selected profile's persona and profile-owned skill pack | Read-only summary beneath the selected profile; not a second peer choice |
+| Optional capabilities | Profile-compatible task specializations authorized for automatic task-time activation | Selectable checkboxes with contributed skills and recommended tool groups nested in each row |
+| Additional skill packs | Reusable packs not owned by the selected profile or an enabled capability | Advanced picker only; selecting one does not change persona or orchestration |
+| Individual skills and tools | Fine-grained reviewed additions or denials | Advanced picker only |
+
+The label **Available capabilities** is ambiguous because "available" is also a
+runtime state. Desktop and CLI use **Optional capabilities** for the reviewed
+checkbox set and distinguish these states:
+
+```text
+compatible  = the selected profile permits this capability to be chosen
+recommended = the preset, scan, or reviewed proposal suggests it
+enabled     = the user has selected it in the workspace manifest
+active      = task-time signals selected it for the current turn
+available  = its plugin and required runtime surfaces currently exist
+blocked    = it cannot be selected or activated, with a bounded reason
+```
+
+Only `enabled` and explicit disable choices are durable workspace decisions.
+`active` and runtime `available` are recomputed. A checkbox therefore means
+"this workspace may use this specialization for matching tasks", not "inject
+every capability skill into every turn".
+
+Profile-owned and capability-owned packs remain catalog entries for
+validation, provenance, exact review, and runtime resolution. The common skill
+pack picker filters them out:
+
+- the chosen profile's pack appears under **Included profile setup**;
+- a capability-owned pack appears only inside that capability's expansion;
+- unowned or cross-domain packs appear as **Additional skill packs** in
+  Advanced, with a warning that they add skills only;
+- selecting a cross-domain pack never changes the profile, persona,
+  orchestration plan, capability allowlist, or tool authority.
+
+#### 12.5 Separate capability compatibility from defaults
+
+The current preset field `capabilities.enabled` serves two different ideas:
+which capabilities a profile contributes and which are selected by default.
+That coupling makes every non-Engineering profile look as though the product
+has no capability system.
+
+Core will separate them:
+
+```ts
+capabilities: {
+  available: string[];   // compatible checkbox choices for this profile
+  recommended: string[]; // initial checked/recommended subset
+}
+```
+
+This is preset/catalog metadata, not a workspace-manifest schema change.
+`workspace.json` continues to persist only the reviewed
+`capabilities.enabled` and `capabilities.disabled` values. Custom treats all
+installed, safe capability contributions as compatible but recommends none.
+Unknown or unavailable contributions stay visible and blocked; a non-Custom
+profile rejects a capability outside its compatibility list.
+
+Each capability definition owns bounded, prompt-free onboarding metadata:
+
+```text
+id, label, description, compatible profile IDs,
+owned skill-pack ID, contributed skill IDs,
+recommended tool-group IDs, and task-detection signals
+```
+
+The runtime instruction remains internal and never crosses the onboarding
+catalog boundary. A capability may recommend a tool group during setup, but
+task-time activation cannot add an unreviewed tool, role, extension, connector,
+or orchestration mode. Selecting both Frontend and Backend represents
+full-stack Engineering; BrainRouter does not add a redundant Full-stack
+capability.
+
+The initial cross-profile catalog is:
+
+| Capability | Compatible profiles | Specialization payload | Tool groups proposed during reviewed setup |
+|---|---|---|---|
+| Frontend | Engineering | Accessibility, component/design-system judgment, responsive behavior, browser and visual verification | `browser`, `artifacts`, optionally `interactive-browser` |
+| Backend | Engineering | API/service design, authorization, data integrity, background work, production readiness, backend verification | `coding`, `shell`, `artifacts` |
+| Academic paper | Research, Writing | Contribution story, claim/evidence map, paper section contracts, citation checks, adversarial paper review, revision | `browser`, `research-notes`, `artifacts` |
+| Computational research | Research, Data Science | Reproducible computational investigation, experiment records, result validation, uncertainty and limitation reporting | `coding`, `shell`, `browser`, `research-notes`, `artifacts` |
+| Data visualization | Data Science | Chart selection, data-story structure, accessibility, misleading-encoding checks, dashboard/figure verification | `coding`, `artifacts`, optionally `interactive-browser` |
+| Programming lab | Study | Executable examples, learner-safe scaffolding, tests, debugging feedback, and progressive exercise difficulty | `coding`, `shell`, `artifacts` |
+| Technical documentation | Writing, Engineering | Repository-grounded API/reference/tutorial structure, runnable examples, terminology consistency, and documentation review | `coding`, `browser`, `artifacts` |
+| Installed custom capability | Custom | Contribution-defined, schema-validated payload | None unless explicitly reviewed |
+
+The profile pack continues to provide the normal domain workflow. These
+capabilities are narrower additions, not renamed copies of Research, Data,
+Study, Writing, or Engineering. A deterministic scan or managed onboarding
+proposal may recommend compatible capabilities from project evidence and the
+user's description, but the review screen owns the final checked set.
+
+#### 12.6 Reviewed picker UX in Desktop and CLI
 
 The workspace onboarding and later workspace-edit flows replace free-text tool,
 skill-pack, and skill-ID list inputs with catalog-backed multi-select controls.
@@ -893,14 +1001,16 @@ They must:
   **denied** states, with the effective-policy reason for a blocked item;
 - render roles, tool groups, tools, packs, and skills as selectable catalog
   entries rather than requiring an implementation ID to be typed;
-- render contributed capabilities such as Frontend and Backend as selectable
-  catalog entries. A capability owns its skill pack and tool-profile
-  recommendations, so those payloads appear nested under the capability and
-  are not presented as duplicate peer choices;
-- show the capability section for every profile, with an explicit empty state
-  when that profile currently contributes none. Engineering is initially the
-  only bundled profile with optional Frontend and Backend capabilities; this is
-  a catalog fact rather than an Engineering-only UI special case;
+- render profile-compatible capabilities as selectable catalog entries. A
+  capability owns its skill pack and tool-profile recommendations, so those
+  payloads appear nested under the capability and are not presented as
+  duplicate peer choices;
+- show **Optional capabilities** for every profile, using the compatibility
+  matrix rather than an Engineering-only UI branch; show an explicit empty
+  state only when no installed contribution is compatible;
+- summarize the selected profile's included persona and pack separately, and
+  move additional cross-domain packs, individual skills, and tools under
+  **Advanced**;
 - offer profile recommendations first, then an "Advanced" view for individual
   tool and skill selections;
 - explain whether a recommendation came from the workspace profile, a reviewed
@@ -1268,6 +1378,12 @@ because it may restate user content.
 - Replace free-text tool-profile/tool-deny/skill-list editing with catalog-backed
   Desktop and CLI pickers, including concrete group expansion and policy-state
   explanations.
+- Separate capability compatibility from default recommendations, rename the
+  selector to **Optional capabilities**, and make it a checkbox catalog for
+  every profile.
+- Nest profile-owned and capability-owned packs beneath their owner; expose
+  only independent or cross-domain packs as **Additional skill packs** in
+  Advanced.
 - Preview plan, strategy, stages, roles, skills, tools, and effective ceilings
   in CLI and Desktop.
 - Add an explicit **Skip setup for now** action that discards the proposal,
@@ -1291,6 +1407,13 @@ Both retain **Skip setup for now** as a terminal no-write action: Desktop
 discards the draft and derives a fresh proposal when setup is reopened, while
 the CLI returns before catalog review and remains covered by a filesystem
 no-write test.
+
+Capability delivery remains split into narrow PRs: first the shared
+compatibility/default contract and picker hierarchy; then capability packs for
+academic-paper, computational-research, data-visualization, programming-lab,
+and technical-documentation. Each pack must ship its own detection,
+profile-compatibility, prompt/skill policy, catalog, runtime-resolution, and
+blocked/unavailable tests. A pack does not widen the profile tool matrix.
 
 ### P23-9 — Plugin and workspace contributions
 
@@ -1343,46 +1466,53 @@ gate is recorded in the Compatibility section above.
 12. Invalid or unavailable plans fail closed to direct primary execution.
 13. Plugin/workspace definitions obey the same bounded no-follow parser and
     produce collision diagnostics.
-14. Hosted CI, cross-workspace parity tests, and automated security review pass
+14. Every built-in profile uses the same Optional capabilities picker and can
+    expose more than one compatible specialization without enabling all of
+    them.
+15. Profile-owned and capability-owned skill packs are nested under their
+    owner, not duplicated as peer choices in the common Skill packs list.
+16. Capability activation cannot add a tool group that was not reviewed in an
+    explicit-catalog workspace.
+17. Hosted CI, cross-workspace parity tests, and automated security review pass
     for every implementation slice.
-15. A strategy whose validated graph contains only primary stages cannot invoke
+18. A strategy whose validated graph contains only primary stages cannot invoke
     a child-launch tool; an `investigate` strategy can launch an explorer only
     when that role stage is present in its validated graph.
-16. An unstarted ephemeral stage is cancelled when its parent turn ends,
+19. An unstarted ephemeral stage is cancelled when its parent turn ends,
     interrupts, or changes session; no raw orchestration tool call is replayed
     outside `Agent.runTurn`.
-17. A missing orchestration runtime creates at most one terminal plan
+20. A missing orchestration runtime creates at most one terminal plan
     diagnostic and no retry loop.
-18. Desktop and CLI trace a rejected pre-launch call as a failed-to-start
+21. Desktop and CLI trace a rejected pre-launch call as a failed-to-start
     delegation, never as delegated work.
-19. Onboarding and workspace editing present built-in tools, groups, skill
+22. Onboarding and workspace editing present built-in tools, groups, skill
     packs, and skills as catalog-backed choices rather than free-form ID lists.
-20. Every visible catalog entry explains whether it is recommended, selected,
+23. Every visible catalog entry explains whether it is recommended, selected,
     available, blocked, or denied; a blocked entry cannot become executable by
     selection alone.
-21. Custom begins with an empty explicit selection and can select a minimal
+24. Custom begins with an empty explicit selection and can select a minimal
     reviewed surface without entering internal IDs manually.
-22. A v2 workspace retains its current tool-group behavior until the user
+25. A v2 workspace retains its current tool-group behavior until the user
     explicitly reviews a v3 explicit-catalog migration.
-23. Dynamic MCP tool names are visible only as live runtime information and
+26. Dynamic MCP tool names are visible only as live runtime information and
     never written to the workspace manifest.
-24. Every profile declares a valid `fallbackStrategyId`; its fallback graph is
+27. Every profile declares a valid `fallbackStrategyId`; its fallback graph is
     primary-only and cannot become unavailable because a child role or skill is
     missing.
-25. Every role stage uses the role-owned output contract, and every requested
+28. Every role stage uses the role-owned output contract, and every requested
     section resolves through that contract's canonical section-alias catalog.
-26. Engineering implementation uses one worker unless isolated worktrees or
+29. Engineering implementation uses one worker unless isolated worktrees or
     disjoint enforced ownership make parallel writes provably safe.
-27. The published Core package contains every bundled orchestration-profile
+30. The published Core package contains every bundled orchestration-profile
     JSON at the path used by the installed loader.
-28. Runtime plan activation is impossible before parser, packaged catalog,
+31. Runtime plan activation is impossible before parser, packaged catalog,
     effective ceilings, and active-turn lifecycle gates are complete; enabling
     it does not alter no-manifest behavior or implicitly activate manifest-v3
     tool selection.
-29. Choosing **Skip setup for now** in CLI or Desktop creates no manifest,
+32. Choosing **Skip setup for now** in CLI or Desktop creates no manifest,
     selection, completion marker, or partial draft; reopening onboarding later
     starts a fresh reviewed proposal.
-30. Use of the TypeScript orchestration-default fallback emits only a bounded
+33. Use of the TypeScript orchestration-default fallback emits only a bounded
     compatibility code, surface, coarse source, and count; it never emits
     profile IDs, plan contents, prompts, paths, or workspace content.
 
