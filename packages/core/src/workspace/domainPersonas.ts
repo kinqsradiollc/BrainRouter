@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { getCliKnobs } from '../config/config.js';
 import { loadPluginsWithKnobs } from '../plugin/loader.js';
 import { parseFrontmatterConfig, splitFrontmatter } from '../plugin/localConfig.js';
+import { RESERVED_ORCHESTRATION_ROLE_IDS } from './personaDefinitionFile.js';
 import { containsWorkspaceSecretMaterial } from './workspaceContentSafety.js';
 
 export type DomainPersonaSource = 'workspace' | 'local' | 'plugin' | 'bundled';
@@ -52,15 +53,7 @@ const UNSAFE_CONTROL_CHARACTERS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f
 const BUNDLED_PERSONAS_DIR = fileURLToPath(new URL('../../agents', import.meta.url));
 
 /** Harness roles are never valid domain identities, even when a manifest names one. */
-export const RESERVED_HARNESS_ROLE_IDS: ReadonlySet<string> = new Set([
-  'architect',
-  'explorer',
-  'fleet',
-  'intake',
-  'reviewer',
-  'verifier',
-  'worker',
-]);
+export const RESERVED_HARNESS_ROLE_IDS = RESERVED_ORCHESTRATION_ROLE_IDS;
 
 /** Load the effective domain-persona catalog in stable precedence order. */
 export function listDomainPersonas(
