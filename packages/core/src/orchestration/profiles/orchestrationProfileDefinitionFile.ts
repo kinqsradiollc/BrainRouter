@@ -38,6 +38,7 @@ const TOP_LEVEL_FIELDS = new Set([
   'id',
   'displayName',
   'defaultMode',
+  'fallbackStrategyId',
   'rolePolicy',
   'limits',
   'strategies',
@@ -69,11 +70,18 @@ const EXPECTED_OUTPUT_FIELDS = new Set(['contractId', 'requiredSections']);
 
 export type OrchestrationProfileMode = 'off' | 'explicit' | 'adaptive';
 
+export interface OrchestrationProfileRoleReference {
+  defaultAccess: 'read' | 'write' | 'shell';
+  outputContract: {
+    id: string;
+    sectionAliases: ReadonlySet<string>;
+  } | null;
+}
+
 export interface OrchestrationProfileReferenceCatalog {
-  roleIds: ReadonlySet<string>;
+  roles: ReadonlyMap<string, OrchestrationProfileRoleReference>;
   skillIds: ReadonlySet<string>;
   signalIds: ReadonlySet<string>;
-  outputContractIds: ReadonlySet<string>;
 }
 
 export interface OrchestrationProfileRolePolicy {
@@ -131,6 +139,7 @@ export interface OrchestrationProfileDefinition {
   id: string;
   displayName: string;
   defaultMode: OrchestrationProfileMode;
+  fallbackStrategyId: string;
   rolePolicy: OrchestrationProfileRolePolicy;
   limits: OrchestrationProfileLimits;
   strategies: OrchestrationProfileStrategy[];
@@ -220,6 +229,8 @@ export function parseOrchestrationProfileDefinition(
   const rolePolicy = parseRolePolicy(value.rolePolicy, references);
   const limits = parseLimits(value.limits);
   const strategies = parseStrategies(value.strategies, rolePolicy, limits, references);
+  const fallbackStrategyId = identifier(value.fallbackStrategyId, 'fallbackStrategyId');
+  validateFallbackStrategy(fallbackStrategyId, strategies);
 
   return {
     schemaVersion: ORCHESTRATION_PROFILE_SCHEMA_VERSION,
@@ -231,6 +242,7 @@ export function parseOrchestrationProfileDefinition(
       'defaultMode',
       ['off', 'explicit', 'adaptive'] as const,
     ),
+    fallbackStrategyId,
     rolePolicy,
     limits,
     strategies,
@@ -259,8 +271,9 @@ function parseRolePolicy(
       `Orchestration profile definition rolePolicy has roles both available and disabled: ${overlap.join(', ')}.`,
     );
   }
-  assertKnownReferences(availableRoles, references.roleIds, 'rolePolicy.availableRoles');
-  assertKnownReferences(disabledRoles, references.roleIds, 'rolePolicy.disabledRoles');
+  const roleIds = new Set(references.roles.keys());
+  assertKnownReferences(availableRoles, roleIds, 'rolePolicy.availableRoles');
+  assertKnownReferences(disabledRoles, roleIds, 'rolePolicy.disabledRoles');
   return { availableRoles, disabledRoles };
 }
 
@@ -360,9 +373,10 @@ function parseStages(
       );
     }
 
+    const executor = parseExecutor(record.executor, strategyId, stageId, rolePolicy);
     const stage: OrchestrationProfileStage = {
       id: stageId,
-      executor: parseExecutor(record.executor, strategyId, stageId, rolePolicy),
+      executor,
       after: identifierList(
         record.after,
         `strategy ${strategyId} stage ${stageId} after`,
@@ -387,14 +401,39 @@ function parseStages(
     );
 
     if (record.fanOut !== undefined) {
-      stage.fanOut = parseFanOut(record.fanOut, strategyId, stageId, stage.executor, limits);
+      stage.fanOut = parseFanOut(
+        record.fanOut,
+        strategyId,
+        stageId,
+        executor,
+        limits,
+        references,
+      );
     }
-    if (record.expectedOutput !== undefined) {
+    if (executor.kind === 'primary') {
+      if (record.expectedOutput !== undefined) {
+        throw new Error(
+          `Orchestration profile definition strategy ${strategyId} stage ${stageId} primary executor cannot declare expectedOutput.`,
+        );
+      }
+    } else {
+      const role = references.roles.get(executor.roleId);
+      if (!role?.outputContract) {
+        throw new Error(
+          `Orchestration profile definition strategy ${strategyId} stage ${stageId} role ${executor.roleId} has no registered output contract.`,
+        );
+      }
+      if (record.expectedOutput === undefined) {
+        throw new Error(
+          `Orchestration profile definition strategy ${strategyId} stage ${stageId} role executor must declare expectedOutput.`,
+        );
+      }
       stage.expectedOutput = parseExpectedOutput(
         record.expectedOutput,
         strategyId,
         stageId,
-        references,
+        executor.roleId,
+        role.outputContract,
       );
     }
     return stage;
@@ -453,6 +492,7 @@ function parseFanOut(
   stageId: string,
   executor: OrchestrationStageExecutor,
   limits: OrchestrationProfileLimits,
+  references: OrchestrationProfileReferenceCatalog,
 ): OrchestrationStageFanOut {
   const record = requiredRecord(value, `strategy ${strategyId} stage ${stageId} fanOut`);
   rejectUnknownFields(record, FAN_OUT_FIELDS, `strategy ${strategyId} stage ${stageId} fanOut`);
@@ -478,6 +518,15 @@ function parseFanOut(
       `Orchestration profile definition strategy ${strategyId} stage ${stageId} fanOut.min must not exceed fanOut.max.`,
     );
   }
+  if (
+    executor.kind === 'role' &&
+    references.roles.get(executor.roleId)?.defaultAccess !== 'read' &&
+    max > 1
+  ) {
+    throw new Error(
+      `Orchestration profile definition strategy ${strategyId} stage ${stageId} write-capable role fanOut.max must be 1 without enforced execution isolation.`,
+    );
+  }
   return { min, max };
 }
 
@@ -485,7 +534,8 @@ function parseExpectedOutput(
   value: unknown,
   strategyId: string,
   stageId: string,
-  references: OrchestrationProfileReferenceCatalog,
+  roleId: string,
+  roleContract: NonNullable<OrchestrationProfileRoleReference['outputContract']>,
 ): OrchestrationStageExpectedOutput {
   const record = requiredRecord(
     value,
@@ -500,19 +550,54 @@ function parseExpectedOutput(
     record.contractId,
     `strategy ${strategyId} stage ${stageId} expectedOutput.contractId`,
   );
+  if (contractId !== roleContract.id) {
+    throw new Error(
+      `Orchestration profile definition strategy ${strategyId} stage ${stageId} expectedOutput.contractId must use role ${roleId} contract ${roleContract.id}.`,
+    );
+  }
+  const requiredSections = identifierList(
+    record.requiredSections,
+    `strategy ${strategyId} stage ${stageId} expectedOutput.requiredSections`,
+    MAX_REQUIRED_SECTIONS,
+  );
   assertKnownReferences(
-    [contractId],
-    references.outputContractIds,
-    `strategy ${strategyId} stage ${stageId} expectedOutput.contractId`,
+    requiredSections,
+    roleContract.sectionAliases,
+    `strategy ${strategyId} stage ${stageId} expectedOutput.requiredSections`,
   );
   return {
     contractId,
-    requiredSections: identifierList(
-      record.requiredSections,
-      `strategy ${strategyId} stage ${stageId} expectedOutput.requiredSections`,
-      MAX_REQUIRED_SECTIONS,
-    ),
+    requiredSections,
   };
+}
+
+function validateFallbackStrategy(
+  fallbackStrategyId: string,
+  strategies: readonly OrchestrationProfileStrategy[],
+): void {
+  const fallback = strategies.find((strategy) => strategy.id === fallbackStrategyId);
+  if (!fallback) {
+    throw new Error(
+      `Orchestration profile definition fallbackStrategyId references unknown strategy ${fallbackStrategyId}.`,
+    );
+  }
+  for (const stage of fallback.stages) {
+    if (stage.executor.kind !== 'primary') {
+      throw new Error(
+        `Orchestration profile definition fallback strategy ${fallbackStrategyId} must contain only primary executors.`,
+      );
+    }
+    if (stage.fanOut !== undefined) {
+      throw new Error(
+        `Orchestration profile definition fallback strategy ${fallbackStrategyId} must not fan out.`,
+      );
+    }
+    if (stage.skillIds.length > 0) {
+      throw new Error(
+        `Orchestration profile definition fallback strategy ${fallbackStrategyId} must not require skills.`,
+      );
+    }
+  }
 }
 
 function validateStageGraph(stages: readonly OrchestrationProfileStage[], strategyId: string): void {
