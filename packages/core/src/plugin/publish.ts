@@ -60,6 +60,7 @@ export function buildRegistryEntry(
     integrity,
     provides: {
       skills: provides.skills,
+      personas: provides.personas,
       agents: provides.agents,
       hooks: provides.hooks,
       mcpServers: provides.mcpServers,

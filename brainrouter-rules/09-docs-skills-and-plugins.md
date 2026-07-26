@@ -156,33 +156,40 @@ refuses name collisions.
 
 - **Evidence:** `brainrouter-cli/src/prompt/skillCatalog.ts:31,96,146`
 
-### 11. Agent personas are single-role markdown; personas never call personas
+### 11. JSON personas define domain responsibilities, not execution authority
 
-Agent personas live as flat files at `agents/<kebab-name>.md` with `name` +
-`description` frontmatter and a body written as a system prompt for **one** role
-with one perspective and a defined output format. Respect the three-layer
-composition: **Skill** = the _how_ (workflow steps), **Persona** = the _who_
-(viewpoint + report), **Command** = the _when_ (user-facing entry composing the
-other two). The user or a slash command orchestrates — **personas must not invoke
-other personas**; skills are the only mandatory hops inside a persona's workflow.
+Personas live as flat, schema-validated files at
+`personas/<kebab-name>.json`. A persona defines domain responsibilities,
+decision priorities, quality criteria, and bounded behavioral instructions.
+It never selects a model, grants tools/access, configures delegation, or owns
+execution limits. Respect the composition: **Skill** = the bounded workflow,
+**Persona** = domain judgment, **Capability** = task-specific expertise,
+**Orchestration role** = execution posture, and **Command** = a user-facing
+entry point. Personas do not invoke personas.
 
-- **Evidence:** `agents/README.md`, `agents/code-reviewer.md:1`
+Discovery is first-match-wins by source: workspace → local → enabled plugin →
+bundled. Within a source, JSON wins over a same-ID legacy Markdown definition.
+The legacy `agents/<id>.md` reader exists only for the migration window and must
+not be extended with new features.
 
-### 11a. Markdown supplies identity; JSON supplies optional executable policy and is a bounded trust boundary
+- **Evidence:** `packages/core/src/workspace/personaDefinitionFile.ts`,
+  `packages/core/src/workspace/domainPersonas.ts`
 
-An agent `<id>.md` defines the domain identity shown to the model. A same-ID
-`<id>.json` may separately define child access, tool scope, ownership, limits,
-and delegation behavior; JSON alone never creates a domain persona. Executable
-definitions are read only from regular UTF-8 files under their declared source
-root, capped at 64 KiB, validated field-by-field, and rejected when their ID does
-not match the filename. Once a workspace manifest exists, runtime lookup keeps
-reserved harness roles active and exposes any other JSON definition only when
-its ID is the manifest default or appears in `agents.enabled`; missing or
-unreadable manifests preserve the full legacy catalog. Project writers must
-validate the exact serialized JSON through the same parser and use guarded
-atomic workspace persistence; never cast arbitrary parsed JSON to
-`AgentDefinition`, follow linked project/pack agent paths, or write executable
-definitions directly with `writeFileSync`.
+### 11a. Executable agent JSON is a separate bounded trust boundary
+
+An `agents/<id>.json` file defines child access, tool scope, ownership, limits,
+and delegation behavior; it never creates a domain persona. Persona/executor
+same-ID pairing is a legacy compatibility behavior, not a design convention.
+Executable definitions are read only from regular UTF-8 files under their
+declared source root, capped at 64 KiB, validated field-by-field, and rejected
+when their ID does not match the filename. While manifest v1 remains active,
+runtime lookup keeps reserved harness roles active and exposes any other JSON
+definition only when its ID is the manifest default or appears in
+`agents.enabled`; missing or unreadable manifests preserve the full legacy
+catalog. Project writers must validate the exact serialized JSON through the
+same parser and use guarded atomic workspace persistence; never cast arbitrary
+parsed JSON to `AgentDefinition`, follow linked project/pack agent paths, or
+write executable definitions directly with `writeFileSync`.
 
 - **Why:** project and pack JSON becomes both a model-visible tool and child
   execution policy, so partial objects, path escapes, or arbitrary tool names
@@ -203,8 +210,9 @@ A BrainRouter plugin is a folder whose manifest lives at
 naming**). The only required field is `name` (kebab-case, validated by
 `KEBAB_CASE_RE`); bad version/category produce **warnings, not hard failures**.
 Component dirs are auto-discovered by convention when `contributes` omits them:
-`skills/`, `agents/` (.md), `commands/` (.md), `hooks/hooks.json`, `workflows/`,
-`connectors/`, `mcp.json` — so a skills-only plugin is just `plugin.json` +
+`skills/`, `personas/` (.json), `agents/` (executable JSON plus legacy Markdown
+during migration), `commands/` (.md), `hooks/hooks.json`, `workflows/`,
+`connectors/`, and `mcp.json` — so a skills-only plugin is just `plugin.json` +
 `skills/`. Any explicit `contributes` path must be relative and stay inside the
 plugin root (absolute and `..`-escaping paths are rejected at parse **and**
 discovery time).

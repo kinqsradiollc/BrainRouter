@@ -49,6 +49,14 @@ function writeFixturePlugin(dir: string, name: string): string {
     compatibility: { brainrouterVersion: '>=0.4.17', agentApiVersion: '1' },
   }));
   w('skills/demo/SKILL.md', `---\nname: ${name}-demo\ndescription: demo skill\n---\n# demo\n`);
+  w('personas/helper.json', JSON.stringify({
+    schemaVersion: 1,
+    kind: 'persona',
+    id: 'helper',
+    displayName: 'Helper',
+    description: 'Fixture persona',
+    instructions: ['Help with the requested task.'],
+  }));
   w('agents/helper.md', '# helper agent\n');
   w('commands/greet.md', 'Say hi to $ARGUMENTS\n');
   w('hooks/hooks.json', JSON.stringify({ hooks: [{ event: 'pre-tool', command: 'echo hi' }] }));
@@ -144,11 +152,12 @@ test('loadPlugins: an enabled fixture plugin contributes skill+agent+command+hoo
   const p = on.loaded[0];
   assert.equal(p.scope, 'user');
   assert.deepEqual(
-    { skills: p.provides.skills, agents: p.provides.agents, commands: p.provides.commands, hooks: p.provides.hooks, mcpServers: p.provides.mcpServers },
-    { skills: 1, agents: 1, commands: 1, hooks: 1, mcpServers: 1 },
+    { skills: p.provides.skills, personas: p.provides.personas, agents: p.provides.agents, commands: p.provides.commands, hooks: p.provides.hooks, mcpServers: p.provides.mcpServers },
+    { skills: 1, personas: 1, agents: 1, commands: 1, hooks: 1, mcpServers: 1 },
   );
   assert.equal(on.contributions.skillRoots.length, 1);
   assert.ok(on.contributions.skillRoots[0].endsWith(path.join('acme-devkit', 'skills')));
+  assert.equal(on.contributions.personaFiles.length, 1);
   assert.equal(on.contributions.agentFiles.length, 1);
   assert.equal(on.contributions.commandFiles.length, 1);
   assert.equal(on.contributions.hookFiles.length, 1);

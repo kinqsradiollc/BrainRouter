@@ -4,9 +4,9 @@
  * Given a workspace root + config, resolve the ENABLED plugins across both
  * scopes (user `~/.brainrouter/plugins/<name>/` and workspace
  * `<ws>/.brainrouter/plugins/<name>/`) and produce the aggregate contributions
- * the CLI/host feed into the EXISTING subsystems — skills, agents, commands,
- * hooks, mcp, connectors, workflows. No parallel runtime: a plugin is inert
- * data that populates systems we already ship.
+ * the CLI/host feed into the EXISTING subsystems — skills, personas, agents,
+ * commands, hooks, mcp, connectors, workflows. No parallel runtime: a plugin
+ * is inert data that populates systems we already ship.
  *
  * Collisions across plugins are disambiguated `<pluginName>:<name>` (mirroring
  * the skill-collision display we shipped). Loading is SKIPPED entirely under
@@ -52,6 +52,7 @@ export interface LoadedPlugin extends DiscoveredPlugin {
 export interface PluginContributions {
   /** Plugin skill DIRECTORIES — appended to skillSearchRoots. */
   skillRoots: string[];
+  personaFiles: Array<{ pluginName: string; path: string }>;
   agentFiles: Array<{ pluginName: string; path: string }>;
   commandFiles: Array<{ pluginName: string; path: string }>;
   hookFiles: Array<{ pluginName: string; path: string }>;
@@ -78,6 +79,7 @@ export interface LoadPluginsResult {
 function emptyContributions(): PluginContributions {
   return {
     skillRoots: [],
+    personaFiles: [],
     agentFiles: [],
     commandFiles: [],
     hookFiles: [],
@@ -176,6 +178,7 @@ export function loadPluginsWithKnobs(
 
     const c = plugin.contributes;
     if (c.skills) contributions.skillRoots.push(c.skills);
+    if (c.personas) contributions.personaFiles.push(...listEntries(c.personas, plugin.name, ['.json']));
     if (c.agents) contributions.agentFiles.push(...listEntries(c.agents, plugin.name, ['.md']));
     if (c.commands) contributions.commandFiles.push(...listEntries(c.commands, plugin.name, ['.md']));
     if (c.connectors) contributions.connectorFiles.push(...listEntries(c.connectors, plugin.name, ['.json']));
@@ -230,6 +233,13 @@ function addOrgConventionRepo(
   const agentsDir = path.join(repoRoot, 'agents');
   if (dirExists(agentsDir)) {
     contributions.agentFiles.push(...listEntries(agentsDir, `org:${path.basename(path.dirname(repoRoot))}`, ['.md']));
+  }
+
+  const personasDir = path.join(repoRoot, 'personas');
+  if (dirExists(personasDir)) {
+    contributions.personaFiles.push(
+      ...listEntries(personasDir, `org:${path.basename(path.dirname(repoRoot))}`, ['.json']),
+    );
   }
 
   for (const pluginRoot of pluginDirsIn(path.join(repoRoot, 'plugins'), altManifestNames)) {

@@ -28,7 +28,7 @@ const {
   removePluginBridge,
 } = await import('./pluginBridge.js');
 
-/** Write a minimal skills-only plugin (safe: no shell/MCP capabilities). */
+/** Write a minimal skill/persona plugin (safe: no shell/MCP capabilities). */
 function writeFixturePlugin(root: string, name: string): void {
   fs.mkdirSync(path.join(root, '.brainrouter-plugin'), { recursive: true });
   fs.writeFileSync(
@@ -37,6 +37,8 @@ function writeFixturePlugin(root: string, name: string): void {
   );
   fs.mkdirSync(path.join(root, 'skills', 'demo'), { recursive: true });
   fs.writeFileSync(path.join(root, 'skills', 'demo', 'SKILL.md'), '# demo skill\n');
+  fs.mkdirSync(path.join(root, 'personas'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'personas', 'helper.json'), '{}\n');
 }
 
 /** Write a plugin whose hooks run a shell command (needs consent). */
@@ -68,6 +70,7 @@ test('install from a local source, then list finds it (disabled by default)', as
   assert.equal(found!.version, '1.0.0');
   assert.equal(found!.author, 'Tester');
   assert.equal(found!.provides.skills, 1);
+  assert.equal(found!.provides.personas, 1);
   assert.equal(found!.requiresConsent, false, 'a skills-only plugin needs no consent');
   assert.equal(found!.enabled, false, 'plugins default disabled');
 });

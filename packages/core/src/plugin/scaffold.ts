@@ -52,7 +52,7 @@ export function scaffoldPlugin(name: string, targetDir: string): ScaffoldResult 
 
   write(
     'README.md',
-    `# ${clean}\n\nA BrainRouter plugin.\n\n## Contributes\n\n- \`skills/\` — auto-discovered skills\n- \`agents/\` — agent definitions (\`.md\`)\n- \`commands/\` — slash-command templates (\`.md\`)\n- \`hooks/hooks.json\` — lifecycle hooks\n- \`workflows/\` — workflow definitions\n- \`connectors/\` — connector definitions\n- \`mcp.json\` — MCP servers (use \`\${BRAINROUTER_PLUGIN_ROOT}\` for portable paths)\n\nInstall with \`brainrouter plugin install <path>\` then \`brainrouter plugin enable ${clean}\`.\n`,
+    `# ${clean}\n\nA BrainRouter plugin.\n\n## Contributes\n\n- \`skills/\` — auto-discovered skills\n- \`personas/\` — domain persona definitions (\`.json\`)\n- \`agents/\` — executable agent definitions and legacy prompt overlays\n- \`commands/\` — slash-command templates (\`.md\`)\n- \`hooks/hooks.json\` — lifecycle hooks\n- \`workflows/\` — workflow definitions\n- \`connectors/\` — connector definitions\n- \`mcp.json\` — MCP servers (use \`\${BRAINROUTER_PLUGIN_ROOT}\` for portable paths)\n\nInstall with \`brainrouter plugin install <path>\` then \`brainrouter plugin enable ${clean}\`.\n`,
   );
 
   return { ok: true, root, files };
