@@ -62,7 +62,7 @@ export const WORKSPACE_CAPABILITY_DEFINITIONS: readonly WorkspaceCapabilityDefin
     description: 'Task-time UI, accessibility, design-system, responsive, and browser-visual expertise for the engineer persona.',
     skillPackId: 'frontend',
     skillIds: ['a11y-skill', 'browser-testing-skill', 'taste-skill'],
-    toolProfileIds: ['browser', 'design'],
+    toolProfileIds: ['browser', 'artifacts', 'interactive-browser'],
   },
   {
     id: 'backend',
@@ -77,7 +77,7 @@ export const WORKSPACE_CAPABILITY_DEFINITIONS: readonly WorkspaceCapabilityDefin
       'production-readiness-skill',
       'backend-testing-skill',
     ],
-    toolProfileIds: ['coding', 'terminal'],
+    toolProfileIds: ['coding', 'shell', 'artifacts'],
   },
 ] as const;
 

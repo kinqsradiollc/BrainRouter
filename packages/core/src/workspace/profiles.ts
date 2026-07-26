@@ -76,7 +76,9 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
         'verify-loop',
       ],
     },
-    tools: { profiles: ['coding', 'terminal', 'browser'] },
+    tools: {
+      profiles: ['coding', 'shell', 'browser', 'artifacts', 'planning-session', 'orchestration'],
+    },
     memory: { tags: ['engineering'], captureHint: 'code' },
   },
   {
@@ -93,7 +95,9 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
     agents: { default: 'researcher', enabled: ['researcher'] },
     capabilities: { enabled: [] },
     skills: { packs: ['research'], enabled: ['planning-skill', 'handover-skill'] },
-    tools: { profiles: ['browser', 'notes'] },
+    tools: {
+      profiles: ['browser', 'research-notes', 'artifacts', 'planning-session', 'orchestration'],
+    },
     memory: { tags: ['research'], captureHint: 'sources' },
   },
   {
@@ -110,7 +114,12 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
     agents: { default: 'data-scientist', enabled: ['data-scientist'] },
     capabilities: { enabled: [] },
     skills: { packs: ['data'], enabled: ['planning-skill', 'testing-skill', 'verify-loop'] },
-    tools: { profiles: ['coding', 'terminal', 'browser'] },
+    tools: {
+      profiles: [
+        'coding', 'shell', 'browser', 'research-notes',
+        'artifacts', 'planning-session', 'orchestration',
+      ],
+    },
     memory: { tags: ['data-science'], captureHint: 'experiments' },
   },
   {
@@ -127,7 +136,7 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
     agents: { default: 'tutor', enabled: ['tutor'] },
     capabilities: { enabled: [] },
     skills: { packs: ['study'], enabled: ['planning-skill', 'handover-skill'] },
-    tools: { profiles: ['browser', 'notes'] },
+    tools: { profiles: ['browser', 'research-notes', 'artifacts', 'planning-session'] },
     memory: { tags: ['study'], captureHint: 'learning' },
   },
   {
@@ -144,7 +153,7 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
     agents: { default: 'writer', enabled: ['writer'] },
     capabilities: { enabled: [] },
     skills: { packs: ['writing'], enabled: ['planning-skill', 'handover-skill'] },
-    tools: { profiles: ['notes', 'browser'] },
+    tools: { profiles: ['browser', 'research-notes', 'artifacts', 'planning-session'] },
     memory: { tags: ['writing'], captureHint: 'drafts' },
   },
   {

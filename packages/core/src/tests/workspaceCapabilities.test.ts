@@ -19,7 +19,7 @@ const EMPTY_RESOLUTION = {
 const FRONTEND_AVAILABILITY = {
   skillPacks: ['frontend'],
   skills: ['a11y-skill', 'browser-testing-skill', 'taste-skill'],
-  toolProfiles: ['browser', 'design'],
+  toolProfiles: ['browser', 'artifacts', 'interactive-browser'],
 };
 
 const BACKEND_AVAILABILITY = {
@@ -32,7 +32,7 @@ const BACKEND_AVAILABILITY = {
     'production-readiness-skill',
     'backend-testing-skill',
   ],
-  toolProfiles: ['coding', 'terminal'],
+  toolProfiles: ['coding', 'shell', 'artifacts'],
 };
 
 test('no manifest is an exact capability no-op even for a frontend task', () => {
@@ -59,7 +59,7 @@ test('engineering activates frontend contributions from task signals without cha
   assert.deepEqual(resolved.skillPacks, ['frontend']);
   assert.ok(resolved.skills.includes('a11y-skill'));
   assert.ok(resolved.skills.includes('browser-testing-skill'));
-  assert.deepEqual(resolved.toolProfiles, ['browser', 'design']);
+  assert.deepEqual(resolved.toolProfiles, ['browser', 'artifacts', 'interactive-browser']);
   assert.equal(resolved.promptBlocks.length, 1);
   assert.match(resolved.promptBlocks[0]!, /Stay in the engineer persona/);
   assert.deepEqual(manifest.agents, { default: 'engineer', enabled: ['engineer'] });
@@ -103,7 +103,7 @@ test('engineering activates backend workflows without changing persona', () => {
   assert.ok(resolved.reasons.includes('task names a backend trust or persistence concern'));
   assert.deepEqual(resolved.skillPacks, ['backend']);
   assert.deepEqual(resolved.skills, BACKEND_AVAILABILITY.skills);
-  assert.deepEqual(resolved.toolProfiles, ['coding', 'terminal']);
+  assert.deepEqual(resolved.toolProfiles, ['coding', 'shell', 'artifacts']);
   assert.match(resolved.promptBlocks[0]!, /Stay in the engineer persona/);
   assert.deepEqual(manifest.persona, { default: 'engineer', enabled: ['engineer'] });
 });
@@ -135,7 +135,9 @@ test('full-stack work may activate frontend and backend under one engineer perso
     availability: {
       skillPacks: ['frontend', 'backend'],
       skills: [...FRONTEND_AVAILABILITY.skills, ...BACKEND_AVAILABILITY.skills],
-      toolProfiles: ['browser', 'design', 'coding', 'terminal'],
+      toolProfiles: [
+        'browser', 'artifacts', 'interactive-browser', 'coding', 'shell',
+      ],
     },
   });
 
