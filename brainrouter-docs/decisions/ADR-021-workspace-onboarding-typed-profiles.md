@@ -1,6 +1,6 @@
 # ADR-021 — Workspace Onboarding: Typed Profiles, Dynamic Capabilities & Knowledge
 
-**Status:** Accepted (phased; W0–W6 shipped; knowledge phases remain) · **Builds on** ADR-010
+**Status:** Accepted and implemented on `release/0.4.17` · **Builds on** ADR-010
 (org/team/user tenancy), ADR-017 (production flows), ADR-019 (org/project
 switching), ADR-020 (memory self-improvement) · **Touches** `packages/core`,
 `brainrouter-cli`, `brainrouter-desktop`, `brainrouter`, and the dashboard.
@@ -240,10 +240,12 @@ server-pinned identity used by the other knowledge tools.
 - **B1c (shipped)** — bounded FTS and exact vector candidates, deterministic
   hybrid fusion with lexical fallback, citation-safe results, authenticated
   Project-scoped REST search, and session-pinned MCP search.
-- **B1d/B3** — additional bounded document parsers; profile-aware
-  recommendations and opt-in sourced distillation.
-- **C3** — dashboard and desktop knowledge management after the server contracts
-  and job status APIs are stable.
+- **B1d/B3 (shipped)** — bounded inline HTML, PDF, and DOCX ingestion;
+  availability-aware profile recommendations; and opt-in, provenance-linked
+  distillation that cannot recurse into derived material.
+- **C3 (shipped)** — dashboard and desktop project-knowledge management over
+  the stable server contracts, with bounded uploads, status/retry, citation
+  search, stale-scope protection, and a credential-free Desktop renderer.
 
 The executable scope, dependency graph, acceptance criteria, and verification
 matrix live in the companion workspace-onboarding specification.

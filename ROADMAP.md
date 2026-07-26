@@ -49,10 +49,12 @@ The changelog remains the source of truth for the exact shipped inventory.
 
 ## 0.4.17 — Runtime body and product completion
 
-**Status: implementation and release validation in progress.** The active line
-adds an execution plane and makes the dashboard and desktop feel like one
-coherent product. The release remains default-safe: hosted or container
-execution, inbound triggers, and other expanded authority stay opt-in.
+**Status: feature implementation complete; release validation and publishing in
+progress.** The active line adds an execution plane, project-aware onboarding,
+and source-grounded Project knowledge while making the Dashboard and Desktop
+feel like one coherent product. The release remains default-safe: hosted or
+container execution, inbound triggers, and other expanded authority stay
+opt-in.
 
 ### Runtime and automation
 
@@ -85,8 +87,16 @@ execution, inbound triggers, and other expanded authority stay opt-in.
       account-managed automations, and server-backed pull-request review history.
 - [x] GitHub pull-request review operations with separate security and code
       lenses, repository policies, evidence, and live job status.
-- [ ] Complete the repository-wide build, test, browser, and Electron acceptance
-      gate; reconcile release notes; bump versions; tag and publish.
+- [x] Separate global and project onboarding with reviewed conversational
+      proposals, offline fallback, one engineer, and per-task capability
+      activation across CLI and Desktop.
+- [x] Organization- and Project-scoped knowledge from bounded
+      text/HTML/PDF/DOCX ingest through processing, retry, hybrid retrieval,
+      citations, recommendations, distillation, and Dashboard/Desktop clients.
+- [x] Complete the onboarding and Project-knowledge hosted CI,
+      browser/Electron acceptance, and documentation reconciliation gates.
+- [ ] Complete the remaining release-wide validation, bump versions, tag, and
+      publish.
 
 Implementation checkmarks in this section describe the active development line,
 not a published release.

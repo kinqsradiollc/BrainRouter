@@ -11,9 +11,10 @@ context for each release.
 | Order | Version | State | Main question |
 |---:|---|---|---|
 | — | 0.3.7 → 0.4.13 | Shipped | Per-version detail in [`../brainrouter-changelog/`](../brainrouter-changelog/) |
-| 1 | **[0.5.0](0.5.0.md)** | Sketched | How do we build the power-user TUI, plugin marketplace, and engineering sync providers? |
+| 1 | **[0.4.17](0.4.17.md)** | Feature-complete; release close pending | How do workspaces become project-aware and source-grounded without broadening authority? |
+| 2 | **[0.5.0](0.5.0.md)** | Sketched | How do we build the power-user TUI, plugin marketplace, and engineering sync providers? |
 
-Latest published: **[0.4.13](../brainrouter-changelog/0.4.13.md)** on 2026-06-07.
+Latest published: **[0.4.16](../brainrouter-changelog/0.4.16.md)** on 2026-07-01.
 
 ---
 
@@ -27,6 +28,7 @@ Latest published: **[0.4.13](../brainrouter-changelog/0.4.13.md)** on 2026-06-07
 | [`0.3.9.md`](0.3.9.md) | Memory quality, cache-first loop, repair, cost-control, config cleanup |
 | [`0.4.0.md`](0.4.0.md) | Shipped 0.4.0 reference — federation MVP plus CLI multi-agent Phase 2 |
 | [`0.4.x.md`](0.4.x.md) | Post-federation CLI orchestration and MCP brain-agent roadmap (0.4.1–0.4.3) |
+| [`0.4.17.md`](0.4.17.md) | Project-aware onboarding, runtime capability activation, profile packs, and Project knowledge |
 | [`0.5.0.md`](0.5.0.md) | Fullscreen TUI, plugin marketplace, cross-harness handoff |
 | [`intentionally-excluded.md`](intentionally-excluded.md) | Explicitly out-of-scope ideas |
 | [`ROADMAP_TEMPLATE.md`](ROADMAP_TEMPLATE.md) | Starter structure for future release plans |

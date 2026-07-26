@@ -13,6 +13,10 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 | Version | Date | State | Highlights |
 |---|---:|---|---|
+| **[0.4.17](0.4.17.md)** | — | Unreleased | Conversational workspace setup, one engineer with task-time capabilities, scoped profile packs, and Project knowledge across Dashboard and Desktop |
+| **[0.4.16](0.4.16.md)** | 2026-07-01 | Shipped | Autonomous fleet, unified Desktop, mature Track workflows, PostgreSQL/pgvector brain, remote brain, and Atlas |
+| **[0.4.15](0.4.15.md)** | 2026-06-22 | Shipped | Requirement-first workflow and the unified Chat, Track, and Code workspace |
+| **[0.4.14](0.4.14.md)** | 2026-06-10 | Shipped | Recall accuracy, grid TUI, and background workers that report back |
 | **[0.4.13](0.4.13.md)** | 2026-06-07 | Shipped | Sub-agent results flow back to the main agent (poll + event-driven resume, weak-model synthesis guard, status-check id-correlation) + REPL polish (tool-result pairing, citation repair, low-effort planner) |
 | **[0.4.12](0.4.12.md)** | 2026-06-05 | Shipped | The Build Loop (`/build`, plan→implement→verify→review→merge, `cli.buildLoop`, fan-out + merge-gate, loop-until-green) + multi-agent reliability (reconnect not timeout, parent-wait timeouts, C1 loop-continue, C2 input queue) + grep / cost / role accuracy fixes |
 | **[0.4.11](0.4.11.md)** | 2026-06-04 | Shipped | Worktree merge-back isolation (`childWorkspaceIsolation: auto`), self-hydrating `config.json`, `/memory verify` + churn-weighted decay |

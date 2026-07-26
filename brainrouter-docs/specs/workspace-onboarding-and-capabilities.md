@@ -1,6 +1,6 @@
 # Spec: Workspace Onboarding, Dynamic Capabilities, and Project Knowledge
 
-Status: Active program (approved 2026-07-21)
+Status: Implemented on `release/0.4.17` (unreleased; 2026-07-26)
 Owner: Core / CLI / Desktop / Brain / Dashboard
 Decision: ADR-021
 Target: `release/0.4.17` through small, independently reviewed PRs
@@ -401,8 +401,8 @@ its current engine; distillation itself never writes cognitive memory.
 | B1c | Done | Hybrid retrieval and citation APIs/tools | FTS/vector/fallback/tenancy tests |
 | B1d | Done | Bounded inline HTML plus REST/MCP PDF and DOCX ingest | Per-format bounds/redaction/no-fetch tests |
 | B3 | Done | Availability-aware recommendations and opt-in derived-note distillation | Catalog/provenance/no-recursion tests |
-| C3 | Todo | Dashboard library expansion + Desktop knowledge panel | SDK, stale-scope, host bridge, UI inventory/live QA |
-| Final | Todo | Full suite, live CLI/Desktop/backend/dashboard walkthrough, docs/changelog | Green CI/security review and merged PRs |
+| C3 | Done | Dashboard library expansion + Desktop knowledge panel | SDK, stale-scope, host bridge, UI inventory/live QA |
+| Final | Done | Integrated CI, CLI/Desktop/backend/dashboard acceptance, docs/changelog | Green hosted CI/security reviews and sequential squash merges |
 
 ## Required Regression Matrix
 
