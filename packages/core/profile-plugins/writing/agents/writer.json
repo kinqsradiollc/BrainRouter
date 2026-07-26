@@ -1,4 +1,6 @@
 {
+  "schemaVersion": 1,
+  "kind": "orchestration-role",
   "id": "writer",
   "displayName": "Writing specialist",
   "whenToUse": "Delegate a bounded outline, draft, revision, or editorial pass in a writing workspace.",

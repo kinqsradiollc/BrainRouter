@@ -1,4 +1,6 @@
 {
+  "schemaVersion": 1,
+  "kind": "orchestration-role",
   "id": "architect",
   "displayName": "Architect",
   "whenToUse": "Design alternatives and tradeoffs for a feature or system change. No file writes.",

@@ -1,4 +1,6 @@
 {
+  "schemaVersion": 1,
+  "kind": "orchestration-role",
   "id": "reviewer",
   "displayName": "Reviewer",
   "whenToUse": "Code review stance; findings first, severity-ordered. Read-only.",

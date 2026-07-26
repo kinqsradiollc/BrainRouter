@@ -180,6 +180,10 @@ not be extended with new features.
 An `agents/<id>.json` file defines child access, tool scope, ownership, limits,
 and delegation behavior; it never creates a domain persona. Persona/executor
 same-ID pairing is a legacy compatibility behavior, not a design convention.
+New definitions declare `schemaVersion: 1` and
+`kind: "orchestration-role"`; the compatibility parser normalizes definitions
+that predate those discriminators but rejects wrong discriminator values,
+persona-only fields, and unknown fields.
 Executable definitions are read only from regular UTF-8 files under their
 declared source root, capped at 64 KiB, validated field-by-field, and rejected
 when their ID does not match the filename. While manifest v1 remains active,

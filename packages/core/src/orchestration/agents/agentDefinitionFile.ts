@@ -12,8 +12,12 @@ import path from 'node:path';
 
 export type Tier = 'chat' | 'reasoning' | 'worker';
 export type AccessMode = 'read' | 'write' | 'shell';
+export const AGENT_DEFINITION_SCHEMA_VERSION = 1 as const;
+export const AGENT_DEFINITION_KIND = 'orchestration-role' as const;
 
 export interface AgentDefinition {
+  schemaVersion: typeof AGENT_DEFINITION_SCHEMA_VERSION;
+  kind: typeof AGENT_DEFINITION_KIND;
   id: string;
   displayName: string;
   whenToUse: string;
@@ -48,6 +52,28 @@ const MAX_RESULT_CHARS = 1_000_000;
 const AGENT_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const DELEGATE_NAME = /^delegate_[a-z0-9_]+$/;
 const UNSAFE_CONTROL_CHARACTERS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
+const AGENT_DEFINITION_FIELDS = new Set([
+  'schemaVersion',
+  'kind',
+  'id',
+  'displayName',
+  'whenToUse',
+  'prompt',
+  'model',
+  'effort',
+  'defaultAccess',
+  'toolScope',
+  'disallowedTools',
+  'ownership',
+  'maxIterations',
+  'timeoutMs',
+  'maxResultChars',
+  'subagents',
+  'delegateName',
+  'tier',
+  'outputContract',
+]);
+const PERSONA_ONLY_FIELDS = new Set(['description', 'instructions', 'priorities']);
 
 /** Return regular JSON files from a bounded real directory without following links. */
 export function listAgentDefinitionFiles(
@@ -106,6 +132,31 @@ export function parseAgentDefinition(raw: string, expectedId: string): AgentDefi
   }
   if (!isRecord(value)) throw new Error('Agent definition must be a JSON object.');
 
+  const personaFields = Object.keys(value).filter((field) => PERSONA_ONLY_FIELDS.has(field));
+  if (personaFields.length > 0) {
+    throw new Error(
+      `Agent definition contains persona-only fields: ${personaFields.sort().join(', ')}.`,
+    );
+  }
+  const unknownFields = Object.keys(value).filter((field) => !AGENT_DEFINITION_FIELDS.has(field));
+  if (unknownFields.length > 0) {
+    throw new Error(`Agent definition contains unknown fields: ${unknownFields.sort().join(', ')}.`);
+  }
+
+  // Definitions created before the discriminator shipped remain readable
+  // during the compatibility window and normalize to the current contract.
+  if (
+    value.schemaVersion !== undefined &&
+    value.schemaVersion !== AGENT_DEFINITION_SCHEMA_VERSION
+  ) {
+    throw new Error(
+      `Agent definition schemaVersion must be ${AGENT_DEFINITION_SCHEMA_VERSION}.`,
+    );
+  }
+  if (value.kind !== undefined && value.kind !== AGENT_DEFINITION_KIND) {
+    throw new Error(`Agent definition kind must be "${AGENT_DEFINITION_KIND}".`);
+  }
+
   const id = requiredString(value.id, 'id', MAX_NAME_CHARS);
   if (!AGENT_ID.test(id) || id !== expectedId) {
     throw new Error('Agent definition id must be kebab-case and match its filename.');
@@ -154,6 +205,8 @@ export function parseAgentDefinition(raw: string, expectedId: string): AgentDefi
   }
 
   return {
+    schemaVersion: AGENT_DEFINITION_SCHEMA_VERSION,
+    kind: AGENT_DEFINITION_KIND,
     id,
     displayName,
     whenToUse,

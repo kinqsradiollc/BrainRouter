@@ -1,4 +1,6 @@
 {
+  "schemaVersion": 1,
+  "kind": "orchestration-role",
   "id": "data-scientist",
   "displayName": "Data science specialist",
   "whenToUse": "Delegate a bounded dataset, notebook, experiment, or validation task in a data-science workspace.",
