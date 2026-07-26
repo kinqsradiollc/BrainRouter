@@ -644,6 +644,42 @@ but loading a profile never creates a workflow run.
 This distinction prevents profile selection from silently starting durable or
 write-capable work.
 
+### 11. Bind selected-plan execution to a live orchestration lifecycle
+
+`route_task` and strategy selection are advisory. They may recommend an
+eligible strategy; they do not themselves launch a child or queue raw
+`delegate_agent` calls for later replay.
+
+The core runtime deliberately exposes orchestration tools only while an
+`Agent.runTurn` invocation owns an active orchestration runtime. That boundary
+must remain fail-closed: a direct or deferred call outside that lifecycle must
+not acquire the port, retry until it succeeds, or create work with an unclear
+parent authority.
+
+The plan executor therefore has one lifecycle owner and records each stage as
+`planned`, `running`, `succeeded`, `failed`, `skipped`, or `cancelled`.
+
+- A child stage launches only from the active parent turn that owns its
+  orchestration runtime, or from an explicitly created durable workflow run
+  with its own persisted lifecycle and authority context.
+- The executor cancels unstarted ephemeral stages when that parent turn ends,
+  is interrupted, or changes session. It never replays their raw tool calls
+  after the turn.
+- Detached work is created by the supported background-worker or durable
+  workflow paths. Its completion is delivered through the existing completion
+  contract, not by invoking an orchestration tool after the parent turn.
+- A direct or `investigate` strategy has no child-stage launch path. A router
+  recommendation cannot override that compiled strategy.
+- A missing active runtime is a terminal lifecycle diagnostic for the affected
+  stage, not a retryable tool failure. The runtime emits one deduplicated plan
+  error and cancels related unstarted stages.
+- Trace/UI terminology reflects accepted state: label a row **Delegated** only
+  after a child launch is accepted. A rejected pre-launch call is shown as
+  **Delegation not started**, with the bounded lifecycle reason.
+
+This makes the active-turn guard both a security boundary and a useful
+diagnostic, rather than a source of repeated failed delegation rows.
+
 ## Profile behavior summary
 
 | Concern | Engineering | Research | Data Science | Study | Writing | Custom |
@@ -676,6 +712,8 @@ write-capable work.
     selection has a bounded deadline and deterministic fallback.
 12. Plan resolution and task-packet construction are pure/testable before any
     child or workflow is created.
+13. An orchestration tool never executes after its owning active turn ends;
+    pending ephemeral stages are cancelled rather than replayed.
 
 ## Alternatives considered
 
@@ -687,6 +725,7 @@ write-capable work.
 | Let the managed model invent a plan on every task | Maximum flexibility; no schema authoring | Unbounded, difficult to review, inconsistent, expensive, and capable of inventing unavailable roles or unsafe fan-out | Rejected |
 | Store the complete graph in each workspace manifest | Fully portable and user-editable | Large/noisy manifest, hard migrations, duplicated plans, poor plugin reuse, and an oversized committable execution surface | Rejected |
 | Reuse durable workflow definitions as the profile contract | Existing graph/run infrastructure | Loading a profile is not launching a durable workflow; lifecycle, writes, artifacts, and resume semantics are too strong for task eligibility | Rejected as the public contract; selected plans may compile to internal phases |
+| Retry or defer raw orchestration tool calls after the parent turn | Can appear to continue a selected strategy without another model turn | Bypasses the active-turn authority boundary, duplicates launches, and produces misleading failed delegation traces | Rejected |
 | Add bounded orchestration-profile JSON referencing reusable roles | Separates topology from authority, supports all profiles, remains inspectable and extensible, and composes with ADR-022 packets | Adds a schema, loader, resolver, plan catalog, and migration work | Accepted |
 
 ## Consequences
@@ -706,6 +745,8 @@ write-capable work.
 - Manifest `maxParallel` becomes an enforced runtime ceiling.
 - Traces can explain plan and stage selection rather than merely showing that a
   child appeared.
+- Rejected launches are distinguishable from real delegated work, without
+  weakening the active-turn security boundary.
 
 ### Costs
 
@@ -729,6 +770,7 @@ write-capable work.
 | Domain-specific needs leak back into role prompts | Persona, capability, stage objective, skill, and expected-output fields carry domain behavior |
 | Existing Engineering flow regresses | First implementation plan encodes current Engineering parity and ships before other profiles |
 | Invalid optional stages hide missing functionality | Structured skip diagnostics and visible onboarding/runtime summaries |
+| A deferred plan invokes a child tool after its turn | One lifecycle owner cancels ephemeral stages at turn end; runtime emits one terminal diagnostic and the UI distinguishes pre-launch rejection from delegation |
 
 ## Compatibility
 
@@ -770,6 +812,18 @@ Each item is a separate small PR and security preview.
 - Intersect plan, manifest, role, skill, delegation, and runtime limits.
 - Enforce `manifest.orchestration.maxParallel` in the spawn chokepoint.
 - Add deterministic fallback and reason codes.
+
+### P23-3a — Active-turn plan lifecycle
+
+- Give every compiled stage a single lifecycle owner and terminal state.
+- Cancel unstarted ephemeral stages at turn/session termination; never replay
+  raw orchestration tool calls outside `Agent.runTurn`.
+- Treat a missing orchestration runtime as one terminal, deduplicated plan
+  diagnostic; do not retry it.
+- Render rejected pre-launch attempts as `Delegation not started`, not as a
+  completed delegation.
+- Add direct/investigate, interruption, session-switch, duplicate-error, and
+  trace-label regression tests.
 
 ### P23-4 — Domain-neutral reusable roles
 
@@ -842,6 +896,14 @@ Each item is a separate small PR and security preview.
     produce collision diagnostics.
 14. Hosted CI, cross-workspace parity tests, and automated security review pass
     for every implementation slice.
+15. A direct or `investigate` strategy cannot invoke a child-launch tool.
+16. An unstarted ephemeral stage is cancelled when its parent turn ends,
+    interrupts, or changes session; no raw orchestration tool call is replayed
+    outside `Agent.runTurn`.
+17. A missing orchestration runtime creates at most one terminal plan
+    diagnostic and no retry loop.
+18. Desktop and CLI trace a rejected pre-launch call as a failed-to-start
+    delegation, never as delegated work.
 
 ## Non-goals
 
