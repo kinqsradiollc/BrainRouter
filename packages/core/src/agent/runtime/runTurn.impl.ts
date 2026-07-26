@@ -8,6 +8,10 @@ import type { Agent, RunTurnCallbacks } from '../agent.js';
 import { getCliKnobs, isRemoteBrainUrl, loadOrInitConfig } from '../../config/config.js';
 import { linkArtifact } from '../../artifact/artifactStore.js';
 import { contextWindowForBudget } from '../../context/contextWindow.js';
+import {
+  buildRootContextEnvelope,
+  materializeContextEnvelope,
+} from '../../context/contextEnvelope.js';
 import { resolveToolPolicy, externalDirectoryDecision } from '../../exec/policy/execPolicy.js';
 import { isPathWithinRoots } from '../../exec/policy/pathPolicy.js';
 import { evaluatePermissionRules, primaryArgText } from '../../exec/policy/permissionRules.js';
@@ -817,7 +821,17 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         // a non-mutating copy so the in-memory guard logic still reads the raw
         // chatHistory. loadHistory already repairs the resumed prefix — this also
         // covers any live malformation (compaction, interrupts, guard injects).
-        const requestMessages = sanitizeToolCallPairing(this.chatHistory);
+        const contextWindowTokens = contextWindowForBudget(this.llmConfig.model);
+        const contextEnvelope = buildRootContextEnvelope(this.chatHistory, {
+          executionId: this.sessionKey,
+          budget: {
+            maxChars: contextWindowTokens * 4,
+            maxTokens: contextWindowTokens,
+          },
+        });
+        const requestMessages = sanitizeToolCallPairing(
+          materializeContextEnvelope(contextEnvelope) as any[],
+        );
         // Re-resolve every loop iteration so an in-session `/effort` flip
         // (which only refreshes the system prompt) also updates the next
         // request's reasoning_effort slot — no restart needed. Resolve from
