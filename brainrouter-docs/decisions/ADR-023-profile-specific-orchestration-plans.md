@@ -203,6 +203,7 @@ The first schema is:
   "id": "engineering",
   "displayName": "Engineering orchestration",
   "defaultMode": "adaptive",
+  "fallbackStrategyId": "direct",
   "rolePolicy": {
     "availableRoles": ["explorer", "architect", "worker", "reviewer", "verifier"],
     "disabledRoles": ["fleet"]
@@ -251,8 +252,8 @@ The first schema is:
           "fanOut": { "min": 1, "max": 2 },
           "optional": true,
           "expectedOutput": {
-            "contractId": "findings",
-            "requiredSections": ["scope", "evidence", "risks"]
+            "contractId": "explorer",
+            "requiredSections": ["headline", "files-read", "facts"]
           }
         },
         {
@@ -261,11 +262,11 @@ The first schema is:
           "after": ["inspect"],
           "objective": "Implement the reviewed requirement within the assigned ownership.",
           "skillIds": ["incremental-skill", "testing-skill"],
-          "fanOut": { "min": 1, "max": 2 },
+          "fanOut": { "min": 1, "max": 1 },
           "optional": false,
           "expectedOutput": {
             "contractId": "worker",
-            "requiredSections": ["changes", "verification"]
+            "requiredSections": ["files-changed", "summary"]
           }
         },
         {
@@ -291,7 +292,7 @@ The first schema is:
           "optional": true,
           "expectedOutput": {
             "contractId": "verifier",
-            "requiredSections": ["result", "evidence"]
+            "requiredSections": ["commands", "pass-fail"]
           }
         },
         {
@@ -312,8 +313,8 @@ This example is illustrative. The implemented schema must remain smaller than
 the maximum shown here and use shared parsers for repeated structures.
 
 Required top-level fields are `schemaVersion`, `kind`, `id`, `displayName`,
-`defaultMode`, `rolePolicy`, `limits`, and `strategies`. Unknown fields are
-rejected.
+`defaultMode`, `fallbackStrategyId`, `rolePolicy`, `limits`, and `strategies`.
+Unknown fields are rejected.
 
 The schema permits:
 
@@ -321,6 +322,7 @@ The schema permits:
 - an explicit default available/disabled role policy;
 - registered activation signal IDs;
 - a bounded acyclic stage graph;
+- one explicit, validated primary-only fallback strategy;
 - `primary` or validated orchestration-role executors;
 - bounded stage objectives;
 - skill references;
@@ -328,6 +330,26 @@ The schema permits:
 - optional stages;
 - bounded fan-out;
 - expected-output contracts.
+
+`fallbackStrategyId` must resolve to exactly one strategy in the same
+definition. Every stage in that strategy must use the primary executor, use no
+fan-out, require no child role, and reference no skill that could make fallback
+unavailable. A definition without this safe fallback is invalid rather than
+relying on a naming convention such as `direct`.
+
+For a role stage, `expectedOutput.contractId` must equal the output contract
+owned by that role definition. `requiredSections` contains only canonical
+kebab-case section aliases registered by that contract; the parser validates
+every alias against the selected contract rather than accepting arbitrary
+section names. A plan can require a subset of an existing role contract, but it
+cannot invent or replace the role's output contract. Primary stages do not
+declare child output contracts.
+
+A write-capable role may not use `fanOut.max > 1` unless the executor can prove
+that every child has an isolated worktree or a disjoint, enforced ownership
+boundary before any child starts. The initial Engineering plan therefore uses
+one worker for its implementation stage. Read-only investigation may still fan
+out within the effective parallel ceiling.
 
 The schema does not permit:
 
@@ -509,11 +531,12 @@ Strategy selection follows this order:
    and a short rationale.
 6. The deterministic resolver validates the choice and applies every ceiling.
 7. Invalid, unavailable, uncertain, or timed-out selection falls back to the
-   profile's `direct` strategy.
+   definition's validated `fallbackStrategyId`.
 
 The model cannot return arbitrary role IDs, skill IDs, stage graphs, prompts,
 tools, access, concurrency, or budgets. It chooses among already validated
-data.
+data. If the selected strategy later becomes unavailable, the resolver uses
+the already validated fallback strategy; it never guesses a strategy by name.
 
 Task signals come from a registered catalog. Plan JSON cannot supply regexes or
 execute expressions over raw user text. The resolver may use existing
@@ -674,8 +697,10 @@ The plan executor therefore has one lifecycle owner and records each stage as
 - Detached work is created by the supported background-worker or durable
   workflow paths. Its completion is delivered through the existing completion
   contract, not by invoking an orchestration tool after the parent turn.
-- A direct or `investigate` strategy has no child-stage launch path. A router
-  recommendation cannot override that compiled strategy.
+- A direct or other primary-only strategy has no child-stage launch path. An
+  Engineering `investigate` strategy may use an explorer child only when its
+  validated graph explicitly contains that role stage. A router recommendation
+  cannot add a child to the compiled strategy.
 - A missing active runtime is a terminal lifecycle diagnostic for the affected
   stage, not a retryable tool failure. The runtime emits one deduplicated plan
   error and cancels related unstarted stages.
@@ -863,6 +888,14 @@ tool merely because its checkbox is selected.
     selection.
 16. Manifest v2 keeps its legacy group semantics until a user reviews an
     explicit-catalog migration.
+17. Every accepted definition has an explicit validated primary-only fallback
+    that cannot become unavailable because of a missing child role or skill.
+18. A plan cannot replace a role's output contract or name sections outside
+    that contract's registered section aliases.
+19. Parallel write-capable children require enforced isolated worktrees or
+    disjoint ownership; otherwise write-capable stage fan-out is one.
+20. Bundled plan assets must be present in source checkouts and published
+    package archives before any installed runtime may depend on them.
 
 ## Alternatives considered
 
@@ -918,12 +951,17 @@ tool merely because its checkbox is selected.
 | Risk | Mitigation |
 |---|---|
 | Plan behaves like hidden authority | Schema excludes authority fields; every stage intersects with manifest, role, parent, and user ceilings |
-| Too many children for simple work | Every profile has a direct strategy; adaptive fallback is direct; total and parallel children are bounded |
+| Too many children for simple work | Every profile declares a validated primary-only fallback strategy; total and parallel children are bounded |
 | Model chooses an unsuitable graph | Model chooses only eligible strategy IDs; deterministic validation and fallback are mandatory |
 | Profile JSON and `profiles.ts` drift | JSON becomes the orchestration default source; TypeScript stores only the plan reference during migration |
 | Plugin plan changes execution unexpectedly | Explicit plugin enablement, contribution disclosure, first-match resolution, and manifest ceilings |
 | Domain-specific needs leak back into role prompts | Persona, capability, stage objective, skill, and expected-output fields carry domain behavior |
 | Existing Engineering flow regresses | First implementation plan encodes current Engineering parity and ships before other profiles |
+| Published Core package omits plan JSON | Add `orchestration-profiles` to the package allowlist and inspect the packed archive before runtime activation |
+| Plan output requirements drift from role contracts | Require the role-owned contract ID and validate every required section against that contract's canonical alias catalog |
+| Invalid selection has no usable direct strategy | Require and validate `fallbackStrategyId` as a primary-only, dependency-free strategy |
+| Parallel workers race on the same files | Keep write-capable fan-out at one until isolated worktrees or disjoint enforced ownership are proven before launch |
+| Generalized role prompts alter no-manifest behavior | Retain the legacy prompt overlay for no-manifest and compatibility-source execution; use generalized prompts only when an authoritative profile plan is active |
 | Invalid optional stages hide missing functionality | Structured skip diagnostics and visible onboarding/runtime summaries |
 | A deferred plan invokes a child tool after its turn | One lifecycle owner cancels ephemeral stages at turn end; runtime emits one terminal diagnostic and the UI distinguishes pre-launch rejection from delegation |
 | Picker suggests a tool the runtime cannot use | Catalog carries availability/provenance; core re-resolves before write and at turn time; blocked entries show a reason and cannot become authority |
@@ -933,7 +971,9 @@ tool merely because its checkbox is selected.
 
 - Existing manifest v2 files remain valid.
 - Existing `packages/core/agents/*.json` role IDs remain stable.
-- No-manifest workspaces preserve existing behavior.
+- No-manifest workspaces preserve existing role prompts and runtime behavior;
+  domain-neutral role prompts are not selected merely because the package
+  contains orchestration-profile JSON.
 - Manifest v2 files continue using their current group/deny behavior. A v3
   writer adds `tools.mode` and `tools.enabled`; it does not silently rewrite a
   v2 workspace into explicit-catalog mode.
@@ -943,6 +983,8 @@ tool merely because its checkbox is selected.
   execution.
 - Engineering ships first with behavior-parity tests before role prompts are
   generalized.
+- Published Core archives include the bundled profile directory before any
+  installed CLI or Desktop runtime resolves it.
 - `profiles.ts` orchestration defaults remain a compatibility source until all
   onboarding consumers resolve the JSON plan catalog.
 - Removing the compatibility source requires one release of diagnostics and a
@@ -957,12 +999,24 @@ Each item is a separate small PR and security preview.
 - Add `orchestrationProfileDefinitionFile.ts`.
 - Define strict bounded types, discriminator, graph validation, and no-follow
   file reads.
-- Add invalid-shape, oversized, cycle, collision, and unknown-reference tests.
+- Require `fallbackStrategyId` and validate that it resolves to a primary-only
+  strategy with no unavailable role or skill dependency.
+- Resolve role-owned output contracts and validate canonical required-section
+  aliases against the selected contract.
+- Reject parallel write-capable stages unless the execution contract declares
+  and enforces isolated worktrees or disjoint ownership; v1 has no such
+  declaration and therefore caps write-capable fan-out at one.
+- Add invalid-shape, oversized, cycle, collision, missing-fallback,
+  output-contract/section mismatch, unsafe writer fan-out, and
+  unknown-reference tests.
 
 ### P23-2 — Bundled catalog and Engineering parity
 
 - Add `packages/core/orchestration-profiles/engineering.json`.
 - Add bundled catalog discovery and exact file/ID parity tests.
+- Add `orchestration-profiles` to the Core package publish allowlist and verify
+  the packed archive contains the Engineering JSON at the path used by the
+  installed loader.
 - Encode current direct and delivery behavior without changing runtime
   activation.
 
@@ -985,6 +1039,13 @@ Each item is a separate small PR and security preview.
 - Add direct/investigate, interruption, session-switch, duplicate-error, and
   trace-label regression tests.
 
+No orchestration-profile JSON becomes authoritative at runtime until P23-1
+through P23-3a are complete together, the packaged-asset check passes, and the
+Engineering compatibility gate is green. P23-3 may expose a pure preview
+resolver, but it does not activate plan-driven child execution by itself.
+P23-3b's tool-selection migration is independently gated and cannot silently
+change a workspace merely because orchestration plans are enabled.
+
 ### P23-3b — Catalog-backed tool-selection contract
 
 - Build the safe built-in, trusted-contribution, and skill catalog descriptors
@@ -1002,6 +1063,10 @@ Each item is a separate small PR and security preview.
 - Generalize explorer, architect, worker, reviewer, and verifier prompts.
 - Move Engineering-specific stage objectives and skill choices into the
   Engineering plan.
+- Preserve the existing Engineering-oriented prompt overlay for no-manifest
+  workspaces and any runtime still using the `profiles.ts` compatibility
+  source. Generalized prompts are selected only with an authoritative resolved
+  profile plan.
 - Run cross-profile role, tool, output-contract, and Engineering-parity tests.
 
 ### P23-5 — Research and Data Science plans
@@ -1021,8 +1086,8 @@ Each item is a separate small PR and security preview.
 
 - Add the bounded strategy-selection response schema and deadline.
 - Allow only eligible strategy IDs and stage enablement choices.
-- Add deterministic direct fallback, malformed-response tests, and trace
-  reasons.
+- Add deterministic resolution through the definition's validated fallback,
+  malformed-response tests, and trace reasons.
 
 ### P23-8 — Onboarding and product surfaces
 
@@ -1073,7 +1138,9 @@ Each item is a separate small PR and security preview.
     produce collision diagnostics.
 14. Hosted CI, cross-workspace parity tests, and automated security review pass
     for every implementation slice.
-15. A direct or `investigate` strategy cannot invoke a child-launch tool.
+15. A strategy whose validated graph contains only primary stages cannot invoke
+    a child-launch tool; an `investigate` strategy can launch an explorer only
+    when that role stage is present in its validated graph.
 16. An unstarted ephemeral stage is cancelled when its parent turn ends,
     interrupts, or changes session; no raw orchestration tool call is replayed
     outside `Agent.runTurn`.
@@ -1092,6 +1159,19 @@ Each item is a separate small PR and security preview.
     explicitly reviews a v3 explicit-catalog migration.
 23. Dynamic MCP tool names are visible only as live runtime information and
     never written to the workspace manifest.
+24. Every profile declares a valid `fallbackStrategyId`; its fallback graph is
+    primary-only and cannot become unavailable because a child role or skill is
+    missing.
+25. Every role stage uses the role-owned output contract, and every requested
+    section resolves through that contract's canonical section-alias catalog.
+26. Engineering implementation uses one worker unless isolated worktrees or
+    disjoint enforced ownership make parallel writes provably safe.
+27. The published Core package contains every bundled orchestration-profile
+    JSON at the path used by the installed loader.
+28. Runtime plan activation is impossible before parser, packaged catalog,
+    effective ceilings, and active-turn lifecycle gates are complete; enabling
+    it does not alter no-manifest behavior or implicitly activate manifest-v3
+    tool selection.
 
 ## Non-goals
 
