@@ -349,9 +349,15 @@ export async function collectProjectOnboardingEdits(
     parsedMaxParallel >= 1 && parsedMaxParallel <= 32
     ? parsedMaxParallel
     : draft.orchestration.maxParallel;
-  const capabilitiesEnabled = await requestList(prompt, 'capabilities-enabled', 'Available task capabilities', draft.capabilities.enabled, 'Step 2 of 4 · capabilities');
+  const capabilitiesEnabled = await requestCatalogSelection(
+    prompt, roleCatalog, 'capabilities-enabled', 'Available task capabilities', 'capability',
+    draft.capabilities.enabled, 'Step 2 of 4 · capabilities', true,
+  );
   if (!capabilitiesEnabled) return null;
-  const capabilitiesDisabled = await requestList(prompt, 'capabilities-disabled', 'Disabled task capabilities', draft.capabilities.disabled, 'Step 2 of 4 · capabilities');
+  const capabilitiesDisabled = await requestCatalogSelection(
+    prompt, roleCatalog, 'capabilities-disabled', 'Disabled task capabilities', 'capability',
+    draft.capabilities.disabled, 'Step 2 of 4 · capabilities', true,
+  );
   if (!capabilitiesDisabled) return null;
   const skillPacks = await requestCatalogSelection(
     prompt, catalog, 'skill-packs', 'Skill packs', 'skill-pack',

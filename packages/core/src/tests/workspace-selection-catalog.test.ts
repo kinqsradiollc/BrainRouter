@@ -14,12 +14,13 @@ import {
   diagnoseWorkspaceToolSelectionMigration,
   isSelectableWorkspaceCatalogToolId,
   migrateWorkspaceManifestToolSelection,
+  validateReviewedWorkspaceCapabilitySelection,
   validateReviewedWorkspaceRoleSelection,
   validateReviewedWorkspaceSkillSelection,
   validateReviewedWorkspaceToolSelection,
 } from '../workspace/selectionCatalog.js';
 
-test('P23-3b catalog projects safe roles, tool groups, tools, skill packs, and skills', () => {
+test('P23-3b catalog projects safe roles, capabilities, tool groups, tools, skill packs, and skills', () => {
   const catalog = buildWorkspaceSelectionCatalog({
     runtimeTools: [{
       id: 'mcp_example_lookup',
@@ -30,6 +31,8 @@ test('P23-3b catalog projects safe roles, tool groups, tools, skill packs, and s
 
   const coding = catalog.entries.find((entry) => entry.kind === 'tool-group' && entry.id === 'coding');
   const architect = catalog.entries.find((entry) => entry.kind === 'role' && entry.id === 'architect');
+  const frontend = catalog.entries.find((entry) => entry.kind === 'capability' && entry.id === 'frontend');
+  const frontendPack = catalog.entries.find((entry) => entry.kind === 'skill-pack' && entry.id === 'frontend');
   const webSearch = catalog.entries.find((entry) => entry.kind === 'tool' && entry.id === 'web_search');
   const research = catalog.entries.find((entry) => entry.kind === 'skill-pack' && entry.id === 'research');
   const researchQuestion = catalog.entries.find((entry) => entry.kind === 'skill' && entry.id === 'research-question-skill');
@@ -39,6 +42,10 @@ test('P23-3b catalog projects safe roles, tool groups, tools, skill packs, and s
   assert.equal(architect?.label, 'Architect');
   assert.equal(architect?.source, 'bundled');
   assert.equal(architect?.provenance, 'bundled-roles');
+  assert.equal(frontend?.source, 'capability-plugin');
+  assert.ok(frontend?.expandsTo?.includes('a11y-skill'));
+  assert.ok(frontend?.expandsTo?.includes('design'));
+  assert.equal(frontendPack?.managedByCapability, 'frontend');
   assert.equal(webSearch?.source, 'core');
   assert.equal(webSearch?.accessTier, 'read');
   assert.equal(webSearch?.actionKind, 'network');
@@ -52,6 +59,22 @@ test('P23-3b catalog projects safe roles, tool groups, tools, skill packs, and s
   const serialized = JSON.stringify(catalog);
   assert.doesNotMatch(serialized, /\/Users\/|\/home\/|Bearer\s|sk-[A-Za-z0-9]{16}/i);
   assert.doesNotMatch(serialized, /## Role:/);
+});
+
+test('P23-3b capability selections use contributed capability IDs and reject typos', () => {
+  const catalog = buildWorkspaceSelectionCatalog();
+  const valid = validateReviewedWorkspaceCapabilitySelection({
+    enabled: ['frontend', 'backend'],
+    disabled: [],
+  }, catalog);
+  assert.equal(valid.ok, true);
+
+  const invalid = validateReviewedWorkspaceCapabilitySelection({
+    enabled: ['mobile'],
+    disabled: [],
+  }, catalog);
+  assert.equal(invalid.ok, false);
+  if (!invalid.ok) assert.deepEqual(invalid.issues.map((issue) => issue.code), ['unknown-entry']);
 });
 
 test('P23-3b role selections use the executable-role catalog and reject unknown IDs', () => {

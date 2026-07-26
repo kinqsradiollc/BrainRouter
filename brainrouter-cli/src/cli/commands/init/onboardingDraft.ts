@@ -1,8 +1,10 @@
 import path from 'node:path';
 import {
+  buildWorkspaceOnboardingPreview,
   createWorkspaceManifest,
   migrateWorkspaceManifestToolSelection,
   normalizeWorkspaceManifest,
+  validateReviewedWorkspaceCapabilitySelection,
   validateReviewedWorkspaceRoleSelection,
   validateReviewedWorkspaceSkillSelection,
   type WorkspaceSelectionCatalog,
@@ -124,6 +126,17 @@ export function finalizeCatalogReviewedProjectOnboarding(
   if (!roles.ok) {
     throw new Error(formatCatalogReviewIssues('role', roles.issues));
   }
+  const capabilityCatalog = {
+    ...catalog,
+    entries: buildWorkspaceOnboardingPreview(edited, catalog).catalog,
+  };
+  const capabilities = validateReviewedWorkspaceCapabilitySelection(
+    edited.capabilities,
+    capabilityCatalog,
+  );
+  if (!capabilities.ok) {
+    throw new Error(formatCatalogReviewIssues('capability', capabilities.issues));
+  }
   const skills = validateReviewedWorkspaceSkillSelection({
     packs: edited.skills.packs,
     enabled: edited.skills.enabled,
@@ -140,6 +153,7 @@ export function finalizeCatalogReviewedProjectOnboarding(
         availableRoles: roles.value.availableRoles,
         disabledRoles: roles.value.disabledRoles,
       },
+      capabilities: capabilities.value,
       skills: skills.value,
     },
     reviewed: {
@@ -153,7 +167,7 @@ export function finalizeCatalogReviewedProjectOnboarding(
 }
 
 function formatCatalogReviewIssues(
-  kind: 'role' | 'skill' | 'tool',
+  kind: 'role' | 'capability' | 'skill' | 'tool',
   issues: ReadonlyArray<{ field: string; id?: string; reason: string }>,
 ): string {
   const detail = issues

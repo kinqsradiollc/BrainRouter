@@ -5,6 +5,7 @@ import {
 } from '../manifest.js';
 import {
   WORKSPACE_SELECTION_STABLE_ID,
+  type ReviewedWorkspaceCapabilitySelection,
   type ReviewedWorkspaceRoleSelection,
   type ReviewedWorkspaceSkillSelection,
   type ReviewedWorkspaceToolSelection,
@@ -14,6 +15,36 @@ import {
   type WorkspaceSelectionReviewResult,
   type WorkspaceToolSelectionMigrationDiagnostic,
 } from './types.js';
+
+/** Validate task-capability allow/deny choices against the contributed catalog. */
+export function validateReviewedWorkspaceCapabilitySelection(
+  proposal: ReviewedWorkspaceCapabilitySelection,
+  catalog: WorkspaceSelectionCatalog,
+): WorkspaceSelectionReviewResult<{
+  enabled: string[];
+  disabled: string[];
+}> {
+  const issues: WorkspaceSelectionReviewIssue[] = [];
+  const enabled = validateField(
+    proposal.enabled,
+    'capabilitiesEnabled',
+    ['capability'],
+    true,
+    catalog,
+    issues,
+  );
+  const disabled = validateField(
+    proposal.disabled,
+    'capabilitiesDisabled',
+    ['capability'],
+    false,
+    catalog,
+    issues,
+  );
+  return issues.length > 0
+    ? { ok: false, issues }
+    : { ok: true, value: { enabled, disabled } };
+}
 
 /** Validate orchestration allow/deny choices against the executable role registry. */
 export function validateReviewedWorkspaceRoleSelection(

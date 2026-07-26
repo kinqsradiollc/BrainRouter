@@ -101,12 +101,15 @@ export function buildWorkspaceOnboardingPreview(
 
   const selectedGroups = new Set(manifest.tools.profiles);
   const selectedTools = new Set(manifest.tools.enabled ?? []);
+  const selectedCapabilities = new Set(manifest.capabilities.enabled);
   const selectedPacks = new Set(manifest.skills.packs);
   const selectedSkills = new Set(manifest.skills.enabled);
   const deniedTools = toolSelection.deniedIds;
+  const disabledCapabilities = new Set(manifest.capabilities.disabled);
   const disabledSkills = new Set(manifest.skills.disabled);
   const recommendedGroups = new Set(preset?.tools.profiles ?? []);
   const recommendedRoles = new Set(preset?.orchestration.availableRoles ?? []);
+  const recommendedCapabilities = new Set(preset?.capabilities.enabled ?? []);
   const recommendedPacks = new Set(preset?.skills.packs ?? []);
   const recommendedSkills = new Set(preset?.skills.enabled ?? []);
 
@@ -171,18 +174,26 @@ export function buildWorkspaceOnboardingPreview(
     catalog: catalog.entries.map((entry) => {
       const roleBlockedByPlan = entry.kind === 'role'
         && (manifest.orchestration.mode === 'off' || !planRoles.has(entry.id));
+      const capabilityBlockedByProfile = entry.kind === 'capability'
+        && preset?.id !== 'custom'
+        && !recommendedCapabilities.has(entry.id);
+      const selectionBlocked = roleBlockedByPlan || capabilityBlockedByProfile;
       return {
         ...entry,
-        selectable: entry.selectable && !roleBlockedByPlan,
-        ...(roleBlockedByPlan && !entry.blockedReason
+        selectable: entry.selectable && !selectionBlocked,
+        ...(selectionBlocked && !entry.blockedReason
           ? {
-              blockedReason: manifest.orchestration.mode === 'off'
-                ? 'Delegation is off for this workspace.'
-                : 'Not available in the selected orchestration plan.',
+              blockedReason: roleBlockedByPlan
+                ? manifest.orchestration.mode === 'off'
+                  ? 'Delegation is off for this workspace.'
+                  : 'Not available in the selected orchestration plan.'
+                : 'Not contributed for the selected workspace profile.',
             }
           : {}),
         selected: entry.kind === 'role'
           ? manifest.orchestration.availableRoles.includes(entry.id)
+          : entry.kind === 'capability'
+            ? selectedCapabilities.has(entry.id)
           : entry.kind === 'tool-group'
             ? selectedGroups.has(entry.id)
             : entry.kind === 'tool'
@@ -194,6 +205,8 @@ export function buildWorkspaceOnboardingPreview(
                   : false,
         recommended: entry.kind === 'role'
           ? recommendedRoles.has(entry.id)
+          : entry.kind === 'capability'
+            ? recommendedCapabilities.has(entry.id)
           : entry.kind === 'tool-group'
             ? recommendedGroups.has(entry.id)
             : entry.kind === 'skill-pack'
@@ -203,6 +216,8 @@ export function buildWorkspaceOnboardingPreview(
                 : false,
         denied: entry.kind === 'role'
           ? disabledRoles.has(entry.id)
+          : entry.kind === 'capability'
+            ? disabledCapabilities.has(entry.id)
           : entry.kind === 'skill'
             ? disabledSkills.has(entry.id)
             : (entry.kind === 'tool' || entry.kind === 'tool-group')

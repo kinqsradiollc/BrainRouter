@@ -65,6 +65,11 @@ test('P23-8 preview exposes only reviewed IDs, plan stages, concrete tool expans
     row.kind === 'tool-group' && row.id === 'coding')?.selected, true);
   assert.equal(preview.catalog.find((row) =>
     row.kind === 'tool' && row.id === 'web_search')?.selected, true);
+  const frontend = preview.catalog.find((row) =>
+    row.kind === 'capability' && row.id === 'frontend');
+  assert.equal(frontend?.selected, true);
+  assert.equal(frontend?.recommended, true);
+  assert.equal(frontend?.selectable, true);
   assert.deepEqual(
     preview.catalog
       .filter((row) => row.kind === 'role' && row.selectable)
@@ -88,4 +93,25 @@ test('P23-8 preview exposes only reviewed IDs, plan stages, concrete tool expans
   ]) {
     assert.equal(previewKeys.has(unsafeKey), false);
   }
+});
+
+test('P23-8 capability choices are profile-scoped while Custom remains explicit', () => {
+  const research = buildWorkspaceOnboardingPreview(
+    createWorkspaceManifest({ name: 'research', profile: 'research', by: 'wizard' }),
+  );
+  const researchCapabilities = research.catalog.filter((row) => row.kind === 'capability');
+  assert.equal(researchCapabilities.every((row) => !row.selectable), true);
+  assert.equal(researchCapabilities.every((row) =>
+    row.blockedReason === 'Not contributed for the selected workspace profile.'), true);
+
+  const custom = buildWorkspaceOnboardingPreview(
+    createWorkspaceManifest({ name: 'custom', profile: 'custom', by: 'wizard' }),
+  );
+  assert.deepEqual(
+    custom.catalog
+      .filter((row) => row.kind === 'capability' && row.selectable)
+      .map((row) => row.id)
+      .sort(),
+    ['backend', 'frontend'],
+  );
 });
