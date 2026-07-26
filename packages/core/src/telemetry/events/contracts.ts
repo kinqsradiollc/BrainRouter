@@ -55,6 +55,8 @@ export const TELEMETRY_EVENTS = {
   memory_captured: 'memory_captured',
   git_refresh: 'git_refresh',
   workspace_refresh: 'workspace_refresh',
+  compatibility_reader_used: 'compatibility_reader_used',
+  compatibility_ambiguity_detected: 'compatibility_ambiguity_detected',
   error: 'error',
 } as const;
 

@@ -29,6 +29,10 @@ import { RESERVED_ORCHESTRATION_ROLE_IDS } from './personaDefinitionFile.js';
 import { readWorkspaceFileBounded, writeWorkspaceFileAtomic } from './fileWrite.js';
 import { recoverInterruptedWorkspaceManifestClaim } from './manifestClaim.js';
 import { recoverInterruptedWorkspaceOnboardingPair } from './onboardingTransaction.js';
+import {
+  recordWorkspaceCompatibilityDiagnostics,
+  type WorkspaceCompatibilityDiagnostic,
+} from './compatibilityDiagnostics.js';
 
 export const WORKSPACE_MANIFEST_VERSION = 2;
 export const WORKSPACE_MANIFEST_RELPATH = path.join('.brainrouter', 'workspace.json');
@@ -65,6 +69,11 @@ export interface WorkspaceManifest {
   instructions: string;
   /** Safe unknown fields from newer writers, preserved on round-trip. */
   extra?: Record<string, unknown>;
+}
+
+export interface WorkspaceManifestLoadResult {
+  manifest: WorkspaceManifest | null;
+  diagnostics: WorkspaceCompatibilityDiagnostic[];
 }
 
 const KNOWN_KEYS = new Set([
@@ -128,6 +137,13 @@ export function isWorkspaceOnboarded(workspaceRoot: string): boolean {
  * failing the load: a hand-edited manifest must never break the app.
  */
 export function loadWorkspaceManifest(workspaceRoot: string): WorkspaceManifest | null {
+  return loadWorkspaceManifestWithDiagnostics(workspaceRoot).manifest;
+}
+
+/** Load a manifest plus bounded local migration diagnostics for review UIs. */
+export function loadWorkspaceManifestWithDiagnostics(
+  workspaceRoot: string,
+): WorkspaceManifestLoadResult {
   let raw: unknown;
   try {
     // Restore any owned pre-write inode before the pair coordinator classifies
@@ -142,10 +158,79 @@ export function loadWorkspaceManifest(workspaceRoot: string): WorkspaceManifest 
       ).toString('utf8'),
     );
   } catch {
-    return null;
+    return { manifest: null, diagnostics: [] };
   }
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
-  return normalizeManifest(raw as Record<string, unknown>);
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return { manifest: null, diagnostics: [] };
+  }
+  const record = raw as Record<string, unknown>;
+  const diagnostics = diagnoseWorkspaceManifestCompatibility(record);
+  recordWorkspaceCompatibilityDiagnostics(workspaceRoot, diagnostics);
+  return {
+    manifest: normalizeManifest(record),
+    diagnostics,
+  };
+}
+
+/**
+ * Inspect only migration shape. Values are counted, never copied into
+ * telemetry, and normal v2 manifests (including their serialized `agents`
+ * alias) produce no compatibility diagnostics.
+ */
+export function diagnoseWorkspaceManifestCompatibility(
+  raw: Record<string, unknown>,
+): WorkspaceCompatibilityDiagnostic[] {
+  const diagnostics: WorkspaceCompatibilityDiagnostic[] = [];
+  const agents = asRecord(raw.agents);
+  const persona = asRecord(raw.persona);
+  const orchestration = asRecord(raw.orchestration);
+  const hasLegacyAgents = Object.keys(agents).length > 0;
+  const hasPersona = Object.keys(persona).length > 0;
+  const hasOrchestration = Object.keys(orchestration).length > 0;
+  const legacyIds = [
+    ...(typeof agents.default === 'string' ? [agents.default] : []),
+    ...(Array.isArray(agents.enabled)
+      ? agents.enabled.filter((value): value is string => typeof value === 'string').slice(0, 256)
+      : []),
+  ].filter((value, index, values) => value.trim() && values.indexOf(value) === index);
+
+  if (hasLegacyAgents && !hasPersona) {
+    diagnostics.push({
+      code: 'legacy_manifest_agents',
+      surface: 'manifest',
+      severity: 'info',
+      message: 'Legacy manifest agent selection was normalized into the persona contract.',
+      count: legacyIds.length || 1,
+    });
+  }
+  if (hasLegacyAgents && !hasOrchestration) {
+    diagnostics.push({
+      code: 'legacy_orchestration_defaults',
+      surface: 'manifest',
+      severity: 'info',
+      message: 'Legacy manifest agent selection required compatibility orchestration defaults.',
+      count: legacyIds.length || 1,
+    });
+  }
+  if (hasLegacyAgents && !hasPersona && !hasOrchestration && legacyIds.length > 0) {
+    diagnostics.push({
+      code: 'implicit_same_id_pairing',
+      surface: 'manifest',
+      severity: 'warning',
+      message: 'Legacy persona ids were implicitly paired with same-id orchestration roles.',
+      count: legacyIds.length,
+    });
+  }
+  if (legacyIds.includes('frontend-builder')) {
+    diagnostics.push({
+      code: 'legacy_frontend_persona',
+      surface: 'manifest',
+      severity: 'info',
+      message: 'Legacy frontend persona selection was normalized to engineer plus the frontend capability.',
+      count: 1,
+    });
+  }
+  return diagnostics;
 }
 
 /** Write the manifest (stable 2-space JSON + trailing newline), creating `.brainrouter/`. */
