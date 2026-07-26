@@ -30,6 +30,7 @@ test('P23-2 bundled orchestration profile files and parsed ids have exact parity
   const profiles = loadBundledOrchestrationProfiles();
 
   assert.deepEqual(files, [
+    'custom.json',
     'data-science.json',
     'engineering.json',
     'research.json',
@@ -165,9 +166,12 @@ test('P23-2/P23-5 packed core archive contains every bundled plan at the loader 
     assert.equal(result.length, 1);
     const packedPaths = new Set(result[0]?.files.map((file) => file.path));
     for (const plan of [
+      'custom.json',
       'data-science.json',
       'engineering.json',
       'research.json',
+      'study.json',
+      'writing.json',
     ]) {
       assert.equal(packedPaths.has(`orchestration-profiles/${plan}`), true);
     }

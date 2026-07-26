@@ -21,6 +21,8 @@ export * from './personaDefinitionFile.js';
 export * from './personaRegistry.js';
 export * from './profilePlugins.js';
 export * from './profileRecommendations.js';
+export * from './profileOrchestrationDefaults.js';
+export * from './onboardingPreview.js';
 export * from './skillSelection.js';
 export * from './skillToolAdapter.js';
 export * from './toolProfiles.js';

@@ -1,12 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildWorkspaceSelectionCatalog,
   createWorkspaceManifest,
   WORKSPACE_MANIFEST_VERSION,
 } from '@kinqs/brainrouter-core/workspace';
 import {
   applyProjectOnboardingEdits,
   createProjectOnboardingDraft,
+  finalizeCatalogReviewedProjectOnboarding,
   parseProjectOnboardingList,
 } from '../cli/commands/init/onboardingDraft.js';
 
@@ -67,6 +69,7 @@ test('reviewed edits de-duplicate fields, include the default persona, and honor
     skillsEnabled: ['testing-skill'],
     skillsDisabled: [],
     toolProfiles: ['coding', 'coding'],
+    toolsEnabled: ['read_file', 'read_file'],
     toolsDenied: ['shell:unsafe'],
     memoryTags: ['engineering', 'engineering'],
     memoryCaptureHint: ' code ',
@@ -92,4 +95,32 @@ test('comma-separated editor fields trim and de-duplicate deterministically', ()
   assert.deepEqual(parseProjectOnboardingList(' browser, terminal, browser, , coding '), [
     'browser', 'terminal', 'coding',
   ]);
+});
+
+test('catalog-reviewed setup persists individual tools only through manifest v3', () => {
+  const draft = createProjectOnboardingDraft({ workspaceRoot: root, profile: 'custom' });
+  const reviewed = finalizeCatalogReviewedProjectOnboarding(draft, {
+    personaDefault: '',
+    personasEnabled: [],
+    orchestrationMode: 'off',
+    orchestrationAvailableRoles: [],
+    orchestrationDisabledRoles: [],
+    orchestrationMaxParallel: 1,
+    capabilitiesEnabled: [],
+    capabilitiesDisabled: [],
+    skillPacks: [],
+    skillsEnabled: [],
+    skillsDisabled: [],
+    toolProfiles: ['coding'],
+    toolsEnabled: ['web_search', 'web_search'],
+    toolsDenied: ['run_command'],
+    memoryTags: [],
+    memoryCaptureHint: '',
+    instructions: '',
+  }, buildWorkspaceSelectionCatalog());
+
+  assert.equal(reviewed.version, 3);
+  assert.equal(reviewed.tools.mode, 'explicit-catalog');
+  assert.deepEqual(reviewed.tools.enabled, ['web_search']);
+  assert.deepEqual(reviewed.tools.deny, ['run_command']);
 });

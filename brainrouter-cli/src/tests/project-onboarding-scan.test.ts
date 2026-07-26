@@ -45,6 +45,9 @@ function reviewingPrompt(options: {
       options.beforeConfirm?.();
       return { kind: 'submit', value: 'save' };
     }
+    if (request.multiSelect) {
+      return { kind: 'submit', value: request.initialChoices ?? [] };
+    }
     return { kind: 'submit', value: request.initialValue ?? '' };
   };
 }

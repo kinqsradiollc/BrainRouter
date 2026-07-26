@@ -42,6 +42,10 @@ export interface PickerProps {
   rows: PickerRow[];
   initialCursor?: number;
   multiSelect?: boolean;
+  /** Stable row IDs checked when a multi-select picker opens. */
+  initialSelected?: string[];
+  /** Allow ENTER to confirm an intentionally empty multi-selection. */
+  allowEmptySelection?: boolean;
   allowOther?: boolean;
   otherLabel?: string;
   otherDescription?: string;
@@ -106,7 +110,10 @@ export function Picker(props: PickerProps) {
   const [cursor, setCursor] = useState(() =>
     Math.max(0, Math.min(props.initialCursor ?? 0, augmentedRows.length - 1)),
   );
-  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [selected, setSelected] = useState<Set<string>>(
+    () => new Set((props.initialSelected ?? []).filter((id) =>
+      augmentedRows.some((row) => row.id === id))),
+  );
   const [phase, setPhase] = useState<'pick' | 'other'>(
     props.prefilledOther !== undefined ? 'other' : 'pick',
   );
@@ -201,7 +208,7 @@ export function Picker(props: PickerProps) {
     if (key.return) {
       const row = augmentedRows[cursor];
       if (props.multiSelect) {
-        if (selected.size === 0) return;
+        if (selected.size === 0 && !props.allowEmptySelection) return;
         if (selected.has(OTHER_ID)) {
           setPhase('other');
           return;

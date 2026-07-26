@@ -1,7 +1,10 @@
 import path from 'node:path';
 import {
   createWorkspaceManifest,
+  migrateWorkspaceManifestToolSelection,
   normalizeWorkspaceManifest,
+  validateReviewedWorkspaceSkillSelection,
+  type WorkspaceSelectionCatalog,
   type WorkspaceManifest,
   type WorkspaceOnboardSource,
   type WorkspaceProfileId,
@@ -20,6 +23,7 @@ export interface ProjectOnboardingFieldEdits {
   skillsEnabled: string[];
   skillsDisabled: string[];
   toolProfiles: string[];
+  toolsEnabled: string[];
   toolsDenied: string[];
   memoryTags: string[];
   memoryCaptureHint: string;
@@ -92,10 +96,58 @@ export function applyProjectOnboardingEdits(
       enabled: unique(edits.skillsEnabled),
       disabled: unique(edits.skillsDisabled),
     },
-    tools: { profiles: unique(edits.toolProfiles), deny: unique(edits.toolsDenied) },
+    tools: {
+      profiles: unique(edits.toolProfiles),
+      enabled: unique(edits.toolsEnabled),
+      deny: unique(edits.toolsDenied),
+    },
     memory: { tags: unique(edits.memoryTags), captureHint: edits.memoryCaptureHint.trim() },
     instructions: edits.instructions.trim(),
   });
+}
+
+/**
+ * Validate the exact reviewed catalog choices and move the saved tool contract
+ * to explicit-catalog mode. This is the final in-memory step before commit.
+ */
+export function finalizeCatalogReviewedProjectOnboarding(
+  draft: WorkspaceManifest,
+  edits: ProjectOnboardingFieldEdits,
+  catalog: WorkspaceSelectionCatalog,
+): WorkspaceManifest {
+  const edited = applyProjectOnboardingEdits(draft, edits);
+  const skills = validateReviewedWorkspaceSkillSelection({
+    packs: edited.skills.packs,
+    enabled: edited.skills.enabled,
+    disabled: edited.skills.disabled,
+  }, catalog);
+  if (!skills.ok) {
+    throw new Error(formatCatalogReviewIssues('skill', skills.issues));
+  }
+  return migrateWorkspaceManifestToolSelection({
+    manifest: {
+      ...edited,
+      skills: skills.value,
+    },
+    reviewed: {
+      profiles: edited.tools.profiles,
+      enabled: unique(edits.toolsEnabled),
+      deny: edited.tools.deny,
+    },
+    catalog,
+    reviewedCatalogFingerprint: catalog.fingerprint,
+  });
+}
+
+function formatCatalogReviewIssues(
+  kind: 'skill' | 'tool',
+  issues: ReadonlyArray<{ field: string; id?: string; reason: string }>,
+): string {
+  const detail = issues
+    .slice(0, 8)
+    .map((issue) => `${issue.field}${issue.id ? `:${issue.id}` : ''} (${issue.reason})`)
+    .join('; ');
+  return `Reviewed ${kind} selection is no longer available${detail ? `: ${detail}` : '.'}`;
 }
 
 function unique(values: string[]): string[] {
