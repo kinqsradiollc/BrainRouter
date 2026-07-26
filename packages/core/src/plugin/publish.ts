@@ -62,6 +62,7 @@ export function buildRegistryEntry(
       skills: provides.skills,
       personas: provides.personas,
       agents: provides.agents,
+      orchestrationProfiles: provides.orchestrationProfiles,
       hooks: provides.hooks,
       mcpServers: provides.mcpServers,
       connectors: provides.connectors,

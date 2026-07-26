@@ -6,7 +6,8 @@
  *
  *   { "plugins": [ { id, name, repo, version, category, tags[], stars,
  *                    lastUpdated, integrity, author,
- *                    provides:{skills,agents,hooks,mcpServers,connectors,workflows} } ] }
+ *                    provides:{skills,agents,orchestrationProfiles,hooks,
+ *                              mcpServers,connectors,workflows} } ] }
  *
  * `brainrouter plugin search <q>` fetches this index (cached), ranks by relevance
  * then stars, and filters by category / tag. The registry URL comes from
@@ -24,6 +25,7 @@ export interface RegistryProvides {
   skills?: number;
   personas?: number;
   agents?: number;
+  orchestrationProfiles?: number;
   hooks?: number;
   mcpServers?: number;
   connectors?: number;
@@ -79,7 +81,16 @@ function toStringArray(v: unknown): string[] {
 function parseProvides(v: unknown): RegistryProvides {
   const out: RegistryProvides = {};
   if (!isPlainObject(v)) return out;
-  for (const k of ['skills', 'personas', 'agents', 'hooks', 'mcpServers', 'connectors', 'workflows'] as const) {
+  for (const k of [
+    'skills',
+    'personas',
+    'agents',
+    'orchestrationProfiles',
+    'hooks',
+    'mcpServers',
+    'connectors',
+    'workflows',
+  ] as const) {
     const n = v[k];
     if (typeof n === 'number' && Number.isFinite(n) && n >= 0) out[k] = Math.floor(n);
   }

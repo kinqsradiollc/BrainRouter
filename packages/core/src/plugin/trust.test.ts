@@ -64,6 +64,7 @@ function writeRiskyPlugin(root: string, name: string, extra: Record<string, unkn
   };
   w('.brainrouter-plugin/plugin.json', JSON.stringify({ name, version: '1.0.0', category: 'development', ...extra }));
   w('skills/demo/SKILL.md', `---\nname: ${name}-demo\ndescription: demo\n---\n# demo\n`);
+  w('orchestration-profiles/research.json', '{}\n');
   w('hooks/hooks.json', JSON.stringify({ PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: '${BRAINROUTER_PLUGIN_ROOT}/scripts/guard.sh' }] }] }));
   w('mcp.json', JSON.stringify({ mcpServers: { srv: { command: 'node', args: ['${BRAINROUTER_PLUGIN_ROOT}/server.js'] } } }));
 }
@@ -228,6 +229,7 @@ test('buildConsentSummary: enumerates capabilities + surfaces hook/MCP commands'
   const summary = buildConsentSummary(disc.plugin, { runtime: { brainrouterVersion: '0.4.17' } });
   assert.equal(summary.name, 'acme-devkit');
   assert.equal(summary.provides.skills, 1);
+  assert.equal(summary.provides.orchestrationProfiles, 1);
   assert.equal(summary.provides.hooks >= 1, true);
   assert.equal(summary.provides.mcpServers, 1);
   assert.equal(summary.requiresConsent, true);
@@ -239,6 +241,7 @@ test('buildConsentSummary: enumerates capabilities + surfaces hook/MCP commands'
   assert.ok(summary.mcpCommands[0].command.includes('node'));
   // Disclosure mentions the counts + the risky commands.
   assert.match(summary.disclosure, /skill/);
+  assert.match(summary.disclosure, /orchestration profile/);
   assert.match(summary.disclosure, /Hooks run/);
 
   // With consent recorded, the summary reflects approval.

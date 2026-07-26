@@ -205,6 +205,7 @@ export function buildConsentSummary(
   const push = (n: number, one: string, many = `${one}s`): void => { if (n) parts.push(`${n} ${n === 1 ? one : many}`); };
   push(provides.skills, 'skill');
   push(provides.agents, 'agent');
+  push(provides.orchestrationProfiles, 'orchestration profile');
   push(provides.commands, 'command');
   push(provides.hooks, 'hook');
   push(provides.mcpServers, 'MCP server');

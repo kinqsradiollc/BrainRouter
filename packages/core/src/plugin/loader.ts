@@ -5,8 +5,9 @@
  * scopes (user `~/.brainrouter/plugins/<name>/` and workspace
  * `<ws>/.brainrouter/plugins/<name>/`) and produce the aggregate contributions
  * the CLI/host feed into the EXISTING subsystems — skills, personas, agents,
- * commands, hooks, mcp, connectors, workflows. No parallel runtime: a plugin
- * is inert data that populates systems we already ship.
+ * orchestration profiles, commands, hooks, mcp, connectors, workflows. No
+ * parallel runtime: a plugin is inert data that populates systems we already
+ * ship.
  *
  * Collisions across plugins are disambiguated `<pluginName>:<name>` (mirroring
  * the skill-collision display we shipped). Loading is SKIPPED entirely under
@@ -54,6 +55,7 @@ export interface PluginContributions {
   skillRoots: string[];
   personaFiles: Array<{ pluginName: string; path: string }>;
   agentFiles: Array<{ pluginName: string; path: string }>;
+  orchestrationProfileFiles: Array<{ pluginName: string; path: string }>;
   commandFiles: Array<{ pluginName: string; path: string }>;
   hookFiles: Array<{ pluginName: string; path: string }>;
   connectorFiles: Array<{ pluginName: string; path: string }>;
@@ -81,6 +83,7 @@ function emptyContributions(): PluginContributions {
     skillRoots: [],
     personaFiles: [],
     agentFiles: [],
+    orchestrationProfileFiles: [],
     commandFiles: [],
     hookFiles: [],
     connectorFiles: [],
@@ -180,6 +183,11 @@ export function loadPluginsWithKnobs(
     if (c.skills) contributions.skillRoots.push(c.skills);
     if (c.personas) contributions.personaFiles.push(...listEntries(c.personas, plugin.name, ['.json']));
     if (c.agents) contributions.agentFiles.push(...listEntries(c.agents, plugin.name, ['.md']));
+    if (c.orchestrationProfiles) {
+      contributions.orchestrationProfileFiles.push(
+        ...listEntries(c.orchestrationProfiles, plugin.name, ['.json']),
+      );
+    }
     if (c.commands) contributions.commandFiles.push(...listEntries(c.commands, plugin.name, ['.md']));
     if (c.connectors) contributions.connectorFiles.push(...listEntries(c.connectors, plugin.name, ['.json']));
     if (c.workflows) contributions.workflowFiles.push(...listEntries(c.workflows, plugin.name, ['.js', '.mjs', '.json']));
@@ -187,8 +195,9 @@ export function loadPluginsWithKnobs(
     // PLUGIN-MARKETPLACE P3 — gate the risky (shell/MCP) capabilities. Hooks with
     // a command-type entry need per-plugin SHELL consent; a `allowManagedHooksOnly`
     // managed gate refuses third-party plugin hooks outright. MCP command-servers
-    // need per-plugin MCP consent. Skills/agents/commands/connectors/workflows are
-    // whitelist-safe and always load on `enabled` alone.
+    // need per-plugin MCP consent. Skills/agents/orchestration profiles/
+    // commands/connectors/workflows are inert contributions and load on
+    // `enabled` alone; their owning subsystem still validates before use.
     let hooksGated = false;
     let mcpGated = false;
     if (c.hooks) {

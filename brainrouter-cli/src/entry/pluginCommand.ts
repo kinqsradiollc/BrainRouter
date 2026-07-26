@@ -278,10 +278,22 @@ export function registerPluginCommand(program: Command): void {
     });
 }
 
-function describeProvides(p: { skills: number; agents: number; commands: number; hooks: number; mcpServers: number; connectors: number; workflows: number }): string {
+function describeProvides(p: {
+  skills: number;
+  agents: number;
+  orchestrationProfiles: number;
+  commands: number;
+  hooks: number;
+  mcpServers: number;
+  connectors: number;
+  workflows: number;
+}): string {
   const parts: string[] = [];
   if (p.skills) parts.push(`${p.skills} skill${p.skills === 1 ? '' : 's'}`);
   if (p.agents) parts.push(`${p.agents} agent${p.agents === 1 ? '' : 's'}`);
+  if (p.orchestrationProfiles) {
+    parts.push(`${p.orchestrationProfiles} orchestration profile${p.orchestrationProfiles === 1 ? '' : 's'}`);
+  }
   if (p.commands) parts.push(`${p.commands} command${p.commands === 1 ? '' : 's'}`);
   if (p.hooks) parts.push(`${p.hooks} hook${p.hooks === 1 ? '' : 's'}`);
   if (p.mcpServers) parts.push(`${p.mcpServers} MCP server${p.mcpServers === 1 ? '' : 's'}`);

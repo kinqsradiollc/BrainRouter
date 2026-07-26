@@ -235,10 +235,10 @@ naming**). The only required field is `name` (kebab-case, validated by
 Component dirs are auto-discovered by convention when `contributes` omits them:
 `skills/`, `personas/` (.json), `agents/` (executable JSON plus legacy Markdown
 during migration), `commands/` (.md), `hooks/hooks.json`, `workflows/`,
-`connectors/`, and `mcp.json` — so a skills-only plugin is just `plugin.json` +
-`skills/`. Any explicit `contributes` path must be relative and stay inside the
-plugin root (absolute and `..`-escaping paths are rejected at parse **and**
-discovery time).
+`orchestration-profiles/`, `connectors/`, and `mcp.json` — so a skills-only
+plugin is just `plugin.json` + `skills/`. Any explicit `contributes` path must
+be relative and stay inside the plugin root (absolute and `..`-escaping paths
+are rejected at parse **and** discovery time).
 
 > Not to be confused with the repo's OWN `.claude-plugin/plugin.json` at the root,
 > which distributes _this repo_ as a Claude Code plugin — a different artifact.
@@ -277,10 +277,11 @@ indexed by a `brainrouter-marketplace.json` at the source root and recorded in
 ### 15. Plugins are packaging, not a runtime; loading is additive and never fatal
 
 A plugin contributes paths that feed the **existing** subsystems (the same skill
-catalog, agents, hooks, MCP, connectors, workflows) — **never build a parallel
-plugin runtime**. Plugin loading in consumers must be best-effort (wrap in
-try/catch so config or filesystem trouble never breaks the host feature — skill
-discovery explicitly swallows plugin-loading errors). Plugin skill roots slot
+catalog, agents, orchestration-profile resolver, hooks, MCP, connectors,
+workflows) — **never build a parallel plugin runtime**. Plugin loading in
+consumers must be best-effort (wrap in try/catch so config or filesystem trouble
+never breaks the host feature — skill discovery explicitly swallows
+plugin-loading errors). Plugin skill roots slot
 between workspace roots (which still win) and bundled roots. `safeMode` disables all
 skills and plugin loading entirely.
 

@@ -3,9 +3,9 @@
  *
  * A plugin is a folder (or git repo) whose `.brainrouter-plugin/plugin.json`
  * describes what it contributes to the existing subsystems (skills / personas /
- * agents / commands / hooks / workflows / connectors / MCP servers). Only `name` is
- * required; the convention dirs are auto-discovered so a skills-only plugin is
- * just `plugin.json` + `skills/`.
+ * agents / orchestration profiles / commands / hooks / workflows / connectors /
+ * MCP servers). Only `name` is required; the convention dirs are auto-discovered
+ * so a skills-only plugin is just `plugin.json` + `skills/`.
  *
  * BrainRouter's own conventions: the manifest lives under
  * `.brainrouter-plugin/plugin.json` (never `.claude`). Portable references
@@ -26,6 +26,7 @@ export const PLUGIN_CONVENTION_PATHS = {
   skills: 'skills',
   personas: 'personas',
   agents: 'agents',
+  orchestrationProfiles: 'orchestration-profiles',
   commands: 'commands',
   hooks: 'hooks/hooks.json',
   workflows: 'workflows',
@@ -61,6 +62,7 @@ export interface PluginContributes {
   skills?: string;
   personas?: string;
   agents?: string;
+  orchestrationProfiles?: string;
   commands?: string;
   hooks?: string;
   workflows?: string;
