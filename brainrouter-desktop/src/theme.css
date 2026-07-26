@@ -2176,6 +2176,10 @@ select.toolbar-input { cursor: pointer; }
 .onboard-field input { width: 100%; box-sizing: border-box; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--r-sm); outline: none; background: var(--input); color: var(--text); font: inherit; font-size: 12px; }
 .onboard-field input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 .onboard-field small { color: var(--text-faint); line-height: 1.35; }
+.onboard-choice { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.onboard-choice button { padding: 7px 6px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--input); color: var(--text-dim); font-size: 11px; cursor: pointer; }
+.onboard-choice button:hover { border-color: var(--border-strong); color: var(--text); }
+.onboard-choice button.selected { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
 .onboard-diff-label { display: flex; justify-content: space-between; gap: 12px; margin: 7px 0 5px; color: var(--text-dim); font-size: 10.5px; }
 .onboard-diff { max-height: 260px; overflow: auto; margin: 0; padding: 10px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--input); color: var(--text-dim); font: 10.5px/1.45 var(--mono); white-space: pre-wrap; word-break: break-word; }
 .onboard-no-instruction { margin-top: 8px; color: var(--text-faint); font-size: 11px; }

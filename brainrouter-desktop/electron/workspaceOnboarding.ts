@@ -41,7 +41,8 @@ export interface ManifestSavePayload {
   expected?: unknown;
   source?: unknown;
   profile: unknown;
-  agents?: unknown;
+  persona?: unknown;
+  orchestration?: unknown;
   capabilities?: unknown;
   skills?: unknown;
   tools?: unknown;
@@ -111,7 +112,7 @@ export function saveWorkspaceManifestFromPayload(
       return saveProfileCardSelection(workspaceRoot, record.profile);
     }
     exactOptionalKeys(record, [
-      'expected', 'source', 'profile', 'agents', 'capabilities',
+      'expected', 'source', 'profile', 'persona', 'orchestration', 'capabilities',
       'skills', 'tools', 'memory', 'instructions',
     ], ['instruction'], 'workspace setup payload');
 
@@ -128,7 +129,8 @@ export function saveWorkspaceManifestFromPayload(
       by: source,
       at: current?.onboarded.at,
     });
-    const agents = parseAgents(record.agents);
+    const persona = parsePersona(record.persona);
+    const orchestration = parseOrchestration(record.orchestration);
     const capabilities = parseEnabledDisabled(record.capabilities, 'capabilities');
     const skills = parseSkills(record.skills);
     const tools = parseTools(record.tools);
@@ -140,7 +142,8 @@ export function saveWorkspaceManifestFromPayload(
       version: current?.version ?? preset.version,
       name: current?.name ?? preset.name,
       onboarded: current ? { ...current.onboarded } : preset.onboarded,
-      agents,
+      persona,
+      orchestration,
       capabilities,
       skills,
       tools,
@@ -198,12 +201,34 @@ function parseRevision(value: unknown): WorkspaceOnboardingReviewRevision {
   };
 }
 
-function parseAgents(value: unknown): WorkspaceManifest['agents'] {
-  const record = plainRecord(value, 'agents');
-  exactKeys(record, ['default', 'enabled'], 'agents');
+function parsePersona(value: unknown): WorkspaceManifest['persona'] {
+  const record = plainRecord(value, 'persona');
+  exactKeys(record, ['default', 'enabled'], 'persona');
   return {
-    default: parseText(record.default, 'default agent', 128),
-    enabled: parseList(record.enabled, 'enabled agents'),
+    default: parseText(record.default, 'default persona', 128),
+    enabled: parseList(record.enabled, 'enabled personas'),
+  };
+}
+
+function parseOrchestration(value: unknown): WorkspaceManifest['orchestration'] {
+  const record = plainRecord(value, 'orchestration');
+  exactKeys(record, ['mode', 'availableRoles', 'disabledRoles', 'maxParallel'], 'orchestration');
+  const mode = record.mode;
+  if (!(mode === 'off' || mode === 'explicit' || mode === 'adaptive')) {
+    throw new Error('Invalid orchestration mode.');
+  }
+  if (!Number.isSafeInteger(record.maxParallel) ||
+      Number(record.maxParallel) < 1 || Number(record.maxParallel) > 32) {
+    throw new Error('Invalid orchestration parallelism.');
+  }
+  const disabledRoles = parseList(record.disabledRoles, 'disabled orchestration roles');
+  const disabledRoleSet = new Set(disabledRoles);
+  return {
+    mode,
+    availableRoles: parseList(record.availableRoles, 'available orchestration roles')
+      .filter((role) => !disabledRoleSet.has(role)),
+    disabledRoles,
+    maxParallel: Number(record.maxParallel),
   };
 }
 

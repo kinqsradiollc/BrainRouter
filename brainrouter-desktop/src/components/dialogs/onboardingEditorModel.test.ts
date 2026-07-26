@@ -19,7 +19,13 @@ const engineering: OnboardingProfile = {
   id: 'engineering',
   label: 'Engineering',
   description: 'Software projects.',
-  agents: { default: 'engineer', enabled: ['engineer'] },
+  persona: { default: 'engineer', enabled: ['engineer'] },
+  orchestration: {
+    mode: 'adaptive',
+    availableRoles: ['explorer', 'worker', 'reviewer', 'fleet'],
+    disabledRoles: ['fleet'],
+    maxParallel: 4,
+  },
   capabilities: { enabled: ['frontend'], disabled: [] },
   skills: { packs: ['engineering'], enabled: ['testing-skill'], disabled: [] },
   tools: { profiles: ['coding'], deny: [] },
@@ -39,12 +45,18 @@ function response(manifest: unknown = null): Record<string, unknown> {
   };
 }
 
-test('hydrates a suggested draft with one engineer and task-scoped frontend capability', () => {
+test('hydrates separate persona and deny-first orchestration fields', () => {
   const parsed = parseOnboardingEditor(response());
   assert.ok(parsed);
   assert.equal(parsed.existing, null);
-  assert.equal(parsed.draft.agents.default, 'engineer');
-  assert.deepEqual(parsed.draft.agents.enabled, ['engineer']);
+  assert.equal(parsed.draft.persona.default, 'engineer');
+  assert.deepEqual(parsed.draft.persona.enabled, ['engineer']);
+  assert.deepEqual(parsed.draft.orchestration, {
+    mode: 'adaptive',
+    availableRoles: ['explorer', 'worker', 'reviewer'],
+    disabledRoles: ['fleet'],
+    maxParallel: 4,
+  });
   assert.deepEqual(parsed.draft.capabilities.enabled, ['frontend']);
   assert.ok(!JSON.stringify(parsed.draft).includes('frontend-builder'));
 });
@@ -83,9 +95,15 @@ test('rejects incomplete revisions and malformed nested manifest fields', () => 
 
   const malformed = response({
     ...draftFromOnboardingProfile(engineering),
-    agents: { default: 'engineer', enabled: 'engineer' },
+    persona: { default: 'engineer', enabled: 'engineer' },
   });
   assert.equal(parseOnboardingEditor(malformed), null);
+
+  const invalidParallelism = response({
+    ...draftFromOnboardingProfile(engineering),
+    orchestration: { ...engineering.orchestration, maxParallel: 0 },
+  });
+  assert.equal(parseOnboardingEditor(invalidParallelism), null);
 });
 
 test('parses model proposals and accepts only the fixed instruction target', () => {

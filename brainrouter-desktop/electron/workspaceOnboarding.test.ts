@@ -43,7 +43,13 @@ function payload(root: string, profileId: string): ManifestSavePayload {
     expected: info.review.revision,
     source: 'wizard',
     profile: profile.id,
-    agents: { default: profile.agents.default, enabled: [...profile.agents.enabled] },
+    persona: { default: profile.persona.default, enabled: [...profile.persona.enabled] },
+    orchestration: {
+      mode: profile.orchestration.mode,
+      availableRoles: [...profile.orchestration.availableRoles],
+      disabledRoles: [...profile.orchestration.disabledRoles],
+      maxParallel: profile.orchestration.maxParallel,
+    },
     capabilities: { enabled: [...profile.capabilities.enabled], disabled: [] },
     skills: { packs: [...profile.skills.packs], enabled: [...profile.skills.enabled], disabled: [] },
     tools: { profiles: [...profile.tools.profiles], deny: [] },
@@ -128,13 +134,26 @@ test('instruction-preview fails closed on secret-bearing or malformed content', 
   } finally { env.cleanup(); }
 });
 
-test('manifest-save writes one engineer with frontend available as a capability', () => {
+test('manifest-save writes persona and orchestration independently', () => {
   const env = tmpWorkspace();
   try {
-    const result = saveWorkspaceManifestFromPayload(env.root, payload(env.root, 'engineering'));
+    const input = payload(env.root, 'engineering');
+    input.orchestration = {
+      mode: 'adaptive',
+      availableRoles: ['worker', 'reviewer', 'fleet'],
+      disabledRoles: ['fleet'],
+      maxParallel: 3,
+    };
+    const result = saveWorkspaceManifestFromPayload(env.root, input);
     assert.ok(result.saved);
-    assert.equal(result.saved && result.manifest.agents.default, 'engineer');
-    assert.deepEqual(result.saved && result.manifest.agents.enabled, ['engineer']);
+    assert.equal(result.saved && result.manifest.persona.default, 'engineer');
+    assert.deepEqual(result.saved && result.manifest.persona.enabled, ['engineer']);
+    assert.deepEqual(result.saved && result.manifest.orchestration, {
+      mode: 'adaptive',
+      availableRoles: ['worker', 'reviewer'],
+      disabledRoles: ['fleet'],
+      maxParallel: 3,
+    });
     assert.deepEqual(result.saved && result.manifest.capabilities.enabled, ['frontend']);
     assert.ok(result.saved && !JSON.stringify(result.manifest).includes('frontend-builder'));
   } finally { env.cleanup(); }
@@ -221,6 +240,18 @@ test('manifest-save rejects malformed review revisions without writing', () => {
 
     const withExtra = { ...payload(env.root, 'study'), unexpected: true };
     assert.equal(saveWorkspaceManifestFromPayload(env.root, withExtra).saved, false);
+    const legacy = payload(env.root, 'study') as ManifestSavePayload & { agents: unknown };
+    legacy.agents = legacy.persona;
+    delete legacy.persona;
+    assert.equal(saveWorkspaceManifestFromPayload(env.root, legacy).saved, false);
+    const invalidParallelism = payload(env.root, 'study');
+    invalidParallelism.orchestration = {
+      mode: 'adaptive',
+      availableRoles: ['worker'],
+      disabledRoles: [],
+      maxParallel: 33,
+    };
+    assert.equal(saveWorkspaceManifestFromPayload(env.root, invalidParallelism).saved, false);
     assert.equal(saveWorkspaceManifestFromPayload(env.root, null).saved, false);
     assert.equal(loadWorkspaceManifest(env.root), null);
   } finally { env.cleanup(); }

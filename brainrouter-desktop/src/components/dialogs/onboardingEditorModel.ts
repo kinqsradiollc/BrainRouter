@@ -10,7 +10,13 @@ export interface OnboardingProfile {
   id: string;
   label: string;
   description: string;
-  agents: { default: string; enabled: string[] };
+  persona: { default: string; enabled: string[] };
+  orchestration: {
+    mode: 'off' | 'explicit' | 'adaptive';
+    availableRoles: string[];
+    disabledRoles: string[];
+    maxParallel: number;
+  };
   capabilities: { enabled: string[]; disabled: string[] };
   skills: { packs: string[]; enabled: string[]; disabled: string[] };
   tools: { profiles: string[]; deny: string[] };
@@ -19,7 +25,13 @@ export interface OnboardingProfile {
 
 export interface OnboardingDraft {
   profile: string;
-  agents: { default: string; enabled: string[] };
+  persona: { default: string; enabled: string[] };
+  orchestration: {
+    mode: 'off' | 'explicit' | 'adaptive';
+    availableRoles: string[];
+    disabledRoles: string[];
+    maxParallel: number;
+  };
   capabilities: { enabled: string[]; disabled: string[] };
   skills: { packs: string[]; enabled: string[]; disabled: string[] };
   tools: { profiles: string[]; deny: string[] };
@@ -194,7 +206,13 @@ export function draftFromOnboardingProfile(profile: OnboardingProfile | undefine
   if (!profile) return null;
   return {
     profile: profile.id,
-    agents: { default: profile.agents.default, enabled: [...profile.agents.enabled] },
+    persona: { default: profile.persona.default, enabled: [...profile.persona.enabled] },
+    orchestration: {
+      mode: profile.orchestration.mode,
+      availableRoles: [...profile.orchestration.availableRoles],
+      disabledRoles: [...profile.orchestration.disabledRoles],
+      maxParallel: profile.orchestration.maxParallel,
+    },
     capabilities: { enabled: [...profile.capabilities.enabled], disabled: [...profile.capabilities.disabled] },
     skills: { packs: [...profile.skills.packs], enabled: [...profile.skills.enabled], disabled: [...profile.skills.disabled] },
     tools: { profiles: [...profile.tools.profiles], deny: [...profile.tools.deny] },
@@ -205,15 +223,23 @@ export function draftFromOnboardingProfile(profile: OnboardingProfile | undefine
 
 export function parseOnboardingDraft(value: unknown): OnboardingDraft | null {
   if (!isRecord(value)) return null;
-  const agents = isRecord(value.agents) ? value.agents : null;
+  const persona = isRecord(value.persona) ? value.persona : null;
+  const orchestration = isRecord(value.orchestration) ? value.orchestration : null;
   const capabilities = isRecord(value.capabilities) ? value.capabilities : null;
   const skills = isRecord(value.skills) ? value.skills : null;
   const tools = isRecord(value.tools) ? value.tools : null;
   const memory = isRecord(value.memory) ? value.memory : null;
-  if (!boundedString(value.profile, 128) || !agents || !capabilities || !skills || !tools || !memory ||
-      !boundedString(agents.default, 128, true) || !boundedString(memory.captureHint, 256, true) ||
+  if (!boundedString(value.profile, 128) || !persona || !orchestration ||
+      !capabilities || !skills || !tools || !memory ||
+      !boundedString(persona.default, 128, true) ||
+      !(orchestration.mode === 'off' || orchestration.mode === 'explicit' || orchestration.mode === 'adaptive') ||
+      !Number.isSafeInteger(orchestration.maxParallel) ||
+      Number(orchestration.maxParallel) < 1 || Number(orchestration.maxParallel) > 32 ||
+      !boundedString(memory.captureHint, 256, true) ||
       !boundedString(value.instructions, 512)) return null;
-  const enabledAgents = parseStringList(agents.enabled);
+  const enabledPersonas = parseStringList(persona.enabled);
+  const availableRoles = parseStringList(orchestration.availableRoles);
+  const disabledRoles = parseStringList(orchestration.disabledRoles, MAX_LIST_ITEMS, true);
   const enabledCapabilities = parseStringList(capabilities.enabled);
   const disabledCapabilities = parseStringList(capabilities.disabled, MAX_LIST_ITEMS, true);
   const packs = parseStringList(skills.packs);
@@ -222,11 +248,19 @@ export function parseOnboardingDraft(value: unknown): OnboardingDraft | null {
   const profiles = parseStringList(tools.profiles);
   const deniedTools = parseStringList(tools.deny, MAX_LIST_ITEMS, true);
   const tags = parseStringList(memory.tags);
-  if (!enabledAgents || !enabledCapabilities || !disabledCapabilities || !packs || !enabledSkills ||
+  if (!enabledPersonas || !availableRoles || !disabledRoles ||
+      !enabledCapabilities || !disabledCapabilities || !packs || !enabledSkills ||
       !disabledSkills || !profiles || !deniedTools || !tags) return null;
+  const disabledRoleSet = new Set(disabledRoles);
   return {
     profile: value.profile,
-    agents: { default: agents.default, enabled: enabledAgents },
+    persona: { default: persona.default, enabled: enabledPersonas },
+    orchestration: {
+      mode: orchestration.mode,
+      availableRoles: availableRoles.filter((role) => !disabledRoleSet.has(role)),
+      disabledRoles,
+      maxParallel: Number(orchestration.maxParallel),
+    },
     capabilities: { enabled: enabledCapabilities, disabled: disabledCapabilities },
     skills: { packs, enabled: enabledSkills, disabled: disabledSkills },
     tools: { profiles, deny: deniedTools },
@@ -269,7 +303,8 @@ function parseProfile(value: unknown): OnboardingProfile | null {
     id: draft.profile,
     label: value.label,
     description: value.description,
-    agents: draft.agents,
+    persona: draft.persona,
+    orchestration: draft.orchestration,
     capabilities: draft.capabilities,
     skills: draft.skills,
     tools: draft.tools,
