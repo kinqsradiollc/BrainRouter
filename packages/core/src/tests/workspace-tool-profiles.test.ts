@@ -21,27 +21,34 @@ test('missing manifests preserve every existing tool decision exactly', () => {
   assert.equal(allowed(selection, 'browser_screenshot', 'browser'), true);
 });
 
-test('engineering profiles expose coding terminal and web tools but not task-only design tools', () => {
+test('engineering defaults include production, planning, and orchestration without high-authority integrations', () => {
   const manifest = createWorkspaceManifest({ name: 'app', profile: 'engineering', by: 'wizard' });
   const selection = resolveWorkspaceToolSelection({ manifest });
 
-  assert.deepEqual(selection.activeProfileIds, ['coding', 'terminal', 'browser']);
+  assert.deepEqual(selection.activeProfileIds, [
+    'coding', 'shell', 'browser', 'artifacts', 'planning-session', 'orchestration',
+  ]);
   assert.equal(allowed(selection, 'edit_file', 'filesystem'), true);
   assert.equal(allowed(selection, 'run_command', 'shell'), true);
   assert.equal(allowed(selection, 'web_search', 'web-research'), true);
-  assert.equal(allowed(selection, 'artifact_write', 'planning-state'), false);
+  assert.equal(allowed(selection, 'artifact_write', 'planning-state'), true);
+  assert.equal(allowed(selection, 'computer_use', 'computer-control'), false);
+  assert.equal(allowed(selection, 'connector_run', 'connectors'), false);
   assert.equal(allowed(selection, 'browser_screenshot', 'browser'), false);
 });
 
-test('frontend task profiles add design extension tools without changing the manifest', () => {
+test('frontend task profiles add interactive browser tools without changing the manifest', () => {
   const manifest = createWorkspaceManifest({ name: 'app', profile: 'engineering', by: 'wizard' });
   const before = JSON.stringify(manifest);
   const selection = resolveWorkspaceToolSelection({
     manifest,
-    activeToolProfiles: ['browser', 'design'],
+    activeToolProfiles: ['browser', 'artifacts', 'interactive-browser'],
   });
 
-  assert.deepEqual(selection.activeProfileIds, ['coding', 'terminal', 'browser', 'design']);
+  assert.deepEqual(selection.activeProfileIds, [
+    'coding', 'shell', 'browser', 'artifacts',
+    'planning-session', 'orchestration', 'interactive-browser',
+  ]);
   assert.equal(allowed(selection, 'browser_screenshot', 'browser'), true);
   assert.equal(allowed(selection, 'artifact_write', 'planning-state'), true);
   assert.equal(JSON.stringify(manifest), before, 'task resolution never mutates reviewed workspace state');
@@ -87,7 +94,54 @@ test('unknown profile ids never grant a registered tool group', () => {
 
   assert.deepEqual(selection.activeProfileIds, []);
   assert.equal(allowed(selection, 'write_file', 'filesystem'), false);
-  assert.deepEqual(workspaceToolProfileIds(), ['coding', 'terminal', 'browser', 'notes', 'design']);
+  assert.deepEqual(workspaceToolProfileIds(), [
+    'coding', 'shell', 'browser', 'research-notes', 'artifacts',
+    'planning-session', 'orchestration', 'interactive-browser',
+    'mcp-resources', 'connectors', 'computer-control', 'workflow-launch',
+    'background-workers', 'security-review', 'terminal', 'notes', 'design',
+  ]);
+});
+
+test('manifest v3 engineering defaults expose the reviewed matrix and keep advanced groups closed', () => {
+  const manifest = createWorkspaceManifest({ name: 'app', profile: 'engineering', by: 'wizard' });
+  manifest.version = 3;
+  manifest.tools.mode = 'explicit-catalog';
+  manifest.tools.enabled = [];
+  const selection = resolveWorkspaceToolSelection({ manifest });
+
+  for (const toolId of [
+    'read_file', 'edit_file', 'run_command', 'web_search', 'artifact_write',
+    'update_plan', 'route_task', 'delegate_agent',
+  ]) {
+    assert.equal(allowed(selection, toolId), true, toolId);
+  }
+  for (const toolId of [
+    'computer_use', 'connector_run', 'mcp_call',
+    'run_workflow', 'spawn_worker_thread', 'file_vulnerability',
+  ]) {
+    assert.equal(allowed(selection, toolId), false, toolId);
+  }
+});
+
+test('legacy composite group expansions remain unchanged in explicit manifests', () => {
+  const manifest = createWorkspaceManifest({ name: 'compat', profile: 'custom', by: 'wizard' });
+  manifest.version = 3;
+  manifest.tools = {
+    mode: 'explicit-catalog',
+    profiles: ['terminal', 'notes', 'design'],
+    enabled: [],
+    deny: [],
+  };
+  const selection = resolveWorkspaceToolSelection({ manifest });
+
+  for (const toolId of [
+    'run_command', 'task_output', 'wait_until', 'kill_command',
+    'computer_use', 'connector_run', 'research_note', 'research_brief', 'artifact_write',
+  ]) {
+    assert.equal(allowed(selection, toolId), true, toolId);
+  }
+  assert.equal(allowed(selection, 'connector_list'), false);
+  assert.equal(allowed(selection, 'browser_screenshot', 'browser'), true);
 });
 
 test('manifest v3 explicit selections hide every unselected local tool', () => {

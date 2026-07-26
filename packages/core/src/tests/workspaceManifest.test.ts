@@ -38,7 +38,9 @@ test('createWorkspaceManifest applies the profile preset', () => {
   assert.deepEqual(manifest.capabilities, { enabled: ['frontend', 'backend'], disabled: [] });
   assert.ok(manifest.skills.enabled.includes('planning-skill'));
   assert.ok(manifest.tools.profiles.includes('coding'));
-  assert.ok(!manifest.tools.profiles.includes('design'), 'design tooling activates with frontend task signals');
+  assert.ok(manifest.tools.profiles.includes('artifacts'));
+  assert.ok(!manifest.tools.profiles.includes('interactive-browser'),
+    'interactive browser control remains a reviewed capability-sensitive choice');
   assert.deepEqual(manifest.memory.tags, ['engineering']);
   assert.equal(manifest.instructions, 'AGENT.md');
   assert.equal(manifest.onboarded.by, 'wizard');
@@ -241,7 +243,9 @@ test('profile presets are self-consistent (every profile usable by the wizard)',
   assert.equal(engineering.orchestration.mode, 'adaptive');
   assert.equal(engineering.orchestration.disabledRoles.includes('fleet'), true);
   assert.deepEqual(engineering.capabilities.enabled, ['frontend', 'backend']);
-  assert.ok(!engineering.tools.profiles.includes('design'), 'design is not a baseline engineering tool profile');
+  assert.ok(engineering.tools.profiles.includes('artifacts'));
+  assert.ok(!engineering.tools.profiles.includes('interactive-browser'),
+    'interactive browser control is not a baseline Engineering grant');
   for (const preset of WORKSPACE_PROFILES) {
     assert.ok(preset.label.trim().length > 0, `${preset.id}: label`);
     assert.ok(preset.description.trim().length > 0, `${preset.id}: description`);

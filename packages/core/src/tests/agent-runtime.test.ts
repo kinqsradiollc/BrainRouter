@@ -3321,8 +3321,10 @@ test('runTurn combines engineering manifest profiles with task-time frontend pro
       assert.equal(names.has('write_file'), true);
       assert.equal(names.has('run_command'), true);
       assert.equal(names.has('web_search'), true);
-      assert.equal(names.has('artifact_write'), true, 'frontend design profile adds its reviewed artifact tool');
-      assert.deepEqual(agent.activeWorkspaceCapabilities.toolProfiles, ['browser', 'design']);
+      assert.equal(names.has('artifact_write'), true, 'Engineering artifacts remain available for frontend work');
+      assert.deepEqual(agent.activeWorkspaceCapabilities.toolProfiles, [
+        'browser', 'artifacts', 'interactive-browser',
+      ]);
       assert.equal(agent.activeWorkspacePersonaId, 'engineer');
     } finally {
       globalThis.fetch = originalFetch;

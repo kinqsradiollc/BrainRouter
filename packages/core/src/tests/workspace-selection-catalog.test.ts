@@ -44,7 +44,8 @@ test('P23-3b catalog projects safe roles, capabilities, tool groups, tools, skil
   assert.equal(architect?.provenance, 'bundled-roles');
   assert.equal(frontend?.source, 'capability-plugin');
   assert.ok(frontend?.expandsTo?.includes('a11y-skill'));
-  assert.ok(frontend?.expandsTo?.includes('design'));
+  assert.ok(frontend?.expandsTo?.includes('artifacts'));
+  assert.ok(frontend?.expandsTo?.includes('interactive-browser'));
   assert.equal(frontendPack?.managedByCapability, 'frontend');
   assert.equal(webSearch?.source, 'core');
   assert.equal(webSearch?.accessTier, 'read');

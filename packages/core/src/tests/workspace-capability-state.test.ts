@@ -66,7 +66,7 @@ test('frontend task paths activate the engineer prompt and reviewed task-time to
     assert.equal(host.activeWorkspacePersonaId, 'engineer', 'reserved harness role falls back to domain default');
     assert.deepEqual(resolved.active, ['frontend']);
     assert.deepEqual(resolved.skills, [], 'prompt activation does not grant catalog entries');
-    assert.deepEqual(resolved.toolProfiles, ['browser', 'design']);
+    assert.deepEqual(resolved.toolProfiles, ['browser', 'artifacts', 'interactive-browser']);
     assert.equal(calls.length, 2);
     assert.equal(calls[0]?.tag, 'workspace-domain-persona');
     assert.match(calls[0]?.content ?? '', /Profile: Engineering \(engineering\)/);
@@ -97,7 +97,7 @@ test('backend tasks activate the engineer prompt without granting new tool group
     assert.equal(host.activeWorkspacePersonaId, 'engineer');
     assert.deepEqual(resolved.active, ['backend']);
     assert.deepEqual(resolved.skills, [], 'prompt activation does not grant catalog entries');
-    assert.deepEqual(resolved.toolProfiles, ['coding', 'terminal']);
+    assert.deepEqual(resolved.toolProfiles, ['coding', 'shell', 'artifacts']);
     assert.match(calls[0]?.content ?? '', /Active task capabilities: backend/);
     assert.match(calls[1]?.content ?? '', /does not itself grant shell, network, database, or write access/);
   } finally {
