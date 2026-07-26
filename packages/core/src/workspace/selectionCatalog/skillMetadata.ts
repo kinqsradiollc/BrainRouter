@@ -47,16 +47,29 @@ export function readSkillFile(
   fallbackCategory: string,
   containmentRoot?: string,
 ): SafeSkillDescriptor | undefined {
+  let descriptor: number | undefined;
   try {
-    const stat = fs.lstatSync(filePath);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_SKILL_FILE_BYTES) return undefined;
+    descriptor = fs.openSync(
+      filePath,
+      fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0),
+    );
+    const stat = fs.fstatSync(descriptor);
+    if (!stat.isFile() || stat.size > MAX_SKILL_FILE_BYTES) return undefined;
     const realFile = fs.realpathSync(filePath);
     if (containmentRoot) {
       const realContainmentRoot = fs.realpathSync(containmentRoot);
       const relative = path.relative(realContainmentRoot, realFile);
       if (relative.startsWith('..') || path.isAbsolute(relative)) return undefined;
     }
-    const raw = fs.readFileSync(realFile, 'utf8');
+    const bytes = Buffer.alloc(MAX_SKILL_FILE_BYTES + 1);
+    let read = 0;
+    while (read < bytes.length) {
+      const count = fs.readSync(descriptor, bytes, read, bytes.length - read, null);
+      if (count === 0) break;
+      read += count;
+    }
+    if (read > MAX_SKILL_FILE_BYTES) return undefined;
+    const raw = bytes.subarray(0, read).toString('utf8');
     const frontmatter = raw.match(/^\uFEFF?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1];
     if (!frontmatter || frontmatterScalar(frontmatter, 'name') !== expectedId) return undefined;
     return {
@@ -67,6 +80,8 @@ export function readSkillFile(
     };
   } catch {
     return undefined;
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
   }
 }
 
