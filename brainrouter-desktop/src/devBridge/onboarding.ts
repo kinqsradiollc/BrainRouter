@@ -1,6 +1,10 @@
 /** Browser-development mirror of the reviewed onboarding host contract. */
 import { WORKSPACE_PROFILES } from '@kinqs/brainrouter-core/dist/workspace/profiles.js';
 import { parseOnboardingDraft } from '../components/dialogs/onboardingEditorModel.js';
+import {
+  buildDevOnboardingPreview,
+  devDraftForProfile,
+} from './devOnboardingPreview.js';
 
 // Keep the browser-development mock aligned with the core reviewed-proposal
 // boundary without pulling the Node-oriented proposal parser into the bundle.
@@ -38,8 +42,11 @@ export function getDevWorkspaceManifest(state: DevOnboardingState, root: string)
       ...profile,
       capabilities: { ...profile.capabilities, disabled: [] },
       skills: { ...profile.skills, disabled: [] },
-      tools: { ...profile.tools, deny: [] },
+      tools: { ...profile.tools, enabled: [], deny: [] },
     })),
+    preview: buildDevOnboardingPreview(
+      state.manifests.get(root) ?? devDraftForProfile('engineering', root),
+    ),
     review: {
       revision: revision(state, root),
       instruction: {
@@ -77,7 +84,7 @@ export function proposeDevWorkspaceOnboarding(root: string, payload: unknown): R
     },
     capabilities: { enabled: [...profile.capabilities.enabled], disabled: [] },
     skills: { packs: [...profile.skills.packs], enabled: [...profile.skills.enabled], disabled: [] },
-    tools: { profiles: [...profile.tools.profiles], deny: [] },
+    tools: { profiles: [...profile.tools.profiles], enabled: [], deny: [] },
     memory: { tags: [...profile.memory.tags], captureHint: profile.memory.captureHint },
     instructions: 'AGENT.md',
   };
@@ -120,6 +127,9 @@ export function saveDevWorkspaceManifest(
   if (!isRecord(payload) || !sameRevision(payload.expected, revision(state, root))) {
     return { saved: false, stale: true, error: 'Workspace setup changed while it was open.' };
   }
+  if (payload.catalogFingerprint !== 'd'.repeat(64)) {
+    return { saved: false, stale: true, error: 'The available setup catalog changed while it was open.' };
+  }
   const source = payload.source === 'agent' ? 'agent' : payload.source === 'wizard' ? 'wizard' : null;
   const draft = parseOnboardingDraft(payload);
   if (!source || !draft || !WORKSPACE_PROFILES.some((profile) => profile.id === draft.profile)) {
@@ -133,9 +143,10 @@ export function saveDevWorkspaceManifest(
   const current = state.manifests.get(root);
   const currentOnboarded = isRecord(current?.onboarded) ? current.onboarded : null;
   const manifest = {
-    version: 2,
+    version: 3,
     name: root.split(/[\\/]/).filter(Boolean).at(-1) ?? 'workspace',
     ...draft,
+    tools: { mode: 'explicit-catalog', ...draft.tools },
     onboarded: currentOnboarded ?? { at: new Date().toISOString(), by: source },
   };
   state.manifests.set(root, manifest);
@@ -145,6 +156,14 @@ export function saveDevWorkspaceManifest(
     state.instructionRevisions.set(root, (state.instructionRevisions.get(root) ?? 0) + 1);
   }
   return { saved: true, manifest, review: getDevWorkspaceManifest(state, root).review };
+}
+
+export function previewDevWorkspaceOnboarding(root: string, payload: unknown): Record<string, unknown> {
+  const draft = parseOnboardingDraft(payload);
+  if (!draft || !WORKSPACE_PROFILES.some((profile) => profile.id === draft.profile)) {
+    return { ok: false, error: 'Workspace setup preview is unavailable.' };
+  }
+  return { ok: true, preview: buildDevOnboardingPreview(draft) };
 }
 
 /** Browser-development mirror of the read-only, stale-safe preview query. */

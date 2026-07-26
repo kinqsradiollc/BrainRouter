@@ -28,7 +28,7 @@ const engineering: OnboardingProfile = {
   },
   capabilities: { enabled: ['frontend'], disabled: [] },
   skills: { packs: ['engineering'], enabled: ['testing-skill'], disabled: [] },
-  tools: { profiles: ['coding'], deny: [] },
+  tools: { profiles: ['coding'], enabled: [], deny: [] },
   memory: { tags: ['engineering'], captureHint: 'code' },
 };
 
@@ -38,10 +38,63 @@ function response(manifest: unknown = null): Record<string, unknown> {
     manifest,
     profiles: [engineering],
     suggestion: { profile: 'engineering', reasons: ['package.json'] },
+    preview: previewResponse(),
     review: {
       revision: { root: digest('a'), manifest: digest('b'), instruction: digest('c') },
       instruction: { path: 'AGENT.md', existed: false, bytes: 0, sha256: null },
     },
+  };
+}
+
+function previewResponse(): Record<string, unknown> {
+  return {
+    profileId: 'engineering',
+    plan: {
+      id: 'engineering',
+      displayName: 'Engineering orchestration',
+      mode: 'adaptive',
+      selectedStrategyId: 'direct',
+      selectionReason: 'setup-preview-fallback',
+      strategies: [{
+        id: 'direct',
+        description: 'Complete directly.',
+        stages: [{
+          id: 'complete',
+          executorKind: 'primary',
+          skillIds: [],
+          optional: false,
+          maxChildren: 0,
+        }],
+      }],
+    },
+    roles: { planAvailable: [], manifestAvailable: [], disabled: [], effective: ['worker'] },
+    skills: { effective: ['testing-skill'], unavailablePacks: [] },
+    tools: {
+      mode: 'explicit-catalog',
+      selectedGroups: ['coding'],
+      effectiveToolIds: ['read_file'],
+      effectiveExtensionIds: [],
+      deniedIds: [],
+      migrationRequired: false,
+    },
+    ceilings: { planMaxParallel: 4, manifestMaxParallel: 4, effectiveMaxParallel: 4 },
+    catalogFingerprint: digest('d'),
+    catalog: [{
+      id: 'coding',
+      kind: 'tool-group',
+      label: 'Files and code',
+      description: 'Inspect and edit files.',
+      category: 'files-code',
+      source: 'core',
+      provenance: 'workspace-tool-groups',
+      persistable: true,
+      selectable: true,
+      runtimeAvailabilityPrerequisites: [],
+      expandsTo: ['read_file'],
+      selected: true,
+      recommended: true,
+      denied: false,
+    }],
   };
 }
 
@@ -68,6 +121,7 @@ test('preserves all three opaque review digests for confirmation-only save', () 
     draft: parsed.draft,
     revision: parsed.revision,
     source: 'agent',
+    catalogFingerprint: digest('d'),
     instruction: { path: 'AGENT.md', contents: '# Reviewed\n' },
     includeInstruction: true,
   });
@@ -80,6 +134,7 @@ test('preserves all three opaque review digests for confirmation-only save', () 
     draft: parsed.draft,
     revision: parsed.revision,
     source: 'wizard',
+    catalogFingerprint: digest('d'),
     instruction: { path: 'AGENT.md', contents: '# Not selected\n' },
     includeInstruction: false,
   });

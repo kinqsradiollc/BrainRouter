@@ -10,6 +10,7 @@ import {
 } from '@kinqs/brainrouter-core/workspace';
 import {
   getWorkspaceManifestInfo,
+  previewWorkspaceOnboardingFromPayload,
   previewWorkspaceInstructionFromPayload,
   saveWorkspaceManifestFromPayload,
   type ManifestSavePayload,
@@ -42,6 +43,7 @@ function payload(root: string, profileId: string): ManifestSavePayload {
   return {
     expected: info.review.revision,
     source: 'wizard',
+    catalogFingerprint: info.preview.catalogFingerprint,
     profile: profile.id,
     persona: { default: profile.persona.default, enabled: [...profile.persona.enabled] },
     orchestration: {
@@ -52,7 +54,7 @@ function payload(root: string, profileId: string): ManifestSavePayload {
     },
     capabilities: { enabled: [...profile.capabilities.enabled], disabled: [] },
     skills: { packs: [...profile.skills.packs], enabled: [...profile.skills.enabled], disabled: [] },
-    tools: { profiles: [...profile.tools.profiles], deny: [] },
+    tools: { profiles: [...profile.tools.profiles], enabled: [], deny: [] },
     memory: { tags: [...profile.memory.tags], captureHint: profile.memory.captureHint },
     instructions: 'AGENT.md',
   };
@@ -66,9 +68,30 @@ test('manifest-get returns suggestion, complete profiles, and opaque review revi
     assert.equal(info.manifest, null);
     assert.equal(info.suggestion.profile, 'engineering');
     assert.ok(info.profiles.some((preset) => preset.id === 'custom'));
+    assert.equal(info.preview.plan?.id, 'engineering');
+    assert.equal(info.preview.catalog.some((row) => row.kind === 'tool-group' && row.id === 'coding'), true);
     assert.match(info.review.revision.root, /^[0-9a-f]{64}$/);
     assert.match(info.review.revision.manifest, /^[0-9a-f]{64}$/);
     assert.equal(info.review.instruction.existed, false);
+  } finally { env.cleanup(); }
+});
+
+test('plan preview parses a reviewed draft without writing workspace files', () => {
+  const env = tmpWorkspace();
+  try {
+    const input = payload(env.root, 'custom');
+    const {
+      expected: _expected,
+      source: _source,
+      catalogFingerprint: _catalogFingerprint,
+      ...draft
+    } = input;
+    const result = previewWorkspaceOnboardingFromPayload(env.root, draft);
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.preview.plan?.id, 'custom');
+    assert.equal(result.ok && result.preview.plan?.selectedStrategyId, 'direct');
+    assert.deepEqual(result.ok && result.preview.roles.effective, []);
+    assert.equal(loadWorkspaceManifest(env.root), null);
   } finally { env.cleanup(); }
 });
 
@@ -155,6 +178,8 @@ test('manifest-save writes persona and orchestration independently', () => {
       maxParallel: 3,
     });
     assert.deepEqual(result.saved && result.manifest.capabilities.enabled, ['frontend', 'backend']);
+    assert.equal(result.saved && result.manifest.version, 3);
+    assert.equal(result.saved && result.manifest.tools.mode, 'explicit-catalog');
     assert.ok(result.saved && !JSON.stringify(result.manifest).includes('frontend-builder'));
   } finally { env.cleanup(); }
 });
@@ -179,13 +204,14 @@ test('manifest-save supports complete edit re-entry and preserves safe unknown f
     saveWorkspaceManifest(env.root, initial);
 
     const edit = payload(env.root, 'writing');
-    edit.tools = { profiles: ['notes'], deny: ['terminal'] };
+    edit.tools = { profiles: ['notes'], enabled: ['web_search'], deny: ['terminal'] };
     const result = saveWorkspaceManifestFromPayload(env.root, edit);
     assert.ok(result.saved);
     assert.equal(result.saved && result.manifest.profile, 'writing');
     assert.equal(result.saved && result.manifest.name, 'kept-name');
     assert.deepEqual(result.saved && result.manifest.extra, { futureOption: { enabled: true } });
     assert.deepEqual(result.saved && result.manifest.tools.deny, ['terminal']);
+    assert.deepEqual(result.saved && result.manifest.tools.enabled, ['web_search']);
   } finally { env.cleanup(); }
 });
 
@@ -252,6 +278,9 @@ test('manifest-save rejects malformed review revisions without writing', () => {
       maxParallel: 33,
     };
     assert.equal(saveWorkspaceManifestFromPayload(env.root, invalidParallelism).saved, false);
+    const staleCatalog = payload(env.root, 'study');
+    staleCatalog.catalogFingerprint = 'f'.repeat(64);
+    assert.equal(saveWorkspaceManifestFromPayload(env.root, staleCatalog).saved, false);
     assert.equal(saveWorkspaceManifestFromPayload(env.root, null).saved, false);
     assert.equal(loadWorkspaceManifest(env.root), null);
   } finally { env.cleanup(); }

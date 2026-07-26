@@ -1207,9 +1207,14 @@ CLI free-text skill/tool IDs with catalog multi-select controls. Its final
 review shows fallback strategy, stages, effective roles, skills, concrete
 tools, and concurrency ceilings, then writes explicit-catalog v3 only after
 confirmation. The Desktop slice consumes the same Core preview/catalog through
-the existing host bridge and must land separately with renderer tests and live
-UI review. Both retain **Skip setup for now** as a terminal no-write action;
-the CLI path returns before catalog review and remains covered by a filesystem
+the active-workspace host bridge, renders searchable catalog checkboxes with
+source, provenance, recommendation, expansion, and availability details, and
+refreshes the plan/effective-access preview after each draft change. Desktop
+requires the reviewed catalog fingerprint before an explicit-catalog v3 save
+and lands separately with host/renderer tests and live responsive UI review.
+Both retain **Skip setup for now** as a terminal no-write action: Desktop
+discards the draft and derives a fresh proposal when setup is reopened, while
+the CLI returns before catalog review and remains covered by a filesystem
 no-write test.
 
 ### P23-9 — Plugin and workspace contributions

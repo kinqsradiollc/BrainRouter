@@ -39,6 +39,7 @@ declare global {
       workspaceManifest?(workspaceRoot: string): Promise<{
         ok: boolean; error?: string; onboarded?: boolean;
         manifest?: Record<string, unknown> | null;
+        preview?: Record<string, unknown>;
         suggestion?: { profile: string; reasons: string[] };
         review?: {
           revision: { root: string; manifest: string; instruction: string };
@@ -57,7 +58,7 @@ declare global {
           };
           capabilities?: { enabled: string[]; disabled?: string[] };
           skills?: { packs: string[]; enabled: string[]; disabled?: string[] };
-          tools?: { profiles: string[]; deny?: string[] };
+          tools?: { profiles: string[]; enabled?: string[]; deny?: string[] };
           memory?: { tags: string[]; captureHint: string };
         }>;
       }>;

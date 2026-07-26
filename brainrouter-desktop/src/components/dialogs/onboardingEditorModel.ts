@@ -5,6 +5,10 @@
  * bridge response as unknown, hydrates only the complete editor contract, and
  * keeps the opaque three-part review revision attached to the eventual save.
  */
+import {
+  parseOnboardingPreview,
+  type OnboardingPlanPreview,
+} from './onboardingCatalogModel.js';
 
 export interface OnboardingProfile {
   id: string;
@@ -19,7 +23,7 @@ export interface OnboardingProfile {
   };
   capabilities: { enabled: string[]; disabled: string[] };
   skills: { packs: string[]; enabled: string[]; disabled: string[] };
-  tools: { profiles: string[]; deny: string[] };
+  tools: { profiles: string[]; enabled: string[]; deny: string[] };
   memory: { tags: string[]; captureHint: string };
 }
 
@@ -34,7 +38,7 @@ export interface OnboardingDraft {
   };
   capabilities: { enabled: string[]; disabled: string[] };
   skills: { packs: string[]; enabled: string[]; disabled: string[] };
-  tools: { profiles: string[]; deny: string[] };
+  tools: { profiles: string[]; enabled: string[]; deny: string[] };
   memory: { tags: string[]; captureHint: string };
   instructions: string;
 }
@@ -76,6 +80,7 @@ export interface LoadedOnboardingEditor {
   revision: OnboardingReviewRevision;
   instructionSummary: OnboardingInstructionSummary;
   detected: { profile: string; reasons: string[] } | null;
+  preview: OnboardingPlanPreview;
 }
 
 export interface ParsedOnboardingProposal {
@@ -104,7 +109,8 @@ export function parseOnboardingEditor(value: unknown): LoadedOnboardingEditor | 
   const review = isRecord(value.review) ? value.review : null;
   const revision = parseRevision(review?.revision);
   const instructionSummary = parseInstructionSummary(review?.instruction);
-  if (!revision || !instructionSummary) return null;
+  const preview = parseOnboardingPreview(value.preview);
+  if (!revision || !instructionSummary || !preview) return null;
 
   const existing = value.manifest === null || value.manifest === undefined
     ? null
@@ -114,7 +120,7 @@ export function parseOnboardingEditor(value: unknown): LoadedOnboardingEditor | 
   const selected = catalog.find((profile) => profile.id === detected?.profile) ?? catalog[0];
   const draft = existing ?? draftFromOnboardingProfile(selected);
   if (!draft) return null;
-  return { profiles: catalog, existing, draft, revision, instructionSummary, detected };
+  return { profiles: catalog, existing, draft, revision, instructionSummary, detected, preview };
 }
 
 export function parseOnboardingProposal(value: unknown): ParsedOnboardingProposal | null {
@@ -215,7 +221,11 @@ export function draftFromOnboardingProfile(profile: OnboardingProfile | undefine
     },
     capabilities: { enabled: [...profile.capabilities.enabled], disabled: [...profile.capabilities.disabled] },
     skills: { packs: [...profile.skills.packs], enabled: [...profile.skills.enabled], disabled: [...profile.skills.disabled] },
-    tools: { profiles: [...profile.tools.profiles], deny: [...profile.tools.deny] },
+    tools: {
+      profiles: [...profile.tools.profiles],
+      enabled: [...profile.tools.enabled],
+      deny: [...profile.tools.deny],
+    },
     memory: { tags: [...profile.memory.tags], captureHint: profile.memory.captureHint },
     instructions: 'AGENT.md',
   };
@@ -246,11 +256,12 @@ export function parseOnboardingDraft(value: unknown): OnboardingDraft | null {
   const enabledSkills = parseStringList(skills.enabled);
   const disabledSkills = parseStringList(skills.disabled, MAX_LIST_ITEMS, true);
   const profiles = parseStringList(tools.profiles);
+  const enabledTools = parseStringList(tools.enabled, MAX_LIST_ITEMS, true);
   const deniedTools = parseStringList(tools.deny, MAX_LIST_ITEMS, true);
   const tags = parseStringList(memory.tags);
   if (!enabledPersonas || !availableRoles || !disabledRoles ||
       !enabledCapabilities || !disabledCapabilities || !packs || !enabledSkills ||
-      !disabledSkills || !profiles || !deniedTools || !tags) return null;
+      !disabledSkills || !profiles || !enabledTools || !deniedTools || !tags) return null;
   const disabledRoleSet = new Set(disabledRoles);
   return {
     profile: value.profile,
@@ -263,7 +274,7 @@ export function parseOnboardingDraft(value: unknown): OnboardingDraft | null {
     },
     capabilities: { enabled: enabledCapabilities, disabled: disabledCapabilities },
     skills: { packs, enabled: enabledSkills, disabled: disabledSkills },
-    tools: { profiles, deny: deniedTools },
+    tools: { profiles, enabled: enabledTools, deny: deniedTools },
     memory: { tags, captureHint: memory.captureHint },
     instructions: value.instructions,
   };
@@ -275,10 +286,12 @@ export function onboardingSavePayload(options: {
   source: 'wizard' | 'agent';
   instruction?: OnboardingInstructionDraft | null;
   includeInstruction?: boolean;
+  catalogFingerprint: string;
 }): Record<string, unknown> {
   return {
     expected: { ...options.revision },
     source: options.source,
+    catalogFingerprint: options.catalogFingerprint,
     ...options.draft,
     ...(options.includeInstruction && options.instruction
       ? { instruction: { ...options.instruction } }

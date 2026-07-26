@@ -1,17 +1,23 @@
 /** Main-process boundary for Desktop workspace setup and settings. */
 import path from 'node:path';
 import {
-  WORKSPACE_PROFILES,
+  WORKSPACE_MANIFEST_EXPLICIT_TOOL_SELECTION_VERSION,
+  buildWorkspaceOnboardingPreview,
+  buildWorkspaceSelectionCatalog,
   commitReviewedWorkspaceOnboarding,
   createWorkspaceManifest,
   inspectWorkspaceOnboardingReview,
   isWorkspaceProfileId,
   loadWorkspaceManifest,
+  migrateWorkspaceManifestToolSelection,
   normalizeWorkspaceManifest,
   previewReviewedWorkspaceInstruction,
   suggestWorkspaceProfile,
+  validateReviewedWorkspaceSkillSelection,
+  workspaceProfilesForOnboarding,
   type ProfileSuggestion,
   type WorkspaceManifest,
+  type WorkspaceOnboardingPreview,
   type WorkspaceOnboardingReviewRevision,
   type WorkspaceProfilePreset,
 } from '@kinqs/brainrouter-core/workspace';
@@ -21,17 +27,26 @@ export interface WorkspaceManifestInfo {
   manifest: WorkspaceManifest | null;
   suggestion: ProfileSuggestion;
   profiles: readonly WorkspaceProfilePreset[];
+  preview: WorkspaceOnboardingPreview;
   review: ReturnType<typeof inspectWorkspaceOnboardingReview>;
 }
 
 /** Everything the setup editor needs, without exposing existing instruction contents. */
 export function getWorkspaceManifestInfo(workspaceRoot: string): WorkspaceManifestInfo {
   const manifest = loadWorkspaceManifest(workspaceRoot);
+  const suggestion = suggestWorkspaceProfile(workspaceRoot);
+  const previewManifest = manifest ?? createWorkspaceManifest({
+    name: path.basename(workspaceRoot),
+    profile: suggestion.profile,
+    by: 'wizard',
+  });
+  const catalog = buildWorkspaceSelectionCatalog();
   return {
     onboarded: manifest !== null,
     manifest,
-    suggestion: suggestWorkspaceProfile(workspaceRoot),
-    profiles: WORKSPACE_PROFILES,
+    suggestion,
+    profiles: workspaceProfilesForOnboarding(),
+    preview: buildWorkspaceOnboardingPreview(previewManifest, catalog),
     review: inspectWorkspaceOnboardingReview(workspaceRoot),
   };
 }
@@ -49,6 +64,7 @@ export interface ManifestSavePayload {
   memory?: unknown;
   instructions?: unknown;
   instruction?: unknown;
+  catalogFingerprint?: unknown;
 }
 
 export type ManifestSaveResult =
@@ -66,6 +82,29 @@ export type WorkspaceInstructionPreviewResult =
       proposedBytes: number;
     }
   | { ok: false; error: string; stale?: boolean };
+
+export type WorkspaceOnboardingPreviewResult =
+  | { ok: true; preview: WorkspaceOnboardingPreview }
+  | { ok: false; error: string };
+
+/** Parse an untrusted renderer draft and return only Core's safe preview. */
+export function previewWorkspaceOnboardingFromPayload(
+  workspaceRoot: string,
+  payload: unknown,
+): WorkspaceOnboardingPreviewResult {
+  try {
+    const record = plainRecord(payload, 'workspace preview payload');
+    exactKeys(record, [
+      'profile', 'persona', 'orchestration', 'capabilities',
+      'skills', 'tools', 'memory', 'instructions',
+    ], 'workspace preview payload');
+    const current = loadWorkspaceManifest(workspaceRoot);
+    const draft = parseManifestDraft(workspaceRoot, record, current, 'wizard');
+    return { ok: true, preview: buildWorkspaceOnboardingPreview(draft) };
+  } catch {
+    return { ok: false, error: 'Workspace setup preview is unavailable.' };
+  }
+}
 
 /**
  * Validate an instruction-preview query and expose exact text only through the
@@ -113,44 +152,30 @@ export function saveWorkspaceManifestFromPayload(
     }
     exactOptionalKeys(record, [
       'expected', 'source', 'profile', 'persona', 'orchestration', 'capabilities',
-      'skills', 'tools', 'memory', 'instructions',
+      'skills', 'tools', 'memory', 'instructions', 'catalogFingerprint',
     ], ['instruction'], 'workspace setup payload');
 
     const expected = parseRevision(record.expected);
     const source = record.source === 'agent' ? 'agent' : record.source === 'wizard' ? 'wizard' : null;
-    const profile = typeof record.profile === 'string' ? record.profile : '';
     if (!source) throw new Error('Unknown workspace setup source.');
-    if (!isWorkspaceProfileId(profile)) throw new Error('Unknown workspace profile.');
-
     const current = loadWorkspaceManifest(workspaceRoot);
-    const preset = createWorkspaceManifest({
-      name: current?.name ?? path.basename(workspaceRoot),
-      profile,
-      by: source,
-      at: current?.onboarded.at,
+    const draft = parseManifestDraft(workspaceRoot, record, current, source);
+    const catalog = buildWorkspaceSelectionCatalog();
+    const catalogFingerprint = parseDigest(record.catalogFingerprint);
+    const skills = validateReviewedWorkspaceSkillSelection(draft.skills, catalog);
+    if (!skills.ok) throw new Error('Reviewed workspace skill selection is unavailable.');
+    const manifest = migrateWorkspaceManifestToolSelection({
+      manifest: { ...draft, skills: skills.value },
+      reviewed: {
+        profiles: draft.tools.profiles,
+        enabled: draft.tools.enabled ?? [],
+        deny: draft.tools.deny,
+      },
+      catalog,
+      reviewedCatalogFingerprint: catalogFingerprint,
     });
-    const persona = parsePersona(record.persona);
-    const orchestration = parseOrchestration(record.orchestration);
-    const capabilities = parseEnabledDisabled(record.capabilities, 'capabilities');
-    const skills = parseSkills(record.skills);
-    const tools = parseTools(record.tools);
-    const memory = parseMemory(record.memory);
-    const instructions = parseText(record.instructions, 'instructions', 512);
+    const instructions = manifest.instructions;
     const instruction = parseInstruction(record.instruction, instructions);
-    const manifest = normalizeWorkspaceManifest({
-      ...preset,
-      version: current?.version ?? preset.version,
-      name: current?.name ?? preset.name,
-      onboarded: current ? { ...current.onboarded } : preset.onboarded,
-      persona,
-      orchestration,
-      capabilities,
-      skills,
-      tools,
-      memory,
-      instructions,
-      ...(current?.extra ? { extra: structuredClone(current.extra) } : {}),
-    });
 
     const committed = commitReviewedWorkspaceOnboarding(workspaceRoot, {
       manifest,
@@ -253,11 +278,42 @@ function parseSkills(value: unknown): WorkspaceManifest['skills'] {
 
 function parseTools(value: unknown): WorkspaceManifest['tools'] {
   const record = plainRecord(value, 'tools');
-  exactKeys(record, ['profiles', 'deny'], 'tools');
+  exactKeys(record, ['profiles', 'enabled', 'deny'], 'tools');
   return {
     profiles: parseList(record.profiles, 'tool profiles'),
+    enabled: parseList(record.enabled, 'enabled tools'),
     deny: parseList(record.deny, 'denied tools'),
   };
+}
+
+function parseManifestDraft(
+  workspaceRoot: string,
+  record: Record<string, unknown>,
+  current: WorkspaceManifest | null,
+  source: 'wizard' | 'agent',
+): WorkspaceManifest {
+  const profile = typeof record.profile === 'string' ? record.profile : '';
+  if (!isWorkspaceProfileId(profile)) throw new Error('Unknown workspace profile.');
+  const preset = createWorkspaceManifest({
+    name: current?.name ?? path.basename(workspaceRoot),
+    profile,
+    by: source,
+    at: current?.onboarded.at,
+  });
+  return normalizeWorkspaceManifest({
+    ...preset,
+    version: WORKSPACE_MANIFEST_EXPLICIT_TOOL_SELECTION_VERSION,
+    name: current?.name ?? preset.name,
+    onboarded: current ? { ...current.onboarded } : preset.onboarded,
+    persona: parsePersona(record.persona),
+    orchestration: parseOrchestration(record.orchestration),
+    capabilities: parseEnabledDisabled(record.capabilities, 'capabilities'),
+    skills: parseSkills(record.skills),
+    tools: { ...parseTools(record.tools), mode: 'explicit-catalog' },
+    memory: parseMemory(record.memory),
+    instructions: parseText(record.instructions, 'instructions', 512),
+    ...(current?.extra ? { extra: structuredClone(current.extra) } : {}),
+  });
 }
 
 function parseMemory(value: unknown): WorkspaceManifest['memory'] {

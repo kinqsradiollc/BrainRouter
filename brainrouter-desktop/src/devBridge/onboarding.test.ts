@@ -5,6 +5,7 @@ import {
   createDevOnboardingState,
   getDevWorkspaceManifest,
   previewDevWorkspaceInstruction,
+  previewDevWorkspaceOnboarding,
   proposeDevWorkspaceOnboarding,
   saveDevWorkspaceManifest,
 } from './onboarding.js';
@@ -20,6 +21,7 @@ function proposal(info: Record<string, unknown>): Record<string, unknown> {
   return {
     expected: (info.review as { revision: Record<string, string> }).revision,
     source: 'wizard',
+    catalogFingerprint: ((info.preview as { catalogFingerprint: string }).catalogFingerprint),
     profile: engineering.id,
     persona: engineering.persona,
     orchestration: engineering.orchestration,
@@ -98,6 +100,32 @@ test('registers the assisted proposal under the production query name', () => {
     proposal?: { source?: string };
   };
   assert.equal(result.proposal?.source, 'model');
+  const preview = queries['workspace-onboarding-preview']?.(
+    (result as { proposal?: { manifest?: Record<string, unknown> } }).proposal?.manifest ?? {},
+  ) as { ok?: boolean; preview?: { plan?: { id?: string } } };
+  assert.equal(preview.ok, true);
+  assert.equal(preview.preview?.plan?.id, 'engineering');
+});
+
+test('browser preview exposes catalog choices and remains read-only', () => {
+  const state = createDevOnboardingState();
+  const info = getDevWorkspaceManifest(state, root);
+  const result = previewDevWorkspaceOnboarding(root, { profile: 'unknown' });
+  assert.equal(result.ok, false);
+  const profile = (info.profiles as Array<Record<string, unknown>>)[0]!;
+  const reviewed = previewDevWorkspaceOnboarding(root, {
+    profile: profile.id,
+    persona: profile.persona,
+    orchestration: profile.orchestration,
+    capabilities: profile.capabilities,
+    skills: profile.skills,
+    tools: profile.tools,
+    memory: profile.memory,
+    instructions: 'AGENT.md',
+  }) as { ok: boolean; preview?: { catalog?: unknown[] } };
+  assert.equal(reviewed.ok, true);
+  assert.ok((reviewed.preview?.catalog?.length ?? 0) > 0);
+  assert.equal(state.manifests.has(root), false);
 });
 
 test('saves reviewed fields in memory and advances the opaque revision', () => {
@@ -114,7 +142,7 @@ test('saves reviewed fields in memory and advances the opaque revision', () => {
     (before.review as { revision: unknown }).revision,
   );
   assert.equal((after.manifest as { name: string }).name, 'example');
-  assert.equal((after.manifest as { version: number }).version, 2);
+  assert.equal((after.manifest as { version: number }).version, 3);
 });
 
 test('rejects stale reviews and tracks an approved instruction replacement', () => {
