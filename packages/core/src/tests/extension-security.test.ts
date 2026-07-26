@@ -10,6 +10,7 @@ import {
   resetExtensionContributions,
 } from '../extension/registry.js';
 import { effectiveToolRegistry } from '../tool/registry/registry.js';
+import { buildWorkspaceSelectionCatalog } from '../workspace/selectionCatalog.js';
 
 const publicTool = (name: string) => ({
   name,
@@ -51,6 +52,21 @@ test('CORE-EXT only required first-party tools are trusted with the privileged r
   assert.equal(requiredExtensionToolNames().has('read_file'), true, 'a required core tool IS trusted');
   createExtensionHost('workspace-plugin', '/tmp/ws', '1.0.0').registerTool(publicTool('user_ext_tool'));
   assert.equal(requiredExtensionToolNames().has('user_ext_tool'), false, 'a user extension tool is NOT trusted');
+  resetExtensionContributions();
+  effectiveToolRegistry();
+});
+
+test('P23-9 stable extension tools expose owner provenance in the workspace catalog', () => {
+  resetExtensionContributions();
+  effectiveToolRegistry();
+  createExtensionHost('workspace-plugin', '/tmp/ws', '1.0.0')
+    .registerTool(publicTool('user_ext_tool'));
+  const entry = buildWorkspaceSelectionCatalog().entries.find(
+    (candidate) => candidate.id === 'user_ext_tool',
+  );
+  assert.equal(entry?.source, 'extension');
+  assert.equal(entry?.provenance, 'workspace-plugin');
+  assert.equal(entry?.persistable, true);
   resetExtensionContributions();
   effectiveToolRegistry();
 });

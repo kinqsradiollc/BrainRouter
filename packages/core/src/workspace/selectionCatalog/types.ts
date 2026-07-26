@@ -15,6 +15,7 @@ export type WorkspaceSelectionCatalogSource =
   | 'core'
   | 'extension'
   | 'bundled'
+  | 'plugin'
   | 'profile-plugin'
   | 'capability-plugin'
   | 'runtime';
@@ -50,8 +51,19 @@ export interface LiveRuntimeToolDescriptor {
   category?: string;
 }
 
+export interface ContributedWorkspaceSkillRoot {
+  /** Safe plugin identifier used only for display provenance. */
+  pluginName: string;
+  /** Host-resolved directory; never returned in catalog output. */
+  path: string;
+  selectable: boolean;
+  blockedReason?: string;
+}
+
 export interface WorkspaceSelectionCatalogOptions {
   availability?: LocalToolAvailabilityContext;
+  /** Skill roots derived from normal plugin discovery, never renderer input. */
+  contributedSkillRoots?: readonly ContributedWorkspaceSkillRoot[];
   /**
    * Safe live names only. These rows are informational and can never be copied
    * into a manifest selection.
