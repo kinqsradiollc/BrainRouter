@@ -26,6 +26,10 @@ export interface OnboardingPlanPreview {
     displayName: string;
     mode: 'off' | 'explicit' | 'adaptive';
     selectedStrategyId: string;
+    source: {
+      kind: 'workspace-local' | 'workspace' | 'plugin' | 'bundled';
+      provenance: string;
+    };
     strategies: Array<{
       id: string;
       description: string;
@@ -115,6 +119,9 @@ function parseCatalogRow(value: unknown): OnboardingCatalogRow | null {
 function parsePlan(value: unknown): NonNullable<OnboardingPlanPreview['plan']> | null {
   if (!record(value) || !bounded(value.id, 128) || !bounded(value.displayName, 256) ||
       !(value.mode === 'off' || value.mode === 'explicit' || value.mode === 'adaptive') ||
+      !record(value.source) ||
+      !['workspace-local', 'workspace', 'plugin', 'bundled'].includes(String(value.source.kind)) ||
+      !bounded(value.source.provenance, 128) ||
       !bounded(value.selectedStrategyId, 128) || !Array.isArray(value.strategies) ||
       value.strategies.length > 32) return null;
   const strategies = value.strategies.map((candidate) => {
@@ -149,6 +156,10 @@ function parsePlan(value: unknown): NonNullable<OnboardingPlanPreview['plan']> |
     displayName: value.displayName,
     mode: value.mode,
     selectedStrategyId: value.selectedStrategyId,
+    source: {
+      kind: value.source.kind as NonNullable<OnboardingPlanPreview['plan']>['source']['kind'],
+      provenance: value.source.provenance,
+    },
     strategies: strategies as NonNullable<OnboardingPlanPreview['plan']>['strategies'],
   };
 }

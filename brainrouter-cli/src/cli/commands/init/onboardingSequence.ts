@@ -1,7 +1,7 @@
 /** Ordered coordination for the CLI's global and per-workspace setup flows. */
 import fs from 'node:fs';
 import path from 'node:path';
-import { getConfigPath, type Config } from '@kinqs/brainrouter-core/config';
+import { getConfigPath, loadConfig, type Config } from '@kinqs/brainrouter-core/config';
 import { isWorkspaceOnboarded } from '@kinqs/brainrouter-core/workspace';
 import { runWizard } from '../../ink/wizard/runWizard.js';
 import { safeOnboardingError } from './onboardingErrors.js';
@@ -49,7 +49,9 @@ const DEFAULT_DEPENDENCIES: CliOnboardingDependencies = {
       mcpSkipped: result.state.draft.mcp?.kind === 'skip',
     };
   },
-  runWorkspaceSetup: (workspaceRoot) => runProjectOnboarding(workspaceRoot),
+  runWorkspaceSetup: (workspaceRoot) => runProjectOnboarding(workspaceRoot, {
+    getConfig: loadConfig,
+  }),
 };
 
 /** Await every applicable setup before callers construct session runtime state. */

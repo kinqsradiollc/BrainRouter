@@ -2,9 +2,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import chalk from 'chalk';
+import type { Config } from '@kinqs/brainrouter-core/config';
 import {
   WORKSPACE_PROFILES,
   buildWorkspaceOnboardingPreview,
+  buildWorkspaceOnboardingSources,
   buildWorkspaceSelectionCatalog,
   commitReviewedWorkspaceOnboarding,
   inspectWorkspaceOnboardingReview,
@@ -91,6 +93,10 @@ export interface ProjectOnboardingOptions {
   prompt?: ProjectOnboardingPrompt;
   now?: () => string;
   print?: (message: string) => void;
+  /** Host-owned plugin enablement snapshot; never derived from prompt input. */
+  config?: Config;
+  /** Production reload seam for the pre-write catalog drift check. */
+  getConfig?: () => Config;
 }
 
 /** Parse a legacy numbered profile answer for compatibility with callers. */
@@ -183,9 +189,17 @@ export async function runProjectOnboarding(
       'Workspace manifest exists but cannot be read safely. Repair or remove .brainrouter/workspace.json before retrying; no project files were written.',
     );
   }
+  const sources = buildWorkspaceOnboardingSources(
+    root,
+    options.getConfig?.() ?? options.config,
+  );
   const print = options.print ?? console.log;
   if (existing && !options.edit) {
-    print(`\n${formatManifestSummary(existing)}\n`);
+    print(`\n${formatManifestSummary(existing, buildWorkspaceOnboardingPreview(
+      existing,
+      sources.catalog,
+      sources.orchestrationProfiles,
+    ))}\n`);
     return { status: 'existing', manifest: existing };
   }
   const prompt = options.prompt ?? promptProjectOnboarding;
@@ -212,7 +226,7 @@ export async function runProjectOnboarding(
   });
   if (start.kind === 'skip') return skipped(print);
   if (start.kind !== 'submit' || start.value !== 'continue') return cancelled(print);
-  const catalog = buildWorkspaceSelectionCatalog();
+  const catalog = sources.catalog;
 
   const profileResponse = await prompt({
     id: 'profile',
@@ -246,7 +260,11 @@ export async function runProjectOnboarding(
   const edits = await collectProjectOnboardingEdits(prompt, draft, catalog);
   if (!edits) return cancelled(print);
   const reviewed = finalizeCatalogReviewedProjectOnboarding(draft, edits, catalog);
-  print(`\n${formatManifestSummary(reviewed, buildWorkspaceOnboardingPreview(reviewed, catalog))}\n`);
+  print(`\n${formatManifestSummary(reviewed, buildWorkspaceOnboardingPreview(
+    reviewed,
+    catalog,
+    sources.orchestrationProfiles,
+  ))}\n`);
 
   const confirm = await prompt({
     id: 'confirm',
@@ -262,12 +280,23 @@ export async function runProjectOnboarding(
   });
   if (confirm.kind !== 'submit' || confirm.value !== 'save') return cancelled(print);
 
+  const currentSources = buildWorkspaceOnboardingSources(
+    root,
+    options.getConfig?.() ?? options.config,
+  );
+  if (currentSources.catalog.fingerprint !== catalog.fingerprint) {
+    throw new Error('Workspace setup choices changed while setup was open. Reload and review the latest catalog.');
+  }
   const committed = commitReviewedWorkspaceOnboarding(root, {
     manifest: reviewed,
     expected: review.revision,
   });
   print(chalk.green(`\n✓ Onboarded — wrote ${path.relative(root, committed.manifestPath)}`));
-  print(`\n${formatManifestSummary(committed.manifest)}\n`);
+  print(`\n${formatManifestSummary(committed.manifest, buildWorkspaceOnboardingPreview(
+    committed.manifest,
+    currentSources.catalog,
+    currentSources.orchestrationProfiles,
+  ))}\n`);
   return { status: 'committed', manifest: committed.manifest, manifestPath: committed.manifestPath };
 }
 

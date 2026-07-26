@@ -1,9 +1,10 @@
 /** Main-process boundary for Desktop workspace setup and settings. */
 import path from 'node:path';
+import type { Config } from '@kinqs/brainrouter-core/config';
 import {
   WORKSPACE_MANIFEST_EXPLICIT_TOOL_SELECTION_VERSION,
   buildWorkspaceOnboardingPreview,
-  buildWorkspaceSelectionCatalog,
+  buildWorkspaceOnboardingSources,
   commitReviewedWorkspaceOnboarding,
   createWorkspaceManifest,
   inspectWorkspaceOnboardingReview,
@@ -32,7 +33,10 @@ export interface WorkspaceManifestInfo {
 }
 
 /** Everything the setup editor needs, without exposing existing instruction contents. */
-export function getWorkspaceManifestInfo(workspaceRoot: string): WorkspaceManifestInfo {
+export function getWorkspaceManifestInfo(
+  workspaceRoot: string,
+  config?: Config,
+): WorkspaceManifestInfo {
   const manifest = loadWorkspaceManifest(workspaceRoot);
   const suggestion = suggestWorkspaceProfile(workspaceRoot);
   const previewManifest = manifest ?? createWorkspaceManifest({
@@ -40,13 +44,17 @@ export function getWorkspaceManifestInfo(workspaceRoot: string): WorkspaceManife
     profile: suggestion.profile,
     by: 'wizard',
   });
-  const catalog = buildWorkspaceSelectionCatalog();
+  const sources = buildWorkspaceOnboardingSources(workspaceRoot, config);
   return {
     onboarded: manifest !== null,
     manifest,
     suggestion,
     profiles: workspaceProfilesForOnboarding(),
-    preview: buildWorkspaceOnboardingPreview(previewManifest, catalog),
+    preview: buildWorkspaceOnboardingPreview(
+      previewManifest,
+      sources.catalog,
+      sources.orchestrationProfiles,
+    ),
     review: inspectWorkspaceOnboardingReview(workspaceRoot),
   };
 }
@@ -91,6 +99,7 @@ export type WorkspaceOnboardingPreviewResult =
 export function previewWorkspaceOnboardingFromPayload(
   workspaceRoot: string,
   payload: unknown,
+  config?: Config,
 ): WorkspaceOnboardingPreviewResult {
   try {
     const record = plainRecord(payload, 'workspace preview payload');
@@ -100,7 +109,15 @@ export function previewWorkspaceOnboardingFromPayload(
     ], 'workspace preview payload');
     const current = loadWorkspaceManifest(workspaceRoot);
     const draft = parseManifestDraft(workspaceRoot, record, current, 'wizard');
-    return { ok: true, preview: buildWorkspaceOnboardingPreview(draft) };
+    const sources = buildWorkspaceOnboardingSources(workspaceRoot, config);
+    return {
+      ok: true,
+      preview: buildWorkspaceOnboardingPreview(
+        draft,
+        sources.catalog,
+        sources.orchestrationProfiles,
+      ),
+    };
   } catch {
     return { ok: false, error: 'Workspace setup preview is unavailable.' };
   }
@@ -144,6 +161,7 @@ export function previewWorkspaceInstructionFromPayload(
 export function saveWorkspaceManifestFromPayload(
   workspaceRoot: string,
   payload: unknown,
+  config?: Config,
 ): ManifestSaveResult {
   try {
     const record = plainRecord(payload, 'workspace setup payload');
@@ -160,7 +178,7 @@ export function saveWorkspaceManifestFromPayload(
     if (!source) throw new Error('Unknown workspace setup source.');
     const current = loadWorkspaceManifest(workspaceRoot);
     const draft = parseManifestDraft(workspaceRoot, record, current, source);
-    const catalog = buildWorkspaceSelectionCatalog();
+    const catalog = buildWorkspaceOnboardingSources(workspaceRoot, config).catalog;
     const catalogFingerprint = parseDigest(record.catalogFingerprint);
     const skills = validateReviewedWorkspaceSkillSelection(draft.skills, catalog);
     if (!skills.ok) throw new Error('Reviewed workspace skill selection is unavailable.');

@@ -54,6 +54,7 @@ function previewResponse(): Record<string, unknown> {
       displayName: 'Engineering orchestration',
       mode: 'adaptive',
       selectedStrategyId: 'direct',
+      source: { kind: 'bundled', provenance: 'bundled' },
       selectionReason: 'setup-preview-fallback',
       strategies: [{
         id: 'direct',

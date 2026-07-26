@@ -5,10 +5,10 @@ import chalk from 'chalk';
 import {
   completeWorkspaceOnboardingWithModel,
 } from '@kinqs/brainrouter-core/agent';
-import type { LLMConfig } from '@kinqs/brainrouter-core/config';
+import type { Config, LLMConfig } from '@kinqs/brainrouter-core/config';
 import {
   buildWorkspaceOnboardingPreview,
-  buildWorkspaceSelectionCatalog,
+  buildWorkspaceOnboardingSources,
   commitReviewedWorkspaceOnboarding,
   inspectWorkspaceOnboardingReview,
   isWorkspaceProfileId,
@@ -42,6 +42,8 @@ export interface ProjectOnboardingScanOptions {
   prompt?: ProjectOnboardingPrompt;
   print?: (message: string) => void;
   propose?: (options: AssistedOnboardingOptions) => Promise<AssistedOnboardingResult>;
+  config?: Config;
+  getConfig?: () => Config;
 }
 
 export interface ProjectOnboardingAgentOptions extends Omit<ProjectOnboardingScanOptions, 'propose'> {
@@ -118,6 +120,8 @@ export async function runProjectOnboardingScan(
   return reviewProjectOnboardingProposal(root, proposal, review.revision, {
     prompt: options.prompt,
     print,
+    config: options.config,
+    getConfig: options.getConfig,
   });
 }
 
@@ -126,12 +130,16 @@ export async function reviewProjectOnboardingProposal(
   workspaceRoot: string,
   proposal: WorkspaceOnboardingProposal,
   expected: WorkspaceOnboardingReviewRevision,
-  options: Pick<ProjectOnboardingOptions, 'prompt' | 'print'> = {},
+  options: Pick<ProjectOnboardingOptions, 'prompt' | 'print' | 'config' | 'getConfig'> = {},
 ): Promise<ProjectOnboardingResult> {
   const root = path.resolve(workspaceRoot);
   const prompt = options.prompt ?? promptProjectOnboarding;
   const print = options.print ?? console.log;
-  const catalog = buildWorkspaceSelectionCatalog();
+  const sources = buildWorkspaceOnboardingSources(
+    root,
+    options.getConfig?.() ?? options.config,
+  );
+  const catalog = sources.catalog;
   const start = await prompt({
     id: 'start',
     kind: 'choice',
@@ -177,7 +185,11 @@ export async function reviewProjectOnboardingProposal(
   const edits = await collectProjectOnboardingEdits(prompt, draft, catalog);
   if (!edits) return cancelled(print);
   const reviewed = finalizeCatalogReviewedProjectOnboarding(draft, edits, catalog);
-  print(`\n${formatManifestSummary(reviewed, buildWorkspaceOnboardingPreview(reviewed, catalog))}\n`);
+  print(`\n${formatManifestSummary(reviewed, buildWorkspaceOnboardingPreview(
+    reviewed,
+    catalog,
+    sources.orchestrationProfiles,
+  ))}\n`);
 
   let instruction: WorkspaceOnboardingProposal['instruction'];
   if (proposal.instruction && proposal.instruction.path !== 'AGENT.md') {
@@ -231,6 +243,13 @@ export async function reviewProjectOnboardingProposal(
   });
   if (confirm.kind !== 'submit' || confirm.value !== 'save') return cancelled(print);
 
+  const currentSources = buildWorkspaceOnboardingSources(
+    root,
+    options.getConfig?.() ?? options.config,
+  );
+  if (currentSources.catalog.fingerprint !== catalog.fingerprint) {
+    throw new Error('Workspace setup choices changed while setup was open. Reload and review the latest catalog.');
+  }
   const committed = commitReviewedWorkspaceOnboarding(root, {
     manifest: reviewed,
     expected,
@@ -238,7 +257,11 @@ export async function reviewProjectOnboardingProposal(
   });
   print(chalk.green(`\n✓ Onboarded — wrote ${path.relative(root, committed.manifestPath)}`));
   if (committed.instructionPath) print(chalk.green(`✓ Updated ${committed.instructionPath}`));
-  print(`\n${formatManifestSummary(committed.manifest)}\n`);
+  print(`\n${formatManifestSummary(committed.manifest, buildWorkspaceOnboardingPreview(
+    committed.manifest,
+    currentSources.catalog,
+    currentSources.orchestrationProfiles,
+  ))}\n`);
   return { status: 'committed', manifest: committed.manifest, manifestPath: committed.manifestPath };
 }
 
