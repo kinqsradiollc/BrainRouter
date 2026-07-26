@@ -16,6 +16,7 @@ import {
   type AgentDefinition,
 } from '../agents/agentDefinitionFile.js';
 import { BUILT_IN_OUTPUT_CONTRACTS } from '../roles/outputContracts.js';
+import { inspectWorkspaceProfilePlugins } from '../../workspace/profilePlugins.js';
 import {
   listOrchestrationProfileDefinitionFiles,
   readOrchestrationProfileDefinitionFile,
@@ -59,6 +60,7 @@ export const ORCHESTRATION_OUTPUT_CONTRACT_IDS: ReadonlySet<string> = new Set(
 export function bundledOrchestrationProfileReferences(options: {
   agentsDir?: string;
   skillsDir?: string;
+  profileSkillIds?: Iterable<string>;
 } = {}): OrchestrationProfileReferenceCatalog {
   const agentsDir = options.agentsDir ?? BUNDLED_AGENTS_DIR;
   const roles = new Map(
@@ -69,9 +71,13 @@ export function bundledOrchestrationProfileReferences(options: {
         roleReference(definition),
       ] as const),
   );
+  const coreSkillIds = listBundledSkillIds(options.skillsDir ?? BUNDLED_SKILLS_DIR);
+  const profileSkillIds = options.profileSkillIds === undefined
+    ? inspectWorkspaceProfilePlugins().available.flatMap((plugin) => [...plugin.skillIds])
+    : [...options.profileSkillIds];
   return {
     roles,
-    skillIds: listBundledSkillIds(options.skillsDir ?? BUNDLED_SKILLS_DIR),
+    skillIds: new Set([...coreSkillIds, ...profileSkillIds]),
     signalIds: ORCHESTRATION_ACTIVATION_SIGNAL_IDS,
   };
 }

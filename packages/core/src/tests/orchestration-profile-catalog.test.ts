@@ -18,6 +18,7 @@ import {
   loadBundledOrchestrationProfiles,
 } from '../orchestration/profiles/orchestrationProfileCatalog.js';
 import { getWorkspaceProfile } from '../workspace/profiles.js';
+import { WORKSPACE_PROFILE_PLUGIN_DEFINITIONS } from '../workspace/profilePlugins.js';
 
 const PACKAGE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const PROFILES_DIR = path.join(PACKAGE_ROOT, 'orchestration-profiles');
@@ -28,7 +29,11 @@ test('P23-2 bundled orchestration profile files and parsed ids have exact parity
     .sort();
   const profiles = loadBundledOrchestrationProfiles();
 
-  assert.deepEqual(files, ['engineering.json']);
+  assert.deepEqual(files, [
+    'data-science.json',
+    'engineering.json',
+    'research.json',
+  ]);
   assert.deepEqual(profiles.map((profile) => `${profile.id}.json`), files);
   assert.equal(profiles.every((profile) => profile.kind === 'orchestration-profile'), true);
 });
@@ -45,7 +50,7 @@ test('P23-2 bundled reference catalog is derived from physical role and skill as
     'verifier',
     'worker',
   ]);
-  assert.deepEqual([...references.skillIds].sort(), [
+  const coreSkillIds = [
     'adr-skill',
     'bootstrap-skill',
     'changelog-generator',
@@ -59,7 +64,14 @@ test('P23-2 bundled reference catalog is derived from physical role and skill as
     'spec-driven-skill',
     'testing-skill',
     'verify-loop',
-  ]);
+  ];
+  const profileSkillIds = WORKSPACE_PROFILE_PLUGIN_DEFINITIONS
+    .flatMap((plugin) => [...plugin.skillIds])
+    .sort();
+  assert.deepEqual(
+    [...references.skillIds].sort(),
+    [...coreSkillIds, ...profileSkillIds].sort(),
+  );
   assert.deepEqual(
     [...references.roles.values()]
       .flatMap((role) => role.outputContract?.id ?? [])
@@ -131,7 +143,7 @@ test('P23-2 package publish allowlist includes orchestration-profile assets', ()
   assert.equal(packageJson.files?.includes('orchestration-profiles'), true);
 });
 
-test('P23-2 packed core archive contains the Engineering plan at the loader path', () => {
+test('P23-2/P23-5 packed core archive contains every bundled plan at the loader path', () => {
   const destination = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-core-pack-'));
   try {
     const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -149,12 +161,14 @@ test('P23-2 packed core archive contains the Engineering plan at the loader path
       files: Array<{ path: string }>;
     }>;
     assert.equal(result.length, 1);
-    assert.equal(
-      result[0]?.files.some(
-        (file) => file.path === 'orchestration-profiles/engineering.json',
-      ),
-      true,
-    );
+    const packedPaths = new Set(result[0]?.files.map((file) => file.path));
+    for (const plan of [
+      'data-science.json',
+      'engineering.json',
+      'research.json',
+    ]) {
+      assert.equal(packedPaths.has(`orchestration-profiles/${plan}`), true);
+    }
     assert.equal(fs.existsSync(path.join(destination, result[0]!.filename)), true);
   } finally {
     fs.rmSync(destination, { recursive: true, force: true });

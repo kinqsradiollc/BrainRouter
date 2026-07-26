@@ -21,7 +21,13 @@ export interface DelegatedTaskPacket {
     requiredSections: string[];
   };
   persona: { id: string };
-  orchestration: { roleId: string };
+  orchestration: {
+    roleId: string;
+    profileId?: string;
+    strategyId?: string;
+    stageId?: string;
+    skillIds?: string[];
+  };
   capabilities: Pick<
     WorkspaceCapabilityResolution,
     'active' | 'reasons' | 'skillPacks' | 'skills' | 'toolProfiles'
