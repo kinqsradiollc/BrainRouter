@@ -12,6 +12,7 @@ export * from './delegation/autoChain.js';
 export * from './agents/agentRegistry.js';
 export * from './profiles/orchestrationProfileCatalog.js';
 export * from './profiles/orchestrationProfileDefinitionFile.js';
+export * from './profiles/orchestrationProfileResolver.js';
 export * from './roles/outputContracts.js';
 // `AccessMode` ('read' | 'write' | 'shell') is declared identically in both
 // roles.ts and agentRegistry.ts; an explicit re-export disambiguates the two
