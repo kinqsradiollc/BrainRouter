@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { discoverPlugin, type DiscoveredPlugin } from '../plugin/discovery.js';
+import { readPersonaDefinitionFile } from './personaDefinitionFile.js';
 
 export type WorkspaceProfilePluginId = 'study' | 'research' | 'data' | 'writing' | 'frontend';
 
@@ -18,15 +19,15 @@ export interface WorkspaceProfilePluginDefinition {
   kind: 'profile' | 'capability';
   pluginName: string;
   skillIds: readonly string[];
-  /** Optional same-id executable policies contributed only with this profile pack. */
-  agentIds: readonly string[];
+  /** Optional domain identities contributed without execution authority. */
+  personaIds: readonly string[];
 }
 
 export interface AvailableWorkspaceProfilePlugin extends WorkspaceProfilePluginDefinition {
   root: string;
   version: string;
   skillsRoot: string;
-  agentsRoot?: string;
+  personasRoot?: string;
   plugin: DiscoveredPlugin;
 }
 
@@ -50,35 +51,35 @@ export const WORKSPACE_PROFILE_PLUGIN_DEFINITIONS: readonly WorkspaceProfilePlug
     kind: 'profile',
     pluginName: 'profile-study',
     skillIds: ['learning-plan-skill', 'retrieval-practice-skill'],
-    agentIds: ['tutor'],
+    personaIds: ['tutor'],
   },
   {
     id: 'research',
     kind: 'profile',
     pluginName: 'profile-research',
     skillIds: ['evidence-research-skill', 'source-synthesis-skill'],
-    agentIds: ['researcher'],
+    personaIds: ['researcher'],
   },
   {
     id: 'data',
     kind: 'profile',
     pluginName: 'profile-data',
     skillIds: ['data-analysis-skill', 'experiment-validation-skill'],
-    agentIds: ['data-scientist'],
+    personaIds: ['data-scientist'],
   },
   {
     id: 'writing',
     kind: 'profile',
     pluginName: 'profile-writing',
     skillIds: ['structured-writing-skill', 'revision-skill'],
-    agentIds: ['writer'],
+    personaIds: ['writer'],
   },
   {
     id: 'frontend',
     kind: 'capability',
     pluginName: 'capability-frontend',
     skillIds: ['a11y-skill', 'browser-testing-skill', 'taste-skill'],
-    agentIds: [],
+    personaIds: [],
   },
 ] as const;
 
@@ -124,16 +125,16 @@ export function inspectWorkspaceProfilePlugins(
       unavailable.push({ ...definition, reason: `missing regular skill file: ${missingSkill}` });
       continue;
     }
-    const agentsRoot = plugin.contributes.agents;
-    if (definition.agentIds.length > 0) {
-      if (!agentsRoot || !isContainedDirectory(pluginRoot, agentsRoot)) {
-        unavailable.push({ ...definition, reason: 'regular contained agents contribution is required' });
+    const personasRoot = plugin.contributes.personas;
+    if (definition.personaIds.length > 0) {
+      if (!personasRoot || !isContainedDirectory(pluginRoot, personasRoot)) {
+        unavailable.push({ ...definition, reason: 'regular contained personas contribution is required' });
         continue;
       }
-      const missingAgent = definition.agentIds.find((agentId) =>
-        !isRegularFile(path.join(agentsRoot, `${agentId}.json`)));
-      if (missingAgent) {
-        unavailable.push({ ...definition, reason: `missing regular agent file: ${missingAgent}` });
+      const missingPersona = definition.personaIds.find((personaId) =>
+        !isValidPersonaFile(personasRoot, pluginRoot, personaId));
+      if (missingPersona) {
+        unavailable.push({ ...definition, reason: `missing valid persona file: ${missingPersona}` });
         continue;
       }
     }
@@ -142,7 +143,7 @@ export function inspectWorkspaceProfilePlugins(
       root: pluginRoot,
       version,
       skillsRoot,
-      ...(agentsRoot ? { agentsRoot } : {}),
+      ...(personasRoot ? { personasRoot } : {}),
       plugin,
     });
   }
@@ -166,9 +167,14 @@ function isRegularSkillFile(filePath: string): boolean {
   }
 }
 
-function isRegularFile(filePath: string): boolean {
+function isValidPersonaFile(personasRoot: string, pluginRoot: string, personaId: string): boolean {
   try {
-    return fs.lstatSync(filePath).isFile();
+    const definition = readPersonaDefinitionFile(
+      path.join(personasRoot, `${personaId}.json`),
+      personasRoot,
+      pluginRoot,
+    );
+    return definition.id === personaId;
   } catch {
     return false;
   }

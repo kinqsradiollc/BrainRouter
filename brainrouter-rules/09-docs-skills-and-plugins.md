@@ -280,8 +280,11 @@ plugin. Their public availability/version catalog is owned by
 must ship the entire `profile-plugins/` asset tree. These artifacts are not
 top-level bundled skills and are never added to the ambient catalog merely
 because the package is installed; a later workspace resolver must select the
-pack explicitly. Keep optional specialist JSON execution definitions inside the
-selected bundle rather than adding unconditional domain executors under the
+pack explicitly. Profile packs contribute bounded identity through
+`personas/*.json`; selecting that identity never creates a same-ID executable
+child. If a profile ever needs a genuinely distinct executable policy, keep it
+under `agents/` with a role-oriented ID and require separate manifest
+orchestration enablement. Never add unconditional domain executors under the
 package's top-level `agents/` directory.
 
 - **Evidence:** `packages/core/src/workspace/profilePlugins.ts`, `packages/core/profile-plugins/`, `packages/core/package.json`
