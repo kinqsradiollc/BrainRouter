@@ -7,3 +7,4 @@ export {
   lastUserMessageFromEnvelope,
   materializeContextEnvelope,
 } from './envelope/builder.js';
+export { compactContextEnvelope } from './envelope/compaction.js';
