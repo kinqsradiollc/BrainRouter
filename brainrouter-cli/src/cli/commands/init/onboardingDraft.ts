@@ -51,7 +51,6 @@ export function createProjectOnboardingDraft(input: {
   if (!existing) return draft;
   return normalizeWorkspaceManifest({
     ...draft,
-    version: existing.version,
     onboarded: { ...existing.onboarded },
     instructions: existing.instructions,
     ...(existing.extra ? { extra: existing.extra } : {}),
@@ -68,6 +67,8 @@ export function applyProjectOnboardingEdits(
   if (agentDefault && !agentsEnabled.includes(agentDefault)) agentsEnabled.unshift(agentDefault);
   return normalizeWorkspaceManifest({
     ...draft,
+    persona: { default: agentDefault, enabled: agentsEnabled },
+    // Keep the serialized v1 compatibility alias synchronized while readers migrate.
     agents: { default: agentDefault, enabled: agentsEnabled },
     capabilities: {
       enabled: unique(edits.capabilitiesEnabled),

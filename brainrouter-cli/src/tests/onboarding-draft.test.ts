@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createWorkspaceManifest } from '@kinqs/brainrouter-core/workspace';
+import {
+  createWorkspaceManifest,
+  WORKSPACE_MANIFEST_VERSION,
+} from '@kinqs/brainrouter-core/workspace';
 import {
   applyProjectOnboardingEdits,
   createProjectOnboardingDraft,
@@ -37,11 +40,12 @@ test('profile changes reset preset fields but retain durable identity and safe f
   };
   const draft = createProjectOnboardingDraft({ workspaceRoot: root, profile: 'engineering', existing });
   assert.equal(draft.name, 'kept-name');
-  assert.equal(draft.version, 7);
+  assert.equal(draft.version, WORKSPACE_MANIFEST_VERSION);
   assert.deepEqual(draft.onboarded, existing.onboarded);
   assert.equal(draft.instructions, 'PROJECT.md');
   assert.deepEqual(draft.extra, { futureFlag: true });
-  assert.deepEqual(draft.agents.enabled, ['engineer']);
+  assert.deepEqual(draft.persona.enabled, ['engineer']);
+  assert.equal(draft.orchestration.mode, 'adaptive');
   assert.deepEqual(draft.capabilities.enabled, ['frontend']);
 });
 
@@ -61,7 +65,8 @@ test('reviewed edits de-duplicate fields, include the default agent, and honor d
     memoryCaptureHint: ' code ',
     instructions: ' AGENT.md ',
   });
-  assert.deepEqual(edited.agents.enabled, ['engineer', 'reviewer']);
+  assert.deepEqual(edited.persona.enabled, ['engineer', 'reviewer']);
+  assert.deepEqual(edited.agents, edited.persona);
   assert.deepEqual(edited.capabilities.enabled, ['frontend']);
   assert.deepEqual(edited.capabilities.disabled, ['browser']);
   assert.deepEqual(edited.skills.packs, ['engineering']);
