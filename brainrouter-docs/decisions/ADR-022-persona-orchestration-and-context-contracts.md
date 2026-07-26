@@ -1,8 +1,8 @@
 # ADR-022 — Persona, Orchestration, and Context Contracts
 
-**Status:** Proposed for `release/0.4.17` · **Builds on** ADR-003 (agent
+**Status:** Accepted for `release/0.4.17` · **Builds on** ADR-003 (agent
 architecture), ADR-020 (memory self-improvement), and ADR-021 (typed workspace
-profiles) · **Supersedes when accepted** ADR-021 sections 3, 4, 6, and 7 only
+profiles) · **Supersedes** ADR-021 sections 3, 4, 6, and 7 only
 where they define domain personas, same-ID specialist executors, or the
 `agents.default` / `agents.enabled` manifest contract.
 
