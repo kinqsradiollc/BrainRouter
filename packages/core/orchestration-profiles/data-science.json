@@ -1,0 +1,284 @@
+{
+  "schemaVersion": 1,
+  "kind": "orchestration-profile",
+  "id": "data-science",
+  "displayName": "Data Science orchestration",
+  "defaultMode": "adaptive",
+  "fallbackStrategyId": "direct-analysis",
+  "rolePolicy": {
+    "availableRoles": [
+      "explorer",
+      "worker",
+      "verifier"
+    ],
+    "disabledRoles": [
+      "fleet"
+    ]
+  },
+  "limits": {
+    "maxParallel": 4,
+    "maxStages": 5,
+    "maxChildrenPerStage": 2,
+    "maxTotalChildren": 5,
+    "maxDepth": 2,
+    "maxRetries": 1
+  },
+  "strategies": [
+    {
+      "id": "direct-analysis",
+      "description": "Keep a bounded analysis or interpretation on the primary data scientist.",
+      "activation": {
+        "signals": [
+          "small-scope"
+        ],
+        "explicitOnly": false
+      },
+      "stages": [
+        {
+          "id": "analyze",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [],
+          "objective": "Complete the bounded analysis directly while reporting assumptions, evidence, uncertainty, and limitations.",
+          "skillIds": [],
+          "optional": false
+        }
+      ]
+    },
+    {
+      "id": "experiment",
+      "description": "Inspect inputs, run one authorized analysis, verify reproducibility, and synthesize the interpretation.",
+      "activation": {
+        "signals": [
+          "experiment"
+        ],
+        "explicitOnly": false
+      },
+      "stages": [
+        {
+          "id": "inspect",
+          "executor": {
+            "kind": "role",
+            "roleId": "explorer"
+          },
+          "after": [],
+          "objective": "Inspect data lineage, schema, sampling, missingness, leakage, prior artifacts, baselines, and execution constraints.",
+          "skillIds": [
+            "data-analysis-skill"
+          ],
+          "fanOut": {
+            "min": 1,
+            "max": 1
+          },
+          "optional": true,
+          "expectedOutput": {
+            "contractId": "explorer",
+            "requiredSections": [
+              "headline",
+              "files-read",
+              "facts"
+            ]
+          }
+        },
+        {
+          "id": "analyze",
+          "executor": {
+            "kind": "role",
+            "roleId": "worker"
+          },
+          "after": [
+            "inspect"
+          ],
+          "objective": "Execute the authorized analysis or experiment with explicit hypotheses, data preparation, baselines, metrics, seeds, stopping rules, and recorded artifacts.",
+          "skillIds": [
+            "data-analysis-skill",
+            "experiment-validation-skill"
+          ],
+          "fanOut": {
+            "min": 1,
+            "max": 1
+          },
+          "optional": false,
+          "expectedOutput": {
+            "contractId": "worker",
+            "requiredSections": [
+              "headline",
+              "files-changed",
+              "summary"
+            ]
+          }
+        },
+        {
+          "id": "reproduce",
+          "executor": {
+            "kind": "role",
+            "roleId": "verifier"
+          },
+          "after": [
+            "analyze"
+          ],
+          "objective": "Reproduce the declared path and validate data lineage, assumptions, assignment, metrics, uncertainty, baselines, and artifact completeness.",
+          "skillIds": [
+            "experiment-validation-skill"
+          ],
+          "fanOut": {
+            "min": 1,
+            "max": 1
+          },
+          "optional": false,
+          "expectedOutput": {
+            "contractId": "verifier",
+            "requiredSections": [
+              "headline",
+              "commands",
+              "pass-fail"
+            ]
+          }
+        },
+        {
+          "id": "synthesize",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "reproduce"
+          ],
+          "objective": "Interpret only the verified evidence and report the supported decision, effect size, uncertainty, limitations, and reproduction requirements.",
+          "skillIds": [
+            "data-analysis-skill"
+          ],
+          "optional": false
+        }
+      ]
+    },
+    {
+      "id": "dataset-audit",
+      "description": "Audit dataset partitions read-only, verify material quality risks, and synthesize a decision-ready assessment.",
+      "activation": {
+        "signals": [
+          "dataset-audit"
+        ],
+        "explicitOnly": false
+      },
+      "stages": [
+        {
+          "id": "inspect",
+          "executor": {
+            "kind": "role",
+            "roleId": "explorer"
+          },
+          "after": [],
+          "objective": "Inspect an assigned dataset partition for provenance, schema, missingness, duplicates, impossible values, sampling bias, joins, leakage, and temporal coverage.",
+          "skillIds": [
+            "data-analysis-skill"
+          ],
+          "fanOut": {
+            "min": 1,
+            "max": 2
+          },
+          "optional": false,
+          "expectedOutput": {
+            "contractId": "explorer",
+            "requiredSections": [
+              "headline",
+              "files-read",
+              "facts"
+            ]
+          }
+        },
+        {
+          "id": "validate",
+          "executor": {
+            "kind": "role",
+            "roleId": "verifier"
+          },
+          "after": [
+            "inspect"
+          ],
+          "objective": "Run permitted checks that confirm or reject the material data-quality, leakage, sampling, and lineage findings.",
+          "skillIds": [
+            "data-analysis-skill"
+          ],
+          "fanOut": {
+            "min": 1,
+            "max": 1
+          },
+          "optional": false,
+          "expectedOutput": {
+            "contractId": "verifier",
+            "requiredSections": [
+              "headline",
+              "commands",
+              "pass-fail"
+            ]
+          }
+        },
+        {
+          "id": "synthesize",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "validate"
+          ],
+          "objective": "Synthesize the verified dataset risks, their decision impact, uncertainty, and the smallest remediation or follow-up analysis.",
+          "skillIds": [
+            "data-analysis-skill"
+          ],
+          "optional": false
+        }
+      ]
+    },
+    {
+      "id": "reproducibility-check",
+      "description": "Reproduce an existing analysis and report whether its data, method, metrics, and claims are independently supported.",
+      "activation": {
+        "signals": [
+          "reproducibility-check"
+        ],
+        "explicitOnly": false
+      },
+      "stages": [
+        {
+          "id": "reproduce",
+          "executor": {
+            "kind": "role",
+            "roleId": "verifier"
+          },
+          "after": [],
+          "objective": "Reproduce the declared inputs, transformations, seeds, environment assumptions, method, baselines, and metrics; report deviations and unsupported claims.",
+          "skillIds": [
+            "data-analysis-skill",
+            "experiment-validation-skill"
+          ],
+          "fanOut": {
+            "min": 1,
+            "max": 1
+          },
+          "optional": false,
+          "expectedOutput": {
+            "contractId": "verifier",
+            "requiredSections": [
+              "headline",
+              "commands",
+              "pass-fail"
+            ]
+          }
+        },
+        {
+          "id": "deliver",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "reproduce"
+          ],
+          "objective": "Deliver the reproducibility verdict with confirmed evidence, deviations, limitations, and bounded next actions.",
+          "skillIds": [],
+          "optional": false
+        }
+      ]
+    }
+  ]
+}

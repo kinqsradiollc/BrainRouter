@@ -1110,6 +1110,26 @@ or output contracts.
 - Add dataset, experiment, and reproducibility strategies.
 - Compile child stages into bounded delegated-task packets.
 
+Research ships with `direct-answer`, `question-decomposition`,
+`parallel-evidence`, and `citation-review`. Only read-access roles are
+available; evidence fan-out is capped at three and final synthesis remains on
+the primary researcher. Data Science ships with `direct-analysis`,
+`experiment`, `dataset-audit`, and `reproducibility-check`. Dataset inspection
+may fan out read-only, but every worker or verifier stage remains single-child
+and the primary data scientist owns interpretation.
+
+The bundled reference catalog validates plan skill IDs against both Core skills
+and physically available package-owned profile-plugin skills. Resolution still
+requires each referenced skill to be installed and selected in the workspace;
+catalog membership alone is not activation. A resolved child stage compiles
+into the existing bounded delegated-task packet with profile, strategy, stage,
+role, validated stage-skill, expected-output, tool/access-ceiling, and budget
+fields. Primary stages cannot compile into child packets, and no parent
+conversation is copied. A fan-out assignment is bounded, control-character
+checked, and serialized separately as untrusted scope data; it is never
+concatenated into the trusted stage objective and cannot override policy,
+access, tools, or budgets.
+
 ### P23-6 — Study and Writing primary-agent plans
 
 - Add diagnose/teach/check/remediate and outline/draft/critique/revise
