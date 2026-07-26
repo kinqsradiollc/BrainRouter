@@ -435,6 +435,13 @@ During onboarding:
 3. the user or assisted initializer may narrow or edit those manifest fields;
 4. only the reviewed manifest is persisted.
 
+CLI and Desktop also present **Skip setup for now** before the write step.
+Skipping discards the in-memory proposal and writes no workspace manifest,
+plan/tool/skill selection, onboarding completion marker, or partial draft. The
+workspace remains a no-manifest workspace with its existing prompts and runtime
+behavior. Onboarding can be opened again later and starts from a fresh proposal;
+an assisted initializer cannot persist its recommendation after the user skips.
+
 At runtime:
 
 ```text
@@ -896,6 +903,8 @@ tool merely because its checkbox is selected.
     disjoint ownership; otherwise write-capable stage fan-out is one.
 20. Bundled plan assets must be present in source checkouts and published
     package archives before any installed runtime may depend on them.
+21. Skipping onboarding creates no reviewed authority or partial workspace
+    state; no-manifest behavior remains unchanged until setup is completed.
 
 ## Alternatives considered
 
@@ -962,6 +971,7 @@ tool merely because its checkbox is selected.
 | Invalid selection has no usable direct strategy | Require and validate `fallbackStrategyId` as a primary-only, dependency-free strategy |
 | Parallel workers race on the same files | Keep write-capable fan-out at one until isolated worktrees or disjoint enforced ownership are proven before launch |
 | Generalized role prompts alter no-manifest behavior | Retain the legacy prompt overlay for no-manifest and compatibility-source execution; use generalized prompts only when an authoritative profile plan is active |
+| Skipping onboarding accidentally applies inferred defaults | Make skip a write-nothing terminal UI action, discard the proposal, and keep the workspace on the existing no-manifest path until setup is resumed |
 | Invalid optional stages hide missing functionality | Structured skip diagnostics and visible onboarding/runtime summaries |
 | A deferred plan invokes a child tool after its turn | One lifecycle owner cancels ephemeral stages at turn end; runtime emits one terminal diagnostic and the UI distinguishes pre-launch rejection from delegation |
 | Picker suggests a tool the runtime cannot use | Catalog carries availability/provenance; core re-resolves before write and at turn time; blocked entries show a reason and cannot become authority |
@@ -974,6 +984,8 @@ tool merely because its checkbox is selected.
 - No-manifest workspaces preserve existing role prompts and runtime behavior;
   domain-neutral role prompts are not selected merely because the package
   contains orchestration-profile JSON.
+- A user may skip onboarding without creating a manifest or partial selection;
+  reopening setup later creates a fresh proposal and still requires review.
 - Manifest v2 files continue using their current group/deny behavior. A v3
   writer adds `tools.mode` and `tools.enabled`; it does not silently rewrite a
   v2 workspace into explicit-catalog mode.
@@ -1097,6 +1109,9 @@ change a workspace merely because orchestration plans are enabled.
   explanations.
 - Preview plan, strategy, stages, roles, skills, tools, and effective ceilings
   in CLI and Desktop.
+- Add an explicit **Skip setup for now** action that discards the proposal,
+  performs no onboarding write, preserves no-manifest behavior, and supports
+  starting setup again later.
 - Preserve user review before any manifest write.
 
 ### P23-9 — Plugin and workspace contributions
@@ -1172,6 +1187,9 @@ change a workspace merely because orchestration plans are enabled.
     effective ceilings, and active-turn lifecycle gates are complete; enabling
     it does not alter no-manifest behavior or implicitly activate manifest-v3
     tool selection.
+29. Choosing **Skip setup for now** in CLI or Desktop creates no manifest,
+    selection, completion marker, or partial draft; reopening onboarding later
+    starts a fresh reviewed proposal.
 
 ## Non-goals
 
