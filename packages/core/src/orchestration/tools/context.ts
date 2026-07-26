@@ -7,6 +7,7 @@ import type { McpClientPool as McpClientWrapper } from '../../mcp/mcpPool.js';
 import type { LLMConfig } from '../../config/config.js';
 import type { AccessMode } from '../roles/roles.js';
 import type { Tier } from '../agents/agentRegistry.js';
+import type { ContextEnvelope } from '../../context/contextEnvelope.js';
 
 export interface OrchestrationContext {
   workspaceRoot: string;
@@ -96,7 +97,11 @@ export interface OrchestrationContext {
   parentRecalledRecordIds?: () => string[];
   parentGoal?: () => { text: string; status: string } | null | undefined;
   parentPlanText?: () => string | null | undefined;
+  parentContextEnvelope?: () => ContextEnvelope;
+  parentSourceFiles?: () => string[];
   parentVisibleTools?: () => string[];
+  parentVisibleLocalTools?: () => string[];
+  parentVisibleMcpTools?: () => string[];
   parentExecutionMode?: string;
   parentReviewPolicy?: string;
 }

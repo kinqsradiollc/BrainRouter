@@ -48,6 +48,9 @@ export interface ChildSessionRecord {
    * entry. See `orchestration/parentContext.ts`.
    */
   parentContext?: import('../delegation/parentContext.js').ParentExecutionContextSnapshot;
+  /** Versioned, bounded child handoff. ParentExecutionContextSnapshot remains a
+   * compatibility projection until every reader has migrated. */
+  delegatedTaskPacket?: import('../delegation/taskPacket.js').DelegatedTaskPacket;
   /** MAS-P4-T4 — follow-up roles auto-chained after this worker (e.g. ['reviewer','verifier']). */
   autoChainFollowups?: string[];
   /** 0.4.x-1 — true when spawned with an operator overlay (a bespoke one-off agent). */

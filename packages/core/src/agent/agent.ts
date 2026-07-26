@@ -96,7 +96,7 @@ import { summarizeLedger, formatBrief } from '../research/evidenceLedger.js';
 import { localToolExecutor, type OrchestrationRuntimePort, type ToolLifecycleRuntimePort } from '../tool/registry/executors.js';
 import { assessMcpToolApproval } from './guards/mcpApproval.js';
 export { normalizeToolName } from '../tool/specs/names.js';
-import { applyToolScope, rankAndCapTools } from '../tool/policy/toolBudget.js';
+import { applyToolScope, rankAndCapTools, toolNameMatchesAny } from '../tool/policy/toolBudget.js';
 import { resolveToolVisible } from '../tool/policy/toolPolicy.js';
 import { buildDefaultSourcePlan, buildMemoryBriefing, describeSourcePlan, selectCitedRecordIds, type RecalledRecord } from '../memory/briefing.js';
 import { assessCapturePayload } from '../memory/memoryPolicy.js';
@@ -484,6 +484,11 @@ export interface AgentOptions {
    * still subject to the budget cap).
    */
   toolScope?: { local: string[]; mcp: string[] };
+  /**
+   * Parent-authorized tool names for a delegated execution. Unlike toolScope,
+   * an explicitly empty list means no tools of that class are authorized.
+   */
+  authorityToolCeiling?: { local: string[]; mcp: string[] };
   disallowedTools?: string[];
   /**
    * 0.4.x-5 — per-child reasoning-effort override. When set, the child uses
@@ -849,6 +854,7 @@ export class Agent {
   public ownership: string | null;
   /** MAS-P4-T1 per-agent tool scope (from the agent def); undefined = no filter. */
   public toolScope?: { local: string[]; mcp: string[] };
+  public authorityToolCeiling?: { local: string[]; mcp: string[] };
   public disallowedTools: string[];
   /** HONK-L3 — built-in tools whose schema was flattened for a local model THIS
    *  turn; their args are re-nested at dispatch via `nestArguments`. */
@@ -900,6 +906,7 @@ export class Agent {
     this.parentSpanId = options.parentSpanId;
     this.ownership = options.ownership ?? null;
     this.toolScope = options.toolScope;
+    this.authorityToolCeiling = options.authorityToolCeiling;
     this.disallowedTools = options.disallowedTools ?? [];
     this.effortOverride = options.effortOverride;
     this.tier = options.tier;
@@ -1118,7 +1125,17 @@ export class Agent {
   public async visibleMcpToolList(): Promise<any[]> {
     try {
       const res = await this.mcpClient.listTools();
-      return (res.tools || []).filter((t: any) => this.isModelVisibleMcpTool(t));
+      let tools = (res.tools || []).filter((t: any) => this.isModelVisibleMcpTool(t));
+      tools = applyToolScope(tools, {
+        allow: this.toolScope?.mcp,
+        disallow: this.disallowedTools,
+      });
+      if (this.authorityToolCeiling) {
+        tools = tools.filter((tool: any) =>
+          toolNameMatchesAny(String(tool?.name ?? ''), this.authorityToolCeiling!.mcp),
+        );
+      }
+      return tools;
     } catch {
       return [];
     }

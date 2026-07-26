@@ -20,10 +20,9 @@
  *      `handleSpawn` after the role + access mode are resolved.
  *   2. The snapshot is persisted on the `ChildSessionRecord` so
  *      `/agents show <id>` can render it post-hoc.
- *   3. The snapshot is also appended as the FIRST transcript entry
- *      of the child (role: `system`, name: `parent_context`,
- *      content: JSON snapshot). That way a `/transcript <id>` dump
- *      always opens with the context the parent intended.
+ *   3. New runtimes append the versioned `DelegatedTaskPacket` as the first
+ *      child transcript entry. This snapshot remains a persisted compatibility
+ *      projection until legacy readers have migrated.
  */
 
 import { createHash } from 'node:crypto';

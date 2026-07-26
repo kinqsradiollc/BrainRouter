@@ -4,4 +4,5 @@
 export * from './router.js';
 export * from './delegationPolicy.js';
 export * from './parentContext.js';
+export * from './taskPacket.js';
 export * from './autoChain.js';

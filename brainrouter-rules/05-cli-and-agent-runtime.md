@@ -193,6 +193,24 @@ context cannot fit. Summary prompts never copy secret values.
   `packages/core/src/prompt/compaction/compactor.ts`,
   `packages/core/src/tests/context-compaction.test.ts`
 
+### 11c. Delegated children receive a bounded task packet, never the parent transcript
+
+Every child starts from a versioned `DelegatedTaskPacket`: bounded task and
+output contract, selected persona/orchestration role, capabilities recomputed
+from the child task, inherited constraints and plan/memory/source references,
+the parent's effective tool-policy ceiling, and explicit execution budgets.
+Only envelope layers marked inheritable may be referenced; recent conversation,
+tool state, and the parent's active capability overlay never cross the boundary.
+The child rebuilds its own system prompt and task capabilities, and every tool
+path—including MCP discovery—must remain inside the parent's ceiling. Wait
+results expose conclusions, evidence, changes, verification, unresolved items,
+and failures as a structured projection.
+
+- **Evidence:** `packages/core/src/orchestration/delegation/taskPacket.ts`,
+  `packages/core/src/orchestration/tools/spawn.ts`,
+  `packages/core/src/orchestration/tools/summarize.ts`,
+  `packages/core/src/tests/delegated-task-packet.test.ts`
+
 ---
 
 ## TUI (Ink) conventions
