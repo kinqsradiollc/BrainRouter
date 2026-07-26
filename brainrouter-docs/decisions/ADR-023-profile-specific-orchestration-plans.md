@@ -1,6 +1,6 @@
 # ADR-023 — Profile-Specific Orchestration Plans
 
-**Status:** Proposed for `release/0.4.17` · **Builds on** ADR-021 (workspace
+**Status:** Accepted for `release/0.4.17` · **Builds on** ADR-021 (workspace
 profiles) and ADR-022 (persona, orchestration, and context contracts) ·
 **Refines** ADR-022 sections 4, 5, 7, and 9 without changing their authority
 boundaries.
@@ -93,7 +93,8 @@ orchestration plan. It does not answer:
   pass is needed;
 - how the runtime should fall back when a role or skill is unavailable.
 
-The bundled role JSON also still reflects its engineering origin:
+At the time of this decision, the bundled role JSON still reflected its
+engineering origin:
 
 - `explorer` describes codebase investigation;
 - `architect` describes feature and system design;
@@ -1090,6 +1091,18 @@ change a workspace merely because orchestration plans are enabled.
   source. Generalized prompts are selected only with an authoritative resolved
   profile plan.
 - Run cross-profile role, tool, output-contract, and Engineering-parity tests.
+
+The implementation keeps two deliberately separate prompt sources. The
+physical bundled JSON contains the domain-neutral role posture used by an
+active resolved profile. A bounded compatibility table contains the exact
+pre-P23-4 Engineering descriptions and prompts used by no-manifest workspaces
+and `profiles.ts`-sourced execution. Registry and direct-role resolution require
+an explicit `{ activation: "active", orchestrationProfileId, strategyId }`
+context before selecting the neutral posture; preview, malformed, or absent
+context remains on the compatibility path. User, workspace, and pack role
+definitions are never rewritten by this selector. Prompt selection does not
+alter access, tool scope, disallowed tools, tier, limits, delegation, ownership,
+or output contracts.
 
 ### P23-5 — Research and Data Science plans
 
