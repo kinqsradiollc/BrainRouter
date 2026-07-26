@@ -1,5 +1,6 @@
 import { formatSessionSummary, type ChildSessionRecord } from '../session/orchestrator.js';
 import { parseChildOutput } from '../roles/outputContracts.js';
+import type { ParsedOutput } from '../roles/outputContracts.js';
 
 export function summarize(record: ChildSessionRecord, includeOutput = false): Record<string, unknown> {
   const base: Record<string, unknown> = {
@@ -44,7 +45,42 @@ export function summarize(record: ChildSessionRecord, includeOutput = false): Re
     // fields (or the unparsed/missing signal) so `wait_agent --json` /
     // `wait_agents --json` callers get structured output, not just prose.
     const parsed = parseChildOutput(record.role, record.finalOutput);
-    if (parsed) base.contract = parsed;
+    if (parsed) {
+      base.contract = parsed;
+      base.result = delegatedResult(parsed);
+    }
+    if (record.delegatedTaskPacket) {
+      base.taskPacket = {
+        schemaVersion: record.delegatedTaskPacket.schemaVersion,
+        persona: record.delegatedTaskPacket.persona,
+        orchestration: record.delegatedTaskPacket.orchestration,
+        capabilities: record.delegatedTaskPacket.capabilities.active,
+        toolPolicyCeiling: {
+          accessMode: record.delegatedTaskPacket.toolPolicyCeiling.accessMode,
+          localToolCount: record.delegatedTaskPacket.toolPolicyCeiling.localTools.length,
+          mcpToolCount: record.delegatedTaskPacket.toolPolicyCeiling.mcpTools.length,
+        },
+        budgets: record.delegatedTaskPacket.budgets,
+      };
+    }
   }
   return base;
+}
+
+function delegatedResult(parsed: ParsedOutput): Record<string, unknown> {
+  const pick = (...keys: string[]): string[] =>
+    keys.map((key) => parsed.fields[key]).filter((value): value is string => Boolean(value));
+  return {
+    conclusions: pick('headline', 'recommendation'),
+    evidence: pick('facts', 'filesRead', 'commands', 'findings', 'tradeoffs'),
+    changes: pick('filesChanged', 'summary', 'firstSlice'),
+    verification: pick('passFail', 'commands', 'testsSuggested'),
+    unresolved: pick('openQuestions', 'risks', 'outOfScope', 'nextProbe'),
+    failures: [
+      ...pick('failures'),
+      ...(parsed.missing.length > 0
+        ? [`Missing required output fields: ${parsed.missing.join(', ')}`]
+        : []),
+    ],
+  };
 }

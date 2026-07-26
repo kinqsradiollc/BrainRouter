@@ -6,6 +6,7 @@ export * from './session/orchestrator.js';
 export * from './tools.js';
 export * from './roles/roles.js';
 export * from './delegation/parentContext.js';
+export * from './delegation/taskPacket.js';
 export * from './delegation/delegationPolicy.js';
 export * from './delegation/autoChain.js';
 export * from './agents/agentRegistry.js';

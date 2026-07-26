@@ -268,6 +268,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       const hardVisible =
         allowed.has(t.name) &&
         (!this.toolScope?.local.length || this.toolScope.local.includes(t.name)) &&
+        (!this.authorityToolCeiling || this.authorityToolCeiling.local.includes(t.name)) &&
         !disallowedLocalSet.has(t.name) &&
         workspaceAllowsLocalTool(t.name) &&
         skillAllowsTool(t.name);
@@ -325,6 +326,15 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         disallow: [...effectiveDisallowed, ...overrideForceOffNames],
       });
     }
+    if (this.authorityToolCeiling) {
+      visibleMcpTools = visibleMcpTools.filter((tool: any) =>
+        toolNameMatchesAny(String(tool?.name ?? ''), this.authorityToolCeiling!.mcp),
+      );
+    }
+    // Preserve the authorized MCP ceiling before progressive discovery and
+    // relevance budgeting hide model-facing schemas. Those are prompt-size
+    // controls, not permission changes.
+    const authorizedMcpTools = [...visibleMcpTools];
     // Snapshot the user-force-on MCP tools so the discovery/budget step below can't
     // hide them — captured AFTER scope filtering (force-on never overrides force-off
     // or the agent-def allowlist).
@@ -369,6 +379,9 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       const ownerName = registryEntry(tool.name)?.name ?? tool.name;
       return registryToolAllowed(tool.name, this.accessMode)
         && (!this.toolScope?.local.length || this.toolScope.local.includes(tool.name) || this.toolScope.local.includes(ownerName))
+        && (!this.authorityToolCeiling
+          || this.authorityToolCeiling.local.includes(tool.name)
+          || this.authorityToolCeiling.local.includes(ownerName))
         && !disallowedLocalSet.has(tool.name)
         && !disallowedLocalSet.has(ownerName)
         && workspaceAllowsLocalTool(tool.name)
@@ -777,7 +790,17 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           return `${explanation}${items}`;
         } catch { return null; }
       },
-      parentVisibleTools: () => mcpTools.map((t: any) => String(t.name)).filter(Boolean),
+      parentContextEnvelope: () => buildRootContextEnvelope(this.chatHistory, {
+        executionId: this.sessionKey,
+      }),
+      parentSourceFiles: () => [...this.filesRead],
+      parentVisibleTools: () => allTools.map((tool: any) => String(tool.name)).filter(Boolean),
+      parentVisibleLocalTools: () => [...filteredLocalTools, ...delegateTools]
+        .map((tool: any) => String(tool.name))
+        .filter(Boolean),
+      parentVisibleMcpTools: () => authorizedMcpTools
+        .map((tool: any) => String(tool.name))
+        .filter(Boolean),
       // Snapshot the parent's ACTIVE SESSION stance at spawn time (session
       // override > workspace pref) so the child records the mode the parent
       // was actually running — not a workspace default a later, unrelated

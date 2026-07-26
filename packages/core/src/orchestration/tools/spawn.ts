@@ -18,8 +18,16 @@ import { readPreferences } from '../../session/preferences/preferencesStore.js';
 import { resolveAutoChainMode, autoChainRoles } from '../delegation/autoChain.js';
 import { resolveDelegationPolicy, evaluateDelegationGate } from '../delegation/delegationPolicy.js';
 import { buildParentExecutionContextSnapshot } from '../delegation/parentContext.js';
+import {
+  buildDelegatedTaskPacket,
+  renderDelegatedTaskPacket,
+} from '../delegation/taskPacket.js';
 import { enqueueCompletion } from '../../session/completion/completionInbox.js';
 import { getOutputContract } from '../roles/outputContracts.js';
+import { loadWorkspaceManifest } from '../../workspace/manifest.js';
+import { resolveWorkspaceCapabilities } from '../../workspace/capabilities.js';
+import { workspaceToolProfileIds } from '../../workspace/toolProfiles.js';
+import { contextWindowForBudget } from '../../context/contextWindow.js';
 import { emitAgentRouteFeedback, emitAgentEvent, agentOutputEvent, type RouteOutcome } from '../../memory/memoryEvents.js';
 import { prepareChildWorkspace, removeChildWorktree, isSharedWorktreeOf, sharedWorktreeLaunchCwd, mergeBackLine, worktreePatchFile, type WorktreeHoldReason, type ChildWorkspaceResolution } from '../../worktree/worktreeIsolation.js';
 import type { OrchestrationContext } from './context.js';
@@ -282,11 +290,62 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
     ownership,
     outputContract: getOutputContract(role.name)?.id ?? null,
   });
-  updateSession(ctx.workspaceRoot, record.id, { parentContext: snapshot });
+  const manifest = loadWorkspaceManifest(ctx.workspaceRoot);
+  const childLlm = resolveAgentLlm(loadOrInitConfig(), ctx.llmConfig, role.name);
+  const selectedPersona = manifest?.persona.enabled.includes(role.name)
+    ? role.name
+    : manifest?.persona.default ?? role.name;
+  const delegatedCapabilities = resolveWorkspaceCapabilities({
+    manifest,
+    activeAgent: selectedPersona,
+    task: effectivePrompt,
+    availability: { toolProfiles: workspaceToolProfileIds() },
+  });
+  const outputContract = getOutputContract(role.name);
+  const knobs = getCliKnobs();
+  const taskPacket = buildDelegatedTaskPacket({
+    task: effectivePrompt,
+    personaId: selectedPersona,
+    roleId: role.name,
+    capabilities: delegatedCapabilities,
+    accessMode: access,
+    expectedOutput: outputContract
+      ? {
+          contractId: outputContract.id,
+          description: outputContract.description,
+          requiredSections: outputContract.fields.map((field) => field.heading),
+        }
+      : undefined,
+    goal: parentGoal,
+    ownership,
+    workspaceInstructionsHash: snapshot.workspaceInstructionsHash,
+    executionMode: parentExecutionMode,
+    reviewPolicy: parentReviewPolicy,
+    planState: parentPlan,
+    recalledRecordIds: parentRecalledIds,
+    memoryExcerpt: parentBriefing,
+    sourceFiles: ctx.parentSourceFiles?.(),
+    parentEnvelope: ctx.parentContextEnvelope?.(),
+    localTools: ctx.parentVisibleLocalTools?.(),
+    mcpTools: ctx.parentVisibleMcpTools?.(),
+    disallowedTools: childDisallowedTools,
+    budgets: {
+      maxWallClockMs: knobs.childAgentTimeoutMs,
+      maxPromptTokens: contextWindowForBudget(childLlm.model),
+      maxCompletionTokens: knobs.maxOutputTokens ?? 16_000,
+      maxIterations: knobs.maxToolLoops,
+      maxDepth,
+      maxOutputChars: Math.max(4_000, knobs.agentPreviewChars * 8),
+    },
+  });
+  updateSession(ctx.workspaceRoot, record.id, {
+    parentContext: snapshot,
+    delegatedTaskPacket: taskPacket,
+  });
   appendTranscriptEntry(childWorkspaceRoot, childKey, {
     role: 'system',
-    name: 'parent_context',
-    content: JSON.stringify(snapshot),
+    name: 'delegated_task_packet',
+    content: JSON.stringify(taskPacket),
   });
 
   const basePrompt = buildSystemPrompt({
@@ -296,6 +355,7 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
     instructionSummary: loadWorkspaceInstructionSummary(childWorkspaceRoot),
   });
   let systemPromptOverride = buildRolePrompt(role, basePrompt, '');
+  systemPromptOverride += `\n\n${renderDelegatedTaskPacket(taskPacket)}`;
   if (seededIds.length > 0) {
     systemPromptOverride +=
       `\n\n## Parent-recalled BrainRouter records\n` +
@@ -320,7 +380,6 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
   // (config.providers + config.agentModels). Falls back to the parent's LLM
   // (ctx.llmConfig — which already honors any per-session override) when the
   // role has no assignment, so default behavior is unchanged.
-  const childLlm = resolveAgentLlm(loadOrInitConfig(), ctx.llmConfig, role.name);
   const childAgent = new Agent(ctx.mcpClient, childLlm, {
     workspaceRoot: childWorkspaceRoot,
     launchCwd: childLaunchCwd,
@@ -350,6 +409,10 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
     ownership,
     // MAS-P4-T1: the agent def's tool scope limits the child's MCP surface.
     toolScope: childToolScope,
+    authorityToolCeiling: {
+      local: taskPacket.toolPolicyCeiling.localTools,
+      mcp: taskPacket.toolPolicyCeiling.mcpTools,
+    },
     disallowedTools: childDisallowedTools,
     // 0.4.x-5: per-child reasoning-effort override.
     effortOverride,
