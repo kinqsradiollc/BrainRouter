@@ -54,6 +54,10 @@ Engineering keeps the current investigate/design/build/review/verify behavior.
 Research, Study, Writing, and Data Science receive different plans rather than
 being forced through an engineering-shaped child-agent loop.
 
+Tool and skill selection becomes catalog-backed: profile bundles are readable
+recommendations, Custom can select individual safe entries, and every effective
+selection remains beneath the existing authority and runtime ceilings.
+
 ## Context
 
 ADR-022 correctly separated domain persona from executable orchestration role
@@ -135,6 +139,8 @@ limit.
 9. Execution traces must explain which plan, strategy, stage, and role were
    selected.
 10. Implementation must ship through small, independently reviewable PRs.
+11. Onboarding must explain built-in tools and skills through the same catalog
+    the runtime validates, rather than requiring users to enter internal IDs.
 
 ## Decision
 
@@ -680,6 +686,142 @@ The plan executor therefore has one lifecycle owner and records each stage as
 This makes the active-turn guard both a security boundary and a useful
 diagnostic, rather than a source of repeated failed delegation rows.
 
+### 12. Make tool and skill selection catalog-driven and profile-aware
+
+The current workspace manifest has `tools.profiles` and `tools.deny`. Its
+built-in group registry maps only five product-level IDs (`coding`, `terminal`,
+`browser`, `notes`, and `design`) to concrete tools. The Desktop and CLI
+onboarding editors currently accept those IDs, denied-tool IDs, skill-pack IDs,
+and skill IDs as free-form lists.
+
+That is insufficient for a profile-aware system: it conceals the available
+surface, makes Custom unnecessarily dependent on internal names, and lets a
+user select a misspelled or unavailable identifier without understanding what
+will be effective at runtime.
+
+#### 12.1 One inspectable catalog, not UI-maintained lists
+
+Core exposes a bounded catalog query assembled from the existing authoritative
+registries. A catalog entry includes only safe metadata:
+
+```text
+id, kind, label, short description, category, source/provenance,
+access tier, action kind, required capability or extension,
+runtime availability prerequisites, selectable state, and reason when blocked
+```
+
+The catalog is the only source for onboarding pickers, CLI review output,
+strategy previews, and manifest validation. It must not contain a credential,
+absolute path, raw plugin prompt, MCP response, or other sensitive workspace
+content.
+
+Catalog entries are classified as follows:
+
+| Entry | Source of truth | Persistable selection | Notes |
+|---|---|---|---|
+| Built-in local tool | Required core tool catalog | Yes, by stable tool ID | Includes the tool's access/action/runtime metadata; the UI does not duplicate it |
+| Built-in tool group | Workspace tool-profile registry | Yes, by stable group ID | A convenience bundle, expanded only by core |
+| Built-in or installed skill | Existing skill discovery catalog | Yes, by stable skill ID | Shows description, pack/source, and availability; selection never embeds the skill body in the manifest |
+| Trusted plugin tool, group, or skill | Normal plugin discovery plus contribution validation | Yes only when its stable contribution is installed and enabled | Shows plugin provenance and becomes blocked when disabled or unavailable |
+| MCP/server-advertised tool | Live MCP discovery | No individual tool-name persistence | The manifest selects the reviewed MCP/capability surface; dynamic server tools remain runtime-discovered and policy-gated |
+
+The selector reads the same discovery result the runtime uses. It must never
+scan arbitrary files from the renderer or treat a label, description, or model
+proposal as executable authority.
+
+#### 12.2 Version the tool-selection semantic, not an orchestration-plan ID
+
+ADR-023 does not require a manifest version merely to name an orchestration
+profile. It *does* require a manifest v3 migration for the distinct,
+behavior-changing tool-selection semantic:
+
+```json
+{
+  "tools": {
+    "mode": "explicit-catalog",
+    "profiles": ["coding", "terminal"],
+    "enabled": ["web_search"],
+    "deny": ["computer_use"]
+  }
+}
+```
+
+`profiles` remains a readable convenience bundle. `enabled` is a checked,
+stable catalog ID for a specific selectable tool or trusted contribution.
+`deny` remains an explicit final subtraction. The parser rejects unknown,
+disabled, or non-persistable entries; onboarding presents those entries as
+blocked instead of silently preserving a typo.
+
+For `explicit-catalog`, core computes:
+
+```text
+requested = expanded selected groups ∪ individually enabled entries
+effective = requested
+  ∩ runtime availability
+  ∩ capability and extension gates
+  ∩ persona/role/tool-scope and parent ceilings
+  ∩ access, approval, and user policy
+  − explicit deny
+```
+
+No selection can widen a role, capability, extension, parent, runtime, or user
+policy. A tool that is unavailable in the current session remains visible with
+its reason but is neither model-visible nor executable. Runtime checks still
+enforce every operation after this selection calculation.
+
+Manifest v2 uses `mode: "legacy-groups"` on read. It preserves today's behavior:
+the existing group gate applies to its managed surface while tools outside that
+legacy registry retain their present visibility. Migration to
+`explicit-catalog` is a reviewed user action; it is never inferred from an old
+list. A no-manifest workspace remains an exact no-op.
+
+#### 12.3 Recommended starting selections are defaults, not grants
+
+The existing profile defaults establish the compatibility baseline. The
+catalog-driven picker presents these as recommended checked bundles, explains
+their concrete tools, and lets the user narrow them before review:
+
+| Workspace profile | Current/recommended tool selection | Normal purpose | Not a default grant |
+|---|---|---|---|
+| Engineering | `coding`, `terminal`, `browser` | Read/edit code, use LSP, run bounded verification, and research when needed | Computer control, connectors, MCP, workflows, and every child role still require their own policy and availability |
+| Research | `browser`, `notes` | Gather sources and maintain research notes/artifacts | File edits, shell, and child fan-out are not baseline research tools |
+| Data Science | `coding`, `terminal`, `browser` | Read/edit notebooks or analysis code, run experiments, and research methods/data | External connectors, computer control, and write-capable children remain explicit choices |
+| Study | `browser`, `notes` | Source lookup plus learning notes/artifacts | Shell, file-editing, and ordinary child fan-out are not baseline tutoring tools |
+| Writing | `notes`, `browser` | Draft/revise artifacts and research sources | File-editing and shell require an explicit authoring/project choice |
+| Custom | Empty | Start from direct primary execution and select only understood entries | No hidden profile bundle or inferred tool grant |
+
+The picker groups the complete built-in catalog by user intent—files and code,
+terminal and computer control, web and research, notes and artifacts,
+MCP/LSP/connectors, planning/session state, orchestration/workflows, and
+security review—while retaining the exact catalog ID and policy metadata in the
+details view. It is therefore possible to choose a small Custom surface without
+having to know the implementation group names.
+
+#### 12.4 Reviewed picker UX in Desktop and CLI
+
+The workspace onboarding and later workspace-edit flows replace free-text tool,
+skill-pack, and skill-ID list inputs with catalog-backed multi-select controls.
+They must:
+
+- show a short description, source, and concrete expansion for every selected
+  group, tool, pack, and skill;
+- distinguish **recommended**, **selected**, **available**, **blocked**, and
+  **denied** states, with the effective-policy reason for a blocked item;
+- offer profile recommendations first, then an "Advanced" view for individual
+  tool and skill selections;
+- allow Custom to begin empty, search/filter the catalog, select a group or
+  individual entries, and review the exact manifest diff before save;
+- show dynamic MCP tools as live, non-persisted information rather than
+  checkboxes that imply a durable tool contract;
+- preserve keyboard accessibility and provide the equivalent numbered picker
+  and review summary in the CLI;
+- re-resolve the proposed selection immediately before write and show any
+  catalog/profile drift as a reviewable conflict rather than writing stale IDs.
+
+The UI is a discovery and review surface. It does not directly change the
+process-global extension registry, bypass the preload/query boundary, or call a
+tool merely because its checkbox is selected.
+
 ## Profile behavior summary
 
 | Concern | Engineering | Research | Data Science | Study | Writing | Custom |
@@ -691,6 +833,7 @@ diagnostic, rather than a source of repeated failed delegation rows.
 | Verification meaning | Tests/build/runtime evidence | Citation support and source consistency | Reproduction and metric checks | Assessment and retrieval practice | Requirement/style conformance | User-defined |
 | Write-capable role | Worker when authorized | None by default | Worker when authorized | None | Primary only | None by default |
 | Final synthesis | Primary engineer | Primary researcher | Primary data scientist | Primary tutor | Primary writer | Primary |
+| Recommended tool bundles | coding, terminal, browser | browser, notes | coding, terminal, browser | browser, notes | notes, browser | none |
 
 ## Security and authority invariants
 
@@ -714,6 +857,12 @@ diagnostic, rather than a source of repeated failed delegation rows.
     child or workflow is created.
 13. An orchestration tool never executes after its owning active turn ends;
     pending ephemeral stages are cancelled rather than replayed.
+14. A catalog selection is a narrowing request, never a tool, capability,
+    extension, role, parent, access, approval, or runtime-authority grant.
+15. Dynamic MCP/server tool names are never persisted as a workspace tool
+    selection.
+16. Manifest v2 keeps its legacy group semantics until a user reviews an
+    explicit-catalog migration.
 
 ## Alternatives considered
 
@@ -726,6 +875,8 @@ diagnostic, rather than a source of repeated failed delegation rows.
 | Store the complete graph in each workspace manifest | Fully portable and user-editable | Large/noisy manifest, hard migrations, duplicated plans, poor plugin reuse, and an oversized committable execution surface | Rejected |
 | Reuse durable workflow definitions as the profile contract | Existing graph/run infrastructure | Loading a profile is not launching a durable workflow; lifecycle, writes, artifacts, and resume semantics are too strong for task eligibility | Rejected as the public contract; selected plans may compile to internal phases |
 | Retry or defer raw orchestration tool calls after the parent turn | Can appear to continue a selected strategy without another model turn | Bypasses the active-turn authority boundary, duplicates launches, and produces misleading failed delegation traces | Rejected |
+| Keep free-form tool and skill identifier fields | Small UI change; advanced users can type any string | Users cannot discover the built-ins, typos and unavailable IDs are opaque, and Custom is not safely self-service | Rejected |
+| Persist every currently advertised MCP tool name | Familiar checkbox model | Server catalogs and schemas are dynamic; names are not a durable reviewed authority contract | Rejected |
 | Add bounded orchestration-profile JSON referencing reusable roles | Separates topology from authority, supports all profiles, remains inspectable and extensible, and composes with ADR-022 packets | Adds a schema, loader, resolver, plan catalog, and migration work | Accepted |
 
 ## Consequences
@@ -747,6 +898,8 @@ diagnostic, rather than a source of repeated failed delegation rows.
   child appeared.
 - Rejected launches are distinguishable from real delegated work, without
   weakening the active-turn security boundary.
+- Users can discover available tools and skills, see why an item is blocked,
+  and make a reviewed Custom selection without manually entering internal IDs.
 
 ### Costs
 
@@ -757,6 +910,8 @@ diagnostic, rather than a source of repeated failed delegation rows.
 - Profile plans and their referenced roles/skills need cross-catalog parity
   tests.
 - Plugin disclosure and publishing validation gain another component kind.
+- The manifest, parser, resolver, CLI, Desktop, and compatibility diagnostics
+  need a focused v3 tool-selection migration.
 
 ### Risks and mitigations
 
@@ -771,12 +926,17 @@ diagnostic, rather than a source of repeated failed delegation rows.
 | Existing Engineering flow regresses | First implementation plan encodes current Engineering parity and ships before other profiles |
 | Invalid optional stages hide missing functionality | Structured skip diagnostics and visible onboarding/runtime summaries |
 | A deferred plan invokes a child tool after its turn | One lifecycle owner cancels ephemeral stages at turn end; runtime emits one terminal diagnostic and the UI distinguishes pre-launch rejection from delegation |
+| Picker suggests a tool the runtime cannot use | Catalog carries availability/provenance; core re-resolves before write and at turn time; blocked entries show a reason and cannot become authority |
+| v3 changes a v2 workspace's visible tool surface | Preserve `legacy-groups` on v2 read; require an explicit reviewed migration before applying `explicit-catalog` semantics |
 
 ## Compatibility
 
 - Existing manifest v2 files remain valid.
 - Existing `packages/core/agents/*.json` role IDs remain stable.
 - No-manifest workspaces preserve existing behavior.
+- Manifest v2 files continue using their current group/deny behavior. A v3
+  writer adds `tools.mode` and `tools.enabled`; it does not silently rewrite a
+  v2 workspace into explicit-catalog mode.
 - During migration, before the plan resolver becomes authoritative, runtime
   behavior remains the current manifest-filtered role registry. After
   activation, a missing or invalid plan fails closed to direct primary
@@ -825,6 +985,18 @@ Each item is a separate small PR and security preview.
 - Add direct/investigate, interruption, session-switch, duplicate-error, and
   trace-label regression tests.
 
+### P23-3b — Catalog-backed tool-selection contract
+
+- Build the safe built-in, trusted-contribution, and skill catalog descriptors
+  from their authoritative registries; do not create UI-maintained lists.
+- Add manifest v3 `tools.mode` and `tools.enabled`, strict stable-ID validation,
+  legacy-v2 normalization, and content-free migration diagnostics.
+- Resolve explicit selections through all existing policy/availability ceilings;
+  retain final deny precedence and runtime enforcement.
+- Keep dynamic MCP tools non-persisted and expose their live status separately.
+- Add profile-default, Custom-empty, typo/disabled-entry, plugin-provenance,
+  v2-compatibility, and no-manifest parity tests.
+
 ### P23-4 — Domain-neutral reusable roles
 
 - Generalize explorer, architect, worker, reviewer, and verifier prompts.
@@ -855,8 +1027,11 @@ Each item is a separate small PR and security preview.
 ### P23-8 — Onboarding and product surfaces
 
 - Derive profile defaults from the plan catalog.
-- Preview plan, strategy, stages, roles, skills, and effective ceilings in CLI
-  and Desktop.
+- Replace free-text tool-profile/tool-deny/skill-list editing with catalog-backed
+  Desktop and CLI pickers, including concrete group expansion and policy-state
+  explanations.
+- Preview plan, strategy, stages, roles, skills, tools, and effective ceilings
+  in CLI and Desktop.
 - Preserve user review before any manifest write.
 
 ### P23-9 — Plugin and workspace contributions
@@ -865,6 +1040,8 @@ Each item is a separate small PR and security preview.
   consent.
 - Add workspace/local discovery with first-match precedence.
 - Add collision and unavailable-reference diagnostics.
+- Surface trusted plugin tool/skill contributions with provenance in the
+  catalog; never persist volatile MCP tool names.
 
 ### P23-10 — Compatibility telemetry and cleanup
 
@@ -904,6 +1081,17 @@ Each item is a separate small PR and security preview.
     diagnostic and no retry loop.
 18. Desktop and CLI trace a rejected pre-launch call as a failed-to-start
     delegation, never as delegated work.
+19. Onboarding and workspace editing present built-in tools, groups, skill
+    packs, and skills as catalog-backed choices rather than free-form ID lists.
+20. Every visible catalog entry explains whether it is recommended, selected,
+    available, blocked, or denied; a blocked entry cannot become executable by
+    selection alone.
+21. Custom begins with an empty explicit selection and can select a minimal
+    reviewed surface without entering internal IDs manually.
+22. A v2 workspace retains its current tool-group behavior until the user
+    explicitly reviews a v3 explicit-catalog migration.
+23. Dynamic MCP tool names are visible only as live runtime information and
+    never written to the workspace manifest.
 
 ## Non-goals
 
