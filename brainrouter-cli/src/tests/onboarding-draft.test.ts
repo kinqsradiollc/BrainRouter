@@ -14,8 +14,10 @@ const root = '/Users/dev/example';
 
 test('engineering drafts use one engineer with frontend as a task capability', () => {
   const draft = createProjectOnboardingDraft({ workspaceRoot: root, profile: 'engineering' });
-  assert.equal(draft.agents.default, 'engineer');
-  assert.deepEqual(draft.agents.enabled, ['engineer']);
+  assert.equal(draft.persona.default, 'engineer');
+  assert.deepEqual(draft.persona.enabled, ['engineer']);
+  assert.equal(draft.orchestration.mode, 'adaptive');
+  assert.deepEqual(draft.orchestration.disabledRoles, ['fleet']);
   assert.deepEqual(draft.capabilities.enabled, ['frontend']);
   assert.ok(!JSON.stringify(draft).includes('frontend-builder'));
 });
@@ -27,11 +29,12 @@ test('same-profile edits preserve normalized forward fields without sharing arra
   };
   const draft = createProjectOnboardingDraft({ workspaceRoot: root, profile: 'research', existing });
   assert.deepEqual(draft, existing);
-  assert.notEqual(draft.agents.enabled, existing.agents.enabled);
+  assert.notEqual(draft.persona.enabled, existing.persona.enabled);
+  assert.notEqual(draft.orchestration.availableRoles, existing.orchestration.availableRoles);
   assert.notEqual(draft.extra, existing.extra);
 });
 
-test('profile changes reset preset fields but retain durable identity and safe forward fields', () => {
+test('profile changes reset preset fields while retaining identity and safe forward fields', () => {
   const existing = {
     ...createWorkspaceManifest({ name: 'kept-name', profile: 'research', by: 'import', at: '2026-01-02T03:04:05.000Z' }),
     version: 7,
@@ -49,11 +52,15 @@ test('profile changes reset preset fields but retain durable identity and safe f
   assert.deepEqual(draft.capabilities.enabled, ['frontend']);
 });
 
-test('reviewed edits de-duplicate fields, include the default agent, and honor denies', () => {
+test('reviewed edits de-duplicate fields, include the default persona, and honor denies', () => {
   const draft = createProjectOnboardingDraft({ workspaceRoot: root, profile: 'custom' });
   const edited = applyProjectOnboardingEdits(draft, {
-    agentDefault: ' engineer ',
-    agentsEnabled: ['reviewer', 'reviewer'],
+    personaDefault: ' engineer ',
+    personasEnabled: ['researcher', 'researcher'],
+    orchestrationMode: 'adaptive',
+    orchestrationAvailableRoles: ['worker', 'reviewer', 'worker', 'fleet'],
+    orchestrationDisabledRoles: ['fleet', 'fleet'],
+    orchestrationMaxParallel: 3,
     capabilitiesEnabled: ['frontend', 'frontend', 'browser'],
     capabilitiesDisabled: ['browser'],
     skillPacks: ['engineering', 'engineering'],
@@ -65,8 +72,14 @@ test('reviewed edits de-duplicate fields, include the default agent, and honor d
     memoryCaptureHint: ' code ',
     instructions: ' AGENT.md ',
   });
-  assert.deepEqual(edited.persona.enabled, ['engineer', 'reviewer']);
+  assert.deepEqual(edited.persona.enabled, ['engineer', 'researcher']);
   assert.deepEqual(edited.agents, edited.persona);
+  assert.deepEqual(edited.orchestration, {
+    mode: 'adaptive',
+    availableRoles: ['worker', 'reviewer'],
+    disabledRoles: ['fleet'],
+    maxParallel: 3,
+  });
   assert.deepEqual(edited.capabilities.enabled, ['frontend']);
   assert.deepEqual(edited.capabilities.disabled, ['browser']);
   assert.deepEqual(edited.skills.packs, ['engineering']);

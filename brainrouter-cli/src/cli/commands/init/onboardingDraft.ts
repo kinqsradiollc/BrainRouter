@@ -8,8 +8,12 @@ import {
 } from '@kinqs/brainrouter-core/workspace';
 
 export interface ProjectOnboardingFieldEdits {
-  agentDefault: string;
-  agentsEnabled: string[];
+  personaDefault: string;
+  personasEnabled: string[];
+  orchestrationMode: 'off' | 'explicit' | 'adaptive';
+  orchestrationAvailableRoles: string[];
+  orchestrationDisabledRoles: string[];
+  orchestrationMaxParallel: number;
   capabilitiesEnabled: string[];
   capabilitiesDisabled: string[];
   skillPacks: string[];
@@ -62,14 +66,23 @@ export function applyProjectOnboardingEdits(
   draft: WorkspaceManifest,
   edits: ProjectOnboardingFieldEdits,
 ): WorkspaceManifest {
-  const agentDefault = edits.agentDefault.trim();
-  const agentsEnabled = unique(edits.agentsEnabled);
-  if (agentDefault && !agentsEnabled.includes(agentDefault)) agentsEnabled.unshift(agentDefault);
+  const personaDefault = edits.personaDefault.trim();
+  const personasEnabled = unique(edits.personasEnabled);
+  if (personaDefault && !personasEnabled.includes(personaDefault)) personasEnabled.unshift(personaDefault);
+  const disabledRoles = unique(edits.orchestrationDisabledRoles);
+  const disabledRoleSet = new Set(disabledRoles);
   return normalizeWorkspaceManifest({
     ...draft,
-    persona: { default: agentDefault, enabled: agentsEnabled },
+    persona: { default: personaDefault, enabled: personasEnabled },
     // Keep the serialized v1 compatibility alias synchronized while readers migrate.
-    agents: { default: agentDefault, enabled: agentsEnabled },
+    agents: { default: personaDefault, enabled: personasEnabled },
+    orchestration: {
+      mode: edits.orchestrationMode,
+      availableRoles: unique(edits.orchestrationAvailableRoles)
+        .filter((role) => !disabledRoleSet.has(role)),
+      disabledRoles,
+      maxParallel: edits.orchestrationMaxParallel,
+    },
     capabilities: {
       enabled: unique(edits.capabilitiesEnabled),
       disabled: unique(edits.capabilitiesDisabled),

@@ -35,6 +35,9 @@ function reviewingPrompt(options: {
     if (request.id === options.cancelAt) return { kind: 'cancel' };
     if (request.id === 'start') return { kind: 'submit', value: 'continue' };
     if (request.id === 'profile') return { kind: 'submit', value: request.initialChoice ?? 'engineering' };
+    if (request.id === 'orchestration-mode') {
+      return { kind: 'submit', value: request.initialChoice ?? 'off' };
+    }
     if (request.id === 'instruction-change') {
       return { kind: 'submit', value: options.instruction ?? 'apply' };
     }
@@ -71,7 +74,13 @@ function modelProposal(): string {
   return JSON.stringify({
     profile: 'engineering',
     reasons: ['The project description and bounded repository evidence indicate a web application.'],
-    agents: { default: 'engineer', enabled: ['engineer'] },
+    persona: { default: 'engineer', enabled: ['engineer'] },
+    orchestration: {
+      mode: 'adaptive',
+      availableRoles: ['explorer', 'architect', 'worker', 'reviewer', 'verifier'],
+      disabledRoles: ['fleet'],
+      maxParallel: 4,
+    },
     capabilities: { enabled: ['frontend'], disabled: [] },
     skills: { packs: ['engineering'], enabled: ['frontend-design'], disabled: [] },
     tools: { profiles: ['browser'], deny: [] },
@@ -91,8 +100,9 @@ test('deterministic scan reviews a complete proposal before creating the manifes
     assert.equal(result.status, 'committed');
     const saved = loadWorkspaceManifest(root);
     assert.ok(saved);
-    assert.equal(saved.agents.default, 'engineer');
-    assert.deepEqual(saved.agents.enabled, ['engineer']);
+    assert.equal(saved.persona.default, 'engineer');
+    assert.deepEqual(saved.persona.enabled, ['engineer']);
+    assert.equal(saved.orchestration.mode, 'adaptive');
     assert.deepEqual(saved.capabilities.enabled, ['frontend']);
     assert.equal(fs.existsSync(path.join(root, 'AGENT.md')), false);
     assert.ok(output.some((message) => message.includes('Workspace scan')));
@@ -125,7 +135,7 @@ test('assisted initializer makes one bounded proposal call and reviews the model
     );
     assert.equal(calls, 1);
     assert.equal(result.status, 'committed');
-    assert.equal(loadWorkspaceManifest(root)?.agents.default, 'engineer');
+    assert.equal(loadWorkspaceManifest(root)?.persona.default, 'engineer');
     assert.deepEqual(loadWorkspaceManifest(root)?.capabilities.enabled, ['frontend']);
     assert.ok(output.some((message) => message.includes('Proposal source') && message.includes('managed model')));
   } finally {
@@ -154,7 +164,7 @@ test('assisted initializer safely labels a model failure and reviews the determi
     );
     assert.equal(calls, 1);
     assert.equal(result.status, 'committed');
-    assert.equal(loadWorkspaceManifest(root)?.agents.default, 'engineer');
+    assert.equal(loadWorkspaceManifest(root)?.persona.default, 'engineer');
     assert.ok(output.some((message) => message.includes('deterministic fallback (model request failed)')));
     assert.equal(output.some((message) => message.includes('sk-do-not-print')), false);
     assert.equal(output.some((message) => message.includes('OPENAI_API_KEY')), false);

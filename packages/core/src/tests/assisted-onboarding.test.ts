@@ -19,9 +19,22 @@ function modelProposal(profile = 'engineering'): string {
   return JSON.stringify({
     profile,
     reasons: ['The bounded evidence supports this profile.'],
-    agents: profile === 'engineering'
+    persona: profile === 'engineering'
       ? { default: 'engineer', enabled: ['engineer'] }
       : { default: 'researcher', enabled: ['researcher'] },
+    orchestration: profile === 'engineering'
+      ? {
+          mode: 'adaptive',
+          availableRoles: ['explorer', 'architect', 'worker', 'reviewer', 'verifier'],
+          disabledRoles: ['fleet'],
+          maxParallel: 4,
+        }
+      : {
+          mode: 'adaptive',
+          availableRoles: ['explorer', 'reviewer'],
+          disabledRoles: ['fleet'],
+          maxParallel: 3,
+        },
     capabilities: profile === 'engineering'
       ? { enabled: ['frontend'], disabled: [] }
       : { enabled: [], disabled: [] },
@@ -91,7 +104,8 @@ test('assisted onboarding is deterministic and no-write without a model or serve
     assert.equal(result.fallbackReason, 'model-unavailable');
     assert.equal(result.proposal.source, 'deterministic');
     assert.equal(result.proposal.manifest.profile, 'engineering');
-    assert.equal(result.proposal.manifest.agents.default, 'engineer');
+    assert.equal(result.proposal.manifest.persona.default, 'engineer');
+    assert.equal(result.proposal.manifest.orchestration.mode, 'adaptive');
     assert.deepEqual(result.proposal.manifest.capabilities.enabled, ['frontend']);
     assert.deepEqual(fs.readdirSync(workspace, { recursive: true }).map(String).sort(), beforeEntries);
     assert.equal(fs.readFileSync(path.join(workspace, 'package.json'), 'utf8'), beforePackage);

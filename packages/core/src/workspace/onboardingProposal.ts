@@ -61,9 +61,15 @@ const instructionContentsSchema = z.string()
 export const WorkspaceOnboardingModelProposalSchema = z.object({
   profile: z.enum(PROFILE_IDS),
   reasons: z.array(reasonSchema).min(1).max(12),
-  agents: z.object({
+  persona: z.object({
     default: identifierOrEmptySchema,
     enabled: identifierListSchema,
+  }).strict(),
+  orchestration: z.object({
+    mode: z.enum(['off', 'explicit', 'adaptive']),
+    availableRoles: identifierListSchema,
+    disabledRoles: identifierListSchema,
+    maxParallel: z.number().int().min(1).max(32),
   }).strict(),
   capabilities: z.object({
     enabled: identifierListSchema,
@@ -148,11 +154,13 @@ export function parseWorkspaceOnboardingProposal(
   const disabledCapabilitySet = new Set(disabledCapabilities);
   const disabledSkills = unique(parsed.data.skills.disabled);
   const disabledSkillSet = new Set(disabledSkills);
-  const legacyFrontendPersona = parsed.data.agents.default === 'frontend-builder' ||
-    parsed.data.agents.enabled.includes('frontend-builder');
-  const agentDefault = normalizeLegacyAgent(parsed.data.agents.default);
-  const enabledAgents = unique(parsed.data.agents.enabled.map(normalizeLegacyAgent).filter(Boolean));
-  if (agentDefault && !enabledAgents.includes(agentDefault)) enabledAgents.unshift(agentDefault);
+  const legacyFrontendPersona = parsed.data.persona.default === 'frontend-builder' ||
+    parsed.data.persona.enabled.includes('frontend-builder');
+  const personaDefault = normalizeLegacyAgent(parsed.data.persona.default);
+  const enabledPersonas = unique(parsed.data.persona.enabled.map(normalizeLegacyAgent).filter(Boolean));
+  if (personaDefault && !enabledPersonas.includes(personaDefault)) enabledPersonas.unshift(personaDefault);
+  const disabledRoles = unique(parsed.data.orchestration.disabledRoles);
+  const disabledRoleSet = new Set(disabledRoles);
 
   const manifest = createWorkspaceManifest({
     name: options.workspaceName,
@@ -160,9 +168,16 @@ export function parseWorkspaceOnboardingProposal(
     by: 'agent',
     at: new Date(atMs).toISOString(),
     overrides: {
-      agents: {
-        default: agentDefault,
-        enabled: enabledAgents.slice(0, ONBOARDING_PROPOSAL_MAX_COLLECTION_ENTRIES),
+      persona: {
+        default: personaDefault,
+        enabled: enabledPersonas.slice(0, ONBOARDING_PROPOSAL_MAX_COLLECTION_ENTRIES),
+      },
+      orchestration: {
+        mode: parsed.data.orchestration.mode,
+        availableRoles: unique(parsed.data.orchestration.availableRoles)
+          .filter((role) => !disabledRoleSet.has(role)),
+        disabledRoles,
+        maxParallel: parsed.data.orchestration.maxParallel,
       },
       capabilities: {
         enabled: unique([

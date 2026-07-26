@@ -27,6 +27,9 @@ function acceptingPrompt(options: {
   return async (request) => {
     if (request.id === 'start') return { kind: 'submit', value: 'continue' };
     if (request.id === 'profile') return { kind: 'submit', value: options.profile ?? 'engineering' };
+    if (request.id === 'orchestration-mode') {
+      return { kind: 'submit', value: options.text?.[request.id] ?? request.initialChoice ?? 'off' };
+    }
     if (request.id === 'confirm') {
       options.beforeConfirm?.();
       return { kind: 'submit', value: 'save' };
@@ -68,7 +71,7 @@ test('cancellation at profile, field, or confirmation writes nothing', async (t)
   }
 });
 
-test('final confirmation saves the reviewed engineer and frontend capability shape', async () => {
+test('final confirmation saves the reviewed persona, orchestration, and frontend capability shape', async () => {
   const root = makeWorkspace();
   try {
     const result = await runProjectOnboarding(root, {
@@ -79,7 +82,13 @@ test('final confirmation saves the reviewed engineer and frontend capability sha
     assert.equal(result.status, 'committed');
     const saved = loadWorkspaceManifest(root);
     assert.ok(saved);
-    assert.deepEqual(saved.agents, { default: 'engineer', enabled: ['engineer'] });
+    assert.deepEqual(saved.persona, { default: 'engineer', enabled: ['engineer'] });
+    assert.deepEqual(saved.orchestration, {
+      mode: 'adaptive',
+      availableRoles: ['explorer', 'architect', 'worker', 'reviewer', 'verifier'],
+      disabledRoles: ['fleet'],
+      maxParallel: 4,
+    });
     assert.deepEqual(saved.capabilities.enabled, ['frontend']);
     assert.ok(!JSON.stringify(saved).includes('frontend-builder'));
   } finally {
@@ -97,13 +106,21 @@ test('edit mode preserves safe forward fields while applying reviewed changes', 
     const result = await runProjectOnboarding(root, {
       edit: true,
       prompt: acceptingPrompt({
-        text: { 'capabilities-enabled': 'frontend, browser' },
+        text: {
+          'orchestration-available': 'worker, reviewer, fleet',
+          'orchestration-disabled': 'fleet',
+          'orchestration-max-parallel': 'not-a-number',
+          'capabilities-enabled': 'frontend, browser',
+        },
       }),
       print: () => undefined,
     });
     assert.equal(result.status, 'committed');
     const saved = loadWorkspaceManifest(root);
     assert.ok(saved);
+    assert.deepEqual(saved.orchestration.availableRoles, ['worker', 'reviewer']);
+    assert.deepEqual(saved.orchestration.disabledRoles, ['fleet']);
+    assert.equal(saved.orchestration.maxParallel, 4);
     assert.deepEqual(saved.capabilities.enabled, ['frontend', 'browser']);
     assert.deepEqual(saved.extra, { futureFlag: true });
   } finally {

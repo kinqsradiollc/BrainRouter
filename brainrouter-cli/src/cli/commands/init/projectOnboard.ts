@@ -27,8 +27,12 @@ export { suggestWorkspaceProfile, type ProfileSuggestion } from '@kinqs/brainrou
 export type ProjectOnboardingPromptId =
   | 'start'
   | 'profile'
-  | 'agent-default'
-  | 'agents-enabled'
+  | 'persona-default'
+  | 'personas-enabled'
+  | 'orchestration-mode'
+  | 'orchestration-available'
+  | 'orchestration-disabled'
+  | 'orchestration-max-parallel'
   | 'capabilities-enabled'
   | 'capabilities-disabled'
   | 'skill-packs'
@@ -94,8 +98,9 @@ export function resolveProfileAnswer(input: string, suggested: WorkspaceProfileI
 export function formatManifestSummary(manifest: WorkspaceManifest): string {
   const lines = [
     `${chalk.bold('Workspace')}: ${manifest.name}  ${chalk.gray(`(profile: ${manifest.profile})`)}`,
-    `  default agent: ${manifest.agents.default || chalk.gray('(none)')}`,
-    `  enabled agents: ${formatList(manifest.agents.enabled)}`,
+    `  default persona: ${manifest.persona.default || chalk.gray('(none)')}`,
+    `  enabled personas: ${formatList(manifest.persona.enabled)}`,
+    `  orchestration: ${manifest.orchestration.mode}; available: ${formatList(manifest.orchestration.availableRoles)}${formatDisabled(manifest.orchestration.disabledRoles)}; max parallel: ${manifest.orchestration.maxParallel}`,
     `  capabilities: ${formatList(manifest.capabilities.enabled)}${formatDisabled(manifest.capabilities.disabled)}`,
     `  skill packs: ${formatList(manifest.skills.packs)}`,
     `  enabled skills: ${formatList(manifest.skills.enabled)}${formatDisabled(manifest.skills.disabled)}`,
@@ -179,7 +184,7 @@ export async function runProjectOnboarding(
           { id: 'cancel', label: 'Cancel', description: 'Leave project files unchanged' },
         ]
       : [
-          { id: 'continue', label: 'Start setup', description: 'Profile, agents, capabilities, skills, tools, and memory' },
+          { id: 'continue', label: 'Start setup', description: 'Profile, persona, orchestration, capabilities, skills, tools, and memory' },
           { id: 'skip', label: 'Skip for now', description: 'Start without writing project files' },
         ],
     initialChoice: 'continue',
@@ -244,10 +249,41 @@ export async function collectProjectOnboardingEdits(
   prompt: ProjectOnboardingPrompt,
   draft: WorkspaceManifest,
 ): Promise<ProjectOnboardingFieldEdits | null> {
-  const agentDefault = await requestText(prompt, 'agent-default', 'Default domain agent', draft.agents.default, 'Step 2 of 4 · agents');
-  if (agentDefault === null) return null;
-  const agentsEnabled = await requestList(prompt, 'agents-enabled', 'Enabled domain agents', draft.agents.enabled, 'Step 2 of 4 · agents');
-  if (!agentsEnabled) return null;
+  const personaDefault = await requestText(prompt, 'persona-default', 'Default domain persona', draft.persona.default, 'Step 2 of 4 · persona');
+  if (personaDefault === null) return null;
+  const personasEnabled = await requestList(prompt, 'personas-enabled', 'Enabled domain personas', draft.persona.enabled, 'Step 2 of 4 · persona');
+  if (!personasEnabled) return null;
+  const orchestrationMode = await requestOrchestrationMode(prompt, draft.orchestration.mode);
+  if (!orchestrationMode) return null;
+  const orchestrationAvailableRoles = await requestList(
+    prompt,
+    'orchestration-available',
+    'Available orchestration roles',
+    draft.orchestration.availableRoles,
+    'Step 2 of 4 · orchestration',
+  );
+  if (!orchestrationAvailableRoles) return null;
+  const orchestrationDisabledRoles = await requestList(
+    prompt,
+    'orchestration-disabled',
+    'Disabled orchestration roles',
+    draft.orchestration.disabledRoles,
+    'Step 2 of 4 · orchestration',
+  );
+  if (!orchestrationDisabledRoles) return null;
+  const orchestrationMaxParallelRaw = await requestText(
+    prompt,
+    'orchestration-max-parallel',
+    'Maximum parallel roles',
+    String(draft.orchestration.maxParallel),
+    'Step 2 of 4 · orchestration',
+  );
+  if (orchestrationMaxParallelRaw === null) return null;
+  const parsedMaxParallel = Number(orchestrationMaxParallelRaw.trim());
+  const orchestrationMaxParallel = Number.isInteger(parsedMaxParallel) &&
+    parsedMaxParallel >= 1 && parsedMaxParallel <= 32
+    ? parsedMaxParallel
+    : draft.orchestration.maxParallel;
   const capabilitiesEnabled = await requestList(prompt, 'capabilities-enabled', 'Available task capabilities', draft.capabilities.enabled, 'Step 2 of 4 · capabilities');
   if (!capabilitiesEnabled) return null;
   const capabilitiesDisabled = await requestList(prompt, 'capabilities-disabled', 'Disabled task capabilities', draft.capabilities.disabled, 'Step 2 of 4 · capabilities');
@@ -269,8 +305,12 @@ export async function collectProjectOnboardingEdits(
   const instructions = await requestText(prompt, 'instructions', 'Instruction file pointer', draft.instructions, 'Step 3 of 4 · instructions');
   if (instructions === null) return null;
   return {
-    agentDefault,
-    agentsEnabled,
+    personaDefault,
+    personasEnabled,
+    orchestrationMode,
+    orchestrationAvailableRoles,
+    orchestrationDisabledRoles,
+    orchestrationMaxParallel,
     capabilitiesEnabled,
     capabilitiesDisabled,
     skillPacks,
@@ -282,6 +322,29 @@ export async function collectProjectOnboardingEdits(
     memoryCaptureHint,
     instructions,
   };
+}
+
+async function requestOrchestrationMode(
+  prompt: ProjectOnboardingPrompt,
+  initial: 'off' | 'explicit' | 'adaptive',
+): Promise<'off' | 'explicit' | 'adaptive' | null> {
+  const result = await prompt({
+    id: 'orchestration-mode',
+    kind: 'choice',
+    title: 'Orchestration mode',
+    subtitle: 'Available roles are invoked only when this mode permits them.',
+    badge: 'Step 2 of 4 · orchestration',
+    rows: [
+      { id: 'off', label: 'Off', description: 'Use only the primary agent' },
+      { id: 'explicit', label: 'Explicit', description: 'Delegate only when the user or a trusted workflow requests it' },
+      { id: 'adaptive', label: 'Adaptive', description: 'Allow task evidence to select an available role' },
+    ],
+    initialChoice: initial,
+  });
+  return result.kind === 'submit' &&
+    (result.value === 'off' || result.value === 'explicit' || result.value === 'adaptive')
+    ? result.value
+    : null;
 }
 
 async function requestText(
