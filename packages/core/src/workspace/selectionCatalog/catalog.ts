@@ -11,6 +11,7 @@ import {
   type LocalToolEntry,
 } from '../../tool/registry/registry.js';
 import { localToolExecutors } from '../../tool/registry/executors.js';
+import { WORKSPACE_CAPABILITY_DEFINITIONS } from '../capabilities.js';
 import {
   inspectWorkspaceProfilePlugins,
 } from '../profilePlugins.js';
@@ -60,6 +61,45 @@ export function buildWorkspaceSelectionCatalog(
       persistable: true,
       selectable: true,
       runtimeAvailabilityPrerequisites: [],
+    });
+  }
+
+  const availableCapabilities = new Map(
+    plugins.available
+      .filter((plugin) => plugin.kind === 'capability')
+      .map((plugin) => [plugin.id, plugin]),
+  );
+  const unavailableCapabilities = new Map(
+    plugins.unavailable
+      .filter((plugin) => plugin.kind === 'capability')
+      .map((plugin) => [plugin.id, plugin]),
+  );
+  for (const capability of WORKSPACE_CAPABILITY_DEFINITIONS) {
+    const available = availableCapabilities.get(capability.id);
+    const unavailable = unavailableCapabilities.get(capability.id);
+    const blockedReason = available
+      ? undefined
+      : safeCatalogText(unavailable?.reason, 'Capability plugin is unavailable.');
+    pushCatalogEntry(entries, {
+      id: capability.id,
+      kind: 'capability',
+      label: capability.label,
+      description: capability.description,
+      category: 'workspace-capabilities',
+      source: 'capability-plugin',
+      provenance: safeProvenance(
+        available?.pluginName ?? unavailable?.pluginName,
+        'capability-plugin',
+      ),
+      persistable: true,
+      selectable: blockedReason === undefined,
+      ...(blockedReason ? { blockedReason } : {}),
+      runtimeAvailabilityPrerequisites: blockedReason ? ['plugin-enabled'] : [],
+      expandsTo: [
+        capability.skillPackId,
+        ...capability.skillIds,
+        ...capability.toolProfileIds,
+      ],
     });
   }
 
@@ -203,6 +243,7 @@ export function buildWorkspaceSelectionCatalog(
       provenance: safeProvenance(plugin.pluginName, 'installed-plugin'),
       persistable: true,
       selectable: true,
+      ...(plugin.kind === 'capability' ? { managedByCapability: plugin.id } : {}),
       runtimeAvailabilityPrerequisites: plugin.kind === 'capability'
         ? [`capability:${plugin.id}`]
         : [],
@@ -248,6 +289,7 @@ export function buildWorkspaceSelectionCatalog(
       persistable: true,
       selectable: false,
       blockedReason: reason,
+      ...(plugin.kind === 'capability' ? { managedByCapability: plugin.id } : {}),
       runtimeAvailabilityPrerequisites: [],
       expandsTo: [...plugin.skillIds],
     });
@@ -304,6 +346,7 @@ function catalogFingerprint(entries: readonly WorkspaceSelectionCatalogEntry[]):
     provenance: entry.provenance,
     persistable: entry.persistable,
     selectable: entry.selectable,
+    managedByCapability: entry.managedByCapability ?? '',
     expandsTo: entry.expandsTo ?? [],
   }));
   return crypto.createHash('sha256').update(JSON.stringify(authorityShape)).digest('hex');

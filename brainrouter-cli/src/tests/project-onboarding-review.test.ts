@@ -117,11 +117,11 @@ test('edit mode preserves safe forward fields while applying reviewed changes', 
       prompt: acceptingPrompt({
         text: {
           'orchestration-max-parallel': 'not-a-number',
-          'capabilities-enabled': 'frontend, browser',
         },
         choices: {
           'orchestration-available': ['worker', 'reviewer', 'fleet'],
           'orchestration-disabled': ['fleet'],
+          'capabilities-enabled': ['frontend'],
         },
       }),
       print: () => undefined,
@@ -132,8 +132,26 @@ test('edit mode preserves safe forward fields while applying reviewed changes', 
     assert.deepEqual(saved.orchestration.availableRoles, ['worker', 'reviewer']);
     assert.deepEqual(saved.orchestration.disabledRoles, ['fleet']);
     assert.equal(saved.orchestration.maxParallel, 4);
-    assert.deepEqual(saved.capabilities.enabled, ['frontend', 'browser']);
+    assert.deepEqual(saved.capabilities.enabled, ['frontend']);
     assert.deepEqual(saved.extra, { futureFlag: true });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('catalog review rejects a capability ID that was never offered', async () => {
+  const root = makeWorkspace();
+  try {
+    await assert.rejects(
+      runProjectOnboarding(root, {
+        prompt: acceptingPrompt({
+          choices: { 'capabilities-enabled': ['browser'] },
+        }),
+        print: () => undefined,
+      }),
+      /capability selection is no longer available/i,
+    );
+    assert.equal(fs.existsSync(workspaceManifestPath(root)), false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

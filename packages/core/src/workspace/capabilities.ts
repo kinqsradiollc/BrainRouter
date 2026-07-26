@@ -45,32 +45,69 @@ interface CapabilityContribution {
   promptBlocks: readonly string[];
 }
 
+export interface WorkspaceCapabilityDefinition {
+  id: 'frontend' | 'backend';
+  label: string;
+  description: string;
+  skillPackId: string;
+  skillIds: readonly string[];
+  toolProfileIds: readonly string[];
+}
+
+/** Prompt-free metadata safe for onboarding catalog projection. */
+export const WORKSPACE_CAPABILITY_DEFINITIONS: readonly WorkspaceCapabilityDefinition[] = [
+  {
+    id: 'frontend',
+    label: 'Frontend',
+    description: 'Task-time UI, accessibility, design-system, responsive, and browser-visual expertise for the engineer persona.',
+    skillPackId: 'frontend',
+    skillIds: ['a11y-skill', 'browser-testing-skill', 'taste-skill'],
+    toolProfileIds: ['browser', 'design'],
+  },
+  {
+    id: 'backend',
+    label: 'Backend',
+    description: 'Task-time service, authorization, data-integrity, background-work, production, and backend-test expertise for the engineer persona.',
+    skillPackId: 'backend',
+    skillIds: [
+      'api-service-design-skill',
+      'authorization-boundary-skill',
+      'data-integrity-migration-skill',
+      'background-work-skill',
+      'production-readiness-skill',
+      'backend-testing-skill',
+    ],
+    toolProfileIds: ['coding', 'terminal'],
+  },
+] as const;
+
+const CAPABILITY_BY_ID = new Map(
+  WORKSPACE_CAPABILITY_DEFINITIONS.map((definition) => [definition.id, definition]),
+);
+const FRONTEND_DEFINITION = CAPABILITY_BY_ID.get('frontend')!;
+const BACKEND_DEFINITION = CAPABILITY_BY_ID.get('backend')!;
+
 const FRONTEND_CONTRIBUTION: CapabilityContribution = {
-  skillPacks: ['frontend'],
-  skills: ['a11y-skill', 'browser-testing-skill', 'taste-skill'],
-  toolProfiles: ['browser', 'design'],
+  skillPacks: [FRONTEND_DEFINITION.skillPackId],
+  skills: FRONTEND_DEFINITION.skillIds,
+  toolProfiles: FRONTEND_DEFINITION.toolProfileIds,
   promptBlocks: [
     'Frontend engineering capability is active for this task. Stay in the engineer persona, discover and follow the workspace design artifact, reuse its component system, preserve established product UX, treat accessibility and responsive behavior as acceptance criteria, and visually verify user-facing changes.',
   ],
 };
 
 const BACKEND_CONTRIBUTION: CapabilityContribution = {
-  skillPacks: ['backend'],
-  skills: [
-    'api-service-design-skill',
-    'authorization-boundary-skill',
-    'data-integrity-migration-skill',
-    'background-work-skill',
-    'production-readiness-skill',
-    'backend-testing-skill',
-  ],
-  toolProfiles: ['coding', 'terminal'],
+  skillPacks: [BACKEND_DEFINITION.skillPackId],
+  skills: BACKEND_DEFINITION.skillIds,
+  toolProfiles: BACKEND_DEFINITION.toolProfileIds,
   promptBlocks: [
     'Backend engineering capability is active for this task. Stay in the engineer persona, preserve service and data contracts, validate every trust boundary, make concurrency and failure behavior explicit, prefer reversible migrations and idempotent operations, and verify production-relevant failure paths. This capability does not itself grant shell, network, database, or write access.',
   ],
 };
 
-const KNOWN_WORKSPACE_CAPABILITY_IDS = ['frontend', 'backend'] as const;
+const KNOWN_WORKSPACE_CAPABILITY_IDS = WORKSPACE_CAPABILITY_DEFINITIONS.map(
+  (definition) => definition.id,
+);
 
 const EMPTY_RESOLUTION: WorkspaceCapabilityResolution = {
   active: [],

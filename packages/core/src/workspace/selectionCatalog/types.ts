@@ -6,6 +6,7 @@ export const WORKSPACE_SELECTION_STABLE_ID = /^[a-z][a-z0-9_-]{0,127}$/;
 
 export type WorkspaceSelectionCatalogKind =
   | 'role'
+  | 'capability'
   | 'tool-group'
   | 'tool'
   | 'skill-pack'
@@ -38,6 +39,8 @@ export interface WorkspaceSelectionCatalogEntry {
   accessTier?: LocalToolEntry['accessTier'];
   actionKind?: LocalToolEntry['actionKind'];
   requiredCapabilityOrExtension?: string;
+  /** Capability that activates this implementation payload. */
+  managedByCapability?: string;
   runtimeAvailabilityPrerequisites: string[];
   expandsTo?: string[];
 }
@@ -103,6 +106,11 @@ export interface ReviewedWorkspaceRoleSelection {
   disabledRoles: readonly string[];
 }
 
+export interface ReviewedWorkspaceCapabilitySelection {
+  enabled: readonly string[];
+  disabled: readonly string[];
+}
+
 export type WorkspaceSelectionReviewIssueCode =
   | 'invalid-id'
   | 'unknown-entry'
@@ -115,6 +123,8 @@ export interface WorkspaceSelectionReviewIssue {
   field:
     | 'availableRoles'
     | 'disabledRoles'
+    | 'capabilitiesEnabled'
+    | 'capabilitiesDisabled'
     | 'profiles'
     | 'enabled'
     | 'deny'

@@ -26,6 +26,7 @@ export async function requestCatalogSelection(
   const entries = catalog.entries.filter((entry) =>
     kinds.has(entry.kind)
     && entry.persistable
+    && !(entry.kind === 'skill-pack' && entry.managedByCapability)
     && (!requireSelectable || entry.selectable));
   const result = await prompt({
     id,
