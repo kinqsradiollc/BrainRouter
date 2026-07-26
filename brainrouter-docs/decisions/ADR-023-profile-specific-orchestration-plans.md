@@ -1167,6 +1167,25 @@ metadata cannot introduce a write-capable child.
 - Add deterministic resolution through the definition's validated fallback,
   malformed-response tests, and trace reasons.
 
+Adaptive selection is one low-effort, forced-tool model call with a five-second
+deadline and no compatibility retry. The model sees only bounded untrusted task
+text plus registered signal matches and eligible strategy/stage IDs with
+executor kind and optionality. It does not receive plan objectives or prompts
+and cannot return roles, skills, tools, edges, access, concurrency, or budgets.
+The response contains exactly `strategyId`, `enabledStageIds`, and a short
+display-only rationale. Required stages must remain enabled; optional stages
+may only be subtracted.
+
+Core derives the eligible set by previewing signal-matched definitions through
+the ordinary authority resolver before the model call, then sends the parsed
+choice through that resolver again. Unknown, signal-unmatched, unavailable,
+duplicate, over-broad, oversized, malformed, failed, or timed-out choices use
+the definition's validated primary-only fallback. Explicit user strategy
+requests, mode `off`, mode `explicit`, no-manifest workspaces, and tasks with no
+eligible signal match do not call the model. Selection traces record the
+bounded source and fallback reason; the free-text rationale is not telemetry
+because it may restate user content.
+
 ### P23-8 — Onboarding and product surfaces
 
 - Derive profile defaults from the plan catalog.

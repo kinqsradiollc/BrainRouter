@@ -18,7 +18,11 @@ import type {
   OrchestrationProfileStrategy,
 } from './orchestrationProfileDefinitionFile.js';
 
-export type OrchestrationSelectionSource = 'explicit' | 'deterministic' | 'fallback';
+export type OrchestrationSelectionSource =
+  | 'explicit'
+  | 'adaptive-model'
+  | 'deterministic'
+  | 'fallback';
 
 export type OrchestrationResolutionReasonCode =
   | 'no-plan'
@@ -28,6 +32,9 @@ export type OrchestrationResolutionReasonCode =
   | 'mode-off'
   | 'explicit-mode-primary'
   | 'explicit-strategy-unavailable'
+  | 'adaptive-selection-unavailable'
+  | 'adaptive-selection-invalid'
+  | 'adaptive-stage-disabled'
   | 'no-eligible-signal-match'
   | 'fallback-selected'
   | 'role-unavailable'
@@ -61,6 +68,16 @@ export interface WorkspaceOrchestrationResolutionInput {
   delegationPolicy: DelegationPolicy;
   runtimeLimits: OrchestrationRuntimeLimits;
   explicitStrategyId?: string;
+  /**
+   * One already parsed, bounded model choice. This can only narrow a validated
+   * signal-matched strategy; it cannot introduce strategy or stage IDs.
+   */
+  managedSelection?: {
+    strategyId: string;
+    enabledStageIds: readonly string[];
+  } | null;
+  /** Distinguishes "no managed attempt" from an unavailable/invalid attempt. */
+  managedSelectionAttempted?: boolean;
   parentDepth?: number;
 }
 
@@ -190,6 +207,55 @@ export function resolveWorkspaceOrchestrationPlan(
     return fallbackResult([{ code: 'explicit-mode-primary' }]);
   }
 
+  const managedSelectionAttempted =
+    input.managedSelectionAttempted === true || input.managedSelection !== undefined;
+  if (managedSelectionAttempted) {
+    const selection = input.managedSelection;
+    if (!selection) {
+      return fallbackResult([{ code: 'adaptive-selection-unavailable' }]);
+    }
+    const requested = definition.strategies.find(
+      (strategy) => strategy.id === selection.strategyId,
+    );
+    const matched = requested?.activation.signals.filter((signal) =>
+      input.taskSignalIds.has(signal)) ?? [];
+    if (!requested || requested.activation.explicitOnly || matched.length === 0) {
+      return fallbackResult([{
+        code: 'adaptive-selection-invalid',
+        strategyId: selection.strategyId,
+      }]);
+    }
+    const requestedPreview = previewStrategy(requested, input, effectiveParallel);
+    if (!requestedPreview.available) {
+      return fallbackResult([
+        {
+          code: 'adaptive-selection-invalid',
+          strategyId: selection.strategyId,
+        },
+        ...requestedPreview.diagnostics,
+      ]);
+    }
+    const selectedPreview = applyManagedStageSelection(
+      requested,
+      requestedPreview,
+      selection.enabledStageIds,
+    );
+    if (!selectedPreview) {
+      return fallbackResult([{
+        code: 'adaptive-selection-invalid',
+        strategyId: selection.strategyId,
+      }]);
+    }
+    return resolvedStrategy(
+      definition.id,
+      requested,
+      selectedPreview,
+      'adaptive-model',
+      new Set(matched),
+      effectiveParallel,
+    );
+  }
+
   const unavailableMatches: OrchestrationResolutionDiagnostic[] = [];
   for (const strategy of definition.strategies) {
     if (strategy.activation.explicitOnly) continue;
@@ -298,6 +364,44 @@ function previewStrategy(
   return { available: true, stages, skippedStages, diagnostics };
 }
 
+function applyManagedStageSelection(
+  strategy: OrchestrationProfileStrategy,
+  preview: StrategyPreview,
+  enabledStageIds: readonly string[],
+): StrategyPreview | null {
+  const enabled = new Set(enabledStageIds);
+  if (enabled.size !== enabledStageIds.length) return null;
+  const stageById = new Map(strategy.stages.map((stage) => [stage.id, stage]));
+  if ([...enabled].some((stageId) => !stageById.has(stageId))) return null;
+  if (strategy.stages.some((stage) => !stage.optional && !enabled.has(stage.id))) {
+    return null;
+  }
+
+  const disabledOptional = new Set(
+    strategy.stages
+      .filter((stage) => stage.optional && !enabled.has(stage.id))
+      .map((stage) => stage.id),
+  );
+  const stages = preview.stages.filter((stage) => !disabledOptional.has(stage.id));
+  const retainedStageIds = new Set(stages.map((stage) => stage.id));
+  return {
+    available: true,
+    stages: stages.map((stage) => ({
+      ...stage,
+      after: stage.after.filter((stageId) => retainedStageIds.has(stageId)),
+    })),
+    skippedStages: [
+      ...preview.skippedStages,
+      ...[...disabledOptional].map((stageId) => ({
+        code: 'adaptive-stage-disabled' as const,
+        strategyId: strategy.id,
+        stageId,
+      })),
+    ],
+    diagnostics: preview.diagnostics,
+  };
+}
+
 function stageUnavailableReason(
   stage: OrchestrationProfileStage,
   input: WorkspaceOrchestrationResolutionInput,
@@ -337,12 +441,19 @@ function resolvedStrategy(
   signals: ReadonlySet<string>,
   effectiveParallel: number,
 ): ResolvedWorkspaceOrchestrationPlan {
+  const retainedStageIds = new Set(preview.stages.map((stage) => stage.id));
   return {
     orchestrationProfileId,
     strategyId: strategy.id,
     selectionSource,
     matchedSignalIds: strategy.activation.signals.filter((signal) => signals.has(signal)),
-    stages: preview.stages,
+    stages: preview.stages.map((stage) => ({
+      ...stage,
+      // An unavailable/disabled optional predecessor is terminally skipped, so
+      // downstream stages must not wait for a lifecycle record that was never
+      // compiled into the resolved plan.
+      after: stage.after.filter((stageId) => retainedStageIds.has(stageId)),
+    })),
     skippedStages: preview.skippedStages,
     effectiveParallel,
     diagnostics: preview.diagnostics,
