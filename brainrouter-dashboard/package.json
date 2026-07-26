@@ -29,11 +29,11 @@
     "remark-math": "^6.0.0"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^22.20.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "esbuild": "^0.25.12",
+    "esbuild": "^0.28.1",
     "typescript": "^5.5.4",
-    "wrangler": "^4.0.0"
+    "wrangler": "^4.114.0"
   }
 }
