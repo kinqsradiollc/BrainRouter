@@ -182,7 +182,7 @@ export async function pluginConsentSummary(
   const p = hit.entry.provides;
   const parts: string[] = [];
   const push = (n: number | undefined, one: string): void => { if (n) parts.push(`${n} ${n === 1 ? one : `${one}s`}`); };
-  push(p.skills, 'skill'); push(p.agents, 'agent'); push(p.hooks, 'hook');
+  push(p.skills, 'skill'); push(p.personas, 'persona'); push(p.agents, 'agent'); push(p.hooks, 'hook');
   push(p.mcpServers, 'MCP server'); push(p.connectors, 'connector'); push(p.workflows, 'workflow');
   const requiresConsent = (p.hooks ?? 0) > 0 || (p.mcpServers ?? 0) > 0;
   return {
@@ -190,7 +190,7 @@ export async function pluginConsentSummary(
     summary: {
       name: hit.entry.name,
       version: hit.entry.version,
-      provides: { skills: p.skills ?? 0, agents: p.agents ?? 0, commands: 0, hooks: p.hooks ?? 0, mcpServers: p.mcpServers ?? 0, connectors: p.connectors ?? 0, workflows: p.workflows ?? 0 },
+      provides: { skills: p.skills ?? 0, personas: p.personas ?? 0, agents: p.agents ?? 0, commands: 0, hooks: p.hooks ?? 0, mcpServers: p.mcpServers ?? 0, connectors: p.connectors ?? 0, workflows: p.workflows ?? 0 },
       hookCommands: [],
       mcpCommands: [],
       requiresConsent,
