@@ -9,7 +9,11 @@ import {
   type ChildSessionRecord,
 } from '../session/orchestrator.js';
 import { buildRolePrompt, resolveRole, type AccessMode } from '../roles/roles.js';
-import { countRunningChildren, spawnSlotDecision } from '../session/spawnSlots.js';
+import {
+  countRunningChildren,
+  effectiveSpawnSlotLimit,
+  spawnSlotDecision,
+} from '../session/spawnSlots.js';
 import { findById, listAll, type Tier } from '../agents/agentRegistry.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../../prompt/systemPrompt.js';
 import { appendTranscriptEntry } from '../../session/transcript/sessionStore.js';
@@ -127,6 +131,7 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
 
   const prompt = String(args.prompt ?? '');
   if (!prompt.trim()) throw new Error('spawn_agent requires a non-empty prompt.');
+  const manifest = loadWorkspaceManifest(ctx.workspaceRoot);
 
   // P1.2 — spawn hierarchy checks.
   const rawMaxDepth = getCliKnobs().maxSpawnDepth;
@@ -151,7 +156,13 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
   {
     const mine = listSessions(ctx.workspaceRoot).filter((s) => s.parentSessionKey === ctx.parentSessionKey);
     const running = countRunningChildren(mine);
-    const slot = spawnSlotDecision(running, getCliKnobs().maxConcurrentChildren);
+    const slot = spawnSlotDecision(
+      running,
+      effectiveSpawnSlotLimit(
+        getCliKnobs().maxConcurrentChildren,
+        manifest?.orchestration.maxParallel,
+      ),
+    );
     if (!slot.allow) throw new Error(slot.reason);
   }
 
@@ -290,7 +301,6 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
     ownership,
     outputContract: getOutputContract(role.name)?.id ?? null,
   });
-  const manifest = loadWorkspaceManifest(ctx.workspaceRoot);
   const childLlm = resolveAgentLlm(loadOrInitConfig(), ctx.llmConfig, role.name);
   const selectedPersona = manifest?.persona.enabled.includes(role.name)
     ? role.name

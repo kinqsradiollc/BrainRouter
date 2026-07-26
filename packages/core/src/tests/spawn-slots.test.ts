@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isLiveChild, countLiveChildren, countRunningChildren, spawnSlotDecision } from '../orchestration/session/spawnSlots.js';
+import {
+  isLiveChild,
+  countLiveChildren,
+  countRunningChildren,
+  effectiveSpawnSlotLimit,
+  spawnSlotDecision,
+} from '../orchestration/session/spawnSlots.js';
 
 test('CODEX-AGENT-LIFECYCLE isLiveChild: only pending/running count as live', () => {
   assert.equal(isLiveChild({ status: 'pending' }), true);
@@ -49,4 +55,13 @@ test('CODEX-AGENT-LIFECYCLE a non-positive cap disables the limit', () => {
   assert.equal(spawnSlotDecision(100, 0).allow, true);
   assert.equal(spawnSlotDecision(100, -1).allow, true);
   assert.match(spawnSlotDecision(5, 0).reason, /no concurrency cap/);
+});
+
+test('P23-3 workspace maxParallel narrows the effective spawn-slot ceiling', () => {
+  assert.equal(effectiveSpawnSlotLimit(8, 3), 3);
+  assert.equal(effectiveSpawnSlotLimit(2, 4), 2);
+  assert.equal(effectiveSpawnSlotLimit(0, 3), 3);
+  assert.equal(effectiveSpawnSlotLimit(8, undefined), 8);
+  assert.equal(effectiveSpawnSlotLimit(0, undefined), 0);
+  assert.equal(spawnSlotDecision(3, effectiveSpawnSlotLimit(8, 3)).allow, false);
 });
