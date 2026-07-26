@@ -30,7 +30,6 @@ Latest published: **[0.4.16](../brainrouter-changelog/0.4.16.md)** on 2026-07-01
 | [`0.4.x.md`](0.4.x.md) | Post-federation CLI orchestration and MCP brain-agent roadmap (0.4.1–0.4.3) |
 | [`0.4.17.md`](0.4.17.md) | Project-aware onboarding, runtime capability activation, profile packs, and Project knowledge |
 | [`0.5.0.md`](0.5.0.md) | Fullscreen TUI, plugin marketplace, cross-harness handoff |
-| [`intentionally-excluded.md`](intentionally-excluded.md) | Explicitly out-of-scope ideas |
 | [`ROADMAP_TEMPLATE.md`](ROADMAP_TEMPLATE.md) | Starter structure for future release plans |
 
 ---
