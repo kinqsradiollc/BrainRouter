@@ -2,8 +2,8 @@
  * PLUGIN-MARKETPLACE P1 — the plugin MANIFEST schema + parser/validator.
  *
  * A plugin is a folder (or git repo) whose `.brainrouter-plugin/plugin.json`
- * describes what it contributes to the existing subsystems (skills / agents /
- * commands / hooks / workflows / connectors / MCP servers). Only `name` is
+ * describes what it contributes to the existing subsystems (skills / personas /
+ * agents / commands / hooks / workflows / connectors / MCP servers). Only `name` is
  * required; the convention dirs are auto-discovered so a skills-only plugin is
  * just `plugin.json` + `skills/`.
  *
@@ -24,6 +24,7 @@ export const PLUGIN_ROOT_TOKEN = '${BRAINROUTER_PLUGIN_ROOT}';
 /** Convention component dirs / files auto-discovered when `contributes` omits them. */
 export const PLUGIN_CONVENTION_PATHS = {
   skills: 'skills',
+  personas: 'personas',
   agents: 'agents',
   commands: 'commands',
   hooks: 'hooks/hooks.json',
@@ -58,6 +59,7 @@ export interface PluginCompatibility {
 /** Optional custom component paths (supplement the auto-discovered dirs). */
 export interface PluginContributes {
   skills?: string;
+  personas?: string;
   agents?: string;
   commands?: string;
   hooks?: string;

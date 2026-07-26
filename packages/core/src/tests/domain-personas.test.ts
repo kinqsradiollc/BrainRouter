@@ -26,6 +26,26 @@ function writePersona(dir: string, id: string, prompt: string, description = `${
   return file;
 }
 
+function writeJsonPersona(
+  dir: string,
+  id: string,
+  instructions: string[],
+  description = `${id} description`,
+): string {
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${id}.json`);
+  fs.writeFileSync(file, JSON.stringify({
+    schemaVersion: 1,
+    kind: 'persona',
+    id,
+    displayName: id === 'engineer' ? 'Engineer' : id,
+    description,
+    instructions,
+    priorities: ['correctness', 'security'],
+  }), 'utf8');
+  return file;
+}
+
 test('bundled catalog defines the five domain identities and no frontend persona', () => {
   withWorkspace((workspace) => {
     const personas = listDomainPersonas(workspace, { pluginAgentFiles: [] });
@@ -56,6 +76,49 @@ test('workspace shadows local, plugin, and bundled definitions with collision pr
     assert.equal(engineer.prompt, workspacePrompt);
     assert.equal(engineer.collides, true);
     assert.deepEqual(engineer.shadowedBy, ['local', 'plugin:fixture', 'bundled']);
+  });
+});
+
+test('JSON personas use source precedence and shadow same-scope legacy Markdown', () => {
+  withWorkspace((workspace) => {
+    writeJsonPersona(path.join(workspace, 'personas'), 'engineer', ['Workspace JSON instructions.']);
+    writePersona(path.join(workspace, 'agents'), 'engineer', 'Workspace legacy instructions.');
+    writeJsonPersona(path.join(workspace, '.brainrouter', 'personas'), 'engineer', ['Local JSON instructions.']);
+
+    const engineer = findDomainPersona('engineer', workspace, {
+      pluginPersonaFiles: [],
+      pluginAgentFiles: [],
+      bundledPersonasDir: path.join(workspace, 'empty-json'),
+    });
+    assert.ok(engineer);
+    assert.equal(engineer.source, 'workspace');
+    assert.match(engineer.prompt, /Workspace JSON instructions/);
+    assert.match(engineer.prompt, /Decision priorities, in order: correctness, security/);
+    assert.doesNotMatch(engineer.prompt, /legacy/);
+    assert.deepEqual(engineer.shadowedBy, ['workspace', 'local', 'bundled']);
+  });
+});
+
+test('legacy workspace Markdown remains above lower-precedence JSON during migration', () => {
+  withWorkspace((workspace) => {
+    writePersona(path.join(workspace, 'agents'), 'researcher', 'Workspace legacy research instructions.');
+    const pluginFile = writeJsonPersona(
+      path.join(workspace, 'plugin', 'personas'),
+      'researcher',
+      ['Plugin JSON research instructions.'],
+    );
+
+    const researcher = findDomainPersona('researcher', workspace, {
+      pluginPersonaFiles: [{
+        pluginName: 'fixture',
+        pluginRoot: path.join(workspace, 'plugin'),
+        path: pluginFile,
+      }],
+      pluginAgentFiles: [],
+      bundledPersonasDir: path.join(workspace, 'empty-json'),
+    });
+    assert.equal(researcher?.source, 'workspace');
+    assert.match(researcher?.prompt ?? '', /Workspace legacy research instructions/);
   });
 });
 

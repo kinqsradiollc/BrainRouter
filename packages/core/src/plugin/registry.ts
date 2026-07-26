@@ -22,6 +22,7 @@ export const DEFAULT_REGISTRY_URL =
 /** What each registry entry declares a plugin provides (counts). */
 export interface RegistryProvides {
   skills?: number;
+  personas?: number;
   agents?: number;
   hooks?: number;
   mcpServers?: number;
@@ -78,7 +79,7 @@ function toStringArray(v: unknown): string[] {
 function parseProvides(v: unknown): RegistryProvides {
   const out: RegistryProvides = {};
   if (!isPlainObject(v)) return out;
-  for (const k of ['skills', 'agents', 'hooks', 'mcpServers', 'connectors', 'workflows'] as const) {
+  for (const k of ['skills', 'personas', 'agents', 'hooks', 'mcpServers', 'connectors', 'workflows'] as const) {
     const n = v[k];
     if (typeof n === 'number' && Number.isFinite(n) && n >= 0) out[k] = Math.floor(n);
   }

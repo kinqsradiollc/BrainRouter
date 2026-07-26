@@ -12,7 +12,12 @@ import { fileURLToPath } from 'node:url';
 import { getCliKnobs } from '../config/config.js';
 import { loadPluginsWithKnobs } from '../plugin/loader.js';
 import { parseFrontmatterConfig, splitFrontmatter } from '../plugin/localConfig.js';
-import { RESERVED_ORCHESTRATION_ROLE_IDS } from './personaDefinitionFile.js';
+import {
+  RESERVED_ORCHESTRATION_ROLE_IDS,
+  listPersonaDefinitionFiles,
+  readPersonaDefinitionFile,
+  type PersonaDefinition,
+} from './personaDefinitionFile.js';
 import { containsWorkspaceSecretMaterial } from './workspaceContentSafety.js';
 
 export type DomainPersonaSource = 'workspace' | 'local' | 'plugin' | 'bundled';
@@ -30,8 +35,12 @@ export interface DomainPersonaDefinition {
 }
 
 export interface DomainPersonaCatalogOptions {
+  /** Explicit JSON persona files for deterministic hosts/tests; omitted loads enabled plugins. */
+  pluginPersonaFiles?: ReadonlyArray<{ pluginName: string; path: string; pluginRoot?: string }>;
   /** Explicit plugin files for deterministic hosts/tests; omitted loads enabled plugins. */
   pluginAgentFiles?: ReadonlyArray<{ pluginName: string; path: string; pluginRoot?: string }>;
+  /** Override only for package-layout tests. */
+  bundledPersonasDir?: string;
   /** Override only for package-layout tests. */
   bundledDir?: string;
 }
@@ -40,6 +49,7 @@ interface PersonaCandidate {
   source: DomainPersonaSource;
   scope: string;
   filePath: string;
+  format: 'json' | 'legacy-markdown';
   boundaryRoot?: string;
 }
 
@@ -49,7 +59,9 @@ const MAX_PERSONA_DESCRIPTION_CHARS = 512;
 const PERSONA_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const UNSAFE_CONTROL_CHARACTERS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 
-// dist/workspace/domainPersonas.js -> ../../agents = package-owned definitions.
+// dist/workspace/domainPersonas.js -> ../../personas = package-owned JSON definitions.
+const BUNDLED_JSON_PERSONAS_DIR = fileURLToPath(new URL('../../personas', import.meta.url));
+// Compatibility only: package-owned Markdown definitions before ADR-022.
 const BUNDLED_PERSONAS_DIR = fileURLToPath(new URL('../../agents', import.meta.url));
 
 /** Harness roles are never valid domain identities, even when a manifest names one. */
@@ -60,27 +72,54 @@ export function listDomainPersonas(
   workspaceRoot: string,
   options: DomainPersonaCatalogOptions = {},
 ): DomainPersonaDefinition[] {
+  const pluginCandidates = resolvePluginPersonaFiles(
+    workspaceRoot,
+    options.pluginPersonaFiles,
+    options.pluginAgentFiles,
+  );
   const candidates: PersonaCandidate[] = [
+    ...listPersonaDefinitionFiles(path.join(workspaceRoot, 'personas'), workspaceRoot).map((filePath) => ({
+      source: 'workspace' as const,
+      scope: 'workspace',
+      filePath,
+      format: 'json' as const,
+      boundaryRoot: workspaceRoot,
+    })),
     ...listMarkdownFiles(path.join(workspaceRoot, 'agents'), workspaceRoot).map((filePath) => ({
       source: 'workspace' as const,
       scope: 'workspace',
       filePath,
+      format: 'legacy-markdown' as const,
+      boundaryRoot: workspaceRoot,
+    })),
+    ...listPersonaDefinitionFiles(path.join(workspaceRoot, '.brainrouter', 'personas'), workspaceRoot).map((filePath) => ({
+      source: 'local' as const,
+      scope: 'local',
+      filePath,
+      format: 'json' as const,
+      boundaryRoot: workspaceRoot,
     })),
     ...listMarkdownFiles(path.join(workspaceRoot, '.brainrouter', 'agents'), workspaceRoot).map((filePath) => ({
       source: 'local' as const,
       scope: 'local',
       filePath,
+      format: 'legacy-markdown' as const,
+      boundaryRoot: workspaceRoot,
     })),
-    ...resolvePluginAgentFiles(workspaceRoot, options.pluginAgentFiles).map((entry) => ({
-      source: 'plugin' as const,
-      scope: `plugin:${entry.pluginName}`,
-      filePath: entry.path,
-      boundaryRoot: entry.pluginRoot,
+    ...pluginCandidates,
+    ...listPersonaDefinitionFiles(options.bundledPersonasDir ?? BUNDLED_JSON_PERSONAS_DIR).map((filePath) => ({
+      source: 'bundled' as const,
+      scope: 'bundled',
+      filePath,
+      format: 'json' as const,
+      boundaryRoot: options.bundledPersonasDir ?? BUNDLED_JSON_PERSONAS_DIR,
     })),
     ...listMarkdownFiles(options.bundledDir ?? BUNDLED_PERSONAS_DIR).map((filePath) => ({
       source: 'bundled' as const,
       scope: 'bundled',
       filePath,
+      format: 'legacy-markdown' as const,
+      boundaryRoot: options.bundledDir ?? BUNDLED_PERSONAS_DIR,
     })),
   ];
 
@@ -128,29 +167,62 @@ export function renderDomainPersonaBriefing(persona: DomainPersonaDefinition): s
   ].join('\n\n');
 }
 
-function resolvePluginAgentFiles(
+function resolvePluginPersonaFiles(
   workspaceRoot: string,
-  provided: DomainPersonaCatalogOptions['pluginAgentFiles'],
-): Array<{ pluginName: string; path: string; pluginRoot?: string }> {
-  if (provided) return [...provided].sort(comparePluginFiles);
+  providedPersonas: DomainPersonaCatalogOptions['pluginPersonaFiles'],
+  providedLegacyAgents: DomainPersonaCatalogOptions['pluginAgentFiles'],
+): PersonaCandidate[] {
+  if (providedPersonas || providedLegacyAgents) {
+    return [
+      ...(providedPersonas ?? []).map((entry) => pluginCandidate(entry, 'json')),
+      ...(providedLegacyAgents ?? []).map((entry) => pluginCandidate(entry, 'legacy-markdown')),
+    ].sort(comparePluginCandidates);
+  }
   try {
     const plugins = loadPluginsWithKnobs(workspaceRoot, getCliKnobs());
     const roots = new Map(plugins.loaded.map((plugin) => [plugin.name, plugin.root]));
-    return plugins.contributions.agentFiles.map((entry) => ({
+    const withRoot = (entry: { pluginName: string; path: string }): {
+      pluginName: string;
+      path: string;
+      pluginRoot?: string;
+    } => ({
       ...entry,
       pluginRoot: roots.get(entry.pluginName) ??
         (entry.pluginName.startsWith('org:') ? path.dirname(path.dirname(entry.path)) : undefined),
-    })).sort(comparePluginFiles);
+    });
+    return [
+      ...plugins.contributions.personaFiles.map((entry) => pluginCandidate(withRoot(entry), 'json')),
+      ...plugins.contributions.agentFiles.map((entry) => pluginCandidate(withRoot(entry), 'legacy-markdown')),
+    ].sort(comparePluginCandidates);
   } catch {
     return [];
   }
 }
 
-function comparePluginFiles(
-  a: { pluginName: string; path: string },
-  b: { pluginName: string; path: string },
+function pluginCandidate(
+  entry: { pluginName: string; path: string; pluginRoot?: string },
+  format: PersonaCandidate['format'],
+): PersonaCandidate {
+  return {
+    source: 'plugin',
+    scope: `plugin:${entry.pluginName}`,
+    filePath: entry.path,
+    format,
+    boundaryRoot: entry.pluginRoot,
+  };
+}
+
+function comparePluginCandidates(
+  a: PersonaCandidate,
+  b: PersonaCandidate,
 ): number {
-  return a.pluginName.localeCompare(b.pluginName) || a.path.localeCompare(b.path);
+  return a.scope.localeCompare(b.scope) ||
+    formatPriority(a.format) - formatPriority(b.format) ||
+    a.filePath.localeCompare(b.filePath);
+}
+
+function formatPriority(format: PersonaCandidate['format']): number {
+  return format === 'json' ? 0 : 1;
 }
 
 function listMarkdownFiles(dir: string, boundaryRoot = dir): string[] {
@@ -180,6 +252,7 @@ function listMarkdownFiles(dir: string, boundaryRoot = dir): string[] {
 }
 
 function parseDomainPersona(candidate: PersonaCandidate): DomainPersonaDefinition | undefined {
+  if (candidate.format === 'json') return parseJsonDomainPersona(candidate);
   const raw = readBoundedRegularFile(candidate.filePath, candidate.boundaryRoot);
   if (!raw) return undefined;
   const { yaml, body } = splitFrontmatter(raw);
@@ -203,6 +276,33 @@ function parseDomainPersona(candidate: PersonaCandidate): DomainPersonaDefinitio
     filePath: candidate.filePath,
     qualifiedName: `${candidate.scope}:${id}`,
   };
+}
+
+function parseJsonDomainPersona(candidate: PersonaCandidate): DomainPersonaDefinition | undefined {
+  let definition: PersonaDefinition;
+  try {
+    const boundaryRoot = candidate.boundaryRoot ?? path.dirname(candidate.filePath);
+    definition = readPersonaDefinitionFile(candidate.filePath, boundaryRoot, boundaryRoot);
+  } catch {
+    return undefined;
+  }
+  return {
+    id: definition.id,
+    displayName: definition.displayName,
+    description: definition.description,
+    prompt: renderPersonaInstructions(definition),
+    source: candidate.source,
+    filePath: candidate.filePath,
+    qualifiedName: `${candidate.scope}:${definition.id}`,
+  };
+}
+
+function renderPersonaInstructions(definition: PersonaDefinition): string {
+  const sections = [definition.instructions.join('\n\n')];
+  if (definition.priorities.length > 0) {
+    sections.push(`Decision priorities, in order: ${definition.priorities.join(', ')}.`);
+  }
+  return sections.join('\n\n');
 }
 
 function readBoundedRegularFile(filePath: string, boundaryRoot?: string): string | undefined {

@@ -4,8 +4,8 @@
  * Given a plugin root, read its manifest and resolve WHICH component paths it
  * actually contributes (auto-discovering the convention dirs when `contributes`
  * omits them). The result is inert DATA — the loader feeds
- * these paths into the existing subsystems (skills / agents / commands / hooks /
- * mcp / connectors / workflows). No parallel runtime.
+ * these paths into the existing subsystems (skills / personas / agents /
+ * commands / hooks / mcp / connectors / workflows). No parallel runtime.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -27,8 +27,8 @@ export interface DiscoveredPlugin {
   manifest: PluginManifest;
   /**
    * Absolute paths of each contributed component, present only when the path
-   * exists on disk. `skills`/`agents`/`commands`/`workflows`/`connectors` are
-   * DIRECTORIES; `hooks`/`mcpServers` are FILES.
+   * exists on disk. `skills`/`personas`/`agents`/`commands`/`workflows`/
+   * `connectors` are DIRECTORIES; `hooks`/`mcpServers` are FILES.
    */
   contributes: Partial<Record<PluginComponentKind, string>>;
   warnings: string[];
@@ -57,7 +57,14 @@ export function looksLikePlugin(pluginRoot: string, altManifestNames: readonly s
   return !!findManifestFile(pluginRoot, altManifestNames);
 }
 
-const DIR_KINDS: ReadonlySet<PluginComponentKind> = new Set(['skills', 'agents', 'commands', 'workflows', 'connectors']);
+const DIR_KINDS: ReadonlySet<PluginComponentKind> = new Set([
+  'skills',
+  'personas',
+  'agents',
+  'commands',
+  'workflows',
+  'connectors',
+]);
 
 /**
  * Read + validate a plugin at `pluginRoot`. Returns discovered component paths
@@ -143,6 +150,7 @@ function manifestFilenames(altManifestNames: readonly string[]): string[] {
 /** Count of each component a plugin contributes — the disclosure summary. */
 export interface PluginProvides {
   skills: number;
+  personas: number;
   agents: number;
   commands: number;
   hooks: number;
@@ -204,9 +212,9 @@ export function summarizeProvides(plugin: DiscoveredPlugin): PluginProvides {
   const c = plugin.contributes;
   return {
     skills: c.skills ? countSkillDirs(c.skills) : 0,
-    // Markdown files provide prompt/persona overlays; JSON files provide
-    // executable agent policy. Both are agent contributions disclosed to the
-    // user before a plugin is enabled.
+    personas: c.personas ? countFilesByExt(c.personas, ['.json']) : 0,
+    // Legacy Markdown prompt overlays remain disclosed as agents during the
+    // persona-format compatibility window.
     agents: c.agents ? countFilesByExt(c.agents, ['.md', '.json']) : 0,
     commands: c.commands ? countFilesByExt(c.commands, ['.md']) : 0,
     hooks: c.hooks ? countHooks(c.hooks) : 0,
