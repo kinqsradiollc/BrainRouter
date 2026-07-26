@@ -3,6 +3,15 @@ import { WORKSPACE_PROFILES } from '@kinqs/brainrouter-core/dist/workspace/profi
 import { parseOnboardingDraft } from '../components/dialogs/onboardingEditorModel.js';
 
 const DEV_ONBOARDING_AT = '2026-01-01T00:00:00.000Z';
+const DEV_ROLES = [
+  ['architect', 'Architect', 'Decision-oriented design work.'],
+  ['explorer', 'Explorer', 'Read-only investigation with evidence.'],
+  ['fleet', 'Fleet executor', 'Unattended isolated execution.'],
+  ['intake', 'Requirements intake', 'Turns a vague ask into a structured requirement.'],
+  ['reviewer', 'Reviewer', 'Read-only critique against requirements.'],
+  ['verifier', 'Verifier', 'Runs checks against acceptance criteria.'],
+  ['worker', 'Worker', 'Produces one bounded artifact or change.'],
+] as const;
 const DEV_TOOL_GROUPS = [
   {
     id: 'coding',
@@ -97,9 +106,34 @@ export function buildDevOnboardingPreview(value: unknown): Record<string, unknow
   const denied = new Set(draft.tools.deny);
   const recommended = WORKSPACE_PROFILES.find((profile) => profile.id === draft.profile);
   const recommendedGroups = new Set(recommended?.tools.profiles ?? []);
+  const recommendedRoles = new Set(recommended?.orchestration.availableRoles ?? []);
   const recommendedPacks = new Set(recommended?.skills.packs ?? []);
   const recommendedSkills = new Set(recommended?.skills.enabled ?? []);
   const catalog = [
+    ...DEV_ROLES.map(([id, label, description]) => {
+      const selectable = draft.orchestration.mode !== 'off'
+        && (recommended?.orchestration.availableRoles.includes(id) ?? false);
+      return {
+        id,
+        kind: 'role',
+        label,
+        description,
+        category: 'orchestration-roles',
+        source: 'bundled',
+        provenance: 'bundled-roles',
+        persistable: true,
+        selectable,
+        ...(selectable ? {} : {
+          blockedReason: draft.orchestration.mode === 'off'
+            ? 'Delegation is off for this workspace.'
+            : 'Not available in the selected orchestration plan.',
+        }),
+        runtimeAvailabilityPrerequisites: [],
+        selected: draft.orchestration.availableRoles.includes(id),
+        recommended: recommendedRoles.has(id),
+        denied: draft.orchestration.disabledRoles.includes(id),
+      };
+    }),
     ...DEV_TOOL_GROUPS.map((group) => ({
       id: group.id,
       kind: 'tool-group',

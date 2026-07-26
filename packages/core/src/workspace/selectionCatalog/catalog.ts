@@ -3,6 +3,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { extensionToolOwner } from '../../extension/registry.js';
 import {
+  loadBundledRegistry,
+  type LoadedDefinition,
+} from '../../orchestration/agents/agentRegistry.js';
+import {
   effectiveToolRegistry,
   type LocalToolEntry,
 } from '../../tool/registry/registry.js';
@@ -25,6 +29,7 @@ import {
   type WorkspaceSelectionCatalog,
   type WorkspaceSelectionCatalogEntry,
   type WorkspaceSelectionCatalogOptions,
+  type WorkspaceRoleCatalogDescriptor,
 } from './types.js';
 
 const BUNDLED_SKILLS_ROOT = fileURLToPath(new URL('../../../skills', import.meta.url));
@@ -41,6 +46,22 @@ export function buildWorkspaceSelectionCatalog(
     ...plugins.available.flatMap((plugin) => [...plugin.skillIds]),
     ...plugins.unavailable.flatMap((plugin) => [...plugin.skillIds]),
   ]);
+  const roles = options.roles ?? loadBundledRegistry().map(roleDescriptor);
+
+  for (const role of roles) {
+    pushCatalogEntry(entries, {
+      id: role.id,
+      kind: 'role',
+      label: safeCatalogText(role.label, labelForId(role.id)),
+      description: safeCatalogText(role.description, 'Orchestration role.'),
+      category: 'orchestration-roles',
+      source: role.source,
+      provenance: safeProvenance(role.provenance, 'role-registry'),
+      persistable: true,
+      selectable: true,
+      runtimeAvailabilityPrerequisites: [],
+    });
+  }
 
   for (const profile of WORKSPACE_TOOL_PROFILES) {
     pushCatalogEntry(entries, {
@@ -305,4 +326,14 @@ function availabilityReason(tool: LocalToolEntry): string {
   if (tool.availability) return `Unavailable until ${tool.availability} is active.`;
   if (tool.runtimePort) return `Unavailable without the ${tool.runtimePort} runtime.`;
   return 'Unavailable in the current runtime.';
+}
+
+function roleDescriptor(loaded: LoadedDefinition): WorkspaceRoleCatalogDescriptor {
+  return {
+    id: loaded.def.id,
+    label: loaded.def.displayName,
+    description: loaded.def.whenToUse,
+    source: 'bundled',
+    provenance: 'bundled-roles',
+  };
 }

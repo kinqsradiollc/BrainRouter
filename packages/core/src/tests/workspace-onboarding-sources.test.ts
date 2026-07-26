@@ -93,6 +93,31 @@ function writeFixturePlugin(workspaceRoot: string): void {
   );
 }
 
+function writeWorkspaceRole(workspaceRoot: string): void {
+  const directory = path.join(workspaceRoot, '.brainrouter', 'agents');
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, 'specialist.json'), JSON.stringify({
+    schemaVersion: 1,
+    kind: 'orchestration-role',
+    id: 'specialist',
+    displayName: 'Workspace specialist',
+    whenToUse: 'Handles one workspace-specific bounded task.',
+    prompt: 'PRIVATE ROLE PROMPT MUST NOT ENTER THE ONBOARDING CATALOG.',
+    model: null,
+    effort: null,
+    defaultAccess: 'read',
+    toolScope: { local: ['read_file'], mcp: [] },
+    disallowedTools: [],
+    maxIterations: 8,
+    timeoutMs: 30_000,
+    maxResultChars: 4_000,
+    subagents: [],
+    delegateName: 'delegate_specialist',
+    tier: 'reasoning',
+    outputContract: null,
+  }));
+}
+
 test('P23-9 onboarding sources align enabled plugin skill provenance and plan references', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'br-onboarding-sources-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -161,4 +186,19 @@ test('P23-9 contributed skill roots reject linked skill directories', (t) => {
 
   const sources = buildWorkspaceOnboardingSources(root, config(true));
   assert.equal(sources.catalog.entries.some((entry) => entry.id === 'linked-skill'), false);
+});
+
+test('P23-9 onboarding sources expose workspace roles without their executable prompts', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'br-onboarding-role-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  writeWorkspaceRole(root);
+
+  const sources = buildWorkspaceOnboardingSources(root);
+  const specialist = sources.catalog.entries.find(
+    (entry) => entry.kind === 'role' && entry.id === 'specialist',
+  );
+  assert.equal(specialist?.label, 'Workspace specialist');
+  assert.equal(specialist?.source, 'workspace');
+  assert.equal(specialist?.provenance, 'workspace-local');
+  assert.doesNotMatch(JSON.stringify(sources.catalog), /PRIVATE ROLE PROMPT/);
 });

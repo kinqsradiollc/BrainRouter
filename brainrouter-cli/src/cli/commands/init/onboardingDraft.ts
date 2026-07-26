@@ -3,6 +3,7 @@ import {
   createWorkspaceManifest,
   migrateWorkspaceManifestToolSelection,
   normalizeWorkspaceManifest,
+  validateReviewedWorkspaceRoleSelection,
   validateReviewedWorkspaceSkillSelection,
   type WorkspaceSelectionCatalog,
   type WorkspaceManifest,
@@ -116,6 +117,13 @@ export function finalizeCatalogReviewedProjectOnboarding(
   catalog: WorkspaceSelectionCatalog,
 ): WorkspaceManifest {
   const edited = applyProjectOnboardingEdits(draft, edits);
+  const roles = validateReviewedWorkspaceRoleSelection({
+    availableRoles: edited.orchestration.availableRoles,
+    disabledRoles: edited.orchestration.disabledRoles,
+  }, catalog);
+  if (!roles.ok) {
+    throw new Error(formatCatalogReviewIssues('role', roles.issues));
+  }
   const skills = validateReviewedWorkspaceSkillSelection({
     packs: edited.skills.packs,
     enabled: edited.skills.enabled,
@@ -127,6 +135,11 @@ export function finalizeCatalogReviewedProjectOnboarding(
   return migrateWorkspaceManifestToolSelection({
     manifest: {
       ...edited,
+      orchestration: {
+        ...edited.orchestration,
+        availableRoles: roles.value.availableRoles,
+        disabledRoles: roles.value.disabledRoles,
+      },
       skills: skills.value,
     },
     reviewed: {
@@ -140,7 +153,7 @@ export function finalizeCatalogReviewedProjectOnboarding(
 }
 
 function formatCatalogReviewIssues(
-  kind: 'skill' | 'tool',
+  kind: 'role' | 'skill' | 'tool',
   issues: ReadonlyArray<{ field: string; id?: string; reason: string }>,
 ): string {
   const detail = issues

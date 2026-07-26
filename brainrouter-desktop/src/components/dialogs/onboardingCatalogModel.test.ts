@@ -9,6 +9,18 @@ function preview(): Record<string, unknown> {
     profileId: 'custom',
     catalogFingerprint: digest,
     catalog: [{
+      id: 'worker',
+      kind: 'role',
+      label: 'Worker',
+      description: 'Produces one bounded artifact or change.',
+      source: 'bundled',
+      provenance: 'bundled-roles',
+      persistable: true,
+      selectable: true,
+      selected: true,
+      recommended: true,
+      denied: false,
+    }, {
       id: 'coding',
       kind: 'tool-group',
       label: 'Files and code',
@@ -59,7 +71,8 @@ test('parses safe catalog metadata and primary-only Custom preview', () => {
     optional: false,
     maxChildren: 0,
   }]);
-  assert.deepEqual(parsed.catalog[0]?.expandsTo, ['read_file', 'apply_patch']);
+  assert.equal(parsed.catalog[0]?.kind, 'role');
+  assert.deepEqual(parsed.catalog[1]?.expandsTo, ['read_file', 'apply_patch']);
 });
 
 test('rejects malformed fingerprints, oversized catalogs, and executable-looking catalog data', () => {

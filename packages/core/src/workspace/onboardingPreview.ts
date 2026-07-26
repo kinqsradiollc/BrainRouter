@@ -106,6 +106,7 @@ export function buildWorkspaceOnboardingPreview(
   const deniedTools = toolSelection.deniedIds;
   const disabledSkills = new Set(manifest.skills.disabled);
   const recommendedGroups = new Set(preset?.tools.profiles ?? []);
+  const recommendedRoles = new Set(preset?.orchestration.availableRoles ?? []);
   const recommendedPacks = new Set(preset?.skills.packs ?? []);
   const recommendedSkills = new Set(preset?.skills.enabled ?? []);
 
@@ -167,29 +168,47 @@ export function buildWorkspaceOnboardingPreview(
         : 0,
     },
     catalogFingerprint: catalog.fingerprint,
-    catalog: catalog.entries.map((entry) => ({
-      ...entry,
-      selected: entry.kind === 'tool-group'
-        ? selectedGroups.has(entry.id)
-        : entry.kind === 'tool'
-          ? selectedTools.has(entry.id)
-          : entry.kind === 'skill-pack'
-            ? selectedPacks.has(entry.id)
-            : entry.kind === 'skill'
-              ? selectedSkills.has(entry.id)
-              : false,
-      recommended: entry.kind === 'tool-group'
-        ? recommendedGroups.has(entry.id)
-        : entry.kind === 'skill-pack'
-          ? recommendedPacks.has(entry.id)
+    catalog: catalog.entries.map((entry) => {
+      const roleBlockedByPlan = entry.kind === 'role'
+        && (manifest.orchestration.mode === 'off' || !planRoles.has(entry.id));
+      return {
+        ...entry,
+        selectable: entry.selectable && !roleBlockedByPlan,
+        ...(roleBlockedByPlan && !entry.blockedReason
+          ? {
+              blockedReason: manifest.orchestration.mode === 'off'
+                ? 'Delegation is off for this workspace.'
+                : 'Not available in the selected orchestration plan.',
+            }
+          : {}),
+        selected: entry.kind === 'role'
+          ? manifest.orchestration.availableRoles.includes(entry.id)
+          : entry.kind === 'tool-group'
+            ? selectedGroups.has(entry.id)
+            : entry.kind === 'tool'
+              ? selectedTools.has(entry.id)
+              : entry.kind === 'skill-pack'
+                ? selectedPacks.has(entry.id)
+                : entry.kind === 'skill'
+                  ? selectedSkills.has(entry.id)
+                  : false,
+        recommended: entry.kind === 'role'
+          ? recommendedRoles.has(entry.id)
+          : entry.kind === 'tool-group'
+            ? recommendedGroups.has(entry.id)
+            : entry.kind === 'skill-pack'
+              ? recommendedPacks.has(entry.id)
+              : entry.kind === 'skill'
+                ? recommendedSkills.has(entry.id)
+                : false,
+        denied: entry.kind === 'role'
+          ? disabledRoles.has(entry.id)
           : entry.kind === 'skill'
-            ? recommendedSkills.has(entry.id)
-            : false,
-      denied: entry.kind === 'skill'
-        ? disabledSkills.has(entry.id)
-        : (entry.kind === 'tool' || entry.kind === 'tool-group')
-          ? deniedTools.has(entry.id)
-          : false,
-    })),
+            ? disabledSkills.has(entry.id)
+            : (entry.kind === 'tool' || entry.kind === 'tool-group')
+              ? deniedTools.has(entry.id)
+              : false,
+      };
+    }),
   };
 }

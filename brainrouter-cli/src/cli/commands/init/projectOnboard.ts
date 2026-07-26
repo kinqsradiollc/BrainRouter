@@ -33,6 +33,8 @@ import {
   requestCatalogSelection,
 } from './projectOnboardingCatalog.js';
 
+type WorkspaceOrchestrationProfiles = Parameters<typeof buildWorkspaceOnboardingPreview>[2];
+
 export { suggestWorkspaceProfile, type ProfileSuggestion } from '@kinqs/brainrouter-core/workspace';
 
 export type ProjectOnboardingPromptId =
@@ -257,7 +259,12 @@ export async function runProjectOnboarding(
     source: options.source,
     now: options.now,
   });
-  const edits = await collectProjectOnboardingEdits(prompt, draft, catalog);
+  const edits = await collectProjectOnboardingEdits(
+    prompt,
+    draft,
+    catalog,
+    sources.orchestrationProfiles,
+  );
   if (!edits) return cancelled(print);
   const reviewed = finalizeCatalogReviewedProjectOnboarding(draft, edits, catalog);
   print(`\n${formatManifestSummary(reviewed, buildWorkspaceOnboardingPreview(
@@ -304,6 +311,7 @@ export async function collectProjectOnboardingEdits(
   prompt: ProjectOnboardingPrompt,
   draft: WorkspaceManifest,
   catalog: WorkspaceSelectionCatalog = buildWorkspaceSelectionCatalog(),
+  orchestrationProfiles?: WorkspaceOrchestrationProfiles,
 ): Promise<ProjectOnboardingFieldEdits | null> {
   const personaDefault = await requestText(prompt, 'persona-default', 'Default domain persona', draft.persona.default, 'Step 2 of 4 · persona');
   if (personaDefault === null) return null;
@@ -311,20 +319,21 @@ export async function collectProjectOnboardingEdits(
   if (!personasEnabled) return null;
   const orchestrationMode = await requestOrchestrationMode(prompt, draft.orchestration.mode);
   if (!orchestrationMode) return null;
-  const orchestrationAvailableRoles = await requestList(
-    prompt,
-    'orchestration-available',
-    'Available orchestration roles',
+  const rolePreview = buildWorkspaceOnboardingPreview({
+    ...draft,
+    orchestration: { ...draft.orchestration, mode: orchestrationMode },
+  }, catalog, orchestrationProfiles);
+  const roleCatalog = { ...catalog, entries: rolePreview.catalog };
+  const orchestrationAvailableRoles = await requestCatalogSelection(
+    prompt, roleCatalog, 'orchestration-available', 'Available orchestration roles', 'role',
     draft.orchestration.availableRoles,
-    'Step 2 of 4 · orchestration',
+    'Step 2 of 4 · orchestration', true,
   );
   if (!orchestrationAvailableRoles) return null;
-  const orchestrationDisabledRoles = await requestList(
-    prompt,
-    'orchestration-disabled',
-    'Disabled orchestration roles',
+  const orchestrationDisabledRoles = await requestCatalogSelection(
+    prompt, roleCatalog, 'orchestration-disabled', 'Disabled orchestration roles', 'role',
     draft.orchestration.disabledRoles,
-    'Step 2 of 4 · orchestration',
+    'Step 2 of 4 · orchestration', false,
   );
   if (!orchestrationDisabledRoles) return null;
   const orchestrationMaxParallelRaw = await requestText(

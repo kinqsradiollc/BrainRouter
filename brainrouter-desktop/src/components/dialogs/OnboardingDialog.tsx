@@ -430,15 +430,15 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
                 onChange={(maxParallel) => patchDraft({
                   orchestration: { ...draft.orchestration, maxParallel },
                 })} />
-              <ListField label="Available orchestration roles" values={draft.orchestration.availableRoles}
-                disabled={proposing || saving || reviewingInstruction}
-                hint="Roles may be selected only when the chosen mode permits delegation."
+              <CatalogField label="Available orchestration roles" values={draft.orchestration.availableRoles}
+                kinds={['role']} preview={planPreview}
+                disabled={proposing || saving || reviewingInstruction || previewing}
                 onChange={(availableRoles) => patchDraft({
                   orchestration: { ...draft.orchestration, availableRoles },
                 })} />
-              <ListField label="Disabled orchestration roles" values={draft.orchestration.disabledRoles}
-                disabled={proposing || saving || reviewingInstruction}
-                hint="Disabled roles always win over available roles."
+              <CatalogField label="Disabled orchestration roles" values={draft.orchestration.disabledRoles}
+                kinds={['role']} preview={planPreview} allowBlocked
+                disabled={proposing || saving || reviewingInstruction || previewing}
                 onChange={(disabledRoles) => patchDraft({
                   orchestration: {
                     ...draft.orchestration,

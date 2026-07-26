@@ -15,6 +15,7 @@ import {
   previewReviewedWorkspaceInstruction,
   suggestWorkspaceProfile,
   validateReviewedWorkspaceSkillSelection,
+  validateReviewedWorkspaceRoleSelection,
   workspaceProfilesForOnboarding,
   type ProfileSuggestion,
   type WorkspaceManifest,
@@ -180,10 +181,23 @@ export function saveWorkspaceManifestFromPayload(
     const draft = parseManifestDraft(workspaceRoot, record, current, source);
     const catalog = buildWorkspaceOnboardingSources(workspaceRoot, config).catalog;
     const catalogFingerprint = parseDigest(record.catalogFingerprint);
+    const roles = validateReviewedWorkspaceRoleSelection({
+      availableRoles: draft.orchestration.availableRoles,
+      disabledRoles: draft.orchestration.disabledRoles,
+    }, catalog);
+    if (!roles.ok) throw new Error('Reviewed workspace role selection is unavailable.');
     const skills = validateReviewedWorkspaceSkillSelection(draft.skills, catalog);
     if (!skills.ok) throw new Error('Reviewed workspace skill selection is unavailable.');
     const manifest = migrateWorkspaceManifestToolSelection({
-      manifest: { ...draft, skills: skills.value },
+      manifest: {
+        ...draft,
+        orchestration: {
+          ...draft.orchestration,
+          availableRoles: roles.value.availableRoles,
+          disabledRoles: roles.value.disabledRoles,
+        },
+        skills: skills.value,
+      },
       reviewed: {
         profiles: draft.tools.profiles,
         enabled: draft.tools.enabled ?? [],

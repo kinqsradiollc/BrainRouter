@@ -14,11 +14,12 @@ import {
   diagnoseWorkspaceToolSelectionMigration,
   isSelectableWorkspaceCatalogToolId,
   migrateWorkspaceManifestToolSelection,
+  validateReviewedWorkspaceRoleSelection,
   validateReviewedWorkspaceSkillSelection,
   validateReviewedWorkspaceToolSelection,
 } from '../workspace/selectionCatalog.js';
 
-test('P23-3b catalog projects safe tool groups, tools, skill packs, and skills', () => {
+test('P23-3b catalog projects safe roles, tool groups, tools, skill packs, and skills', () => {
   const catalog = buildWorkspaceSelectionCatalog({
     runtimeTools: [{
       id: 'mcp_example_lookup',
@@ -28,12 +29,16 @@ test('P23-3b catalog projects safe tool groups, tools, skill packs, and skills',
   });
 
   const coding = catalog.entries.find((entry) => entry.kind === 'tool-group' && entry.id === 'coding');
+  const architect = catalog.entries.find((entry) => entry.kind === 'role' && entry.id === 'architect');
   const webSearch = catalog.entries.find((entry) => entry.kind === 'tool' && entry.id === 'web_search');
   const research = catalog.entries.find((entry) => entry.kind === 'skill-pack' && entry.id === 'research');
   const researchQuestion = catalog.entries.find((entry) => entry.kind === 'skill' && entry.id === 'research-question-skill');
   const runtimeTool = catalog.entries.find((entry) => entry.kind === 'runtime-tool');
 
   assert.ok(coding?.expandsTo?.includes('read_file'));
+  assert.equal(architect?.label, 'Architect');
+  assert.equal(architect?.source, 'bundled');
+  assert.equal(architect?.provenance, 'bundled-roles');
   assert.equal(webSearch?.source, 'core');
   assert.equal(webSearch?.accessTier, 'read');
   assert.equal(webSearch?.actionKind, 'network');
@@ -46,6 +51,23 @@ test('P23-3b catalog projects safe tool groups, tools, skill packs, and skills',
 
   const serialized = JSON.stringify(catalog);
   assert.doesNotMatch(serialized, /\/Users\/|\/home\/|Bearer\s|sk-[A-Za-z0-9]{16}/i);
+  assert.doesNotMatch(serialized, /## Role:/);
+});
+
+test('P23-3b role selections use the executable-role catalog and reject unknown IDs', () => {
+  const catalog = buildWorkspaceSelectionCatalog();
+  const valid = validateReviewedWorkspaceRoleSelection({
+    availableRoles: ['explorer', 'worker'],
+    disabledRoles: ['fleet'],
+  }, catalog);
+  assert.equal(valid.ok, true);
+
+  const invalid = validateReviewedWorkspaceRoleSelection({
+    availableRoles: ['invented'],
+    disabledRoles: [],
+  }, catalog);
+  assert.equal(invalid.ok, false);
+  if (!invalid.ok) assert.deepEqual(invalid.issues.map((issue) => issue.code), ['unknown-entry']);
 });
 
 test('P23-3b current runtime availability is visible but cannot grant a blocked tool', () => {

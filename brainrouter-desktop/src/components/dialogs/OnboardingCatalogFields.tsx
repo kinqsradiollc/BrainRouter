@@ -24,7 +24,7 @@ export function CatalogField({ label, values, kinds, preview, allowBlocked = fal
       .toLowerCase().includes(query));
   const selected = new Set(values);
   const toggle = (row: OnboardingCatalogRow): void => {
-    if (disabled || (!allowBlocked && !row.selectable)) return;
+    if (disabled || (!selected.has(row.id) && !allowBlocked && !row.selectable)) return;
     onChange(selected.has(row.id)
       ? values.filter((id) => id !== row.id)
       : [...values, row.id]);
@@ -48,7 +48,7 @@ export function CatalogField({ label, values, kinds, preview, allowBlocked = fal
               <label key={`${row.kind}:${row.id}`}
                 className={`onboard-catalog-option${checked ? ' selected' : ''}${blocked ? ' blocked' : ''}`}>
                 <input type="checkbox" checked={checked}
-                  disabled={disabled || (!allowBlocked && blocked)}
+                  disabled={disabled || (!checked && !allowBlocked && blocked)}
                   onChange={() => toggle(row)} />
                 <span>
                   <strong>{row.label}</strong>
