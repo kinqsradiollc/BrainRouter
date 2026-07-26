@@ -19,6 +19,7 @@ import {
 } from '../telemetry/recorder/telemetry.js';
 import type { TelemetryEvent } from '../telemetry/events/contracts.js';
 import type { TelemetrySink } from '../telemetry/events/telemetryPort.js';
+import { resolveWorkspaceProfileOrchestrationDefaults } from '../workspace/profileOrchestrationDefaults.js';
 
 function memorySink(): TelemetrySink & { events: TelemetryEvent[] } {
   const events: TelemetryEvent[] = [];
@@ -189,5 +190,30 @@ test('compatibility telemetry excludes paths and content and supports a measured
   } finally {
     setTelemetrySink(null);
     fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('P23-10 TypeScript orchestration fallback records one content-free reader event', () => {
+  const sink = memorySink();
+  setTelemetrySink(sink);
+  try {
+    const defaults = resolveWorkspaceProfileOrchestrationDefaults('engineering', {
+      findPlan: () => undefined,
+    });
+    assert.equal(defaults.source, 'typescript-compatibility');
+    assert.equal(defaults.planId, null);
+    assert.deepEqual(sink.events.map((event) => event.props), [{
+      surface: 'manifest',
+      code: 'typescript_orchestration_defaults',
+      source: 'bundled',
+      count: 1,
+    }]);
+    assert.equal(sink.events[0]?.workspaceRoot, undefined);
+
+    const summary = summarizeCompatibilityTelemetry(sink.events);
+    assert.equal(summary.readerEvents, 1);
+    assert.equal(summary.byCode.typescript_orchestration_defaults, 1);
+  } finally {
+    setTelemetrySink(null);
   }
 });
