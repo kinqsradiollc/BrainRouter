@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   RESERVED_HARNESS_ROLE_IDS,
   findDomainPersona,
@@ -61,6 +62,22 @@ test('bundled catalog defines the five domain identities and no frontend persona
   });
 });
 
+test('bundled persona and executable-agent assets are physically separated', () => {
+  const packageRoot = fileURLToPath(new URL('../../', import.meta.url));
+  const personaFiles = fs.readdirSync(path.join(packageRoot, 'personas')).sort();
+  const agentFiles = fs.readdirSync(path.join(packageRoot, 'agents')).sort();
+
+  assert.deepEqual(personaFiles, [
+    'data-scientist.json',
+    'engineer.json',
+    'researcher.json',
+    'tutor.json',
+    'writer.json',
+  ]);
+  assert.equal(agentFiles.every((file) => file.endsWith('.json')), true);
+  assert.equal(agentFiles.some((file) => personaFiles.includes(file)), false);
+});
+
 test('workspace shadows local, plugin, and bundled definitions with collision provenance', () => {
   withWorkspace((workspace) => {
     const workspacePrompt = 'Workspace engineer prompt.';
@@ -95,7 +112,7 @@ test('JSON personas use source precedence and shadow same-scope legacy Markdown'
     assert.match(engineer.prompt, /Workspace JSON instructions/);
     assert.match(engineer.prompt, /Decision priorities, in order: correctness, security/);
     assert.doesNotMatch(engineer.prompt, /legacy/);
-    assert.deepEqual(engineer.shadowedBy, ['workspace', 'local', 'bundled']);
+    assert.deepEqual(engineer.shadowedBy, ['workspace', 'local']);
   });
 });
 
@@ -145,7 +162,11 @@ test('harness role ids, malformed files, symlinks, and secret-bearing prompts fa
     const target = writePersona(path.join(workspace, 'elsewhere'), 'linked', 'Linked prompt.');
     fs.symlinkSync(target, path.join(dir, 'linked.md'));
 
-    const ids = listDomainPersonas(workspace, { pluginAgentFiles: [], bundledDir: path.join(workspace, 'empty') })
+    const ids = listDomainPersonas(workspace, {
+      pluginAgentFiles: [],
+      bundledPersonasDir: path.join(workspace, 'empty-json'),
+      bundledDir: path.join(workspace, 'empty'),
+    })
       .map((persona) => persona.id);
     assert.deepEqual(ids, ['safe-custom']);
     for (const role of RESERVED_HARNESS_ROLE_IDS) {
@@ -162,6 +183,7 @@ test('workspace persona discovery refuses an agents directory that escapes throu
       fs.symlinkSync(outside, path.join(workspace, 'agents'));
       const ids = listDomainPersonas(workspace, {
         pluginAgentFiles: [],
+        bundledPersonasDir: path.join(workspace, 'empty-json'),
         bundledDir: path.join(workspace, 'empty'),
       }).map((persona) => persona.id);
       assert.deepEqual(ids, []);
@@ -177,6 +199,7 @@ test('plugin persona discovery refuses files outside the resolved plugin root', 
     const outsideFile = writePersona(path.join(workspace, 'outside'), 'outside-plugin', 'Outside prompt.');
     fs.mkdirSync(pluginRoot, { recursive: true });
     const personas = listDomainPersonas(workspace, {
+      bundledPersonasDir: path.join(workspace, 'empty-json'),
       bundledDir: path.join(workspace, 'empty'),
       pluginAgentFiles: [{ pluginName: 'fixture', pluginRoot, path: outsideFile }],
     });
