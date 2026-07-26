@@ -780,9 +780,9 @@ behavior-changing tool-selection semantic:
 
 `profiles` remains a readable convenience bundle. `enabled` is a checked,
 stable catalog ID for a specific selectable tool or trusted contribution.
-`deny` remains an explicit final subtraction. The parser rejects unknown,
-disabled, or non-persistable entries; onboarding presents those entries as
-blocked instead of silently preserving a typo.
+`deny` remains an explicit final subtraction. The reviewed-selection parser
+rejects unknown, disabled, or non-persistable entries; onboarding presents
+those entries as blocked instead of silently preserving a typo.
 
 For `explicit-catalog`, core computes:
 
@@ -805,7 +805,17 @@ Manifest v2 uses `mode: "legacy-groups"` on read. It preserves today's behavior:
 the existing group gate applies to its managed surface while tools outside that
 legacy registry retain their present visibility. Migration to
 `explicit-catalog` is a reviewed user action; it is never inferred from an old
-list. A no-manifest workspace remains an exact no-op.
+list. Existing onboarding continues writing v2 until the catalog picker and
+exact manifest diff are available; Core exposes a stale-safe reviewed migration
+instead of changing the current writer underneath those surfaces. A no-manifest
+workspace remains an exact no-op.
+
+Task-time capability detection cannot add an unselected tool group under
+`explicit-catalog`; capabilities only subtract through their existing runtime
+gates. Dynamic MCP/server names also cannot appear in `enabled`. A v3 workspace
+opens that live surface through a reviewed stable MCP control entry, after
+which individual server tools remain runtime-discovered and subject to the
+ordinary access, scope, approval, and dispatch gates.
 
 #### 12.3 Recommended starting selections are defaults, not grants
 

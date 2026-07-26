@@ -1,0 +1,218 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import {
+  createWorkspaceManifest,
+  loadWorkspaceManifest,
+  saveWorkspaceManifest,
+  workspaceManifestPath,
+} from '../workspace/manifest.js';
+import {
+  buildWorkspaceSelectionCatalog,
+  diagnoseWorkspaceToolSelectionMigration,
+  migrateWorkspaceManifestToolSelection,
+  validateReviewedWorkspaceSkillSelection,
+  validateReviewedWorkspaceToolSelection,
+} from '../workspace/selectionCatalog.js';
+
+test('P23-3b catalog projects safe tool groups, tools, skill packs, and skills', () => {
+  const catalog = buildWorkspaceSelectionCatalog({
+    runtimeTools: [{
+      id: 'mcp_example_lookup',
+      label: 'Example lookup',
+      description: 'Live server tool',
+    }],
+  });
+
+  const coding = catalog.entries.find((entry) => entry.kind === 'tool-group' && entry.id === 'coding');
+  const webSearch = catalog.entries.find((entry) => entry.kind === 'tool' && entry.id === 'web_search');
+  const research = catalog.entries.find((entry) => entry.kind === 'skill-pack' && entry.id === 'research');
+  const researchQuestion = catalog.entries.find((entry) => entry.kind === 'skill' && entry.id === 'research-question-skill');
+  const runtimeTool = catalog.entries.find((entry) => entry.kind === 'runtime-tool');
+
+  assert.ok(coding?.expandsTo?.includes('read_file'));
+  assert.equal(webSearch?.source, 'core');
+  assert.equal(webSearch?.accessTier, 'read');
+  assert.equal(webSearch?.actionKind, 'network');
+  assert.equal(research?.source, 'profile-plugin');
+  assert.ok(research?.expandsTo?.includes('research-question-skill'));
+  assert.equal(researchQuestion?.provenance, 'profile-research');
+  assert.equal(runtimeTool?.persistable, false);
+  assert.equal(runtimeTool?.selectable, false);
+  assert.match(catalog.fingerprint, /^[a-f0-9]{64}$/);
+
+  const serialized = JSON.stringify(catalog);
+  assert.doesNotMatch(serialized, /\/Users\/|\/home\/|Bearer\s|sk-[A-Za-z0-9]{16}/i);
+});
+
+test('P23-3b current runtime availability is visible but cannot grant a blocked tool', () => {
+  const catalog = buildWorkspaceSelectionCatalog({
+    availability: {
+      computerUseAvailable: false,
+      rootAgent: true,
+      mcpDiscovery: false,
+    },
+  });
+  const computerUse = catalog.entries.find((entry) => entry.kind === 'tool' && entry.id === 'computer_use');
+
+  assert.equal(computerUse?.selectable, false);
+  assert.match(computerUse?.blockedReason ?? '', /computer-use/);
+  const reviewed = validateReviewedWorkspaceToolSelection({
+    profiles: [],
+    enabled: ['computer_use'],
+    deny: [],
+  }, catalog);
+  assert.equal(reviewed.ok, false);
+  if (!reviewed.ok) assert.equal(reviewed.issues[0]?.code, 'blocked-entry');
+});
+
+test('P23-3b reviewed migration creates v3 without mutating a v2 workspace', () => {
+  const catalog = buildWorkspaceSelectionCatalog();
+  const legacy = createWorkspaceManifest({
+    name: 'app',
+    profile: 'engineering',
+    by: 'wizard',
+    at: '2026-07-26T00:00:00.000Z',
+  });
+  const before = JSON.stringify(legacy);
+  const migrated = migrateWorkspaceManifestToolSelection({
+    manifest: legacy,
+    reviewed: {
+      profiles: ['coding', 'terminal'],
+      enabled: ['web_search'],
+      deny: ['computer_use'],
+    },
+    catalog,
+    reviewedCatalogFingerprint: catalog.fingerprint,
+  });
+
+  assert.equal(JSON.stringify(legacy), before);
+  assert.equal(migrated.version, 3);
+  assert.deepEqual(migrated.tools, {
+    mode: 'explicit-catalog',
+    profiles: ['coding', 'terminal'],
+    enabled: ['web_search'],
+    deny: ['computer_use'],
+  });
+});
+
+test('P23-3b reviewed selections reject typos, hidden tools, and live runtime names', () => {
+  const catalog = buildWorkspaceSelectionCatalog({
+    runtimeTools: [{ id: 'mcp_example_lookup' }],
+  });
+  const result = validateReviewedWorkspaceToolSelection({
+    profiles: ['codign'],
+    enabled: ['spawn_agent', 'mcp_example_lookup'],
+    deny: [],
+  }, catalog);
+
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.deepEqual(
+      result.issues.map((issue) => issue.code).sort(),
+      ['blocked-entry', 'not-persistable', 'unknown-entry'],
+    );
+  }
+});
+
+test('P23-3b stale catalog snapshots fail before migration', () => {
+  const catalog = buildWorkspaceSelectionCatalog();
+  const manifest = createWorkspaceManifest({ name: 'app', profile: 'custom', by: 'wizard' });
+
+  assert.throws(
+    () => migrateWorkspaceManifestToolSelection({
+      manifest,
+      reviewed: { profiles: [], enabled: [], deny: [] },
+      catalog,
+      reviewedCatalogFingerprint: '0'.repeat(64),
+    }),
+    (error: unknown) => {
+      const candidate = error as Error & { issues?: Array<{ code: string }> };
+      return candidate.name === 'WorkspaceSelectionReviewError'
+        && candidate.issues?.[0]?.code === 'stale-catalog';
+    },
+  );
+});
+
+test('P23-3b skill selections use the same catalog and reject unknown IDs', () => {
+  const catalog = buildWorkspaceSelectionCatalog();
+  const valid = validateReviewedWorkspaceSkillSelection({
+    packs: ['research'],
+    enabled: ['planning-skill', 'research-question-skill'],
+    disabled: ['research-review-skill'],
+  }, catalog);
+  assert.equal(valid.ok, true);
+
+  const invalid = validateReviewedWorkspaceSkillSelection({
+    packs: ['unknown-pack'],
+    enabled: ['missing-skill'],
+    disabled: [],
+  }, catalog);
+  assert.equal(invalid.ok, false);
+  if (!invalid.ok) assert.deepEqual(invalid.issues.map((issue) => issue.code), ['unknown-entry', 'unknown-entry']);
+});
+
+test('P23-3b v2 diagnostics are content-free and loading does not infer v3', () => {
+  const catalog = buildWorkspaceSelectionCatalog();
+  const legacy = createWorkspaceManifest({ name: 'app', profile: 'engineering', by: 'wizard' });
+  legacy.tools.profiles.push('future-tools');
+  const diagnostic = diagnoseWorkspaceToolSelectionMigration(legacy, catalog);
+
+  assert.deepEqual(diagnostic, {
+    required: true,
+    sourceVersion: 2,
+    unknownProfileCount: 1,
+    unknownEnabledCount: 0,
+    blockedSelectionCount: 1,
+  });
+  assert.equal('mode' in legacy.tools, false);
+  assert.equal('enabled' in legacy.tools, false);
+});
+
+test('P23-3b manifest v3 survives the normal save/load chokepoint', () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'br-v3-tools-'));
+  try {
+    const catalog = buildWorkspaceSelectionCatalog();
+    const migrated = migrateWorkspaceManifestToolSelection({
+      manifest: createWorkspaceManifest({ name: 'app', profile: 'engineering', by: 'wizard' }),
+      reviewed: { profiles: ['coding'], enabled: ['web_search'], deny: ['run_command'] },
+      catalog,
+    });
+    saveWorkspaceManifest(workspace, migrated);
+
+    const loaded = loadWorkspaceManifest(workspace);
+    assert.ok(loaded);
+    assert.equal(loaded.version, 3);
+    assert.deepEqual(loaded.tools, migrated.tools);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('P23-3b v3 normalization strips credentials and local paths from selections', () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'br-v3-safe-'));
+  try {
+    fs.mkdirSync(path.dirname(workspaceManifestPath(workspace)), { recursive: true });
+    fs.writeFileSync(workspaceManifestPath(workspace), JSON.stringify({
+      version: 3,
+      profile: 'custom',
+      tools: {
+        mode: 'explicit-catalog',
+        profiles: ['coding', '/Users/example/private'],
+        enabled: ['web_search', 'Bearer private-token'],
+        deny: ['computer_use', 'sk-abcdefghijklmnopqrstuvwxyz'],
+      },
+    }));
+
+    assert.deepEqual(loadWorkspaceManifest(workspace)?.tools, {
+      mode: 'explicit-catalog',
+      profiles: ['coding'],
+      enabled: ['web_search'],
+      deny: ['computer_use'],
+    });
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});

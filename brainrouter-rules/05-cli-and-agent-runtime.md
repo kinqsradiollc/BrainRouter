@@ -272,18 +272,28 @@ the skill body (the single source of truth). See [`09`](09-docs-skills-and-plugi
 
 - **Evidence:** `brainrouter-cli/src/cli/prompt/skillCatalog.ts:31,33,96`
 
-### 16. Workspace tool profiles filter each Agent turn; never mutate the extension registry
+### 16. Workspace tool selection filters each Agent turn; never mutate the extension registry
 
 Manifest `tools.profiles` and task-time capability profiles resolve through the
 single mapping in `workspace/toolProfiles.ts`. Apply that selection to the
 model-visible local surface and re-check it at dispatch. Profile assignments are
-explicit: unassigned control-plane/security tools and unknown extension tools
-retain their existing behavior, while a missing manifest is an exact no-op.
-Manifest tool/extension denies subtract after profile selection and user
-force-on overrides cannot bypass the gate. Never reload, unregister, or mutate
-process-global extensions to represent one workspace or one task.
+explicit. For manifest v2 (`legacy-groups`), unassigned control-plane/security
+tools and unknown extension tools retain their existing behavior. Manifest v3
+(`explicit-catalog`) instead exposes only expanded reviewed groups plus reviewed
+stable tool IDs; unselected and unknown local tools fail closed. A missing
+manifest remains an exact no-op. Denies subtract last, and user force-on
+overrides cannot bypass the gate.
 
-- **Evidence:** `packages/core/src/workspace/toolProfiles.ts`, `packages/core/src/tests/workspace-tool-profiles.test.ts`, `packages/core/src/agent/runtime/runTurn.impl.ts`
+Build review choices from `workspace/selectionCatalog.ts`, never an app-owned
+ID list. V3 is created only by a reviewed migration against a fresh catalog
+fingerprint; loading v2 must not infer or persist v3 semantics. Live
+MCP/server-advertised names are informational and non-persistable. A v3
+workspace opens the dynamic MCP surface only through a reviewed stable MCP
+control entry, while the normal access, capability, scope, approval, and
+dispatch checks still apply. Never reload, unregister, or mutate process-global
+extensions to represent one workspace or one task.
+
+- **Evidence:** `packages/core/src/workspace/toolProfiles.ts`, `packages/core/src/workspace/selectionCatalog.ts`, `packages/core/src/tests/workspace-tool-profiles.test.ts`, `packages/core/src/tests/workspace-selection-catalog.test.ts`, `packages/core/src/agent/runtime/runTurn.impl.ts`
 
 ### 17. Workspace profile briefings replace by tag at the per-turn capability chokepoint
 

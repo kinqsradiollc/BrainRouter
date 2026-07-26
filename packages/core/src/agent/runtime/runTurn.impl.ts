@@ -101,6 +101,7 @@ import {
 import { loadWorkspaceManifest } from '../../workspace/manifest.js';
 import {
   resolveWorkspaceToolSelection,
+  workspaceDynamicMcpAllowed,
   workspaceToolAllowed,
 } from '../../workspace/toolProfiles.js';
 import {
@@ -212,6 +213,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       manifest: loadWorkspaceManifest(this.workspaceRoot),
       activeToolProfiles: this.activeWorkspaceCapabilities.toolProfiles,
     });
+    const workspaceAllowsDynamicMcp = workspaceDynamicMcpAllowed(workspaceToolSelection);
     const workspaceAllowsLocalTool = (name: string): boolean => {
       const canonicalName = registryEntry(name)?.name ?? name;
       return workspaceToolAllowed(workspaceToolSelection, {
@@ -321,6 +323,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // tools stay hidden because the CLI owns those flows.
     let visibleMcpTools = mcpTools.filter((t: any) =>
       this.isModelVisibleMcpTool(t)
+      && workspaceAllowsDynamicMcp
       && !workspaceToolSelection.deniedIds.has(String(t?.name ?? ''))
       && skillAllowsTool(String(t?.name ?? '')));
     // MAS-P4-T1: tool-surface budgeting. First apply the agent def's scope
@@ -2052,6 +2055,9 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
             }
             if (!isLocal && workspaceToolSelection.deniedIds.has(name)) {
               denyAndRecord(`Tool "${name}" denied by the active workspace tool policy.`);
+            }
+            if (!isLocal && !workspaceAllowsDynamicMcp) {
+              denyAndRecord(`Tool "${name}" denied because this workspace has no reviewed MCP surface.`);
             }
             // CC-P3.2 — declarative cli.permissions rules run FIRST: a deny match
             // blocks outright; an allow match downgrades an `ask` below (it never
