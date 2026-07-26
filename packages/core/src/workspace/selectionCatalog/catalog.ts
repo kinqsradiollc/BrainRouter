@@ -14,6 +14,7 @@ import { BUNDLED_WORKSPACE_SKILL_PACK_IDS } from '../skillSelection.js';
 import { WORKSPACE_TOOL_PROFILES } from '../toolProfiles.js';
 import { labelForId, pushCatalogEntry, safeCatalogText, safeProvenance } from './safety.js';
 import { readSkillCatalogRoot, readSkillFile } from './skillMetadata.js';
+import { isSelectableWorkspaceCatalogToolId } from './toolEligibility.js';
 import {
   WORKSPACE_SELECTION_CATALOG_MAX_ENTRIES,
   WORKSPACE_SELECTION_STABLE_ID,
@@ -51,7 +52,7 @@ export function buildWorkspaceSelectionCatalog(
     const executor = executors.get(tool.name);
     const owner = extensionToolOwner(tool.name);
     const required = owner?.required === true;
-    const hidden = tool.advertised === false || executor?.exposure() === 'hidden';
+    const hidden = !isSelectableWorkspaceCatalogToolId(tool.name);
     const unavailable = options.availability !== undefined
       && executor?.isAvailable?.(options.availability) === false;
     const blockedReason = hidden

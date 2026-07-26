@@ -56,6 +56,8 @@ export function readSkillFile(
     const stat = fs.fstatSync(descriptor);
     if (!stat.isFile() || stat.size > MAX_SKILL_FILE_BYTES) return undefined;
     const realFile = fs.realpathSync(filePath);
+    const resolvedStat = fs.statSync(realFile);
+    if (stat.dev !== resolvedStat.dev || stat.ino !== resolvedStat.ino) return undefined;
     if (containmentRoot) {
       const realContainmentRoot = fs.realpathSync(containmentRoot);
       const relative = path.relative(realContainmentRoot, realFile);

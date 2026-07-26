@@ -11,7 +11,7 @@ import {
   type WorkspaceManifest,
   type WorkspaceToolSelectionMode,
 } from './manifest.js';
-import { registryEntry } from '../tool/registry/registry.js';
+import { isSelectableWorkspaceCatalogToolId } from './selectionCatalog/toolEligibility.js';
 
 export interface WorkspaceToolProfileDefinition {
   id: string;
@@ -130,14 +130,14 @@ export function resolveWorkspaceToolSelection(input: {
   }
   if (mode === 'explicit-catalog') {
     for (const toolId of input.manifest.tools.enabled ?? []) {
-      if (isExactSelectableToolId(toolId)) allowedToolIds.add(toolId);
+      if (isSelectableWorkspaceCatalogToolId(toolId)) allowedToolIds.add(toolId);
     }
   }
 
   const deniedIds = new Set(
     mode === 'explicit-catalog'
       ? input.manifest.tools.deny.filter((id) =>
-          PROFILE_BY_ID.has(id) || isExactSelectableToolId(id))
+          PROFILE_BY_ID.has(id) || isSelectableWorkspaceCatalogToolId(id))
       : input.manifest.tools.deny,
   );
   if (mode === 'explicit-catalog') {
@@ -200,11 +200,6 @@ export function workspaceDynamicMcpAllowed(selection: WorkspaceToolSelection): b
 
 function unique(values: readonly string[]): string[] {
   return [...new Set(values)];
-}
-
-function isExactSelectableToolId(id: string): boolean {
-  const entry = registryEntry(id);
-  return entry?.name === id && entry.advertised !== false;
 }
 
 function emptySelection(): WorkspaceToolSelection {

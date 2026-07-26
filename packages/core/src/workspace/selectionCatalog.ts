@@ -6,4 +6,5 @@
  */
 export * from './selectionCatalog/types.js';
 export * from './selectionCatalog/catalog.js';
+export * from './selectionCatalog/toolEligibility.js';
 export * from './selectionCatalog/validation.js';

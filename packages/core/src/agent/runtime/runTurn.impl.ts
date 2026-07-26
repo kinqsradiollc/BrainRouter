@@ -2041,7 +2041,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
             // recent-denials ring so `/recent-denials` can surface WHY the agent
             // kept getting blocked. Best-effort; never breaks the gate.
             const diagnosticToolName = String(name)
-              .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '?')
+              .replace(/[^A-Za-z0-9_.:-]/g, '?')
               .slice(0, 120);
             const denyAndRecord = (reason: string): never => {
               try { recordDenial(this.workspaceRoot, this.sessionKey, diagnosticToolName, reason); } catch { /* best-effort */ }

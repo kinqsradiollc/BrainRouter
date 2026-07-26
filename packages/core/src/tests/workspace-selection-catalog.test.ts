@@ -12,6 +12,7 @@ import {
 import {
   buildWorkspaceSelectionCatalog,
   diagnoseWorkspaceToolSelectionMigration,
+  isSelectableWorkspaceCatalogToolId,
   migrateWorkspaceManifestToolSelection,
   validateReviewedWorkspaceSkillSelection,
   validateReviewedWorkspaceToolSelection,
@@ -66,6 +67,14 @@ test('P23-3b current runtime availability is visible but cannot grant a blocked 
   }, catalog);
   assert.equal(reviewed.ok, false);
   if (!reviewed.ok) assert.equal(reviewed.issues[0]?.code, 'blocked-entry');
+});
+
+test('P23-3b runtime uses the same exact direct-tool eligibility as the catalog', () => {
+  assert.equal(isSelectableWorkspaceCatalogToolId('web_search'), true);
+  assert.equal(isSelectableWorkspaceCatalogToolId('delegate_agent'), true);
+  assert.equal(isSelectableWorkspaceCatalogToolId('delegate_unreviewed'), false);
+  assert.equal(isSelectableWorkspaceCatalogToolId('spawn_agent'), false);
+  assert.equal(isSelectableWorkspaceCatalogToolId('<script>'), false);
 });
 
 test('P23-3b reviewed migration creates v3 without mutating a v2 workspace', () => {
