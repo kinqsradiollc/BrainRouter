@@ -70,8 +70,16 @@ describe("workspace profile recommendation MCP tool", () => {
         skillPacks: [{
           id: "research",
           source: "profile-plugin",
-          version: "2.0.0",
-          skillIds: ["evidence-research-skill", "source-synthesis-skill"],
+          version: "2.1.0",
+          skillIds: [
+            "research-question-skill",
+            "source-strategy-skill",
+            "evidence-research-skill",
+            "claim-ledger-skill",
+            "source-synthesis-skill",
+            "citation-verification-skill",
+            "research-review-skill",
+          ],
         }],
       });
       const serialized = JSON.stringify(payload);
