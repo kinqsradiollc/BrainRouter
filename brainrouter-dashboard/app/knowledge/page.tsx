@@ -8,6 +8,7 @@ import { EmptyState } from "../../components/EmptyState";
 import { KnowledgeScopePicker, useKnowledgeScope } from "../../components/KnowledgeScopePicker";
 import { PageHeader } from "../../components/PageHeader";
 import { PremiumButton } from "../../components/PremiumButton";
+import { ProjectKnowledgeLibrary } from "../../components/ProjectKnowledgeLibrary";
 type KnowledgeSection = "overview" | "library" | "quality" | "connections" | "profile";
 
 const SECTIONS: Array<{ id: KnowledgeSection; label: string; description: string }> = [
@@ -155,6 +156,10 @@ function KnowledgePageContent() {
       {section === "library" && (
         <div id="knowledge-panel-library" className="knowledge-category-panel" role="tabpanel" aria-labelledby="knowledge-tab-library">
           <KnowledgeLinks section="library" />
+          <ProjectKnowledgeLibrary
+            orgId={scopeState.scope.orgId}
+            projectId={scopeState.scope.projectId}
+          />
           <section className="knowledge-source-panel">
             <div className="knowledge-section-heading"><span>Connected material</span><h2>Sources ready to use</h2><p>Search by name or narrow the list by source type.</p></div>
             <div className="knowledge-source-filters">
