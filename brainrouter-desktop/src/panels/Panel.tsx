@@ -9,7 +9,7 @@
 import React, { useState } from 'react';
 import { Icon } from '../icons.js';
 
-export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'task-detail' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'review' | 'requirements' | 'annotations' | 'artifacts' | 'attachments' | 'ci' | 'atlas' | 'workflows' | 'memory' | 'prototype' | 'servers' | 'browser';
+export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'task-detail' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'review' | 'requirements' | 'annotations' | 'artifacts' | 'attachments' | 'ci' | 'atlas' | 'workflows' | 'memory' | 'knowledge' | 'prototype' | 'servers' | 'browser';
 
 export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'context', title: 'Context', icon: 'layout-right' },
@@ -34,6 +34,7 @@ export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'atlas', title: 'Atlas', icon: 'atlas' },
   { id: 'workflows', title: 'Workflows', icon: 'bolt' },
   { id: 'memory', title: 'Saved knowledge', icon: 'pin' },
+  { id: 'knowledge', title: 'Project knowledge', icon: 'brain' },
   { id: 'prototype', title: 'Prototype', icon: 'bolt' },
   { id: 'servers', title: 'Servers', icon: 'globe' },
   { id: 'browser', title: 'Browser', icon: 'globe' },

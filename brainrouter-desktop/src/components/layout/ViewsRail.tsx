@@ -96,6 +96,7 @@ export function ViewsRail(p: ViewsRailProps): React.ReactElement | null {
     { id: 'requirements' as PanelId, title: 'Requirements', hint: '', icon: 'tasks', group: 'Plan',
       badge: requirements.length ? String(requirements.length) : '' },
     { id: 'memory' as PanelId, title: 'Saved knowledge', hint: '', icon: 'pin', badge: '', group: 'Knowledge' },
+    { id: 'knowledge' as PanelId, title: 'Project knowledge', hint: '', icon: 'brain', badge: '', group: 'Knowledge' },
     { id: 'context' as PanelId, title: 'Context', hint: '', icon: 'layout-right', badge: '', group: 'Knowledge' },
     { id: 'atlas' as PanelId, title: 'Atlas', hint: '', icon: 'atlas', badge: '', group: 'Knowledge' },
     { id: 'artifacts' as PanelId, title: 'Artifacts', hint: '', icon: 'file', group: 'Knowledge',

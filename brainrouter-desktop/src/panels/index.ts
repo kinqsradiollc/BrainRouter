@@ -27,6 +27,7 @@ export { PlanPanel } from './planning/PlanPanel.js';
 export { AnnotationsPanel } from './memory/AnnotationsPanel.js';
 export { ArtifactsPanel } from './memory/ArtifactsPanel.js';
 export { MemoryPanel } from './memory/MemoryPanel.js';
+export { KnowledgePanel } from './memory/KnowledgePanel.js';
 export { ContextPanel } from './memory/ContextPanel.js';
 export { AtlasPanel, type AtlasPanelProps } from './atlas/AtlasPanel.js';
 export { CIPanel } from './ci/CIPanel.js';

@@ -77,6 +77,52 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     runPreviews: Object.fromEntries(S.devConnectors.map((entry) => [entry.id, devConnectorRuns[entry.id] ?? []])),
     documentPreviews: Object.fromEntries(S.devConnectors.map((entry) => [entry.id, devSlimDocuments(entry.id, 3)])),
   });
+  // C3 — stateful Project-knowledge fixtures. Browser development exercises
+  // the same named host queries as Electron, including create, ingest, polling,
+  // retry, and citation search, without exposing a local path or credential.
+  let devKnowledgeBaseSeq = 1;
+  let devKnowledgeDocumentSeq = 2;
+  const devKnowledgeBases = [
+    { baseId: 'kb_dev_1', name: 'Product handbook', description: 'Architecture, operations, and release guidance.', createdAt: '2026-07-20T08:00:00.000Z', updatedAt: '2026-07-25T09:00:00.000Z' },
+  ];
+  const devKnowledgeDocuments: Array<Record<string, unknown>> = [
+    { baseId: 'kb_dev_1', documentId: 'kdoc_dev_1', title: 'Deployment guide', sourceName: 'deployment.md', sourceFormat: 'markdown', origin: 'source', status: 'ready', statusMessage: null, parseVersion: 1, createdAt: '2026-07-25T08:00:00.000Z', updatedAt: '2026-07-25T08:01:00.000Z', readyAt: '2026-07-25T08:01:00.000Z' },
+    { baseId: 'kb_dev_1', documentId: 'kdoc_dev_2', title: 'Runbook', sourceName: 'runbook.pdf', sourceFormat: 'pdf', origin: 'source', status: 'failed', statusMessage: 'The document could not be parsed.', parseVersion: 1, createdAt: '2026-07-25T07:00:00.000Z', updatedAt: '2026-07-25T07:01:00.000Z', readyAt: null },
+  ];
+  const devKnowledgePolls = new Map<string, number>();
+  const devKnowledgeDocumentView = (document: Record<string, unknown>) => {
+    const { baseId: _baseId, ...view } = document;
+    return view;
+  };
+  const devKnowledgeStatus = (documentId: string) => {
+    const document = devKnowledgeDocuments.find((entry) => entry.documentId === documentId);
+    if (!document) return { state: 'error', message: 'Knowledge document not found.' };
+    if (document.status === 'queued') {
+      const polls = devKnowledgePolls.get(documentId) ?? 0;
+      devKnowledgePolls.set(documentId, polls + 1);
+      if (polls > 0) {
+        document.status = 'ready';
+        document.updatedAt = new Date().toISOString();
+        document.readyAt = document.updatedAt;
+      }
+    }
+    const ready = document.status === 'ready';
+    const failed = document.status === 'failed';
+    return {
+      state: 'ready',
+      document: {
+        ...devKnowledgeDocumentView(document),
+        processing: {
+          jobState: ready ? 'done' : failed ? 'failed' : 'pending',
+          attempts: failed ? 3 : 1,
+          maxAttempts: 3,
+          retryable: failed,
+          chunkCount: ready ? 1 : 0,
+          embeddingCount: ready ? 1 : 0,
+        },
+      },
+    };
+  };
   const queries: Record<string, (args: Record<string, unknown>) => unknown> = {
     'workspace-onboarding-propose': (args) => proposeDevWorkspaceOnboarding(S.wsCurrent, args),
     'workspace-onboarding-preview-instruction': (args) =>
@@ -102,6 +148,66 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       },
     }),
     'runtime-preview-remove': () => ({ ok: true }),
+    'knowledge-workspace': () => ({
+      state: 'ready',
+      project: { projectId: 'proj_dev', name: 'BrainRouter' },
+      bases: [...devKnowledgeBases],
+    }),
+    'knowledge-base-create': (a) => {
+      const name = String(a.name ?? '').trim();
+      if (!name) return { state: 'error', message: 'Knowledge base name is required.' };
+      const now = new Date().toISOString();
+      const base = { baseId: `kb_dev_${++devKnowledgeBaseSeq}`, name, description: String(a.description ?? '').trim(), createdAt: now, updatedAt: now };
+      devKnowledgeBases.push(base);
+      return { state: 'ready', base };
+    },
+    'knowledge-documents': (a) => ({
+      state: 'ready',
+      documents: devKnowledgeDocuments
+        .filter((document) => document.baseId === a.baseId)
+        .map(devKnowledgeDocumentView),
+    }),
+    'knowledge-ingest': (a) => {
+      const now = new Date().toISOString();
+      const document = {
+        baseId: String(a.baseId ?? ''),
+        documentId: `kdoc_dev_${++devKnowledgeDocumentSeq}`,
+        title: String(a.title ?? 'Untitled document'),
+        sourceName: String(a.sourceName ?? ''),
+        sourceFormat: String(a.sourceFormat ?? 'text'),
+        origin: 'source',
+        status: 'queued',
+        statusMessage: null,
+        parseVersion: 1,
+        createdAt: now,
+        updatedAt: now,
+        readyAt: null,
+      };
+      devKnowledgeDocuments.unshift(document);
+      return { state: 'ready', document: devKnowledgeDocumentView(document), created: true };
+    },
+    'knowledge-document-status': (a) => devKnowledgeStatus(String(a.documentId ?? '')),
+    'knowledge-document-retry': (a) => {
+      const document = devKnowledgeDocuments.find((entry) => entry.documentId === a.documentId);
+      if (!document) return { state: 'error', message: 'Knowledge document not found.' };
+      document.status = 'queued';
+      document.statusMessage = null;
+      document.updatedAt = new Date().toISOString();
+      devKnowledgePolls.set(String(document.documentId), 0);
+      return { state: 'ready', retry: { documentId: document.documentId, jobState: 'pending', enqueued: true } };
+    },
+    'knowledge-search': (a) => ({
+      state: 'ready',
+      search: {
+        mode: 'lexical',
+        hits: String(a.query ?? '').trim() ? [{
+          content: 'Health probes must pass before a deployment receives production traffic.',
+          score: 0.92,
+          matchedBy: ['lexical'],
+          citation: { baseId: String(a.baseId ?? 'kb_dev_1'), documentId: 'kdoc_dev_1', chunkId: 'kchunk_dev_1', documentTitle: 'Deployment guide', sourceName: 'deployment.md', ordinal: 0, charStart: 0, charEnd: 74 },
+        }] : [],
+      },
+    }),
     'schedule-list': () => devSchedules,
     'schedule-add': (a) => {
       const kind = a.kind === 'once' ? 'once' : 'cron';
