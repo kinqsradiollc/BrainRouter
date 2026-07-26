@@ -13,3 +13,7 @@ export * from "./useWorkingMemory.js";
 export * from "./useHookStatus.js";
 export * from "./useSkillActivations.js";
 export * from "./useActiveSessions.js";
+export * from "./useKnowledgeBases.js";
+export * from "./useKnowledgeDocuments.js";
+export * from "./useKnowledgeDocumentStatus.js";
+export * from "./useKnowledgeSearch.js";
