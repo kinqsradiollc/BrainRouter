@@ -57,7 +57,9 @@ deep dives.
   [ADR-021 workspace onboarding: typed profiles, domain personas & the workspace knowledge subsystem](decisions/ADR-021-workspace-onboarding-typed-profiles.md) —
   `.brainrouter/workspace.json` manifest (core chokepoint), profile presets, offline `/init` v2, bundled starter skills, and the B/C restructure phases;
   [ADR-022 persona, orchestration, and context contracts](decisions/ADR-022-persona-orchestration-and-context-contracts.md) —
-  separate JSON persona and executable-role schemas, profile-scoped orchestration, task capabilities, and bounded context composition.
+  separate JSON persona and executable-role schemas, profile-scoped orchestration, task capabilities, and bounded context composition;
+  [ADR-023 profile-specific orchestration plans](decisions/ADR-023-profile-specific-orchestration-plans.md) —
+  bounded per-profile strategy graphs that reference reusable role JSON while preserving manifest and runtime authority ceilings.
 
 Published benchmark results: [`../brainrouter-benchmark/reports/`](../brainrouter-benchmark/reports/).
 
