@@ -21,7 +21,7 @@ test('W4b a profile pack selects its versioned standard-plugin root and skills',
 
   assert.equal(selection.managed, true);
   assert.deepEqual(selection.bundles.map(({ id, source, version }) => ({ id, source, version })), [
-    { id: 'research', source: 'profile-plugin', version: '2.1.0' },
+    { id: 'research', source: 'profile-plugin', version: '2.2.0' },
   ]);
   assert.equal(selection.skillRoots.length, 1);
   assert.deepEqual(selection.ambientSkillIds, [
@@ -29,6 +29,7 @@ test('W4b a profile pack selects its versioned standard-plugin root and skills',
     'handover-skill',
     'research-question-skill',
     'source-strategy-skill',
+    'iterative-evidence-skill',
     'evidence-research-skill',
     'claim-ledger-skill',
     'source-synthesis-skill',
@@ -124,6 +125,7 @@ test('W4b unknown and unavailable packs fail closed without hiding valid sibling
     skillIds: [
       'research-question-skill',
       'source-strategy-skill',
+      'iterative-evidence-skill',
       'evidence-research-skill',
       'claim-ledger-skill',
       'source-synthesis-skill',

@@ -89,12 +89,19 @@ test('P23-5 Research plan matches its preset and keeps every child read-only', (
   const evidence = plan.strategies.find((strategy) => strategy.id === 'parallel-evidence');
   assert.deepEqual(evidence?.stages.map((stage) => [stage.id, stage.executor.kind]), [
     ['frame', 'primary'],
+    ['ground', 'primary'],
     ['collect', 'role'],
     ['ledger', 'primary'],
     ['audit', 'role'],
     ['synthesize', 'primary'],
   ]);
-  assert.equal(evidence?.stages.find((stage) => stage.id === 'collect')?.fanOut?.max, 3);
+  const ground = evidence?.stages.find((stage) => stage.id === 'ground');
+  const collect = evidence?.stages.find((stage) => stage.id === 'collect');
+  assert.deepEqual(ground?.skillIds, ['iterative-evidence-skill']);
+  assert.deepEqual(collect?.after, ['ground']);
+  assert.equal(collect?.optional, true);
+  assert.equal(collect?.skillIds.includes('iterative-evidence-skill'), false);
+  assert.equal(collect?.fanOut?.max, 3);
 });
 
 test('P23-5 Research resolution narrows evidence fan-out and fails closed on skill gaps', () => {

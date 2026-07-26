@@ -39,6 +39,7 @@ test('B3 recommends the research pack, persona, and starter skills from live cat
     skillIds: [
       'research-question-skill',
       'source-strategy-skill',
+      'iterative-evidence-skill',
       'evidence-research-skill',
       'claim-ledger-skill',
       'source-synthesis-skill',

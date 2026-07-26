@@ -15,7 +15,7 @@ import {
 test('C2 package-owned profile plugins use the standard versioned plugin contract', () => {
   const catalog = inspectWorkspaceProfilePlugins();
   const expectedVersions = new Map([
-    ['research', '2.1.0'],
+    ['research', '2.2.0'],
     ['study', '2.1.0'],
     ['data', '2.0.0'],
     ['writing', '2.0.0'],
@@ -53,10 +53,11 @@ test('research profile exposes separate task-selectable workflow skills', () => 
 
   assert.ok(research);
   assert.equal(research.kind, 'profile');
-  assert.equal(research.version, '2.1.0');
+  assert.equal(research.version, '2.2.0');
   assert.deepEqual(research.skillIds, [
     'research-question-skill',
     'source-strategy-skill',
+    'iterative-evidence-skill',
     'evidence-research-skill',
     'claim-ledger-skill',
     'source-synthesis-skill',

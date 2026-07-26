@@ -250,6 +250,7 @@ test('search applies query and scope to selected package additions', () => {
     });
     assert.deepEqual(names(global), [
       'research-question-skill',
+      'iterative-evidence-skill',
       'evidence-research-skill',
       'research-review-skill',
     ]);
@@ -272,6 +273,11 @@ test('research workflow bodies load independently for the current task', () => {
     const question = resolveWorkspaceManagedSkill(workspace, 'research-question-skill', 'workflow');
     assert.match(question?.content[0].text ?? '', /Express one primary question/);
     assert.doesNotMatch(question?.content[0].text ?? '', /Enumerate every citation anchor/);
+
+    const iterative = resolveWorkspaceManagedSkill(workspace, 'iterative-evidence-skill', 'workflow');
+    assert.match(iterative?.content[0].text ?? '', /no more than three cycles/);
+    assert.match(iterative?.content[0].text ?? '', /knowledge_list/);
+    assert.match(iterative?.content[0].text ?? '', /do not grant Project Knowledge access to explorer children/);
 
     const citation = resolveWorkspaceManagedSkill(workspace, 'citation-verification-skill', 'workflow');
     assert.match(citation?.content[0].text ?? '', /Enumerate every citation anchor/);

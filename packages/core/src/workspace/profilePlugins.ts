@@ -73,6 +73,7 @@ export const WORKSPACE_PROFILE_PLUGIN_DEFINITIONS: readonly WorkspaceProfilePlug
     skillIds: [
       'research-question-skill',
       'source-strategy-skill',
+      'iterative-evidence-skill',
       'evidence-research-skill',
       'claim-ledger-skill',
       'source-synthesis-skill',
