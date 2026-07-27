@@ -55,11 +55,12 @@ test('parseGoogleHtml respects the result limit and dedupes repeated URLs', () =
   assert.equal(parseGoogleHtml(html, 20).length, 8, 'duplicate URL not counted twice');
 });
 
-test('googleSearchUrl pins language/region to reduce the consent redirect', () => {
+test('googleSearchUrl leaves language and region to the browser session', () => {
   const u = new URL(googleSearchUrl('current ai news', 5));
   assert.equal(u.hostname, 'www.google.com');
   assert.equal(u.pathname, '/search');
   assert.equal(u.searchParams.get('q'), 'current ai news');
-  assert.equal(u.searchParams.get('hl'), 'en');
-  assert.equal(u.searchParams.get('gl'), 'us');
+  assert.equal(u.searchParams.get('hl'), null);
+  assert.equal(u.searchParams.get('gl'), null);
+  assert.equal(u.searchParams.get('pws'), '0');
 });
