@@ -353,6 +353,11 @@ directory, repository, token, or environment from model input. Failures report
 back into the originating session so the same agent can diagnose and repair
 them during normal conversation or a goal run.
 
+Automatic extension steering carries normalized transition metadata only. Never
+inject pull-request titles, comment/review bodies, check names, logs, or command
+errors into a turn. Mark extension steering as a background observation and
+require the agent to retrieve external content explicitly as untrusted data.
+
 - **Evidence:** `packages/core/extensions/pull-request-observer/index.js`,
   `packages/core/src/session/input/inputDelivery.ts`,
   `packages/core/src/extension/host.ts`

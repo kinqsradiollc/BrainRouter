@@ -69,6 +69,11 @@ test('pull-request observer emits only material transitions', async () => {
     ['checks-failed', 'comments', 'reviews'],
   );
   assert.match(extension.pullRequestTransitionEvents(previous, failed)[0]!.text, /smallest valid fix/i);
+  const serializedEvents = JSON.stringify(extension.pullRequestTransitionEvents(previous, failed));
+  assert.doesNotMatch(serializedEvents, /Please fix this/);
+  assert.doesNotMatch(serializedEvents, /Ship it/);
+  assert.doesNotMatch(serializedEvents, /@reviewer/);
+  assert.match(serializedEvents, /untrusted external data/i);
   assert.deepEqual(extension.pullRequestTransitionEvents(failed, failed), []);
   assert.deepEqual(
     extension.pullRequestTransitionEvents(null, failed).map((event) => event.kind),

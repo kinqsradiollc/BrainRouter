@@ -900,7 +900,10 @@ polling, normalization, and transition detection live in an optional built-in
 extension. Core owns only the bounded session-keyed background-result inbox and
 safe-boundary Steer contract. Desktop and CLI decide how an idle session resumes
 and how queued, steered, and applied states appear. User or workspace extensions
-cannot acquire either privileged host port.
+cannot acquire either privileged host port. Automatic steering carries only
+normalized transition metadata; titles, comment/review bodies, check labels,
+logs, and command errors are never injected into the turn. The agent retrieves
+such external content explicitly and treats it as untrusted data.
 
 #### 12.5 Use one visible ownership hierarchy
 
