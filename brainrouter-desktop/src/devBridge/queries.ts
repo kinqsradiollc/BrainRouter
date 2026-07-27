@@ -984,7 +984,19 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
         clearTimeout(timer);
       }
     },
-    'term-open': () => { S.termBuf = '\u001b[1;32mdemo-shell\u001b[0m on \u001b[1;34m/Users/dev/BrainRouter\u001b[0m\r\n$ '; return { id: 'tdemo', shell: '/bin/zsh (demo)', snapshot: S.termBuf, start: 0, next: S.termBuf.length, alive: true, reused: false }; },
+    'term-shells': () => ({ selected: 'zsh', shells: [
+      { id: 'zsh', label: 'Z shell', description: 'Open Z shell in the active workspace.', isDefault: true },
+      { id: 'bash', label: 'Bash', description: 'Open Bash in the active workspace.', isDefault: false },
+    ] }),
+    'term-open': (a) => {
+      const shellId = a.shellId === 'bash' ? 'bash' : 'zsh';
+      S.termBuf = `\u001b[1;32m${shellId}\u001b[0m on \u001b[1;34m/Users/dev/BrainRouter\u001b[0m\r\n$ `;
+      return {
+        id: `tdemo-${shellId}`, shellId, label: shellId === 'bash' ? 'Bash' : 'Z shell',
+        shell: `/bin/${shellId} (demo)`, snapshot: S.termBuf,
+        start: 0, next: S.termBuf.length, alive: true, reused: false,
+      };
+    },
     'term-write': (a) => {
       const d = String(a.data ?? '');
       S.termBuf += d.replace('\r', '');
