@@ -148,10 +148,11 @@ export async function reviewProjectOnboardingProposal(
     badge: 'Workspace proposal',
     rows: [
       { id: 'continue', label: 'Review and edit', description: 'Inspect every proposed field' },
-      { id: 'cancel', label: 'Cancel', description: 'Leave project files unchanged' },
+      { id: 'skip', label: 'Skip setup for now', description: 'Discard this proposal and leave project files unchanged' },
     ],
     initialChoice: 'continue',
   });
+  if (start.kind === 'skip') return skipped(print);
   if (start.kind !== 'submit' || start.value !== 'continue') return cancelled(print);
 
   const profileResponse = await prompt({
@@ -182,7 +183,12 @@ export async function reviewProjectOnboardingProposal(
     existing: proposal.manifest,
     source: 'agent',
   });
-  const edits = await collectProjectOnboardingEdits(prompt, draft, catalog);
+  const edits = await collectProjectOnboardingEdits(
+    prompt,
+    draft,
+    catalog,
+    sources.orchestrationProfiles,
+  );
   if (!edits) return cancelled(print);
   const reviewed = finalizeCatalogReviewedProjectOnboarding(draft, edits, catalog);
   print(`\n${formatManifestSummary(reviewed, buildWorkspaceOnboardingPreview(
@@ -325,4 +331,9 @@ function sameRevision(
 function cancelled(print: (message: string) => void): ProjectOnboardingResult {
   print(chalk.gray('\nCancelled — nothing written.\n'));
   return { status: 'cancelled' };
+}
+
+function skipped(print: (message: string) => void): ProjectOnboardingResult {
+  print(chalk.gray('\nSkipped — proposal discarded and nothing written. Run /init when you are ready.\n'));
+  return { status: 'skipped' };
 }

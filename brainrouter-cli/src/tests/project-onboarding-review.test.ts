@@ -59,6 +59,35 @@ test('skip leaves a new workspace completely untouched', async () => {
   }
 });
 
+test('CLI review separates included profile setup from optional catalog choices', async () => {
+  const root = makeWorkspace();
+  let sawOptionalCapabilities = false;
+  let sawAdditionalSkillPacks = false;
+  try {
+    const base = acceptingPrompt();
+    const result = await runProjectOnboarding(root, {
+      prompt: async (request) => {
+        if (request.id === 'capabilities-enabled') {
+          sawOptionalCapabilities = request.title === 'Optional capabilities';
+        }
+        if (request.id === 'skill-packs') {
+          sawAdditionalSkillPacks = request.title === 'Additional skill packs';
+          assert.equal(request.rows?.some((row) => row.id === 'engineering'), false);
+          assert.equal(request.initialChoices?.includes('engineering'), false);
+        }
+        return base(request);
+      },
+      print: () => undefined,
+    });
+    assert.equal(result.status, 'committed');
+    assert.equal(sawOptionalCapabilities, true);
+    assert.equal(sawAdditionalSkillPacks, true);
+    assert.ok(loadWorkspaceManifest(root)?.skills.packs.includes('engineering'));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('cancellation at profile, field, or confirmation writes nothing', async (t) => {
   for (const cancelAt of ['profile', 'capabilities-enabled', 'confirm'] as const) {
     await t.test(cancelAt, async () => {
