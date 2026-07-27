@@ -434,6 +434,9 @@ async function main(): Promise<void> {
   // events; the renderer's dialogs answer them. Shares the hostCore broker so
   // interrupt/shutdown dismiss pending dialogs fail-closed.
   const broker = new InteractionBroker();
+  // One host-owned PTY registry backs both the Terminal panel and the
+  // top-level agent's bounded terminal inspection/control tools.
+  const ptyRegistry = new PtyRegistry({ workspaceRoot });
   // DESK-5v — interaction-request events ride a separate seq namespace AND
   // carry the ASKING agent's own sessionKey, so an approval raised by a
   // background turn surfaces against the right chat (same `send` wire).
@@ -451,6 +454,7 @@ async function main(): Promise<void> {
     interactionPort: createBrokerPort(broker, (e) => emitPortFor(agent.sessionKey, e)),
     computerUsePort: computerUseBridge,
     browserControlPort: browserControlBridge,
+    terminalUsePort: ptyRegistry,
   });
   // DESK-5v — the agent the user is currently VIEWING. hostCore keeps a pool of
   // agents (one per running/active session) and tells us which is active via
@@ -529,6 +533,7 @@ async function main(): Promise<void> {
       interactionPort: createBrokerPort(broker, (e) => emitPortFor(a.sessionKey, e)),
       computerUsePort: computerUseBridge,
       browserControlPort: browserControlBridge,
+      terminalUsePort: ptyRegistry,
     });
     a.sessionKey = sessionKey;
     return a as unknown as AgentLike;
@@ -778,9 +783,6 @@ async function main(): Promise<void> {
     emitRecordEvent({ kind: 'provenance', subjectKind: 'artifact', subjectId: record.id, provenance });
   };
 
-  // One real PTY registry per workspace host. A panel can detach/re-attach while
-  // the shell and scrollback remain host-owned; host shutdown kills every child.
-  const ptyRegistry = new PtyRegistry({ workspaceRoot });
   const hostedAgents = new HostedAgentManager({
     workspaceRoot,
     ptyRegistry,

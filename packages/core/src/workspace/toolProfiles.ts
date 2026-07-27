@@ -51,9 +51,9 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
   {
     id: 'shell',
     label: 'Shell commands',
-    description: 'Run, observe, wait for, and stop workspace commands.',
+    description: 'Run workspace commands and inspect or control an available native terminal.',
     category: 'terminal-computer',
-    toolIds: ['run_command', 'task_output', 'wait_until', 'kill_command'],
+    toolIds: ['run_command', 'task_output', 'wait_until', 'kill_command', 'terminal_list', 'terminal_read', 'terminal_write'],
     extensionIds: [],
   },
   {
@@ -169,7 +169,7 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
     label: 'Compatibility: terminal, computer, and connectors',
     description: 'Existing composite bundle retained unchanged for previously reviewed workspaces.',
     category: 'legacy-compatibility',
-    toolIds: ['run_command', 'task_output', 'wait_until', 'kill_command', 'computer_use', 'connector_run'],
+    toolIds: ['run_command', 'task_output', 'wait_until', 'kill_command', 'terminal_list', 'terminal_read', 'terminal_write', 'computer_use', 'connector_run'],
     extensionIds: [],
   },
   {
@@ -195,7 +195,7 @@ const PROFILE_BY_ID = new Map(WORKSPACE_TOOL_PROFILES.map((profile) => [profile.
 // selection. New explicit group expansions must not narrow a legacy workspace.
 const LEGACY_MANAGED_TOOL_IDS = new Set([
   'write_file', 'edit_file', 'apply_patch', 'notebook_edit', 'lsp',
-  'run_command', 'task_output', 'wait_until', 'kill_command', 'computer_use', 'connector_run',
+  'run_command', 'task_output', 'wait_until', 'kill_command', 'terminal_list', 'terminal_read', 'terminal_write', 'computer_use', 'connector_run',
   'fetch_url', 'web_search', 'research_note', 'research_brief', 'artifact_write',
 ]);
 const MANAGED_EXTENSION_IDS = new Set(WORKSPACE_TOOL_PROFILES.flatMap((profile) => [...profile.extensionIds]));

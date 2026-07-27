@@ -274,6 +274,12 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         tier: this.tier,
         remoteBrain: isRemoteBrainUrl(cliKnobs.brainUrl),
       }),
+      terminalUseAvailable:
+        !!this.terminalUsePort &&
+        !this.silent &&
+        this.agentDepth === 0 &&
+        this.tier !== 'worker' &&
+        !isRemoteBrainUrl(cliKnobs.brainUrl),
       multiProfile: !hideSwitchModel,
       mcpDiscovery: mcpDiscoveryOn,
     }).filter((t) => {

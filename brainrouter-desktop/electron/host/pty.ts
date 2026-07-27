@@ -120,6 +120,17 @@ export class PtyRegistry {
 
   get size(): number { return this.sessions.size; }
 
+  list(): Array<{ id: string; shell: string; pid: number; start: number; next: number; alive: boolean }> {
+    return [...this.sessions.values()].map((session) => ({
+      id: session.id,
+      shell: session.shell,
+      pid: session.pty.pid,
+      start: session.start,
+      next: session.next,
+      alive: session.alive,
+    }));
+  }
+
   open(options: PtyOpenOptions): PtyOpenResult {
     const cols = clampGeometry(options.cols, 80, MIN_COLS);
     const rows = clampGeometry(options.rows, 24, MIN_ROWS);

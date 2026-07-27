@@ -30,7 +30,7 @@ export interface LocalToolEntry {
   /** Safe to dispatch concurrently within one assistant message. */
   parallelSafe: boolean;
   /** Optional turn-scoped visibility predicate owned by the extension. */
-  availability?: 'result-cache' | 'active-workflow' | 'root-agent' | 'computer-use' | 'browser-use' | 'multi-profile' | 'mcp-discovery';
+  availability?: 'result-cache' | 'active-workflow' | 'root-agent' | 'computer-use' | 'browser-use' | 'terminal-use' | 'multi-profile' | 'mcp-discovery';
   advertised?: boolean;
   runtimePort?: 'orchestration' | 'browser-control';
   audited?: boolean;
@@ -138,6 +138,9 @@ export const REQUIRED_CORE_TOOL_CATALOG: LocalToolEntry[] = [
   // --- shell tier: + command execution ------------------------------------
   { name: 'run_command', accessTier: 'shell', actionKind: 'shell', parallelSafe: false },
   { name: 'kill_command', accessTier: 'shell', actionKind: 'shell', parallelSafe: false },
+  { name: 'terminal_list', accessTier: 'shell', actionKind: 'read_only', parallelSafe: true, availability: 'terminal-use' },
+  { name: 'terminal_read', accessTier: 'shell', actionKind: 'read_only', parallelSafe: true, availability: 'terminal-use' },
+  { name: 'terminal_write', accessTier: 'shell', actionKind: 'shell', parallelSafe: false, availability: 'terminal-use' },
   { name: 'computer_use', accessTier: 'shell', actionKind: 'computer', parallelSafe: false, availability: 'computer-use' },
   // connector_run performs network ingestion + memory writes, so it's gated to
   // shell tier (exposure) like command execution; its ActionKind is `network`

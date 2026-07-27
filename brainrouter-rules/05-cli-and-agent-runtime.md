@@ -309,6 +309,19 @@ the pre-onboarding prompt exactly.
 
 - **Evidence:** `packages/core/src/agent/workspaceCapabilityState.ts`, `packages/core/src/tests/workspace-capability-state.test.ts`
 
+### 18. Native-terminal tools attach to host-owned sessions; they never spawn shells
+
+The Desktop host may give the top-level local Agent a terminal-use port for PTYs
+the user already opened. Keep list/read output bounded and strip control
+sequences before returning it to the model. Terminal input is bounded and
+approval-gated. Never accept a shell executable, working directory, environment,
+or spawn arguments through this port; new processes remain the responsibility of
+the normal Terminal UI or `run_command`. Do not copy the port into silent
+children, reviewers, workers, remote-brain sessions, or non-shell workspace
+profiles.
+
+- **Evidence:** `brainrouter-desktop/electron/host/pty.ts`, `packages/core/src/extension/builtin/runtime.ts`, `packages/core/src/agent/runtime/runTurn.impl.ts`
+
 ---
 
 ## Comments & tests

@@ -107,6 +107,39 @@ export const BUILTIN_TOOL_SPECS = [
     }
   },
   {
+    name: 'terminal_list',
+    description: 'List live native terminal sessions owned by the current Desktop workspace. Use terminal_read with an id to inspect visible shell output. Only available to the top-level local Desktop agent.',
+    inputSchema: {
+      type: 'object',
+      properties: {}
+    }
+  },
+  {
+    name: 'terminal_read',
+    description: 'Read bounded, plain-text output from a live native terminal. Omit fromOffset to inspect the latest output; pass the returned nextOffset to read only new output.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Terminal id returned by terminal_list.' },
+        fromOffset: { type: 'integer', description: 'Optional absolute character offset. Omit to read the latest output.' },
+        maxChars: { type: 'integer', description: 'Maximum characters to return. Default 12000, maximum 20000.' }
+      },
+      required: ['id']
+    }
+  },
+  {
+    name: 'terminal_write',
+    description: 'Send bounded input to an existing live native terminal. Use only when the user asked you to interact with that terminal; command execution normally belongs in run_command. Mutating input is approval-gated.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Terminal id returned by terminal_list.' },
+        data: { type: 'string', description: 'Input to send, including a final newline or carriage return when the shell should execute it.' }
+      },
+      required: ['id', 'data']
+    }
+  },
+  {
     name: 'file_vulnerability',
     description: 'Record one verified pentest finding. A reproducible proof of concept, CVSS 3.1 vector, CWE, and remediation are mandatory. Duplicate root causes are returned without creating a second finding.',
     inputSchema: {

@@ -24,6 +24,7 @@ export interface LocalToolAvailabilityContext {
   rootAgent?: boolean;
   computerUseAvailable?: boolean;
   browserUseAvailable?: boolean;
+  terminalUseAvailable?: boolean;
   multiProfile?: boolean;
   mcpDiscovery?: boolean;
 }

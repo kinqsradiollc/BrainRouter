@@ -90,6 +90,22 @@ test('writes and resizes a live PTY with clamped geometry', () => {
   assert.deepEqual(ptys[0]?.resizes, [[2, 1_000]]);
 });
 
+test('lists bounded terminal metadata without exposing scrollback', () => {
+  const { registry, ptys } = fixture();
+  const opened = registry.open({ shell: '/bin/zsh' });
+  ptys[0]?.emitData('secret-looking terminal output');
+
+  assert.deepEqual(registry.list(), [{
+    id: opened.id,
+    shell: '/bin/zsh',
+    pid: 4321,
+    start: 0,
+    next: 30,
+    alive: true,
+  }]);
+  assert.equal('snapshot' in (registry.list()[0] ?? {}), false);
+});
+
 test('keeps absolute read offsets when bounded scrollback drops old output', () => {
   const { registry, ptys } = fixture(8);
   const opened = registry.open({});
