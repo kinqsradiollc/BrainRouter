@@ -939,21 +939,28 @@ which capabilities a profile contributes and which are selected by default.
 That coupling makes every non-Engineering profile look as though the product
 has no capability system.
 
-Core will separate them:
+Core separates them:
 
 ```ts
 capabilities: {
   available: string[];   // compatible checkbox choices for this profile
   recommended: string[]; // initial checked/recommended subset
+  enabled: string[];     // deprecated 0.4.17 client alias for recommended
 }
 ```
 
 This is preset/catalog metadata, not a workspace-manifest schema change.
 `workspace.json` continues to persist only the reviewed
-`capabilities.enabled` and `capabilities.disabled` values. Custom treats all
-installed, safe capability contributions as compatible but recommends none.
-Unknown or unavailable contributions stay visible and blocked; a non-Custom
-profile rejects a capability outside its compatibility list.
+`capabilities.enabled` and `capabilities.disabled` values. The preset
+`capabilities.enabled` alias is transport compatibility only, always mirrors
+`recommended`, and must not be used to decide compatibility. It can be removed
+only with a separately reviewed client-contract migration.
+
+Custom treats every bundled safe capability as compatible but recommends none.
+Installed safe contributions are added to the resolved Custom catalog rather
+than becoming static preset defaults. Unknown or unavailable contributions stay
+visible and blocked; every profile, including Custom, rejects a capability
+outside its resolved compatibility list.
 
 Each capability definition owns bounded, prompt-free onboarding metadata:
 
@@ -1045,6 +1052,14 @@ They must:
   and review summary in the CLI;
 - re-resolve the proposed selection immediately before write and show any
   catalog/profile drift as a reviewable conflict rather than writing stale IDs.
+
+A catalog-fingerprint mismatch is an expected stale-review condition, not a
+generic persistence failure. Desktop reloads the latest catalog and explains
+that the available setup choices changed while the dialog was open. This is
+especially important during source development, where rebuilding the package
+can change the catalog beneath an already-open onboarding review. The stale
+draft is never written and the user reviews the refreshed choices before
+trying again.
 
 The UI is a discovery and review surface. It does not directly change the
 process-global extension registry, bypass the preload/query boundary, or call a
@@ -1651,7 +1666,8 @@ the CLI returns before catalog review and remains covered by a filesystem
 no-write test.
 
 Capability delivery remains split into narrow PRs: first the shared
-compatibility/default contract and picker hierarchy; then cross-profile
+compatibility/default contract, compatibility-enforced runtime activation,
+picker hierarchy, and actionable stale-catalog reload; then cross-profile
 capability packs for Writing academic-paper, computational-research,
 data-visualization, programming-lab, and technical-documentation. Research's
 included academic-paper skills and strategy ship independently from the future
@@ -1826,6 +1842,9 @@ gate is recorded in the Compatibility section above.
     task-selectable skills; its paper strategy keeps drafting and revision on
     the primary researcher and caps the independent citation/paper audit at one
     read-only reviewer.
+42. If the role, capability, skill, or tool catalog changes during onboarding
+    review, save fails as a stale conflict, reloads the latest choices, and
+    never collapses the condition into an unexplained generic write failure.
 
 ## Non-goals
 
