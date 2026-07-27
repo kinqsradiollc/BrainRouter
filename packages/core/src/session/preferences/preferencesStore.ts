@@ -174,9 +174,18 @@ export function readPreferences(workspaceRoot: string): Preferences {
         : 'auto';
   const workspaceOverride =
     personalityMode === 'manual' ? migrated.personality : undefined;
+  const configuredPersonality = getRawCliKnobs().personalityDefault;
+  const globalDefault: PersonalityStyle | undefined =
+    configuredPersonality === 'concise'
+    || configuredPersonality === 'standard'
+    || configuredPersonality === 'detailed'
+    || configuredPersonality === 'pair-programmer'
+      ? configuredPersonality
+      : undefined;
   const resolvedPersonality = resolvePersonality({
     profile: loadWorkspaceManifest(workspaceRoot)?.profile,
     workspaceOverride,
+    globalDefault,
   });
   return {
     ...DEFAULT,

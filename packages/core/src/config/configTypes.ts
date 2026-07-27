@@ -564,6 +564,12 @@ export interface CliKnobs {
    * toggle is a per-workspace preference layered on top of this.
    */
   personaAnchor?: 'on' | 'off';
+  /**
+   * Optional user-wide communication-style default. Workspace and chat
+   * overrides remain higher precedence; omitted lets the workspace profile
+   * recommend a style.
+   */
+  personalityDefault?: 'concise' | 'standard' | 'detailed' | 'pair-programmer' | null;
   /** Cap on briefing chars per source. Default 4000. */
   briefingMaxCharsPerSource?: number;
   /** Cap on parallel briefing sources. Default 6. */
@@ -1229,6 +1235,7 @@ export interface ResolvedCliKnobs {
   nextActionPlanner: 'on' | 'off';
   prefixMemoryAnchors: 'on' | 'off';
   personaAnchor: 'on' | 'off';
+  personalityDefault: 'concise' | 'standard' | 'detailed' | 'pair-programmer' | null;
   briefingMaxCharsPerSource: number;
   briefingMaxSources: number;
   autoCompactTokens: number;
