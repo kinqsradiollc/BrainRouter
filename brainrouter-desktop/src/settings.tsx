@@ -117,6 +117,9 @@ export function SettingsDialog(props: {
   const ps = (key: string, dflt: string): string => String(prefs[key] ?? dflt);
   const pb = (key: string, dflt: boolean): boolean => Boolean(prefs[key] ?? dflt);
   const tier = (prefs.tier as string | null | undefined) ?? 'follow model';
+  const personalityMode = ps('personalityMode', 'auto');
+  const personality = ps('personality', 'standard');
+  const personalitySource = ps('personalitySource', 'fallback');
   // §settings — cli.* knob helpers (per-knob writer), lifted to component scope
   // so a knob-backed control can live in its natural category, not only under
   // Advanced. Shared with the CLI; empty/clear reverts to the default.
@@ -213,8 +216,24 @@ export function SettingsDialog(props: {
             <Row title="Reasoning effort" desc="Choose an exact model effort from none through max. Managed models limit this list to the server policy; custom providers use an inferred profile. (/effort)">
               <Select value={ps('effort', 'medium')} options={['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']} onChange={(v) => props.onPref('effort', v)} />
             </Row>
-            <Row title="Personality" desc="Communication style for the agent's prose. (/personality)">
-              <Select value={ps('personality', 'standard')} options={['concise', 'standard', 'detailed', 'pair-programmer']} onChange={(v) => props.onPref('personality', v)} />
+            <Row
+              title="Personality"
+              desc={`Communication style only; persona, tools, and workflow stay unchanged. Effective: ${personality} (${personalitySource}). (/personality)`}
+            >
+              <ChoiceControl
+                value={personalityMode === 'auto' ? 'auto' : personality}
+                options={[
+                  { value: 'auto', label: 'Use profile recommendation', detail: `${personality} · ${personalitySource}` },
+                  { value: 'concise', label: 'Concise', detail: 'short responses' },
+                  { value: 'standard', label: 'Standard', detail: 'balanced prose' },
+                  { value: 'detailed', label: 'Detailed', detail: 'more explanation and evidence' },
+                  { value: 'pair-programmer', label: 'Pair programmer', detail: 'collaborative technical prose' },
+                ]}
+                onChange={(v) => props.onPref(
+                  v === 'auto' ? 'personalityMode' : 'personality',
+                  v === 'auto' ? 'auto' : v,
+                )}
+              />
             </Row>
             <Row title="Model tier pin" desc="Pin the tier ladder: flash | standard | pro. “follow model” lets <<<NEEDS_HIGH>>> self-escalation work. (/tier)">
               <Select value={tier} options={['follow model', 'flash', 'standard', 'pro']}

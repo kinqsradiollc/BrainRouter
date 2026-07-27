@@ -168,14 +168,24 @@ export const KEY_HANDLERS: Record<string, ConfigKeyHandler> = {
     },
   },
   personality: {
-    get: (ctx) => readPreferences(ctx.agent.workspaceRoot).personality,
+    get: (ctx) => {
+      const prefs = readPreferences(ctx.agent.workspaceRoot);
+      return prefs.personalityMode === 'auto'
+        ? `auto (${prefs.personality}, ${prefs.personalitySource})`
+        : prefs.personality;
+    },
     set: (ctx, value) => {
       const v = value.toLowerCase();
-      if (!['concise', 'standard', 'detailed', 'pair-programmer'].includes(v)) {
-        return { ok: false, reason: `personality must be concise|standard|detailed|pair-programmer (got "${value}")` };
+      if (!['auto', 'concise', 'standard', 'detailed', 'pair-programmer'].includes(v)) {
+        return { ok: false, reason: `personality must be auto|concise|standard|detailed|pair-programmer (got "${value}")` };
       }
-      writePreferences(ctx.agent.workspaceRoot, { personality: v as Preferences['personality'] });
-      return { ok: true, message: `personality → ${v}` };
+      const next = v === 'auto'
+        ? writePreferences(ctx.agent.workspaceRoot, { personalityMode: 'auto' })
+        : writePreferences(ctx.agent.workspaceRoot, { personality: v as Preferences['personality'] });
+      return {
+        ok: true,
+        message: `personality → ${v === 'auto' ? `auto (${next.personality}, ${next.personalitySource})` : v}`,
+      };
     },
   },
   editor: {
