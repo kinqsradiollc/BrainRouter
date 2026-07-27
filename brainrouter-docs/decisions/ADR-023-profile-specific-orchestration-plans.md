@@ -931,6 +931,12 @@ Selecting the Frontend capability does not make any operation executable unless
 the workspace has separately reviewed its tool group and the relevant host
 runtime is available.
 
+When an existing workspace opens settings, every selectable recommended catalog
+entry that is not in the current manifest is shown as a **Recommended
+addition**, its field opens automatically, and the summary reports the pending
+addition count. Nothing is selected or saved automatically; the user reviews
+the expansion and explicitly checks and saves each accepted change.
+
 #### 12.4 Keep agent tools in extensions and native runtimes in their hosts
 
 An agent-visible integration tool belongs to a required or optional built-in

@@ -457,6 +457,7 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
                 })} />
               <CatalogField label="Disabled orchestration roles" values={draft.orchestration.disabledRoles}
                 kinds={['role']} preview={planPreview} allowBlocked
+                showRecommendedAdditions={false}
                 disabled={proposing || saving || reviewingInstruction || previewing}
                 onChange={(disabledRoles) => patchDraft({
                   orchestration: {
@@ -479,6 +480,7 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
                 })} />
               <CatalogField label="Disabled optional capabilities" values={draft.capabilities.disabled}
                 kinds={['capability']} preview={planPreview} allowBlocked hideUnavailable
+                showRecommendedAdditions={false}
                 emptyLabel="No optional capabilities are contributed for this profile."
                 disabled={proposing || saving || reviewingInstruction || previewing}
                 onChange={(disabled) => patchDraft({
@@ -511,6 +513,7 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
                     onChange={(values) => patchDraft({ skills: { ...draft.skills, enabled: values } })} />
                   <CatalogField label="Disabled skills" values={draft.skills.disabled}
                     kinds={['skill']} preview={planPreview} allowBlocked
+                    showRecommendedAdditions={false}
                     disabled={proposing || saving || reviewingInstruction || previewing}
                     onChange={(values) => patchDraft({ skills: { ...draft.skills, disabled: values } })} />
                   <CatalogField label="Additional individual tools" values={draft.tools.enabled}
@@ -519,6 +522,7 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
                     onChange={(values) => patchDraft({ tools: { ...draft.tools, enabled: values } })} />
                   <CatalogField label="Denied tool groups or tools" values={draft.tools.deny}
                     kinds={['tool-group', 'tool']} preview={planPreview} allowBlocked
+                    showRecommendedAdditions={false}
                     disabled={proposing || saving || reviewingInstruction || previewing}
                     onChange={(values) => patchDraft({ tools: { ...draft.tools, deny: values } })} />
                 </div>

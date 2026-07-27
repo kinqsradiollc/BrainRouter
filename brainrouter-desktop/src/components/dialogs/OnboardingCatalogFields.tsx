@@ -1,5 +1,5 @@
 /** Searchable catalog controls and the Core-derived plan/effective-access card. */
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   type OnboardingCatalogKind,
   type OnboardingCatalogRow,
@@ -26,7 +26,18 @@ export function catalogRowsForField(options: {
       .toLowerCase().includes(query));
 }
 
-export function CatalogField({ label, values, kinds, preview, allowBlocked = false, hideUnavailable = false, excludedIds = [], disabled = false, emptyLabel, onChange }: {
+export function recommendedAdditionCount(
+  rows: readonly OnboardingCatalogRow[],
+  values: readonly string[],
+  enabled = true,
+): number {
+  if (!enabled) return 0;
+  const selected = new Set(values);
+  return rows.filter((row) =>
+    row.recommended && row.selectable && !row.denied && !selected.has(row.id)).length;
+}
+
+export function CatalogField({ label, values, kinds, preview, allowBlocked = false, hideUnavailable = false, excludedIds = [], disabled = false, showRecommendedAdditions = true, emptyLabel, onChange }: {
   label: string;
   values: string[];
   kinds: OnboardingCatalogKind[];
@@ -35,6 +46,8 @@ export function CatalogField({ label, values, kinds, preview, allowBlocked = fal
   hideUnavailable?: boolean;
   excludedIds?: string[];
   disabled?: boolean;
+  /** Negative selectors must not present a recommended grant as an addition. */
+  showRecommendedAdditions?: boolean;
   emptyLabel?: string;
   onChange: (values: string[]) => void;
 }): React.ReactElement {
@@ -48,6 +61,23 @@ export function CatalogField({ label, values, kinds, preview, allowBlocked = fal
     query: filter,
   });
   const selected = new Set(values);
+  const recommendedAdditions = recommendedAdditionCount(
+    rows,
+    values,
+    showRecommendedAdditions,
+  );
+  const recommendedAdditionIds = rows
+    .filter((row) => showRecommendedAdditions
+      && row.recommended
+      && row.selectable
+      && !row.denied
+      && !selected.has(row.id))
+    .map((row) => row.id)
+    .join('\u0000');
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => {
+    if (recommendedAdditionIds) setExpanded(true);
+  }, [recommendedAdditionIds]);
   const toggle = (row: OnboardingCatalogRow): void => {
     if (disabled || (!selected.has(row.id) && !allowBlocked && !row.selectable)) return;
     onChange(selected.has(row.id)
@@ -55,10 +85,16 @@ export function CatalogField({ label, values, kinds, preview, allowBlocked = fal
       : [...values, row.id]);
   };
   return (
-    <details className="onboard-catalog-field">
+    <details className="onboard-catalog-field" open={expanded}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}>
       <summary>
         <span>{label}</span>
-        <span>{values.length} selected</span>
+        <span>
+          {values.length} selected
+          {recommendedAdditions
+            ? ` · ${recommendedAdditions} recommended ${recommendedAdditions === 1 ? 'addition' : 'additions'}`
+            : ''}
+        </span>
       </summary>
       <div className="onboard-catalog-panel">
         <input type="search" value={filter} disabled={disabled}
@@ -78,7 +114,9 @@ export function CatalogField({ label, values, kinds, preview, allowBlocked = fal
                 <span>
                   <strong>{row.label}</strong>
                   <small>
-                    {row.recommended ? 'Recommended · ' : ''}
+                    {showRecommendedAdditions && row.recommended
+                      ? checked ? 'Recommended · ' : 'Recommended addition · '
+                      : ''}
                     {row.source} · {row.provenance}
                     {row.expandsTo.length ? ` · Includes ${row.expandsTo.join(', ')}` : ''}
                     {row.blockedReason ? ` · Unavailable: ${row.blockedReason}` : ''}

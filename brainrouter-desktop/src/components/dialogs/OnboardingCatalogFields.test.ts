@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { catalogRowsForField } from './OnboardingCatalogFields.js';
+import {
+  catalogRowsForField,
+  recommendedAdditionCount,
+} from './OnboardingCatalogFields.js';
 import type { OnboardingCatalogRow } from './onboardingCatalogModel.js';
 
 function row(overrides: Partial<OnboardingCatalogRow>): OnboardingCatalogRow {
@@ -34,4 +37,49 @@ test('additional skill-pack choices exclude the included profile and capability-
   });
 
   assert.deepEqual(rows.map((entry) => entry.id), ['writing']);
+});
+
+test('existing workspaces expose selectable unselected recommendations as additions', () => {
+  const rows = [
+    row({
+      id: 'workspace-files',
+      kind: 'tool-group',
+      label: 'Workspace files',
+      selected: false,
+      recommended: true,
+    }),
+    row({
+      id: 'artifacts',
+      kind: 'tool-group',
+      label: 'Artifacts',
+      selected: true,
+      recommended: true,
+    }),
+    row({
+      id: 'interactive-browser',
+      kind: 'tool-group',
+      label: 'Interactive browser',
+      selected: false,
+      recommended: false,
+    }),
+    row({
+      id: 'blocked',
+      kind: 'tool-group',
+      label: 'Blocked',
+      selected: false,
+      recommended: true,
+      selectable: false,
+    }),
+  ];
+
+  assert.equal(recommendedAdditionCount(rows, ['artifacts']), 1);
+  assert.equal(
+    recommendedAdditionCount(rows, ['workspace-files', 'artifacts']),
+    0,
+  );
+  assert.equal(
+    recommendedAdditionCount(rows, ['artifacts'], false),
+    0,
+    'deny and disable selectors never recommend removing a grant',
+  );
 });
