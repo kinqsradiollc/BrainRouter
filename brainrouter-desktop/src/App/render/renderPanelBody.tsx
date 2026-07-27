@@ -159,10 +159,12 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId) => 
       case 'editor': return (
         <Suspense fallback={<div className="row status"><span className="spinner" /> Loading editor…</div>}>
           <EditorPanel
+            workspaceKey={activeRoot} files={allFiles} fileStatuses={statuses} filesLoading={filesLoading}
             tabs={editor.tabs} activePath={editor.activePath} conflictPaths={editor.conflictPaths} saving={editor.saving} revealLine={editor.revealLine}
             onSelect={editor.select} onChange={editor.change} onSave={editor.save} onSaveAll={editor.saveAll}
             onRevert={editor.revert} onClose={closeEditorTab} onReorder={editor.reorder}
             onOpenFile={(f) => openFile(f)} onOpenUrl={openUrl}
+            onRefreshFiles={() => { q('q-list', 'list-files', { refresh: true }); q('q-files', 'changed-files'); }}
             onAnnotateSelection={(path, body, anchor) => {
               q('q-annot-create', 'annotation-create', {
                 type: 'file',

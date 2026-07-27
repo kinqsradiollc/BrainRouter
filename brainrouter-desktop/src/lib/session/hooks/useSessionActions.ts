@@ -199,7 +199,7 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
   /** Close an editor tab, confirming first if it has unsaved changes. */
   function closeEditorTab(path: string): void {
     const tab = editor.tabs.find((t) => t.path === path);
-    if (tab && tab.content !== tab.saved && !tab.readOnly && !tab.binary) {
+    if (tab && editor.isDirty(path)) {
       if (!window.confirm(`Discard unsaved changes to ${path.split('/').pop()}?`)) return;
     }
     editor.close(path);

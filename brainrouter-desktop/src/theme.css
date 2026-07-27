@@ -3040,6 +3040,18 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
 .editor-breadcrumbs span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .editor-breadcrumbs .current { color: var(--text-dim); }
 .editor-banner { font-size: 11.5px; color: var(--text-faint); background: var(--surface); padding: 4px 10px; border-bottom: 1px solid var(--border); }
+.editor-workspace { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 30px minmax(0, 1fr); }
+.editor-workspace.explorer-open { grid-template-columns: clamp(150px, 32%, 250px) minmax(0, 1fr); }
+.editor-explorer { min-width: 0; min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--bg); }
+.editor-explorer.collapsed { align-items: center; }
+.editor-explorer-head { height: 30px; flex: 0 0 auto; display: flex; align-items: center; gap: 4px; padding: 0 5px 0 9px; border-bottom: 1px solid var(--border); color: var(--text-dim); font-size: 10.5px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; }
+.editor-explorer-head > span:first-child { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.editor-explorer-filter { flex: 0 0 auto; margin: 6px; width: calc(100% - 12px); min-width: 0; padding: 5px 7px; border: 1px solid var(--border); border-radius: 5px; background: var(--input); color: var(--text); font: 11px var(--font); }
+.editor-explorer-filter:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+.editor-explorer-tree { flex: 1 1 auto; min-height: 0; padding: 0 4px 8px; }
+.editor-explorer-tree .tree-row { font-size: 11.5px; }
+.editor-explorer-show { width: 28px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border: 0; background: transparent; color: var(--text-dim); cursor: pointer; }
+.editor-explorer-show:hover { color: var(--text); background: var(--ov-07); }
 .editor-body { flex: 1 1 auto; min-height: 0; position: relative; }
 .editor-split { height: 100%; min-height: 0; display: grid; background: var(--term-bg); }
 .editor-split.one { grid-template-columns: minmax(0, 1fr); }

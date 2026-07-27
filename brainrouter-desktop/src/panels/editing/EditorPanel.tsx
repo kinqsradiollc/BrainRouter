@@ -35,10 +35,16 @@ import { type EditorPaneId } from '../EditorPanel/editorPaneHelpers.js';
 import { EditorPane } from '../EditorPanel/EditorPane.js';
 import { EditorTabStrip } from '../EditorPanel/EditorTabStrip.js';
 import { useMarkdownMode } from '../EditorPanel/useMarkdownMode.js';
+import { FileExplorer } from '../files/FileExplorer.js';
+import { useFileExplorerState } from '../files/fileExplorerState.js';
 
 installMonaco();
 
-export function EditorPanel({ tabs, activePath, conflictPaths, saving, revealLine, onSelect, onChange, onSave, onSaveAll, onRevert, onClose, onReorder, onAnnotateSelection, onOpenFile, onOpenUrl }: {
+export function EditorPanel({ workspaceKey, files, fileStatuses, filesLoading, tabs, activePath, conflictPaths, saving, revealLine, onSelect, onChange, onSave, onSaveAll, onRevert, onClose, onReorder, onAnnotateSelection, onOpenFile, onOpenUrl, onRefreshFiles }: {
+  workspaceKey: string;
+  files: readonly string[];
+  fileStatuses: ReadonlyMap<string, string>;
+  filesLoading?: boolean;
   tabs: EditorTab[];
   activePath: string | null;
   conflictPaths?: string[];
@@ -56,6 +62,7 @@ export function EditorPanel({ tabs, activePath, conflictPaths, saving, revealLin
   /** Markdown-mode preview links: open a workspace file (code Editor) / external URL (browser). */
   onOpenFile?: (path: string) => void;
   onOpenUrl?: (url: string) => void;
+  onRefreshFiles?: () => void;
 }): React.ReactElement {
   const active = tabs.find((t) => t.path === activePath) ?? null;
   const [secondaryPath, setSecondaryPath] = useState<string | null>(null);
@@ -65,6 +72,9 @@ export function EditorPanel({ tabs, activePath, conflictPaths, saving, revealLin
   const [wordWrap, setWordWrap] = useState(() => parseEditorViewPrefs(localStorage.getItem('br-editor-wrap'), localStorage.getItem('br-editor-minimap')).wordWrap);
   const [minimap, setMinimap] = useState(() => parseEditorViewPrefs(localStorage.getItem('br-editor-wrap'), localStorage.getItem('br-editor-minimap')).minimap);
   const [hasSelection, setHasSelection] = useState<Record<EditorPaneId, boolean>>({ primary: false, secondary: false });
+  const [explorerOpen, setExplorerOpen] = useState(() => localStorage.getItem('br-editor-explorer-open') !== 'false');
+  const explorer = useFileExplorerState(workspaceKey, files, !filesLoading);
+  const explorerFilter = explorer.state.filter.startsWith('?') ? '' : explorer.state.filter;
   // keep the latest save handler reachable from Monaco's once-registered command
   const saveRef = useRef(onSave);
   saveRef.current = onSave;
@@ -101,6 +111,15 @@ export function EditorPanel({ tabs, activePath, conflictPaths, saving, revealLin
   useEffect(() => {
     localStorage.setItem('br-editor-minimap', serializeEditorPref(minimap));
   }, [minimap]);
+
+  useEffect(() => {
+    localStorage.setItem('br-editor-explorer-open', explorerOpen ? 'true' : 'false');
+    const frame = window.requestAnimationFrame(() => {
+      editorRefs.current.primary?.layout();
+      editorRefs.current.secondary?.layout();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [explorerOpen]);
 
   useEffect(() => {
     setCursor({ line: 1, column: 1 });
@@ -336,21 +355,65 @@ export function EditorPanel({ tabs, activePath, conflictPaths, saving, revealLin
         </div>
       ) : null}
 
-      <div className="editor-body">
-        {!active ? (
-          <div className="empty center-empty">Open a file from the Files panel or a diff to edit it here.</div>
-        ) : mdTab ? (
-          <div className={`editor-md view-${mdView}`}>
-            {mdView !== 'preview' ? <div className="editor-md-edit">{renderPane('primary', mdTab)}</div> : null}
-            {mdView !== 'edit' ? <MarkdownPreview content={mdTab.content} currentPath={mdTab.path} onOpenFile={onOpenFile} onOpenUrl={onOpenUrl} /> : null}
-            {review ? <ReviewOverlay review={review} onDecision={setDecision} onAll={setAllDecisions} onApply={applyReviewToDoc} onCancel={() => setReview(null)} /> : null}
-          </div>
-        ) : (
-          <div className={`editor-split${secondary ? ' two' : ' one'}`}>
-            {renderPane('primary', active)}
-            {secondary ? renderPane('secondary', secondary) : null}
-          </div>
-        )}
+      <div className={`editor-workspace${explorerOpen ? ' explorer-open' : ''}`}>
+        <aside className={`editor-explorer${explorerOpen ? '' : ' collapsed'}`} aria-label="Editor Explorer">
+          {explorerOpen ? (
+            <>
+              <div className="editor-explorer-head">
+                <span>Explorer</span>
+                <button className="editor-icon-act" type="button" title="Refresh files" aria-label="Refresh files" onClick={onRefreshFiles} disabled={filesLoading}>
+                  {filesLoading ? <span className="spinner" /> : <Icon name="refresh" size={12} />}
+                </button>
+                <button className="editor-icon-act" type="button" title="Hide Explorer" aria-label="Hide Explorer" onClick={() => setExplorerOpen(false)}>
+                  <Icon name="layout" size={12} />
+                </button>
+              </div>
+              <input
+                className="editor-explorer-filter"
+                value={explorerFilter}
+                placeholder="Filter files"
+                aria-label="Filter editor files"
+                onChange={(event) => explorer.setFilter(event.target.value)}
+              />
+              <div className="editor-explorer-tree scroll">
+                {files.length ? (
+                  <FileExplorer
+                    files={files}
+                    statuses={fileStatuses}
+                    filter={explorerFilter}
+                    expandedPaths={explorer.state.expanded}
+                    selectedPath={activePath ?? explorer.state.selectedPath}
+                    onToggle={explorer.toggleExpanded}
+                    onOpen={(path) => {
+                      explorer.select(path);
+                      onOpenFile?.(path);
+                    }}
+                  />
+                ) : <div className="empty">{filesLoading ? 'Loading files…' : 'Folder is empty'}</div>}
+              </div>
+            </>
+          ) : (
+            <button className="editor-explorer-show" type="button" title="Show Explorer" aria-label="Show Explorer" onClick={() => setExplorerOpen(true)}>
+              <Icon name="folder" size={14} />
+            </button>
+          )}
+        </aside>
+        <div className="editor-body">
+          {!active ? (
+            <div className="empty center-empty">Choose a file in Explorer to start editing.</div>
+          ) : mdTab ? (
+            <div className={`editor-md view-${mdView}`}>
+              {mdView !== 'preview' ? <div className="editor-md-edit">{renderPane('primary', mdTab)}</div> : null}
+              {mdView !== 'edit' ? <MarkdownPreview content={mdTab.content} currentPath={mdTab.path} onOpenFile={onOpenFile} onOpenUrl={onOpenUrl} /> : null}
+              {review ? <ReviewOverlay review={review} onDecision={setDecision} onAll={setAllDecisions} onApply={applyReviewToDoc} onCancel={() => setReview(null)} /> : null}
+            </div>
+          ) : (
+            <div className={`editor-split${secondary ? ' two' : ' one'}`}>
+              {renderPane('primary', active)}
+              {secondary ? renderPane('secondary', secondary) : null}
+            </div>
+          )}
+        </div>
       </div>
 
       {mdTab ? <WritingAssistant currentPath={mdTab.path} onOpenFile={onOpenFile} onOpenUrl={onOpenUrl} /> : null}
