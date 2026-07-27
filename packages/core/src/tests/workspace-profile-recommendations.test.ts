@@ -45,6 +45,8 @@ test('B3 recommends the research pack, persona, and starter skills from live cat
       'source-synthesis-skill',
       'citation-verification-skill',
       'research-review-skill',
+      'academic-paper-drafting-skill',
+      'academic-paper-review-skill',
     ],
   }]);
   assert.deepEqual(recommendation.starterSkillIds, ['planning-skill', 'handover-skill']);

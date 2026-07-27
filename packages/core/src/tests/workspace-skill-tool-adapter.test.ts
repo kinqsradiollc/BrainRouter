@@ -253,6 +253,7 @@ test('search applies query and scope to selected package additions', () => {
       'iterative-evidence-skill',
       'evidence-research-skill',
       'research-review-skill',
+      'academic-paper-drafting-skill',
     ]);
     assert.deepEqual(names(local), []);
     const entries = JSON.parse(global) as Array<Record<string, unknown>>;
@@ -286,6 +287,22 @@ test('research workflow bodies load independently for the current task', () => {
     const review = resolveWorkspaceManagedSkill(workspace, 'research-review-skill', 'workflow');
     assert.match(review?.content[0].text ?? '', /Classify findings as blocking/);
     assert.doesNotMatch(review?.content[0].text ?? '', /Retrieve small result sets/);
+
+    const drafting = resolveWorkspaceManagedSkill(
+      workspace,
+      'academic-paper-drafting-skill',
+      'workflow',
+    );
+    assert.match(drafting?.content[0].text ?? '', /Create a claim-evidence map/);
+    assert.match(drafting?.content[0].text ?? '', /Reverse-outline the draft/);
+
+    const paperReview = resolveWorkspaceManagedSkill(
+      workspace,
+      'academic-paper-review-skill',
+      'workflow',
+    );
+    assert.match(paperReview?.content[0].text ?? '', /Classify at most ten findings/);
+    assert.match(paperReview?.content[0].text ?? '', /Blocking:/);
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
   }

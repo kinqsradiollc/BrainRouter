@@ -79,6 +79,8 @@ export const WORKSPACE_PROFILE_PLUGIN_DEFINITIONS: readonly WorkspaceProfilePlug
       'source-synthesis-skill',
       'citation-verification-skill',
       'research-review-skill',
+      'academic-paper-drafting-skill',
+      'academic-paper-review-skill',
     ],
     personaIds: ['researcher'],
   },
