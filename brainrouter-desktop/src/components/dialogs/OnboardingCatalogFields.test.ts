@@ -83,3 +83,31 @@ test('existing workspaces expose selectable unselected recommendations as additi
     'deny and disable selectors never recommend removing a grant',
   );
 });
+
+test('recommendation count remains independent from the visible search filter', () => {
+  const rows = [
+    row({
+      id: 'workspace-files',
+      kind: 'tool-group',
+      label: 'Workspace files',
+      selected: false,
+      recommended: true,
+    }),
+    row({
+      id: 'artifacts',
+      kind: 'tool-group',
+      label: 'Artifacts',
+      selected: false,
+      recommended: true,
+    }),
+  ];
+  const visible = catalogRowsForField({
+    catalog: rows,
+    kinds: ['tool-group'],
+    values: [],
+    query: 'workspace',
+  });
+
+  assert.deepEqual(visible.map((entry) => entry.id), ['workspace-files']);
+  assert.equal(recommendedAdditionCount(rows, []), 2);
+});

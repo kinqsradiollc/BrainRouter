@@ -52,8 +52,15 @@ export function CatalogField({ label, values, kinds, preview, allowBlocked = fal
   onChange: (values: string[]) => void;
 }): React.ReactElement {
   const [filter, setFilter] = useState('');
-  const rows = catalogRowsForField({
+  const allRows = catalogRowsForField({
     catalog: preview?.catalog ?? [],
+    kinds,
+    values,
+    hideUnavailable,
+    excludedIds,
+  });
+  const rows = catalogRowsForField({
+    catalog: allRows,
     kinds,
     values,
     hideUnavailable,
@@ -62,11 +69,11 @@ export function CatalogField({ label, values, kinds, preview, allowBlocked = fal
   });
   const selected = new Set(values);
   const recommendedAdditions = recommendedAdditionCount(
-    rows,
+    allRows,
     values,
     showRecommendedAdditions,
   );
-  const recommendedAdditionIds = rows
+  const recommendedAdditionIds = allRows
     .filter((row) => showRecommendedAdditions
       && row.recommended
       && row.selectable
