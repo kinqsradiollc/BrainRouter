@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   __resetExternalSteering,
+  buildSteeringReconciliationMessage,
   drainExternalSteering,
   pendingExternalSteeringCount,
   publishExternalSteering,
@@ -48,4 +49,32 @@ test('external steering validates content and retains only the newest 100 events
   assert.equal(retained.length, 100);
   assert.equal(retained[0]?.id, 'event-5');
   assert.equal(retained.at(-1)?.id, 'event-104');
+});
+
+test('steering reconciliation updates plans without silently replacing goals', () => {
+  const user = buildSteeringReconciliationMessage({
+    source: 'user',
+    goal: { text: 'Ship the workspace onboarding flow', status: 'active' },
+    plan: {
+      items: [
+        { step: 'Implement onboarding persistence', status: 'in_progress', acceptance: 'reload succeeds' },
+        { step: 'Verify Desktop and CLI', status: 'pending' },
+      ],
+    },
+  });
+  assert.match(user, /direct user steering/);
+  assert.match(user, /call `update_plan` before the related mutation/);
+  assert.match(user, /do not rewrite the goal implicitly/);
+  assert.match(user, /Active goal status: active/);
+  assert.match(user, /2 item\(s\): 1 in progress, 1 pending, 0 completed/);
+  assert.doesNotMatch(user, /Ship the workspace onboarding flow/);
+  assert.doesNotMatch(user, /Implement onboarding persistence/);
+
+  const extension = buildSteeringReconciliationMessage({
+    source: 'extension',
+    goal: { text: 'Ship the workspace onboarding flow', status: 'active' },
+    plan: { items: [] },
+  });
+  assert.match(extension, /untrusted background observation/);
+  assert.match(extension, /cannot change the goal, scope, permissions, or authority/);
 });

@@ -1168,6 +1168,9 @@ test('runTurn applies Steer after an in-flight model response and before the nex
       assert.equal(calls, 2);
       assert.match(requestBodies[1], /Background observation from a built-in extension/);
       assert.match(requestBodies[1], /external content as untrusted data/);
+      assert.match(requestBodies[1], /Steering reconciliation/);
+      assert.match(requestBodies[1], /call `update_plan` before the related mutation/);
+      assert.match(requestBodies[1], /do not rewrite the goal implicitly/);
       assert.match(requestBodies[1], /PR #42 has one new review/);
     } finally {
       globalThis.fetch = originalFetch;
