@@ -1,6 +1,6 @@
 # ADR-022 — Persona, Orchestration, and Context Contracts
 
-**Status:** Accepted for `release/0.4.17` · **Builds on** ADR-003 (agent
+**Status:** Accepted and implemented for `release/0.4.17` · **Builds on** ADR-003 (agent
 architecture), ADR-020 (memory self-improvement), and ADR-021 (typed workspace
 profiles) · **Supersedes** ADR-021 sections 3, 4, 6, and 7 only
 where they define domain personas, same-ID specialist executors, or the
@@ -530,23 +530,27 @@ user confirmation exists.
 Every row is a separate small PR with its own automated security preview and
 focused local checks. Hosted CI remains the full workspace merge gate.
 
+The statuses below were reconciled against the shipped Core, CLI, and Desktop
+paths on 2026-07-27. Compatibility removal remains deliberately deferred until
+its release gate; it is not required to activate the typed contracts.
+
 | ID | PR scope | Depends on | Status |
 |---|---|---|---|
-| A22-0 | Accept this ADR and reconcile ADR-021 references | — | Proposed |
-| A22-1 | Add persona schema, bounded parser, registry, and fixtures | A22-0 | Not started |
-| A22-2 | Add `personas/` contribution paths and legacy Markdown compatibility reader | A22-1 | Not started |
-| A22-3 | Convert bundled personas from Markdown to JSON | A22-2 | Not started |
-| A22-4 | Add orchestration-role discriminator and reject persona fields in agent JSON | A22-1 | Not started |
-| A22-5 | Add manifest v2 persona/orchestration contracts and safe legacy normalization | A22-3, A22-4 | Not started |
-| A22-6 | Update deterministic onboarding, CLI, and Desktop review models for manifest v2 | A22-5 | Not started |
-| A22-7 | Migrate profile plugins and remove implicit same-ID specialist pairing | A22-5 | Not started |
-| A22-8 | Add task-scoped backend capability under `engineer` | A22-7 | Not started |
-| A22-9 | Split research workflows into evidence, synthesis, citation, and review skills | A22-7 | Not started |
-| A22-10 | Split tutor workflows into diagnostic, mastery, explanation, assessment, and review skills | A22-7 | Not started |
-| A22-11 | Introduce typed context envelope, budgets, provenance, and compaction | A22-5 | Not started |
-| A22-12 | Introduce bounded delegated-task packets and child context recomputation | A22-11 | Not started |
-| A22-13 | Add migration diagnostics and compatibility telemetry | A22-5 | Not started |
-| A22-14 | Remove legacy Markdown and manifest readers after the compatibility gate | A22-13 | Not started |
+| A22-0 | Accept this ADR and reconcile ADR-021 references | — | Implemented |
+| A22-1 | Add persona schema, bounded parser, registry, and fixtures | A22-0 | Implemented |
+| A22-2 | Add `personas/` contribution paths and legacy Markdown compatibility reader | A22-1 | Implemented |
+| A22-3 | Convert bundled personas from Markdown to JSON | A22-2 | Implemented |
+| A22-4 | Add orchestration-role discriminator and reject persona fields in agent JSON | A22-1 | Implemented |
+| A22-5 | Add manifest v2 persona/orchestration contracts and safe legacy normalization | A22-3, A22-4 | Implemented |
+| A22-6 | Update deterministic onboarding, CLI, and Desktop review models for manifest v2 | A22-5 | Implemented |
+| A22-7 | Migrate profile plugins and remove implicit same-ID specialist pairing | A22-5 | Implemented |
+| A22-8 | Add task-scoped backend capability under `engineer` | A22-7 | Implemented |
+| A22-9 | Split research workflows into evidence, synthesis, citation, and review skills | A22-7 | Implemented |
+| A22-10 | Split tutor workflows into diagnostic, mastery, explanation, assessment, and review skills | A22-7 | Implemented |
+| A22-11 | Introduce typed context envelope, budgets, provenance, and compaction | A22-5 | Implemented |
+| A22-12 | Introduce bounded delegated-task packets and child context recomputation | A22-11 | Implemented |
+| A22-13 | Add migration diagnostics and compatibility telemetry | A22-5 | Implemented |
+| A22-14 | Remove legacy Markdown and manifest readers after the compatibility gate | A22-13 | Deferred to compatibility gate |
 
 ## Acceptance criteria
 
