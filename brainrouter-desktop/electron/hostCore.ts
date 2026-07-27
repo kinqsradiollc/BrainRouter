@@ -29,7 +29,15 @@ import {
   type AgentImage,
   type InteractionResponse,
 } from '@kinqs/brainrouter-agent-protocol';
-import { InputQueue, subscribeCompletions, pendingCompletionCount, peekCompletions, type SteeringInput } from '@kinqs/brainrouter-core/session';
+import {
+  InputQueue,
+  drainExternalSteering,
+  pendingCompletionCount,
+  peekCompletions,
+  subscribeCompletions,
+  subscribeExternalSteering,
+  type SteeringInput,
+} from '@kinqs/brainrouter-core/session';
 import { buildChildResumePrompt } from '@kinqs/brainrouter-core/util';
 
 /**
@@ -381,6 +389,63 @@ export function createHostCore(input: {
   const unsubscribeCompletions = subscribeCompletions((parentKey) => { if (parentKey === activeKey) maybeScheduleResume(); });
 
   /**
+   * PR-OBS-1 — extension results use the same delivery semantics as a human
+   * Steer. A running session receives them at its next safe model boundary; an
+   * idle pooled session starts an extension-labelled follow-up. Events for an unloaded
+   * session remain in the core inbox until that session is focused again.
+   */
+  function deliverExternalSteeringForKey(key: string): void {
+    const rt = pool.get(key);
+    if (!rt) return;
+    const events = drainExternalSteering(key);
+    if (!events.length) return;
+    if (rt.running && rt.agent.requestSteer) {
+      for (const event of events) {
+        rt.agent.requestSteer(event.text, { id: event.id, source: 'extension' });
+        stamp(key, {
+          kind: 'input-delivery',
+          id: event.id,
+          mode: 'steer',
+          state: 'steered',
+          text: event.text,
+          source: 'extension',
+        });
+      }
+      return;
+    }
+    for (const event of events) {
+      const queued = rt.queue.enqueue(event.text, {
+        deliveryId: event.id,
+        deliveryMode: 'steer',
+        deliverySource: 'extension',
+      });
+      stamp(key, {
+        kind: 'input-delivery',
+        id: event.id,
+        mode: 'steer',
+        state: 'queued',
+        text: event.text,
+        position: queued.position,
+        source: 'extension',
+      });
+    }
+    if (!rt.running) {
+      const next = rt.queue.dequeue();
+      if (next) {
+        setImmediate(() => {
+          void startTurnForKey(key, next.text, false, undefined, {
+            id: next.deliveryId ?? nextDeliveryId(),
+            mode: 'steer',
+            source: 'extension',
+          });
+        });
+      }
+    }
+  }
+
+  const unsubscribeExternalSteering = subscribeExternalSteering(deliverExternalSteeringForKey);
+
+  /**
    * Acquire a runtime to host `targetKey`. Reuses the currently-viewed agent
    * when it's idle (no need to spawn); otherwise spawns a fresh one. Returns
    * null only when the viewed agent is busy AND there's no spawn factory — the
@@ -409,6 +474,7 @@ export function createHostCore(input: {
       // flag against this so a resumed chat never shows a stale "working…" spinner
       // (a dropped turn-complete used to leave the flag stuck forever).
       stamp(targetKey, { kind: 'session-changed', sessionKey: targetKey, loadedMessages: count, model: existing.agent.getModel?.() ?? '', running: existing.running });
+      deliverExternalSteeringForKey(targetKey);
       return;
     }
     const rt = acquireRuntime();
@@ -441,6 +507,7 @@ export function createHostCore(input: {
     const loaded = init(rt);
     pool.set(targetKey, rt);
     setActive(targetKey);
+    deliverExternalSteeringForKey(targetKey);
     // A freshly-acquired runtime is never mid-turn → running:false reconciles
     // away any stale renderer flag for this key.
     stamp(targetKey, { kind: 'session-changed', sessionKey: targetKey, loadedMessages: loaded, model: rt.agent.getModel?.() ?? '', running: rt.running });
@@ -570,6 +637,7 @@ export function createHostCore(input: {
       case 'shutdown':
         cancelResume();
         unsubscribeCompletions();
+        unsubscribeExternalSteering();
         broker.dismissAll();
         input.onShutdown?.();
         return;

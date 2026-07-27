@@ -47,6 +47,7 @@ export interface RunChatContext {
   lastChildCount: number;
   refreshTickN: number;
   scheduleTicker: import('../../../runtime/background/scheduleTicker.js').ScheduleTickerHandle | null;
+  unsubscribeExternalSteering: (() => void) | null;
 
   // --- helper functions (assigned after construction) ---
   isQuiet: () => boolean;

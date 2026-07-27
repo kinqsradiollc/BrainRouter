@@ -87,7 +87,15 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
       ],
     },
     tools: {
-      profiles: ['coding', 'shell', 'browser', 'artifacts', 'planning-session', 'orchestration'],
+      profiles: [
+        'coding',
+        'shell',
+        'browser',
+        'artifacts',
+        'planning-session',
+        'orchestration',
+        'pull-request-observation',
+      ],
     },
     memory: { tags: ['engineering'], captureHint: 'code' },
   },

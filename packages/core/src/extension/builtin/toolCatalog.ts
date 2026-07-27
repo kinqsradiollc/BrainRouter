@@ -32,7 +32,7 @@ export interface LocalToolEntry {
   /** Optional turn-scoped visibility predicate owned by the extension. */
   availability?: 'result-cache' | 'active-workflow' | 'root-agent' | 'computer-use' | 'browser-use' | 'terminal-use' | 'multi-profile' | 'mcp-discovery';
   advertised?: boolean;
-  runtimePort?: 'orchestration' | 'browser-control';
+  runtimePort?: 'orchestration' | 'browser-control' | 'session-input';
   audited?: boolean;
   workflowLaunch?: boolean;
   afterInvoke?: 'track-automation' | 'goal-reconcile' | 'plan-update';

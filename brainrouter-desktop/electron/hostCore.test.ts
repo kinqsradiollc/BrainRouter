@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 import { createBrokerPort, createHostCore, isUnsavedNewSessionKey, type AgentLike } from './hostCore.js';
 import { InteractionBroker } from '@kinqs/brainrouter-agent-protocol';
 import type { AgentEventMessage } from '@kinqs/brainrouter-agent-protocol';
+import {
+  __resetExternalSteering,
+  publishExternalSteering,
+} from '@kinqs/brainrouter-core/session';
 
 function fakeAgent(behavior?: (prompt: string, cb: Record<string, unknown>) => Promise<string>): AgentLike {
   return {
@@ -176,6 +180,72 @@ test('Steer enters the running Agent and reports when the safe boundary applies 
     message.event.kind === 'input-delivery'
     && message.event.id === 's1'
     && message.event.state === 'applied'));
+});
+
+test('extension results steer a running desktop session without blocking it', async () => {
+  __resetExternalSteering();
+  const { out, send } = collect();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const received: Array<{ text: string; source?: string }> = [];
+  const agent: AgentLike = {
+    sessionKey: 'sess-extension-running',
+    runTurn: async () => { await gate; return 'done'; },
+    requestSteer: (text, options) => {
+      received.push({ text, source: options?.source });
+      return {
+        id: options?.id ?? 'generated',
+        text,
+        source: options?.source ?? 'user',
+        createdAt: Date.now(),
+      };
+    },
+  };
+  const core = createHostCore({ agent, send });
+
+  const turn = core.handle({ kind: 'start-turn', prompt: 'keep coding' });
+  publishExternalSteering('sess-extension-running', 'CI failed', { id: 'ci-failed-1' });
+
+  assert.deepEqual(received, [{ text: 'CI failed', source: 'extension' }]);
+  assert.ok(out.some((message) =>
+    message.event.kind === 'input-delivery'
+    && message.event.id === 'ci-failed-1'
+    && message.event.state === 'steered'
+    && message.event.source === 'extension'));
+
+  release();
+  await turn;
+  await core.handle({ kind: 'shutdown' });
+  __resetExternalSteering();
+});
+
+test('extension results start an idle desktop follow-up with visible delivery state', async () => {
+  __resetExternalSteering();
+  const { out, send } = collect();
+  let resolveTurn!: () => void;
+  const turnStarted = new Promise<void>((resolve) => { resolveTurn = resolve; });
+  const prompts: string[] = [];
+  const agent: AgentLike = {
+    sessionKey: 'sess-extension-idle',
+    runTurn: async (prompt) => {
+      prompts.push(prompt);
+      resolveTurn();
+      return 'handled';
+    },
+  };
+  const core = createHostCore({ agent, send });
+
+  publishExternalSteering('sess-extension-idle', 'A reviewer requested changes', { id: 'review-1' });
+  await turnStarted;
+
+  assert.deepEqual(prompts, ['A reviewer requested changes']);
+  assert.ok(out.some((message) =>
+    message.event.kind === 'input-delivery'
+    && message.event.id === 'review-1'
+    && message.event.source === 'extension'));
+
+  await core.handle({ kind: 'shutdown' });
+  __resetExternalSteering();
 });
 
 test('DESK-5q resume during a running turn is deferred until the turn unwinds', async () => {

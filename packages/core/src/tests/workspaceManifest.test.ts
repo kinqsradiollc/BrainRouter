@@ -254,6 +254,7 @@ test('profile presets are self-consistent (every profile usable by the wizard)',
     enabled: [],
   });
   assert.ok(engineering.tools.profiles.includes('artifacts'));
+  assert.ok(engineering.tools.profiles.includes('pull-request-observation'));
   assert.ok(!engineering.tools.profiles.includes('interactive-browser'),
     'interactive browser control is not a baseline Engineering grant');
   for (const preset of WORKSPACE_PROFILES) {

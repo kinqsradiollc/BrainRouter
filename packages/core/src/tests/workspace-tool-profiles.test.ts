@@ -27,6 +27,7 @@ test('engineering defaults include production, planning, and orchestration witho
 
   assert.deepEqual(selection.activeProfileIds, [
     'coding', 'shell', 'browser', 'artifacts', 'planning-session', 'orchestration',
+    'pull-request-observation',
   ]);
   assert.equal(allowed(selection, 'edit_file', 'filesystem'), true);
   assert.equal(allowed(selection, 'run_command', 'shell'), true);
@@ -35,6 +36,7 @@ test('engineering defaults include production, planning, and orchestration witho
   assert.equal(allowed(selection, 'computer_use', 'computer-control'), false);
   assert.equal(allowed(selection, 'connector_run', 'connectors'), false);
   assert.equal(allowed(selection, 'browser_screenshot', 'browser'), false);
+  assert.equal(allowed(selection, 'pull_request_watch', 'pull-request-observer'), true);
 });
 
 test('frontend task profiles add interactive browser tools without changing the manifest', () => {
@@ -47,7 +49,8 @@ test('frontend task profiles add interactive browser tools without changing the 
 
   assert.deepEqual(selection.activeProfileIds, [
     'coding', 'shell', 'browser', 'artifacts',
-    'planning-session', 'orchestration', 'interactive-browser',
+    'planning-session', 'orchestration', 'pull-request-observation',
+    'interactive-browser',
   ]);
   assert.equal(allowed(selection, 'browser_screenshot', 'browser'), true);
   assert.equal(allowed(selection, 'artifact_write', 'planning-state'), true);
@@ -98,7 +101,8 @@ test('unknown profile ids never grant a registered tool group', () => {
     'coding', 'shell', 'browser', 'research-notes', 'artifacts',
     'planning-session', 'orchestration', 'interactive-browser',
     'mcp-resources', 'connectors', 'computer-control', 'workflow-launch',
-    'background-workers', 'security-review', 'terminal', 'notes', 'design',
+    'background-workers', 'pull-request-observation', 'security-review',
+    'terminal', 'notes', 'design',
   ]);
 });
 

@@ -15,7 +15,7 @@ import { getCliKnobs, isRemoteBrainUrl } from '../config/config.js';
 import type { ComputerUsePort } from '@kinqs/brainrouter-agent-protocol';
 import { browserUseAvailableFor, type BrowserControlPort } from '../browser/control.js';
 import { appendTranscriptEntry, isInternalSessionKey, redactText, readTranscriptEntries } from '../session/transcript/sessionStore.js';
-import type { SteeringInput } from '../session/input/inputDelivery.js';
+import { publishExternalSteering, type SteeringInput } from '../session/input/inputDelivery.js';
 import { recordFileMutation } from '../storage/fileSnapshotStore.js';
 import { isConnectivityError, isRetryableServerError } from '../storage/checkpointStore.js';
 import { reconnectBackoffMs, probeConnectivity, parseRetryAfterMs } from '../mcp/reconnect/reconnect.js';
@@ -1233,6 +1233,9 @@ export class Agent {
     })) {
       throw new Error(`Tool "${name}" is unavailable outside the active top-level local Desktop browser session.`);
     }
+    if (registryEntry(name)?.runtimePort === 'session-input' && (this.silent || this.agentDepth !== 0)) {
+      throw new Error(`Tool "${name}" is unavailable outside an active top-level session.`);
+    }
     // CWE-266 — the builtin/orchestration/lifecycle runtime ports let a tool
     // invoke ANY built-in (shell/file) and spawn child agents. Only FIRST-PARTY
     // tools owned by a required core extension are trusted with them; a
@@ -1249,6 +1252,9 @@ export class Agent {
       orchestrationRuntime: trusted ? runtime?.orchestrationRuntime : undefined,
       lifecycleRuntime: trusted ? runtime?.lifecycleRuntime : undefined,
       browserControlPort: this.browserControlPort,
+      sessionInputPort: registryEntry(name)?.runtimePort === 'session-input'
+        ? { publish: (text, options) => publishExternalSteering(this.sessionKey, text, options) }
+        : undefined,
       signal: this.turnAbort?.signal,
     });
   }

@@ -34,6 +34,14 @@ test('CORE-EXT user/workspace extensions cannot request the native browser-contr
   }), /cannot request.*browser-control/i);
 });
 
+test('CORE-EXT user/workspace extensions cannot request the session-input port', () => {
+  const host = createExtensionHost('workspace-plugin', '/tmp/ws', '1.0.0', { source: 'workspace' });
+  assert.throws(() => host.registerTool({
+    ...publicTool('background_input_hijack'),
+    runtimePort: 'session-input',
+  }), /cannot request.*session-input/i);
+});
+
 test('CORE-EXT required first-party tools cannot be shadowed', () => {
   resetExtensionContributions();
   effectiveToolRegistry();
