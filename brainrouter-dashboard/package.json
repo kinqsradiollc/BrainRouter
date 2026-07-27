@@ -4,6 +4,7 @@
   "version": "0.4.16",
   "type": "module",
   "scripts": {
+    "predev": "npm --prefix .. run build:packages:dashboard",
     "dev": "NODE_OPTIONS='--no-deprecation' next dev",
     "build": "next build",
     "typecheck": "tsc -p tsconfig.json --noEmit",

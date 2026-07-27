@@ -5,8 +5,10 @@
     "moduleResolution": "NodeNext",
     "declaration": true,
     "outDir": "dist",
+    "rootDir": "src",
     "strict": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "types": ["node"]
   },
   "include": ["src"]
 }
