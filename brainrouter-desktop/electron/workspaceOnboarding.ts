@@ -228,6 +228,13 @@ export function saveWorkspaceManifestFromPayload(
     return { saved: true, manifest: committed.manifest, review: committed.review };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Workspace setup could not be saved.';
+    if (isStaleCatalogReviewError(error)) {
+      return {
+        saved: false,
+        stale: true,
+        error: 'Available setup choices changed while this dialog was open. Reload and review the latest options.',
+      };
+    }
     if (message.includes('changed during review')) {
       return { saved: false, stale: true, error: 'Workspace setup changed while it was open. Reload and review the latest version.' };
     }
@@ -426,4 +433,19 @@ function exactOptionalKeys(
       keys.some((key) => !allowed.has(key))) {
     throw new Error(`Invalid ${label}.`);
   }
+}
+
+function isStaleCatalogReviewError(error: unknown): boolean {
+  if (!(error instanceof Error) || error.name !== 'WorkspaceSelectionReviewError') return false;
+  const issues = (error as Error & { issues?: unknown }).issues;
+  return Array.isArray(issues) && issues.some((issue) =>
+    plainIssueCode(issue) === 'stale-catalog');
+}
+
+function plainIssueCode(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return undefined;
+  const code = (value as Record<string, unknown>).code;
+  return typeof code === 'string' ? code : undefined;
 }

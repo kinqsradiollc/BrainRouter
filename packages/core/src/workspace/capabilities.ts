@@ -10,9 +10,10 @@
  * win over enabled values and detected signals.
  */
 import type { WorkspaceManifest } from './manifest.js';
+import { getWorkspaceProfile } from './profiles.js';
 
 export interface WorkspaceCapabilityResolutionInput {
-  manifest: Pick<WorkspaceManifest, 'persona' | 'capabilities'> | null | undefined;
+  manifest: Pick<WorkspaceManifest, 'profile' | 'persona' | 'capabilities'> | null | undefined;
   /** Current user task or requirement text. */
   task?: string;
   /** Files currently in scope for the task, expressed relative or absolute. */
@@ -176,8 +177,13 @@ export function resolveWorkspaceCapabilities(input: WorkspaceCapabilityResolutio
 
   const activeAgent = input.activeAgent ?? input.manifest.persona.default;
   const engineerIsActive = activeAgent === 'engineer' && input.manifest.persona.enabled.includes('engineer');
+  const available = new Set(
+    getWorkspaceProfile(input.manifest.profile)?.capabilities.available ?? [],
+  );
   const disabled = new Set(input.manifest.capabilities.disabled);
-  const enabled = new Set(input.manifest.capabilities.enabled.filter((id) => !disabled.has(id)));
+  const enabled = new Set(input.manifest.capabilities.enabled.filter(
+    (id) => available.has(id) && !disabled.has(id),
+  ));
   const active: string[] = [];
   const reasons: string[] = [];
   const skillPacks: string[] = [];

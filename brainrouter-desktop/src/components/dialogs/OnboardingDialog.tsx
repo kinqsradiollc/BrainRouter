@@ -331,7 +331,11 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
         return;
       }
       if (result?.stale) {
-        load(root, 'The workspace changed while this dialog was open. The latest setup has been reloaded.');
+        load(
+          root,
+          String(result.error
+            ?? 'The workspace changed while this dialog was open. The latest setup has been reloaded.'),
+        );
         return;
       }
       setSaving(false);

@@ -52,7 +52,7 @@ function payload(root: string, profileId: string): ManifestSavePayload {
       disabledRoles: [...profile.orchestration.disabledRoles],
       maxParallel: profile.orchestration.maxParallel,
     },
-    capabilities: { enabled: [...profile.capabilities.enabled], disabled: [] },
+    capabilities: { enabled: [...profile.capabilities.recommended], disabled: [] },
     skills: { packs: [...profile.skills.packs], enabled: [...profile.skills.enabled], disabled: [] },
     tools: { profiles: [...profile.tools.profiles], enabled: [], deny: [] },
     memory: { tags: [...profile.memory.tags], captureHint: profile.memory.captureHint },
@@ -358,7 +358,12 @@ test('manifest-save rejects malformed review revisions without writing', () => {
     assert.equal(saveWorkspaceManifestFromPayload(env.root, unknownRole).saved, false);
     const staleCatalog = payload(env.root, 'study');
     staleCatalog.catalogFingerprint = 'f'.repeat(64);
-    assert.equal(saveWorkspaceManifestFromPayload(env.root, staleCatalog).saved, false);
+    const staleCatalogResult = saveWorkspaceManifestFromPayload(env.root, staleCatalog);
+    assert.deepEqual(staleCatalogResult, {
+      saved: false,
+      stale: true,
+      error: 'Available setup choices changed while this dialog was open. Reload and review the latest options.',
+    });
     assert.equal(saveWorkspaceManifestFromPayload(env.root, null).saved, false);
     assert.equal(loadWorkspaceManifest(env.root), null);
   } finally { env.cleanup(); }

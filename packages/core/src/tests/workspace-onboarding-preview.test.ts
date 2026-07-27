@@ -107,6 +107,9 @@ test('P23-8 capability choices are profile-scoped while Custom remains explicit'
   const custom = buildWorkspaceOnboardingPreview(
     createWorkspaceManifest({ name: 'custom', profile: 'custom', by: 'wizard' }),
   );
+  assert.deepEqual(custom.catalog
+    .filter((row) => row.kind === 'capability' && row.recommended)
+    .map((row) => row.id), []);
   assert.deepEqual(
     custom.catalog
       .filter((row) => row.kind === 'capability' && row.selectable)

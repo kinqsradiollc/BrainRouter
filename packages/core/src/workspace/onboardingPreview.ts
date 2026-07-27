@@ -109,7 +109,8 @@ export function buildWorkspaceOnboardingPreview(
   const disabledSkills = new Set(manifest.skills.disabled);
   const recommendedGroups = new Set(preset?.tools.profiles ?? []);
   const recommendedRoles = new Set(preset?.orchestration.availableRoles ?? []);
-  const recommendedCapabilities = new Set(preset?.capabilities.enabled ?? []);
+  const availableCapabilities = new Set(preset?.capabilities.available ?? []);
+  const recommendedCapabilities = new Set(preset?.capabilities.recommended ?? []);
   const recommendedPacks = new Set(preset?.skills.packs ?? []);
   const recommendedSkills = new Set(preset?.skills.enabled ?? []);
 
@@ -175,8 +176,7 @@ export function buildWorkspaceOnboardingPreview(
       const roleBlockedByPlan = entry.kind === 'role'
         && (manifest.orchestration.mode === 'off' || !planRoles.has(entry.id));
       const capabilityBlockedByProfile = entry.kind === 'capability'
-        && preset?.id !== 'custom'
-        && !recommendedCapabilities.has(entry.id);
+        && !availableCapabilities.has(entry.id);
       const selectionBlocked = roleBlockedByPlan || capabilityBlockedByProfile;
       return {
         ...entry,

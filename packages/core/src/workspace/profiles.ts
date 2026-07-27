@@ -35,8 +35,14 @@ export interface WorkspaceProfilePreset {
   };
   /** @deprecated Manifest-v1/client compatibility alias for `persona`. */
   agents: { default: string; enabled: string[] };
-  /** Optional capability sets available for task-scoped activation. */
-  capabilities: { enabled: string[] };
+  /**
+   * Optional task capabilities exposed by this profile.
+   *
+   * `available` is the compatibility ceiling; `recommended` is the default
+   * manifest selection. The deprecated `enabled` alias stays wire-compatible
+   * with 0.4.17 onboarding clients and always mirrors `recommended`.
+   */
+  capabilities: { available: string[]; recommended: string[]; enabled: string[] };
   /** Skill packs (plugin-delivered) + individual starter skills to enable. */
   skills: { packs: string[]; enabled: string[] };
   /** Tool GROUPS (mapped onto extension gating), not individual tool names. */
@@ -59,7 +65,11 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
       maxParallel: 4,
     },
     agents: { default: 'engineer', enabled: ['engineer'] },
-    capabilities: { enabled: ['frontend', 'backend'] },
+    capabilities: {
+      available: ['frontend', 'backend'],
+      recommended: ['frontend', 'backend'],
+      enabled: ['frontend', 'backend'],
+    },
     skills: {
       packs: ['engineering'],
       enabled: [
@@ -93,7 +103,7 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
       maxParallel: 3,
     },
     agents: { default: 'researcher', enabled: ['researcher'] },
-    capabilities: { enabled: [] },
+    capabilities: { available: [], recommended: [], enabled: [] },
     skills: { packs: ['research'], enabled: ['planning-skill', 'handover-skill'] },
     tools: {
       profiles: ['browser', 'research-notes', 'artifacts', 'planning-session', 'orchestration'],
@@ -112,7 +122,7 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
       maxParallel: 4,
     },
     agents: { default: 'data-scientist', enabled: ['data-scientist'] },
-    capabilities: { enabled: [] },
+    capabilities: { available: [], recommended: [], enabled: [] },
     skills: { packs: ['data'], enabled: ['planning-skill', 'testing-skill', 'verify-loop'] },
     tools: {
       profiles: [
@@ -134,7 +144,7 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
       maxParallel: 2,
     },
     agents: { default: 'tutor', enabled: ['tutor'] },
-    capabilities: { enabled: [] },
+    capabilities: { available: [], recommended: [], enabled: [] },
     skills: { packs: ['study'], enabled: ['planning-skill', 'handover-skill'] },
     tools: { profiles: ['browser', 'research-notes', 'artifacts', 'planning-session'] },
     memory: { tags: ['study'], captureHint: 'learning' },
@@ -151,7 +161,7 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
       maxParallel: 2,
     },
     agents: { default: 'writer', enabled: ['writer'] },
-    capabilities: { enabled: [] },
+    capabilities: { available: [], recommended: [], enabled: [] },
     skills: { packs: ['writing'], enabled: ['planning-skill', 'handover-skill'] },
     tools: { profiles: ['browser', 'research-notes', 'artifacts', 'planning-session'] },
     memory: { tags: ['writing'], captureHint: 'drafts' },
@@ -168,7 +178,11 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
       maxParallel: 1,
     },
     agents: { default: '', enabled: [] },
-    capabilities: { enabled: [] },
+    capabilities: {
+      available: ['frontend', 'backend'],
+      recommended: [],
+      enabled: [],
+    },
     skills: { packs: [], enabled: [] },
     tools: { profiles: [] },
     memory: { tags: [], captureHint: '' },

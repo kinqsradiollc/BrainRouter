@@ -83,7 +83,7 @@ export function devDraftForProfile(profileId: string, root: string): Record<stri
       disabledRoles: [...profile.orchestration.disabledRoles],
       maxParallel: profile.orchestration.maxParallel,
     },
-    capabilities: { enabled: [...profile.capabilities.enabled], disabled: [] },
+    capabilities: { enabled: [...profile.capabilities.recommended], disabled: [] },
     skills: { packs: [...profile.skills.packs], enabled: [...profile.skills.enabled], disabled: [] },
     tools: { profiles: [...profile.tools.profiles], enabled: [], deny: [] },
     memory: { tags: [...profile.memory.tags], captureHint: profile.memory.captureHint },
@@ -122,7 +122,8 @@ export function buildDevOnboardingPreview(value: unknown): Record<string, unknow
   const recommended = WORKSPACE_PROFILES.find((profile) => profile.id === draft.profile);
   const recommendedGroups = new Set(recommended?.tools.profiles ?? []);
   const recommendedRoles = new Set(recommended?.orchestration.availableRoles ?? []);
-  const recommendedCapabilities = new Set(recommended?.capabilities.enabled ?? []);
+  const availableCapabilities = new Set(recommended?.capabilities.available ?? []);
+  const recommendedCapabilities = new Set(recommended?.capabilities.recommended ?? []);
   const recommendedPacks = new Set(recommended?.skills.packs ?? []);
   const recommendedSkills = new Set(recommended?.skills.enabled ?? []);
   const catalog = [
@@ -151,8 +152,7 @@ export function buildDevOnboardingPreview(value: unknown): Record<string, unknow
       };
     }),
     ...DEV_CAPABILITIES.map((capability) => {
-      const selectable = draft.profile === 'custom'
-        || recommendedCapabilities.has(capability.id);
+      const selectable = availableCapabilities.has(capability.id);
       return {
         ...capability,
         kind: 'capability',
