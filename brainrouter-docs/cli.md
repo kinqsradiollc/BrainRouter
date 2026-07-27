@@ -437,7 +437,7 @@ provider forwarding heuristic
 | `glob_files` | Find files by glob pattern. |
 | `run_command` | Shell command (gated by confirmation + optional sandbox). Aliased as `bash` / `Bash` / `shell` / `sh` for Claude Code parity — all four route to the same gated implementation, so read-only mode can't sneak shell access. |
 | `fetch_url` | HTTP GET; strips HTML tags; clamps at 15kB. |
-| `web_search` | DuckDuckGo or `BRAINROUTER_WEB_SEARCH_ENDPOINT`. |
+| `web_search` | Managed Google browser search or an explicitly configured API provider. |
 | `update_plan` | Create/update the durable task plan. |
 | `goal_complete` | Mark the active `/goal` complete with proof. Hard-refuses while plan items are open. |
 | `goal_blocked` | Mark the active `/goal` blocked with a reason + needed unblocker. |

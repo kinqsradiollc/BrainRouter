@@ -1,8 +1,9 @@
 /**
  * Google SERP parsing — web_search now navigates the in-app browser to Google
  * first (real Chromium renders its JS results) and parses the rendered HTML,
- * falling back to DuckDuckGo. The parser is structural (title <h3> inside the
- * result anchor) so it survives Google's churning CSS class names.
+ * falling back to an explicitly configured provider. The parser is structural
+ * (title <h3> inside the result anchor) so it survives Google's churning CSS
+ * class names.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';

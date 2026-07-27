@@ -10,8 +10,8 @@ import { normalizeResult, type WebSearchResult } from '../types.js';
  * deliberately structural: every organic result's title is an <h3> inside the
  * result's anchor, and the anchor's href is the destination (sometimes wrapped
  * in Google's /url?q= redirect). That title↔anchor relationship is far more
- * stable than the churning CSS class names. Callers fall back to DuckDuckGo
- * when this returns nothing (consent interstitial, CAPTCHA, or a layout change).
+ * stable than the churning CSS class names. Callers may use an explicitly
+ * configured API provider when this returns nothing.
  */
 
 /** Google sometimes wraps a result href in `/url?q=<real>&...`; unwrap it. */

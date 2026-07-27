@@ -153,10 +153,12 @@ export interface ResolvedAutomationKnobs {
   };
 }
 
-export type WebSearchProviderName = 'duckduckgo' | 'serper' | 'google_pse' | 'brave' | 'searxng' | 'custom_http';
+export type WebSearchProviderName = 'serper' | 'google_pse' | 'brave' | 'searxng' | 'custom_http';
+export type LegacyWebSearchProviderName = 'duckduckgo';
 
 export interface WebSearchCliKnobs {
-  provider?: WebSearchProviderName;
+  /** `duckduckgo` remains parseable only so legacy config gets a migration error. */
+  provider?: WebSearchProviderName | LegacyWebSearchProviderName;
   maxResults?: number;
   serperApiKey?: string;
   google?: { apiKey?: string; cx?: string };
@@ -174,6 +176,7 @@ export interface WebSearchCliKnobs {
 
 export interface ResolvedWebSearchKnobs {
   provider: WebSearchProviderName;
+  configurationError?: string;
   maxResults: number;
   serperApiKey: string;
   google: { apiKey: string; cx: string };

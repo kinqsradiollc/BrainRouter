@@ -421,7 +421,7 @@ function normalizeProviderRequestFormat(input: unknown): Record<string, Provider
   return out;
 }
 
-const WEB_SEARCH_PROVIDER_NAMES: readonly WebSearchProviderName[] = ['duckduckgo', 'serper', 'google_pse', 'brave', 'searxng', 'custom_http'];
+const WEB_SEARCH_PROVIDER_NAMES: readonly WebSearchProviderName[] = ['serper', 'google_pse', 'brave', 'searxng', 'custom_http'];
 
 function positiveInt(value: unknown, fallback: number, opts: { min?: number; max?: number } = {}): number {
   const n = typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : fallback;
@@ -436,11 +436,15 @@ function nonNegativeNumber(value: unknown, fallback = 0): number {
 }
 
 function resolveWebSearchKnobs(input: WebSearchCliKnobs | undefined): ResolvedWebSearchKnobs {
+  const configuredProvider = typeof input?.provider === 'string' ? input.provider : '';
   const provider = WEB_SEARCH_PROVIDER_NAMES.includes(input?.provider as WebSearchProviderName)
     ? input!.provider!
-    : 'duckduckgo';
+    : 'google_pse';
   return {
-    provider,
+    provider: provider as WebSearchProviderName,
+    ...(configuredProvider === 'duckduckgo'
+      ? { configurationError: 'cli.webSearch.provider "duckduckgo" is no longer supported. Choose google_pse for Google search, or configure serper, brave, searxng, or custom_http explicitly.' }
+      : {}),
     maxResults: positiveInt(input?.maxResults, 5, { min: 1, max: 10 }),
     serperApiKey: input?.serperApiKey ?? '',
     google: {

@@ -336,8 +336,10 @@ and return `{ results: [{ index, relevance_score }] }`.
 
 ## Web search backend
 
-`web_search` uses DuckDuckGo's Instant Answer API by default (no key). For
-real search, point at a custom backend:
+In Desktop, `web_search` uses the workspace's persistent browser session and
+Google results. Headless CLI use defaults to Google Programmable Search and
+requires `cli.webSearch.google.apiKey` plus `cli.webSearch.google.cx`. You may
+instead point at a custom backend:
 
 ```env
 BRAINROUTER_WEB_SEARCH_ENDPOINT=http://your-search-proxy.example.com/search

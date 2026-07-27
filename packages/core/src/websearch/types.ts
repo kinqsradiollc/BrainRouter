@@ -1,4 +1,4 @@
-export const WEB_SEARCH_PROVIDERS = ['duckduckgo', 'serper', 'google_pse', 'brave', 'searxng', 'custom_http'] as const;
+export const WEB_SEARCH_PROVIDERS = ['serper', 'google_pse', 'brave', 'searxng', 'custom_http'] as const;
 export type WebSearchProviderId = (typeof WEB_SEARCH_PROVIDERS)[number];
 
 export interface WebSearchResult {

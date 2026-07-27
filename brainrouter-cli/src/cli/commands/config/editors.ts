@@ -224,7 +224,7 @@ export async function editWebSearch(ctx: CommandContext): Promise<boolean> {
     title: 'Web search',
     subtitle: 'Configure web_search provider keys and crawler behavior.',
     rows: [
-      { id: 'provider', label: 'Provider', value: provider, description: 'duckduckgo, serper, google_pse, brave, searxng, custom_http' },
+      { id: 'provider', label: 'Provider', value: provider, description: 'google_pse, serper, brave, searxng, custom_http' },
       { id: 'serper', label: 'Serper API key', value: current.serperApiKey ? maskApiKey(current.serperApiKey) : '(unset)', description: 'write-only key' },
       { id: 'google-key', label: 'Google PSE API key', value: current.google?.apiKey ? maskApiKey(current.google.apiKey) : '(unset)', description: 'write-only key' },
       { id: 'google-cx', label: 'Google PSE cx', value: current.google?.cx ? '(set)' : '(unset)', description: 'custom search engine id' },
@@ -240,8 +240,8 @@ export async function editWebSearch(ctx: CommandContext): Promise<boolean> {
     const prov = await pickFromList({
       theme,
       title: 'Web search provider',
-      subtitle: 'DuckDuckGo is keyless and keeps zero-config behavior.',
-      rows: ['duckduckgo', 'serper', 'google_pse', 'brave', 'searxng', 'custom_http'].map((id) => ({ id, label: id, value: id === provider ? 'current' : '' })),
+      subtitle: 'Google PSE is the default; managed Desktop search uses the signed-in browser.',
+      rows: ['google_pse', 'serper', 'brave', 'searxng', 'custom_http'].map((id) => ({ id, label: id, value: id === provider ? 'current' : '' })),
       initialCursor: 0,
     });
     if (prov.kind !== 'pick') return false;

@@ -55,8 +55,8 @@ function webSearchHandler(path: 'provider' | 'serperApiKey' | 'googleApiKey' | '
       const ws = ensureWebSearchConfig(ctx);
       const v = value.trim();
       if (path === 'provider') {
-        if (!['duckduckgo', 'serper', 'google_pse', 'brave', 'searxng', 'custom_http'].includes(v)) {
-          return { ok: false, reason: `web-search.provider must be duckduckgo|serper|google_pse|brave|searxng|custom_http (got "${value}")` };
+        if (!['google_pse', 'serper', 'brave', 'searxng', 'custom_http'].includes(v)) {
+          return { ok: false, reason: `web-search.provider must be google_pse|serper|brave|searxng|custom_http (got "${value}")` };
         }
         ws.provider = v as NonNullable<typeof ws.provider>;
       } else if (path === 'serperApiKey') ws.serperApiKey = v;

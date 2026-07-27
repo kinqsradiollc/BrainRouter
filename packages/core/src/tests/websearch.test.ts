@@ -21,7 +21,7 @@ async function withMockFetch<T>(mock: typeof fetch, fn: () => Promise<T>): Promi
 
 test('websearch config resolves safe defaults', () => {
   const knobs = resolveCliKnobs({ activeServer: '', servers: {}, cli: {} });
-  assert.equal(knobs.webSearch.provider, 'duckduckgo');
+  assert.equal(knobs.webSearch.provider, 'google_pse');
   assert.equal(knobs.webSearch.maxResults, 5);
   assert.equal(knobs.webSearch.crawler.respectRobots, true);
   assert.equal(knobs.webSearch.crawler.maxContentChars, 15_000);
@@ -29,9 +29,19 @@ test('websearch config resolves safe defaults', () => {
   assert.equal(knobs.computerUse.mode, 'smart_approve');
 });
 
+test('legacy DuckDuckGo config returns an actionable migration error', () => {
+  const knobs = resolveCliKnobs({ activeServer: '', servers: {}, cli: { webSearch: { provider: 'duckduckgo' } } });
+  assert.throws(() => buildSearchProvider(knobs), /duckduckgo.*no longer supported.*google_pse/i);
+});
+
 test('websearch factory reports exact missing secret fields', () => {
   const knobs = resolveCliKnobs({ activeServer: '', servers: {}, cli: { webSearch: { provider: 'serper' } } });
   assert.throws(() => buildSearchProvider(knobs), /cli\.webSearch\.serperApiKey/);
+});
+
+test('legacy custom endpoint remains the zero-config headless override', () => {
+  const knobs = resolveCliKnobs({ activeServer: '', servers: {}, cli: { webSearchEndpoint: 'https://search.test/query' } });
+  assert.equal(buildSearchProvider(knobs).id, 'custom_http');
 });
 
 test('websearch providers normalize backend-specific response shapes', async () => {
