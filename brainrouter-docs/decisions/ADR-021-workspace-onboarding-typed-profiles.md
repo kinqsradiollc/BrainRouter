@@ -204,21 +204,22 @@ server-pinned identity used by the other knowledge tools.
 
 - **W0–W3a (shipped)** — bundled starter skills; core manifest/presets; CLI
   project onboarding baseline; desktop manifest IPC and shared suggestion.
-- **W1c** — correct the manifest/presets/writers to one engineer plus dynamic
+- **W1c (shipped)** — correct the manifest/presets/writers to one engineer plus dynamic
   capabilities, add legacy normalization, and make `workspace.json` committable.
-- **W2b/W3b** — complete CLI editing/two-flow chaining and desktop onboarding,
+- **W2b/W3b (shipped)** — complete CLI editing/two-flow chaining and desktop onboarding,
   re-entry, editable selections, accessibility, and lifecycle tests.
-- **W3c** — conversational suggestion and bounded setup agent with deterministic
+- **W3c (shipped)** — conversational suggestion and bounded setup agent with deterministic
   fallback and confirmation-only writes.
-- **W4** — shared runtime persona/capability/skill/tool/briefing/memory wiring,
+- **W4 (shipped)** — shared runtime persona/capability/skill/tool/briefing/memory wiring,
   including delegated tasks and strict no-manifest compatibility tests.
 - **W5/W6 (shipped)** — domain persona definitions, packs/docs, and client
   bootstrap-path deprecation. First-party project setup is package-local and
   offline-capable; server skill and template-doc tools remain available for
   downstream clients.
-- **C1/C2/C4 (shipped)** — skill tool allowlists, plugin-delivered
-  profile/capability packs with selected same-ID specialist executors, and the
-  frontend design-artifact workflow without a separate frontend persona.
+- **C1/C2/C4 (shipped, refined by ADR-022/023)** — skill tool allowlists,
+  plugin-delivered profile and capability packs with persona and executable
+  orchestration roles kept separate, and the frontend design-artifact workflow
+  under the engineer persona rather than a separate frontend persona.
 - **B1a (shipped)** — project-consistent knowledge
   storage, central read/write roles, a server-derived actor, exact Project
   access resolution, scoped base CRUD, authenticated REST routes, and
