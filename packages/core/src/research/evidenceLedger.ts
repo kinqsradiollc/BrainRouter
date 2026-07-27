@@ -16,11 +16,27 @@
 export type Stance = 'support' | 'refute' | 'unclear';
 export type Confidence = 'high' | 'medium' | 'low';
 
+export interface EvidenceSource {
+  /** Canonical HTTP(S) URL with fragments and tracking parameters removed. */
+  url: string;
+  title?: string;
+  publisher?: string;
+  authors?: string[];
+  publishedDate?: string;
+  accessedAt: string;
+  /** The specific passage, datum, or observation that bears on the claim. */
+  evidence?: string;
+  /** Source-specific caveat such as methodology, recency, or access limits. */
+  limitations?: string;
+}
+
 export interface EvidenceEntry {
   id: string;
   claim: string;
   /** URLs or short source descriptions backing this entry. */
   sources: string[];
+  /** Structured provenance for report-ready claim-to-source links. */
+  sourceRecords?: EvidenceSource[];
   stance: Stance;
   confidence: Confidence;
   note?: string;
@@ -37,9 +53,52 @@ export interface ResearchLedger {
 export interface AddEntryInput {
   claim: string;
   sources?: string[];
+  sourceRecords?: Array<Omit<EvidenceSource, 'accessedAt'> & { accessedAt?: string }>;
   stance?: Stance;
   confidence?: Confidence;
   note?: string;
+}
+
+const TRACKING_PARAM = /^(utm_.+|fbclid|gclid|dclid|msclkid|mc_cid|mc_eid)$/i;
+
+export function canonicalSourceUrl(raw: string): string {
+  const value = raw.trim();
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return value;
+    url.hash = '';
+    for (const key of [...url.searchParams.keys()]) {
+      if (TRACKING_PARAM.test(key)) url.searchParams.delete(key);
+    }
+    url.searchParams.sort();
+    return url.toString();
+  } catch {
+    return value;
+  }
+}
+
+function bounded(value: string | undefined, max: number): string | undefined {
+  const text = value?.trim().slice(0, max);
+  return text || undefined;
+}
+
+function normalizeSource(
+  source: Omit<EvidenceSource, 'accessedAt'> & { accessedAt?: string },
+  now: string,
+): EvidenceSource | null {
+  const url = canonicalSourceUrl(String(source.url ?? ''));
+  if (!/^https?:\/\//i.test(url)) return null;
+  const authors = (source.authors ?? []).map((author) => bounded(String(author), 200)).filter((author): author is string => !!author).slice(0, 20);
+  return {
+    url,
+    accessedAt: bounded(source.accessedAt, 64) ?? now,
+    ...(bounded(source.title, 500) ? { title: bounded(source.title, 500) } : {}),
+    ...(bounded(source.publisher, 300) ? { publisher: bounded(source.publisher, 300) } : {}),
+    ...(authors.length ? { authors } : {}),
+    ...(bounded(source.publishedDate, 64) ? { publishedDate: bounded(source.publishedDate, 64) } : {}),
+    ...(bounded(source.evidence, 4_000) ? { evidence: bounded(source.evidence, 4_000) } : {}),
+    ...(bounded(source.limitations, 2_000) ? { limitations: bounded(source.limitations, 2_000) } : {}),
+  };
 }
 
 export function createLedger(question: string, now: string): ResearchLedger {
@@ -50,10 +109,18 @@ export function createLedger(question: string, now: string): ResearchLedger {
 export function addEntry(ledger: ResearchLedger, input: AddEntryInput, now: string): ResearchLedger {
   const claim = input.claim.trim();
   if (!claim) throw new Error('an evidence entry needs a non-empty claim.');
+  const sourceRecordsByUrl = new Map<string, EvidenceSource>();
+  for (const candidate of input.sourceRecords ?? []) {
+    const source = normalizeSource(candidate, now);
+    if (source && !sourceRecordsByUrl.has(source.url)) sourceRecordsByUrl.set(source.url, source);
+    if (sourceRecordsByUrl.size >= 50) break;
+  }
+  const sourceRecords = [...sourceRecordsByUrl.values()];
   const entry: EvidenceEntry = {
     id: `ev_${ledger.entries.length + 1}`,
     claim,
     sources: (input.sources ?? []).map((s) => s.trim()).filter(Boolean),
+    ...(sourceRecords.length ? { sourceRecords } : {}),
     stance: input.stance ?? 'unclear',
     confidence: input.confidence ?? 'low',
     createdAt: now,
@@ -90,7 +157,10 @@ export function crossCheck(ledger: ResearchLedger): ClaimCrossCheck[] {
   }
   const out: ClaimCrossCheck[] = [];
   for (const entries of byClaim.values()) {
-    const sources = new Set(entries.flatMap((e) => e.sources));
+    const sources = new Set(entries.flatMap((e) => [
+      ...e.sources.map(canonicalSourceUrl),
+      ...(e.sourceRecords ?? []).map((source) => source.url),
+    ]));
     const stances = new Set(entries.map((e) => e.stance));
     const conflicting = stances.has('support') && stances.has('refute');
     const sourceCount = sources.size;
@@ -150,6 +220,16 @@ export function formatBrief(ledger: ResearchLedger): string {
       for (const s of e.sources) lines.push(`  - ${s}`);
     } else {
       lines.push('- sources: _none cited_');
+    }
+    if (e.sourceRecords?.length) {
+      lines.push('- source records:');
+      for (const source of e.sourceRecords) {
+        const identity = [source.authors?.join(', '), source.publisher, source.publishedDate].filter(Boolean).join(' · ');
+        lines.push(`  - [${source.title || source.url}](${source.url})${identity ? ` — ${identity}` : ''}`);
+        if (source.evidence) lines.push(`    - evidence: ${source.evidence}`);
+        if (source.limitations) lines.push(`    - limitations: ${source.limitations}`);
+        lines.push(`    - accessed: ${source.accessedAt}`);
+      }
     }
     if (e.note) lines.push(`- note: ${e.note}`);
   }

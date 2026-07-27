@@ -790,6 +790,18 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         const claim = String(args.claim ?? '').trim();
         if (!claim) throw new Error('research_note requires a non-empty `claim`.');
         const sources = Array.isArray(args.sources) ? args.sources.map((s: any) => String(s)) : [];
+        const sourceRecords = Array.isArray(args.sourceRecords)
+          ? args.sourceRecords.filter((source: any) => source && typeof source === 'object').map((source: any) => ({
+            url: String(source.url ?? ''),
+            ...(typeof source.title === 'string' ? { title: source.title } : {}),
+            ...(typeof source.publisher === 'string' ? { publisher: source.publisher } : {}),
+            ...(Array.isArray(source.authors) ? { authors: source.authors.map((author: any) => String(author)) } : {}),
+            ...(typeof source.publishedDate === 'string' ? { publishedDate: source.publishedDate } : {}),
+            ...(typeof source.accessedAt === 'string' ? { accessedAt: source.accessedAt } : {}),
+            ...(typeof source.evidence === 'string' ? { evidence: source.evidence } : {}),
+            ...(typeof source.limitations === 'string' ? { limitations: source.limitations } : {}),
+          }))
+          : [];
         const stance = ['support', 'refute', 'unclear'].includes(String(args.stance))
           ? (String(args.stance) as 'support' | 'refute' | 'unclear')
           : undefined;
@@ -797,7 +809,7 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
           ? (String(args.confidence) as 'high' | 'medium' | 'low')
           : undefined;
         const note = typeof args.note === 'string' ? args.note : undefined;
-        const ledger = appendEvidence(this.workspaceRoot, this.sessionKey, { claim, sources, stance, confidence, note });
+        const ledger = appendEvidence(this.workspaceRoot, this.sessionKey, { claim, sources, sourceRecords, stance, confidence, note });
         const s = summarizeLedger(ledger);
         return `Recorded. Ledger: ${s.total} finding${s.total === 1 ? '' : 's'} (${s.corroborated} corroborated, ${s.conflicting} conflicting, ${s.singleSource} single-source).`;
       }

@@ -287,15 +287,33 @@ export const BUILTIN_TOOL_SPECS = [
   },
   {
     name: 'research_note',
-    description: 'Record one piece of evidence into the session research ledger: a claim, the sources backing it, whether they support/refute/are unclear about it, and your confidence. Use during evidence-driven research (after web_search / fetch_url) so the final research_brief can cross-check sources and flag conflicts.',
+    description: 'Record one claim with structured source provenance in the durable session research ledger. Capture the exact evidence and limitations after reading each source so research_brief can cross-check claims and emit auditable citations.',
     inputSchema: {
       type: 'object',
       properties: {
         claim: { type: 'string', description: 'The specific factual claim this evidence bears on.' },
-        sources: { type: 'array', items: { type: 'string' }, description: 'URLs or short source descriptions backing the claim.' },
+        sources: { type: 'array', items: { type: 'string' }, description: 'Legacy URL or short-source list. Prefer sourceRecords for new research.' },
+        sourceRecords: {
+          type: 'array',
+          description: 'Structured sources supporting this claim. Record only sources you opened and inspected.',
+          items: {
+            type: 'object',
+            properties: {
+              url: { type: 'string', description: 'Canonical source URL.' },
+              title: { type: 'string', description: 'Source title.' },
+              publisher: { type: 'string', description: 'Publisher, journal, institution, or site.' },
+              authors: { type: 'array', items: { type: 'string' }, description: 'Named authors.' },
+              publishedDate: { type: 'string', description: 'Published or last-updated date when available.' },
+              accessedAt: { type: 'string', description: 'Access timestamp. Defaults to the current time.' },
+              evidence: { type: 'string', description: 'Specific passage, datum, or observation bearing on the claim.' },
+              limitations: { type: 'string', description: 'Methodology, recency, access, or applicability caveat.' }
+            },
+            required: ['url']
+          }
+        },
         stance: { type: 'string', enum: ['support', 'refute', 'unclear'], description: 'Do the sources support, refute, or are unclear about the claim? Default unclear.' },
         confidence: { type: 'string', enum: ['high', 'medium', 'low'], description: 'Confidence in this finding. Default low.' },
-        note: { type: 'string', description: 'Optional nuance, caveat, or short quote.' }
+        note: { type: 'string', description: 'Optional claim-level synthesis or caveat.' }
       },
       required: ['claim']
     }
