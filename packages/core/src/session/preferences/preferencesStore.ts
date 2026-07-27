@@ -1,5 +1,12 @@
 import { getStateFile, readJsonFile, writeJsonFile } from '../../storage/store.js';
 import { getRawCliKnobs } from '../../config/config.js';
+import { loadWorkspaceManifest } from '../../workspace/manifest.js';
+import {
+  resolvePersonality,
+  type PersonalityMode,
+  type PersonalitySource,
+  type PersonalityStyle,
+} from './personality.js';
 
 /**
  * Per-workspace runtime preferences that don't justify their own file.
@@ -58,8 +65,12 @@ export interface Preferences {
   theme: 'auto' | 'light' | 'dark' | 'mono';
   /** Terminal title format segments (model, branch, session, mode) or 'off'. Tied to/title. */
   terminalTitle: string;
-  /** Communication style for the agent. Tied to/personality. */
-  personality: 'concise' | 'standard' | 'detailed' | 'pair-programmer';
+  /** Effective communication style for the agent. Tied to /personality. */
+  personality: PersonalityStyle;
+  /** Auto follows the profile recommendation; manual is a workspace override. */
+  personalityMode: PersonalityMode;
+  /** Inspectable provenance for the effective communication style. Never persisted. */
+  personalitySource: PersonalitySource;
   /** When true, REPL output skips markdown rendering for copy-friendly raw text. Tied to/raw. */
   rawScrollback: boolean;
   /** When true, gated experimental features are unlocked. Tied to/experimental. */
@@ -117,6 +128,8 @@ const DEFAULT: Preferences = {
   theme: 'auto',
   terminalTitle: 'model,session',
   personality: 'standard',
+  personalityMode: 'auto',
+  personalitySource: 'fallback',
   rawScrollback: false,
   experimental: false,
   memoriesEnabled: true,
@@ -152,13 +165,43 @@ export function readPreferences(workspaceRoot: string): Preferences {
     getStateFile(workspaceRoot, 'preferences.json'),
     {},
   );
-  return { ...DEFAULT, ...migrateLegacyShell(stored) };
+  const migrated = migrateLegacyShell(stored);
+  const personalityMode: PersonalityMode =
+    migrated.personalityMode === 'auto' || migrated.personalityMode === 'manual'
+      ? migrated.personalityMode
+      : migrated.personality !== undefined
+        ? 'manual'
+        : 'auto';
+  const workspaceOverride =
+    personalityMode === 'manual' ? migrated.personality : undefined;
+  const resolvedPersonality = resolvePersonality({
+    profile: loadWorkspaceManifest(workspaceRoot)?.profile,
+    workspaceOverride,
+  });
+  return {
+    ...DEFAULT,
+    ...migrated,
+    personality: resolvedPersonality.style,
+    personalityMode,
+    personalitySource: resolvedPersonality.source,
+  };
 }
 
-export function writePreferences(workspaceRoot: string, prefs: Partial<Preferences>): Preferences {
-  const merged = { ...readPreferences(workspaceRoot), ...prefs };
+export function writePreferences(
+  workspaceRoot: string,
+  prefs: Partial<Omit<Preferences, 'personalitySource'>>,
+): Preferences {
+  const current = readPreferences(workspaceRoot);
+  const personalityMode =
+    prefs.personalityMode ?? (prefs.personality !== undefined ? 'manual' : current.personalityMode);
+  const { personalitySource: _derivedSource, ...persistedCurrent } = current;
+  const merged: Omit<Preferences, 'personalitySource'> = {
+    ...persistedCurrent,
+    ...prefs,
+    personalityMode,
+  };
   writeJsonFile(getStateFile(workspaceRoot, 'preferences.json'), merged);
-  return merged;
+  return readPreferences(workspaceRoot);
 }
 
 /**

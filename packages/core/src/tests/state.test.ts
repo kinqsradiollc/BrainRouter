@@ -8,8 +8,10 @@ import { formatPlan, readPlan, updatePlan, seedPlanFromRequirement } from '../ta
 import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, getWorkflowDir, listWorkflows, slugify } from '../workflow/run/workflowArtifacts.js';
 import { addHook, readHooks, removeHook, runHooks, setHookEnabled } from '../hooks/hooksStore.js';
 import { applyYoloOff, applyYoloOn, readPreferences, writePreferences, normalizeEffort } from '../session/preferences/preferencesStore.js';
+import { resolvePersonality } from '../session/preferences/personality.js';
 import { withTempWorkspace } from './_helpers.js';
 import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
+import { createWorkspaceManifest, saveWorkspaceManifest } from '../workspace/manifest.js';
 
 test('CLI state helpers live under ~/.brainrouter, not the workspace', () => {
   withTempWorkspace((workspace) => {
@@ -215,6 +217,8 @@ test('preferencesStore: defaults include theme + personality + statusline fields
     const prefs = readPreferences(workspace);
     assert.equal(prefs.theme, 'auto');
     assert.equal(prefs.personality, 'standard');
+    assert.equal(prefs.personalityMode, 'auto');
+    assert.equal(prefs.personalitySource, 'fallback');
     assert.equal(prefs.rawScrollback, false);
     assert.equal(prefs.experimental, false);
     assert.equal(prefs.memoriesEnabled, true);
@@ -227,8 +231,84 @@ test('preferencesStore: writePreferences merges new theme/personality fields', (
     const prefs = readPreferences(workspace);
     assert.equal(prefs.theme, 'dark');
     assert.equal(prefs.personality, 'concise');
+    assert.equal(prefs.personalityMode, 'manual');
+    assert.equal(prefs.personalitySource, 'workspace');
     // Old defaults still present
     assert.equal(prefs.statusline, 'mode');
+  });
+});
+
+test('preferencesStore: legacy personality values remain explicit workspace overrides', () => {
+  withTempWorkspace((workspace) => {
+    fs.writeFileSync(
+      getStateFile(workspace, 'preferences.json'),
+      JSON.stringify({ personality: 'detailed' }),
+    );
+    const prefs = readPreferences(workspace);
+    assert.equal(prefs.personality, 'detailed');
+    assert.equal(prefs.personalityMode, 'manual');
+    assert.equal(prefs.personalitySource, 'workspace');
+  });
+});
+
+test('personality resolver follows chat, workspace, global, profile, fallback precedence', () => {
+  assert.deepEqual(
+    resolvePersonality({
+      profile: 'research',
+      globalDefault: 'concise',
+      workspaceOverride: 'standard',
+      chatOverride: 'pair-programmer',
+    }),
+    { style: 'pair-programmer', source: 'chat' },
+  );
+  assert.deepEqual(
+    resolvePersonality({ profile: 'research', globalDefault: 'concise' }),
+    { style: 'concise', source: 'global' },
+  );
+  assert.deepEqual(
+    resolvePersonality({ profile: 'research' }),
+    { style: 'detailed', source: 'profile' },
+  );
+  assert.deepEqual(
+    resolvePersonality({ profile: 'custom' }),
+    { style: 'standard', source: 'fallback' },
+  );
+});
+
+test('preferencesStore: auto personality follows the profile without replacing a manual choice', () => {
+  withTempWorkspace((workspace) => {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'papers', profile: 'research', by: 'wizard' }),
+    );
+    assert.deepEqual(
+      {
+        personality: readPreferences(workspace).personality,
+        mode: readPreferences(workspace).personalityMode,
+        source: readPreferences(workspace).personalitySource,
+      },
+      { personality: 'detailed', mode: 'auto', source: 'profile' },
+    );
+
+    writePreferences(workspace, { personality: 'concise' });
+    assert.deepEqual(
+      {
+        personality: readPreferences(workspace).personality,
+        mode: readPreferences(workspace).personalityMode,
+        source: readPreferences(workspace).personalitySource,
+      },
+      { personality: 'concise', mode: 'manual', source: 'workspace' },
+    );
+
+    writePreferences(workspace, { personalityMode: 'auto' });
+    assert.deepEqual(
+      {
+        personality: readPreferences(workspace).personality,
+        mode: readPreferences(workspace).personalityMode,
+        source: readPreferences(workspace).personalitySource,
+      },
+      { personality: 'detailed', mode: 'auto', source: 'profile' },
+    );
   });
 });
 
