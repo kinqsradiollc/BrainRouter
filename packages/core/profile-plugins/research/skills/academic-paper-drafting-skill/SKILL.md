@@ -1,7 +1,7 @@
 ---
 name: academic-paper-drafting-skill
 description: Draft or revise an academic paper from a reviewed evidence set with a coherent contribution story, explicit section contracts, and claim-evidence alignment.
-allowed-tools: [read_file, grep_search, glob_files, research_note, research_brief, write_file, edit_file]
+allowed-tools: [read_file, list_dir, grep_search, glob_files, research_note, research_brief, artifact_write, write_file, edit_file]
 ---
 
 # Academic paper drafting

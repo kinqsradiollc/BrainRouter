@@ -1,7 +1,7 @@
 ---
 name: claim-ledger-skill
 description: Normalize collected observations into auditable claims with support, contradiction, provenance, limitations, and confidence.
-allowed-tools: [read_file, grep_search, glob_files, research_note, research_brief]
+allowed-tools: [read_file, list_dir, grep_search, glob_files, research_note, research_brief]
 ---
 
 # Claim ledger

@@ -1,7 +1,7 @@
 ---
 name: academic-paper-review-skill
 description: Adversarially review an academic paper for reject-level defects, material weaknesses, and advisory improvements without silently rewriting it.
-allowed-tools: [read_file, grep_search, glob_files, research_note, research_brief]
+allowed-tools: [read_file, list_dir, grep_search, glob_files, fetch_url, web_search, research_note, research_brief]
 ---
 
 # Academic paper review

@@ -1,7 +1,7 @@
 ---
 name: iterative-evidence-skill
 description: Continue a bounded research task from prior findings, ground it in available project context, and issue only non-duplicate probes for material evidence gaps.
-allowed-tools: [read_file, grep_search, glob_files, knowledge_list, knowledge_search, fetch_url, web_search, research_note, research_brief]
+allowed-tools: [read_file, list_dir, grep_search, glob_files, knowledge_list, knowledge_search, fetch_url, web_search, research_note, research_brief]
 ---
 
 # Iterative evidence

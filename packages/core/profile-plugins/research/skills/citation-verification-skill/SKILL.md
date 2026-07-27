@@ -1,7 +1,7 @@
 ---
 name: citation-verification-skill
 description: Verify that every material citation resolves, supports its adjacent claim, preserves scope, and is not stale or misleading.
-allowed-tools: [read_file, grep_search, glob_files, fetch_url, web_search, research_note]
+allowed-tools: [read_file, list_dir, grep_search, glob_files, fetch_url, web_search, research_note]
 ---
 
 # Citation verification

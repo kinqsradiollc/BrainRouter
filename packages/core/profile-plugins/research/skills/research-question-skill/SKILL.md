@@ -1,7 +1,7 @@
 ---
 name: research-question-skill
 description: Refine an ambiguous research request into a bounded question, decision target, sub-questions, evidence threshold, and stopping condition.
-allowed-tools: [read_file, grep_search, glob_files]
+allowed-tools: [read_file, list_dir, grep_search, glob_files]
 ---
 
 # Research question

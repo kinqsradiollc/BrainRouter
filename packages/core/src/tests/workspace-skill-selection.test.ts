@@ -21,7 +21,7 @@ test('W4b a profile pack selects its versioned standard-plugin root and skills',
 
   assert.equal(selection.managed, true);
   assert.deepEqual(selection.bundles.map(({ id, source, version }) => ({ id, source, version })), [
-    { id: 'research', source: 'profile-plugin', version: '2.3.0' },
+    { id: 'research', source: 'profile-plugin', version: '2.4.0' },
   ]);
   assert.equal(selection.skillRoots.length, 1);
   assert.deepEqual(selection.ambientSkillIds, [
