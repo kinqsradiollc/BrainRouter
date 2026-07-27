@@ -279,7 +279,8 @@ export const BUILTIN_TOOL_SPECS = [
       type: 'object',
       properties: {
         query: { type: 'string', description: 'The search query.' },
-        maxResults: { type: 'integer', description: 'Maximum results to return. Default 5, max 10.' }
+        maxResults: { type: 'integer', description: 'Maximum results to return. Default 5, max 10.' },
+        page: { type: 'integer', description: 'Google results page to inspect. Default 1, max 10. Use later pages only for a named evidence gap.' }
       },
       required: ['query']
     }

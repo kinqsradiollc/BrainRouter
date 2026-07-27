@@ -733,9 +733,10 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         // them into a DOM and innerText-scrape a mangled copy — send those
         // straight to the crawler, which returns the raw bytes.
         if (this.browserControlPort && !this.silent && !looksStructuredUrl(String(url))) {
-          // Drive a VISIBLE, reused research tab so the user watches the agent go
-          // to the URL, rather than a throwaway background tab.
-          const viaBrowser = await fetchViaInAppBrowser(this.browserControlPort, String(url), 25_000, this.turnAbort?.signal, { live: true, tabRef: (this._browserResearchRef ??= {}) });
+          // Read through a background agent-owned tab, then close it. The human's
+          // selected tab and panel remain untouched while the real browser
+          // session, JavaScript, and authentication are still available.
+          const viaBrowser = await fetchViaInAppBrowser(this.browserControlPort, String(url), 25_000, this.turnAbort?.signal);
           if (viaBrowser?.text) {
             return JSON.stringify({ ok: true, via: 'in-app-browser', title: viaBrowser.title, url: viaBrowser.url, text: viaBrowser.text }, null, 2);
           }
@@ -756,6 +757,7 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         if (!query) throw new Error('web_search requires a non-empty query.');
         const knobs = getCliKnobs();
         const maxResults = Math.max(1, Math.min(10, Number(args.maxResults ?? knobs.webSearch.maxResults)));
+        const page = Math.max(1, Math.min(10, Math.floor(Number(args.page ?? 1))));
         // BROWSER-ONLY when available: run the search THROUGH the in-app browser
         // (real Chromium, the user's session, no raw HTTP scrape / bot-challenge).
         // Google runs through the real browser so the search shares the user's
@@ -765,19 +767,17 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         if (this.browserControlPort && !this.silent) {
           const port = this.browserControlPort;
           const sig = this.turnAbort?.signal;
-          // Share one reused research tab with fetch_url so browser work remains
-          // inspectable without multiplying search tabs.
-          const researchRef = (this._browserResearchRef ??= {});
           const tryEngine = async (url: string, parsers: Array<(h: string, n: number) => WebSearchResult[]>): Promise<WebSearchResult[]> => {
             try {
-              const html = await fetchHtmlViaInAppBrowser(port, url, 25_000, sig, { live: true, tabRef: researchRef });
+              const html = await fetchHtmlViaInAppBrowser(port, url, 25_000, sig);
               if (html) for (const parse of parsers) { const r = parse(html, maxResults); if (r.length) return r; }
             } catch { /* fall through to the explicitly configured HTTP provider */ }
             return [];
           };
-          const results = await tryEngine(googleSearchUrl(query, maxResults), [parseGoogleHtml]);
+          const results = await tryEngine(googleSearchUrl(query, maxResults, page), [parseGoogleHtml]);
           if (results.length) return JSON.stringify(results.slice(0, maxResults), null, 2);
         }
+        if (page > 1) return 'web_search pagination requires the managed Desktop browser; headless API providers currently support page 1 only.';
         try {
           const provider = buildSearchProvider(knobs);
           const results = await provider.search(query, maxResults, this.turnAbort?.signal);
