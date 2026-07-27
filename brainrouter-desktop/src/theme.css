@@ -2170,6 +2170,9 @@ select.toolbar-input { cursor: pointer; }
 .onboard-detected { margin-left: 6px; color: var(--accent); font-size: 9px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; }
 .onboard-card-desc { color: var(--text-dim); font-size: 11px; line-height: 1.35; }
 .onboard-reasons { color: var(--text-faint); font-size: 11px; }
+.onboard-included-setup { display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 12px; padding: 9px 10px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--input); color: var(--text-dim); font-size: 11px; }
+.onboard-included-setup strong { color: var(--text); }
+.onboard-included-setup small { flex-basis: 100%; color: var(--text-faint); line-height: 1.35; }
 .onboard-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
 .onboard-fields h3 { grid-column: 1 / -1; margin-bottom: 0; }
 .onboard-field { display: flex; flex-direction: column; gap: 5px; color: var(--text-dim); font-size: 11px; }
@@ -2200,6 +2203,11 @@ select.toolbar-input { cursor: pointer; }
 .onboard-catalog-option strong { color: var(--text); font-size: 11px; font-weight: 600; }
 .onboard-catalog-option small { color: var(--text-faint); font-size: 9.5px; line-height: 1.35; overflow-wrap: anywhere; }
 .onboard-catalog-empty { padding: 10px 4px; color: var(--text-faint); font-size: 10.5px; }
+.onboard-advanced { grid-column: 1 / -1; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--raised); }
+.onboard-advanced > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 10px; cursor: pointer; color: var(--text-dim); font-size: 11px; list-style: none; }
+.onboard-advanced > summary::-webkit-details-marker { display: none; }
+.onboard-advanced > summary span:last-child { color: var(--text-faint); font-size: 10px; }
+.onboard-advanced-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 0 9px 9px; }
 .onboard-plan-preview { border-color: color-mix(in srgb, var(--accent) 28%, var(--border)); }
 .onboard-plan-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .onboard-plan-heading h3 { margin: 0; }

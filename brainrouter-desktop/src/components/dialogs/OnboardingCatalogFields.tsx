@@ -6,26 +6,47 @@ import {
   type OnboardingPlanPreview,
 } from './onboardingCatalogModel.js';
 
-export function CatalogField({ label, values, kinds, preview, allowBlocked = false, hideUnavailable = false, disabled = false, emptyLabel, onChange }: {
+export function catalogRowsForField(options: {
+  catalog: OnboardingCatalogRow[];
+  kinds: OnboardingCatalogKind[];
+  values: string[];
+  hideUnavailable?: boolean;
+  excludedIds?: string[];
+  query?: string;
+}): OnboardingCatalogRow[] {
+  const kindSet = new Set(options.kinds);
+  const excluded = new Set(options.excludedIds ?? []);
+  const query = (options.query ?? '').trim().toLowerCase();
+  return options.catalog
+    .filter((row) => kindSet.has(row.kind) && row.persistable)
+    .filter((row) => !(row.kind === 'skill-pack' && row.managedByCapability))
+    .filter((row) => !excluded.has(row.id))
+    .filter((row) => !options.hideUnavailable || row.selectable || options.values.includes(row.id))
+    .filter((row) => !query || `${row.label} ${row.id} ${row.description} ${row.provenance}`
+      .toLowerCase().includes(query));
+}
+
+export function CatalogField({ label, values, kinds, preview, allowBlocked = false, hideUnavailable = false, excludedIds = [], disabled = false, emptyLabel, onChange }: {
   label: string;
   values: string[];
   kinds: OnboardingCatalogKind[];
   preview: OnboardingPlanPreview | null;
   allowBlocked?: boolean;
   hideUnavailable?: boolean;
+  excludedIds?: string[];
   disabled?: boolean;
   emptyLabel?: string;
   onChange: (values: string[]) => void;
 }): React.ReactElement {
   const [filter, setFilter] = useState('');
-  const kindSet = new Set(kinds);
-  const query = filter.trim().toLowerCase();
-  const rows = (preview?.catalog ?? [])
-    .filter((row) => kindSet.has(row.kind) && row.persistable)
-    .filter((row) => !(row.kind === 'skill-pack' && row.managedByCapability))
-    .filter((row) => !hideUnavailable || row.selectable || values.includes(row.id))
-    .filter((row) => !query || `${row.label} ${row.id} ${row.description} ${row.provenance}`
-      .toLowerCase().includes(query));
+  const rows = catalogRowsForField({
+    catalog: preview?.catalog ?? [],
+    kinds,
+    values,
+    hideUnavailable,
+    excludedIds,
+    query: filter,
+  });
   const selected = new Set(values);
   const toggle = (row: OnboardingCatalogRow): void => {
     if (disabled || (!selected.has(row.id) && !allowBlocked && !row.selectable)) return;
