@@ -62,6 +62,9 @@ declare global {
           memory?: { tags: string[]; captureHint: string };
         }>;
       }>;
+      previewWorkspaceOnboarding?(workspaceRoot: string, payload: Record<string, unknown>): Promise<{
+        ok: boolean; error?: string; preview?: unknown;
+      }>;
       saveWorkspaceManifest?(workspaceRoot: string, payload: Record<string, unknown>): Promise<{
         saved: boolean; error?: string; stale?: boolean; manifest?: Record<string, unknown>;
       }>;
