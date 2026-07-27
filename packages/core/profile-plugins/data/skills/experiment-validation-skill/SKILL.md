@@ -1,7 +1,7 @@
 ---
 name: experiment-validation-skill
 description: Design or audit an experiment with explicit hypotheses, assignment, metrics, power, stopping rules, and reproducible checks.
-allowed-tools: [read_file, grep_search, glob_files, write_file, edit_file, apply_patch, run_command]
+allowed-tools: [read_file, list_dir, grep_search, glob_files, write_file, edit_file, apply_patch, notebook_edit, lsp, run_command, artifact_write]
 ---
 
 # Experiment validation

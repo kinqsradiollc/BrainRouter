@@ -881,6 +881,15 @@ browser control, but task-time capability activation cannot silently add that
 group to an `explicit-catalog` workspace. The user reviews and persists the
 proposal during onboarding or later workspace editing.
 
+The selected group is only one side of the effective intersection. Bundled
+profile skills must retain the concrete tools their documented workflow needs:
+all folder-backed skills keep directory discovery; producing Study and Writing
+skills keep artifact emission; and Data Science analysis and experiment skills
+keep notebook editing, language inspection, command execution, and artifact
+emission. These allowlists still only subtract from the workspace, role,
+access, extension, and runtime gates. They never make an unselected group
+executable.
+
 Profiles also do not receive every tool merely because a task could eventually
 benefit from it. Live connectors depend on configured external systems,
 computer control acts outside the repository, workflow/worker launch can incur

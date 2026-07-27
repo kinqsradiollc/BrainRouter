@@ -1,7 +1,7 @@
 ---
 name: learner-diagnostic-skill
 description: Diagnose the learner's goal, prior knowledge, misconceptions, constraints, and readiness before choosing instruction.
-allowed-tools: [read_file, grep_search, glob_files, research_note]
+allowed-tools: [read_file, list_dir, grep_search, glob_files, research_note]
 ---
 
 # Learner diagnostic

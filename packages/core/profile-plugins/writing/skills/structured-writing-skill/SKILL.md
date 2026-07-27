@@ -1,7 +1,7 @@
 ---
 name: structured-writing-skill
 description: Plan and draft audience-aware long-form content with a clear purpose, evidence map, structure, and voice.
-allowed-tools: [read_file, grep_search, glob_files, fetch_url, web_search, research_note, research_brief, write_file, edit_file]
+allowed-tools: [read_file, list_dir, grep_search, glob_files, fetch_url, web_search, research_note, research_brief, artifact_write, write_file, edit_file]
 ---
 
 # Structured writing

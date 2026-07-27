@@ -1,7 +1,7 @@
 ---
 name: tutoring-explanation-skill
 description: Explain one learning objective using prior knowledge, source-grounded models, worked examples, checks for understanding, and fading support.
-allowed-tools: [read_file, grep_search, glob_files, fetch_url, research_note, write_file, edit_file]
+allowed-tools: [read_file, list_dir, grep_search, glob_files, fetch_url, research_note, artifact_write, write_file, edit_file]
 ---
 
 # Tutoring explanation

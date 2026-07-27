@@ -1,7 +1,7 @@
 ---
 name: learning-plan-skill
 description: Build or revise a prerequisite-aware objective map with observable mastery gates from a diagnosed learner goal and source material.
-allowed-tools: [read_file, grep_search, glob_files, fetch_url, web_search, research_note, research_brief, write_file, edit_file]
+allowed-tools: [read_file, list_dir, grep_search, glob_files, fetch_url, web_search, research_note, research_brief, artifact_write, write_file, edit_file]
 ---
 
 # Learning objective map
