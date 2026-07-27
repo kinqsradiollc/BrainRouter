@@ -6,7 +6,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fetchViaInAppBrowser } from '../extension/builtin/runtime.js';
+import { fetchHtmlViaInAppBrowser, fetchViaInAppBrowser } from '../extension/builtin/runtime.js';
 
 function stubPort(handlers: Record<string, (cmd: any) => any>) {
   const calls: string[] = [];
@@ -75,6 +75,18 @@ test('returns null when the port throws (→ crawler fallback)', async () => {
   const port = { calls: [], request: async () => { throw new Error('bridge down'); } };
   const out = await fetchViaInAppBrowser(port as any, 'https://x.test', 5000);
   assert.equal(out, null);
+});
+
+test('rendered HTML search uses a background tab and closes it after extraction', async () => {
+  const port = recordingPort({
+    'tabs.open': () => ({ ok: true, tabId: 'search_1' }),
+    'page.html': () => ({ ok: true, data: { html: `<html><body>${'result '.repeat(30)}</body></html>` } }),
+    'tabs.close': () => ({ ok: true }),
+  });
+  const html = await fetchHtmlViaInAppBrowser(port as any, 'https://www.google.com/search?q=x', 5_000);
+  assert.match(html ?? '', /result/);
+  assert.equal(port.cmds.find((command) => command.kind === 'tabs.open')?.activate, false, 'agent search must not steal human focus');
+  assert.ok(port.cmds.some((command) => command.kind === 'tabs.close' && command.tabId === 'search_1'), 'search tab closes after extraction');
 });
 
 // Live mode: the fetch is WATCHABLE — it opens/reuses a single VISIBLE research

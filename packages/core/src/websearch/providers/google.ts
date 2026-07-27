@@ -79,7 +79,8 @@ export function parseGoogleHtml(html: string, limit: number): WebSearchResult[] 
  *  Language and region intentionally come from the persistent browser session
  *  and network rather than a fabricated country parameter. `num` asks for
  *  enough organic rows. */
-export function googleSearchUrl(query: string, maxResults: number): string {
+export function googleSearchUrl(query: string, maxResults: number, page = 1): string {
   const num = Math.max(10, Math.min(20, maxResults * 2));
-  return `https://www.google.com/search?q=${encodeURIComponent(query)}&num=${num}&pws=0`;
+  const start = Math.max(0, Math.min(90, (Math.floor(page) - 1) * 10));
+  return `https://www.google.com/search?q=${encodeURIComponent(query)}&num=${num}&start=${start}&pws=0`;
 }
