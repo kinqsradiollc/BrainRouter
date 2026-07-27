@@ -16,6 +16,10 @@ import type { ScheduleRecordView } from './lib/schedule/scheduleView.js';
 import { SESSION_BASE } from './lib/session/list/sessionPagination.js';
 import { usePanels } from './lib/panels/usePanels.js';
 import { environmentPanelLayout } from './lib/panels/sideRailLayout.js';
+import {
+  workspaceViewContextFromManifest,
+  type WorkspaceViewContext,
+} from './lib/panels/viewRecommendations.js';
 import { buildCommandList, runCommand, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './lib/commands/commands.js';
 import { tagQueryId } from './lib/workspace/workspaceEvents.js';
 import { duplicateTitleKeys } from './lib/session/list/sessionDisplay.js';
@@ -68,6 +72,7 @@ export function App(): React.ReactElement {
   } = useSessionState();
   const [onboardAsk, setOnboardAsk] = useState<string | null>(null);
   const [onboardedByRoot, setOnboardedByRoot] = useState<Record<string, boolean>>({});
+  const [workspaceViewContextByRoot, setWorkspaceViewContextByRoot] = useState<Record<string, WorkspaceViewContext>>({});
   const onboardingDismissedRef = useRef<Set<string>>(new Set());
 
   const cachedSessionRowsRef = useRef<Record<string, ChatRow[]>>({});
@@ -128,6 +133,10 @@ export function App(): React.ReactElement {
       if (cancelled || workspaceGenRef.current !== generation || activeWsRef.current !== root || !result.ok) return;
       const onboarded = result.onboarded === true;
       setOnboardedByRoot((current) => ({ ...current, [root]: onboarded }));
+      setWorkspaceViewContextByRoot((current) => ({
+        ...current,
+        [root]: workspaceViewContextFromManifest(result.manifest),
+      }));
       if (!onboarded && !onboardingDismissedRef.current.has(root)) setOnboardAsk(root);
     }).catch(() => { /* the persistent sidebar action remains available for retry */ });
     return () => { cancelled = true; };
@@ -715,7 +724,8 @@ export function App(): React.ReactElement {
         openCiPanel={openCiPanel} lastTurnFails={lastTurnFails} openTask={openTask} dockAnim={dockAnim}
         termDockHeight={termDockHeight} resizeTerminal={resizeTerminal} termTabs={termTabs} activeTerm={activeTerm}
         setActiveTerm={setActiveTerm} closeBottomTab={closeBottomTab} addBottomTab={addBottomTab} envOpen={envOpen}
-        setEnvOpen={setEnvOpen} termDockOpen={termDockOpen} setSideFullScreen={setSideFullScreen} openBottomDock={openBottomDock} />
+        setEnvOpen={setEnvOpen} termDockOpen={termDockOpen} setSideFullScreen={setSideFullScreen} openBottomDock={openBottomDock}
+        workspaceViewContext={workspaceViewContextByRoot[activeRoot] ?? { profileId: 'custom', capabilityIds: [] }} />
 
       <AppDialogs
         pop={pop} setPop={setPop} q={q} cmdCtx={cmdCtx} commands={commands}
@@ -738,6 +748,13 @@ export function App(): React.ReactElement {
         onWorkspaceOnboarded={(root) => {
           onboardingDismissedRef.current.delete(root);
           setOnboardedByRoot((current) => ({ ...current, [root]: true }));
+          void window.brainrouter.workspaceManifest?.(root).then((result) => {
+            if (!result.ok) return;
+            setWorkspaceViewContextByRoot((current) => ({
+              ...current,
+              [root]: workspaceViewContextFromManifest(result.manifest),
+            }));
+          }).catch(() => {});
         }}
         sessionMenu={sessionMenu} sessions={sessions} closeSessionMenu={closeSessionMenu} openExternal={openExternal}
         togglePin={togglePin} toggleComplete={toggleComplete} startRename={startRename} forkSessionAction={forkSessionAction}

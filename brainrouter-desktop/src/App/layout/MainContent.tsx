@@ -170,6 +170,7 @@ export interface MainContentProps {
   termDockOpen: boolean;
   setSideFullScreen: TR['setSideFullScreen'];
   openBottomDock: TR['openBottomDock'];
+  workspaceViewContext: TR['workspaceViewContext'];
 }
 
 export function MainContent(p: MainContentProps): React.ReactElement {
@@ -188,6 +189,7 @@ export function MainContent(p: MainContentProps): React.ReactElement {
     tokens, openSettings, attachFiles, attachmentUploads, canSubmit, setAttachmentUploads, pastedImages,
     addPastedImages, setPastedImages, componentTags, onDropTag, onClearComponentTag, envAnim, setTermDockOpen, commitSubjects, openCiPanel, lastTurnFails, openTask,
     dockAnim, termDockHeight, resizeTerminal, termTabs, activeTerm, setActiveTerm, closeBottomTab, addBottomTab,
+    workspaceViewContext,
     envOpen, setEnvOpen, termDockOpen, setSideFullScreen, openBottomDock,
   } = p;
   const composerInputRef = React.useRef<HTMLTextAreaElement>(null);
@@ -327,7 +329,7 @@ export function MainContent(p: MainContentProps): React.ReactElement {
         termDockOpen={termDockOpen} setTermDockOpen={setTermDockOpen} sidePanelOpen={sidePanelOpen} sideWidth={sideWidth}
         setSidePanelOpen={setSidePanelOpen} sideFullScreen={sideFullScreen} setSideFullScreen={setSideFullScreen}
         sideTabs={sideTabs} activeSideTab={activeSideTab} ensurePanel={ensurePanel} openBottomDock={openBottomDock}
-        pop={pop} setPop={setPop} openSettings={openSettings} />
+        pop={pop} setPop={setPop} openSettings={openSettings} workspaceViewContext={workspaceViewContext} />
     </div>
   );
 }

@@ -9,8 +9,11 @@ import { Icon } from '../../icons.js';
 import type { PopId } from '../../types.js';
 import type { SettingsSection } from '../../lib/commands/commands.js';
 import { sideRailFullscreenTitle } from '../../lib/panels/sideRailLayout.js';
-import { VIEW_MENU } from '../../constants.js';
 import type { PanelId } from '../../panels/index.js';
+import {
+  groupWorkspaceViews,
+  type WorkspaceViewContext,
+} from '../../lib/panels/viewRecommendations.js';
 
 export interface TopbarRightProps {
   /** Workspace mode — Environment/terminal are Code-only; side views also apply to Track. */
@@ -35,14 +38,16 @@ export interface TopbarRightProps {
   pop: PopId;
   setPop: Dispatch<SetStateAction<PopId>>;
   openSettings: (section: SettingsSection) => void;
+  workspaceViewContext: WorkspaceViewContext;
 }
 
 export function TopbarRight(p: TopbarRightProps): React.ReactElement {
   const {
     mode, homeMode, envRoom, envOpen, setEnvOpen, q, termDockOpen, setTermDockOpen,
     sidePanelOpen, sideWidth, setSidePanelOpen, sideFullScreen, setSideFullScreen,
-    sideTabs, activeSideTab, ensurePanel, openBottomDock, pop, setPop, openSettings,
+    sideTabs, activeSideTab, ensurePanel, openBottomDock, pop, setPop, openSettings, workspaceViewContext,
   } = p;
+  const viewGroups = groupWorkspaceViews(workspaceViewContext, sideTabs);
   // Environment and bottom-terminal toggles are Code-only. Track still has the
   // right-side views rail for PR / checks, Atlas, tasks, and related project
   // surfaces.
@@ -74,12 +79,22 @@ export function TopbarRight(p: TopbarRightProps): React.ReactElement {
           <span className="pop-wrap">
             {pop === 'splus' ? (
               <div className="menu-pop down">
-                {VIEW_MENU.map((v) => (
-                  <button key={v.id} className="menu-item" onClick={() => { setPop(''); ensurePanel(v.id); }}>
-                    <span className="mi-check">{sideTabs.includes(v.id) ? '✓' : <Icon name={v.icon} size={13} />}</span>{v.title}
-                    {v.id === activeSideTab ? <span className="mi-hint">active</span> : null}
-                  </button>
-                ))}
+                {([
+                  ['Active & recent', viewGroups.active],
+                  ['Suggested', viewGroups.suggested],
+                  ['More views', viewGroups.more],
+                ] as const).map(([label, views]) => views.length ? (
+                  <React.Fragment key={label}>
+                    <div className="menu-sep" />
+                    <div className="menu-item" aria-hidden="true"><span className="mi-hint">{label}</span></div>
+                    {views.map((v) => (
+                      <button key={v.id} className="menu-item" onClick={() => { setPop(''); ensurePanel(v.id); }}>
+                        <span className="mi-check">{sideTabs.includes(v.id) ? '✓' : <Icon name={v.icon} size={13} />}</span>{v.title}
+                        {v.id === activeSideTab ? <span className="mi-hint">active</span> : null}
+                      </button>
+                    ))}
+                  </React.Fragment>
+                ) : null)}
                 {isCode ? (
                   <>
                     <div className="menu-sep" />

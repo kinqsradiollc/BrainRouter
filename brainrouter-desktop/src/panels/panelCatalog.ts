@@ -1,0 +1,41 @@
+/**
+ * DESK-5f — pure panel identity and presentation catalog. Kept free of React
+ * and panel implementations so layout/recommendation models are Node-testable.
+ */
+export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'task-detail' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'review' | 'requirements' | 'annotations' | 'artifacts' | 'attachments' | 'ci' | 'atlas' | 'workflows' | 'memory' | 'knowledge' | 'prototype' | 'servers' | 'browser';
+
+export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
+  { id: 'context', title: 'Context', icon: 'layout-right' },
+  { id: 'files', title: 'Files', icon: 'folder' },
+  { id: 'file', title: 'File', icon: 'file' },
+  { id: 'editor', title: 'Editor', icon: 'file' },
+  { id: 'diff', title: 'Changes', icon: 'diff' },
+  { id: 'terminal', title: 'Terminal', icon: 'terminal' },
+  { id: 'tools', title: 'Tool calls', icon: 'bolt' },
+  { id: 'tasks', title: 'Tasks', icon: 'tasks' },
+  { id: 'task-detail', title: 'Task', icon: 'tasks' },
+  { id: 'plan', title: 'Plan', icon: 'plan' },
+  { id: 'search', title: 'Search session', icon: 'search' },
+  { id: 'schedule', title: 'Schedules', icon: 'clock' },
+  { id: 'worktrees', title: 'Worktrees', icon: 'branch' },
+  { id: 'review', title: 'Review', icon: 'review' },
+  { id: 'requirements', title: 'Requirements', icon: 'tasks' },
+  { id: 'annotations', title: 'Annotations', icon: 'review' },
+  { id: 'artifacts', title: 'Artifacts', icon: 'file' },
+  { id: 'attachments', title: 'Attachments', icon: 'file' },
+  { id: 'ci', title: 'PR / Checks', icon: 'check-circle' },
+  { id: 'atlas', title: 'Atlas', icon: 'atlas' },
+  { id: 'workflows', title: 'Workflows', icon: 'bolt' },
+  { id: 'memory', title: 'Saved knowledge', icon: 'pin' },
+  { id: 'knowledge', title: 'Project knowledge', icon: 'brain' },
+  { id: 'prototype', title: 'Prototype', icon: 'bolt' },
+  { id: 'servers', title: 'Servers', icon: 'globe' },
+  { id: 'browser', title: 'Browser', icon: 'globe' },
+];
+
+const HIDDEN_MANUAL_PANEL_IDS = new Set<PanelId>([
+  'file',
+  'task-detail',
+]);
+
+export const MANUAL_PANEL_DEFS = PANEL_DEFS.filter((panel) => !HIDDEN_MANUAL_PANEL_IDS.has(panel.id));
