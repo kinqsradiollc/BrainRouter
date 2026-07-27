@@ -8,7 +8,7 @@
   "scripts": {
     "build": "npm run build:electron && vite build",
     "build:electron": "node -e \"fs.rmSync('dist-electron',{recursive:true,force:true})\" && tsc -p tsconfig.electron.json",
-    "build:deps": "npm run build -w @kinqs/brainrouter-types && npm run build -w @kinqs/brainrouter-core",
+    "build:deps": "npm run build -w @kinqs/brainrouter-types && npm run build -w @kinqs/brainrouter-agent-protocol && npm run build -w @kinqs/brainrouter-core",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build:deps && npm run typecheck && npm run build:electron && node --test \"dist-electron/**/*.test.js\" \"scripts/**/*.test.mjs\" && tsx --test \"src/**/*.test.ts\" \"scripts/**/*.test.ts\"",
     "test:browser:harness": "node --test \"scripts/**/*.test.mjs\"",
