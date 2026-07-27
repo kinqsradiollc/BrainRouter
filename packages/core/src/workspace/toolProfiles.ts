@@ -38,6 +38,17 @@ export interface WorkspaceToolDescriptor {
 
 export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] = [
   {
+    id: 'workspace-files',
+    label: 'Workspace files',
+    description: 'Inspect, search, create, and revise ordinary files in the workspace.',
+    category: 'files-code',
+    toolIds: [
+      'read_file', 'list_dir', 'grep_search', 'glob_files',
+      'write_file', 'edit_file', 'apply_patch',
+    ],
+    extensionIds: [],
+  },
+  {
     id: 'coding',
     label: 'Files and code',
     description: 'Inspect, edit, patch, and analyze source files and notebooks.',
