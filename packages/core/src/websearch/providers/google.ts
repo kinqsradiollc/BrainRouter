@@ -76,9 +76,10 @@ export function parseGoogleHtml(html: string, limit: number): WebSearchResult[] 
 }
 
 /** The URL the in-app browser should navigate to for a Google query.
- *  `hl`/`gl` pin language+region to reduce the consent-redirect that fires on a
- *  fresh session; `num` asks for enough organic rows. */
+ *  Language and region intentionally come from the persistent browser session
+ *  and network rather than a fabricated country parameter. `num` asks for
+ *  enough organic rows. */
 export function googleSearchUrl(query: string, maxResults: number): string {
   const num = Math.max(10, Math.min(20, maxResults * 2));
-  return `https://www.google.com/search?q=${encodeURIComponent(query)}&num=${num}&hl=en&gl=us&pws=0`;
+  return `https://www.google.com/search?q=${encodeURIComponent(query)}&num=${num}&pws=0`;
 }
