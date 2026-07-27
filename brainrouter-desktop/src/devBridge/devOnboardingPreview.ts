@@ -72,6 +72,18 @@ const DEV_CAPABILITIES = [
     description: 'Task-time coding exercises, executable feedback, progressive hints, debugging, and tests.',
     expandsTo: ['programming-lab-skill', 'coding', 'shell', 'artifacts'],
   },
+  {
+    id: 'technical-documentation',
+    label: 'Technical documentation',
+    description: 'Task-time repository-grounded references, guides, tutorials, runbooks, and verified examples.',
+    expandsTo: [
+      'technical-documentation-skill',
+      'workspace-files',
+      'shell',
+      'browser',
+      'artifacts',
+    ],
+  },
 ] as const;
 const DEV_TOOL_GROUPS = [
   {

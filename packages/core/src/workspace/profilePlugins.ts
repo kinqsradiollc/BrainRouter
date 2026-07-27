@@ -22,7 +22,8 @@ export type WorkspaceProfilePluginId =
   | 'academic-paper'
   | 'computational-research'
   | 'data-visualization'
-  | 'programming-lab';
+  | 'programming-lab'
+  | 'technical-documentation';
 
 type WorkspaceProfilePluginAssetId = Exclude<
   WorkspaceProfilePluginId,
@@ -30,6 +31,7 @@ type WorkspaceProfilePluginAssetId = Exclude<
   | 'computational-research'
   | 'data-visualization'
   | 'programming-lab'
+  | 'technical-documentation'
 >;
 
 export interface WorkspaceProfilePluginDefinition {
@@ -169,6 +171,14 @@ export const WORKSPACE_PROFILE_PLUGIN_DEFINITIONS: readonly WorkspaceProfilePlug
     assetId: 'study',
     pluginName: 'profile-study',
     skillIds: ['programming-lab-skill'],
+    personaIds: [],
+  },
+  {
+    id: 'technical-documentation',
+    kind: 'capability',
+    assetId: 'writing',
+    pluginName: 'profile-writing',
+    skillIds: ['technical-documentation-skill'],
     personaIds: [],
   },
 ] as const;

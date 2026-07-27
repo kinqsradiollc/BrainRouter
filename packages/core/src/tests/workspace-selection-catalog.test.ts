@@ -51,6 +51,10 @@ test('P23-3b catalog projects safe roles, capabilities, tool groups, tools, skil
     entry.kind === 'capability' && entry.id === 'programming-lab');
   const programmingLabPack = catalog.entries.find((entry) =>
     entry.kind === 'skill-pack' && entry.id === 'programming-lab');
+  const technicalDocumentation = catalog.entries.find((entry) =>
+    entry.kind === 'capability' && entry.id === 'technical-documentation');
+  const technicalDocumentationPack = catalog.entries.find((entry) =>
+    entry.kind === 'skill-pack' && entry.id === 'technical-documentation');
   const webSearch = catalog.entries.find((entry) => entry.kind === 'tool' && entry.id === 'web_search');
   const research = catalog.entries.find((entry) => entry.kind === 'skill-pack' && entry.id === 'research');
   const researchQuestion = catalog.entries.find((entry) => entry.kind === 'skill' && entry.id === 'research-question-skill');
@@ -83,6 +87,12 @@ test('P23-3b catalog projects safe roles, capabilities, tool groups, tools, skil
   assert.ok(programmingLab?.expandsTo?.includes('programming-lab-skill'));
   assert.ok(programmingLab?.expandsTo?.includes('shell'));
   assert.equal(programmingLabPack?.managedByCapability, 'programming-lab');
+  assert.ok(technicalDocumentation?.expandsTo?.includes('technical-documentation-skill'));
+  assert.ok(technicalDocumentation?.expandsTo?.includes('workspace-files'));
+  assert.equal(
+    technicalDocumentationPack?.managedByCapability,
+    'technical-documentation',
+  );
   assert.equal(webSearch?.source, 'core');
   assert.equal(webSearch?.accessTier, 'read');
   assert.equal(webSearch?.actionKind, 'network');
@@ -108,6 +118,7 @@ test('P23-3b capability selections use contributed capability IDs and reject typ
       'computational-research',
       'data-visualization',
       'programming-lab',
+      'technical-documentation',
     ],
     disabled: [],
   }, catalog);

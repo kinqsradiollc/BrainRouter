@@ -208,6 +208,34 @@ test('reviewed Study programming lab activates without changing tutor persona', 
   }
 });
 
+test('reviewed Engineering technical documentation activates without changing persona', () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'br-cap-state-docs-'));
+  try {
+    const manifest = createWorkspaceManifest({
+      name: 'service',
+      profile: 'engineering',
+      by: 'wizard',
+    });
+    manifest.capabilities.enabled.push('technical-documentation');
+    saveWorkspaceManifest(workspace, manifest);
+    const { host, calls } = makeHost(workspace);
+    const resolved = refreshWorkspaceCapabilityState(
+      host,
+      'Write repository-grounded developer documentation with runnable examples.',
+    );
+
+    assert.equal(host.activeWorkspacePersonaId, 'engineer');
+    assert.deepEqual(resolved.active, ['technical-documentation']);
+    assert.deepEqual(resolved.toolProfiles, [
+      'workspace-files', 'shell', 'browser', 'artifacts',
+    ]);
+    assert.match(calls[0]?.content ?? '', /technical-documentation/);
+    assert.match(calls[1]?.content ?? '', /Preserve the active engineer or writer persona/);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test('switching workspaces replaces profile, persona, and capability briefing state', () => {
   const engineering = fs.mkdtempSync(path.join(os.tmpdir(), 'br-cap-state-switch-engineering-'));
   const research = fs.mkdtempSync(path.join(os.tmpdir(), 'br-cap-state-switch-research-'));

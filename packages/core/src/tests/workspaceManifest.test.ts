@@ -243,7 +243,7 @@ test('profile presets are self-consistent (every profile usable by the wizard)',
   assert.equal(engineering.orchestration.mode, 'adaptive');
   assert.equal(engineering.orchestration.disabledRoles.includes('fleet'), true);
   assert.deepEqual(engineering.capabilities, {
-    available: ['frontend', 'backend'],
+    available: ['frontend', 'backend', 'technical-documentation'],
     recommended: ['frontend', 'backend'],
     enabled: ['frontend', 'backend'],
   });
@@ -256,13 +256,14 @@ test('profile presets are self-consistent (every profile usable by the wizard)',
       'computational-research',
       'data-visualization',
       'programming-lab',
+      'technical-documentation',
     ],
     recommended: [],
     enabled: [],
   });
   const writing = WORKSPACE_PROFILES.find((preset) => preset.id === 'writing')!;
   assert.deepEqual(writing.capabilities, {
-    available: ['academic-paper'],
+    available: ['academic-paper', 'technical-documentation'],
     recommended: [],
     enabled: [],
   });
