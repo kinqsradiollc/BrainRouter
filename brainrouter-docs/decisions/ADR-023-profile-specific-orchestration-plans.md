@@ -1,7 +1,8 @@
 # ADR-023 — Profile-Specific Orchestration Plans
 
-**Status:** Implemented for `release/0.4.17` · **Builds on** ADR-021 (workspace
-profiles) and ADR-022 (persona, orchestration, and context contracts) ·
+**Status:** Accepted; implementation in progress for `release/0.4.17` ·
+**Builds on** ADR-021 (workspace profiles) and ADR-022 (persona,
+orchestration, and context contracts) ·
 **Refines** ADR-022 sections 4, 5, 7, and 9 without changing their authority
 boundaries.
 
@@ -54,9 +55,12 @@ Engineering keeps the current investigate/design/build/review/verify behavior.
 Research, Study, Writing, and Data Science receive different plans rather than
 being forced through an engineering-shaped child-agent loop.
 
-Tool and skill selection becomes catalog-backed: profile bundles are readable
-recommendations, Custom can select individual safe entries, and every effective
-selection remains beneath the existing authority and runtime ceilings.
+Tool, capability, and skill selection becomes catalog-backed. A workspace
+profile owns the primary persona and baseline pack; optional capabilities are
+separately selectable specializations; capability-owned packs remain nested
+under their capability instead of appearing as duplicate skill-pack choices.
+Custom can select individual safe entries, and every effective selection
+remains beneath the existing authority and runtime ceilings.
 
 ## Context
 
@@ -881,7 +885,132 @@ computer control acts outside the repository, workflow/worker launch can incur
 substantial cost, and security-review tools have a specialized runtime. These
 remain discoverable, explained choices.
 
-#### 12.4 Reviewed picker UX in Desktop and CLI
+#### 12.4 Use one visible ownership hierarchy
+
+The common setup flow must not present a profile, its optional capabilities,
+and their implementation packs as peers. In particular, **Engineering**,
+**Frontend**, and **Backend** are not three interchangeable skill packs:
+Engineering is a workspace profile, while Frontend and Backend are optional
+task capabilities owned by that profile.
+
+The reviewed UI hierarchy is:
+
+| Surface | Contract | Common-flow presentation |
+|---|---|---|
+| Workspace profile | Primary domain, persona, orchestration defaults, baseline skills, tools, and memory posture | Choose exactly one profile card |
+| Included profile setup | The selected profile's persona and profile-owned skill pack | Read-only summary beneath the selected profile; not a second peer choice |
+| Optional capabilities | Profile-compatible task specializations authorized for automatic task-time activation | Selectable checkboxes with contributed skills and recommended tool groups nested in each row |
+| Additional skill packs | Reusable packs not owned by the selected profile or an enabled capability | Advanced picker only; selecting one does not change persona or orchestration |
+| Individual skills and tools | Fine-grained reviewed additions or denials | Advanced picker only |
+
+The label **Available capabilities** is ambiguous because "available" is also a
+runtime state. Desktop and CLI use **Optional capabilities** for the reviewed
+checkbox set and distinguish these states:
+
+```text
+compatible  = the selected profile permits this capability to be chosen
+recommended = the preset, scan, or reviewed proposal suggests it
+enabled     = the user has selected it in the workspace manifest
+active      = task-time signals selected it for the current turn
+available  = its plugin and required runtime surfaces currently exist
+blocked    = it cannot be selected or activated, with a bounded reason
+```
+
+Only `enabled` and explicit disable choices are durable workspace decisions.
+`active` and runtime `available` are recomputed. A checkbox therefore means
+"this workspace may use this specialization for matching tasks", not "inject
+every capability skill into every turn".
+
+Profile-owned and capability-owned packs remain catalog entries for
+validation, provenance, exact review, and runtime resolution. The common skill
+pack picker filters them out:
+
+- the chosen profile's pack appears under **Included profile setup**;
+- a capability-owned pack appears only inside that capability's expansion;
+- unowned or cross-domain packs appear as **Additional skill packs** in
+  Advanced, with a warning that they add skills only;
+- selecting a cross-domain pack never changes the profile, persona,
+  orchestration plan, capability allowlist, or tool authority.
+
+#### 12.5 Separate capability compatibility from defaults
+
+The current preset field `capabilities.enabled` serves two different ideas:
+which capabilities a profile contributes and which are selected by default.
+That coupling makes every non-Engineering profile look as though the product
+has no capability system.
+
+Core separates them:
+
+```ts
+capabilities: {
+  available: string[];   // compatible checkbox choices for this profile
+  recommended: string[]; // initial checked/recommended subset
+  enabled: string[];     // deprecated 0.4.17 client alias for recommended
+}
+```
+
+This is preset/catalog metadata, not a workspace-manifest schema change.
+`workspace.json` continues to persist only the reviewed
+`capabilities.enabled` and `capabilities.disabled` values. The preset
+`capabilities.enabled` alias is transport compatibility only, always mirrors
+`recommended`, and must not be used to decide compatibility. It can be removed
+only with a separately reviewed client-contract migration.
+
+Custom treats every bundled safe capability as compatible but recommends none.
+Installed safe contributions are added to the resolved Custom catalog rather
+than becoming static preset defaults. Unknown or unavailable contributions stay
+visible and blocked; every profile, including Custom, rejects a capability
+outside its resolved compatibility list.
+
+Each capability definition owns bounded, prompt-free onboarding metadata:
+
+```text
+id, label, description, compatible profile IDs,
+owned skill-pack ID, contributed skill IDs,
+recommended tool-group IDs, and task-detection signals
+```
+
+The runtime instruction remains internal and never crosses the onboarding
+catalog boundary. A capability may recommend a tool group during setup, but
+task-time activation cannot add an unreviewed tool, role, extension, connector,
+or orchestration mode. Selecting both Frontend and Backend represents
+full-stack Engineering; BrainRouter does not add a redundant Full-stack
+capability.
+
+The initial cross-profile catalog is:
+
+| Capability | Compatible profiles | Specialization payload | Tool groups proposed during reviewed setup |
+|---|---|---|---|
+| Frontend | Engineering | Accessibility, component/design-system judgment, responsive behavior, browser and visual verification | `browser`, `artifacts`, optionally `interactive-browser` |
+| Backend | Engineering | API/service design, authorization, data integrity, background work, production readiness, backend verification | `coding`, `shell`, `artifacts` |
+| Academic paper | Writing | Adds the Research-grade contribution story, claim/evidence map, paper section contracts, citation checks, adversarial paper review, and revision workflow to a Writing workspace | `browser`, `research-notes`, `artifacts` |
+| Computational research | Research, Data Science | Reproducible computational investigation, experiment records, result validation, uncertainty and limitation reporting | `coding`, `shell`, `browser`, `research-notes`, `artifacts` |
+| Data visualization | Data Science | Chart selection, data-story structure, accessibility, misleading-encoding checks, dashboard/figure verification | `coding`, `artifacts`, optionally `interactive-browser` |
+| Programming lab | Study | Executable examples, learner-safe scaffolding, tests, debugging feedback, and progressive exercise difficulty | `coding`, `shell`, `artifacts` |
+| Technical documentation | Writing, Engineering | Repository-grounded API/reference/tutorial structure, runnable examples, terminology consistency, and documentation review | `coding`, `browser`, `artifacts` |
+| Installed custom capability | Custom | Contribution-defined, schema-validated payload | None unless explicitly reviewed |
+
+The alternatives are:
+
+| Approach | Advantages | Disadvantages | Decision |
+|---|---|---|---|
+| Keep optional capabilities Engineering-only | Smallest catalog and no new packs | Makes the abstraction profile-specific in practice; Research, Data, Study, and Writing cannot express common specializations | Rejected |
+| Rename every profile skill pack as a capability | Reuses existing packages and produces rows quickly | Duplicates the profile itself, mixes persistent domain identity with task-time activation, and repeats the current UI confusion | Rejected |
+| Show every installed capability for every profile | Maximum discoverability and fewer compatibility rules | Encourages nonsensical combinations, expands proposal ambiguity, and makes validation less useful | Rejected except for explicit Custom setup |
+| Generate arbitrary capabilities from the project description | Highly flexible and needs no bundled catalog | Produces unstable IDs and unreviewed payloads; cannot support deterministic validation, upgrades, or blocked-state explanations | Rejected |
+| Separate compatible choices from recommended defaults | Consistent picker across profiles, deterministic validation, safe managed recommendations, and room for installed contributions | Requires explicit capability metadata and several small pack implementations | Accepted |
+
+The profile pack continues to provide the normal domain workflow. Research
+therefore owns academic-paper production directly; presenting the same workflow
+as an optional Research capability would duplicate its included profile setup.
+The Academic paper capability exists to add that narrower workflow to a Writing
+workspace without changing its writer persona or primary Writing plan. These
+capabilities are narrower additions, not renamed copies of Research, Data,
+Study, Writing, or Engineering. A deterministic scan or managed onboarding
+proposal may recommend compatible capabilities from project evidence and the
+user's description, but the review screen owns the final checked set.
+
+#### 12.6 Reviewed picker UX in Desktop and CLI
 
 The workspace onboarding and later workspace-edit flows replace free-text tool,
 skill-pack, and skill-ID list inputs with catalog-backed multi-select controls.
@@ -893,14 +1022,16 @@ They must:
   **denied** states, with the effective-policy reason for a blocked item;
 - render roles, tool groups, tools, packs, and skills as selectable catalog
   entries rather than requiring an implementation ID to be typed;
-- render contributed capabilities such as Frontend and Backend as selectable
-  catalog entries. A capability owns its skill pack and tool-profile
-  recommendations, so those payloads appear nested under the capability and
-  are not presented as duplicate peer choices;
-- show the capability section for every profile, with an explicit empty state
-  when that profile currently contributes none. Engineering is initially the
-  only bundled profile with optional Frontend and Backend capabilities; this is
-  a catalog fact rather than an Engineering-only UI special case;
+- render profile-compatible capabilities as selectable catalog entries. A
+  capability owns its skill pack and tool-profile recommendations, so those
+  payloads appear nested under the capability and are not presented as
+  duplicate peer choices;
+- show **Optional capabilities** for every profile, using the compatibility
+  matrix rather than an Engineering-only UI branch; show an explicit empty
+  state only when no installed contribution is compatible;
+- summarize the selected profile's included persona and pack separately, and
+  move additional cross-domain packs, individual skills, and tools under
+  **Advanced**;
 - offer profile recommendations first, then an "Advanced" view for individual
   tool and skill selections;
 - explain whether a recommendation came from the workspace profile, a reviewed
@@ -922,9 +1053,244 @@ They must:
 - re-resolve the proposed selection immediately before write and show any
   catalog/profile drift as a reviewable conflict rather than writing stale IDs.
 
+A catalog-fingerprint mismatch is an expected stale-review condition, not a
+generic persistence failure. Desktop reloads the latest catalog and explains
+that the available setup choices changed while the dialog was open. This is
+especially important during source development, where rebuilding the package
+can change the catalog beneath an already-open onboarding review. The stale
+draft is never written and the user reviews the refreshed choices before
+trying again.
+
 The UI is a discovery and review surface. It does not directly change the
 process-global extension registry, bypass the preload/query boundary, or call a
 tool merely because its checkbox is selected.
+
+### 13. Research production, Project Knowledge, and isolated candidates
+
+Research needs continuity across evidence sources and iterations, but that does
+not justify a second memory system or a broader child-role trust boundary.
+Project Knowledge and isolated candidate runs also have different lifecycle
+owners from active-turn orchestration and must not be presented as if they were
+additional orchestration roles.
+
+#### 13.1 Research uses one bounded, gap-driven evidence loop
+
+The Research profile adds a primary-agent iterative research skill. It owns a
+bounded working state for the current research task:
+
+```text
+original question
+  → reviewed subquestions
+  → prior-query ledger
+  → source and claim ledger
+  → unresolved evidence gaps
+  → stop decision
+```
+
+Each cycle creates at most three non-duplicate, gap-driven probes, routes each
+probe to the most appropriate available source class, updates claims and
+conflicts, and stops when the evidence threshold, iteration limit, or user
+budget is reached. A follow-up begins from the prior question, findings,
+citations, unresolved gaps, and report artifact rather than silently restarting
+the research. Report assembly receives only bounded relevant prior sections and
+an explicit no-repeat instruction.
+
+Source routing distinguishes project/local material, primary and academic
+sources, technical documentation, and broader web material. Source fit,
+provenance, recency, and direct support matter more than raw citation counts or
+ranking. Unknown source quality remains unknown; the agent must not manufacture
+a journal-quality classification or turn a popularity signal into authority.
+
+Project Knowledge is an optional evidence source in this loop, not a new memory
+store, authority source, or automatic ingestion path. When authenticated,
+linked to the current project, model-visible, and allowed by effective tool
+policy, the primary researcher searches the project corpus before expanding
+unresolved gaps to external sources. Missing or unavailable Project Knowledge
+does not fail ordinary research. Ingestion remains an explicit user action.
+Results retain their source origin and citations and never become verified
+claims merely because they came from the project corpus.
+
+The primary researcher owns Project Knowledge grounding. The reusable explorer
+role keeps its existing read-only scope and does not gain project-wide MCP
+authority merely to support one Research strategy. Explorer fan-out handles
+independent external evidence questions after the primary grounding stage;
+claim reconciliation and final synthesis return to the primary.
+
+| Approach | Advantages | Disadvantages | Decision |
+|---|---|---|---|
+| Search only the web on every turn | Simple and always follows one path | Repeats work, ignores reviewed project material, and loses follow-up continuity | Rejected |
+| Give every explorer Project Knowledge access | Makes all sources available inside fan-out | Widens a reusable child trust boundary and duplicates project context across children | Rejected |
+| Copy research state into a new profile store | Profile-specific querying can be optimized independently | Violates the single-memory-system rule and creates conflicting retention and redaction paths | Rejected |
+| Primary grounding plus bounded gap-driven fan-out | Reuses reviewed project evidence, preserves child isolation, and stops redundant searches | Requires explicit working-state and stopping contracts | Accepted |
+
+#### 13.2 Academic papers are an included Research workflow
+
+Academic-paper production belongs to the Research profile pack rather than a
+second Research persona or a peer skill-pack choice. Two separate skills keep
+authority and review intent clear:
+
+- `academic-paper-drafting-skill` owns the contribution story, claim/evidence
+  map, section contracts, reverse outline, terminology map, figure/table
+  inventory, experiment coverage, and explicit limitations;
+- `academic-paper-review-skill` performs an independent adversarial gate and
+  returns at most ten deduplicated blocking, material, or advisory findings.
+
+The `academic-paper` strategy is bounded to five stages:
+
+```text
+frame on primary
+  → freeze claim ledger on primary
+  → draft on primary
+  → citation + paper audit on one read-only reviewer
+  → revise and record dispositions on primary
+```
+
+Drafting and accepted edits remain primary-owned. The reviewer cannot write the
+paper, widen collection, or turn style preferences into blocking findings.
+Citation verification remains a separate skill in the audit stage so a polished
+paper cannot pass with unresolved material claims. Missing evidence is preserved
+as an explicit gap; the drafting workflow never invents results, method details,
+citations, or numerical values.
+
+The same workflow may later be contributed as an optional Academic paper
+capability to a Writing workspace. That capability reuses the reviewed skills
+and strategy but does not replace the writer persona, enable Research broadly,
+or add tools beyond the workspace's reviewed tool selection.
+
+#### 13.3 Project Knowledge has a workspace-scoped query contract
+
+Desktop Project Knowledge queries use the same request/result discipline as
+other renderer-to-host queries:
+
+- accept both host-wrapped events and bare development-bridge events;
+- match request ID and, when present, the expected workspace root;
+- clear the timeout when a terminal result arrives;
+- preserve structured unavailable, signed-out, unlinked-project, empty, ready,
+  and failed states instead of collapsing them into a generic timeout;
+- ignore late or cross-workspace results after the listener is disposed.
+
+The renderer must never report “did not respond” when either bridge already
+returned a terminal result. Project resolution remains host-owned because it
+uses authenticated project access and repository remotes; the renderer cannot
+invent or persist a project ID. Research tools continue to receive a validated
+project identifier through the existing authenticated MCP boundary.
+
+#### 13.4 Isolated candidates are not orchestration roles
+
+The **Parallel agent candidates** surface launches independent adapter sessions
+in isolated worktrees so a user can compare implementations. It is a durable
+root-owned fan-out workflow, not the active-turn explorer/architect/worker/
+reviewer/verifier graph. Selecting an adapter therefore does not add an
+orchestration role, change the workspace profile, or grant that adapter the
+profile's role tools.
+
+Candidate launch is validated before a run or worktree is persisted:
+
+- between two and eight distinct, available adapters are selected;
+- every selected adapter's workspace-trust requirement is satisfied by an
+  explicit user choice;
+- the workspace and remote-host prerequisites resolve;
+- a failed preflight creates no partial run, candidate, or worktree.
+
+The UI derives trust requirements from the selected adapter metadata, disables
+launch while consent is missing, and explains which adapters require it. Trust
+is never checked automatically. A trust failure is a pre-launch validation
+state, not a candidate that remains indefinitely in `needs-trust`.
+
+Hosted adapter sessions and PTYs are process-local while fan-out records are
+durable. On Desktop startup, the fan-out owner reconciles persisted transient
+candidate states whose process-local session no longer exists. Those candidates
+become terminal `failed` entries with an actionable restart/cleanup message,
+and the parent run becomes terminal when no live candidate remains. BrainRouter
+does not pretend to resume a lost process and does not leave a run permanently
+in `launching` or `running`.
+
+| Approach | Advantages | Disadvantages | Decision |
+|---|---|---|---|
+| Treat candidates as orchestration roles | One vocabulary and one selector | Confuses active-turn children with durable isolated worktrees and crosses authority/lifecycle boundaries | Rejected |
+| Persist enough PTY state to resume processes | Could retain a running-looking session after restart | A PTY/process cannot be safely reconstructed from metadata; creates false recovery guarantees | Rejected |
+| Leave transient records unchanged after restart | Minimal startup work | Produces permanently launching/working cards with no owning session | Rejected |
+| Preflight, then reconcile lost sessions to terminal failure | No partial launch, explicit trust, truthful durable history, and clear recovery | The user must start a new run after restart | Accepted |
+
+#### 13.5 Profiles recommend views; they do not authorize panels
+
+The current right-rail chooser presents nearly every panel for every workspace.
+That is technically complete but makes a Research or Writing workspace look
+like an Engineering workbench. Panel discoverability therefore becomes a
+catalog projection using the same resolved workspace profile and capability
+snapshot as onboarding.
+
+Each panel descriptor declares:
+
+```text
+id, label, group, description,
+recommended profile IDs,
+recommended capability IDs,
+runtime prerequisites, and data-activation signals
+```
+
+The chooser renders three ordered sections:
+
+1. **Suggested for this workspace** — profile and enabled-capability matches;
+2. **Active and recent** — currently open panels or panels with live/recent
+   data, regardless of profile;
+3. **More views** — every other installed and available panel, searchable.
+
+This is progressive disclosure, not a security boundary. A profile cannot grant
+the host query, tool, connector, authentication, or runtime needed by a panel.
+A user can still find and open a non-suggested compatible panel. A previously
+opened panel is not force-closed when the profile changes, and a panel with
+live data is not hidden merely because it is unusual for the profile.
+Unavailable panels remain discoverable in **More views** with a bounded reason
+and setup action when one exists; they do not render as broken empty surfaces.
+
+The initial recommendation posture is:
+
+| Profile | Normal suggested views | Added by capability or live state |
+|---|---|---|
+| Engineering | Files, Changes, Terminal, Plan, Tasks, Artifacts, Review, PR / Checks | Browser, Prototype, and Servers for Frontend/full-stack or detected dev servers; Worktrees for isolated runs; Project Knowledge when linked |
+| Research | Project knowledge, Saved knowledge, Context, Plan, Tasks, Artifacts, Annotations | Browser for source research; Files/Terminal for Computational research; Review for citation/adversarial review |
+| Data Science | Files, Terminal, Project knowledge, Context, Plan, Tasks, Artifacts | Browser and Prototype for Data visualization; Worktrees for isolated experiments |
+| Study | Project knowledge, Saved knowledge, Context, Plan, Tasks, Artifacts | Files/Terminal for Programming lab; Browser for source explanation |
+| Writing | Project knowledge, Saved knowledge, Context, Plan, Artifacts, Annotations | Files for Technical documentation; Review for critique; Browser for sourced writing |
+| Custom | Context and any panel with live data | Panels proposed by explicitly enabled capabilities; all others remain under More views |
+
+Panel recommendations are contributed metadata with validated IDs, not
+hard-coded conditional JSX branches. Unknown contribution panel IDs are
+ignored with a diagnostic. The exact open-tab layout remains local presentation
+state and never enters the workspace manifest.
+
+#### 13.6 Settings configures preview reservations; Servers owns live status
+
+Runtime preview ports and workspace dev servers are distinct resources:
+
+| Surface | Owns | Does not own |
+|---|---|---|
+| Settings → Runtime | Default named loopback-port reservations used when an isolated runtime starts a preview | Process status, logs, start/stop, or browser navigation |
+| Servers view | Live workspace dev servers and live runtime preview registrations, their source, status, URL, logs when available, and valid lifecycle actions | Global/runtime defaults or port policy |
+
+The current **App-preview ports** label is renamed **Runtime preview port
+reservations** and explains that it is configuration, not a running server.
+Settings stops duplicating the live-preview list. The Servers view becomes the
+single operational surface and groups entries by source:
+
+- **Workspace dev servers** are backed by the reviewed workspace launch
+  configuration and support start, stop, logs, and open in Browser.
+- **Runtime previews** are registered by an active isolated runtime and support
+  open in Browser plus only lifecycle actions owned by that runtime.
+
+The Servers view is suggested when the Engineering profile enables Frontend,
+when a valid workspace dev-server definition exists, or when any runtime
+preview is live. It remains available under **More views** otherwise. A port
+reservation alone does not make the view active and does not imply that a
+server is running.
+
+| Approach | Advantages | Disadvantages | Decision |
+|---|---|---|---|
+| Keep live previews in Settings and dev servers in Servers | No data-contract change | Two operational status surfaces and unclear ownership | Rejected |
+| Remove runtime preview reservations | Simplifies Settings | Isolated runtimes lose deterministic named ports | Rejected |
+| Put all configuration into Servers | One visible destination | Mixes durable policy with ephemeral process control | Rejected |
+| Settings for defaults, unified Servers for live operations | Clear configuration/runtime split and one place to inspect previews | Requires one combined server-view query/model | Accepted |
 
 ## Profile behavior summary
 
@@ -1187,9 +1553,10 @@ or output contracts.
 - Compile child stages into bounded delegated-task packets.
 
 Research ships with `direct-answer`, `question-decomposition`,
-`parallel-evidence`, and `citation-review`. Only read-access roles are
-available; evidence fan-out is capped at three and final synthesis remains on
-the primary researcher. Data Science ships with `direct-analysis`,
+`parallel-evidence`, `citation-review`, and `academic-paper`. Only read-access
+roles are available; evidence fan-out is capped at three, paper review uses one
+read-only reviewer, and final synthesis or revision remains on the primary
+researcher. Data Science ships with `direct-analysis`,
 `experiment`, `dataset-audit`, and `reproducibility-check`. Dataset inspection
 may fan out read-only, but every worker or verifier stage remains single-child
 and the primary data scientist owns interpretation.
@@ -1268,6 +1635,12 @@ because it may restate user content.
 - Replace free-text tool-profile/tool-deny/skill-list editing with catalog-backed
   Desktop and CLI pickers, including concrete group expansion and policy-state
   explanations.
+- Separate capability compatibility from default recommendations, rename the
+  selector to **Optional capabilities**, and make it a checkbox catalog for
+  every profile.
+- Nest profile-owned and capability-owned packs beneath their owner; expose
+  only independent or cross-domain packs as **Additional skill packs** in
+  Advanced.
 - Preview plan, strategy, stages, roles, skills, tools, and effective ceilings
   in CLI and Desktop.
 - Add an explicit **Skip setup for now** action that discards the proposal,
@@ -1291,6 +1664,16 @@ Both retain **Skip setup for now** as a terminal no-write action: Desktop
 discards the draft and derives a fresh proposal when setup is reopened, while
 the CLI returns before catalog review and remains covered by a filesystem
 no-write test.
+
+Capability delivery remains split into narrow PRs: first the shared
+compatibility/default contract, compatibility-enforced runtime activation,
+picker hierarchy, and actionable stale-catalog reload; then cross-profile
+capability packs for Writing academic-paper, computational-research,
+data-visualization, programming-lab, and technical-documentation. Research's
+included academic-paper skills and strategy ship independently from the future
+Writing capability. Each capability pack must ship its own detection,
+profile-compatibility, prompt/skill policy, catalog, runtime-resolution, and
+blocked/unavailable tests. A pack does not widen the profile tool matrix.
 
 ### P23-9 — Plugin and workspace contributions
 
@@ -1322,6 +1705,53 @@ window cannot be simulated during development, and the compatibility table is
 the fail-safe for damaged or incomplete package assets. The follow-up removal
 gate is recorded in the Compatibility section above.
 
+### P23-13 — Iterative Research evidence and Project Knowledge grounding
+
+- Add one Research-owned iterative evidence skill with a non-duplicate query
+  ledger, source routing, evidence-gap updates, bounded stopping, and follow-up
+  continuity.
+- Add a primary Project Knowledge/local-context grounding stage before optional
+  explorer fan-out; do not widen the explorer role.
+- Keep project-corpus absence non-fatal, preserve citation provenance, and keep
+  ingestion explicit.
+- Add parser/catalog/strategy tests and the affected cross-profile parity
+  checks.
+- Add separate academic-paper drafting and adversarial-review skills to the
+  included Research pack, plus a bounded primary-draft/read-only-audit/primary-
+  revision strategy that composes citation verification.
+
+### P23-14 — Project Knowledge query transport
+
+- Make the shared Desktop query listener accept both host-wrapped and bare
+  development events and enforce request/workspace scoping.
+- Preserve terminal bridge states and cancel timers/listeners deterministically.
+- Add focused transport tests and verify ready, empty, unlinked, signed-out,
+  error, timeout, and workspace-switch behavior in the running Desktop UI.
+
+### P23-15 — Isolated candidate launch and restart lifecycle
+
+- Validate adapter count, uniqueness, availability, remote prerequisites, and
+  explicit workspace trust before creating durable state.
+- Disable launch and explain missing trust in the candidate picker.
+- Reconcile persisted transient candidates with no live hosted session to a
+  terminal failed state at startup; aggregate the parent run truthfully.
+- Add focused manager/UI tests for no-partial-run preflight, trust consent,
+  restart reconciliation, and terminal run status.
+
+### P23-16 — Profile-aware views and unified server operations
+
+- Extend the panel catalog with validated profile/capability recommendations,
+  runtime prerequisites, and live-data activation signals.
+- Render Suggested, Active and recent, and More views without changing panel
+  authority or force-closing a user's open layout.
+- Rename App-preview ports to Runtime preview port reservations and remove live
+  preview status from Settings.
+- Project workspace dev servers and runtime previews into one grouped Servers
+  view with source-appropriate lifecycle actions.
+- Add catalog/projection tests and live Desktop checks for Engineering,
+  Research, Writing, Custom, unavailable panels, profile changes, and both
+  server sources.
+
 ## Acceptance criteria
 
 1. All six built-in profiles resolve distinct orchestration-profile JSON.
@@ -1343,48 +1773,78 @@ gate is recorded in the Compatibility section above.
 12. Invalid or unavailable plans fail closed to direct primary execution.
 13. Plugin/workspace definitions obey the same bounded no-follow parser and
     produce collision diagnostics.
-14. Hosted CI, cross-workspace parity tests, and automated security review pass
+14. Every built-in profile uses the same Optional capabilities picker and can
+    expose more than one compatible specialization without enabling all of
+    them.
+15. Profile-owned and capability-owned skill packs are nested under their
+    owner, not duplicated as peer choices in the common Skill packs list.
+16. Capability activation cannot add a tool group that was not reviewed in an
+    explicit-catalog workspace.
+17. Hosted CI, cross-workspace parity tests, and automated security review pass
     for every implementation slice.
-15. A strategy whose validated graph contains only primary stages cannot invoke
+18. A strategy whose validated graph contains only primary stages cannot invoke
     a child-launch tool; an `investigate` strategy can launch an explorer only
     when that role stage is present in its validated graph.
-16. An unstarted ephemeral stage is cancelled when its parent turn ends,
+19. An unstarted ephemeral stage is cancelled when its parent turn ends,
     interrupts, or changes session; no raw orchestration tool call is replayed
     outside `Agent.runTurn`.
-17. A missing orchestration runtime creates at most one terminal plan
+20. A missing orchestration runtime creates at most one terminal plan
     diagnostic and no retry loop.
-18. Desktop and CLI trace a rejected pre-launch call as a failed-to-start
+21. Desktop and CLI trace a rejected pre-launch call as a failed-to-start
     delegation, never as delegated work.
-19. Onboarding and workspace editing present built-in tools, groups, skill
+22. Onboarding and workspace editing present built-in tools, groups, skill
     packs, and skills as catalog-backed choices rather than free-form ID lists.
-20. Every visible catalog entry explains whether it is recommended, selected,
+23. Every visible catalog entry explains whether it is recommended, selected,
     available, blocked, or denied; a blocked entry cannot become executable by
     selection alone.
-21. Custom begins with an empty explicit selection and can select a minimal
+24. Custom begins with an empty explicit selection and can select a minimal
     reviewed surface without entering internal IDs manually.
-22. A v2 workspace retains its current tool-group behavior until the user
+25. A v2 workspace retains its current tool-group behavior until the user
     explicitly reviews a v3 explicit-catalog migration.
-23. Dynamic MCP tool names are visible only as live runtime information and
+26. Dynamic MCP tool names are visible only as live runtime information and
     never written to the workspace manifest.
-24. Every profile declares a valid `fallbackStrategyId`; its fallback graph is
+27. Every profile declares a valid `fallbackStrategyId`; its fallback graph is
     primary-only and cannot become unavailable because a child role or skill is
     missing.
-25. Every role stage uses the role-owned output contract, and every requested
+28. Every role stage uses the role-owned output contract, and every requested
     section resolves through that contract's canonical section-alias catalog.
-26. Engineering implementation uses one worker unless isolated worktrees or
+29. Engineering implementation uses one worker unless isolated worktrees or
     disjoint enforced ownership make parallel writes provably safe.
-27. The published Core package contains every bundled orchestration-profile
+30. The published Core package contains every bundled orchestration-profile
     JSON at the path used by the installed loader.
-28. Runtime plan activation is impossible before parser, packaged catalog,
+31. Runtime plan activation is impossible before parser, packaged catalog,
     effective ceilings, and active-turn lifecycle gates are complete; enabling
     it does not alter no-manifest behavior or implicitly activate manifest-v3
     tool selection.
-29. Choosing **Skip setup for now** in CLI or Desktop creates no manifest,
+32. Choosing **Skip setup for now** in CLI or Desktop creates no manifest,
     selection, completion marker, or partial draft; reopening onboarding later
     starts a fresh reviewed proposal.
-30. Use of the TypeScript orchestration-default fallback emits only a bounded
+33. Use of the TypeScript orchestration-default fallback emits only a bounded
     compatibility code, surface, coarse source, and count; it never emits
     profile IDs, plan contents, prompts, paths, or workspace content.
+34. Research can ground from available Project Knowledge, avoid duplicate
+    probes, continue from prior findings, and stop at an explicit evidence or
+    budget threshold without granting Project Knowledge to explorer children.
+35. Desktop Project Knowledge accepts both supported bridge event shapes and
+    never converts a received terminal result into a timeout.
+36. An invalid or untrusted isolated-candidate selection persists no partial
+    fan-out run or worktree.
+37. After Desktop restart, a durable candidate with no process-local owner is
+    terminal and actionable; no run remains indefinitely launching or working.
+38. Every profile receives a useful suggested panel set while all compatible
+    installed panels remain searchable under More views.
+39. Panel recommendation never grants a tool, host query, connector,
+    authentication state, or runtime capability.
+40. Settings contains only runtime preview reservation policy; one Servers view
+    owns live workspace-server and runtime-preview status without offering
+    unsupported lifecycle actions.
+41. Research exposes academic-paper drafting and adversarial review as separate
+    task-selectable skills; its paper strategy keeps drafting and revision on
+    the primary researcher and caps the independent citation/paper audit at one
+    read-only reviewer.
+42. If the role, capability, skill, or tool catalog changes during onboarding
+    review, save fails as a stale conflict, reloads the latest choices, and
+    never collapses the condition into an unexplained generic write failure.
 
 ## Non-goals
 
