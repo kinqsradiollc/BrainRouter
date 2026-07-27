@@ -115,6 +115,6 @@ test('P23-8 capability choices are profile-scoped while Custom remains explicit'
       .filter((row) => row.kind === 'capability' && row.selectable)
       .map((row) => row.id)
       .sort(),
-    ['backend', 'frontend'],
+    ['academic-paper', 'backend', 'frontend'],
   );
 });

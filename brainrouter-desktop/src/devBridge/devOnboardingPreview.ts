@@ -25,6 +25,21 @@ const DEV_CAPABILITIES = [
     description: 'Task-time service, authorization, data, production, and backend-test expertise.',
     expandsTo: ['api-service-design-skill', 'backend-testing-skill', 'coding', 'terminal'],
   },
+  {
+    id: 'academic-paper',
+    label: 'Academic paper',
+    description: 'Task-time claim-evidence, citation, drafting, and adversarial paper-review workflows.',
+    expandsTo: [
+      'source-synthesis-skill',
+      'citation-verification-skill',
+      'academic-paper-drafting-skill',
+      'academic-paper-review-skill',
+      'workspace-files',
+      'browser',
+      'research-notes',
+      'artifacts',
+    ],
+  },
 ] as const;
 const DEV_TOOL_GROUPS = [
   {

@@ -68,9 +68,9 @@ test('P23-2 bundled reference catalog is derived from physical role and skill as
     'testing-skill',
     'verify-loop',
   ];
-  const profileSkillIds = WORKSPACE_PROFILE_PLUGIN_DEFINITIONS
-    .flatMap((plugin) => [...plugin.skillIds])
-    .sort();
+  const profileSkillIds = [...new Set(
+    WORKSPACE_PROFILE_PLUGIN_DEFINITIONS.flatMap((plugin) => [...plugin.skillIds]),
+  )].sort();
   assert.deepEqual(
     [...references.skillIds].sort(),
     [...coreSkillIds, ...profileSkillIds].sort(),

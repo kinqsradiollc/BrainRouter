@@ -43,19 +43,20 @@ test('C2 package-owned profile plugins use the standard versioned plugin contrac
     ['writing', '2.2.0'],
     ['frontend', '1.1.0'],
     ['backend', '1.1.0'],
+    ['academic-paper', '2.4.0'],
   ]);
 
   assert.deepEqual(catalog.unavailable, []);
   assert.deepEqual(
     catalog.available.map((plugin) => plugin.id),
-    ['study', 'research', 'data', 'writing', 'frontend', 'backend'],
+    ['study', 'research', 'data', 'writing', 'frontend', 'backend', 'academic-paper'],
   );
   for (const plugin of catalog.available) {
     assert.equal(plugin.version, expectedVersions.get(plugin.id));
     assert.equal(plugin.plugin.manifest.version, plugin.version);
     assert.equal(plugin.plugin.manifest.name, plugin.pluginName);
-    assert.equal(summarizeProvides(plugin.plugin).skills, plugin.skillIds.length);
-    assert.equal(summarizeProvides(plugin.plugin).personas, plugin.personaIds.length);
+    assert.ok(summarizeProvides(plugin.plugin).skills >= plugin.skillIds.length);
+    assert.ok(summarizeProvides(plugin.plugin).personas >= plugin.personaIds.length);
     assert.equal(summarizeProvides(plugin.plugin).agents, 0);
     if (plugin.personaIds.length === 0) {
       assert.equal(plugin.personasRoot, undefined);
@@ -212,6 +213,23 @@ test('backend stays an engineer capability and owns bounded service workflows', 
   assert.equal(backend.personasRoot, undefined);
 });
 
+test('academic-paper capability reuses the reviewed Research paper workflows', () => {
+  const paper = findWorkspaceProfilePlugin('academic-paper');
+
+  assert.ok(paper);
+  assert.equal(paper.kind, 'capability');
+  assert.equal(paper.pluginName, 'profile-research');
+  assert.equal(paper.version, '2.4.0');
+  assert.deepEqual(paper.skillIds, [
+    'source-synthesis-skill',
+    'citation-verification-skill',
+    'academic-paper-drafting-skill',
+    'academic-paper-review-skill',
+  ]);
+  assert.deepEqual(paper.personaIds, []);
+  assert.equal(paper.personasRoot, undefined);
+});
+
 test('C2 profile plugins declare matching personas without executable specialists', () => {
   const catalog = inspectWorkspaceProfilePlugins();
   const personasByProfile = Object.fromEntries(
@@ -225,6 +243,7 @@ test('C2 profile plugins declare matching personas without executable specialist
     writing: ['writer'],
     frontend: [],
     backend: [],
+    'academic-paper': [],
   });
 });
 
@@ -248,7 +267,9 @@ test('C2 malformed package-owned versions fail availability without affecting si
   fs.writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, version: 'draft' }, null, 2)}\n`);
 
   const catalog = inspectWorkspaceProfilePlugins({ root: fixtureRoot });
-  assert.deepEqual(catalog.available.map((plugin) => plugin.id), ['study', 'research', 'data', 'writing', 'backend']);
+  assert.deepEqual(catalog.available.map((plugin) => plugin.id), [
+    'study', 'research', 'data', 'writing', 'backend', 'academic-paper',
+  ]);
   assert.equal(catalog.unavailable[0]?.id, 'frontend');
   assert.match(catalog.unavailable[0]?.reason ?? '', /semantic/);
 });
@@ -261,7 +282,9 @@ test('C2 a missing profile persona fails that plugin closed without affecting si
   fs.rmSync(path.join(fixtureRoot, 'research', 'personas', 'researcher.json'));
 
   const catalog = inspectWorkspaceProfilePlugins({ root: fixtureRoot });
-  assert.deepEqual(catalog.available.map((plugin) => plugin.id), ['study', 'data', 'writing', 'frontend', 'backend']);
+  assert.deepEqual(catalog.available.map((plugin) => plugin.id), [
+    'study', 'data', 'writing', 'frontend', 'backend', 'academic-paper',
+  ]);
   assert.equal(catalog.unavailable[0]?.id, 'research');
   assert.match(catalog.unavailable[0]?.reason ?? '', /missing valid persona file: researcher/);
 });

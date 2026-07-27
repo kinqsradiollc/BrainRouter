@@ -105,6 +105,31 @@ test('backend tasks activate the engineer prompt without granting new tool group
   }
 });
 
+test('reviewed Writing academic-paper capability activates only for matching tasks', () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'br-cap-state-paper-'));
+  try {
+    const manifest = createWorkspaceManifest({ name: 'paper', profile: 'writing', by: 'wizard' });
+    manifest.capabilities.enabled.push('academic-paper');
+    saveWorkspaceManifest(workspace, manifest);
+    const { host, calls } = makeHost(workspace);
+    const resolved = refreshWorkspaceCapabilityState(
+      host,
+      'Audit the citations in this academic paper.',
+    );
+
+    assert.equal(host.activeWorkspacePersonaId, 'writer');
+    assert.deepEqual(resolved.active, ['academic-paper']);
+    assert.deepEqual(resolved.skills, [], 'prompt activation does not grant catalog entries');
+    assert.deepEqual(resolved.toolProfiles, [
+      'workspace-files', 'browser', 'research-notes', 'artifacts',
+    ]);
+    assert.match(calls[0]?.content ?? '', /Available task capabilities: academic-paper/);
+    assert.match(calls[1]?.content ?? '', /Stay in the writer persona/);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test('switching workspaces replaces profile, persona, and capability briefing state', () => {
   const engineering = fs.mkdtempSync(path.join(os.tmpdir(), 'br-cap-state-switch-engineering-'));
   const research = fs.mkdtempSync(path.join(os.tmpdir(), 'br-cap-state-switch-research-'));

@@ -202,6 +202,47 @@ test('backend package skills appear only for the active task capability', () => 
   }
 });
 
+test('academic-paper skills appear only for an active reviewed Writing capability', () => {
+  const workspace = makeWorkspace();
+  try {
+    const manifest = createWorkspaceManifest({ name: 'paper', profile: 'writing', by: 'wizard' });
+    manifest.capabilities.enabled.push('academic-paper');
+    saveWorkspaceManifest(workspace, manifest);
+    const remote = JSON.stringify([
+      { name: 'academic-paper-drafting-skill', category: 'legacy', scope: 'global' },
+      { name: 'ordinary-skill', category: 'agent', scope: 'global' },
+    ]);
+    assert.deepEqual(names(adaptWorkspaceSkillCatalogText({
+      workspaceRoot: workspace,
+      text: remote,
+      tool: 'list_skills',
+    })), [
+      'structured-writing-skill',
+      'revision-skill',
+      'writing-critique-skill',
+      'ordinary-skill',
+    ]);
+
+    assert.deepEqual(names(adaptWorkspaceSkillCatalogText({
+      workspaceRoot: workspace,
+      activeCapabilities: ['academic-paper'],
+      text: remote,
+      tool: 'list_skills',
+    })), [
+      'structured-writing-skill',
+      'revision-skill',
+      'writing-critique-skill',
+      'source-synthesis-skill',
+      'citation-verification-skill',
+      'academic-paper-drafting-skill',
+      'academic-paper-review-skill',
+      'ordinary-skill',
+    ]);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test('disabled package skills stay ambient-hidden but explicit reads use package policy', () => {
   const workspace = makeWorkspace();
   try {

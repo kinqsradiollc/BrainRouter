@@ -179,7 +179,7 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
       maxParallel: 2,
     },
     agents: { default: 'writer', enabled: ['writer'] },
-    capabilities: { available: [], recommended: [], enabled: [] },
+    capabilities: { available: ['academic-paper'], recommended: [], enabled: [] },
     skills: { packs: ['writing'], enabled: ['planning-skill', 'handover-skill'] },
     tools: {
       profiles: [
@@ -202,7 +202,7 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
     },
     agents: { default: '', enabled: [] },
     capabilities: {
-      available: ['frontend', 'backend'],
+      available: ['frontend', 'backend', 'academic-paper'],
       recommended: [],
       enabled: [],
     },
