@@ -45,6 +45,7 @@ import {
 } from '../../router/index.js';
 import { drainCompletions, formatCompletionFeedback } from '../../session/completion/completionInbox.js';
 import { resolveActiveMode } from '../../session/state/sessionModeStore.js';
+import { buildSteeringReconciliationMessage } from '../../session/input/inputDelivery.js';
 import { isInternalSessionKey } from '../../session/transcript/sessionStore.js';
 import { isConnectivityError, isRetryableServerError } from '../../storage/checkpointStore.js';
 import { readPlan } from '../../task/taskStore.js';
@@ -836,6 +837,18 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     const applyPendingSteering = (): number => {
       const pending = this.consumePendingSteering();
       for (const input of pending) {
+        let goal: ReturnType<typeof readGoal> = null;
+        let plan: ReturnType<typeof readPlan> | null = null;
+        try { goal = readGoal(this.workspaceRoot, this.sessionKey); } catch { /* keep steering available without goal state */ }
+        try { plan = readPlan(this.workspaceRoot, this.sessionKey); } catch { /* keep steering available without plan state */ }
+        const reconciliation = {
+          role: 'system',
+          content: buildSteeringReconciliationMessage({
+            source: input.source,
+            goal: goal ? { text: goal.text, status: goal.status } : null,
+            plan,
+          }),
+        };
         const message = {
           role: 'user',
           content: input.source === 'extension'
@@ -847,6 +860,8 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
             : input.text,
           ...(input.source === 'extension' ? { name: 'extension' } : {}),
         };
+        this.chatHistory.push(reconciliation);
+        this.recordTranscript(reconciliation);
         this.chatHistory.push(message);
         this.recordTranscript(message);
         callbacks.onSteerApplied?.(input);
