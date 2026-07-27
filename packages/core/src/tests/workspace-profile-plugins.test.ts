@@ -38,7 +38,7 @@ test('C2 package-owned profile plugins use the standard versioned plugin contrac
     ['data', '2.1.0'],
     ['writing', '2.1.0'],
     ['frontend', '1.1.0'],
-    ['backend', '1.0.0'],
+    ['backend', '1.1.0'],
   ]);
 
   assert.deepEqual(catalog.unavailable, []);
