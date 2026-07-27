@@ -25,7 +25,8 @@ export type BriefingRecord = { id: string; type?: string; priority?: number; con
 export type ChangesetFile = { path: string; status: string; added: number; removed: number };
 
 export type ChatRow =
-  | { id: number | string; kind: 'user'; text: string; ts: number }
+  | { id: number | string; kind: 'user'; text: string; ts: number; delivery?: { id: string; mode: 'queue' | 'steer'; state: 'queued' | 'steered' | 'applied' | 'running' | 'completed' | 'canceled'; position?: number } }
+  | { id: number | string; kind: 'delivery'; text: string; ts: number; source: 'extension'; delivery: { id: string; mode: 'queue' | 'steer'; state: 'queued' | 'steered' | 'applied' | 'running' | 'completed' | 'canceled'; position?: number } }
   | { id: number | string; kind: 'assistant'; text: string; ts: number }
   | { id: number | string; kind: 'status'; text: string; ts: number; action?: 'plan' }
   | { id: number | string; kind: 'error'; text: string; detail?: string; ts: number }

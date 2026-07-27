@@ -1094,6 +1094,82 @@ test('agent: removeTaggedSystemMessage is idempotent and clears stale entries', 
   assert.equal(agent.chatHistory.filter((m: any) => m.content?.includes('keep me')).length, 1);
 });
 
+test('Agent steering inbox is ordered, bounded, and consumed exactly once', () => {
+  const stubMcp: any = { callTool: async () => ({ content: [] }) };
+  const agent = new Agent(stubMcp, { provider: 'openai', apiKey: '', model: 'gpt-4o-mini' }, {
+    workspaceRoot: '/tmp', launchCwd: '/tmp', sessionKey: 's:steer',
+  });
+  agent.requestSteer('first', { id: 's1', source: 'user' });
+  agent.requestSteer('CI failed', { id: 's2', source: 'extension' });
+  assert.equal(agent.pendingSteeringCount, 2);
+  assert.deepEqual(agent.consumePendingSteering().map((input) => ({
+    id: input.id,
+    text: input.text,
+    source: input.source,
+  })), [
+    { id: 's1', text: 'first', source: 'user' },
+    { id: 's2', text: 'CI failed', source: 'extension' },
+  ]);
+  assert.equal(agent.pendingSteeringCount, 0);
+  assert.deepEqual(agent.consumePendingSteering(), []);
+  assert.throws(() => agent.requestSteer('   '), /cannot be empty/);
+  assert.throws(() => agent.requestSteer('x'.repeat(20_001)), /exceeds 20000/);
+});
+
+test('runTurn applies Steer after an in-flight model response and before the next request', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const originalFetch = globalThis.fetch;
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const requestBodies: string[] = [];
+    let calls = 0;
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      calls++;
+      requestBodies.push(String(init?.body ?? ''));
+      if (calls === 1) {
+        await firstGate;
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: 'Initial direction.' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 20, completion_tokens: 4 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'Adjusted direction.' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 30, completion_tokens: 4 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch;
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({ content: [] }),
+        close: async () => {},
+      };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        silent: true,
+      });
+      const applied: string[] = [];
+      const turn = agent.runTurn('Start here.', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: () => {},
+        onSteerApplied: (input) => applied.push(input.id),
+      });
+      await waitForValue(() => calls, (value) => value === 1);
+      agent.requestSteer('Use the updated requirement.', { id: 'steer-safe-boundary' });
+      releaseFirst();
+
+      assert.equal(await turn, 'Adjusted direction.');
+      assert.deepEqual(applied, ['steer-safe-boundary']);
+      assert.equal(calls, 2);
+      assert.match(requestBodies[1], /Use the updated requirement/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
 test('runTurn: task budget aborts when provider usage reaches token cap', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const originalFetch = globalThis.fetch;

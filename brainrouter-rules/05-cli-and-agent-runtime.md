@@ -322,6 +322,22 @@ profiles.
 
 - **Evidence:** `brainrouter-desktop/electron/host/pty.ts`, `packages/core/src/extension/builtin/runtime.ts`, `packages/core/src/agent/runtime/runTurn.impl.ts`
 
+### 19. Queue and Steer share one core contract; Steer enters only at safe model boundaries
+
+Queue is FIFO input that starts after the active turn settles. Steer is input for
+the active turn and may enter chat history only between complete model/tool
+batches—never between an assistant tool call and its matching result. CLI and
+desktop use the shared core input primitives and agent-protocol delivery events,
+including queued, applied, completed, and canceled states. Background extensions
+deliver through the same Steer inbox with `source:'extension'`; they do not
+invent a second conversation or session channel.
+
+- **Why:** host-local implementations drift, and injecting an asynchronous event
+  inside a tool batch corrupts strict provider history.
+- **Evidence:** `packages/core/src/session/input/inputDelivery.ts`,
+  `packages/core/src/agent/runtime/runTurn.impl.ts`,
+  `packages/agent-protocol/src/index.ts`
+
 ---
 
 ## Comments & tests

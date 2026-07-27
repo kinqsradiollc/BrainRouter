@@ -483,7 +483,7 @@ export function App(): React.ReactElement {
   // T-handlers — composer + attachment handlers (submit, AI PR review, file
   // attachments, pasted-image staging, header rename) live in a hook now. Every
   // symbol is destructured back so existing references (render JSX) are unchanged.
-  const { submit, reviewPrWithAi, attachFiles, addPastedImages, renameCurrentSession } = useAppHandlers({
+  const { submit, submitDelivery, reviewPrWithAi, attachFiles, addPastedImages, renameCurrentSession } = useAppHandlers({
     q, draft, setDraft, attachmentUploads, setAttachmentUploads, pastedImages, setPastedImages,
     running, stopping, setToast, commands, cmdCtx, runBridge, sessionKeyRef, setRows, lastPromptRef,
     goalContPendingRef, setRunning, setSessionRunning, info, setTurnStart, turnFailsRef, branches,
@@ -707,7 +707,7 @@ export function App(): React.ReactElement {
         goalState={goalState} runBridge={runBridge} q={q} running={running} turnStart={turnStart}
         reasoningTail={reasoningTail} statusLine={statusLine} interaction={interaction} answerInteraction={answerInteraction}
         chatEnd={chatEnd} atBottom={atBottom} hasConversation={hasConversation} ensurePanel={ensurePanel}
-        draft={draft} setDraft={setDraft} stopping={stopping} submit={submit} requestStop={requestStop}
+        draft={draft} setDraft={setDraft} stopping={stopping} submit={submit} submitDelivery={submitDelivery} requestStop={requestStop}
         slashActive={slashActive} slashMatches={slashMatches} commands={commands} slashSel={slashSel} setSlashSel={setSlashSel}
         setSlashDismissed={setSlashDismissed} runSlash={runSlash} pop={pop} setPop={setPop} modeLabel={modeLabel}
         effort={effort} branches={branches} endpointModels={endpointModels} defaultProviderModels={defaultProviderModels}

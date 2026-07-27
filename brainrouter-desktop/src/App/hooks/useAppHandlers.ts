@@ -54,6 +54,7 @@ export interface AppHandlersCtx {
 
 export interface AppHandlers {
   submit: (override?: string) => void;
+  submitDelivery: (mode: 'queue' | 'steer') => void;
   reviewPrWithAi: (pr: { number: number; title?: string; headRefName?: string; baseRefName?: string }) => void;
   attachFiles: (files: File[]) => void;
   addPastedImages: (files: File[]) => void;
@@ -69,7 +70,7 @@ export function useAppHandlers(ctx: AppHandlersCtx): AppHandlers {
     ensurePanel, viewKey, componentTags, setComponentTags,
   } = ctx;
 
-  function submit(override?: string): void {
+  function submitWithDelivery(override: string | undefined, delivery: 'immediate' | 'queue' | 'steer'): void {
     const typedPrompt = (override ?? draft).trim();
     const pendingAttachments = attachmentUploads.filter((a) => a.status === 'reading' || a.status === 'attaching');
     const failedAttachments = attachmentUploads.filter((a) => a.status === 'failed');
@@ -84,7 +85,8 @@ export function useAppHandlers(ctx: AppHandlersCtx): AppHandlers {
       ...pastedImages.map((p) => ({ mediaType: p.mediaType, dataBase64: p.dataBase64 })),
       ...attachedImages,
     ];
-    if (running || stopping) return;
+    if (stopping || (running && delivery === 'immediate')) return;
+    if (!running && delivery !== 'immediate') delivery = 'immediate';
     if (!typedPrompt && attached.length === 0 && imagesToSend.length === 0 && componentTags.length === 0) return;
     if (pendingAttachments.length > 0) {
       setToast(pendingAttachments.length === 1 ? `Still attaching ${pendingAttachments[0].name}…` : `Still attaching ${pendingAttachments.length} files…`);
@@ -92,6 +94,10 @@ export function useAppHandlers(ctx: AppHandlersCtx): AppHandlers {
     }
     if (failedAttachments.length > 0) {
       setToast(failedAttachments.length === 1 ? `Remove failed attachment ${failedAttachments[0].name} before sending.` : 'Remove failed attachments before sending.');
+      return;
+    }
+    if (delivery !== 'immediate' && (attached.length > 0 || imagesToSend.length > 0 || componentTags.length > 0)) {
+      setToast('Queue and Steer currently accept text only; send attachments after the active turn.');
       return;
     }
     // §vision — an image-only send (no typed text, no file attachments) gets a
@@ -143,11 +149,29 @@ export function useAppHandlers(ctx: AppHandlersCtx): AppHandlers {
     goalContPendingRef.current = null;
     const nowTs = Date.now();
     const stableId = `${sessionKeyRef.current ?? 'global'}-user-${nowTs}-${displayPrompt.slice(0, 32).replace(/[^a-zA-Z0-9]/g, '_')}`;
-    setRows((r) => [...r, { id: stableId, kind: 'user', text: displayPrompt, ts: nowTs }]);
+    const deliveryState = delivery === 'queue' ? 'queued' : 'steered';
+    setRows((r) => [...r, {
+      id: stableId,
+      kind: 'user',
+      text: displayPrompt,
+      ts: nowTs,
+      ...(delivery !== 'immediate'
+        ? { delivery: { id: stableId, mode: delivery, state: deliveryState } }
+        : {}),
+    }]);
     if (!override) setDraft('');
     if (attached.length > 0) setAttachmentUploads((prev) => prev.filter((a) => !attached.some((sent) => sent.id === a.id)));
     if (imagesToSend.length > 0) setPastedImages([]);
     if (componentTags.length > 0) setComponentTags([]);
+    if (delivery !== 'immediate') {
+      window.brainrouter.send({
+        kind: 'start-turn',
+        prompt: finalPrompt,
+        delivery,
+        deliveryId: stableId,
+      });
+      return;
+    }
     setRunning(true);
     // DESK-5v — mark THIS session running so its spinner survives a switch away.
     setSessionRunning(sessionKeyRef.current ?? info.sessionKey ?? '', true);
@@ -177,6 +201,14 @@ export function useAppHandlers(ctx: AppHandlersCtx): AppHandlers {
       setTimeout(() => refreshSession(), 400);
     }
     window.brainrouter.send({ kind: 'start-turn', prompt: finalPrompt, ...(imagesToSend.length ? { images: imagesToSend } : {}) });
+  }
+
+  function submit(override?: string): void {
+    submitWithDelivery(override, 'immediate');
+  }
+
+  function submitDelivery(mode: 'queue' | 'steer'): void {
+    submitWithDelivery(undefined, mode);
   }
 
   // AI PR review — kick the agent to review a PR on an ISOLATED git worktree so
@@ -278,5 +310,5 @@ export function useAppHandlers(ctx: AppHandlersCtx): AppHandlers {
     if (viewKey && t) q('q-session-meta', 'action:session-meta', { sessionKey: viewKey, patch: { title: t } });
   };
 
-  return { submit, reviewPrWithAi, attachFiles, addPastedImages, renameCurrentSession };
+  return { submit, submitDelivery, reviewPrWithAi, attachFiles, addPastedImages, renameCurrentSession };
 }

@@ -29,7 +29,7 @@ import {
   type AgentImage,
   type InteractionResponse,
 } from '@kinqs/brainrouter-agent-protocol';
-import { subscribeCompletions, pendingCompletionCount, peekCompletions } from '@kinqs/brainrouter-core/session';
+import { InputQueue, subscribeCompletions, pendingCompletionCount, peekCompletions, type SteeringInput } from '@kinqs/brainrouter-core/session';
 import { buildChildResumePrompt } from '@kinqs/brainrouter-core/util';
 
 /**
@@ -44,6 +44,9 @@ export interface AgentLike {
   runTurn(prompt: string, callbacks: any, opts?: { hiddenPrompt?: boolean; images?: AgentImage[] }): Promise<string>;
   /** DESK-2 — cooperative stop; the turn unwinds at the next boundary. */
   requestInterrupt?(): void;
+  requestSteer?(text: string, options?: { id?: string; source?: SteeringInput['source'] }): SteeringInput;
+  consumePendingSteering?(): SteeringInput[];
+  readonly pendingSteeringCount?: number;
   // DESK-3 — session lifecycle + model control (all present on the real Agent).
   clearHistory?(): void;
   resetSessionCounters?(): void;
@@ -113,6 +116,7 @@ export interface HostCore {
 interface Runtime {
   agent: AgentLike;
   running: boolean;
+  queue: InputQueue;
   /**
    * DESK-6t — LAZY HISTORY: when a session is resumed for VIEWING, its full
    * transcript is NOT loaded into the agent (which is the expensive part — it
@@ -192,7 +196,7 @@ export function createHostCore(input: {
   // DESK-5v — the agent pool. Seeded with the initial agent; grows only with
   // sessions that are running or being viewed.
   const pool = new Map<string, Runtime>();
-  pool.set(input.agent.sessionKey, { agent: input.agent, running: false });
+  pool.set(input.agent.sessionKey, { agent: input.agent, running: false, queue: new InputQueue() });
   let activeKey = input.agent.sessionKey;
 
   // Control/status events (interrupt notices, model changes) belong to whatever
@@ -209,22 +213,31 @@ export function createHostCore(input: {
   // ONLY agent is busy is queued here and applied once its turn unwinds.
   let pendingSwitch: (() => void) | null = null;
 
-  async function startTurn(prompt: string, hidden?: boolean, images?: AgentImage[]): Promise<void> {
-    const rt = pool.get(activeKey);
-    if (!rt) { emit({ kind: 'turn-error', message: 'No active session to run in.' }); return; }
+  let deliverySequence = 0;
+  const nextDeliveryId = (): string => `delivery-${Date.now().toString(36)}-${++deliverySequence}`;
+
+  async function startTurnForKey(
+    key: string,
+    prompt: string,
+    hidden?: boolean,
+    images?: AgentImage[],
+    delivery?: { id: string; mode: 'queue' | 'steer'; source: SteeringInput['source'] },
+  ): Promise<void> {
+    const rt = pool.get(key);
+    if (!rt) { stamp(key, { kind: 'turn-error', message: 'No active session to run in.' }); return; }
     if (rt.running) {
-      emit({ kind: 'turn-error', message: 'A turn is already running in this session — interrupt it first or queue the prompt.' });
+      stamp(key, { kind: 'turn-error', message: 'A turn is already running in this session.' });
       return;
     }
     // Reserve the session before an async policy refresh so a second send cannot
     // race through validation and start another turn.
     rt.running = true;
     try {
-      const policyError = input.validateTurn ? await input.validateTurn(activeKey) : null;
-      if (policyError) { rt.running = false; emit({ kind: 'turn-error', message: policyError }); return; }
+      const policyError = input.validateTurn ? await input.validateTurn(key) : null;
+      if (policyError) { rt.running = false; stamp(key, { kind: 'turn-error', message: policyError }); return; }
     } catch (error) {
       rt.running = false;
-      emit({ kind: 'turn-error', message: error instanceof Error ? error.message : String(error) });
+      stamp(key, { kind: 'turn-error', message: error instanceof Error ? error.message : String(error) });
       return;
     }
     // DESK-6t — LAZY HISTORY lands here: if this session was resumed for viewing
@@ -247,27 +260,100 @@ export function createHostCore(input: {
       stamp(sk, event);
     };
     const turnCallbacks = createCallbackBridge(turnEmit) as unknown as Record<string, unknown>;
+    if (delivery) turnEmit({ kind: 'input-delivery', id: delivery.id, mode: delivery.mode, state: 'running', text: prompt, source: delivery.source });
     turnEmit({ kind: 'turn-start', prompt });
     try {
       const answer = await rt.agent.runTurn(prompt, turnCallbacks, { hiddenPrompt: hidden, images });
       turnEmit({ kind: 'turn-complete', answer });
+      if (delivery) turnEmit({ kind: 'input-delivery', id: delivery.id, mode: delivery.mode, state: 'completed', text: prompt, source: delivery.source });
       const u = rt.agent.sessionUsage;
       if (u) turnEmit({ kind: 'tokens-updated', promptTokens: u.promptTokens, completionTokens: u.completionTokens, calls: u.calls, turns: u.turns, cachedTokens: u.cachedTokens });
     } catch (err) {
       turnEmit({ kind: 'turn-error', message: err instanceof Error ? err.message : String(err) });
+      if (delivery) turnEmit({ kind: 'input-delivery', id: delivery.id, mode: delivery.mode, state: 'canceled', text: prompt, source: delivery.source });
     } finally {
       rt.running = false;
+      // A steer accepted during late turn-finalization missed the last model
+      // boundary. Convert it into a normal queued follow-up instead of losing it.
+      for (const pending of rt.agent.consumePendingSteering?.() ?? []) {
+        const queued = rt.queue.enqueue(pending.text, {
+          deliveryId: pending.id,
+          deliveryMode: 'steer',
+          deliverySource: pending.source,
+        });
+        turnEmit({
+          kind: 'input-delivery',
+          id: pending.id,
+          mode: 'steer',
+          state: 'queued',
+          text: pending.text,
+          position: queued.position,
+          source: pending.source,
+        });
+      }
+      const next = rt.queue.dequeue();
       // A finished BACKGROUND agent (not the one on screen) is disposable — its
       // result is persisted to the transcript and re-read on switch-back. Drop
       // it so the pool can't grow without bound. Only spawned agents are dropped;
       // the single shared agent of the no-factory path is never evicted.
-      if (sk !== activeKey && input.spawnAgent) pool.delete(sk);
+      if (sk !== activeKey && input.spawnAgent && !next) pool.delete(sk);
       // Single-agent path: a switch was deferred until this turn ended.
       if (pendingSwitch) { const fn = pendingSwitch; pendingSwitch = null; fn(); }
       // WS1 — a detached child/worker may have finished mid-turn; fold its result
       // in now (idle) instead of waiting for the user's next prompt.
       maybeScheduleResume();
+      if (next) {
+        setImmediate(() => {
+          void startTurnForKey(sk, next.text, false, undefined, {
+            id: next.deliveryId ?? nextDeliveryId(),
+            mode: next.deliveryMode ?? 'queue',
+            source: next.deliverySource ?? 'user',
+          });
+        });
+      }
     }
+  }
+
+  async function startTurn(prompt: string, hidden?: boolean, images?: AgentImage[]): Promise<void> {
+    await startTurnForKey(activeKey, prompt, hidden, images);
+  }
+
+  async function deliverInput(
+    prompt: string,
+    mode: 'immediate' | 'queue' | 'steer',
+    hidden?: boolean,
+    images?: AgentImage[],
+    requestedId?: string,
+  ): Promise<void> {
+    const key = activeKey;
+    const rt = pool.get(key);
+    if (!rt) { emit({ kind: 'turn-error', message: 'No active session to run in.' }); return; }
+    if (!rt.running) {
+      await startTurnForKey(key, prompt, hidden, images, mode === 'immediate'
+        ? undefined
+        : { id: requestedId?.trim() || nextDeliveryId(), mode, source: 'user' });
+      return;
+    }
+    const id = requestedId?.trim() || nextDeliveryId();
+    if (mode === 'queue') {
+      const queued = rt.queue.enqueue(prompt, {
+        deliveryId: id,
+        deliveryMode: 'queue',
+        deliverySource: 'user',
+      });
+      stamp(key, { kind: 'input-delivery', id, mode, state: 'queued', text: prompt, position: queued.position, source: 'user' });
+      return;
+    }
+    if (mode === 'steer') {
+      if (!rt.agent.requestSteer) {
+        stamp(key, { kind: 'turn-error', message: 'This agent runtime does not support steering.' });
+        return;
+      }
+      rt.agent.requestSteer(prompt, { id, source: 'user' });
+      stamp(key, { kind: 'input-delivery', id, mode, state: 'steered', text: prompt, source: 'user' });
+      return;
+    }
+    emit({ kind: 'turn-error', message: 'A turn is already running. Choose Queue or Steer.' });
   }
 
   // WS1 — auto-resume the active session when detached background work (a
@@ -303,7 +389,7 @@ export function createHostCore(input: {
   function acquireRuntime(): Runtime | null {
     const cur = pool.get(activeKey);
     if (cur && !cur.running) { pool.delete(activeKey); return cur; }
-    if (input.spawnAgent) return { agent: input.spawnAgent(activeKey), running: false };
+    if (input.spawnAgent) return { agent: input.spawnAgent(activeKey), running: false, queue: new InputQueue() };
     return null;
   }
 
@@ -401,7 +487,7 @@ export function createHostCore(input: {
     switch (cmd.kind) {
       case 'start-turn':
         cancelResume(); // a real user prompt preempts any queued auto-resume
-        await startTurn(cmd.prompt, cmd.hidden, cmd.images);
+        await deliverInput(cmd.prompt, cmd.delivery ?? 'immediate', cmd.hidden, cmd.images, cmd.deliveryId);
         return;
       case 'interrupt': {
         cancelResume(); // user stopped — never auto-resume on top of a stop

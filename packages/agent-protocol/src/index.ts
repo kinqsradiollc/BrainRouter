@@ -105,6 +105,15 @@ export type AgentEvent =
   | { kind: 'interaction-request'; request: InteractionRequest }
   | { kind: 'turn-complete'; answer: string }
   | { kind: 'turn-error'; message: string }
+  | {
+      kind: 'input-delivery';
+      id: string;
+      mode: 'queue' | 'steer';
+      state: 'queued' | 'steered' | 'applied' | 'running' | 'completed' | 'canceled';
+      text: string;
+      position?: number;
+      source?: 'user' | 'extension';
+    }
   | { kind: 'tokens-updated'; promptTokens: number; completionTokens: number; calls: number; turns: number; cachedTokens?: number }
   // LIVE per-LLM-call usage for the CURRENT turn (fires after each call, not just
   // at turn-end) so the UI's token counter ticks up live instead of snapshotting.
@@ -128,7 +137,7 @@ const EVENT_KINDS = new Set<string>([
   'child-complete', 'plan-update', 'compaction', 'memory', 'requirement-event',
   'artifact-event', 'annotation-event', 'provenance', 'task-event', 'approval-decision',
   'interaction-request', 'turn-complete', 'turn-error', 'tokens-updated', 'usage-live', 'session-changed', 'query-result',
-  'notice', 'files-changed',
+  'notice', 'files-changed', 'input-delivery',
 ]);
 
 /** Structural guard for a {@link BackgroundTaskEventView}. Pure. */
@@ -207,7 +216,14 @@ export interface ComputerUsePort {
 }
 
 export type AgentCommand =
-  | { kind: 'start-turn'; prompt: string; hidden?: boolean; images?: AgentImage[] }
+  | {
+      kind: 'start-turn';
+      prompt: string;
+      hidden?: boolean;
+      images?: AgentImage[];
+      delivery?: 'immediate' | 'queue' | 'steer';
+      deliveryId?: string;
+    }
   | { kind: 'interrupt' }
   | { kind: 'interaction-response'; id: string; response: InteractionResponse }
   | { kind: 'query'; id: string; name: string; args?: Record<string, unknown> }
@@ -330,6 +346,7 @@ export class InteractionBroker {
 export interface BridgedCallbacks {
   onStatusUpdate: (text: string) => void;
   onNotice: (notice: { level: 'info' | 'warn'; message: string }) => void;
+  onSteerApplied: (input: { id: string; text: string; source: 'user' | 'extension'; createdAt: number }) => void;
   onToolStart: (tool: string, args: Record<string, unknown>, callId?: string) => void;
   onToolEnd: (
     tool: string,
@@ -380,6 +397,14 @@ export function createCallbackBridge(emit: EmitEvent): BridgedCallbacks {
   return {
     onStatusUpdate: (text) => emit({ kind: 'status', text }),
     onNotice: (notice) => emit({ kind: 'notice', level: notice.level, message: notice.message }),
+    onSteerApplied: (input) => emit({
+      kind: 'input-delivery',
+      id: input.id,
+      mode: 'steer',
+      state: 'applied',
+      text: input.text,
+      source: input.source,
+    }),
     // LIVE token usage: forward the agent's per-call usage so the UI ticks up
     // during the turn (the session total still lands via tokens-updated at end).
     onUsageUpdate: (usage) => emit({ kind: 'usage-live', promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, calls: usage.calls, cachedTokens: usage.cachedTokens }),

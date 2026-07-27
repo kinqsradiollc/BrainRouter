@@ -829,6 +829,24 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       parentReviewPolicy: resolveActiveMode(this.workspaceRoot, this.sessionKey).reviewPolicy,
     });
 
+    const applyPendingSteering = (): number => {
+      const pending = this.consumePendingSteering();
+      for (const input of pending) {
+        const message = {
+          role: 'user',
+          content: input.text,
+          ...(input.source === 'extension' ? { name: 'extension' } : {}),
+        };
+        this.chatHistory.push(message);
+        this.recordTranscript(message);
+        callbacks.onSteerApplied?.(input);
+      }
+      if (pending.length > 0) {
+        callbacks.onStatusUpdate(`Applied ${pending.length} steering message${pending.length === 1 ? '' : 's'} at the next safe model boundary.`);
+      }
+      return pending.length;
+    };
+
     while (loopCount < maxLoops) {
       loopCount++;
       // INTERRUPT — cooperative stop before the next LLM call. The note lands
@@ -842,6 +860,10 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         callbacks.onStatusUpdate('Interrupted');
         return note;
       }
+      // Queue/Steer — user and extension events accepted while the turn was
+      // busy become real model input only between complete LLM/tool batches.
+      // This preserves the assistant.tool_calls -> tool-result invariant.
+      applyPendingSteering();
       // ADAPTIVE TOOL BUDGET checkpoint — the agent just completed a full budget
       // window without a final answer. Force it to self-assess (finish or keep
       // looping) instead of silently cutting off. Injected as a user turn so the
@@ -1423,6 +1445,10 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       }
 
       if (!response.toolCalls || response.toolCalls.length === 0) {
+        // A steer may have arrived while this LLM response was streaming. The
+        // assistant message is now durably recorded and has no unpaired tool
+        // calls, so this is the earliest safe boundary to continue with it.
+        if (applyPendingSteering() > 0) continue;
         const unobservedChildIds = [...spawnedChildIdsThisTurn].filter((id) => !waitedChildIdsThisTurn.has(id));
         // DESK-6 — a Stop skips the auto-drain (it bypasses both interrupt
         // seams); the loop-top check below returns the clean interrupted answer.

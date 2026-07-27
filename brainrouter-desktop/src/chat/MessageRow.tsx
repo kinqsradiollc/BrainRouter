@@ -18,6 +18,20 @@ import { ToolGroup } from './ToolGroup.js';
 import { ChangesetCard } from './ChangesetCard.js';
 import { ArtifactCard } from './ArtifactCard.js';
 
+function deliveryLabel(delivery: Extract<ChatRow, { kind: 'user' }>['delivery']): string {
+  if (!delivery) return '';
+  if (delivery.state === 'canceled') return 'Canceled';
+  if (delivery.mode === 'queue') {
+    if (delivery.state === 'queued') return delivery.position ? `Queued · ${delivery.position}` : 'Queued';
+    if (delivery.state === 'running') return 'Queue · running';
+    return 'Queue · delivered';
+  }
+  if (delivery.state === 'steered') return 'Steer · pending';
+  if (delivery.state === 'applied') return 'Steer · applied';
+  if (delivery.state === 'running') return 'Steer · follow-up';
+  return 'Steer · delivered';
+}
+
 export function MessageRow({ r, liveLast, inlineDiffs, onRequestDiff, onOpenFile, onOpenDiff, onOpenPlan, onOpenArtifact, onDismissError, onFork, onRewind }: {
   r: ChatRow;
   liveLast: boolean;
@@ -34,12 +48,22 @@ export function MessageRow({ r, liveLast, inlineDiffs, onRequestDiff, onOpenFile
   switch (r.kind) {
     case 'user': return (
       <div className="row user-row">
-        <div className="user">{r.text}</div>
+        <div className="user">
+          {r.text}
+          {r.delivery ? <span className={`delivery-badge ${r.delivery.mode} state-${r.delivery.state}`}>{deliveryLabel(r.delivery)}</span> : null}
+        </div>
         <span className="msg-actions">
           <button className="icon-btn" title="Copy" onClick={() => void navigator.clipboard.writeText(r.text)}><Icon name="copy" size={11} /></button>
           <button className="icon-btn" title="Rewind the conversation to here" onClick={() => onRewind(r.ts)}><Icon name="arrow-left" size={11} /></button>
           <span className="msg-time">{fmtRel(r.ts)}</span>
         </span>
+      </div>
+    );
+    case 'delivery': return (
+      <div className="row delivery-row">
+        <div className="delivery-source">Extension event</div>
+        <div className="delivery-copy">{r.text}</div>
+        <span className={`delivery-badge ${r.delivery.mode} state-${r.delivery.state}`}>{deliveryLabel(r.delivery)}</span>
       </div>
     );
     case 'assistant': {

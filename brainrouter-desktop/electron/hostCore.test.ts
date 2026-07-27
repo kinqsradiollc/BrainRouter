@@ -104,6 +104,80 @@ test('start-turn while running → turn-error (no concurrent turns)', async () =
   await first;
 });
 
+test('Queue accepts input during a turn and runs it FIFO after the turn settles', async () => {
+  const { out, send } = collect();
+  let releaseFirst!: () => void;
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const prompts: string[] = [];
+  let resolveSecond!: () => void;
+  const secondDone = new Promise<void>((resolve) => { resolveSecond = resolve; });
+  const agent: AgentLike = {
+    sessionKey: 'sess-queue',
+    runTurn: async (prompt) => {
+      prompts.push(prompt);
+      if (prompts.length === 1) await firstGate;
+      else resolveSecond();
+      return `done:${prompt}`;
+    },
+  };
+  const core = createHostCore({ agent, send });
+
+  const first = core.handle({ kind: 'start-turn', prompt: 'first' });
+  await core.handle({ kind: 'start-turn', prompt: 'second', delivery: 'queue', deliveryId: 'q1' });
+  const queued = out.find((message) => message.event.kind === 'input-delivery' && message.event.id === 'q1');
+  assert.ok(queued && queued.event.kind === 'input-delivery');
+  assert.equal(queued.event.state, 'queued');
+  assert.equal(queued.event.position, 1);
+
+  releaseFirst();
+  await first;
+  await secondDone;
+  assert.deepEqual(prompts, ['first', 'second']);
+  assert.ok(out.some((message) =>
+    message.event.kind === 'input-delivery'
+    && message.event.id === 'q1'
+    && message.event.state === 'running'));
+});
+
+test('Steer enters the running Agent and reports when the safe boundary applies it', async () => {
+  const { out, send } = collect();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let callbacks: Record<string, unknown> = {};
+  const pending: Array<{ id: string; text: string; source: 'user' | 'extension'; createdAt: number }> = [];
+  const agent: AgentLike = {
+    sessionKey: 'sess-steer',
+    runTurn: async (_prompt, cb) => {
+      callbacks = cb;
+      await gate;
+      const steering = pending.shift();
+      if (steering) (callbacks.onSteerApplied as (input: typeof steering) => void)(steering);
+      return 'done';
+    },
+    requestSteer: (text, options) => {
+      const steering = { id: options?.id ?? 'generated', text, source: options?.source ?? 'user', createdAt: Date.now() };
+      pending.push(steering);
+      return steering;
+    },
+    consumePendingSteering: () => pending.splice(0),
+    get pendingSteeringCount() { return pending.length; },
+  };
+  const core = createHostCore({ agent, send });
+
+  const first = core.handle({ kind: 'start-turn', prompt: 'first' });
+  await core.handle({ kind: 'start-turn', prompt: 'new direction', delivery: 'steer', deliveryId: 's1' });
+  assert.ok(out.some((message) =>
+    message.event.kind === 'input-delivery'
+    && message.event.id === 's1'
+    && message.event.state === 'steered'));
+  release();
+  await first;
+  assert.ok(out.some((message) =>
+    message.event.kind === 'input-delivery'
+    && message.event.id === 's1'
+    && message.event.state === 'applied'));
+});
+
 test('DESK-5q resume during a running turn is deferred until the turn unwinds', async () => {
   const { out, send } = collect();
   let release!: () => void;

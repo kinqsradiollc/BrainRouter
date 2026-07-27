@@ -220,6 +220,36 @@ export function createOnAgentEvent(deps: OnAgentEventDeps): (msg: AgentEventMess
         break;
       // §truncation — a persistent provider-truncation notice ("raise cli.maxOutputTokens").
       case 'notice': push({ id: rid(), kind: 'status', text: `${e.level === 'warn' ? '⚠ ' : ''}${e.message}`, ts: Date.now() }); break;
+      case 'input-delivery': {
+        setRows((current) => {
+          const index = current.findIndex((row) =>
+            (row.kind === 'user' || row.kind === 'delivery') && row.delivery?.id === e.id);
+          const delivery = {
+            id: e.id,
+            mode: e.mode,
+            state: e.state,
+            ...(e.position ? { position: e.position } : {}),
+          };
+          if (index >= 0) {
+            return current.map((row, rowIndex) =>
+              rowIndex === index && (row.kind === 'user' || row.kind === 'delivery')
+                ? { ...row, delivery }
+                : row);
+          }
+          if (e.source === 'extension') {
+            return [...current, {
+              id: e.id,
+              kind: 'delivery',
+              text: e.text,
+              source: 'extension',
+              delivery,
+              ts: Date.now(),
+            }];
+          }
+          return current;
+        });
+        break;
+      }
       case 'requirement-event':
         q('q-req', 'requirement-list');
         break;
