@@ -21,12 +21,15 @@ export async function requestCatalogSelection(
   initial: string[],
   badge: string,
   requireSelectable: boolean,
+  excludedIds: readonly string[] = [],
 ): Promise<string[] | null> {
   const kinds = new Set(Array.isArray(kind) ? kind : [kind]);
+  const excluded = new Set(excludedIds);
   const entries = catalog.entries.filter((entry) =>
     kinds.has(entry.kind)
     && entry.persistable
     && !(entry.kind === 'skill-pack' && entry.managedByCapability)
+    && !excluded.has(entry.id)
     && (!requireSelectable || entry.selectable));
   const result = await prompt({
     id,

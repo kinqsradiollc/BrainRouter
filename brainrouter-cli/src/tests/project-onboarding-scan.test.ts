@@ -213,6 +213,26 @@ test('cancelling proposal review writes nothing', async () => {
   }
 });
 
+test('skipping an assisted proposal discards it without writing workspace state', async () => {
+  const root = makeWorkspace();
+  try {
+    const result = await runProjectOnboardingScan(root, {
+      prompt: async (request) => {
+        assert.equal(request.id, 'start');
+        assert.ok(request.rows?.some((row) =>
+          row.id === 'skip' && row.label === 'Skip setup for now'));
+        return { kind: 'skip' };
+      },
+      print: () => undefined,
+    });
+    assert.equal(result.status, 'skipped');
+    assert.equal(fs.existsSync(workspaceManifestPath(root)), false);
+    assert.equal(fs.existsSync(path.join(root, 'AGENT.md')), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('accepted instruction diff commits AGENT.md with the reviewed manifest', async () => {
   const root = makeWorkspace();
   const output: string[] = [];

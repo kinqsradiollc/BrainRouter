@@ -350,20 +350,25 @@ export async function collectProjectOnboardingEdits(
     ? parsedMaxParallel
     : draft.orchestration.maxParallel;
   const capabilitiesEnabled = await requestCatalogSelection(
-    prompt, roleCatalog, 'capabilities-enabled', 'Available task capabilities', 'capability',
+    prompt, roleCatalog, 'capabilities-enabled', 'Optional capabilities', 'capability',
     draft.capabilities.enabled, 'Step 2 of 4 · capabilities', true,
   );
   if (!capabilitiesEnabled) return null;
   const capabilitiesDisabled = await requestCatalogSelection(
-    prompt, roleCatalog, 'capabilities-disabled', 'Disabled task capabilities', 'capability',
+    prompt, roleCatalog, 'capabilities-disabled', 'Disabled optional capabilities', 'capability',
     draft.capabilities.disabled, 'Step 2 of 4 · capabilities', true,
   );
   if (!capabilitiesDisabled) return null;
-  const skillPacks = await requestCatalogSelection(
-    prompt, catalog, 'skill-packs', 'Skill packs', 'skill-pack',
-    draft.skills.packs, 'Step 3 of 4 · skills', true,
+  const includedSkillPacks = WORKSPACE_PROFILES.find(
+    (profile) => profile.id === draft.profile,
+  )?.skills.packs ?? [];
+  const additionalSkillPacks = await requestCatalogSelection(
+    prompt, catalog, 'skill-packs', 'Additional skill packs', 'skill-pack',
+    draft.skills.packs.filter((id) => !includedSkillPacks.includes(id)),
+    'Step 3 of 4 · skills', true, includedSkillPacks,
   );
-  if (!skillPacks) return null;
+  if (!additionalSkillPacks) return null;
+  const skillPacks = [...new Set([...includedSkillPacks, ...additionalSkillPacks])];
   const skillsEnabled = await requestCatalogSelection(
     prompt, catalog, 'skills-enabled', 'Enabled individual skills', 'skill',
     draft.skills.enabled, 'Step 3 of 4 · skills', true,
