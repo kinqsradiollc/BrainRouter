@@ -1,7 +1,7 @@
 ---
 name: error-remediation-skill
 description: Turn a diagnosed learning error into the smallest corrective intervention, changed practice, and delayed re-check without shaming or answer leakage.
-allowed-tools: [read_file, grep_search, glob_files, research_note, write_file, edit_file]
+allowed-tools: [read_file, list_dir, grep_search, glob_files, research_note, artifact_write, write_file, edit_file]
 ---
 
 # Error remediation

@@ -1,7 +1,7 @@
 ---
 name: learning-assessment-skill
 description: Evaluate one objective against its declared mastery gate using observable, objective-type evidence and a deterministic advance-or-remediate decision.
-allowed-tools: [read_file, grep_search, glob_files, research_note, write_file, edit_file]
+allowed-tools: [read_file, list_dir, grep_search, glob_files, research_note, artifact_write, write_file, edit_file]
 ---
 
 # Learning assessment

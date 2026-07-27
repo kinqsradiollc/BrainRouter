@@ -1,7 +1,7 @@
 ---
 name: retrieval-practice-skill
 description: Schedule and run recall or transfer practice for previously taught objectives, with answer commitment, feedback, and spaced re-checks.
-allowed-tools: [read_file, grep_search, glob_files, research_note, write_file, edit_file]
+allowed-tools: [read_file, list_dir, grep_search, glob_files, research_note, artifact_write, write_file, edit_file]
 ---
 
 # Retrieval practice

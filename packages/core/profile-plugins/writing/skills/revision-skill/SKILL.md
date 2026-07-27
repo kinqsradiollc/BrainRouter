@@ -1,7 +1,7 @@
 ---
 name: revision-skill
 description: Revise writing in ordered passes for purpose, structure, evidence, clarity, voice, and final correctness.
-allowed-tools: [read_file, grep_search, glob_files, write_file, edit_file]
+allowed-tools: [read_file, list_dir, grep_search, glob_files, artifact_write, write_file, edit_file]
 ---
 
 # Revision
