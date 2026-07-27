@@ -781,6 +781,7 @@ export function BrowserPanel(): React.ReactElement {
       {permission && (
         <div className="browser-promptbar" role="alertdialog" aria-label="Site permission request">
           <Icon name="shield" size={14} /><span><b>{permission.origin}</b> wants permission to use <b>{permission.permission}</b>.</span>
+          {permission.permission === 'geolocation' && <span className="browser-prompt-note">Your choice is saved for this workspace and can be cleared by resetting the browser.</span>}
           <span className="browser-prompt-actions"><button className="chip" onClick={() => void respondPermission(false)}>Block</button><button className="br-go" onClick={() => void respondPermission(true)}>Allow</button></span>
         </div>
       )}
@@ -818,8 +819,8 @@ export function BrowserPanel(): React.ReactElement {
           {railBtn('play', recording ? `Recording (${recorded.length})` : 'Record a flow', recording, () => setRecording((value) => !value))}
           {railBtn('clock', 'Flows', drawer === 'flows', () => setDrawer('flows'))}
           <div className="br-rail-sep" />
-          {railBtn('trash', 'Reset browser — close every tab and clear cookies, cache & history', false, () => {
-            if (window.confirm('Reset the browser? This closes every tab and clears cookies, cache, and history.')) {
+          {railBtn('trash', 'Reset browser — close every tab and clear cookies, cache, history & saved site permissions', false, () => {
+            if (window.confirm('Reset the browser? This closes every tab and clears cookies, cache, history, and saved site permissions.')) {
               void runBrowser({ op: 'reset-browser' }).then(() => void refreshState()).catch((error) => setStatus(String(error)));
             }
           }, !browser)}

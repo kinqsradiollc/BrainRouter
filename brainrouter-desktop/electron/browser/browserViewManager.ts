@@ -80,7 +80,13 @@ type ViewRecord = {
 };
 
 type ClosedTab = { url: string; title: string };
-type PendingPermission = { id: string; tabId: BrowserTabId; callback: (allow: boolean) => void; timer: ReturnType<typeof setTimeout> };
+type PendingPermission = {
+  id: string;
+  tabId: BrowserTabId;
+  respond: (allow: boolean) => void;
+  cancel: () => void;
+  timer: ReturnType<typeof setTimeout>;
+};
 type DialogResponse = { accept: boolean; value?: string };
 type PendingDialog = {
   id: string;
@@ -88,7 +94,17 @@ type PendingDialog = {
   finish: (response: DialogResponse) => void;
   timer: ReturnType<typeof setTimeout>;
 };
-type PersistedTabs = { version: 1; activeIndex: number; tabs: Array<{ url: string }> };
+type PersistedPermissionDecision = {
+  origin: string;
+  permission: 'geolocation';
+  decision: 'allow' | 'block';
+};
+type PersistedTabs = {
+  version: 1;
+  activeIndex: number;
+  tabs: Array<{ url: string }>;
+  permissions?: PersistedPermissionDecision[];
+};
 type AgentNavigationPolicy = { allowedPrivateOrigin?: string };
 type StagedUpload = { directory: string; timer: ReturnType<typeof setTimeout> };
 type BrowserOperationGuard = () => void;
@@ -332,6 +348,7 @@ export class BrowserViewManager {
   private pendingPermission: PendingPermission | null = null;
   private pendingDialog: PendingDialog | null = null;
   private readonly permissionGrants = new Set<string>();
+  private readonly permissionDecisions = new Map<string, PersistedPermissionDecision['decision']>();
   private visibleAgentPin: {
     tabId: BrowserTabId;
     deferredSelection?: BrowserTabId;
@@ -649,22 +666,35 @@ export class BrowserViewManager {
     if (!tab || grants.length === 0) { callback(false); return; }
     let origin = '';
     try { origin = new URL(rawOrigin || tab.url).origin; } catch { origin = rawOrigin || tab.url; }
+    const decisionKey = `${origin}\n${permission}`;
+    const savedDecision = permission === 'geolocation' ? this.permissionDecisions.get(decisionKey) : undefined;
+    if (savedDecision) { callback(savedDecision === 'allow'); return; }
     if (this.hasPermission(origin, grants)) { callback(true); return; }
     if (this.pendingPermission) {
       clearTimeout(this.pendingPermission.timer);
-      this.pendingPermission.callback(false);
+      this.pendingPermission.cancel();
     }
     const id = `permission_${++this.permissionSequence}`;
-    const finish = (allow: boolean): void => {
+    const finish = (allow: boolean, remember: boolean): void => {
       if (allow) for (const grant of grants) this.permissionGrants.add(`${origin}\n${grant}`);
+      if (remember && permission === 'geolocation') {
+        this.permissionDecisions.set(decisionKey, allow ? 'allow' : 'block');
+        this.persistWorkspace();
+      }
       callback(allow);
       if (this.pendingPermission?.id === id) this.pendingPermission = null;
       this.permissionPrompt = null;
       this.emit({ type: 'permission', prompt: null });
       this.emitState();
     };
-    const timer = setTimeout(() => finish(false), PERMISSION_TIMEOUT_MS);
-    this.pendingPermission = { id, tabId: tab.id, callback: finish, timer };
+    const timer = setTimeout(() => finish(false, false), PERMISSION_TIMEOUT_MS);
+    this.pendingPermission = {
+      id,
+      tabId: tab.id,
+      respond: (allow) => finish(allow, true),
+      cancel: () => finish(false, false),
+      timer,
+    };
     this.permissionPrompt = { id, tabId: tab.id, origin: boundBrowserText(origin, 512), permission: boundBrowserText(permission, 128) };
     this.selectTab(tab.id);
     this.emit({ type: 'permission', prompt: this.permissionPrompt });
@@ -677,7 +707,7 @@ export class BrowserViewManager {
     this.disposed = true;
     if (this.pendingPermission) {
       clearTimeout(this.pendingPermission.timer);
-      this.pendingPermission.callback(false);
+      this.pendingPermission.cancel();
       this.pendingPermission = null;
     }
     this.cancelPendingDialog();
@@ -1479,7 +1509,7 @@ export class BrowserViewManager {
 
   private respondPermission(id: string, allow: boolean): { ok: true } {
     if (!this.pendingPermission || this.pendingPermission.id !== id) throw new BrowserManagerError('INVALID_REQUEST', 'Permission prompt is no longer active.');
-    const pending = this.pendingPermission; this.pendingPermission = null; clearTimeout(pending.timer); pending.callback(allow); return { ok: true };
+    const pending = this.pendingPermission; this.pendingPermission = null; clearTimeout(pending.timer); pending.respond(allow); return { ok: true };
   }
 
   private presentDialog(
@@ -1549,7 +1579,10 @@ export class BrowserViewManager {
   private async resetBrowser(): Promise<{ ok: true }> {
     for (const tab of [...this.tabs]) { try { this.closeTab(tab.id); } catch { /* best effort */ } }
     await this.clearData(['cache', 'cookies', 'storage', 'history']);
+    this.permissionGrants.clear();
+    this.permissionDecisions.clear();
     if (this.tabs.length === 0) this.createTab(BROWSER_BLANK_URL, true);
+    this.persistWorkspace();
     this.emitState();
     return { ok: true };
   }
@@ -1885,6 +1918,21 @@ export class BrowserViewManager {
       const raw = typeof row.url === 'string' && !row.url.startsWith('data:') ? row.url : BROWSER_BLANK_URL;
       try { this.createTab(raw, false); } catch { /* skip unsafe/stale row */ }
     }
+    const decisions = persisted?.version === 1 && Array.isArray(persisted.permissions)
+      ? persisted.permissions.slice(0, 200)
+      : [];
+    for (const row of decisions) {
+      if (row?.permission !== 'geolocation' || (row.decision !== 'allow' && row.decision !== 'block')) continue;
+      let origin = '';
+      try {
+        const parsed = new URL(row.origin);
+        if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') continue;
+        origin = parsed.origin;
+      } catch { continue; }
+      const key = `${origin}\ngeolocation`;
+      this.permissionDecisions.set(key, row.decision);
+      if (row.decision === 'allow') this.permissionGrants.add(key);
+    }
     if (this.tabs.length > 0) this.selectTab(this.tabs[Math.max(0, Math.min(this.tabs.length - 1, Math.floor(persisted?.activeIndex ?? 0)))].id);
   }
 
@@ -1894,6 +1942,11 @@ export class BrowserViewManager {
       version: 1,
       activeIndex: Math.max(0, this.tabs.findIndex((tab) => tab.id === this.activeTabId)),
       tabs: this.tabs.map((tab) => ({ url: persistableBrowserUrl(tab.url) })),
+      permissions: [...this.permissionDecisions.entries()].slice(-200).map(([key, decision]) => ({
+        origin: key.slice(0, key.lastIndexOf('\n')),
+        permission: 'geolocation',
+        decision,
+      })),
     };
     try {
       const file = this.persistencePath(); fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -1908,7 +1961,7 @@ export class BrowserViewManager {
       const pending = this.pendingPermission;
       this.pendingPermission = null;
       clearTimeout(pending.timer);
-      pending.callback(false);
+      pending.cancel();
     }
     try { this.win.contentView.removeChildView(record.view); } catch { /* detached */ }
     if (this.attachedViewId === id) this.attachedViewId = null;
