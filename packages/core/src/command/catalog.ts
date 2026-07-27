@@ -18,7 +18,7 @@ export const SLASH_COMMANDS = [
   '/tokens', '/usage', '/context', '/watch', '/yolo', '/mode', '/review-policy', '/sandbox', '/kill',
   // workflow & ergonomics commands
   '/theme', '/title', '/personality', '/effort', '/tier', '/new', '/side', '/btw', '/raw',
-  '/feedback', '/rollout', '/ps', '/fg', '/stop', '/queue', '/logout', '/apps', '/plugin', '/plugins', '/marketplace',
+  '/feedback', '/rollout', '/ps', '/fg', '/stop', '/queue', '/steer', '/logout', '/apps', '/plugin', '/plugins', '/marketplace',
   '/experimental', '/memories', '/debug-config', '/mention', '/keymap', '/ide',
 ] as const;
 
@@ -160,6 +160,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/fg <id>', desc: 'Bring a background worker/child agent to the foreground (snapshot of status + transcript)' },
       { cmd: '/stop [id]', desc: 'Stop a specific worker/child by id, or (no id) stop the loop + mark stale children' },
       { cmd: '/queue [remove <n>|clear]', desc: 'View / manage messages you typed while a turn was running (they run next, in order)' },
+      { cmd: '/steer <message>', desc: 'Apply a message to the active turn at its next safe model boundary' },
     ],
   },
   {

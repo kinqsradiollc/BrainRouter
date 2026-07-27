@@ -112,6 +112,7 @@ export interface MainContentProps {
   setDraft: CP['setDraft'];
   stopping: boolean;
   submit: CP['submit'];
+  submitDelivery: CP['submitDelivery'];
   requestStop: () => void;
   slashActive: CP['slashActive'];
   slashMatches: CP['slashMatches'];
@@ -183,7 +184,7 @@ export function MainContent(p: MainContentProps): React.ReactElement {
     setWorkflowView, renderRow, homeStats, statsTab, setStatsTab, statsRange, setStatsRange, snapshot, sessions,
     viewKey, renameCurrentSession, resumeSession, forkParent, transcriptEls, liveText, goalState, runBridge, q,
     running, turnStart, reasoningTail, statusLine, interaction, answerInteraction, chatEnd, atBottom, hasConversation,
-    ensurePanel, draft, setDraft, stopping, submit, requestStop, slashActive, slashMatches, commands, slashSel,
+    ensurePanel, draft, setDraft, stopping, submit, submitDelivery, requestStop, slashActive, slashMatches, commands, slashSel,
     setSlashSel, setSlashDismissed, runSlash, pop, setPop, modeLabel, effort, branches, endpointModels,
     defaultProviderModels, routerCatalog, routerFallback, modelsLoading, setModelsLoading, modelChoices, modelScope, setModelScope, contextUsage,
     tokens, openSettings, attachFiles, attachmentUploads, canSubmit, setAttachmentUploads, pastedImages,
@@ -254,7 +255,7 @@ export function MainContent(p: MainContentProps): React.ReactElement {
               </div>
             ) : null}
             <Composer
-              draft={draft} setDraft={setDraft} running={running} stopping={stopping} submit={submit}
+              draft={draft} setDraft={setDraft} running={running} stopping={stopping} submit={submit} submitDelivery={submitDelivery}
               // WS7 — the chat Stop button also pauses an active goal, so an
               // interrupt doesn't leave the goal "active" and silently auto-resume.
               requestStop={() => { requestStop(); if (goalState?.status === 'active') runBridge('goal', 'pause'); }}

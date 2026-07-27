@@ -29,6 +29,7 @@ export interface ComposerProps {
   running: boolean;
   stopping: boolean;
   submit: () => void;
+  submitDelivery: (mode: 'queue' | 'steer') => void;
   requestStop: () => void;
   slashActive: boolean;
   slashMatches: DeskCommand[];
@@ -118,7 +119,7 @@ const CHANGE_POLICIES = [
 
 export function Composer(p: ComposerProps): React.ReactElement {
   const {
-    draft, setDraft, running, stopping, submit, requestStop, slashActive, slashMatches, commands,
+    draft, setDraft, running, stopping, submit, submitDelivery, requestStop, slashActive, slashMatches, commands,
     slashSel, setSlashSel, setSlashDismissed, onRunSlash, pop, setPop, q, modeLabel, effort,
     info, branches, endpointModels, allowedModels, connectedProviders, accountModels, defaultProviderName, routerCatalog, routerFallback, modelsLoading, setModelsLoading, modelChoices, modelScope, setModelScope,
     hasConversation, contextUsage, tokens, openSettings, onAttach, attachments = [], onClearAttachment, canSubmit = false,
@@ -132,6 +133,8 @@ export function Composer(p: ComposerProps): React.ReactElement {
   const mirrorRef = React.useRef<HTMLDivElement | null>(null);
   const modelMenuRef = React.useRef<HTMLDivElement | null>(null);
   const [dragOver, setDragOver] = React.useState(false);
+  const [deliveryMode, setDeliveryMode] = React.useState<'queue' | 'steer'>('queue');
+  const [deliveryMenuOpen, setDeliveryMenuOpen] = React.useState(false);
   // §5.7 — @-mention: workspace file picker. Self-contained (independent of the
   // slash system); fetched once, recomputed from the caret on each keystroke.
   const [mentionFiles, setMentionFiles] = React.useState<string[]>([]);
@@ -373,7 +376,11 @@ export function Composer(p: ComposerProps): React.ReactElement {
                 if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); onRunSlash(slashMatches[Math.min(slashSel, slashMatches.length - 1)]); return; }
                 if (e.key === 'Escape') { e.preventDefault(); setSlashDismissed(true); return; }
               }
-              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                if (running) submitDelivery(deliveryMode);
+                else submit();
+              }
               if (e.key === 'Escape' && running) requestStop();
             }}
           />
@@ -388,9 +395,36 @@ export function Composer(p: ComposerProps): React.ReactElement {
             </button>
           </>
         ) : null}
-        <button className={`input-send icon-btn${running ? ' stop-red' : ''}${stopping ? ' stopping' : ''}`} title={stopping ? 'Stopping…' : running ? 'Stop' : 'Send'}
-          onClick={() => running ? requestStop() : submit()}
-          disabled={(!running && !draft.trim() && !canSubmit && pastedImages.length === 0) || stopping}>{running ? <Icon name="stop" size={14} /> : <Icon name="arrow-up" size={14} />}</button>
+        {running ? (
+          <span className="delivery-picker pop-wrap">
+            {deliveryMenuOpen ? (
+              <div className="menu-pop delivery-menu" role="menu" aria-label="Send while agent is working">
+                <button type="button" className="menu-item" onClick={() => { setDeliveryMode('queue'); setDeliveryMenuOpen(false); }}>
+                  <span className="mi-check">{deliveryMode === 'queue' ? '✓' : ''}</span>
+                  <span>Queue<span className="choice-detail">Run after the current turn</span></span>
+                </button>
+                <button type="button" className="menu-item" onClick={() => { setDeliveryMode('steer'); setDeliveryMenuOpen(false); }}>
+                  <span className="mi-check">{deliveryMode === 'steer' ? '✓' : ''}</span>
+                  <span>Steer<span className="choice-detail">Apply at the next safe model boundary</span></span>
+                </button>
+              </div>
+            ) : null}
+            <button type="button" className="delivery-mode-btn" onClick={() => setDeliveryMenuOpen((open) => !open)}
+              title={`Messages will ${deliveryMode === 'queue' ? 'run after this turn' : 'steer the active turn'}`}>
+              {deliveryMode === 'queue' ? 'Queue' : 'Steer'} <Icon name="chev-down" size={9} />
+            </button>
+          </span>
+        ) : null}
+        <button className={`input-send icon-btn${stopping ? ' stopping' : ''}`}
+          title={running ? `${deliveryMode === 'queue' ? 'Queue' : 'Steer'} message` : 'Send'}
+          onClick={() => running ? submitDelivery(deliveryMode) : submit()}
+          disabled={(!draft.trim() && !canSubmit && pastedImages.length === 0) || stopping}><Icon name="arrow-up" size={14} /></button>
+        {running ? (
+          <button type="button" className={`input-stop icon-btn stop-red${stopping ? ' stopping' : ''}`}
+            title={stopping ? 'Stopping…' : 'Stop'} onClick={requestStop} disabled={stopping}>
+            <Icon name="stop" size={13} />
+          </button>
+        ) : null}
         <div className="composer-controls">
           <span className="pop-wrap composer-policy">
             {pop === 'mode' ? (

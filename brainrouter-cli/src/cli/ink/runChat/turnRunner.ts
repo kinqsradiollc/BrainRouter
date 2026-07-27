@@ -129,6 +129,9 @@ export function installTurnRunner(ctx: RunChatContext): void {
     try {
       const answer = await agent.runTurn(expanded, {
         onStatusUpdate: tickStatus,
+        onSteerApplied: (input) => {
+          controller!.push.notice(`Steer applied · ${input.text.replace(/\s+/g, ' ').slice(0, 100)}`, 'info');
+        },
         // TIER A live streaming hooks. The agent calls these as SSE
         // frames arrive so the chat shows text character-by-character.
         // assistantDeltaEnd() clears the transient

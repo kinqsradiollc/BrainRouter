@@ -104,6 +104,8 @@ test('createEnvelopeWriter: stamps monotonic seq + ts + sessionKey', () => {
 
 test('guards: accept valid, reject malformed', () => {
   assert.equal(isAgentCommand({ kind: 'start-turn', prompt: 'hi' }), true);
+  assert.equal(isAgentCommand({ kind: 'start-turn', prompt: 'later', delivery: 'queue', deliveryId: 'd1' }), true);
+  assert.equal(isAgentCommand({ kind: 'start-turn', prompt: 'change direction', delivery: 'steer', deliveryId: 'd2' }), true);
   // start-turn carries optional inline images for vision-capable models.
   assert.equal(isAgentCommand({ kind: 'start-turn', prompt: 'see this', images: [{ mediaType: 'image/png', dataBase64: 'AAAA' }] }), true);
   assert.equal(isAgentCommand({ kind: 'interrupt' }), true);

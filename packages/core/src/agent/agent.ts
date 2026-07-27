@@ -15,6 +15,7 @@ import { getCliKnobs, isRemoteBrainUrl } from '../config/config.js';
 import type { ComputerUsePort } from '@kinqs/brainrouter-agent-protocol';
 import { browserUseAvailableFor, type BrowserControlPort } from '../browser/control.js';
 import { appendTranscriptEntry, isInternalSessionKey, redactText, readTranscriptEntries } from '../session/transcript/sessionStore.js';
+import type { SteeringInput } from '../session/input/inputDelivery.js';
 import { recordFileMutation } from '../storage/fileSnapshotStore.js';
 import { isConnectivityError, isRetryableServerError } from '../storage/checkpointStore.js';
 import { reconnectBackoffMs, probeConnectivity, parseRetryAfterMs } from '../mcp/reconnect/reconnect.js';
@@ -292,6 +293,9 @@ export interface RunTurnCallbacks {
    * cli.maxOutputTokens". The REPL/host render it as a durable row.
    */
   onNotice?: (notice: { level: 'info' | 'warn'; message: string }) => void;
+  /** Fired when an input accepted during a running turn reaches the next safe
+   * model boundary and is appended as a real user message. */
+  onSteerApplied?: (input: SteeringInput) => void;
   // POLISH-1 (0.4.13) — `callId` (the LLM tool_call id) lets the REPL pair each
   // result with its OWN start row; parallel same-name calls no longer collide on a
   // name-keyed map. Optional → existing callers are unaffected.
@@ -650,6 +654,9 @@ export class Agent {
   public workspaceRoot: string;
   public launchCwd: string;
   public chatHistory: any[] = [];
+  /** Inputs accepted while a turn is running. Consumed only at model-safe
+   * boundaries, never between assistant tool calls and their results. */
+  private pendingSteering: SteeringInput[] = [];
   /** MAS-P5-T2: per-session cache of full tool results, keyed by resultRef. */
   // MEM-22 — retention is configurable via cli.offloadRetentionMs / cli.offloadMaxEntries.
   public readonly resultCache = new ResultCache(getCliKnobs().offloadRetentionMs, getCliKnobs().offloadMaxEntries);
@@ -1331,6 +1338,33 @@ export class Agent {
 
   public requestInterrupt(): void {
     return requestInterruptImpl.call(this);
+  }
+
+  public requestSteer(
+    text: string,
+    options: { id?: string; source?: SteeringInput['source'] } = {},
+  ): SteeringInput {
+    const normalized = text.trim();
+    if (!normalized) throw new Error('Steering input cannot be empty.');
+    if (normalized.length > 20_000) throw new Error('Steering input exceeds 20000 characters.');
+    const input: SteeringInput = {
+      id: options.id?.trim() || randomUUID(),
+      text: normalized,
+      source: options.source ?? 'user',
+      createdAt: Date.now(),
+    };
+    this.pendingSteering.push(input);
+    return { ...input };
+  }
+
+  public consumePendingSteering(): SteeringInput[] {
+    const pending = this.pendingSteering;
+    this.pendingSteering = [];
+    return pending.map((input) => ({ ...input }));
+  }
+
+  public get pendingSteeringCount(): number {
+    return this.pendingSteering.length;
   }
 
   public setModel(model: string): void {

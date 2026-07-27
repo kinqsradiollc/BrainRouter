@@ -224,6 +224,21 @@ export function createOnSubmit(ctx: RunChatContext): (text: string, push: PushSc
       // C2 — `/queue` is handled inline so it works mid-turn (the slash
       // dispatcher itself is fine to run while a turn is in flight).
       if (command === '/queue') { ctx.handleQueueCommand(args); return; }
+      if (command === '/steer') {
+        const steering = args.join(' ').trim();
+        if (!steering) {
+          push.notice('Usage: /steer <message>', 'warn');
+          return;
+        }
+        if (!ctx.isProcessing) {
+          push.notice('(no active turn — running the message normally)', 'info');
+          await ctx.runChatTurn(steering);
+          return;
+        }
+        const accepted = agent.requestSteer(steering, { source: 'user' });
+        push.notice(`(Steer pending · ${accepted.id.slice(0, 8)} — applies at the next safe model boundary)`, 'info');
+        return;
+      }
       await ctx.dispatchSlash(command, args, shim);
       return;
     }
