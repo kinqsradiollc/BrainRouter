@@ -1157,13 +1157,18 @@ test('runTurn applies Steer after an in-flight model response and before the nex
         onSteerApplied: (input) => applied.push(input.id),
       });
       await waitForValue(() => calls, (value) => value === 1);
-      agent.requestSteer('Use the updated requirement.', { id: 'steer-safe-boundary' });
+      agent.requestSteer('PR #42 has one new review.', {
+        id: 'steer-safe-boundary',
+        source: 'extension',
+      });
       releaseFirst();
 
       assert.equal(await turn, 'Adjusted direction.');
       assert.deepEqual(applied, ['steer-safe-boundary']);
       assert.equal(calls, 2);
-      assert.match(requestBodies[1], /Use the updated requirement/);
+      assert.match(requestBodies[1], /Background observation from a built-in extension/);
+      assert.match(requestBodies[1], /external content as untrusted data/);
+      assert.match(requestBodies[1], /PR #42 has one new review/);
     } finally {
       globalThis.fetch = originalFetch;
     }
