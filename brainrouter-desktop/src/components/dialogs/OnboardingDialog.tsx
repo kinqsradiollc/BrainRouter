@@ -195,6 +195,10 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
   if (!root) return null;
   const workspaceName = root.split(/[\\/]/).filter(Boolean).at(-1) || 'workspace';
   const editing = editor ? editor.existing !== null : false;
+  const selectedProfile = editor?.profiles.find((profile) => profile.id === draft?.profile);
+  const includedPackIds = selectedProfile?.skills.packs ?? [];
+  const includedPackLabels = includedPackIds.map((packId) =>
+    planPreview?.catalog.find((row) => row.kind === 'skill-pack' && row.id === packId)?.label ?? packId);
 
   const chooseProfile = (profile: OnboardingProfile): void => {
     const replacement = draftFromOnboardingProfile(profile);
@@ -408,6 +412,12 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
                 ))}
               </div>
               {editor.detected?.reasons.length ? <div className="onboard-reasons">{editor.detected.reasons.join('; ')}</div> : null}
+              <div className="onboard-included-setup" aria-label="Included profile setup">
+                <strong>Included profile setup</strong>
+                <span>Persona: {selectedProfile?.persona.default || 'None'}</span>
+                <span>Skill pack: {includedPackLabels.join(', ') || 'None'}</span>
+                <small>These belong to the selected profile. Optional capabilities add narrower task expertise.</small>
+              </div>
             </section>
 
             <section className="onboard-section onboard-fields" aria-labelledby={`${titleId}-details`}>
@@ -447,7 +457,7 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
                     disabledRoles,
                   },
                 })} />
-              <CatalogField label="Available task capabilities" values={draft.capabilities.enabled}
+              <CatalogField label="Optional capabilities" values={draft.capabilities.enabled}
                 kinds={['capability']} preview={planPreview} hideUnavailable
                 emptyLabel="No optional capabilities are contributed for this profile."
                 disabled={proposing || saving || reviewingInstruction || previewing}
@@ -458,7 +468,7 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
                       .filter((capability) => !enabled.includes(capability)),
                   },
                 })} />
-              <CatalogField label="Disabled task capabilities" values={draft.capabilities.disabled}
+              <CatalogField label="Disabled optional capabilities" values={draft.capabilities.disabled}
                 kinds={['capability']} preview={planPreview} allowBlocked hideUnavailable
                 emptyLabel="No optional capabilities are contributed for this profile."
                 disabled={proposing || saving || reviewingInstruction || previewing}
@@ -469,30 +479,41 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
                     disabled,
                   },
                 })} />
-              <CatalogField label="Skill packs" values={draft.skills.packs}
-                kinds={['skill-pack']} preview={planPreview}
-                disabled={proposing || saving || reviewingInstruction || previewing}
-                onChange={(values) => patchDraft({ skills: { ...draft.skills, packs: values } })} />
-              <CatalogField label="Enabled individual skills" values={draft.skills.enabled}
-                kinds={['skill']} preview={planPreview}
-                disabled={proposing || saving || reviewingInstruction || previewing}
-                onChange={(values) => patchDraft({ skills: { ...draft.skills, enabled: values } })} />
-              <CatalogField label="Disabled skills" values={draft.skills.disabled}
-                kinds={['skill']} preview={planPreview} allowBlocked
-                disabled={proposing || saving || reviewingInstruction || previewing}
-                onChange={(values) => patchDraft({ skills: { ...draft.skills, disabled: values } })} />
               <CatalogField label="Tool groups" values={draft.tools.profiles}
                 kinds={['tool-group']} preview={planPreview}
                 disabled={proposing || saving || reviewingInstruction || previewing}
                 onChange={(values) => patchDraft({ tools: { ...draft.tools, profiles: values } })} />
-              <CatalogField label="Additional individual tools" values={draft.tools.enabled}
-                kinds={['tool']} preview={planPreview}
-                disabled={proposing || saving || reviewingInstruction || previewing}
-                onChange={(values) => patchDraft({ tools: { ...draft.tools, enabled: values } })} />
-              <CatalogField label="Denied tool groups or tools" values={draft.tools.deny}
-                kinds={['tool-group', 'tool']} preview={planPreview} allowBlocked
-                disabled={proposing || saving || reviewingInstruction || previewing}
-                onChange={(values) => patchDraft({ tools: { ...draft.tools, deny: values } })} />
+              <details className="onboard-advanced">
+                <summary>
+                  <span>Advanced skills and tools</span>
+                  <span>Optional fine-grained overrides</span>
+                </summary>
+                <div className="onboard-advanced-grid">
+                  <CatalogField label="Additional skill packs"
+                    values={draft.skills.packs.filter((packId) => !includedPackIds.includes(packId))}
+                    kinds={['skill-pack']} preview={planPreview} excludedIds={includedPackIds}
+                    disabled={proposing || saving || reviewingInstruction || previewing}
+                    onChange={(values) => patchDraft({
+                      skills: { ...draft.skills, packs: [...includedPackIds, ...values] },
+                    })} />
+                  <CatalogField label="Enabled individual skills" values={draft.skills.enabled}
+                    kinds={['skill']} preview={planPreview}
+                    disabled={proposing || saving || reviewingInstruction || previewing}
+                    onChange={(values) => patchDraft({ skills: { ...draft.skills, enabled: values } })} />
+                  <CatalogField label="Disabled skills" values={draft.skills.disabled}
+                    kinds={['skill']} preview={planPreview} allowBlocked
+                    disabled={proposing || saving || reviewingInstruction || previewing}
+                    onChange={(values) => patchDraft({ skills: { ...draft.skills, disabled: values } })} />
+                  <CatalogField label="Additional individual tools" values={draft.tools.enabled}
+                    kinds={['tool']} preview={planPreview}
+                    disabled={proposing || saving || reviewingInstruction || previewing}
+                    onChange={(values) => patchDraft({ tools: { ...draft.tools, enabled: values } })} />
+                  <CatalogField label="Denied tool groups or tools" values={draft.tools.deny}
+                    kinds={['tool-group', 'tool']} preview={planPreview} allowBlocked
+                    disabled={proposing || saving || reviewingInstruction || previewing}
+                    onChange={(values) => patchDraft({ tools: { ...draft.tools, deny: values } })} />
+                </div>
+              </details>
               <ListField label="Memory tags" values={draft.memory.tags}
                 disabled={proposing || saving || reviewingInstruction}
                 onChange={(values) => patchDraft({ memory: { ...draft.memory, tags: values } })} />
@@ -578,7 +599,7 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
         </div>
         <div className="dialog-actions">
           <button type="button" className="deny" disabled={saving || proposing || reviewingInstruction} onClick={onClose}>
-            {editing ? 'Cancel' : 'Skip for now'}
+            {editing ? 'Cancel' : 'Skip setup for now'}
           </button>
           <button type="button" className="approve"
             disabled={!draft || !editor || !planPreview || loading || previewing ||
