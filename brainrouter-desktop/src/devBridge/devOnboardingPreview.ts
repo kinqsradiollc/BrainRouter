@@ -66,6 +66,12 @@ const DEV_CAPABILITIES = [
       'interactive-browser',
     ],
   },
+  {
+    id: 'programming-lab',
+    label: 'Programming lab',
+    description: 'Task-time coding exercises, executable feedback, progressive hints, debugging, and tests.',
+    expandsTo: ['programming-lab-skill', 'coding', 'shell', 'artifacts'],
+  },
 ] as const;
 const DEV_TOOL_GROUPS = [
   {

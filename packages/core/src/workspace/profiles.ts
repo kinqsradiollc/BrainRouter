@@ -165,7 +165,11 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
       maxParallel: 2,
     },
     agents: { default: 'tutor', enabled: ['tutor'] },
-    capabilities: { available: [], recommended: [], enabled: [] },
+    capabilities: {
+      available: ['programming-lab'],
+      recommended: [],
+      enabled: [],
+    },
     skills: { packs: ['study'], enabled: ['planning-skill', 'handover-skill'] },
     tools: {
       profiles: [
@@ -216,6 +220,7 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
         'academic-paper',
         'computational-research',
         'data-visualization',
+        'programming-lab',
       ],
       recommended: [],
       enabled: [],

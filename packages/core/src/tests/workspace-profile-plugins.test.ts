@@ -38,7 +38,7 @@ test('C2 package-owned profile plugins use the standard versioned plugin contrac
   const catalog = inspectWorkspaceProfilePlugins();
   const expectedVersions = new Map([
     ['research', '2.4.0'],
-    ['study', '2.3.0'],
+    ['study', '2.4.0'],
     ['data', '2.2.0'],
     ['writing', '2.2.0'],
     ['frontend', '1.1.0'],
@@ -46,6 +46,7 @@ test('C2 package-owned profile plugins use the standard versioned plugin contrac
     ['academic-paper', '2.4.0'],
     ['computational-research', '2.2.0'],
     ['data-visualization', '2.2.0'],
+    ['programming-lab', '2.4.0'],
   ]);
 
   assert.deepEqual(catalog.unavailable, []);
@@ -54,6 +55,7 @@ test('C2 package-owned profile plugins use the standard versioned plugin contrac
     [
       'study', 'research', 'data', 'writing', 'frontend', 'backend',
       'academic-paper', 'computational-research', 'data-visualization',
+      'programming-lab',
     ],
   );
   for (const plugin of catalog.available) {
@@ -159,7 +161,7 @@ test('study profile exposes separate task-selectable tutoring workflows', () => 
 
   assert.ok(study);
   assert.equal(study.kind, 'profile');
-  assert.equal(study.version, '2.3.0');
+  assert.equal(study.version, '2.4.0');
   assert.deepEqual(study.skillIds, [
     'learner-diagnostic-skill',
     'learning-plan-skill',
@@ -285,6 +287,36 @@ test('data-visualization capability owns a bounded Data Science visualization wo
   assert.equal(tools.has('fetch_url'), false);
 });
 
+test('programming-lab capability owns a bounded executable tutoring workflow', () => {
+  const lab = findWorkspaceProfilePlugin('programming-lab');
+
+  assert.ok(lab);
+  assert.equal(lab.kind, 'capability');
+  assert.equal(lab.pluginName, 'profile-study');
+  assert.equal(lab.version, '2.4.0');
+  assert.deepEqual(lab.skillIds, ['programming-lab-skill']);
+  assert.deepEqual(lab.personaIds, []);
+  assert.equal(lab.personasRoot, undefined);
+  const body = fs.readFileSync(
+    path.join(lab.skillsRoot, 'programming-lab-skill', 'SKILL.md'),
+    'utf8',
+  );
+  const flow = body.match(/^allowed-tools:\s*\[([^\]]*)\]$/m)?.[1];
+  assert.notEqual(flow, undefined);
+  const tools = new Set(flow!.split(',').map((value) => value.trim()).filter(Boolean));
+  for (const toolId of [
+    'list_dir',
+    'write_file',
+    'notebook_edit',
+    'lsp',
+    'run_command',
+    'artifact_write',
+  ]) {
+    assert.ok(tools.has(toolId), toolId);
+  }
+  assert.equal([...tools].some((toolId) => toolId.startsWith('browser_')), false);
+});
+
 test('C2 profile plugins declare matching personas without executable specialists', () => {
   const catalog = inspectWorkspaceProfilePlugins();
   const personasByProfile = Object.fromEntries(
@@ -301,6 +333,7 @@ test('C2 profile plugins declare matching personas without executable specialist
     'academic-paper': [],
     'computational-research': [],
     'data-visualization': [],
+    'programming-lab': [],
   });
 });
 
@@ -326,7 +359,7 @@ test('C2 malformed package-owned versions fail availability without affecting si
   const catalog = inspectWorkspaceProfilePlugins({ root: fixtureRoot });
   assert.deepEqual(catalog.available.map((plugin) => plugin.id), [
     'study', 'research', 'data', 'writing', 'backend',
-    'academic-paper', 'computational-research', 'data-visualization',
+    'academic-paper', 'computational-research', 'data-visualization', 'programming-lab',
   ]);
   assert.equal(catalog.unavailable[0]?.id, 'frontend');
   assert.match(catalog.unavailable[0]?.reason ?? '', /semantic/);
@@ -342,7 +375,7 @@ test('C2 a missing profile persona fails that plugin closed without affecting si
   const catalog = inspectWorkspaceProfilePlugins({ root: fixtureRoot });
   assert.deepEqual(catalog.available.map((plugin) => plugin.id), [
     'study', 'data', 'writing', 'frontend', 'backend',
-    'academic-paper', 'computational-research', 'data-visualization',
+    'academic-paper', 'computational-research', 'data-visualization', 'programming-lab',
   ]);
   assert.equal(catalog.unavailable[0]?.id, 'research');
   assert.match(catalog.unavailable[0]?.reason ?? '', /missing valid persona file: researcher/);
