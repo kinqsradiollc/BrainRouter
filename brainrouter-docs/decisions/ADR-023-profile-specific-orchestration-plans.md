@@ -1363,6 +1363,273 @@ server is running.
 | Put all configuration into Servers | One visible destination | Mixes durable policy with ephemeral process control | Rejected |
 | Settings for defaults, unified Servers for live operations | Clear configuration/runtime split and one place to inspect previews | Requires one combined server-view query/model | Accepted |
 
+#### 13.7 Workbench panels preserve state without joining hot render paths
+
+Profile-aware disclosure does not make a panel disposable. Files, Editor, and
+other workbench views keep workspace-scoped presentation state when the user
+switches tabs, hides the right rail, or moves between workspaces. At minimum,
+Files retains expanded directories, filter text, and the current selection;
+Editor retains open models, dirty state, view state, and its selected file.
+State is keyed by canonical workspace identity and must not leak paths or
+expansion state into another workspace.
+
+Keeping every hidden panel inside the root render path is not an acceptable
+way to preserve that state. Expensive panels use a stable host boundary:
+
+- high-frequency Editor buffer changes are owned by Monaco models or an
+  editor-local external store, not the root `App` component;
+- inactive panels do not rerender because chat streaming, agent traces, or
+  unrelated workspace state changed;
+- hiding a panel preserves its lightweight view model while allowing expensive
+  observers, polling, layout work, and native surfaces to suspend;
+- reopening a warm Files or Editor panel restores its prior state without a
+  full-tree refetch;
+- event subscriptions have deterministic ownership and cleanup, so repeatedly
+  opening panels cannot grow renderer listener counts.
+
+Editor adds an integrated Explorer backed by the same workspace file query and
+status projection as Files. It is a collapsible, keyboard-navigable sidebar,
+not a second file cache. Opening a file from either view selects the same
+Editor model. Monaco remains lazy-loaded and keeps familiar editor behaviors
+such as multi-tab editing, command/keybinding handling, find, diagnostics,
+conflict-safe save, and per-file view state. “VS Code-like” is a behavior and
+responsiveness target; BrainRouter does not embed the complete VS Code
+workbench or extension host.
+
+The Desktop performance harness records warm panel-switch latency and Editor
+key-to-paint latency. On the supported reference fixture, the targets are
+100 ms p95 for a warm Files/Editor switch and 50 ms p95 key-to-paint while
+editing a normal source file. A regression result is evidence to investigate,
+not permission to hide correctness failures or discard dirty buffers.
+
+#### 13.8 The human owns visible browser focus and location consent
+
+The embedded browser has two simultaneous clients: a human using it as a
+normal browser and an agent performing bounded browser work. They share the
+workspace browser session but do not share focus authority.
+
+The selected right-rail panel is the sole owner of native browser-surface
+visibility. When Browser stops being the visible panel, the host detaches its
+native surface in the same visibility transition. An in-flight agent command
+may continue only when its operation is safe headlessly; it cannot keep the
+native surface layered above Settings, Atlas, Editor, or another panel. A
+visibility epoch prevents a late agent result from reattaching a stale surface.
+
+Agent-created tabs open in the background by default, including child windows
+and research-source tabs. Explicit activation is reserved for a step that
+requires visible human takeover, such as a challenge, permission prompt, or
+user-requested navigation. Human tab selection takes precedence and is not
+changed merely because a background agent tab navigated or completed. Agent
+tabs and human tabs carry separate ownership metadata so cleanup can close only
+agent-owned research tabs.
+
+Browser locale and region signals derive from the host session rather than a
+hard-coded search country. Geolocation remains a sensitive per-origin
+permission: the user can allow or deny it through a visible prompt and the
+workspace browser profile may remember that reviewed decision. BrainRouter
+does not silently grant, spoof, or infer precise location. When a site cannot
+determine location, the Browser explains whether permission, OS location
+services, or network-derived location is unavailable and offers the appropriate
+user action. Network reputation and site policy may still prevent location or
+challenge-free browsing.
+
+#### 13.9 Research browsing is bounded, source-backed, and Google-first
+
+The built-in interactive research path uses Google Search pages through the
+workspace browser. The bundled DuckDuckGo provider, fallback, provider ID, and
+tests are removed; legacy configuration selecting it produces an actionable
+migration diagnostic instead of silently changing engines. Explicit
+administrator-configured search APIs remain separate optional providers, but
+the managed browser-research strategy does not mix their ranking with Google
+without disclosure.
+
+Research is deliberate rather than a burst of unbounded tab creation:
+
+```text
+frame question and coverage ledger
+  → form non-duplicate subquestions
+  → inspect one Google results page
+  → open one source in a background agent tab
+  → extract a bounded source note and update claims/gaps
+  → close the extracted source tab
+  → continue to the next source or Google page only for an unresolved gap
+  → verify material claims
+  → synthesize a cited artifact
+  → close remaining agent-owned research tabs
+```
+
+Pagination is explicit. The agent records which query and result page it has
+inspected and follows the next-page control only while a named coverage gap
+remains and the page, source, time, and token budgets permit it. It does not
+rapidly click every result, open duplicate URLs, or treat a search-result
+snippet or generated overview as verified evidence.
+
+Every retained source note records title, canonical URL, publisher or author
+when available, publication date when available, access time, the supported
+claim, evidence excerpt or structured observation, and limitations or
+conflicts. Notes are written incrementally to the Research notes/artifacts
+contract so compaction or interruption does not erase provenance. The final
+artifact includes a deduplicated source ledger and claim-to-source links.
+Long-lived memory receives only reviewed stable findings, decisions, and
+unresolved gaps; raw browsing noise and page content are not copied into
+memory.
+
+Parallel research is optional bounded orchestration. The primary researcher
+may assign disjoint subquestions to eligible read-only explorers, each with a
+separate query/source budget and structured result contract. The primary
+researcher merges and deduplicates their ledgers, resolves conflicts, and owns
+the final synthesis. Explorers do not share mutable browser focus, open
+unbounded tabs, or write the final report.
+
+Agent-owned tabs close immediately after extraction unless a documented next
+step requires the live page. On completion, cancellation, or failure, the
+research lifecycle closes every remaining agent-owned tab and preserves all
+human-owned tabs. CAPTCHA, consent, login, and other human challenges pause the
+affected step and request visible takeover rather than being bypassed or
+hammered with retries.
+
+#### 13.10 Steering reconciles the active work contract
+
+Queue and Steer are delivery modes, not separate planning systems. Queue starts
+a later user turn in FIFO order. Steer enters the current turn at the next safe
+model boundary. Both are evaluated against the same active work contract:
+
+```text
+active goal, when present
+  + current plan revision
+  + accepted requirements and acceptance criteria
+  + workspace/profile authority
+  + applied-change ledger
+```
+
+Every applied input receives one bounded impact disposition:
+
+| Impact | Required behavior |
+|---|---|
+| Clarification or evidence | Record it against the affected task; keep the plan revision when ordering and acceptance criteria are unchanged |
+| Tactical correction | Update the affected plan item or its verification note before the next related action |
+| Added or removed scope | Revise the plan, dependencies, acceptance criteria, and estimated remaining work before the next mutating tool |
+| Priority/order change | Reorder pending items, preserve completed evidence, and identify any now-obsolete work |
+| Goal-compatible constraint | Append it to the active work contract and revise the plan; do not rewrite the goal text silently |
+| Goal replacement or contradiction | Stop incompatible work and require an explicit goal edit/replacement or user confirmation before continuing |
+| Authority or safety change | Recompute effective policy; text cannot grant tools, permissions, access, or bypass approval boundaries |
+
+The agent may decide that a plan revision is unnecessary, but it must record a
+short reason. Material steering cannot be acknowledged in prose and then
+ignored by an unchanged plan. The next model call receives the active goal,
+current plan revision, and unapplied change ledger together so compaction
+cannot separate the correction from the work it changed.
+
+Extension-authored steering is observation, not user authority. A CI failure,
+review comment, or background result may add an in-scope remediation or
+verification item and revise the plan, but cannot expand the goal, enable a
+tool, accept a security disposition, or replace user requirements. Conflicting
+extension observations become an explicit unresolved item for the primary
+agent.
+
+Desktop and CLI show whether a queued or steered message was applied, whether
+it revised the plan, the resulting plan revision, and whether it needs a goal
+decision. A `/goal` continuation always resumes from the latest reconciled
+plan; it does not regenerate a clean plan that drops accepted steering.
+
+#### 13.11 Planning and decision skills have activation policy, not just availability
+
+Selecting a skill makes it eligible beneath the workspace and tool ceilings.
+It does not guarantee the agent will use it at the correct time. Conversely,
+including Planning in every profile pack must not force a planning ceremony for
+one-step questions. BrainRouter therefore adds a skill-activation policy to the
+resolved profile/strategy contract:
+
+```text
+skill available and selected
+  ∩ task/strategy activation signal
+  ∩ stage assignment
+  ∩ required tool availability
+  → required, recommended, optional, or blocked activation
+```
+
+The activation decision is deterministic for hard cases and may use the
+bounded planner only for ambiguous cases. At minimum:
+
+- Planning is required for an active goal, multi-stage implementation,
+  research with more than one evidence gap, multi-artifact writing/data work,
+  or any task that will delegate; it is recommended for medium work and
+  unnecessary for a single obvious action.
+- ADR is required when the task introduces or reverses a durable architecture,
+  public contract, data/authority boundary, cross-surface lifecycle, or
+  expensive-to-reverse dependency. It is recommended when competing designs
+  have meaningful long-term trade-offs and unnecessary for local mechanical
+  fixes.
+- A required Planning activation must create or update the durable project plan
+  and taskboard used by the repository, then keep the runtime plan projection
+  synchronized. A required ADR activation must inspect existing decisions,
+  update or supersede the right record, and link implementation tasks to it.
+- Planning activation does not invent an approval pause. A plan-only request
+  stops after the reviewable plan; an explicit build/change request may proceed
+  through its reviewed repository workflow unless an actual approval,
+  authority, or material user-choice boundary requires a pause.
+- A child stage receives only the skills declared for that stage. The primary
+  agent owns final plan and ADR reconciliation; a child may return a proposal
+  but cannot accept an architecture decision or rewrite root scope.
+- If a required skill is unavailable or its output destination is not writable,
+  the runtime reports a blocked prerequisite or uses a profile-declared safe
+  primary fallback. It never pretends the skill ran.
+
+Profiles tune normal triggers and outputs without weakening the shared rules:
+
+| Profile | Planning emphasis | ADR/decision emphasis |
+|---|---|---|
+| Engineering | Vertical slices, dependencies, verification, release sequence | APIs, storage, security, runtime ownership, and cross-package contracts |
+| Research | Question decomposition, coverage and source budgets, synthesis checkpoints | Method, evidence, provenance, retention, and reproducibility decisions |
+| Data Science | Dataset/experiment lineage, reproducibility, validation checkpoints | Data contracts, statistical assumptions, model/evaluation and deployment boundaries |
+| Study | Learning objectives, diagnostic checkpoints, practice/remediation sequence | Curriculum or assessment policy only when durable and consequential |
+| Writing | Outline, section contracts, source/revision passes | Publication structure, governance, provenance, or reusable editorial policy |
+| Custom | No implicit workflow until selected; show recommended triggers for enabled capabilities | Same cross-profile hard triggers once the relevant skill is selected |
+
+This policy is inspectable in onboarding and workspace settings. The UI explains
+why a skill is included, when it activates, what it writes, and which tools it
+requires. Users can disable a recommended skill within their authority, but a
+task that requires the missing contract becomes visibly limited rather than
+silently executed with lower reliability.
+
+#### 13.12 Personality is a user-controlled communication overlay
+
+Persona answers **how the agent reasons and works in a domain**. Personality
+answers **how the agent communicates that work**. They remain independent:
+switching to Research cannot replace the researcher persona with a writing
+style, and choosing concise prose cannot remove citation or planning duties.
+
+Personality resolves in layers:
+
+```text
+per-chat override
+  → workspace override
+  → user global default
+  → profile recommendation
+  → standard fallback
+```
+
+The profile recommendation is used only when no user override exists. Suggested
+defaults may include evidence-first communication for Research, Socratic
+communication for Study, collaborative technical prose for Engineering,
+structured explanatory prose for Data Science, and audience-aware prose for
+Writing. Recommendations affect presentation only: they cannot add tools,
+skills, roles, memory access, or orchestration.
+
+Settings displays the effective personality and its source. The normal choice
+is **Use profile recommendation**, followed by explicit styles. A user may set a
+global default, override one workspace, or temporarily override the current
+chat; clearing an override reveals the next layer instead of writing a copied
+profile value. Existing stored personality values migrate as explicit
+workspace overrides so upgrades do not silently change established behavior.
+
+| Approach | Advantages | Disadvantages | Decision |
+|---|---|---|---|
+| Force one personality per profile | Immediately domain-flavored | Overrides user preference and conflates communication with persona | Rejected |
+| Keep one opaque workspace value | Matches the current simple setting | Users cannot tell whether profile or preference won; no temporary style | Rejected |
+| Let the model choose on every turn | Flexible | Unstable voice and difficult to inspect or reproduce | Rejected |
+| Layer chat/workspace/global overrides above a profile recommendation | Stable, inspectable, and user-controlled while still providing useful defaults | Requires provenance UI and compatibility migration | Accepted |
+
 ## Profile behavior summary
 
 | Concern | Engineering | Research | Data Science | Study | Writing | Custom |
@@ -1823,6 +2090,66 @@ gate is recorded in the Compatibility section above.
   Research, Writing, Custom, unavailable panels, profile changes, and both
   server sources.
 
+### P23-17 — Workbench state and Editor responsiveness
+
+- Persist Files and Editor presentation state per workspace while isolating
+  hidden panels from unrelated high-frequency renderer updates.
+- Move hot Editor buffer ownership out of the root app render path and preserve
+  conflict-safe save plus Monaco model/view state.
+- Add one shared file-explorer model and a collapsible Explorer inside Editor.
+- Add listener-lifecycle checks and warm panel-switch/key-to-paint benchmarks;
+  verify the source-started Desktop with real workspace files.
+
+### P23-18 — Browser visibility, focus, and location ownership
+
+- Make selected-panel visibility an explicit host contract and detach the
+  native browser surface immediately when Browser is no longer visible.
+- Open agent and agent-popup tabs in the background by default; preserve human
+  selection and track agent-owned tabs for cleanup.
+- Remove hard-coded search-region signals and add reviewed, per-origin
+  geolocation permission handling without silent grants or spoofing.
+- Add visibility-epoch, background-tab, ownership-cleanup, and permission tests;
+  verify Browser-to-Atlas/Settings switching in the source-started Desktop.
+
+### P23-19 — Source-backed browser research
+
+- Remove the bundled DuckDuckGo provider and fallback with an actionable legacy
+  configuration diagnostic.
+- Compile the Research iterative-evidence contract into a bounded Google
+  pagination/source-extraction loop with duplicate-query and duplicate-URL
+  suppression.
+- Persist incremental source notes and claim links through Research
+  notes/artifacts; store only reviewed durable findings in memory.
+- Add bounded disjoint explorer fan-out and lifecycle cleanup for agent-owned
+  tabs while preserving human tabs and failing closed on challenges.
+- Add Core/extension/profile tests plus live source-started research QA with
+  citations, pagination, tab-focus preservation, cancellation, and cleanup.
+
+### P23-20 — Steer/goal plan reconciliation
+
+- Add an applied-input impact/disposition contract and durable bounded change
+  ledger shared by queue, steer, goal continuation, CLI, and Desktop.
+- Require plan revision before further mutation for scope, acceptance,
+  dependency, or ordering changes; record why clarification-only input leaves
+  the revision unchanged.
+- Keep extension steering observational and prevent it from expanding goal or
+  authority; pause for explicit goal replacement when input contradicts the
+  active goal.
+- Show applied state, plan revision, and goal-decision state in CLI/Desktop and
+  add safe-boundary, compaction, continuation, and conflicting-input tests.
+
+### P23-21 — Profile-aware skill activation and personality layering
+
+- Add validated required/recommended/optional/blocked activation metadata for
+  selected skills, with hard Planning and ADR triggers shared across profiles.
+- Enforce stage-scoped skill activation and primary-owned plan/ADR acceptance;
+  surface unavailable required outputs instead of pretending success.
+- Explain activation triggers, outputs, and tool prerequisites in onboarding
+  and workspace settings.
+- Separate profile-recommended communication from persona behavior and add
+  global, workspace, and chat personality layers with visible provenance and
+  compatibility migration.
+
 ## Acceptance criteria
 
 1. All six built-in profiles resolve distinct orchestration-profile JSON.
@@ -1919,6 +2246,38 @@ gate is recorded in the Compatibility section above.
 43. If the role, capability, skill, or tool catalog changes during onboarding
     review, save fails as a stale conflict, reloads the latest choices, and
     never collapses the condition into an unexplained generic write failure.
+44. Files expansion/filter/selection and Editor model/view state survive
+    right-panel switching and workspace round-trips without leaking between
+    workspaces.
+45. Editor buffer changes do not rerender the root app, and the shared Explorer
+    opens the same model as Files while conflict-safe save remains intact.
+46. A hidden Browser panel has no attached native surface, including while an
+    agent action is in flight; a late action cannot re-cover another panel.
+47. Agent-created tabs do not steal the human-selected tab by default, and
+    research cleanup closes only agent-owned tabs.
+48. Browser search locale is not pinned to a false country, and geolocation is
+    never granted or spoofed without a reviewed per-origin user decision.
+49. Built-in browser research uses Google, has no DuckDuckGo runtime fallback,
+    records query/result-page progress, and visits sources within explicit
+    budgets.
+50. Every material research claim in a final artifact links to a retained
+    source record; interruption preserves completed source notes and final
+    cleanup preserves human tabs.
+51. Parallel research assigns disjoint bounded subquestions and returns
+    structured source ledgers to the primary researcher; it never creates
+    unbounded browser concurrency or multiple final-report writers.
+52. A material queued or steered requirement updates the active plan before the
+    next affected mutation, and CLI/Desktop show the resulting plan revision.
+53. Goal continuation uses the latest reconciled plan and applied-change ledger;
+    a contradictory steer cannot silently replace the active goal.
+54. Extension steering may add in-scope remediation evidence but cannot expand
+    goal, authority, tool access, or approval policy.
+55. Planning and ADR activation is enforced by validated task/stage signals,
+    not merely by listing the skills in a profile pack; unavailable required
+    outputs are visible and fail safe.
+56. Personality changes prose only, exposes its effective source, respects
+    chat/workspace/global overrides, and never changes persona, tools, skills,
+    roles, or orchestration.
 
 ## Non-goals
 
