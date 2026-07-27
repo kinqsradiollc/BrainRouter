@@ -33,6 +33,7 @@ const BUNDLED_SKILLS_DIR = fileURLToPath(new URL('../../../skills', import.meta.
 
 export const ORCHESTRATION_ACTIVATION_SIGNAL_IDS: ReadonlySet<string> = new Set([
   'architecture-design',
+  'academic-paper',
   'bug-fix',
   'citation-review',
   'critique',

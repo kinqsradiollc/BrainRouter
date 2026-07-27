@@ -70,7 +70,7 @@ describe("workspace profile recommendation MCP tool", () => {
         skillPacks: [{
           id: "research",
           source: "profile-plugin",
-          version: "2.2.0",
+          version: "2.3.0",
           skillIds: [
             "research-question-skill",
             "source-strategy-skill",
@@ -80,6 +80,8 @@ describe("workspace profile recommendation MCP tool", () => {
             "source-synthesis-skill",
             "citation-verification-skill",
             "research-review-skill",
+            "academic-paper-drafting-skill",
+            "academic-paper-review-skill",
           ],
         }],
       });

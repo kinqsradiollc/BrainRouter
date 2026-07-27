@@ -264,6 +264,101 @@
           "optional": false
         }
       ]
+    },
+    {
+      "id": "academic-paper",
+      "description": "Draft a paper from a reviewed claim ledger, independently audit citations and paper quality, then apply bounded corrections on the primary researcher.",
+      "activation": {
+        "signals": [
+          "academic-paper"
+        ],
+        "explicitOnly": false
+      },
+      "stages": [
+        {
+          "id": "frame",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [],
+          "objective": "Confirm the research question, audience constraints, contribution story, evidence boundary, and stopping condition before drafting.",
+          "skillIds": [
+            "research-question-skill",
+            "source-strategy-skill"
+          ],
+          "optional": false
+        },
+        {
+          "id": "ledger",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "frame"
+          ],
+          "objective": "Freeze an auditable claim ledger for every material novelty, method, comparative, numerical, and generalization claim.",
+          "skillIds": [
+            "claim-ledger-skill"
+          ],
+          "optional": false
+        },
+        {
+          "id": "draft",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "ledger"
+          ],
+          "objective": "Draft the paper and its claim-evidence map, terminology map, section contracts, reverse outline, figure and table inventory, experiment coverage, and limitations.",
+          "skillIds": [
+            "source-synthesis-skill",
+            "academic-paper-drafting-skill"
+          ],
+          "optional": false
+        },
+        {
+          "id": "audit",
+          "executor": {
+            "kind": "role",
+            "roleId": "reviewer"
+          },
+          "after": [
+            "draft"
+          ],
+          "objective": "Independently verify citations and adversarially review contribution, soundness, evidence, experiments, reproducibility, presentation, and limitations with bounded prioritized findings.",
+          "skillIds": [
+            "citation-verification-skill",
+            "academic-paper-review-skill"
+          ],
+          "fanOut": {
+            "min": 1,
+            "max": 1
+          },
+          "optional": false,
+          "expectedOutput": {
+            "contractId": "reviewer",
+            "requiredSections": [
+              "headline",
+              "findings"
+            ]
+          }
+        },
+        {
+          "id": "revise",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "audit"
+          ],
+          "objective": "Resolve blocking and material findings, record dispositions, rerun the claim-evidence and reverse-outline checks, and deliver the paper with remaining limitations visible.",
+          "skillIds": [
+            "academic-paper-drafting-skill"
+          ],
+          "optional": false
+        }
+      ]
     }
   ]
 }

@@ -81,6 +81,7 @@ test('P23-5 Research plan matches its preset and keeps every child read-only', (
     'question-decomposition',
     'parallel-evidence',
     'citation-review',
+    'academic-paper',
   ]);
   for (const roleId of plan.rolePolicy.availableRoles) {
     assert.equal(references.roles.get(roleId)?.defaultAccess, 'read');
@@ -102,6 +103,22 @@ test('P23-5 Research plan matches its preset and keeps every child read-only', (
   assert.equal(collect?.optional, true);
   assert.equal(collect?.skillIds.includes('iterative-evidence-skill'), false);
   assert.equal(collect?.fanOut?.max, 3);
+
+  const academic = plan.strategies.find((strategy) => strategy.id === 'academic-paper');
+  assert.deepEqual(academic?.stages.map((stage) => [stage.id, stage.executor.kind]), [
+    ['frame', 'primary'],
+    ['ledger', 'primary'],
+    ['draft', 'primary'],
+    ['audit', 'role'],
+    ['revise', 'primary'],
+  ]);
+  const paperAudit = academic?.stages.find((stage) => stage.id === 'audit');
+  assert.deepEqual(paperAudit?.skillIds, [
+    'citation-verification-skill',
+    'academic-paper-review-skill',
+  ]);
+  assert.equal(paperAudit?.fanOut?.max, 1);
+  assert.deepEqual(academic?.stages.at(-1)?.skillIds, ['academic-paper-drafting-skill']);
 });
 
 test('P23-5 Research resolution narrows evidence fan-out and fails closed on skill gaps', () => {
