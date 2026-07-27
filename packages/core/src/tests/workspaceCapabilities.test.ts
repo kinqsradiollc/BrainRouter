@@ -199,7 +199,7 @@ test('the ordinary verb react is not treated as the React framework without a fr
   );
 });
 
-test('frontend requires an enabled engineer to be the active domain agent', () => {
+test('frontend requires both a compatible profile and an enabled engineer persona', () => {
   const manifest = createWorkspaceManifest({ name: 'demo', profile: 'research', by: 'wizard' });
   manifest.capabilities.enabled.push('frontend');
   assert.deepEqual(
@@ -218,7 +218,19 @@ test('frontend requires an enabled engineer to be the active domain agent', () =
     task: 'Build a React research dashboard.',
     availability: FRONTEND_AVAILABILITY,
   });
-  assert.deepEqual(delegated.active, ['frontend']);
+  assert.deepEqual(delegated, EMPTY_RESOLUTION);
+
+  const custom = createWorkspaceManifest({ name: 'custom', profile: 'custom', by: 'wizard' });
+  custom.persona = { default: 'engineer', enabled: ['engineer'] };
+  custom.capabilities.enabled.push('frontend');
+  assert.deepEqual(
+    resolveWorkspaceCapabilities({
+      manifest: custom,
+      task: 'Build a React research dashboard.',
+      availability: FRONTEND_AVAILABILITY,
+    }).active,
+    ['frontend'],
+  );
 });
 
 test('backend requires an enabled engineer and respects explicit disable', () => {

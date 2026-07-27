@@ -82,7 +82,7 @@ export function proposeDevWorkspaceOnboarding(root: string, payload: unknown): R
       disabledRoles: [...profile.orchestration.disabledRoles],
       maxParallel: profile.orchestration.maxParallel,
     },
-    capabilities: { enabled: [...profile.capabilities.enabled], disabled: [] },
+    capabilities: { enabled: [...profile.capabilities.recommended], disabled: [] },
     skills: { packs: [...profile.skills.packs], enabled: [...profile.skills.enabled], disabled: [] },
     tools: { profiles: [...profile.tools.profiles], enabled: [], deny: [] },
     memory: { tags: [...profile.memory.tags], captureHint: profile.memory.captureHint },

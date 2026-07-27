@@ -110,7 +110,7 @@ export function recommendWorkspaceProfileServing(
     return [];
   });
 
-  const capabilities = unique(preset.capabilities.enabled).flatMap(
+  const capabilities = unique(preset.capabilities.recommended).flatMap(
     (id): RecommendedWorkspaceCapability[] => {
       const plugin = availablePlugins.get(id);
       if (plugin?.kind === 'capability') {

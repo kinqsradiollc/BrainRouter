@@ -21,7 +21,12 @@ export interface OnboardingProfile {
     disabledRoles: string[];
     maxParallel: number;
   };
-  capabilities: { enabled: string[]; disabled: string[] };
+  capabilities: {
+    available: string[];
+    recommended: string[];
+    enabled: string[];
+    disabled: string[];
+  };
   skills: { packs: string[]; enabled: string[]; disabled: string[] };
   tools: { profiles: string[]; enabled: string[]; deny: string[] };
   memory: { tags: string[]; captureHint: string };
@@ -219,7 +224,10 @@ export function draftFromOnboardingProfile(profile: OnboardingProfile | undefine
       disabledRoles: [...profile.orchestration.disabledRoles],
       maxParallel: profile.orchestration.maxParallel,
     },
-    capabilities: { enabled: [...profile.capabilities.enabled], disabled: [...profile.capabilities.disabled] },
+    capabilities: {
+      enabled: [...profile.capabilities.recommended],
+      disabled: [...profile.capabilities.disabled],
+    },
     skills: { packs: [...profile.skills.packs], enabled: [...profile.skills.enabled], disabled: [...profile.skills.disabled] },
     tools: {
       profiles: [...profile.tools.profiles],
@@ -312,13 +320,26 @@ function parseProfile(value: unknown): OnboardingProfile | null {
     ? { ...value, profile: value.id, instructions: 'AGENT.md' }
     : value);
   if (!draft || !isRecord(value) || !boundedString(value.label, 128) || !boundedString(value.description, 2048, true)) return null;
+  const capabilityRecord = isRecord(value.capabilities) ? value.capabilities : {};
+  const availableCapabilities = capabilityRecord.available === undefined
+    ? [...draft.capabilities.enabled]
+    : parseStringList(capabilityRecord.available);
+  const recommendedCapabilities = capabilityRecord.recommended === undefined
+    ? [...draft.capabilities.enabled]
+    : parseStringList(capabilityRecord.recommended);
+  if (!availableCapabilities || !recommendedCapabilities) return null;
   return {
     id: draft.profile,
     label: value.label,
     description: value.description,
     persona: draft.persona,
     orchestration: draft.orchestration,
-    capabilities: draft.capabilities,
+    capabilities: {
+      available: availableCapabilities,
+      recommended: recommendedCapabilities,
+      enabled: draft.capabilities.enabled,
+      disabled: draft.capabilities.disabled,
+    },
     skills: draft.skills,
     tools: draft.tools,
     memory: draft.memory,

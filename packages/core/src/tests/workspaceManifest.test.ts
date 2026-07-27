@@ -242,7 +242,17 @@ test('profile presets are self-consistent (every profile usable by the wizard)',
   assert.deepEqual(engineering.agents, { default: 'engineer', enabled: ['engineer'] });
   assert.equal(engineering.orchestration.mode, 'adaptive');
   assert.equal(engineering.orchestration.disabledRoles.includes('fleet'), true);
-  assert.deepEqual(engineering.capabilities.enabled, ['frontend', 'backend']);
+  assert.deepEqual(engineering.capabilities, {
+    available: ['frontend', 'backend'],
+    recommended: ['frontend', 'backend'],
+    enabled: ['frontend', 'backend'],
+  });
+  const custom = WORKSPACE_PROFILES.find((preset) => preset.id === 'custom')!;
+  assert.deepEqual(custom.capabilities, {
+    available: ['frontend', 'backend'],
+    recommended: [],
+    enabled: [],
+  });
   assert.ok(engineering.tools.profiles.includes('artifacts'));
   assert.ok(!engineering.tools.profiles.includes('interactive-browser'),
     'interactive browser control is not a baseline Engineering grant');
@@ -250,6 +260,16 @@ test('profile presets are self-consistent (every profile usable by the wizard)',
     assert.ok(preset.label.trim().length > 0, `${preset.id}: label`);
     assert.ok(preset.description.trim().length > 0, `${preset.id}: description`);
     assert.equal(getWorkspaceProfile(preset.id), preset);
+    assert.deepEqual(
+      preset.capabilities.enabled,
+      preset.capabilities.recommended,
+      `${preset.id}: compatibility alias mirrors recommended defaults`,
+    );
+    assert.equal(
+      preset.capabilities.recommended.every((id) => preset.capabilities.available.includes(id)),
+      true,
+      `${preset.id}: every recommended capability is compatible`,
+    );
     if (preset.id !== 'custom') {
       assert.ok(preset.persona.default.length > 0, `${preset.id}: names a default persona`);
       assert.ok(preset.persona.enabled.includes(preset.persona.default), `${preset.id}: default persona is enabled`);

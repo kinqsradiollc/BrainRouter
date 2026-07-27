@@ -316,7 +316,10 @@ export function createWorkspaceManifest(input: {
       maxParallel: orchestrationDefaults.maxParallel,
     },
     agents: persona,
-    capabilities: overrides.capabilities ?? { enabled: [...preset.capabilities.enabled], disabled: [] },
+    capabilities: overrides.capabilities ?? {
+      enabled: [...preset.capabilities.recommended],
+      disabled: [],
+    },
     skills: overrides.skills ?? { packs: [...preset.skills.packs], enabled: [...preset.skills.enabled], disabled: [] },
     tools: overrides.tools ?? { profiles: [...preset.tools.profiles], deny: [] },
     memory: overrides.memory ?? { tags: [...preset.memory.tags], captureHint: preset.memory.captureHint },

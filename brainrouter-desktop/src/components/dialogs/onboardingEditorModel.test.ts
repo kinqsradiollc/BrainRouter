@@ -26,7 +26,12 @@ const engineering: OnboardingProfile = {
     disabledRoles: ['fleet'],
     maxParallel: 4,
   },
-  capabilities: { enabled: ['frontend'], disabled: [] },
+  capabilities: {
+    available: ['frontend', 'backend'],
+    recommended: ['frontend'],
+    enabled: ['frontend'],
+    disabled: [],
+  },
   skills: { packs: ['engineering'], enabled: ['testing-skill'], disabled: [] },
   tools: { profiles: ['coding'], enabled: [], deny: [] },
   memory: { tags: ['engineering'], captureHint: 'code' },
@@ -112,6 +117,8 @@ test('hydrates separate persona and deny-first orchestration fields', () => {
     maxParallel: 4,
   });
   assert.deepEqual(parsed.draft.capabilities.enabled, ['frontend']);
+  assert.deepEqual(parsed.profiles[0]?.capabilities.available, ['frontend', 'backend']);
+  assert.deepEqual(parsed.profiles[0]?.capabilities.recommended, ['frontend']);
   assert.ok(!JSON.stringify(parsed.draft).includes('frontend-builder'));
 });
 

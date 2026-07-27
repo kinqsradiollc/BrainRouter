@@ -86,7 +86,11 @@ export function workspaceProfilesForOnboarding(): WorkspaceProfilePreset[] {
         default: preset.agents.default,
         enabled: [...preset.agents.enabled],
       },
-      capabilities: { enabled: [...preset.capabilities.enabled] },
+      capabilities: {
+        available: [...preset.capabilities.available],
+        recommended: [...preset.capabilities.recommended],
+        enabled: [...preset.capabilities.recommended],
+      },
       skills: {
         packs: [...preset.skills.packs],
         enabled: [...preset.skills.enabled],
