@@ -1,7 +1,7 @@
 ---
 name: source-synthesis-skill
 description: Turn a reviewed claim ledger into a provenance-preserving synthesis that exposes agreement, conflict, inference, and gaps.
-allowed-tools: [read_file, grep_search, glob_files, research_note, research_brief, write_file, edit_file]
+allowed-tools: [read_file, list_dir, grep_search, glob_files, research_note, research_brief, artifact_write, write_file, edit_file]
 ---
 
 # Source synthesis

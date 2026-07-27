@@ -9,7 +9,7 @@
   "effort": null,
   "defaultAccess": "read",
   "toolScope": { "local": ["*"], "mcp": ["memory_*"] },
-  "disallowedTools": ["fetch_url", "web_search"],
+  "disallowedTools": [],
   "maxIterations": 30,
   "timeoutMs": 120000,
   "maxResultChars": 8000,

@@ -1,7 +1,7 @@
 ---
 name: source-strategy-skill
 description: Design a bounded source and retrieval strategy that matches each sub-question to source types, query modes, freshness, and fallback paths.
-allowed-tools: [read_file, grep_search, glob_files, fetch_url, web_search]
+allowed-tools: [read_file, list_dir, grep_search, glob_files, fetch_url, web_search]
 ---
 
 # Source strategy

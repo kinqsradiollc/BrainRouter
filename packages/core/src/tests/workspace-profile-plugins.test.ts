@@ -12,10 +12,28 @@ import {
   WORKSPACE_PROFILE_PLUGIN_DEFINITIONS,
 } from '../workspace/profilePlugins.js';
 
+const PACKAGE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
+
+function allowedTools(skillId: string): string[] {
+  const research = findWorkspaceProfilePlugin('research');
+  assert.ok(research);
+  const body = fs.readFileSync(path.join(research.skillsRoot, skillId, 'SKILL.md'), 'utf8');
+  const flow = body.match(/^allowed-tools:\s*\[([^\]]*)\]$/m)?.[1];
+  assert.notEqual(flow, undefined, `${skillId} must declare a bounded allowed-tools list`);
+  return flow!.split(',').map((value) => value.trim()).filter(Boolean);
+}
+
+function intersection(...lists: readonly string[][]): string[] {
+  return lists.reduce<string[]>(
+    (shared, list) => shared.filter((tool) => list.includes(tool)),
+    [...(lists[0] ?? [])],
+  );
+}
+
 test('C2 package-owned profile plugins use the standard versioned plugin contract', () => {
   const catalog = inspectWorkspaceProfilePlugins();
   const expectedVersions = new Map([
-    ['research', '2.3.0'],
+    ['research', '2.4.0'],
     ['study', '2.2.0'],
     ['data', '2.1.0'],
     ['writing', '2.1.0'],
@@ -53,7 +71,7 @@ test('research profile exposes separate task-selectable workflow skills', () => 
 
   assert.ok(research);
   assert.equal(research.kind, 'profile');
-  assert.equal(research.version, '2.3.0');
+  assert.equal(research.version, '2.4.0');
   assert.deepEqual(research.skillIds, [
     'research-question-skill',
     'source-strategy-skill',
@@ -66,6 +84,39 @@ test('research profile exposes separate task-selectable workflow skills', () => 
     'academic-paper-drafting-skill',
     'academic-paper-review-skill',
   ]);
+});
+
+test('research skills retain folder, artifact, and citation tools through stacked intersections', () => {
+  const research = findWorkspaceProfilePlugin('research');
+  assert.ok(research);
+  for (const skillId of research.skillIds) {
+    assert.ok(allowedTools(skillId).includes('list_dir'), `${skillId}: workspace discovery`);
+  }
+
+  for (const skillId of ['academic-paper-drafting-skill', 'source-synthesis-skill']) {
+    assert.ok(allowedTools(skillId).includes('artifact_write'), `${skillId}: deliverable artifact`);
+  }
+
+  const researchAudit = intersection(
+    allowedTools('citation-verification-skill'),
+    allowedTools('research-review-skill'),
+  );
+  assert.ok(researchAudit.includes('fetch_url'));
+  assert.ok(researchAudit.includes('web_search'));
+
+  const paperAudit = intersection(
+    allowedTools('citation-verification-skill'),
+    allowedTools('academic-paper-review-skill'),
+  );
+  assert.ok(paperAudit.includes('fetch_url'));
+  assert.ok(paperAudit.includes('web_search'));
+
+  const reviewer = JSON.parse(
+    fs.readFileSync(path.join(PACKAGE_ROOT, 'agents', 'reviewer.json'), 'utf8'),
+  ) as { defaultAccess: string; disallowedTools: string[] };
+  assert.equal(reviewer.defaultAccess, 'read');
+  assert.equal(reviewer.disallowedTools.includes('fetch_url'), false);
+  assert.equal(reviewer.disallowedTools.includes('web_search'), false);
 });
 
 test('study profile exposes separate task-selectable tutoring workflows', () => {
@@ -186,7 +237,6 @@ test('C2 a missing profile persona fails that plugin closed without affecting si
 });
 
 test('C2 the published core package declares its profile plugin assets', () => {
-  const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-  const packageJson = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')) as { files?: string[] };
+  const packageJson = JSON.parse(fs.readFileSync(path.join(PACKAGE_ROOT, 'package.json'), 'utf8')) as { files?: string[] };
   assert.ok(packageJson.files?.includes('profile-plugins'));
 });

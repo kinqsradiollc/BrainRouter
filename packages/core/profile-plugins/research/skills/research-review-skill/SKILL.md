@@ -1,7 +1,7 @@
 ---
 name: research-review-skill
 description: Review a completed research artifact for question coverage, evidence quality, citation integrity, uncertainty, and decision usefulness.
-allowed-tools: [read_file, grep_search, glob_files, fetch_url, research_note, research_brief]
+allowed-tools: [read_file, list_dir, grep_search, glob_files, fetch_url, web_search, research_note, research_brief]
 ---
 
 # Research review

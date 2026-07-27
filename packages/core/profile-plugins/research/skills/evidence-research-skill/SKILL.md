@@ -1,7 +1,7 @@
 ---
 name: evidence-research-skill
 description: Collect bounded, relevant evidence for an approved research question and source strategy without drafting conclusions.
-allowed-tools: [read_file, grep_search, glob_files, fetch_url, web_search, research_note]
+allowed-tools: [read_file, list_dir, grep_search, glob_files, fetch_url, web_search, research_note]
 ---
 
 # Evidence research

@@ -102,7 +102,7 @@ engineering origin:
 
 - `explorer` describes codebase investigation;
 - `architect` describes feature and system design;
-- `reviewer` describes code review and currently denies web search;
+- `reviewer` described code review and denied web search;
 - `worker` describes implementation and file edits;
 - `verifier` describes tests and build checks.
 
@@ -573,6 +573,17 @@ stage objective
 Parent conversation history is never copied into a child. The child receives
 only the bounded task packet and context-envelope layers selected for that
 stage.
+
+Role-level denials remain absolute, so reusable role JSON must not deny a tool
+that a valid profile stage can require. The reviewer therefore keeps read
+access but does not globally deny page fetch or web search. Network access is
+available only when the reviewed workspace selects the browser group, the
+active stage's intersected skill allowlists retain the tool, and every ordinary
+runtime/access gate also permits it. Research citation-review stages keep
+source resolution in both citation and review skill allowlists so stacked-skill
+least privilege does not accidentally erase the workflow's required evidence
+surface. Engineering and Writing review do not gain network access merely from
+the reusable role.
 
 A `primary` stage does not create a child. It tells the root agent which prior
 stage results and skills are relevant for the next step. This is necessary for
