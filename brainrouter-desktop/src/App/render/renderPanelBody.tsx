@@ -151,7 +151,7 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId) => 
           tokens={tokens} liveTurn={liveTurn} contextUsage={contextUsage} efficiency={efficiency}
           bgCount={runningTasks.length} configDir="~/.config/brainrouter"
         />);
-      case 'files': return <FilesPanel files={allFiles} statuses={statuses} onOpen={openFile} grepHits={grepHits}
+      case 'files': return <FilesPanel workspaceKey={activeRoot} files={allFiles} statuses={statuses} onOpen={openFile} grepHits={grepHits}
         onGrep={(gq) => q('q-grep', 'search-content', { q: gq })}
         onRefresh={() => { q('q-list', 'list-files', { refresh: true }); q('q-files', 'changed-files'); }}
         loading={filesLoading} truncated={filesTruncated} error={filesError} />;

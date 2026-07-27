@@ -2733,6 +2733,8 @@ button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97)
 .panel-mini-status span { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .panel-mini-status.warn { color: var(--warn); }
 .tree-row:hover { background: var(--ov-05); color: var(--text); }
+.tree-row.selected,
+.file-row.selected { background: var(--accent-soft); color: var(--text); }
 .tree-row.file { font-family: var(--mono); font-size: 12px; }
 .tree-chevron { width: 12px; flex: none; color: var(--text-faint); font-size: 10px; }
 .tree-folder { flex: none; font-size: 12px; opacity: .8; }
