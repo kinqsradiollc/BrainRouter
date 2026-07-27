@@ -9,7 +9,7 @@
 import { execSync } from 'node:child_process';
 import chalk from 'chalk';
 import { setCliKnobOverride } from '@kinqs/brainrouter-core/config';
-import { readPreferences, writePreferences } from '@kinqs/brainrouter-core/session';
+import { readPreferences, writePreferences, type Preferences } from '@kinqs/brainrouter-core/session';
 import type { CommandContext } from '../_context.js';
 
 export async function tryHandleUiPreferencesCommand(ctx: CommandContext): Promise<boolean> {
@@ -100,10 +100,11 @@ export async function tryHandleUiPreferencesCommand(ctx: CommandContext): Promis
     {
       const prefs = readPreferences(agent.workspaceRoot);
       const arg = (args[0] ?? '').toLowerCase();
-      const valid = new Set(['concise', 'standard', 'detailed', 'pair-programmer']);
+      const valid = new Set(['auto', 'concise', 'standard', 'detailed', 'pair-programmer']);
       if (!arg) {
         console.log(chalk.bold('\nPersonality (communication style)'));
-        console.log(`  Current: ${chalk.cyan(prefs.personality)}`);
+        console.log(`  Current: ${chalk.cyan(prefs.personality)} (${prefs.personalitySource})`);
+        console.log(`  Selection: ${chalk.cyan(prefs.personalityMode === 'auto' ? 'auto' : prefs.personality)}`);
         console.log(chalk.gray(`  Available: ${Array.from(valid).join(', ')}\n`));
         return true;
       }
@@ -111,9 +112,14 @@ export async function tryHandleUiPreferencesCommand(ctx: CommandContext): Promis
         console.log(chalk.red(`\nUnknown personality "${arg}". Choose: ${Array.from(valid).join(', ')}\n`));
         return true;
       }
-      writePreferences(agent.workspaceRoot, { personality: arg as any });
+      const next = arg === 'auto'
+        ? writePreferences(agent.workspaceRoot, { personalityMode: 'auto' })
+        : writePreferences(agent.workspaceRoot, { personality: arg as Preferences['personality'] });
       agent.refreshSystemPrompt();
-      console.log(chalk.green(`\n✓ Personality → ${arg}. New behavior applies on the next turn.\n`));
+      const selection = arg === 'auto'
+        ? `auto (${next.personality}, ${next.personalitySource})`
+        : arg;
+      console.log(chalk.green(`\n✓ Personality → ${selection}. New behavior applies on the next turn.\n`));
       return true;
     }
     case '/raw':

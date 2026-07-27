@@ -3476,7 +3476,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       'action:compact': async () => getActiveAgent().compactHistory(),
       'action:set-pref': (args) => {
         const key = typeof args.key === 'string' ? args.key : '';
-        const SETTABLE = new Set(['delegationPolicy', 'autoChain', 'personality', 'tier', 'theme', 'quiet', 'memoriesEnabled', 'personaAnchorEnabled', 'experimental', 'rawScrollback', 'editorMode']);
+        const SETTABLE = new Set(['delegationPolicy', 'autoChain', 'personality', 'personalityMode', 'tier', 'theme', 'quiet', 'memoriesEnabled', 'personaAnchorEnabled', 'experimental', 'rawScrollback', 'editorMode']);
         if (!SETTABLE.has(key)) throw new Error(`Preference "${key}" is not settable from the desktop.`);
         return writePreferences(workspaceRoot, { [key]: args.value } as never);
       },

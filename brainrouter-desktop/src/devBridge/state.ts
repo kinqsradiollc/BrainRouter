@@ -43,7 +43,7 @@ export function createDevState() {
 
   const prefs = {
     executionMode: 'planning', reviewPolicy: 'request', delegationPolicy: 'auto', autoChain: 'off',
-    effort: 'medium', personality: 'standard', tier: null, theme: 'dark', quiet: false,
+    effort: 'medium', personality: 'pair-programmer', personalityMode: 'auto', personalitySource: 'profile', tier: null, theme: 'dark', quiet: false,
     memoriesEnabled: true, personaAnchorEnabled: true, experimental: false, rawScrollback: false, editorMode: 'emacs',
   } as Record<string, unknown>;
   const sessionModes: Record<string, Record<string, unknown>> = {};

@@ -132,7 +132,17 @@ function buildPanelRows(ctx: CommandContext): PanelRow[] {
     { key: 'mode',          label: 'Execution mode',   current: () => prefs().executionMode,         edit: editExecutionMode },
     { key: 'review-policy', label: 'Review policy',    current: () => prefs().reviewPolicy,          edit: editReviewPolicy },
     { key: 'quiet',         label: 'Quiet mode',       current: () => prefs().quiet ? 'on' : 'off',  edit: toggleQuiet },
-    { key: 'personality',   label: 'Personality',      current: () => prefs().personality,           edit: editPersonality },
+    {
+      key: 'personality',
+      label: 'Personality',
+      current: () => {
+        const current = prefs();
+        return current.personalityMode === 'auto'
+          ? `auto → ${current.personality} (${current.personalitySource})`
+          : current.personality;
+      },
+      edit: editPersonality,
+    },
     { key: 'editor',        label: 'Editor mode',      current: () => prefs().editorMode,            edit: editEditorMode },
     {
       key: 'wire-format',

@@ -1297,7 +1297,18 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     'recap': () => ['Last prompt: fix the reranker blend regression', 'Files touched: src/memory/recall.ts', 'Open plan: 2/3 done'],
     'action:clear': () => ({ ok: true }),
     'action:compact': () => ({ summary: 'Early exploration compacted; kept the blend fix decision and the sweep numbers.', estimatedTokens: 412, durationMs: 1830, replacedMessages: 14 }),
-    'action:set-pref': (a) => { prefs[String(a.key)] = a.value; return { ...prefs }; },
+    'action:set-pref': (a) => {
+      const key = String(a.key);
+      prefs[key] = a.value;
+      if (key === 'personality') {
+        prefs.personalityMode = 'manual';
+        prefs.personalitySource = 'workspace';
+      } else if (key === 'personalityMode' && a.value === 'auto') {
+        prefs.personality = 'pair-programmer';
+        prefs.personalitySource = 'profile';
+      }
+      return { ...prefs };
+    },
     'action:set-cli-knob': (a) => { if (a.value === null) delete devCliKnobs[String(a.key)]; else devCliKnobs[String(a.key)] = a.value; return { ok: true, key: String(a.key) }; },
     // MC-DESK — mirror of the host's sibling-safe nested writer for the Runtime /
     // Automations / Profiles panels (browser preview + Preview server).

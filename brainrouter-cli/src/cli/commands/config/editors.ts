@@ -553,16 +553,22 @@ export async function editPersonality(ctx: CommandContext): Promise<boolean> {
     title: 'Personality',
     subtitle: 'Communication style for agent responses.',
     rows: [
+      { id: 'auto',            label: 'Use profile recommendation', value: 'recommended' },
       { id: 'concise',         label: 'Concise',         description: 'short responses' },
-      { id: 'standard',        label: 'Standard',        value: 'default' },
+      { id: 'standard',        label: 'Standard' },
       { id: 'detailed',        label: 'Detailed',        description: 'verbose explanations' },
       { id: 'pair-programmer', label: 'Pair programmer', description: 'think-out-loud' },
     ],
   });
   if (result.kind !== 'pick') return false;
-  writePreferences(ctx.agent.workspaceRoot, { personality: result.id as Preferences['personality'] });
+  const next = result.id === 'auto'
+    ? writePreferences(ctx.agent.workspaceRoot, { personalityMode: 'auto' })
+    : writePreferences(ctx.agent.workspaceRoot, { personality: result.id as Preferences['personality'] });
   ctx.agent.refreshSystemPrompt();
-  console.log(chalk.green(`\n  ✓ Personality → ${result.id}\n`));
+  const selection = result.id === 'auto'
+    ? `auto (${next.personality}, ${next.personalitySource})`
+    : result.id;
+  console.log(chalk.green(`\n  ✓ Personality → ${selection}\n`));
   return true;
 }
 
