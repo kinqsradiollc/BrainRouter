@@ -70,10 +70,11 @@ describe("workspace profile recommendation MCP tool", () => {
         skillPacks: [{
           id: "research",
           source: "profile-plugin",
-          version: "2.1.0",
+          version: "2.2.0",
           skillIds: [
             "research-question-skill",
             "source-strategy-skill",
+            "iterative-evidence-skill",
             "evidence-research-skill",
             "claim-ledger-skill",
             "source-synthesis-skill",
