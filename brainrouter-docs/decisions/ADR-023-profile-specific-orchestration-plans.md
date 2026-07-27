@@ -915,6 +915,15 @@ does not silently modify an already reviewed manifest. Existing managed
 workspaces see it as a new recommended choice during workspace-settings review
 and must explicitly save that revised selection.
 
+The Frontend accessibility, design-quality, and browser-verification skills
+share the stable build, artifact, and embedded-browser operations needed for a
+stacked build-and-verify turn. This prevents least-privilege intersection from
+accidentally erasing file creation, deliverables, state inspection, navigation,
+interaction, console/network review, responsive checks, or screenshots.
+Selecting the Frontend capability does not make any operation executable unless
+the workspace has separately reviewed its tool group and the relevant host
+runtime is available.
+
 #### 12.4 Keep agent tools in extensions and native runtimes in their hosts
 
 An agent-visible integration tool belongs to a required or optional built-in
