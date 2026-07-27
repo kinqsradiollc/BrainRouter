@@ -71,7 +71,6 @@ import { estimateTokens as estimateTokensContentAware } from '../../util/tokens/
 import { waitUntilCondition } from '../../util/agentloop/waitUntil.js';
 import { fetchAndExtract } from '../../websearch/crawler.js';
 import { buildSearchProvider } from '../../websearch/factory.js';
-import { parseDuckDuckGoLite, parseDuckDuckGoHtml } from '../../websearch/providers/duckduckgo.js';
 import { parseGoogleHtml, googleSearchUrl } from '../../websearch/providers/google.js';
 import type { WebSearchResult } from '../../websearch/types.js';
 import { readWorkerMeta, readWorkerSummary, closeWorker, canSpawnWorker } from '../../worker/workerStore.js';
@@ -759,27 +758,24 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         const maxResults = Math.max(1, Math.min(10, Number(args.maxResults ?? knobs.webSearch.maxResults)));
         // BROWSER-ONLY when available: run the search THROUGH the in-app browser
         // (real Chromium, the user's session, no raw HTTP scrape / bot-challenge).
-        // GOOGLE first — the real browser renders its JS SERP the way a person's
-        // Chrome does — with DuckDuckGo's lite endpoint as the resilient fallback
-        // when Google answers a consent wall / CAPTCHA or shifts its layout. The
-        // HTTP provider below is used ONLY when there is no in-app browser.
+        // Google runs through the real browser so the search shares the user's
+        // locale and session. A consent wall, challenge, or parser miss falls
+        // through to an explicitly configured HTTP provider; there is no hidden
+        // second search engine.
         if (this.browserControlPort && !this.silent) {
           const port = this.browserControlPort;
           const sig = this.turnAbort?.signal;
-          // Share ONE reused, visible research tab across engines (Google→DDG) and
-          // with fetch_url, so the user watches a single tab search and page.
+          // Share one reused research tab with fetch_url so browser work remains
+          // inspectable without multiplying search tabs.
           const researchRef = (this._browserResearchRef ??= {});
           const tryEngine = async (url: string, parsers: Array<(h: string, n: number) => WebSearchResult[]>): Promise<WebSearchResult[]> => {
             try {
               const html = await fetchHtmlViaInAppBrowser(port, url, 25_000, sig, { live: true, tabRef: researchRef });
               if (html) for (const parse of parsers) { const r = parse(html, maxResults); if (r.length) return r; }
-            } catch { /* try the next engine, then the HTTP provider */ }
+            } catch { /* fall through to the explicitly configured HTTP provider */ }
             return [];
           };
-          let results = await tryEngine(googleSearchUrl(query, maxResults), [parseGoogleHtml]);
-          if (!results.length) {
-            results = await tryEngine(`https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`, [parseDuckDuckGoLite, parseDuckDuckGoHtml]);
-          }
+          const results = await tryEngine(googleSearchUrl(query, maxResults), [parseGoogleHtml]);
           if (results.length) return JSON.stringify(results.slice(0, maxResults), null, 2);
         }
         try {
