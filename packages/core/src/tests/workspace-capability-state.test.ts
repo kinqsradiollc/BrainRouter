@@ -130,6 +130,30 @@ test('reviewed Writing academic-paper capability activates only for matching tas
   }
 });
 
+test('reviewed Research computational capability activates without changing persona', () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'br-cap-state-computational-'));
+  try {
+    const manifest = createWorkspaceManifest({ name: 'analysis', profile: 'research', by: 'wizard' });
+    manifest.capabilities.enabled.push('computational-research');
+    saveWorkspaceManifest(workspace, manifest);
+    const { host, calls } = makeHost(workspace);
+    const resolved = refreshWorkspaceCapabilityState(
+      host,
+      'Run a reproducible computational analysis of this dataset.',
+    );
+
+    assert.equal(host.activeWorkspacePersonaId, 'researcher');
+    assert.deepEqual(resolved.active, ['computational-research']);
+    assert.deepEqual(resolved.toolProfiles, [
+      'coding', 'shell', 'browser', 'research-notes', 'artifacts',
+    ]);
+    assert.match(calls[0]?.content ?? '', /Available task capabilities: computational-research/);
+    assert.match(calls[1]?.content ?? '', /Preserve the active domain persona/);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test('switching workspaces replaces profile, persona, and capability briefing state', () => {
   const engineering = fs.mkdtempSync(path.join(os.tmpdir(), 'br-cap-state-switch-engineering-'));
   const research = fs.mkdtempSync(path.join(os.tmpdir(), 'br-cap-state-switch-research-'));

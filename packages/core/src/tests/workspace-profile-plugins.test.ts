@@ -44,12 +44,16 @@ test('C2 package-owned profile plugins use the standard versioned plugin contrac
     ['frontend', '1.1.0'],
     ['backend', '1.1.0'],
     ['academic-paper', '2.4.0'],
+    ['computational-research', '2.1.0'],
   ]);
 
   assert.deepEqual(catalog.unavailable, []);
   assert.deepEqual(
     catalog.available.map((plugin) => plugin.id),
-    ['study', 'research', 'data', 'writing', 'frontend', 'backend', 'academic-paper'],
+    [
+      'study', 'research', 'data', 'writing', 'frontend', 'backend',
+      'academic-paper', 'computational-research',
+    ],
   );
   for (const plugin of catalog.available) {
     assert.equal(plugin.version, expectedVersions.get(plugin.id));
@@ -230,6 +234,21 @@ test('academic-paper capability reuses the reviewed Research paper workflows', (
   assert.equal(paper.personasRoot, undefined);
 });
 
+test('computational-research capability reuses the reviewed Data Science workflows', () => {
+  const computational = findWorkspaceProfilePlugin('computational-research');
+
+  assert.ok(computational);
+  assert.equal(computational.kind, 'capability');
+  assert.equal(computational.pluginName, 'profile-data');
+  assert.equal(computational.version, '2.1.0');
+  assert.deepEqual(computational.skillIds, [
+    'data-analysis-skill',
+    'experiment-validation-skill',
+  ]);
+  assert.deepEqual(computational.personaIds, []);
+  assert.equal(computational.personasRoot, undefined);
+});
+
 test('C2 profile plugins declare matching personas without executable specialists', () => {
   const catalog = inspectWorkspaceProfilePlugins();
   const personasByProfile = Object.fromEntries(
@@ -244,6 +263,7 @@ test('C2 profile plugins declare matching personas without executable specialist
     frontend: [],
     backend: [],
     'academic-paper': [],
+    'computational-research': [],
   });
 });
 
@@ -268,7 +288,8 @@ test('C2 malformed package-owned versions fail availability without affecting si
 
   const catalog = inspectWorkspaceProfilePlugins({ root: fixtureRoot });
   assert.deepEqual(catalog.available.map((plugin) => plugin.id), [
-    'study', 'research', 'data', 'writing', 'backend', 'academic-paper',
+    'study', 'research', 'data', 'writing', 'backend',
+    'academic-paper', 'computational-research',
   ]);
   assert.equal(catalog.unavailable[0]?.id, 'frontend');
   assert.match(catalog.unavailable[0]?.reason ?? '', /semantic/);
@@ -283,7 +304,8 @@ test('C2 a missing profile persona fails that plugin closed without affecting si
 
   const catalog = inspectWorkspaceProfilePlugins({ root: fixtureRoot });
   assert.deepEqual(catalog.available.map((plugin) => plugin.id), [
-    'study', 'data', 'writing', 'frontend', 'backend', 'academic-paper',
+    'study', 'data', 'writing', 'frontend', 'backend',
+    'academic-paper', 'computational-research',
   ]);
   assert.equal(catalog.unavailable[0]?.id, 'research');
   assert.match(catalog.unavailable[0]?.reason ?? '', /missing valid persona file: researcher/);

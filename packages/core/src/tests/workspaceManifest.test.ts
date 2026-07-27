@@ -249,7 +249,7 @@ test('profile presets are self-consistent (every profile usable by the wizard)',
   });
   const custom = WORKSPACE_PROFILES.find((preset) => preset.id === 'custom')!;
   assert.deepEqual(custom.capabilities, {
-    available: ['frontend', 'backend', 'academic-paper'],
+    available: ['frontend', 'backend', 'academic-paper', 'computational-research'],
     recommended: [],
     enabled: [],
   });
@@ -259,6 +259,10 @@ test('profile presets are self-consistent (every profile usable by the wizard)',
     recommended: [],
     enabled: [],
   });
+  const research = WORKSPACE_PROFILES.find((preset) => preset.id === 'research')!;
+  const dataScience = WORKSPACE_PROFILES.find((preset) => preset.id === 'data-science')!;
+  assert.deepEqual(research.capabilities.available, ['computational-research']);
+  assert.deepEqual(dataScience.capabilities.available, ['computational-research']);
   assert.ok(engineering.tools.profiles.includes('artifacts'));
   assert.ok(engineering.tools.profiles.includes('pull-request-observation'));
   assert.ok(!engineering.tools.profiles.includes('interactive-browser'),

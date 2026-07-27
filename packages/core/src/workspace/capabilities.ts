@@ -47,7 +47,7 @@ interface CapabilityContribution {
 }
 
 export interface WorkspaceCapabilityDefinition {
-  id: 'frontend' | 'backend' | 'academic-paper';
+  id: 'frontend' | 'backend' | 'academic-paper' | 'computational-research';
   label: string;
   description: string;
   skillPackId: string;
@@ -93,6 +93,14 @@ export const WORKSPACE_CAPABILITY_DEFINITIONS: readonly WorkspaceCapabilityDefin
     ],
     toolProfileIds: ['workspace-files', 'browser', 'research-notes', 'artifacts'],
   },
+  {
+    id: 'computational-research',
+    label: 'Computational research',
+    description: 'Task-time reproducible analysis, experiment, validation, uncertainty, and limitation workflows.',
+    skillPackId: 'computational-research',
+    skillIds: ['data-analysis-skill', 'experiment-validation-skill'],
+    toolProfileIds: ['coding', 'shell', 'browser', 'research-notes', 'artifacts'],
+  },
 ] as const;
 
 const CAPABILITY_BY_ID = new Map(
@@ -101,6 +109,7 @@ const CAPABILITY_BY_ID = new Map(
 const FRONTEND_DEFINITION = CAPABILITY_BY_ID.get('frontend')!;
 const BACKEND_DEFINITION = CAPABILITY_BY_ID.get('backend')!;
 const ACADEMIC_PAPER_DEFINITION = CAPABILITY_BY_ID.get('academic-paper')!;
+const COMPUTATIONAL_RESEARCH_DEFINITION = CAPABILITY_BY_ID.get('computational-research')!;
 
 const FRONTEND_CONTRIBUTION: CapabilityContribution = {
   skillPacks: [FRONTEND_DEFINITION.skillPackId],
@@ -126,6 +135,15 @@ const ACADEMIC_PAPER_CONTRIBUTION: CapabilityContribution = {
   toolProfiles: ACADEMIC_PAPER_DEFINITION.toolProfileIds,
   promptBlocks: [
     'Academic paper capability is active for this task. Stay in the writer persona, preserve the reviewed evidence boundary, maintain an explicit claim-evidence map, resolve and verify material citations, separate drafting from adversarial review, and never invent evidence, methods, results, citations, or numerical values. This capability does not itself grant file, network, or artifact authority.',
+  ],
+};
+
+const COMPUTATIONAL_RESEARCH_CONTRIBUTION: CapabilityContribution = {
+  skillPacks: [COMPUTATIONAL_RESEARCH_DEFINITION.skillPackId],
+  skills: COMPUTATIONAL_RESEARCH_DEFINITION.skillIds,
+  toolProfiles: COMPUTATIONAL_RESEARCH_DEFINITION.toolProfileIds,
+  promptBlocks: [
+    'Computational research capability is active for this task. Preserve the active domain persona, state a measurable question and hypotheses, record data lineage and transformations, use reproducible environments and seeds, validate results independently, report effect size and uncertainty, and keep limitations and unsupported claims visible. This capability does not itself grant shell, notebook, file, network, or artifact authority.',
   ],
 };
 
@@ -196,6 +214,10 @@ const BACKEND_CONFIG_PATTERN =
 const ACADEMIC_PAPER_TASK_PATTERN =
   /\b(academic paper|research paper|journal (?:article|submission)|conference paper|manuscript|preprint|literature review|systematic review|citation audit|claim[- ]evidence map)\b/i;
 const ACADEMIC_PAPER_FILE_PATTERN = /\.(?:tex|bib|ris|enw|nbib)$/i;
+const COMPUTATIONAL_RESEARCH_TASK_PATTERN =
+  /\b(computational research|computational analysis|empirical analysis|reproducib(?:le|ility)|experiment(?:al)? analysis|statistical analysis|simulation|notebook analysis)\b/i;
+const COMPUTATIONAL_RESEARCH_FILE_PATTERN =
+  /\.(?:ipynb|rmd|qmd|sas|do|jl|r)$/i;
 
 /** Resolve additive capabilities for one task without reading disk or mutating the manifest. */
 export function resolveWorkspaceCapabilities(input: WorkspaceCapabilityResolutionInput): WorkspaceCapabilityResolution {
@@ -204,6 +226,9 @@ export function resolveWorkspaceCapabilities(input: WorkspaceCapabilityResolutio
   const activeAgent = input.activeAgent ?? input.manifest.persona.default;
   const engineerIsActive = activeAgent === 'engineer' && input.manifest.persona.enabled.includes('engineer');
   const writerIsActive = activeAgent === 'writer' && input.manifest.persona.enabled.includes('writer');
+  const computationalResearchPersonaIsActive =
+    (activeAgent === 'researcher' || activeAgent === 'data-scientist')
+    && input.manifest.persona.enabled.includes(activeAgent);
   const available = new Set(
     getWorkspaceProfile(input.manifest.profile)?.capabilities.available ?? [],
   );
@@ -251,6 +276,18 @@ export function resolveWorkspaceCapabilities(input: WorkspaceCapabilityResolutio
       appendAvailable(skills, ACADEMIC_PAPER_CONTRIBUTION.skills, input.availability?.skills);
       appendAvailable(toolProfiles, ACADEMIC_PAPER_CONTRIBUTION.toolProfiles, input.availability?.toolProfiles);
       appendUnique(promptBlocks, ACADEMIC_PAPER_CONTRIBUTION.promptBlocks);
+    }
+  }
+
+  if (computationalResearchPersonaIsActive && enabled.has('computational-research')) {
+    const computationalReasons = detectComputationalResearchReasons(input.task, input.files);
+    if (computationalReasons.length > 0) {
+      active.push('computational-research');
+      reasons.push(...computationalReasons);
+      appendAvailable(skillPacks, COMPUTATIONAL_RESEARCH_CONTRIBUTION.skillPacks, input.availability?.skillPacks);
+      appendAvailable(skills, COMPUTATIONAL_RESEARCH_CONTRIBUTION.skills, input.availability?.skills);
+      appendAvailable(toolProfiles, COMPUTATIONAL_RESEARCH_CONTRIBUTION.toolProfiles, input.availability?.toolProfiles);
+      appendUnique(promptBlocks, COMPUTATIONAL_RESEARCH_CONTRIBUTION.promptBlocks);
     }
   }
 
@@ -307,6 +344,21 @@ function detectAcademicPaperReasons(
   const normalizedFiles = (files ?? []).map((file) => file.replaceAll('\\', '/'));
   if (normalizedFiles.some((file) => ACADEMIC_PAPER_FILE_PATTERN.test(file))) {
     reasons.push('task includes an academic manuscript or citation file');
+  }
+  return reasons;
+}
+
+function detectComputationalResearchReasons(
+  task: string | undefined,
+  files: readonly string[] | undefined,
+): string[] {
+  const reasons: string[] = [];
+  if (COMPUTATIONAL_RESEARCH_TASK_PATTERN.test(task?.trim() ?? '')) {
+    reasons.push('task describes computational research');
+  }
+  const normalizedFiles = (files ?? []).map((file) => file.replaceAll('\\', '/'));
+  if (normalizedFiles.some((file) => COMPUTATIONAL_RESEARCH_FILE_PATTERN.test(file))) {
+    reasons.push('task includes a computational research file');
   }
   return reasons;
 }

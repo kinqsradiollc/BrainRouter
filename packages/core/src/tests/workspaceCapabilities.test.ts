@@ -46,6 +46,12 @@ const ACADEMIC_PAPER_AVAILABILITY = {
   toolProfiles: ['workspace-files', 'browser', 'research-notes', 'artifacts'],
 };
 
+const COMPUTATIONAL_RESEARCH_AVAILABILITY = {
+  skillPacks: ['computational-research'],
+  skills: ['data-analysis-skill', 'experiment-validation-skill'],
+  toolProfiles: ['coding', 'shell', 'browser', 'research-notes', 'artifacts'],
+};
+
 test('no manifest is an exact capability no-op even for a frontend task', () => {
   assert.deepEqual(
     resolveWorkspaceCapabilities({
@@ -181,6 +187,60 @@ test('academic-paper capability rejects incompatible profiles and explicit disab
       manifest: writing,
       task: 'Draft an academic paper.',
       availability: ACADEMIC_PAPER_AVAILABILITY,
+    }),
+    EMPTY_RESOLUTION,
+  );
+});
+
+test('Research and Data Science activate computational-research workflows', () => {
+  for (const profile of ['research', 'data-science'] as const) {
+    const manifest = createWorkspaceManifest({ name: profile, profile, by: 'wizard' });
+    manifest.capabilities.enabled.push('computational-research');
+    const resolved = resolveWorkspaceCapabilities({
+      manifest,
+      task: 'Run a reproducible computational analysis with uncertainty and limitations.',
+      files: ['analysis/model.ipynb'],
+      availability: COMPUTATIONAL_RESEARCH_AVAILABILITY,
+    });
+
+    assert.deepEqual(resolved.active, ['computational-research']);
+    assert.deepEqual(resolved.reasons, [
+      'task describes computational research',
+      'task includes a computational research file',
+    ]);
+    assert.deepEqual(resolved.skillPacks, ['computational-research']);
+    assert.deepEqual(resolved.skills, COMPUTATIONAL_RESEARCH_AVAILABILITY.skills);
+    assert.deepEqual(resolved.toolProfiles, [
+      'coding', 'shell', 'browser', 'research-notes', 'artifacts',
+    ]);
+    assert.match(resolved.promptBlocks[0]!, /Preserve the active domain persona/);
+    assert.equal(
+      manifest.persona.default,
+      profile === 'research' ? 'researcher' : 'data-scientist',
+    );
+  }
+});
+
+test('computational-research rejects incompatible personas and explicit disable', () => {
+  const study = createWorkspaceManifest({ name: 'study', profile: 'study', by: 'wizard' });
+  study.capabilities.enabled.push('computational-research');
+  assert.deepEqual(
+    resolveWorkspaceCapabilities({
+      manifest: study,
+      task: 'Run a reproducible computational analysis.',
+      availability: COMPUTATIONAL_RESEARCH_AVAILABILITY,
+    }),
+    EMPTY_RESOLUTION,
+  );
+
+  const research = createWorkspaceManifest({ name: 'research', profile: 'research', by: 'wizard' });
+  research.capabilities.enabled.push('computational-research');
+  research.capabilities.disabled.push('computational-research');
+  assert.deepEqual(
+    resolveWorkspaceCapabilities({
+      manifest: research,
+      task: 'Run a reproducible computational analysis.',
+      availability: COMPUTATIONAL_RESEARCH_AVAILABILITY,
     }),
     EMPTY_RESOLUTION,
   );

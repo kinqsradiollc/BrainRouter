@@ -243,6 +243,36 @@ test('academic-paper skills appear only for an active reviewed Writing capabilit
   }
 });
 
+test('computational-research skills activate for a reviewed Research capability', () => {
+  const workspace = makeWorkspace();
+  try {
+    const manifest = createWorkspaceManifest({ name: 'study', profile: 'research', by: 'wizard' });
+    manifest.capabilities.enabled.push('computational-research');
+    saveWorkspaceManifest(workspace, manifest);
+    const remote = JSON.stringify([
+      { name: 'data-analysis-skill', category: 'legacy', scope: 'global' },
+      { name: 'ordinary-skill', category: 'agent', scope: 'global' },
+    ]);
+    assert.equal(names(adaptWorkspaceSkillCatalogText({
+      workspaceRoot: workspace,
+      text: remote,
+      tool: 'list_skills',
+    })).includes('data-analysis-skill'), false);
+
+    const active = names(adaptWorkspaceSkillCatalogText({
+      workspaceRoot: workspace,
+      activeCapabilities: ['computational-research'],
+      text: remote,
+      tool: 'list_skills',
+    }));
+    assert.ok(active.includes('data-analysis-skill'));
+    assert.ok(active.includes('experiment-validation-skill'));
+    assert.ok(active.includes('ordinary-skill'));
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test('disabled package skills stay ambient-hidden but explicit reads use package policy', () => {
   const workspace = makeWorkspace();
   try {
