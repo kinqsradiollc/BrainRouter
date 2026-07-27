@@ -338,6 +338,25 @@ invent a second conversation or session channel.
   `packages/core/src/agent/runtime/runTurn.impl.ts`,
   `packages/agent-protocol/src/index.ts`
 
+### 20. Provider-specific background observation is an extension; session delivery is core
+
+Keep pull-request provider commands, status normalization, polling intervals,
+and transition detection in an optional built-in extension. The extension may
+publish only through the privileged session-input port; user and workspace
+extensions cannot request that port. Core owns the bounded session-keyed inbox
+and safe-boundary Steer contract, while CLI and Desktop own how an idle session
+resumes and how delivery state is rendered.
+
+Background polling must return control immediately, use non-overlapping bounded
+reads, expire, retain bounded watcher state, and never accept a command, working
+directory, repository, token, or environment from model input. Failures report
+back into the originating session so the same agent can diagnose and repair
+them during normal conversation or a goal run.
+
+- **Evidence:** `packages/core/extensions/pull-request-observer/index.js`,
+  `packages/core/src/session/input/inputDelivery.ts`,
+  `packages/core/src/extension/host.ts`
+
 ---
 
 ## Comments & tests

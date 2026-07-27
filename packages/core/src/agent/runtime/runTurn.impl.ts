@@ -274,6 +274,10 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         tier: this.tier,
         remoteBrain: isRemoteBrainUrl(cliKnobs.brainUrl),
       }),
+      sessionInputAvailable:
+        !this.silent &&
+        this.agentDepth === 0 &&
+        this.tier !== 'worker',
       terminalUseAvailable:
         !!this.terminalUsePort &&
         !this.silent &&

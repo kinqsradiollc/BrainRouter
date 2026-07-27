@@ -1,0 +1,7 @@
+{
+  "name": "pull-request-observer",
+  "version": "0.4.17",
+  "description": "Watch pull-request checks, reviews, and comments in the background and steer the originating session when action is needed.",
+  "main": "index.js",
+  "contributes": ["tools"]
+}

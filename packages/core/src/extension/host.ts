@@ -21,10 +21,12 @@ import {
 import { registerBuiltinCapability } from './builtin/capabilities.js';
 import type { ExtensionSource } from './manifest.js';
 import type { BrowserControlPort } from '../browser/control.js';
+import type { SessionInputPort } from '../session/input/inputDelivery.js';
 
 /** Narrow runtime context available only to a packaged built-in browser extension. */
 export interface ExtensionToolRuntimeContext {
   browserControlPort?: BrowserControlPort;
+  sessionInputPort?: SessionInputPort;
   signal?: AbortSignal;
 }
 
@@ -43,7 +45,7 @@ export interface ExtensionToolDef {
   /** Include this call in policy audit events even when its action kind is network. */
   audited?: boolean;
   /** Privileged per-Agent runtime port. Only packaged built-in extensions may request it. */
-  runtimePort?: 'browser-control';
+  runtimePort?: 'browser-control' | 'session-input';
   /** The runtime — receives the parsed args, returns the tool-result string. */
   handle(args: Record<string, unknown>, runtime?: ExtensionToolRuntimeContext): Promise<string> | string;
 }
@@ -81,12 +83,16 @@ class ExtensionToolExecutor implements LocalToolExecutor {
   actionKind(): ActionKind { return this.def.actionKind; }
   supportsParallelToolCalls(): boolean { return this.def.parallelSafe ?? false; }
   isAvailable(context: import('../tool/registry/executors.js').LocalToolAvailabilityContext): boolean {
-    return this.def.runtimePort !== 'browser-control' || context.browserUseAvailable === true;
+    if (this.def.runtimePort === 'browser-control') return context.browserUseAvailable === true;
+    if (this.def.runtimePort === 'session-input') return context.sessionInputAvailable === true;
+    return true;
   }
   async handle(invocation: LocalToolInvocation): Promise<string> {
     const runtime = this.def.runtimePort === 'browser-control'
       ? { browserControlPort: invocation.browserControlPort, signal: invocation.signal }
-      : undefined;
+      : this.def.runtimePort === 'session-input'
+        ? { sessionInputPort: invocation.sessionInputPort, signal: invocation.signal }
+        : undefined;
     return String(await this.def.handle(invocation.args, runtime));
   }
 }
@@ -103,8 +109,8 @@ export function createExtensionHost(
     version,
     log: (msg, fields) => console.error(`[ext:${name}] ${msg}${fields ? ' ' + JSON.stringify(fields) : ''}`),
     registerTool: (def) => {
-      if (def.runtimePort === 'browser-control' && options.source !== 'builtin') {
-        throw new Error(`Extension "${name}" cannot request the privileged browser-control runtime port.`);
+      if (def.runtimePort && options.source !== 'builtin') {
+        throw new Error(`Extension "${name}" cannot request the privileged ${def.runtimePort} runtime port.`);
       }
       const entry: LocalToolEntry = {
         name: def.name,
@@ -113,6 +119,7 @@ export function createExtensionHost(
         parallelSafe: def.parallelSafe ?? false,
         ...(def.audited ? { audited: true } : {}),
         ...(def.runtimePort === 'browser-control' ? { runtimePort: 'browser-control', availability: 'browser-use' } : {}),
+        ...(def.runtimePort === 'session-input' ? { runtimePort: 'session-input', availability: 'root-agent' } : {}),
       };
       registerExtensionTool(entry, new ExtensionToolExecutor(def), name, { required: false });
     },

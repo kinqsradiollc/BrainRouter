@@ -32,6 +32,7 @@ import { installInputQueueHandlers } from './runChat/inputQueueHandlers.js';
 import { installTurnRunner } from './runChat/turnRunner.js';
 import { installScheduleTicker } from './runChat/scheduleTicker.js';
 import { installDispatch, createOnSubmit } from './runChat/dispatch.js';
+import { installExternalSteering } from './runChat/externalSteering.js';
 
 /**
  * Mount the full Ink-based chat REPL and run it until the user exits.
@@ -184,6 +185,7 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
     lastChildCount: 0,
     refreshTickN: 0,
     scheduleTicker: null,
+    unsubscribeExternalSteering: null,
     isQuiet: () => false,
     armIdleHint: noop,
     clearIdleHint: noop,
@@ -220,6 +222,7 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
   installChildResume(ctx);
   installInputQueueHandlers(ctx);
   installTurnRunner(ctx);
+  installExternalSteering(ctx);
   installScheduleTicker(ctx);
   installDispatch(ctx);
 
@@ -366,6 +369,8 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       ctx.clearIdleHint();
       try { ctx.scheduleTicker?.stop(); } catch { /* noop */ }
       ctx.scheduleTicker = null;
+      ctx.unsubscribeExternalSteering?.();
+      ctx.unsubscribeExternalSteering = null;
       if (ctx.childRefreshTimer) { clearInterval(ctx.childRefreshTimer); ctx.childRefreshTimer = null; }
       try { await mcpClient.close(); } catch { /* already closed */ }
       try {
@@ -385,6 +390,8 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       ctx.clearIdleHint();
       try { ctx.scheduleTicker?.stop(); } catch { /* noop */ }
       ctx.scheduleTicker = null;
+      ctx.unsubscribeExternalSteering?.();
+      ctx.unsubscribeExternalSteering = null;
       if (ctx.childRefreshTimer) { clearInterval(ctx.childRefreshTimer); ctx.childRefreshTimer = null; }
       try { await mcpClient.close(); } catch { /* already closed */ }
       try {

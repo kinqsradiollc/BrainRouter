@@ -76,3 +76,74 @@ export interface SteeringInput {
   source: 'user' | 'extension';
   createdAt: number;
 }
+
+/** A background extension result addressed to the session that launched it. */
+export interface ExternalSteeringInput extends SteeringInput {
+  sessionKey: string;
+  label?: string;
+}
+
+export interface SessionInputPort {
+  publish(text: string, options?: { id?: string; label?: string }): ExternalSteeringInput;
+}
+
+type ExternalSteeringListener = (sessionKey: string) => void;
+
+const externalSteeringInbox = new Map<string, ExternalSteeringInput[]>();
+const externalSteeringListeners = new Set<ExternalSteeringListener>();
+const MAX_EXTERNAL_STEERING_PER_SESSION = 100;
+
+/** Publish a bounded extension result without capturing a CLI/Desktop host. */
+export function publishExternalSteering(
+  sessionKey: string,
+  text: string,
+  options: { id?: string; label?: string } = {},
+): ExternalSteeringInput {
+  const target = sessionKey.trim();
+  const normalized = text.trim();
+  if (!target) throw new Error('External steering requires a session key.');
+  if (!normalized) throw new Error('External steering cannot be empty.');
+  if (normalized.length > 20_000) throw new Error('External steering exceeds 20000 characters.');
+  const event: ExternalSteeringInput = {
+    id: options.id?.trim() || `extension-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+    sessionKey: target,
+    text: normalized,
+    source: 'extension',
+    createdAt: Date.now(),
+    ...(options.label?.trim() ? { label: options.label.trim().slice(0, 160) } : {}),
+  };
+  const pending = externalSteeringInbox.get(target);
+  if (pending) {
+    pending.push(event);
+    if (pending.length > MAX_EXTERNAL_STEERING_PER_SESSION) {
+      pending.splice(0, pending.length - MAX_EXTERNAL_STEERING_PER_SESSION);
+    }
+  }
+  else externalSteeringInbox.set(target, [event]);
+  for (const listener of externalSteeringListeners) {
+    try { listener(target); } catch { /* extension delivery must remain fault-isolated */ }
+  }
+  return { ...event };
+}
+
+export function pendingExternalSteeringCount(sessionKey: string): number {
+  return externalSteeringInbox.get(sessionKey)?.length ?? 0;
+}
+
+export function drainExternalSteering(sessionKey: string): ExternalSteeringInput[] {
+  const pending = externalSteeringInbox.get(sessionKey);
+  if (!pending?.length) return [];
+  externalSteeringInbox.delete(sessionKey);
+  return pending.map((event) => ({ ...event }));
+}
+
+export function subscribeExternalSteering(listener: ExternalSteeringListener): () => void {
+  externalSteeringListeners.add(listener);
+  return () => { externalSteeringListeners.delete(listener); };
+}
+
+/** Test-only reset for the process-local background delivery channel. */
+export function __resetExternalSteering(): void {
+  externalSteeringInbox.clear();
+  externalSteeringListeners.clear();
+}

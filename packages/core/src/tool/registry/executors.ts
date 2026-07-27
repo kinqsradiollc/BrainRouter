@@ -3,6 +3,7 @@ import { ensureRequiredCoreToolsRegistered, type BuiltinToolRuntimePort } from '
 import { extensionExecutor, extensionExecutors } from '../../extension/registry.js';
 import { registryEntry } from './registry.js';
 import type { BrowserControlPort } from '../../browser/control.js';
+import type { SessionInputPort } from '../../session/input/inputDelivery.js';
 
 export type ToolExposure = 'direct' | 'hidden';
 export interface LocalToolSpec { name: string; description: string; inputSchema: Record<string, unknown> }
@@ -16,6 +17,8 @@ export interface LocalToolInvocation {
   lifecycleRuntime?: ToolLifecycleRuntimePort;
   /** Desktop-only, per-Agent port. Never copied into child/reviewer agents. */
   browserControlPort?: BrowserControlPort;
+  /** Root-session channel for built-in background extensions. */
+  sessionInputPort?: SessionInputPort;
   signal?: AbortSignal;
 }
 export interface LocalToolAvailabilityContext {
@@ -24,6 +27,7 @@ export interface LocalToolAvailabilityContext {
   rootAgent?: boolean;
   computerUseAvailable?: boolean;
   browserUseAvailable?: boolean;
+  sessionInputAvailable?: boolean;
   terminalUseAvailable?: boolean;
   multiProfile?: boolean;
   mcpDiscovery?: boolean;

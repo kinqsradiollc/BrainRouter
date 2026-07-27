@@ -10,7 +10,7 @@ export interface LocalToolEntry {
   parallelSafe: boolean;
   availability?: 'result-cache' | 'active-workflow' | 'root-agent' | 'computer-use' | 'browser-use' | 'terminal-use' | 'multi-profile' | 'mcp-discovery';
   advertised?: boolean;
-  runtimePort?: 'orchestration' | 'browser-control';
+  runtimePort?: 'orchestration' | 'browser-control' | 'session-input';
   /** Explicitly include an otherwise non-mutating action (for example browser navigation) in policy audit events. */
   audited?: boolean;
   workflowLaunch?: boolean;

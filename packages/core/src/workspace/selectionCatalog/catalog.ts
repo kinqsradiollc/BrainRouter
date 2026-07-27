@@ -356,6 +356,7 @@ function categoryForTool(tool: LocalToolEntry): string {
   if (['run_command', 'task_output', 'wait_until', 'kill_command', 'computer_use'].includes(tool.name)) return 'terminal-computer';
   if (['fetch_url', 'web_search', 'research_note', 'research_brief'].includes(tool.name)) return 'web-research';
   if (tool.name.includes('mcp')) return 'mcp-connectors';
+  if (tool.name === 'pull_request_watch') return 'development-lifecycle';
   if (tool.name.includes('agent') || tool.name.includes('worker') || tool.name.includes('workflow') || tool.name === 'route_task') return 'orchestration-workflows';
   if (tool.name.includes('vulnerability') || tool.name.includes('scan') || tool.name.includes('request') || tool.name.includes('sitemap') || tool.name === 'scope_rules') return 'security-review';
   if (tool.name.includes('plan') || tool.name.includes('goal') || tool.name.includes('track') || tool.name === 'mark_chapter') return 'planning-session';

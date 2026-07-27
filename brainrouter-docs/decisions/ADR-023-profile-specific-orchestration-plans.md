@@ -851,6 +851,7 @@ new group but must not silently add tools to an already reviewed group.
 | `computer-control` | Operate an available computer-control session | High-authority, runtime-sensitive, never a broad profile default |
 | `workflow-launch` | Launch reviewed workflows/graphs and observe active workflow progress | High-cost explicit choice; child plans do not imply this grant |
 | `background-workers` | Launch and manage durable root-owned worker threads | Root-only explicit choice; not implied by ordinary orchestration |
+| `pull-request-observation` | Observe pull-request checks, reviews, and comments without blocking the active turn | Built-in extension with a bounded background watcher; recommended only for Engineering |
 | `security-review` | Inspect review traffic and record/finalize security findings | Specialized review surface, never inferred from Engineering alone |
 
 Conditional availability tools such as result expansion and model switching stay
@@ -864,7 +865,7 @@ recommendation is still only a request entering the intersection in section
 
 | Workspace profile | Recommended checked groups | Capability-sensitive proposal | Advanced, not preselected |
 |---|---|---|---|
-| Engineering | `coding`, `shell`, `browser`, `artifacts`, `planning-session`, `orchestration` | Add `interactive-browser` for reviewed frontend/full-stack work; backend remains the same engineer persona and may add it when browser/API inspection is useful | MCP resources, connectors, computer control, workflow launch, background workers, security review |
+| Engineering | `coding`, `shell`, `browser`, `artifacts`, `planning-session`, `orchestration`, `pull-request-observation` | Add `interactive-browser` for reviewed frontend/full-stack work; backend remains the same engineer persona and may add it when browser/API inspection is useful | MCP resources, connectors, computer control, workflow launch, background workers, security review |
 | Research | `browser`, `research-notes`, `artifacts`, `planning-session`, `orchestration` | Add `coding` and `shell` for computational/repository research; add interactive browser only when source access needs it | MCP resources/connectors when a reviewed corpus needs them; workflow launch, background workers, computer control, security review |
 | Data Science | `coding`, `shell`, `browser`, `research-notes`, `artifacts`, `planning-session`, `orchestration` | Add interactive browser for dashboard/data-portal work | MCP resources/connectors for reviewed data sources; workflow launch, background workers, computer control, security review |
 | Study | `browser`, `research-notes`, `artifacts`, `planning-session` | Add `orchestration` only when the learner selects a plan that uses an explorer; add coding/shell for programming labs | MCP resources/connectors for a reviewed course corpus; interactive browser, workflow launch, background workers, computer control, security review |
@@ -885,7 +886,23 @@ computer control acts outside the repository, workflow/worker launch can incur
 substantial cost, and security-review tools have a specialized runtime. These
 remain discoverable, explained choices.
 
-#### 12.4 Use one visible ownership hierarchy
+#### 12.4 Keep agent tools in extensions and native runtimes in their hosts
+
+An agent-visible integration tool belongs to a required or optional built-in
+extension when it has a stable schema, policy metadata, and profile assignment.
+The extension does not own operating-system resources. Native terminal PTY
+creation, shell discovery, process lifecycle, and rendering remain Desktop/CLI
+host responsibilities; the required shell extension receives only a bounded
+host port for sessions the user already opened.
+
+The same split applies to pull-request observation. Provider-specific commands,
+polling, normalization, and transition detection live in an optional built-in
+extension. Core owns only the bounded session-keyed background-result inbox and
+safe-boundary Steer contract. Desktop and CLI decide how an idle session resumes
+and how queued, steered, and applied states appear. User or workspace extensions
+cannot acquire either privileged host port.
+
+#### 12.5 Use one visible ownership hierarchy
 
 The common setup flow must not present a profile, its optional capabilities,
 and their implementation packs as peers. In particular, **Engineering**,
@@ -932,7 +949,7 @@ pack picker filters them out:
 - selecting a cross-domain pack never changes the profile, persona,
   orchestration plan, capability allowlist, or tool authority.
 
-#### 12.5 Separate capability compatibility from defaults
+#### 12.6 Separate capability compatibility from defaults
 
 The current preset field `capabilities.enabled` serves two different ideas:
 which capabilities a profile contributes and which are selected by default.
@@ -1010,7 +1027,7 @@ Study, Writing, or Engineering. A deterministic scan or managed onboarding
 proposal may recommend compatible capabilities from project evidence and the
 user's description, but the review screen owns the final checked set.
 
-#### 12.6 Reviewed picker UX in Desktop and CLI
+#### 12.7 Reviewed picker UX in Desktop and CLI
 
 The workspace onboarding and later workspace-edit flows replace free-text tool,
 skill-pack, and skill-ID list inputs with catalog-backed multi-select controls.
@@ -1303,7 +1320,7 @@ server is running.
 | Verification meaning | Tests/build/runtime evidence | Citation support and source consistency | Reproduction and metric checks | Assessment and retrieval practice | Requirement/style conformance | User-defined |
 | Write-capable role | Worker when authorized | None by default | Worker when authorized | None | Primary only | None by default |
 | Final synthesis | Primary engineer | Primary researcher | Primary data scientist | Primary tutor | Primary writer | Primary |
-| Recommended tool bundles | coding, shell, browser, artifacts, planning-session, orchestration | browser, research-notes, artifacts, planning-session, orchestration | coding, shell, browser, research-notes, artifacts, planning-session, orchestration | browser, research-notes, artifacts, planning-session | browser, research-notes, artifacts, planning-session | none |
+| Recommended tool bundles | coding, shell, browser, artifacts, planning-session, orchestration, pull-request-observation | browser, research-notes, artifacts, planning-session, orchestration | coding, shell, browser, research-notes, artifacts, planning-session, orchestration | browser, research-notes, artifacts, planning-session | browser, research-notes, artifacts, planning-session | none |
 
 ## Security and authority invariants
 
@@ -1803,46 +1820,49 @@ gate is recorded in the Compatibility section above.
     explicitly reviews a v3 explicit-catalog migration.
 26. Dynamic MCP tool names are visible only as live runtime information and
     never written to the workspace manifest.
-27. Every profile declares a valid `fallbackStrategyId`; its fallback graph is
+27. Agent-visible terminal and pull-request observation tools are built-in
+    extensions; native runtime lifecycle remains host-owned, and only
+    first-party built-ins can receive the corresponding privileged port.
+28. Every profile declares a valid `fallbackStrategyId`; its fallback graph is
     primary-only and cannot become unavailable because a child role or skill is
     missing.
-28. Every role stage uses the role-owned output contract, and every requested
+29. Every role stage uses the role-owned output contract, and every requested
     section resolves through that contract's canonical section-alias catalog.
-29. Engineering implementation uses one worker unless isolated worktrees or
+30. Engineering implementation uses one worker unless isolated worktrees or
     disjoint enforced ownership make parallel writes provably safe.
-30. The published Core package contains every bundled orchestration-profile
+31. The published Core package contains every bundled orchestration-profile
     JSON at the path used by the installed loader.
-31. Runtime plan activation is impossible before parser, packaged catalog,
+32. Runtime plan activation is impossible before parser, packaged catalog,
     effective ceilings, and active-turn lifecycle gates are complete; enabling
     it does not alter no-manifest behavior or implicitly activate manifest-v3
     tool selection.
-32. Choosing **Skip setup for now** in CLI or Desktop creates no manifest,
+33. Choosing **Skip setup for now** in CLI or Desktop creates no manifest,
     selection, completion marker, or partial draft; reopening onboarding later
     starts a fresh reviewed proposal.
-33. Use of the TypeScript orchestration-default fallback emits only a bounded
+34. Use of the TypeScript orchestration-default fallback emits only a bounded
     compatibility code, surface, coarse source, and count; it never emits
     profile IDs, plan contents, prompts, paths, or workspace content.
-34. Research can ground from available Project Knowledge, avoid duplicate
+35. Research can ground from available Project Knowledge, avoid duplicate
     probes, continue from prior findings, and stop at an explicit evidence or
     budget threshold without granting Project Knowledge to explorer children.
-35. Desktop Project Knowledge accepts both supported bridge event shapes and
+36. Desktop Project Knowledge accepts both supported bridge event shapes and
     never converts a received terminal result into a timeout.
-36. An invalid or untrusted isolated-candidate selection persists no partial
+37. An invalid or untrusted isolated-candidate selection persists no partial
     fan-out run or worktree.
-37. After Desktop restart, a durable candidate with no process-local owner is
+38. After Desktop restart, a durable candidate with no process-local owner is
     terminal and actionable; no run remains indefinitely launching or working.
-38. Every profile receives a useful suggested panel set while all compatible
+39. Every profile receives a useful suggested panel set while all compatible
     installed panels remain searchable under More views.
-39. Panel recommendation never grants a tool, host query, connector,
+40. Panel recommendation never grants a tool, host query, connector,
     authentication state, or runtime capability.
-40. Settings contains only runtime preview reservation policy; one Servers view
+41. Settings contains only runtime preview reservation policy; one Servers view
     owns live workspace-server and runtime-preview status without offering
     unsupported lifecycle actions.
-41. Research exposes academic-paper drafting and adversarial review as separate
+42. Research exposes academic-paper drafting and adversarial review as separate
     task-selectable skills; its paper strategy keeps drafting and revision on
     the primary researcher and caps the independent citation/paper audit at one
     read-only reviewer.
-42. If the role, capability, skill, or tool catalog changes during onboarding
+43. If the role, capability, skill, or tool catalog changes during onboarding
     review, save fails as a stale conflict, reloads the latest choices, and
     never collapses the condition into an unexplained generic write failure.
 

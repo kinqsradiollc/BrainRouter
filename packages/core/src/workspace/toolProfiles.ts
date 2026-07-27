@@ -154,6 +154,14 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
     extensionIds: [],
   },
   {
+    id: 'pull-request-observation',
+    label: 'Pull request monitoring',
+    description: 'Watch pull-request checks, reviews, and comments in the background and notify the active agent when action is needed.',
+    category: 'development-lifecycle',
+    toolIds: [],
+    extensionIds: ['pull-request-observer'],
+  },
+  {
     id: 'security-review',
     label: 'Security review',
     description: 'Inspect isolated review traffic and record or finalize security findings.',
