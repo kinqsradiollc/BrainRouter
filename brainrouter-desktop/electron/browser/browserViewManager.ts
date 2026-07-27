@@ -21,7 +21,11 @@ import { isAllowedWebviewSrc, isMetadataOrLinkLocalAddress, isPrivateOrLocalAddr
 import { browserPermissionCheckScopes, browserPermissionRequestScope } from './browserPermissionPolicy.js';
 import { agentCursorScript, removeAgentCursorScript } from './browserCursor.js';
 import { humanChallengeReason } from './browserHumanChallenge.js';
-import { browserPartitionForWorkspace } from './browserProfile.js';
+import {
+  browserAcceptLanguages,
+  browserPartitionForWorkspace,
+  standardChromeUserAgent,
+} from './browserProfile.js';
 import { promptForHttpAuth } from './httpAuthPrompt.js';
 import {
   BROWSER_BLANK_URL,
@@ -128,23 +132,13 @@ async function resolvedDestinationAllowed(rawUrl: string, agentPolicy?: { allowe
   return allow;
 }
 
-/** A standard desktop Chromium User-Agent for the bundled engine. It omits
- * Electron/application product tokens while leaving Chromium's native
- * client-hint, platform, locale, graphics, and capability signals untouched. */
-function standardChromeUserAgent(): string {
-  const chrome = process.versions.chrome || '120.0.0.0';
-  const platformToken = process.platform === 'darwin'
-    ? 'Macintosh; Intel Mac OS X 10_15_7'
-    : process.platform === 'win32'
-      ? 'Windows NT 10.0; Win64; x64'
-      : 'X11; Linux x86_64';
-  return `Mozilla/5.0 (${platformToken}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome} Safari/537.36`;
-}
-
 function configureBrowserSession(ses: Session): void {
   if (configuredSessions.has(ses)) return;
   configuredSessions.add(ses);
-  ses.setUserAgent(standardChromeUserAgent());
+  ses.setUserAgent(
+    standardChromeUserAgent(),
+    browserAcceptLanguages(app.getLocale()),
+  );
   ses.setPermissionCheckHandler((contents, permission, origin, details) => {
     if (!contents) return false;
     return managersByWebContents.get(contents.id)?.hasPermission(origin, browserPermissionCheckScopes(permission, details.mediaType)) ?? false;
