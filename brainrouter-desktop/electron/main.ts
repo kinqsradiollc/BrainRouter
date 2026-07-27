@@ -25,7 +25,11 @@ import {
   type BrowserControlRequestMessage,
 } from '@kinqs/brainrouter-core/browser';
 import { isWorkspaceTrusted, trustWorkspace, untrustWorkspace, listTrustedWorkspaces } from '@kinqs/brainrouter-core/workspace';
-import { getWorkspaceManifestInfo, saveWorkspaceManifestFromPayload } from './workspaceOnboarding.js';
+import {
+  getWorkspaceManifestInfo,
+  previewWorkspaceOnboardingFromPayload,
+  saveWorkspaceManifestFromPayload,
+} from './workspaceOnboarding.js';
 import { listTranscripts, type TranscriptSummary } from '@kinqs/brainrouter-core/session';
 import { getStateDir } from '@kinqs/brainrouter-core/storage';
 // T1 — global dashboard disk reads (no live host needed): running tasks + last
@@ -846,6 +850,17 @@ app.whenReady().then(() => {
     }
     if (!isWorkspaceTrusted(root)) return { ok: false, error: 'Workspace is not trusted.' };
     return { ok: true, ...getWorkspaceManifestInfo(root, loadConfig()) };
+  });
+  ipcMain.handle('workspace:manifest-preview', (event, root: unknown, payload: unknown) => {
+    if (typeof root !== 'string' || !fs.existsSync(root)) {
+      return { ok: false, error: 'Unknown workspace.' };
+    }
+    const wp = wins.get(event.sender.id);
+    if (!wp || event.senderFrame !== wp.win.webContents.mainFrame || wp.pool.activeRoot !== root) {
+      return { ok: false, error: 'Workspace is no longer active.' };
+    }
+    if (!isWorkspaceTrusted(root)) return { ok: false, error: 'Workspace is not trusted.' };
+    return previewWorkspaceOnboardingFromPayload(root, payload, loadConfig());
   });
   ipcMain.handle('workspace:manifest-save', (event, root: unknown, payload: unknown) => {
     if (typeof root !== 'string' || !fs.existsSync(root)) return { saved: false, error: 'Unknown workspace.' };

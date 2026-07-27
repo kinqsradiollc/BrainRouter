@@ -127,12 +127,17 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
     const generation = ++previewGeneration.current;
     setPreviewing(true);
     const timer = window.setTimeout(() => {
-      void bridgeQuery<unknown>(
-        'workspace-onboarding-preview',
-        { ...draft },
-        15_000,
+      const request = window.brainrouter.previewWorkspaceOnboarding?.(
         workspaceRoot,
-      ).then((raw) => {
+        { ...draft },
+      );
+      if (!request) {
+        setPreviewing(false);
+        setPlanPreview(null);
+        setError('The plan and catalog preview is unavailable. Review the setup again before saving.');
+        return;
+      }
+      void request.then((raw) => {
         if (generation !== previewGeneration.current || root !== workspaceRoot) return;
         const result = raw && typeof raw === 'object' && 'preview' in raw
           ? parseOnboardingPreview((raw as { preview?: unknown }).preview)

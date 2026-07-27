@@ -50,6 +50,9 @@ contextBridge.exposeInMainWorld('brainrouter', {
   workspaceManifest(workspaceRoot: string): Promise<Record<string, unknown>> {
     return ipcRenderer.invoke('workspace:manifest-get', workspaceRoot);
   },
+  previewWorkspaceOnboarding(workspaceRoot: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return ipcRenderer.invoke('workspace:manifest-preview', workspaceRoot, payload);
+  },
   saveWorkspaceManifest(workspaceRoot: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
     return ipcRenderer.invoke('workspace:manifest-save', workspaceRoot, payload);
   },
