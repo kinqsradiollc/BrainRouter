@@ -94,7 +94,7 @@ function asLiveElements(nodes: BrowserSemanticNode[]): LiveElement[] {
   }));
 }
 
-export function BrowserPanel(): React.ReactElement {
+export function BrowserPanel({ panelVisible = true }: { panelVisible?: boolean }): React.ReactElement {
   const browser = window.brainrouter.browser;
   const [browserState, setBrowserState] = useState<BrowserState | null>(null);
   const [bridgeError, setBridgeError] = useState(browser ? '' : 'Native browser unavailable. Restart BrainRouter after updating the desktop app.');
@@ -241,7 +241,7 @@ export function BrowserPanel(): React.ReactElement {
       const rect = browserViewRect({ left: raw.left * zoom, top: raw.top * zoom, width: raw.width * zoom, height: raw.height * zoom });
       const surface = {
         ...rect,
-        visible: intersecting && document.visibilityState === 'visible' && !bridgeError && !activeTab?.crashed && !resizingRef.current && rect.width > 1 && rect.height > 1,
+        visible: panelVisible && intersecting && document.visibilityState === 'visible' && !bridgeError && !activeTab?.crashed && !resizingRef.current && rect.width > 1 && rect.height > 1,
       };
       const serialized = JSON.stringify(surface);
       if (serialized !== last || openGeneration !== undefined) {
@@ -271,7 +271,7 @@ export function BrowserPanel(): React.ReactElement {
       const rect = browserViewRect(host.getBoundingClientRect());
       browser.setSurface({ ...rect, visible: false });
     };
-  }, [activeTab?.crashed, bridgeError, browser, openGeneration]);
+  }, [activeTab?.crashed, bridgeError, browser, openGeneration, panelVisible]);
 
   useEffect(() => {
     const onOpenGeneration = (event: Event): void => {

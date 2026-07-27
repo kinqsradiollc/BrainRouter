@@ -34,7 +34,7 @@ export interface ViewsRailProps {
   closeSideTab: (id: PanelId) => void;
   reorderSideTab: (dragged: PanelId, target: PanelId) => void;
   tabTitle: (id: PanelId) => string;
-  renderPanelBody: (id: PanelId) => React.ReactElement | null;
+  renderPanelBody: (id: PanelId, active?: boolean) => React.ReactElement | null;
   openSideView: (id: PanelId) => void;
   lastPlan: { items: Array<{ status: string }> } | null;
   changedFiles: unknown[];
@@ -189,7 +189,7 @@ export function ViewsRail(p: ViewsRailProps): React.ReactElement | null {
         // its own `.side-body panel-body`, so no layout/CSS change is needed.
         <>{sideTabs.map((t) => (
           <div key={t} className="side-body panel-body" style={{ display: t === activeSideTab ? undefined : 'none' }}>
-            {renderPanelBody(t)}
+            {renderPanelBody(t, t === activeSideTab)}
           </div>
         ))}</>
       ) : (

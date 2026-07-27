@@ -413,13 +413,17 @@ export class BrowserViewManager {
       x: Number(value.x), y: Number(value.y), width: Number(value.width), height: Number(value.height), visible: value.visible === true,
     }, bounds);
     if (this.visibleAgentPin && (!next.visible || next.width <= 1 || next.height <= 1)) {
-      // A panel switch/unmount is explicit user takeover. Abort the active
-      // action, but keep its exact native tab attached until the raw Chromium
-      // work settles; detaching early would allow a late action on hidden UI.
-      this.visibleAgentPin.deferredSurface = next;
+      // A panel switch/unmount is explicit user takeover. Native views render
+      // above every renderer pixel, so deferring this hide lets the Browser
+      // cover Settings/Atlas/Editor until Chromium settles. Detach first, then
+      // abort the action; the operation guard prevents a late side effect.
+      this.visibleAgentPin.deferredSurface = undefined;
       this.visibleAgentPin.userTakeoverRequested = true;
+      this.surface = next;
+      this.attachActiveView();
+      this.emitState();
       this.agentTakeoverHandler?.();
-      return { ...this.surface };
+      return { ...next };
     }
     if (this.visibleAgentPin) this.visibleAgentPin.deferredSurface = undefined;
     this.surface = next;
@@ -945,7 +949,7 @@ export class BrowserViewManager {
       try {
         const inheritedPolicy = this.agentNavigationPolicies.get(tab.id);
         const agentControlled = this.agentControlledTabs.has(tab.id);
-        const child = this.createTab(details.url === 'about:blank' ? BROWSER_BLANK_URL : details.url, true, {
+        const child = this.createTab(details.url === 'about:blank' ? BROWSER_BLANK_URL : details.url, !agentControlled, {
           deferLoad: true,
           agentControlled,
           agentPolicy: inheritedPolicy ?? {},

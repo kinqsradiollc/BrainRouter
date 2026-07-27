@@ -125,7 +125,7 @@ export interface RenderPanelBodyCtx {
   artifacts: ArtifactRecord[];
 }
 
-export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId) => React.ReactElement | null {
+export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, active?: boolean) => React.ReactElement | null {
   const {
     q, hostUp, running, info, gitInfo, branches, tokens, liveTurn, contextUsage, efficiency, runningTasks,
     allFiles, statuses, openFile, grepHits, filesLoading, filesTruncated, filesError, fileView, editor,
@@ -141,7 +141,7 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId) => 
   } = ctx;
 
   // DESK-5f — tab CONTENT only; the tab strip owns titles and closing.
-  const renderPanelBody = (id: PanelId): React.ReactElement | null => {
+  const renderPanelBody = (id: PanelId, active = true): React.ReactElement | null => {
     switch (id) {
       case 'context': return (
         <ContextPanel
@@ -327,7 +327,7 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId) => 
       // UI-TEST fusion — the embedded Browser panel (propless; talks to App via
       // localStorage + br-browser-* window events). Lazy + Suspense like Editor/CI.
       case 'browser':
-        return <Suspense fallback={<div className="row status"><span className="spinner" /> Loading…</div>}><BrowserPanel /></Suspense>;
+        return <Suspense fallback={<div className="row status"><span className="spinner" /> Loading…</div>}><BrowserPanel panelVisible={active} /></Suspense>;
       case 'requirements': {
         const refresh = () => setTimeout(() => q('q-req', 'requirement-list'), 150);
         return <RequirementsPanel requirements={requirements}

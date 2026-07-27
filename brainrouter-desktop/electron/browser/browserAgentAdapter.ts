@@ -57,7 +57,7 @@ function safeAgentUrl(raw: string | undefined): string | undefined {
 
 export function mapAgentBrowserCommand(command: BrowserControlCommand): MappedAgentBrowserCommand {
   switch (command.kind) {
-    case 'tabs.open': return { command: { op: 'create-tab', url: safeAgentUrl(command.url), active: command.activate } };
+    case 'tabs.open': return { command: { op: 'create-tab', url: safeAgentUrl(command.url), active: command.activate === true } };
     case 'tabs.select': return { command: { op: 'select-tab', tabId: command.tabId } };
     case 'tabs.close': return { command: { op: 'close-tab', tabId: command.tabId } };
     case 'tabs.reopen': return { command: { op: 'reopen-tab' } };
