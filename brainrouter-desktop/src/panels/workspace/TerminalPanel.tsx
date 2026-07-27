@@ -183,7 +183,7 @@ export function TerminalPanel(): React.ReactElement {
           }}>
             {shells.map((shell) => (
               <option key={shell.id} value={shell.id}>
-                {shell.label}{shell.isDefault ? ' — default' : ''}
+                {shell.label}
               </option>
             ))}
           </select>
