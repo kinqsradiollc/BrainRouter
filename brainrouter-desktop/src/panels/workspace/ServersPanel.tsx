@@ -23,8 +23,19 @@ interface ServerStatus {
 
 interface ServerListResult { servers: ServerStatus[] }
 
+interface RuntimePreview {
+  runtimeId: string;
+  name: string;
+  port: number;
+  url: string;
+  updatedAt: string;
+}
+
+interface RuntimePreviewListResult { previews: RuntimePreview[] }
+
 export function ServersPanel({ onOpenInBrowser }: { onOpenInBrowser: (url: string) => void }): React.ReactElement {
   const [servers, setServers] = React.useState<ServerStatus[]>([]);
+  const [runtimePreviews, setRuntimePreviews] = React.useState<RuntimePreview[]>([]);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState('');
   const [pending, setPending] = React.useState<string>(''); // name being started/stopped
@@ -42,9 +53,24 @@ export function ServersPanel({ onOpenInBrowser }: { onOpenInBrowser: (url: strin
 
   const refresh = React.useCallback(() => {
     setBusy(true);
-    void bridgeQuery<ServerListResult>('servers:list', {}, 10_000)
-      .then((r) => { if (mounted.current) { setServers(Array.isArray(r.servers) ? r.servers : []); setError(''); } })
-      .catch((err) => { if (mounted.current) setError((err as Error).message || 'Server lookup failed.'); })
+    void Promise.allSettled([
+      bridgeQuery<ServerListResult>('servers:list', {}, 10_000),
+      bridgeQuery<RuntimePreviewListResult>('runtime-previews-list', {}, 10_000),
+    ])
+      .then(([serverResult, previewResult]) => {
+        if (!mounted.current) return;
+        if (serverResult.status === 'fulfilled') {
+          setServers(Array.isArray(serverResult.value.servers) ? serverResult.value.servers : []);
+          setError('');
+        } else {
+          setError(serverResult.reason instanceof Error ? serverResult.reason.message : 'Server lookup failed.');
+        }
+        setRuntimePreviews(
+          previewResult.status === 'fulfilled' && Array.isArray(previewResult.value.previews)
+            ? previewResult.value.previews
+            : [],
+        );
+      })
       .finally(() => { if (mounted.current) setBusy(false); });
   }, []);
 
@@ -94,7 +120,7 @@ export function ServersPanel({ onOpenInBrowser }: { onOpenInBrowser: (url: strin
   return (
     <div className="scroll">
       <div className="tasks-section">
-        <span>Dev servers</span>
+        <span>Workspace dev servers</span>
         <button className="tasks-clear" type="button" onClick={refresh} disabled={busy}>{busy ? 'Refreshing...' : 'Refresh'}</button>
       </div>
       {error ? <div className="empty error">{error}</div> : null}
@@ -119,6 +145,19 @@ export function ServersPanel({ onOpenInBrowser }: { onOpenInBrowser: (url: strin
             </div>
           ) : null}
         </React.Fragment>
+      ))}
+      <div className="tasks-section"><span>Runtime previews</span></div>
+      <div className="set-desc" style={{ padding: '0 8px 8px' }}>
+        Live loopback endpoints registered by isolated runtimes. Configure durable port defaults in Settings → Automation → Runtime.
+      </div>
+      {runtimePreviews.length === 0 ? <div className="empty">No live runtime previews.</div> : null}
+      {runtimePreviews.map((preview) => (
+        <div className="task-row" key={`${preview.runtimeId}:${preview.name}`}>
+          <span className="task-kind ok">● registered</span>
+          <span className="file-name">{preview.name} · {preview.url}</span>
+          <span className="task-elapsed">{preview.runtimeId}</span>
+          <button className="task-link" type="button" onClick={() => onOpenInBrowser(preview.url)}>Open in Browser</button>
+        </div>
       ))}
       <div className="tasks-section"><span>Add a dev server</span></div>
       <div className="task-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, padding: 8 }}>
