@@ -27,6 +27,7 @@ export * from './onboardingPreview.js';
 export * from './onboardingSources.js';
 export * from './skillSelection.js';
 export * from './skillToolAdapter.js';
+export * from './requiredSkillActivation.js';
 export * from './toolProfiles.js';
 export * from './selectionCatalog.js';
 export * from './memoryCapture.js';

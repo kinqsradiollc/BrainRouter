@@ -2180,7 +2180,9 @@ test('runTurn: delegate_agent triggers child-drain guardrail (R2 must not bypass
       const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
         workspaceRoot: workspace, launchCwd: workspace, silent: true,
       });
-      const answer = await agent.runTurn('delegate the background work', {
+      // Keep this fixture focused on child draining. Explicit delegation is a
+      // separate hard trigger for the required Planning-skill gate.
+      const answer = await agent.runTurn('handle the background work', {
         onStatusUpdate: () => {},
         onToolStart: (name) => { toolNames.push(name); },
         onToolEnd: () => {},
@@ -3260,6 +3262,104 @@ test('runTurn serves package-owned get_skill without calling a stale global MCP 
       assert.doesNotMatch(toolResult.content, /Legacy global collision/);
     } finally {
       globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('runTurn pauses mutation until a hard-triggered workflow skill is loaded', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'app', profile: 'engineering', by: 'wizard' }),
+    );
+    const restore = stubLlm([{
+      content: '',
+      tool_calls: [{
+        id: 'premature_write',
+        type: 'function',
+        function: { name: 'write_file', arguments: '{"path":"blocked.txt","content":"no"}' },
+      }],
+    }]);
+    try {
+      const agent = new Agent(makeStubMcp(), { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        silent: true,
+      });
+      agent.setAccessMode('shell');
+      assert.equal(await agent.runTurn('Plan the multi-stage implementation and build it.', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: () => {},
+      }), 'done.');
+
+      assert.equal(fs.existsSync(path.join(workspace, 'blocked.txt')), false);
+      const result = agent.chatHistory.find((message: any) =>
+        message.role === 'tool' && message.tool_call_id === 'premature_write');
+      assert.match(result?.content ?? '', /paused until required workflow skill.*planning-skill/i);
+      assert.ok(agent.chatHistory.some((message: any) =>
+        message.role === 'system' && /Required workflow skills/.test(message.content)));
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('runTurn permits mutation after the required workflow skill is loaded', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'app', profile: 'engineering', by: 'wizard' }),
+    );
+    const restore = stubLlm([
+      {
+        content: '',
+        tool_calls: [{
+          id: 'load_planning',
+          type: 'function',
+          function: { name: 'get_skill', arguments: '{"name":"planning-skill","section":"workflow"}' },
+        }],
+      },
+      {
+        content: '',
+        tool_calls: [{
+          id: 'write_after_skill',
+          type: 'function',
+          function: { name: 'write_file', arguments: '{"path":"allowed.txt","content":"yes"}' },
+        }],
+      },
+    ]);
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({
+          tools: [{
+            name: 'get_skill',
+            __rawName: 'get_skill',
+            description: 'Get a skill',
+            inputSchema: {
+              type: 'object',
+              properties: { name: { type: 'string' }, section: { type: 'string' } },
+              required: ['name'],
+            },
+          }],
+        }),
+        callTool: async () => ({ content: [{ text: '# Planning workflow\nKeep the durable plan current.' }] }),
+        close: async () => {},
+      };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        silent: true,
+      });
+      agent.setAccessMode('shell');
+      assert.equal(await agent.runTurn('Plan the multi-stage implementation and build it.', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: () => {},
+      }), 'done.');
+      assert.equal(fs.readFileSync(path.join(workspace, 'allowed.txt'), 'utf8'), 'yes');
+    } finally {
+      restore();
     }
   });
 });

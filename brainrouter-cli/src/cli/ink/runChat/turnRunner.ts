@@ -425,6 +425,7 @@ export function installTurnRunner(ctx: RunChatContext): void {
       controller.push.setPhase('idle');
       controller.push.setStatus('');
       agent.activeSkill = undefined;
+      agent.activeSkills = [];
       // CC-SKILLS-D3 — the skill's per-turn tool blacklist is cleared with it.
       agent.activeSkillDisallowedTools = [];
       agent.activeSkillAllowedTools = undefined;
