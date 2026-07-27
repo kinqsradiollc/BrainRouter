@@ -28,6 +28,14 @@ const DEV_CAPABILITIES = [
 ] as const;
 const DEV_TOOL_GROUPS = [
   {
+    id: 'workspace-files',
+    label: 'Workspace files',
+    description: 'Inspect, search, create, and revise ordinary files in the workspace.',
+    category: 'files-code',
+    toolIds: ['read_file', 'list_dir', 'grep_search', 'glob_files', 'write_file', 'edit_file', 'apply_patch'],
+    extensionIds: [],
+  },
+  {
     id: 'coding',
     label: 'Files and code',
     description: 'Inspect, edit, patch, and analyze source files and notebooks.',

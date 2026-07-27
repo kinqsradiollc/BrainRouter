@@ -57,15 +57,41 @@ test('frontend task profiles add interactive browser tools without changing the 
   assert.equal(JSON.stringify(manifest), before, 'task resolution never mutates reviewed workspace state');
 });
 
-test('research profiles expose browser and notes while coding and terminal stay hidden', () => {
+test('research profiles can inspect and author workspace files without code or shell authority', () => {
   const manifest = createWorkspaceManifest({ name: 'sources', profile: 'research', by: 'wizard' });
+  manifest.version = 3;
+  manifest.tools.mode = 'explicit-catalog';
+  manifest.tools.enabled = [];
   const selection = resolveWorkspaceToolSelection({ manifest });
 
+  assert.equal(allowed(selection, 'list_dir', 'filesystem'), true);
+  assert.equal(allowed(selection, 'glob_files', 'filesystem'), true);
+  assert.equal(allowed(selection, 'write_file', 'filesystem'), true);
+  assert.equal(allowed(selection, 'apply_patch', 'filesystem'), true);
   assert.equal(allowed(selection, 'fetch_url', 'web-research'), true);
   assert.equal(allowed(selection, 'research_note', 'web-research'), true);
   assert.equal(allowed(selection, 'artifact_write', 'planning-state'), true);
-  assert.equal(allowed(selection, 'write_file', 'filesystem'), false);
+  assert.equal(allowed(selection, 'notebook_edit', 'filesystem'), false);
+  assert.equal(allowed(selection, 'lsp', 'filesystem'), false);
   assert.equal(allowed(selection, 'run_command', 'shell'), false);
+});
+
+test('study and writing profiles can produce folder-backed learning and writing material', () => {
+  for (const profile of ['study', 'writing'] as const) {
+    const manifest = createWorkspaceManifest({ name: profile, profile, by: 'wizard' });
+    manifest.version = 3;
+    manifest.tools.mode = 'explicit-catalog';
+    manifest.tools.enabled = [];
+    const selection = resolveWorkspaceToolSelection({ manifest });
+
+    assert.equal(allowed(selection, 'list_dir', 'filesystem'), true, `${profile}: list`);
+    assert.equal(allowed(selection, 'read_file', 'filesystem'), true, `${profile}: read`);
+    assert.equal(allowed(selection, 'write_file', 'filesystem'), true, `${profile}: write`);
+    assert.equal(allowed(selection, 'artifact_write', 'planning-state'), true, `${profile}: artifact`);
+    assert.equal(allowed(selection, 'notebook_edit', 'filesystem'), false, `${profile}: notebook`);
+    assert.equal(allowed(selection, 'lsp', 'filesystem'), false, `${profile}: lsp`);
+    assert.equal(allowed(selection, 'run_command', 'shell'), false, `${profile}: shell`);
+  }
 });
 
 test('custom empty profiles hide registered groups but retain baseline and unknown extension tools', () => {
@@ -98,7 +124,7 @@ test('unknown profile ids never grant a registered tool group', () => {
   assert.deepEqual(selection.activeProfileIds, []);
   assert.equal(allowed(selection, 'write_file', 'filesystem'), false);
   assert.deepEqual(workspaceToolProfileIds(), [
-    'coding', 'shell', 'browser', 'research-notes', 'artifacts',
+    'workspace-files', 'coding', 'shell', 'browser', 'research-notes', 'artifacts',
     'planning-session', 'orchestration', 'interactive-browser',
     'mcp-resources', 'connectors', 'computer-control', 'workflow-launch',
     'background-workers', 'pull-request-observation', 'security-review',

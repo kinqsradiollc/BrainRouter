@@ -725,11 +725,11 @@ diagnostic, rather than a source of repeated failed delegation rows.
 
 ### 12. Make tool and skill selection catalog-driven and profile-aware
 
-The current workspace manifest has `tools.profiles` and `tools.deny`. Its
-built-in group registry maps only five product-level IDs (`coding`, `terminal`,
-`browser`, `notes`, and `design`) to concrete tools. The Desktop and CLI
-onboarding editors currently accept those IDs, denied-tool IDs, skill-pack IDs,
-and skill IDs as free-form lists.
+At the start of this decision, the workspace manifest had `tools.profiles` and
+`tools.deny`, but its built-in group registry mapped only five product-level
+IDs (`coding`, `terminal`, `browser`, `notes`, and `design`) to concrete tools.
+The Desktop and CLI onboarding editors accepted those IDs, denied-tool IDs,
+skill-pack IDs, and skill IDs as free-form lists.
 
 That is insufficient for a profile-aware system: it conceals the available
 surface, makes Custom unnecessarily dependent on internal names, and lets a
@@ -838,6 +838,7 @@ new group but must not silently add tools to an already reviewed group.
 
 | Group | Concrete responsibility | Authority posture |
 |---|---|---|
+| `workspace-files` | Read, search, create, revise, and patch ordinary files in the selected workspace | Normal folder-backed production surface for Research, Study, and Writing; excludes LSP and notebook execution |
 | `coding` | Read/search code, LSP, file edits, patches, and notebook edits | Normal for Engineering and Data Science; still bounded by access mode |
 | `shell` | Run, observe, wait for, and stop commands | Normal for Engineering and Data Science; excludes computer control and connectors |
 | `browser` | Fetch pages and search public sources | Read/network research surface; not interactive browser control |
@@ -866,10 +867,10 @@ recommendation is still only a request entering the intersection in section
 | Workspace profile | Recommended checked groups | Capability-sensitive proposal | Advanced, not preselected |
 |---|---|---|---|
 | Engineering | `coding`, `shell`, `browser`, `artifacts`, `planning-session`, `orchestration`, `pull-request-observation` | Add `interactive-browser` for reviewed frontend/full-stack work; backend remains the same engineer persona and may add it when browser/API inspection is useful | MCP resources, connectors, computer control, workflow launch, background workers, security review |
-| Research | `browser`, `research-notes`, `artifacts`, `planning-session`, `orchestration` | Add `coding` and `shell` for computational/repository research; add interactive browser only when source access needs it | MCP resources/connectors when a reviewed corpus needs them; workflow launch, background workers, computer control, security review |
+| Research | `workspace-files`, `browser`, `research-notes`, `artifacts`, `planning-session`, `orchestration` | Add `coding` and `shell` for computational/repository research; add interactive browser only when source access needs it | MCP resources/connectors when a reviewed corpus needs them; workflow launch, background workers, computer control, security review |
 | Data Science | `coding`, `shell`, `browser`, `research-notes`, `artifacts`, `planning-session`, `orchestration` | Add interactive browser for dashboard/data-portal work | MCP resources/connectors for reviewed data sources; workflow launch, background workers, computer control, security review |
-| Study | `browser`, `research-notes`, `artifacts`, `planning-session` | Add `orchestration` only when the learner selects a plan that uses an explorer; add coding/shell for programming labs | MCP resources/connectors for a reviewed course corpus; interactive browser, workflow launch, background workers, computer control, security review |
-| Writing | `browser`, `research-notes`, `artifacts`, `planning-session` | Add `orchestration` when the writer selects a reviewer strategy; add coding only for repository-backed documentation | MCP resources/connectors for reviewed source libraries; interactive browser, shell, workflow launch, background workers, computer control, security review |
+| Study | `workspace-files`, `browser`, `research-notes`, `artifacts`, `planning-session` | Add `orchestration` only when the learner selects a plan that uses an explorer; add coding/shell for programming labs | MCP resources/connectors for a reviewed course corpus; interactive browser, workflow launch, background workers, computer control, security review |
+| Writing | `workspace-files`, `browser`, `research-notes`, `artifacts`, `planning-session` | Add `orchestration` when the writer selects a reviewer strategy; add coding only for repository-backed documentation | MCP resources/connectors for reviewed source libraries; interactive browser, shell, workflow launch, background workers, computer control, security review |
 | Custom | Empty | A deterministic scan or managed proposal may recommend checked entries, but the user must review them | Everything remains searchable and individually selectable; no hidden bundle |
 
 This matrix deliberately treats artifacts as a production primitive, not a
@@ -885,6 +886,14 @@ benefit from it. Live connectors depend on configured external systems,
 computer control acts outside the repository, workflow/worker launch can incur
 substantial cost, and security-review tools have a specialized runtime. These
 remain discoverable, explained choices.
+
+The `workspace-files` group is separate from `coding` because folder-backed
+work is a baseline production need for research reports, study material, and
+long-form drafts, while LSP and notebook mutation are programming-specific.
+Adding this new group does not change the immutable expansion of `coding` and
+does not silently modify an already reviewed manifest. Existing managed
+workspaces see it as a new recommended choice during workspace-settings review
+and must explicitly save that revised selection.
 
 #### 12.4 Keep agent tools in extensions and native runtimes in their hosts
 
@@ -1323,7 +1332,7 @@ server is running.
 | Verification meaning | Tests/build/runtime evidence | Citation support and source consistency | Reproduction and metric checks | Assessment and retrieval practice | Requirement/style conformance | User-defined |
 | Write-capable role | Worker when authorized | None by default | Worker when authorized | None | Primary only | None by default |
 | Final synthesis | Primary engineer | Primary researcher | Primary data scientist | Primary tutor | Primary writer | Primary |
-| Recommended tool bundles | coding, shell, browser, artifacts, planning-session, orchestration, pull-request-observation | browser, research-notes, artifacts, planning-session, orchestration | coding, shell, browser, research-notes, artifacts, planning-session, orchestration | browser, research-notes, artifacts, planning-session | browser, research-notes, artifacts, planning-session | none |
+| Recommended tool bundles | coding, shell, browser, artifacts, planning-session, orchestration, pull-request-observation | workspace-files, browser, research-notes, artifacts, planning-session, orchestration | coding, shell, browser, research-notes, artifacts, planning-session, orchestration | workspace-files, browser, research-notes, artifacts, planning-session | workspace-files, browser, research-notes, artifacts, planning-session | none |
 
 ## Security and authority invariants
 

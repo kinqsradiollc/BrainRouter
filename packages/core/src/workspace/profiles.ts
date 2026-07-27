@@ -114,7 +114,10 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
     capabilities: { available: [], recommended: [], enabled: [] },
     skills: { packs: ['research'], enabled: ['planning-skill', 'handover-skill'] },
     tools: {
-      profiles: ['browser', 'research-notes', 'artifacts', 'planning-session', 'orchestration'],
+      profiles: [
+        'workspace-files', 'browser', 'research-notes',
+        'artifacts', 'planning-session', 'orchestration',
+      ],
     },
     memory: { tags: ['research'], captureHint: 'sources' },
   },
@@ -154,7 +157,9 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
     agents: { default: 'tutor', enabled: ['tutor'] },
     capabilities: { available: [], recommended: [], enabled: [] },
     skills: { packs: ['study'], enabled: ['planning-skill', 'handover-skill'] },
-    tools: { profiles: ['browser', 'research-notes', 'artifacts', 'planning-session'] },
+    tools: {
+      profiles: ['workspace-files', 'browser', 'research-notes', 'artifacts', 'planning-session'],
+    },
     memory: { tags: ['study'], captureHint: 'learning' },
   },
   {
@@ -171,7 +176,9 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
     agents: { default: 'writer', enabled: ['writer'] },
     capabilities: { available: [], recommended: [], enabled: [] },
     skills: { packs: ['writing'], enabled: ['planning-skill', 'handover-skill'] },
-    tools: { profiles: ['browser', 'research-notes', 'artifacts', 'planning-session'] },
+    tools: {
+      profiles: ['workspace-files', 'browser', 'research-notes', 'artifacts', 'planning-session'],
+    },
     memory: { tags: ['writing'], captureHint: 'drafts' },
   },
   {
