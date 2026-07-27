@@ -2,11 +2,11 @@
 name: planning-skill
 description: Breaks work into ordered tasks. Use when you have a spec or clear requirements and need to break work into implementable tasks. Use when a task feels too large to start, when you need to estimate scope, or when parallel work is possible.
 hints: |
-  - Always write the plan to a markdown file (e.g. IMPLEMENTATION_PLAN.md) before coding.
+  - Keep a durable plan for goals, multi-stage work, delegation, multi-gap research, or multiple deliverables; use the runtime plan first and follow the project's existing tracker convention.
   - Break tasks into XS, S, or M sizes; never start an L or XL task without decomposing it further.
   - If available, search local reference implementations for open-source reference architectures to guide planning.
   - Identify a clear verification step and acceptance criteria for every single task.
-  - STOP and wait for human approval of the implementation plan before starting code changes.
+  - Pause after planning only when the user requested plan/review-only work or a real authority, risk, or product decision is unresolved. If implementation was requested, continue with the first safe slice.
 ---
 
 # Planning and Task Breakdown
@@ -27,9 +27,17 @@ Decompose work into small, verifiable tasks with explicit acceptance criteria. G
 
 ## The Planning Process
 
-### Step 1: Enter Plan Mode
+### Step 1: Classify the Planning Contract
 
-Before writing any code, operate in read-only mode:
+Start read-only while you learn the task and codebase. Then classify the request:
+
+- **Plan/review-only:** produce the requested plan and stop without implementation.
+- **Plan and implement:** keep the plan current and proceed into the first safe,
+  authorized slice after the plan is coherent.
+- **Small obvious change:** skip a separate planning artifact; state the
+  acceptance check and implement directly.
+- **Decision blocked:** pause only for a choice that changes scope, authority,
+  irreversible risk, or the product contract.
 
 - Run `list_template_docs` to see what structural constraints and project conventions exist.
 - Run `get_template_doc` to retrieve any project-specific constraints from the `docs/` folder (such as design themes, API structures, or schemas).
@@ -39,7 +47,9 @@ Before writing any code, operate in read-only mode:
 - Map dependencies between components
 - Note risks and unknowns
 
-**Do NOT write code during planning.** The output MUST be a plan documented in a markdown file (e.g., `IMPLEMENTATION_PLAN.md`), not implementation.
+Do not mutate while the plan is still being formed. Once a plan-and-implement
+request has a safe first slice, planning and execution become one continuous
+workflow; approval is not invented when the user already authorized the work.
 
 ### Step 2: Identify the Dependency Graph
 
@@ -130,20 +140,26 @@ Add explicit checkpoints:
 - [ ] Core user flow works end-to-end
 - [ ] Review with human before proceeding
 
-### Step 6: Persist the Plan to a Markdown File
+### Step 6: Persist the Plan
 
-Always write your full plan to a markdown file in the project root before starting any implementation.
+For non-trivial work, persist the plan through the runtime plan tool when
+available. Update an existing project tracker when repository instructions name
+one. Create a new markdown plan only when the user requests an artifact or the
+project's contributor rules require that file.
 
 **Why?**
 - **Durability:** Large language models have limited context windows. A written plan serves as external memory.
-- **Collaboration:** Allows a human or another agent to review and approve the strategy.
+- **Collaboration:** Allows a human or another agent to review the strategy.
 - **Tracking:** You can check off tasks as you complete them, maintaining a clear state of progress.
 
-**Recommended Path:** `IMPLEMENTATION_PLAN.md` in the project root.
+**Fallback Path:** `IMPLEMENTATION_PLAN.md` in the project root only when no
+runtime or repository-specific tracker exists.
 
 ### Step 7: Initialize the Task Tracker (task.md)
 
-For any non-trivial implementation, create a dedicated `task.md` file. While the `IMPLEMENTATION_PLAN.md` is for approval and architecture, `task.md` is for active execution.
+For any non-trivial implementation, use the repository's existing task tracker
+when its instructions require one. Do not create duplicate plan and tracker
+files merely because this skill ran.
 
 **Format:**
 ```markdown
@@ -156,7 +172,7 @@ For any non-trivial implementation, create a dedicated `task.md` file. While the
 - [x] Task 3: [Completed Task]
 ```
 
-Copy the approved task list from your plan into `task.md`. This becomes your source of truth for "what's next."
+Keep exactly one execution source of truth and update it as work changes.
 ```
 
 ## Task Sizing Guidelines
@@ -257,14 +273,13 @@ Before starting implementation, confirm:
 - [ ] Task dependencies are identified and ordered correctly
 - [ ] No task touches more than ~5 files
 - [ ] Checkpoints exist between major phases
-- [ ] The human has reviewed and approved the plan
+- [ ] Any genuinely required human decision is explicit; otherwise execution is authorized by the implementation request
 
 ## Workflow
 1. **Context Loading:** Run `list_template_docs` and `get_template_doc` to retrieve project constraints.
 2. **Research:** Read relevant codebase sections and map the dependency graph.
 3. **Drafting:** Structure the work into small, vertically sliced tasks with acceptance criteria.
-4. **Persist:** Write the plan to `IMPLEMENTATION_PLAN.md` (or similar) in the project root.
-5. **Approval:** STOP and wait for human approval of the plan file.
-6. **Track:** Once approved, initialize `task.md` by copying the task list from the plan.
-7. **Execute:** Implement tasks one-by-one, marking progress in `task.md`. Update the human after major milestones.
-
+4. **Persist:** Use the runtime plan or the repository's existing tracker; create a new plan file only when required.
+5. **Decision gate:** Stop only for plan/review-only requests or a real unresolved authority, risk, or product choice.
+6. **Execute:** For plan-and-implement requests, implement the first safe slice and keep plan status current.
+7. **Reconcile:** Classify steering as clarification, tactical correction, scope/order change, constraint, conflict, or authority change. Revise affected tasks and acceptance checks before the next related mutation.
