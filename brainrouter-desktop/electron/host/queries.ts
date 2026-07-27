@@ -78,6 +78,7 @@ import {
   previewWorkspaceInstructionFromPayload,
   previewWorkspaceOnboardingFromPayload,
 } from '../workspaceOnboarding.js';
+import { discoverTerminalShells, resolveTerminalShell } from './terminalShells.js';
 import {
   CLI_CONFIG_SCHEMA,
   findConfigSchemaField,
@@ -3172,11 +3173,26 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // A true pseudo-terminal: interactive programs see a TTY, resize reaches
       // the child process, and a host-owned bounded snapshot survives panel
       // remounts without writing terminal contents to disk.
-      'term-open': (args) => ptyRegistry.open({
-        cols: Number(args.cols) || undefined,
-        rows: Number(args.rows) || undefined,
-        reuseKey: typeof args.reuseKey === 'string' ? args.reuseKey : undefined,
-      }),
+      'term-shells': () => {
+        const catalog = discoverTerminalShells();
+        return {
+          selected: catalog.defaultId,
+          shells: catalog.shells.map(({ id, label, description, isDefault }) => ({
+            id, label, description, isDefault,
+          })),
+        };
+      },
+      'term-open': (args) => {
+        const selected = resolveTerminalShell(args.shellId);
+        const opened = ptyRegistry.open({
+          shell: selected.shell,
+          args: selected.args,
+          cols: Number(args.cols) || undefined,
+          rows: Number(args.rows) || undefined,
+          reuseKey: `workspace-terminal:${selected.id}`,
+        });
+        return { ...opened, shellId: selected.id, label: selected.label };
+      },
       'term-write': (args) => {
         return { ok: ptyRegistry.write(String(args.id), String(args.data ?? '')) };
       },

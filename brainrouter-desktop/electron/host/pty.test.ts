@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PtyRegistry, type PtyLike, type PtySpawn } from './pty.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { ensureSpawnHelperExecutable, PtyRegistry, type PtyLike, type PtySpawn } from './pty.js';
 
 class FakePty implements PtyLike {
   readonly pid = 4321;
@@ -36,6 +39,25 @@ function fixture(bufferLimit = 400_000) {
   const registry = new PtyRegistry({ workspaceRoot: '/work/repo', bufferLimit, spawn });
   return { registry, ptys };
 }
+
+test('restores the executable bit on the native spawn helper', { skip: process.platform === 'win32' }, () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-node-pty-'));
+  try {
+    const entry = path.join(root, 'lib', 'index.js');
+    const helper = path.join(root, 'prebuilds', `${process.platform}-${process.arch}`, 'spawn-helper');
+    fs.mkdirSync(path.dirname(entry), { recursive: true });
+    fs.mkdirSync(path.dirname(helper), { recursive: true });
+    fs.writeFileSync(entry, '');
+    fs.writeFileSync(helper, '');
+    fs.chmodSync(helper, 0o644);
+
+    ensureSpawnHelperExecutable(entry);
+
+    assert.notEqual(fs.statSync(helper).mode & 0o111, 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('opens a PTY with workspace cwd and streams raw terminal data', () => {
   const calls: Parameters<PtySpawn>[] = [];

@@ -1,4 +1,6 @@
 import { createRequire } from 'node:module';
+import fs from 'node:fs';
+import path from 'node:path';
 
 export interface PtyLike {
   readonly pid: number;
@@ -77,8 +79,29 @@ function defaultPtySpawn(file: string, args: string[], options: PtySpawnOptions)
   // loads it only when a real terminal is opened, after electron-builder has
   // rebuilt it for the packaged runtime.
   const require = createRequire(import.meta.url);
+  ensureSpawnHelperExecutable(require.resolve('node-pty'));
   const nodePty = require('node-pty') as { spawn: PtySpawn };
   return nodePty.spawn(file, args, options);
+}
+
+/**
+ * node-pty's macOS prebuild delegates process creation to spawn-helper. Some
+ * package caches restore that binary without its executable bit, which makes
+ * every valid shell fail with the opaque "posix_spawnp failed" error.
+ */
+export function ensureSpawnHelperExecutable(nodePtyEntry: string): void {
+  if (process.platform === 'win32') return;
+  const packageRoot = path.resolve(path.dirname(nodePtyEntry), '..');
+  const candidates = [
+    path.join(packageRoot, 'build', 'Release', 'spawn-helper'),
+    path.join(packageRoot, 'prebuilds', `${process.platform}-${process.arch}`, 'spawn-helper'),
+  ];
+  for (const helper of candidates) {
+    if (!fs.existsSync(helper)) continue;
+    const mode = fs.statSync(helper).mode;
+    if ((mode & 0o111) === 0) fs.chmodSync(helper, mode | 0o755);
+    return;
+  }
 }
 
 export class PtyRegistry {

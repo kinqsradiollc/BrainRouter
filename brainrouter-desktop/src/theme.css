@@ -2724,24 +2724,37 @@ button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97)
 .tree-chevron { width: 12px; flex: none; color: var(--text-faint); font-size: 10px; }
 .tree-folder { flex: none; font-size: 12px; opacity: .8; }
 .tree-row .fstat { width: auto; margin-left: auto; }
-.xterm-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.terminal-agent-bar,
-.terminal-followup { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--border); min-width: 0; }
-.terminal-agent-bar select,
-.terminal-agent-bar button,
-.terminal-followup button { min-height: 30px; height: 30px; }
-.terminal-agent-bar select { max-width: 180px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 0 8px; }
-.terminal-trust { display: inline-flex; align-items: center; gap: 5px; color: var(--text-muted); white-space: nowrap; font-size: 12px; }
+.xterm-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--term-bg); }
+.terminal-toolbar {
+  display: flex; align-items: center; gap: 6px; min-width: 0; height: 36px; padding: 0 10px;
+  background: color-mix(in srgb, var(--term-bg) 82%, var(--raised));
+  border-bottom: 1px solid var(--ov-08);
+}
+.terminal-live-indicator { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 12%, transparent); }
+.terminal-live-indicator.is-offline { background: var(--err); box-shadow: 0 0 0 3px var(--err-soft); }
+.terminal-shell-picker { display: inline-flex; align-items: center; min-width: 0; }
+.terminal-shell-picker select {
+  width: auto; max-width: 210px; height: 26px; padding: 0 24px 0 7px;
+  border: 0; border-radius: 5px; background-color: transparent; color: var(--text-dim);
+  font: 11px var(--mono); cursor: pointer;
+}
+.terminal-shell-picker select:hover { background-color: var(--ov-06); color: var(--text); }
+.terminal-new-button {
+  width: 26px; height: 26px; min-height: 26px; padding: 0; border: 0; border-radius: 5px;
+  color: var(--text-dim); font: 18px/1 var(--font);
+}
+.terminal-new-button:hover:not(:disabled) { background: var(--ov-08); color: var(--text); }
+.terminal-shell-status { color: var(--text-faint); font: 10.5px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-shell-status.status-failed { color: var(--err); }
+.terminal-toolbar-spacer { flex: 1; }
+.terminal-exit-notice { padding: 5px 8px; border-top: 1px solid var(--border); color: var(--warn); font-size: 11px; }
 .terminal-agent-status { border: 1px solid var(--border); border-radius: 999px; padding: 3px 8px; color: var(--text-muted); font-size: 11px; text-transform: capitalize; }
 .terminal-agent-status.status-working { color: var(--ok); }
 .terminal-agent-status.status-blocked,
 .terminal-agent-status.status-needs-trust { color: var(--warn); }
 .terminal-agent-status.status-failed { color: var(--err); }
-.terminal-setup-state { color: var(--text-muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.terminal-agent-spacer { flex: 1; }
-.terminal-followup input { flex: 1; min-width: 0; height: 30px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 0 9px; }
-.xterm-host { flex: 1; min-height: 0; }
-.xterm-host .xterm { height: 100%; padding: 4px; }
+.xterm-host { flex: 1; min-height: 0; background: var(--term-bg); }
+.xterm-host .xterm { height: 100%; padding: 9px 10px; }
 .fanout-section { display: grid; gap: 10px; margin-bottom: 18px; }
 .ssh-hosts-card { border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); }
 .ssh-hosts-card > summary { min-height: 38px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 10px; color: var(--text); cursor: pointer; font-size: 12px; font-weight: 650; list-style: none; }
