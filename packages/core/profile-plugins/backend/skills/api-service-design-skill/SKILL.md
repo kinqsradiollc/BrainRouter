@@ -1,7 +1,7 @@
 ---
 name: api-service-design-skill
 description: Design or change backend APIs and service boundaries with explicit contracts, validation, compatibility, idempotency, and failure semantics.
-allowed-tools: [read_file, list_dir, grep_search, glob_files, edit_file, apply_patch, run_command]
+allowed-tools: [read_file, list_dir, grep_search, glob_files, write_file, edit_file, apply_patch, lsp, run_command, artifact_write]
 ---
 
 # API and service contract design

@@ -1,7 +1,7 @@
 ---
 name: backend-testing-skill
 description: Verify backend changes at contract and integration boundaries with deterministic success, denial, concurrency, retry, migration, and dependency-failure evidence.
-allowed-tools: [read_file, list_dir, grep_search, glob_files, edit_file, apply_patch, run_command]
+allowed-tools: [read_file, list_dir, grep_search, glob_files, write_file, edit_file, apply_patch, lsp, run_command, artifact_write]
 ---
 
 # Backend verification

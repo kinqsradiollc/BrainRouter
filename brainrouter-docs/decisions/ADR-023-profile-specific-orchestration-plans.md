@@ -901,6 +901,13 @@ emission. These allowlists still only subtract from the workspace, role,
 access, extension, and runtime gates. They never make an unselected group
 executable.
 
+Backend capability skills retain the common file creation, editing, language
+service, bounded command, and artifact operations needed when several backend
+workflows are stacked. The shared list prevents skill intersection from
+silently removing migrations, tests, new service files, verification, or
+deliverables, but remains subordinate to the Engineering workspace's reviewed
+coding, shell, and artifact groups and the active role's access ceiling.
+
 Profiles also do not receive every tool merely because a task could eventually
 benefit from it. Live connectors depend on configured external systems,
 computer control acts outside the repository, workflow/worker launch can incur

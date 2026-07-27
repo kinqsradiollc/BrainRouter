@@ -1,7 +1,7 @@
 ---
 name: data-integrity-migration-skill
 description: Change backend domain models, persistence, schemas, and migrations while preserving invariants, tenant scope, rollback safety, and operational compatibility.
-allowed-tools: [read_file, list_dir, grep_search, glob_files, edit_file, apply_patch, run_command]
+allowed-tools: [read_file, list_dir, grep_search, glob_files, write_file, edit_file, apply_patch, lsp, run_command, artifact_write]
 ---
 
 # Data integrity and migrations

@@ -1,7 +1,7 @@
 ---
 name: production-readiness-skill
 description: Prepare backend services for deployment with explicit configuration, health, observability, capacity, performance, shutdown, and failure-isolation behavior.
-allowed-tools: [read_file, list_dir, grep_search, glob_files, edit_file, apply_patch, run_command]
+allowed-tools: [read_file, list_dir, grep_search, glob_files, write_file, edit_file, apply_patch, lsp, run_command, artifact_write]
 ---
 
 # Backend production readiness

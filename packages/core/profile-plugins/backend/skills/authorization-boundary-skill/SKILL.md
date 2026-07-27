@@ -1,7 +1,7 @@
 ---
 name: authorization-boundary-skill
 description: Implement or review backend authentication, authorization, tenancy, secret, and untrusted-input boundaries without trusting caller-supplied identity or scope.
-allowed-tools: [read_file, list_dir, grep_search, glob_files, edit_file, apply_patch, run_command]
+allowed-tools: [read_file, list_dir, grep_search, glob_files, write_file, edit_file, apply_patch, lsp, run_command, artifact_write]
 ---
 
 # Authorization and trust boundaries
