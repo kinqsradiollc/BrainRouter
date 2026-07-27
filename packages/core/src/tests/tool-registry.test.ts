@@ -47,9 +47,8 @@ test('CODEX-TOOL-REGISTRY parallel-safety agrees with toolSafety for every entry
   }
 });
 
-test('CODEX-TOOL-REGISTRY exposure tiers reproduce the historical allowed sets exactly', () => {
-  // These are the sets the agent shipped before the registry generated them —
-  // the guard ensures the generated exposure never silently changes.
+test('CODEX-TOOL-REGISTRY exposure tiers match the reviewed allowed sets exactly', () => {
+  // The guard ensures the generated exposure never silently changes.
   const read = registryAllowedTools('read');
   const write = registryAllowedTools('write');
   const shell = registryAllowedTools('shell');
@@ -58,10 +57,13 @@ test('CODEX-TOOL-REGISTRY exposure tiers reproduce the historical allowed sets e
   for (const t of read) assert.ok(write.has(t), `read tool ${t} must remain in write`);
   for (const t of write) assert.ok(shell.has(t), `write tool ${t} must remain in shell`);
 
-  // Write adds exactly the structured file tools; shell adds command/computer
-  // control plus connector_run (network ingestion + memory writes, shell-gated).
+  // Write adds exactly the structured file tools; shell adds command, native
+  // terminal, and computer control plus connector_run.
   assert.deepEqual([...write].filter((t) => !read.has(t)).sort(), ['apply_patch', 'edit_file', 'notebook_edit', 'write_file']);
-  assert.deepEqual([...shell].filter((t) => !write.has(t)).sort(), ['computer_use', 'connector_run', 'kill_command', 'run_command']);
+  assert.deepEqual([...shell].filter((t) => !write.has(t)).sort(), [
+    'computer_use', 'connector_run', 'kill_command', 'run_command',
+    'terminal_list', 'terminal_read', 'terminal_write',
+  ]);
 
   // Read tier exposes the read/observe/orchestration surface and nothing mutating.
   assert.ok(read.has('read_file') && read.has('task_agent') && read.has('goal_complete'));
@@ -170,12 +172,24 @@ test('CORE-EXT every required tool is owned by a required capability extension',
 });
 
 test('CORE-EXT dynamic visibility belongs to the extension executor', () => {
-  const none = localToolSpecsFromExecutors({ resultExpansionAvailable: false, workflowActive: false }).map((tool) => tool.name);
+  const none = localToolSpecsFromExecutors({
+    resultExpansionAvailable: false,
+    workflowActive: false,
+    terminalUseAvailable: false,
+  }).map((tool) => tool.name);
   assert.ok(!none.includes('extract_result'));
   assert.ok(!none.includes('workflow_progress'));
-  const active = localToolSpecsFromExecutors({ resultExpansionAvailable: true, workflowActive: true }).map((tool) => tool.name);
+  assert.ok(!none.includes('terminal_read'));
+  const active = localToolSpecsFromExecutors({
+    resultExpansionAvailable: true,
+    workflowActive: true,
+    terminalUseAvailable: true,
+  }).map((tool) => tool.name);
   assert.ok(active.includes('extract_result'));
   assert.ok(active.includes('workflow_progress'));
+  assert.ok(active.includes('terminal_list'));
+  assert.ok(active.includes('terminal_read'));
+  assert.ok(active.includes('terminal_write'));
 });
 
 test('CORE-EXT Agent runtime contains no first-party tool catalog or handler switch', () => {

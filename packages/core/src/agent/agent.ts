@@ -523,6 +523,12 @@ export interface AgentOptions {
   computerUsePort?: ComputerUsePort;
   /** Desktop-only control of this window's embedded browser. Omitted everywhere else. */
   browserControlPort?: BrowserControlPort;
+  /** Desktop-only access to native terminals already opened by the user. */
+  terminalUsePort?: {
+    list(): Array<{ id: string; shell: string; pid: number; start: number; next: number; alive: boolean }>;
+    read(id: string, fromOffset: number): { chunk: string; next: number; alive: boolean; dropped: number };
+    write(id: string, data: string): boolean;
+  };
   /**
    * §ADR-003 — the interactive prompt surface (TTY yes/no + choice picker).
    * The CLI injects its readline/ink-backed prompter; headless hosts (Desktop,
@@ -876,6 +882,7 @@ export class Agent {
   public interactionPort?: AgentOptions['interactionPort'];
   public computerUsePort?: ComputerUsePort;
   public browserControlPort?: BrowserControlPort;
+  public terminalUsePort?: AgentOptions['terminalUsePort'];
   // §ADR-003 — injected interactive prompter (default = headless/no-TTY stub).
   public prompter: InteractivePrompter;
   // DESK-5n — parent's review stance, for the silent-child Auto-mode bypass.
@@ -924,6 +931,7 @@ export class Agent {
     this.interactionPort = options.interactionPort;
     this.computerUsePort = options.computerUsePort;
     this.browserControlPort = options.browserControlPort;
+    this.terminalUsePort = options.terminalUsePort;
     this.prompter = options.prompter ?? HEADLESS_PROMPTER;
     this.parentReviewPolicy = options.parentReviewPolicy;
     this.parentExecutionMode = options.parentExecutionMode;

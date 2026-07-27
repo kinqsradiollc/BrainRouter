@@ -611,6 +611,61 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         const notice = result.notice ? `${result.notice}\n` : '';
         return `${notice}${sandboxBadge}Exit Code: ${result.exitCode}\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`;
       }
+      case 'terminal_list': {
+        if (!this.terminalUsePort || this.silent || this.agentDepth !== 0 || this.tier === 'worker') {
+          return 'terminal_list is unavailable outside the active top-level local Desktop session.';
+        }
+        return JSON.stringify(this.terminalUsePort.list(), null, 2);
+      }
+      case 'terminal_read': {
+        if (!this.terminalUsePort || this.silent || this.agentDepth !== 0 || this.tier === 'worker') {
+          return 'terminal_read is unavailable outside the active top-level local Desktop session.';
+        }
+        const id = String(args.id ?? '').trim();
+        if (!id) throw new Error('Missing parameter "id" for terminal_read.');
+        const maxChars = Math.max(1, Math.min(20_000, Math.floor(Number(args.maxChars) || 12_000)));
+        const session = this.terminalUsePort.list().find((entry: { id: string }) => entry.id === id);
+        if (!session) return JSON.stringify({ id, found: false, chunk: '', nextOffset: 0, alive: false });
+        const requested = args.fromOffset === undefined
+          ? Math.max(session.start, session.next - maxChars)
+          : Math.max(0, Math.floor(Number(args.fromOffset) || 0));
+        const result = this.terminalUsePort.read(id, requested);
+        const plain = String(result.chunk ?? '')
+          .replace(/\u001B(?:[@-_][0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001B\\))/g, '')
+          .replace(/\r\n?/g, '\n');
+        const chunk = plain.length > maxChars ? plain.slice(-maxChars) : plain;
+        return JSON.stringify({
+          id,
+          found: true,
+          chunk,
+          nextOffset: result.next,
+          alive: result.alive,
+          dropped: result.dropped,
+        }, null, 2);
+      }
+      case 'terminal_write': {
+        if (!this.terminalUsePort || this.silent || this.agentDepth !== 0 || this.tier === 'worker') {
+          return 'terminal_write is unavailable outside the active top-level local Desktop session.';
+        }
+        const id = String(args.id ?? '').trim();
+        const data = String(args.data ?? '');
+        if (!id) throw new Error('Missing parameter "id" for terminal_write.');
+        if (!data) throw new Error('Missing parameter "data" for terminal_write.');
+        if (data.length > 4_000) return 'terminal_write rejected: input exceeds 4000 characters.';
+        const activeMode = resolveActiveMode(this.workspaceRoot, this.sessionKey);
+        if (activeMode.executionMode !== 'fast') {
+          const approved = this.interactionPort
+            ? await this.interactionPort.confirm({
+                title: 'Send input to native terminal?',
+                detail: `Terminal ${id}\n\n${data}`,
+                dangerous: false,
+                tool: 'terminal_write',
+              })
+            : await this.prompter.askYesNo(`Send this input to terminal ${id}?\n${data}\n(y/N) `, false);
+          if (!approved) return 'terminal_write rejected by user.';
+        }
+        return JSON.stringify({ id, written: this.terminalUsePort.write(id, data) });
+      }
       case 'computer_use': {
         if (!getCliKnobs().computerUse.enabled) return 'computer_use is disabled. Set cli.computerUse.enabled=true to enable it.';
         if (!this.computerUsePort) return 'computer_use is unavailable in this runtime.';
