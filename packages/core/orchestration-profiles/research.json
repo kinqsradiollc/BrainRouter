@@ -16,7 +16,7 @@
   },
   "limits": {
     "maxParallel": 3,
-    "maxStages": 5,
+    "maxStages": 6,
     "maxChildrenPerStage": 3,
     "maxTotalChildren": 6,
     "maxDepth": 2,
@@ -119,13 +119,27 @@
           "optional": false
         },
         {
+          "id": "ground",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "frame"
+          ],
+          "objective": "Restore prior findings and queries, ground unresolved gaps in available project and local evidence, and prepare at most three non-duplicate external probes under an explicit stop budget.",
+          "skillIds": [
+            "iterative-evidence-skill"
+          ],
+          "optional": false
+        },
+        {
           "id": "collect",
           "executor": {
             "kind": "role",
             "roleId": "explorer"
           },
           "after": [
-            "frame"
+            "ground"
           ],
           "objective": "Collect evidence for one assigned sub-question, preserving provenance, dates, contradictions, limitations, and access gaps without drafting the conclusion.",
           "skillIds": [
@@ -135,7 +149,7 @@
             "min": 1,
             "max": 3
           },
-          "optional": false,
+          "optional": true,
           "expectedOutput": {
             "contractId": "explorer",
             "requiredSections": [
