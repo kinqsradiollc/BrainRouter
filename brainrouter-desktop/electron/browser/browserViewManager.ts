@@ -20,7 +20,8 @@ import { fileURLToPath } from 'node:url';
 import { isAllowedWebviewSrc, isMetadataOrLinkLocalAddress, isPrivateOrLocalAddress } from '../webviewPolicy.js';
 import { browserPermissionCheckScopes, browserPermissionRequestScope } from './browserPermissionPolicy.js';
 import { agentCursorScript, removeAgentCursorScript } from './browserCursor.js';
-import { STEALTH_INIT_SCRIPT } from './browserStealth.js';
+import { humanChallengeReason } from './browserHumanChallenge.js';
+import { browserPartitionForWorkspace } from './browserProfile.js';
 import { promptForHttpAuth } from './httpAuthPrompt.js';
 import {
   BROWSER_BLANK_URL,
@@ -50,14 +51,6 @@ import {
   type BrowserTabId,
 } from './protocol.js';
 
-const BROWSER_PARTITION_BASE = 'persist:brainrouter-browser';
-/** Per-session partition name so each chat session gets its own isolated browser
- *  storage (cookies/cache/history). A session with no key keeps the base
- *  partition, preserving the pre-per-session behavior. */
-function partitionForSession(sessionKey: string | null): string {
-  if (!sessionKey || sessionKey === 'host') return BROWSER_PARTITION_BASE;
-  return `${BROWSER_PARTITION_BASE}-${sessionKey.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80)}`;
-}
 const ISOLATED_WORLD_ID = 1_001;
 const MAX_CONSOLE_ROWS = 300;
 const MAX_NETWORK_ROWS = 500;
@@ -135,12 +128,9 @@ async function resolvedDestinationAllowed(rawUrl: string, agentPolicy?: { allowe
   return allow;
 }
 
-/** A clean, standard desktop-Chrome User-Agent for the current platform, built
- *  from the bundled Chromium version. The Electron default UA carries
- *  `Electron/<v>` + the app name ("BrainRouter"), which Facebook, Google, and
- *  many other sites detect and then block, throttle, challenge, or serve broken
- *  JS to — the single biggest reason real sites "load forever" in the embedded
- *  browser. Presenting as ordinary Chrome makes them behave normally. */
+/** A standard desktop Chromium User-Agent for the bundled engine. It omits
+ * Electron/application product tokens while leaving Chromium's native
+ * client-hint, platform, locale, graphics, and capability signals untouched. */
 function standardChromeUserAgent(): string {
   const chrome = process.versions.chrome || '120.0.0.0';
   const platformToken = process.platform === 'darwin'
@@ -154,23 +144,7 @@ function standardChromeUserAgent(): string {
 function configureBrowserSession(ses: Session): void {
   if (configuredSessions.has(ses)) return;
   configuredSessions.add(ses);
-  // Present as ordinary desktop Chrome (see standardChromeUserAgent). Also strip
-  // the Electron/app brand out of the UA-Client-Hints headers so a site that
-  // reads Sec-CH-UA doesn't see through the string UA either. Synchronous — adds
-  // no per-request latency.
-  const userAgent = standardChromeUserAgent();
-  ses.setUserAgent(userAgent);
-  const chromeMajor = (process.versions.chrome || '120').split('.')[0];
-  const cleanBrands = `"Chromium";v="${chromeMajor}", "Google Chrome";v="${chromeMajor}", "Not_A Brand";v="99"`;
-  ses.webRequest.onBeforeSendHeaders({ urls: ['http://*/*', 'https://*/*'] }, (details, callback) => {
-    const headers = details.requestHeaders;
-    for (const key of Object.keys(headers)) {
-      const lower = key.toLowerCase();
-      if (lower === 'sec-ch-ua' || lower === 'sec-ch-ua-full-version-list') headers[key] = cleanBrands;
-      else if (lower === 'user-agent') headers[key] = userAgent;
-    }
-    callback({ requestHeaders: headers });
-  });
+  ses.setUserAgent(standardChromeUserAgent());
   ses.setPermissionCheckHandler((contents, permission, origin, details) => {
     if (!contents) return false;
     return managersByWebContents.get(contents.id)?.hasPermission(origin, browserPermissionCheckScopes(permission, details.mediaType)) ?? false;
@@ -343,16 +317,15 @@ export class BrowserViewManager {
   private permissionSequence = 0;
   private dialogSequence = 0;
   private readonly windowPrefix = randomUUID().replace(/-/g, '').slice(0, 10);
-  // Per-session browser isolation: the active session's Electron partition + a
-  // per-session snapshot of its open tabs so switching sessions swaps to that
-  // session's isolated browser (and restores its tabs) rather than sharing one.
-  private partition = BROWSER_PARTITION_BASE;
+  // One persistent profile per workspace preserves sign-ins, cookies, storage,
+  // and completed site challenges across chat sessions without sharing them
+  // with another workspace.
+  private partition: string;
   // The tab whose native view is currently a child of the window. Re-adding an
   // already-attached view flashes it, so attachActiveView only add/removes on a
   // real change and otherwise just re-bounds (smooth).
   private attachedViewId: BrowserTabId | null = null;
   private sessionKey: string | null = null;
-  private readonly sessionTabs = new Map<string, Array<{ url: string; title: string; active: boolean }>>();
   private readonly queues = new Map<BrowserTabId, Promise<void>>();
   private readonly emulatedTabs = new Set<BrowserTabId>();
   // When true, agent pointer actions (click/hover/drag) glide a visible cursor
@@ -374,6 +347,7 @@ export class BrowserViewManager {
   private agentTakeoverHandler: (() => void) | null = null;
   private readonly agentNavigationPolicies = new Map<BrowserTabId, AgentNavigationPolicy>();
   private readonly agentControlledTabs = new Set<BrowserTabId>();
+  private readonly humanChallengeTabs = new Set<BrowserTabId>();
   private readonly trustedUserPrivateOrigins = new Set<string>();
   private readonly userOriginChecks = new Map<string, Promise<void>>();
   private readonly agentDownloadAllowances = new Map<BrowserTabId, number>();
@@ -388,6 +362,7 @@ export class BrowserViewManager {
 
   constructor(private readonly win: BrowserWindow, workspaceRoot: string) {
     this.workspaceRoot = workspaceRoot;
+    this.partition = browserPartitionForWorkspace(workspaceRoot);
     configureBrowserSession(session.fromPartition(this.partition));
     this.restoreWorkspace();
     if (this.tabs.length === 0) this.createTab(BROWSER_BLANK_URL, true);
@@ -548,6 +523,19 @@ export class BrowserViewManager {
           this.releaseAgentControl(tab.id);
           if (request.command.op === 'navigate') void this.recordUserPrivateOrigin(request.command.url);
         }
+        if (
+          signal
+          && tab
+          && this.humanChallengeTabs.has(tab.id)
+          && !['snapshot', 'screenshot', 'state', 'stop'].includes(request.command.op)
+        ) {
+          this.releaseAgentControl(tab.id);
+          this.selectTab(tab.id);
+          throw new BrowserManagerError(
+            'NOT_READY',
+            'This site requires human verification. Complete it in the visible Browser tab, then ask the agent to continue.',
+          );
+        }
         if (signal && tab) {
           this.agentControlledTabs.add(tab.id);
           if (AGENT_DOWNLOAD_INTERACTIONS.has(request.command.op)) {
@@ -615,33 +603,6 @@ export class BrowserViewManager {
 
   setWorkspaceRoot(workspaceRoot: string): void {
     if (!workspaceRoot || workspaceRoot === this.workspaceRoot) return;
-    this.workspaceGeneration += 1;
-    this.visibleAgentPin = null;
-    this.persistWorkspace();
-    this.destroyAllViews();
-    this.workspaceRoot = workspaceRoot;
-    this.tabs = [];
-    this.activeTabId = '';
-    this.closedTabs = [];
-    this.trustedUserPrivateOrigins.clear();
-    this.userOriginChecks.clear();
-    this.restoreWorkspace();
-    if (this.tabs.length === 0) this.createTab(BROWSER_BLANK_URL, true);
-    this.attachActiveView();
-    this.emitState();
-  }
-
-  /** Switch the browser to a chat session's own isolated storage partition.
-   *  Each session gets a brand-new browser (its own cookies/cache/history/
-   *  localStorage) and its own set of open tabs; switching back restores that
-   *  session's tabs. A session with no key keeps the shared base partition, so
-   *  this is a no-op for callers that never wire sessions (back-compat). */
-  setSession(sessionKey: string | null): void {
-    const nextPartition = partitionForSession(sessionKey);
-    if (nextPartition === this.partition) { this.sessionKey = sessionKey; return; }
-    // Snapshot the outgoing session's tabs so returning to it restores them.
-    this.sessionTabs.set(this.partition, this.snapshotTabs());
-    // Detach the download listener from the old partition before tearing down.
     const previousSession = session.fromPartition(this.partition);
     if (this.downloadListener) {
       previousSession.off('will-download', this.downloadListener);
@@ -649,48 +610,37 @@ export class BrowserViewManager {
     }
     this.workspaceGeneration += 1;
     this.visibleAgentPin = null;
+    this.persistWorkspace();
     this.destroyAllViews();
+    this.workspaceRoot = workspaceRoot;
+    this.partition = browserPartitionForWorkspace(workspaceRoot);
+    this.sessionKey = null;
     this.tabs = [];
     this.activeTabId = '';
     this.closedTabs = [];
     this.trustedUserPrivateOrigins.clear();
     this.userOriginChecks.clear();
-    // Switch partitions and re-arm the new session's browser.
-    this.sessionKey = sessionKey;
-    this.partition = nextPartition;
+    this.humanChallengeTabs.clear();
     configureBrowserSession(session.fromPartition(this.partition));
     this.installDownloadListener();
-    this.restoreTabs(this.sessionTabs.get(this.partition) ?? []);
+    this.restoreWorkspace();
     if (this.tabs.length === 0) this.createTab(BROWSER_BLANK_URL, true);
     this.attachActiveView();
     this.emitState();
   }
 
-  /** Wipe a session's isolated browser storage (cookies/cache/history/local
-   *  storage). Call when the user deletes or clears a chat session so its
-   *  browsing data doesn't outlive it. Safe to call for a non-active session. */
+  /** Record the active chat without rotating the workspace browser profile.
+   * Browser tabs, sign-ins, cookies, and completed challenges intentionally
+   * remain continuous across chats in the same workspace. */
+  setSession(sessionKey: string | null): void {
+    this.sessionKey = sessionKey;
+  }
+
+  /** Compatibility operation for chat deletion. Browser state is workspace
+   * scoped, so deleting one chat must not sign every other chat out. Users can
+   * explicitly clear or reset the workspace browser from the Browser panel. */
   async clearSessionData(sessionKey: string): Promise<void> {
-    const partition = partitionForSession(sessionKey);
-    this.sessionTabs.delete(partition);
-    const ses = session.fromPartition(partition);
-    try {
-      await ses.clearCache();
-      await ses.clearStorageData({ storages: ['cookies', 'localstorage', 'indexdb', 'serviceworkers', 'cachestorage'] });
-    } catch { /* best effort — a never-used partition has nothing to clear */ }
-    // If they cleared the session they're currently viewing, hand back a blank tab.
-    if (partition === this.partition) { await this.resetBrowser(); }
-  }
-
-  private snapshotTabs(): Array<{ url: string; title: string; active: boolean }> {
-    return this.tabs
-      .filter((tab) => tab.url && tab.url !== BROWSER_BLANK_URL)
-      .map((tab) => ({ url: tab.url, title: tab.title, active: tab.id === this.activeTabId }));
-  }
-
-  private restoreTabs(saved: Array<{ url: string; title: string; active: boolean }>): void {
-    for (const entry of saved) {
-      try { this.createTab(entry.url, entry.active, { title: entry.title }); } catch { /* skip a tab that fails to open */ }
-    }
+    if (this.sessionKey === sessionKey) this.sessionKey = null;
   }
 
   hasPermission(rawOrigin: string, grants: string[]): boolean {
@@ -836,6 +786,7 @@ export class BrowserViewManager {
       tab.canGoForward = contents.navigationHistory.canGoForward();
       tab.zoomFactor = contents.getZoomFactor();
       tab.crashed = false;
+      this.updateHumanChallenge(tab);
       if (!this.agentControlledTabs.has(tab.id)) void this.recordUserPrivateOrigin(tab.url);
       tab.revision += 1;
       this.persistWorkspace();
@@ -853,7 +804,12 @@ export class BrowserViewManager {
     contents.on('did-navigate-in-page', updateNavigation);
     contents.on('did-start-loading', () => { tab.loading = true; this.emitState(); });
     contents.on('did-stop-loading', () => { tab.loading = false; updateNavigation(); });
-    contents.on('page-title-updated', (_event, title) => { tab.title = boundBrowserText(title || 'New tab', 256); this.persistWorkspace(); this.emitState(); });
+    contents.on('page-title-updated', (_event, title) => {
+      tab.title = boundBrowserText(title || 'New tab', 256);
+      this.updateHumanChallenge(tab);
+      this.persistWorkspace();
+      this.emitState();
+    });
     contents.on('page-favicon-updated', (_event, favicons) => { tab.faviconUrl = favicons.find((value) => /^https?:|^data:image\//i.test(value)) ?? null; this.emitState(); });
     contents.on('media-started-playing', () => { tab.audible = true; this.emitState(); });
     contents.on('media-paused', () => { tab.audible = false; this.emitState(); });
@@ -1819,15 +1775,20 @@ export class BrowserViewManager {
     if (contents.debugger.isAttached()) return false;
     contents.debugger.attach('1.3');
     void contents.debugger.sendCommand('Page.enable').catch(() => undefined);
-    // Fingerprint hardening: attaching CDP flips navigator.webdriver on and leaves
-    // a few automation tells, so ordinary sites mis-detect our real headed Chromium
-    // as a bot and block/stall it. Normalize those tells in the page main world
-    // before page scripts run, on every navigation. Best-effort; never throws into
-    // the page. (Scope: fingerprint leaks only — NOT CAPTCHA/anti-abuse defeat.)
-    void contents.debugger
-      .sendCommand('Page.addScriptToEvaluateOnNewDocument', { source: STEALTH_INIT_SCRIPT })
-      .catch(() => undefined);
     return true;
+  }
+
+  private updateHumanChallenge(tab: BrowserTab): void {
+    const reason = humanChallengeReason(tab.url, tab.title);
+    if (!reason) {
+      this.humanChallengeTabs.delete(tab.id);
+      return;
+    }
+    if (this.humanChallengeTabs.has(tab.id)) return;
+    this.humanChallengeTabs.add(tab.id);
+    this.releaseAgentControl(tab.id);
+    this.selectTab(tab.id);
+    this.setStatus(tab, `${reason} Complete it in this visible tab; the agent will remain paused.`);
   }
 
   private setStatus(tab: BrowserTab, text: string): void {
@@ -1957,6 +1918,7 @@ export class BrowserViewManager {
     }
     try { this.win.contentView.removeChildView(record.view); } catch { /* detached */ }
     if (this.attachedViewId === id) this.attachedViewId = null;
+    this.humanChallengeTabs.delete(id);
     managersByWebContents.delete(record.view.webContents.id);
     this.releaseAgentControl(id);
     this.cleanupStagedUpload(id);

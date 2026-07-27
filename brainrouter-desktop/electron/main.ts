@@ -527,8 +527,8 @@ function spawnHost(wp: WinPool, workspaceRoot: string): UtilityProcess {
       // Real background work (a child/worker produced output) is activity too.
       else if (kind === 'child-tool-end' || kind === 'child-complete') markWorkspaceActivity(workspaceRoot, 'background-task');
       // Remember each workspace's last-viewed session so we can re-announce it
-      // when the user switches back to a parked (reused) host. Also give each
-      // session its own isolated browser (per-session cookies/history/tabs).
+      // when the user switches back to a parked (reused) host. The Browser
+      // records the active chat without rotating its workspace-scoped profile.
       else if (kind === 'session-changed' && typeof ev?.sessionKey === 'string') {
         wp.lastSession.set(workspaceRoot, ev.sessionKey);
         try { wp.browser?.setSession(ev.sessionKey); } catch (err) { console.error('[browser] setSession failed', err); }
@@ -599,8 +599,8 @@ function activateWorkspace(wp: WinPool, workspaceRoot: string): void {
     if (host && last) { try { host.postMessage({ kind: 'resume-session', sessionKey: last }); } catch { /* gone */ } }
   }
   wp.win.setTitle(`BrainRouter — ${path.basename(workspaceRoot)}`);
-  // Browser tabs are window-owned but restored independently per workspace.
-  // Cookies/cache remain in the shared persistent browser profile.
+  // Browser tabs and storage are window-owned and restored through one
+  // persistent, isolated profile per workspace.
   wp.browser.setWorkspaceRoot(workspaceRoot);
   // Activating/switching is membership only; it must not change the user's
   // project order.
