@@ -52,6 +52,12 @@ const COMPUTATIONAL_RESEARCH_AVAILABILITY = {
   toolProfiles: ['coding', 'shell', 'browser', 'research-notes', 'artifacts'],
 };
 
+const DATA_VISUALIZATION_AVAILABILITY = {
+  skillPacks: ['data-visualization'],
+  skills: ['data-visualization-skill'],
+  toolProfiles: ['coding', 'shell', 'artifacts', 'interactive-browser'],
+};
+
 test('no manifest is an exact capability no-op even for a frontend task', () => {
   assert.deepEqual(
     resolveWorkspaceCapabilities({
@@ -241,6 +247,70 @@ test('computational-research rejects incompatible personas and explicit disable'
       manifest: research,
       task: 'Run a reproducible computational analysis.',
       availability: COMPUTATIONAL_RESEARCH_AVAILABILITY,
+    }),
+    EMPTY_RESOLUTION,
+  );
+});
+
+test('Data Science activates data visualization without changing persona', () => {
+  const manifest = createWorkspaceManifest({
+    name: 'visual-analysis',
+    profile: 'data-science',
+    by: 'wizard',
+  });
+  manifest.capabilities.enabled.push('data-visualization');
+  const resolved = resolveWorkspaceCapabilities({
+    manifest,
+    task: 'Build an accessible analytical dashboard and audit every chart scale.',
+    files: ['visualizations/retention.vega.json'],
+    availability: DATA_VISUALIZATION_AVAILABILITY,
+  });
+
+  assert.deepEqual(resolved.active, ['data-visualization']);
+  assert.deepEqual(resolved.reasons, [
+    'task describes data-visualization work',
+    'task includes a visualization artifact',
+  ]);
+  assert.deepEqual(resolved.skillPacks, ['data-visualization']);
+  assert.deepEqual(resolved.skills, ['data-visualization-skill']);
+  assert.deepEqual(resolved.toolProfiles, [
+    'coding', 'shell', 'artifacts', 'interactive-browser',
+  ]);
+  assert.match(resolved.promptBlocks[0]!, /Stay in the data-scientist persona/);
+  assert.deepEqual(manifest.persona, {
+    default: 'data-scientist',
+    enabled: ['data-scientist'],
+  });
+});
+
+test('data-visualization rejects incompatible profiles and explicit disable', () => {
+  const research = createWorkspaceManifest({
+    name: 'research',
+    profile: 'research',
+    by: 'wizard',
+  });
+  research.capabilities.enabled.push('data-visualization');
+  assert.deepEqual(
+    resolveWorkspaceCapabilities({
+      manifest: research,
+      task: 'Build an analytical dashboard.',
+      availability: DATA_VISUALIZATION_AVAILABILITY,
+    }),
+    EMPTY_RESOLUTION,
+  );
+
+  const data = createWorkspaceManifest({
+    name: 'data',
+    profile: 'data-science',
+    by: 'wizard',
+  });
+  data.capabilities.enabled.push('data-visualization');
+  data.capabilities.disabled.push('data-visualization');
+  assert.deepEqual(
+    resolveWorkspaceCapabilities({
+      manifest: data,
+      task: 'Build an analytical dashboard.',
+      availability: DATA_VISUALIZATION_AVAILABILITY,
     }),
     EMPTY_RESOLUTION,
   );

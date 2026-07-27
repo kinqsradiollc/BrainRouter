@@ -54,6 +54,18 @@ const DEV_CAPABILITIES = [
       'artifacts',
     ],
   },
+  {
+    id: 'data-visualization',
+    label: 'Data visualization',
+    description: 'Task-time chart, dashboard, visual-integrity, accessibility, and interactive-verification workflow.',
+    expandsTo: [
+      'data-visualization-skill',
+      'coding',
+      'shell',
+      'artifacts',
+      'interactive-browser',
+    ],
+  },
 ] as const;
 const DEV_TOOL_GROUPS = [
   {
