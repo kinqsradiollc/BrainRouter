@@ -1743,6 +1743,7 @@ inventory, not permission to move every declaration in the file:
 | Profile stage controller and lifecycle modules | Trace snapshots and task-facing records sit beside mutable turn lifecycle state and execution rules | Stable snapshots/events move to types or agent protocol; mutable records, transition guards, and execution stay in focused Core runtime modules |
 | `packages/agent-protocol/src/index.ts` | Commands, events, interaction ports, computer-use vocabulary, and unrelated views share one root file | Split into command, event, interaction, computer-use, steering, and stage-trace submodules; keep a temporary root compatibility barrel only for the migration window |
 | `packages/types/src/api.ts` and the types-package root barrel | A shared package can itself become a god package when unrelated domains are reachable only through one file or barrel | Split contracts by domain, add explicit subpath exports, and prohibit new catch-all profile/orchestration declarations in the root barrel |
+| Desktop onboarding dialog and editor model | The renderer currently declares its own profile, manifest draft, review revision, instruction preview, and proposal shapes beside parsing, formatting, editor state, and a large dialog component | Put stable bridge and persisted workspace-onboarding records in named Types subpaths; keep renderer hydration/view state local; split parsing, draft transforms, presentation state, and UI sections into focused feature modules |
 | CLI/Desktop bridge and renderer models | Wire DTOs are duplicated or reshaped beside host callbacks and view state | Import canonical wire records; retain process adapters and renderer-only presentation state with their owning feature |
 
 The inventory is checked into the implementation PR series as a small,
@@ -2362,6 +2363,7 @@ can still mix incompatible ownership.
 | Types Track entities module | 23 declarations in one 537-line module | Verify cohesion, then separate workflow, work-item, board/view, automation, and membership contract families where consumers do not require the whole graph |
 | Dashboard admin client module | 38 declarations in one 595-line application module | Reuse canonical shared DTOs where the wire contract crosses packages; keep dashboard-only form/view models and fetch mechanics local |
 | Desktop settings shared-types module | 17 declarations in one 305-line module | Reuse canonical configuration/integration snapshots where structurally identical; keep renderer-only navigation, choice, and presentation state local |
+| Desktop onboarding editor model and dialog | 8 exported interfaces plus one exported union in an approximately 400-line model consumed by a dialog exceeding 700 lines, with overlapping Core onboarding contracts | Move stable profile, reviewed draft, revision, instruction, proposal, and preview wire records to a named `types/workspace-onboarding` domain; keep unknown-input parsers, editor hydration, form state, display formatters, and React state in focused Desktop feature modules |
 
 The inventory is not limited to these files or to `packages/core`. It scans
 Types, Agent Protocol, Core, SDK, hooks, Backend, CLI, Desktop, Dashboard, and
@@ -2377,6 +2379,12 @@ wire shapes before the first migration is considered complete.
   import path. New code imports a domain subpath, and no new catch-all
   `types.ts`, `api.ts`, or `contracts.ts` file may become the replacement god
   file.
+- Use domain directories when one domain has multiple independently consumed
+  contract families. Workspace onboarding, for example, may expose focused
+  `profile`, `manifest-draft`, `review`, `instruction`, and `proposal` modules
+  beneath one `workspace-onboarding` export namespace; it must not place every
+  onboarding declaration into one new shared file merely to shorten the
+  Desktop model.
 - Keep this package dependency-free and browser-safe. Parsers, environment
   access, defaults, secrets, filesystem/process handles, and executable policy
   stay with their runtime owners.
@@ -2404,6 +2412,17 @@ wire shapes before the first migration is considered complete.
 - Do not combine a declaration move with behavior, schema, permission, storage,
   or UI changes. Each extraction is reviewable as a behavior-preserving move
   and names the exact consumer set it migrated.
+- Treat workspace onboarding as an early vertical migration. First reconcile
+  the duplicate Core, CLI, Electron, dev-bridge, and renderer records against
+  the persisted manifest and bridge payloads. Then add the focused Types
+  subpaths, migrate Core and hosts, and finally split the Desktop feature into
+  bridge parsing, draft transforms, editor state, and UI sections. Renderer-only
+  aggregates such as hydrated editor state remain in Desktop even when their
+  fields use shared wire contracts.
+- Split the Desktop dialog by cohesive interaction section only after the
+  contract imports are canonical. Component extraction must preserve one
+  reviewed draft owner and cannot introduce mirrored state, implicit saves, or
+  a second profile-selection authority.
 - Start with the leaf contracts and migrate outward in dependency order:
   Types domain subpath and export map, then Core owner/validator, then Agent
   Protocol where applicable, followed by SDK/hooks and host applications. A
@@ -2573,6 +2592,10 @@ wire shapes before the first migration is considered complete.
     application, records every public contract family and known
     mixed-responsibility hotspot, and links each migrated family to its
     verification and compatibility-removal evidence.
+64. Workspace onboarding has one canonical set of stable cross-process
+    contracts consumed by Core, CLI, Electron, dev bridges, and Desktop; the
+    renderer no longer redeclares those records, while its parsers, form state,
+    formatting, and React components remain in focused Desktop-owned modules.
 
 ## Non-goals
 
