@@ -30,6 +30,8 @@ test('P23-3b catalog projects safe roles, capabilities, tool groups, tools, skil
   });
 
   const coding = catalog.entries.find((entry) => entry.kind === 'tool-group' && entry.id === 'coding');
+  const projectKnowledge = catalog.entries.find((entry) =>
+    entry.kind === 'tool-group' && entry.id === 'project-knowledge');
   const architect = catalog.entries.find((entry) => entry.kind === 'role' && entry.id === 'architect');
   const frontend = catalog.entries.find((entry) => entry.kind === 'capability' && entry.id === 'frontend');
   const frontendPack = catalog.entries.find((entry) => entry.kind === 'skill-pack' && entry.id === 'frontend');
@@ -39,6 +41,7 @@ test('P23-3b catalog projects safe roles, capabilities, tool groups, tools, skil
   const runtimeTool = catalog.entries.find((entry) => entry.kind === 'runtime-tool');
 
   assert.ok(coding?.expandsTo?.includes('read_file'));
+  assert.deepEqual(projectKnowledge?.expandsTo, ['mcp:knowledge_list', 'mcp:knowledge_search']);
   assert.equal(architect?.label, 'Architect');
   assert.equal(architect?.source, 'bundled');
   assert.equal(architect?.provenance, 'bundled-roles');

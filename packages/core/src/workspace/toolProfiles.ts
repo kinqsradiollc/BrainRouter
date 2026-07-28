@@ -19,6 +19,8 @@ export interface WorkspaceToolProfileDefinition {
   description: string;
   category: string;
   toolIds: readonly string[];
+  /** Stable first-party MCP names; live third-party names remain non-persistable. */
+  mcpToolIds: readonly string[];
   extensionIds: readonly string[];
 }
 
@@ -28,12 +30,20 @@ export interface WorkspaceToolSelection {
   activeProfileIds: string[];
   deniedIds: Set<string>;
   allowedToolIds: Set<string>;
+  allowedMcpToolIds: Set<string>;
   allowedExtensionIds: Set<string>;
 }
 
 export interface WorkspaceToolDescriptor {
   toolId: string;
   extensionId?: string;
+}
+
+export interface WorkspaceMcpToolDescriptor {
+  /** Raw server-advertised name, never the connection-specific namespace. */
+  toolId: string;
+  /** True only when the connected server was identified as BrainRouter. */
+  brainrouterOwned: boolean;
 }
 
 export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] = [
@@ -46,6 +56,7 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
       'read_file', 'list_dir', 'grep_search', 'glob_files',
       'write_file', 'edit_file', 'apply_patch',
     ],
+    mcpToolIds: [],
     extensionIds: [],
   },
   {
@@ -57,6 +68,7 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
       'read_file', 'list_dir', 'grep_search', 'glob_files',
       'write_file', 'edit_file', 'apply_patch', 'notebook_edit', 'lsp',
     ],
+    mcpToolIds: [],
     extensionIds: [],
   },
   {
@@ -65,6 +77,7 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
     description: 'Run workspace commands and inspect or control an available native terminal.',
     category: 'terminal-computer',
     toolIds: ['run_command', 'task_output', 'wait_until', 'kill_command', 'terminal_list', 'terminal_read', 'terminal_write'],
+    mcpToolIds: [],
     extensionIds: [],
   },
   {
@@ -73,6 +86,16 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
     description: 'Fetch web pages and search public sources.',
     category: 'web-research',
     toolIds: ['fetch_url', 'web_search'],
+    mcpToolIds: [],
+    extensionIds: [],
+  },
+  {
+    id: 'project-knowledge',
+    label: 'Project knowledge',
+    description: 'List and search authenticated read-only knowledge attached to this project.',
+    category: 'web-research',
+    toolIds: [],
+    mcpToolIds: ['knowledge_list', 'knowledge_search'],
     extensionIds: [],
   },
   {
@@ -81,6 +104,7 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
     description: 'Capture sourced research notes and bounded research briefs.',
     category: 'notes-artifacts',
     toolIds: ['research_note', 'research_brief'],
+    mcpToolIds: [],
     extensionIds: [],
   },
   {
@@ -89,6 +113,7 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
     description: 'Create structured artifact records for designs, reports, learning materials, and other deliverables.',
     category: 'notes-artifacts',
     toolIds: ['artifact_write'],
+    mcpToolIds: [],
     extensionIds: [],
   },
   {
@@ -100,6 +125,7 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
       'update_plan', 'goal_complete', 'goal_blocked',
       'track_query', 'track_update', 'mark_chapter', 'ask_user_choice',
     ],
+    mcpToolIds: [],
     extensionIds: [],
   },
   {
@@ -111,6 +137,7 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
       'task_agent', 'delegate_agent', 'list_agents', 'wait_agent', 'wait_agents',
       'read_agent_transcript', 'close_agent', 'send_input', 'resume_agent', 'route_task',
     ],
+    mcpToolIds: [],
     extensionIds: [],
   },
   {
@@ -119,6 +146,7 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
     description: 'Use tools contributed by the installed browser-control extension when its runtime is available.',
     category: 'design-browser',
     toolIds: [],
+    mcpToolIds: [],
     extensionIds: ['browser'],
   },
   {
@@ -130,6 +158,7 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
       'list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource',
       'mcp_search', 'mcp_describe', 'mcp_call', 'mcp_refresh_catalog',
     ],
+    mcpToolIds: [],
     extensionIds: [],
   },
   {
@@ -138,6 +167,7 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
     description: 'List configured connectors and run an explicitly authorized connector.',
     category: 'mcp-connectors',
     toolIds: ['connector_list', 'connector_run'],
+    mcpToolIds: [],
     extensionIds: [],
   },
   {
@@ -146,6 +176,7 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
     description: 'Operate an available computer-control session under its normal runtime and approval gates.',
     category: 'terminal-computer',
     toolIds: ['computer_use'],
+    mcpToolIds: [],
     extensionIds: [],
   },
   {
@@ -154,6 +185,7 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
     description: 'Launch reviewed workflows or saved graphs and inspect active workflow progress.',
     category: 'orchestration-workflows',
     toolIds: ['run_workflow', 'run_workflow_graph', 'workflow_progress'],
+    mcpToolIds: [],
     extensionIds: [],
   },
   {
@@ -162,6 +194,7 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
     description: 'Launch and manage durable root-owned worker threads that may outlive an interactive turn.',
     category: 'orchestration-workflows',
     toolIds: ['spawn_worker_thread', 'wait_worker', 'read_worker_summary', 'close_worker'],
+    mcpToolIds: [],
     extensionIds: [],
   },
   {
@@ -170,6 +203,7 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
     description: 'Watch pull-request checks, reviews, and comments in the background and notify the active agent when action is needed.',
     category: 'development-lifecycle',
     toolIds: [],
+    mcpToolIds: [],
     extensionIds: ['pull-request-observer'],
   },
   {
@@ -181,6 +215,7 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
       'file_vulnerability', 'finish_scan', 'list_requests', 'view_request',
       'repeat_request', 'list_sitemap', 'scope_rules',
     ],
+    mcpToolIds: [],
     extensionIds: [],
   },
   {
@@ -189,6 +224,7 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
     description: 'Existing composite bundle retained unchanged for previously reviewed workspaces.',
     category: 'legacy-compatibility',
     toolIds: ['run_command', 'task_output', 'wait_until', 'kill_command', 'terminal_list', 'terminal_read', 'terminal_write', 'computer_use', 'connector_run'],
+    mcpToolIds: [],
     extensionIds: [],
   },
   {
@@ -197,6 +233,7 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
     description: 'Existing composite bundle retained unchanged for previously reviewed workspaces.',
     category: 'legacy-compatibility',
     toolIds: ['research_note', 'research_brief', 'artifact_write'],
+    mcpToolIds: [],
     extensionIds: [],
   },
   {
@@ -205,6 +242,7 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
     description: 'Existing composite bundle retained unchanged for previously reviewed workspaces.',
     category: 'legacy-compatibility',
     toolIds: ['artifact_write'],
+    mcpToolIds: [],
     extensionIds: ['browser'],
   },
 ] as const;
@@ -226,6 +264,11 @@ const MCP_SURFACE_TOOL_IDS = new Set([
   'mcp_describe',
   'mcp_call',
   'mcp_refresh_catalog',
+]);
+const BASELINE_BRAINROUTER_MCP_TOOL_IDS = new Set([
+  'list_skills',
+  'get_skill',
+  'search_skills',
 ]);
 
 export function workspaceToolProfileIds(): string[] {
@@ -249,10 +292,12 @@ export function resolveWorkspaceToolSelection(input: {
     ...(mode === 'legacy-groups' ? input.activeToolProfiles ?? [] : []),
   ]).filter((id) => PROFILE_BY_ID.has(id));
   const allowedToolIds = new Set<string>();
+  const allowedMcpToolIds = new Set<string>();
   const allowedExtensionIds = new Set<string>();
   for (const id of activeProfileIds) {
     const profile = PROFILE_BY_ID.get(id)!;
     for (const toolId of profile.toolIds) allowedToolIds.add(toolId);
+    for (const toolId of profile.mcpToolIds) allowedMcpToolIds.add(toolId);
     for (const extensionId of profile.extensionIds) allowedExtensionIds.add(extensionId);
   }
   if (mode === 'explicit-catalog') {
@@ -272,6 +317,7 @@ export function resolveWorkspaceToolSelection(input: {
       const profile = PROFILE_BY_ID.get(id);
       if (!profile) continue;
       for (const toolId of profile.toolIds) deniedIds.add(toolId);
+      for (const toolId of profile.mcpToolIds) deniedIds.add(toolId);
       for (const extensionId of profile.extensionIds) deniedIds.add(extensionId);
     }
   }
@@ -282,6 +328,7 @@ export function resolveWorkspaceToolSelection(input: {
     activeProfileIds,
     deniedIds,
     allowedToolIds,
+    allowedMcpToolIds,
     allowedExtensionIds,
   };
 }
@@ -325,6 +372,27 @@ export function workspaceDynamicMcpAllowed(selection: WorkspaceToolSelection): b
   );
 }
 
+/**
+ * Keep the essential skill library available to every managed profile, then
+ * expose only reviewed first-party MCP reads unless the user selected the
+ * general MCP surface. Connection-specific names never enter the manifest.
+ */
+export function workspaceMcpToolAllowed(
+  selection: WorkspaceToolSelection,
+  descriptor: WorkspaceMcpToolDescriptor,
+): boolean {
+  if (!selection.managed || selection.mode === 'legacy-groups') return true;
+  if (selection.deniedIds.has(descriptor.toolId)) return false;
+  if (
+    descriptor.brainrouterOwned
+    && BASELINE_BRAINROUTER_MCP_TOOL_IDS.has(descriptor.toolId)
+  ) {
+    return true;
+  }
+  if (workspaceDynamicMcpAllowed(selection)) return true;
+  return descriptor.brainrouterOwned && selection.allowedMcpToolIds.has(descriptor.toolId);
+}
+
 function unique(values: readonly string[]): string[] {
   return [...new Set(values)];
 }
@@ -336,6 +404,7 @@ function emptySelection(): WorkspaceToolSelection {
     activeProfileIds: [],
     deniedIds: new Set(),
     allowedToolIds: new Set(),
+    allowedMcpToolIds: new Set(),
     allowedExtensionIds: new Set(),
   };
 }

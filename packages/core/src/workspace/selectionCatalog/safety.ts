@@ -50,6 +50,10 @@ function containsSensitiveOrLocalContent(value: string): boolean {
 }
 
 function isSafeExpansionId(value: string): boolean {
-  const id = value.startsWith('extension:') ? value.slice('extension:'.length) : value;
+  const id = value.startsWith('extension:')
+    ? value.slice('extension:'.length)
+    : value.startsWith('mcp:')
+      ? value.slice('mcp:'.length)
+      : value;
   return WORKSPACE_SELECTION_STABLE_ID.test(id);
 }

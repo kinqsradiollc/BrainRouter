@@ -91,6 +91,7 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
         'coding',
         'shell',
         'browser',
+        'project-knowledge',
         'artifacts',
         'planning-session',
         'orchestration',
@@ -115,7 +116,7 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
     skills: { packs: ['research'], enabled: ['planning-skill', 'handover-skill'] },
     tools: {
       profiles: [
-        'workspace-files', 'browser', 'research-notes',
+        'workspace-files', 'browser', 'project-knowledge', 'research-notes',
         'artifacts', 'planning-session', 'orchestration',
       ],
     },
@@ -137,7 +138,7 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
     skills: { packs: ['data'], enabled: ['planning-skill', 'testing-skill', 'verify-loop'] },
     tools: {
       profiles: [
-        'coding', 'shell', 'browser', 'research-notes',
+        'coding', 'shell', 'browser', 'project-knowledge', 'research-notes',
         'artifacts', 'planning-session', 'orchestration',
       ],
     },
@@ -158,7 +159,7 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
     capabilities: { available: [], recommended: [], enabled: [] },
     skills: { packs: ['study'], enabled: ['planning-skill', 'handover-skill'] },
     tools: {
-      profiles: ['workspace-files', 'browser', 'research-notes', 'artifacts', 'planning-session'],
+      profiles: ['workspace-files', 'browser', 'project-knowledge', 'research-notes', 'artifacts', 'planning-session'],
     },
     memory: { tags: ['study'], captureHint: 'learning' },
   },
@@ -177,7 +178,7 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
     capabilities: { available: [], recommended: [], enabled: [] },
     skills: { packs: ['writing'], enabled: ['planning-skill', 'handover-skill'] },
     tools: {
-      profiles: ['workspace-files', 'browser', 'research-notes', 'artifacts', 'planning-session'],
+      profiles: ['workspace-files', 'browser', 'project-knowledge', 'research-notes', 'artifacts', 'planning-session'],
     },
     memory: { tags: ['writing'], captureHint: 'drafts' },
   },
