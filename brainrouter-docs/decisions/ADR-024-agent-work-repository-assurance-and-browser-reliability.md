@@ -946,7 +946,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[U]` user decision.
 | ID | Status | Deliverable | Depends on | Acceptance evidence |
 |---|---|---|---|---|
 | R0 | `[x]` | Accept, revise, or reject this ADR | — | Accepted on 2026-07-28 |
-| R1 | `[~]` | Work Contract v1 schemas, stable task IDs, migration reader | R0 | Round-trip, migration, and invariant tests |
+| R1 | `[x]` | Work Contract v1 schemas, stable task IDs, migration reader | R0 | Round-trip, migration, and invariant tests |
 | R2 | `[ ]` | Typed Steer receipts and revision reconciliation in core | R1 | CLI/Desktop parity tests; goal-conflict tests |
 | R3 | `[ ]` | Profile planning-schema catalog and activation policy | R1 | Six-profile resolver matrix |
 | R4 | `[ ]` | Code Intelligence Index schema and parser spike for TypeScript/JavaScript | R0 | Symbol/reference/call golden corpus and performance budget |

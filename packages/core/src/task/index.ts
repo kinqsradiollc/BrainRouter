@@ -4,3 +4,5 @@
 // internal service layer (service.ts) stays unexported.
 export * from './planHistoryStore.js';
 export * from './taskStore.js';
+export * from './workContract.js';
+export * from './workContractStore.js';
