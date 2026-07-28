@@ -224,6 +224,15 @@ remain in `@kinqs/brainrouter-agent-protocol`. Core owns validation, domain
 transitions, services, and adapters; it may expose a thin compatibility
 entrypoint but must not duplicate the shared interfaces.
 
+The types package is a dependency leaf, not a catch-all destination. Moving
+every interface into one `types.ts`, `api.ts`, or root barrel would merely move
+the god file. A contract belongs in `@kinqs/brainrouter-types` only when at least
+two packages or processes exchange the same dependency-free data shape. Types
+used by one implementation stay in that implementation's focused domain
+module. Public type modules are split by domain and re-exported through thin
+compatibility barrels; they never import runtime services, validation libraries,
+filesystem/process APIs, provider clients, or Electron APIs.
+
 The package audit is behavior-led rather than a bulk folder move:
 
 | Current shape to scan | Correct destination | Migration rule |
@@ -236,10 +245,32 @@ The package audit is behavior-led rather than a bulk folder move:
 | Large test files | Feature-aligned test modules and shared test helpers | Split independently from production refactors so coverage remains reviewable |
 
 The first audit covers `packages/core`, then follows the dependency direction
-through protocol/types consumers. Each remediation is a small PR with an
-unchanged public surface or an explicit migration. File size alone is a signal,
-not an automatic move: a cohesive validator may remain local, while a short
-cross-package interface is misplaced even if its source file is small.
+through every workspace package and application consumer. It inventories
+exports from `packages/types`, `packages/agent-protocol`, `packages/core`,
+`packages/sdk`, and `packages/hooks`, then checks the backend, CLI, Desktop, and
+Dashboard import sites that establish whether a contract is genuinely shared.
+Each remediation is a small PR with an unchanged public surface or an explicit
+migration. File size alone is a signal, not an automatic move: a cohesive
+validator may remain local, while a short cross-package interface is misplaced
+even if its source file is small.
+
+For each exported interface, type alias, enum, schema, command, event, port, and
+DTO, the audit records:
+
+1. its semantic domain and authoritative owner;
+2. whether it is public wire/data vocabulary or implementation-private state;
+3. all package/process consumers and the allowed dependency direction;
+4. whether runtime values, validation, persistence, or side effects are mixed
+   into the same module;
+5. the destination module, compatibility export, migration order, and focused
+   parity test required before moving it.
+
+The audit must produce both a responsibility inventory and a dependency-ordered
+PR queue. It is incomplete if it only lists large files, only scans
+`packages/core`, or relocates declarations without splitting their domain
+ownership. New boundary checks must also prevent applications from recreating
+local copies of shared contracts and prevent the types leaf from importing
+higher-level packages.
 
 The initial core scan establishes this review queue:
 
@@ -1021,6 +1052,8 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[U]` user decision.
 | R1f | `[ ]` | Move the stable workspace manifest record to types and split core normalization/store services | R1b | V1/V2/V3 round-trips, hostile-input bounds, compatibility imports |
 | R1g | `[ ]` | Split orchestration definition contracts, file source, validation, and graph checks | R1b | Catalog and malformed-definition fixture parity |
 | R1h | `[ ]` | Split public API DTOs by domain within types | R1b | Unchanged root/API exports and consumer typecheck |
+| R1i | `[ ]` | Complete the exported-contract ownership inventory across types, protocol, core, SDK, hooks, backend, CLI, Desktop, and Dashboard | R1b | Consumer-backed owner classification, dependency-ordered migration queue, and explicit keep/move rationale for every public contract family |
+| R1j | `[ ]` | Add package-boundary guards for the types leaf, protocol vocabulary, curated core entrypoints, and duplicate application-local contracts | R1d, R1e, R1f, R1h, R1i | Negative import fixtures, package graph check, and existing public import parity |
 | R2 | `[x]` | Typed Steer receipts and revision reconciliation | R1a | Core lifecycle, protocol projection, CLI/Desktop parity, and goal-conflict tests |
 | R2a | `[x]` | Persist one pending receipt when Steer enters the model at a safe boundary | R1a | Empty/existing-plan coverage; idempotence; bounded summary; focused runtime tests |
 | R2b | `[x]` | Classify receipts and gate related mutation until reconciliation | R2a | Clarification, plan-change, evidence-only extension, and goal-conflict matrix |
