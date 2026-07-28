@@ -1641,11 +1641,17 @@ Writing. Recommendations affect presentation only: they cannot add tools,
 skills, roles, memory access, or orchestration.
 
 Settings displays the effective personality and its source. The normal choice
-is **Use profile recommendation**, followed by explicit styles. A user may set a
-global default, override one workspace, or temporarily override the current
-chat; clearing an override reveals the next layer instead of writing a copied
-profile value. Existing stored personality values migrate as explicit
-workspace overrides so upgrades do not silently change established behavior.
+is **Automatic** at workspace scope, followed by explicit styles. It cannot be
+labelled **Use profile recommendation** because a global default may be the
+winning inherited layer. The complete control exposes explicit **Current
+chat**, **This workspace**, and **All workspaces** scopes: chat uses **Inherit**,
+workspace uses **Automatic**, and global uses **No global default** as their
+respective clear choices. Each scope reports the resulting effective value and
+source. A user may set a global default, override one workspace, or temporarily
+override the current chat; clearing an override reveals the next layer instead
+of writing a copied profile value. Existing stored personality values migrate
+as explicit workspace overrides so upgrades do not silently change established
+behavior.
 
 | Approach | Advantages | Disadvantages | Decision |
 |---|---|---|---|

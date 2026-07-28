@@ -138,7 +138,7 @@ function buildPanelRows(ctx: CommandContext): PanelRow[] {
       current: () => {
         const current = prefs();
         return current.personalityMode === 'auto'
-          ? `auto → ${current.personality} (${current.personalitySource})`
+          ? `automatic → ${current.personality} (${current.personalitySource})`
           : current.personality;
       },
       edit: editPersonality,

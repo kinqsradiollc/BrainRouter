@@ -218,12 +218,12 @@ export function SettingsDialog(props: {
             </Row>
             <Row
               title="Personality"
-              desc={`Communication style only; persona, tools, and workflow stay unchanged. Effective: ${personality} (${personalitySource}). (/personality)`}
+              desc={`This workspace's communication style only; persona, tools, and workflow stay unchanged. Effective: ${personality} (${personalitySource}). Automatic inherits the global default, profile recommendation, or standard fallback. (/personality)`}
             >
               <ChoiceControl
                 value={personalityMode === 'auto' ? 'auto' : personality}
                 options={[
-                  { value: 'auto', label: 'Use profile recommendation', detail: `${personality} · ${personalitySource}` },
+                  { value: 'auto', label: 'Automatic', detail: `${personality} · inherited from ${personalitySource}` },
                   { value: 'concise', label: 'Concise', detail: 'short responses' },
                   { value: 'standard', label: 'Standard', detail: 'balanced prose' },
                   { value: 'detailed', label: 'Detailed', detail: 'more explanation and evidence' },

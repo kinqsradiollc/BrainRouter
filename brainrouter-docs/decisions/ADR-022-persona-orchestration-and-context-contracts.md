@@ -155,6 +155,20 @@ communication style. A global default expresses the user's general preference
 across projects. Changing profiles may change only the auto recommendation; it
 must not overwrite any explicit override.
 
+The settings contract makes the write scope explicit instead of presenting one
+ambiguous personality picker:
+
+| Scope | Inherit choice | Explicit choice writes | Clear behavior |
+|---|---|---|---|
+| Current chat | **Inherit** | A temporary session override | Removes only the chat override |
+| This workspace | **Automatic** | A workspace override | Reveals global default, profile recommendation, or fallback |
+| All workspaces | **No global default** | The user-global default | Reveals each workspace profile recommendation or fallback |
+
+Every scope displays the effective style and winning source after the change.
+The existing workspace-only picker is labelled **Automatic**, not **Use profile
+recommendation**, because a configured global default may win before the
+profile layer. Desktop and CLI use the same labels and precedence.
+
 Personality styles may affect tone, explanation depth, and collaboration
 format. They must not grant tools or skills, select capabilities or roles,
 change approval or delegation policy, alter model or reasoning effort, relax
