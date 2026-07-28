@@ -29,6 +29,7 @@ class FakeManager implements BrowserManagerPort {
 
 test('agent browser command mapping targets exact tab/revision and never exposes arbitrary eval', () => {
   assert.deepEqual(mapAgentBrowserCommand({ kind: 'tabs.open', url: 'https://example.com/', activate: true }), { command: { op: 'create-tab', url: 'https://example.com/', active: true } });
+  assert.deepEqual(mapAgentBrowserCommand({ kind: 'tabs.open', url: 'https://example.com/' }), { command: { op: 'create-tab', url: 'https://example.com/', active: false } });
   assert.deepEqual(mapAgentBrowserCommand({ kind: 'page.click', tabId: 'tab_x_1', ref: 'br:tab_x_1:4:node_1', pageRevision: 4 }), {
     tabId: 'tab_x_1', expectedRevision: 4, command: { op: 'click', ref: 'br:tab_x_1:4:node_1', target: undefined, button: undefined, modifiers: undefined },
   });

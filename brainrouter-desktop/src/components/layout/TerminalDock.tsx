@@ -26,7 +26,7 @@ export interface TerminalDockProps {
   setTermDockOpen: Dispatch<SetStateAction<boolean>>;
   tabTitle: (id: PanelId) => string;
   gitInfo: GitInfo;
-  renderPanelBody: (id: PanelId) => React.ReactElement | null;
+  renderPanelBody: (id: PanelId, active?: boolean) => React.ReactElement | null;
 }
 
 export function TerminalDock(p: TerminalDockProps): React.ReactElement | null {
@@ -90,7 +90,7 @@ export function TerminalDock(p: TerminalDockProps): React.ReactElement | null {
         {(() => {
           const active = termTabs.find((t) => t.id === activeTerm);
           return active && active.kind !== 'shell'
-            ? <div className="dock-view panel-body" key={active.id}>{renderPanelBody(active.kind)}</div>
+            ? <div className="dock-view panel-body" key={active.id}>{renderPanelBody(active.kind, true)}</div>
             : null;
         })()}
       </div>
