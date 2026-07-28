@@ -1,6 +1,6 @@
 # ADR-024 — Agent Work Contracts, Repository Assurance, and Browser Reliability
 
-**Status:** Proposed for review; no implementation is authorized by this ADR yet ·
+**Status:** Accepted for phased implementation on `release/0.4.17` ·
 **Builds on** ADR-017 (GitHub App review flows), ADR-021 (typed workspace
 profiles), ADR-022 (persona, capability, orchestration, skill, tool, and context
 contracts), and ADR-023 (profile-specific orchestration plans) ·
@@ -938,14 +938,14 @@ assurance policy.
 
 ## Rollout plan and taskboard
 
-No rollout item begins until this ADR is accepted. Each row is one PR or a small
-PR series with its own security review and rollback boundary.
+Each row is one PR or a small PR series with its own security review and rollback
+boundary.
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[U]` user decision.
 
 | ID | Status | Deliverable | Depends on | Acceptance evidence |
 |---|---|---|---|---|
-| R0 | `[U]` | Accept, revise, or reject this ADR | — | Recorded ADR decision |
+| R0 | `[x]` | Accept, revise, or reject this ADR | — | Accepted on 2026-07-28 |
 | R1 | `[ ]` | Work Contract v1 schemas, stable task IDs, migration reader | R0 | Round-trip, migration, and invariant tests |
 | R2 | `[ ]` | Typed Steer receipts and revision reconciliation in core | R1 | CLI/Desktop parity tests; goal-conflict tests |
 | R3 | `[ ]` | Profile planning-schema catalog and activation policy | R1 | Six-profile resolver matrix |
@@ -1026,18 +1026,20 @@ This ADR is implemented only when:
 24. Every rollout item ships in a small PR with focused local verification and
     hosted CI as the broad integration gate.
 
-## Decision required from reviewer
+## Accepted rollout defaults
 
-Before implementation, confirm or revise:
-
-1. whether `security-auditor` should be a bundled persona now or introduced with
-   R10;
-2. whether deep repository review should be manually triggered only or also run
-   on a configurable schedule;
-3. which two languages follow TypeScript/JavaScript in the parser rollout;
-4. whether attached external-browser control is in `0.4.17` scope or a later
-   release;
-5. default GitHub policy: code review only, code + security, or organization-
-   selectable with neither forced;
-6. retention limits for checkouts, indexes, action receipts, and dynamic
-   validation evidence.
+1. The `security-auditor` persona ships with R10, when its capability, skills,
+   assurance stages, and evidence contract exist.
+2. Deep repository review is manual in the first release. Configurable scheduled
+   runs follow only after cost, latency, supersession, and coverage telemetry are
+   proven.
+3. Python and Go follow TypeScript/JavaScript in the parser rollout.
+4. Attached external-browser control remains in `0.4.17` scope, off by default
+   behind explicit consent and policy.
+5. GitHub code and security review are organization-selectable. Migration
+   preserves each repository's current enabled lenses; new installations offer
+   both without silently forcing either.
+6. Exact checkouts are deleted when a run becomes terminal. Indexes use a
+   configurable 30-day inactive default. Action receipts and assurance evidence
+   use a configurable 90-day default; finding lifecycle records and their stable
+   fingerprints remain durable while their large raw artifacts may expire.
