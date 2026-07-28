@@ -43,6 +43,10 @@ test('P23-3b catalog projects safe roles, capabilities, tool groups, tools, skil
     entry.kind === 'skill-pack' && entry.id === 'academic-paper');
   const computationalResearch = catalog.entries.find((entry) =>
     entry.kind === 'capability' && entry.id === 'computational-research');
+  const dataVisualization = catalog.entries.find((entry) =>
+    entry.kind === 'capability' && entry.id === 'data-visualization');
+  const dataVisualizationPack = catalog.entries.find((entry) =>
+    entry.kind === 'skill-pack' && entry.id === 'data-visualization');
   const webSearch = catalog.entries.find((entry) => entry.kind === 'tool' && entry.id === 'web_search');
   const research = catalog.entries.find((entry) => entry.kind === 'skill-pack' && entry.id === 'research');
   const researchQuestion = catalog.entries.find((entry) => entry.kind === 'skill' && entry.id === 'research-question-skill');
@@ -69,6 +73,9 @@ test('P23-3b catalog projects safe roles, capabilities, tool groups, tools, skil
   assert.equal(academicPaperPack?.managedByCapability, 'academic-paper');
   assert.ok(computationalResearch?.expandsTo?.includes('data-analysis-skill'));
   assert.ok(computationalResearch?.expandsTo?.includes('shell'));
+  assert.ok(dataVisualization?.expandsTo?.includes('data-visualization-skill'));
+  assert.ok(dataVisualization?.expandsTo?.includes('interactive-browser'));
+  assert.equal(dataVisualizationPack?.managedByCapability, 'data-visualization');
   assert.equal(webSearch?.source, 'core');
   assert.equal(webSearch?.accessTier, 'read');
   assert.equal(webSearch?.actionKind, 'network');
@@ -87,7 +94,13 @@ test('P23-3b catalog projects safe roles, capabilities, tool groups, tools, skil
 test('P23-3b capability selections use contributed capability IDs and reject typos', () => {
   const catalog = buildWorkspaceSelectionCatalog();
   const valid = validateReviewedWorkspaceCapabilitySelection({
-    enabled: ['frontend', 'backend', 'academic-paper', 'computational-research'],
+    enabled: [
+      'frontend',
+      'backend',
+      'academic-paper',
+      'computational-research',
+      'data-visualization',
+    ],
     disabled: [],
   }, catalog);
   assert.equal(valid.ok, true);

@@ -47,7 +47,12 @@ interface CapabilityContribution {
 }
 
 export interface WorkspaceCapabilityDefinition {
-  id: 'frontend' | 'backend' | 'academic-paper' | 'computational-research';
+  id:
+    | 'frontend'
+    | 'backend'
+    | 'academic-paper'
+    | 'computational-research'
+    | 'data-visualization';
   label: string;
   description: string;
   skillPackId: string;
@@ -101,6 +106,14 @@ export const WORKSPACE_CAPABILITY_DEFINITIONS: readonly WorkspaceCapabilityDefin
     skillIds: ['data-analysis-skill', 'experiment-validation-skill'],
     toolProfileIds: ['coding', 'shell', 'browser', 'research-notes', 'artifacts'],
   },
+  {
+    id: 'data-visualization',
+    label: 'Data visualization',
+    description: 'Task-time chart, dashboard, figure, visual-integrity, accessibility, and interactive-verification workflow.',
+    skillPackId: 'data-visualization',
+    skillIds: ['data-visualization-skill'],
+    toolProfileIds: ['coding', 'shell', 'artifacts', 'interactive-browser'],
+  },
 ] as const;
 
 const CAPABILITY_BY_ID = new Map(
@@ -110,6 +123,7 @@ const FRONTEND_DEFINITION = CAPABILITY_BY_ID.get('frontend')!;
 const BACKEND_DEFINITION = CAPABILITY_BY_ID.get('backend')!;
 const ACADEMIC_PAPER_DEFINITION = CAPABILITY_BY_ID.get('academic-paper')!;
 const COMPUTATIONAL_RESEARCH_DEFINITION = CAPABILITY_BY_ID.get('computational-research')!;
+const DATA_VISUALIZATION_DEFINITION = CAPABILITY_BY_ID.get('data-visualization')!;
 
 const FRONTEND_CONTRIBUTION: CapabilityContribution = {
   skillPacks: [FRONTEND_DEFINITION.skillPackId],
@@ -144,6 +158,15 @@ const COMPUTATIONAL_RESEARCH_CONTRIBUTION: CapabilityContribution = {
   toolProfiles: COMPUTATIONAL_RESEARCH_DEFINITION.toolProfileIds,
   promptBlocks: [
     'Computational research capability is active for this task. Preserve the active domain persona, state a measurable question and hypotheses, record data lineage and transformations, use reproducible environments and seeds, validate results independently, report effect size and uncertainty, and keep limitations and unsupported claims visible. This capability does not itself grant shell, notebook, file, network, or artifact authority.',
+  ],
+};
+
+const DATA_VISUALIZATION_CONTRIBUTION: CapabilityContribution = {
+  skillPacks: [DATA_VISUALIZATION_DEFINITION.skillPackId],
+  skills: DATA_VISUALIZATION_DEFINITION.skillIds,
+  toolProfiles: DATA_VISUALIZATION_DEFINITION.toolProfileIds,
+  promptBlocks: [
+    'Data visualization capability is active for this task. Stay in the data-scientist persona, define the audience and decision, verify data lineage and transformations, choose an encoding that preserves the comparison, disclose scales, normalization, missingness, and uncertainty, provide accessible alternatives, and verify representative values and interactive states. This capability does not itself grant file, shell, notebook, browser, or artifact authority.',
   ],
 };
 
@@ -218,6 +241,10 @@ const COMPUTATIONAL_RESEARCH_TASK_PATTERN =
   /\b(computational research|computational analysis|empirical analysis|reproducib(?:le|ility)|experiment(?:al)? analysis|statistical analysis|simulation|notebook analysis)\b/i;
 const COMPUTATIONAL_RESEARCH_FILE_PATTERN =
   /\.(?:ipynb|rmd|qmd|sas|do|jl|r)$/i;
+const DATA_VISUALIZATION_TASK_PATTERN =
+  /\b(data visuali[sz]ation|visual analytics|interactive chart|analytical dashboard|data dashboard|chart design|chart audit|plotting|publication figure|statistical graphic)\b/i;
+const DATA_VISUALIZATION_FILE_PATTERN =
+  /(?:^|\/)(?:charts?|figures?|visuali[sz]ations?)(?:\/|$)|\.(?:vega|vl)\.json$|\.(?:pbix|twb|twbx)$/i;
 
 /** Resolve additive capabilities for one task without reading disk or mutating the manifest. */
 export function resolveWorkspaceCapabilities(input: WorkspaceCapabilityResolutionInput): WorkspaceCapabilityResolution {
@@ -229,6 +256,8 @@ export function resolveWorkspaceCapabilities(input: WorkspaceCapabilityResolutio
   const computationalResearchPersonaIsActive =
     (activeAgent === 'researcher' || activeAgent === 'data-scientist')
     && input.manifest.persona.enabled.includes(activeAgent);
+  const dataScientistIsActive =
+    activeAgent === 'data-scientist' && input.manifest.persona.enabled.includes('data-scientist');
   const available = new Set(
     getWorkspaceProfile(input.manifest.profile)?.capabilities.available ?? [],
   );
@@ -288,6 +317,18 @@ export function resolveWorkspaceCapabilities(input: WorkspaceCapabilityResolutio
       appendAvailable(skills, COMPUTATIONAL_RESEARCH_CONTRIBUTION.skills, input.availability?.skills);
       appendAvailable(toolProfiles, COMPUTATIONAL_RESEARCH_CONTRIBUTION.toolProfiles, input.availability?.toolProfiles);
       appendUnique(promptBlocks, COMPUTATIONAL_RESEARCH_CONTRIBUTION.promptBlocks);
+    }
+  }
+
+  if (dataScientistIsActive && enabled.has('data-visualization')) {
+    const visualizationReasons = detectDataVisualizationReasons(input.task, input.files);
+    if (visualizationReasons.length > 0) {
+      active.push('data-visualization');
+      reasons.push(...visualizationReasons);
+      appendAvailable(skillPacks, DATA_VISUALIZATION_CONTRIBUTION.skillPacks, input.availability?.skillPacks);
+      appendAvailable(skills, DATA_VISUALIZATION_CONTRIBUTION.skills, input.availability?.skills);
+      appendAvailable(toolProfiles, DATA_VISUALIZATION_CONTRIBUTION.toolProfiles, input.availability?.toolProfiles);
+      appendUnique(promptBlocks, DATA_VISUALIZATION_CONTRIBUTION.promptBlocks);
     }
   }
 
@@ -359,6 +400,21 @@ function detectComputationalResearchReasons(
   const normalizedFiles = (files ?? []).map((file) => file.replaceAll('\\', '/'));
   if (normalizedFiles.some((file) => COMPUTATIONAL_RESEARCH_FILE_PATTERN.test(file))) {
     reasons.push('task includes a computational research file');
+  }
+  return reasons;
+}
+
+function detectDataVisualizationReasons(
+  task: string | undefined,
+  files: readonly string[] | undefined,
+): string[] {
+  const reasons: string[] = [];
+  if (DATA_VISUALIZATION_TASK_PATTERN.test(task?.trim() ?? '')) {
+    reasons.push('task describes data-visualization work');
+  }
+  const normalizedFiles = (files ?? []).map((file) => file.replaceAll('\\', '/'));
+  if (normalizedFiles.some((file) => DATA_VISUALIZATION_FILE_PATTERN.test(file))) {
+    reasons.push('task includes a visualization artifact');
   }
   return reasons;
 }

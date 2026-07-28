@@ -154,6 +154,34 @@ test('reviewed Research computational capability activates without changing pers
   }
 });
 
+test('reviewed Data Science visualization capability activates without changing persona', () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'br-cap-state-visualization-'));
+  try {
+    const manifest = createWorkspaceManifest({
+      name: 'visual-analysis',
+      profile: 'data-science',
+      by: 'wizard',
+    });
+    manifest.capabilities.enabled.push('data-visualization');
+    saveWorkspaceManifest(workspace, manifest);
+    const { host, calls } = makeHost(workspace);
+    const resolved = refreshWorkspaceCapabilityState(
+      host,
+      'Build an accessible analytical dashboard and verify every chart.',
+    );
+
+    assert.equal(host.activeWorkspacePersonaId, 'data-scientist');
+    assert.deepEqual(resolved.active, ['data-visualization']);
+    assert.deepEqual(resolved.toolProfiles, [
+      'coding', 'shell', 'artifacts', 'interactive-browser',
+    ]);
+    assert.match(calls[0]?.content ?? '', /Available task capabilities: data-visualization/);
+    assert.match(calls[1]?.content ?? '', /Stay in the data-scientist persona/);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test('switching workspaces replaces profile, persona, and capability briefing state', () => {
   const engineering = fs.mkdtempSync(path.join(os.tmpdir(), 'br-cap-state-switch-engineering-'));
   const research = fs.mkdtempSync(path.join(os.tmpdir(), 'br-cap-state-switch-research-'));

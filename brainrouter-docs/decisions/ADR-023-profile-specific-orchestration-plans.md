@@ -2049,6 +2049,15 @@ Writing capability. Each capability pack must ship its own detection,
 profile-compatibility, prompt/skill policy, catalog, runtime-resolution, and
 blocked/unavailable tests. A pack does not widen the profile tool matrix.
 
+The Data Science `data-visualization` capability owns a separate visualization
+skill instead of silently adding browser authority to the whole Data Science
+profile. It covers question and audience definition, data lineage, truthful
+encodings and scales, uncertainty, accessibility alternatives, reproducible
+chart specifications, value spot-checks, and interactive-state verification.
+The capability may recommend coding, shell, artifacts, and interactive-browser
+groups, but the active skill can only subtract from the workspace's reviewed
+selection and cannot make a missing browser or terminal runtime available.
+
 ### P23-9 — Plugin and workspace contributions
 
 - Add `orchestrationProfiles` to plugin discovery, summaries, publishing, and

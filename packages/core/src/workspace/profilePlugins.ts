@@ -20,11 +20,12 @@ export type WorkspaceProfilePluginId =
   | 'frontend'
   | 'backend'
   | 'academic-paper'
-  | 'computational-research';
+  | 'computational-research'
+  | 'data-visualization';
 
 type WorkspaceProfilePluginAssetId = Exclude<
   WorkspaceProfilePluginId,
-  'academic-paper' | 'computational-research'
+  'academic-paper' | 'computational-research' | 'data-visualization'
 >;
 
 export interface WorkspaceProfilePluginDefinition {
@@ -148,6 +149,14 @@ export const WORKSPACE_PROFILE_PLUGIN_DEFINITIONS: readonly WorkspaceProfilePlug
     assetId: 'data',
     pluginName: 'profile-data',
     skillIds: ['data-analysis-skill', 'experiment-validation-skill'],
+    personaIds: [],
+  },
+  {
+    id: 'data-visualization',
+    kind: 'capability',
+    assetId: 'data',
+    pluginName: 'profile-data',
+    skillIds: ['data-visualization-skill'],
     personaIds: [],
   },
 ] as const;

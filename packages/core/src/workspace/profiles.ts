@@ -140,7 +140,7 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
     },
     agents: { default: 'data-scientist', enabled: ['data-scientist'] },
     capabilities: {
-      available: ['computational-research'],
+      available: ['computational-research', 'data-visualization'],
       recommended: [],
       enabled: [],
     },
@@ -210,7 +210,13 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
     },
     agents: { default: '', enabled: [] },
     capabilities: {
-      available: ['frontend', 'backend', 'academic-paper', 'computational-research'],
+      available: [
+        'frontend',
+        'backend',
+        'academic-paper',
+        'computational-research',
+        'data-visualization',
+      ],
       recommended: [],
       enabled: [],
     },
