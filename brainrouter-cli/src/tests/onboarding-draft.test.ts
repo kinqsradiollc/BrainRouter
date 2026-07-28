@@ -124,3 +124,29 @@ test('catalog-reviewed setup persists individual tools only through manifest v3'
   assert.deepEqual(reviewed.tools.enabled, ['web_search']);
   assert.deepEqual(reviewed.tools.deny, ['run_command']);
 });
+
+test('catalog-reviewed setup rejects a free-text persona ID', () => {
+  const draft = createProjectOnboardingDraft({ workspaceRoot: root, profile: 'custom' });
+  assert.throws(
+    () => finalizeCatalogReviewedProjectOnboarding(draft, {
+      personaDefault: 'invented',
+      personasEnabled: ['invented'],
+      orchestrationMode: 'off',
+      orchestrationAvailableRoles: [],
+      orchestrationDisabledRoles: [],
+      orchestrationMaxParallel: 1,
+      capabilitiesEnabled: [],
+      capabilitiesDisabled: [],
+      skillPacks: [],
+      skillsEnabled: [],
+      skillsDisabled: [],
+      toolProfiles: [],
+      toolsEnabled: [],
+      toolsDenied: [],
+      memoryTags: [],
+      memoryCaptureHint: '',
+      instructions: '',
+    }, buildWorkspaceSelectionCatalog()),
+    /Reviewed persona selection is no longer available/,
+  );
+});

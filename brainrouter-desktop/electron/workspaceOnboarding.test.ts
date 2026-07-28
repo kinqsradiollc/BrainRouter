@@ -104,6 +104,10 @@ test('manifest-get returns suggestion, complete profiles, and opaque review revi
     assert.equal(info.suggestion.profile, 'engineering');
     assert.ok(info.profiles.some((preset) => preset.id === 'custom'));
     assert.equal(info.preview.plan?.id, 'engineering');
+    assert.equal(
+      info.preview.catalog.some((row) => row.kind === 'persona' && row.id === 'engineer'),
+      true,
+    );
     assert.equal(info.preview.catalog.some((row) => row.kind === 'role' && row.id === 'worker'), true);
     assert.equal(info.preview.catalog.some((row) => row.kind === 'tool-group' && row.id === 'coding'), true);
     assert.match(info.review.revision.root, /^[0-9a-f]{64}$/);
@@ -247,6 +251,18 @@ test('manifest-save rejects a capability outside the selected profile catalog', 
   try {
     const input = payload(env.root, 'research');
     input.capabilities = { enabled: ['frontend'], disabled: [] };
+    const result = saveWorkspaceManifestFromPayload(env.root, input);
+    assert.equal(result.saved, false);
+    assert.equal(result.error, 'Workspace setup could not be saved.');
+    assert.equal(loadWorkspaceManifest(env.root), null);
+  } finally { env.cleanup(); }
+});
+
+test('manifest-save rejects an unknown free-text persona with no write', () => {
+  const env = tmpWorkspace();
+  try {
+    const input = payload(env.root, 'custom');
+    input.persona = { default: 'invented', enabled: ['invented'] };
     const result = saveWorkspaceManifestFromPayload(env.root, input);
     assert.equal(result.saved, false);
     assert.equal(result.error, 'Workspace setup could not be saved.');

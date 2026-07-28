@@ -15,6 +15,7 @@ import {
   previewReviewedWorkspaceInstruction,
   suggestWorkspaceProfile,
   validateReviewedWorkspaceCapabilitySelection,
+  validateReviewedWorkspacePersonaSelection,
   validateReviewedWorkspaceSkillSelection,
   validateReviewedWorkspaceRoleSelection,
   workspaceProfilesForOnboarding,
@@ -182,6 +183,8 @@ export function saveWorkspaceManifestFromPayload(
     const draft = parseManifestDraft(workspaceRoot, record, current, source);
     const catalog = buildWorkspaceOnboardingSources(workspaceRoot, config).catalog;
     const catalogFingerprint = parseDigest(record.catalogFingerprint);
+    const personas = validateReviewedWorkspacePersonaSelection(draft.persona, catalog);
+    if (!personas.ok) throw new Error('Reviewed workspace persona selection is unavailable.');
     const roles = validateReviewedWorkspaceRoleSelection({
       availableRoles: draft.orchestration.availableRoles,
       disabledRoles: draft.orchestration.disabledRoles,
@@ -201,6 +204,8 @@ export function saveWorkspaceManifestFromPayload(
     const manifest = migrateWorkspaceManifestToolSelection({
       manifest: {
         ...draft,
+        persona: personas.value,
+        agents: personas.value,
         orchestration: {
           ...draft.orchestration,
           availableRoles: roles.value.availableRoles,

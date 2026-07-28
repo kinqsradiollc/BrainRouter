@@ -101,6 +101,7 @@ export function buildWorkspaceOnboardingPreview(
 
   const selectedGroups = new Set(manifest.tools.profiles);
   const selectedTools = new Set(manifest.tools.enabled ?? []);
+  const selectedPersonas = new Set(manifest.persona.enabled);
   const selectedCapabilities = new Set(manifest.capabilities.enabled);
   const selectedPacks = new Set(manifest.skills.packs);
   const selectedSkills = new Set(manifest.skills.enabled);
@@ -108,6 +109,7 @@ export function buildWorkspaceOnboardingPreview(
   const disabledCapabilities = new Set(manifest.capabilities.disabled);
   const disabledSkills = new Set(manifest.skills.disabled);
   const recommendedGroups = new Set(preset?.tools.profiles ?? []);
+  const recommendedPersonas = new Set(preset?.persona.enabled ?? []);
   const recommendedRoles = new Set(preset?.orchestration.availableRoles ?? []);
   const availableCapabilities = new Set(preset?.capabilities.available ?? []);
   const recommendedCapabilities = new Set(preset?.capabilities.recommended ?? []);
@@ -190,7 +192,9 @@ export function buildWorkspaceOnboardingPreview(
                 : 'Not contributed for the selected workspace profile.',
             }
           : {}),
-        selected: entry.kind === 'role'
+        selected: entry.kind === 'persona'
+          ? selectedPersonas.has(entry.id)
+          : entry.kind === 'role'
           ? manifest.orchestration.availableRoles.includes(entry.id)
           : entry.kind === 'capability'
             ? selectedCapabilities.has(entry.id)
@@ -203,7 +207,9 @@ export function buildWorkspaceOnboardingPreview(
                 : entry.kind === 'skill'
                   ? selectedSkills.has(entry.id)
                   : false,
-        recommended: entry.kind === 'role'
+        recommended: entry.kind === 'persona'
+          ? recommendedPersonas.has(entry.id)
+          : entry.kind === 'role'
           ? recommendedRoles.has(entry.id)
           : entry.kind === 'capability'
             ? recommendedCapabilities.has(entry.id)
@@ -214,7 +220,9 @@ export function buildWorkspaceOnboardingPreview(
               : entry.kind === 'skill'
                 ? recommendedSkills.has(entry.id)
                 : false,
-        denied: entry.kind === 'role'
+        denied: entry.kind === 'persona'
+          ? false
+          : entry.kind === 'role'
           ? disabledRoles.has(entry.id)
           : entry.kind === 'capability'
             ? disabledCapabilities.has(entry.id)

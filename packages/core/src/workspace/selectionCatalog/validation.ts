@@ -15,6 +15,34 @@ import {
   type WorkspaceSelectionReviewResult,
   type WorkspaceToolSelectionMigrationDiagnostic,
 } from './types.js';
+import type { ReviewedWorkspacePersonaSelection } from './personaSelection.js';
+
+/** Validate the active and enabled domain personas against one host-owned catalog. */
+export function validateReviewedWorkspacePersonaSelection(
+  proposal: ReviewedWorkspacePersonaSelection,
+  catalog: WorkspaceSelectionCatalog,
+): WorkspaceSelectionReviewResult<{
+  default: string;
+  enabled: string[];
+}> {
+  const issues: WorkspaceSelectionReviewIssue[] = [];
+  const enabled = validateField(proposal.enabled, 'personasEnabled', ['persona'], true, catalog, issues);
+  const defaultPersona = proposal.default.trim();
+  const validatedDefault = defaultPersona
+    ? validateField([defaultPersona], 'personaDefault', ['persona'], true, catalog, issues)[0] ?? ''
+    : '';
+  if (validatedDefault && !enabled.includes(validatedDefault)) {
+    issues.push({
+      field: 'personaDefault',
+      id: validatedDefault,
+      code: 'default-not-enabled',
+      reason: 'The default persona must also be enabled.',
+    });
+  }
+  return issues.length > 0
+    ? { ok: false, issues }
+    : { ok: true, value: { default: validatedDefault, enabled } };
+}
 
 /** Validate task-capability allow/deny choices against the contributed catalog. */
 export function validateReviewedWorkspaceCapabilitySelection(
