@@ -18,11 +18,16 @@ export type WorkspaceProfilePluginId =
   | 'data'
   | 'writing'
   | 'frontend'
-  | 'backend';
+  | 'backend'
+  | 'academic-paper';
+
+type WorkspaceProfilePluginAssetId = Exclude<WorkspaceProfilePluginId, 'academic-paper'>;
 
 export interface WorkspaceProfilePluginDefinition {
   id: WorkspaceProfilePluginId;
   kind: 'profile' | 'capability';
+  /** Package asset directory; omitted when it matches the public pack id. */
+  assetId?: WorkspaceProfilePluginAssetId;
   pluginName: string;
   skillIds: readonly string[];
   /** Optional domain identities contributed without execution authority. */
@@ -120,6 +125,19 @@ export const WORKSPACE_PROFILE_PLUGIN_DEFINITIONS: readonly WorkspaceProfilePlug
     ],
     personaIds: [],
   },
+  {
+    id: 'academic-paper',
+    kind: 'capability',
+    assetId: 'research',
+    pluginName: 'profile-research',
+    skillIds: [
+      'source-synthesis-skill',
+      'citation-verification-skill',
+      'academic-paper-drafting-skill',
+      'academic-paper-review-skill',
+    ],
+    personaIds: [],
+  },
 ] as const;
 
 // dist/workspace/profilePlugins.js -> ../../profile-plugins = package assets.
@@ -134,7 +152,7 @@ export function inspectWorkspaceProfilePlugins(
   const unavailable: UnavailableWorkspaceProfilePlugin[] = [];
 
   for (const definition of WORKSPACE_PROFILE_PLUGIN_DEFINITIONS) {
-    const pluginRoot = path.join(root, definition.id);
+    const pluginRoot = path.join(root, definition.assetId ?? definition.id);
     const discovered = discoverPlugin(pluginRoot);
     if (!discovered.ok) {
       unavailable.push({ ...definition, reason: discovered.error.errors.join('; ') });
@@ -182,7 +200,7 @@ export function inspectWorkspaceProfilePlugins(
       root: pluginRoot,
       version,
       skillsRoot,
-      ...(personasRoot ? { personasRoot } : {}),
+      ...(definition.personaIds.length > 0 && personasRoot ? { personasRoot } : {}),
       plugin,
     });
   }

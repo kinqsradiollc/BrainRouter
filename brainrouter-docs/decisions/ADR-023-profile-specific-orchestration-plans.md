@@ -1078,7 +1078,7 @@ The initial cross-profile catalog is:
 |---|---|---|---|
 | Frontend | Engineering | Accessibility, component/design-system judgment, responsive behavior, browser and visual verification | `browser`, `artifacts`, optionally `interactive-browser` |
 | Backend | Engineering | API/service design, authorization, data integrity, background work, production readiness, backend verification | `coding`, `shell`, `artifacts` |
-| Academic paper | Writing | Adds the Research-grade contribution story, claim/evidence map, paper section contracts, citation checks, adversarial paper review, and revision workflow to a Writing workspace | `browser`, `research-notes`, `artifacts` |
+| Academic paper | Writing | Adds the Research-grade contribution story, claim/evidence map, paper section contracts, citation checks, adversarial paper review, and revision workflow to a Writing workspace | `workspace-files`, `browser`, `research-notes`, `artifacts` |
 | Computational research | Research, Data Science | Reproducible computational investigation, experiment records, result validation, uncertainty and limitation reporting | `coding`, `shell`, `browser`, `research-notes`, `artifacts` |
 | Data visualization | Data Science | Chart selection, data-story structure, accessibility, misleading-encoding checks, dashboard/figure verification | `coding`, `artifacts`, optionally `interactive-browser` |
 | Programming lab | Study | Executable examples, learner-safe scaffolding, tests, debugging feedback, and progressive exercise difficulty | `coding`, `shell`, `artifacts` |
@@ -1104,6 +1104,12 @@ capabilities are narrower additions, not renamed copies of Research, Data,
 Study, Writing, or Engineering. A deterministic scan or managed onboarding
 proposal may recommend compatible capabilities from project evidence and the
 user's description, but the review screen owns the final checked set.
+
+A capability may reuse a strict subset of skills from an installed profile
+pack. The capability has its own stable ID, compatibility matrix, detection
+signals, prompt block, and proposed tool groups; activation exposes only its
+declared subset and does not enable the source profile, its persona, or its
+remaining skills.
 
 #### 12.7 Reviewed picker UX in Desktop and CLI
 

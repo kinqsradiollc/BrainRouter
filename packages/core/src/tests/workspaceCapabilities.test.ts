@@ -35,6 +35,17 @@ const BACKEND_AVAILABILITY = {
   toolProfiles: ['coding', 'shell', 'artifacts'],
 };
 
+const ACADEMIC_PAPER_AVAILABILITY = {
+  skillPacks: ['academic-paper'],
+  skills: [
+    'source-synthesis-skill',
+    'citation-verification-skill',
+    'academic-paper-drafting-skill',
+    'academic-paper-review-skill',
+  ],
+  toolProfiles: ['workspace-files', 'browser', 'research-notes', 'artifacts'],
+};
+
 test('no manifest is an exact capability no-op even for a frontend task', () => {
   assert.deepEqual(
     resolveWorkspaceCapabilities({
@@ -124,6 +135,55 @@ test('backend source, migration, and deployment files activate deterministically
     'task includes a backend service or persistence file',
     'task includes backend deployment or operations configuration',
   ]);
+});
+
+test('Writing activates academic-paper workflows without changing persona', () => {
+  const manifest = createWorkspaceManifest({ name: 'paper', profile: 'writing', by: 'wizard' });
+  manifest.capabilities.enabled.push('academic-paper');
+  const resolved = resolveWorkspaceCapabilities({
+    manifest,
+    task: 'Revise this research paper and perform a citation audit.',
+    files: ['paper/main.tex', 'paper/references.bib'],
+    availability: ACADEMIC_PAPER_AVAILABILITY,
+  });
+
+  assert.deepEqual(resolved.active, ['academic-paper']);
+  assert.deepEqual(resolved.reasons, [
+    'task describes academic-paper work',
+    'task includes an academic manuscript or citation file',
+  ]);
+  assert.deepEqual(resolved.skillPacks, ['academic-paper']);
+  assert.deepEqual(resolved.skills, ACADEMIC_PAPER_AVAILABILITY.skills);
+  assert.deepEqual(resolved.toolProfiles, [
+    'workspace-files', 'browser', 'research-notes', 'artifacts',
+  ]);
+  assert.match(resolved.promptBlocks[0]!, /Stay in the writer persona/);
+  assert.deepEqual(manifest.persona, { default: 'writer', enabled: ['writer'] });
+});
+
+test('academic-paper capability rejects incompatible profiles and explicit disable', () => {
+  const research = createWorkspaceManifest({ name: 'research', profile: 'research', by: 'wizard' });
+  research.capabilities.enabled.push('academic-paper');
+  assert.deepEqual(
+    resolveWorkspaceCapabilities({
+      manifest: research,
+      task: 'Draft an academic paper.',
+      availability: ACADEMIC_PAPER_AVAILABILITY,
+    }),
+    EMPTY_RESOLUTION,
+  );
+
+  const writing = createWorkspaceManifest({ name: 'paper', profile: 'writing', by: 'wizard' });
+  writing.capabilities.enabled.push('academic-paper');
+  writing.capabilities.disabled.push('academic-paper');
+  assert.deepEqual(
+    resolveWorkspaceCapabilities({
+      manifest: writing,
+      task: 'Draft an academic paper.',
+      availability: ACADEMIC_PAPER_AVAILABILITY,
+    }),
+    EMPTY_RESOLUTION,
+  );
 });
 
 test('full-stack work may activate frontend and backend under one engineer persona', () => {

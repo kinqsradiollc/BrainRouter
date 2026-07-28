@@ -37,6 +37,10 @@ test('P23-3b catalog projects safe roles, capabilities, tool groups, tools, skil
   const architect = catalog.entries.find((entry) => entry.kind === 'role' && entry.id === 'architect');
   const frontend = catalog.entries.find((entry) => entry.kind === 'capability' && entry.id === 'frontend');
   const frontendPack = catalog.entries.find((entry) => entry.kind === 'skill-pack' && entry.id === 'frontend');
+  const academicPaper = catalog.entries.find((entry) =>
+    entry.kind === 'capability' && entry.id === 'academic-paper');
+  const academicPaperPack = catalog.entries.find((entry) =>
+    entry.kind === 'skill-pack' && entry.id === 'academic-paper');
   const webSearch = catalog.entries.find((entry) => entry.kind === 'tool' && entry.id === 'web_search');
   const research = catalog.entries.find((entry) => entry.kind === 'skill-pack' && entry.id === 'research');
   const researchQuestion = catalog.entries.find((entry) => entry.kind === 'skill' && entry.id === 'research-question-skill');
@@ -58,6 +62,9 @@ test('P23-3b catalog projects safe roles, capabilities, tool groups, tools, skil
   assert.ok(frontend?.expandsTo?.includes('artifacts'));
   assert.ok(frontend?.expandsTo?.includes('interactive-browser'));
   assert.equal(frontendPack?.managedByCapability, 'frontend');
+  assert.ok(academicPaper?.expandsTo?.includes('academic-paper-drafting-skill'));
+  assert.ok(academicPaper?.expandsTo?.includes('workspace-files'));
+  assert.equal(academicPaperPack?.managedByCapability, 'academic-paper');
   assert.equal(webSearch?.source, 'core');
   assert.equal(webSearch?.accessTier, 'read');
   assert.equal(webSearch?.actionKind, 'network');
@@ -76,7 +83,7 @@ test('P23-3b catalog projects safe roles, capabilities, tool groups, tools, skil
 test('P23-3b capability selections use contributed capability IDs and reject typos', () => {
   const catalog = buildWorkspaceSelectionCatalog();
   const valid = validateReviewedWorkspaceCapabilitySelection({
-    enabled: ['frontend', 'backend'],
+    enabled: ['frontend', 'backend', 'academic-paper'],
     disabled: [],
   }, catalog);
   assert.equal(valid.ok, true);

@@ -249,7 +249,13 @@ test('profile presets are self-consistent (every profile usable by the wizard)',
   });
   const custom = WORKSPACE_PROFILES.find((preset) => preset.id === 'custom')!;
   assert.deepEqual(custom.capabilities, {
-    available: ['frontend', 'backend'],
+    available: ['frontend', 'backend', 'academic-paper'],
+    recommended: [],
+    enabled: [],
+  });
+  const writing = WORKSPACE_PROFILES.find((preset) => preset.id === 'writing')!;
+  assert.deepEqual(writing.capabilities, {
+    available: ['academic-paper'],
     recommended: [],
     enabled: [],
   });
