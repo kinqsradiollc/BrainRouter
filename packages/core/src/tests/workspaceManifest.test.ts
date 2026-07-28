@@ -276,6 +276,9 @@ test('profile presets are self-consistent (every profile usable by the wizard)',
   const research = WORKSPACE_PROFILES.find((preset) => preset.id === 'research')!;
   const dataScience = WORKSPACE_PROFILES.find((preset) => preset.id === 'data-science')!;
   assert.deepEqual(research.capabilities.available, ['computational-research']);
+  assert.ok(research.tools.profiles.includes('research-browser'));
+  assert.ok(!research.tools.profiles.includes('interactive-browser'),
+    'Research receives the bounded browser group rather than full browser authority');
   assert.deepEqual(
     dataScience.capabilities.available,
     ['computational-research', 'data-visualization'],

@@ -1,7 +1,7 @@
 ---
 name: evidence-research-skill
 description: Collect bounded, relevant evidence for an approved research question and source strategy without drafting conclusions.
-allowed-tools: [read_file, list_dir, grep_search, glob_files, fetch_url, web_search, research_note]
+allowed-tools: [read_file, list_dir, grep_search, glob_files, fetch_url, web_search, research_note, browser_capabilities, browser_list_tabs, browser_get_state, browser_snapshot, browser_screenshot, browser_console, browser_network, browser_downloads, browser_list_screens, browser_get_screen, browser_find_element, browser_assert_visible, browser_open_tab, browser_navigate, browser_back, browser_forward, browser_reload, browser_stop, browser_wait, browser_select_tab, browser_close_tab, browser_reopen_tab, browser_click, browser_double_click, browser_tap, browser_hover, browser_type, browser_press, browser_scroll, browser_select_option, browser_check]
 ---
 
 # Evidence research

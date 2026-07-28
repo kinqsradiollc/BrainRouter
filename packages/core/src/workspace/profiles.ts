@@ -121,8 +121,9 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
     skills: { packs: ['research'], enabled: ['planning-skill', 'handover-skill'] },
     tools: {
       profiles: [
-        'workspace-files', 'browser', 'project-knowledge', 'memory-context', 'research-notes',
-        'artifacts', 'planning-session', 'orchestration',
+        'workspace-files', 'browser', 'research-browser', 'project-knowledge',
+        'memory-context', 'research-notes', 'artifacts', 'planning-session',
+        'orchestration',
       ],
     },
     memory: { tags: ['research'], captureHint: 'sources' },

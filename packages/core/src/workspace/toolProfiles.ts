@@ -11,6 +11,8 @@ import {
   type WorkspaceManifest,
   type WorkspaceToolSelectionMode,
 } from './manifest.js';
+import { WORKSPACE_CAPABILITY_DEFINITIONS } from './capabilities.js';
+import { getWorkspaceProfile } from './profiles.js';
 import { isSelectableWorkspaceCatalogToolId } from './selectionCatalog/toolEligibility.js';
 
 export interface WorkspaceToolProfileDefinition {
@@ -86,6 +88,26 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
     description: 'Fetch web pages and search public sources.',
     category: 'web-research',
     toolIds: ['fetch_url', 'web_search'],
+    mcpToolIds: [],
+    extensionIds: [],
+  },
+  {
+    id: 'research-browser',
+    label: 'Interactive research browser',
+    description: 'Observe and navigate dynamic sources one page at a time without granting uploads, permission changes, device emulation, or bulk browser flows.',
+    category: 'web-research',
+    toolIds: [
+      'browser_capabilities', 'browser_list_tabs', 'browser_get_state',
+      'browser_snapshot', 'browser_screenshot', 'browser_console', 'browser_network',
+      'browser_downloads', 'browser_list_screens', 'browser_get_screen',
+      'browser_find_element', 'browser_assert_visible',
+      'browser_open_tab', 'browser_navigate', 'browser_back', 'browser_forward',
+      'browser_reload', 'browser_stop', 'browser_wait',
+      'browser_select_tab', 'browser_close_tab', 'browser_reopen_tab',
+      'browser_click', 'browser_double_click', 'browser_tap', 'browser_hover',
+      'browser_type', 'browser_press', 'browser_scroll', 'browser_select_option',
+      'browser_check',
+    ],
     mcpToolIds: [],
     extensionIds: [],
   },
@@ -291,7 +313,10 @@ export function workspaceToolProfileIds(): string[] {
 
 /** Resolve reviewed manifest profiles plus task-time capability additions. */
 export function resolveWorkspaceToolSelection(input: {
-  manifest: Pick<WorkspaceManifest, 'version' | 'tools'> | null | undefined;
+  manifest: Pick<
+    WorkspaceManifest,
+    'version' | 'profile' | 'capabilities' | 'tools'
+  > | null | undefined;
   activeToolProfiles?: readonly string[];
 }): WorkspaceToolSelection {
   if (!input.manifest) return emptySelection();
@@ -301,9 +326,12 @@ export function resolveWorkspaceToolSelection(input: {
       && input.manifest.tools.mode === 'explicit-catalog'
       ? 'explicit-catalog'
       : 'legacy-groups';
+  const activeToolProfiles = mode === 'explicit-catalog'
+    ? reviewedCapabilityToolProfiles(input.manifest, input.activeToolProfiles ?? [])
+    : input.activeToolProfiles ?? [];
   const activeProfileIds = unique([
     ...input.manifest.tools.profiles,
-    ...(mode === 'legacy-groups' ? input.activeToolProfiles ?? [] : []),
+    ...activeToolProfiles,
   ]).filter((id) => PROFILE_BY_ID.has(id));
   const allowedToolIds = new Set<string>();
   const allowedMcpToolIds = new Set<string>();
@@ -345,6 +373,31 @@ export function resolveWorkspaceToolSelection(input: {
     allowedMcpToolIds,
     allowedExtensionIds,
   };
+}
+
+/**
+ * V3 capability choices are reviewed manifest authority, but their tool groups
+ * remain task-scoped. Accept only groups contributed by an enabled capability
+ * compatible with the selected profile; callers cannot widen an explicit
+ * catalog by passing arbitrary active group ids.
+ */
+function reviewedCapabilityToolProfiles(
+  manifest: Pick<WorkspaceManifest, 'profile' | 'capabilities'>,
+  requested: readonly string[],
+): string[] {
+  const profile = getWorkspaceProfile(manifest.profile);
+  if (!profile) return [];
+  const available = new Set(profile.capabilities.available);
+  const disabled = new Set(manifest.capabilities.disabled);
+  const enabled = new Set(
+    manifest.capabilities.enabled.filter((id) => available.has(id) && !disabled.has(id)),
+  );
+  const reviewedGroups = new Set(
+    WORKSPACE_CAPABILITY_DEFINITIONS
+      .filter((capability) => enabled.has(capability.id))
+      .flatMap((capability) => [...capability.toolProfileIds]),
+  );
+  return unique(requested).filter((id) => reviewedGroups.has(id));
 }
 
 /**

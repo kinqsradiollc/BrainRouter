@@ -37,13 +37,13 @@ function intersection(...lists: readonly string[][]): string[] {
 test('C2 package-owned profile plugins use the standard versioned plugin contract', () => {
   const catalog = inspectWorkspaceProfilePlugins();
   const expectedVersions = new Map([
-    ['research', '2.4.0'],
+    ['research', '2.5.0'],
     ['study', '2.4.0'],
     ['data', '2.2.0'],
     ['writing', '2.3.0'],
     ['frontend', '1.1.0'],
     ['backend', '1.1.0'],
-    ['academic-paper', '2.4.0'],
+    ['academic-paper', '2.5.0'],
     ['computational-research', '2.2.0'],
     ['data-visualization', '2.2.0'],
     ['programming-lab', '2.4.0'],
@@ -110,7 +110,7 @@ test('research profile exposes separate task-selectable workflow skills', () => 
 
   assert.ok(research);
   assert.equal(research.kind, 'profile');
-  assert.equal(research.version, '2.4.0');
+  assert.equal(research.version, '2.5.0');
   assert.deepEqual(research.skillIds, [
     'research-question-skill',
     'source-strategy-skill',
@@ -149,6 +149,28 @@ test('research skills retain folder, artifact, and citation tools through stacke
   );
   assert.ok(paperAudit.includes('fetch_url'));
   assert.ok(paperAudit.includes('web_search'));
+  for (const toolId of [
+    'browser_snapshot',
+    'browser_find_element',
+    'browser_open_tab',
+    'browser_navigate',
+    'browser_click',
+    'browser_type',
+    'browser_scroll',
+    'browser_close_tab',
+  ]) {
+    assert.ok(researchAudit.includes(toolId), `research audit: ${toolId}`);
+    assert.ok(paperAudit.includes(toolId), `paper audit: ${toolId}`);
+  }
+  for (const toolId of [
+    'browser_upload_files',
+    'browser_permission',
+    'browser_set_device',
+    'browser_run_flow',
+  ]) {
+    assert.equal(researchAudit.includes(toolId), false, `research audit excludes ${toolId}`);
+    assert.equal(paperAudit.includes(toolId), false, `paper audit excludes ${toolId}`);
+  }
 
   const reviewer = JSON.parse(
     fs.readFileSync(path.join(PACKAGE_ROOT, 'agents', 'reviewer.json'), 'utf8'),
@@ -228,7 +250,7 @@ test('academic-paper capability reuses the reviewed Research paper workflows', (
   assert.ok(paper);
   assert.equal(paper.kind, 'capability');
   assert.equal(paper.pluginName, 'profile-research');
-  assert.equal(paper.version, '2.4.0');
+  assert.equal(paper.version, '2.5.0');
   assert.deepEqual(paper.skillIds, [
     'source-synthesis-skill',
     'citation-verification-skill',
