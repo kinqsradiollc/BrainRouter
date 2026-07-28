@@ -1,7 +1,7 @@
 {
   "name": "profile-writing",
-  "version": "2.1.0",
-  "description": "Audience-aware drafting and structured revision workflows.",
+  "version": "2.2.0",
+  "description": "Audience-aware drafting, read-only critique, and structured revision workflows.",
   "category": "productivity",
   "keywords": ["writing", "drafting", "revision"]
 }

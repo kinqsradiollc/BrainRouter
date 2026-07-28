@@ -204,6 +204,7 @@ test('P23-6 exceptional source gathering and critique narrow fan-out before prim
     ['check', 'primary'],
   ]);
   assert.equal(study.stages[0]?.fanOut?.max, 1);
+  assert.deepEqual(study.stages[0]?.skillIds, ['learning-source-skill']);
 
   const writing = resolveWorkspaceOrchestrationPlan(input(
     'writing',
@@ -222,6 +223,31 @@ test('P23-6 exceptional source gathering and critique narrow fan-out before prim
       : undefined,
     'reviewer',
   );
+  assert.deepEqual(writing.stages[1]?.skillIds, ['writing-critique-skill']);
+});
+
+test('P23-6 delegated stage skill gaps fail closed to primary handling', () => {
+  for (const [profileId, signal, strategyId, missingSkill, fallback] of [
+    ['study', 'source-explanation', 'source-explanation', 'learning-source-skill', 'direct-tutoring'],
+    ['writing', 'critique', 'critique-revision', 'writing-critique-skill', 'direct-writing'],
+  ] as const) {
+    const base = input(profileId, signal);
+    const result = resolveWorkspaceOrchestrationPlan(input(profileId, signal, {
+      explicitStrategyId: strategyId,
+      workspaceSkillIds: new Set(
+        [...base.workspaceSkillIds].filter((skillId) => skillId !== missingSkill),
+      ),
+    }));
+
+    assert.equal(result.strategyId, fallback);
+    assert.equal(result.selectionSource, 'fallback');
+    assert.equal(
+      result.diagnostics.some((diagnostic) =>
+        diagnostic.code === 'skill-unavailable'
+        && diagnostic.referenceId === missingSkill),
+      true,
+    );
+  }
 });
 
 test('P23-6 a missing primary skill fails the selected strategy closed to direct handling', () => {

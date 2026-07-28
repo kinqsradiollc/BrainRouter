@@ -128,7 +128,9 @@
             "prepare"
           ],
           "objective": "Critique the frozen artifact against the supplied rubric for purpose, structure, evidence, consistency, clarity, and voice without editing it.",
-          "skillIds": [],
+          "skillIds": [
+            "writing-critique-skill"
+          ],
           "fanOut": {
             "min": 1,
             "max": 2

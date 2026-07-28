@@ -56,6 +56,7 @@ test('selected profile skills lead the managed catalog and replace global collis
       'learning-assessment-skill',
       'error-remediation-skill',
       'retrieval-practice-skill',
+      'learning-source-skill',
       'ordinary-skill',
     ]);
     assert.equal(entries[5].scope, 'plugin');

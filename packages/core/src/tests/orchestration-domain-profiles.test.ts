@@ -36,6 +36,20 @@ test('P23-5 bundled plans fail closed when their profile skills are unavailable'
   );
 });
 
+test('every bundled delegated stage declares at least one stage-scoped skill', () => {
+  for (const profile of loadBundledOrchestrationProfiles()) {
+    for (const strategy of profile.strategies) {
+      for (const stage of strategy.stages) {
+        if (stage.executor.kind !== 'role') continue;
+        assert.ok(
+          stage.skillIds.length > 0,
+          `${profile.id}/${strategy.id}/${stage.id}: missing delegated skill contract`,
+        );
+      }
+    }
+  }
+});
+
 function input(
   profileId: WorkspaceProfileId,
   signal: string,

@@ -16,7 +16,7 @@ function allowedTools(profileId: WorkspaceProfilePluginId, skillId: string): str
   return flow!.split(',').map((value) => value.trim()).filter(Boolean);
 }
 
-test('folder-backed Study and Writing skills can discover inputs and persist deliverables', () => {
+test('folder-backed Study and Writing skills discover inputs while producing skills persist deliverables', () => {
   const study = findWorkspaceProfilePlugin('study');
   const writing = findWorkspaceProfilePlugin('writing');
   assert.ok(study);
@@ -26,11 +26,22 @@ test('folder-backed Study and Writing skills can discover inputs and persist del
     const profileId = study.skillIds.includes(skillId) ? 'study' : 'writing';
     assert.ok(allowedTools(profileId, skillId).includes('list_dir'), `${skillId}: workspace discovery`);
   }
-  for (const skillId of study.skillIds.filter((id) => id !== 'learner-diagnostic-skill')) {
+  for (const skillId of study.skillIds.filter((id) =>
+    !['learner-diagnostic-skill', 'learning-source-skill'].includes(id))) {
     assert.ok(allowedTools('study', skillId).includes('artifact_write'), `${skillId}: learning artifact`);
   }
-  for (const skillId of writing.skillIds) {
+  for (const skillId of writing.skillIds.filter((id) => id !== 'writing-critique-skill')) {
     assert.ok(allowedTools('writing', skillId).includes('artifact_write'), `${skillId}: writing artifact`);
+  }
+  for (const [profileId, skillId] of [
+    ['study', 'learning-source-skill'],
+    ['writing', 'writing-critique-skill'],
+  ] as const) {
+    assert.equal(
+      allowedTools(profileId, skillId).includes('artifact_write'),
+      false,
+      `${skillId}: read-only delegated skill`,
+    );
   }
 });
 

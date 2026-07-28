@@ -180,7 +180,9 @@
           },
           "after": [],
           "objective": "Gather authoritative source material for one assigned learning objective, preserving precise provenance, assumptions, disagreements, and access gaps without teaching or grading the learner.",
-          "skillIds": [],
+          "skillIds": [
+            "learning-source-skill"
+          ],
           "fanOut": {
             "min": 1,
             "max": 2
