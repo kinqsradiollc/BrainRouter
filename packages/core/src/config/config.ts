@@ -645,6 +645,13 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     },
     prefixMemoryAnchors: c.prefixMemoryAnchors ?? 'on',
     personaAnchor: c.personaAnchor ?? 'on',
+    personalityDefault:
+      c.personalityDefault === 'concise'
+      || c.personalityDefault === 'standard'
+      || c.personalityDefault === 'detailed'
+      || c.personalityDefault === 'pair-programmer'
+        ? c.personalityDefault
+        : null,
     briefingMaxCharsPerSource: c.briefingMaxCharsPerSource ?? 4_000,
     briefingMaxSources: c.briefingMaxSources ?? 6,
     autoCompactTokens: c.autoCompactTokens ?? 80_000,

@@ -312,6 +312,33 @@ test('preferencesStore: auto personality follows the profile without replacing a
   });
 });
 
+test('preferencesStore: global personality default sits below a workspace override and above profile recommendation', () => {
+  withTempWorkspace((workspace) => {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'papers', profile: 'research', by: 'wizard' }),
+    );
+    setCliKnobOverride({ personalityDefault: 'concise' });
+
+    assert.deepEqual(
+      {
+        personality: readPreferences(workspace).personality,
+        source: readPreferences(workspace).personalitySource,
+      },
+      { personality: 'concise', source: 'global' },
+    );
+
+    writePreferences(workspace, { personality: 'pair-programmer' });
+    assert.deepEqual(
+      {
+        personality: readPreferences(workspace).personality,
+        source: readPreferences(workspace).personalitySource,
+      },
+      { personality: 'pair-programmer', source: 'workspace' },
+    );
+  });
+});
+
 test('preferencesStore: executionMode + reviewPolicy default to planning + request', () => {
   withTempWorkspace((workspace) => {
     const prefs = readPreferences(workspace);
