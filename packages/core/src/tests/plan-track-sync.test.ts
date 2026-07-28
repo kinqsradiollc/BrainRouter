@@ -2,10 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Agent } from '../agent/agent.js';
 import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
-import { createRequirement, getRequirement } from '../requirement/records/requirementStore.js';
-import { planItemId, syncRequirementPlanTrack } from '../requirement/sync/planTrackSync.js';
+import { createRequirement, getRequirement, linkRequirement } from '../requirement/records/requirementStore.js';
+import {
+  legacyPlanItemId,
+  planItemId,
+  syncRequirementPlanTrack,
+} from '../requirement/sync/planTrackSync.js';
 import { readPlan, updatePlan } from '../task/taskStore.js';
-import { listWorkItems } from '../track/trackStore.js';
+import { createWorkItem, linkWorkItem, listWorkItems } from '../track/trackStore.js';
 import { withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
 
 test('plan/Track sync: a ready requirement seeds one plan and deduplicated work items', () => {
@@ -77,6 +81,44 @@ test('plan/Track sync: a completed plan item transitions its linked item to done
     const item = listWorkItems(workspace).find((candidate) => candidate.requirementId === requirement.id)!;
     assert.equal(item.statusCategory, 'completed');
     assert.equal(result.actions.filter((action) => action.kind === 'work-item-completed').length, 1);
+  });
+});
+
+test('R1 plan/Track sync adopts a legacy content link without creating another item', () => {
+  withTempWorkspace((workspace) => {
+    const sessionKey = 'session:legacy-link';
+    const requirement = createRequirement(workspace, {
+      title: 'Migrate task identity',
+      status: 'in-progress',
+      sessionKey,
+      acceptanceCriteria: ['Stable ids link plan and Track.'],
+    });
+    const plan = updatePlan(workspace, {
+      requirementId: requirement.id,
+      plan: [{ step: 'Stable ids link plan and Track.', status: 'in_progress' }],
+    }, sessionKey);
+    const planItem = plan.items[0];
+    const existing = createWorkItem(workspace, {
+      title: planItem.step,
+      sessionKey,
+      requirementId: requirement.id,
+      actor: 'agent',
+    });
+    linkWorkItem(workspace, existing.id, {
+      taskIds: [legacyPlanItemId(requirement.id, planItem)],
+    });
+    linkRequirement(workspace, requirement.id, {
+      taskId: legacyPlanItemId(requirement.id, planItem),
+    });
+
+    const result = syncRequirementPlanTrack(workspace, sessionKey);
+    const items = listWorkItems(workspace);
+    assert.equal(items.length, 1, 'legacy linkage is upgraded in place');
+    assert.equal(result.actions.filter((action) => action.kind === 'work-item-created').length, 0);
+    assert.ok(
+      items[0].taskIds.includes(planItemId(requirement.id, planItem)),
+      'the existing Track item receives the stable task link',
+    );
   });
 });
 

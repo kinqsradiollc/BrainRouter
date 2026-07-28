@@ -167,11 +167,13 @@ test('diffTrace: changed / added / removed / stale', () => {
 test('traceModelFromRecords: explicit covers tag wins over the plan anchor', () => {
   const records: RequirementRecord[] = [makeRecord('req_aaa', ['crit a']), makeRecord('req_bbb', ['crit b'])];
   const plan: PlanState = {
+    schemaVersion: 1,
+    revision: 1,
     updatedAt: new Date(0).toISOString(),
     requirementId: 'req_aaa',
     items: [
-      { step: 'tagged step (covers: req_bbb)', status: 'completed' },
-      { step: 'untagged step falls back to anchor', status: 'pending' },
+      { id: 'task_trace_tagged', step: 'tagged step (covers: req_bbb)', status: 'completed' },
+      { id: 'task_trace_anchor', step: 'untagged step falls back to anchor', status: 'pending' },
     ],
   };
   const model = traceModelFromRecords(records, plan);
@@ -185,8 +187,10 @@ test('traceModelFromRecords: explicit covers tag wins over the plan anchor', () 
 
 test('tracePlanStepsFromPlan: no anchor + no tag → uncovered', () => {
   const plan: PlanState = {
+    schemaVersion: 1,
+    revision: 1,
     updatedAt: new Date(0).toISOString(),
-    items: [{ step: 'orphan step', status: 'pending' }],
+    items: [{ id: 'task_trace_orphan', step: 'orphan step', status: 'pending' }],
   };
   const steps = tracePlanStepsFromPlan(plan);
   assert.deepEqual(steps[0].covers, []);

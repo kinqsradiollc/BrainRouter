@@ -20,9 +20,9 @@ test('buildRecap: counts, last prompt/answer, tools, files, plan, goal', () => {
   ];
   const lines = buildRecap({
     entries,
-    plan: { updatedAt: '', items: [
-      { step: 'fix blend', status: 'completed' },
-      { step: 'add regression test', status: 'in_progress' },
+    plan: { schemaVersion: 1, revision: 1, updatedAt: '', items: [
+      { id: 'task_recap_fix', step: 'fix blend', status: 'completed' },
+      { id: 'task_recap_test', step: 'add regression test', status: 'in_progress' },
     ] },
     goalText: 'ship the recall fix',
     goalStatus: 'active',
