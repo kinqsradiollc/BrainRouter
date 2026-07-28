@@ -38,6 +38,9 @@ function reviewingPrompt(options: {
     if (request.id === 'orchestration-mode') {
       return { kind: 'submit', value: request.initialChoice ?? 'off' };
     }
+    if (request.id === 'persona-default') {
+      return { kind: 'submit', value: request.initialChoice ?? '' };
+    }
     if (request.id === 'instruction-change') {
       return { kind: 'submit', value: options.instruction ?? 'apply' };
     }
