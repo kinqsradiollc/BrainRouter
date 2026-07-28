@@ -4,6 +4,7 @@ import {
   draftFromOnboardingProfile,
   onboardingDescriptionError,
   onboardingDraftPreview,
+  onboardingProfileSuggestionText,
   onboardingProposalStatus,
   onboardingSavePayload,
   parseOnboardingCsv,
@@ -279,4 +280,17 @@ test('formats review previews and comma-separated editor fields deterministicall
   assert.ok(draft);
   assert.deepEqual(parseOnboardingCsv(' browser, terminal, browser, , coding '), ['browser', 'terminal', 'coding']);
   assert.deepEqual(JSON.parse(onboardingDraftPreview(draft)), draft);
+});
+
+test('distinguishes an existing selected profile from the folder scan suggestion', () => {
+  assert.equal(onboardingProfileSuggestionText({
+    editing: false,
+    reasons: ['package.json'],
+    selectedProfileLabel: 'Engineering',
+  }), 'package.json');
+  assert.equal(onboardingProfileSuggestionText({
+    editing: true,
+    reasons: ['no recognizable signals — starting empty'],
+    selectedProfileLabel: 'Research',
+  }), 'Folder scan suggestion only: no recognizable signals — starting empty. Selected profile: Research.');
 });

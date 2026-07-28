@@ -311,6 +311,21 @@ export function onboardingDraftPreview(draft: OnboardingDraft): string {
   return JSON.stringify(draft, null, 2);
 }
 
+/**
+ * An existing manifest remains authoritative while repository signals are only
+ * a suggestion. Keeping that distinction in a pure formatter prevents an empty
+ * but deliberately configured folder from looking as though its profile changed.
+ */
+export function onboardingProfileSuggestionText(options: {
+  editing: boolean;
+  reasons: string[];
+  selectedProfileLabel: string;
+}): string {
+  const reasons = options.reasons.join('; ');
+  if (!options.editing) return reasons;
+  return `Folder scan suggestion only: ${reasons}. Selected profile: ${options.selectedProfileLabel}.`;
+}
+
 export function parseOnboardingCsv(value: string): string[] {
   return [...new Set(value.split(',').map((part) => part.trim()).filter(Boolean))];
 }

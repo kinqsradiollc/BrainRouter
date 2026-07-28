@@ -20,6 +20,7 @@ import {
   draftFromOnboardingProfile,
   onboardingDescriptionError,
   onboardingDraftPreview,
+  onboardingProfileSuggestionText,
   onboardingProposalStatus,
   onboardingSavePayload,
   parseOnboardingCsv,
@@ -415,15 +416,28 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
                     onClick={() => chooseProfile(profile)}>
                     <span className="onboard-card-label">
                       {profile.label}
-                      {editor.detected?.profile === profile.id ? <span className="onboard-detected">detected</span> : null}
+                      {editor.detected?.profile === profile.id ? (
+                        <span className="onboard-detected">
+                          {editing ? 'folder suggestion' : 'detected'}
+                        </span>
+                      ) : null}
                     </span>
                     <span className="onboard-card-desc">{profile.description}</span>
                   </button>
                 ))}
               </div>
-              {editor.detected?.reasons.length ? <div className="onboard-reasons">{editor.detected.reasons.join('; ')}</div> : null}
+              {editor.detected?.reasons.length ? (
+                <div className="onboard-reasons">
+                  {onboardingProfileSuggestionText({
+                    editing,
+                    reasons: editor.detected.reasons,
+                    selectedProfileLabel: selectedProfile?.label ?? draft.profile,
+                  })}
+                </div>
+              ) : null}
               <div className="onboard-included-setup" aria-label="Included profile setup">
                 <strong>Included profile setup</strong>
+                <span>Selected profile: {selectedProfile?.label ?? draft.profile}</span>
                 <span>Persona: {selectedProfile?.persona.default || 'None'}</span>
                 <span>Skill pack: {includedPackLabels.join(', ') || 'None'}</span>
                 <small>These belong to the selected profile. Optional capabilities add narrower task expertise.</small>
