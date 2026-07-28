@@ -19,6 +19,7 @@
  * - Never holds secrets. Committable by design.
  */
 import path from 'node:path';
+import type { WorkspacePlanningSelection } from '@kinqs/brainrouter-types/planning-schema';
 import {
   WORKSPACE_PROFILES,
   getWorkspaceProfile,
@@ -55,6 +56,8 @@ export interface WorkspaceManifest {
   version: number;
   name: string;
   profile: WorkspaceProfileId;
+  /** Omitted for profile defaults; present only after an explicit reviewed selection. */
+  planning?: WorkspacePlanningSelection;
   onboarded: { at: string; by: WorkspaceOnboardSource };
   persona: { default: string; enabled: string[] };
   orchestration: {
@@ -88,7 +91,7 @@ export interface WorkspaceManifestLoadResult {
 }
 
 const KNOWN_KEYS = new Set([
-  'version', 'name', 'profile', 'onboarded', 'persona', 'orchestration', 'agents',
+  'version', 'name', 'profile', 'planning', 'onboarded', 'persona', 'orchestration', 'agents',
   'capabilities', 'skills', 'tools', 'memory', 'instructions',
 ]);
 const UNSAFE_OBJECT_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
@@ -293,7 +296,7 @@ export function createWorkspaceManifest(input: {
   at?: string;
   overrides?: Partial<Pick<
     WorkspaceManifest,
-    'persona' | 'orchestration' | 'agents' | 'capabilities' | 'skills' | 'tools' | 'memory' | 'instructions'
+    'planning' | 'persona' | 'orchestration' | 'agents' | 'capabilities' | 'skills' | 'tools' | 'memory' | 'instructions'
   >>;
 }): WorkspaceManifest {
   const preset = getWorkspaceProfile(input.profile) ?? getWorkspaceProfile('custom')!;
@@ -307,6 +310,7 @@ export function createWorkspaceManifest(input: {
     version: WORKSPACE_MANIFEST_VERSION,
     name: isBoundedString(input.name) ? input.name.trim() || 'workspace' : 'workspace',
     profile: preset.id,
+    ...(overrides.planning ? { planning: overrides.planning } : {}),
     onboarded: { at: input.at ?? new Date().toISOString(), by: input.by },
     persona,
     orchestration: overrides.orchestration ?? {
@@ -341,6 +345,7 @@ function normalizeManifest(
   const profile: WorkspaceProfileId =
     profileInput !== undefined && isWorkspaceProfileId(profileInput) ? profileInput : 'custom';
   const onboardedRaw = asRecord(raw.onboarded);
+  const planningRaw = asRecord(raw.planning);
   const agentsRaw = asRecord(raw.agents);
   const personaRaw = Object.keys(asRecord(raw.persona)).length > 0
     ? asRecord(raw.persona)
@@ -404,6 +409,7 @@ function normalizeManifest(
   const memoryTags = safeStringArray(memoryRaw.tags, budget);
   const memoryCaptureHint = safeKnownString(memoryRaw.captureHint, '', budget);
   const instructions = safeInstructionPointer(raw.instructions, budget);
+  const planningSchemaId = safeKnownString(planningRaw.schemaId, '', budget);
   const extra: Record<string, unknown> = {};
   const extraState = { inspected: 0 };
   if (explicitExtra !== undefined) collectExtraEntries(explicitExtra, extra, budget, extraState);
@@ -412,6 +418,7 @@ function normalizeManifest(
     version,
     name,
     profile,
+    ...(planningSchemaId ? { planning: { schemaId: planningSchemaId } } : {}),
     onboarded: {
       at: onboardedAt,
       by: by === 'wizard' || by === 'agent' || by === 'import' ? by : 'import',

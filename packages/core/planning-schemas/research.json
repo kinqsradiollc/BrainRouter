@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "kind": "planning-schema",
+  "id": "research-evidence",
+  "label": "Evidence research",
+  "description": "Research questions, source strategy, claim evidence, contradictions, and synthesis.",
+  "profileIds": ["research"],
+  "planningSkillIds": ["planning-skill", "research-question-skill"],
+  "sections": [
+    {
+      "id": "brief",
+      "label": "Research brief",
+      "description": "Audience, decision context, scope, and freshness requirements.",
+      "required": true
+    },
+    {
+      "id": "questions",
+      "label": "Question tree",
+      "description": "Primary question and bounded supporting questions.",
+      "required": true
+    },
+    {
+      "id": "sources",
+      "label": "Source strategy",
+      "description": "Source classes, authority criteria, coverage, and search boundaries.",
+      "required": true
+    },
+    {
+      "id": "evidence",
+      "label": "Evidence ledger",
+      "description": "Claims, sources, excerpts or observations, confidence, and contradictions.",
+      "required": true
+    },
+    {
+      "id": "synthesis",
+      "label": "Synthesis",
+      "description": "Findings, limitations, unresolved questions, and source-linked conclusions.",
+      "required": true
+    }
+  ],
+  "gates": [
+    {
+      "id": "source-coverage",
+      "label": "Source coverage",
+      "description": "Material claims have adequate authoritative and diverse source coverage."
+    },
+    {
+      "id": "contradiction-review",
+      "label": "Contradiction review",
+      "description": "Conflicting evidence and unresolved uncertainty are visible before synthesis."
+    }
+  ]
+}
