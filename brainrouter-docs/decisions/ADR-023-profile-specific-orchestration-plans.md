@@ -1666,6 +1666,47 @@ behavior.
 | Let the model choose on every turn | Flexible | Unstable voice and difficult to inspect or reproduce | Rejected |
 | Layer chat/workspace/global overrides above a profile recommendation | Stable, inspectable, and user-controlled while still providing useful defaults | Requires provenance UI and compatibility migration | Accepted |
 
+#### 13.13 Shared contracts do not accumulate in Core god files
+
+Profile, capability, tool-selection, orchestration-plan, stage-packet, and trace
+work introduces contracts consumed by more than one package. Those contracts
+must not accumulate beside Core loaders, validation, resolution, persistence,
+and runtime behavior in one large module.
+
+Before adding more contract fields, implementation performs a package-wide
+ownership scan and classifies every exported type, interface, schema, DTO,
+event, port, and constant in the affected Core workspace/orchestration trees:
+
+| Contract kind | Owner | Examples |
+|---|---|---|
+| Dependency-free stable data crossing package or process boundaries | `@kinqs/brainrouter-types` | workspace profile IDs, reviewed selection records, orchestration plan/stage snapshots, trace and preview DTOs |
+| Agent-host command or event vocabulary | `@kinqs/brainrouter-agent-protocol` | queue/steer delivery events and terminal observation messages |
+| Core domain behavior and untrusted-input validation | Focused Core modules | parsers, validators, registries, resolvers, policy intersection, lifecycle transitions |
+| Filesystem, process, provider, Electron, secret-bearing, or host callbacks | The owning package's ports | manifest storage, native terminal, browser host, provider and bridge adapters |
+| Renderer-only presentation state | Desktop feature modules | picker view models, panel state, local UI projections |
+
+Moving a TypeScript declaration does not move validation or authority. Untrusted
+JSON still enters through a Core-owned runtime parser, and a shared DTO never
+becomes an executable policy merely because it is exported from the types
+package. The types package remains browser-safe and dependency-free; it cannot
+import Core or host implementations.
+
+The scan is responsibility-based rather than a blind relocation of every
+`interface`. A private shape used by one focused module stays private. A
+cross-package contract moves to a named types submodule with a deliberate
+subpath export. A Core file mixing contract declaration, parsing, catalog
+loading, policy, and execution is split along those seams even when some
+module-local types remain in Core. Runtime files consume contracts with
+type-only imports where possible, and public compatibility aliases are removed
+only after all consumers migrate.
+
+Migration is incremental: workspace manifests and selections, orchestration
+definitions and previews, lifecycle/task packets/traces, then CLI/Desktop
+adapters. Each family ships in its own small PR with import-boundary, package
+archive, no-cycle, public-export, and behavioral parity checks. File length is a
+review signal, not the acceptance test; one clear owner and one coherent reason
+to change are the acceptance test.
+
 ## Profile behavior summary
 
 | Concern | Engineering | Research | Data Science | Study | Writing | Custom |
@@ -1771,6 +1812,8 @@ behavior.
 - Plugin disclosure and publishing validation gain another component kind.
 - The manifest, parser, resolver, CLI, Desktop, and compatibility diagnostics
   need a focused v3 tool-selection migration.
+- Shared contracts require a staged package-boundary migration and temporary
+  compatibility exports while Core god files are decomposed.
 
 ### Risks and mitigations
 
@@ -1793,6 +1836,8 @@ behavior.
 | A deferred plan invokes a child tool after its turn | One lifecycle owner cancels ephemeral stages at turn end; runtime emits one terminal diagnostic and the UI distinguishes pre-launch rejection from delegation |
 | Picker suggests a tool the runtime cannot use | Catalog carries availability/provenance; core re-resolves before write and at turn time; blocked entries show a reason and cannot become authority |
 | v3 changes a v2 workspace's visible tool surface | Preserve `legacy-groups` on v2 read; require an explicit reviewed migration before applying `explicit-catalog` semantics |
+| Moving declarations into the types package creates a dependency cycle or drops runtime validation | Classify contracts before moving them; keep parsers and behavior in Core, ports in their owners, and enforce browser-safe leaf plus no-cycle checks |
+| A mechanical type extraction replaces one god file with one shared god file | Use contract-family submodules and explicit subpath exports; migrate one vertical family per PR and prohibit catch-all profile/orchestration contract files |
 
 ## Compatibility
 
@@ -2232,6 +2277,31 @@ gate is recorded in the Compatibility section above.
   Writing, Custom, interruption, unavailable required skills, malformed child
   output, and the saved explicit-catalog workspace shape used by Desktop/CLI.
 
+### P23-23 — Contract ownership audit and god-file decomposition
+
+- Inventory exported and duplicated types, interfaces, schemas, DTOs, events,
+  ports, and constants across Core workspace/orchestration code and their CLI,
+  Desktop, SDK, hooks, and backend consumers. Record owner, consumers, runtime
+  validation, and dependency direction before moving anything.
+- Move dependency-free cross-package records into focused
+  `@kinqs/brainrouter-types` submodules. Move agent-host wire vocabulary into
+  `@kinqs/brainrouter-agent-protocol`; keep Core parsers/validators/resolvers
+  and owner-specific ports outside both leaves.
+- Split mixed-responsibility Core modules into contract adapters, validation,
+  catalogs, policy resolution, persistence, and runtime lifecycle modules.
+  Do not create a replacement `profiles.ts`, `types.ts`, or `contracts.ts` god
+  file.
+- Deliver separate PRs for workspace manifest/selection contracts,
+  orchestration definition/preview contracts, lifecycle/task-packet/trace
+  contracts, and CLI/Desktop adapter cleanup. Do not combine these moves with
+  unrelated behavior changes.
+- Add package-boundary and no-cycle checks, explicit types-package subpath
+  exports, packed-archive checks, duplicate-contract detection for public
+  profile/orchestration shapes, and cross-package compile/parity tests.
+- Preserve public compatibility aliases only for a documented migration
+  window, then remove them in a separate cleanup PR after all consumers use the
+  canonical contract.
+
 ## Acceptance criteria
 
 1. All six built-in profiles resolve distinct orchestration-profile JSON.
@@ -2373,6 +2443,13 @@ gate is recorded in the Compatibility section above.
     stage skills, compile role stages through the validated stage packet, and
     expose terminal stage outcomes in both CLI and Desktop traces. Pure
     resolver/preview availability alone does not satisfy this criterion.
+61. Every cross-package profile/orchestration contract has one canonical owner
+    in the types or agent-protocol leaf, while Core retains runtime validation
+    and behavior in focused modules and host-specific ports remain with their
+    owner.
+62. No replacement profile/orchestration god file combines shared declarations,
+    parsing, catalogs, policy, persistence, and execution; package-boundary,
+    no-cycle, packed-export, and cross-package parity checks protect the split.
 
 ## Non-goals
 
