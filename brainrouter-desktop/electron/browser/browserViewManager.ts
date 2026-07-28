@@ -848,10 +848,16 @@ export class BrowserViewManager {
       this.setStatus(tab, `Load failed: ${description} (${boundBrowserText(validatedUrl, 512)})`);
       this.emitState();
     });
-    contents.on('console-message', (_event, level, message, line, sourceId) => {
+    contents.on('console-message', (details) => {
       const record = this.records.get(tab.id);
       if (!record) return;
-      record.console.push({ level: String(level), text: boundBrowserText(message, 4_096), source: boundBrowserText(sourceId, 512), line, at: Date.now() });
+      record.console.push({
+        level: details.level,
+        text: boundBrowserText(details.message, 4_096),
+        source: boundBrowserText(details.sourceId, 512),
+        line: details.lineNumber,
+        at: Date.now(),
+      });
       if (record.console.length > MAX_CONSOLE_ROWS) record.console.splice(0, record.console.length - MAX_CONSOLE_ROWS);
     });
     contents.on('before-input-event', (event, input) => {
