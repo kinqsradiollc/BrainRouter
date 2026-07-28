@@ -8,9 +8,25 @@ import type { LLMConfig } from '../../config/config.js';
 import type { AccessMode } from '../roles/roles.js';
 import type { Tier } from '../agents/agentRegistry.js';
 import type { ContextEnvelope } from '../../context/contextEnvelope.js';
+import type {
+  PreparedProfileStageDelegation,
+  ProfileStageDelegationOutput,
+} from '../runtime/profileStageController.js';
 
-export interface PrimaryStageRuntimeController {
+export interface ProfileStageRuntimeController {
   invoke(args: Record<string, unknown>): Promise<string>;
+  prepareDelegation(input: {
+    stageId: string;
+    requestedRoleId?: string;
+    assignment?: string;
+  }): Promise<PreparedProfileStageDelegation>;
+  ownsPreparedDelegation(value: unknown): value is PreparedProfileStageDelegation;
+  inspectDelegationOutput(
+    launch: PreparedProfileStageDelegation,
+    output: string,
+  ): ProfileStageDelegationOutput;
+  finishDelegation(launch: PreparedProfileStageDelegation, accepted: boolean): void;
+  rejectDelegation(launch: PreparedProfileStageDelegation): void;
 }
 
 export interface OrchestrationContext {
@@ -112,5 +128,5 @@ export interface OrchestrationContext {
    * Root-turn owner for the currently resolved profile plan. Missing for
    * children, unmanaged workspaces, and turns whose plan has no profile.
    */
-  profileStageController?: PrimaryStageRuntimeController;
+  profileStageController?: ProfileStageRuntimeController;
 }

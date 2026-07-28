@@ -642,6 +642,8 @@ test('callOpenAIStream: retries once without reasoning effort when the stream en
   }
 });
 import { executeOrchestrationTool } from '../orchestration/tools.js';
+import { ProfileStageController } from '../orchestration/runtime/profileStageController.js';
+import type { ResolvedOrchestrationStage } from '../orchestration/profiles/orchestrationProfileResolver.js';
 import { clearGoal, readGoal, setGoal } from '../goal/store/goalStore.js';
 import { makeAgent, withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
 
@@ -2315,6 +2317,112 @@ test('orchestration: task_agent wait timeout returns envelope without failing th
       );
       assert.equal(record?.status, 'completed');
       assert.match(record?.finalOutput ?? '', /too late|never reached/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('orchestration: task_agent executes a compiled delegated profile stage', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const originalFetch = globalThis.fetch;
+    const requests: any[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push(JSON.parse(String(init?.body ?? '{}')));
+      return new Response(JSON.stringify({
+        choices: [{
+          message: {
+            content: [
+              '## Headline',
+              'The evidence is internally consistent.',
+              '',
+              '## Facts',
+              '- The checked source supports the claim.',
+            ].join('\n'),
+          },
+        }],
+        usage: { prompt_tokens: 20, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stage: ResolvedOrchestrationStage = {
+        id: 'inspect-evidence',
+        executor: { kind: 'role', roleId: 'explorer' },
+        after: [],
+        objective: 'Inspect the supplied evidence and report only grounded facts.',
+        skillIds: ['source-review', 'citation-check'],
+        optional: false,
+        requiresApproval: false,
+        fanOut: { min: 1, max: 1 },
+        expectedOutput: {
+          contractId: 'explorer',
+          requiredSections: ['headline', 'facts'],
+        },
+      };
+      const controller = new ProfileStageController(
+        { turnId: 'turn:test', sessionKey: 'session:test' },
+        {
+          orchestrationProfileId: 'research',
+          strategyId: 'evidence-review',
+          stages: [stage],
+        },
+        {
+          loadSkill: async (id) => ({
+            id,
+            instructions: `## Workflow\nFollow the ${id} workflow.`,
+            allowedTools: id === 'source-review'
+              ? ['read_file', 'grep_search']
+              : ['read_file'],
+            disallowedTools: id === 'citation-check' ? ['write_file'] : [],
+          }),
+          setActiveSkill: () => {},
+        },
+      );
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({ content: [{ text: '{}' }] }),
+        close: async () => {},
+      };
+      const raw = await executeOrchestrationTool(
+        'task_agent',
+        {
+          stageId: 'inspect-evidence',
+          role: 'explorer',
+          prompt: 'Focus on the citation attached to claim A.',
+        },
+        {
+          workspaceRoot: workspace,
+          parentSessionKey: 'session:test',
+          parentAccessMode: 'read' as const,
+          mcpClient: stubMcp,
+          llmConfig: { provider: 'openai' as const, apiKey: 'k', model: 'test-model' },
+          launchCwd: workspace,
+          parentVisibleLocalTools: () => ['read_file', 'grep_search', 'write_file'],
+          parentVisibleMcpTools: () => [],
+          profileStageController: controller,
+        },
+      );
+
+      const result = JSON.parse(raw);
+      assert.equal(result.status, 'completed');
+      assert.equal(result.taskPacket.orchestration.profileId, 'research');
+      assert.equal(result.taskPacket.orchestration.strategyId, 'evidence-review');
+      assert.equal(result.taskPacket.orchestration.stageId, 'inspect-evidence');
+      assert.deepEqual(
+        result.taskPacket.orchestration.skillIds,
+        ['source-review', 'citation-check'],
+      );
+      assert.equal(controller.snapshot()[0].state, 'succeeded');
+
+      assert.equal(requests.length, 1);
+      const system = requests[0].messages.find((message: any) => message.role === 'system')?.content ?? '';
+      assert.match(system, /Required orchestration-stage skills/);
+      assert.match(system, /Follow the source-review workflow/);
+      assert.match(system, /Follow the citation-check workflow/);
+      const user = requests[0].messages.find((message: any) => message.role === 'user')?.content ?? '';
+      assert.match(user, /Bounded assignment scope/);
+      const toolNames = (requests[0].tools ?? []).map((tool: any) => tool.function?.name);
+      assert.deepEqual(toolNames, ['read_file']);
     } finally {
       globalThis.fetch = originalFetch;
     }

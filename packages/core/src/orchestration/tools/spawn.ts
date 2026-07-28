@@ -26,6 +26,9 @@ import {
   buildDelegatedTaskPacket,
   renderDelegatedTaskPacket,
 } from '../delegation/taskPacket.js';
+import { buildOrchestrationStageTaskPacket } from '../delegation/stageTaskPacket.js';
+import type { PreparedProfileStageDelegation } from '../runtime/profileStageController.js';
+import { stackStageSkillActivations } from '../runtime/stageSkillActivation.js';
 import { enqueueCompletion } from '../../session/completion/completionInbox.js';
 import { getOutputContract } from '../roles/outputContracts.js';
 import { loadWorkspaceManifest } from '../../workspace/manifest.js';
@@ -45,6 +48,18 @@ import {
   OFFLOAD_THRESHOLD_CHARS,
 } from './helpers.js';
 import { handleWait } from './wait.js';
+
+class ProfileStageOutputRejectedError extends Error {
+  constructor(
+    readonly output: string,
+    readonly missingSections: readonly string[],
+  ) {
+    super(
+      `Delegated profile stage output is missing required sections: ${missingSections.join(', ')}.`,
+    );
+    this.name = 'ProfileStageOutputRejectedError';
+  }
+}
 
 /**
  * MAS-P2-M6 — best-effort route-feedback emit on child completion.
@@ -96,6 +111,14 @@ async function emitRouteFeedback(
 }
 
 export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string> {
+  const suppliedProfileStageLaunch = args?.profileStageLaunch;
+  const profileStageLaunch: PreparedProfileStageDelegation | undefined =
+    ctx.profileStageController?.ownsPreparedDelegation(suppliedProfileStageLaunch)
+      ? suppliedProfileStageLaunch
+      : undefined;
+  if (suppliedProfileStageLaunch !== undefined && !profileStageLaunch) {
+    throw new Error('Delegated profile stage launch is not owned by the active turn.');
+  }
   // Resolve agent definition via agentId (registry) or role (legacy).
   let role: ReturnType<typeof resolveRole>;
   let childTier: Tier | undefined;
@@ -311,9 +334,12 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
     task: effectivePrompt,
     availability: { toolProfiles: workspaceToolProfileIds() },
   });
+  const stageSkills = profileStageLaunch
+    ? stackStageSkillActivations(profileStageLaunch.skills)
+    : undefined;
   const outputContract = getOutputContract(role.name);
   const knobs = getCliKnobs();
-  const taskPacket = buildDelegatedTaskPacket({
+  const packetInput = {
     task: effectivePrompt,
     personaId: selectedPersona,
     roleId: role.name,
@@ -338,7 +364,10 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
     parentEnvelope: ctx.parentContextEnvelope?.(),
     localTools: ctx.parentVisibleLocalTools?.(),
     mcpTools: ctx.parentVisibleMcpTools?.(),
-    disallowedTools: childDisallowedTools,
+    disallowedTools: [
+      ...(childDisallowedTools ?? []),
+      ...(stageSkills?.disallowedTools ?? []),
+    ],
     budgets: {
       maxWallClockMs: knobs.childAgentTimeoutMs,
       maxPromptTokens: contextWindowForBudget(childLlm.model),
@@ -347,7 +376,16 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
       maxDepth,
       maxOutputChars: Math.max(4_000, knobs.agentPreviewChars * 8),
     },
-  });
+  };
+  const taskPacket = profileStageLaunch
+    ? buildOrchestrationStageTaskPacket({
+        ...packetInput,
+        orchestrationProfileId: profileStageLaunch.profileId,
+        strategyId: profileStageLaunch.strategyId,
+        stage: profileStageLaunch.stage,
+        assignment: profileStageLaunch.assignment,
+      })
+    : buildDelegatedTaskPacket(packetInput);
   updateSession(ctx.workspaceRoot, record.id, {
     parentContext: snapshot,
     delegatedTaskPacket: taskPacket,
@@ -366,6 +404,9 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
   });
   let systemPromptOverride = buildRolePrompt(role, basePrompt, '');
   systemPromptOverride += `\n\n${renderDelegatedTaskPacket(taskPacket)}`;
+  if (stageSkills) {
+    systemPromptOverride += `\n\n${stageSkills.instructions}`;
+  }
   if (seededIds.length > 0) {
     systemPromptOverride +=
       `\n\n## Parent-recalled BrainRouter records\n` +
@@ -435,6 +476,13 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
     parentReviewPolicy: ctx.parentReviewPolicy as 'request' | 'proceed' | undefined,
     parentExecutionMode: ctx.parentExecutionMode as 'planning' | 'fast' | undefined,
   });
+  if (stageSkills) {
+    childAgent.activeSkill = stageSkills.ids[0];
+    childAgent.activeSkillAllowedTools = stageSkills.allowedTools
+      ? [...stageSkills.allowedTools]
+      : undefined;
+    childAgent.activeSkillDisallowedTools = [...stageSkills.disallowedTools];
+  }
   if (ctx.parentAgentId) childAgent.setParentAgentId(ctx.parentAgentId);
   // DESK-6 — register the live handle so a parent Stop can cascade into it.
   runningChildAgents.set(record.id, { agent: childAgent, parentSessionKey: ctx.parentSessionKey });
@@ -485,6 +533,18 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
           });
         },
       });
+      if (profileStageLaunch && ctx.profileStageController) {
+        const validation = ctx.profileStageController.inspectDelegationOutput(
+          profileStageLaunch,
+          output,
+        );
+        if (!validation.accepted) {
+          throw new ProfileStageOutputRejectedError(
+            output,
+            validation.missingSections,
+          );
+        }
+      }
 
       // Working-memory offload: when a child returns a sizeable payload, push
       // the full body into the BrainRouter working canvas and keep only a
@@ -671,6 +731,12 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
           });
         }
       }
+      if (
+        profileStageLaunch
+        && ctx.profileStageController?.ownsPreparedDelegation(profileStageLaunch)
+      ) {
+        ctx.profileStageController.finishDelegation(profileStageLaunch, true);
+      }
     } catch (err: any) {
       // ORCH-FIX — a child failure must stay ISOLATED. Do all failure
       // bookkeeping inside its own try/catch so a throwing callback
@@ -678,8 +744,13 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
       // into a REJECTED promise → unhandled rejection → process exit.
       try {
         const message = err?.message ?? String(err);
-        const syntheticOutput = `ERROR: ${message}`;
+        const syntheticOutput = err instanceof ProfileStageOutputRejectedError
+          ? err.output
+          : `ERROR: ${message}`;
         const completedAt = new Date().toISOString();
+        if (profileStageLaunch && ctx.profileStageController) {
+          ctx.profileStageController.rejectDelegation(profileStageLaunch);
+        }
         updateSession(ctx.workspaceRoot, record.id, {
           status: 'failed',
           completedAt,
