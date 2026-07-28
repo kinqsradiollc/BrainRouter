@@ -63,6 +63,7 @@ export function createOnAgentEvent(deps: OnAgentEventDeps): (msg: AgentEventMess
   void runGit; void isWorkspaceScopedReviewQuery;
 
   const push = (row: ChatRow) => setRows((r) => [...r, row]);
+  const profileStageStates = new Map<string, string>();
   const pushTool = (item: ToolItem) => setRows((r) => {
     const last = r[r.length - 1];
     if (last && last.kind === 'tool-group') {
@@ -195,6 +196,32 @@ export function createOnAgentEvent(deps: OnAgentEventDeps): (msg: AgentEventMess
       case 'plan-update':
         setLastPlan({ items: e.items, explanation: e.explanation });
         push({ id: rid(), kind: 'status', text: 'Updated the plan', action: 'plan', ts: Date.now() });
+        break;
+      case 'profile-stage':
+        if (e.phase === 'resolved') {
+          push({
+            id: rid(),
+            kind: 'status',
+            text: `Profile plan · ${e.profileId} / ${e.strategyId} · ${e.selectionSource}`,
+            ts: Date.now(),
+          });
+        }
+        if (e.phase !== 'terminated') {
+          for (const stage of e.stages) {
+            const signature = `${stage.state}:${stage.activeSkillId ?? ''}`;
+            if (e.phase === 'updated' && profileStageStates.get(stage.id) !== signature) {
+              const owner = stage.executor === 'role' ? ` · ${stage.roleId}` : '';
+              const skill = stage.activeSkillId ? ` · skill ${stage.activeSkillId}` : '';
+              push({
+                id: rid(),
+                kind: 'status',
+                text: `Profile stage · ${stage.id} · ${stage.state}${owner}${skill}`,
+                ts: Date.now(),
+              });
+            }
+            profileStageStates.set(stage.id, signature);
+          }
+        }
         break;
       case 'files-changed':
         // FILES-LIVE — the host's debounced fs.watch fired. Re-pull the file

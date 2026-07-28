@@ -642,7 +642,10 @@ test('callOpenAIStream: retries once without reasoning effort when the stream en
   }
 });
 import { executeOrchestrationTool } from '../orchestration/tools.js';
-import { ProfileStageController } from '../orchestration/runtime/profileStageController.js';
+import {
+  ProfileStageController,
+  type ProfileStageStateEvent,
+} from '../orchestration/runtime/profileStageController.js';
 import type { ResolvedOrchestrationStage } from '../orchestration/profiles/orchestrationProfileResolver.js';
 import { clearGoal, readGoal, setGoal } from '../goal/store/goalStore.js';
 import { makeAgent, withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
@@ -2364,6 +2367,7 @@ test('orchestration: task_agent executes a compiled delegated profile stage', as
         {
           orchestrationProfileId: 'research',
           strategyId: 'evidence-review',
+          selectionSource: 'deterministic',
           stages: [stage],
         },
         {
@@ -3487,6 +3491,7 @@ test('runTurn activates Research primary-stage skills and narrows tools inside t
 
     const originalFetch = globalThis.fetch;
     const requestBodies: any[] = [];
+    const stageEvents: ProfileStageStateEvent[] = [];
     let attemptedEarlyFinal = false;
     const calls = [
       { id: 'begin_question', action: 'begin', stageId: 'frame', skillId: 'research-question-skill' },
@@ -3548,6 +3553,7 @@ test('runTurn activates Research primary-stage skills and narrows tools inside t
         onStatusUpdate: () => {},
         onToolStart: () => {},
         onToolEnd: () => {},
+        onProfileStageUpdate: (event) => stageEvents.push(event),
       }), 'framed');
 
       assert.equal(requestBodies.length, 8);
@@ -3578,6 +3584,16 @@ test('runTurn activates Research primary-stage skills and narrows tools inside t
       assert.equal(agent.activeSkill, undefined, 'turn finalization clears stage-owned skill state');
       assert.equal(agent.activeSkillAllowedTools, undefined);
       assert.deepEqual(agent.activeSkillDisallowedTools, []);
+      assert.equal(stageEvents[0].phase, 'resolved');
+      assert.equal(stageEvents[0].profileId, 'research');
+      assert.equal(stageEvents[0].strategyId, 'parallel-evidence');
+      assert.equal(
+        stageEvents.some((event) => event.stages.some(
+          (stage) => stage.id === 'frame' && stage.activeSkillId === 'research-question-skill',
+        )),
+        true,
+      );
+      assert.equal(stageEvents.at(-1)?.phase, 'terminated');
     } finally {
       globalThis.fetch = originalFetch;
     }

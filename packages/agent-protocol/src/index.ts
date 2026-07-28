@@ -42,6 +42,21 @@ export interface ProvenanceRef {
   detail?: Record<string, unknown>;
 }
 
+export interface ProfileStageEventView {
+  phase: 'resolved' | 'updated' | 'terminated';
+  profileId: string;
+  strategyId: string;
+  selectionSource: 'explicit' | 'adaptive-model' | 'deterministic' | 'fallback';
+  stages: Array<{
+    id: string;
+    state: 'planned' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'cancelled';
+    executor: 'primary' | 'role';
+    roleId?: string;
+    skillIds: string[];
+    activeSkillId?: string;
+  }>;
+}
+
 /** What happened to a background task (gap 1/2/3). */
 export type TaskEventAction = 'created' | 'progress' | 'updated' | 'completed' | 'failed' | 'canceled';
 
@@ -94,6 +109,7 @@ export type AgentEvent =
   | { kind: 'child-tool-end'; childId: string; role: string; tool: string; ok: boolean; summary: string; preview?: string; durationMs: number }
   | { kind: 'child-complete'; childId: string; role: string; status: 'completed' | 'failed'; preview?: string; error?: string }
   | { kind: 'plan-update'; items: Array<{ step: string; status: 'pending' | 'in_progress' | 'completed'; acceptance?: string }>; explanation?: string }
+  | ({ kind: 'profile-stage' } & ProfileStageEventView)
   | { kind: 'compaction'; droppedMessages: number; keptMessages: number; summary: string }
   | { kind: 'memory'; level: 'info' | 'warn'; text: string; op?: string; sources?: string[]; records?: BriefingRecord[] }
   | { kind: 'requirement-event'; action: RecordLifecycleAction; requirementId: string; title?: string; status?: string; provenance?: ProvenanceRef }
@@ -134,7 +150,7 @@ export type AgentEventMessage = EventEnvelope & { event: AgentEvent };
 const EVENT_KINDS = new Set<string>([
   'turn-start', 'status', 'assistant-turn-start', 'assistant-delta', 'assistant-turn-end',
   'reasoning-delta', 'tool-start', 'tool-end', 'child-tool-start', 'child-tool-end',
-  'child-complete', 'plan-update', 'compaction', 'memory', 'requirement-event',
+  'child-complete', 'plan-update', 'profile-stage', 'compaction', 'memory', 'requirement-event',
   'artifact-event', 'annotation-event', 'provenance', 'task-event', 'approval-decision',
   'interaction-request', 'turn-complete', 'turn-error', 'tokens-updated', 'usage-live', 'session-changed', 'query-result',
   'notice', 'files-changed', 'input-delivery',
@@ -363,6 +379,7 @@ export interface BridgedCallbacks {
   onAssistantTurnEnd: () => void;
   onReasoningDelta: (chunk: string) => void;
   onPlanUpdate: (items: Array<{ step: string; status: 'pending' | 'in_progress' | 'completed'; acceptance?: string }>, explanation?: string) => void;
+  onProfileStageUpdate: (event: ProfileStageEventView) => void;
   onCompactionEvent: (event: { droppedMessages: number; keptMessages: number; summary: string }) => void;
   onUsageUpdate: (usage: { promptTokens: number; completionTokens: number; calls: number; cachedTokens?: number; missedTokens?: number }) => void;
   onMemoryEvent: (event: { kind?: string; level?: 'info' | 'warn'; text?: string; reason?: string; sources?: string[]; recordCount?: number; records?: BriefingRecord[] }) => void;
@@ -424,6 +441,7 @@ export function createCallbackBridge(emit: EmitEvent): BridgedCallbacks {
     onAssistantTurnEnd: () => emit({ kind: 'assistant-turn-end' }),
     onReasoningDelta: (text) => emit({ kind: 'reasoning-delta', text }),
     onPlanUpdate: (items, explanation) => emit({ kind: 'plan-update', items, explanation }),
+    onProfileStageUpdate: (event) => emit({ kind: 'profile-stage', ...event }),
     onCompactionEvent: (event) => emit({ kind: 'compaction', ...event }),
     onMemoryEvent: (event) => {
       // A pre-turn briefing carries the actual recalled records — pass them
