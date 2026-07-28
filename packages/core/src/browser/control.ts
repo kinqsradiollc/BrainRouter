@@ -123,6 +123,9 @@ export interface BrowserControlRequestMessage {
   kind: 'browser-command-request';
   version: typeof BROWSER_CONTROL_PROTOCOL_VERSION;
   id: string;
+  /** Chat session that owns this browser operation. Desktop uses this to keep
+   * agent tabs isolated while the underlying Chromium profile stays shared. */
+  sessionKey?: string;
   command: BrowserControlCommand;
 }
 
@@ -148,7 +151,12 @@ export type BrowserControlResponseMessage =
       error: BrowserControlError;
     };
 
-export interface BrowserControlRequestOptions { signal?: AbortSignal }
+export interface BrowserControlRequestOptions {
+  signal?: AbortSignal;
+  /** Internal host scope. Normal tools omit this; a session-bound Desktop port
+   * supplies it before the request crosses the process boundary. */
+  sessionKey?: string;
+}
 
 export interface BrowserControlPort {
   request(command: BrowserControlCommand, options?: BrowserControlRequestOptions): Promise<BrowserControlResult>;
@@ -646,7 +654,14 @@ export function createBrowserControlBridge(
           requestOptions.signal.addEventListener('abort', entry.onAbort, { once: true });
         }
         pending.set(id, entry);
-        transport.postMessage({ kind: 'browser-command-request', version: BROWSER_CONTROL_PROTOCOL_VERSION, id, command } satisfies BrowserControlRequestMessage);
+        const sessionKey = requestOptions.sessionKey?.trim();
+        transport.postMessage({
+          kind: 'browser-command-request',
+          version: BROWSER_CONTROL_PROTOCOL_VERSION,
+          id,
+          ...(sessionKey ? { sessionKey: sessionKey.slice(0, 512) } : {}),
+          command,
+        } satisfies BrowserControlRequestMessage);
       });
     },
     handleMessage(message: unknown): boolean {
@@ -683,6 +698,7 @@ export function isBrowserControlRequestMessage(value: unknown): value is Browser
   if (!value || typeof value !== 'object') return false;
   const row = value as Record<string, unknown>;
   if (row.kind !== 'browser-command-request' || row.version !== BROWSER_CONTROL_PROTOCOL_VERSION || typeof row.id !== 'string' || row.id.length > 128) return false;
+  if (row.sessionKey !== undefined && (typeof row.sessionKey !== 'string' || row.sessionKey.length < 1 || row.sessionKey.length > 512)) return false;
   try { parseBrowserControlCommand(row.command); return true; } catch { return false; }
 }
 

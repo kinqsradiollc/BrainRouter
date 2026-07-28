@@ -65,6 +65,21 @@ production).
   query renders an empty/broken surface and blocks review.
 - **Evidence:** `brainrouter-desktop/src/devBridge.ts:1`, `brainrouter-desktop/src/App.tsx:44`
 
+### 4a. Browser storage is workspace-scoped; agent tab authority is chat-scoped
+
+The embedded Chromium partition may preserve cookies, cache, sign-ins, and
+human tabs across chats in one workspace. Agent browser requests must carry the
+owning `sessionKey`, and an agent may list, implicitly target, or explicitly
+drive only tabs opened by that chat. A new chat starts with no agent-visible
+tabs and opens its own tab while reusing the workspace profile.
+
+- **Why:** sharing the profile keeps authenticated browsing useful, but sharing
+  tab authority lets a clean chat mistake an older chat or human tab for its own
+  fetch target and report false redirects or stale page content.
+- **Evidence:** `packages/core/src/browser/control.ts`,
+  `brainrouter-desktop/electron/browser/browserSessionScope.ts`,
+  `brainrouter-desktop/electron/main.ts`
+
 ### 5. Respect workspace identity on the event stream: drop stale, trust `session-changed`
 
 Main tags every agent-event with its owning `workspaceRoot`; renderer code
