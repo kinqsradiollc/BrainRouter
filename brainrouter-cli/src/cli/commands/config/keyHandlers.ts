@@ -171,7 +171,7 @@ export const KEY_HANDLERS: Record<string, ConfigKeyHandler> = {
     get: (ctx) => {
       const prefs = readPreferences(ctx.agent.workspaceRoot);
       return prefs.personalityMode === 'auto'
-        ? `auto (${prefs.personality}, ${prefs.personalitySource})`
+        ? `automatic (${prefs.personality}, inherited from ${prefs.personalitySource})`
         : prefs.personality;
     },
     set: (ctx, value) => {
@@ -184,7 +184,7 @@ export const KEY_HANDLERS: Record<string, ConfigKeyHandler> = {
         : writePreferences(ctx.agent.workspaceRoot, { personality: v as Preferences['personality'] });
       return {
         ok: true,
-        message: `personality → ${v === 'auto' ? `auto (${next.personality}, ${next.personalitySource})` : v}`,
+        message: `personality → ${v === 'auto' ? `automatic (${next.personality}, inherited from ${next.personalitySource})` : v}`,
       };
     },
   },

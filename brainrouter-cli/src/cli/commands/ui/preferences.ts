@@ -104,7 +104,8 @@ export async function tryHandleUiPreferencesCommand(ctx: CommandContext): Promis
       if (!arg) {
         console.log(chalk.bold('\nPersonality (communication style)'));
         console.log(`  Current: ${chalk.cyan(prefs.personality)} (${prefs.personalitySource})`);
-        console.log(`  Selection: ${chalk.cyan(prefs.personalityMode === 'auto' ? 'auto' : prefs.personality)}`);
+        console.log(`  Workspace: ${chalk.cyan(prefs.personalityMode === 'auto' ? 'automatic (inherit)' : prefs.personality)}`);
+        console.log(chalk.gray('  Automatic precedence: global default → profile recommendation → standard fallback.'));
         console.log(chalk.gray(`  Available: ${Array.from(valid).join(', ')}\n`));
         return true;
       }
@@ -117,7 +118,7 @@ export async function tryHandleUiPreferencesCommand(ctx: CommandContext): Promis
         : writePreferences(agent.workspaceRoot, { personality: arg as Preferences['personality'] });
       agent.refreshSystemPrompt();
       const selection = arg === 'auto'
-        ? `auto (${next.personality}, ${next.personalitySource})`
+        ? `automatic (${next.personality}, inherited from ${next.personalitySource})`
         : arg;
       console.log(chalk.green(`\n✓ Personality → ${selection}. New behavior applies on the next turn.\n`));
       return true;

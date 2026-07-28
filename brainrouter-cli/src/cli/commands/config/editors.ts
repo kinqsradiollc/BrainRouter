@@ -551,9 +551,9 @@ export async function editPersonality(ctx: CommandContext): Promise<boolean> {
   const result = await pickFromList({
     theme,
     title: 'Personality',
-    subtitle: 'Communication style for agent responses.',
+    subtitle: 'Workspace communication style; Automatic inherits global, profile, then fallback.',
     rows: [
-      { id: 'auto',            label: 'Use profile recommendation', value: 'recommended' },
+      { id: 'auto',            label: 'Automatic', value: 'inherit', description: 'global default → profile recommendation → standard' },
       { id: 'concise',         label: 'Concise',         description: 'short responses' },
       { id: 'standard',        label: 'Standard' },
       { id: 'detailed',        label: 'Detailed',        description: 'verbose explanations' },
@@ -566,7 +566,7 @@ export async function editPersonality(ctx: CommandContext): Promise<boolean> {
     : writePreferences(ctx.agent.workspaceRoot, { personality: result.id as Preferences['personality'] });
   ctx.agent.refreshSystemPrompt();
   const selection = result.id === 'auto'
-    ? `auto (${next.personality}, ${next.personalitySource})`
+    ? `automatic (${next.personality}, inherited from ${next.personalitySource})`
     : result.id;
   console.log(chalk.green(`\n  ✓ Personality → ${selection}\n`));
   return true;
