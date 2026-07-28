@@ -7,69 +7,39 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { Agent } from '../agent.js';
-import { extractToolText } from '../../mcp/mcpUtils.js';
 import {
-  PrimaryStageController,
+  ProfileStageController,
+  type RequiredDelegatedStageAction,
   type RequiredPrimaryStageAction,
-} from '../../orchestration/runtime/primaryStageController.js';
+} from '../../orchestration/runtime/profileStageController.js';
+import { resolveStageSkillActivation } from '../../orchestration/runtime/stageSkillActivation.js';
 import type { ResolvedWorkspaceOrchestrationPlan } from '../../orchestration/profiles/orchestrationProfileResolver.js';
 import type { ActiveTurnOrchestrationResolution } from '../../workspace/activeTurnOrchestration.js';
-import {
-  parseWorkspaceSkillToolPolicy,
-  resolveBundledWorkspaceSkill,
-  resolveWorkspaceManagedSkill,
-  type WorkspaceManagedSkillResult,
-} from '../../workspace/skillToolAdapter.js';
 
-export function createPrimaryStageControllerForTurn(input: {
+export function createProfileStageControllerForTurn(input: {
   agent: Agent;
   resolution: ActiveTurnOrchestrationResolution;
   turnSessionKey: string;
-}): PrimaryStageController | undefined {
+}): ProfileStageController | undefined {
   const { agent, resolution } = input;
   if (
     agent.agentDepth !== 0
     || agent.activeSkill
     || resolution.plan.orchestrationProfileId === null
     || resolution.plan.strategyId === null
-    || !resolution.plan.stages.some((stage) => stage.executor.kind === 'primary')
+    || resolution.plan.stages.length === 0
   ) {
     return undefined;
   }
-  return new PrimaryStageController(
+  return new ProfileStageController(
     { turnId: randomUUID(), sessionKey: input.turnSessionKey },
     resolution.plan,
     {
-      loadSkill: async (skillId) => {
-        const managed = resolveWorkspaceManagedSkill(agent.workspaceRoot, skillId, 'full');
-        if (managed) return activationFromResolvedSkill(skillId, managed);
-
-        let serviceFailure = 'skill service returned no valid workflow';
-        try {
-          const result = await agent.mcpClient.callTool(
-            'get_skill',
-            { name: skillId, section: 'full' },
-            { signal: agent.turnAbort?.signal },
-          );
-          const instructions = extractToolText(result);
-          if (!result.isError && /^##\s+Workflow\b/im.test(instructions)) {
-            const policy = parseWorkspaceSkillToolPolicy(instructions);
-            return {
-              id: skillId,
-              instructions,
-              ...(policy.allowedTools ? { allowedTools: [...policy.allowedTools] } : {}),
-              disallowedTools: [...policy.disallowedTools],
-            };
-          }
-          serviceFailure = instructions || serviceFailure;
-        } catch (error) {
-          serviceFailure = error instanceof Error ? error.message : String(error);
-        }
-
-        const bundled = resolveBundledWorkspaceSkill(agent.workspaceRoot, skillId, 'full');
-        if (!bundled) throw new Error(serviceFailure);
-        return activationFromResolvedSkill(skillId, bundled);
-      },
+      loadSkill: async (skillId) => await resolveStageSkillActivation({
+        workspaceRoot: agent.workspaceRoot,
+        mcpClient: agent.mcpClient,
+        signal: agent.turnAbort?.signal,
+      }, skillId),
       setActiveSkill: (skill) => {
         agent.activeSkill = skill?.id;
         agent.activeSkillAllowedTools = skill?.allowedTools
@@ -109,17 +79,13 @@ export function buildRequiredProfileStageCorrection(action: RequiredPrimaryStage
   ].join('\n\n');
 }
 
-function activationFromResolvedSkill(
-  skillId: string,
-  resolved: WorkspaceManagedSkillResult,
-) {
-  const instructions = resolved.content[0]?.text ?? '';
-  return {
-    id: skillId,
-    instructions,
-    ...(resolved.metadata.allowedTools
-      ? { allowedTools: [...resolved.metadata.allowedTools] }
-      : {}),
-    disallowedTools: [...resolved.metadata.disallowedTools],
-  };
+export function buildRequiredDelegatedStageCorrection(
+  action: RequiredDelegatedStageAction,
+): string {
+  return [
+    'Runtime profile-stage guardrail tripped.',
+    `The active workspace strategy requires delegated stage "${action.stageId}" with role "${action.roleId}" before ending this turn.`,
+    `Call task_agent with stageId "${action.stageId}" and a bounded assignment in prompt. The runtime will supply the reviewed role, objective, stage skills, output contract, and authority ceilings.`,
+    'Use multiple task_agent calls in the same assistant message only when the stage description permits fan-out. Do not replace the stage with a generic child prompt.',
+  ].join('\n\n');
 }

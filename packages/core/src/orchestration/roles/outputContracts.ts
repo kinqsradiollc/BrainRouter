@@ -44,6 +44,12 @@ export interface ParsedOutput {
   missing: string[];
 }
 
+export interface ChildOutputSectionValidation {
+  accepted: boolean;
+  missingSections: string[];
+  parsed: ParsedOutput | null;
+}
+
 const EXPLORER: OutputContract = {
   id: "explorer",
   description:
@@ -226,6 +232,47 @@ export function parseChildOutput(
     .map((f) => f.name);
   const status: ParsedOutput["contractStatus"] = missing.length === 0 ? "parsed" : "unparsed";
   return { contractStatus: status, fields, missing };
+}
+
+/**
+ * Validate only the reviewed section subset required by an orchestration
+ * stage. A role's broader default contract remains useful for generic
+ * delegation, but cannot make a valid narrowed stage fail.
+ */
+export function validateChildOutputSections(
+  roleName: string,
+  text: string | undefined | null,
+  requiredSections: readonly string[],
+): ChildOutputSectionValidation {
+  const contract = getOutputContract(roleName);
+  const parsed = parseChildOutput(roleName, text);
+  if (!contract || !parsed) {
+    return {
+      accepted: false,
+      missingSections: [...requiredSections],
+      parsed,
+    };
+  }
+  const fieldByAlias = new Map(
+    contract.fields.map((field) => [outputSectionAlias(field.heading), field.name]),
+  );
+  const missingSections = requiredSections.filter((section) => {
+    const fieldName = fieldByAlias.get(section);
+    return !fieldName || !parsed.fields[fieldName]?.trim();
+  });
+  return {
+    accepted: missingSections.length === 0,
+    missingSections,
+    parsed,
+  };
+}
+
+export function outputSectionAlias(heading: string): string {
+  return heading
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
 }
 
 function normaliseHeading(raw: string): string {

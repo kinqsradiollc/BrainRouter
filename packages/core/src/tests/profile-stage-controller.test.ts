@@ -1,5 +1,5 @@
 /**
- * Primary-stage controller contract tests.
+ * Profile-stage controller contract tests.
  *
  * These tests keep multi-skill sequencing, dependency gates, and turn-owned
  * fail-closed behavior independent from the Agent transport loop.
@@ -8,9 +8,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   PrimaryStageActionRejectedError,
-  PrimaryStageController,
+  ProfileStageController,
   type PrimaryStageSkillActivation,
-} from '../orchestration/runtime/primaryStageController.js';
+} from '../orchestration/runtime/profileStageController.js';
 import type {
   ResolvedOrchestrationStage,
   ResolvedWorkspaceOrchestrationPlan,
@@ -35,8 +35,15 @@ function stage(input: Partial<ResolvedOrchestrationStage> & {
   };
 }
 
-function plan(stages: ResolvedOrchestrationStage[]): Pick<ResolvedWorkspaceOrchestrationPlan, 'stages'> {
-  return { stages };
+function plan(stages: ResolvedOrchestrationStage[]): Pick<
+  ResolvedWorkspaceOrchestrationPlan,
+  'orchestrationProfileId' | 'strategyId' | 'stages'
+> {
+  return {
+    orchestrationProfileId: 'test-profile',
+    strategyId: 'test-strategy',
+    stages,
+  };
 }
 
 function skill(id: string): PrimaryStageSkillActivation {
@@ -50,7 +57,7 @@ function skill(id: string): PrimaryStageSkillActivation {
 
 test('primary stage runs every declared skill before unlocking its dependent', async () => {
   let active: PrimaryStageSkillActivation | undefined;
-  const controller = new PrimaryStageController(
+  const controller = new ProfileStageController(
     OWNER,
     plan([
       stage({
@@ -135,7 +142,7 @@ test('primary stage runs every declared skill before unlocking its dependent', a
 });
 
 test('primary stage rejects role stages, undeclared skills, and required skips', async () => {
-  const controller = new PrimaryStageController(
+  const controller = new ProfileStageController(
     OWNER,
     plan([
       stage({ id: 'review', executor: { kind: 'role', roleId: 'reviewer' } }),
@@ -172,7 +179,7 @@ test('primary stage rejects role stages, undeclared skills, and required skips',
 
 test('missing skill fails the stage and clears active policy', async () => {
   let active: PrimaryStageSkillActivation | undefined = skill('existing');
-  const controller = new PrimaryStageController(
+  const controller = new ProfileStageController(
     OWNER,
     plan([stage({ id: 'frame', executor: { kind: 'primary' }, skillIds: ['missing'] })]),
     {
@@ -193,7 +200,7 @@ test('missing skill fails the stage and clears active policy', async () => {
 });
 
 test('optional primary stage can skip only before another stage starts', async () => {
-  const controller = new PrimaryStageController(
+  const controller = new ProfileStageController(
     OWNER,
     plan([
       stage({ id: 'optional', executor: { kind: 'primary' }, optional: true }),
@@ -215,7 +222,7 @@ test('optional primary stage can skip only before another stage starts', async (
 });
 
 test('optional stages cannot skip unresolved dependencies', async () => {
-  const controller = new PrimaryStageController(
+  const controller = new ProfileStageController(
     OWNER,
     plan([
       stage({ id: 'required', executor: { kind: 'primary' } }),
@@ -249,4 +256,191 @@ test('optional stages cannot skip unresolved dependencies', async () => {
     stageId: 'optional-after',
   }));
   assert.equal(skipped.action, 'skipped-stage');
+});
+
+test('delegated stage validates role, skills, output, and unlocks its dependent', async () => {
+  const controller = new ProfileStageController(
+    OWNER,
+    plan([
+      stage({
+        id: 'inspect',
+        executor: { kind: 'role', roleId: 'explorer' },
+        skillIds: ['question', 'source-plan'],
+        fanOut: { min: 1, max: 1 },
+        expectedOutput: {
+          contractId: 'explorer',
+          requiredSections: ['headline', 'facts'],
+        },
+      }),
+      stage({
+        id: 'synthesize',
+        executor: { kind: 'primary' },
+        after: ['inspect'],
+        skillIds: ['evidence'],
+      }),
+    ]),
+    {
+      loadSkill: async (id) => skill(id),
+      setActiveSkill: () => {},
+    },
+  );
+
+  assert.deepEqual(controller.nextRequiredDelegation(), {
+    action: 'delegate',
+    stageId: 'inspect',
+    roleId: 'explorer',
+    optional: false,
+  });
+  await assert.rejects(
+    controller.prepareDelegation({
+      stageId: 'inspect',
+      requestedRoleId: 'reviewer',
+      assignment: 'Inspect one source.',
+    }),
+    (error: unknown) => (
+      error instanceof PrimaryStageActionRejectedError
+      && error.reason === 'executor-mismatch'
+    ),
+  );
+
+  const launch = await controller.prepareDelegation({
+    stageId: 'inspect',
+    requestedRoleId: 'explorer',
+    assignment: 'Inspect one source.',
+  });
+  assert.equal(controller.ownsPreparedDelegation(launch), true);
+  assert.equal(launch.profileId, 'test-profile');
+  assert.equal(launch.strategyId, 'test-strategy');
+  assert.deepEqual(launch.skills.map((entry) => entry.id), ['question', 'source-plan']);
+  assert.equal(controller.nextRequiredAction(), undefined);
+  assert.equal(controller.nextRequiredDelegation(), undefined);
+
+  const validation = controller.inspectDelegationOutput(
+    launch,
+    '## Headline\nGrounded finding.\n\n## Facts\n- One fact.',
+  );
+  assert.deepEqual(validation, { accepted: true, missingSections: [] });
+  controller.finishDelegation(launch, validation.accepted);
+  assert.deepEqual(controller.nextRequiredAction(), {
+    action: 'begin',
+    stageId: 'synthesize',
+    skillId: 'evidence',
+    optional: false,
+  });
+});
+
+test('invalid delegated output fails closed and does not unlock dependents', async () => {
+  const controller = new ProfileStageController(
+    OWNER,
+    plan([
+      stage({
+        id: 'review',
+        executor: { kind: 'role', roleId: 'reviewer' },
+        fanOut: { min: 1, max: 1 },
+        expectedOutput: {
+          contractId: 'reviewer',
+          requiredSections: ['headline', 'findings'],
+        },
+      }),
+      stage({
+        id: 'revise',
+        executor: { kind: 'primary' },
+        after: ['review'],
+        skillIds: ['draft'],
+      }),
+    ]),
+    {
+      loadSkill: async (id) => skill(id),
+      setActiveSkill: () => {},
+    },
+  );
+
+  const launch = await controller.prepareDelegation({ stageId: 'review' });
+  const validation = controller.inspectDelegationOutput(
+    launch,
+    '## Headline\nNo structured findings section.',
+  );
+  assert.deepEqual(validation, {
+    accepted: false,
+    missingSections: ['findings'],
+  });
+  controller.finishDelegation(launch, validation.accepted);
+  assert.deepEqual(controller.failedRequiredStage(), {
+    stageId: 'review',
+    roleId: 'reviewer',
+  });
+  assert.equal(controller.nextRequiredAction(), undefined);
+});
+
+test('invalid delegated assignment does not mutate the stage lifecycle', async () => {
+  const controller = new ProfileStageController(
+    OWNER,
+    plan([
+      stage({
+        id: 'inspect',
+        executor: { kind: 'role', roleId: 'explorer' },
+        expectedOutput: {
+          contractId: 'explorer',
+          requiredSections: ['headline'],
+        },
+      }),
+    ]),
+    {
+      loadSkill: async (id) => skill(id),
+      setActiveSkill: () => {},
+    },
+  );
+
+  await assert.rejects(
+    controller.prepareDelegation({
+      stageId: 'inspect',
+      assignment: 'unsafe\u0000assignment',
+    }),
+    (error: unknown) => (
+      error instanceof PrimaryStageActionRejectedError
+      && error.reason === 'invalid-action'
+    ),
+  );
+  assert.equal(controller.snapshot()[0].state, 'planned');
+  assert.deepEqual(controller.nextRequiredDelegation(), {
+    action: 'delegate',
+    stageId: 'inspect',
+    roleId: 'explorer',
+    optional: false,
+  });
+});
+
+test('delegated fan-out remains running until its minimum accepted outputs arrive', async () => {
+  const controller = new ProfileStageController(
+    OWNER,
+    plan([
+      stage({
+        id: 'collect',
+        executor: { kind: 'role', roleId: 'explorer' },
+        fanOut: { min: 2, max: 2 },
+        expectedOutput: {
+          contractId: 'explorer',
+          requiredSections: ['headline'],
+        },
+      }),
+    ]),
+    {
+      loadSkill: async (id) => skill(id),
+      setActiveSkill: () => {},
+    },
+  );
+
+  const first = await controller.prepareDelegation({ stageId: 'collect' });
+  controller.finishDelegation(first, true);
+  assert.deepEqual(controller.nextRequiredDelegation(), {
+    action: 'delegate',
+    stageId: 'collect',
+    roleId: 'explorer',
+    optional: false,
+  });
+
+  const second = await controller.prepareDelegation({ stageId: 'collect' });
+  controller.finishDelegation(second, true);
+  assert.equal(controller.snapshot()[0].state, 'succeeded');
+  assert.equal(controller.nextRequiredDelegation(), undefined);
 });

@@ -12,7 +12,8 @@ export function createProfileStageTool() {
       'Advance a primary-agent stage from the active workspace profile plan. ' +
       'Call begin before doing the stage work; when the stage declares skills, execute the returned instructions using only the returned tool surface, then call complete. ' +
       'A multi-skill stage requires one begin/complete pair per declared skill. Optional stages may be skipped before they start. ' +
-      'This tool cannot launch delegated-role stages or grant tools beyond the reviewed workspace policy.',
+      'Launch a delegated-role stage with task_agent or delegate_agent and its exact stageId; profile_stage does not launch children. ' +
+      'No stage transition can grant tools beyond the reviewed workspace policy.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -106,6 +107,10 @@ export function createTaskAgentTool() {
           items: { type: 'string' },
           description: 'Optional BrainRouter memory record IDs that the parent already recalled.',
         },
+        stageId: {
+          type: 'string',
+          description: 'Optional role-stage id from the active profile strategy. When present, the runtime owns the role, objective, skills, output contract, and ceilings; prompt is only a bounded assignment.',
+        },
       },
       required: ['prompt'],
     },
@@ -135,6 +140,10 @@ export function createDelegateAgentTool() {
           type: 'array',
           items: { type: 'string' },
           description: 'Optional BrainRouter memory record IDs that the parent already recalled.',
+        },
+        stageId: {
+          type: 'string',
+          description: 'Optional role-stage id from the active profile strategy. When present, the runtime owns the role, objective, skills, output contract, and ceilings; prompt is only a bounded assignment.',
         },
       },
       required: ['prompt'],

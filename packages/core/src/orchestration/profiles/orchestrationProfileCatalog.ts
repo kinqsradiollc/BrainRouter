@@ -15,7 +15,10 @@ import {
   readAgentDefinitionFile,
   type AgentDefinition,
 } from '../agents/agentDefinitionFile.js';
-import { BUILT_IN_OUTPUT_CONTRACTS } from '../roles/outputContracts.js';
+import {
+  BUILT_IN_OUTPUT_CONTRACTS,
+  outputSectionAlias,
+} from '../roles/outputContracts.js';
 import { inspectWorkspaceProfilePlugins } from '../../workspace/profilePlugins.js';
 import {
   listOrchestrationProfileDefinitionFiles,
@@ -170,15 +173,7 @@ export function orchestrationProfileRoleReference(
     defaultAccess: definition.defaultAccess,
     outputContract: {
       id: contract.id,
-      sectionAliases: new Set(contract.fields.map((field) => sectionAlias(field.heading))),
+      sectionAliases: new Set(contract.fields.map((field) => outputSectionAlias(field.heading))),
     },
   };
-}
-
-function sectionAlias(heading: string): string {
-  return heading
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '');
 }

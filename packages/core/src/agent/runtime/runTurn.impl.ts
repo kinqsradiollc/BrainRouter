@@ -112,8 +112,9 @@ import {
   minimalReasoningEffort, abortableDelay,
 } from '../transport/llmTransport.js';
 import {
+  buildRequiredDelegatedStageCorrection,
   buildRequiredProfileStageCorrection,
-  createPrimaryStageControllerForTurn,
+  createProfileStageControllerForTurn,
   describeProfileStageTool,
 } from './profileStageRuntime.js';
 
@@ -222,7 +223,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       this.chatHistory[0] = this.createSystemMessage();
     }
 
-    const profileStageController = createPrimaryStageControllerForTurn({
+    const profileStageController = createProfileStageControllerForTurn({
       agent: this,
       resolution: activeTurnOrchestration,
       turnSessionKey,
@@ -771,8 +772,15 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       Math.max(
         2,
         activeTurnOrchestration.plan.stages
-          .filter((stage) => stage.executor.kind === 'primary')
-          .reduce((count, stage) => count + (stage.skillIds.length * 2), 0),
+          .reduce((count, stage) => (
+            count + (
+              stage.executor.kind === 'primary'
+                ? stage.skillIds.length * 2
+                : stage.optional
+                  ? 0
+                  : stage.fanOut?.min ?? 1
+            )
+          ), 0),
       ),
     );
     const planCompletedAtTurnStart = (() => {
@@ -1616,6 +1624,16 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           continue;
         }
 
+        const failedProfileStage = activeProfileStageController?.failedRequiredStage();
+        if (failedProfileStage) {
+          finalAnswer =
+            `The active profile strategy failed required stage "${failedProfileStage.stageId}"` +
+            `${failedProfileStage.roleId ? ` for role "${failedProfileStage.roleId}"` : ''}. ` +
+            'Its dependent stages were not unlocked. Review the stage tool result before retrying the task.';
+          exitedCleanly = true;
+          break;
+        }
+
         const requiredProfileAction = activeProfileStageController?.nextRequiredAction();
         if (requiredProfileAction) {
           if (profileStageGuardFired < PROFILE_STAGE_GUARD_MAX) {
@@ -1634,6 +1652,28 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
             `The active profile strategy could not finish required stage "${requiredProfileAction.stageId}" ` +
             `because skill "${requiredProfileAction.skillId}" was not ${requiredProfileAction.action === 'begin' ? 'started' : 'completed'} ` +
             `within the bounded runtime guard. No broader tool authority was granted.`;
+          exitedCleanly = true;
+          break;
+        }
+
+        const requiredDelegatedStage = activeProfileStageController?.nextRequiredDelegation();
+        if (requiredDelegatedStage) {
+          if (profileStageGuardFired < PROFILE_STAGE_GUARD_MAX) {
+            profileStageGuardFired += 1;
+            const correction = buildRequiredDelegatedStageCorrection(requiredDelegatedStage);
+            const guardMsg = { role: 'user', content: correction };
+            this.chatHistory.push(guardMsg);
+            this.recordTranscript({ ...guardMsg, name: 'guard' });
+            callbacks.onStatusUpdate(
+              `Recovery: required delegated stage ${requiredDelegatedStage.stageId}/${requiredDelegatedStage.roleId} ` +
+              `(${profileStageGuardFired}/${PROFILE_STAGE_GUARD_MAX})`,
+            );
+            continue;
+          }
+          finalAnswer =
+            `The active profile strategy could not launch required delegated stage ` +
+            `"${requiredDelegatedStage.stageId}" with role "${requiredDelegatedStage.roleId}" ` +
+            'within the bounded runtime guard. No child was launched outside the compiled plan.';
           exitedCleanly = true;
           break;
         }
