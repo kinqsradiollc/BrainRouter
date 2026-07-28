@@ -439,6 +439,7 @@ export interface LastBriefingDetails {
 export type { ChatCompletionPayload, ResponsesPayload } from './transport/llmTransport.js';
 import type { PromptLayeredMessage } from './transport/llmTransport.js';
 import type { WorkspaceCapabilityResolution } from '../workspace/capabilities.js';
+import type { ActiveTurnOrchestrationResolution } from '../workspace/activeTurnOrchestration.js';
 import { resolveWorkspaceMemoryCaptureContext } from '../workspace/memoryCapture.js';
 
 export interface AgentOptions {
@@ -806,6 +807,8 @@ export class Agent {
     toolProfiles: [],
     promptBlocks: [],
   };
+  /** Read-only saved-profile plan resolved for the current root turn. */
+  public activeTurnOrchestration?: ActiveTurnOrchestrationResolution;
   public accessMode: AccessMode;
   /** POLICY-1 — audit trail of execution-policy decisions on mutating tools. */
   public policyAudit: Array<{ tool: string; action: ActionKind; decision: PolicyDecision; reason: string }> = [];
