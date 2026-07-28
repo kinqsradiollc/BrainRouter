@@ -25,6 +25,22 @@ export type PrimaryStageSkillActivation = StageSkillActivation;
 export interface ProfileStageControllerHooks {
   loadSkill(skillId: string): Promise<PrimaryStageSkillActivation>;
   setActiveSkill(skill: PrimaryStageSkillActivation | undefined): void;
+  onStateChange?(event: ProfileStageStateEvent): void;
+}
+
+export interface ProfileStageStateEvent {
+  phase: 'resolved' | 'updated' | 'terminated';
+  profileId: string;
+  strategyId: string;
+  selectionSource: ResolvedWorkspaceOrchestrationPlan['selectionSource'];
+  stages: Array<{
+    id: string;
+    state: OrchestrationStageLifecycleSnapshot['state'];
+    executor: 'primary' | 'role';
+    roleId?: string;
+    skillIds: string[];
+    activeSkillId?: string;
+  }>;
 }
 
 export interface RequiredPrimaryStageAction {
@@ -107,7 +123,7 @@ export class ProfileStageController {
     readonly owner: Readonly<OrchestrationLifecycleOwner>,
     readonly plan: Pick<
       ResolvedWorkspaceOrchestrationPlan,
-      'orchestrationProfileId' | 'strategyId' | 'stages'
+      'orchestrationProfileId' | 'strategyId' | 'selectionSource' | 'stages'
     >,
     private readonly hooks: ProfileStageControllerHooks,
   ) {
@@ -140,6 +156,10 @@ export class ProfileStageController {
 
   snapshot(): OrchestrationStageLifecycleSnapshot[] {
     return this.lifecycle.snapshot();
+  }
+
+  publishResolvedState(): void {
+    this.publishState('resolved');
   }
 
   /**
@@ -276,6 +296,7 @@ export class ProfileStageController {
 
     const launchId = `${this.owner.turnId}:${input.stageId}:${++this.delegationSequence}`;
     record.pendingLaunchIds.add(launchId);
+    this.publishState('updated');
     let skills: PrimaryStageSkillActivation[];
     try {
       skills = await Promise.all(record.stage.skillIds.map(async (skillId) => {
@@ -319,6 +340,7 @@ export class ProfileStageController {
       skills: Object.freeze(skills),
     });
     this.preparedDelegations.set(launchId, prepared);
+    this.publishState('updated');
     return prepared;
   }
 
@@ -367,6 +389,7 @@ export class ProfileStageController {
     this.clearActiveSkill();
     this.preparedDelegations.clear();
     this.lifecycle.terminate(reason);
+    this.publishState('terminated');
   }
 
   private async begin(stageId: string, requestedSkillId?: string): Promise<string> {
@@ -403,6 +426,7 @@ export class ProfileStageController {
           `Stage "${stageId}" declares no skills; do not provide skillId.`,
         );
       }
+      this.publishState('updated');
       return this.result({
         action: 'began',
         stage: record.stage,
@@ -447,6 +471,7 @@ export class ProfileStageController {
 
     this.activeSkillId = skillId;
     this.hooks.setActiveSkill(skill);
+    this.publishState('updated');
     return this.result({
       action: 'began-skill',
       stage: record.stage,
@@ -493,6 +518,7 @@ export class ProfileStageController {
       this.lifecycle.finishStage(stageId, 'succeeded');
       this.activeStageId = undefined;
     }
+    this.publishState('updated');
     return this.result({
       action: remainingSkillIds.length === 0 ? 'completed-stage' : 'completed-skill',
       stage: record.stage,
@@ -532,6 +558,7 @@ export class ProfileStageController {
       );
     }
     this.lifecycle.finishStage(stageId, 'skipped');
+    this.publishState('updated');
     return this.result({
       action: 'skipped-stage',
       stage,
@@ -599,6 +626,7 @@ export class ProfileStageController {
     this.clearActiveSkill();
     if (this.stageState(stageId) === 'running') this.lifecycle.finishStage(stageId, 'failed');
     this.activeStageId = undefined;
+    this.publishState('updated');
   }
 
   private clearActiveSkill(): void {
@@ -615,17 +643,50 @@ export class ProfileStageController {
     record.completedLaunchIds.add(launchId);
     if (accepted) record.successfulLaunches += 1;
     else record.failedLaunches += 1;
-    if (record.pendingLaunchIds.size > 0) return;
+    if (record.pendingLaunchIds.size > 0) {
+      this.publishState('updated');
+      return;
+    }
 
     const min = record.stage.fanOut?.min ?? 1;
     const max = record.stage.fanOut?.max ?? 1;
     if (record.successfulLaunches >= min) {
       this.lifecycle.finishStage(record.stage.id, 'succeeded');
+      this.publishState('updated');
       return;
     }
     if (record.completedLaunchIds.size >= max) {
       this.lifecycle.finishStage(record.stage.id, 'failed');
+      this.publishState('updated');
+      return;
     }
+    this.publishState('updated');
+  }
+
+  private publishState(phase: ProfileStageStateEvent['phase']): void {
+    const profileId = this.plan.orchestrationProfileId;
+    const strategyId = this.plan.strategyId;
+    if (!profileId || !strategyId) return;
+    const states = new Map(this.lifecycle.snapshot().map((stage) => [stage.id, stage]));
+    this.hooks.onStateChange?.({
+      phase,
+      profileId,
+      strategyId,
+      selectionSource: this.plan.selectionSource,
+      stages: this.plan.stages.map((stage) => {
+        const snapshot = states.get(stage.id);
+        return {
+          id: stage.id,
+          state: snapshot?.state ?? 'planned',
+          executor: stage.executor.kind,
+          ...(stage.executor.kind === 'role' ? { roleId: stage.executor.roleId } : {}),
+          skillIds: [...stage.skillIds],
+          ...(this.activeStageId === stage.id && this.activeSkillId
+            ? { activeSkillId: this.activeSkillId }
+            : {}),
+        };
+      }),
+    });
   }
 
   private result(input: {

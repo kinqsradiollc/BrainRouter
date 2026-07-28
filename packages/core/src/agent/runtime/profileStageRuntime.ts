@@ -11,6 +11,7 @@ import {
   ProfileStageController,
   type RequiredDelegatedStageAction,
   type RequiredPrimaryStageAction,
+  type ProfileStageStateEvent,
 } from '../../orchestration/runtime/profileStageController.js';
 import { resolveStageSkillActivation } from '../../orchestration/runtime/stageSkillActivation.js';
 import type { ResolvedWorkspaceOrchestrationPlan } from '../../orchestration/profiles/orchestrationProfileResolver.js';
@@ -20,6 +21,7 @@ export function createProfileStageControllerForTurn(input: {
   agent: Agent;
   resolution: ActiveTurnOrchestrationResolution;
   turnSessionKey: string;
+  onStateChange?: (event: ProfileStageStateEvent) => void;
 }): ProfileStageController | undefined {
   const { agent, resolution } = input;
   if (
@@ -49,6 +51,7 @@ export function createProfileStageControllerForTurn(input: {
           ? [...skill.disallowedTools]
           : [];
       },
+      ...(input.onStateChange ? { onStateChange: input.onStateChange } : {}),
     },
   );
 }

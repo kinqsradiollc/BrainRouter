@@ -80,6 +80,7 @@ import {
   type OrchestrationContext,
 } from '../orchestration/tools.js';
 import { getSession } from '../orchestration/session/orchestrator.js';
+import type { ProfileStageStateEvent } from '../orchestration/runtime/profileStageController.js';
 import { emitAgentEvent, emitArtifactCapture } from '../memory/memoryEvents.js';
 import { listAll as listAgentDefinitions } from '../orchestration/agents/agentRegistry.js';
 import { ownershipWriteViolation } from '../orchestration/ownership/ownership.js';
@@ -316,6 +317,12 @@ export interface RunTurnCallbacks {
    * plan invisible until the user runs `/plan`.
    */
   onPlanUpdate?: (items: Array<{ step: string; status: 'pending' | 'in_progress' | 'completed' }>, explanation?: string) => void;
+  /**
+   * Optional: publishes the resolved profile strategy and every stage
+   * transition with its plan provenance. Presentation heads use this instead
+   * of inferring orchestration state from generic tool rows.
+   */
+  onProfileStageUpdate?: (event: ProfileStageStateEvent) => void;
   /**
    * Optional: invoked when a child agent (spawn_agent) finishes its runTurn —
    * either succeeded with a final answer (preview supplied) or failed (error

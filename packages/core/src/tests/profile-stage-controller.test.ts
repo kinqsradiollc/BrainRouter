@@ -37,11 +37,12 @@ function stage(input: Partial<ResolvedOrchestrationStage> & {
 
 function plan(stages: ResolvedOrchestrationStage[]): Pick<
   ResolvedWorkspaceOrchestrationPlan,
-  'orchestrationProfileId' | 'strategyId' | 'stages'
+  'orchestrationProfileId' | 'strategyId' | 'selectionSource' | 'stages'
 > {
   return {
     orchestrationProfileId: 'test-profile',
     strategyId: 'test-strategy',
+    selectionSource: 'deterministic',
     stages,
   };
 }

@@ -114,6 +114,7 @@ export function installTurnRunner(ctx: RunChatContext): void {
     // window, emit a single "🚀 Spawned N agents in parallel: …" notice
     // instead of N individual "▶ X running" lines.
     const pendingSpawns: Array<{ childId: string; role: string }> = [];
+    const profileStageStates = new Map<string, string>();
     let pendingSpawnTimer: ReturnType<typeof setTimeout> | null = null;
     const flushPendingSpawns = () => {
       pendingSpawnTimer = null;
@@ -195,6 +196,25 @@ export function installTurnRunner(ctx: RunChatContext): void {
           // line above the checklist) rather than as a separate memory event,
           // so the explanation visually anchors to the plan it describes.
           controller!.push.plan(items, explanation);
+          tickStatus('Thinking');
+        },
+        onProfileStageUpdate: (event) => {
+          if (event.phase === 'resolved') {
+            controller!.push.notice(
+              `Profile plan · ${event.profileId} / ${event.strategyId} · ${event.selectionSource}`,
+            );
+          }
+          if (event.phase !== 'terminated') {
+            for (const stage of event.stages) {
+              const signature = `${stage.state}:${stage.activeSkillId ?? ''}`;
+              if (event.phase === 'updated' && profileStageStates.get(stage.id) !== signature) {
+                const owner = stage.executor === 'role' ? ` · ${stage.roleId}` : '';
+                const skill = stage.activeSkillId ? ` · skill ${stage.activeSkillId}` : '';
+                controller!.push.notice(`Profile stage · ${stage.id} · ${stage.state}${owner}${skill}`);
+              }
+              profileStageStates.set(stage.id, signature);
+            }
+          }
           tickStatus('Thinking');
         },
         onChildToolStart: (event) => {

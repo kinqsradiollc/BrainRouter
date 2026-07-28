@@ -227,6 +227,9 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       agent: this,
       resolution: activeTurnOrchestration,
       turnSessionKey,
+      ...(callbacks.onProfileStageUpdate
+        ? { onStateChange: callbacks.onProfileStageUpdate }
+        : {}),
     });
 
     try {
@@ -301,6 +304,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     )
       ? profileStageController
       : undefined;
+    activeProfileStageController?.publishResolvedState();
     // CC-SKILLS-D3 — the active skill's `disallowed-tools` frontmatter blacklists
     // apply for THIS turn on top of the role/agent-def `disallowedTools`. Computed
     // here so it filters BOTH local tools (below) and MCP tools (further down).
