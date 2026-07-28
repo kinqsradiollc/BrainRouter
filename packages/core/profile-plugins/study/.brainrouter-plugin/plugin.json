@@ -1,7 +1,7 @@
 {
   "name": "profile-study",
-  "version": "2.2.0",
-  "description": "Task-selectable diagnosis, objective mapping, explanation, assessment, remediation, and retrieval practice.",
+  "version": "2.3.0",
+  "description": "Task-selectable source gathering, diagnosis, objective mapping, explanation, assessment, remediation, and retrieval practice.",
   "category": "productivity",
   "keywords": ["study", "learning", "practice"]
 }

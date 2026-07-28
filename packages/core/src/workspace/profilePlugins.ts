@@ -63,6 +63,7 @@ export const WORKSPACE_PROFILE_PLUGIN_DEFINITIONS: readonly WorkspaceProfilePlug
       'learning-assessment-skill',
       'error-remediation-skill',
       'retrieval-practice-skill',
+      'learning-source-skill',
     ],
     personaIds: ['tutor'],
   },
@@ -95,7 +96,7 @@ export const WORKSPACE_PROFILE_PLUGIN_DEFINITIONS: readonly WorkspaceProfilePlug
     id: 'writing',
     kind: 'profile',
     pluginName: 'profile-writing',
-    skillIds: ['structured-writing-skill', 'revision-skill'],
+    skillIds: ['structured-writing-skill', 'revision-skill', 'writing-critique-skill'],
     personaIds: ['writer'],
   },
   {

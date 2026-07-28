@@ -15,9 +15,13 @@ import {
 const PACKAGE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 
 function allowedTools(skillId: string): string[] {
-  const research = findWorkspaceProfilePlugin('research');
-  assert.ok(research);
-  const body = fs.readFileSync(path.join(research.skillsRoot, skillId, 'SKILL.md'), 'utf8');
+  return profileAllowedTools('research', skillId);
+}
+
+function profileAllowedTools(profileId: string, skillId: string): string[] {
+  const profile = findWorkspaceProfilePlugin(profileId);
+  assert.ok(profile);
+  const body = fs.readFileSync(path.join(profile.skillsRoot, skillId, 'SKILL.md'), 'utf8');
   const flow = body.match(/^allowed-tools:\s*\[([^\]]*)\]$/m)?.[1];
   assert.notEqual(flow, undefined, `${skillId} must declare a bounded allowed-tools list`);
   return flow!.split(',').map((value) => value.trim()).filter(Boolean);
@@ -34,9 +38,9 @@ test('C2 package-owned profile plugins use the standard versioned plugin contrac
   const catalog = inspectWorkspaceProfilePlugins();
   const expectedVersions = new Map([
     ['research', '2.4.0'],
-    ['study', '2.2.0'],
+    ['study', '2.3.0'],
     ['data', '2.1.0'],
-    ['writing', '2.1.0'],
+    ['writing', '2.2.0'],
     ['frontend', '1.1.0'],
     ['backend', '1.1.0'],
   ]);
@@ -62,6 +66,31 @@ test('C2 package-owned profile plugins use the standard versioned plugin contrac
         const body: string = fs.readFileSync(path.join(personasRoot, `${personaId}.json`), 'utf8');
         assert.equal(parsePersonaDefinition(body, personaId).id, personaId);
       }
+    }
+  }
+});
+
+test('study and writing expose bounded skills for every delegated stage', () => {
+  const study = findWorkspaceProfilePlugin('study');
+  const writing = findWorkspaceProfilePlugin('writing');
+  assert.ok(study);
+  assert.ok(writing);
+  assert.ok(study.skillIds.includes('learning-source-skill'));
+  assert.ok(writing.skillIds.includes('writing-critique-skill'));
+
+  for (const [profileId, skillId] of [
+    ['study', 'learning-source-skill'],
+    ['writing', 'writing-critique-skill'],
+  ]) {
+    const tools = profileAllowedTools(profileId, skillId);
+    for (const required of [
+      'read_file', 'list_dir', 'knowledge_list', 'knowledge_search',
+      'fetch_url', 'web_search', 'research_note',
+    ]) {
+      assert.ok(tools.includes(required), `${skillId}: ${required}`);
+    }
+    for (const mutation of ['write_file', 'edit_file', 'apply_patch', 'artifact_write']) {
+      assert.equal(tools.includes(mutation), false, `${skillId}: ${mutation}`);
     }
   }
 });
@@ -124,7 +153,7 @@ test('study profile exposes separate task-selectable tutoring workflows', () => 
 
   assert.ok(study);
   assert.equal(study.kind, 'profile');
-  assert.equal(study.version, '2.2.0');
+  assert.equal(study.version, '2.3.0');
   assert.deepEqual(study.skillIds, [
     'learner-diagnostic-skill',
     'learning-plan-skill',
@@ -132,6 +161,7 @@ test('study profile exposes separate task-selectable tutoring workflows', () => 
     'learning-assessment-skill',
     'error-remediation-skill',
     'retrieval-practice-skill',
+    'learning-source-skill',
   ]);
 });
 
