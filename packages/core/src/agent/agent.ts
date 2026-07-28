@@ -848,6 +848,8 @@ export class Agent {
    * Null/undefined when no skill is active.
    */
   public activeSkill?: string;
+  /** All skill bodies embedded by a host for the current turn. */
+  public activeSkills: string[] = [];
   /**
    * CC-SKILLS-D3 — per-turn tool blacklist declared by the active skill's
    * `disallowed-tools` frontmatter. Merged into the same disallow path as the

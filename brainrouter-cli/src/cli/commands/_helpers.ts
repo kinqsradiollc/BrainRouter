@@ -159,5 +159,6 @@ export async function runSkillByName(
   // The activeSkill stays latched while the turn runs; runAgentTurn's
   // continuation loop will clear it via the post-turn hook.
   agent.activeSkill = skillName;
+  agent.activeSkills = [skillName];
   runTurn(prompt);
 }

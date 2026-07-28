@@ -474,6 +474,7 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       // repl.ts clears activeSkill + refreshes again, so the overlay
       // doesn't bleed into the user's next plain prompt.
       agent.activeSkill = 'grill-me';
+      agent.activeSkills = ['grill-me'];
       agent.refreshSystemPrompt();
       const prompt = [
         '[CLARIFY — grill-me]',
@@ -554,6 +555,7 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         reviewInstructions: buildReviewInstructionBlock(agent.workspaceRoot),
       });
       agent.activeSkill = SLASH_TO_SKILL['/review'] ?? 'code-review-and-quality';
+      agent.activeSkills = [agent.activeSkill];
       ctx.repl.runAgentTurn(reviewPrompt);
       return true;
     }

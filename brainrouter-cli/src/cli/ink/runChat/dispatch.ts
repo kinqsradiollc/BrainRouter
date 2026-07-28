@@ -209,6 +209,7 @@ export function createOnSubmit(ctx: RunChatContext): (text: string, push: PushSc
             .catch(() => ({ resolved: [], disallowedTools: [] as string[], allowedTools: undefined }));
           if (resolved.length >= 1) {
             agent.activeSkill = resolved[0].name;
+            agent.activeSkills = resolved.map((skill) => skill.name);
             agent.activeSkillDisallowedTools = disallowedTools;
             agent.activeSkillAllowedTools = allowedTools;
             const allowedNote = allowedTools === undefined ? '' : `  (allowed: ${allowedTools.join(', ') || 'none'})`;
@@ -264,6 +265,7 @@ export function createOnSubmit(ctx: RunChatContext): (text: string, push: PushSc
         .catch(() => ({ resolved: [], disallowedTools: [] as string[], allowedTools: undefined }));
       if (resolved.length >= 1) {
         agent.activeSkill = resolved[0].name;
+        agent.activeSkills = resolved.map((skill) => skill.name);
         agent.activeSkillDisallowedTools = disallowedTools;
         agent.activeSkillAllowedTools = allowedTools;
         noticeSkillReady(push, triggered, resolved.map((s) => s.name));

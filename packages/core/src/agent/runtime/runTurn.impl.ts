@@ -97,6 +97,11 @@ import { sanitizeToolCallsForHistory, explainUnknownToolName } from '../agent.js
 import { refreshWorkspaceCapabilityState } from '../workspaceCapabilityState.js';
 import { resolveActiveTurnOrchestration } from '../../workspace/activeTurnOrchestration.js';
 import {
+  requiredSkillActivationPrompt,
+  requiredSkillsBlockingMutation,
+  resolveRequiredSkillActivation,
+} from '../../workspace/requiredSkillActivation.js';
+import {
   adaptWorkspaceSkillCatalogText,
   resolveWorkspaceManagedSkill,
 } from '../../workspace/skillToolAdapter.js';
@@ -171,6 +176,17 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       parentDepth: this.agentDepth,
     });
     this.activeTurnOrchestration = activeTurnOrchestration;
+    const workspaceManifestForTurn = loadWorkspaceManifest(this.workspaceRoot);
+    const goalForSkillActivation = readGoal(this.workspaceRoot, this.sessionKey);
+    const requiredSkillActivation = resolveRequiredSkillActivation({
+      prompt,
+      activeGoal: goalForSkillActivation?.status === 'active',
+      manifest: workspaceManifestForTurn,
+    });
+    const loadedRequiredSkills = new Set([
+      ...this.activeSkills,
+      ...(this.activeSkill ? [this.activeSkill] : []),
+    ]);
     // MAR-4 — snapshot children carried over from the previous turn BEFORE the reset,
     // so a "is it done?" question this turn can resolve those exact ids.
     const carriedPendingChildIds = [...this.lastTurnPendingChildIds];
@@ -235,7 +251,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     try {
     const allowed = this.allowedToolsForAccess();
     const workspaceToolSelection = resolveWorkspaceToolSelection({
-      manifest: loadWorkspaceManifest(this.workspaceRoot),
+      manifest: workspaceManifestForTurn,
       activeToolProfiles: this.activeWorkspaceCapabilities.toolProfiles,
     });
     const workspaceAllowsLocalTool = (name: string): boolean => {
@@ -666,6 +682,13 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         // model doesn't keep seeing a completed/cleared goal as "current."
         this.removeTaggedSystemMessage('goal-anchor');
       }
+    }
+
+    const requiredSkillsPrompt = requiredSkillActivationPrompt(requiredSkillActivation);
+    if (requiredSkillsPrompt) {
+      this.replaceTaggedSystemMessage('required-skills', requiredSkillsPrompt);
+    } else {
+      this.removeTaggedSystemMessage('required-skills');
     }
 
     const userMsg: { role: string; content: string; images?: Array<{ mediaType: string; dataBase64: string }> } = { role: 'user', content: prompt };
@@ -2304,6 +2327,25 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
               }
             }
             const policy = resolveToolPolicy(name, this.accessMode, args as Record<string, unknown> | null);
+            const mcpNeedsApproval = !isLocal &&
+              assessMcpToolApproval(name, mcpToolByName.get(name)).requiresApproval;
+            if (policy.mutating || mcpNeedsApproval) {
+              const blockedSkills = requiredSkillsBlockingMutation(
+                requiredSkillActivation,
+                loadedRequiredSkills,
+              );
+              const disabledSkill = blockedSkills.find((skill) => skill.availability === 'disabled');
+              if (disabledSkill) {
+                denyAndRecord(
+                  `Tool "${name}" paused: required skill "${disabledSkill.id}" is disabled for this workspace. Enable it or revise the task before mutating.`,
+                );
+              }
+              if (blockedSkills.length > 0) {
+                denyAndRecord(
+                  `Tool "${name}" paused until required workflow skill(s) are loaded: ${blockedSkills.map((skill) => skill.id).join(', ')}. Call get_skill for each, follow the instructions, then retry.`,
+                );
+              }
+            }
             if (ruleDecision === 'allow' && policy.decision === 'ask') {
               policy.decision = 'allow';
               policy.reason = 'cli.permissions allow rule';
@@ -2454,6 +2496,15 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
               isError = true;
             }
             resultText = extractToolText(mcpRes);
+            if (
+              isBrainrouterSkillTool &&
+              rawMcpName === 'get_skill' &&
+              !isError &&
+              typeof mcpArgs.name === 'string' &&
+              resultText.trim().length > 0
+            ) {
+              loadedRequiredSkills.add(mcpArgs.name);
+            }
             if (isBrainrouterSkillTool && (rawMcpName === 'list_skills' || rawMcpName === 'search_skills')) {
               resultText = adaptWorkspaceSkillCatalogText({
                 workspaceRoot: this.workspaceRoot,
