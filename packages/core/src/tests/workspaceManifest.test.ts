@@ -255,6 +255,7 @@ test('profile presets are self-consistent (every profile usable by the wizard)',
       'academic-paper',
       'computational-research',
       'data-visualization',
+      'programming-lab',
     ],
     recommended: [],
     enabled: [],
@@ -262,6 +263,12 @@ test('profile presets are self-consistent (every profile usable by the wizard)',
   const writing = WORKSPACE_PROFILES.find((preset) => preset.id === 'writing')!;
   assert.deepEqual(writing.capabilities, {
     available: ['academic-paper'],
+    recommended: [],
+    enabled: [],
+  });
+  const study = WORKSPACE_PROFILES.find((preset) => preset.id === 'study')!;
+  assert.deepEqual(study.capabilities, {
+    available: ['programming-lab'],
     recommended: [],
     enabled: [],
   });

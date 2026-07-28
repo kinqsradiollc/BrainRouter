@@ -52,7 +52,8 @@ export interface WorkspaceCapabilityDefinition {
     | 'backend'
     | 'academic-paper'
     | 'computational-research'
-    | 'data-visualization';
+    | 'data-visualization'
+    | 'programming-lab';
   label: string;
   description: string;
   skillPackId: string;
@@ -114,6 +115,14 @@ export const WORKSPACE_CAPABILITY_DEFINITIONS: readonly WorkspaceCapabilityDefin
     skillIds: ['data-visualization-skill'],
     toolProfileIds: ['coding', 'shell', 'artifacts', 'interactive-browser'],
   },
+  {
+    id: 'programming-lab',
+    label: 'Programming lab',
+    description: 'Task-time coding exercises, executable feedback, progressive hints, debugging, tests, and transfer checks.',
+    skillPackId: 'programming-lab',
+    skillIds: ['programming-lab-skill'],
+    toolProfileIds: ['coding', 'shell', 'artifacts'],
+  },
 ] as const;
 
 const CAPABILITY_BY_ID = new Map(
@@ -124,6 +133,7 @@ const BACKEND_DEFINITION = CAPABILITY_BY_ID.get('backend')!;
 const ACADEMIC_PAPER_DEFINITION = CAPABILITY_BY_ID.get('academic-paper')!;
 const COMPUTATIONAL_RESEARCH_DEFINITION = CAPABILITY_BY_ID.get('computational-research')!;
 const DATA_VISUALIZATION_DEFINITION = CAPABILITY_BY_ID.get('data-visualization')!;
+const PROGRAMMING_LAB_DEFINITION = CAPABILITY_BY_ID.get('programming-lab')!;
 
 const FRONTEND_CONTRIBUTION: CapabilityContribution = {
   skillPacks: [FRONTEND_DEFINITION.skillPackId],
@@ -167,6 +177,15 @@ const DATA_VISUALIZATION_CONTRIBUTION: CapabilityContribution = {
   toolProfiles: DATA_VISUALIZATION_DEFINITION.toolProfileIds,
   promptBlocks: [
     'Data visualization capability is active for this task. Stay in the data-scientist persona, define the audience and decision, verify data lineage and transformations, choose an encoding that preserves the comparison, disclose scales, normalization, missingness, and uncertainty, provide accessible alternatives, and verify representative values and interactive states. This capability does not itself grant file, shell, notebook, browser, or artifact authority.',
+  ],
+};
+
+const PROGRAMMING_LAB_CONTRIBUTION: CapabilityContribution = {
+  skillPacks: [PROGRAMMING_LAB_DEFINITION.skillPackId],
+  skills: PROGRAMMING_LAB_DEFINITION.skillIds,
+  toolProfiles: PROGRAMMING_LAB_DEFINITION.toolProfileIds,
+  promptBlocks: [
+    'Programming lab capability is active for this task. Stay in the tutor persona, establish the learner level and objective, preserve learner ownership, isolate one concept at a time, use bounded execution and tests as feedback, escalate hints progressively, distinguish environment, syntax, logic, and conceptual errors, and finish with an explanation or transfer check. This capability does not itself grant file, shell, notebook, language-service, or artifact authority.',
   ],
 };
 
@@ -245,6 +264,10 @@ const DATA_VISUALIZATION_TASK_PATTERN =
   /\b(data visuali[sz]ation|visual analytics|interactive chart|analytical dashboard|data dashboard|chart design|chart audit|plotting|publication figure|statistical graphic)\b/i;
 const DATA_VISUALIZATION_FILE_PATTERN =
   /(?:^|\/)(?:charts?|figures?|visuali[sz]ations?)(?:\/|$)|\.(?:vega|vl)\.json$|\.(?:pbix|twb|twbx)$/i;
+const PROGRAMMING_LAB_TASK_PATTERN =
+  /\b(programming lab|coding lab|coding exercise|programming exercise|code kata|learn (?:to )?(?:code|program)|debugging practice|test[- ]driven learning|guided coding)\b/i;
+const PROGRAMMING_LAB_FILE_PATTERN =
+  /\.(?:c|cc|cpp|cs|go|java|js|jsx|kt|kts|php|py|rb|rs|swift|ts|tsx)$/i;
 
 /** Resolve additive capabilities for one task without reading disk or mutating the manifest. */
 export function resolveWorkspaceCapabilities(input: WorkspaceCapabilityResolutionInput): WorkspaceCapabilityResolution {
@@ -258,6 +281,8 @@ export function resolveWorkspaceCapabilities(input: WorkspaceCapabilityResolutio
     && input.manifest.persona.enabled.includes(activeAgent);
   const dataScientistIsActive =
     activeAgent === 'data-scientist' && input.manifest.persona.enabled.includes('data-scientist');
+  const tutorIsActive =
+    activeAgent === 'tutor' && input.manifest.persona.enabled.includes('tutor');
   const available = new Set(
     getWorkspaceProfile(input.manifest.profile)?.capabilities.available ?? [],
   );
@@ -329,6 +354,18 @@ export function resolveWorkspaceCapabilities(input: WorkspaceCapabilityResolutio
       appendAvailable(skills, DATA_VISUALIZATION_CONTRIBUTION.skills, input.availability?.skills);
       appendAvailable(toolProfiles, DATA_VISUALIZATION_CONTRIBUTION.toolProfiles, input.availability?.toolProfiles);
       appendUnique(promptBlocks, DATA_VISUALIZATION_CONTRIBUTION.promptBlocks);
+    }
+  }
+
+  if (tutorIsActive && enabled.has('programming-lab')) {
+    const programmingReasons = detectProgrammingLabReasons(input.task, input.files);
+    if (programmingReasons.length > 0) {
+      active.push('programming-lab');
+      reasons.push(...programmingReasons);
+      appendAvailable(skillPacks, PROGRAMMING_LAB_CONTRIBUTION.skillPacks, input.availability?.skillPacks);
+      appendAvailable(skills, PROGRAMMING_LAB_CONTRIBUTION.skills, input.availability?.skills);
+      appendAvailable(toolProfiles, PROGRAMMING_LAB_CONTRIBUTION.toolProfiles, input.availability?.toolProfiles);
+      appendUnique(promptBlocks, PROGRAMMING_LAB_CONTRIBUTION.promptBlocks);
     }
   }
 
@@ -415,6 +452,21 @@ function detectDataVisualizationReasons(
   const normalizedFiles = (files ?? []).map((file) => file.replaceAll('\\', '/'));
   if (normalizedFiles.some((file) => DATA_VISUALIZATION_FILE_PATTERN.test(file))) {
     reasons.push('task includes a visualization artifact');
+  }
+  return reasons;
+}
+
+function detectProgrammingLabReasons(
+  task: string | undefined,
+  files: readonly string[] | undefined,
+): string[] {
+  const reasons: string[] = [];
+  if (PROGRAMMING_LAB_TASK_PATTERN.test(task?.trim() ?? '')) {
+    reasons.push('task describes a programming lab');
+  }
+  const normalizedFiles = (files ?? []).map((file) => file.replaceAll('\\', '/'));
+  if (normalizedFiles.some((file) => PROGRAMMING_LAB_FILE_PATTERN.test(file))) {
+    reasons.push('task includes a programming source file');
   }
   return reasons;
 }

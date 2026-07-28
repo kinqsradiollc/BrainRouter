@@ -58,6 +58,12 @@ const DATA_VISUALIZATION_AVAILABILITY = {
   toolProfiles: ['coding', 'shell', 'artifacts', 'interactive-browser'],
 };
 
+const PROGRAMMING_LAB_AVAILABILITY = {
+  skillPacks: ['programming-lab'],
+  skills: ['programming-lab-skill'],
+  toolProfiles: ['coding', 'shell', 'artifacts'],
+};
+
 test('no manifest is an exact capability no-op even for a frontend task', () => {
   assert.deepEqual(
     resolveWorkspaceCapabilities({
@@ -311,6 +317,65 @@ test('data-visualization rejects incompatible profiles and explicit disable', ()
       manifest: data,
       task: 'Build an analytical dashboard.',
       availability: DATA_VISUALIZATION_AVAILABILITY,
+    }),
+    EMPTY_RESOLUTION,
+  );
+});
+
+test('Study activates a programming lab without changing the tutor persona', () => {
+  const manifest = createWorkspaceManifest({
+    name: 'coding-course',
+    profile: 'study',
+    by: 'wizard',
+  });
+  manifest.capabilities.enabled.push('programming-lab');
+  const resolved = resolveWorkspaceCapabilities({
+    manifest,
+    task: 'Create a guided coding exercise with progressive hints and tests.',
+    files: ['exercises/parser.ts'],
+    availability: PROGRAMMING_LAB_AVAILABILITY,
+  });
+
+  assert.deepEqual(resolved.active, ['programming-lab']);
+  assert.deepEqual(resolved.reasons, [
+    'task describes a programming lab',
+    'task includes a programming source file',
+  ]);
+  assert.deepEqual(resolved.skillPacks, ['programming-lab']);
+  assert.deepEqual(resolved.skills, ['programming-lab-skill']);
+  assert.deepEqual(resolved.toolProfiles, ['coding', 'shell', 'artifacts']);
+  assert.match(resolved.promptBlocks[0]!, /Stay in the tutor persona/);
+  assert.deepEqual(manifest.persona, { default: 'tutor', enabled: ['tutor'] });
+});
+
+test('programming-lab rejects incompatible profiles and explicit disable', () => {
+  const engineering = createWorkspaceManifest({
+    name: 'app',
+    profile: 'engineering',
+    by: 'wizard',
+  });
+  engineering.capabilities.enabled.push('programming-lab');
+  assert.deepEqual(
+    resolveWorkspaceCapabilities({
+      manifest: engineering,
+      task: 'Create a coding exercise.',
+      availability: PROGRAMMING_LAB_AVAILABILITY,
+    }),
+    EMPTY_RESOLUTION,
+  );
+
+  const study = createWorkspaceManifest({
+    name: 'course',
+    profile: 'study',
+    by: 'wizard',
+  });
+  study.capabilities.enabled.push('programming-lab');
+  study.capabilities.disabled.push('programming-lab');
+  assert.deepEqual(
+    resolveWorkspaceCapabilities({
+      manifest: study,
+      task: 'Create a coding exercise.',
+      availability: PROGRAMMING_LAB_AVAILABILITY,
     }),
     EMPTY_RESOLUTION,
   );

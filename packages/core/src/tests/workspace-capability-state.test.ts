@@ -182,6 +182,32 @@ test('reviewed Data Science visualization capability activates without changing 
   }
 });
 
+test('reviewed Study programming lab activates without changing tutor persona', () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'br-cap-state-programming-lab-'));
+  try {
+    const manifest = createWorkspaceManifest({
+      name: 'coding-course',
+      profile: 'study',
+      by: 'wizard',
+    });
+    manifest.capabilities.enabled.push('programming-lab');
+    saveWorkspaceManifest(workspace, manifest);
+    const { host, calls } = makeHost(workspace);
+    const resolved = refreshWorkspaceCapabilityState(
+      host,
+      'Create a guided coding exercise with progressive hints.',
+    );
+
+    assert.equal(host.activeWorkspacePersonaId, 'tutor');
+    assert.deepEqual(resolved.active, ['programming-lab']);
+    assert.deepEqual(resolved.toolProfiles, ['coding', 'shell', 'artifacts']);
+    assert.match(calls[0]?.content ?? '', /Available task capabilities: programming-lab/);
+    assert.match(calls[1]?.content ?? '', /Stay in the tutor persona/);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test('switching workspaces replaces profile, persona, and capability briefing state', () => {
   const engineering = fs.mkdtempSync(path.join(os.tmpdir(), 'br-cap-state-switch-engineering-'));
   const research = fs.mkdtempSync(path.join(os.tmpdir(), 'br-cap-state-switch-research-'));

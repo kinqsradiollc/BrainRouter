@@ -2058,6 +2058,13 @@ The capability may recommend coding, shell, artifacts, and interactive-browser
 groups, but the active skill can only subtract from the workspace's reviewed
 selection and cannot make a missing browser or terminal runtime available.
 
+The Study `programming-lab` capability keeps executable teaching separate from
+the general tutoring profile. It preserves the tutor persona while adding a
+bounded workflow for prerequisite diagnosis, isolated exercises, progressive
+hints, execution and test evidence, misconception remediation, and transfer
+checks. Coding, shell, notebook, language-service, and artifact operations
+remain subject to the reviewed workspace selection and ordinary runtime gates.
+
 ### P23-9 — Plugin and workspace contributions
 
 - Add `orchestrationProfiles` to plugin discovery, summaries, publishing, and
