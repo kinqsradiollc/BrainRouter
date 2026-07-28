@@ -199,7 +199,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/theme [auto|light|dark|mono]', desc: 'Markdown output theme' },
       { cmd: '/title <segments>', desc: 'Terminal title (model,session,branch,mode)' },
       { cmd: '/statusline <segments>', desc: 'Prompt (mode,exec,effort,branch,dirty,model,tokens,session,pr,workflow,phase,goal,plan)' },
-      { cmd: '/personality <style>', desc: 'auto | concise | standard | detailed | pair-programmer' },
+      { cmd: '/personality [workspace|global] <style>', desc: 'Chat override by default; workspace/global persist. auto | concise | standard | detailed | pair-programmer' },
       { cmd: '/effort [low|medium|high|xhigh]', desc: 'Reasoning depth: low=terse, medium=default, high=step-by-step, xhigh=maximum (alias: max)' },
       { cmd: '/tier [name]', desc: "Show or pin the model tier on the provider's tier ladder" },
       { cmd: '/model [auto|bare|provider/model] [--session]', desc: 'List or switch the session model request; router mode uses the unified catalog' },

@@ -846,6 +846,7 @@ export function createHandleQueryResult(ctx: AgentEventsCtx): (rawId: string, re
       case 'a-clear': setRows([]); if (sessionKeyRef.current) delete errorsBySession.current[sessionKeyRef.current]; setToast('History cleared.'); return;
       case 'a-compact': setInfoDialog({ title: 'Compaction', body: result ? fmt(result) : 'Nothing to compact yet.' }); return;
       case 'a-mode': q('q-snapshot', 'config-snapshot'); setToast('Mode saved for this session.'); return;
+      case 'a-chat-personality': q('q-snapshot', 'config-snapshot'); setToast('Personality saved for this chat.'); return;
       case 'a-pref': q('q-snapshot', 'config-snapshot'); setToast('Saved — shared with the CLI.'); return;
       case 'a-hook': q('q-snapshot', 'config-snapshot'); setToast('Hook updated.'); return;
       case 'a-ext': q('q-snapshot', 'config-snapshot'); setToast('Extension updated — reloaded.'); return;

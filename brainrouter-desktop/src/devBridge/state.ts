@@ -47,7 +47,14 @@ export function createDevState() {
     memoriesEnabled: true, personaAnchorEnabled: true, experimental: false, rawScrollback: false, editorMode: 'emacs',
   } as Record<string, unknown>;
   const sessionModes: Record<string, Record<string, unknown>> = {};
-  const effectivePrefs = () => ({ ...prefs, ...(sessionModes[activeSession] ?? {}) });
+  const effectivePrefs = () => {
+    const session = sessionModes[activeSession] ?? {};
+    return {
+      ...prefs,
+      ...session,
+      ...(session.personality ? { personalitySource: 'chat' } : {}),
+    };
+  };
 
   // DESK-5l — stateful model, mirroring the real host (agent.getModel):
   // session-info must reflect a switch, or refreshes revert the UI.

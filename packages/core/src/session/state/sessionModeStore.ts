@@ -6,6 +6,10 @@ import {
   type ExecutionMode,
   type ReviewPolicy,
 } from '../preferences/preferencesStore.js';
+import type {
+  PersonalityResolution,
+  PersonalityStyle,
+} from '../preferences/personality.js';
 
 /**
  * Per-session execution stance: which `executionMode` / `reviewPolicy` /
@@ -28,6 +32,7 @@ export interface SessionMode {
   executionMode?: ExecutionMode;
   reviewPolicy?: ReviewPolicy;
   effort?: EffortLevel;
+  personality?: PersonalityStyle;
 }
 
 /** Fully-resolved stance for a session — every field concrete. */
@@ -39,7 +44,7 @@ export interface ResolvedMode {
 
 type Store = Record<string, SessionMode>;
 
-const MODE_FIELDS = ['executionMode', 'reviewPolicy', 'effort'] as const;
+const MODE_FIELDS = ['executionMode', 'reviewPolicy', 'effort', 'personality'] as const;
 
 function modeFile(workspaceRoot: string): string {
   return getStateFile(workspaceRoot, 'sessionMode.json');
@@ -125,4 +130,22 @@ export function resolveActiveMode(workspaceRoot: string, sessionKey?: string): R
   };
   if (!sessionKey) return workspaceStance;
   return resolveSessionMode(workspaceStance, getSessionMode(workspaceRoot, sessionKey));
+}
+
+/**
+ * Resolve the presentation-only personality for one chat without creating a
+ * second session store. The session override wins; an empty session inherits
+ * the already-resolved workspace/global/profile/fallback preference.
+ */
+export function resolveActivePersonality(
+  workspaceRoot: string,
+  sessionKey?: string,
+): PersonalityResolution {
+  const prefs = readPreferences(workspaceRoot);
+  const chatOverride = sessionKey
+    ? getSessionMode(workspaceRoot, sessionKey).personality
+    : undefined;
+  return chatOverride
+    ? { style: chatOverride, source: 'chat' }
+    : { style: prefs.personality, source: prefs.personalitySource };
 }

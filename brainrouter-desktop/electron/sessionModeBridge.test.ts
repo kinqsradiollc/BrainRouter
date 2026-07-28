@@ -7,8 +7,14 @@ test('desktopSessionModePatchFromArgs accepts valid session-scoped fields', () =
     executionMode: 'fast',
     reviewPolicy: 'proceed',
     effort: 'xhigh',
+    personality: 'detailed',
   }), {
-    patch: { executionMode: 'fast', reviewPolicy: 'proceed', effort: 'xhigh' },
+    patch: {
+      executionMode: 'fast',
+      reviewPolicy: 'proceed',
+      effort: 'xhigh',
+      personality: 'detailed',
+    },
   });
 });
 
@@ -23,6 +29,7 @@ test('desktopSessionModePatchFromArgs rejects invalid values before writing', ()
   assert.match(desktopSessionModePatchFromArgs({ executionMode: 'auto' }).error ?? '', /execution mode/);
   assert.match(desktopSessionModePatchFromArgs({ reviewPolicy: 'always' }).error ?? '', /review policy/);
   assert.match(desktopSessionModePatchFromArgs({ effort: 'maximum' }).error ?? '', /effort/);
+  assert.match(desktopSessionModePatchFromArgs({ personality: 'caveman' }).error ?? '', /personality/);
 });
 
 test('mergeSessionModePrefs overlays active session mode onto workspace prefs', () => {
@@ -35,10 +42,15 @@ test('mergeSessionModePrefs overlays active session mode onto workspace prefs', 
     executionMode: 'fast',
     reviewPolicy: 'proceed',
     effort: 'high',
+  }, {
+    style: 'concise',
+    source: 'chat',
   }), {
     executionMode: 'fast',
     reviewPolicy: 'proceed',
     effort: 'high',
+    personality: 'concise',
+    personalitySource: 'chat',
     theme: 'dark',
   });
 });
