@@ -10,7 +10,12 @@ import fs from 'node:fs';
 
 import { getSessionStateFile, readJsonFile, writeJsonFile } from '../storage/store.js';
 import { loadWorkspaceManifest } from '../workspace/manifest.js';
-import { hashPlanState, readPlan, type PlanState } from './taskStore.js';
+import { readPlan } from './taskStore.js';
+import {
+  projectContractStatus,
+  projectPlanReference,
+  projectPlanTasks,
+} from './workContractProjection.js';
 import {
   WORK_CONTRACT_SCHEMA_VERSION,
   assertWorkContract,
@@ -153,37 +158,10 @@ export function readOrMigrateWorkContract(
     sessionKey,
     profileId: options.profileId ?? loadWorkspaceManifest(workspaceRoot)?.profile ?? 'custom',
     requirements: requirementRefs,
-    plan: planReference(sessionKey, plan),
-    tasks: plan.items.map((item): WorkTaskRef => ({
-      id: item.id,
-      planItemId: item.id,
-      status: item.status,
-      readiness: plan.requirementId ? 'implementation_ready' : 'draft',
-      requirementIds: plan.requirementId ? [plan.requirementId] : [],
-      acceptanceCriterionIds: [],
-      decisionIds: [],
-      dependencyTaskIds: [],
-      affectedPaths: [],
-      expectedArtifactTypes: [],
-      expectedEvidenceTypes: [],
-      skillIds: [],
-      completionEvidenceIds: [],
-    })),
-    status: migratedStatus(plan),
+    plan: projectPlanReference(sessionKey, plan),
+    tasks: projectPlanTasks(plan),
+    status: projectContractStatus(plan),
   });
-}
-
-function planReference(sessionKey: string, plan: PlanState): WorkContract['plan'] {
-  return {
-    id: opaqueHashId('plan', sessionKey),
-    revision: plan.revision,
-    contentHash: hashPlanState(plan),
-  };
-}
-
-function migratedStatus(plan: PlanState): WorkContract['status'] {
-  if (!plan.requirementId) return 'draft';
-  return plan.items.every((item) => item.status === 'completed') ? 'review' : 'active';
 }
 
 function deriveWorkspaceId(workspaceRoot: string): string {

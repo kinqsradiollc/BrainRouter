@@ -170,9 +170,12 @@ function validateSteeringArray(value: unknown, errors: string[]): void {
     if (!['user', 'parent', 'extension'].includes(String(receipt.source))) {
       errors.push(`${label}.source is invalid.`);
     }
-    if (!['clarification', 'plan_change', 'evidence', 'goal_conflict'].includes(
-      String(receipt.classification),
-    )) {
+    if (
+      receipt.classification !== undefined &&
+      !['clarification', 'plan_change', 'evidence', 'goal_conflict'].includes(
+        String(receipt.classification),
+      )
+    ) {
       errors.push(`${label}.classification is invalid.`);
     }
     validateTimestamp(receipt.receivedAt, `${label}.receivedAt`, errors);
@@ -190,6 +193,9 @@ function validateSteeringArray(value: unknown, errors: string[]): void {
     }
     if (!['pending', 'applied', 'rejected', 'needs_user'].includes(String(receipt.status))) {
       errors.push(`${label}.status is invalid.`);
+    }
+    if (receipt.status !== 'pending' && receipt.classification === undefined) {
+      errors.push(`${label}.classification is required after reconciliation.`);
     }
   }
 }

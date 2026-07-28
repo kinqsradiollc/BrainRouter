@@ -61,7 +61,11 @@ export interface WorkTaskRef {
 export interface SteeringReceipt {
   id: string;
   source: "user" | "parent" | "extension";
-  classification: "clarification" | "plan_change" | "evidence" | "goal_conflict";
+  /**
+   * Absent only while the receipt is pending semantic reconciliation.
+   * Delivery to the model is not the same as accepting the steer.
+   */
+  classification?: "clarification" | "plan_change" | "evidence" | "goal_conflict";
   receivedAt: string;
   appliedAt?: string;
   priorRevision: number;
