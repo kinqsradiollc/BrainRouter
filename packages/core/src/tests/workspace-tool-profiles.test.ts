@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { resolveWorkspaceCapabilities } from '../workspace/capabilities.js';
 import { createWorkspaceManifest } from '../workspace/manifest.js';
 import {
   resolveWorkspaceToolSelection,
@@ -78,6 +79,14 @@ test('research profiles can inspect and author workspace files without code or s
   assert.equal(allowed(selection, 'fetch_url', 'web-research'), true);
   assert.equal(allowed(selection, 'research_note', 'web-research'), true);
   assert.equal(allowed(selection, 'artifact_write', 'planning-state'), true);
+  assert.equal(allowed(selection, 'browser_snapshot', 'browser'), true);
+  assert.equal(allowed(selection, 'browser_click', 'browser'), true);
+  assert.equal(allowed(selection, 'browser_type', 'browser'), true);
+  assert.equal(allowed(selection, 'browser_close_tab', 'browser'), true);
+  assert.equal(allowed(selection, 'browser_upload_files', 'browser'), false);
+  assert.equal(allowed(selection, 'browser_permission', 'browser'), false);
+  assert.equal(allowed(selection, 'browser_set_device', 'browser'), false);
+  assert.equal(allowed(selection, 'browser_run_flow', 'browser'), false);
   assert.equal(allowed(selection, 'notebook_edit', 'filesystem'), false);
   assert.equal(allowed(selection, 'lsp', 'filesystem'), false);
   assert.equal(allowed(selection, 'run_command', 'shell'), false);
@@ -138,13 +147,116 @@ test('unknown profile ids never grant a registered tool group', () => {
   assert.deepEqual(selection.activeProfileIds, []);
   assert.equal(allowed(selection, 'write_file', 'filesystem'), false);
   assert.deepEqual(workspaceToolProfileIds(), [
-    'workspace-files', 'coding', 'shell', 'browser', 'project-knowledge', 'memory-context',
-    'research-notes', 'artifacts',
+    'workspace-files', 'coding', 'shell', 'browser', 'research-browser',
+    'project-knowledge', 'memory-context', 'research-notes', 'artifacts',
     'planning-session', 'orchestration', 'interactive-browser',
     'mcp-resources', 'connectors', 'computer-control', 'workflow-launch',
     'background-workers', 'pull-request-observation', 'security-review',
     'terminal', 'notes', 'design',
   ]);
+});
+
+test('v3 activates only tool groups implied by a reviewed task capability', () => {
+  const fixtures = [
+    {
+      profile: 'engineering',
+      capability: 'frontend',
+      task: 'Improve the responsive user interface.',
+      expected: ['browser', 'artifacts', 'interactive-browser'],
+      requiredTool: ['browser_run_flow', 'browser'],
+    },
+    {
+      profile: 'research',
+      capability: 'computational-research',
+      task: 'Run a reproducible computational analysis for this research question.',
+      expected: ['coding', 'shell', 'browser', 'research-notes', 'artifacts'],
+      requiredTool: ['run_command', undefined],
+    },
+    {
+      profile: 'data-science',
+      capability: 'data-visualization',
+      task: 'Create and visually verify a data visualization dashboard.',
+      expected: ['coding', 'shell', 'artifacts', 'interactive-browser'],
+      requiredTool: ['browser_run_flow', 'browser'],
+    },
+    {
+      profile: 'study',
+      capability: 'programming-lab',
+      task: 'Create an executable programming lab with tests.',
+      expected: ['coding', 'shell', 'artifacts'],
+      requiredTool: ['run_command', undefined],
+    },
+    {
+      profile: 'writing',
+      capability: 'technical-documentation',
+      task: 'Write repository-grounded technical documentation with runnable examples.',
+      expected: ['workspace-files', 'shell', 'browser', 'artifacts'],
+      requiredTool: ['run_command', undefined],
+    },
+  ] as const;
+
+  for (const fixture of fixtures) {
+    const manifest = createWorkspaceManifest({
+      name: fixture.profile,
+      profile: fixture.profile,
+      by: 'wizard',
+    });
+    manifest.version = 3;
+    manifest.tools.mode = 'explicit-catalog';
+    if (!manifest.capabilities.enabled.includes(fixture.capability)) {
+      manifest.capabilities.enabled.push(fixture.capability);
+    }
+    const capability = resolveWorkspaceCapabilities({
+      manifest,
+      task: fixture.task,
+      availability: {
+        skillPacks: [],
+        skills: [],
+        toolProfiles: fixture.expected,
+      },
+    });
+    assert.deepEqual(capability.active, [fixture.capability], fixture.profile);
+    assert.deepEqual(capability.toolProfiles, fixture.expected, fixture.profile);
+
+    const selection = resolveWorkspaceToolSelection({
+      manifest,
+      activeToolProfiles: capability.toolProfiles,
+    });
+    assert.equal(
+      allowed(selection, fixture.requiredTool[0], fixture.requiredTool[1]),
+      true,
+      `${fixture.profile}: ${fixture.requiredTool[0]}`,
+    );
+  }
+});
+
+test('v3 rejects arbitrary, incompatible, and disabled capability tool additions', () => {
+  const manifest = createWorkspaceManifest({
+    name: 'research',
+    profile: 'research',
+    by: 'wizard',
+  });
+  manifest.version = 3;
+  manifest.tools.mode = 'explicit-catalog';
+  manifest.capabilities.enabled.push('computational-research');
+  manifest.capabilities.disabled.push('computational-research');
+
+  const selection = resolveWorkspaceToolSelection({
+    manifest,
+    activeToolProfiles: [
+      'coding',
+      'shell',
+      'interactive-browser',
+      'computer-control',
+      'security-review',
+    ],
+  });
+
+  assert.equal(allowed(selection, 'run_command', 'shell'), false);
+  assert.equal(allowed(selection, 'browser_run_flow', 'browser'), false);
+  assert.equal(allowed(selection, 'computer_use', 'computer-control'), false);
+  assert.equal(allowed(selection, 'file_vulnerability'), false);
+  assert.equal(selection.activeProfileIds.includes('coding'), false);
 });
 
 test('manifest v3 engineering defaults expose the reviewed matrix and keep advanced groups closed', () => {

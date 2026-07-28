@@ -6,6 +6,14 @@ import {
   findWorkspaceProfilePlugin,
   type WorkspaceProfilePluginId,
 } from '../workspace/profilePlugins.js';
+import { createWorkspaceManifest } from '../workspace/manifest.js';
+import { WORKSPACE_PROFILES } from '../workspace/profiles.js';
+import { resolveWorkspaceSkillSelection } from '../workspace/skillSelection.js';
+import {
+  resolveWorkspaceToolSelection,
+  workspaceMcpToolAllowed,
+  workspaceToolAllowed,
+} from '../workspace/toolProfiles.js';
 
 function allowedTools(profileId: WorkspaceProfilePluginId, skillId: string): string[] {
   const profile = findWorkspaceProfilePlugin(profileId);
@@ -62,3 +70,113 @@ test('Data Science skills retain notebook, language, shell, and artifact tools w
     }
   }
 });
+
+test('every built-in profile has an explicit folder, workflow, and production tool contract', () => {
+  const expectedGroups = {
+    engineering: [
+      'coding', 'shell', 'browser', 'project-knowledge', 'memory-context',
+      'artifacts', 'planning-session', 'orchestration',
+      'pull-request-observation',
+    ],
+    research: [
+      'workspace-files', 'browser', 'research-browser', 'project-knowledge',
+      'memory-context', 'research-notes', 'artifacts', 'planning-session',
+      'orchestration',
+    ],
+    'data-science': [
+      'coding', 'shell', 'browser', 'project-knowledge', 'memory-context',
+      'research-notes', 'artifacts', 'planning-session', 'orchestration',
+    ],
+    study: [
+      'workspace-files', 'browser', 'project-knowledge', 'memory-context',
+      'research-notes', 'artifacts', 'planning-session', 'orchestration',
+    ],
+    writing: [
+      'workspace-files', 'browser', 'project-knowledge', 'memory-context',
+      'research-notes', 'artifacts', 'planning-session', 'orchestration',
+    ],
+    custom: [],
+  } as const;
+
+  for (const profile of WORKSPACE_PROFILES) {
+    assert.deepEqual(profile.tools.profiles, expectedGroups[profile.id], profile.id);
+    const manifest = createWorkspaceManifest({
+      name: profile.id,
+      profile: profile.id,
+      by: 'wizard',
+    });
+    manifest.version = 3;
+    manifest.tools.mode = 'explicit-catalog';
+    const tools = resolveWorkspaceToolSelection({ manifest });
+
+    if (profile.id === 'custom') {
+      assert.equal(tools.activeProfileIds.length, 0);
+      continue;
+    }
+    for (const toolId of ['read_file', 'list_dir', 'grep_search', 'glob_files']) {
+      assert.equal(
+        workspaceToolAllowed(tools, { toolId }),
+        true,
+        `${profile.id}: folder discovery ${toolId}`,
+      );
+    }
+    assert.equal(
+      workspaceToolAllowed(tools, { toolId: 'artifact_write' }),
+      true,
+      `${profile.id}: artifact production`,
+    );
+    assert.equal(
+      workspaceToolAllowed(tools, { toolId: 'update_plan' }),
+      true,
+      `${profile.id}: planning`,
+    );
+  }
+});
+
+test('every default profile-plugin skill can execute its declared tools under the profile ceiling', () => {
+  const pluginByProfile = {
+    research: 'research',
+    'data-science': 'data',
+    study: 'study',
+    writing: 'writing',
+  } as const;
+
+  for (const [profileId, pluginId] of Object.entries(pluginByProfile) as Array<
+    [keyof typeof pluginByProfile, WorkspaceProfilePluginId]
+  >) {
+    const manifest = createWorkspaceManifest({
+      name: profileId,
+      profile: profileId,
+      by: 'wizard',
+    });
+    manifest.version = 3;
+    manifest.tools.mode = 'explicit-catalog';
+    const toolSelection = resolveWorkspaceToolSelection({ manifest });
+    const skillSelection = resolveWorkspaceSkillSelection({ manifest });
+    const plugin = findWorkspaceProfilePlugin(pluginId);
+    assert.ok(plugin);
+    assert.deepEqual(
+      skillSelection.ambientSkillIds.filter((id) => plugin.skillIds.includes(id)),
+      [...plugin.skillIds],
+      `${profileId}: every profile skill is active`,
+    );
+
+    for (const skillId of plugin.skillIds) {
+      for (const toolId of allowedTools(pluginId, skillId)) {
+        const permitted = isBrainRouterMcpTool(toolId)
+          ? workspaceMcpToolAllowed(toolSelection, {
+              toolId,
+              brainrouterOwned: true,
+            })
+          : workspaceToolAllowed(toolSelection, { toolId });
+        assert.equal(permitted, true, `${profileId}/${skillId}: ${toolId}`);
+      }
+    }
+  }
+});
+
+function isBrainRouterMcpTool(toolId: string): boolean {
+  return toolId.startsWith('knowledge_')
+    || toolId.startsWith('memory_')
+    || ['list_skills', 'get_skill', 'search_skills'].includes(toolId);
+}
