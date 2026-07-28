@@ -23,6 +23,10 @@ compose them too loosely:
   is not a parser-backed symbol, reference, and call graph.
 - Queue and Steer enter the agent loop safely, but a material steer is not yet a
   durable, revisioned change to the requirement/decision/plan contract.
+- Some shared runtime contracts still sit beside validation, persistence, and
+  orchestration in large core modules. Adding new profile, planning, steering,
+  assurance, and browser shapes there would grow package-level god files and
+  make CLI/Desktop reuse depend on core implementation details.
 - The built-in browser exposes semantic references and real Chromium tabs, but
   the agent has no single action policy for observing, locating, acting,
   verifying, recovering, and handing an incompatible site to a human or an
@@ -211,6 +215,44 @@ a task does not change its identity. Each task can link:
 
 A task without a requirement, criterion, or explicit exploratory parent cannot
 be marked implementation-ready.
+
+#### 1.1.1 Contract placement and module ownership
+
+Reusable plain-data contracts that cross package or process boundaries belong
+in `@kinqs/brainrouter-types`, except agent-host commands and events, which
+remain in `@kinqs/brainrouter-agent-protocol`. Core owns validation, domain
+transitions, services, and adapters; it may expose a thin compatibility
+entrypoint but must not duplicate the shared interfaces.
+
+The package audit is behavior-led rather than a bulk folder move:
+
+| Current shape to scan | Correct destination | Migration rule |
+|---|---|---|
+| Cross-package records, refs, status unions, and stable payload constants | `packages/types` | Move only dependency-free public data contracts; add a browser-safe subpath when renderer use is expected |
+| Agent-host commands, events, and delivery receipts | `packages/agent-protocol` | Keep backward-compatible guards and wire vocabulary together |
+| Validation mixed with shared interfaces | Owning package `contracts/` or focused validation module | Import the shared type; keep bounds and persistence invariants beside the owner |
+| Filesystem, process, provider, or Electron interfaces | Owning package `ports/` | Move only when more than one adapter consumes the port; never put side-effect APIs in the types leaf |
+| Large services or runtime dispatchers | Domain/service/adapter modules behind a thin entrypoint | Split by responsibility with behavior tests; do not disguise orchestration as types |
+| Large test files | Feature-aligned test modules and shared test helpers | Split independently from production refactors so coverage remains reviewable |
+
+The first audit covers `packages/core`, then follows the dependency direction
+through protocol/types consumers. Each remediation is a small PR with an
+unchanged public surface or an explicit migration. File size alone is a signal,
+not an automatic move: a cohesive validator may remain local, while a short
+cross-package interface is misplaced even if its source file is small.
+
+The initial core scan establishes this review queue:
+
+| Area | Boundary question | Intended review |
+|---|---|---|
+| `task/workContract` | Shared records were mixed with validation and storage | Move dependency-free data shapes to types; retain focused validation and store modules in core |
+| `config/configTypes` | Many exported shapes are core configuration, but some are consumed as public snapshots | Separate internal resolved/runtime shapes from genuinely shared data contracts; do not move secrets or config loading |
+| `workspace/manifest` and onboarding | Persisted manifest payloads, normalization, validation, and filesystem transactions are adjacent | Isolate the stable manifest contract from normalization services and guarded persistence adapters |
+| orchestration profile definition/resolution | Definition payloads, source diagnostics, validation, and resolution have different owners | Put shared definition payloads in contracts/types only when external consumers need them; keep authority resolution in core |
+| browser control and target receipts | Cross-host commands/results coexist with core action policy | Put wire vocabulary in agent protocol, stable data receipts in types, policy in core, and Electron behavior in its adapter |
+| requirement trace, research evidence, and review records | Records are increasingly shared across CLI, Desktop, backend, and Workbench | Consolidate public records in types while keeping indexing, persistence, and workflow transitions in their owning packages |
+| provider/runner clients and large runtime dispatchers | Port interfaces and concrete transport behavior are interleaved | Extract reusable ports and focused adapters; never move Node/process APIs into the browser-safe types leaf |
+| large test suites | Feature coverage is concentrated around historic god modules | Split after production seams are stable, preserving fixtures and hosted parity coverage |
 
 #### 1.2 Profile-specific planning schemas
 
@@ -947,8 +989,9 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[U]` user decision.
 |---|---|---|---|---|
 | R0 | `[x]` | Accept, revise, or reject this ADR | — | Accepted on 2026-07-28 |
 | R1 | `[x]` | Work Contract v1 schemas, stable task IDs, migration reader | R0 | Round-trip, migration, and invariant tests |
-| R2 | `[ ]` | Typed Steer receipts and revision reconciliation in core | R1 | CLI/Desktop parity tests; goal-conflict tests |
-| R3 | `[ ]` | Profile planning-schema catalog and activation policy | R1 | Six-profile resolver matrix |
+| R1a | `[~]` | Package contract-placement audit and responsibility splits, beginning with Work Contract types/validation/store | R1 | Inventory by contract/port/service/adapter owner; types and core builds; unchanged compatibility imports |
+| R2 | `[ ]` | Typed Steer receipts and revision reconciliation in core | R1a | CLI/Desktop parity tests; goal-conflict tests |
+| R3 | `[ ]` | Profile planning-schema catalog and activation policy | R1a | Six-profile resolver matrix |
 | R4 | `[ ]` | Code Intelligence Index schema and parser spike for TypeScript/JavaScript | R0 | Symbol/reference/call golden corpus and performance budget |
 | R5 | `[ ]` | Incremental index store, freshness reconciliation, Atlas adapter | R4 | Edit/delete/rename/stale/unsupported tests |
 | R6 | `[ ]` | Shared graph query tools and Desktop/CLI/Atlas projections | R5 | Caller/callee/impact/route query fixtures |
