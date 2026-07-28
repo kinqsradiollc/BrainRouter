@@ -142,8 +142,15 @@ export function registerMeetingsBridge(): void {
 
   // Teams management and sharing use the same org-scoped backend collection.
   ipcMain.handle('teams:contexts', async () => {
-    const payload = await requestJson<unknown>(teamRequests.contexts(), 'Could not load organizations');
-    return arrayField(payload, 'orgs');
+    try {
+      const payload = await requestJson<unknown>(teamRequests.contexts(), 'Could not load organizations');
+      return arrayField(payload, 'orgs');
+    } catch {
+      // Organization discovery runs automatically during renderer startup.
+      // Offline/signed-out state is represented by no contexts instead of an
+      // unhandled IPC rejection; explicit Teams operations still surface errors.
+      return [];
+    }
   });
   ipcMain.handle('teams:list', async (_event, orgId: unknown) => {
     const payload = await requestJson<unknown>(teamRequests.list(orgId), 'Could not load teams');
