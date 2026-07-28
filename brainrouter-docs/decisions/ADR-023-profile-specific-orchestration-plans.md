@@ -1673,9 +1673,11 @@ work introduces contracts consumed by more than one package. Those contracts
 must not accumulate beside Core loaders, validation, resolution, persistence,
 and runtime behavior in one large module.
 
-Before adding more contract fields, implementation performs a package-wide
+Before adding more contract fields, implementation performs a monorepo-wide
 ownership scan and classifies every exported type, interface, schema, DTO,
-event, port, and constant in the affected Core workspace/orchestration trees:
+event, port, and constant in every first-party package and application. The
+workspace/orchestration families are the first migration slice, not the boundary
+of the audit:
 
 | Contract kind | Owner | Examples |
 |---|---|---|
@@ -1684,6 +1686,12 @@ event, port, and constant in the affected Core workspace/orchestration trees:
 | Core domain behavior and untrusted-input validation | Focused Core modules | parsers, validators, registries, resolvers, policy intersection, lifecycle transitions |
 | Filesystem, process, provider, Electron, secret-bearing, or host callbacks | The owning package's ports | manifest storage, native terminal, browser host, provider and bridge adapters |
 | Renderer-only presentation state | Desktop feature modules | picker view models, panel state, local UI projections |
+
+| Approach | Advantages | Disadvantages | Decision |
+|---|---|---|---|
+| Keep every declaration beside its current implementation | Few immediate import changes | Duplicates public shapes and lets large runtime files become implicit APIs | Rejected |
+| Move every `type` and `interface` into one shared file/package root | One apparent lookup location | Creates a new god file, leaks host concerns, invites cycles, and separates private shapes from their behavior without benefit | Rejected |
+| Classify by responsibility, then migrate stable cross-package contracts into named domain subpaths | One canonical owner, browser-safe shared leaves, focused runtime modules, incremental compatibility | Requires an inventory, temporary aliases, and multiple small PRs | Accepted |
 
 Moving a TypeScript declaration does not move validation or authority. Untrusted
 JSON still enters through a Core-owned runtime parser, and a shared DTO never
@@ -1708,10 +1716,12 @@ review signal, not the acceptance test; one clear owner and one coherent reason
 to change are the acceptance test.
 
 The audit starts with a generated declaration/import inventory rather than a
-hand-picked list. It scans every TypeScript package plus Backend, CLI, Desktop,
-SDK, and hooks for exported declarations, duplicate public shapes, cross-package
-imports, runtime-schema ownership, and files that combine declarations with
-behavior. The inventory records:
+hand-picked list. It scans Core, types, agent protocol, SDK, hooks, Backend, CLI,
+Dashboard, Desktop, and Mobile for exported declarations, duplicate public
+shapes, cross-package imports, runtime-schema ownership, and files that combine
+declarations with behavior. Generated output, dependencies, fixtures, and
+test-local declarations are reported separately and cannot become canonical
+contract owners. The inventory records:
 
 - symbol and current file;
 - intended canonical owner and subpath export;
@@ -1727,12 +1737,12 @@ inventory, not permission to move every declaration in the file:
 
 | Current seam | Problem to classify | Intended split |
 |---|---|---|
-| Core configuration type module | Shared configuration records, Core defaults, and runtime-facing configuration vocabulary are colocated | Stable consumer-facing records move to focused types submodules; defaults, normalization, secrets, and runtime validation remain with configuration owners |
-| Workspace manifest and onboarding transaction modules | Persisted DTOs, review state, filesystem transaction ports, validation, and mutation behavior are mixed | Versioned manifest/selection records become shared contracts; Core keeps schemas, migration, safety checks, and transactions; host filesystem ports stay host-owned |
-| Orchestration profile definition and resolver modules | Public plan shapes sit beside parsing, reference validation, catalog resolution, and selection behavior | Definition/preview DTOs move by family; Core keeps untrusted-file schemas, registries, resolution policy, and fallback behavior |
+| `packages/core/src/config/configTypes.ts` | Shared configuration records, Core defaults, and runtime-facing configuration vocabulary are colocated | Stable consumer-facing records move to focused types submodules; defaults, normalization, secrets, and runtime validation remain with configuration owners |
+| `packages/core/src/workspace/manifest.ts` and `workspace/onboardingTransaction.ts` | Persisted DTOs, review state, filesystem transaction ports, validation, and mutation behavior are mixed | Versioned manifest/selection records become shared contracts; Core keeps schemas, migration, safety checks, and transactions; host filesystem ports stay host-owned |
+| `packages/core/src/orchestration/profiles/orchestrationProfileDefinitionFile.ts` and resolver modules | Public plan shapes sit beside parsing, reference validation, catalog resolution, and selection behavior | Definition/preview DTOs move by family; Core keeps untrusted-file schemas, registries, resolution policy, and fallback behavior |
 | Profile stage controller and lifecycle modules | Trace snapshots and task-facing records sit beside mutable turn lifecycle state and execution rules | Stable snapshots/events move to types or agent protocol; mutable records, transition guards, and execution stay in focused Core runtime modules |
-| Agent protocol root module | Commands, events, interaction ports, computer-use vocabulary, and unrelated views share one root file | Split into command, event, interaction, computer-use, steering, and stage-trace submodules; keep a temporary root compatibility barrel only for the migration window |
-| Types-package root and broad API modules | A shared package can itself become a god package when unrelated domains are reachable only through one barrel | Add explicit domain subpath exports and prohibit new catch-all profile/orchestration declarations in the root barrel |
+| `packages/agent-protocol/src/index.ts` | Commands, events, interaction ports, computer-use vocabulary, and unrelated views share one root file | Split into command, event, interaction, computer-use, steering, and stage-trace submodules; keep a temporary root compatibility barrel only for the migration window |
+| `packages/types/src/api.ts` and the types-package root barrel | A shared package can itself become a god package when unrelated domains are reachable only through one file or barrel | Split contracts by domain, add explicit subpath exports, and prohibit new catch-all profile/orchestration declarations in the root barrel |
 | CLI/Desktop bridge and renderer models | Wire DTOs are duplicated or reshaped beside host callbacks and view state | Import canonical wire records; retain process adapters and renderer-only presentation state with their owning feature |
 
 The inventory is checked into the implementation PR series as a small,
@@ -2312,34 +2322,61 @@ gate is recorded in the Compatibility section above.
 
 ### P23-23 — Contract ownership audit and god-file decomposition
 
+This work is deliberately decomposed; “move all interfaces to the types
+package” is not an acceptable implementation task.
+
+#### P23-23a — Monorepo contract inventory and boundary gates
+
 - Inventory exported and duplicated types, interfaces, schemas, DTOs, events,
-  ports, and constants across Core workspace/orchestration code and their CLI,
-  Desktop, SDK, hooks, and backend consumers. Record owner, consumers, runtime
-  validation, and dependency direction before moving anything.
+  ports, and constants across every first-party package and application. Record
+  canonical owner, consumers, runtime validation, dependency direction, and
+  compatibility requirements before moving anything.
 - Commit a machine-readable ownership ledger with one row per public symbol or
   contract family. Add a deterministic audit command that flags duplicate
   declarations, forbidden dependency directions, missing canonical subpath
   exports, and new mixed-responsibility hotspots without treating line count
   alone as failure.
-- Move dependency-free cross-package records into focused
-  `@kinqs/brainrouter-types` submodules. Move agent-host wire vocabulary into
-  `@kinqs/brainrouter-agent-protocol`; keep Core parsers/validators/resolvers
-  and owner-specific ports outside both leaves.
-- Split mixed-responsibility Core modules into contract adapters, validation,
-  catalogs, policy resolution, persistence, and runtime lifecycle modules.
-  Do not create a replacement `profiles.ts`, `types.ts`, or `contracts.ts` god
+- Establish the dependency graph and fail CI when `types` imports Core, agent
+  protocol imports a host application, renderer code imports Node-only
+  contracts, or a new public contract bypasses its named domain subpath.
+
+#### P23-23b — Types-package domain boundaries
+
+- Split the broad types API into named domain submodules for configuration,
+  workspace, orchestration, planning, review, knowledge, memory, connectors,
+  models, and artifacts as justified by the inventory.
+- Keep the root export as a temporary compatibility barrel, not the canonical
+  import path. New code imports a domain subpath, and no new catch-all
+  `types.ts`, `api.ts`, or `contracts.ts` file may become the replacement god
   file.
-- Deliver separate PRs for workspace manifest/selection contracts,
-  configuration contracts, orchestration definition/preview contracts,
-  lifecycle/task-packet/trace contracts, agent-protocol submodules, and
-  CLI/Desktop adapter cleanup. Do not combine these moves with unrelated
-  behavior changes.
+- Keep this package dependency-free and browser-safe. Parsers, environment
+  access, defaults, secrets, filesystem/process handles, and executable policy
+  stay with their runtime owners.
+
+#### P23-23c — Behavior-preserving contract-family migrations
+
+- Deliver separate PRs for configuration contracts; workspace manifest and
+  reviewed-selection contracts; orchestration definition and preview
+  contracts; lifecycle, task-packet, and trace contracts; agent-protocol
+  command/event submodules; and each CLI/Desktop/Backend adapter cleanup.
+- Split mixed-responsibility runtime modules into contract adapters,
+  validation, catalogs, policy resolution, persistence, and lifecycle modules.
+  Preserve old public paths through thin, time-bounded compatibility barrels
+  while consumers migrate.
+- Do not combine a declaration move with behavior, schema, permission, storage,
+  or UI changes. Each extraction is reviewable as a behavior-preserving move
+  and names the exact consumer set it migrated.
+
+#### P23-23d — Completion and compatibility cleanup
+
 - Add package-boundary and no-cycle checks, explicit types-package subpath
-  exports, packed-archive checks, duplicate-contract detection for public
-  profile/orchestration shapes, and cross-package compile/parity tests.
-- Preserve public compatibility aliases only for a documented migration
-  window, then remove them in a separate cleanup PR after all consumers use the
-  canonical contract.
+  exports, packed-archive checks, duplicate-contract detection, and
+  cross-package compile/parity tests.
+- Remove each compatibility alias in a separate cleanup PR only after the
+  ledger proves all production consumers use the canonical contract.
+- Complete the scan across all packages even if the first profile and
+  orchestration families have migrated; P23-23 is not complete while an
+  unclassified public contract or known mixed-responsibility hotspot remains.
 
 ## Acceptance criteria
 
@@ -2482,13 +2519,17 @@ gate is recorded in the Compatibility section above.
     stage skills, compile role stages through the validated stage packet, and
     expose terminal stage outcomes in both CLI and Desktop traces. Pure
     resolver/preview availability alone does not satisfy this criterion.
-61. Every cross-package profile/orchestration contract has one canonical owner
-    in the types or agent-protocol leaf, while Core retains runtime validation
-    and behavior in focused modules and host-specific ports remain with their
-    owner.
-62. No replacement profile/orchestration god file combines shared declarations,
-    parsing, catalogs, policy, persistence, and execution; package-boundary,
-    no-cycle, packed-export, and cross-package parity checks protect the split.
+61. Every cross-package contract has one canonical owner in a named types or
+    agent-protocol domain subpath, while runtime validation and behavior remain
+    in focused owner modules and host-specific ports remain with their host.
+62. No replacement god file combines unrelated shared declarations or mixes
+    declarations with parsing, catalogs, policy, persistence, and execution;
+    package-boundary, no-cycle, packed-export, and cross-package parity checks
+    protect the split.
+63. The checked-in ownership ledger covers every first-party package and
+    application, records every public contract family and known
+    mixed-responsibility hotspot, and links each migrated family to its
+    verification and compatibility-removal evidence.
 
 ## Non-goals
 
