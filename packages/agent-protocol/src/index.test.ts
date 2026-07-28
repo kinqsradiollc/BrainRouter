@@ -104,6 +104,48 @@ test('createCallbackBridge: memory event falls back kind→text and defaults lev
   assert.deepEqual(events[0], { kind: 'memory', level: 'info', text: 'policy' });
 });
 
+test('createCallbackBridge: steering receipt lifecycle preserves revisions', () => {
+  const events: AgentEvent[] = [];
+  const cb = createCallbackBridge((event) => events.push(event));
+  const pending = {
+    id: 'steer_1',
+    source: 'user' as const,
+    receivedAt: '2026-07-28T01:00:00.000Z',
+    priorRevision: 2,
+    affectedRequirementIds: [],
+    affectedTaskIds: ['task_1'],
+    summary: 'Change verification order.',
+    status: 'pending' as const,
+  };
+  cb.onSteerApplied({
+    id: 'steer_1',
+    text: 'Verify first.',
+    source: 'user',
+    createdAt: 1,
+  }, pending);
+  cb.onSteerReceipt({
+    ...pending,
+    classification: 'plan_change',
+    status: 'applied',
+    appliedAt: '2026-07-28T01:01:00.000Z',
+    resultingRevision: 3,
+  });
+
+  assert.deepEqual(events[0], {
+    kind: 'input-delivery',
+    id: 'steer_1',
+    mode: 'steer',
+    state: 'applied',
+    text: 'Verify first.',
+    source: 'user',
+    receipt: pending,
+  });
+  assert.equal(events[1].kind, 'steering-receipt');
+  if (events[1].kind === 'steering-receipt') {
+    assert.equal(events[1].receipt.resultingRevision, 3);
+  }
+});
+
 // --- envelope writer -----------------------------------------------------------
 
 test('createEnvelopeWriter: stamps monotonic seq + ts + sessionKey', () => {

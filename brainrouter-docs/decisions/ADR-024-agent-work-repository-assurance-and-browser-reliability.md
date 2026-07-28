@@ -994,10 +994,10 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[U]` user decision.
 | R0 | `[x]` | Accept, revise, or reject this ADR | — | Accepted on 2026-07-28 |
 | R1 | `[x]` | Work Contract v1 schemas, stable task IDs, migration reader | R0 | Round-trip, migration, and invariant tests |
 | R1a | `[~]` | Package contract-placement audit and responsibility splits, beginning with Work Contract types/validation/store | R1 | Inventory by contract/port/service/adapter owner; types and core builds; unchanged compatibility imports |
-| R2 | `[~]` | Typed Steer receipts and revision reconciliation | R1a | Core lifecycle, protocol projection, CLI/Desktop parity, and goal-conflict tests |
+| R2 | `[x]` | Typed Steer receipts and revision reconciliation | R1a | Core lifecycle, protocol projection, CLI/Desktop parity, and goal-conflict tests |
 | R2a | `[x]` | Persist one pending receipt when Steer enters the model at a safe boundary | R1a | Empty/existing-plan coverage; idempotence; bounded summary; focused runtime tests |
 | R2b | `[x]` | Classify receipts and gate related mutation until reconciliation | R2a | Clarification, plan-change, evidence-only extension, and goal-conflict matrix |
-| R2c | `[ ]` | Project receipt classification and resulting revision through CLI/Desktop | R2b | Shared protocol fixture and host parity tests |
+| R2c | `[x]` | Project receipt classification and resulting revision through CLI/Desktop | R2b | Shared protocol fixture and host parity tests |
 | R3 | `[ ]` | Profile planning-schema catalog and activation policy | R1a | Six-profile resolver matrix |
 | R4 | `[ ]` | Code Intelligence Index schema and parser spike for TypeScript/JavaScript | R0 | Symbol/reference/call golden corpus and performance budget |
 | R5 | `[ ]` | Incremental index store, freshness reconciliation, Atlas adapter | R4 | Edit/delete/rename/stale/unsupported tests |

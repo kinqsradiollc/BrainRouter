@@ -1200,11 +1200,16 @@ test('runTurn applies Steer after an in-flight model response and before the nex
         silent: true,
       });
       const applied: string[] = [];
+      const receiptStates: string[] = [];
       const turn = agent.runTurn('Start here.', {
         onStatusUpdate: () => {},
         onToolStart: () => {},
         onToolEnd: () => {},
-        onSteerApplied: (input) => applied.push(input.id),
+        onSteerApplied: (input, receipt) => {
+          applied.push(input.id);
+          receiptStates.push(receipt.status);
+        },
+        onSteerReceipt: (receipt) => receiptStates.push(receipt.status),
       });
       await waitForValue(() => calls, (value) => value === 1);
       agent.requestSteer('PR #42 has one new review.', {
@@ -1228,6 +1233,7 @@ test('runTurn applies Steer after an in-flight model response and before the nex
       assert.equal(contract?.steering[0].source, 'extension');
       assert.equal(contract?.steering[0].classification, 'evidence');
       assert.equal(contract?.steering[0].status, 'applied');
+      assert.deepEqual(receiptStates, ['pending', 'applied']);
     } finally {
       globalThis.fetch = originalFetch;
     }

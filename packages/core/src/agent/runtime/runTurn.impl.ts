@@ -51,6 +51,7 @@ import {
   pendingSteeringConstraint,
 } from '../../task/steeringReceiptStore.js';
 import { evaluateSteeringToolGate } from '../../task/steeringReconciliationGate.js';
+import { readWorkContract } from '../../task/workContractStore.js';
 import { isInternalSessionKey } from '../../session/transcript/sessionStore.js';
 import { isConnectivityError, isRetryableServerError } from '../../storage/checkpointStore.js';
 import { readPlan } from '../../task/taskStore.js';
@@ -971,7 +972,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     const applyPendingSteering = (): number => {
       const pending = this.consumePendingSteering();
       for (const input of pending) {
-        beginSteeringReceipt(this.workspaceRoot, this.sessionKey, input);
+        const receipt = beginSteeringReceipt(this.workspaceRoot, this.sessionKey, input);
         let goal: ReturnType<typeof readGoal> = null;
         let plan: ReturnType<typeof readPlan> | null = null;
         try { goal = readGoal(this.workspaceRoot, this.sessionKey); } catch { /* keep steering available without goal state */ }
@@ -1000,7 +1001,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         this.recordTranscript(reconciliation);
         this.chatHistory.push(message);
         this.recordTranscript(message);
-        callbacks.onSteerApplied?.(input);
+        callbacks.onSteerApplied?.(input, receipt);
       }
       if (pending.length > 0) {
         callbacks.onStatusUpdate(`Applied ${pending.length} steering message${pending.length === 1 ? '' : 's'} at the next safe model boundary.`);
@@ -2502,8 +2503,23 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
                       if (automationCount > 0) lifecycleSummarySuffix = ` | automation advanced ${automationCount} Track item${automationCount === 1 ? '' : 's'}`;
                     } else if (kind === 'goal-reconcile') {
                       try { this.autoReconcileGoalCompletion(callbacks); } catch { /* best-effort */ }
-                    } else if (kind === 'plan-update' && Array.isArray(toolArgs.plan) && callbacks.onPlanUpdate) {
-                      callbacks.onPlanUpdate(toolArgs.plan, toolArgs.explanation);
+                    } else if (kind === 'plan-update') {
+                      if (Array.isArray(toolArgs.plan) && callbacks.onPlanUpdate) {
+                        callbacks.onPlanUpdate(toolArgs.plan, toolArgs.explanation);
+                      }
+                      const receiptId = typeof toolArgs.steeringReceiptId === 'string'
+                        ? toolArgs.steeringReceiptId.trim()
+                        : '';
+                      const receipt = receiptId
+                        ? readWorkContract(this.workspaceRoot, this.sessionKey)
+                          ?.steering.find((candidate) => candidate.id === receiptId)
+                        : undefined;
+                      if (receipt) callbacks.onSteerReceipt?.(receipt);
+                    } else if (kind === 'steer-reconcile') {
+                      const receiptId = String(toolArgs.receiptId ?? '');
+                      const receipt = readWorkContract(this.workspaceRoot, this.sessionKey)
+                        ?.steering.find((candidate) => candidate.id === receiptId);
+                      if (receipt) callbacks.onSteerReceipt?.(receipt);
                     }
                   },
                 },

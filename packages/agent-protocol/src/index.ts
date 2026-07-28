@@ -129,7 +129,9 @@ export type AgentEvent =
       text: string;
       position?: number;
       source?: 'user' | 'extension';
+      receipt?: SteeringReceiptEventView;
     }
+  | { kind: 'steering-receipt'; receipt: SteeringReceiptEventView }
   | { kind: 'tokens-updated'; promptTokens: number; completionTokens: number; calls: number; turns: number; cachedTokens?: number }
   // LIVE per-LLM-call usage for the CURRENT turn (fires after each call, not just
   // at turn-end) so the UI's token counter ticks up live instead of snapshotting.
@@ -153,7 +155,7 @@ const EVENT_KINDS = new Set<string>([
   'child-complete', 'plan-update', 'profile-stage', 'compaction', 'memory', 'requirement-event',
   'artifact-event', 'annotation-event', 'provenance', 'task-event', 'approval-decision',
   'interaction-request', 'turn-complete', 'turn-error', 'tokens-updated', 'usage-live', 'session-changed', 'query-result',
-  'notice', 'files-changed', 'input-delivery',
+  'notice', 'files-changed', 'input-delivery', 'steering-receipt',
 ]);
 
 /** Structural guard for a {@link BackgroundTaskEventView}. Pure. */
@@ -362,7 +364,11 @@ export class InteractionBroker {
 export interface BridgedCallbacks {
   onStatusUpdate: (text: string) => void;
   onNotice: (notice: { level: 'info' | 'warn'; message: string }) => void;
-  onSteerApplied: (input: { id: string; text: string; source: 'user' | 'extension'; createdAt: number }) => void;
+  onSteerApplied: (
+    input: { id: string; text: string; source: 'user' | 'extension'; createdAt: number },
+    receipt: SteeringReceiptEventView,
+  ) => void;
+  onSteerReceipt: (receipt: SteeringReceiptEventView) => void;
   onToolStart: (tool: string, args: Record<string, unknown>, callId?: string) => void;
   onToolEnd: (
     tool: string,
@@ -410,18 +416,35 @@ export interface BriefingRecord {
   score?: number;
 }
 
+/** Browser-safe projection of the shared Work Contract steering receipt. */
+export interface SteeringReceiptEventView {
+  id: string;
+  source: 'user' | 'parent' | 'extension';
+  classification?: 'clarification' | 'plan_change' | 'evidence' | 'goal_conflict';
+  receivedAt: string;
+  appliedAt?: string;
+  priorRevision: number;
+  resultingRevision?: number;
+  affectedRequirementIds: string[];
+  affectedTaskIds: string[];
+  summary: string;
+  status: 'pending' | 'applied' | 'rejected' | 'needs_user';
+}
+
 export function createCallbackBridge(emit: EmitEvent): BridgedCallbacks {
   return {
     onStatusUpdate: (text) => emit({ kind: 'status', text }),
     onNotice: (notice) => emit({ kind: 'notice', level: notice.level, message: notice.message }),
-    onSteerApplied: (input) => emit({
+    onSteerApplied: (input, receipt) => emit({
       kind: 'input-delivery',
       id: input.id,
       mode: 'steer',
       state: 'applied',
       text: input.text,
       source: input.source,
+      receipt,
     }),
+    onSteerReceipt: (receipt) => emit({ kind: 'steering-receipt', receipt }),
     // LIVE token usage: forward the agent's per-call usage so the UI ticks up
     // during the turn (the session total still lands via tokens-updated at end).
     onUsageUpdate: (usage) => emit({ kind: 'usage-live', promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, calls: usage.calls, cachedTokens: usage.cachedTokens }),

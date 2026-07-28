@@ -14,7 +14,7 @@ export interface LocalToolEntry {
   /** Explicitly include an otherwise non-mutating action (for example browser navigation) in policy audit events. */
   audited?: boolean;
   workflowLaunch?: boolean;
-  afterInvoke?: 'track-automation' | 'goal-reconcile' | 'plan-update';
+  afterInvoke?: 'track-automation' | 'goal-reconcile' | 'plan-update' | 'steer-reconcile';
   childAccessPolicy?: 'single' | 'batch';
   dynamicNamePrefix?: string;
 }
