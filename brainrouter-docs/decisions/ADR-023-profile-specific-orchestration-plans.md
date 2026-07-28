@@ -2344,6 +2344,30 @@ package” is not an acceptable implementation task.
   protocol imports a host application, renderer code imports Node-only
   contracts, or a new public contract bypasses its named domain subpath.
 
+The initial inventory must begin with the following verified hotspots. Counts
+are discovery signals from the `release/0.4.17` source tree, not automatic
+failure thresholds: a cohesive domain model can be large, while a shorter file
+can still mix incompatible ownership.
+
+| Seed hotspot | Observed declaration surface | Required ownership review |
+|---|---:|---|
+| Core configuration contract module | 24 declarations in one 1,340-line module | Move stable cross-package configuration records to a `types/configuration` domain; retain defaults, normalization, secret handling, environment access, and validation in Core |
+| Core onboarding transaction module | 11 declarations in one 977-line module | Move only serialized/reviewed workspace records to `types/workspace`; retain transaction receipts, staged-file state, locks, persistence, and rollback details beside the transaction |
+| Core orchestration definition module | 11 exported declarations in one 855-line module | Move stable definition and preview records to `types/orchestration`; retain bounded parsing, reference validation, source precedence, and fail-closed policy in Core |
+| Core workspace manifest module | 7 declarations in one 834-line module | Move the stable manifest record to `types/workspace`; retain normalization, compatibility migration, diagnostics, filesystem loading, and validation in Core |
+| Core profile-stage controller | 10 declarations in one 773-line module | Put cross-process stage snapshots/events in the appropriate Types or Agent Protocol domain; retain mutable stage records, transition guards, scheduling, and execution in Core |
+| Core browser-control module | 18 declarations in one 693-line module | Put stable host/agent commands and events in Agent Protocol; retain transport implementations, pending-request state, cancellation, and host-specific ports with their runtime owner |
+| Agent Protocol root | 21 exported declarations in one 511-line root | Split commands, events, interactions, computer use, steering, and stage traces into named dependency-free subpaths |
+| Types API module | 54 declarations in one 396-line catch-all | Split authentication, reviews, memory, chat, working context, hooks, and sessions into named API-domain modules; do not recreate a generic `api.ts` barrel as the canonical surface |
+| Types Track entities module | 23 declarations in one 537-line module | Verify cohesion, then separate workflow, work-item, board/view, automation, and membership contract families where consumers do not require the whole graph |
+| Dashboard admin client module | 38 declarations in one 595-line application module | Reuse canonical shared DTOs where the wire contract crosses packages; keep dashboard-only form/view models and fetch mechanics local |
+| Desktop settings shared-types module | 17 declarations in one 305-line module | Reuse canonical configuration/integration snapshots where structurally identical; keep renderer-only navigation, choice, and presentation state local |
+
+The inventory is not limited to these files or to `packages/core`. It scans
+Types, Agent Protocol, Core, SDK, hooks, Backend, CLI, Desktop, Dashboard, and
+Mobile, and it must classify both exported contracts and duplicated unexported
+wire shapes before the first migration is considered complete.
+
 #### P23-23b — Types-package domain boundaries
 
 - Split the broad types API into named domain submodules for configuration,
@@ -2356,6 +2380,16 @@ package” is not an acceptable implementation task.
 - Keep this package dependency-free and browser-safe. Parsers, environment
   access, defaults, secrets, filesystem/process handles, and executable policy
   stay with their runtime owners.
+- Apply the following ownership test to every declaration:
+
+  | Declaration kind | Canonical owner |
+  |---|---|
+  | Stable dependency-free record, identifier, status union, or serialized DTO used by two or more packages/processes | Named `@kinqs/brainrouter-types/<domain>` subpath |
+  | Agent-host command, event, interaction, steering receipt, computer-use action, or other process-boundary message | Named `@kinqs/brainrouter-agent-protocol/<domain>` subpath |
+  | Parser output that is also the stable cross-package wire record | Record in Types; parser, schema, diagnostics, and migration in the owning runtime package |
+  | Filesystem, process, provider, Electron, secret-bearing, mutable lifecycle, persistence, or callback port | Owning runtime package beside the implementation |
+  | Renderer-only view model, component state, form draft, or navigation option | Owning application presentation module |
+  | Type used by one implementation concern only | Concern-local module; do not promote it merely to reduce a file's line count |
 
 #### P23-23c — Behavior-preserving contract-family migrations
 
@@ -2370,6 +2404,11 @@ package” is not an acceptable implementation task.
 - Do not combine a declaration move with behavior, schema, permission, storage,
   or UI changes. Each extraction is reviewable as a behavior-preserving move
   and names the exact consumer set it migrated.
+- Start with the leaf contracts and migrate outward in dependency order:
+  Types domain subpath and export map, then Core owner/validator, then Agent
+  Protocol where applicable, followed by SDK/hooks and host applications. A
+  consumer migration cannot force a leaf package to import back from Core or an
+  application.
 
 #### P23-23d — Completion and compatibility cleanup
 
