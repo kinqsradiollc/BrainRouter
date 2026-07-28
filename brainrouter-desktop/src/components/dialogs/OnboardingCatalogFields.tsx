@@ -31,10 +31,20 @@ export function recommendedAdditionCount(
   values: readonly string[],
   enabled = true,
 ): number {
-  if (!enabled) return 0;
+  return recommendedAdditionValues(rows, values, enabled).length;
+}
+
+export function recommendedAdditionValues(
+  rows: readonly OnboardingCatalogRow[],
+  values: readonly string[],
+  enabled = true,
+): string[] {
+  if (!enabled) return [];
   const selected = new Set(values);
-  return rows.filter((row) =>
-    row.recommended && row.selectable && !row.denied && !selected.has(row.id)).length;
+  return rows
+    .filter((row) =>
+      row.recommended && row.selectable && !row.denied && !selected.has(row.id))
+    .map((row) => row.id);
 }
 
 export function CatalogField({ label, values, kinds, preview, allowBlocked = false, hideUnavailable = false, excludedIds = [], disabled = false, showRecommendedAdditions = true, emptyLabel, onChange }: {
@@ -68,23 +78,17 @@ export function CatalogField({ label, values, kinds, preview, allowBlocked = fal
     query: filter,
   });
   const selected = new Set(values);
-  const recommendedAdditions = recommendedAdditionCount(
+  const recommendedIds = recommendedAdditionValues(
     allRows,
     values,
     showRecommendedAdditions,
   );
-  const recommendedAdditionIds = allRows
-    .filter((row) => showRecommendedAdditions
-      && row.recommended
-      && row.selectable
-      && !row.denied
-      && !selected.has(row.id))
-    .map((row) => row.id)
-    .join('\u0000');
+  const recommendedAdditions = recommendedIds.length;
+  const recommendationKey = recommendedIds.join('\u0000');
   const [expanded, setExpanded] = useState(false);
   useEffect(() => {
-    if (recommendedAdditionIds) setExpanded(true);
-  }, [recommendedAdditionIds]);
+    if (recommendationKey) setExpanded(true);
+  }, [recommendationKey]);
   const toggle = (row: OnboardingCatalogRow): void => {
     if (disabled || (!selected.has(row.id) && !allowBlocked && !row.selectable)) return;
     onChange(selected.has(row.id)
@@ -108,6 +112,13 @@ export function CatalogField({ label, values, kinds, preview, allowBlocked = fal
           aria-label={`Filter ${label}`}
           placeholder={`Filter ${label.toLowerCase()}…`}
           onChange={(event) => setFilter(event.target.value)} />
+        {recommendedIds.length ? (
+          <button type="button" className="btn sm onboard-apply-recommended"
+            disabled={disabled}
+            onClick={() => onChange([...values, ...recommendedIds])}>
+            Apply {recommendedIds.length} recommended {recommendedIds.length === 1 ? 'addition' : 'additions'}
+          </button>
+        ) : null}
         <div className="onboard-catalog-options">
           {rows.length ? rows.map((row) => {
             const checked = selected.has(row.id);

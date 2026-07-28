@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   catalogRowsForField,
   recommendedAdditionCount,
+  recommendedAdditionValues,
 } from './OnboardingCatalogFields.js';
 import type { OnboardingCatalogRow } from './onboardingCatalogModel.js';
 
@@ -73,6 +74,11 @@ test('existing workspaces expose selectable unselected recommendations as additi
   ];
 
   assert.equal(recommendedAdditionCount(rows, ['artifacts']), 1);
+  assert.deepEqual(
+    recommendedAdditionValues(rows, ['artifacts']),
+    ['workspace-files'],
+    'the apply action receives only selectable, non-denied missing recommendations',
+  );
   assert.equal(
     recommendedAdditionCount(rows, ['workspace-files', 'artifacts']),
     0,
