@@ -11,8 +11,8 @@
 #   docker compose -f docker-compose.dev.yml logs -f brain
 #
 # Edit brainrouter/src/**  → tsx watch restarts the brain in-place (seconds).
-# Edit packages/*/src/**   → rebuild the deps once: `docker compose -f
-#   docker-compose.dev.yml exec brain npm run build:packages` (brain restarts).
+# Edit packages/*/src/**   → restart `brain`; the boot script fingerprints and
+#   rebuilds changed runtime packages before the server starts.
 #
 # The brain applies DB migrations itself on boot (advisory-lock-safe), so no
 # separate migrator is needed here. For a PRODUCTION-image run (baked dist, no
