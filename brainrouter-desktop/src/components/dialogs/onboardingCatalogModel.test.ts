@@ -9,6 +9,18 @@ function preview(): Record<string, unknown> {
     profileId: 'custom',
     catalogFingerprint: digest,
     catalog: [{
+      id: 'researcher',
+      kind: 'persona',
+      label: 'Researcher',
+      description: 'Investigates source-grounded questions.',
+      source: 'bundled',
+      provenance: 'bundled-personas',
+      persistable: true,
+      selectable: true,
+      selected: true,
+      recommended: true,
+      denied: false,
+    }, {
       id: 'worker',
       kind: 'role',
       label: 'Worker',
@@ -84,9 +96,10 @@ test('parses safe catalog metadata and primary-only Custom preview', () => {
     optional: false,
     maxChildren: 0,
   }]);
-  assert.equal(parsed.catalog[0]?.kind, 'role');
-  assert.equal(parsed.catalog[1]?.kind, 'capability');
-  assert.deepEqual(parsed.catalog[2]?.expandsTo, ['read_file', 'apply_patch']);
+  assert.equal(parsed.catalog[0]?.kind, 'persona');
+  assert.equal(parsed.catalog[1]?.kind, 'role');
+  assert.equal(parsed.catalog[2]?.kind, 'capability');
+  assert.deepEqual(parsed.catalog[3]?.expandsTo, ['read_file', 'apply_patch']);
 });
 
 test('rejects malformed fingerprints, oversized catalogs, and executable-looking catalog data', () => {

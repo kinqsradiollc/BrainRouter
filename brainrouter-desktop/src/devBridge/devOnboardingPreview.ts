@@ -14,6 +14,13 @@ const DEV_ROLES = [
   ['verifier', 'Verifier', 'Runs checks against acceptance criteria.'],
   ['worker', 'Worker', 'Produces one bounded artifact or change.'],
 ] as const;
+const DEV_PERSONAS = [
+  ['data-scientist', 'Data Scientist'],
+  ['engineer', 'Engineer'],
+  ['researcher', 'Researcher'],
+  ['tutor', 'Tutor'],
+  ['writer', 'Writer'],
+] as const;
 export function devDraftForProfile(profileId: string, root: string): Record<string, unknown> {
   const profile = WORKSPACE_PROFILES.find((candidate) => candidate.id === profileId) ?? WORKSPACE_PROFILES[0]!;
   return {
@@ -60,18 +67,35 @@ export function buildDevOnboardingPreview(value: unknown): Record<string, unknow
   const packIds = [...new Set(WORKSPACE_PROFILES.flatMap((profile) => profile.skills.packs))];
   const selectedGroups = new Set(draft.tools.profiles);
   const selectedTools = new Set(draft.tools.enabled);
+  const selectedPersonas = new Set(draft.persona.enabled);
   const selectedCapabilities = new Set(draft.capabilities.enabled);
   const selectedPacks = new Set(draft.skills.packs);
   const selectedSkills = new Set(draft.skills.enabled);
   const denied = new Set(draft.tools.deny);
   const recommended = WORKSPACE_PROFILES.find((profile) => profile.id === draft.profile);
   const recommendedGroups = new Set(recommended?.tools.profiles ?? []);
+  const recommendedPersonas = new Set(recommended?.persona.enabled ?? []);
   const recommendedRoles = new Set(recommended?.orchestration.availableRoles ?? []);
   const availableCapabilities = new Set(recommended?.capabilities.available ?? []);
   const recommendedCapabilities = new Set(recommended?.capabilities.recommended ?? []);
   const recommendedPacks = new Set(recommended?.skills.packs ?? []);
   const recommendedSkills = new Set(recommended?.skills.enabled ?? []);
   const catalog = [
+    ...DEV_PERSONAS.map(([id, label]) => ({
+      id,
+      kind: 'persona',
+      label,
+      description: 'Built-in workspace domain persona.',
+      category: 'domain-personas',
+      source: 'bundled',
+      provenance: 'bundled-personas',
+      persistable: true,
+      selectable: true,
+      runtimeAvailabilityPrerequisites: [],
+      selected: selectedPersonas.has(id),
+      recommended: recommendedPersonas.has(id),
+      denied: false,
+    })),
     ...DEV_ROLES.map(([id, label, description]) => {
       const selectable = draft.orchestration.mode !== 'off'
         && (recommended?.orchestration.availableRoles.includes(id) ?? false);

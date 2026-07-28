@@ -13,6 +13,42 @@ import type {
 } from './projectOnboard.js';
 import { parseProjectOnboardingList } from './onboardingDraft.js';
 
+export async function requestCatalogChoice(
+  prompt: ProjectOnboardingPrompt,
+  catalog: WorkspaceSelectionCatalog,
+  id: ProjectOnboardingPromptId,
+  title: string,
+  kind: WorkspaceSelectionCatalogEntry['kind'],
+  initial: string,
+  badge: string,
+  allowEmpty = false,
+): Promise<string | null> {
+  const entries = catalog.entries.filter((entry) =>
+    entry.kind === kind && entry.persistable && entry.selectable);
+  const emptyId = '__none__';
+  const result = await prompt({
+    id,
+    kind: 'choice',
+    title,
+    subtitle: 'Choose one catalog entry. ENTER confirms.',
+    badge,
+    rows: [
+      ...(allowEmpty
+        ? [{
+            id: emptyId,
+            label: 'No default persona',
+            value: 'custom',
+            description: 'Keep the workspace without a default domain persona.',
+          }]
+        : []),
+      ...entries.map((entry) => catalogPickerRow(entry, entry.id === initial)),
+    ],
+    initialChoice: initial || (allowEmpty ? emptyId : entries[0]?.id),
+  });
+  if (result.kind !== 'submit' || Array.isArray(result.value)) return null;
+  return result.value === emptyId ? '' : result.value;
+}
+
 export async function requestCatalogSelection(
   prompt: ProjectOnboardingPrompt,
   catalog: WorkspaceSelectionCatalog,

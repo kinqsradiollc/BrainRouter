@@ -5,6 +5,7 @@
  * cannot disagree about which inert skill/profile contributions are enabled.
  * Returned data contains only safe catalog metadata and bounded diagnostics.
  */
+import path from 'node:path';
 import type { Config } from '../config/configTypes.js';
 import {
   loadRegistry,
@@ -19,9 +20,11 @@ import {
   type ResolvedOrchestrationProfileCatalog,
 } from '../orchestration/profiles/orchestrationProfileSources.js';
 import { loadPlugins } from '../plugin/loader.js';
+import { inspectDomainPersonas, type DomainPersonaDefinition } from './domainPersonas.js';
 import {
   buildWorkspaceSelectionCatalog,
   type ContributedWorkspaceSkillRoot,
+  type WorkspacePersonaCatalogDescriptor,
   type WorkspaceRoleCatalogDescriptor,
   type WorkspaceSelectionCatalog,
 } from './selectionCatalog.js';
@@ -66,7 +69,17 @@ export function buildWorkspaceOnboardingSources(
     source: roleSource(loaded.source),
     provenance: roleProvenance(loaded.source),
   }));
-  const catalog = buildWorkspaceSelectionCatalog({ contributedSkillRoots, roles });
+  const pluginRoots = new Map(plugins.loaded.map((plugin) => [plugin.name, plugin.root]));
+  const withPluginRoot = (entry: { pluginName: string; path: string }) => ({
+    ...entry,
+    pluginRoot: pluginRoots.get(entry.pluginName)
+      ?? (entry.pluginName.startsWith('org:') ? path.dirname(path.dirname(entry.path)) : undefined),
+  });
+  const personas = inspectDomainPersonas(workspaceRoot, {
+    pluginPersonaFiles: plugins.contributions.personaFiles.map(withPluginRoot),
+    pluginAgentFiles: plugins.contributions.agentFiles.map(withPluginRoot),
+  }).personas.map(personaDescriptor);
+  const catalog = buildWorkspaceSelectionCatalog({ contributedSkillRoots, personas, roles });
   const enabledPluginSkillIds = catalog.entries
     .filter((entry) => entry.kind === 'skill' && entry.source === 'plugin' && entry.selectable)
     .map((entry) => entry.id);
@@ -91,6 +104,16 @@ export function buildWorkspaceOnboardingSources(
     references,
   });
   return { catalog, orchestrationProfiles };
+}
+
+function personaDescriptor(persona: DomainPersonaDefinition): WorkspacePersonaCatalogDescriptor {
+  return {
+    id: persona.id,
+    label: persona.displayName,
+    description: persona.description,
+    source: persona.source === 'local' ? 'user' : persona.source,
+    provenance: persona.qualifiedName,
+  };
 }
 
 function roleSource(

@@ -30,6 +30,7 @@ import {
 } from './onboardingDraft.js';
 import {
   formatPlanPreview,
+  requestCatalogChoice,
   requestCatalogSelection,
 } from './projectOnboardingCatalog.js';
 
@@ -313,9 +314,27 @@ export async function collectProjectOnboardingEdits(
   catalog: WorkspaceSelectionCatalog = buildWorkspaceSelectionCatalog(),
   orchestrationProfiles?: WorkspaceOrchestrationProfiles,
 ): Promise<ProjectOnboardingFieldEdits | null> {
-  const personaDefault = await requestText(prompt, 'persona-default', 'Default domain persona', draft.persona.default, 'Step 2 of 4 · persona');
+  const personaDefault = await requestCatalogChoice(
+    prompt,
+    catalog,
+    'persona-default',
+    'Default domain persona',
+    'persona',
+    draft.persona.default,
+    'Step 2 of 4 · persona',
+    draft.profile === 'custom',
+  );
   if (personaDefault === null) return null;
-  const personasEnabled = await requestList(prompt, 'personas-enabled', 'Enabled domain personas', draft.persona.enabled, 'Step 2 of 4 · persona');
+  const personasEnabled = await requestCatalogSelection(
+    prompt,
+    catalog,
+    'personas-enabled',
+    'Enabled domain personas',
+    'persona',
+    [...new Set([...draft.persona.enabled, ...(personaDefault ? [personaDefault] : [])])],
+    'Step 2 of 4 · persona',
+    true,
+  );
   if (!personasEnabled) return null;
   const orchestrationMode = await requestOrchestrationMode(prompt, draft.orchestration.mode);
   if (!orchestrationMode) return null;

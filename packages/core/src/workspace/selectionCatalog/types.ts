@@ -1,10 +1,12 @@
 import type { LocalToolEntry } from '../../tool/registry/registry.js';
 import type { LocalToolAvailabilityContext } from '../../tool/registry/executors.js';
+import type { WorkspacePersonaCatalogDescriptor } from './personaSelection.js';
 
 export const WORKSPACE_SELECTION_CATALOG_MAX_ENTRIES = 512;
 export const WORKSPACE_SELECTION_STABLE_ID = /^[a-z][a-z0-9_-]{0,127}$/;
 
 export type WorkspaceSelectionCatalogKind =
+  | 'persona'
   | 'role'
   | 'capability'
   | 'tool-group'
@@ -82,6 +84,8 @@ export interface WorkspaceSelectionCatalogOptions {
   contributedSkillRoots?: readonly ContributedWorkspaceSkillRoot[];
   /** Precedence-resolved executable roles; role prompts never cross this boundary. */
   roles?: readonly WorkspaceRoleCatalogDescriptor[];
+  /** Precedence-resolved domain personas; persona prompts never cross this boundary. */
+  personas?: readonly WorkspacePersonaCatalogDescriptor[];
   /**
    * Safe live names only. These rows are informational and can never be copied
    * into a manifest selection.
@@ -117,10 +121,13 @@ export type WorkspaceSelectionReviewIssueCode =
   | 'wrong-kind'
   | 'not-persistable'
   | 'blocked-entry'
+  | 'default-not-enabled'
   | 'stale-catalog';
 
 export interface WorkspaceSelectionReviewIssue {
   field:
+    | 'personaDefault'
+    | 'personasEnabled'
     | 'availableRoles'
     | 'disabledRoles'
     | 'capabilitiesEnabled'

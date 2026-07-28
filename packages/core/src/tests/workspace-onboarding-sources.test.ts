@@ -118,6 +118,23 @@ function writeWorkspaceRole(workspaceRoot: string): void {
   }));
 }
 
+function writeWorkspacePersona(workspaceRoot: string): void {
+  const directory = path.join(workspaceRoot, '.brainrouter', 'personas');
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(
+    path.join(directory, 'economist.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      kind: 'persona',
+      id: 'economist',
+      displayName: 'Economist',
+      description: 'Evaluates economic questions with explicit assumptions and evidence.',
+      instructions: ['PRIVATE PERSONA PROMPT MUST NOT ENTER THE ONBOARDING CATALOG.'],
+      priorities: ['evidence quality'],
+    }),
+  );
+}
+
 test('P23-9 onboarding sources align enabled plugin skill provenance and plan references', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'br-onboarding-sources-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -201,4 +218,19 @@ test('P23-9 onboarding sources expose workspace roles without their executable p
   assert.equal(specialist?.source, 'workspace');
   assert.equal(specialist?.provenance, 'workspace-local');
   assert.doesNotMatch(JSON.stringify(sources.catalog), /PRIVATE ROLE PROMPT/);
+});
+
+test('P23-8 onboarding sources expose workspace personas without their prompts', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'br-onboarding-persona-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  writeWorkspacePersona(root);
+
+  const sources = buildWorkspaceOnboardingSources(root);
+  const economist = sources.catalog.entries.find(
+    (entry) => entry.kind === 'persona' && entry.id === 'economist',
+  );
+  assert.equal(economist?.label, 'Economist');
+  assert.equal(economist?.source, 'user');
+  assert.equal(economist?.provenance, 'local-economist');
+  assert.doesNotMatch(JSON.stringify(sources.catalog), /PRIVATE PERSONA PROMPT/);
 });

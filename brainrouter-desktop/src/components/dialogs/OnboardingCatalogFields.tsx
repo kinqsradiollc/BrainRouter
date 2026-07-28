@@ -47,6 +47,68 @@ export function recommendedAdditionValues(
     .map((row) => row.id);
 }
 
+export function CatalogChoiceField({ label, value, kind, preview, allowEmpty = false, disabled = false, emptyLabel, onChange }: {
+  label: string;
+  value: string;
+  kind: OnboardingCatalogKind;
+  preview: OnboardingPlanPreview | null;
+  allowEmpty?: boolean;
+  disabled?: boolean;
+  emptyLabel?: string;
+  onChange: (value: string) => void;
+}): React.ReactElement {
+  const [filter, setFilter] = useState('');
+  const values = value ? [value] : [];
+  const rows = catalogRowsForField({
+    catalog: preview?.catalog ?? [],
+    kinds: [kind],
+    values,
+    hideUnavailable: true,
+    query: filter,
+  });
+  const [expanded, setExpanded] = useState(true);
+  return (
+    <details className="onboard-catalog-field" open={expanded}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}>
+      <summary>
+        <span>{label}</span>
+        <span>{value ? '1 selected' : 'None selected'}</span>
+      </summary>
+      <div className="onboard-catalog-panel">
+        <input type="search" value={filter} disabled={disabled}
+          aria-label={`Filter ${label}`}
+          placeholder={`Filter ${label.toLowerCase()}…`}
+          onChange={(event) => setFilter(event.target.value)} />
+        {allowEmpty && value ? (
+          <button type="button" className="btn sm onboard-apply-recommended"
+            disabled={disabled} onClick={() => onChange('')}>
+            Clear default persona
+          </button>
+        ) : null}
+        <div className="onboard-catalog-options">
+          {rows.length ? rows.map((row) => (
+            <label key={`${row.kind}:${row.id}`}
+              className={`onboard-catalog-option${value === row.id ? ' selected' : ''}`}>
+              <input type="radio" checked={value === row.id} disabled={disabled}
+                name={`onboard-${kind}-choice`} onChange={() => onChange(row.id)} />
+              <span>
+                <strong>{row.label}</strong>
+                <small>
+                  {row.recommended ? 'Profile recommendation · ' : ''}
+                  {row.source} · {row.provenance}
+                </small>
+                <small>{row.description}</small>
+              </span>
+            </label>
+          )) : <div className="onboard-catalog-empty">
+            {emptyLabel ?? 'No catalog choices match this filter.'}
+          </div>}
+        </div>
+      </div>
+    </details>
+  );
+}
+
 export function CatalogField({ label, values, kinds, preview, allowBlocked = false, hideUnavailable = false, excludedIds = [], disabled = false, showRecommendedAdditions = true, emptyLabel, onChange }: {
   label: string;
   values: string[];

@@ -15,12 +15,13 @@ import {
   isSelectableWorkspaceCatalogToolId,
   migrateWorkspaceManifestToolSelection,
   validateReviewedWorkspaceCapabilitySelection,
+  validateReviewedWorkspacePersonaSelection,
   validateReviewedWorkspaceRoleSelection,
   validateReviewedWorkspaceSkillSelection,
   validateReviewedWorkspaceToolSelection,
 } from '../workspace/selectionCatalog.js';
 
-test('P23-3b catalog projects safe roles, capabilities, tool groups, tools, skill packs, and skills', () => {
+test('P23-3b catalog projects safe personas, roles, capabilities, tool groups, tools, skill packs, and skills', () => {
   const catalog = buildWorkspaceSelectionCatalog({
     runtimeTools: [{
       id: 'mcp_example_lookup',
@@ -35,6 +36,7 @@ test('P23-3b catalog projects safe roles, capabilities, tool groups, tools, skil
   const memoryContext = catalog.entries.find((entry) =>
     entry.kind === 'tool-group' && entry.id === 'memory-context');
   const architect = catalog.entries.find((entry) => entry.kind === 'role' && entry.id === 'architect');
+  const researcher = catalog.entries.find((entry) => entry.kind === 'persona' && entry.id === 'researcher');
   const frontend = catalog.entries.find((entry) => entry.kind === 'capability' && entry.id === 'frontend');
   const frontendPack = catalog.entries.find((entry) => entry.kind === 'skill-pack' && entry.id === 'frontend');
   const academicPaper = catalog.entries.find((entry) =>
@@ -71,6 +73,9 @@ test('P23-3b catalog projects safe roles, capabilities, tool groups, tools, skil
   assert.equal(architect?.label, 'Architect');
   assert.equal(architect?.source, 'bundled');
   assert.equal(architect?.provenance, 'bundled-roles');
+  assert.equal(researcher?.label, 'Researcher');
+  assert.equal(researcher?.source, 'bundled');
+  assert.equal(researcher?.provenance, 'bundled-personas');
   assert.equal(frontend?.source, 'capability-plugin');
   assert.ok(frontend?.expandsTo?.includes('a11y-skill'));
   assert.ok(frontend?.expandsTo?.includes('artifacts'));
@@ -107,6 +112,46 @@ test('P23-3b catalog projects safe roles, capabilities, tool groups, tools, skil
   const serialized = JSON.stringify(catalog);
   assert.doesNotMatch(serialized, /\/Users\/|\/home\/|Bearer\s|sk-[A-Za-z0-9]{16}/i);
   assert.doesNotMatch(serialized, /## Role:/);
+});
+
+test('P23-8 persona selections reject unknown IDs and require the default to be enabled', () => {
+  const catalog = buildWorkspaceSelectionCatalog();
+  const valid = validateReviewedWorkspacePersonaSelection({
+    default: 'researcher',
+    enabled: ['researcher'],
+  }, catalog);
+  assert.deepEqual(valid, {
+    ok: true,
+    value: { default: 'researcher', enabled: ['researcher'] },
+  });
+  assert.deepEqual(
+    validateReviewedWorkspacePersonaSelection({ default: '', enabled: [] }, catalog),
+    { ok: true, value: { default: '', enabled: [] } },
+    'Custom may deliberately keep domain persona selection empty',
+  );
+
+  const unknown = validateReviewedWorkspacePersonaSelection({
+    default: 'invented',
+    enabled: ['invented'],
+  }, catalog);
+  assert.equal(unknown.ok, false);
+  if (!unknown.ok) {
+    assert.deepEqual(unknown.issues.map((issue) => issue.code), [
+      'unknown-entry',
+      'unknown-entry',
+    ]);
+  }
+
+  const disabledDefault = validateReviewedWorkspacePersonaSelection({
+    default: 'researcher',
+    enabled: [],
+  }, catalog);
+  assert.equal(disabledDefault.ok, false);
+  if (!disabledDefault.ok) {
+    assert.deepEqual(disabledDefault.issues.map((issue) => issue.code), [
+      'default-not-enabled',
+    ]);
+  }
 });
 
 test('P23-3b capability selections use contributed capability IDs and reject typos', () => {

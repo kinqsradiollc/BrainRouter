@@ -31,6 +31,12 @@ function acceptingPrompt(options: {
     if (request.id === 'orchestration-mode') {
       return { kind: 'submit', value: options.text?.[request.id] ?? request.initialChoice ?? 'off' };
     }
+    if (request.id === 'persona-default') {
+      return {
+        kind: 'submit',
+        value: options.text?.[request.id] ?? request.initialChoice ?? '',
+      };
+    }
     if (request.id === 'confirm') {
       options.beforeConfirm?.();
       return { kind: 'submit', value: 'save' };

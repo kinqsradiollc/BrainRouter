@@ -12,6 +12,7 @@ import {
   type OnboardingPlanPreview,
 } from './onboardingCatalogModel.js';
 import {
+  CatalogChoiceField,
   CatalogField,
   PlanPreviewCard,
 } from './OnboardingCatalogFields.js';
@@ -431,13 +432,30 @@ export function OnboardingDialog({ root, onClose, onSaved }: {
 
             <section className="onboard-section onboard-fields" aria-labelledby={`${titleId}-details`}>
               <h3 id={`${titleId}-details`}>Persona, orchestration, capabilities, skills, and tools</h3>
-              <TextField label="Default domain persona" value={draft.persona.default}
-                disabled={proposing || saving || reviewingInstruction}
-                hint="The profile's domain persona; optional capabilities add task expertise without creating another persona."
-                onChange={(value) => patchDraft({ persona: { ...draft.persona, default: value } })} />
-              <ListField label="Enabled personas" values={draft.persona.enabled}
-                disabled={proposing || saving || reviewingInstruction}
-                onChange={(values) => patchDraft({ persona: { ...draft.persona, enabled: values } })} />
+              <CatalogChoiceField label="Default domain persona" value={draft.persona.default}
+                kind="persona" preview={planPreview} allowEmpty={draft.profile === 'custom'}
+                disabled={proposing || saving || reviewingInstruction || previewing}
+                emptyLabel="No domain personas are available from the current workspace and enabled plugins."
+                onChange={(value) => patchDraft({
+                  persona: {
+                    default: value,
+                    enabled: value && !draft.persona.enabled.includes(value)
+                      ? [value, ...draft.persona.enabled]
+                      : draft.persona.enabled,
+                  },
+                })} />
+              <CatalogField label="Enabled personas" values={draft.persona.enabled}
+                kinds={['persona']} preview={planPreview}
+                disabled={proposing || saving || reviewingInstruction || previewing}
+                emptyLabel="No domain personas are available from the current workspace and enabled plugins."
+                onChange={(enabled) => patchDraft({
+                  persona: {
+                    default: draft.persona.default && enabled.includes(draft.persona.default)
+                      ? draft.persona.default
+                      : (enabled[0] ?? ''),
+                    enabled,
+                  },
+                })} />
               <ChoiceField label="Orchestration mode" value={draft.orchestration.mode}
                 disabled={proposing || saving || reviewingInstruction}
                 hint="Available roles are a ceiling. Off keeps work with the primary agent."

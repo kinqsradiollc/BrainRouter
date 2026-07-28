@@ -1,5 +1,5 @@
 /** Pure, bounded renderer parser for Core's safe onboarding preview/catalog. */
-export type OnboardingCatalogKind = 'role' | 'capability' | 'tool-group' | 'tool' | 'skill-pack' | 'skill' | 'runtime-tool';
+export type OnboardingCatalogKind = 'persona' | 'role' | 'capability' | 'tool-group' | 'tool' | 'skill-pack' | 'skill' | 'runtime-tool';
 
 export interface OnboardingCatalogRow {
   id: string;
@@ -60,7 +60,7 @@ export interface OnboardingPlanPreview {
 
 const DIGEST = /^[0-9a-f]{64}$/;
 const KINDS = new Set<OnboardingCatalogKind>([
-  'role', 'capability', 'tool-group', 'tool', 'skill-pack', 'skill', 'runtime-tool',
+  'persona', 'role', 'capability', 'tool-group', 'tool', 'skill-pack', 'skill', 'runtime-tool',
 ]);
 
 export function parseOnboardingPreview(value: unknown): OnboardingPlanPreview | null {

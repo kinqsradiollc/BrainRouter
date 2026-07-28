@@ -8,7 +8,10 @@ import type {
   ProjectOnboardingPrompt,
   ProjectOnboardingPromptRequest,
 } from '../cli/commands/init/projectOnboard.js';
-import { requestCatalogSelection } from '../cli/commands/init/projectOnboardingCatalog.js';
+import {
+  requestCatalogChoice,
+  requestCatalogSelection,
+} from '../cli/commands/init/projectOnboardingCatalog.js';
 
 function catalog(selected: boolean): WorkspaceSelectionCatalog {
   const entry: WorkspaceOnboardingCatalogRow = {
@@ -69,4 +72,43 @@ test('CLI catalog labels an already selected recommendation as selected', async 
   );
 
   assert.match(request?.rows?.[0]?.description ?? '', /Recommended selection\./);
+});
+
+test('CLI persona choice uses catalog rows and supports an empty Custom default', async () => {
+  let request: ProjectOnboardingPromptRequest | undefined;
+  const prompt: ProjectOnboardingPrompt = async (value) => {
+    request = value;
+    return { kind: 'submit', value: '__none__' };
+  };
+  const personaCatalog: WorkspaceSelectionCatalog = {
+    entries: [{
+      id: 'researcher',
+      kind: 'persona',
+      label: 'Researcher',
+      description: 'Investigates source-grounded questions.',
+      category: 'domain-personas',
+      source: 'bundled',
+      provenance: 'bundled-personas',
+      persistable: true,
+      selectable: true,
+      runtimeAvailabilityPrerequisites: [],
+    }],
+    fingerprint: 'f'.repeat(64),
+  };
+
+  const selected = await requestCatalogChoice(
+    prompt,
+    personaCatalog,
+    'persona-default',
+    'Default domain persona',
+    'persona',
+    '',
+    'PERSONA',
+    true,
+  );
+
+  assert.equal(selected, '');
+  assert.equal(request?.kind, 'choice');
+  assert.deepEqual(request?.rows?.map((row) => row.id), ['__none__', 'researcher']);
+  assert.equal(request?.initialChoice, '__none__');
 });

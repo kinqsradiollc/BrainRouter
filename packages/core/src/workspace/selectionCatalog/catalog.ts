@@ -24,6 +24,7 @@ import {
   readSkillFile,
 } from './skillMetadata.js';
 import { isSelectableWorkspaceCatalogToolId } from './toolEligibility.js';
+import { bundledWorkspacePersonaCatalogDescriptors } from './personaSelection.js';
 import {
   WORKSPACE_SELECTION_CATALOG_MAX_ENTRIES,
   WORKSPACE_SELECTION_STABLE_ID,
@@ -48,6 +49,22 @@ export function buildWorkspaceSelectionCatalog(
     ...plugins.unavailable.flatMap((plugin) => [...plugin.skillIds]),
   ]);
   const roles = options.roles ?? loadBundledRegistry().map(roleDescriptor);
+  const personas = options.personas ?? bundledWorkspacePersonaCatalogDescriptors();
+
+  for (const persona of personas) {
+    pushCatalogEntry(entries, {
+      id: persona.id,
+      kind: 'persona',
+      label: safeCatalogText(persona.label, labelForId(persona.id)),
+      description: safeCatalogText(persona.description, 'Workspace domain persona.'),
+      category: 'domain-personas',
+      source: persona.source,
+      provenance: safeProvenance(persona.provenance, 'persona-registry'),
+      persistable: true,
+      selectable: true,
+      runtimeAvailabilityPrerequisites: [],
+    });
+  }
 
   for (const role of roles) {
     pushCatalogEntry(entries, {

@@ -5,6 +5,7 @@ import {
   migrateWorkspaceManifestToolSelection,
   normalizeWorkspaceManifest,
   validateReviewedWorkspaceCapabilitySelection,
+  validateReviewedWorkspacePersonaSelection,
   validateReviewedWorkspaceRoleSelection,
   validateReviewedWorkspaceSkillSelection,
   type WorkspaceSelectionCatalog,
@@ -119,6 +120,10 @@ export function finalizeCatalogReviewedProjectOnboarding(
   catalog: WorkspaceSelectionCatalog,
 ): WorkspaceManifest {
   const edited = applyProjectOnboardingEdits(draft, edits);
+  const personas = validateReviewedWorkspacePersonaSelection(edited.persona, catalog);
+  if (!personas.ok) {
+    throw new Error(formatCatalogReviewIssues('persona', personas.issues));
+  }
   const roles = validateReviewedWorkspaceRoleSelection({
     availableRoles: edited.orchestration.availableRoles,
     disabledRoles: edited.orchestration.disabledRoles,
@@ -148,6 +153,8 @@ export function finalizeCatalogReviewedProjectOnboarding(
   return migrateWorkspaceManifestToolSelection({
     manifest: {
       ...edited,
+      persona: personas.value,
+      agents: personas.value,
       orchestration: {
         ...edited.orchestration,
         availableRoles: roles.value.availableRoles,
@@ -167,7 +174,7 @@ export function finalizeCatalogReviewedProjectOnboarding(
 }
 
 function formatCatalogReviewIssues(
-  kind: 'role' | 'capability' | 'skill' | 'tool',
+  kind: 'persona' | 'role' | 'capability' | 'skill' | 'tool',
   issues: ReadonlyArray<{ field: string; id?: string; reason: string }>,
 ): string {
   const detail = issues
