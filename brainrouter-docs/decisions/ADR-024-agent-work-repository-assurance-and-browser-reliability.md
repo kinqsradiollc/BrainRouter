@@ -254,6 +254,25 @@ The initial core scan establishes this review queue:
 | provider/runner clients and large runtime dispatchers | Port interfaces and concrete transport behavior are interleaved | Extract reusable ports and focused adapters; never move Node/process APIs into the browser-safe types leaf |
 | large test suites | Feature coverage is concentrated around historic god modules | Split after production seams are stable, preserving fixtures and hosted parity coverage |
 
+The first measured scan on 2026-07-28 confirms that line count alone is not the
+decision rule, but it exposes several mixed-responsibility hotspots:
+
+| Current module | Observed responsibility mix | Target boundary |
+|---|---|---|
+| `core/config/configTypes.ts` | 1,400+ lines of persisted knobs, resolved runtime shapes, provider/plugin/automation/domain types, defaults, and normalization functions | Split domain config contracts and pure normalizers inside core; move only intentionally public, secret-free snapshots to types; preserve `config` barrel imports |
+| `agent-protocol/index.ts` | Events, commands, guards, computer-use wire shapes, interaction broker, callback bridge, and writer | Keep all agent-host wire vocabulary in agent-protocol, split by events/commands/interactions/bridge/writer, and retain a compatibility barrel |
+| `core/browser/control.ts` | Cross-host request/result shapes, parsers, URL/path policy, redaction, backend, pending-request transport, and guards | Put stable commands/events/results in agent-protocol; keep policy/normalization in core; keep Electron behavior in the Desktop adapter |
+| `core/workspace/manifest.ts` | Persisted contract, migration diagnostics, draft creation, normalization, secret/path filtering, size fitting, and filesystem persistence | Put the dependency-free manifest record in types; split core normalization, compatibility, and store services behind the existing workspace export |
+| `core/orchestration/profiles/orchestrationProfileDefinitionFile.ts` | Definition records, reference catalog, file discovery/read safety, strict validation, reference checks, and graph validation | Keep current records core-local until another package consumes them; split contracts, file source, field validation, and graph validation without changing the public barrel |
+| `types/api.ts` | Authentication, review, pagination, memory, chat, working context, hooks, sessions, and skill activation DTOs | Keep these public DTOs in types but split by API domain with an `api` compatibility barrel |
+| `core/agent/agent.ts`, `core/agent/runtime/runTurn.impl.ts`, and `core/extension/builtin/runtime.ts` | Large stateful runtime coordinators rather than type collections | Extract behavior-owned services and lifecycle phases only after characterization tests; do not move runtime ports or mutable state into types |
+| Large feature test modules | Historic end-to-end fixtures and many unrelated scenarios in one file | Split by production seam after that seam lands; share fixtures explicitly and preserve hosted coverage |
+
+The remediation order is dependency-safe: leaf shared contracts first, then
+protocol barrels, then core consumers, then Desktop/CLI adapters, and finally
+large runtime coordinators. Every move retains a compatibility export until
+all consumers migrate and no PR combines more than one boundary family.
+
 #### 1.2 Profile-specific planning schemas
 
 The profile orchestration plan selects a planning schema from a validated
@@ -994,7 +1013,13 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[U]` user decision.
 | R0 | `[x]` | Accept, revise, or reject this ADR | — | Accepted on 2026-07-28 |
 | R1 | `[x]` | Work Contract v1 schemas, stable task IDs, migration reader | R0 | Round-trip, migration, and invariant tests |
 | R1a | `[~]` | Package contract-placement audit and responsibility splits, beginning with Work Contract types/validation/store | R1 | Inventory by contract/port/service/adapter owner; types and core builds; unchanged compatibility imports |
-| R1b | `[ ]` | Package-by-package god-module and misplaced-contract scan, beginning with workspace manifest/profile modules and orchestration definition parsing | R1a | File-level responsibility inventory, dependency-direction check, and small behavior-preserving remediation PR queue |
+| R1b | `[x]` | Package-by-package god-module and misplaced-contract scan, beginning with workspace manifest/profile modules and orchestration definition parsing | R1a | File-level responsibility inventory, dependency-direction check, and small behavior-preserving remediation PR queue |
+| R1c | `[ ]` | Split core configuration contracts and normalizers by domain | R1b | Compatibility barrel, config fixture parity, types/core build |
+| R1d | `[ ]` | Split agent-protocol events, commands, interactions, bridges, and writers | R1b | Unchanged public exports and protocol fixture parity |
+| R1e | `[ ]` | Separate browser wire contracts, core policy, transport, and Desktop adapter concerns | R1d | Browser protocol, redaction, cancellation, and host parity tests |
+| R1f | `[ ]` | Move the stable workspace manifest record to types and split core normalization/store services | R1b | V1/V2/V3 round-trips, hostile-input bounds, compatibility imports |
+| R1g | `[ ]` | Split orchestration definition contracts, file source, validation, and graph checks | R1b | Catalog and malformed-definition fixture parity |
+| R1h | `[ ]` | Split public API DTOs by domain within types | R1b | Unchanged root/API exports and consumer typecheck |
 | R2 | `[x]` | Typed Steer receipts and revision reconciliation | R1a | Core lifecycle, protocol projection, CLI/Desktop parity, and goal-conflict tests |
 | R2a | `[x]` | Persist one pending receipt when Steer enters the model at a safe boundary | R1a | Empty/existing-plan coverage; idempotence; bounded summary; focused runtime tests |
 | R2b | `[x]` | Classify receipts and gate related mutation until reconciliation | R2a | Clarification, plan-change, evidence-only extension, and goal-conflict matrix |
