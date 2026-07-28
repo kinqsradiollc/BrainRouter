@@ -99,6 +99,20 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
     extensionIds: [],
   },
   {
+    id: 'memory-context',
+    label: 'Memory context',
+    description: 'Recall and search authenticated read-only memory relevant to this project.',
+    category: 'web-research',
+    toolIds: [],
+    mcpToolIds: [
+      'memory_recall',
+      'memory_search',
+      'memory_find_related',
+      'memory_graph_query',
+    ],
+    extensionIds: [],
+  },
+  {
     id: 'research-notes',
     label: 'Research notes',
     description: 'Capture sourced research notes and bounded research briefs.',

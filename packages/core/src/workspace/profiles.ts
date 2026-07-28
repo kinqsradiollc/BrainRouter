@@ -92,6 +92,7 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
         'shell',
         'browser',
         'project-knowledge',
+        'memory-context',
         'artifacts',
         'planning-session',
         'orchestration',
@@ -116,7 +117,7 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
     skills: { packs: ['research'], enabled: ['planning-skill', 'handover-skill'] },
     tools: {
       profiles: [
-        'workspace-files', 'browser', 'project-knowledge', 'research-notes',
+        'workspace-files', 'browser', 'project-knowledge', 'memory-context', 'research-notes',
         'artifacts', 'planning-session', 'orchestration',
       ],
     },
@@ -138,7 +139,7 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
     skills: { packs: ['data'], enabled: ['planning-skill', 'testing-skill', 'verify-loop'] },
     tools: {
       profiles: [
-        'coding', 'shell', 'browser', 'project-knowledge', 'research-notes',
+        'coding', 'shell', 'browser', 'project-knowledge', 'memory-context', 'research-notes',
         'artifacts', 'planning-session', 'orchestration',
       ],
     },
@@ -159,7 +160,10 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
     capabilities: { available: [], recommended: [], enabled: [] },
     skills: { packs: ['study'], enabled: ['planning-skill', 'handover-skill'] },
     tools: {
-      profiles: ['workspace-files', 'browser', 'project-knowledge', 'research-notes', 'artifacts', 'planning-session'],
+      profiles: [
+        'workspace-files', 'browser', 'project-knowledge', 'memory-context',
+        'research-notes', 'artifacts', 'planning-session', 'orchestration',
+      ],
     },
     memory: { tags: ['study'], captureHint: 'learning' },
   },
@@ -178,7 +182,10 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
     capabilities: { available: [], recommended: [], enabled: [] },
     skills: { packs: ['writing'], enabled: ['planning-skill', 'handover-skill'] },
     tools: {
-      profiles: ['workspace-files', 'browser', 'project-knowledge', 'research-notes', 'artifacts', 'planning-session'],
+      profiles: [
+        'workspace-files', 'browser', 'project-knowledge', 'memory-context',
+        'research-notes', 'artifacts', 'planning-session', 'orchestration',
+      ],
     },
     memory: { tags: ['writing'], captureHint: 'drafts' },
   },
