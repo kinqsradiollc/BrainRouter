@@ -7,7 +7,7 @@
 import React, { Suspense, lazy } from 'react';
 import {
   DiffPanel, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel, WorktreesPanel, ReviewPanel,
-  RequirementsPanel, AnnotationsPanel, ArtifactsPanel, AttachmentsPanel, AtlasPanel, WorkflowsPanel, MemoryPanel, KnowledgePanel, PrototypePanel, TasksPanel, TaskDetailPanel, TerminalPanel, ToolsPanel, ServersPanel, ContextPanel, type PanelId, type SearchHit, type ReviewFindingView, type GrepHit, type FinishedTask,
+  RequirementsPanel, AnnotationsPanel, ArtifactsPanel, AttachmentsPanel, MemoryPanel, KnowledgePanel, PrototypePanel, TasksPanel, TaskDetailPanel, TerminalPanel, ToolsPanel, ServersPanel, ContextPanel, type PanelId, type SearchHit, type ReviewFindingView, type GrepHit, type FinishedTask,
 } from '../../panels/index.js';
 import type { RequirementRecord, AnnotationRecord, ArtifactRecord, AtlasGraph } from '@kinqs/brainrouter-types';
 import type { TrackPrStatus } from '../../track/TrackView.js';
@@ -33,6 +33,10 @@ const CIPanel = lazy(() => import('../../panels/ci/CIPanel.js').then((m) => ({ d
 // UI-TEST fusion — the embedded Browser panel (webview + tool rail) is only
 // opened for UI testing; lazy so its webview bridge stays out of first paint.
 const BrowserPanel = lazy(() => import('../../panels/BrowserPanel.js').then((m) => ({ default: m.BrowserPanel })));
+// Graph panels pull layout engines and the canvas runtime. Keep them outside the
+// chat shell and load each only when the user opens that view.
+const AtlasPanel = lazy(() => import('../../panels/atlas/AtlasPanel.js').then((m) => ({ default: m.AtlasPanel })));
+const WorkflowsPanel = lazy(() => import('../../panels/planning/WorkflowsPanel.js').then((m) => ({ default: m.WorkflowsPanel })));
 
 type Query = (id: string, name: string, args?: Record<string, unknown>) => void;
 
@@ -258,7 +262,7 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
           }} />;
       }
       case 'search': return <SearchPanel hits={searchHits} onSearch={(query) => q('q-search', 'search-transcript', { q: query })} />;
-      case 'workflows': return <WorkflowsPanel />;
+      case 'workflows': return <Suspense fallback={<div className="row status"><span className="spinner" /> Loading workflows…</div>}><WorkflowsPanel /></Suspense>;
       case 'memory': return <MemoryPanel />;
       case 'knowledge': return <KnowledgePanel workspaceKey={activeRoot} />;
       case 'prototype': return <PrototypePanel onSendToChat={(text) => { setDraft(text); setToast('Prototype prompt sent to the composer — press Enter to generate.'); }} />;
@@ -304,7 +308,7 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
           onOpenDiff={(f) => { setDiffTarget({ path: f.file, line: f.line }); ensurePanel('diff'); q('q-diff', 'file-diff', { path: f.file }); }} />;
       }
       case 'atlas':
-        return <AtlasPanel graph={atlasGraph} building={atlasBuilding} enriching={atlasEnriching}
+        return <Suspense fallback={<div className="row status"><span className="spinner" /> Loading Atlas…</div>}><AtlasPanel graph={atlasGraph} building={atlasBuilding} enriching={atlasEnriching}
           onLoad={() => q('q-atlas', 'atlas-graph')}
           onBuild={() => { setAtlasBuilding(true); q('q-atlas-build', 'atlas-build'); }}
           onEnrich={() => { setAtlasEnriching(true); q('q-atlas-enrich', 'atlas-enrich'); }}
@@ -323,7 +327,7 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
           stories={atlasStories}
           onLoadStories={() => q('q-browser-stories', 'browser:list-stories')}
           onSuggestStories={() => q('q-browser-suggest', 'browser:suggest-stories')}
-          onRunStory={(story) => runStory(story)} />;
+          onRunStory={(story) => runStory(story)} /></Suspense>;
       // UI-TEST fusion — the embedded Browser panel (propless; talks to App via
       // localStorage + br-browser-* window events). Lazy + Suspense like Editor/CI.
       case 'browser':
