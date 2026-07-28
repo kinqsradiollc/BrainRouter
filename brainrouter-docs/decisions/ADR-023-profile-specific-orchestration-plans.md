@@ -1707,6 +1707,39 @@ archive, no-cycle, public-export, and behavioral parity checks. File length is a
 review signal, not the acceptance test; one clear owner and one coherent reason
 to change are the acceptance test.
 
+The audit starts with a generated declaration/import inventory rather than a
+hand-picked list. It scans every TypeScript package plus Backend, CLI, Desktop,
+SDK, and hooks for exported declarations, duplicate public shapes, cross-package
+imports, runtime-schema ownership, and files that combine declarations with
+behavior. The inventory records:
+
+- symbol and current file;
+- intended canonical owner and subpath export;
+- all package/process consumers;
+- whether the value exists at runtime or is type-only;
+- parser or schema that validates untrusted input;
+- compatibility alias and removal release, when one is required;
+- dependency direction before and after the move;
+- migration PR and verification evidence.
+
+The first baseline identifies these high-risk seams. This is a starting
+inventory, not permission to move every declaration in the file:
+
+| Current seam | Problem to classify | Intended split |
+|---|---|---|
+| Core configuration type module | Shared configuration records, Core defaults, and runtime-facing configuration vocabulary are colocated | Stable consumer-facing records move to focused types submodules; defaults, normalization, secrets, and runtime validation remain with configuration owners |
+| Workspace manifest and onboarding transaction modules | Persisted DTOs, review state, filesystem transaction ports, validation, and mutation behavior are mixed | Versioned manifest/selection records become shared contracts; Core keeps schemas, migration, safety checks, and transactions; host filesystem ports stay host-owned |
+| Orchestration profile definition and resolver modules | Public plan shapes sit beside parsing, reference validation, catalog resolution, and selection behavior | Definition/preview DTOs move by family; Core keeps untrusted-file schemas, registries, resolution policy, and fallback behavior |
+| Profile stage controller and lifecycle modules | Trace snapshots and task-facing records sit beside mutable turn lifecycle state and execution rules | Stable snapshots/events move to types or agent protocol; mutable records, transition guards, and execution stay in focused Core runtime modules |
+| Agent protocol root module | Commands, events, interaction ports, computer-use vocabulary, and unrelated views share one root file | Split into command, event, interaction, computer-use, steering, and stage-trace submodules; keep a temporary root compatibility barrel only for the migration window |
+| Types-package root and broad API modules | A shared package can itself become a god package when unrelated domains are reachable only through one barrel | Add explicit domain subpath exports and prohibit new catch-all profile/orchestration declarations in the root barrel |
+| CLI/Desktop bridge and renderer models | Wire DTOs are duplicated or reshaped beside host callbacks and view state | Import canonical wire records; retain process adapters and renderer-only presentation state with their owning feature |
+
+The inventory is checked into the implementation PR series as a small,
+reviewable ledger. A symbol is not marked migrated until all production
+consumers use its canonical import and the former declaration is either removed
+or recorded as a time-bounded compatibility alias.
+
 ## Profile behavior summary
 
 | Concern | Engineering | Research | Data Science | Study | Writing | Custom |
@@ -2283,6 +2316,11 @@ gate is recorded in the Compatibility section above.
   ports, and constants across Core workspace/orchestration code and their CLI,
   Desktop, SDK, hooks, and backend consumers. Record owner, consumers, runtime
   validation, and dependency direction before moving anything.
+- Commit a machine-readable ownership ledger with one row per public symbol or
+  contract family. Add a deterministic audit command that flags duplicate
+  declarations, forbidden dependency directions, missing canonical subpath
+  exports, and new mixed-responsibility hotspots without treating line count
+  alone as failure.
 - Move dependency-free cross-package records into focused
   `@kinqs/brainrouter-types` submodules. Move agent-host wire vocabulary into
   `@kinqs/brainrouter-agent-protocol`; keep Core parsers/validators/resolvers
@@ -2292,9 +2330,10 @@ gate is recorded in the Compatibility section above.
   Do not create a replacement `profiles.ts`, `types.ts`, or `contracts.ts` god
   file.
 - Deliver separate PRs for workspace manifest/selection contracts,
-  orchestration definition/preview contracts, lifecycle/task-packet/trace
-  contracts, and CLI/Desktop adapter cleanup. Do not combine these moves with
-  unrelated behavior changes.
+  configuration contracts, orchestration definition/preview contracts,
+  lifecycle/task-packet/trace contracts, agent-protocol submodules, and
+  CLI/Desktop adapter cleanup. Do not combine these moves with unrelated
+  behavior changes.
 - Add package-boundary and no-cycle checks, explicit types-package subpath
   exports, packed-archive checks, duplicate-contract detection for public
   profile/orchestration shapes, and cross-package compile/parity tests.
