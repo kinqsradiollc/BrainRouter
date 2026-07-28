@@ -30,7 +30,7 @@ export interface LocalToolEntry {
   /** Safe to dispatch concurrently within one assistant message. */
   parallelSafe: boolean;
   /** Optional turn-scoped visibility predicate owned by the extension. */
-  availability?: 'result-cache' | 'active-workflow' | 'root-agent' | 'computer-use' | 'browser-use' | 'terminal-use' | 'multi-profile' | 'mcp-discovery';
+  availability?: 'result-cache' | 'active-workflow' | 'active-orchestration-plan' | 'root-agent' | 'computer-use' | 'browser-use' | 'terminal-use' | 'multi-profile' | 'mcp-discovery';
   advertised?: boolean;
   runtimePort?: 'orchestration' | 'browser-control' | 'session-input';
   audited?: boolean;
@@ -90,6 +90,7 @@ export const REQUIRED_CORE_TOOL_CATALOG: LocalToolEntry[] = [
   // Orchestration surface (added dynamically as specs, but access-gated here).
   // NB: child-spawn action kind is resolved per-call from the requested child
   // `access` (REVIEW-FIX); `child_write` is the name-only default they share.
+  { name: 'profile_stage', accessTier: 'read', actionKind: 'read_only', parallelSafe: false, availability: 'active-orchestration-plan', runtimePort: 'orchestration' },
   { name: 'task_agent', accessTier: 'read', actionKind: 'child_write', parallelSafe: true, runtimePort: 'orchestration', childAccessPolicy: 'single' },
   { name: 'delegate_agent', accessTier: 'read', actionKind: 'child_write', parallelSafe: true, runtimePort: 'orchestration', childAccessPolicy: 'single', dynamicNamePrefix: 'delegate_' },
   { name: 'spawn_agent', accessTier: 'read', actionKind: 'child_write', parallelSafe: false, runtimePort: 'orchestration', advertised: false, childAccessPolicy: 'single' },

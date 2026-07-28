@@ -5,6 +5,36 @@
  * the orchestration capability extension. No shared state and no Agent-runtime
  * dependencies; re-exported from tools.ts for back-compat.
  */
+export function createProfileStageTool() {
+  return {
+    name: 'profile_stage',
+    description:
+      'Advance a primary-agent stage from the active workspace profile plan. ' +
+      'Call begin before doing the stage work; when the stage declares skills, execute the returned instructions using only the returned tool surface, then call complete. ' +
+      'A multi-skill stage requires one begin/complete pair per declared skill. Optional stages may be skipped before they start. ' +
+      'This tool cannot launch delegated-role stages or grant tools beyond the reviewed workspace policy.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['begin', 'complete', 'skip'],
+          description: 'Begin a primary stage/its next skill, complete the active skill or stage, or skip an optional unstarted stage.',
+        },
+        stageId: {
+          type: 'string',
+          description: 'Stage id from the active profile strategy.',
+        },
+        skillId: {
+          type: 'string',
+          description: 'Declared skill id. Optional when the stage has one remaining skill; omit for skill-less stages.',
+        },
+      },
+      required: ['action', 'stageId'],
+    },
+  };
+}
+
 export function createSpawnAgentTool() {
   return {
     name: 'spawn_agent',

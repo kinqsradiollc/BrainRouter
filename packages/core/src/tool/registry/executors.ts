@@ -24,6 +24,7 @@ export interface LocalToolInvocation {
 export interface LocalToolAvailabilityContext {
   resultExpansionAvailable?: boolean;
   workflowActive?: boolean;
+  activeOrchestrationPlan?: boolean;
   rootAgent?: boolean;
   computerUseAvailable?: boolean;
   browserUseAvailable?: boolean;

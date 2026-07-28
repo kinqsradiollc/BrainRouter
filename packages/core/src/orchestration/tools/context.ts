@@ -9,6 +9,10 @@ import type { AccessMode } from '../roles/roles.js';
 import type { Tier } from '../agents/agentRegistry.js';
 import type { ContextEnvelope } from '../../context/contextEnvelope.js';
 
+export interface PrimaryStageRuntimeController {
+  invoke(args: Record<string, unknown>): Promise<string>;
+}
+
 export interface OrchestrationContext {
   workspaceRoot: string;
   parentSessionKey: string;
@@ -104,4 +108,9 @@ export interface OrchestrationContext {
   parentVisibleMcpTools?: () => string[];
   parentExecutionMode?: string;
   parentReviewPolicy?: string;
+  /**
+   * Root-turn owner for the currently resolved profile plan. Missing for
+   * children, unmanaged workspaces, and turns whose plan has no profile.
+   */
+  profileStageController?: PrimaryStageRuntimeController;
 }

@@ -32,6 +32,7 @@ import { runGraph } from '../workflow/graph/graphEngine.js';
 import { routeTask } from './delegation/router.js';
 import { localModelProfileActive } from '../provider/modelFamily.js';
 import { getCliKnobs } from '../config/config.js';
+import { OrchestrationRuntimeUnavailableError } from './runtime/activeTurnRuntime.js';
 
 // ---------------------------------------------------------------------------
 // Routing / delegation handlers — thin glue over handleSpawn (foreground vs
@@ -195,6 +196,11 @@ export async function executeOrchestrationTool(
   }
 
   switch (name) {
+    case 'profile_stage':
+      if (!ctx.profileStageController) {
+        throw new OrchestrationRuntimeUnavailableError(name, 'missing-port');
+      }
+      return await ctx.profileStageController.invoke(args ?? {});
     case 'task_agent':
       return await handleTaskAgent(args, ctx);
     case 'delegate_agent':
@@ -266,4 +272,5 @@ export {
   createRouteTaskTool,
   createRunWorkflowTool,
   createRunWorkflowGraphTool,
+  createProfileStageTool,
 } from './agents/agentTools.js';

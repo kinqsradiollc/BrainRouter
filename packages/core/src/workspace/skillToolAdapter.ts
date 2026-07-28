@@ -8,6 +8,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import { loadWorkspaceManifest } from './manifest.js';
 import {
@@ -39,7 +40,17 @@ export interface WorkspaceSkillCatalogEntry {
 
 export interface WorkspaceManagedSkillResult {
   content: Array<{ type: 'text'; text: string }>;
-  metadata: { scope: 'plugin'; tokenEstimate: number };
+  metadata: {
+    scope: 'plugin' | 'bundled';
+    tokenEstimate: number;
+    allowedTools?: string[];
+    disallowedTools: string[];
+  };
+}
+
+export interface WorkspaceSkillToolPolicyMetadata {
+  allowedTools?: string[];
+  disallowedTools: string[];
 }
 
 interface WorkspaceSkillToolPolicy {
@@ -53,6 +64,9 @@ interface WorkspaceSkillToolPolicy {
 interface PackageSkill extends WorkspaceSkillCatalogEntry {
   filePath: string;
 }
+
+const BUNDLED_SKILLS_ROOT = fileURLToPath(new URL('../../skills/', import.meta.url));
+const STABLE_SKILL_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 const SECTION_HEADINGS: Record<Exclude<WorkspaceSkillSection, 'description' | 'full' | 'phases' | 'checklist'>, string[]> = {
   overview: ['overview'],
@@ -83,16 +97,58 @@ export function resolveWorkspaceManagedSkill(
 
   try {
     const raw = fs.readFileSync(skill.filePath, 'utf8');
+    const { data } = splitFrontmatter(raw);
     const text = loadSection(raw, section);
+    const allowedTools = frontmatterStringList(data['allowed-tools']);
+    const disallowedTools = frontmatterStringList(data['disallowed-tools']) ?? [];
     return {
       content: [{ type: 'text', text }],
-      metadata: { scope: 'plugin', tokenEstimate: Math.ceil(text.length / 4) },
+      metadata: {
+        scope: 'plugin',
+        tokenEstimate: Math.ceil(text.length / 4),
+        ...(allowedTools ? { allowedTools } : {}),
+        disallowedTools,
+      },
     };
   } catch {
     // Package inspection is fail-safe and the file can still disappear between
     // validation and this read. Let the ordinary MCP/fallback path handle it.
     return undefined;
   }
+}
+
+/**
+ * Resolve a package-bundled workflow when the skill service is unavailable.
+ * Workspace-authored same-name definitions retain normal precedence and must
+ * be served by the workspace-aware skill registry instead.
+ */
+export function resolveBundledWorkspaceSkill(
+  workspaceRoot: string,
+  name: string,
+  section: unknown = 'workflow',
+): WorkspaceManagedSkillResult | undefined {
+  if (!isWorkspaceSkillSection(section) || !STABLE_SKILL_ID.test(name)) return undefined;
+  if (workspaceDefinesSkill(workspaceRoot, name)) return undefined;
+  let realRoot: string;
+  try {
+    if (fs.lstatSync(BUNDLED_SKILLS_ROOT).isSymbolicLink()) return undefined;
+    realRoot = fs.realpathSync(BUNDLED_SKILLS_ROOT);
+  } catch {
+    return undefined;
+  }
+  let categories: fs.Dirent[];
+  try {
+    categories = fs.readdirSync(realRoot, { withFileTypes: true });
+  } catch {
+    return undefined;
+  }
+  for (const category of categories.slice(0, 128)) {
+    if (!category.isDirectory() || category.isSymbolicLink()) continue;
+    const candidate = path.join(realRoot, category.name, name, 'SKILL.md');
+    const result = readResolvedSkillFile(candidate, realRoot, section, 'bundled');
+    if (result) return result;
+  }
+  return undefined;
 }
 
 /** Preserve workspace-authored precedence without following links or unbounded scans. */
@@ -270,6 +326,47 @@ function readPackageSkill(plugin: AvailableWorkspaceProfilePlugin, id: string): 
   }
 }
 
+function readResolvedSkillFile(
+  filePath: string,
+  containmentRoot: string,
+  section: WorkspaceSkillSection,
+  scope: WorkspaceManagedSkillResult['metadata']['scope'],
+): WorkspaceManagedSkillResult | undefined {
+  let descriptor: number | undefined;
+  try {
+    descriptor = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    const stat = fs.fstatSync(descriptor);
+    if (!stat.isFile() || stat.size > 256 * 1024) return undefined;
+    const realFile = fs.realpathSync(filePath);
+    const relative = path.relative(fs.realpathSync(containmentRoot), realFile);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) return undefined;
+    const bytes = Buffer.alloc(stat.size);
+    let read = 0;
+    while (read < bytes.length) {
+      const count = fs.readSync(descriptor, bytes, read, bytes.length - read, null);
+      if (count === 0) break;
+      read += count;
+    }
+    const raw = bytes.subarray(0, read).toString('utf8');
+    const { data } = splitFrontmatter(raw);
+    const text = loadSection(raw, section);
+    const allowedTools = frontmatterStringList(data['allowed-tools']);
+    return {
+      content: [{ type: 'text', text }],
+      metadata: {
+        scope,
+        tokenEstimate: Math.ceil(text.length / 4),
+        ...(allowedTools ? { allowedTools } : {}),
+        disallowedTools: frontmatterStringList(data['disallowed-tools']) ?? [],
+      },
+    };
+  } catch {
+    return undefined;
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+  }
+}
+
 function splitFrontmatter(raw: string): { data: Record<string, unknown>; body: string } {
   const match = raw.match(/^\uFEFF?---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
   if (!match) return { data: {}, body: raw.trim() };
@@ -278,6 +375,25 @@ function splitFrontmatter(raw: string): { data: Record<string, unknown>; body: s
     ? value as Record<string, unknown>
     : {};
   return { data, body: (match[2] ?? '').trim() };
+}
+
+function frontmatterStringList(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+/** Parse bounded skill tool-policy metadata for runtime stage activation. */
+export function parseWorkspaceSkillToolPolicy(raw: string): WorkspaceSkillToolPolicyMetadata {
+  const { data } = splitFrontmatter(raw);
+  const allowedTools = frontmatterStringList(data['allowed-tools']);
+  return {
+    ...(allowedTools ? { allowedTools } : {}),
+    disallowedTools: frontmatterStringList(data['disallowed-tools']) ?? [],
+  };
 }
 
 function loadSection(raw: string, section: WorkspaceSkillSection): string {
