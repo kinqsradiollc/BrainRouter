@@ -1,5 +1,7 @@
 /** Browser-development fixture for the production safe onboarding preview shape. */
+import { WORKSPACE_CAPABILITY_DEFINITIONS } from '@kinqs/brainrouter-core/dist/workspace/capabilities.js';
 import { WORKSPACE_PROFILES } from '@kinqs/brainrouter-core/dist/workspace/profiles.js';
+import { WORKSPACE_TOOL_PROFILES } from '@kinqs/brainrouter-core/dist/workspace/toolProfileCatalog.js';
 import { parseOnboardingDraft } from '../components/dialogs/onboardingEditorModel.js';
 
 const DEV_ONBOARDING_AT = '2026-01-01T00:00:00.000Z';
@@ -12,130 +14,6 @@ const DEV_ROLES = [
   ['verifier', 'Verifier', 'Runs checks against acceptance criteria.'],
   ['worker', 'Worker', 'Produces one bounded artifact or change.'],
 ] as const;
-const DEV_CAPABILITIES = [
-  {
-    id: 'frontend',
-    label: 'Frontend',
-    description: 'Task-time UI, accessibility, responsive, and browser-visual expertise.',
-    expandsTo: ['a11y-skill', 'browser-testing-skill', 'taste-skill', 'browser', 'design'],
-  },
-  {
-    id: 'backend',
-    label: 'Backend',
-    description: 'Task-time service, authorization, data, production, and backend-test expertise.',
-    expandsTo: ['api-service-design-skill', 'backend-testing-skill', 'coding', 'terminal'],
-  },
-  {
-    id: 'academic-paper',
-    label: 'Academic paper',
-    description: 'Task-time claim-evidence, citation, drafting, and adversarial paper-review workflows.',
-    expandsTo: [
-      'source-synthesis-skill',
-      'citation-verification-skill',
-      'academic-paper-drafting-skill',
-      'academic-paper-review-skill',
-      'workspace-files',
-      'browser',
-      'research-notes',
-      'artifacts',
-    ],
-  },
-  {
-    id: 'computational-research',
-    label: 'Computational research',
-    description: 'Task-time reproducible analysis, experiment, validation, uncertainty, and limitation workflows.',
-    expandsTo: [
-      'data-analysis-skill',
-      'experiment-validation-skill',
-      'coding',
-      'shell',
-      'browser',
-      'research-notes',
-      'artifacts',
-    ],
-  },
-  {
-    id: 'data-visualization',
-    label: 'Data visualization',
-    description: 'Task-time chart, dashboard, visual-integrity, accessibility, and interactive-verification workflow.',
-    expandsTo: [
-      'data-visualization-skill',
-      'coding',
-      'shell',
-      'artifacts',
-      'interactive-browser',
-    ],
-  },
-  {
-    id: 'programming-lab',
-    label: 'Programming lab',
-    description: 'Task-time coding exercises, executable feedback, progressive hints, debugging, and tests.',
-    expandsTo: ['programming-lab-skill', 'coding', 'shell', 'artifacts'],
-  },
-  {
-    id: 'technical-documentation',
-    label: 'Technical documentation',
-    description: 'Task-time repository-grounded references, guides, tutorials, runbooks, and verified examples.',
-    expandsTo: [
-      'technical-documentation-skill',
-      'workspace-files',
-      'shell',
-      'browser',
-      'artifacts',
-    ],
-  },
-] as const;
-const DEV_TOOL_GROUPS = [
-  {
-    id: 'workspace-files',
-    label: 'Workspace files',
-    description: 'Inspect, search, create, and revise ordinary files in the workspace.',
-    category: 'files-code',
-    toolIds: ['read_file', 'list_dir', 'grep_search', 'glob_files', 'write_file', 'edit_file', 'apply_patch'],
-    extensionIds: [],
-  },
-  {
-    id: 'coding',
-    label: 'Files and code',
-    description: 'Inspect, edit, patch, and analyze source files and notebooks.',
-    category: 'files-code',
-    toolIds: ['read_file', 'list_dir', 'grep_search', 'glob_files', 'write_file', 'edit_file', 'apply_patch', 'notebook_edit', 'lsp'],
-    extensionIds: [],
-  },
-  {
-    id: 'terminal',
-    label: 'Terminal and computer control',
-    description: 'Run and monitor commands and available computer-control sessions.',
-    category: 'terminal-computer',
-    toolIds: ['run_command', 'task_output', 'wait_until', 'kill_command', 'computer_use', 'connector_run'],
-    extensionIds: [],
-  },
-  {
-    id: 'browser',
-    label: 'Web and research',
-    description: 'Fetch web pages and search public sources.',
-    category: 'web-research',
-    toolIds: ['fetch_url', 'web_search'],
-    extensionIds: [],
-  },
-  {
-    id: 'notes',
-    label: 'Notes and artifacts',
-    description: 'Capture research notes, briefs, and structured artifacts.',
-    category: 'notes-artifacts',
-    toolIds: ['research_note', 'research_brief', 'artifact_write'],
-    extensionIds: [],
-  },
-  {
-    id: 'design',
-    label: 'Design and browser interaction',
-    description: 'Create visual artifacts and use installed browser control.',
-    category: 'design-browser',
-    toolIds: ['artifact_write'],
-    extensionIds: ['browser'],
-  },
-] as const;
-
 export function devDraftForProfile(profileId: string, root: string): Record<string, unknown> {
   const profile = WORKSPACE_PROFILES.find((candidate) => candidate.id === profileId) ?? WORKSPACE_PROFILES[0]!;
   return {
@@ -161,7 +39,7 @@ export function devDraftForProfile(profileId: string, root: string): Record<stri
 export function buildDevOnboardingPreview(value: unknown): Record<string, unknown> {
   const draft = parseOnboardingDraft(value) ?? parseOnboardingDraft(devDraftForProfile('engineering', '/workspace'))!;
   const toolRows = new Map<string, Record<string, unknown>>();
-  for (const group of DEV_TOOL_GROUPS) {
+  for (const group of WORKSPACE_TOOL_PROFILES) {
     for (const toolId of group.toolIds) {
       if (toolRows.has(toolId)) continue;
       toolRows.set(toolId, {
@@ -218,10 +96,13 @@ export function buildDevOnboardingPreview(value: unknown): Record<string, unknow
         denied: draft.orchestration.disabledRoles.includes(id),
       };
     }),
-    ...DEV_CAPABILITIES.map((capability) => {
+    ...WORKSPACE_CAPABILITY_DEFINITIONS.map((capability) => {
       const selectable = availableCapabilities.has(capability.id);
       return {
-        ...capability,
+        id: capability.id,
+        label: capability.label,
+        description: capability.description,
+        expandsTo: [...capability.skillIds, ...capability.toolProfileIds],
         kind: 'capability',
         category: 'workspace-capabilities',
         source: 'capability-plugin',
@@ -237,7 +118,7 @@ export function buildDevOnboardingPreview(value: unknown): Record<string, unknow
         denied: draft.capabilities.disabled.includes(capability.id),
       };
     }),
-    ...DEV_TOOL_GROUPS.map((group) => ({
+    ...WORKSPACE_TOOL_PROFILES.map((group) => ({
       id: group.id,
       kind: 'tool-group',
       label: group.label,
@@ -248,7 +129,11 @@ export function buildDevOnboardingPreview(value: unknown): Record<string, unknow
       persistable: true,
       selectable: true,
       runtimeAvailabilityPrerequisites: [],
-      expandsTo: [...group.toolIds, ...group.extensionIds.map((id) => `extension:${id}`)],
+      expandsTo: [
+        ...group.toolIds,
+        ...group.mcpToolIds.map((id) => `mcp:${id}`),
+        ...group.extensionIds.map((id) => `extension:${id}`),
+      ],
       selected: selectedGroups.has(group.id),
       recommended: recommendedGroups.has(group.id),
       denied: denied.has(group.id),
@@ -291,12 +176,12 @@ export function buildDevOnboardingPreview(value: unknown): Record<string, unknow
       denied: draft.skills.disabled.includes(id),
     })),
   ];
-  const groupTools = DEV_TOOL_GROUPS
+  const groupTools = WORKSPACE_TOOL_PROFILES
     .filter((group) => selectedGroups.has(group.id))
     .flatMap((group) => [...group.toolIds]);
   const deniedTools = new Set([
     ...denied,
-    ...DEV_TOOL_GROUPS
+    ...WORKSPACE_TOOL_PROFILES
       .filter((group) => denied.has(group.id))
       .flatMap((group) => [...group.toolIds]),
   ]);

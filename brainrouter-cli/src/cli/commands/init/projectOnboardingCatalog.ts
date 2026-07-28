@@ -1,6 +1,7 @@
 /** Catalog-backed selection prompts and safe CLI onboarding preview formatting. */
 import chalk from 'chalk';
 import {
+  type WorkspaceOnboardingCatalogRow,
   type WorkspaceOnboardingPreview,
   type WorkspaceSelectionCatalog,
   type WorkspaceSelectionCatalogEntry,
@@ -31,13 +32,14 @@ export async function requestCatalogSelection(
     && !(entry.kind === 'skill-pack' && entry.managedByCapability)
     && !excluded.has(entry.id)
     && (!requireSelectable || entry.selectable));
+  const selected = new Set(initial);
   const result = await prompt({
     id,
     kind: 'choice',
     title,
     subtitle: 'Use SPACE to toggle choices. ENTER confirms; an empty selection is allowed.',
     badge,
-    rows: entries.map(catalogPickerRow),
+    rows: entries.map((entry) => catalogPickerRow(entry, selected.has(entry.id))),
     initialChoices: initial.filter((selectedId) =>
       entries.some((entry) => entry.id === selectedId)),
     multiSelect: true,
@@ -67,7 +69,11 @@ export function formatPlanPreview(preview: WorkspaceOnboardingPreview): string[]
   ];
 }
 
-function catalogPickerRow(entry: WorkspaceSelectionCatalogEntry): PickerRow {
+function catalogPickerRow(entry: WorkspaceSelectionCatalogEntry, selected: boolean): PickerRow {
+  const recommended = (entry as WorkspaceOnboardingCatalogRow).recommended === true;
+  const recommendation = recommended
+    ? selected ? ' Recommended selection.' : ' Recommended addition.'
+    : '';
   const expansion = entry.expandsTo?.length
     ? ` Includes: ${entry.expandsTo.join(', ')}.`
     : '';
@@ -76,7 +82,7 @@ function catalogPickerRow(entry: WorkspaceSelectionCatalogEntry): PickerRow {
     id: entry.id,
     label: entry.label,
     value: entry.source,
-    description: `${entry.description} [${entry.provenance}].${expansion}${unavailable}`,
+    description: `${entry.description} [${entry.provenance}].${recommendation}${expansion}${unavailable}`,
   };
 }
 

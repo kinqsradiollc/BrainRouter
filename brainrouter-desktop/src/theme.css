@@ -2206,6 +2206,7 @@ select.toolbar-input { cursor: pointer; }
 .onboard-catalog-panel { padding: 0 8px 8px; border-top: 1px solid var(--border); }
 .onboard-catalog-panel > input { width: 100%; box-sizing: border-box; margin: 8px 0 6px; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--r-sm); outline: none; background: var(--raised); color: var(--text); font: inherit; }
 .onboard-catalog-panel > input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.onboard-apply-recommended { width: 100%; margin: 0 0 6px; justify-content: center; }
 .onboard-catalog-options { display: flex; flex-direction: column; gap: 5px; max-height: 240px; overflow: auto; }
 .onboard-catalog-option { display: flex; align-items: flex-start; gap: 7px; padding: 7px; border: 1px solid transparent; border-radius: var(--r-sm); cursor: pointer; }
 .onboard-catalog-option:hover { border-color: var(--border); background: var(--raised); }

@@ -323,15 +323,15 @@ export async function collectProjectOnboardingEdits(
     ...draft,
     orchestration: { ...draft.orchestration, mode: orchestrationMode },
   }, catalog, orchestrationProfiles);
-  const roleCatalog = { ...catalog, entries: rolePreview.catalog };
+  const fieldCatalog = { ...catalog, entries: rolePreview.catalog };
   const orchestrationAvailableRoles = await requestCatalogSelection(
-    prompt, roleCatalog, 'orchestration-available', 'Available orchestration roles', 'role',
+    prompt, fieldCatalog, 'orchestration-available', 'Available orchestration roles', 'role',
     draft.orchestration.availableRoles,
     'Step 2 of 4 · orchestration', true,
   );
   if (!orchestrationAvailableRoles) return null;
   const orchestrationDisabledRoles = await requestCatalogSelection(
-    prompt, roleCatalog, 'orchestration-disabled', 'Disabled orchestration roles', 'role',
+    prompt, fieldCatalog, 'orchestration-disabled', 'Disabled orchestration roles', 'role',
     draft.orchestration.disabledRoles,
     'Step 2 of 4 · orchestration', false,
   );
@@ -350,12 +350,12 @@ export async function collectProjectOnboardingEdits(
     ? parsedMaxParallel
     : draft.orchestration.maxParallel;
   const capabilitiesEnabled = await requestCatalogSelection(
-    prompt, roleCatalog, 'capabilities-enabled', 'Optional capabilities', 'capability',
+    prompt, fieldCatalog, 'capabilities-enabled', 'Optional capabilities', 'capability',
     draft.capabilities.enabled, 'Step 2 of 4 · capabilities', true,
   );
   if (!capabilitiesEnabled) return null;
   const capabilitiesDisabled = await requestCatalogSelection(
-    prompt, roleCatalog, 'capabilities-disabled', 'Disabled optional capabilities', 'capability',
+    prompt, fieldCatalog, 'capabilities-disabled', 'Disabled optional capabilities', 'capability',
     draft.capabilities.disabled, 'Step 2 of 4 · capabilities', true,
   );
   if (!capabilitiesDisabled) return null;
@@ -363,34 +363,34 @@ export async function collectProjectOnboardingEdits(
     (profile) => profile.id === draft.profile,
   )?.skills.packs ?? [];
   const additionalSkillPacks = await requestCatalogSelection(
-    prompt, catalog, 'skill-packs', 'Additional skill packs', 'skill-pack',
+    prompt, fieldCatalog, 'skill-packs', 'Additional skill packs', 'skill-pack',
     draft.skills.packs.filter((id) => !includedSkillPacks.includes(id)),
     'Step 3 of 4 · skills', true, includedSkillPacks,
   );
   if (!additionalSkillPacks) return null;
   const skillPacks = [...new Set([...includedSkillPacks, ...additionalSkillPacks])];
   const skillsEnabled = await requestCatalogSelection(
-    prompt, catalog, 'skills-enabled', 'Enabled individual skills', 'skill',
+    prompt, fieldCatalog, 'skills-enabled', 'Enabled individual skills', 'skill',
     draft.skills.enabled, 'Step 3 of 4 · skills', true,
   );
   if (!skillsEnabled) return null;
   const skillsDisabled = await requestCatalogSelection(
-    prompt, catalog, 'skills-disabled', 'Disabled skills', 'skill',
+    prompt, fieldCatalog, 'skills-disabled', 'Disabled skills', 'skill',
     draft.skills.disabled, 'Step 3 of 4 · skills', false,
   );
   if (!skillsDisabled) return null;
   const toolProfiles = await requestCatalogSelection(
-    prompt, catalog, 'tool-profiles', 'Tool groups', 'tool-group',
+    prompt, fieldCatalog, 'tool-profiles', 'Tool groups', 'tool-group',
     draft.tools.profiles, 'Step 3 of 4 · tools', true,
   );
   if (!toolProfiles) return null;
   const toolsEnabled = await requestCatalogSelection(
-    prompt, catalog, 'tools-enabled', 'Additional individual tools', 'tool',
+    prompt, fieldCatalog, 'tools-enabled', 'Additional individual tools', 'tool',
     draft.tools.enabled ?? [], 'Step 3 of 4 · tools', true,
   );
   if (!toolsEnabled) return null;
   const toolsDenied = await requestCatalogSelection(
-    prompt, catalog, 'tools-denied', 'Denied tool groups or tools', ['tool-group', 'tool'],
+    prompt, fieldCatalog, 'tools-denied', 'Denied tool groups or tools', ['tool-group', 'tool'],
     draft.tools.deny, 'Step 3 of 4 · tools', false,
   );
   if (!toolsDenied) return null;
