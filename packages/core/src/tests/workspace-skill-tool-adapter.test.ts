@@ -3,9 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { loadBundledOrchestrationProfiles } from '../orchestration/profiles/orchestrationProfileCatalog.js';
 import { createWorkspaceManifest, saveWorkspaceManifest } from '../workspace/manifest.js';
+import { isWorkspaceProfileId } from '../workspace/profiles.js';
 import {
   adaptWorkspaceSkillCatalogText,
+  resolveBundledWorkspaceSkill,
   resolveWorkspaceManagedSkill,
 } from '../workspace/skillToolAdapter.js';
 
@@ -27,6 +30,64 @@ test('missing manifest preserves MCP catalog text and package lookup exactly', (
       tool: 'list_skills',
     }), text);
     assert.equal(resolveWorkspaceManagedSkill(workspace, 'taste-skill', 'full'), undefined);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('bundled workflow fallback works offline without shadowing a workspace skill', () => {
+  const workspace = makeWorkspace();
+  try {
+    const bundled = resolveBundledWorkspaceSkill(workspace, 'shipping-skill', 'full');
+    assert.equal(bundled?.metadata.scope, 'bundled');
+    assert.match(bundled?.content[0].text ?? '', /# Shipping and Launch/);
+
+    const local = path.join(workspace, 'skills', 'shipping-skill');
+    fs.mkdirSync(local, { recursive: true });
+    fs.writeFileSync(
+      path.join(local, 'SKILL.md'),
+      '---\nname: shipping-skill\ndescription: Local override.\n---\n\n## Workflow\n\nUse the local workflow.\n',
+      'utf8',
+    );
+    assert.equal(
+      resolveBundledWorkspaceSkill(workspace, 'shipping-skill', 'full'),
+      undefined,
+      'workspace-authored skill remains the higher-precedence source',
+    );
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('every built-in primary-stage skill has a package-local activation path', () => {
+  const workspace = makeWorkspace();
+  try {
+    for (const profile of loadBundledOrchestrationProfiles()) {
+      assert.equal(isWorkspaceProfileId(profile.id), true, profile.id);
+      if (!isWorkspaceProfileId(profile.id)) continue;
+      saveWorkspaceManifest(
+        workspace,
+        createWorkspaceManifest({
+          name: profile.id,
+          profile: profile.id,
+          by: 'wizard',
+        }),
+      );
+      for (const strategy of profile.strategies) {
+        for (const stage of strategy.stages) {
+          if (stage.executor.kind !== 'primary') continue;
+          for (const skillId of stage.skillIds) {
+            const resolved =
+              resolveWorkspaceManagedSkill(workspace, skillId, 'full')
+              ?? resolveBundledWorkspaceSkill(workspace, skillId, 'full');
+            assert.ok(
+              resolved?.content[0].text.trim(),
+              `${profile.id}/${strategy.id}/${stage.id}: ${skillId} is not locally activatable`,
+            );
+          }
+        }
+      }
+    }
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
   }
@@ -275,6 +336,8 @@ test('research workflow bodies load independently for the current task', () => {
     const question = resolveWorkspaceManagedSkill(workspace, 'research-question-skill', 'workflow');
     assert.match(question?.content[0].text ?? '', /Express one primary question/);
     assert.doesNotMatch(question?.content[0].text ?? '', /Enumerate every citation anchor/);
+    assert.deepEqual(question?.metadata.allowedTools, ['read_file', 'list_dir', 'grep_search', 'glob_files']);
+    assert.deepEqual(question?.metadata.disallowedTools, []);
 
     const iterative = resolveWorkspaceManagedSkill(workspace, 'iterative-evidence-skill', 'workflow');
     assert.match(iterative?.content[0].text ?? '', /no more than three cycles/);

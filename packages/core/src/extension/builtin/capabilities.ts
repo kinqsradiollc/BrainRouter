@@ -18,7 +18,7 @@ const CAPABILITY_TOOLS = {
   'mcp-lsp-connectors': ['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource', 'mcp_search', 'mcp_describe', 'mcp_call', 'mcp_refresh_catalog', 'lsp', 'connector_list', 'connector_run'],
   'planning-state': ['update_plan', 'goal_complete', 'goal_blocked', 'ask_user_choice', 'track_query', 'track_update', 'artifact_write', 'mark_chapter', 'switch_model'],
   'security-review': ['file_vulnerability', 'finish_scan', 'list_requests', 'view_request', 'repeat_request', 'list_sitemap', 'scope_rules'],
-  orchestration: ['task_agent', 'delegate_agent', 'spawn_agent', 'spawn_agents', 'list_agents', 'wait_agent', 'wait_agents', 'read_agent_transcript', 'close_agent', 'send_input', 'resume_agent', 'route_task'],
+  orchestration: ['profile_stage', 'task_agent', 'delegate_agent', 'spawn_agent', 'spawn_agents', 'list_agents', 'wait_agent', 'wait_agents', 'read_agent_transcript', 'close_agent', 'send_input', 'resume_agent', 'route_task'],
   'workflow-workers': ['run_workflow', 'run_workflow_graph', 'workflow_progress', 'extract_result', 'spawn_worker_thread', 'wait_worker', 'read_worker_summary', 'close_worker'],
 } as const;
 
@@ -39,6 +39,7 @@ class BuiltinToolExecutor implements LocalToolExecutor {
     if (this.entry.advertised === false) return false;
     if (this.entry.availability === 'result-cache') return context.resultExpansionAvailable === true;
     if (this.entry.availability === 'active-workflow') return context.workflowActive === true;
+    if (this.entry.availability === 'active-orchestration-plan') return context.activeOrchestrationPlan === true;
     if (this.entry.availability === 'root-agent') return context.rootAgent === true;
     if (this.entry.availability === 'computer-use') return context.computerUseAvailable === true;
     if (this.entry.availability === 'browser-use') return context.browserUseAvailable === true;

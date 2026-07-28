@@ -2,8 +2,8 @@
 // Byte-identical body; a free function bound to `this: Agent` and assigned onto
 // Agent.prototype so all instance state + private helpers resolve exactly as
 // before. Imports mirror the symbols the loop referenced inside the class.
-import chalk from 'chalk';
 import path from 'node:path';
+import chalk from 'chalk';
 import type { Agent, RunTurnCallbacks } from '../agent.js';
 import { getCliKnobs, isRemoteBrainUrl, loadOrInitConfig } from '../../config/config.js';
 import { linkArtifact } from '../../artifact/artifactStore.js';
@@ -111,6 +111,11 @@ import {
   callOpenAI, callOpenAIStream, InterruptError, isInterrupt, activeProviderDef, effortForTurnSelection,
   minimalReasoningEffort, abortableDelay,
 } from '../transport/llmTransport.js';
+import {
+  buildRequiredProfileStageCorrection,
+  createPrimaryStageControllerForTurn,
+  describeProfileStageTool,
+} from './profileStageRuntime.js';
 
 function sameLlmRoute(route: { llm: { model: string; endpoint?: string; apiKey?: string } }, llm: { model: string; endpoint?: string; apiKey?: string }): boolean {
   return route.llm.model === llm.model
@@ -217,6 +222,13 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       this.chatHistory[0] = this.createSystemMessage();
     }
 
+    const profileStageController = createPrimaryStageControllerForTurn({
+      agent: this,
+      resolution: activeTurnOrchestration,
+      turnSessionKey,
+    });
+
+    try {
     const allowed = this.allowedToolsForAccess();
     const workspaceToolSelection = resolveWorkspaceToolSelection({
       manifest: loadWorkspaceManifest(this.workspaceRoot),
@@ -277,19 +289,37 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     const toolOverrides = cliKnobs.toolOverrides;
     const overrideForceOnNames = new Set(Object.keys(toolOverrides).filter((k) => toolOverrides[k] === true));
     const overrideForceOffNames = Object.keys(toolOverrides).filter((k) => toolOverrides[k] === false);
+    const activeProfileStageController = (
+      profileStageController
+      && allowed.has('profile_stage')
+      && (!this.toolScope?.local.length || this.toolScope.local.includes('profile_stage'))
+      && (!this.authorityToolCeiling || this.authorityToolCeiling.local.includes('profile_stage'))
+      && !toolNameMatchesAny('profile_stage', this.disallowedTools)
+      && workspaceAllowsLocalTool('profile_stage')
+      && toolOverrides.profile_stage !== false
+    )
+      ? profileStageController
+      : undefined;
     // CC-SKILLS-D3 — the active skill's `disallowed-tools` frontmatter blacklists
     // apply for THIS turn on top of the role/agent-def `disallowedTools`. Computed
     // here so it filters BOTH local tools (below) and MCP tools (further down).
-    const effectiveDisallowed = [...this.disallowedTools, ...this.activeSkillDisallowedTools];
-    const disallowedLocalSet = new Set(effectiveDisallowed);
+    const effectiveDisallowed = (): string[] => [
+      ...this.disallowedTools,
+      ...this.activeSkillDisallowedTools,
+    ];
+    const toolDisallowed = (name: string): boolean =>
+      name !== 'profile_stage' && toolNameMatchesAny(name, effectiveDisallowed());
     // A skill allowlist can only subtract from the surface that every
     // existing access/role/capability/scope gate already permits. `undefined`
     // preserves legacy behavior; a declared empty list intentionally hides all.
-    const skillAllowsTool = (name: string): boolean => this.activeSkillAllowedTools === undefined ||
-      toolNameMatchesAny(name, this.activeSkillAllowedTools);
+    const skillAllowsTool = (name: string): boolean =>
+      name === 'profile_stage'
+      || this.activeSkillAllowedTools === undefined
+      || toolNameMatchesAny(name, this.activeSkillAllowedTools);
     let filteredLocalTools = localToolSpecsFromExecutors({
       resultExpansionAvailable: this.resultCache.size() > 0,
       workflowActive: Boolean(getCurrentWorkflow(this.workspaceRoot, this.sessionKey)),
+      activeOrchestrationPlan: activeProfileStageController !== undefined,
       rootAgent: !hideWorkerTools,
       computerUseAvailable: !hideComputerUse,
       browserUseAvailable: browserUseAvailableFor({
@@ -317,7 +347,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         allowed.has(t.name) &&
         (!this.toolScope?.local.length || this.toolScope.local.includes(t.name)) &&
         (!this.authorityToolCeiling || this.authorityToolCeiling.local.includes(t.name)) &&
-        !disallowedLocalSet.has(t.name) &&
+        !toolDisallowed(t.name) &&
         workspaceAllowsLocalTool(t.name) &&
         skillAllowsTool(t.name);
       if (!hardVisible) return false;
@@ -337,6 +367,17 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       filteredLocalTools = filteredLocalTools.map((t) => t.name === 'switch_model'
         ? { ...t, description: `${t.description} Configured profiles: ${llmProfileNames.join(', ')}.` }
         : t);
+    }
+    if (activeProfileStageController) {
+      filteredLocalTools = filteredLocalTools.map((tool) => tool.name === 'profile_stage'
+        ? {
+            ...tool,
+            description: describeProfileStageTool(
+              tool.description,
+              activeTurnOrchestration.plan,
+            ),
+          }
+        : tool);
     }
     // HONK-L3 — for local models, flatten deep/wide tool schemas (the dormant,
     // tested repair pass) so they stop dropping nested args; `nestArguments` at
@@ -367,11 +408,11 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // one returns a structured "hidden by budget" hint instead of a bare
     // unknown-tool error.
     this.lastBudgetHiddenTools = new Set();
-    if (this.toolScope || effectiveDisallowed.length > 0 || overrideForceOffNames.length > 0) {
+    if (this.toolScope || effectiveDisallowed().length > 0 || overrideForceOffNames.length > 0) {
       visibleMcpTools = applyToolScope(visibleMcpTools, {
         allow: this.toolScope?.mcp,
         // cli.toolOverrides force-off applies to MCP tools by their namespaced name.
-        disallow: [...effectiveDisallowed, ...overrideForceOffNames],
+        disallow: [...effectiveDisallowed(), ...overrideForceOffNames],
       });
     }
     if (this.authorityToolCeiling) {
@@ -430,12 +471,21 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         && (!this.authorityToolCeiling
           || this.authorityToolCeiling.local.includes(tool.name)
           || this.authorityToolCeiling.local.includes(ownerName))
-        && !disallowedLocalSet.has(tool.name)
-        && !disallowedLocalSet.has(ownerName)
+        && !toolDisallowed(tool.name)
+        && !toolDisallowed(ownerName)
         && workspaceAllowsLocalTool(tool.name)
         && skillAllowsTool(tool.name);
     });
-    const allTools = [...filteredLocalTools, ...delegateTools, ...visibleMcpTools];
+    const baseAllTools = [...filteredLocalTools, ...delegateTools, ...visibleMcpTools];
+    let allTools = [...baseAllTools];
+    const refreshActiveSkillTools = (): void => {
+      allTools = baseAllTools.filter((tool: any) => {
+        const name = String(tool?.name ?? '');
+        return name === 'profile_stage'
+          || (!toolDisallowed(name) && skillAllowsTool(name));
+      });
+    };
+    refreshActiveSkillTools();
     const mcpToolByName = new Map<string, any>();
     for (const tool of mcpTools) {
       const name = String(tool?.name ?? '');
@@ -715,6 +765,16 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     let synthesisGuardFired = 0;
     const SYNTHESIS_GUARD_MAX = 1;
     let childOutputDeliveredThisTurn = false;
+    let profileStageGuardFired = 0;
+    const PROFILE_STAGE_GUARD_MAX = Math.min(
+      16,
+      Math.max(
+        2,
+        activeTurnOrchestration.plan.stages
+          .filter((stage) => stage.executor.kind === 'primary')
+          .reduce((count, stage) => count + (stage.skillIds.length * 2), 0),
+      ),
+    );
     const planCompletedAtTurnStart = (() => {
       try { return readPlan(this.workspaceRoot, this.sessionKey).items.filter((i) => i.status === 'completed').length; }
       catch { return 0; }
@@ -843,10 +903,12 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       }),
       parentSourceFiles: () => [...this.filesRead],
       parentVisibleTools: () => allTools.map((tool: any) => String(tool.name)).filter(Boolean),
-      parentVisibleLocalTools: () => [...filteredLocalTools, ...delegateTools]
+      parentVisibleLocalTools: () => allTools
+        .filter((tool: any) => isRegisteredLocalTool(String(tool.name)))
         .map((tool: any) => String(tool.name))
         .filter(Boolean),
-      parentVisibleMcpTools: () => authorizedMcpTools
+      parentVisibleMcpTools: () => allTools
+        .filter((tool: any) => !isRegisteredLocalTool(String(tool.name)))
         .map((tool: any) => String(tool.name))
         .filter(Boolean),
       // Snapshot the parent's ACTIVE SESSION stance at spawn time (session
@@ -855,6 +917,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       // session switch might change.
       parentExecutionMode: resolveActiveMode(this.workspaceRoot, this.sessionKey).executionMode,
       parentReviewPolicy: resolveActiveMode(this.workspaceRoot, this.sessionKey).reviewPolicy,
+      profileStageController: activeProfileStageController,
     });
 
     const applyPendingSteering = (): number => {
@@ -1551,6 +1614,28 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           this.chatHistory.push(guardMsg);
           this.recordTranscript({ ...guardMsg, name: 'guard' });
           continue;
+        }
+
+        const requiredProfileAction = activeProfileStageController?.nextRequiredAction();
+        if (requiredProfileAction) {
+          if (profileStageGuardFired < PROFILE_STAGE_GUARD_MAX) {
+            profileStageGuardFired += 1;
+            const correction = buildRequiredProfileStageCorrection(requiredProfileAction);
+            const guardMsg = { role: 'user', content: correction };
+            this.chatHistory.push(guardMsg);
+            this.recordTranscript({ ...guardMsg, name: 'guard' });
+            callbacks.onStatusUpdate(
+              `Recovery: required profile stage ${requiredProfileAction.stageId}/${requiredProfileAction.skillId} ` +
+              `(${profileStageGuardFired}/${PROFILE_STAGE_GUARD_MAX})`,
+            );
+            continue;
+          }
+          finalAnswer =
+            `The active profile strategy could not finish required stage "${requiredProfileAction.stageId}" ` +
+            `because skill "${requiredProfileAction.skillId}" was not ${requiredProfileAction.action === 'begin' ? 'started' : 'completed'} ` +
+            `within the bounded runtime guard. No broader tool authority was granted.`;
+          exitedCleanly = true;
+          break;
         }
 
         // Empty-answer-after-tools guardrail. The model ran real tool calls this
@@ -2275,6 +2360,11 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
               // active tool call is on the stack. Captured/deferred calls fail
               // terminally instead of replaying after the owning turn.
               activeOrchestrationRuntime.close();
+              // profile_stage can activate or finish a skill inside this same
+              // model turn. Rebuild the request-facing subset immediately so
+              // the next iteration sees the stage policy instead of the
+              // broader tool list captured at turn start.
+              refreshActiveSkillTools();
             }
             summary = getToolSummary(name, args, resultText) + lifecycleSummarySuffix;
           } else if (this.lastBudgetHiddenTools.has(name)) {
@@ -2715,4 +2805,13 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       });
     }
     return finalAnswer;
-  }
+    } finally {
+      profileStageController?.terminate(
+        this.sessionKey !== turnSessionKey
+          ? 'session-changed'
+          : this.turnAbort?.signal.aborted || this.interruptRequested
+            ? 'turn-interrupted'
+            : 'turn-ended',
+      );
+    }
+}

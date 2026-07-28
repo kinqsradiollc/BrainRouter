@@ -3338,7 +3338,7 @@ test('runTurn gives a saved Research workspace its folder, skill, and read-only 
         silent: true,
       });
       agent.setAccessMode('shell');
-      assert.equal(await agent.runTurn('Set up this research folder.', {
+      assert.equal(await agent.runTurn('Set up this project folder.', {
         onStatusUpdate: () => {},
         onToolStart: () => {},
         onToolEnd: () => {},
@@ -3363,6 +3363,113 @@ test('runTurn gives a saved Research workspace its folder, skill, and read-only 
       const denied = secondRequestBody.messages.find((message: any) =>
         message.tool_call_id === 'third_party_skill_collision');
       assert.match(denied?.content ?? '', /workspace MCP tool policy/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('runTurn activates Research primary-stage skills and narrows tools inside the same turn', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const manifest = createWorkspaceManifest({ name: 'EconomicsResearch', profile: 'research', by: 'wizard' });
+    manifest.version = 3;
+    manifest.tools.mode = 'explicit-catalog';
+    manifest.tools.enabled = [];
+    saveWorkspaceManifest(workspace, manifest);
+
+    const originalFetch = globalThis.fetch;
+    const requestBodies: any[] = [];
+    let attemptedEarlyFinal = false;
+    const calls = [
+      { id: 'begin_question', action: 'begin', stageId: 'frame', skillId: 'research-question-skill' },
+      { id: 'complete_question', action: 'complete', stageId: 'frame', skillId: 'research-question-skill' },
+      { id: 'begin_sources', action: 'begin', stageId: 'frame', skillId: 'source-strategy-skill' },
+      { id: 'complete_sources', action: 'complete', stageId: 'frame', skillId: 'source-strategy-skill' },
+      { id: 'begin_ground', action: 'begin', stageId: 'ground', skillId: 'iterative-evidence-skill' },
+      { id: 'complete_ground', action: 'complete', stageId: 'ground', skillId: 'iterative-evidence-skill' },
+    ];
+    globalThis.fetch = (async (_url: any, opts: any) => {
+      const body = JSON.parse(opts.body);
+      requestBodies.push(body);
+      if (!attemptedEarlyFinal) {
+        attemptedEarlyFinal = true;
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: 'I can answer without the profile stages.' } }],
+          usage: { prompt_tokens: 50, completion_tokens: 5 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      const next = calls.shift();
+      return new Response(JSON.stringify({
+        choices: [{
+          message: next
+            ? {
+                content: '',
+                tool_calls: [{
+                  id: next.id,
+                  type: 'function',
+                  function: {
+                    name: 'profile_stage',
+                    arguments: JSON.stringify({
+                      action: next.action,
+                      stageId: next.stageId,
+                      skillId: next.skillId,
+                    }),
+                  },
+                }],
+              }
+            : { content: 'framed' },
+        }],
+        usage: { prompt_tokens: 50, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => {
+          throw new Error('package-owned stage skills must not require an MCP round trip');
+        },
+        close: async () => {},
+      };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'm' }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        silent: true,
+      });
+      agent.setAccessMode('shell');
+      assert.equal(await agent.runTurn('Research inflation evidence and find sources.', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: () => {},
+      }), 'framed');
+
+      assert.equal(requestBodies.length, 8);
+      const toolNames = (index: number) => new Set(
+        (requestBodies[index].tools ?? []).map((tool: any) => tool.function?.name),
+      );
+      const firstProfileStage = (requestBodies[0].tools ?? [])
+        .find((tool: any) => tool.function?.name === 'profile_stage');
+      assert.match(firstProfileStage?.function?.description ?? '', /Active strategy: parallel-evidence/);
+      assert.match(firstProfileStage?.function?.description ?? '', /frame \(primary/);
+      assert.match(
+        requestBodies[1].messages.at(-1)?.content ?? '',
+        /requires you to begin skill "research-question-skill"/,
+      );
+
+      assert.deepEqual(
+        [...toolNames(2)].sort(),
+        ['glob_files', 'grep_search', 'list_dir', 'profile_stage', 'read_file'].sort(),
+        'research-question-skill narrows the next model iteration immediately',
+      );
+      assert.equal(toolNames(3).has('web_search'), true, 'completing the first skill restores the reviewed profile surface');
+      for (const expected of ['fetch_url', 'web_search', 'glob_files', 'grep_search', 'list_dir', 'profile_stage', 'read_file']) {
+        assert.equal(toolNames(4).has(expected), true, expected);
+      }
+      assert.equal(toolNames(4).has('write_file'), false, 'source strategy cannot widen into workspace writes');
+      assert.equal(toolNames(6).has('web_search'), true, 'evidence skill keeps reviewed research access');
+      assert.equal(toolNames(6).has('write_file'), false, 'evidence skill remains read-oriented');
+      assert.equal(agent.activeSkill, undefined, 'turn finalization clears stage-owned skill state');
+      assert.equal(agent.activeSkillAllowedTools, undefined);
+      assert.deepEqual(agent.activeSkillDisallowedTools, []);
     } finally {
       globalThis.fetch = originalFetch;
     }

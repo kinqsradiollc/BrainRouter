@@ -148,7 +148,7 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
     description: 'Route tasks and coordinate bounded child agents while the owning turn is active.',
     category: 'orchestration-workflows',
     toolIds: [
-      'task_agent', 'delegate_agent', 'list_agents', 'wait_agent', 'wait_agents',
+      'profile_stage', 'task_agent', 'delegate_agent', 'list_agents', 'wait_agent', 'wait_agents',
       'read_agent_transcript', 'close_agent', 'send_input', 'resume_agent', 'route_task',
     ],
     mcpToolIds: [],

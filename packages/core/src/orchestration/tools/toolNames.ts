@@ -3,6 +3,7 @@ import type { AccessMode } from '../roles/roles.js';
 export const DELEGATE_TOOL_PREFIX = 'delegate_';
 
 const ORCHESTRATION_TOOL_NAMES = new Set([
+  'profile_stage',
   'task_agent',
   'delegate_agent',
   'spawn_agent',

@@ -175,18 +175,22 @@ test('CORE-EXT dynamic visibility belongs to the extension executor', () => {
   const none = localToolSpecsFromExecutors({
     resultExpansionAvailable: false,
     workflowActive: false,
+    activeOrchestrationPlan: false,
     terminalUseAvailable: false,
   }).map((tool) => tool.name);
   assert.ok(!none.includes('extract_result'));
   assert.ok(!none.includes('workflow_progress'));
+  assert.ok(!none.includes('profile_stage'));
   assert.ok(!none.includes('terminal_read'));
   const active = localToolSpecsFromExecutors({
     resultExpansionAvailable: true,
     workflowActive: true,
+    activeOrchestrationPlan: true,
     terminalUseAvailable: true,
   }).map((tool) => tool.name);
   assert.ok(active.includes('extract_result'));
   assert.ok(active.includes('workflow_progress'));
+  assert.ok(active.includes('profile_stage'));
   assert.ok(active.includes('terminal_list'));
   assert.ok(active.includes('terminal_read'));
   assert.ok(active.includes('terminal_write'));

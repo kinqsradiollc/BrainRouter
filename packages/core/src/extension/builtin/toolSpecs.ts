@@ -6,6 +6,7 @@
  * behavior change; re-exported from agent.ts for back-compat.
  */
 import {
+  createProfileStageTool,
   createTaskAgentTool,
   createDelegateAgentTool,
   createSpawnAgentTool,
@@ -546,6 +547,7 @@ export const BUILTIN_TOOL_SPECS = [
       required: ['patch']
     }
   },
+  createProfileStageTool(),
   createTaskAgentTool(),
   createDelegateAgentTool(),
   createSpawnAgentTool(),
