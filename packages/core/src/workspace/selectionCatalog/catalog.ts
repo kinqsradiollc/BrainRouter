@@ -114,7 +114,11 @@ export function buildWorkspaceSelectionCatalog(
       persistable: true,
       selectable: true,
       runtimeAvailabilityPrerequisites: [],
-      expandsTo: [...profile.toolIds, ...profile.extensionIds.map((id) => `extension:${id}`)],
+      expandsTo: [
+        ...profile.toolIds,
+        ...profile.mcpToolIds.map((id) => `mcp:${id}`),
+        ...profile.extensionIds.map((id) => `extension:${id}`),
+      ],
     });
   }
 

@@ -378,13 +378,16 @@ as blocked, but only enabled plugin skill IDs may satisfy a contributed plan
 reference. Stable extension tools keep their registered owner as provenance;
 live MCP-advertised tool names remain non-persistable.
 
-Dynamic MCP tool names may be displayed as live, non-persistable rows. Reviewed
-tool/skill writes reject typos, unavailable entries, wrong entry kinds, and
-live-only names. Rebuild the catalog immediately before write and compare its
-content-free fingerprint so a stale review cannot grant a contribution that
-changed after display.
+Dynamic MCP tool names may be displayed as live, non-persistable rows. A
+reviewed tool group may map to stable, first-party raw MCP names only when the
+runtime also verifies the connected server identity; connection-specific
+namespaces and third-party names never enter the manifest. Reviewed tool/skill
+writes reject typos, unavailable entries, wrong entry kinds, and live-only
+names. Rebuild the catalog immediately before write and compare its content-free
+fingerprint so a stale review cannot grant a contribution that changed after
+display.
 
-- **Evidence:** `packages/core/src/workspace/selectionCatalog.ts`, `packages/core/src/workspace/onboardingSources.ts`, `packages/core/src/tests/workspace-selection-catalog.test.ts`, `packages/core/src/tests/workspace-onboarding-sources.test.ts`
+- **Evidence:** `packages/core/src/workspace/selectionCatalog.ts`, `packages/core/src/workspace/toolProfiles.ts`, `packages/core/src/workspace/onboardingSources.ts`, `packages/core/src/tests/workspace-selection-catalog.test.ts`, `packages/core/src/tests/workspace-onboarding-sources.test.ts`
 
 ### 16. ⛔ Executable plugin capabilities are consent-gated through the existing exec policy
 

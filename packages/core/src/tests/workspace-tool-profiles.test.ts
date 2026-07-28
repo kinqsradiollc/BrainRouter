@@ -4,6 +4,7 @@ import { createWorkspaceManifest } from '../workspace/manifest.js';
 import {
   resolveWorkspaceToolSelection,
   workspaceDynamicMcpAllowed,
+  workspaceMcpToolAllowed,
   workspaceToolAllowed,
   workspaceToolProfileIds,
 } from '../workspace/toolProfiles.js';
@@ -13,6 +14,11 @@ const allowed = (
   toolId: string,
   extensionId?: string,
 ) => workspaceToolAllowed(selection, { toolId, extensionId });
+const mcpAllowed = (
+  selection: ReturnType<typeof resolveWorkspaceToolSelection>,
+  toolId: string,
+  brainrouterOwned = true,
+) => workspaceMcpToolAllowed(selection, { toolId, brainrouterOwned });
 
 test('missing manifests preserve every existing tool decision exactly', () => {
   const selection = resolveWorkspaceToolSelection({ manifest: null });
@@ -26,7 +32,7 @@ test('engineering defaults include production, planning, and orchestration witho
   const selection = resolveWorkspaceToolSelection({ manifest });
 
   assert.deepEqual(selection.activeProfileIds, [
-    'coding', 'shell', 'browser', 'artifacts', 'planning-session', 'orchestration',
+    'coding', 'shell', 'browser', 'project-knowledge', 'artifacts', 'planning-session', 'orchestration',
     'pull-request-observation',
   ]);
   assert.equal(allowed(selection, 'edit_file', 'filesystem'), true);
@@ -48,7 +54,7 @@ test('frontend task profiles add interactive browser tools without changing the 
   });
 
   assert.deepEqual(selection.activeProfileIds, [
-    'coding', 'shell', 'browser', 'artifacts',
+    'coding', 'shell', 'browser', 'project-knowledge', 'artifacts',
     'planning-session', 'orchestration', 'pull-request-observation',
     'interactive-browser',
   ]);
@@ -74,6 +80,10 @@ test('research profiles can inspect and author workspace files without code or s
   assert.equal(allowed(selection, 'notebook_edit', 'filesystem'), false);
   assert.equal(allowed(selection, 'lsp', 'filesystem'), false);
   assert.equal(allowed(selection, 'run_command', 'shell'), false);
+  assert.equal(mcpAllowed(selection, 'knowledge_list'), true);
+  assert.equal(mcpAllowed(selection, 'knowledge_search'), true);
+  assert.equal(mcpAllowed(selection, 'knowledge_ingest'), false);
+  assert.equal(mcpAllowed(selection, 'knowledge_search', false), false);
 });
 
 test('study and writing profiles can produce folder-backed learning and writing material', () => {
@@ -124,7 +134,7 @@ test('unknown profile ids never grant a registered tool group', () => {
   assert.deepEqual(selection.activeProfileIds, []);
   assert.equal(allowed(selection, 'write_file', 'filesystem'), false);
   assert.deepEqual(workspaceToolProfileIds(), [
-    'workspace-files', 'coding', 'shell', 'browser', 'research-notes', 'artifacts',
+    'workspace-files', 'coding', 'shell', 'browser', 'project-knowledge', 'research-notes', 'artifacts',
     'planning-session', 'orchestration', 'interactive-browser',
     'mcp-resources', 'connectors', 'computer-control', 'workflow-launch',
     'background-workers', 'pull-request-observation', 'security-review',
@@ -212,8 +222,16 @@ test('manifest v3 keeps dynamic MCP closed until a stable MCP surface is reviewe
   const selection = resolveWorkspaceToolSelection({ manifest });
 
   assert.equal(workspaceDynamicMcpAllowed(selection), false);
+  assert.equal(mcpAllowed(selection, 'list_skills'), true);
+  assert.equal(mcpAllowed(selection, 'get_skill'), true);
+  assert.equal(mcpAllowed(selection, 'search_skills'), true);
+  assert.equal(mcpAllowed(selection, 'knowledge_search'), false);
+  assert.equal(mcpAllowed(selection, 'list_skills', false), false);
+  assert.equal(mcpAllowed(selection, 'third_party_search', false), false);
   manifest.tools.enabled = ['mcp_search'];
-  assert.equal(workspaceDynamicMcpAllowed(resolveWorkspaceToolSelection({ manifest })), true);
+  const broadSelection = resolveWorkspaceToolSelection({ manifest });
+  assert.equal(workspaceDynamicMcpAllowed(broadSelection), true);
+  assert.equal(mcpAllowed(broadSelection, 'third_party_search', false), true);
 });
 
 test('v2 ignores catalog-only fields and retains legacy baseline behavior', () => {

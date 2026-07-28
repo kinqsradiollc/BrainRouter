@@ -102,7 +102,7 @@ import {
 import { loadWorkspaceManifest } from '../../workspace/manifest.js';
 import {
   resolveWorkspaceToolSelection,
-  workspaceDynamicMcpAllowed,
+  workspaceMcpToolAllowed,
   workspaceToolAllowed,
 } from '../../workspace/toolProfiles.js';
 import {
@@ -214,12 +214,28 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       manifest: loadWorkspaceManifest(this.workspaceRoot),
       activeToolProfiles: this.activeWorkspaceCapabilities.toolProfiles,
     });
-    const workspaceAllowsDynamicMcp = workspaceDynamicMcpAllowed(workspaceToolSelection);
     const workspaceAllowsLocalTool = (name: string): boolean => {
       const canonicalName = registryEntry(name)?.name ?? name;
       return workspaceToolAllowed(workspaceToolSelection, {
         toolId: canonicalName,
         extensionId: extensionToolOwner(canonicalName)?.extension,
+      });
+    };
+    const workspaceAllowsMcpTool = (tool: any): boolean => {
+      const name = String(tool?.name ?? '');
+      const rawName = String(tool?.__rawName ?? this.rawMcpToolName(name));
+      const serverId = typeof tool?.__serverId === 'string'
+        ? tool.__serverId
+        : this.serverIdFromMcpToolName(name);
+      const status = serverId && typeof (this.mcpClient as any).getStatus === 'function'
+        ? (this.mcpClient as any).getStatus(serverId)
+        : undefined;
+      return workspaceMcpToolAllowed(workspaceToolSelection, {
+        toolId: rawName,
+        // Pool tools always carry a server identity. Bare tools are retained
+        // for single-client compatibility and follow the historical BrainRouter
+        // adapter path used by embedded CLI/Desktop tests.
+        brainrouterOwned: !serverId || status?.identity === 'brainrouter',
       });
     };
     // Worker-thread tools are registered so the model can call them, but only a
@@ -334,8 +350,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // tools stay hidden because the CLI owns those flows.
     let visibleMcpTools = mcpTools.filter((t: any) =>
       this.isModelVisibleMcpTool(t)
-      && workspaceAllowsDynamicMcp
-      && !workspaceToolSelection.deniedIds.has(String(t?.name ?? ''))
+      && workspaceAllowsMcpTool(t)
       && skillAllowsTool(String(t?.name ?? '')));
     // MAS-P4-T1: tool-surface budgeting. First apply the agent def's scope
     // (whitelist `toolScope.mcp` + blacklist `disallowedTools`), then cap the
@@ -2113,11 +2128,10 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
             if (isLocal && !workspaceAllowsLocalTool(name)) {
               denyAndRecord(`Tool "${diagnosticToolName}" denied by the active workspace tool-profile policy.`);
             }
-            if (!isLocal && workspaceToolSelection.deniedIds.has(name)) {
-              denyAndRecord(`Tool "${diagnosticToolName}" denied by the active workspace tool policy.`);
-            }
-            if (!isLocal && !workspaceAllowsDynamicMcp) {
-              denyAndRecord(`Tool "${diagnosticToolName}" denied because this workspace has no reviewed MCP surface.`);
+            if (!isLocal && !workspaceAllowsMcpTool(
+              mcpToolByName.get(name) ?? { name, __rawName: name },
+            )) {
+              denyAndRecord(`Tool "${diagnosticToolName}" denied by the active workspace MCP tool policy.`);
             }
             // CC-P3.2 — declarative cli.permissions rules run FIRST: a deny match
             // blocks outright; an allow match downgrades an `ask` below (it never

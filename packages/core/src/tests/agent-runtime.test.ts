@@ -3220,6 +3220,155 @@ test('runTurn applies manifest tool profiles to the model-visible local surface'
   });
 });
 
+test('runTurn gives a saved Research workspace its folder, skill, and read-only Project Knowledge tools', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const manifest = createWorkspaceManifest({ name: 'EconomicsResearch', profile: 'research', by: 'wizard' });
+    manifest.version = 3;
+    manifest.tools.mode = 'explicit-catalog';
+    manifest.tools.enabled = [];
+    saveWorkspaceManifest(workspace, manifest);
+
+    const originalFetch = globalThis.fetch;
+    let llmCalls = 0;
+    let firstRequestBody: any;
+    let secondRequestBody: any;
+    const mcpCalls: string[] = [];
+    globalThis.fetch = (async (_url: any, opts: any) => {
+      llmCalls += 1;
+      const body = JSON.parse(opts.body);
+      if (llmCalls === 1) {
+        firstRequestBody = body;
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: '',
+              tool_calls: [
+                {
+                  id: 'research_list',
+                  type: 'function',
+                  function: { name: 'list_dir', arguments: '{"path":"."}' },
+                },
+                {
+                  id: 'research_write',
+                  type: 'function',
+                  function: { name: 'write_file', arguments: '{"path":"notes.md","content":"# Notes"}' },
+                },
+                {
+                  id: 'research_knowledge',
+                  type: 'function',
+                  function: { name: 'mcp_brain_knowledge_search', arguments: '{"query":"inflation"}' },
+                },
+                {
+                  id: 'third_party_skill_collision',
+                  type: 'function',
+                  function: { name: 'mcp_other_get_skill', arguments: '{"name":"unsafe"}' },
+                },
+              ],
+            },
+          }],
+          usage: { prompt_tokens: 50, completion_tokens: 5 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      secondRequestBody = body;
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'done' } }],
+        usage: { prompt_tokens: 50, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const tools = [
+        {
+          name: 'mcp_brain_list_skills',
+          __serverId: 'brain',
+          __rawName: 'list_skills',
+          description: 'List skills',
+          inputSchema: { type: 'object', properties: {} },
+        },
+        {
+          name: 'mcp_brain_get_skill',
+          __serverId: 'brain',
+          __rawName: 'get_skill',
+          description: 'Get a skill',
+          inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
+        },
+        {
+          name: 'mcp_brain_search_skills',
+          __serverId: 'brain',
+          __rawName: 'search_skills',
+          description: 'Search skills',
+          inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+        },
+        {
+          name: 'mcp_brain_knowledge_search',
+          __serverId: 'brain',
+          __rawName: 'knowledge_search',
+          description: 'Search project knowledge',
+          inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+        },
+        {
+          name: 'mcp_brain_knowledge_ingest',
+          __serverId: 'brain',
+          __rawName: 'knowledge_ingest',
+          description: 'Ingest project knowledge',
+          inputSchema: { type: 'object', properties: {} },
+        },
+        {
+          name: 'mcp_other_get_skill',
+          __serverId: 'other',
+          __rawName: 'get_skill',
+          description: 'Coincidentally named third-party tool',
+          inputSchema: { type: 'object', properties: { name: { type: 'string' } } },
+        },
+      ];
+      const stubMcp: any = {
+        listTools: async () => ({ tools }),
+        getServerIds: () => ['brain', 'other'],
+        getStatus: (serverId: string) => ({
+          identity: serverId === 'brain' ? 'brainrouter' : 'third-party',
+        }),
+        callTool: async (name: string) => {
+          mcpCalls.push(name);
+          return { content: [{ text: '{"results":[]}' }] };
+        },
+        close: async () => {},
+      };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'm' }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        silent: true,
+      });
+      agent.setAccessMode('shell');
+      assert.equal(await agent.runTurn('Set up this research folder.', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: () => {},
+      }), 'done');
+
+      const names = new Set((firstRequestBody.tools ?? []).map((tool: any) => tool.function?.name));
+      for (const name of [
+        'list_dir',
+        'write_file',
+        'mcp_brain_list_skills',
+        'mcp_brain_get_skill',
+        'mcp_brain_search_skills',
+        'mcp_brain_knowledge_search',
+      ]) {
+        assert.equal(names.has(name), true, name);
+      }
+      assert.equal(names.has('run_command'), false, 'Research does not receive shell authority by default');
+      assert.equal(names.has('mcp_brain_knowledge_ingest'), false, 'Project Knowledge defaults are read-only');
+      assert.equal(names.has('mcp_other_get_skill'), false, 'skill baseline is limited to the BrainRouter server');
+      assert.equal(fs.readFileSync(path.join(workspace, 'notes.md'), 'utf8'), '# Notes');
+      assert.deepEqual(mcpCalls, ['mcp_brain_knowledge_search']);
+      const denied = secondRequestBody.messages.find((message: any) =>
+        message.tool_call_id === 'third_party_skill_collision');
+      assert.match(denied?.content ?? '', /workspace MCP tool policy/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
 test('runTurn applies explicit catalog selection to exposure and dispatch', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const catalog = buildWorkspaceSelectionCatalog();
@@ -3361,7 +3510,7 @@ test('runTurn keeps live MCP names closed without a reviewed stable MCP surface'
       assert.equal(names.has('mcp_docs_search'), false);
       assert.equal(mcpCalls, 0);
       const denied = secondRequestBody.messages.find((message: any) => message.tool_call_id === 'unreviewed_mcp');
-      assert.match(denied?.content ?? '', /no reviewed MCP surface/i);
+      assert.match(denied?.content ?? '', /workspace MCP tool policy/i);
     } finally {
       globalThis.fetch = originalFetch;
     }
