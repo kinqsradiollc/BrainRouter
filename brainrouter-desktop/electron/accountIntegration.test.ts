@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  accountServiceError,
   brainRouterAccountHeaders,
   createGithubTrackProxyFetch,
   createGitlabTrackProxyFetch,
@@ -383,6 +384,26 @@ test('account model catalog exposes only safe policy metadata and preserves exac
       'X-BrainRouter-Org': 'org-main',
     },
   }]);
+});
+
+test('account connectivity failures use a stable renderer-safe message', async () => {
+  const socketFailure = new TypeError('fetch failed', {
+    cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }),
+  });
+  assert.equal(
+    accountServiceError(socketFailure, 'fallback'),
+    'BrainRouter service is unavailable. Check the connection and try again.',
+  );
+  assert.equal(accountServiceError(new Error('HTTP 503'), 'fallback'), 'HTTP 503');
+
+  const catalog = await fetchAccountModelCatalog(
+    { baseUrl: 'https://account.brainrouter.test', apiKey: 'account-key', orgId: 'org-main' },
+    null,
+    async () => { throw socketFailure; },
+  );
+  assert.equal(catalog.signedIn, true);
+  assert.equal(catalog.stale, false);
+  assert.equal(catalog.error, 'BrainRouter service is unavailable. Check the connection and try again.');
 });
 
 test('account model catalog revalidates by ETag and fails closed on unsupported effort aliases', async () => {

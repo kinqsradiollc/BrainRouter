@@ -154,6 +154,29 @@ function responseError(response: FetchResponse, body: Record<string, unknown>): 
   return message || `HTTP ${response.status}`;
 }
 
+/** Turn low-level fetch/socket failures into a stable message suitable for the
+ * renderer. HTTP and catalog-validation failures remain specific so operators
+ * can still distinguish a bad response from an unavailable account service. */
+export function accountServiceError(error: unknown, fallback: string): string {
+  if (error instanceof TypeError) return 'BrainRouter service is unavailable. Check the connection and try again.';
+  if (error instanceof Error) {
+    const cause = error.cause && typeof error.cause === 'object'
+      ? error.cause as { code?: unknown }
+      : null;
+    const code = typeof cause?.code === 'string' ? cause.code : '';
+    if (
+      error.name === 'AbortError'
+      || error.name === 'TimeoutError'
+      || code.startsWith('UND_ERR_')
+      || /^(?:ECONN|EHOST|ENET|ETIMEDOUT|EAI_)/.test(code)
+    ) {
+      return 'BrainRouter service is unavailable. Check the connection and try again.';
+    }
+    if (error.message.trim()) return error.message;
+  }
+  return fallback;
+}
+
 const MODEL_EFFORTS = new Set<string>(MODEL_REASONING_EFFORTS);
 const CAPABILITY_SOURCES = new Set<ModelCapabilityProvenanceSource>(['verified', 'discovered', 'manual', 'inferred']);
 
@@ -279,7 +302,7 @@ export async function fetchAccountModelCatalog(
       refreshedAt: new Date().toISOString(),
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unable to refresh the BrainRouter model catalog.';
+    const message = accountServiceError(error, 'Unable to refresh the BrainRouter model catalog.');
     return previous
       ? { ...previous, signedIn: true, stale: true, error: message }
       : emptyAccountModelCatalog(true, message);
