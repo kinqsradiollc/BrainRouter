@@ -53,6 +53,7 @@ test('external steering validates content and retains only the newest 100 events
 
 test('steering reconciliation updates plans without silently replacing goals', () => {
   const user = buildSteeringReconciliationMessage({
+    receiptId: 'steer_user',
     source: 'user',
     goal: { text: 'Ship the workspace onboarding flow', status: 'active' },
     plan: {
@@ -71,6 +72,7 @@ test('steering reconciliation updates plans without silently replacing goals', (
   assert.doesNotMatch(user, /Implement onboarding persistence/);
 
   const extension = buildSteeringReconciliationMessage({
+    receiptId: 'steer_extension',
     source: 'extension',
     goal: { text: 'Ship the workspace onboarding flow', status: 'active' },
     plan: { items: [] },

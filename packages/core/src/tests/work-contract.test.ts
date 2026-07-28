@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-import { updatePlan } from '../task/taskStore.js';
+import { readPlan, updatePlan } from '../task/taskStore.js';
 import {
   createWorkContract,
   readOrMigrateWorkContract,
@@ -14,7 +14,13 @@ import {
   workContractPath,
 } from '../task/workContractStore.js';
 import type { WorkTaskRef } from '../task/workContract.js';
-import { beginSteeringReceipt } from '../task/steeringReceiptStore.js';
+import {
+  applySteeringPlanRevision,
+  beginSteeringReceipt,
+  pendingSteeringConstraint,
+  reconcileSteeringReceipt,
+} from '../task/steeringReceiptStore.js';
+import { evaluateSteeringToolGate } from '../task/steeringReconciliationGate.js';
 import { withTempWorkspace } from './_helpers.js';
 
 const PLAN_HASH = 'a'.repeat(64);
@@ -181,7 +187,7 @@ test('Steering delivery creates one pending receipt without copying an unbounded
     assert.equal(receipt.status, 'pending');
     assert.equal(receipt.classification, undefined);
     assert.equal(receipt.receivedAt, '2026-07-28T01:02:03.000Z');
-    assert.equal(receipt.priorRevision, 1);
+    assert.equal(receipt.priorRevision, 0);
     assert.ok(receipt.summary.length <= 240);
     assert.equal(duplicate.id, receipt.id);
     assert.equal(contract?.steering.length, 1);
@@ -189,4 +195,152 @@ test('Steering delivery creates one pending receipt without copying an unbounded
     assert.equal(contract?.plan.revision, 0);
     assert.equal(contract?.tasks.length, 0);
   });
+});
+
+test('Steering reconciliation applies clarification and keeps extension input evidence-only', () => {
+  withTempWorkspace((workspace) => {
+    const sessionKey = 'session:steering-classification';
+    beginSteeringReceipt(workspace, sessionKey, {
+      id: 'steer_user',
+      text: 'Clarify the output.',
+      source: 'user',
+      createdAt: Date.now(),
+    });
+    assert.deepEqual(
+      pendingSteeringConstraint(workspace, sessionKey),
+      { receiptId: 'steer_user', phase: 'classify' },
+    );
+    const clarification = reconcileSteeringReceipt(workspace, sessionKey, {
+      receiptId: 'steer_user',
+      classification: 'clarification',
+      summary: 'Clarifies the expected output.',
+    });
+    assert.equal(clarification.status, 'applied');
+    assert.ok(clarification.appliedAt);
+    assert.equal(pendingSteeringConstraint(workspace, sessionKey), null);
+
+    beginSteeringReceipt(workspace, sessionKey, {
+      id: 'steer_extension',
+      text: 'Checks failed.',
+      source: 'extension',
+      createdAt: Date.now(),
+    });
+    assert.throws(
+      () => reconcileSteeringReceipt(workspace, sessionKey, {
+        receiptId: 'steer_extension',
+        classification: 'plan_change',
+        summary: 'Change the implementation plan.',
+      }),
+      /evidence-only/,
+    );
+    const evidence = reconcileSteeringReceipt(workspace, sessionKey, {
+      receiptId: 'steer_extension',
+      classification: 'evidence',
+      summary: 'Records a failed check.',
+    });
+    assert.equal(evidence.status, 'applied');
+  });
+});
+
+test('Plan-changing Steer remains pending until its matching plan revision is stored', () => {
+  withTempWorkspace((workspace) => {
+    const sessionKey = 'session:steering-plan-change';
+    const initial = updatePlan(workspace, {
+      plan: [{ step: 'Implement the original behavior.', status: 'in_progress' }],
+    }, sessionKey);
+    beginSteeringReceipt(workspace, sessionKey, {
+      id: 'steer_plan',
+      text: 'Verify compatibility first.',
+      source: 'user',
+      createdAt: Date.now(),
+    });
+    const classified = reconcileSteeringReceipt(workspace, sessionKey, {
+      receiptId: 'steer_plan',
+      classification: 'plan_change',
+      summary: 'Adds compatibility verification before implementation.',
+      affectedTaskIds: [initial.items[0].id],
+    });
+    assert.equal(classified.status, 'pending');
+    assert.deepEqual(
+      pendingSteeringConstraint(workspace, sessionKey),
+      { receiptId: 'steer_plan', phase: 'revise_plan' },
+    );
+
+    const revisedPlan = updatePlan(workspace, {
+      plan: [
+        {
+          id: initial.items[0].id,
+          step: 'Verify compatibility before implementing the behavior.',
+          status: 'in_progress',
+        },
+      ],
+    }, sessionKey);
+    const applied = applySteeringPlanRevision(
+      workspace,
+      sessionKey,
+      'steer_plan',
+      revisedPlan,
+    );
+    const contract = readWorkContract(workspace, sessionKey);
+    assert.equal(applied.status, 'applied');
+    assert.equal(applied.resultingRevision, revisedPlan.revision);
+    assert.equal(contract?.plan.revision, readPlan(workspace, sessionKey).revision);
+    assert.equal(contract?.tasks[0].id, initial.items[0].id);
+    assert.equal(pendingSteeringConstraint(workspace, sessionKey), null);
+  });
+});
+
+test('Goal-conflicting Steer requires the user and never rewrites the goal', () => {
+  withTempWorkspace((workspace) => {
+    const sessionKey = 'session:steering-goal-conflict';
+    beginSteeringReceipt(workspace, sessionKey, {
+      id: 'steer_goal',
+      text: 'Do a different project instead.',
+      source: 'user',
+      createdAt: Date.now(),
+    });
+    const receipt = reconcileSteeringReceipt(workspace, sessionKey, {
+      receiptId: 'steer_goal',
+      classification: 'goal_conflict',
+      summary: 'Would replace the active project goal.',
+    });
+    assert.equal(receipt.status, 'needs_user');
+    assert.equal(receipt.appliedAt, undefined);
+    assert.equal(pendingSteeringConstraint(workspace, sessionKey), null);
+  });
+});
+
+test('Steering tool gate permits only classification, then the matching plan revision', () => {
+  assert.equal(
+    evaluateSteeringToolGate(
+      { receiptId: 'steer_gate', phase: 'classify' },
+      'write_file',
+      { path: 'src/a.ts' },
+    ).allowed,
+    false,
+  );
+  assert.equal(
+    evaluateSteeringToolGate(
+      { receiptId: 'steer_gate', phase: 'classify' },
+      'reconcile_steer',
+      { receiptId: 'steer_gate' },
+    ).allowed,
+    true,
+  );
+  assert.equal(
+    evaluateSteeringToolGate(
+      { receiptId: 'steer_gate', phase: 'revise_plan' },
+      'update_plan',
+      { steeringReceiptId: 'wrong' },
+    ).allowed,
+    false,
+  );
+  assert.equal(
+    evaluateSteeringToolGate(
+      { receiptId: 'steer_gate', phase: 'revise_plan' },
+      'update_plan',
+      { steeringReceiptId: 'steer_gate' },
+    ).allowed,
+    true,
+  );
 });

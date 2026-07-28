@@ -78,6 +78,7 @@ export interface SteeringInput {
 }
 
 export interface SteeringReconciliationContext {
+  receiptId: string;
   source: SteeringInput['source'];
   goal?: { text: string; status: string } | null;
   plan?: {
@@ -111,8 +112,9 @@ export function buildSteeringReconciliationMessage(
     authority,
     `Active goal status: ${goal}`,
     `Current plan status: ${plan}`,
+    `Steering receipt: ${context.receiptId}`,
     '',
-    '- Classify the steer as clarification, plan-impacting change, evidence/status update, or goal conflict.',
+    '- First call `reconcile_steer` with this receipt id and classify it as clarification, plan-impacting change, evidence/status update, or goal conflict.',
     '- If it materially changes scope, ordering, acceptance criteria, diagnosis, or verification, call `update_plan` before the related mutation. Preserve truthful completed work and revise only affected pending/in-progress items.',
     '- If it conflicts with or replaces the active goal, stop and ask for an explicit goal change; do not rewrite the goal implicitly.',
     '- If it is only a clarification or status update, continue without a ceremonial plan rewrite.',

@@ -197,6 +197,18 @@ function validateSteeringArray(value: unknown, errors: string[]): void {
     if (receipt.status !== 'pending' && receipt.classification === undefined) {
       errors.push(`${label}.classification is required after reconciliation.`);
     }
+    if (receipt.status === 'applied' && receipt.appliedAt === undefined) {
+      errors.push(`${label}.appliedAt is required when status is applied.`);
+    }
+    if (receipt.status !== 'applied' && receipt.appliedAt !== undefined) {
+      errors.push(`${label}.appliedAt is allowed only when status is applied.`);
+    }
+    if (
+      receipt.resultingRevision !== undefined &&
+      !(receipt.status === 'applied' && receipt.classification === 'plan_change')
+    ) {
+      errors.push(`${label}.resultingRevision is allowed only for an applied plan change.`);
+    }
   }
 }
 

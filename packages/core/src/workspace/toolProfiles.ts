@@ -136,7 +136,7 @@ export const WORKSPACE_TOOL_PROFILES: readonly WorkspaceToolProfileDefinition[] 
     description: 'Maintain plans, goals, task tracking, chapter markers, and bounded user choices.',
     category: 'planning-session',
     toolIds: [
-      'update_plan', 'goal_complete', 'goal_blocked',
+      'reconcile_steer', 'update_plan', 'goal_complete', 'goal_blocked',
       'track_query', 'track_update', 'mark_chapter', 'ask_user_choice',
     ],
     mcpToolIds: [],

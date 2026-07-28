@@ -288,7 +288,8 @@ Before acting on a user or parent steer, the runtime records:
 interface SteeringReceipt {
   id: string;
   source: "user" | "parent" | "extension";
-  classification:
+  // Absent only while status is "pending" before semantic reconciliation.
+  classification?:
     | "clarification"
     | "plan_change"
     | "evidence"
@@ -316,6 +317,9 @@ Rules:
    replacing the goal.
 6. A parent can steer only descendants it owns, and the child receipt is also
    linked into the parent Work Contract.
+7. While a receipt is unclassified, `reconcile_steer` is the only permitted
+   tool. A classified plan change then permits only `update_plan` carrying the
+   matching receipt id until the new plan revision is stored.
 
 Background CI, review, deployment, and other observer extensions do not keep a
 model turn open while polling. They run as durable background observations and
@@ -992,7 +996,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[U]` user decision.
 | R1a | `[~]` | Package contract-placement audit and responsibility splits, beginning with Work Contract types/validation/store | R1 | Inventory by contract/port/service/adapter owner; types and core builds; unchanged compatibility imports |
 | R2 | `[~]` | Typed Steer receipts and revision reconciliation | R1a | Core lifecycle, protocol projection, CLI/Desktop parity, and goal-conflict tests |
 | R2a | `[x]` | Persist one pending receipt when Steer enters the model at a safe boundary | R1a | Empty/existing-plan coverage; idempotence; bounded summary; focused runtime tests |
-| R2b | `[ ]` | Classify receipts and gate related mutation until reconciliation | R2a | Clarification, plan-change, evidence-only extension, and goal-conflict matrix |
+| R2b | `[x]` | Classify receipts and gate related mutation until reconciliation | R2a | Clarification, plan-change, evidence-only extension, and goal-conflict matrix |
 | R2c | `[ ]` | Project receipt classification and resulting revision through CLI/Desktop | R2b | Shared protocol fixture and host parity tests |
 | R3 | `[ ]` | Profile planning-schema catalog and activation policy | R1a | Six-profile resolver matrix |
 | R4 | `[ ]` | Code Intelligence Index schema and parser spike for TypeScript/JavaScript | R0 | Symbol/reference/call golden corpus and performance budget |

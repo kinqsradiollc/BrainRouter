@@ -6,7 +6,7 @@
  */
 import { loadWorkspaceManifest } from '../workspace/manifest.js';
 import type { SteeringInput } from '../session/input/inputDelivery.js';
-import { readPlan } from './taskStore.js';
+import { readPlan, type PlanState } from './taskStore.js';
 import {
   createWorkContract,
   readWorkContract,
@@ -14,12 +14,28 @@ import {
 } from './workContractStore.js';
 import {
   projectContractStatus,
+  mergeProjectedPlanTasks,
   projectPlanReference,
   projectPlanTasks,
 } from './workContractProjection.js';
 import type { SteeringReceipt, WorkContract } from './workContract.js';
 
 const MAX_STEERING_SUMMARY_LENGTH = 240;
+
+export type SteeringClassification = NonNullable<SteeringReceipt['classification']>;
+
+export interface ReconcileSteeringReceiptInput {
+  receiptId: string;
+  classification: SteeringClassification;
+  summary: string;
+  affectedRequirementIds?: string[];
+  affectedTaskIds?: string[];
+}
+
+export interface PendingSteeringConstraint {
+  receiptId: string;
+  phase: 'classify' | 'revise_plan';
+}
 
 export function beginSteeringReceipt(
   workspaceRoot: string,
@@ -34,7 +50,7 @@ export function beginSteeringReceipt(
     id: input.id,
     source: input.source,
     receivedAt: new Date(input.createdAt).toISOString(),
-    priorRevision: current.revision,
+    priorRevision: current.plan.revision,
     affectedRequirementIds: [],
     affectedTaskIds: [],
     summary: summarizeSteer(input.text),
@@ -52,6 +68,112 @@ export function beginSteeringReceipt(
   return structuredClone(
     revised.steering.find((candidate) => candidate.id === input.id) ?? receipt,
   );
+}
+
+export function reconcileSteeringReceipt(
+  workspaceRoot: string,
+  sessionKey: string,
+  input: ReconcileSteeringReceiptInput,
+): SteeringReceipt {
+  if (!['clarification', 'plan_change', 'evidence', 'goal_conflict'].includes(input.classification)) {
+    throw new Error(`Invalid steering classification "${input.classification}".`);
+  }
+  const current = ensureWorkContract(workspaceRoot, sessionKey);
+  const receipt = current.steering.find((candidate) => candidate.id === input.receiptId);
+  if (!receipt) throw new Error(`Unknown steering receipt "${input.receiptId}".`);
+  if (receipt.classification) return structuredClone(receipt);
+  if (receipt.source === 'extension' && input.classification !== 'evidence') {
+    throw new Error('Extension steering is evidence-only and cannot change plans or goals.');
+  }
+  const summary = summarizeSteer(input.summary);
+  if (!summary) throw new Error('Steering reconciliation summary cannot be empty.');
+  const affectedRequirementIds = uniqueIds(input.affectedRequirementIds);
+  const affectedTaskIds = uniqueIds(input.affectedTaskIds);
+  assertKnownIds(affectedRequirementIds, current.requirements.map((entry) => entry.id), 'requirement');
+  assertKnownIds(affectedTaskIds, current.tasks.map((entry) => entry.id), 'task');
+  const status: SteeringReceipt['status'] =
+    input.classification === 'plan_change'
+      ? 'pending'
+      : input.classification === 'goal_conflict'
+        ? 'needs_user'
+        : 'applied';
+  const now = new Date().toISOString();
+  const revised = reviseWorkContract(
+    workspaceRoot,
+    sessionKey,
+    current.revision,
+    (contract) => ({
+      ...contract,
+      steering: contract.steering.map((candidate) => candidate.id === input.receiptId
+        ? {
+            ...candidate,
+            classification: input.classification,
+            summary,
+            affectedRequirementIds,
+            affectedTaskIds,
+            status,
+            ...(status === 'applied' ? { appliedAt: now } : {}),
+          }
+        : candidate),
+    }),
+  );
+  return structuredClone(revised.steering.find((candidate) => candidate.id === input.receiptId)!);
+}
+
+export function applySteeringPlanRevision(
+  workspaceRoot: string,
+  sessionKey: string,
+  receiptId: string,
+  plan: PlanState,
+): SteeringReceipt {
+  const current = ensureWorkContract(workspaceRoot, sessionKey);
+  const receipt = current.steering.find((candidate) => candidate.id === receiptId);
+  if (!receipt) throw new Error(`Unknown steering receipt "${receiptId}".`);
+  if (receipt.classification !== 'plan_change' || receipt.status !== 'pending') {
+    throw new Error(`Steering receipt "${receiptId}" is not awaiting a plan revision.`);
+  }
+  const now = new Date().toISOString();
+  const requirementRefs = plan.requirementId
+    ? uniqueIds([
+        ...current.requirements.map((entry) => entry.id),
+        plan.requirementId,
+      ]).map((id) => ({ id }))
+    : current.requirements;
+  const revised = reviseWorkContract(
+    workspaceRoot,
+    sessionKey,
+    current.revision,
+    (contract) => ({
+      ...contract,
+      requirements: requirementRefs,
+      plan: projectPlanReference(sessionKey, plan),
+      tasks: mergeProjectedPlanTasks(contract.tasks, plan),
+      status: projectContractStatus(plan),
+      steering: contract.steering.map((candidate) => candidate.id === receiptId
+        ? {
+            ...candidate,
+            status: 'applied',
+            appliedAt: now,
+            resultingRevision: plan.revision,
+          }
+        : candidate),
+    }),
+  );
+  return structuredClone(revised.steering.find((candidate) => candidate.id === receiptId)!);
+}
+
+export function pendingSteeringConstraint(
+  workspaceRoot: string,
+  sessionKey: string,
+): PendingSteeringConstraint | null {
+  const contract = readWorkContract(workspaceRoot, sessionKey);
+  if (!contract) return null;
+  const unclassified = contract.steering.find((receipt) =>
+    receipt.status === 'pending' && !receipt.classification);
+  if (unclassified) return { receiptId: unclassified.id, phase: 'classify' };
+  const planChange = contract.steering.find((receipt) =>
+    receipt.status === 'pending' && receipt.classification === 'plan_change');
+  return planChange ? { receiptId: planChange.id, phase: 'revise_plan' } : null;
 }
 
 export function ensureWorkContract(
@@ -77,4 +199,14 @@ function summarizeSteer(text: string): string {
   const normalized = text.replace(/\s+/g, ' ').trim();
   if (normalized.length <= MAX_STEERING_SUMMARY_LENGTH) return normalized;
   return `${normalized.slice(0, MAX_STEERING_SUMMARY_LENGTH - 1).trimEnd()}…`;
+}
+
+function uniqueIds(values: string[] | undefined): string[] {
+  return [...new Set((values ?? []).map((value) => value.trim()).filter(Boolean))];
+}
+
+function assertKnownIds(values: string[], knownValues: string[], label: string): void {
+  const known = new Set(knownValues);
+  const unknown = values.find((value) => !known.has(value));
+  if (unknown) throw new Error(`Unknown affected ${label} id "${unknown}".`);
 }

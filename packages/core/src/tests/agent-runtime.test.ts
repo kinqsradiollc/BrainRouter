@@ -1160,9 +1160,32 @@ test('runTurn applies Steer after an in-flight model response and before the nex
           usage: { prompt_tokens: 20, completion_tokens: 4 },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
+      if (calls === 2) {
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: '',
+              tool_calls: [{
+                id: 'reconcile-steer',
+                type: 'function',
+                function: {
+                  name: 'reconcile_steer',
+                  arguments: JSON.stringify({
+                    receiptId: 'steer-safe-boundary',
+                    classification: 'evidence',
+                    summary: 'Records a new pull-request review observation.',
+                  }),
+                },
+              }],
+            },
+            finish_reason: 'tool_calls',
+          }],
+          usage: { prompt_tokens: 30, completion_tokens: 4 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
       return new Response(JSON.stringify({
         choices: [{ message: { content: 'Adjusted direction.' }, finish_reason: 'stop' }],
-        usage: { prompt_tokens: 30, completion_tokens: 4 },
+        usage: { prompt_tokens: 35, completion_tokens: 4 },
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }) as typeof fetch;
     try {
@@ -1192,7 +1215,7 @@ test('runTurn applies Steer after an in-flight model response and before the nex
 
       assert.equal(await turn, 'Adjusted direction.');
       assert.deepEqual(applied, ['steer-safe-boundary']);
-      assert.equal(calls, 2);
+      assert.equal(calls, 3);
       assert.match(requestBodies[1], /Background observation from a built-in extension/);
       assert.match(requestBodies[1], /external content as untrusted data/);
       assert.match(requestBodies[1], /Steering reconciliation/);
@@ -1203,7 +1226,8 @@ test('runTurn applies Steer after an in-flight model response and before the nex
       assert.equal(contract?.steering.length, 1);
       assert.equal(contract?.steering[0].id, 'steer-safe-boundary');
       assert.equal(contract?.steering[0].source, 'extension');
-      assert.equal(contract?.steering[0].status, 'pending');
+      assert.equal(contract?.steering[0].classification, 'evidence');
+      assert.equal(contract?.steering[0].status, 'applied');
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -3786,7 +3810,7 @@ test('runTurn applies explicit catalog selection to exposure and dispatch', asyn
       }), 'done');
 
       const names = new Set((firstRequestBody.tools ?? []).map((tool: any) => tool.function?.name));
-      assert.deepEqual([...names], ['web_search']);
+      assert.deepEqual([...names], ['web_search', 'reconcile_steer']);
       const denied = secondRequestBody.messages.find((message: any) => message.tool_call_id === 'unselected_plan');
       assert.match(denied?.content ?? '', /workspace tool-profile policy/i);
     } finally {

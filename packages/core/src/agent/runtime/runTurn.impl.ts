@@ -46,7 +46,11 @@ import {
 import { drainCompletions, formatCompletionFeedback } from '../../session/completion/completionInbox.js';
 import { resolveActiveMode } from '../../session/state/sessionModeStore.js';
 import { buildSteeringReconciliationMessage } from '../../session/input/inputDelivery.js';
-import { beginSteeringReceipt } from '../../task/steeringReceiptStore.js';
+import {
+  beginSteeringReceipt,
+  pendingSteeringConstraint,
+} from '../../task/steeringReceiptStore.js';
+import { evaluateSteeringToolGate } from '../../task/steeringReconciliationGate.js';
 import { isInternalSessionKey } from '../../session/transcript/sessionStore.js';
 import { isConnectivityError, isRetryableServerError } from '../../storage/checkpointStore.js';
 import { readPlan } from '../../task/taskStore.js';
@@ -364,14 +368,20 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       multiProfile: !hideSwitchModel,
       mcpDiscovery: mcpDiscoveryOn,
     }).filter((t) => {
+      const mandatorySteeringControl = t.name === 'reconcile_steer';
       // HARD gates first — a user override can never escalate past these.
       const hardVisible =
         allowed.has(t.name) &&
         (!this.toolScope?.local.length || this.toolScope.local.includes(t.name)) &&
         (!this.authorityToolCeiling || this.authorityToolCeiling.local.includes(t.name)) &&
-        !toolDisallowed(t.name) &&
-        workspaceAllowsLocalTool(t.name) &&
-        skillAllowsTool(t.name);
+        (
+          mandatorySteeringControl ||
+          (
+            !toolDisallowed(t.name) &&
+            workspaceAllowsLocalTool(t.name) &&
+            skillAllowsTool(t.name)
+          )
+        );
       if (!hardVisible) return false;
       // No model-strength tool clamp: EVERY model — weak or strong — sees the
       // full tool surface. The old HONK-L2 profile hid the long tail from
@@ -379,7 +389,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       // tools. A user can still force-off a specific tool via cli.toolOverrides,
       // and the non-hiding reliability aids stay (L1 loop/storm caps below; L3
       // schema flattening, which just helps a weak model CALL those same tools).
-      return resolveToolVisible(t.name, true, toolOverrides);
+      return mandatorySteeringControl || resolveToolVisible(t.name, true, toolOverrides);
     });
     // MC-D3 — when switch_model is offered, append the concrete profile names to
     // its description so the model can pick a valid target without guessing.
@@ -782,6 +792,8 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // honest signal. Bounded so a model that won't update can't loop.
     let planSyncGuardFired = 0;
     const PLAN_SYNC_GUARD_MAX = 1;
+    let steeringReconciliationGuardFired = 0;
+    const STEERING_RECONCILIATION_GUARD_MAX = 1;
     // Requirement → Plan → Track synchronization is deterministic store work,
     // not a prompt. It gets one turn-end pass after the model's plan guard.
     let requirementPlanTrackSyncGuardFired = 0;
@@ -967,6 +979,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         const reconciliation = {
           role: 'system',
           content: buildSteeringReconciliationMessage({
+            receiptId: input.id,
             source: input.source,
             goal: goal ? { text: goal.text, status: goal.status } : null,
             plan,
@@ -1597,6 +1610,27 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         // assistant message is now durably recorded and has no unpaired tool
         // calls, so this is the earliest safe boundary to continue with it.
         if (applyPendingSteering() > 0) continue;
+        const pendingSteering = pendingSteeringConstraint(
+          this.workspaceRoot,
+          this.sessionKey,
+        );
+        if (
+          pendingSteering &&
+          steeringReconciliationGuardFired < STEERING_RECONCILIATION_GUARD_MAX
+        ) {
+          steeringReconciliationGuardFired += 1;
+          const instruction = pendingSteering.phase === 'classify'
+            ? `Call \`reconcile_steer\` for receipt "${pendingSteering.receiptId}" before continuing or finishing.`
+            : `Call \`update_plan\` with steeringReceiptId "${pendingSteering.receiptId}" before related work or finishing.`;
+          const guard = {
+            role: 'user',
+            content: `A steering receipt is still pending. ${instruction}`,
+          };
+          this.chatHistory.push(guard);
+          this.recordTranscript({ ...guard, name: 'guard' });
+          callbacks.onStatusUpdate('Pending steer requires typed reconciliation');
+          continue;
+        }
         const unobservedChildIds = [...spawnedChildIdsThisTurn].filter((id) => !waitedChildIdsThisTurn.has(id));
         // DESK-6 — a Stop skips the auto-drain (it bypasses both interrupt
         // seams); the loop-top check below returns the clean interrupted answer.
@@ -2104,6 +2138,13 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       const safeFlags: boolean[] = toolCalls.map(
         (_tc: any, idx: number) => parallelEnabled && isParallelSafe(normalizedNames[idx]),
       );
+      // Freeze the steering barrier for this entire assistant tool batch. A
+      // model must observe the reconciliation result in a later iteration
+      // before any newly-authorized tool can run.
+      const steeringConstraintAtBatchStart = pendingSteeringConstraint(
+        this.workspaceRoot,
+        this.sessionKey,
+      );
 
       const processOneToolCall = async (tc: any, name: string): Promise<{ toolMsg: any; fullResultText: string; systemMsg?: any }> => {
         this.lastTurnToolCalls += 1;
@@ -2119,33 +2160,6 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           }, tc.id);
           return { toolMsg: { role: 'tool', tool_call_id: tc.id, name, content: skipped, isError: true }, fullResultText: skipped };
         }
-        // CC-P6.5 — classify this call for the verification gate (wrote files vs
-        // ran a build/test/lint). Best-effort arg parse; the real execution +
-        // arg validation happens below. We also record WHICH files were written
-        // (edit-tool paths) so the gate can tell a docs/config-only change from a
-        // code change, and flag an opaque file-writing shell command.
-        try {
-          const parsedArgs = typeof tc?.function?.arguments === 'string'
-            ? JSON.parse(tc.function.arguments)
-            : (tc?.function?.arguments ?? {});
-          const cmdText = name === 'run_command' ? String(parsedArgs?.command ?? '') : '';
-          const signal = classifyForVerification(name, cmdText);
-          if (signal === 'mutated') {
-            this.mutatedThisTurn = true;
-            if (name === 'run_command') {
-              // A file-writing shell command — we can't reliably know which path
-              // it wrote, so it can never be ruled docs-only.
-              if (commandWritesFiles(cmdText)) this.shellWroteThisTurn = true;
-            } else {
-              const p = typeof parsedArgs?.path === 'string' ? parsedArgs.path
-                : typeof parsedArgs?.file === 'string' ? parsedArgs.file
-                : typeof parsedArgs?.filePath === 'string' ? parsedArgs.filePath : '';
-              if (p) this.filesWrittenThisTurn.push(p);
-            }
-          } else if (signal === 'verified') {
-            this.verifiedThisTurn = true;
-          }
-        } catch { /* arg parse is best-effort; gate just won't credit this call */ }
         // 0.3.8-I4: Use the strict-recovery helper so a malformed-arguments
         // tool_call surfaces as a structured tool_result (with the raw
         // arguments echoed back) instead of throwing out of the loop.
@@ -2182,6 +2196,57 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           }, { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId });
           const toolMsg = { role: 'tool', tool_call_id: tc.id, name, content: resultText, isError };
           return { toolMsg, fullResultText: resultText };
+        }
+
+        // A pending Steer is a turn-level control barrier. Enforce it before
+        // hooks, verification credit, policy prompts, or any tool adapter runs.
+        const steeringGate = evaluateSteeringToolGate(
+          steeringConstraintAtBatchStart,
+          name,
+          args,
+        );
+        const steeringDenial = steeringGate.allowed ? null : steeringGate.reason!;
+        if (steeringDenial) {
+          try { recordDenial(this.workspaceRoot, this.sessionKey, name.slice(0, 120), steeringDenial); } catch { /* best-effort */ }
+          callbacks.onToolEnd(name, {
+            success: false,
+            summary: steeringDenial,
+            ...(delegationLaunch ? { delegationState: 'not-started' as const } : {}),
+          }, tc.id);
+          traceEvent('brainrouter.tool', {
+            tool: name,
+            ok: false,
+            local: isLocal,
+            session_key: this.sessionKey,
+            guard: 'steering_reconciliation',
+            ...(delegationLaunch ? { delegation_state: 'not_started' } : {}),
+          }, { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId });
+          const toolMsg = {
+            role: 'tool',
+            tool_call_id: tc.id,
+            name,
+            content: steeringDenial,
+            isError: true,
+          };
+          return { toolMsg, fullResultText: steeringDenial };
+        }
+
+        // CC-P6.5 — credit mutations and verification only after the steering
+        // barrier accepts this call.
+        const cmdText = name === 'run_command' ? String(args?.command ?? '') : '';
+        const verificationSignal = classifyForVerification(name, cmdText);
+        if (verificationSignal === 'mutated') {
+          this.mutatedThisTurn = true;
+          if (name === 'run_command') {
+            if (commandWritesFiles(cmdText)) this.shellWroteThisTurn = true;
+          } else {
+            const p = typeof args?.path === 'string' ? args.path
+              : typeof args?.file === 'string' ? args.file
+              : typeof args?.filePath === 'string' ? args.filePath : '';
+            if (p) this.filesWrittenThisTurn.push(p);
+          }
+        } else if (verificationSignal === 'verified') {
+          this.verifiedThisTurn = true;
         }
 
         // Repeat-loop guard: if the model has already issued this exact
@@ -2284,10 +2349,10 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
             // Defense in depth: a model can emit a stale/guessed tool name
             // even when it was absent from the request surface. Recheck the
             // active skill allowlist at dispatch for local, delegate, and MCP.
-            if (!skillAllowsTool(name)) {
+            if (name !== 'reconcile_steer' && !skillAllowsTool(name)) {
               denyAndRecord(`Tool "${diagnosticToolName}" denied by the active skill allowed-tools policy.`);
             }
-            if (isLocal && !workspaceAllowsLocalTool(name)) {
+            if (isLocal && name !== 'reconcile_steer' && !workspaceAllowsLocalTool(name)) {
               denyAndRecord(`Tool "${diagnosticToolName}" denied by the active workspace tool-profile policy.`);
             }
             if (!isLocal && !workspaceAllowsMcpTool(
