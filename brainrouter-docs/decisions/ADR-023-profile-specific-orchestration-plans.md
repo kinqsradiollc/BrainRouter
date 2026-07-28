@@ -570,6 +570,13 @@ stage objective
   + bounded execution budgets
 ```
 
+Every role-executed stage declares at least one stage-scoped skill. A role
+without a domain workflow is an execution posture, not a complete child task,
+so an empty child skill list makes that strategy invalid. Primary stages may
+use an empty list when the active persona can handle the bounded step directly.
+If a required child skill is unavailable, resolution falls back to the
+profile's validated primary-only strategy rather than spawning a generic role.
+
 Parent conversation history is never copied into a child. The child receives
 only the bounded task packet and context-envelope layers selected for that
 stage.
@@ -584,6 +591,14 @@ source resolution in both citation and review skill allowlists so stacked-skill
 least privilege does not accidentally erase the workflow's required evidence
 surface. Engineering and Writing review do not gain network access merely from
 the reusable role.
+
+Role MCP scopes use exact stable tool identifiers. The matching contract
+supports an exact raw name or the exact suffix of a namespaced MCP tool; glob
+entries such as `memory_*` are not wildcards and therefore match nothing.
+Bundled roles name only the reviewed read-only memory, skill-discovery, and
+Project Knowledge tools they may consume. The workspace selection, server
+identity, parent authority, role access, and active skill allowlists remain
+outer intersections, so this role list cannot grant an unselected surface.
 
 A `primary` stage does not create a child. It tells the root agent which prior
 stage results and skills are relevant for the next step. This is necessary for
@@ -853,6 +868,8 @@ new group but must not silently add tools to an already reviewed group.
 | `coding` | Read/search code, LSP, file edits, patches, and notebook edits | Normal for Engineering and Data Science; still bounded by access mode |
 | `shell` | Run, observe, wait for, and stop commands | Normal for Engineering and Data Science; excludes computer control and connectors |
 | `browser` | Fetch pages and search public sources | Read/network research surface; not interactive browser control |
+| `project-knowledge` | List and search authenticated knowledge linked to the current project | Read-only first-party evidence surface; server identity is verified and same-name third-party tools do not satisfy it |
+| `memory-context` | Recall, search, and traverse authenticated project-relevant memory | Read-only first-party context surface; separate from automatic briefing and from memory mutation/governance |
 | `research-notes` | Maintain source notes and research briefs | Session/workspace research state, not a document artifact |
 | `artifacts` | Produce structured artifact records | Normal production surface for every bundled non-Custom profile |
 | `planning-session` | Plans, goals, task tracking, chapter markers, and user-choice requests | Recommended interaction surface; selections do not auto-create a goal or plan |
@@ -877,12 +894,19 @@ recommendation is still only a request entering the intersection in section
 
 | Workspace profile | Recommended checked groups | Capability-sensitive proposal | Advanced, not preselected |
 |---|---|---|---|
-| Engineering | `coding`, `shell`, `browser`, `artifacts`, `planning-session`, `orchestration`, `pull-request-observation` | Add `interactive-browser` for reviewed frontend/full-stack work; backend remains the same engineer persona and may add it when browser/API inspection is useful | MCP resources, connectors, computer control, workflow launch, background workers, security review |
-| Research | `workspace-files`, `browser`, `research-notes`, `artifacts`, `planning-session`, `orchestration` | Add `coding` and `shell` for computational/repository research; add interactive browser only when source access needs it | MCP resources/connectors when a reviewed corpus needs them; workflow launch, background workers, computer control, security review |
-| Data Science | `coding`, `shell`, `browser`, `research-notes`, `artifacts`, `planning-session`, `orchestration` | Add interactive browser for dashboard/data-portal work | MCP resources/connectors for reviewed data sources; workflow launch, background workers, computer control, security review |
-| Study | `workspace-files`, `browser`, `research-notes`, `artifacts`, `planning-session` | Add `orchestration` only when the learner selects a plan that uses an explorer; add coding/shell for programming labs | MCP resources/connectors for a reviewed course corpus; interactive browser, workflow launch, background workers, computer control, security review |
-| Writing | `workspace-files`, `browser`, `research-notes`, `artifacts`, `planning-session` | Add `orchestration` when the writer selects a reviewer strategy; add coding only for repository-backed documentation | MCP resources/connectors for reviewed source libraries; interactive browser, shell, workflow launch, background workers, computer control, security review |
+| Engineering | `coding`, `shell`, `browser`, `project-knowledge`, `memory-context`, `artifacts`, `planning-session`, `orchestration`, `pull-request-observation` | Add `interactive-browser` for reviewed frontend/full-stack work; backend remains the same engineer persona and may add it when browser/API inspection is useful | MCP resources, connectors, computer control, workflow launch, background workers, security review |
+| Research | `workspace-files`, `browser`, `project-knowledge`, `memory-context`, `research-notes`, `artifacts`, `planning-session`, `orchestration` | Add `coding` and `shell` for computational/repository research; add interactive browser only when source access needs it | MCP resources/connectors when another reviewed corpus needs them; workflow launch, background workers, computer control, security review |
+| Data Science | `coding`, `shell`, `browser`, `project-knowledge`, `memory-context`, `research-notes`, `artifacts`, `planning-session`, `orchestration` | Add interactive browser for dashboard/data-portal work | MCP resources/connectors for reviewed data sources; workflow launch, background workers, computer control, security review |
+| Study | `workspace-files`, `browser`, `project-knowledge`, `memory-context`, `research-notes`, `artifacts`, `planning-session`, `orchestration` | Add coding/shell for programming labs; Explorer remains dormant until an explicit source-explanation strategy is selected | MCP resources/connectors for another reviewed course corpus; interactive browser, workflow launch, background workers, computer control, security review |
+| Writing | `workspace-files`, `browser`, `project-knowledge`, `memory-context`, `research-notes`, `artifacts`, `planning-session`, `orchestration` | Add coding only for repository-backed documentation; Reviewer remains dormant until an explicit critique strategy is selected | MCP resources/connectors for other reviewed source libraries; interactive browser, shell, workflow launch, background workers, computer control, security review |
 | Custom | Empty | A deterministic scan or managed proposal may recommend checked entries, but the user must review them | Everything remains searchable and individually selectable; no hidden bundle |
+
+The first-party `list_skills`, `get_skill`, and `search_skills` discovery tools
+remain a managed-workspace baseline rather than a checked profile group. They
+expose the reviewed skill library progressively but do not activate a skill,
+open arbitrary MCP tools, or widen its tool allowlist. Project Knowledge and
+Memory Context remain visible, removable groups because their contents affect
+what workspace evidence and recalled context the model may inspect.
 
 This matrix deliberately treats artifacts as a production primitive, not a
 frontend-only design feature. Engineering, including backend-only work,
@@ -2150,6 +2174,28 @@ gate is recorded in the Compatibility section above.
   global, workspace, and chat personality layers with visible provenance and
   compatibility migration.
 
+### P23-22 — Production plan activation and stage execution
+
+- Resolve the selected orchestration profile at the root turn chokepoint from
+  the saved workspace manifest, registered task signals, installed/selected
+  skills, role availability, delegation policy, and live provider capacity.
+- Create one active-turn lifecycle owner for the resolved graph. Primary stages
+  activate their stage skills on the root agent; role stages compile through
+  `buildOrchestrationStageTaskPacket` and launch only through that owner's
+  orchestration port.
+- Feed structured terminal stage outputs only to declared dependants, enforce
+  required sections before success, and record profile, strategy, stage, role,
+  skill, fallback, and lifecycle diagnostics in the shared trace contract.
+- Keep ordinary user/model delegation available as bounded ad hoc delegation,
+  but do not label it as plan-stage execution or let it satisfy a planned stage
+  unless it was launched from the validated stage packet.
+- Preserve no-manifest behavior and primary-only fallbacks. Resolver,
+  adaptive-selection, lifecycle, and packet helpers are not considered active
+  product orchestration merely because their pure modules or previews exist.
+- Add Agent-level tests for Engineering, Research, Data Science, Study,
+  Writing, Custom, interruption, unavailable required skills, malformed child
+  output, and the saved explicit-catalog workspace shape used by Desktop/CLI.
+
 ## Acceptance criteria
 
 1. All six built-in profiles resolve distinct orchestration-profile JSON.
@@ -2278,6 +2324,19 @@ gate is recorded in the Compatibility section above.
 56. Personality changes prose only, exposes its effective source, respects
     chat/workspace/global overrides, and never changes persona, tools, skills,
     roles, or orchestration.
+57. Every role-executed stage has at least one stage-scoped skill; removing a
+    required child skill makes that strategy unavailable and selects the
+    validated primary-only fallback.
+58. Every standard profile recommends visible read-only Project Knowledge and
+    Memory Context groups, while Custom remains empty; Study and Writing keep
+    orchestration selectable so their reviewed explicit strategies can run.
+59. Bundled role MCP scopes use exact stable identifiers and no wildcard-like
+    entry; namespaced first-party matches remain subordinate to workspace,
+    server-identity, parent, access, and active-skill ceilings.
+60. Production Agent turns resolve and own one plan lifecycle, activate primary
+    stage skills, compile role stages through the validated stage packet, and
+    expose terminal stage outcomes in both CLI and Desktop traces. Pure
+    resolver/preview availability alone does not satisfy this criterion.
 
 ## Non-goals
 
