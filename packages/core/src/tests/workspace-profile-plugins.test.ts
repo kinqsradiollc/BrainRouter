@@ -40,13 +40,14 @@ test('C2 package-owned profile plugins use the standard versioned plugin contrac
     ['research', '2.4.0'],
     ['study', '2.4.0'],
     ['data', '2.2.0'],
-    ['writing', '2.2.0'],
+    ['writing', '2.3.0'],
     ['frontend', '1.1.0'],
     ['backend', '1.1.0'],
     ['academic-paper', '2.4.0'],
     ['computational-research', '2.2.0'],
     ['data-visualization', '2.2.0'],
     ['programming-lab', '2.4.0'],
+    ['technical-documentation', '2.3.0'],
   ]);
 
   assert.deepEqual(catalog.unavailable, []);
@@ -56,6 +57,7 @@ test('C2 package-owned profile plugins use the standard versioned plugin contrac
       'study', 'research', 'data', 'writing', 'frontend', 'backend',
       'academic-paper', 'computational-research', 'data-visualization',
       'programming-lab',
+      'technical-documentation',
     ],
   );
   for (const plugin of catalog.available) {
@@ -317,6 +319,37 @@ test('programming-lab capability owns a bounded executable tutoring workflow', (
   assert.equal([...tools].some((toolId) => toolId.startsWith('browser_')), false);
 });
 
+test('technical-documentation capability owns a bounded Writing workflow', () => {
+  const documentation = findWorkspaceProfilePlugin('technical-documentation');
+
+  assert.ok(documentation);
+  assert.equal(documentation.kind, 'capability');
+  assert.equal(documentation.pluginName, 'profile-writing');
+  assert.equal(documentation.version, '2.3.0');
+  assert.deepEqual(documentation.skillIds, ['technical-documentation-skill']);
+  assert.deepEqual(documentation.personaIds, []);
+  assert.equal(documentation.personasRoot, undefined);
+  const body = fs.readFileSync(
+    path.join(documentation.skillsRoot, 'technical-documentation-skill', 'SKILL.md'),
+    'utf8',
+  );
+  const flow = body.match(/^allowed-tools:\s*\[([^\]]*)\]$/m)?.[1];
+  assert.notEqual(flow, undefined);
+  const tools = new Set(flow!.split(',').map((value) => value.trim()).filter(Boolean));
+  for (const toolId of [
+    'list_dir',
+    'write_file',
+    'run_command',
+    'fetch_url',
+    'web_search',
+    'artifact_write',
+  ]) {
+    assert.ok(tools.has(toolId), toolId);
+  }
+  assert.equal(tools.has('notebook_edit'), false);
+  assert.equal([...tools].some((toolId) => toolId.startsWith('browser_')), false);
+});
+
 test('C2 profile plugins declare matching personas without executable specialists', () => {
   const catalog = inspectWorkspaceProfilePlugins();
   const personasByProfile = Object.fromEntries(
@@ -334,6 +367,7 @@ test('C2 profile plugins declare matching personas without executable specialist
     'computational-research': [],
     'data-visualization': [],
     'programming-lab': [],
+    'technical-documentation': [],
   });
 });
 
@@ -359,7 +393,8 @@ test('C2 malformed package-owned versions fail availability without affecting si
   const catalog = inspectWorkspaceProfilePlugins({ root: fixtureRoot });
   assert.deepEqual(catalog.available.map((plugin) => plugin.id), [
     'study', 'research', 'data', 'writing', 'backend',
-    'academic-paper', 'computational-research', 'data-visualization', 'programming-lab',
+    'academic-paper', 'computational-research', 'data-visualization',
+    'programming-lab', 'technical-documentation',
   ]);
   assert.equal(catalog.unavailable[0]?.id, 'frontend');
   assert.match(catalog.unavailable[0]?.reason ?? '', /semantic/);
@@ -375,7 +410,8 @@ test('C2 a missing profile persona fails that plugin closed without affecting si
   const catalog = inspectWorkspaceProfilePlugins({ root: fixtureRoot });
   assert.deepEqual(catalog.available.map((plugin) => plugin.id), [
     'study', 'data', 'writing', 'frontend', 'backend',
-    'academic-paper', 'computational-research', 'data-visualization', 'programming-lab',
+    'academic-paper', 'computational-research', 'data-visualization',
+    'programming-lab', 'technical-documentation',
   ]);
   assert.equal(catalog.unavailable[0]?.id, 'research');
   assert.match(catalog.unavailable[0]?.reason ?? '', /missing valid persona file: researcher/);

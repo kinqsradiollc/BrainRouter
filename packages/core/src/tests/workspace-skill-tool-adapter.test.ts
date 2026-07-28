@@ -339,6 +339,39 @@ test('programming-lab skill appears only for an active reviewed Study capability
   }
 });
 
+test('technical-documentation skill appears only for an active reviewed capability', () => {
+  const workspace = makeWorkspace();
+  try {
+    const manifest = createWorkspaceManifest({
+      name: 'service',
+      profile: 'engineering',
+      by: 'wizard',
+    });
+    manifest.capabilities.enabled.push('technical-documentation');
+    saveWorkspaceManifest(workspace, manifest);
+    const remote = JSON.stringify([
+      { name: 'technical-documentation-skill', category: 'legacy', scope: 'global' },
+      { name: 'ordinary-skill', category: 'agent', scope: 'global' },
+    ]);
+    assert.equal(names(adaptWorkspaceSkillCatalogText({
+      workspaceRoot: workspace,
+      text: remote,
+      tool: 'list_skills',
+    })).includes('technical-documentation-skill'), false);
+
+    const active = names(adaptWorkspaceSkillCatalogText({
+      workspaceRoot: workspace,
+      activeCapabilities: ['technical-documentation'],
+      text: remote,
+      tool: 'list_skills',
+    }));
+    assert.ok(active.includes('technical-documentation-skill'));
+    assert.ok(active.includes('ordinary-skill'));
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test('disabled package skills stay ambient-hidden but explicit reads use package policy', () => {
   const workspace = makeWorkspace();
   try {

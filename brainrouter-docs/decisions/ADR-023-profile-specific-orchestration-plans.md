@@ -2065,6 +2065,14 @@ hints, execution and test evidence, misconception remediation, and transfer
 checks. Coding, shell, notebook, language-service, and artifact operations
 remain subject to the reviewed workspace selection and ordinary runtime gates.
 
+The `technical-documentation` capability is compatible with Engineering and
+Writing and preserves the active engineer or writer persona. Its skill grounds
+references, guides, tutorials, and runbooks in current code, schemas, tests,
+runtime evidence, or primary sources; verifies examples; and exposes
+prerequisites, permissions, side effects, recovery, and version limits.
+Workspace files, shell, browser reads, and artifact emission remain separate
+reviewed tool groups and are never implied by selecting the capability alone.
+
 ### P23-9 — Plugin and workspace contributions
 
 - Add `orchestrationProfiles` to plugin discovery, summaries, publishing, and

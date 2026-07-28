@@ -64,6 +64,12 @@ const PROGRAMMING_LAB_AVAILABILITY = {
   toolProfiles: ['coding', 'shell', 'artifacts'],
 };
 
+const TECHNICAL_DOCUMENTATION_AVAILABILITY = {
+  skillPacks: ['technical-documentation'],
+  skills: ['technical-documentation-skill'],
+  toolProfiles: ['workspace-files', 'shell', 'browser', 'artifacts'],
+};
+
 test('no manifest is an exact capability no-op even for a frontend task', () => {
   assert.deepEqual(
     resolveWorkspaceCapabilities({
@@ -376,6 +382,64 @@ test('programming-lab rejects incompatible profiles and explicit disable', () =>
       manifest: study,
       task: 'Create a coding exercise.',
       availability: PROGRAMMING_LAB_AVAILABILITY,
+    }),
+    EMPTY_RESOLUTION,
+  );
+});
+
+test('Engineering and Writing activate technical documentation without changing persona', () => {
+  for (const profile of ['engineering', 'writing'] as const) {
+    const manifest = createWorkspaceManifest({ name: profile, profile, by: 'wizard' });
+    manifest.capabilities.enabled.push('technical-documentation');
+    const resolved = resolveWorkspaceCapabilities({
+      manifest,
+      task: 'Write repository-grounded developer documentation with runnable examples.',
+      files: ['docs/guides/integration.md'],
+      availability: TECHNICAL_DOCUMENTATION_AVAILABILITY,
+    });
+
+    assert.deepEqual(resolved.active, ['technical-documentation']);
+    assert.deepEqual(resolved.reasons, [
+      'task describes technical-documentation work',
+      'task includes a technical-documentation artifact',
+    ]);
+    assert.deepEqual(resolved.skillPacks, ['technical-documentation']);
+    assert.deepEqual(resolved.skills, ['technical-documentation-skill']);
+    assert.deepEqual(resolved.toolProfiles, [
+      'workspace-files', 'shell', 'browser', 'artifacts',
+    ]);
+    assert.match(resolved.promptBlocks[0]!, /Preserve the active engineer or writer persona/);
+    assert.equal(
+      manifest.persona.default,
+      profile === 'engineering' ? 'engineer' : 'writer',
+    );
+  }
+});
+
+test('technical-documentation rejects incompatible personas and explicit disable', () => {
+  const study = createWorkspaceManifest({ name: 'study', profile: 'study', by: 'wizard' });
+  study.capabilities.enabled.push('technical-documentation');
+  assert.deepEqual(
+    resolveWorkspaceCapabilities({
+      manifest: study,
+      task: 'Write API documentation.',
+      availability: TECHNICAL_DOCUMENTATION_AVAILABILITY,
+    }),
+    EMPTY_RESOLUTION,
+  );
+
+  const writing = createWorkspaceManifest({
+    name: 'writing',
+    profile: 'writing',
+    by: 'wizard',
+  });
+  writing.capabilities.enabled.push('technical-documentation');
+  writing.capabilities.disabled.push('technical-documentation');
+  assert.deepEqual(
+    resolveWorkspaceCapabilities({
+      manifest: writing,
+      task: 'Write API documentation.',
+      availability: TECHNICAL_DOCUMENTATION_AVAILABILITY,
     }),
     EMPTY_RESOLUTION,
   );

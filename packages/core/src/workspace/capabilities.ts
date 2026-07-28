@@ -53,7 +53,8 @@ export interface WorkspaceCapabilityDefinition {
     | 'academic-paper'
     | 'computational-research'
     | 'data-visualization'
-    | 'programming-lab';
+    | 'programming-lab'
+    | 'technical-documentation';
   label: string;
   description: string;
   skillPackId: string;
@@ -123,6 +124,14 @@ export const WORKSPACE_CAPABILITY_DEFINITIONS: readonly WorkspaceCapabilityDefin
     skillIds: ['programming-lab-skill'],
     toolProfileIds: ['coding', 'shell', 'artifacts'],
   },
+  {
+    id: 'technical-documentation',
+    label: 'Technical documentation',
+    description: 'Task-time repository-grounded references, guides, tutorials, runbooks, runnable examples, and documentation verification.',
+    skillPackId: 'technical-documentation',
+    skillIds: ['technical-documentation-skill'],
+    toolProfileIds: ['workspace-files', 'shell', 'browser', 'artifacts'],
+  },
 ] as const;
 
 const CAPABILITY_BY_ID = new Map(
@@ -134,6 +143,7 @@ const ACADEMIC_PAPER_DEFINITION = CAPABILITY_BY_ID.get('academic-paper')!;
 const COMPUTATIONAL_RESEARCH_DEFINITION = CAPABILITY_BY_ID.get('computational-research')!;
 const DATA_VISUALIZATION_DEFINITION = CAPABILITY_BY_ID.get('data-visualization')!;
 const PROGRAMMING_LAB_DEFINITION = CAPABILITY_BY_ID.get('programming-lab')!;
+const TECHNICAL_DOCUMENTATION_DEFINITION = CAPABILITY_BY_ID.get('technical-documentation')!;
 
 const FRONTEND_CONTRIBUTION: CapabilityContribution = {
   skillPacks: [FRONTEND_DEFINITION.skillPackId],
@@ -186,6 +196,15 @@ const PROGRAMMING_LAB_CONTRIBUTION: CapabilityContribution = {
   toolProfiles: PROGRAMMING_LAB_DEFINITION.toolProfileIds,
   promptBlocks: [
     'Programming lab capability is active for this task. Stay in the tutor persona, establish the learner level and objective, preserve learner ownership, isolate one concept at a time, use bounded execution and tests as feedback, escalate hints progressively, distinguish environment, syntax, logic, and conceptual errors, and finish with an explanation or transfer check. This capability does not itself grant file, shell, notebook, language-service, or artifact authority.',
+  ],
+};
+
+const TECHNICAL_DOCUMENTATION_CONTRIBUTION: CapabilityContribution = {
+  skillPacks: [TECHNICAL_DOCUMENTATION_DEFINITION.skillPackId],
+  skills: TECHNICAL_DOCUMENTATION_DEFINITION.skillIds,
+  toolProfiles: TECHNICAL_DOCUMENTATION_DEFINITION.toolProfileIds,
+  promptBlocks: [
+    'Technical documentation capability is active for this task. Preserve the active engineer or writer persona, define the audience and job, ground material claims in current code, schemas, tests, runtime evidence, or primary sources, distinguish implemented behavior from proposals, verify runnable examples, expose prerequisites, permissions, side effects, failure recovery, and version limits, and keep terminology consistent. This capability does not itself grant file, shell, network, or artifact authority.',
   ],
 };
 
@@ -268,6 +287,10 @@ const PROGRAMMING_LAB_TASK_PATTERN =
   /\b(programming lab|coding lab|coding exercise|programming exercise|code kata|learn (?:to )?(?:code|program)|debugging practice|test[- ]driven learning|guided coding)\b/i;
 const PROGRAMMING_LAB_FILE_PATTERN =
   /\.(?:c|cc|cpp|cs|go|java|js|jsx|kt|kts|php|py|rb|rs|swift|ts|tsx)$/i;
+const TECHNICAL_DOCUMENTATION_TASK_PATTERN =
+  /\b(technical documentation|developer documentation|api documentation|api reference|developer guide|integration guide|technical tutorial|operational runbook|architecture documentation|documentation audit)\b/i;
+const TECHNICAL_DOCUMENTATION_FILE_PATTERN =
+  /(?:^|\/)(?:docs?|documentation|guides?|runbooks?)(?:\/|$)|(?:^|\/)(?:readme|contributing|architecture)\.(?:md|mdx)$|(?:^|\/)(?:openapi|asyncapi)\.(?:json|ya?ml)$/i;
 
 /** Resolve additive capabilities for one task without reading disk or mutating the manifest. */
 export function resolveWorkspaceCapabilities(input: WorkspaceCapabilityResolutionInput): WorkspaceCapabilityResolution {
@@ -283,6 +306,9 @@ export function resolveWorkspaceCapabilities(input: WorkspaceCapabilityResolutio
     activeAgent === 'data-scientist' && input.manifest.persona.enabled.includes('data-scientist');
   const tutorIsActive =
     activeAgent === 'tutor' && input.manifest.persona.enabled.includes('tutor');
+  const technicalDocumentationPersonaIsActive =
+    (activeAgent === 'engineer' || activeAgent === 'writer')
+    && input.manifest.persona.enabled.includes(activeAgent);
   const available = new Set(
     getWorkspaceProfile(input.manifest.profile)?.capabilities.available ?? [],
   );
@@ -366,6 +392,18 @@ export function resolveWorkspaceCapabilities(input: WorkspaceCapabilityResolutio
       appendAvailable(skills, PROGRAMMING_LAB_CONTRIBUTION.skills, input.availability?.skills);
       appendAvailable(toolProfiles, PROGRAMMING_LAB_CONTRIBUTION.toolProfiles, input.availability?.toolProfiles);
       appendUnique(promptBlocks, PROGRAMMING_LAB_CONTRIBUTION.promptBlocks);
+    }
+  }
+
+  if (technicalDocumentationPersonaIsActive && enabled.has('technical-documentation')) {
+    const documentationReasons = detectTechnicalDocumentationReasons(input.task, input.files);
+    if (documentationReasons.length > 0) {
+      active.push('technical-documentation');
+      reasons.push(...documentationReasons);
+      appendAvailable(skillPacks, TECHNICAL_DOCUMENTATION_CONTRIBUTION.skillPacks, input.availability?.skillPacks);
+      appendAvailable(skills, TECHNICAL_DOCUMENTATION_CONTRIBUTION.skills, input.availability?.skills);
+      appendAvailable(toolProfiles, TECHNICAL_DOCUMENTATION_CONTRIBUTION.toolProfiles, input.availability?.toolProfiles);
+      appendUnique(promptBlocks, TECHNICAL_DOCUMENTATION_CONTRIBUTION.promptBlocks);
     }
   }
 
@@ -467,6 +505,21 @@ function detectProgrammingLabReasons(
   const normalizedFiles = (files ?? []).map((file) => file.replaceAll('\\', '/'));
   if (normalizedFiles.some((file) => PROGRAMMING_LAB_FILE_PATTERN.test(file))) {
     reasons.push('task includes a programming source file');
+  }
+  return reasons;
+}
+
+function detectTechnicalDocumentationReasons(
+  task: string | undefined,
+  files: readonly string[] | undefined,
+): string[] {
+  const reasons: string[] = [];
+  if (TECHNICAL_DOCUMENTATION_TASK_PATTERN.test(task?.trim() ?? '')) {
+    reasons.push('task describes technical-documentation work');
+  }
+  const normalizedFiles = (files ?? []).map((file) => file.replaceAll('\\', '/'));
+  if (normalizedFiles.some((file) => TECHNICAL_DOCUMENTATION_FILE_PATTERN.test(file))) {
+    reasons.push('task includes a technical-documentation artifact');
   }
   return reasons;
 }

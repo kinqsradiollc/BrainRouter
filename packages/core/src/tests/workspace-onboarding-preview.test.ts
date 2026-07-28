@@ -130,6 +130,30 @@ test('P23-8 capability choices are profile-scoped while Custom remains explicit'
     ['programming-lab'],
   );
 
+  const engineering = buildWorkspaceOnboardingPreview(
+    createWorkspaceManifest({ name: 'engineering', profile: 'engineering', by: 'wizard' }),
+  );
+  assert.deepEqual(
+    engineering.catalog
+      .filter((row) => row.kind === 'capability' && row.selectable)
+      .map((row) => [row.id, row.recommended]),
+    [
+      ['backend', true],
+      ['frontend', true],
+      ['technical-documentation', false],
+    ],
+  );
+
+  const writing = buildWorkspaceOnboardingPreview(
+    createWorkspaceManifest({ name: 'writing', profile: 'writing', by: 'wizard' }),
+  );
+  assert.deepEqual(
+    writing.catalog
+      .filter((row) => row.kind === 'capability' && row.selectable)
+      .map((row) => row.id),
+    ['academic-paper', 'technical-documentation'],
+  );
+
   const custom = buildWorkspaceOnboardingPreview(
     createWorkspaceManifest({ name: 'custom', profile: 'custom', by: 'wizard' }),
   );
@@ -148,6 +172,7 @@ test('P23-8 capability choices are profile-scoped while Custom remains explicit'
       'data-visualization',
       'frontend',
       'programming-lab',
+      'technical-documentation',
     ],
   );
 });

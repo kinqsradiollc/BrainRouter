@@ -66,7 +66,7 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
     },
     agents: { default: 'engineer', enabled: ['engineer'] },
     capabilities: {
-      available: ['frontend', 'backend'],
+      available: ['frontend', 'backend', 'technical-documentation'],
       recommended: ['frontend', 'backend'],
       enabled: ['frontend', 'backend'],
     },
@@ -191,7 +191,11 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
       maxParallel: 2,
     },
     agents: { default: 'writer', enabled: ['writer'] },
-    capabilities: { available: ['academic-paper'], recommended: [], enabled: [] },
+    capabilities: {
+      available: ['academic-paper', 'technical-documentation'],
+      recommended: [],
+      enabled: [],
+    },
     skills: { packs: ['writing'], enabled: ['planning-skill', 'handover-skill'] },
     tools: {
       profiles: [
@@ -221,6 +225,7 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
         'computational-research',
         'data-visualization',
         'programming-lab',
+        'technical-documentation',
       ],
       recommended: [],
       enabled: [],
