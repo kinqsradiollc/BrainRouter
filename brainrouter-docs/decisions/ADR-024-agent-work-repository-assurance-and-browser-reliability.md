@@ -1014,7 +1014,8 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[U]` user decision.
 | R1 | `[x]` | Work Contract v1 schemas, stable task IDs, migration reader | R0 | Round-trip, migration, and invariant tests |
 | R1a | `[~]` | Package contract-placement audit and responsibility splits, beginning with Work Contract types/validation/store | R1 | Inventory by contract/port/service/adapter owner; types and core builds; unchanged compatibility imports |
 | R1b | `[x]` | Package-by-package god-module and misplaced-contract scan, beginning with workspace manifest/profile modules and orchestration definition parsing | R1a | File-level responsibility inventory, dependency-direction check, and small behavior-preserving remediation PR queue |
-| R1c | `[ ]` | Split core configuration contracts and normalizers by domain | R1b | Compatibility barrel, config fixture parity, types/core build |
+| R1c | `[~]` | Split core configuration contracts and normalizers by domain | R1b | Compatibility barrel, config fixture parity, types/core build |
+| R1c1 | `[x]` | Extract runtime-plane configuration contracts and pure normalizers | R1c | Unchanged config exports; runtime-plane/container fixtures |
 | R1d | `[ ]` | Split agent-protocol events, commands, interactions, bridges, and writers | R1b | Unchanged public exports and protocol fixture parity |
 | R1e | `[ ]` | Separate browser wire contracts, core policy, transport, and Desktop adapter concerns | R1d | Browser protocol, redaction, cancellation, and host parity tests |
 | R1f | `[ ]` | Move the stable workspace manifest record to types and split core normalization/store services | R1b | V1/V2/V3 round-trips, hostile-input bounds, compatibility imports |
