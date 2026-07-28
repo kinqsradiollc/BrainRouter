@@ -100,9 +100,14 @@ test('P23-8 capability choices are profile-scoped while Custom remains explicit'
     createWorkspaceManifest({ name: 'research', profile: 'research', by: 'wizard' }),
   );
   const researchCapabilities = research.catalog.filter((row) => row.kind === 'capability');
-  assert.equal(researchCapabilities.every((row) => !row.selectable), true);
-  assert.equal(researchCapabilities.every((row) =>
-    row.blockedReason === 'Not contributed for the selected workspace profile.'), true);
+  assert.deepEqual(
+    researchCapabilities.filter((row) => row.selectable).map((row) => row.id),
+    ['computational-research'],
+  );
+  assert.equal(researchCapabilities
+    .filter((row) => !row.selectable)
+    .every((row) =>
+      row.blockedReason === 'Not contributed for the selected workspace profile.'), true);
 
   const custom = buildWorkspaceOnboardingPreview(
     createWorkspaceManifest({ name: 'custom', profile: 'custom', by: 'wizard' }),
@@ -115,6 +120,6 @@ test('P23-8 capability choices are profile-scoped while Custom remains explicit'
       .filter((row) => row.kind === 'capability' && row.selectable)
       .map((row) => row.id)
       .sort(),
-    ['academic-paper', 'backend', 'frontend'],
+    ['academic-paper', 'backend', 'computational-research', 'frontend'],
   );
 });

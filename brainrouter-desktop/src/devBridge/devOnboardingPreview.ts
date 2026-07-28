@@ -40,6 +40,20 @@ const DEV_CAPABILITIES = [
       'artifacts',
     ],
   },
+  {
+    id: 'computational-research',
+    label: 'Computational research',
+    description: 'Task-time reproducible analysis, experiment, validation, uncertainty, and limitation workflows.',
+    expandsTo: [
+      'data-analysis-skill',
+      'experiment-validation-skill',
+      'coding',
+      'shell',
+      'browser',
+      'research-notes',
+      'artifacts',
+    ],
+  },
 ] as const;
 const DEV_TOOL_GROUPS = [
   {

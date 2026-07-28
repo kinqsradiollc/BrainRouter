@@ -19,9 +19,13 @@ export type WorkspaceProfilePluginId =
   | 'writing'
   | 'frontend'
   | 'backend'
-  | 'academic-paper';
+  | 'academic-paper'
+  | 'computational-research';
 
-type WorkspaceProfilePluginAssetId = Exclude<WorkspaceProfilePluginId, 'academic-paper'>;
+type WorkspaceProfilePluginAssetId = Exclude<
+  WorkspaceProfilePluginId,
+  'academic-paper' | 'computational-research'
+>;
 
 export interface WorkspaceProfilePluginDefinition {
   id: WorkspaceProfilePluginId;
@@ -136,6 +140,14 @@ export const WORKSPACE_PROFILE_PLUGIN_DEFINITIONS: readonly WorkspaceProfilePlug
       'academic-paper-drafting-skill',
       'academic-paper-review-skill',
     ],
+    personaIds: [],
+  },
+  {
+    id: 'computational-research',
+    kind: 'capability',
+    assetId: 'data',
+    pluginName: 'profile-data',
+    skillIds: ['data-analysis-skill', 'experiment-validation-skill'],
     personaIds: [],
   },
 ] as const;

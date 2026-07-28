@@ -41,6 +41,8 @@ test('P23-3b catalog projects safe roles, capabilities, tool groups, tools, skil
     entry.kind === 'capability' && entry.id === 'academic-paper');
   const academicPaperPack = catalog.entries.find((entry) =>
     entry.kind === 'skill-pack' && entry.id === 'academic-paper');
+  const computationalResearch = catalog.entries.find((entry) =>
+    entry.kind === 'capability' && entry.id === 'computational-research');
   const webSearch = catalog.entries.find((entry) => entry.kind === 'tool' && entry.id === 'web_search');
   const research = catalog.entries.find((entry) => entry.kind === 'skill-pack' && entry.id === 'research');
   const researchQuestion = catalog.entries.find((entry) => entry.kind === 'skill' && entry.id === 'research-question-skill');
@@ -65,6 +67,8 @@ test('P23-3b catalog projects safe roles, capabilities, tool groups, tools, skil
   assert.ok(academicPaper?.expandsTo?.includes('academic-paper-drafting-skill'));
   assert.ok(academicPaper?.expandsTo?.includes('workspace-files'));
   assert.equal(academicPaperPack?.managedByCapability, 'academic-paper');
+  assert.ok(computationalResearch?.expandsTo?.includes('data-analysis-skill'));
+  assert.ok(computationalResearch?.expandsTo?.includes('shell'));
   assert.equal(webSearch?.source, 'core');
   assert.equal(webSearch?.accessTier, 'read');
   assert.equal(webSearch?.actionKind, 'network');
@@ -83,7 +87,7 @@ test('P23-3b catalog projects safe roles, capabilities, tool groups, tools, skil
 test('P23-3b capability selections use contributed capability IDs and reject typos', () => {
   const catalog = buildWorkspaceSelectionCatalog();
   const valid = validateReviewedWorkspaceCapabilitySelection({
-    enabled: ['frontend', 'backend', 'academic-paper'],
+    enabled: ['frontend', 'backend', 'academic-paper', 'computational-research'],
     disabled: [],
   }, catalog);
   assert.equal(valid.ok, true);

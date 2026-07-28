@@ -113,7 +113,11 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
       maxParallel: 3,
     },
     agents: { default: 'researcher', enabled: ['researcher'] },
-    capabilities: { available: [], recommended: [], enabled: [] },
+    capabilities: {
+      available: ['computational-research'],
+      recommended: [],
+      enabled: [],
+    },
     skills: { packs: ['research'], enabled: ['planning-skill', 'handover-skill'] },
     tools: {
       profiles: [
@@ -135,7 +139,11 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
       maxParallel: 4,
     },
     agents: { default: 'data-scientist', enabled: ['data-scientist'] },
-    capabilities: { available: [], recommended: [], enabled: [] },
+    capabilities: {
+      available: ['computational-research'],
+      recommended: [],
+      enabled: [],
+    },
     skills: { packs: ['data'], enabled: ['planning-skill', 'testing-skill', 'verify-loop'] },
     tools: {
       profiles: [
@@ -202,7 +210,7 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
     },
     agents: { default: '', enabled: [] },
     capabilities: {
-      available: ['frontend', 'backend', 'academic-paper'],
+      available: ['frontend', 'backend', 'academic-paper', 'computational-research'],
       recommended: [],
       enabled: [],
     },
