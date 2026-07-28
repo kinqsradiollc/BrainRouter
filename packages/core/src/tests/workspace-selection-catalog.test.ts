@@ -78,6 +78,7 @@ test('P23-3b catalog projects safe roles, capabilities, tool groups, tools, skil
   assert.equal(frontendPack?.managedByCapability, 'frontend');
   assert.ok(academicPaper?.expandsTo?.includes('academic-paper-drafting-skill'));
   assert.ok(academicPaper?.expandsTo?.includes('workspace-files'));
+  assert.ok(academicPaper?.expandsTo?.includes('research-browser'));
   assert.equal(academicPaperPack?.managedByCapability, 'academic-paper');
   assert.ok(computationalResearch?.expandsTo?.includes('data-analysis-skill'));
   assert.ok(computationalResearch?.expandsTo?.includes('shell'));

@@ -43,7 +43,13 @@ const ACADEMIC_PAPER_AVAILABILITY = {
     'academic-paper-drafting-skill',
     'academic-paper-review-skill',
   ],
-  toolProfiles: ['workspace-files', 'browser', 'research-notes', 'artifacts'],
+  toolProfiles: [
+    'workspace-files',
+    'browser',
+    'research-browser',
+    'research-notes',
+    'artifacts',
+  ],
 };
 
 const COMPUTATIONAL_RESEARCH_AVAILABILITY = {
@@ -179,7 +185,7 @@ test('Writing activates academic-paper workflows without changing persona', () =
   assert.deepEqual(resolved.skillPacks, ['academic-paper']);
   assert.deepEqual(resolved.skills, ACADEMIC_PAPER_AVAILABILITY.skills);
   assert.deepEqual(resolved.toolProfiles, [
-    'workspace-files', 'browser', 'research-notes', 'artifacts',
+    'workspace-files', 'browser', 'research-browser', 'research-notes', 'artifacts',
   ]);
   assert.match(resolved.promptBlocks[0]!, /Stay in the writer persona/);
   assert.deepEqual(manifest.persona, { default: 'writer', enabled: ['writer'] });

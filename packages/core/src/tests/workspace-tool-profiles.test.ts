@@ -166,6 +166,15 @@ test('v3 activates only tool groups implied by a reviewed task capability', () =
       requiredTool: ['browser_run_flow', 'browser'],
     },
     {
+      profile: 'writing',
+      capability: 'academic-paper',
+      task: 'Audit the citations and revise this academic paper.',
+      expected: [
+        'workspace-files', 'browser', 'research-browser', 'research-notes', 'artifacts',
+      ],
+      requiredTool: ['browser_snapshot', undefined],
+    },
+    {
       profile: 'research',
       capability: 'computational-research',
       task: 'Run a reproducible computational analysis for this research question.',
@@ -228,6 +237,48 @@ test('v3 activates only tool groups implied by a reviewed task capability', () =
       `${fixture.profile}: ${fixture.requiredTool[0]}`,
     );
   }
+});
+
+test('an existing reviewed Research folder keeps its selected production tools after catalog expansion', () => {
+  const manifest = createWorkspaceManifest({
+    name: 'EconomicsResearch',
+    profile: 'research',
+    by: 'wizard',
+  });
+  manifest.version = 3;
+  manifest.tools = {
+    mode: 'explicit-catalog',
+    profiles: [
+      'workspace-files',
+      'browser',
+      'research-notes',
+      'artifacts',
+      'planning-session',
+      'orchestration',
+    ],
+    enabled: [],
+    deny: [],
+  };
+
+  const selection = resolveWorkspaceToolSelection({ manifest });
+  for (const toolId of [
+    'read_file',
+    'list_dir',
+    'grep_search',
+    'glob_files',
+    'write_file',
+    'edit_file',
+    'apply_patch',
+    'research_note',
+    'artifact_write',
+    'update_plan',
+    'delegate_agent',
+  ]) {
+    assert.equal(allowed(selection, toolId), true, toolId);
+  }
+  assert.equal(allowed(selection, 'run_command'), false);
+  assert.equal(allowed(selection, 'browser_snapshot'), false);
+  assert.equal(mcpAllowed(selection, 'knowledge_search'), false);
 });
 
 test('v3 rejects arbitrary, incompatible, and disabled capability tool additions', () => {
