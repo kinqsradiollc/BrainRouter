@@ -3,6 +3,7 @@ import type {
   ResolvedPlanningSchema,
 } from '@kinqs/brainrouter-types/planning-schema';
 import type { WorkspaceProfileId } from '../profiles.js';
+import { isWorkspaceInitializationRequest } from '../projectIntent.js';
 import { resolvePlanningSchema } from './catalog.js';
 
 export interface PlanningSchemaSkillRequirement {
@@ -53,7 +54,8 @@ export function resolvePlanningSchemaActivation(input: {
 
 function requiresPlanning(prompt: string): boolean {
   const normalized = prompt.toLowerCase();
-  return /\b(plan|planning|taskboard|multi[- ](?:stage|step|agent)|end[- ]to[- ]end|parallel agents?|sub[- ]?agents?|delegate|delegation|deep research|multiple deliverables|several deliverables)\b/.test(normalized);
+  return isWorkspaceInitializationRequest(prompt)
+    || /\b(plan|planning|taskboard|multi[- ](?:stage|step|agent)|end[- ]to[- ]end|parallel agents?|sub[- ]?agents?|delegate|delegation|deep research|multiple deliverables|several deliverables)\b/.test(normalized);
 }
 
 function decisionTriggers(
