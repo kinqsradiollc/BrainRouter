@@ -207,6 +207,7 @@
     "personas",
     "agents",
     "orchestration-profiles",
+    "planning-schemas",
     "packs",
     "profile-plugins",
     "extensions",

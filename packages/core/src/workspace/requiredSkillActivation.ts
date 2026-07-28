@@ -1,6 +1,7 @@
 import type { WorkspaceManifest } from './manifest.js';
+import { resolvePlanningSchemaActivation } from './planningSchemas/activation.js';
 
-export type RequiredRuntimeSkillId = 'planning-skill' | 'adr-skill';
+export type RequiredRuntimeSkillId = string;
 
 export interface RequiredRuntimeSkill {
   id: RequiredRuntimeSkillId;
@@ -9,16 +10,27 @@ export interface RequiredRuntimeSkill {
 }
 
 export interface RequiredSkillActivation {
+  planningSchema: {
+    id: string;
+    label: string;
+    source: 'profile-default' | 'workspace-selection' | 'safe-fallback';
+  };
   required: RequiredRuntimeSkill[];
 }
 
 export function resolveRequiredSkillActivation(input: {
   prompt: string;
   activeGoal: boolean;
-  manifest?: Pick<WorkspaceManifest, 'profile' | 'skills'> | null;
+  manifest?: Pick<WorkspaceManifest, 'profile' | 'planning' | 'skills'> | null;
 }): RequiredSkillActivation {
   const required: RequiredRuntimeSkill[] = [];
   const disabled = new Set(input.manifest?.skills.disabled ?? []);
+  const schemaActivation = resolvePlanningSchemaActivation({
+    profileId: input.manifest?.profile ?? 'custom',
+    prompt: input.prompt,
+    activeGoal: input.activeGoal,
+    selectedSchemaId: input.manifest?.planning?.schemaId,
+  });
   const add = (id: RequiredRuntimeSkillId, reason: string): void => {
     if (required.some((skill) => skill.id === id)) return;
     required.push({
@@ -28,17 +40,20 @@ export function resolveRequiredSkillActivation(input: {
     });
   };
 
-  if (input.activeGoal) {
-    add('planning-skill', 'an active goal requires a durable, current plan');
-  } else if (requiresPlanning(input.prompt)) {
-    add('planning-skill', 'the request is multi-stage, delegated, research-heavy, or explicitly asks for planning');
-  }
-
-  if (requiresArchitectureDecision(input.prompt)) {
+  for (const skill of schemaActivation.requiredSkills) add(skill.id, skill.reason);
+  if (requiresExplicitArchitectureDecision(input.prompt) &&
+      !required.some((skill) => skill.id === 'adr-skill')) {
     add('adr-skill', 'the request explicitly requires a durable architecture or cross-surface decision');
   }
 
-  return { required };
+  return {
+    planningSchema: {
+      id: schemaActivation.selection.schema.id,
+      label: schemaActivation.selection.schema.label,
+      source: schemaActivation.selection.source,
+    },
+    required,
+  };
 }
 
 export function requiredSkillActivationPrompt(activation: RequiredSkillActivation): string {
@@ -47,6 +62,8 @@ export function requiredSkillActivationPrompt(activation: RequiredSkillActivatio
     `- \`${skill.id}\` (${skill.availability}): ${skill.reason}`);
   return [
     '## Required workflow skills',
+    `Planning schema: ${activation.planningSchema.label} (\`${activation.planningSchema.id}\`, ${activation.planningSchema.source})`,
+    '',
     ...lines,
     '',
     'Before the first mutating tool call, load each available required skill with `get_skill` and follow it unless the host already embedded that skill for this turn.',
@@ -64,12 +81,7 @@ export function requiredSkillsBlockingMutation(
   );
 }
 
-function requiresPlanning(prompt: string): boolean {
-  const normalized = prompt.toLowerCase();
-  return /\b(plan|planning|taskboard|multi[- ](?:stage|step|agent)|end[- ]to[- ]end|parallel agents?|sub[- ]?agents?|delegate|delegation|deep research|multiple deliverables|several deliverables)\b/.test(normalized);
-}
-
-function requiresArchitectureDecision(prompt: string): boolean {
+function requiresExplicitArchitectureDecision(prompt: string): boolean {
   const normalized = prompt.toLowerCase();
   if (/\badr(?:-\d+)?\b|architecture decision record/.test(normalized)) return true;
   const durableSurface =

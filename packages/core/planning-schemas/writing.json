@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "kind": "planning-schema",
+  "id": "writing-editorial",
+  "label": "Editorial workflow",
+  "description": "Audience and intent, outline, source or continuity evidence, drafting, and revision.",
+  "profileIds": ["writing"],
+  "planningSkillIds": ["planning-skill", "structured-writing-skill"],
+  "sections": [
+    {
+      "id": "brief",
+      "label": "Audience and intent",
+      "description": "Audience, purpose, voice, constraints, and success criteria.",
+      "required": true
+    },
+    {
+      "id": "outline",
+      "label": "Outline",
+      "description": "Narrative or argument structure and section purpose.",
+      "required": true
+    },
+    {
+      "id": "ledger",
+      "label": "Source or continuity ledger",
+      "description": "Factual sources, terminology, characters, claims, and continuity constraints.",
+      "required": false
+    },
+    {
+      "id": "revision",
+      "label": "Revision plan",
+      "description": "Editorial passes, reviewer concerns, factual checks, and completion criteria.",
+      "required": true
+    }
+  ],
+  "gates": [
+    {
+      "id": "editorial-review",
+      "label": "Editorial review",
+      "description": "Structure, clarity, voice, audience fit, and revision goals are reviewed."
+    },
+    {
+      "id": "factual-review",
+      "label": "Factual review",
+      "description": "Material factual claims retain source evidence and uncertainty."
+    }
+  ]
+}

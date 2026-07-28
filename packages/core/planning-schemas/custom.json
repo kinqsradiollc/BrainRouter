@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "kind": "planning-schema",
+  "id": "custom-deliverable",
+  "label": "Custom deliverable",
+  "description": "A minimal outcome, task, evidence, and review plan when no domain schema is selected.",
+  "profileIds": ["custom"],
+  "planningSkillIds": ["planning-skill"],
+  "sections": [
+    {
+      "id": "outcome",
+      "label": "Outcome",
+      "description": "Desired result, boundaries, constraints, and completion criteria.",
+      "required": true
+    },
+    {
+      "id": "tasks",
+      "label": "Tasks",
+      "description": "Stable tasks, dependencies, and assigned capabilities.",
+      "required": true
+    },
+    {
+      "id": "evidence",
+      "label": "Evidence",
+      "description": "Artifacts and observations that demonstrate completion.",
+      "required": true
+    },
+    {
+      "id": "review",
+      "label": "Review",
+      "description": "User-selected review and approval gate.",
+      "required": true
+    }
+  ],
+  "gates": [
+    {
+      "id": "explicit-review",
+      "label": "Explicit review",
+      "description": "The user-selected completion and approval gate is recorded before execution."
+    }
+  ]
+}

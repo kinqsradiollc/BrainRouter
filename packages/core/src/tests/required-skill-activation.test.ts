@@ -15,8 +15,9 @@ test('required skill activation applies shared Planning and ADR hard triggers', 
   });
   assert.deepEqual(
     activation.required.map((skill) => skill.id),
-    ['planning-skill', 'adr-skill'],
+    ['planning-skill', 'research-question-skill', 'adr-skill'],
   );
+  assert.equal(activation.planningSchema.id, 'research-evidence');
   assert.match(requiredSkillActivationPrompt(activation), /Before the first mutating tool call/);
 });
 
@@ -34,8 +35,8 @@ test('active goals require Planning while small obvious changes do not', () => {
       prompt: 'Rename this label.',
       activeGoal: false,
       manifest: null,
-    }),
-    { required: [] },
+    }).required,
+    [],
   );
 });
 
@@ -56,4 +57,24 @@ test('disabled hard-trigger skills fail safe and loaded skills satisfy the gate'
     manifest,
   });
   assert.deepEqual(requiredSkillsBlockingMutation(available, new Set(['planning-skill'])), []);
+});
+
+test('reviewed workspace planning selection drives runtime skill activation', () => {
+  const manifest = createWorkspaceManifest({
+    name: 'custom',
+    profile: 'custom',
+    by: 'wizard',
+    overrides: { planning: { schemaId: 'research-evidence' } },
+  });
+  const activation = resolveRequiredSkillActivation({
+    prompt: 'Plan a deep research project.',
+    activeGoal: false,
+    manifest,
+  });
+  assert.equal(activation.planningSchema.id, 'research-evidence');
+  assert.equal(activation.planningSchema.source, 'workspace-selection');
+  assert.deepEqual(
+    activation.required.map((skill) => skill.id),
+    ['planning-skill', 'research-question-skill'],
+  );
 });

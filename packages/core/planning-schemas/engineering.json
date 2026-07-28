@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "kind": "planning-schema",
+  "id": "engineering-delivery",
+  "label": "Engineering delivery",
+  "description": "Requirements, architecture decisions, implementation tasks, and verification evidence.",
+  "profileIds": ["engineering"],
+  "planningSkillIds": ["planning-skill"],
+  "sections": [
+    {
+      "id": "requirements",
+      "label": "Requirements",
+      "description": "Outcome, scope, constraints, and acceptance criteria.",
+      "required": true
+    },
+    {
+      "id": "decisions",
+      "label": "Architecture decisions",
+      "description": "Durable decisions and their trade-offs when a decision trigger applies.",
+      "required": false
+    },
+    {
+      "id": "implementation",
+      "label": "Implementation plan",
+      "description": "Stable tasks, dependencies, affected surfaces, and review boundaries.",
+      "required": true
+    },
+    {
+      "id": "verification",
+      "label": "Verification matrix",
+      "description": "Acceptance criteria mapped to focused and hosted evidence.",
+      "required": true
+    }
+  ],
+  "gates": [
+    {
+      "id": "acceptance-criteria",
+      "label": "Acceptance criteria",
+      "description": "Every implementation-ready task links to an accepted criterion or exploratory parent."
+    },
+    {
+      "id": "architecture-decision",
+      "label": "Architecture decision",
+      "description": "Material irreversible or boundary-crossing choices have a reviewed decision record."
+    }
+  ],
+  "decisionPolicy": {
+    "skillId": "adr-skill",
+    "triggerIds": [
+      "public-contract",
+      "security-boundary",
+      "persistence-model",
+      "provider-runtime-boundary",
+      "cross-surface",
+      "expensive-to-reverse"
+    ]
+  }
+}

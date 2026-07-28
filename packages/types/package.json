@@ -22,6 +22,10 @@
       "types": "./dist/work-contract.d.ts",
       "import": "./dist/work-contract.js"
     },
+    "./planning-schema": {
+      "types": "./dist/planning-schema.d.ts",
+      "import": "./dist/planning-schema.js"
+    },
     "./atlas-ops": {
       "types": "./dist/atlas-ops.d.ts",
       "import": "./dist/atlas-ops.js"
