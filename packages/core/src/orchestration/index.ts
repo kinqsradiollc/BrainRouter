@@ -15,6 +15,7 @@ export * from './profiles/orchestrationProfileCatalog.js';
 export * from './profiles/orchestrationProfileSources.js';
 export * from './profiles/orchestrationProfileDefinitionFile.js';
 export * from './profiles/orchestrationProfileResolver.js';
+export * from './profiles/taskSignals.js';
 export * from './profiles/adaptiveStrategySelection.js';
 export * from './profiles/adaptiveStrategySelectionModel.js';
 export * from './roles/outputContracts.js';

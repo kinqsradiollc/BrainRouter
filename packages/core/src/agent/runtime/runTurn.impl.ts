@@ -95,6 +95,7 @@ import { getToolSummary, getToolPreview } from '../support/toolSummary.js';
 import { trackChildObservation, parseChildDrainTimeouts, formatChildDrainTimeoutAnswer, summarizeWaitedChildOutputs } from '../support/childObservation.js';
 import { sanitizeToolCallsForHistory, explainUnknownToolName } from '../agent.js';
 import { refreshWorkspaceCapabilityState } from '../workspaceCapabilityState.js';
+import { resolveActiveTurnOrchestration } from '../../workspace/activeTurnOrchestration.js';
 import {
   adaptWorkspaceSkillCatalogText,
   resolveWorkspaceManagedSkill,
@@ -157,6 +158,13 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // construction so later policy slices can consume the same immutable turn
     // state; this first slice publishes only the tagged prompt contribution.
     refreshWorkspaceCapabilityState(this, prompt);
+    const activeTurnOrchestration = resolveActiveTurnOrchestration({
+      workspaceRoot: this.workspaceRoot,
+      task: prompt,
+      activeCapabilitySkillIds: this.activeWorkspaceCapabilities.skills,
+      parentDepth: this.agentDepth,
+    });
+    this.activeTurnOrchestration = activeTurnOrchestration;
     // MAR-4 — snapshot children carried over from the previous turn BEFORE the reset,
     // so a "is it done?" question this turn can resolve those exact ids.
     const carriedPendingChildIds = [...this.lastTurnPendingChildIds];
@@ -2643,6 +2651,12 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       loops_used: loopCount,
       tokens_in: this.lastTurnUsage.promptTokens,
       tokens_out: this.lastTurnUsage.completionTokens,
+      orchestration_profile_id: activeTurnOrchestration.plan.orchestrationProfileId,
+      orchestration_strategy_id: activeTurnOrchestration.plan.strategyId,
+      orchestration_selection_source: activeTurnOrchestration.plan.selectionSource,
+      orchestration_stage_count: activeTurnOrchestration.plan.stages.length,
+      orchestration_signal_ids: activeTurnOrchestration.taskSignalIds.join(','),
+      orchestration_source: activeTurnOrchestration.source,
     });
     // Accumulate session usage + (below) run the turn-end tool-result shrink on
     // EVERY exit path, the loop-limit path included. A `return finalAnswer`

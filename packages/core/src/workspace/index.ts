@@ -20,6 +20,7 @@ export * from './domainPersonas.js';
 export * from './personaDefinitionFile.js';
 export * from './personaRegistry.js';
 export * from './profilePlugins.js';
+export * from './activeTurnOrchestration.js';
 export * from './profileRecommendations.js';
 export * from './profileOrchestrationDefaults.js';
 export * from './onboardingPreview.js';
