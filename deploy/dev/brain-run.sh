@@ -27,22 +27,35 @@ if [ "${BRAIN_INSTALL_DOCKER_CLI:-0}" = "1" ] && ! command -v docker >/dev/null 
   rm -rf /var/lib/apt/lists/*
 fi
 
-# 3) OPTIONAL (BRAIN_REBUILD_CORE=1): the step-4 gate is existence-only and the
-#    dist volume persists across recreation, so a stale compiled packages/core
-#    keeps loading after you edit packages/core/src. Delete the marker file the
-#    gate keys on to force a fresh core build. Set this on the FIRST boot after
-#    editing the pentest runtime (packages/core/src/review/*).
+# 3) Fingerprint the runtime-package sources. Their dist directories live in
+#    persistent Linux volumes, while their sources come from the host bind mount;
+#    existence-only checks therefore keep stale exports after a source update.
+#    Rebuild when the fingerprint changes. BRAIN_REBUILD_CORE remains an
+#    explicit force-rebuild escape hatch.
+runtime_hash_marker=packages/core/dist/.brain-runtime-source-hash
+runtime_source_hash=$(
+  {
+    find packages/types/src packages/agent-protocol/src packages/core/src -type f -print0
+    printf '%s\0' \
+      packages/types/package.json packages/types/tsconfig.json \
+      packages/agent-protocol/package.json packages/agent-protocol/tsconfig.json \
+      packages/core/package.json packages/core/tsconfig.json
+  } | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1
+)
+stored_runtime_hash=$(cat "$runtime_hash_marker" 2>/dev/null || true)
 if [ "${BRAIN_REBUILD_CORE:-0}" = "1" ]; then
-  rm -f packages/core/dist/review/index.js
+  stored_runtime_hash=
 fi
 
-# 4) Build the runtime packages the brain imports, on first boot / missing marker.
+# 4) Build the runtime packages on first boot, incomplete dist, or source drift.
 if [ ! -f packages/types/dist/index.js ] \
   || [ ! -f packages/agent-protocol/dist/index.js ] \
-  || [ ! -f packages/core/dist/review/index.js ]; then
+  || [ ! -f packages/core/dist/review/index.js ] \
+  || [ "$stored_runtime_hash" != "$runtime_source_hash" ]; then
   npm run build -w @kinqs/brainrouter-types \
     && npm run build -w @kinqs/brainrouter-agent-protocol \
     && npm run build -w @kinqs/brainrouter-core
+  printf '%s\n' "$runtime_source_hash" > "$runtime_hash_marker"
 fi
 
 # 5) Hand off to tsx watch — brainrouter/src edits reflect live, no rebuild.
