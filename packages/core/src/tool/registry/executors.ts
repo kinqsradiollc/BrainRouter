@@ -8,7 +8,14 @@ import type { SessionInputPort } from '../../session/input/inputDelivery.js';
 export type ToolExposure = 'direct' | 'hidden';
 export interface LocalToolSpec { name: string; description: string; inputSchema: Record<string, unknown> }
 export interface OrchestrationRuntimePort { invoke(toolName: string, args: Record<string, any>, metadata: { workflowLaunch: boolean }): Promise<string> }
-export interface ToolLifecycleRuntimePort { afterInvoke(kind: 'track-automation' | 'goal-reconcile' | 'plan-update', args: Record<string, any>): void | Promise<void> }
+export type ToolLifecycleKind =
+  | 'track-automation'
+  | 'goal-reconcile'
+  | 'plan-update'
+  | 'steer-reconcile';
+export interface ToolLifecycleRuntimePort {
+  afterInvoke(kind: ToolLifecycleKind, args: Record<string, any>): void | Promise<void>;
+}
 export interface LocalToolInvocation {
   args: Record<string, any>;
   invokedName?: string;

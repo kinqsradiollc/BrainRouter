@@ -130,8 +130,21 @@ export function installTurnRunner(ctx: RunChatContext): void {
     try {
       const answer = await agent.runTurn(expanded, {
         onStatusUpdate: tickStatus,
-        onSteerApplied: (input) => {
-          controller!.push.notice(`Steer applied · ${input.text.replace(/\s+/g, ' ').slice(0, 100)}`, 'info');
+        onSteerApplied: (_input, receipt) => {
+          controller!.push.notice(
+            `Steer received · ${receipt.id.slice(0, 8)} · awaiting classification`,
+            'info',
+          );
+        },
+        onSteerReceipt: (receipt) => {
+          const classification = receipt.classification?.replace('_', ' ') ?? 'pending';
+          const revision = receipt.resultingRevision
+            ? ` · plan r${receipt.resultingRevision}`
+            : '';
+          controller!.push.notice(
+            `Steer ${receipt.status} · ${classification}${revision}`,
+            receipt.status === 'needs_user' || receipt.status === 'rejected' ? 'warn' : 'info',
+          );
         },
         // TIER A live streaming hooks. The agent calls these as SSE
         // frames arrive so the chat shows text character-by-character.

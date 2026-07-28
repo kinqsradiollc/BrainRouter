@@ -27,6 +27,18 @@ function deliveryLabel(delivery: Extract<ChatRow, { kind: 'user' }>['delivery'])
     return 'Queue · delivered';
   }
   if (delivery.state === 'steered') return 'Steer · pending';
+  if (delivery.receipt?.status === 'needs_user') return 'Steer · needs input';
+  if (delivery.receipt?.status === 'pending' && delivery.receipt.classification === 'plan_change') {
+    return 'Steer · revising plan';
+  }
+  if (delivery.receipt?.status === 'pending') return 'Steer · reconciling';
+  if (delivery.receipt?.status === 'applied') {
+    const classification = delivery.receipt.classification?.replace('_', ' ');
+    const revision = delivery.receipt.resultingRevision
+      ? ` · plan r${delivery.receipt.resultingRevision}`
+      : '';
+    return `Steer · ${classification ?? 'applied'}${revision}`;
+  }
   if (delivery.state === 'applied') return 'Steer · applied';
   if (delivery.state === 'running') return 'Steer · follow-up';
   return 'Steer · delivered';

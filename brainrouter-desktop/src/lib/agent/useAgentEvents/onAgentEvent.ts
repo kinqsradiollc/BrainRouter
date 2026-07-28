@@ -251,11 +251,17 @@ export function createOnAgentEvent(deps: OnAgentEventDeps): (msg: AgentEventMess
         setRows((current) => {
           const index = current.findIndex((row) =>
             (row.kind === 'user' || row.kind === 'delivery') && row.delivery?.id === e.id);
+          const priorReceipt = index >= 0
+            ? current[index].kind === 'user' || current[index].kind === 'delivery'
+              ? current[index].delivery?.receipt
+              : undefined
+            : undefined;
           const delivery = {
             id: e.id,
             mode: e.mode,
             state: e.state,
             ...(e.position ? { position: e.position } : {}),
+            ...(e.receipt || priorReceipt ? { receipt: e.receipt ?? priorReceipt } : {}),
           };
           if (index >= 0) {
             return current.map((row, rowIndex) =>
@@ -275,6 +281,20 @@ export function createOnAgentEvent(deps: OnAgentEventDeps): (msg: AgentEventMess
           }
           return current;
         });
+        break;
+      }
+      case 'steering-receipt': {
+        setRows((current) => current.map((row) =>
+          (row.kind === 'user' || row.kind === 'delivery') &&
+          row.delivery?.id === e.receipt.id
+            ? {
+                ...row,
+                delivery: {
+                  ...row.delivery,
+                  receipt: e.receipt,
+                },
+              }
+            : row));
         break;
       }
       case 'requirement-event':

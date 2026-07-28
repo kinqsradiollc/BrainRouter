@@ -284,6 +284,7 @@ import {
   getPolicyAudit as getPolicyAuditImpl,
   loadHistory as loadHistoryImpl,
 } from './runtime/session.impl.js';
+import type { SteeringReceipt } from '../task/workContract.js';
 
 export interface RunTurnCallbacks {
   onStatusUpdate: (status: string) => void;
@@ -296,7 +297,9 @@ export interface RunTurnCallbacks {
   onNotice?: (notice: { level: 'info' | 'warn'; message: string }) => void;
   /** Fired when an input accepted during a running turn reaches the next safe
    * model boundary and is appended as a real user message. */
-  onSteerApplied?: (input: SteeringInput) => void;
+  onSteerApplied?: (input: SteeringInput, receipt: SteeringReceipt) => void;
+  /** Fired when semantic reconciliation changes a steering receipt. */
+  onSteerReceipt?: (receipt: SteeringReceipt) => void;
   // POLISH-1 (0.4.13) — `callId` (the LLM tool_call id) lets the REPL pair each
   // result with its OWN start row; parallel same-name calls no longer collide on a
   // name-keyed map. Optional → existing callers are unaffected.

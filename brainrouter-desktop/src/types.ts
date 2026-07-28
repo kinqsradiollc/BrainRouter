@@ -3,6 +3,8 @@
  * session + fleet rows, and the workflow-detail shape. Extracted from App.tsx
  * so the chat components and the App shell agree on one definition.
  */
+import type { SteeringReceiptEventView } from '@kinqs/brainrouter-agent-protocol';
+
 /** Composer / header popover ids (which menu is open). */
 export type PopId = '' | 'mode' | 'model' | 'effort' | 'ctx' | 'export' | 'branch' | 'branch-env' | 'plus' | 'splus' | 'bplus' | 'repo' | 'local' | 'commit' | 'title' | 'editor';
 
@@ -24,9 +26,17 @@ export type BriefingRecord = { id: string; type?: string; priority?: number; con
 /** One file in an end-of-turn changeset card (Codex-style: path · status · +/-). */
 export type ChangesetFile = { path: string; status: string; added: number; removed: number };
 
+export type DeliveryMeta = {
+  id: string;
+  mode: 'queue' | 'steer';
+  state: 'queued' | 'steered' | 'applied' | 'running' | 'completed' | 'canceled';
+  position?: number;
+  receipt?: SteeringReceiptEventView;
+};
+
 export type ChatRow =
-  | { id: number | string; kind: 'user'; text: string; ts: number; delivery?: { id: string; mode: 'queue' | 'steer'; state: 'queued' | 'steered' | 'applied' | 'running' | 'completed' | 'canceled'; position?: number } }
-  | { id: number | string; kind: 'delivery'; text: string; ts: number; source: 'extension'; delivery: { id: string; mode: 'queue' | 'steer'; state: 'queued' | 'steered' | 'applied' | 'running' | 'completed' | 'canceled'; position?: number } }
+  | { id: number | string; kind: 'user'; text: string; ts: number; delivery?: DeliveryMeta }
+  | { id: number | string; kind: 'delivery'; text: string; ts: number; source: 'extension'; delivery: DeliveryMeta }
   | { id: number | string; kind: 'assistant'; text: string; ts: number }
   | { id: number | string; kind: 'status'; text: string; ts: number; action?: 'plan' }
   | { id: number | string; kind: 'error'; text: string; detail?: string; ts: number }
