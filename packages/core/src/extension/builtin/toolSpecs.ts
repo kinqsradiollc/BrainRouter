@@ -630,6 +630,7 @@ export const BUILTIN_TOOL_SPECS = [
     description:
       'Create or update the durable CLI task plan. Use it ONLY for work with ≥3 non-trivial steps (1–2 steps: just do them). ' +
       'Each item is ONE verifiable outcome in imperative voice ("Add the migration", not "Database work") — and give it an `acceptance` cue where it helps (how you\'ll know it\'s done: "tests pass", "endpoint returns 200"). ' +
+      'When revising an existing item, copy its `id` from the current plan so rewording or reordering preserves task identity; omit `id` only for a new item. ' +
       'Keep at most one item `in_progress` and mark each `completed` the moment it\'s done, never in batches. Rewrite the plan as you learn — a stale plan is worse than none. Never start an item too large to finish in one focused pass; decompose it first.',
     inputSchema: {
       type: 'object',
@@ -641,6 +642,7 @@ export const BUILTIN_TOOL_SPECS = [
           items: {
             type: 'object',
             properties: {
+              id: { type: 'string', description: 'Existing host-issued task id. Copy it unchanged when revising an item; omit for a new item.' },
               step: { type: 'string', description: 'One verifiable outcome, imperative voice.' },
               status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] },
               acceptance: { type: 'string', description: 'Optional: how you will know this item is done (e.g. "tests pass", "file written", "benchmark hit").' }

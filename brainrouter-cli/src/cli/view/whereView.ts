@@ -311,7 +311,9 @@ export function gatherWhereInputs(args: {
     try { return readGoal(args.workspaceRoot, args.sessionKey) ?? undefined; } catch { return undefined; }
   })();
   const plan = (() => {
-    try { return readPlan(args.workspaceRoot, args.sessionKey); } catch { return { items: [], updatedAt: '' }; }
+    try { return readPlan(args.workspaceRoot, args.sessionKey); } catch {
+      return { schemaVersion: 1 as const, revision: 0, items: [], updatedAt: '' };
+    }
   })();
   const childSessions = (() => {
     try { return listSessions(args.workspaceRoot); } catch { return []; }

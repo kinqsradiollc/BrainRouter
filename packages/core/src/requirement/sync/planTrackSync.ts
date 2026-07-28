@@ -36,13 +36,18 @@ function normalizePlanStep(step: string): string {
 }
 
 /**
- * A CONTENT-derived link id (not positional), so it survives the model
- * rewriting/reordering its plan via update_plan. Keyed on the normalized step
- * text scoped to the requirement — re-running after an insert/reorder still
- * matches the existing work item instead of double-creating one. (Index-based
- * keys broke on any plan edit; the store has no persisted plan-item id yet.)
+ * R1 (0.4.17) — the Track link follows the plan store's host-owned stable id.
+ * The content-derived fallback is retained only for callers holding a legacy
+ * in-memory item; persisted plans are migrated before this function is called.
  */
 export function planItemId(requirementId: string, item: PlanItem): string {
+  return item.id
+    ? `plan:${requirementId}:${item.id}`
+    : legacyPlanItemId(requirementId, item);
+}
+
+/** Previous link shape, used only to adopt existing Track records in place. */
+export function legacyPlanItemId(requirementId: string, item: PlanItem): string {
   return `plan:${requirementId}:${normalizePlanStep(item.step)}`;
 }
 
@@ -85,9 +90,19 @@ export function syncRequirementPlanTrack(
   const workItems = listWorkItems(workspaceRoot);
   for (const item of plan.items) {
     const id = planItemId(requirement.id, item);
+    const legacyId = legacyPlanItemId(requirement.id, item);
     let workItem = workItems.find((candidate) =>
       candidate.requirementId === requirement.id && candidate.taskIds.includes(id),
     );
+    if (!workItem && legacyId !== id) {
+      workItem = workItems.find((candidate) =>
+        candidate.requirementId === requirement.id && candidate.taskIds.includes(legacyId),
+      );
+      if (workItem) {
+        workItem = linkWorkItem(workspaceRoot, workItem.id, { taskIds: [id] }) ?? workItem;
+        linkRequirement(workspaceRoot, requirement.id, { taskId: id });
+      }
+    }
     if (!workItem) {
       workItem = createWorkItem(workspaceRoot, {
         title: item.step,

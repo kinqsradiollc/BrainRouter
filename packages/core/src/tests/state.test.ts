@@ -2,9 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { getStateDir, getStateFile } from '../storage/store.js';
+import { getSessionStateFile, getStateDir, getStateFile } from '../storage/store.js';
 import { appendTranscriptEntry, listTranscripts, readTranscriptEntries, redactText } from '../session/transcript/sessionStore.js';
-import { formatPlan, readPlan, updatePlan, seedPlanFromRequirement } from '../task/taskStore.js';
+import {
+  formatPlan,
+  readPlan,
+  updatePlan,
+  seedPlanFromRequirement,
+  type PlanState,
+} from '../task/taskStore.js';
 import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, getWorkflowDir, listWorkflows, slugify } from '../workflow/run/workflowArtifacts.js';
 import { addHook, readHooks, removeHook, runHooks, setHookEnabled } from '../hooks/hooksStore.js';
 import { applyYoloOff, applyYoloOn, readPreferences, writePreferences, normalizeEffort } from '../session/preferences/preferencesStore.js';
@@ -64,6 +70,9 @@ test('plan store persists and validates durable plan state', () => {
     });
 
     assert.equal(state.items.length, 2);
+    assert.equal(state.schemaVersion, 1);
+    assert.equal(state.revision, 1);
+    assert.ok(state.items.every((item) => /^task_/.test(item.id)));
     assert.match(formatPlan(readPlan(workspace)), /\[\/\] Wire update_plan/);
     assert.throws(
       () => updatePlan(workspace, {
@@ -73,6 +82,68 @@ test('plan store persists and validates durable plan state', () => {
         ],
       }),
       /At most one plan item/,
+    );
+  });
+});
+
+test('R1 plan migration assigns durable ids and revisions without losing legacy state', () => {
+  withTempWorkspace((workspace) => {
+    const sessionKey = 'session:legacy-plan';
+    const filePath = getSessionStateFile(workspace, sessionKey, 'tasks.json');
+    fs.writeFileSync(filePath, JSON.stringify({
+      explanation: 'legacy plan',
+      updatedAt: '2026-07-20T00:00:00.000Z',
+      requirementId: 'req_legacy',
+      items: [
+        { step: 'Inspect the current contract', status: 'completed' },
+        { step: 'Implement the migration', status: 'in_progress', acceptance: 'migration test passes' },
+      ],
+    }), 'utf8');
+
+    const migrated = readPlan(workspace, sessionKey);
+    assert.equal(migrated.schemaVersion, 1);
+    assert.equal(migrated.revision, 0);
+    assert.equal(migrated.requirementId, 'req_legacy');
+    assert.equal(new Set(migrated.items.map((item) => item.id)).size, 2);
+
+    const persisted = JSON.parse(fs.readFileSync(filePath, 'utf8')) as PlanState;
+    assert.equal(persisted.schemaVersion, 1, 'the migration reader persists the new schema');
+    assert.deepEqual(
+      persisted.items.map((item) => item.id),
+      migrated.items.map((item) => item.id),
+      'migrated identities remain durable across process reads',
+    );
+  });
+});
+
+test('R1 plan updates preserve ids through rewording and reordering', () => {
+  withTempWorkspace((workspace) => {
+    const first = updatePlan(workspace, {
+      plan: [
+        { step: 'Inspect the current contract', status: 'completed' },
+        { step: 'Implement the migration', status: 'in_progress' },
+      ],
+    });
+    const [inspect, implement] = first.items;
+
+    const revised = updatePlan(workspace, {
+      plan: [
+        { id: implement.id, step: 'Implement and verify the migration', status: 'completed' },
+        { id: inspect.id, step: 'Inspect the existing contract', status: 'completed' },
+        { id: 'task_modelinvented', step: 'Document the result', status: 'in_progress' },
+      ],
+    });
+
+    assert.equal(revised.revision, 2);
+    assert.deepEqual(
+      revised.items.slice(0, 2).map((item) => item.id),
+      [implement.id, inspect.id],
+      'explicit existing ids survive both reorder and reword',
+    );
+    assert.notEqual(
+      revised.items[2].id,
+      'task_modelinvented',
+      'the host does not trust a model-issued id for a new task',
     );
   });
 });
