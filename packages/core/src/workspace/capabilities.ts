@@ -98,7 +98,13 @@ export const WORKSPACE_CAPABILITY_DEFINITIONS: readonly WorkspaceCapabilityDefin
       'academic-paper-drafting-skill',
       'academic-paper-review-skill',
     ],
-    toolProfileIds: ['workspace-files', 'browser', 'research-notes', 'artifacts'],
+    toolProfileIds: [
+      'workspace-files',
+      'browser',
+      'research-browser',
+      'research-notes',
+      'artifacts',
+    ],
   },
   {
     id: 'computational-research',

@@ -121,7 +121,7 @@ test('reviewed Writing academic-paper capability activates only for matching tas
     assert.deepEqual(resolved.active, ['academic-paper']);
     assert.deepEqual(resolved.skills, [], 'prompt activation does not grant catalog entries');
     assert.deepEqual(resolved.toolProfiles, [
-      'workspace-files', 'browser', 'research-notes', 'artifacts',
+      'workspace-files', 'browser', 'research-browser', 'research-notes', 'artifacts',
     ]);
     assert.match(calls[0]?.content ?? '', /Available task capabilities: academic-paper/);
     assert.match(calls[1]?.content ?? '', /Stay in the writer persona/);
