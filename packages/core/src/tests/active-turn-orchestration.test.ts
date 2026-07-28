@@ -24,6 +24,19 @@ test('registered task signals are bounded and ambiguous chat remains primary-onl
   assert.deepEqual([...detectOrchestrationTaskSignals('Hello, how are you?')], []);
 });
 
+test('P23-21 workspace initialization is not misclassified as evidence collection', () => {
+  assert.deepEqual(
+    [...detectOrchestrationTaskSignals(
+      "We're in an empty folder right now, building our day-to-day Economics Research. Help me setting this up.",
+    )],
+    [],
+  );
+  assert.deepEqual(
+    [...detectOrchestrationTaskSignals('Research the inflation outlook and find authoritative sources.')],
+    ['evidence-collection'],
+  );
+});
+
 test('missing workspace manifests preserve the legacy direct-primary path', () => {
   withTempWorkspace((workspace) => {
     const resolved = resolveActiveTurnOrchestration({

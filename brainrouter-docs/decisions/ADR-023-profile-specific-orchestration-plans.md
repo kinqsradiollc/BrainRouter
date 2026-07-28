@@ -2290,6 +2290,10 @@ gate is recorded in the Compatibility section above.
 
 - Add validated required/recommended/optional/blocked activation metadata for
   selected skills, with hard Planning and ADR triggers shared across profiles.
+- Treat project/workspace initialization as a Planning trigger resolved through
+  the selected profile's planning schema. Setup language must not activate a
+  domain execution strategy such as evidence collection before the primary
+  agent has established the project brief, outputs, and review gates.
 - Enforce stage-scoped skill activation and primary-owned plan/ADR acceptance;
   surface unavailable required outputs instead of pretending success.
 - Explain activation triggers, outputs, and tool prerequisites in onboarding

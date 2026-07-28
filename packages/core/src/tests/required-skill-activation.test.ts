@@ -40,6 +40,28 @@ test('active goals require Planning while small obvious changes do not', () => {
   );
 });
 
+test('P23-21 project initialization activates each profile planning contract', () => {
+  for (const [profile, expected] of [
+    ['engineering', ['planning-skill']],
+    ['research', ['planning-skill', 'research-question-skill']],
+    ['data-science', ['planning-skill', 'experiment-validation-skill']],
+    ['study', ['planning-skill', 'learning-plan-skill']],
+    ['writing', ['planning-skill', 'structured-writing-skill']],
+    ['custom', ['planning-skill']],
+  ] as const) {
+    const activation = resolveRequiredSkillActivation({
+      prompt: 'We are in an empty project folder. Help me set this workspace up.',
+      activeGoal: false,
+      manifest: createWorkspaceManifest({ name: profile, profile, by: 'wizard' }),
+    });
+    assert.deepEqual(
+      activation.required.map((skill) => skill.id),
+      expected,
+      `${profile} should initialize through its own planning schema`,
+    );
+  }
+});
+
 test('disabled hard-trigger skills fail safe and loaded skills satisfy the gate', () => {
   const manifest = createWorkspaceManifest({ name: 'app', profile: 'engineering', by: 'wizard' });
   manifest.skills.disabled = ['adr-skill'];

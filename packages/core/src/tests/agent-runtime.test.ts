@@ -3500,13 +3500,41 @@ test('runTurn gives a saved Research workspace its folder, skill, and read-only 
     const originalFetch = globalThis.fetch;
     let llmCalls = 0;
     let firstRequestBody: any;
-    let secondRequestBody: any;
+    let lastRequestBody: any;
     const mcpCalls: string[] = [];
     globalThis.fetch = (async (_url: any, opts: any) => {
       llmCalls += 1;
       const body = JSON.parse(opts.body);
       if (llmCalls === 1) {
         firstRequestBody = body;
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: '',
+              tool_calls: [
+                {
+                  id: 'load_research_planning',
+                  type: 'function',
+                  function: {
+                    name: 'mcp_brain_get_skill',
+                    arguments: '{"name":"planning-skill","section":"workflow"}',
+                  },
+                },
+                {
+                  id: 'load_research_question',
+                  type: 'function',
+                  function: {
+                    name: 'mcp_brain_get_skill',
+                    arguments: '{"name":"research-question-skill","section":"workflow"}',
+                  },
+                },
+              ],
+            },
+          }],
+          usage: { prompt_tokens: 50, completion_tokens: 5 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (llmCalls === 2) {
         return new Response(JSON.stringify({
           choices: [{
             message: {
@@ -3538,7 +3566,7 @@ test('runTurn gives a saved Research workspace its folder, skill, and read-only 
           usage: { prompt_tokens: 50, completion_tokens: 5 },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
-      secondRequestBody = body;
+      lastRequestBody = body;
       return new Response(JSON.stringify({
         choices: [{ message: { content: 'done' } }],
         usage: { prompt_tokens: 50, completion_tokens: 5 },
@@ -3628,8 +3656,11 @@ test('runTurn gives a saved Research workspace its folder, skill, and read-only 
       assert.equal(names.has('mcp_brain_knowledge_ingest'), false, 'Project Knowledge defaults are read-only');
       assert.equal(names.has('mcp_other_get_skill'), false, 'skill baseline is limited to the BrainRouter server');
       assert.equal(fs.readFileSync(path.join(workspace, 'notes.md'), 'utf8'), '# Notes');
-      assert.deepEqual(mcpCalls, ['mcp_brain_knowledge_search']);
-      const denied = secondRequestBody.messages.find((message: any) =>
+      assert.deepEqual(mcpCalls, [
+        'mcp_brain_get_skill',
+        'mcp_brain_knowledge_search',
+      ]);
+      const denied = lastRequestBody.messages.find((message: any) =>
         message.tool_call_id === 'third_party_skill_collision');
       assert.match(denied?.content ?? '', /workspace MCP tool policy/i);
     } finally {

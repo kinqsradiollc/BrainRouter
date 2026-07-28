@@ -6,6 +6,7 @@
  * signal so the resolver uses the profile's primary-only fallback.
  */
 import { ORCHESTRATION_ACTIVATION_SIGNAL_IDS } from './orchestrationProfileCatalog.js';
+import { isWorkspaceInitializationRequest } from '../../workspace/projectIntent.js';
 
 const SIGNAL_PATTERNS: ReadonlyArray<readonly [string, RegExp]> = [
   ['architecture-design', /\b(?:architecture|architectural|system design|design decision|adr)\b/i],
@@ -31,8 +32,10 @@ const SIGNAL_PATTERNS: ReadonlyArray<readonly [string, RegExp]> = [
 
 export function detectOrchestrationTaskSignals(task: string): ReadonlySet<string> {
   const bounded = task.trim().slice(0, 16_000);
+  const workspaceInitialization = isWorkspaceInitializationRequest(bounded);
   const detected = new Set<string>();
   for (const [id, pattern] of SIGNAL_PATTERNS) {
+    if (id === 'evidence-collection' && workspaceInitialization) continue;
     if (ORCHESTRATION_ACTIVATION_SIGNAL_IDS.has(id) && pattern.test(bounded)) {
       detected.add(id);
     }
