@@ -32,7 +32,8 @@ test('engineering defaults include production, planning, and orchestration witho
   const selection = resolveWorkspaceToolSelection({ manifest });
 
   assert.deepEqual(selection.activeProfileIds, [
-    'coding', 'shell', 'browser', 'project-knowledge', 'artifacts', 'planning-session', 'orchestration',
+    'coding', 'shell', 'browser', 'project-knowledge', 'memory-context',
+    'artifacts', 'planning-session', 'orchestration',
     'pull-request-observation',
   ]);
   assert.equal(allowed(selection, 'edit_file', 'filesystem'), true);
@@ -54,7 +55,7 @@ test('frontend task profiles add interactive browser tools without changing the 
   });
 
   assert.deepEqual(selection.activeProfileIds, [
-    'coding', 'shell', 'browser', 'project-knowledge', 'artifacts',
+    'coding', 'shell', 'browser', 'project-knowledge', 'memory-context', 'artifacts',
     'planning-session', 'orchestration', 'pull-request-observation',
     'interactive-browser',
   ]);
@@ -101,6 +102,9 @@ test('study and writing profiles can produce folder-backed learning and writing 
     assert.equal(allowed(selection, 'notebook_edit', 'filesystem'), false, `${profile}: notebook`);
     assert.equal(allowed(selection, 'lsp', 'filesystem'), false, `${profile}: lsp`);
     assert.equal(allowed(selection, 'run_command', 'shell'), false, `${profile}: shell`);
+    assert.equal(allowed(selection, 'delegate_agent'), true, `${profile}: orchestration`);
+    assert.equal(mcpAllowed(selection, 'memory_search'), true, `${profile}: memory search`);
+    assert.equal(mcpAllowed(selection, 'memory_graph_query'), true, `${profile}: memory graph`);
   }
 });
 
@@ -134,7 +138,8 @@ test('unknown profile ids never grant a registered tool group', () => {
   assert.deepEqual(selection.activeProfileIds, []);
   assert.equal(allowed(selection, 'write_file', 'filesystem'), false);
   assert.deepEqual(workspaceToolProfileIds(), [
-    'workspace-files', 'coding', 'shell', 'browser', 'project-knowledge', 'research-notes', 'artifacts',
+    'workspace-files', 'coding', 'shell', 'browser', 'project-knowledge', 'memory-context',
+    'research-notes', 'artifacts',
     'planning-session', 'orchestration', 'interactive-browser',
     'mcp-resources', 'connectors', 'computer-control', 'workflow-launch',
     'background-workers', 'pull-request-observation', 'security-review',
@@ -160,6 +165,11 @@ test('manifest v3 engineering defaults expose the reviewed matrix and keep advan
     'run_workflow', 'spawn_worker_thread', 'file_vulnerability',
   ]) {
     assert.equal(allowed(selection, toolId), false, toolId);
+  }
+  for (const toolId of [
+    'memory_recall', 'memory_search', 'memory_find_related', 'memory_graph_query',
+  ]) {
+    assert.equal(mcpAllowed(selection, toolId), true, toolId);
   }
 });
 

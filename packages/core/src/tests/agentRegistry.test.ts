@@ -12,6 +12,7 @@ import {
   type AgentDefinition,
 } from '../orchestration/agents/agentRegistry.js';
 import { synthesizeDelegateTools } from '../orchestration/tools/toolNames.js';
+import { applyToolScope } from '../tool/policy/toolBudget.js';
 import { createWorkspaceManifest, saveWorkspaceManifest } from '../workspace/manifest.js';
 
 const ORCHESTRATION_ROLE_HEADER = {
@@ -65,6 +66,30 @@ test('all built-in definitions carry required fields', () => {
     assert.ok(def.defaultAccess, `${def.id}: missing defaultAccess`);
     assert.ok(def.prompt, `${def.id}: missing prompt`);
     assert.equal(loaded.source, 'builtin');
+  }
+});
+
+test('all built-in roles retain exact read-only context and skill tools', () => {
+  const expected = [
+    'memory_recall',
+    'memory_search',
+    'memory_find_related',
+    'memory_graph_query',
+    'list_skills',
+    'get_skill',
+    'search_skills',
+    'knowledge_list',
+    'knowledge_search',
+  ];
+  const advertised = expected.map((name) => ({ name: `mcp_brainrouter_${name}` }));
+
+  for (const { def } of loadRegistry()) {
+    assert.deepEqual(def.toolScope.mcp, expected, `${def.id}: exact MCP scope`);
+    assert.deepEqual(
+      applyToolScope(advertised, { allow: def.toolScope.mcp }).map((tool) => tool.name),
+      advertised.map((tool) => tool.name),
+      `${def.id}: namespaced context tools remain visible`,
+    );
   }
 });
 
