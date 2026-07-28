@@ -1304,12 +1304,32 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
         prefs.personalityMode = 'manual';
         prefs.personalitySource = 'workspace';
       } else if (key === 'personalityMode' && a.value === 'auto') {
-        prefs.personality = 'pair-programmer';
-        prefs.personalitySource = 'profile';
+        const globalPersonality = devCliKnobs.personalityDefault;
+        if (typeof globalPersonality === 'string') {
+          prefs.personality = globalPersonality;
+          prefs.personalitySource = 'global';
+        } else {
+          prefs.personality = 'pair-programmer';
+          prefs.personalitySource = 'profile';
+        }
       }
       return { ...prefs };
     },
-    'action:set-cli-knob': (a) => { if (a.value === null) delete devCliKnobs[String(a.key)]; else devCliKnobs[String(a.key)] = a.value; return { ok: true, key: String(a.key) }; },
+    'action:set-cli-knob': (a) => {
+      const key = String(a.key);
+      if (a.value === null) delete devCliKnobs[key];
+      else devCliKnobs[key] = a.value;
+      if (key === 'personalityDefault' && prefs.personalityMode === 'auto') {
+        if (typeof a.value === 'string') {
+          prefs.personality = a.value;
+          prefs.personalitySource = 'global';
+        } else {
+          prefs.personality = 'pair-programmer';
+          prefs.personalitySource = 'profile';
+        }
+      }
+      return { ok: true, key };
+    },
     // MC-DESK — mirror of the host's sibling-safe nested writer for the Runtime /
     // Automations / Profiles panels (browser preview + Preview server).
     'action:set-cli-path': (a) => {
@@ -1514,7 +1534,7 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     },
     'action:set-session-mode': (a) => {
       const next = { ...(sessionModes[S.activeSession] ?? {}) };
-      for (const key of ['executionMode', 'reviewPolicy', 'effort']) {
+      for (const key of ['executionMode', 'reviewPolicy', 'effort', 'personality']) {
         if (key in a) {
           if (a[key] == null || a[key] === '') delete next[key];
           else next[key] = a[key];

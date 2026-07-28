@@ -16,6 +16,7 @@ const {
   clearSessionMode,
   resolveSessionMode,
   resolveActiveMode,
+  resolveActivePersonality,
 } = await import('@kinqs/brainrouter-core/session');
 const { writePreferences } = await import('@kinqs/brainrouter-core/session');
 const { resolveRunCommandApproval } = await import('@kinqs/brainrouter-core/exec');
@@ -63,6 +64,27 @@ test('two sessions hold DIFFERENT modes concurrently', () => {
   assert.equal(getSessionMode(ws, 'sess:1').effort, 'high');
   assert.equal(getSessionMode(ws, 'sess:2').executionMode, undefined);
   assert.equal(getSessionMode(ws, 'sess:2').reviewPolicy, 'proceed');
+});
+
+test('personality is isolated per chat and inherits when cleared', () => {
+  const isoWs = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-personality-')));
+  writePreferences(isoWs, { personality: 'concise' });
+  setSessionMode(isoWs, 'sess:detail', { personality: 'detailed' });
+
+  assert.deepEqual(
+    resolveActivePersonality(isoWs, 'sess:detail'),
+    { style: 'detailed', source: 'chat' },
+  );
+  assert.deepEqual(
+    resolveActivePersonality(isoWs, 'sess:other'),
+    { style: 'concise', source: 'workspace' },
+  );
+
+  setSessionMode(isoWs, 'sess:detail', { personality: undefined });
+  assert.deepEqual(
+    resolveActivePersonality(isoWs, 'sess:detail'),
+    { style: 'concise', source: 'workspace' },
+  );
 });
 
 // --- restore-per-session ---------------------------------------------------

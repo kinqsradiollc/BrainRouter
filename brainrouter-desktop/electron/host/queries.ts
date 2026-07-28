@@ -126,6 +126,7 @@ import {
   getSessionMode,
   setSessionMode,
   resolveActiveMode,
+  resolveActivePersonality,
   buildRecap,
   readPreferences,
   writePreferences,
@@ -2179,6 +2180,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         );
         const workspacePrefs = readPreferences(workspaceRoot);
         const activeMode = resolveActiveMode(workspaceRoot, getActiveAgent().sessionKey);
+        const activePersonality = resolveActivePersonality(workspaceRoot, getActiveAgent().sessionKey);
         const connectorItems = listConnectors(workspaceRoot);
         return {
           model: fresh.llm?.model ?? getLlm().model,
@@ -2188,7 +2190,11 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           fallbackModel: cli?.fallbackModel ?? null,
           workspaceRoot,
           sandbox: cli?.sandbox ?? 'off',
-          prefs: mergeSessionModePrefs(workspacePrefs as unknown as Record<string, unknown>, activeMode),
+          prefs: mergeSessionModePrefs(
+            workspacePrefs as unknown as Record<string, unknown>,
+            activeMode,
+            activePersonality,
+          ),
           workspacePrefs,
           sessionMode: getSessionMode(workspaceRoot, getActiveAgent().sessionKey),
           modeScope: 'session',
@@ -3485,7 +3491,15 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         if (parsed.error) throw new Error(parsed.error);
         const sessionMode = setSessionMode(workspaceRoot, getActiveAgent().sessionKey, parsed.patch);
         const activeMode = resolveActiveMode(workspaceRoot, getActiveAgent().sessionKey);
-        return { ok: true, sessionKey: getActiveAgent().sessionKey, sessionMode, activeMode };
+        const activePersonality = resolveActivePersonality(workspaceRoot, getActiveAgent().sessionKey);
+        if ('personality' in parsed.patch) getActiveAgent().refreshSystemPrompt();
+        return {
+          ok: true,
+          sessionKey: getActiveAgent().sessionKey,
+          sessionMode,
+          activeMode,
+          activePersonality,
+        };
       },
       'action:set-hook': (args) => {
         const id = typeof args.id === 'string' ? args.id : '';

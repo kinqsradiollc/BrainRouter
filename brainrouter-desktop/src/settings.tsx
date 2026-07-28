@@ -1,7 +1,8 @@
 /**
  * DESK-4c — the Settings modal: left category nav + search, right scrollable
- * sections with toggle/select/input rows. Values reuse the CLI stores (global
- * prefs via `action:set-pref`; mode/review/effort session-scoped).
+ * sections with toggle/select/input rows. Values reuse the CLI stores
+ * (workspace prefs via `action:set-pref`; mode/review/effort/personality may
+ * also be session-scoped).
  *
  * This module is the composed shell/barrel: modal chrome + the section switch.
  * Section controls, the shared row/knob primitives, and the large
@@ -114,12 +115,19 @@ export function SettingsDialog(props: {
     if (section === 'data-connectors') refreshConnectors();
   };
   const prefs = (snapshot?.prefs ?? {}) as Record<string, unknown>;
+  const workspacePrefs = (snapshot?.workspacePrefs ?? {}) as Record<string, unknown>;
   const ps = (key: string, dflt: string): string => String(prefs[key] ?? dflt);
+  const wps = (key: string, dflt: string): string => String(workspacePrefs[key] ?? dflt);
   const pb = (key: string, dflt: boolean): boolean => Boolean(prefs[key] ?? dflt);
   const tier = (prefs.tier as string | null | undefined) ?? 'follow model';
-  const personalityMode = ps('personalityMode', 'auto');
   const personality = ps('personality', 'standard');
   const personalitySource = ps('personalitySource', 'fallback');
+  const workspacePersonalityMode = wps('personalityMode', 'auto');
+  const workspacePersonality = wps('personality', 'standard');
+  const workspacePersonalitySource = wps('personalitySource', 'fallback');
+  const chatPersonality = typeof snapshot?.sessionMode?.personality === 'string'
+    ? snapshot.sessionMode.personality
+    : 'inherit';
   // §settings — cli.* knob helpers (per-knob writer), lifted to component scope
   // so a knob-backed control can live in its natural category, not only under
   // Advanced. Shared with the CLI; empty/clear reverts to the default.
@@ -217,13 +225,33 @@ export function SettingsDialog(props: {
               <Select value={ps('effort', 'medium')} options={['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']} onChange={(v) => props.onPref('effort', v)} />
             </Row>
             <Row
-              title="Personality"
-              desc={`This workspace's communication style only; persona, tools, and workflow stay unchanged. Effective: ${personality} (${personalitySource}). Automatic inherits the global default, profile recommendation, or standard fallback. (/personality)`}
+              title="Chat personality"
+              desc={`Temporary communication style for this chat only. Effective: ${personality} (${personalitySource}). Persona, tools, workflow, and authority stay unchanged. (/personality)`}
             >
               <ChoiceControl
-                value={personalityMode === 'auto' ? 'auto' : personality}
+                value={chatPersonality}
                 options={[
-                  { value: 'auto', label: 'Automatic', detail: `${personality} · inherited from ${personalitySource}` },
+                  { value: 'inherit', label: 'Inherit workspace', detail: `${workspacePersonality} · ${workspacePersonalitySource}` },
+                  { value: 'concise', label: 'Concise', detail: 'short responses' },
+                  { value: 'standard', label: 'Standard', detail: 'balanced prose' },
+                  { value: 'detailed', label: 'Detailed', detail: 'more explanation and evidence' },
+                  { value: 'pair-programmer', label: 'Pair programmer', detail: 'collaborative technical prose' },
+                ]}
+                onChange={(v) => props.onAction(
+                  'a-chat-personality',
+                  'action:set-session-mode',
+                  { personality: v === 'inherit' ? null : v },
+                )}
+              />
+            </Row>
+            <Row
+              title="Workspace personality"
+              desc="Automatic follows the global default, profile recommendation, or standard fallback. A manual choice persists for this workspace."
+            >
+              <ChoiceControl
+                value={workspacePersonalityMode === 'auto' ? 'auto' : workspacePersonality}
+                options={[
+                  { value: 'auto', label: 'Automatic', detail: `${workspacePersonality} · inherited from ${workspacePersonalitySource}` },
                   { value: 'concise', label: 'Concise', detail: 'short responses' },
                   { value: 'standard', label: 'Standard', detail: 'balanced prose' },
                   { value: 'detailed', label: 'Detailed', detail: 'more explanation and evidence' },
@@ -233,6 +261,22 @@ export function SettingsDialog(props: {
                   v === 'auto' ? 'personalityMode' : 'personality',
                   v === 'auto' ? 'auto' : v,
                 )}
+              />
+            </Row>
+            <Row
+              title="All workspaces personality"
+              desc="Optional global default used only by workspaces set to Automatic. Profile recommendations resume when this is cleared."
+            >
+              <ChoiceControl
+                value={ks('personalityDefault', 'none')}
+                options={[
+                  { value: 'none', label: 'No global default', detail: 'let each profile recommend its style' },
+                  { value: 'concise', label: 'Concise', detail: 'short responses' },
+                  { value: 'standard', label: 'Standard', detail: 'balanced prose' },
+                  { value: 'detailed', label: 'Detailed', detail: 'more explanation and evidence' },
+                  { value: 'pair-programmer', label: 'Pair programmer', detail: 'collaborative technical prose' },
+                ]}
+                onChange={(v) => setKnob('personalityDefault', v === 'none' ? null : v)}
               />
             </Row>
             <Row title="Model tier pin" desc="Pin the tier ladder: flash | standard | pro. “follow model” lets <<<NEEDS_HIGH>>> self-escalation work. (/tier)">

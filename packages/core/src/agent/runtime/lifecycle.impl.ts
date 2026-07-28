@@ -22,7 +22,10 @@ import { syncRequirementPlanTrack } from '../../requirement/sync/planTrackSync.j
 import { detectRequirementShapedPrompt } from '../../requirement/records/requirementDetector.js';
 import { createRequirement, getRequirement, linkRequirement, listRequirements, updateRequirement } from '../../requirement/records/requirementStore.js';
 import { effortToPromptLevel, readPreferences } from '../../session/preferences/preferencesStore.js';
-import { resolveActiveMode } from '../../session/state/sessionModeStore.js';
+import {
+  resolveActiveMode,
+  resolveActivePersonality,
+} from '../../session/state/sessionModeStore.js';
 import { readPlan } from '../../task/taskStore.js';
 import { reconcileSessionSprints } from '../../track/automation/index.js';
 import {
@@ -120,8 +123,8 @@ export async function ensureInitialized(this: Agent): Promise<void> {
   }
 
 export function createSystemMessage(this: Agent) {
-    const prefs = readPreferences(this.workspaceRoot);
     const activeMode = resolveActiveMode(this.workspaceRoot, this.sessionKey);
+    const activePersonality = resolveActivePersonality(this.workspaceRoot, this.sessionKey);
     // 10b: pass the connected MCP tool inventory so `buildSystemPrompt`
     // can omit the BrainRouter memory section when the brain is offline.
     // The cached `lastKnownMcpTools` is populated by every successful
@@ -134,7 +137,7 @@ export function createSystemMessage(this: Agent) {
       launchCwd: this.launchCwd,
       sessionKey: this.sessionKey,
       instructionSummary: loadWorkspaceInstructionSummary(this.workspaceRoot),
-      personality: prefs.personality,
+      personality: activePersonality.style,
       activeSkill: this.activeSkill,
       // Planning/fast framing + review-policy framing reflect the ACTIVE
       // SESSION's stance (session override > workspace pref) so each chat's

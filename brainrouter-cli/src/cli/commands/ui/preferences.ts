@@ -8,8 +8,20 @@
 
 import { execSync } from 'node:child_process';
 import chalk from 'chalk';
-import { setCliKnobOverride } from '@kinqs/brainrouter-core/config';
-import { readPreferences, writePreferences, type Preferences } from '@kinqs/brainrouter-core/session';
+import {
+  _resetCliKnobsCache,
+  getRawCliKnobs,
+  saveConfig,
+  setCliKnobOverride,
+} from '@kinqs/brainrouter-core/config';
+import {
+  getSessionMode,
+  readPreferences,
+  resolveActivePersonality,
+  setSessionMode,
+  writePreferences,
+  type Preferences,
+} from '@kinqs/brainrouter-core/session';
 import type { CommandContext } from '../_context.js';
 
 export async function tryHandleUiPreferencesCommand(ctx: CommandContext): Promise<boolean> {
@@ -99,28 +111,61 @@ export async function tryHandleUiPreferencesCommand(ctx: CommandContext): Promis
     case '/personality':
     {
       const prefs = readPreferences(agent.workspaceRoot);
-      const arg = (args[0] ?? '').toLowerCase();
+      const sessionKey = agent.sessionKey;
+      const sessionOverride = getSessionMode(agent.workspaceRoot, sessionKey).personality;
+      const active = resolveActivePersonality(agent.workspaceRoot, sessionKey);
+      const scope = (args[0] ?? '').toLowerCase();
+      const persistentScope = scope === 'workspace' || scope === 'global';
+      const arg = ((persistentScope ? args[1] : args[0]) ?? '').toLowerCase();
       const valid = new Set(['auto', 'concise', 'standard', 'detailed', 'pair-programmer']);
       if (!arg) {
+        const globalDefault = getRawCliKnobs().personalityDefault ?? 'none';
         console.log(chalk.bold('\nPersonality (communication style)'));
-        console.log(`  Current: ${chalk.cyan(prefs.personality)} (${prefs.personalitySource})`);
+        console.log(`  Current chat: ${chalk.cyan(active.style)} (${active.source})`);
+        console.log(`  Chat override: ${chalk.cyan(sessionOverride ?? 'inherit')}`);
         console.log(`  Workspace: ${chalk.cyan(prefs.personalityMode === 'auto' ? 'automatic (inherit)' : prefs.personality)}`);
+        console.log(`  All workspaces: ${chalk.cyan(globalDefault)}`);
         console.log(chalk.gray('  Automatic precedence: global default → profile recommendation → standard fallback.'));
-        console.log(chalk.gray(`  Available: ${Array.from(valid).join(', ')}\n`));
+        console.log(chalk.gray(`  This chat: /personality <${Array.from(valid).join('|')}>`));
+        console.log(chalk.gray(`  Workspace: /personality workspace <${Array.from(valid).join('|')}>`));
+        console.log(chalk.gray(`  All workspaces: /personality global <${Array.from(valid).join('|')}>\n`));
         return true;
       }
       if (!valid.has(arg)) {
         console.log(chalk.red(`\nUnknown personality "${arg}". Choose: ${Array.from(valid).join(', ')}\n`));
         return true;
       }
-      const next = arg === 'auto'
-        ? writePreferences(agent.workspaceRoot, { personalityMode: 'auto' })
-        : writePreferences(agent.workspaceRoot, { personality: arg as Preferences['personality'] });
+      if (scope === 'workspace') {
+        const next = arg === 'auto'
+          ? writePreferences(agent.workspaceRoot, { personalityMode: 'auto' })
+          : writePreferences(agent.workspaceRoot, { personality: arg as Preferences['personality'] });
+        agent.refreshSystemPrompt();
+        const selection = arg === 'auto'
+          ? `automatic (${next.personality}, inherited from ${next.personalitySource})`
+          : arg;
+        console.log(chalk.green(`\n✓ Workspace personality → ${selection}. New behavior applies on the next turn.\n`));
+        return true;
+      }
+      if (scope === 'global') {
+        ctx.config.cli ??= {};
+        ctx.config.cli.personalityDefault = arg === 'auto'
+          ? null
+          : arg as Preferences['personality'];
+        saveConfig(ctx.config);
+        _resetCliKnobsCache();
+        agent.refreshSystemPrompt();
+        console.log(chalk.green(
+          `\n✓ All-workspaces personality → ${arg === 'auto' ? 'no global default' : arg}. New behavior applies on the next turn.\n`,
+        ));
+        return true;
+      }
+      setSessionMode(agent.workspaceRoot, sessionKey, {
+        personality: arg === 'auto' ? undefined : arg as Preferences['personality'],
+      });
+      const next = resolveActivePersonality(agent.workspaceRoot, sessionKey);
       agent.refreshSystemPrompt();
-      const selection = arg === 'auto'
-        ? `automatic (${next.personality}, inherited from ${next.personalitySource})`
-        : arg;
-      console.log(chalk.green(`\n✓ Personality → ${selection}. New behavior applies on the next turn.\n`));
+      const selection = arg === 'auto' ? `${next.style} (inherited from ${next.source})` : arg;
+      console.log(chalk.green(`\n✓ Chat personality → ${selection}. New behavior applies on the next turn.\n`));
       return true;
     }
     case '/raw':

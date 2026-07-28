@@ -6,6 +6,8 @@ import { Agent, buildChatCompletionPayload, buildResponsesPayload, callOpenAI, c
 import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
 import { BudgetExceededError } from '../provider/budget.js';
 import { _resetModelReasoningCapabilities, registerModelReasoningCapabilities } from '../provider/models/reasoning.js';
+import { writePreferences } from '../session/preferences/preferencesStore.js';
+import { setSessionMode } from '../session/state/sessionModeStore.js';
 import { createWorkspaceManifest, saveWorkspaceManifest } from '../workspace/manifest.js';
 import {
   buildWorkspaceSelectionCatalog,
@@ -1003,6 +1005,25 @@ test('Agent.loadHistory replaces chat history and refreshSystemPrompt updates it
     assert.doesNotMatch(sys.content, /Active Goal/, 'foundational system message must not carry the goal block (9d)');
     assert.doesNotMatch(sys.content, /finish the auth refactor/, 'foundational system message must not echo the goal text (9d)');
     clearGoal(workspace, agent.sessionKey);
+  });
+});
+
+test('Agent system prompt uses the active chat personality over the workspace preference', () => {
+  withTempWorkspace((workspace) => {
+    const agent = makeAgent(workspace);
+    writePreferences(workspace, { personality: 'concise' });
+    setSessionMode(workspace, agent.sessionKey, { personality: 'detailed' });
+    agent.loadHistory([]);
+    agent.refreshSystemPrompt();
+
+    let system = (agent as any).chatHistory[0]?.content ?? '';
+    assert.match(system, /Communication style: detailed/);
+    assert.doesNotMatch(system, /Communication style: concise/);
+
+    setSessionMode(workspace, agent.sessionKey, { personality: undefined });
+    agent.refreshSystemPrompt();
+    system = (agent as any).chatHistory[0]?.content ?? '';
+    assert.match(system, /Communication style: concise/);
   });
 });
 
