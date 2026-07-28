@@ -8,6 +8,7 @@ import { BudgetExceededError } from '../provider/budget.js';
 import { _resetModelReasoningCapabilities, registerModelReasoningCapabilities } from '../provider/models/reasoning.js';
 import { writePreferences } from '../session/preferences/preferencesStore.js';
 import { setSessionMode } from '../session/state/sessionModeStore.js';
+import { readWorkContract } from '../task/workContractStore.js';
 import { createWorkspaceManifest, saveWorkspaceManifest } from '../workspace/manifest.js';
 import {
   buildWorkspaceSelectionCatalog,
@@ -1198,6 +1199,11 @@ test('runTurn applies Steer after an in-flight model response and before the nex
       assert.match(requestBodies[1], /call `update_plan` before the related mutation/);
       assert.match(requestBodies[1], /do not rewrite the goal implicitly/);
       assert.match(requestBodies[1], /PR #42 has one new review/);
+      const contract = readWorkContract(workspace, agent.sessionKey);
+      assert.equal(contract?.steering.length, 1);
+      assert.equal(contract?.steering[0].id, 'steer-safe-boundary');
+      assert.equal(contract?.steering[0].source, 'extension');
+      assert.equal(contract?.steering[0].status, 'pending');
     } finally {
       globalThis.fetch = originalFetch;
     }

@@ -14,6 +14,7 @@ import {
   workContractPath,
 } from '../task/workContractStore.js';
 import type { WorkTaskRef } from '../task/workContract.js';
+import { beginSteeringReceipt } from '../task/steeringReceiptStore.js';
 import { withTempWorkspace } from './_helpers.js';
 
 const PLAN_HASH = 'a'.repeat(64);
@@ -159,5 +160,33 @@ test('Work Contract leaves unsupported future schemas untouched', () => {
       /newer Work Contract exists/,
     );
     assert.equal(fs.readFileSync(filePath, 'utf8'), future);
+  });
+});
+
+test('Steering delivery creates one pending receipt without copying an unbounded message', () => {
+  withTempWorkspace((workspace) => {
+    const sessionKey = 'session:steering-receipt';
+    const input = {
+      id: 'steer_1',
+      text: `  Change   the next task. ${'detail '.repeat(80)}`,
+      source: 'user' as const,
+      createdAt: Date.parse('2026-07-28T01:02:03.000Z'),
+    };
+
+    const receipt = beginSteeringReceipt(workspace, sessionKey, input);
+    const duplicate = beginSteeringReceipt(workspace, sessionKey, input);
+    const contract = readWorkContract(workspace, sessionKey);
+
+    assert.equal(receipt.id, input.id);
+    assert.equal(receipt.status, 'pending');
+    assert.equal(receipt.classification, undefined);
+    assert.equal(receipt.receivedAt, '2026-07-28T01:02:03.000Z');
+    assert.equal(receipt.priorRevision, 1);
+    assert.ok(receipt.summary.length <= 240);
+    assert.equal(duplicate.id, receipt.id);
+    assert.equal(contract?.steering.length, 1);
+    assert.equal(contract?.revision, 2);
+    assert.equal(contract?.plan.revision, 0);
+    assert.equal(contract?.tasks.length, 0);
   });
 });

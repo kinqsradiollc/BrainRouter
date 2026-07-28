@@ -46,6 +46,7 @@ import {
 import { drainCompletions, formatCompletionFeedback } from '../../session/completion/completionInbox.js';
 import { resolveActiveMode } from '../../session/state/sessionModeStore.js';
 import { buildSteeringReconciliationMessage } from '../../session/input/inputDelivery.js';
+import { beginSteeringReceipt } from '../../task/steeringReceiptStore.js';
 import { isInternalSessionKey } from '../../session/transcript/sessionStore.js';
 import { isConnectivityError, isRetryableServerError } from '../../storage/checkpointStore.js';
 import { readPlan } from '../../task/taskStore.js';
@@ -958,6 +959,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     const applyPendingSteering = (): number => {
       const pending = this.consumePendingSteering();
       for (const input of pending) {
+        beginSteeringReceipt(this.workspaceRoot, this.sessionKey, input);
         let goal: ReturnType<typeof readGoal> = null;
         let plan: ReturnType<typeof readPlan> | null = null;
         try { goal = readGoal(this.workspaceRoot, this.sessionKey); } catch { /* keep steering available without goal state */ }
