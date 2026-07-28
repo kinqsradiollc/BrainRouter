@@ -16,7 +16,7 @@ const CAPABILITY_TOOLS = {
   shell: ['run_command', 'task_output', 'wait_until', 'computer_use', 'kill_command', 'terminal_list', 'terminal_read', 'terminal_write'],
   'web-research': ['fetch_url', 'web_search', 'research_note', 'research_brief'],
   'mcp-lsp-connectors': ['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource', 'mcp_search', 'mcp_describe', 'mcp_call', 'mcp_refresh_catalog', 'lsp', 'connector_list', 'connector_run'],
-  'planning-state': ['update_plan', 'goal_complete', 'goal_blocked', 'ask_user_choice', 'track_query', 'track_update', 'artifact_write', 'mark_chapter', 'switch_model'],
+  'planning-state': ['reconcile_steer', 'update_plan', 'goal_complete', 'goal_blocked', 'ask_user_choice', 'track_query', 'track_update', 'artifact_write', 'mark_chapter', 'switch_model'],
   'security-review': ['file_vulnerability', 'finish_scan', 'list_requests', 'view_request', 'repeat_request', 'list_sitemap', 'scope_rules'],
   orchestration: ['profile_stage', 'task_agent', 'delegate_agent', 'spawn_agent', 'spawn_agents', 'list_agents', 'wait_agent', 'wait_agents', 'read_agent_transcript', 'close_agent', 'send_input', 'resume_agent', 'route_task'],
   'workflow-workers': ['run_workflow', 'run_workflow_graph', 'workflow_progress', 'extract_result', 'spawn_worker_thread', 'wait_worker', 'read_worker_summary', 'close_worker'],

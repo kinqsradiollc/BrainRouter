@@ -38,6 +38,31 @@ export function projectPlanTasks(plan: PlanState): WorkTaskRef[] {
   }));
 }
 
+export function mergeProjectedPlanTasks(
+  current: WorkTaskRef[],
+  plan: PlanState,
+): WorkTaskRef[] {
+  const byPlanItemId = new Map(current.map((task) => [task.planItemId, task]));
+  const projected = projectPlanTasks(plan).map((projected) => {
+    const existing = byPlanItemId.get(projected.planItemId);
+    return existing
+      ? {
+          ...existing,
+          status: projected.status,
+          requirementIds: projected.requirementIds.length > 0
+            ? projected.requirementIds
+            : existing.requirementIds,
+        }
+      : projected;
+  });
+  const activeIds = new Set(projected.map((task) => task.planItemId));
+  return [
+    ...projected,
+    ...current.filter((task) =>
+      task.status === 'completed' && !activeIds.has(task.planItemId)),
+  ];
+}
+
 export function projectContractStatus(plan: PlanState): WorkContract['status'] {
   if (!plan.requirementId) return 'draft';
   return plan.items.every((item) => item.status === 'completed') ? 'review' : 'active';

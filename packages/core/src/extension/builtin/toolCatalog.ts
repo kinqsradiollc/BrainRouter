@@ -65,6 +65,7 @@ export const REQUIRED_CORE_TOOL_CATALOG: LocalToolEntry[] = [
   { name: 'mcp_refresh_catalog', accessTier: 'read', actionKind: 'read_only', parallelSafe: false, availability: 'mcp-discovery' },
   { name: 'lsp', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   { name: 'extract_result', accessTier: 'read', actionKind: 'read_only', parallelSafe: true, availability: 'result-cache' },
+  { name: 'reconcile_steer', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   { name: 'update_plan', accessTier: 'read', actionKind: 'read_only', parallelSafe: false, afterInvoke: 'plan-update' },
   { name: 'goal_complete', accessTier: 'read', actionKind: 'read_only', parallelSafe: false, afterInvoke: 'goal-reconcile' },
   { name: 'goal_blocked', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },

@@ -44,6 +44,11 @@ import { setSessionRuntime } from '../../session/state/sessionRuntimeStore.js';
 import { resolveProfileSwitch } from '../../provider/llmProfiles.js';
 import { buildModelRegistry, resolveRoutes } from '../../router/index.js';
 import { formatPlan, updatePlan, readPlan } from '../../task/taskStore.js';
+import {
+  applySteeringPlanRevision,
+  reconcileSteeringReceipt,
+  type SteeringClassification,
+} from '../../task/steeringReceiptStore.js';
 import { isTelemetryEnabled } from '../../telemetry/recorder/telemetry.js';
 import { traceEvent } from '../../telemetry/tracing/tracing.js';
 import { runExtractResult } from '../../tool/result/extractResult.js';
@@ -1133,11 +1138,33 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
           return result + patchNotice + patchReindex;
         }
       }
+      case 'reconcile_steer': {
+        const receipt = reconcileSteeringReceipt(this.workspaceRoot, this.sessionKey, {
+          receiptId: String(args.receiptId ?? ''),
+          classification: String(args.classification ?? '') as SteeringClassification,
+          summary: String(args.summary ?? ''),
+          affectedRequirementIds: Array.isArray(args.affectedRequirementIds)
+            ? args.affectedRequirementIds.map(String)
+            : [],
+          affectedTaskIds: Array.isArray(args.affectedTaskIds)
+            ? args.affectedTaskIds.map(String)
+            : [],
+        });
+        return JSON.stringify(receipt, null, 2);
+      }
       case 'update_plan': {
         const state = updatePlan(this.workspaceRoot, {
           explanation: args.explanation,
           plan: args.plan,
         }, this.sessionKey);
+        if (typeof args.steeringReceiptId === 'string' && args.steeringReceiptId.trim()) {
+          applySteeringPlanRevision(
+            this.workspaceRoot,
+            this.sessionKey,
+            args.steeringReceiptId.trim(),
+            state,
+          );
+        }
         // Auto mode has no approval prompt — record an auto-approval into the
         // plan history when this establishes a new plan version.
         this.maybeAutoApprovePlan(state);

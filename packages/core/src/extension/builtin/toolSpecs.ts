@@ -626,6 +626,35 @@ export const BUILTIN_TOOL_SPECS = [
     },
   },
   {
+    name: 'reconcile_steer',
+    description:
+      'Classify one pending Steer receipt before acting on it. Extension-origin receipts are evidence-only. ' +
+      'Use plan_change when scope, ordering, acceptance, diagnosis, or verification changes; then call update_plan with the same steeringReceiptId before related work. ' +
+      'Use goal_conflict when the steer would replace or conflict with the active goal; stop for explicit user direction.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        receiptId: { type: 'string', description: 'Receipt id shown in the steering reconciliation message.' },
+        classification: {
+          type: 'string',
+          enum: ['clarification', 'plan_change', 'evidence', 'goal_conflict'],
+        },
+        summary: { type: 'string', description: 'Bounded explanation of the classification without copying the full steer.' },
+        affectedRequirementIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Existing requirement ids affected by this steer.',
+        },
+        affectedTaskIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Existing plan task ids affected by this steer.',
+        },
+      },
+      required: ['receiptId', 'classification', 'summary'],
+    },
+  },
+  {
     name: 'update_plan',
     description:
       'Create or update the durable CLI task plan. Use it ONLY for work with ≥3 non-trivial steps (1–2 steps: just do them). ' +
@@ -636,6 +665,7 @@ export const BUILTIN_TOOL_SPECS = [
       type: 'object',
       properties: {
         explanation: { type: 'string', description: 'Optional short explanation of the plan update.' },
+        steeringReceiptId: { type: 'string', description: 'Required when this plan revision applies a pending plan-change Steer.' },
         plan: {
           type: 'array',
           description: 'Ordered plan items.',

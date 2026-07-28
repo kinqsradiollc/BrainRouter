@@ -8,3 +8,4 @@ export * from './workContract.js';
 export * from './workContractProjection.js';
 export * from './workContractStore.js';
 export * from './steeringReceiptStore.js';
+export * from './steeringReconciliationGate.js';
