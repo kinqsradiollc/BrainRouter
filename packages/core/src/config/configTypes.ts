@@ -7,6 +7,14 @@
  * from ../config/config.js, so every importer of these types is unchanged.
  */
 import type { ExternalDirMode } from '../exec/policy/execPolicy.js';
+import type {
+  HostedAgentConfig,
+  ResolvedHostedAgentConfig,
+  RuntimeBackendKind,
+  RuntimeCliKnobs,
+} from './runtimeConfig.js';
+
+export * from './runtimeConfig.js';
 
 export interface ServerConfig {
   type: 'stdio' | 'http';
@@ -345,116 +353,11 @@ export interface SkillsCliKnobs {
  *  Native formats are opt-in via `cli.providerRequestFormat`. */
 export type ProviderWireFormat = 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate';
 
-/**
- * MC-A1 — runtime-plane backend selector values. `process` (default) is
- * today's in-process host execution; `worktree` is the git-worktree isolated
- * backend (MC-A2); `container` is the Docker-CLI isolated backend (MC-A3,
- * strictly opt-in — requires `cli.runtime.containerImage`). Lives here (not
- * in `runtime/`) so the config layer never imports upward.
- */
-export type RuntimeBackendKind = 'process' | 'worktree' | 'container' | 'hosted';
-
-export type HostedAgentProtocol = 'line-json' | 'stdio';
-
-export interface HostedAgentConfig {
-  name?: string;
-  command?: string;
-  args?: string[];
-  protocol?: HostedAgentProtocol;
-}
-
-export interface ResolvedHostedAgentConfig {
-  name: string;
-  command: string;
-  args: string[];
-  protocol: HostedAgentProtocol;
-}
-
-/** MC-A3 — resource limits for the `container` runtime backend. */
-export interface ContainerRuntimeLimits {
-  /** `docker run --cpus` value (fractional allowed). 0/absent = no limit. */
-  cpus?: number;
-  /** `docker run --memory` value (e.g. '512m', '2g'). Empty/absent = no limit. */
-  memory?: string;
-}
-
-/** MC-A1 — `cli.runtime` block: which runtime backend hosts agent runs. */
-export interface RuntimeCliKnobs {
-  /** Runtime backend for agent conversations. Default 'process' (in-process,
-   *  exactly today's behavior). Invalid values resolve to 'process'. */
-  backend?: RuntimeBackendKind;
-  /** Cap on concurrently LIVE runtime instances before LRU parking (MC-A4).
-   *  Default 0 = no cap (nothing is ever evicted). */
-  maxLive?: number;
-  /** MC-A6 — write a durable workspace archive (git-delta patch + tarball of
-   *  changed files + manifest) when a throwaway `worktree` runtime is
-   *  disposed. Default true — worktree runtimes are teardown-by-design, so
-   *  their uncommitted work is preserved unless the user opts out. */
-  archiveOnDispose?: boolean;
-  /** MC-A6 — cap (in MB) on the changed-file payload packed into an
-   *  archive's tarball. Oversize payloads skip the tarball (the git-delta
-   *  patch is still captured) and note it in the manifest — the host disk is
-   *  a constrained resource. Default 64, clamped 1..1024. */
-  archiveMaxMB?: number;
-  /** MC-A6 — how many archives `pruneArchives()` keeps (newest first).
-   *  Default 20; 0 = no count-based pruning. */
-  archiveKeep?: number;
-  /** MC-A5 — JIT secret indirection for runtime children. When true,
-   *  secret-shaped vars in a child runtime's env are replaced with
-   *  `BRAINROUTER_SECRET_LEASE_<NAME>` tokens (single-use, short-TTL,
-   *  scope-checked) redeemed at point-of-use via the host secret broker.
-   *  Default false — children receive raw env values exactly as today. */
-  jitSecrets?: boolean;
-  /** MC-A5 — lease lifetime for JIT secret tokens, in ms. Default 60_000,
-   *  clamped 1_000..3_600_000. */
-  jitSecretTtlMs?: number;
-  /** MC-A3 — image the `container` backend runs. NO default and NO automatic
-   *  pulls (the host disk is a constrained resource): the backend refuses to
-   *  start until this is set, and a locally-missing image is an instructive
-   *  error telling the user the exact `docker pull` to run themselves. */
-  containerImage?: string;
-  /** MC-A3 — resource limits applied to `docker run` (`--cpus`/`--memory`). */
-  container?: ContainerRuntimeLimits;
-  /** Serve the local runtime HTTP contract. Default false; callers must opt in. */
-  serve?: boolean;
-  /** Local runtime contract bind host. Defaults to loopback. */
-  serveHost?: string;
-  /** Local runtime contract port. Defaults to 8791; 0 is allowed for tests. */
-  servePort?: number;
-  /** Remote runtime endpoint. Empty by default; in-process remains the default. */
-  remoteUrl?: string;
-  /** Named app-preview ports reserved by runtimes. Empty by default. */
-  previewPorts?: Record<string, number>;
-}
-
 export interface BudgetCliKnobs {
   /** Per-agent-task USD cap. 0 or absent means uncapped. */
   maxPerTaskUSD?: number;
   /** Per-agent-task token cap. 0 or absent means uncapped. */
   maxPerTaskTokens?: number;
-}
-
-/** MC-A1 — validated knob values (see `RuntimeBackendKind`). */
-export function normalizeRuntimeBackend(value: unknown): RuntimeBackendKind {
-  if (value === 'worktree') return 'worktree';
-  if (value === 'container') return 'container'; // MC-A3 — still opt-in: it also needs containerImage
-  if (value === 'hosted') return 'hosted';
-  return 'process';
-}
-
-/** MC-A3 — `docker run --memory` shapes we accept: bytes or b/k/m/g suffixed. */
-const CONTAINER_MEMORY_RE = /^\d+(\.\d+)?[bkmg]?b?$/i;
-
-/** MC-A3 — validated container resource limits: junk drops to "no limit". */
-export function normalizeContainerLimits(value: unknown): { cpus: number; memory: string } {
-  const raw = (value && typeof value === 'object') ? value as ContainerRuntimeLimits : {};
-  const cpus = typeof raw.cpus === 'number' && Number.isFinite(raw.cpus) && raw.cpus > 0
-    ? Math.min(raw.cpus, 128)
-    : 0;
-  const memory = typeof raw.memory === 'string' && CONTAINER_MEMORY_RE.test(raw.memory.trim())
-    ? raw.memory.trim()
-    : '';
-  return { cpus, memory };
 }
 
 /**
