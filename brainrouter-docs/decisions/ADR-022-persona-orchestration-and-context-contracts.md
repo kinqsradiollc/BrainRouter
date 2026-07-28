@@ -124,6 +124,44 @@ For a root conversational turn, the orchestration role is `primary`. It follows
 the same validation and context rules as delegated roles even when no child is
 created.
 
+#### 1.1 Keep presentation personality separate and profile-aware
+
+Personality controls how the agent communicates, not what the agent is, what it
+may do, or how it decomposes work. A workspace profile may recommend a
+personality, but that recommendation is presentation metadata rather than part
+of the persona, capability, orchestration, skill, tool, model, memory, or
+permission contracts.
+
+The effective personality resolves through explicit, inspectable layers:
+
+```text
+temporary chat override
+  > workspace override
+  > global user default
+  > workspace-profile recommendation
+  > standard fallback
+```
+
+Desktop and CLI must expose both the effective value and its source. **Use
+profile recommendation** is the normal default. Choosing a concrete style
+creates an override at the surface's stated scope; returning that scope to
+**Auto** removes its override instead of copying the current recommendation.
+Existing stored personality values migrate as manual workspace overrides so an
+upgrade does not silently change the user's preferred communication style.
+
+A chat override applies only to that conversation and must be easy to clear. A
+workspace override is appropriate when one project benefits from a stable
+communication style. A global default expresses the user's general preference
+across projects. Changing profiles may change only the auto recommendation; it
+must not overwrite any explicit override.
+
+Personality styles may affect tone, explanation depth, and collaboration
+format. They must not grant tools or skills, select capabilities or roles,
+change approval or delegation policy, alter model or reasoning effort, relax
+evidence requirements, or override persona and workflow instructions. The
+runtime validates personality as a closed enum and records provenance rather
+than accepting an arbitrary prompt as a personality setting.
+
 ### 2. Separate persona and orchestration storage
 
 First-party definitions use:
@@ -551,6 +589,8 @@ its release gate; it is not required to activate the typed contracts.
 | A22-12 | Introduce bounded delegated-task packets and child context recomputation | A22-11 | Implemented |
 | A22-13 | Add migration diagnostics and compatibility telemetry | A22-5 | Implemented |
 | A22-14 | Remove legacy Markdown and manifest readers after the compatibility gate | A22-13 | Deferred to compatibility gate |
+| A22-15 | Add profile-recommended personality with inspectable workspace auto/manual selection | A22-6 | Implemented |
+| A22-16 | Add global and temporary-chat personality layers without changing execution authority | A22-15 | Planned as separate small PRs |
 
 ## Acceptance criteria
 
@@ -573,6 +613,8 @@ This ADR is implemented only when:
    authority during the compatibility window.
 10. CLI and Desktop show the same reviewed persona, capability, and
     orchestration configuration.
+11. Personality resolution has identical precedence and provenance in CLI and
+    Desktop, and changing personality cannot alter execution authority.
 
 ## Open questions for acceptance
 
