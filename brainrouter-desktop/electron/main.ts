@@ -57,6 +57,12 @@ import { checkComputerUsePermissions, openAccessibilitySettings, openScreenRecor
 import { setupTray } from './tray.js';
 import { BrowserViewManager } from './browser/browserViewManager.js';
 import { executeAgentBrowserCommand } from './browser/browserAgentAdapter.js';
+import {
+  browserCommandTabId,
+  commandRequiresOwnedTab,
+  scopedBrowserState,
+  scopedBrowserTarget,
+} from './browser/browserSessionScope.js';
 import { isBrowserCommand } from './browser/protocol.js';
 import { concreteRendererBrowserTarget } from './browser/rendererCommandTarget.js';
 import { shouldBypassAgentVisibleQueue, shouldBypassRendererVisibleQueue } from './browser/visibleQueuePolicy.js';
@@ -91,6 +97,9 @@ interface WinPool {
   browserOpenSequence: number;
   pendingBrowserOpens: Map<number, (visible: boolean) => void>;
   activeVisibleBrowserControllers: Set<AbortController>;
+  /** Agent tabs are isolated per chat even though cookies/storage intentionally
+   * remain shared by the workspace Chromium profile. */
+  browserTabsBySession: Map<string, Set<string>>;
 }
 const wins = new Map<number, WinPool>(); // webContents.id → WinPool
 const pendingBrowserRequests = new WeakMap<UtilityProcess, Map<string, AbortController>>();
@@ -160,19 +169,6 @@ function browserOwnershipMatches(wp: WinPool, host: UtilityProcess, workspaceRoo
     && wp.hosts.get(workspaceRoot) === host;
 }
 
-function concreteBrowserTarget(wp: WinPool, command: BrowserControlCommand): string | undefined {
-  const explicit = typeof (command as { tabId?: unknown }).tabId === 'string'
-    ? (command as { tabId: string }).tabId
-    : undefined;
-  if (explicit) return explicit;
-  const state = wp.browser.getState();
-  if (command.kind === 'permission.respond') return state.permissionPrompt?.tabId;
-  if (command.kind === 'dialog.respond') return state.dialogPrompt?.tabId ?? state.activeTabId;
-  if (command.kind === 'download.action') return state.downloads.find((row) => row.id === command.downloadId)?.tabId ?? undefined;
-  if (command.kind === 'capabilities' || command.kind === 'tabs.list' || command.kind === 'tabs.open' || command.kind === 'tabs.reopen') return undefined;
-  return state.activeTabId || undefined;
-}
-
 function pinBrowserCommand(command: BrowserControlCommand, tabId?: string): BrowserControlCommand {
   if (!tabId || (!command.kind.startsWith('page.') && command.kind !== 'dialog.respond')) return command;
   return { ...command, tabId } as BrowserControlCommand;
@@ -231,6 +227,11 @@ async function handleBrowserControlRequest(
     postBrowserControlError(host, request.id, 'closed', 'The owning desktop window is closed.');
     return;
   }
+  const sessionKey = request.sessionKey?.trim();
+  if (!sessionKey) {
+    postBrowserControlError(host, request.id, 'ownership_mismatch', 'Browser control requires an owning chat session.');
+    return;
+  }
   // A parked/background workspace host must never drive the tab currently shown
   // in another workspace in the same window.
   if (wp.pool.activeRoot !== workspaceRoot || wp.hosts.get(workspaceRoot) !== host) {
@@ -238,7 +239,23 @@ async function handleBrowserControlRequest(
     return;
   }
   const workspaceGeneration = wp.browserWorkspaceGeneration;
-  const targetTabId = concreteBrowserTarget(wp, request.command);
+  const ownedTabs = wp.browserTabsBySession.get(sessionKey) ?? new Set<string>();
+  wp.browserTabsBySession.set(sessionKey, ownedTabs);
+  if (request.command.kind === 'tabs.reopen') {
+    postBrowserControlError(host, request.id, 'permission_denied', 'Reopening a workspace browser tab is unavailable to agents; open its URL in a new tab.');
+    return;
+  }
+  const explicitTabId = browserCommandTabId(request.command);
+  if (explicitTabId && !ownedTabs.has(explicitTabId)) {
+    postBrowserControlError(host, request.id, 'ownership_mismatch', 'The requested browser tab belongs to another chat or to the user.');
+    return;
+  }
+  const state = wp.browser.getState();
+  const targetTabId = scopedBrowserTarget(request.command, state, ownedTabs);
+  if (commandRequiresOwnedTab(request.command) && !targetTabId) {
+    postBrowserControlError(host, request.id, 'not_found', 'This chat has no browser tab for that operation. Open a new tab first.');
+    return;
+  }
   const pinnedRequest: BrowserControlRequestMessage = {
     ...request,
     command: pinBrowserCommand(request.command, targetTabId),
@@ -271,7 +288,14 @@ async function handleBrowserControlRequest(
           throw new Error('BROWSER_TAB_NOT_VISIBLE');
         }
         if (!browserOwnershipMatches(wp, host, workspaceRoot, workspaceGeneration)) throw new Error('BROWSER_OWNERSHIP_CHANGED');
-        return await executeAgentBrowserCommand(wp.browser, pinnedRequest, workspaceRoot, controller.signal);
+        const scopedManager = {
+          getState: () => scopedBrowserState(wp.browser.getState(), ownedTabs),
+          execute: wp.browser.execute.bind(wp.browser),
+        };
+        const result = await executeAgentBrowserCommand(scopedManager, pinnedRequest, workspaceRoot, controller.signal);
+        if (result.ok && request.command.kind === 'tabs.open' && result.tabId) ownedTabs.add(result.tabId);
+        if (result.ok && request.command.kind === 'tabs.close' && targetTabId) ownedTabs.delete(targetTabId);
+        return result;
       } finally {
         // Cancellation/timeout can return before Chromium has finished the raw
         // operation. Keep the exact native tab pinned until that work settles so
@@ -647,6 +671,7 @@ function openWorkspaceWindow(workspaceRoot: string): void {
     browserOpenSequence: 0,
     pendingBrowserOpens: new Map(),
     activeVisibleBrowserControllers: new Set(),
+    browserTabsBySession: new Map(),
   };
   browser.setAgentTakeoverHandler(() => {
     for (const controller of wp.activeVisibleBrowserControllers) controller.abort();

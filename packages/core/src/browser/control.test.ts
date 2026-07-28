@@ -39,6 +39,24 @@ test('browser bridge emits the versioned utility-host request and correlates the
   bridge.dispose();
 });
 
+test('browser bridge carries the owning chat session without changing tool commands', async () => {
+  const transport = new FakeTransport();
+  const bridge = createBrowserControlBridge(transport, { timeoutMs: 1000, idPrefix: 'scope' });
+  const pending = bridge.request({ kind: 'tabs.list' }, { sessionKey: 'chat-b' });
+  const request = transport.sent[0] as BrowserControlRequestMessage;
+  assert.equal(request.sessionKey, 'chat-b');
+  assert.deepEqual(request.command, { kind: 'tabs.list' });
+  bridge.handleMessage({
+    kind: 'browser-command-response',
+    version: BROWSER_CONTROL_PROTOCOL_VERSION,
+    id: request.id,
+    ok: true,
+    result: { ok: true, kind: 'tabs.list', durationMs: 1, data: { tabs: [] } },
+  });
+  await pending;
+  bridge.dispose();
+});
+
 test('browser bridge aborts locally and emits a correlated cancel message', async () => {
   const transport = new FakeTransport();
   const bridge = createBrowserControlBridge(transport, { timeoutMs: 1000, idPrefix: 'abort' });

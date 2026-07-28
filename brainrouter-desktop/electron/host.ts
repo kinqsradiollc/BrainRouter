@@ -50,7 +50,7 @@ import { InteractionBroker, type AgentEvent, type RecordLifecycleAction } from '
 // Deep imports into the CLI's built runtime (no "exports" field = allowed).
 // Extracting a proper @kinqs/brainrouter-agent package is tracked for 0.4.16.
 import { Agent, classifyForVerification } from '@kinqs/brainrouter-core/agent';
-import { createBrowserControlBridge } from '@kinqs/brainrouter-core/browser';
+import { createBrowserControlBridge, type BrowserControlPort } from '@kinqs/brainrouter-core/browser';
 import { loadConfig, saveConfig, _resetCliKnobsCache, type LLMConfig } from '@kinqs/brainrouter-core/config';
 // 0.4.15 — named providers + per-sub-agent model routing (pure transforms).
 import {
@@ -313,6 +313,14 @@ async function main(): Promise<void> {
   // as computer-use, but targets the window-owned visible WebContentsView tab.
   // Plain node/CLI hosts have no parent port and therefore advertise no tools.
   const browserControlBridge = port ? createBrowserControlBridge(port, { idPrefix: 'desktop-browser' }) : undefined;
+  const browserPortFor = (sessionKey: () => string): BrowserControlPort | undefined => browserControlBridge
+    ? {
+        request: (command, options = {}) => browserControlBridge.request(command, {
+          ...options,
+          sessionKey: sessionKey(),
+        }),
+      }
+    : undefined;
 
   // Identical boot recipe to `brainrouter chat` (index.ts): config → llm →
   // pool.connectAll(profiles) → Agent. Offline MCP does not block (same
@@ -448,12 +456,13 @@ async function main(): Promise<void> {
   // EXTENSIONS — activate code-level extensions before the first turn (workspace
   // tier gated on project trust). Best-effort; never blocks the host boot.
   await loadExtensions(workspaceRoot).catch(() => undefined);
-  const agent = new Agent(mcpClient, llm, {
+  let agent: Agent;
+  agent = new Agent(mcpClient, llm, {
     workspaceRoot,
     launchCwd: workspaceRoot,
     interactionPort: createBrokerPort(broker, (e) => emitPortFor(agent.sessionKey, e)),
     computerUsePort: computerUseBridge,
-    browserControlPort: browserControlBridge,
+    browserControlPort: browserPortFor(() => agent.sessionKey),
     terminalUsePort: ptyRegistry,
   });
   // DESK-5v — the agent the user is currently VIEWING. hostCore keeps a pool of
@@ -527,12 +536,13 @@ async function main(): Promise<void> {
   // provider/model/endpoint (sessionRuntimeStore). spawnAgent resolves THIS
   // session's runtime so concurrent chats can run different models/providers.
   const spawnAgent = (sessionKey: string): AgentLike => {
-    const a = new Agent(mcpClient, llmForSession(sessionKey), {
+    let a: Agent;
+    a = new Agent(mcpClient, llmForSession(sessionKey), {
       workspaceRoot,
       launchCwd: workspaceRoot,
       interactionPort: createBrokerPort(broker, (e) => emitPortFor(a.sessionKey, e)),
       computerUsePort: computerUseBridge,
-      browserControlPort: browserControlBridge,
+      browserControlPort: browserPortFor(() => a.sessionKey),
       terminalUsePort: ptyRegistry,
     });
     a.sessionKey = sessionKey;
