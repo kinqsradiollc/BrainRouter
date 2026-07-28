@@ -155,6 +155,26 @@ subpaths directly.
 - **Evidence:** `packages/agent-protocol/src/index.ts:1`, `packages/hooks/package.json`,
   `packages/sdk/src/client.ts:60,104`
 
+### 10a. Shared data contracts live in types; wire events live in agent-protocol
+
+When a dependency-free record, reference, status union, or stable payload
+constant crosses package/process boundaries, define it in
+`@kinqs/brainrouter-types` and add a browser-safe subpath when renderer consumers
+need it. Agent-host commands, events, and delivery vocabulary instead belong in
+the zero-dependency agent-protocol leaf. Core imports those contracts and owns
+validation, domain transitions, services, and adapters behind thin subsystem
+entrypoints; never combine all of those responsibilities into one contract
+module. Filesystem, process, provider, Electron, or secret-bearing interfaces
+remain in owning-package ports and must not enter the browser-safe types leaf.
+
+- **Why:** putting shared shapes beside core validation/storage forces other
+  packages to depend on implementation details and turns each new workflow field
+  into god-file growth; moving side-effect ports into types would break leaf
+  purity in the opposite direction.
+- **Evidence:** `packages/types/src/work-contract.ts`,
+  `packages/core/src/task/workContract.ts`,
+  `packages/core/src/task/workContractValidation.ts`
+
 ### 11. Lockstep versioning; version strings read from `package.json` at runtime
 
 Every publishable package **and** every private app carries the SAME version

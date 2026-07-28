@@ -16,3 +16,4 @@ export * from "./api.js";
 export * from "./pentest.js";
 export * from "./models.js";
 export * from "./reviews.js";
+export * from "./work-contract.js";
