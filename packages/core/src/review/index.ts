@@ -19,6 +19,7 @@ export * from './pentestProxySession.js';
 export * from './reviewStore.js';
 export * from './reviewSynthesis.js';
 export * from './vulnerabilityIntelligence.js';
+export * from './hostProjection.js';
 export * from './contracts/index.js';
 export * from './domain/index.js';
 export * from './ports/index.js';

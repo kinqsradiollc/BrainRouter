@@ -13,8 +13,13 @@
  * so there is no new config knob or env var. The server resolves the caller's
  * org from the bearer (the optional `X-BrainRouter-Org` header is not needed).
  */
-import { loadOrInitConfig } from '@kinqs/brainrouter-core/config';
 import { isInternalSessionKey, loadTranscript } from '@kinqs/brainrouter-core/session';
+import {
+  AccountApiHttpError,
+  accountApiRequest,
+  resolveAccountApiTarget,
+  type AccountApiTarget,
+} from '../account/accountClient.js';
 import {
   chatSyncMappingPath,
   getThreadLink,
@@ -28,11 +33,9 @@ import {
   type ServerChatMessageInput,
 } from './transcriptMapping.js';
 
-/** The resolved account API binding: base URL + bearer key. */
-export interface ChatSyncTarget {
-  baseUrl: string;
-  apiKey: string;
-}
+/** Compatibility names retained for existing chat-sync consumers. */
+export type ChatSyncTarget = AccountApiTarget;
+export { AccountApiHttpError as ChatSyncHttpError };
 
 /** A server thread as returned by the list/create/replace endpoints (subset we use). */
 export interface ServerChatThread {
@@ -43,63 +46,24 @@ export interface ServerChatThread {
   updatedAt: string;
 }
 
-/** Raised for a non-2xx response; carries the HTTP status so callers can branch (e.g. 404). */
-export class ChatSyncHttpError extends Error {
-  constructor(readonly status: number, message: string) {
-    super(message);
-    this.name = 'ChatSyncHttpError';
-  }
-}
-
 /**
  * Resolve the active hosted (`http`) profile → account base URL + API key.
  * Mirrors the resolver `brainrouter github` uses: the profile URL is the MCP
  * endpoint (`…/mcp`); the account API lives at the root.
  */
 export function resolveChatSyncTarget(): ChatSyncTarget | { error: string } {
-  const config = loadOrInitConfig();
-  const active = config.activeServer;
-  const server = active ? config.servers?.[active] : undefined;
-  if (!server || server.type !== 'http' || !('url' in server) || !server.url) {
-    return { error: 'No hosted BrainRouter server is configured. Run `brainrouter login` to connect to one first.' };
-  }
-  const baseUrl = String(server.url).replace(/\/mcp\/?$/, '').replace(/\/+$/, '');
-  const apiKey = String(('apiKey' in server && server.apiKey) || '');
-  if (!apiKey) return { error: 'Your BrainRouter profile has no API key. Re-run `brainrouter login`.' };
-  return { baseUrl, apiKey };
-}
-
-function authHeaders(apiKey: string): Record<string, string> {
-  return { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', Accept: 'application/json' };
-}
-
-function errorMessage(body: unknown, status: number): string {
-  const r = body as { error?: unknown } | null;
-  const e = r?.error;
-  if (typeof e === 'string' && e) return e;
-  return `HTTP ${status}`;
-}
-
-async function request<T>(target: ChatSyncTarget, method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${target.baseUrl}${path}`, {
-    method,
-    headers: authHeaders(target.apiKey),
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const json = (await res.json().catch(() => ({}))) as unknown;
-  if (!res.ok) throw new ChatSyncHttpError(res.status, errorMessage(json, res.status));
-  return json as T;
+  return resolveAccountApiTarget();
 }
 
 /** GET /api/chat/threads — the caller's threads (no messages), newest-touched first. */
 export async function listServerThreads(target: ChatSyncTarget): Promise<ServerChatThread[]> {
-  const data = await request<{ threads?: ServerChatThread[] }>(target, 'GET', '/api/chat/threads');
+  const data = await accountApiRequest<{ threads?: ServerChatThread[] }>(target, 'GET', '/api/chat/threads');
   return data.threads ?? [];
 }
 
 /** POST /api/chat/threads — create an (empty) thread; the server assigns its id. */
 export async function createThread(target: ChatSyncTarget, title: string): Promise<ServerChatThread> {
-  const data = await request<{ thread: ServerChatThread }>(target, 'POST', '/api/chat/threads', { title });
+  const data = await accountApiRequest<{ thread: ServerChatThread }>(target, 'POST', '/api/chat/threads', { title });
   return data.thread;
 }
 
@@ -109,7 +73,7 @@ export async function replaceThreadMessages(
   threadId: string,
   messages: ServerChatMessageInput[],
 ): Promise<ServerChatThread> {
-  const data = await request<{ thread: ServerChatThread }>(
+  const data = await accountApiRequest<{ thread: ServerChatThread }>(
     target,
     'PUT',
     `/api/chat/threads/${encodeURIComponent(threadId)}/messages`,
@@ -160,7 +124,7 @@ export async function pushSessionToServer(
       await replaceThreadMessages(target, threadId, messages);
     } catch (err) {
       // 404 → the mapped thread is gone (deleted / different owner). Recreate.
-      if (err instanceof ChatSyncHttpError && err.status === 404) {
+      if (err instanceof AccountApiHttpError && err.status === 404) {
         threadId = undefined;
       } else {
         throw err;
