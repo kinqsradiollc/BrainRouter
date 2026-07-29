@@ -1,7 +1,7 @@
 /** Browser-development fixture for the production safe onboarding preview shape. */
-import { WORKSPACE_CAPABILITY_DEFINITIONS } from '@kinqs/brainrouter-core/dist/workspace/capabilities.js';
-import { WORKSPACE_PROFILES } from '@kinqs/brainrouter-core/dist/workspace/profiles.js';
-import { WORKSPACE_TOOL_PROFILES } from '@kinqs/brainrouter-core/dist/workspace/toolProfileCatalog.js';
+import { WORKSPACE_CAPABILITY_DEFINITIONS } from '@kinqs/brainrouter-core/workspace/capabilities';
+import { WORKSPACE_PROFILES } from '@kinqs/brainrouter-core/workspace/profiles';
+import { WORKSPACE_TOOL_PROFILES } from '@kinqs/brainrouter-core/workspace/tool-profile-catalog';
 import { parseOnboardingDraft } from '../components/dialogs/onboardingEditorModel.js';
 
 const DEV_ONBOARDING_AT = '2026-01-01T00:00:00.000Z';

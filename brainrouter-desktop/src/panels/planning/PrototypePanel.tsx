@@ -4,8 +4,8 @@ import {
   buildDesignSteering,
   isHexColor,
   type DesignContext,
-} from '@kinqs/brainrouter-core/dist/prototype/prototypePrompt.js';
-import { reservePrototypePath } from '@kinqs/brainrouter-core/dist/prototype/protoDetect.js';
+} from '@kinqs/brainrouter-core/prototype/prompt';
+import { reservePrototypePath } from '@kinqs/brainrouter-core/prototype/detect';
 
 /**
  * INTERACTIVE PROTOTYPE (§3 D4) — the design-context editor + prompt composer.

@@ -124,7 +124,7 @@ export function WritingAssistant({ currentPath, onOpenFile, onOpenUrl }: {
 }
 
 // ── Selection AI (W3): Polish / Rewrite / Continue → a per-chunk accept/reject diff.
-import { reviewStats, type ReviewChunk, type ReviewDecision } from '@kinqs/brainrouter-core/dist/write/writeDiff.js';
+import { reviewStats, type ReviewChunk, type ReviewDecision } from '@kinqs/brainrouter-core/write/review-diff';
 
 export type InlineAction = 'polish' | 'rewrite' | 'continue';
 export const ACTION_LABEL: Record<InlineAction, string> = { polish: 'Polish', rewrite: 'Rewrite', continue: 'Continue' };

@@ -41,9 +41,9 @@ Rules established by the current package manifests and architecture law:
 4. Dashboard consumes the browser-safe types/SDK/hooks subset. It does not
    import Core or protocol.
 5. Backend, CLI, and the Electron host consume curated Core entrypoints.
-6. The Desktop renderer may deep-import a specific browser-safe Core module.
-   This is the one sanctioned exception and depends on Core's `./dist/*`
-   compatibility export until browser-safe subpaths replace each use.
+6. The Desktop renderer uses focused browser-safe Core subpaths. Compiled
+   `dist/*` internals are not a supported import surface in any maintained
+   consumer.
 
 ## Whole-platform ownership map
 
@@ -68,7 +68,7 @@ Rules established by the current package manifests and architecture law:
 |---|---|---|
 | types | root plus `models`, `review`, `reviews`, `work-contract`, `planning-schema`, `atlas-ops`, and `provider` | `review` is canonical and `reviews` is its compatibility entrypoint; add other subpaths only when browser safety or bounded domain ownership requires them |
 | agent protocol | root only | The root remains stable while its implementation splits into private siblings |
-| Core | minimal root plus curated domain subpaths such as `agent`, `config`, `provider`, `router`, `review`, `workspace`, and `workflow` | Internal services stay private; renderer-only `dist/*` access remains a documented compatibility exception |
+| Core | minimal root plus curated domain and focused browser-safe subpaths such as `agent`, `provider`, `workspace/profiles`, `write/review-diff`, and `workflow/graph` | Internal services and compiled paths stay private; broad Node-bearing barrels are not renderer entrypoints |
 | SDK | root only | Preserve `BrainRouterClient`; private transport/domain delegates do not become public automatically |
 | hooks | root only | Preserve named hook exports and explicit client injection |
 
@@ -76,14 +76,12 @@ Applications are private composition roots, not libraries. A reusable concept
 found in an app moves down only when at least one real cross-package consumer
 needs it and the lower package can own it without importing host concerns.
 
-### Current exception that must remain explicit
+### Browser-safe public entrypoints
 
-The Desktop renderer has specific deep Core imports for browser-safe modules.
-The root lint configuration exempts only `brainrouter-desktop/src/**`; Electron
-host code remains subject to the curated-entrypoint rule. Core's `./dist/*`
-export is therefore still load-bearing. A25-2 must correct the stale lint
-comment that says the wildcard is gone, then add negative fixtures without
-removing the exception.
+The Desktop renderer now uses explicit, focused Core exports for the pure
+catalog, policy, graph, diff, framework, and prototype modules it consumes.
+The root lint and package-boundary checks reject compiled Core paths for every
+maintained application, and Core no longer publishes a `./dist/*` wildcard.
 
 ## Mixed-responsibility and large-module triage
 
@@ -125,14 +123,14 @@ production boundary stabilizes.
 
 | ADR-025 wave | Current sources of truth | Destination decision | Compatibility requirement |
 |---|---|---|---|
-| A25-2 shared boundaries | package manifests, types exports, protocol root, Core export map, lint boundary | Machine-check leaf direction, curated Core imports, and sanctioned renderer exception | No supported import breaks; negative fixtures prove forbidden edges |
+| A25-2 shared boundaries | package manifests, types exports, protocol root, Core export map, lint boundary | Machine-check leaf direction and curated Core imports across every maintained consumer | No supported import breaks; negative fixtures prove forbidden edges |
 | A25-3 provider/model | Core `provider/` and `router/`; backend `providers/`, model gateway, hosted gateway; agent LLM transport | Catalog, routing, policy, transport adapters, and recovery receipts have one named owner each | Existing provider IDs, model discovery, fallback, budgets, and endpoint behavior stay stable |
 | A25-4 agent runtime | Core agent/runtime/context/tool/session/orchestration plus host protocol | Separate lifecycle, context, tool execution, delivery, and delegation boundaries | Tool-call pairing, safe-boundary Steer, authority ceilings, and bounded loops stay exact |
 | A25-5 workspace/profile | Core workspace, plugin, persona, planning, tool-profile, and onboarding modules | Manifest/contracts, catalog resolution, policy, file adapters, and transaction services are distinct | Missing-manifest behavior, precedence, diagnostics, and safe writes stay exact |
 | A25-6 infrastructure domains | Core browser/exec/background/connectors/storage/worktree plus CLI/Desktop adapters | Host-neutral policy/services remain in Core; privileged side effects remain in hosts | No permission, cancellation, workspace, or session widening |
 | A25-7–A25-13 assurance | types review/pentest records, Core review package, backend PR integration/jobs/routes, GitHub publication, Desktop/CLI/Dashboard review views | Durable assurance run, coverage, evidence, lifecycle, analysis, ports, and host projections | Current diff review remains labeled fallback until repository-context parity is proven |
 | A25-14 agent quality | contributor rules, engineering profile planning schema, skills, runtime activation | Short global invariants plus profile/task-selected architecture, planning, code-quality, and security workflows | No prompt claims an unshipped tool or authority; unrelated profiles do not inherit engineering work |
-| A25-15 cleanup | compatibility barrels, aliases, renderer deep imports, legacy paths | Remove only after import graph and consumer evidence prove zero supported users | One deletion PR per coherent compatibility family |
+| A25-15 cleanup | compatibility barrels, aliases, compiled renderer imports, legacy paths | Replace the compiled Core import family with focused browser-safe exports after import-graph evidence proves every maintained consumer is migrated | Keep other compatibility families until their own consumer evidence supports a separate deletion PR |
 
 ### Provider/model migration
 
@@ -165,10 +163,10 @@ manifests change. The guard now proves:
 3. SDK and hooks production modules stay free of `node:` imports while their
    Node-based tests remain valid;
 4. Dashboard cannot import Core or protocol;
-5. non-renderer consumers cannot use Core `dist/**` internals or unexported
-   Core subpaths;
-6. the Desktop renderer exception accepts only Core `dist/**` compatibility
-   imports and does not weaken any other surface; and
+5. no maintained consumer can use Core `dist/**` internals or unexported Core
+   subpaths;
+6. the Desktop renderer can use focused browser-safe Core exports without a
+   compiled-path exception; and
 7. maintained Core and host consumers use canonical Provider Routing while the
    supported router entrypoints remain external compatibility façades; and
 8. static imports, re-exports, dynamic imports, and `require()` calls are all

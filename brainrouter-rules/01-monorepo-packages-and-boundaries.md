@@ -40,12 +40,11 @@ downstream.** Never reorder the `build:packages` chain.
 
 ### 3. ⛔ Import core only via curated per-subsystem entrypoints; `dist/*` is an ESLint error
 
-Everywhere except the desktop renderer, import core as
-`@kinqs/brainrouter-core/<subsystem>` (`/agent`, `/config`, `/memory`,
-`/provider`, `/exec`, …). The root ESLint config makes
+Import core as `@kinqs/brainrouter-core/<subsystem>` (`/agent`, `/config`,
+`/memory`, `/provider`, `/exec`, or a focused browser-safe subpath). The root
+ESLint config makes
 `@kinqs/brainrouter-core/dist/**` a `no-restricted-imports` **error**. Node
-contexts (CLI `src/`, MCP server, desktop `electron/`) already use only curated
-entrypoints — keep it that way.
+and renderer consumers use only curated entrypoints.
 
 - **Why:** the migration off 442 deep `dist` imports is complete; deep imports
   couple consumers to core's internal file layout and reopen the god-package
@@ -81,23 +80,18 @@ fatten the root barrel.** Source is organized by DOMAIN (`provider/`, `agent/`,
 - **Evidence:** `packages/core/src/index.ts:24`, `packages/core/src/memory/index.ts:3`,
   `packages/core/src/agent/index.ts:1`
 
-### 6. ⛔ The desktop renderer is the one sanctioned deep-import exception — and core's `./dist/*` wildcard is load-bearing
+### 6. ⛔ Browser-safe Core access uses focused curated subpaths
 
-`brainrouter-desktop/src/**` (the vite browser bundle) is exempt from the
-deep-import ban because a curated entrypoint re-exports its FULL surface —
-including `node:fs`/`node:crypto` modules vite can't bundle. In renderer code,
-deep-import the exact browser-safe module (e.g.
-`@kinqs/brainrouter-core/dist/write/writeDiff.js`) and leave a comment naming the
-node-only module the barrel would otherwise pull. Core's trailing
-`"./dist/*": "./dist/*"` export (still present at
-`packages/core/package.json:174`) is what keeps these resolvable — **do not delete
-it.** The lint rule, not the exports map, is the enforcement mechanism. The
-Electron host (`electron/**`) runs in Node and MUST use curated entrypoints.
+The Vite renderer must not import a broad Core subsystem barrel when that barrel
+also exposes Node-only modules. Add or reuse a focused, explicitly exported
+browser-safe subpath such as `workspace/profiles`, `write/review-diff`, or
+`session/permission-modes`. Never restore the `./dist/*` wildcard or import a
+compiled internal path.
 
-- **Why:** a barrel import pulls `node:crypto`/`node:fs` and breaks `vite build`;
-  TypeScript will not catch it.
-- **Evidence:** `eslint.config.mjs:61-71`, `brainrouter-desktop/src/lib/atlas/atlasView.ts:21`,
-  `packages/core/package.json:174`
+- **Why:** focused exports keep browser bundles away from `node:fs` and
+  `node:crypto` without coupling consumers to Core's file layout.
+- **Evidence:** `packages/core/package.json`, `eslint.config.mjs`,
+  `brainrouter-desktop/src/panels/EditorPanel/useMarkdownMode.ts`
 
 ### 7. The dashboard may only use the browser-safe package subset
 
