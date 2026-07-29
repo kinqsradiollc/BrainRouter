@@ -29,10 +29,11 @@ import {
   standardChromeUserAgent,
 } from './browserProfile.js';
 import { promptForHttpAuth } from './httpAuthPrompt.js';
+import { BrowserManagerError } from './browserManagerError.js';
+import { BrowserPromptManager } from './browserPromptManager.js';
 import {
   BrowserWorkspaceStore,
   persistableBrowserUrl,
-  type PersistedPermissionDecision,
   type PersistedBrowserWorkspace,
 } from './browserWorkspaceStore.js';
 import {
@@ -66,7 +67,6 @@ import {
 const ISOLATED_WORLD_ID = 1_001;
 const MAX_CONSOLE_ROWS = 300;
 const MAX_NETWORK_ROWS = 500;
-const PERMISSION_TIMEOUT_MS = 30_000;
 const DIALOG_TIMEOUT_MS = 60_000;
 const AGENT_DOWNLOAD_GESTURE_MS = 5_000;
 const MAX_STAGED_UPLOAD_FILE_BYTES = 512 * 1024 * 1024;
@@ -76,32 +76,12 @@ const AGENT_DOWNLOAD_INTERACTIONS = new Set<BrowserCommand['op']>([
   'click', 'double-click', 'type', 'press', 'drag', 'select', 'check', 'set-files', 'respond-dialog',
 ]);
 
-class BrowserManagerError extends Error {
-  constructor(public readonly code: BrowserErrorCode, message: string) {
-    super(message);
-  }
-}
-
 type ViewRecord = {
   view: WebContentsView;
   console: BrowserConsoleEntry[];
 };
 
 type ClosedTab = { url: string; title: string };
-type PendingPermission = {
-  id: string;
-  tabId: BrowserTabId;
-  respond: (allow: boolean) => void;
-  cancel: () => void;
-  timer: ReturnType<typeof setTimeout>;
-};
-type DialogResponse = { accept: boolean; value?: string };
-type PendingDialog = {
-  id: string;
-  tabId: BrowserTabId;
-  finish: (response: DialogResponse) => void;
-  timer: ReturnType<typeof setTimeout>;
-};
 type AgentNavigationPolicy = { allowedPrivateOrigin?: string };
 type StagedUpload = { directory: string; timer: ReturnType<typeof setTimeout> };
 type BrowserOperationGuard = () => void;
@@ -267,8 +247,6 @@ export class BrowserViewManager {
   private surface: BrowserSurface = { x: 0, y: 0, width: 0, height: 0, visible: false };
   private tabSequence = 0;
   private downloadSequence = 0;
-  private permissionSequence = 0;
-  private dialogSequence = 0;
   private readonly windowPrefix = randomUUID().replace(/-/g, '').slice(0, 10);
   // One persistent profile per workspace preserves sign-ins, cookies, storage,
   // and completed site challenges across chat sessions without sharing them
@@ -287,12 +265,7 @@ export class BrowserViewManager {
   // pane SEES the agent operate the page. Toggled by the panel's set-cursor op;
   // defaults on so the cursor shows even before the renderer syncs the toggle.
   private agentCursorEnabled = true;
-  private permissionPrompt: BrowserState['permissionPrompt'] = null;
-  private dialogPrompt: BrowserState['dialogPrompt'] = null;
-  private pendingPermission: PendingPermission | null = null;
-  private pendingDialog: PendingDialog | null = null;
-  private readonly permissionGrants = new Set<string>();
-  private readonly permissionDecisions = new Map<string, PersistedPermissionDecision['decision']>();
+  private readonly promptManager: BrowserPromptManager;
   private visibleAgentPin: {
     tabId: BrowserTabId;
     deferredSelection?: BrowserTabId;
@@ -319,6 +292,14 @@ export class BrowserViewManager {
     this.workspaceRoot = workspaceRoot;
     this.partition = browserPartitionForWorkspace(workspaceRoot);
     this.workspaceStore = new BrowserWorkspaceStore(app.getPath('userData'), workspaceRoot);
+    this.promptManager = new BrowserPromptManager({
+      tabForContents: (contentsId) => this.tabForContents(contentsId),
+      selectTab: (tabId) => { this.selectTab(tabId); },
+      persist: () => { this.persistWorkspace(); },
+      emit: (event) => { this.emit(event); },
+      emitState: () => { this.emitState(); },
+      setStatus: (tab, text) => { this.setStatus(tab, text); },
+    }, this.windowPrefix);
     configureBrowserSession(session.fromPartition(this.partition));
     this.restoreWorkspace();
     if (this.tabs.length === 0) this.createTab(BROWSER_BLANK_URL, true);
@@ -333,8 +314,8 @@ export class BrowserViewManager {
       closedTabCount: this.closedTabs.length,
       surface: { ...this.surface },
       downloads: this.workspaceDownloads(),
-      permissionPrompt: this.permissionPrompt ? { ...this.permissionPrompt } : null,
-      dialogPrompt: this.dialogPrompt ? { ...this.dialogPrompt } : null,
+      permissionPrompt: this.promptManager.getPermissionPrompt(),
+      dialogPrompt: this.promptManager.getDialogPrompt(),
       capabilities: {
         nativeTabs: true,
         sameVisibleTabAutomation: true,
@@ -531,8 +512,7 @@ export class BrowserViewManager {
       const stop = (): void => {
         const current = this.resolveTab(request.tabId, false);
         if (!current) return;
-        this.cancelPendingDialog(current.id);
-        if (this.pendingPermission?.tabId === current.id) this.respondPermission(this.pendingPermission.id, false);
+        this.promptManager.stopForTab(current.id);
         try { this.requireContents(current.id).stop(); } catch { /* already closed */ }
       };
       // Keep the raw work promise separate from the bounded caller result. If a
@@ -605,62 +585,24 @@ export class BrowserViewManager {
   }
 
   hasPermission(rawOrigin: string, grants: string[]): boolean {
-    if (grants.length === 0) return false;
-    let origin = rawOrigin;
-    try { origin = new URL(rawOrigin).origin; } catch { /* invalid origins have no grants */ }
-    return grants.every((permission) => this.permissionGrants.has(`${origin}\n${permission}`));
+    return this.promptManager.hasPermission(rawOrigin, grants);
   }
 
   requestPermission(contentsId: number, permission: string, grants: string[], rawOrigin: string, callback: (allow: boolean) => void): void {
-    const tab = this.tabForContents(contentsId);
-    if (!tab || grants.length === 0) { callback(false); return; }
-    let origin = '';
-    try { origin = new URL(rawOrigin || tab.url).origin; } catch { origin = rawOrigin || tab.url; }
-    const decisionKey = `${origin}\n${permission}`;
-    const savedDecision = permission === 'geolocation' ? this.permissionDecisions.get(decisionKey) : undefined;
-    if (savedDecision) { callback(savedDecision === 'allow'); return; }
-    if (this.hasPermission(origin, grants)) { callback(true); return; }
-    if (this.pendingPermission) {
-      clearTimeout(this.pendingPermission.timer);
-      this.pendingPermission.cancel();
-    }
-    const id = `permission_${++this.permissionSequence}`;
-    const finish = (allow: boolean, remember: boolean): void => {
-      if (allow) for (const grant of grants) this.permissionGrants.add(`${origin}\n${grant}`);
-      if (remember && permission === 'geolocation') {
-        this.permissionDecisions.set(decisionKey, allow ? 'allow' : 'block');
-        this.persistWorkspace();
-      }
-      callback(allow);
-      if (this.pendingPermission?.id === id) this.pendingPermission = null;
-      this.permissionPrompt = null;
-      this.emit({ type: 'permission', prompt: null });
-      this.emitState();
-    };
-    const timer = setTimeout(() => finish(false, false), PERMISSION_TIMEOUT_MS);
-    this.pendingPermission = {
-      id,
-      tabId: tab.id,
-      respond: (allow) => finish(allow, true),
-      cancel: () => finish(false, false),
-      timer,
-    };
-    this.permissionPrompt = { id, tabId: tab.id, origin: boundBrowserText(origin, 512), permission: boundBrowserText(permission, 128) };
-    this.selectTab(tab.id);
-    this.emit({ type: 'permission', prompt: this.permissionPrompt });
-    this.emitState();
+    this.promptManager.requestPermission(
+      contentsId,
+      permission,
+      grants,
+      rawOrigin,
+      callback,
+    );
   }
 
   dispose(): void {
     if (this.disposed) return;
     this.persistWorkspace();
     this.disposed = true;
-    if (this.pendingPermission) {
-      clearTimeout(this.pendingPermission.timer);
-      this.pendingPermission.cancel();
-      this.pendingPermission = null;
-    }
-    this.cancelPendingDialog();
+    this.promptManager.dispose();
     if (this.downloadListener) {
       session.fromPartition(this.partition).off('will-download', this.downloadListener);
       this.downloadListener = null;
@@ -863,7 +805,7 @@ export class BrowserViewManager {
       let origin = url;
       try { origin = new URL(url).origin; } catch { /* retain bounded URL */ }
       const subject = certificate.subjectName || certificate.subject?.commonName || 'unknown certificate';
-      this.presentDialog(tab, {
+      this.promptManager.presentDialog(tab, {
         kind: 'certificate',
         message: `${boundBrowserText(error, 256)} (${boundBrowserText(subject, 256)}). Continue only if you trust this site.`,
         origin: boundBrowserText(origin, 512),
@@ -875,7 +817,7 @@ export class BrowserViewManager {
       const kind = ['alert', 'confirm', 'prompt', 'beforeunload'].includes(String(details.type))
         ? String(details.type) as 'alert' | 'confirm' | 'prompt' | 'beforeunload'
         : 'alert';
-      this.presentDialog(tab, {
+      this.promptManager.presentDialog(tab, {
         kind,
         message: boundBrowserText(details.message, 4_096),
         defaultValue: kind === 'prompt' ? boundBrowserText(details.defaultPrompt, 4_096) : undefined,
@@ -1046,8 +988,8 @@ export class BrowserViewManager {
       case 'set-cursor': return this.setCursor(this.requireTab(tab), command.enabled);
       case 'set-device': return this.setDevice(this.requireTab(tab), command.device, assertCurrent);
       case 'clear-highlight': return this.isolated(this.requireTab(tab).id, `(() => { document.getElementById('__brainrouter_testid_highlights__')?.remove(); const el=window.__brainrouterHighlighted; if(el){el.style.outline=window.__brainrouterPreviousOutline||'';el.style.outlineOffset='';} window.__brainrouterHighlighted=null; return {ok:true}; })()`);
-      case 'respond-permission': return this.respondPermission(command.promptId, command.allow);
-      case 'respond-dialog': return this.respondDialog(command);
+      case 'respond-permission': return this.promptManager.respondPermission(command.promptId, command.allow);
+      case 'respond-dialog': return this.promptManager.respondDialog(command);
       case 'open-download': case 'show-download': case 'cancel-download': case 'pause-download': case 'resume-download': return this.downloadCommand(command.op, command.downloadId);
       case 'clear-data': return this.clearData(command.dataTypes);
       case 'reset-browser': return this.resetBrowser();
@@ -1463,57 +1405,6 @@ export class BrowserViewManager {
     return { name: boundBrowserText(device.name, 128), width, height, deviceScaleFactor, isMobile: device.isMobile === true };
   }
 
-  private respondPermission(id: string, allow: boolean): { ok: true } {
-    if (!this.pendingPermission || this.pendingPermission.id !== id) throw new BrowserManagerError('INVALID_REQUEST', 'Permission prompt is no longer active.');
-    const pending = this.pendingPermission; this.pendingPermission = null; clearTimeout(pending.timer); pending.respond(allow); return { ok: true };
-  }
-
-  private presentDialog(
-    tab: BrowserTab,
-    prompt: Omit<NonNullable<BrowserState['dialogPrompt']>, 'id' | 'tabId'>,
-    responder: (response: DialogResponse) => void,
-  ): void {
-    this.cancelPendingDialog();
-    const id = `dialog_${this.windowPrefix}_${++this.dialogSequence}`;
-    let settled = false;
-    let timer!: ReturnType<typeof setTimeout>;
-    const finish = (response: DialogResponse): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (this.pendingDialog?.id === id) this.pendingDialog = null;
-      if (this.dialogPrompt?.id === id) {
-        this.dialogPrompt = null;
-        this.emit({ type: 'dialog', prompt: null });
-        this.emitState();
-      }
-      try { responder(response); }
-      catch (error) { this.setStatus(tab, `Could not answer browser prompt: ${error instanceof Error ? error.message : String(error)}`); }
-    };
-    timer = setTimeout(() => finish({ accept: false }), DIALOG_TIMEOUT_MS);
-    this.pendingDialog = { id, tabId: tab.id, finish, timer };
-    this.dialogPrompt = { id, tabId: tab.id, ...prompt };
-    this.selectTab(tab.id);
-    this.emit({ type: 'dialog', prompt: { ...this.dialogPrompt } });
-    this.emitState();
-  }
-
-  private respondDialog(command: Extract<BrowserCommand, { op: 'respond-dialog' }>): { ok: true } {
-    const pending = this.pendingDialog;
-    if (!pending || pending.id !== command.promptId) throw new BrowserManagerError('INVALID_REQUEST', 'Browser prompt is no longer active.');
-    pending.finish({
-      accept: command.accept,
-      value: boundBrowserText(command.value, 4_096),
-    });
-    return { ok: true };
-  }
-
-  private cancelPendingDialog(tabId?: BrowserTabId): void {
-    const pending = this.pendingDialog;
-    if (!pending || (tabId && pending.tabId !== tabId)) return;
-    pending.finish({ accept: false });
-  }
-
   private async downloadCommand(op: 'open-download' | 'show-download' | 'cancel-download' | 'pause-download' | 'resume-download', id: string): Promise<{ ok: true }> {
     const download = this.downloads.find((entry) => entry.id === id);
     if (!download || this.downloadWorkspaces.get(id) !== this.workspaceRoot) throw new BrowserManagerError('INVALID_REQUEST', 'Download was not found in the active workspace.');
@@ -1535,8 +1426,7 @@ export class BrowserViewManager {
   private async resetBrowser(): Promise<{ ok: true }> {
     for (const tab of [...this.tabs]) { try { this.closeTab(tab.id); } catch { /* best effort */ } }
     await this.clearData(['cache', 'cookies', 'storage', 'history']);
-    this.permissionGrants.clear();
-    this.permissionDecisions.clear();
+    this.promptManager.clearPermissions();
     if (this.tabs.length === 0) this.createTab(BROWSER_BLANK_URL, true);
     this.persistWorkspace();
     this.emitState();
@@ -1871,18 +1761,7 @@ export class BrowserViewManager {
     const decisions = persisted?.version === 1 && Array.isArray(persisted.permissions)
       ? persisted.permissions.slice(0, 200)
       : [];
-    for (const row of decisions) {
-      if (row?.permission !== 'geolocation' || (row.decision !== 'allow' && row.decision !== 'block')) continue;
-      let origin = '';
-      try {
-        const parsed = new URL(row.origin);
-        if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') continue;
-        origin = parsed.origin;
-      } catch { continue; }
-      const key = `${origin}\ngeolocation`;
-      this.permissionDecisions.set(key, row.decision);
-      if (row.decision === 'allow') this.permissionGrants.add(key);
-    }
+    this.promptManager.restorePermissions(decisions);
     if (this.tabs.length > 0) this.selectTab(this.tabs[Math.max(0, Math.min(this.tabs.length - 1, Math.floor(persisted?.activeIndex ?? 0)))].id);
   }
 
@@ -1892,11 +1771,7 @@ export class BrowserViewManager {
       version: 1,
       activeIndex: Math.max(0, this.tabs.findIndex((tab) => tab.id === this.activeTabId)),
       tabs: this.tabs.map((tab) => ({ url: persistableBrowserUrl(tab.url) })),
-      permissions: [...this.permissionDecisions.entries()].slice(-200).map(([key, decision]) => ({
-        origin: key.slice(0, key.lastIndexOf('\n')),
-        permission: 'geolocation',
-        decision,
-      })),
+      permissions: this.promptManager.persistedPermissions(),
     };
     try {
       this.workspaceStore.save(state);
@@ -1905,13 +1780,7 @@ export class BrowserViewManager {
 
   private destroyView(id: string): void {
     const record = this.records.get(id); if (!record) return;
-    this.cancelPendingDialog(id);
-    if (this.pendingPermission?.tabId === id) {
-      const pending = this.pendingPermission;
-      this.pendingPermission = null;
-      clearTimeout(pending.timer);
-      pending.cancel();
-    }
+    this.promptManager.cancelForTab(id);
     try { this.win.contentView.removeChildView(record.view); } catch { /* detached */ }
     if (this.attachedViewId === id) this.attachedViewId = null;
     this.humanChallengeTabs.delete(id);
