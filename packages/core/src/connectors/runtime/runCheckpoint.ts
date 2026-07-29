@@ -14,14 +14,15 @@
  *   - `mcpClient`    — the `mcp` source reads MCP resources through the caller's
  *     own connected MCP surface.
  *   - `envToken`     — resolves a STATIC credential from the env var named by
- *     `connector.credential.ref`. The default reads `process.env`; the host
+ *     `connector.credential.ref`. The default calls the runtime host; callers
  *     overrides it so `config:track` refs resolve too.
  *
  * Web / filesystem / gitlab / slack / jira / confluence / notion / linear /
  * google-drive / gmail are all constructed here from the existing factory
  * functions — no per-source knowledge leaks back to the caller.
  *
- * Node/host/CLI context — `node:` imports are fine (never renderer-reachable).
+ * Path normalization is deterministic; process environment and cwd access stay
+ * behind the runtime host.
  */
 import path from 'node:path';
 import type {
@@ -59,6 +60,8 @@ import {
 } from '../index.js';
 import { finishConnectorRun, getConnector, recordConnectorRun } from '../store/connectorStore.js';
 import { upsertConnectorDocuments } from '../store/documentStore.js';
+import type { ConnectorRuntimeHost } from './host/contracts.js';
+import { nodeConnectorRuntimeHost } from './host/nodeConnectorRuntimeHost.js';
 
 /** The shared checkpoint result shape every `run<Source>ConnectorCheckpoint` returns. */
 export interface CheckpointResult {
@@ -74,6 +77,8 @@ export type EnvTokenResolver = (
 ) => { token?: string; error?: string };
 
 export interface CheckpointRunnerDeps {
+  /** Process context. Defaults to the local Node host. */
+  runtimeHost?: ConnectorRuntimeHost;
   /**
    * GitHub connector client. The host passes its keychain/gh-CLI-aware client;
    * the agent passes a static/dynamic-token REST client. When absent, a github
@@ -83,7 +88,7 @@ export interface CheckpointRunnerDeps {
   /** MCP client for the `mcp` source. Absent → the mcp source is unavailable to this caller. */
   mcpClient?: (connector: ConnectorRecord) => McpConnectorClient | undefined;
   /**
-   * STATIC env-token resolver. Defaults to reading `process.env[connector.credential.ref]`.
+   * STATIC env-token resolver. Defaults to the runtime host's environment.
    * Never mutate; only reads the env var named by the connector's credential ref.
    */
   envToken?: EnvTokenResolver;
@@ -101,10 +106,11 @@ export interface CheckpointRunnerDeps {
 const OAUTH_KEYCHAIN_GUIDANCE =
   'This connector uses OAuth/keychain credentials — run it from BrainRouter Desktop.';
 
-/** Default STATIC env-token resolver: reads `process.env[connector.credential.ref]`. */
+/** Default STATIC env-token resolver: reads through the selected runtime host. */
 export function defaultEnvTokenResolver(
   connector: ConnectorRecord,
   label: string,
+  runtimeHost: ConnectorRuntimeHost = nodeConnectorRuntimeHost,
 ): { token?: string; error?: string } {
   const credential = connector.credential;
   if (!credential || credential.mode === 'none') return {};
@@ -113,7 +119,7 @@ export function defaultEnvTokenResolver(
   }
   const ref = credential.ref?.trim();
   if (!ref) return { error: `${label} connector credential reference is required.` };
-  const token = process.env[ref]?.trim();
+  const token = runtimeHost.environmentValue(ref)?.trim();
   if (!token) return { error: `${label} connector credential ${ref} is not available in the environment.` };
   return { token };
 }
@@ -130,11 +136,15 @@ function requireConnectorConfig(connector: ConnectorRecord, key: string, label: 
 }
 
 /** Resolve a filesystem connector's roots against the workspace root (absolute paths in place). */
-function filesystemConnectorForRunner(connector: ConnectorRecord, workspaceRoot?: string): ConnectorRecord {
+function filesystemConnectorForRunner(
+  connector: ConnectorRecord,
+  workspaceRoot: string | undefined,
+  runtimeHost: ConnectorRuntimeHost,
+): ConnectorRecord {
   const rawRoots = Array.isArray(connector.config.roots)
     ? connector.config.roots.filter((root): root is string => typeof root === 'string')
     : [];
-  const base = workspaceRoot ?? process.cwd();
+  const base = workspaceRoot ?? runtimeHost.currentWorkingDirectory();
   return {
     ...connector,
     config: {
@@ -158,7 +168,9 @@ function filesystemConnectorForRunner(connector: ConnectorRecord, workspaceRoot?
 export function buildCheckpointRunner(
   deps: CheckpointRunnerDeps = {},
 ): (connector: ConnectorRecord) => Promise<CheckpointResult> {
-  const envToken: EnvTokenResolver = deps.envToken ?? defaultEnvTokenResolver;
+  const runtimeHost = deps.runtimeHost ?? nodeConnectorRuntimeHost;
+  const envToken: EnvTokenResolver = deps.envToken
+    ?? ((connector, label) => defaultEnvTokenResolver(connector, label, runtimeHost));
   const requireStaticToken = (connector: ConnectorRecord, label: string): { token: string; oauth: boolean } => {
     const oauth = deps.oauthToken?.(connector, label);
     if (oauth?.token) return { token: oauth.token, oauth: true };
@@ -181,7 +193,7 @@ export function buildCheckpointRunner(
       }
       case 'filesystem':
         return await runFilesystemConnectorCheckpoint(
-          filesystemConnectorForRunner(connector, deps.workspaceRoot),
+          filesystemConnectorForRunner(connector, deps.workspaceRoot, runtimeHost),
           nodeFsClient(),
         );
       case 'web': {
