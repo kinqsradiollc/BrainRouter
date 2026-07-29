@@ -49,7 +49,6 @@ import {
   BrainChatResponse,
 } from "@kinqs/brainrouter-types";
 import type {
-  BrainRouterRequestOptions,
   CreateKnowledgeBaseInput,
   IngestKnowledgeBinaryInput,
   IngestKnowledgeTextInput,
@@ -64,6 +63,8 @@ import type {
   SearchKnowledgeInput,
   UpdateKnowledgeBaseInput,
 } from "./knowledge.js";
+import type { BrainRouterRequestOptions } from "./request.js";
+import { BrainRouterReviewClient } from "./review.js";
 
 export class BrainRouterApiError extends Error {
   constructor(
@@ -77,6 +78,8 @@ export class BrainRouterApiError extends Error {
 }
 
 export class BrainRouterClient {
+  readonly reviews: BrainRouterReviewClient;
+
   constructor(
     private baseUrl = "",
     private apiKey = "",
@@ -84,7 +87,12 @@ export class BrainRouterClient {
     /** Optional refresh hook: called once on a 401; return a fresh access token
      *  to transparently replay the request, or null to let the error surface. */
     private onUnauthorized?: () => Promise<string | null>
-  ) {}
+  ) {
+    this.reviews = new BrainRouterReviewClient(
+      <T>(path: string, options?: BrainRouterRequestOptions) =>
+        this.get<T>(path, undefined, options),
+    );
+  }
 
   withApiKey(apiKey: string) {
     return new BrainRouterClient(this.baseUrl, apiKey, this.token, this.onUnauthorized);

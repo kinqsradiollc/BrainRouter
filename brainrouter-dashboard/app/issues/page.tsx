@@ -3,13 +3,16 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useReviewAssurance } from "@kinqs/brainrouter-hooks";
 import { AgentTraceGraph } from "../../components/AgentTraceGraph";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DataTable, SeverityBadge, StatusBadge } from "../../components/Analytics";
 import { EmptyState } from "../../components/EmptyState";
 import { PageHeader } from "../../components/PageHeader";
 import { PremiumButton } from "../../components/PremiumButton";
-import { adminApi, type ReviewIssue, type ReviewIssuesResponse, type ReviewJob } from "../../lib/adminApi";
+import { ReviewAssurancePanel } from "../../components/ReviewAssurancePanel";
+import { adminApi, type ReviewIssue, type ReviewIssuesResponse } from "../../lib/adminApi";
+import { getClient } from "../../lib/client";
 import { InlineLoading } from "../../components/LoadingSpinner";
 import { useActiveOrg } from "../../components/OrgWorkspaceProvider";
 
@@ -55,9 +58,16 @@ function Issues() {
   const [response, setResponse] = useState<ReviewIssuesResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [selectedReview, setSelectedReview] = useState<ReviewJob | null>(null);
   const [traceReviewId, setTraceReviewId] = useState<string | null>(() => searchParams.get("review"));
-  const [traceLoading, setTraceLoading] = useState(false);
+  const reviewClient = useMemo(
+    () => getClient().withActiveOrg(activeOrg || ""),
+    [activeOrg],
+  );
+  const reviewState = useReviewAssurance(
+    reviewClient,
+    traceReviewId ?? "",
+    activeOrg,
+  );
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedQuery(query.trim()), 250);
@@ -99,12 +109,6 @@ function Issues() {
     return () => controller.abort();
   }, [activeOrg, debouncedQuery, severity, repo, tab, sort, cursor]);
 
-  useEffect(() => {
-    if (!traceReviewId || selectedReview?.id === traceReviewId) return;
-    setTraceLoading(true);
-    adminApi.getReviewJob(traceReviewId, activeOrg || undefined).then((result) => { setSelectedReview(result.review); setError(""); }).catch((caught) => { setSelectedReview(null); setError(caught instanceof Error ? caught.message : "Failed to load agent trace"); }).finally(() => setTraceLoading(false));
-  }, [traceReviewId, selectedReview?.id, activeOrg]);
-
   const resetPage = useCallback(() => { setCursor(null); setCursorHistory([]); }, []);
 
   // Switching workspaces invalidates the current pagination cursor and any open
@@ -115,14 +119,12 @@ function Issues() {
     if (prevOrg.current !== null && prevOrg.current !== activeOrg) {
       setCursor(null);
       setCursorHistory([]);
-      setSelectedReview(null);
       setTraceReviewId(null);
     }
     prevOrg.current = activeOrg;
   }, [activeOrg]);
   const repositories = useMemo(() => [...new Set((response?.issues ?? []).map((issue) => issue.repo).filter((value): value is string => Boolean(value)))].sort(), [response]);
   const openTrace = (issue: ReviewIssue) => {
-    setSelectedReview(null);
     setTraceReviewId(issue.reviewId);
     setError("");
   };
@@ -155,7 +157,7 @@ function Issues() {
           <select className="settings-select" aria-label="Repository filter" value={repo} onChange={(event) => { setRepo(event.target.value); resetPage(); }}><option value="all">All repositories</option>{repo !== "all" && !repositories.includes(repo) && <option value={repo}>{repo}</option>}{repositories.map((value) => <option value={value} key={value}>{value}</option>)}</select>
           <select className="settings-select" aria-label="Sort issues" value={sort} onChange={(event) => { setSort(event.target.value === "oldest" ? "oldest" : "newest"); resetPage(); }}><option value="newest">Newest</option><option value="oldest">Oldest</option></select>
         </div>
-        {error && <div className="settings-note settings-note--error" role="alert">{error}</div>}
+        {(error || reviewState.error) && <div className="settings-note settings-note--error" role="alert">{error || reviewState.error}</div>}
         {loading && !response ? <InlineLoading label="Loading matching issues…" /> : issues.length ? (
           <>
             <DataTable headers={["Severity", "Finding", "Repository", "Status", "Provenance"]}>{issues.map((issue) => (
@@ -175,7 +177,30 @@ function Issues() {
           </>
         ) : <EmptyState title="No matching issues" description="Run a review or adjust the filters to see verified findings." />}
       </section>
-      {(traceLoading || selectedReview) && <section className="issues-trace" aria-label="Originating review trace">{traceLoading && !selectedReview ? <InlineLoading label="Loading Agent Trace…" /> : selectedReview && <><div className="issues-trace__head"><div><span>Originating review</span><h2>{selectedReview.repo} #{selectedReview.prNumber}</h2></div><button type="button" className="settings-link settings-link--button" onClick={() => { setTraceReviewId(null); setSelectedReview(null); }}>Close</button></div><AgentTraceGraph reviews={[selectedReview]} /></>}</section>}
+      {traceReviewId && (
+        <section className="issues-trace" aria-label="Originating review trace">
+          <div className="issues-trace__head">
+            <div>
+              <span>Originating review</span>
+              <h2>{reviewState.review ? `${reviewState.review.repo} #${reviewState.review.prNumber}` : "Review details"}</h2>
+            </div>
+            <button type="button" className="settings-link settings-link--button" onClick={() => setTraceReviewId(null)}>Close</button>
+          </div>
+          {reviewState.isLoading && !reviewState.review ? (
+            <InlineLoading label="Loading Agent Trace…" />
+          ) : reviewState.review ? (
+            <>
+              <AgentTraceGraph reviews={[reviewState.review]} />
+              <ReviewAssurancePanel assurance={reviewState.assurance} />
+            </>
+          ) : reviewState.error ? (
+            <div className="settings-note settings-note--error" role="alert">
+              {reviewState.error}
+              <button type="button" className="settings-link settings-link--button" onClick={reviewState.reload}>Retry</button>
+            </div>
+          ) : null}
+        </section>
+      )}
     </div>
   );
 }
