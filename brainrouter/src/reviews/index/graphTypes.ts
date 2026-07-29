@@ -3,6 +3,7 @@ import type {
   AssuranceCodeRelationshipEdge,
   AssuranceCodeSymbol,
   AssuranceCoverageLimitation,
+  AssuranceSourceLocation,
 } from '@kinqs/brainrouter-types/review';
 
 export interface ParserBackedIndexHandle {
@@ -27,4 +28,9 @@ export interface CheckoutIndexResolver {
 
 export interface ParserBackedIndexResolver {
   resolve(indexRef: string): ParserBackedIndexHandle | null;
+}
+
+export interface DeepReviewAnchorSelection {
+  anchors: AssuranceSourceLocation[];
+  indexedFiles: number;
 }

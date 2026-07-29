@@ -64,6 +64,7 @@ export interface AssurancePolicySnapshot {
     maxModelCalls: number;
     maxToolCalls: number;
     maxDurationMs: number;
+    maxUsd?: number;
   };
   redactionPolicyId: string;
   publicationPolicyId: string;

@@ -3,11 +3,16 @@ import type {
   AssuranceCodeIndexReceipt,
   AssuranceCodeIndexResult,
   AssuranceCoverageLimitation,
+  AssuranceSourceLocation,
   UpdateAssuranceIndexInput,
 } from '@kinqs/brainrouter-types/review';
 import type { AssuranceOperationCancellation, RepositoryAssuranceIndexPort } from '@kinqs/brainrouter-core/review';
 import ts from 'typescript';
-import type { CheckoutIndexResolver, ParserBackedIndexHandle } from './graphTypes.js';
+import type {
+  CheckoutIndexResolver,
+  DeepReviewAnchorSelection,
+  ParserBackedIndexHandle,
+} from './graphTypes.js';
 import { isTypeScriptSourcePath } from './pathResolution.js';
 import { buildTypeScriptGraph } from './typeScriptGraph.js';
 
@@ -84,6 +89,52 @@ export class TypeScriptAssuranceIndexAdapter implements RepositoryAssuranceIndex
   resolve(indexRef: string): ParserBackedIndexHandle | null {
     const handle = this.indexes.get(indexRef);
     return handle ? structuredClone(handle) : null;
+  }
+
+  selectDeepReviewAnchors(indexRef: string, limit: number): DeepReviewAnchorSelection {
+    if (!Number.isInteger(limit) || limit < 1) {
+      throw new Error('Deep-review anchor limit must be a positive integer.');
+    }
+    const handle = this.indexes.get(indexRef);
+    if (!handle) throw new Error('Parser index is unavailable for deep-review selection.');
+    const riskScore = (path: string): number => {
+      const normalized = path.toLowerCase();
+      return [
+        /(^|\/)(auth|security|crypto|permission|session|token)(\/|[._-])/,
+        /(^|\/)(api|route|controller|handler)(\/|[._-])/,
+        /(^|\/)(config|database|storage|network)(\/|[._-])/,
+      ].reduce((score, pattern, index) =>
+        score + (pattern.test(normalized) ? 30 - index * 10 : 0), 0);
+    };
+    const kindScore = (kind: ParserBackedIndexHandle['symbols'][number]['kind']): number =>
+      kind === 'route'
+        ? 6
+        : kind === 'function' || kind === 'method'
+          ? 5
+          : kind === 'class'
+            ? 4
+            : kind === 'variable'
+              ? 3
+              : 1;
+    const ordered = [...handle.symbols].sort((left, right) =>
+      riskScore(right.location.path) - riskScore(left.location.path)
+      || Number(right.exported) - Number(left.exported)
+      || kindScore(right.kind) - kindScore(left.kind)
+      || left.location.path.localeCompare(right.location.path)
+      || (left.location.line ?? 0) - (right.location.line ?? 0)
+      || left.id.localeCompare(right.id));
+    const seen = new Set<string>();
+    const anchors: AssuranceSourceLocation[] = [];
+    for (const symbol of ordered) {
+      if (seen.has(symbol.location.path)) continue;
+      seen.add(symbol.location.path);
+      anchors.push({ ...symbol.location });
+      if (anchors.length >= limit) break;
+    }
+    return {
+      anchors,
+      indexedFiles: handle.receipt.filesIndexed,
+    };
   }
 
   async update(

@@ -6,12 +6,18 @@
  * modules so this file stays focused on lifecycle coordination.
  */
 
-import { validateAssuranceImpactPacketAssembly } from "@kinqs/brainrouter-core/review";
+import {
+  evaluateDeepReviewActivation,
+  validateAssuranceImpactPacketAssembly,
+} from "@kinqs/brainrouter-core/review";
 import type {
   AssuranceCodeIndexResult,
   AssuranceCoverageLimitation,
   AssuranceImpactPacketAssembly,
   AssuranceSourceLocation,
+  DeepReviewActivationSource,
+  DeepReviewPolicy,
+  DeepReviewTelemetry,
   RepositoryAssuranceRun,
 } from "@kinqs/brainrouter-types/review";
 import type {
@@ -79,6 +85,90 @@ export class RepositoryContextAssuranceSession {
 
   get limitationIds(): string[] {
     return [...this.limitations.keys()];
+  }
+
+  async enforceDeepReviewPreflight(input: {
+    policy: DeepReviewPolicy;
+    organizationId: string;
+    source: DeepReviewActivationSource;
+    estimatedModelCalls: number;
+    estimatedToolCalls: number;
+    estimatedDurationMs: number;
+    estimatedUsd: number;
+  }): Promise<DeepReviewTelemetry> {
+    const run = await this.input.runs.get(this.input.runId);
+    if (!active(run) || !this.indexResult) {
+      throw new Error("DEEP_REVIEW_PREFLIGHT_SOURCE_UNAVAILABLE");
+    }
+    if (this.input.program !== "code_review" && this.input.program !== "security_review") {
+      throw new Error("DEEP_REVIEW_PROGRAM_UNSUPPORTED");
+    }
+    const telemetry: DeepReviewTelemetry = {
+      repositoryFiles: run.sourceSnapshot.fileCount,
+      eligibleFiles: this.indexResult.receipt.filesEligible,
+      indexedFiles: this.indexResult.receipt.filesIndexed,
+      estimatedModelCalls: input.estimatedModelCalls,
+      estimatedToolCalls: input.estimatedToolCalls,
+      estimatedDurationMs: input.estimatedDurationMs,
+      estimatedUsd: input.estimatedUsd,
+    };
+    await this.input.campaign.runStage(
+      this.input.runId,
+      "coverage_risk_map",
+      1,
+      async (current) => {
+        const decision = evaluateDeepReviewActivation({
+          policy: input.policy,
+          organizationId: input.organizationId,
+          repository: current.repository,
+          program: this.input.program,
+          source: input.source,
+          explicitRequest: true,
+          telemetry,
+        });
+        if (!decision.eligible) {
+          throw new Error(`DEEP_REVIEW_PREFLIGHT_DENIED:${decision.reasons.join(",")}`);
+        }
+        return {
+          status: "succeeded",
+          inputRefs: [
+            current.sourceSnapshot.inventoryRef ?? current.sourceSnapshot.id,
+            this.indexResult!.receipt.indexRef,
+          ],
+          outputRefs: [
+            `deep-policy:${input.policy.policyHash}`,
+            `deep-coverage:${decision.coverageLabel}`,
+          ],
+        };
+      },
+    );
+    return telemetry;
+  }
+
+  async prepareDeepPrompt(maxAnchors: number): Promise<RepositoryContextPrompt | null> {
+    if (!this.indexRef || !this.input.analysis.selectDeepReviewAnchors) {
+      throw new Error("DEEP_REVIEW_ANCHOR_SELECTION_UNAVAILABLE");
+    }
+    const selection = this.input.analysis.selectDeepReviewAnchors(
+      this.indexRef,
+      maxAnchors,
+    );
+    if (!selection.anchors.length) {
+      throw new Error("DEEP_REVIEW_ANCHORS_UNAVAILABLE");
+    }
+    this.limitations.set(
+      "deep-review-bounded-scope",
+      coverageLimitation(
+        "deep-review-bounded-scope",
+        "deep-review",
+        "partial",
+        "DEEP_REVIEW_BOUNDED_SCOPE",
+        selection.indexedFiles > selection.anchors.length
+          ? `Bounded deep review selected ${selection.anchors.length} of ${selection.indexedFiles} indexed files.`
+          : "Deep review used bounded parser-selected packets and does not claim exhaustive repository coverage.",
+      ),
+    );
+    return this.preparePrompt(selection.anchors);
   }
 
   async prepareSourceAndIndex(): Promise<void> {

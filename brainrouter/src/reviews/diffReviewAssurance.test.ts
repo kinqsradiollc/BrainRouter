@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { buildDeepReviewPolicy } from "@kinqs/brainrouter-core/review";
 import type {
   AssuranceCoverage,
   AssuranceFinding,
@@ -14,6 +15,11 @@ import {
   type RepositoryAssuranceSupersessionStore,
 } from "./diffReviewAssurance.js";
 import type { RepositoryContextAnalysisPorts } from "./repositoryContextAssurance.js";
+
+vi.mock("@kinqs/brainrouter-core/review", async () =>
+  import("../../../packages/core/src/review/index.js"));
+vi.mock("@kinqs/brainrouter-types/review", async () =>
+  import("../../../packages/types/src/review/index.js"));
 
 function clone<T>(value: T): T {
   return structuredClone(value);
@@ -244,6 +250,7 @@ function input(
 function repositoryContextAnalysis(overrides: {
   sourceFailure?: boolean;
   cancelAfterSource?: boolean;
+  indexedFiles?: number;
   assembly?: AssuranceImpactPacketAssembly;
 } = {}): RepositoryContextAnalysisPorts & {
   released: string[];
@@ -317,7 +324,7 @@ function repositoryContextAnalysis(overrides: {
           analyzerVersion: "fixture",
           supportedLanguages: ["typescript", "javascript"],
           filesEligible: 2,
-          filesIndexed: 2,
+          filesIndexed: overrides.indexedFiles ?? 2,
           symbolsIndexed: 3,
           relationshipsIndexed: 2,
           limitationIds: [],
@@ -338,6 +345,13 @@ function repositoryContextAnalysis(overrides: {
       ? { ref, content: "# src/handler.ts\nhandler();", byteCount: 32 }
       : null,
     releaseArtifacts: (refs) => { released.push(...refs); },
+    selectDeepReviewAnchors: (_indexRef, limit) => ({
+      anchors: [
+        { path: "src/route.ts", line: 10 },
+        { path: "src/handler.ts", line: 20 },
+      ].slice(0, limit),
+      indexedFiles: 2,
+    }),
     isCancellationRequested: () => canceled,
     maxModelContextBytes: 4_096,
     released,
@@ -396,7 +410,112 @@ function sourceToSinkAssembly(): AssuranceImpactPacketAssembly {
   };
 }
 
+function deepReviewPolicy() {
+  return buildDeepReviewPolicy({
+    organizationId: "org-1",
+    repository: { forge: "github", slug: "owner/repository" },
+    program: "security_review",
+    requestedBy: "user-1",
+    telemetryThresholds: {
+      program: "security_review",
+      maxRepositoryFiles: 100,
+      minIndexedFileRatio: 0.8,
+      maxEstimatedModelCalls: 20,
+      maxEstimatedToolCalls: 20,
+      maxEstimatedDurationMs: 20 * 60_000,
+      maxEstimatedUsd: 10,
+      acceptedBy: "user-1",
+      acceptedAt: "2026-07-29T00:00:00.000Z",
+    },
+    packetLimits: {
+      maxPackets: 1,
+      maxPacketBytes: 16_000,
+      maxFilesPerPacket: 12,
+    },
+    budgets: {
+      maxModelCalls: 10,
+      maxToolCalls: 10,
+      maxDurationMs: 10 * 60_000,
+      maxUsd: 5,
+    },
+    now: "2026-07-29T00:00:00.000Z",
+  });
+}
+
 describe("diff review assurance projection", () => {
+  it("preflights exact-source telemetry and keeps deep coverage explicitly bounded", async () => {
+    const store = new FakeAssuranceStore();
+    const analysis = repositoryContextAnalysis();
+    const request = input(store, {
+      review: {
+        orgId: "org-1",
+        installationId: "installation-1",
+        requestedBy: "user-1",
+        reviewMode: "deep",
+        repo: "owner/repository",
+        prNumber: 42,
+        headSha: "head-1",
+      },
+      repositoryContext: analysis,
+      deepReview: {
+        source: "manual_api",
+        policy: deepReviewPolicy(),
+      },
+    });
+    const { result, changedFiles, ...start } = request;
+    const session = await startDiffReviewAssurance(start);
+    const prompt = await session!.prepareContext([{ path: "src/diff.ts", line: 1 }]);
+    const completed = await session!.complete(result, changedFiles);
+
+    expect(prompt?.text).toContain("src/handler.ts");
+    expect(analysis.impactCalls).toEqual([["src/route.ts"]]);
+    expect(completed.policySnapshot).toMatchObject({
+      program: "security_review",
+      budgets: { maxModelCalls: 10, maxToolCalls: 10, maxUsd: 5 },
+    });
+    expect(completed.stages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        stage: "coverage_risk_map",
+        status: "succeeded",
+        outputRefs: expect.arrayContaining([
+          "deep-coverage:bounded_whole_repository",
+        ]),
+      }),
+    ]));
+    expect(completed.coverage).toMatchObject({ status: "partial" });
+    expect(completed.coverage.limitations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ reasonCode: "DEEP_REVIEW_BOUNDED_SCOPE" }),
+    ]));
+  });
+
+  it("fails deep review before model context when exact-source telemetry misses acceptance", async () => {
+    const store = new FakeAssuranceStore();
+    const analysis = repositoryContextAnalysis({ indexedFiles: 1 });
+    const request = input(store, {
+      review: {
+        orgId: "org-1",
+        installationId: "installation-1",
+        requestedBy: "user-1",
+        reviewMode: "deep",
+        repo: "owner/repository",
+        prNumber: 42,
+        headSha: "head-1",
+      },
+      repositoryContext: analysis,
+      deepReview: {
+        source: "manual_api",
+        policy: deepReviewPolicy(),
+      },
+    });
+    const { result: _result, changedFiles: _changedFiles, ...start } = request;
+
+    await expect(startDiffReviewAssurance(start)).rejects.toThrow(
+      /INDEX_COVERAGE_THRESHOLD_NOT_MET/,
+    );
+    expect([...store.runs.values()][0]).toMatchObject({ status: "failed" });
+    expect(analysis.impactCalls).toEqual([]);
+  });
+
   it("records exact-head diff-only coverage as partial and retries idempotently", async () => {
     const store = new FakeAssuranceStore();
     const request = input(store);
