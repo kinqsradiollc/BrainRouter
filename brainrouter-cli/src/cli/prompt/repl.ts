@@ -30,6 +30,7 @@ import { tryHandleAnnotationCommand } from '../commands/annotation/index.js';
 import { tryHandleArtifactCommand } from '../commands/artifact/index.js';
 import { tryHandleAtlasCommand } from '../commands/atlas/index.js';
 import { tryHandleAttachmentCommand } from '../commands/attachment/index.js';
+import { tryHandleReviewsCommand } from '../commands/reviews/index.js';
 import { loadCustomCommands, findCustomCommand, expandCommandBody } from '../../runtime/commands/customCommands.js';
 
 /**
@@ -142,6 +143,7 @@ export async function handleSlashCommand(
   if (await tryHandleArtifactCommand(cmdCtx)) return;
   if (await tryHandleAtlasCommand(cmdCtx)) return;
   if (await tryHandleAttachmentCommand(cmdCtx)) return;
+  if (await tryHandleReviewsCommand(cmdCtx)) return;
   if (await tryHandleScheduleCommand(cmdCtx)) return;
   if (await tryHandleReleaseNotesCommand(cmdCtx)) return;
   if (await tryHandleObsCommand(cmdCtx)) return;
