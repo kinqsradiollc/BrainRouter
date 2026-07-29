@@ -6,6 +6,7 @@
  */
 
 import type { InteractionRequest } from './interaction.js';
+import type { AssuranceRunEventAction, AssuranceRunEventView } from './assurance.js';
 
 export interface EventEnvelope {
   /** Monotonic per-session sequence (gap detection over lossy transports). */
@@ -135,6 +136,7 @@ export type AgentEvent =
   | { kind: 'annotation-event'; action: RecordLifecycleAction; annotationId: string; targetKind: string; targetId?: string; status?: string; provenance?: ProvenanceRef }
   | { kind: 'provenance'; subjectKind: 'requirement' | 'artifact' | 'annotation' | 'plan' | 'memory' | 'tool' | 'session'; subjectId?: string; provenance: ProvenanceRef }
   | { kind: 'task-event'; action: TaskEventAction; task: BackgroundTaskEventView; provenance?: ProvenanceRef }
+  | { kind: 'assurance-run'; action: AssuranceRunEventAction; run: AssuranceRunEventView; provenance?: ProvenanceRef }
   | { kind: 'approval-decision'; tool: string; action: string; decision: 'allow' | 'ask' | 'deny'; reason?: string }
   | { kind: 'interaction-request'; request: InteractionRequest }
   | { kind: 'turn-complete'; answer: string }
@@ -167,6 +169,7 @@ const EVENT_KINDS = new Set<string>([
   'interaction-request', 'turn-complete', 'turn-error', 'tokens-updated', 'usage-live',
   'session-changed', 'query-result', 'notice', 'files-changed', 'input-delivery',
   'steering-receipt',
+  'assurance-run',
 ]);
 
 /** Structural guard for a {@link BackgroundTaskEventView}. Pure. */
