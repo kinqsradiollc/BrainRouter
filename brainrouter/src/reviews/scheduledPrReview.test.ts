@@ -19,11 +19,6 @@ const mocks = vi.hoisted(() => ({
   createAnalysis: vi.fn(),
 }));
 
-vi.mock("@kinqs/brainrouter-core/review", async () =>
-  import("../../../packages/core/src/review/index.js"));
-vi.mock("@kinqs/brainrouter-types/review", async () =>
-  import("../../../packages/types/src/review/index.js"));
-
 vi.mock("../integrations/prSecurityReview.js", () => ({
   runPrSecurityReview: mocks.execute,
   runPrCodeReview: mocks.execute,

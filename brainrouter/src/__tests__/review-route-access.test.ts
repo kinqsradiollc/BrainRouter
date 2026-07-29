@@ -61,11 +61,6 @@ vi.mock("@kinqs/brainrouter-core/track", async (importOriginal) => {
   return { ...actual, mintInstallationToken: mocks.mintInstallationToken };
 });
 
-vi.mock("@kinqs/brainrouter-core/review", async () =>
-  import("../../../packages/core/src/review/index.js"));
-vi.mock("@kinqs/brainrouter-types/review", async () =>
-  import("../../../packages/types/src/review/index.js"));
-
 import { reviewsRouter } from "../api/routes/admin/reviews.js";
 
 type HttpResult = { status: number; body: any };

@@ -4,11 +4,6 @@ import { runPrSecurityReview, runPrCodeReview, type PrSecurityReviewDeps } from 
 import { projectAssurancePublication } from "@kinqs/brainrouter-core/review";
 import type { LLMRunner } from "@kinqs/brainrouter-types";
 
-vi.mock("@kinqs/brainrouter-core/review", async () =>
-  import("../../../packages/core/src/review/index.js"));
-vi.mock("@kinqs/brainrouter-types/review", async () =>
-  import("../../../packages/types/src/review/index.js"));
-
 // A real RSA key so buildAppJwt (RS256) actually signs during token mint.
 const { privateKey } = generateKeyPairSync("rsa", {
   modulusLength: 2048,
