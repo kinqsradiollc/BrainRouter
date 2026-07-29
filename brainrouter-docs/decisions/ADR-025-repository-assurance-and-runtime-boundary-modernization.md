@@ -559,6 +559,7 @@ the repository's normal security-review process before merge.
 | A25-6b5b | `[x]` | Extract session ownership, visible-operation leases, cancellation, user takeover, uploads, and navigation authority behind the browser agent-control manager | Desktop agent-control fixtures preserve per-chat tab isolation, exact visible pinning, cancellation settlement, private-origin authority, staged-upload cleanup, and event order |
 | A25-6c | `[ ]` | Separate terminal, background, connector, storage, and worktree policy/services from privileged host adapters | Per-domain fixtures preserve workspace/session scope, authority, cancellation, persistence, and cleanup |
 | A25-6c1 | `[x]` | Move worktree isolation contracts and merge-back presentation behind the unchanged Core facade before separating the privileged Git/filesystem host | Types, protocol, and Core builds plus 44 worktree, runtime, and fleet fixtures preserve public imports, isolation authority, recovery refs, patch persistence, merge-back, cleanup, and presentation |
+| A25-6c2 | `[x]` | Move worktree Git, filesystem, configuration, and state-path capabilities behind one privileged Node host adapter | Core build plus 47 worktree, runtime, fleet, and structural-boundary fixtures preserve public imports and every isolation/recovery behavior while proving the service no longer imports privileged owners directly |
 
 ### A25-8 Core review delivery slices
 
