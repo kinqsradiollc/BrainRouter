@@ -4,6 +4,7 @@ import type { MemoryEngine } from "../engine.js";
 import { MemoryCapturePipeline } from "../capture.js";
 import { MemoryRecallPipeline } from "../recall.js";
 import { MemoryJobRunner } from "../scheduler/runner.js";
+import type { AssessmentEvidenceCleanupResult } from "@kinqs/brainrouter-types/review";
 import { EmbeddingService, DEFAULT_EMBEDDING_DIMENSIONS } from "../store/embedding.js";
 import { RerankerService } from "../store/reranker.js";
 import { hashPassword } from "../../api/auth/crypto.js";
@@ -118,6 +119,13 @@ export async function initialize(engine: MemoryEngine): Promise<void> {
 export function startJobRunner(engine: MemoryEngine): void {
   const self = engine as unknown as LifecycleState;
   if (process.env.BRAINROUTER_JOB_RUNNER === "off") return;
+  const assessmentEvidenceStore = self.store as unknown as {
+    expireAuthorizedAssessmentEvidence?: (
+      options?: { now?: string },
+    ) => Promise<AssessmentEvidenceCleanupResult>;
+  };
+  let lastAssessmentEvidenceSweep = 0;
+  const assessmentEvidenceSweepIntervalMs = 60 * 60_000;
   self.jobRunner = new MemoryJobRunner(
     self.store,
     // `engine: this` lets the 0.4.3 depth executors (vault / blackboard /
@@ -136,7 +144,19 @@ export function startJobRunner(engine: MemoryEngine): void {
         ? parseInt(process.env.BRAINROUTER_JOB_RUNNER_STUCK_MS, 10)
         : undefined,
       // 0.4.3 — auto-schedule the maintenance depth agents (own throttle).
-      onTick: async () => { await self.enqueueScheduledMaintenance(); },
+      onTick: async () => {
+        await self.enqueueScheduledMaintenance();
+        const now = Date.now();
+        if (
+          assessmentEvidenceStore.expireAuthorizedAssessmentEvidence
+          && now - lastAssessmentEvidenceSweep >= assessmentEvidenceSweepIntervalMs
+        ) {
+          lastAssessmentEvidenceSweep = now;
+          await assessmentEvidenceStore.expireAuthorizedAssessmentEvidence({
+            now: new Date(now).toISOString(),
+          });
+        }
+      },
     },
   );
   self.jobRunner.start();

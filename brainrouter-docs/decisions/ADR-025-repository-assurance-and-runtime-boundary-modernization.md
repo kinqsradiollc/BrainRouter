@@ -615,7 +615,7 @@ coverage states rather than clean repository conclusions.
 | ID | Status | Deliverable | Acceptance evidence |
 |---|---|---|---|
 | A25-13a | `[x]` | Require every dynamic or source-only pentest to carry one versioned, hashed policy snapshot bound to an active persisted target | Types/Core fixtures cover authority, exact target perimeter, budget, fail-closed cancellation, and evidence-retention fields; backend route and scheduler fixtures reject missing, changed, revoked, cross-tenant, or mismatched target authority |
-| A25-13b | `[ ]` | Enforce retained-evidence expiry and raw-workspace cleanup for authorized assessments | Cleanup fixtures prove raw traffic is never retained, redacted evidence expires on policy, active runs are protected, and cleanup is idempotent |
+| A25-13b | `[x]` | Enforce retained-evidence expiry and raw-workspace cleanup for authorized assessments | Domain findings persist through a bounded redacted allowlist; disposable workspaces are removed after every exit path; an hourly store-capability sweep expires detailed job timelines, normalized evidence, verifier payloads, and artifact references while retaining audit metadata; focused unit and scratch-Postgres fixtures prove active/fresh protection and idempotence |
 | A25-13c | `[ ]` | Add an explicit whole-repository deep-review policy with accepted telemetry thresholds and bounded opt-in activation | Policy fixtures prove program-specific thresholds, cost/time ceilings, cancellation, coverage labeling, and no automatic escalation from diff review |
 
 ### Migration guardrails

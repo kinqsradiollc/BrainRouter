@@ -90,6 +90,7 @@ import type {
   PentestTargetInput,
   PentestTargetRecord,
 } from "@kinqs/brainrouter-types";
+import type { AssessmentEvidenceCleanupResult } from "@kinqs/brainrouter-types/review";
 import { createPgPool } from "./connection.js";
 import { loadMigrations, applyMigrations, withSchemaLock } from "./migrate.js";
 import {
@@ -144,6 +145,7 @@ import * as skillFocus from "./queries/skillFocusQueries.js";
 import * as session from "./queries/sessionQueries.js";
 import * as job from "./queries/jobQueries.js";
 import * as assurance from "./queries/assuranceQueries.js";
+import * as assessmentEvidence from "./queries/assessmentEvidenceQueries.js";
 import * as compression from "./queries/compressionQueries.js";
 import * as atlasIdentity from "./queries/atlasIdentityQueries.js";
 import * as graph from "./queries/graphQueries.js";
@@ -1178,6 +1180,12 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
 
   public sweepStuckMemoryJobs(stuckMs: number, options?: { now?: string }): Promise<number> {
     return job.sweepStuckMemoryJobs(this.exec, stuckMs, options);
+  }
+
+  public expireAuthorizedAssessmentEvidence(
+    options?: { now?: string },
+  ): Promise<AssessmentEvidenceCleanupResult> {
+    return assessmentEvidence.expireAuthorizedAssessmentEvidence(this.exec, options);
   }
 
   public getMemoryJobKindAggregates(options?: { now?: string }): Promise<MemoryJobKindAggregate[]> {

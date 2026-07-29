@@ -37,3 +37,11 @@ export interface AuthorizedAssessmentPolicy {
   scanMode: AuthorizedAssessmentScanMode;
   createdAt: string;
 }
+
+export interface AssessmentEvidenceCleanupResult {
+  jobsExpired: number;
+  evidenceRowsDeleted: number;
+  findingsScrubbed: number;
+  stageReceiptsScrubbed: number;
+  sourceReceiptsScrubbed: number;
+}
