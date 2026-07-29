@@ -165,6 +165,7 @@ describe("scheduled PR review repository-context composition", () => {
       program: "security_review",
       maxDiffChars: 20_000,
       timeoutMs: 90_000,
+      llmRunner: ctx.llmRunner,
       repositoryContext: analysis,
     }));
     expect(prepareContext).toHaveBeenCalledWith([{ path: "src/index.ts", line: 4 }]);

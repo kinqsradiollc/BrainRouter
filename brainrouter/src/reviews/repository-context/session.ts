@@ -73,6 +73,10 @@ export class RepositoryContextAssuranceSession {
     return this.assembly ? structuredClone(this.assembly) : null;
   }
 
+  get verificationContext(): string | null {
+    return this.prompt?.text ?? null;
+  }
+
   get limitationIds(): string[] {
     return [...this.limitations.keys()];
   }
