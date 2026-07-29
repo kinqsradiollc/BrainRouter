@@ -5,11 +5,11 @@ import {
   createPinnedLookup,
   validateUpstreamTarget,
   type UpstreamDnsResolver,
-} from '../router/transport.js';
+} from '../provider/routing/transport.js';
 import {
   applyModelEffortWireMap,
   type ModelEffortWireMap,
-} from '../router/providerAdapters.js';
+} from '../provider/routing/adapters.js';
 
 const publicDns: UpstreamDnsResolver = async () => [
   { address: '93.184.216.34', family: 4 },
@@ -197,4 +197,3 @@ test('applyModelEffortWireMap fails closed for a missing mapping or unsafe/confl
   );
   assert.deepEqual(payload, { reasoning: { enabled: true } });
 });
-

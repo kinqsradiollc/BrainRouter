@@ -1,6 +1,6 @@
 import {
   applyModelEffortWireMap,
-} from '@kinqs/brainrouter-core/router';
+} from '@kinqs/brainrouter-core/provider';
 
 import type { GatewayResolvedModel } from './modelPolicy.js';
 import {

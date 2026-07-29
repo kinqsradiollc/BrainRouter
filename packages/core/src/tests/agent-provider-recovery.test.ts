@@ -9,9 +9,9 @@ import type { ProviderRecoveryReceipt } from '@kinqs/brainrouter-types';
 
 import { recoverAgentProviderRoute } from '../agent/runtime/providerRecovery.js';
 import type { LLMConfig } from '../config/config.js';
-import { RouterPolicy } from '../router/policy.js';
-import { buildModelRegistry } from '../router/registry.js';
-import { resolveRoutes } from '../router/resolve.js';
+import { RouterPolicy } from '../provider/routing/policy.js';
+import { buildModelRegistry } from '../provider/routing/registry.js';
+import { resolveRoutes } from '../provider/routing/resolve.js';
 
 const primary: LLMConfig = {
   provider: 'primary',

@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { Config } from '../config/config.js';
-import type { RouterGatewayTransport } from '../router/gateway.js';
-import { startRouterGateway } from '../router/gateway.js';
-import { resetRouterPolicyForTests } from '../router/policy.js';
+import type { RouterGatewayTransport } from '../provider/routing/gateway.js';
+import { startRouterGateway } from '../provider/routing/gateway.js';
+import { resetRouterPolicyForTests } from '../provider/routing/policy.js';
 
 const config: Config = {
   activeServer: 's',

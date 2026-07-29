@@ -3,7 +3,7 @@ import {
   validateUpstreamTarget,
   type UpstreamTargetPolicy,
   type ValidatedUpstreamTarget,
-} from '@kinqs/brainrouter-core/router';
+} from '@kinqs/brainrouter-core/provider';
 import { Agent } from 'undici';
 
 export type UpstreamFetchInit = RequestInit & { dispatcher?: unknown };

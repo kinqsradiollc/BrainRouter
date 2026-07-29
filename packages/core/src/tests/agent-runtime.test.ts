@@ -6,7 +6,7 @@ import { Agent, buildChatCompletionPayload, buildResponsesPayload, callOpenAI, c
 import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
 import { BudgetExceededError } from '../provider/budget.js';
 import { _resetModelReasoningCapabilities, registerModelReasoningCapabilities } from '../provider/models/reasoning.js';
-import { resetRouterPolicyForTests } from '../router/policy.js';
+import { resetRouterPolicyForTests } from '../provider/routing/policy.js';
 import { readTranscriptEntries } from '../session/transcript/sessionStore.js';
 import { writePreferences } from '../session/preferences/preferencesStore.js';
 import { setSessionMode } from '../session/state/sessionModeStore.js';

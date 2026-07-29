@@ -8,10 +8,10 @@ import test from 'node:test';
 import type { ProviderRecoveryReceipt } from '@kinqs/brainrouter-types';
 
 import type { LLMConfig } from '../config/config.js';
-import { RouterPolicy } from '../router/policy.js';
-import { executeWithProviderRecovery, ProviderRecoveryExhaustedError } from '../router/recovery.js';
-import { buildModelRegistry } from '../router/registry.js';
-import { resolveRoutes } from '../router/resolve.js';
+import { RouterPolicy } from '../provider/routing/policy.js';
+import { executeWithProviderRecovery, ProviderRecoveryExhaustedError } from '../provider/routing/recovery.js';
+import { buildModelRegistry } from '../provider/routing/registry.js';
+import { resolveRoutes } from '../provider/routing/resolve.js';
 
 const first: LLMConfig = {
   provider: 'first',

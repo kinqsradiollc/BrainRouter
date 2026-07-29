@@ -42,7 +42,7 @@ import { readPreferences } from '../../session/preferences/preferencesStore.js';
 import { resolveActiveMode, setSessionMode } from '../../session/state/sessionModeStore.js';
 import { setSessionRuntime } from '../../session/state/sessionRuntimeStore.js';
 import { resolveProfileSwitch } from '../../provider/llmProfiles.js';
-import { buildModelRegistry, resolveRoutes } from '../../router/index.js';
+import { buildModelRegistry, resolveRoutes } from '../../provider/routing/index.js';
 import { formatPlan, updatePlan, readPlan } from '../../task/taskStore.js';
 import {
   applySteeringPlanRevision,

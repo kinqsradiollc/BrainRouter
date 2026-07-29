@@ -172,6 +172,7 @@ export function loadBoundaryPolicy(repoRoot) {
 
   return {
     applicationRoots: APPLICATION_ROOTS.map((root) => path.join(repoRoot, root)),
+    coreRouterCompatibilityRoot: path.join(repoRoot, 'packages/core/src/router'),
     curatedCoreExports,
     repoRoot,
   };
@@ -190,6 +191,9 @@ export function checkImport({ area, filePath, specifier, policy }) {
 
     if (packageName === '@kinqs/brainrouter-core' && specifier !== packageName) {
       const subpath = specifier.slice(`${packageName}/`.length);
+      if (subpath === 'router' || subpath.startsWith('router/')) {
+        return violation('maintained consumers use the provider surface; router is an external compatibility façade');
+      }
       if (subpath.startsWith('dist/')) {
         if (area !== 'desktop-renderer') {
           return violation('compiled Core internals are restricted to the Desktop renderer compatibility exception');
@@ -206,6 +210,13 @@ export function checkImport({ area, filePath, specifier, policy }) {
 
   if (PACKAGE_SOURCE_AREAS.has(area) && (specifier.startsWith('.') || path.isAbsolute(specifier))) {
     const resolved = path.resolve(path.dirname(filePath), specifier);
+    if (
+      area === 'core'
+      && isWithin(resolved, policy.coreRouterCompatibilityRoot)
+      && !isWithin(filePath, policy.coreRouterCompatibilityRoot)
+    ) {
+      return violation('Core implementation imports provider/routing; router is a compatibility façade');
+    }
     if (policy.applicationRoots.some((root) => isWithin(resolved, root))) {
       return violation('shared packages may not import application source');
     }

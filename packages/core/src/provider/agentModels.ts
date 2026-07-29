@@ -13,7 +13,7 @@
  */
 import type { Config, LLMConfig, AgentModelAssignment } from '../config/config.js';
 import { resolveCliKnobs } from '../config/config.js';
-import { buildModelRegistry, resolveRoutes } from '../router/index.js';
+import { buildModelRegistry, resolveRoutes } from './routing/index.js';
 
 /**
  * Sub-agent roles that can have their own model. The entry named `default` is

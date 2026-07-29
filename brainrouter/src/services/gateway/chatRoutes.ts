@@ -3,7 +3,7 @@ import type { Express, Request, Response as ExpressResponse } from 'express';
 import {
   ModelEffortAdapterError,
   UpstreamPolicyError,
-} from '@kinqs/brainrouter-core/router';
+} from '@kinqs/brainrouter-core/provider';
 
 import type { ProviderModelRecord } from '../../providers/modelPolicyStore.js';
 import { resolveRequestUrl } from '../../providers/wireFormat.js';

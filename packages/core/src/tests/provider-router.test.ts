@@ -8,7 +8,7 @@ import {
   classifyRouterFailure,
   resolveRoutes,
   RouterPolicy,
-} from '../router/index.js';
+} from '../provider/routing/index.js';
 import { resolveAgentLlm, resolveCriticLlm } from '../provider/agentModels.js';
 
 const openai: LLMConfig = {

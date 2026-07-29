@@ -42,7 +42,7 @@ import {
   getRouterPolicy,
   resolveRoutes,
   type RouterFailure,
-} from '../../router/index.js';
+} from '../../provider/routing/index.js';
 import { drainCompletions, formatCompletionFeedback } from '../../session/completion/completionInbox.js';
 import { resolveActiveMode } from '../../session/state/sessionModeStore.js';
 import { buildSteeringReconciliationMessage } from '../../session/input/inputDelivery.js';
