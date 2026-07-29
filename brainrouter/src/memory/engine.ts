@@ -17,6 +17,7 @@ import * as memoryOps from "./engine/memoryOps.js";
 import * as benchOps from "./engine/benchOps.js";
 import * as sweepersOps from "./engine/sweepersOps.js";
 import * as lifecycleOps from "./engine/lifecycleOps.js";
+import { pentestFindingMemoryMetadata } from "./engine/assessmentMemoryMetadata.js";
 import type { ModeStats } from "./bench/regression.js";
 import type { CodeRecallResult } from "./bench/code-recall.js";
 import type { RetrievalMetrics } from "./bench/code-scale.js";
@@ -747,12 +748,13 @@ export class MemoryEngine {
   }
 
   /**
-   * Ingest verified pentest findings into the org's cognitive memory so future
+   * Ingest pentest finding metadata into the org's cognitive memory so future
    * scans and code reviews can recall "we already found X against this target".
    * Routes every record through upsertEngineeringMemory (the redaction + length
-   * chokepoint — Bearer/sk-/ghp_/PEM/API_KEY/IPv4 in a PoC are scrubbed), then
-   * promotes it to org visibility so the whole org can recall it. Best-effort;
-   * findings whose final status is dismissed/disputed/out-of-scope are skipped.
+   * chokepoint), then promotes it to org visibility so the whole org can recall
+   * it. Detailed impact, remediation, verifier, and proof material stay in the
+   * assessment records governed by their retention policy. Best-effort; findings
+   * whose final status is dismissed/disputed/out-of-scope are skipped.
    */
   public async recordPentestFindings(params: {
     orgId: string;
@@ -772,29 +774,20 @@ export class MemoryEngine {
     // emitting a huge finding set cannot amplify into unbounded ingestion.
     for (const f of params.findings.slice(0, 100)) {
       if (f.status && skip.has(f.status)) continue;
-      // NOTE: the raw proof-of-concept is deliberately NOT composed into this
-      // org-shared record — a captured session cookie / JWT / cloud key inside a
-      // PoC would otherwise be promoted org-wide into recall + briefings, and the
-      // memory redaction denylist cannot catch every secret shape. The full PoC
-      // stays only in the local workspace SARIF (.brainrouter/findings.sarif).
-      const content = [
-        `SECURITY FINDING (${String(f.severity).toUpperCase()}): ${f.summary}`,
-        f.cwe ? `CWE: ${f.cwe}` : "",
-        typeof f.cvss === "number" ? `CVSS: ${f.cvss}${f.cvssVector ? ` (${f.cvssVector})` : ""}` : "",
-        f.file ? `Location: ${f.file}${f.line ? `:${f.line}` : ""}` : "",
-        `Target: ${params.target}`,
-        f.details ? `Impact: ${f.details.slice(0, 1200)}` : "",
-        f.remediation ? `Remediation: ${f.remediation.slice(0, 800)}` : "",
-      ].filter(Boolean).join("\n");
+      // This org-shared record is metadata, not durable assessment evidence.
+      // Details, remediation, verifier output, and proofs remain in the
+      // retention-governed job/assurance records and are never promoted into
+      // recall or briefings.
+      const metadata = pentestFindingMemoryMetadata(f, params.target);
       const rec = await this.upsertEngineeringMemory({
         userId: params.userId,
         type: "bug_finding",
-        content,
+        content: metadata.content,
         priority: f.severity === "critical" ? 95 : f.severity === "high" ? 90 : 75,
         confidence: Math.max(0.5, Math.min(1, (f.confidence ?? 70) / 100)),
         sourceKind: "model_inference",
-        verificationStatus: f.poc ? "verified" : "unverified",
-        filePaths: f.file ? [f.file] : [],
+        verificationStatus: "unverified",
+        filePaths: metadata.filePaths,
         metadata: { kind: "pentest-finding", source: "pentest", cwe: f.cwe, cve: f.cve, cvss: f.cvss, severity: f.severity, target: params.target, reviewId: params.reviewId, findingId: f.id },
       });
       await this.sharing.setMemoryVisibility(rec.id, params.userId, params.orgId, "org");
