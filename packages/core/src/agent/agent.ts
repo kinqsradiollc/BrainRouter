@@ -65,7 +65,7 @@ import {
   type McpConnectorClient,
   type McpConnectorResource,
 } from '../connectors/index.js';
-import { isArtifactKind, isArtifactFormat, isCodeLinkKind, isWorkItemType, isWorkItemPriority, isTerminalCategory, isUnstartedCategory, type ArtifactKind, type ArtifactFormat, type ArtifactRecord } from '@kinqs/brainrouter-types';
+import { isArtifactKind, isArtifactFormat, isCodeLinkKind, isWorkItemType, isWorkItemPriority, isTerminalCategory, isUnstartedCategory, type ArtifactKind, type ArtifactFormat, type ArtifactRecord, type ProviderRecoveryReceipt } from '@kinqs/brainrouter-types';
 // Auto mode (fast + proceed) has no approval prompt, so the plan history would
 // otherwise never record that a plan was acted on. When the agent establishes a
 // new plan version under auto mode we record an `actor: 'auto'` approval so the
@@ -300,6 +300,8 @@ export interface RunTurnCallbacks {
   onSteerApplied?: (input: SteeringInput, receipt: SteeringReceipt) => void;
   /** Fired when semantic reconciliation changes a steering receipt. */
   onSteerReceipt?: (receipt: SteeringReceipt) => void;
+  /** Fired once after a bounded provider recovery campaign completes. */
+  onProviderRecovery?: (receipt: ProviderRecoveryReceipt) => void;
   // POLISH-1 (0.4.13) — `callId` (the LLM tool_call id) lets the REPL pair each
   // result with its OWN start row; parallel same-name calls no longer collide on a
   // name-keyed map. Optional → existing callers are unaffected.

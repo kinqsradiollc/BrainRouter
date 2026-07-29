@@ -21,6 +21,17 @@ export interface ProviderRecoveryExecutionOptions<T> {
   sessionKey?: string;
   now?: () => Date;
   onReceipt?: (receipt: ProviderRecoveryReceipt) => void;
+  initialFailure?: {
+    route: ModelRegistryEntry;
+    error: unknown;
+    startedAt?: string;
+    completedAt?: string;
+  };
+  onFallback?: (event: {
+    from: ModelRegistryEntry;
+    to: ModelRegistryEntry;
+    failure: RouterFailure;
+  }) => void;
 }
 
 export interface ProviderRecoveryExecution<T> {
@@ -110,14 +121,32 @@ export async function executeWithProviderRecovery<T>(
 ): Promise<ProviderRecoveryExecution<T>> {
   const now = options.now ?? (() => new Date());
   const maxAttempts = boundedAttempts(options.maxAttempts);
-  const startedAt = now().toISOString();
+  const startedAt = options.initialFailure?.startedAt ?? now().toISOString();
   const attempts: ProviderRecoveryAttemptReceipt[] = [];
   const tried = new Set<string>();
   let lastError: unknown;
   let lastFailedRoute: ModelRegistryEntry | undefined;
   let lastFailure: RouterFailure | undefined;
 
-  for (let index = 0; index < maxAttempts; index += 1) {
+  if (options.initialFailure) {
+    const failure = classifyRouterFailure(options.initialFailure.error);
+    options.policy.markFailure(options.initialFailure.route, failure);
+    tried.add(options.initialFailure.route.slug);
+    attempts.push({
+      attempt: 1,
+      route: routeRef(options.initialFailure.route),
+      startedAt,
+      completedAt: options.initialFailure.completedAt ?? now().toISOString(),
+      outcome: 'failed',
+      failure: failureRef(failure),
+    });
+    lastError = options.initialFailure.error;
+    lastFailedRoute = options.initialFailure.route;
+    lastFailure = failure;
+  }
+
+  for (let index = attempts.length; index < maxAttempts; index += 1) {
+    if (lastFailure && !lastFailure.retryable) break;
     const route = options.policy.pickRoute(
       options.routes.filter((candidate) => !tried.has(candidate.slug)),
       options.sessionKey,
@@ -126,6 +155,11 @@ export async function executeWithProviderRecovery<T>(
 
     if (lastFailedRoute && lastFailure) {
       options.policy.noteFallback(lastFailedRoute.slug, route.slug, lastFailure);
+      await options.onFallback?.({
+        from: lastFailedRoute,
+        to: route,
+        failure: lastFailure,
+      });
     }
     tried.add(route.slug);
     const attemptStartedAt = now().toISOString();

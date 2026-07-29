@@ -141,3 +141,46 @@ test('an asynchronous receipt projection failure cannot change execution', async
   assert.equal(execution.result, 'completed');
   assert.equal(execution.receipt.outcome, 'succeeded');
 });
+
+test('an already-failed primary attempt remains part of the same recovery campaign', async () => {
+  const [primary, fallback] = routes();
+  assert.ok(primary);
+  assert.ok(fallback);
+  const receipts: ProviderRecoveryReceipt[] = [];
+  const fallbackEvents: string[] = [];
+  const executed: string[] = [];
+  const primaryError = Object.assign(new Error('primary rate limited'), { status: 429 });
+
+  const execution = await executeWithProviderRecovery({
+    routes: [primary, fallback],
+    policy: new RouterPolicy({ now: () => 0 }),
+    maxAttempts: 2,
+    initialFailure: {
+      route: primary,
+      error: primaryError,
+      startedAt: '2026-07-29T00:00:00.000Z',
+      completedAt: '2026-07-29T00:00:01.000Z',
+    },
+    onFallback: ({ from, to, failure }) => {
+      fallbackEvents.push(`${from.slug}->${to.slug}:${failure.kind}`);
+    },
+    onReceipt: (receipt) => receipts.push(receipt),
+    execute: async (route, attempt) => {
+      executed.push(`${attempt}:${route.slug}`);
+      return 'recovered';
+    },
+  });
+
+  assert.equal(execution.result, 'recovered');
+  assert.deepEqual(executed, ['2:second/model-b']);
+  assert.deepEqual(fallbackEvents, ['first/model-a->second/model-b:provider_retryable']);
+  assert.equal(receipts.length, 1);
+  assert.equal(execution.receipt.startedAt, '2026-07-29T00:00:00.000Z');
+  assert.deepEqual(
+    execution.receipt.attempts.map((attempt) => [attempt.attempt, attempt.route.slug, attempt.outcome]),
+    [
+      [1, 'first/model-a', 'failed'],
+      [2, 'second/model-b', 'succeeded'],
+    ],
+  );
+});

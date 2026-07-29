@@ -6,6 +6,8 @@ import { Agent, buildChatCompletionPayload, buildResponsesPayload, callOpenAI, c
 import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
 import { BudgetExceededError } from '../provider/budget.js';
 import { _resetModelReasoningCapabilities, registerModelReasoningCapabilities } from '../provider/models/reasoning.js';
+import { resetRouterPolicyForTests } from '../router/policy.js';
+import { readTranscriptEntries } from '../session/transcript/sessionStore.js';
 import { writePreferences } from '../session/preferences/preferencesStore.js';
 import { setSessionMode } from '../session/state/sessionModeStore.js';
 import { readWorkContract } from '../task/workContractStore.js';
@@ -1282,6 +1284,99 @@ test('runTurn: disabled task budget leaves provider usage behavior unchanged', a
     } finally {
       resetCliKnobsForAgentRuntimeTest();
       globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('runTurn: provider recovery preserves fallback status and transcript while publishing one receipt', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const originalFetch = globalThis.fetch;
+    resetRouterPolicyForTests();
+    setCliKnobOverride({
+      providerRequestFormat: { openai: 'chat-completions' },
+      router: {
+        enabled: true,
+        passThrough: true,
+        chain: ['router-primary', 'router-fallback'],
+        strategy: 'priority',
+        order: [],
+        aliases: {},
+        cooldownBaseMs: 500,
+        cooldownMaxMs: 1_000,
+        sessionAffinity: true,
+        serve: false,
+        serveHost: '127.0.0.1',
+        servePort: 8_790,
+        serveKey: '',
+      },
+    });
+    const calledModels: string[] = [];
+    globalThis.fetch = (async (_url: any, init: any) => {
+      const body = JSON.parse(String(init?.body ?? '{}'));
+      calledModels.push(body.model);
+      if (body.model === 'router-primary') {
+        return new Response(JSON.stringify({
+          error: { message: 'invalid model router-primary', type: 'invalid_request_error' },
+        }), { status: 404, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'recovered answer' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 20, completion_tokens: 4 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch;
+
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({ content: [] }),
+        close: async () => {},
+      };
+      const agent = new Agent(stubMcp, {
+        provider: 'openai',
+        apiKey: 'provider-secret',
+        model: 'router-primary',
+        models: ['router-primary', 'router-fallback'],
+      }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        silent: true,
+        sessionKey: 'provider-recovery-runtime',
+      });
+      const statuses: string[] = [];
+      const receipts: any[] = [];
+      const answer = await agent.runTurn('answer through the configured route', {
+        onStatusUpdate: (status) => statuses.push(status),
+        onToolStart: () => {},
+        onToolEnd: () => {},
+        onProviderRecovery: (receipt) => receipts.push(receipt),
+      });
+
+      assert.equal(answer, 'recovered answer');
+      assert.deepEqual(calledModels, ['router-primary', 'router-fallback']);
+      assert.ok(statuses.some((status) => (
+        status.includes('Router fallback:') && status.includes('router-fallback')
+      )));
+      const transcript = readTranscriptEntries(workspace, agent.sessionKey, 20);
+      assert.ok(transcript.some((entry) => (
+        entry.role === 'system'
+        && entry.name === 'router'
+        && String(entry.content).includes('routed to')
+        && String(entry.content).includes('router-fallback')
+      )));
+      assert.equal(receipts.length, 1);
+      assert.equal(receipts[0].outcome, 'succeeded');
+      assert.deepEqual(
+        receipts[0].attempts.map((attempt: any) => [attempt.route.model, attempt.outcome]),
+        [
+          ['router-primary', 'failed'],
+          ['router-fallback', 'succeeded'],
+        ],
+      );
+      assert.doesNotMatch(JSON.stringify(receipts[0]), /provider-secret/);
+    } finally {
+      globalThis.fetch = originalFetch;
+      resetRouterPolicyForTests();
+      resetCliKnobsForAgentRuntimeTest();
     }
   });
 });
