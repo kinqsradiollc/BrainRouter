@@ -8,26 +8,11 @@ export interface PentestFindingMemoryInput {
   cwe?: string;
 }
 
-function safeLocation(value: string | undefined): string | undefined {
-  const location = value?.trim();
-  if (!location) return undefined;
-  try {
-    const parsed = new URL(location);
-    parsed.username = "";
-    parsed.password = "";
-    parsed.search = "";
-    parsed.hash = "";
-    return parsed.toString();
-  } catch {
-    return location;
-  }
-}
-
 export function pentestFindingMemoryMetadata(
   finding: PentestFindingMemoryInput,
   target: string,
 ): { content: string; filePaths: string[] } {
-  const location = safeLocation(finding.file);
+  const location = safeAssessmentLocation(finding.file);
   const content = [
     `SECURITY FINDING (${String(finding.severity).toUpperCase()}): ${finding.summary}`,
     finding.cwe ? `CWE: ${finding.cwe}` : "",
@@ -39,3 +24,4 @@ export function pentestFindingMemoryMetadata(
   ].filter(Boolean).join("\n");
   return { content, filePaths: location ? [location] : [] };
 }
+import { safeAssessmentLocation } from "../../reviews/assessmentLocation.js";

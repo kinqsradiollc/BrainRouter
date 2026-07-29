@@ -3,7 +3,11 @@ import { MemoryEngine } from "../engine.js";
 
 describe("authorized-assessment memory metadata", () => {
   it("does not promote retention-governed evidence into long-lived recall", async () => {
-    const upsertEngineeringMemory = vi.fn(async () => ({ id: "memory-1" }));
+    const upsertEngineeringMemory = vi.fn(async (_input: {
+      content: string;
+      filePaths: string[];
+      verificationStatus: string;
+    }) => ({ id: "memory-1" }));
     const setMemoryVisibility = vi.fn(async () => undefined);
     const engine = {
       upsertEngineeringMemory,
