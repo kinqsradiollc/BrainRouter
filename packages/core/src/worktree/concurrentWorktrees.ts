@@ -6,8 +6,12 @@
  * best-effort awareness, never a hard dependency (the destructive-command guard
  * is the actual enforcement).
  */
-import { execFileSync } from 'node:child_process';
 import path from 'node:path';
+
+import type { WorktreeAwarenessHost } from './awareness/host/contracts.js';
+import { nodeWorktreeAwarenessHost } from './awareness/host/nodeWorktreeAwarenessHost.js';
+
+export type { WorktreeAwarenessHost } from './awareness/host/contracts.js';
 
 /**
  * Parse `git worktree list --porcelain` output into `"<path> (<branch>)"` lines,
@@ -35,14 +39,12 @@ export function parseWorktreePorcelain(output: string, selfPath: string): string
  * Returns `[]` when there's only one worktree, when it isn't a git repo, or on any
  * error — passive awareness must never break prompt assembly. Capped + timed out.
  */
-export function listOtherWorktrees(workspaceRoot: string): string[] {
+export function listOtherWorktrees(
+  workspaceRoot: string,
+  host: WorktreeAwarenessHost = nodeWorktreeAwarenessHost,
+): string[] {
   try {
-    const output = execFileSync('git', ['worktree', 'list', '--porcelain'], {
-      cwd: workspaceRoot,
-      encoding: 'utf8',
-      timeout: 2000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
+    const output = host.listPorcelain(workspaceRoot);
     return parseWorktreePorcelain(output, workspaceRoot).slice(0, 12);
   } catch {
     return [];
