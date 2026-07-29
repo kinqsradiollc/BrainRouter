@@ -21,107 +21,32 @@ import {
   type WorkspaceFileParentGuard,
   type WorkspaceFileStagedVersion,
 } from './fileWrite.js';
+import {
+  INSTRUCTION_MAX_BYTES,
+  INSTRUCTION_RELPATH,
+  MANIFEST_MAX_BYTES,
+  MANIFEST_RELPATH,
+  RECEIPT_LIMIT,
+  RECEIPT_MAX_BYTES,
+  type ActivePairTransaction,
+  type DesiredFileVersion,
+  type EncodedFileSnapshot,
+  type EncodedFileVersion,
+  type PairPhase,
+  type StagedFileVersion,
+  type WorkspaceOnboardingFileSnapshot,
+  type WorkspaceOnboardingManifestClaimFingerprint,
+  type WorkspaceOnboardingManifestReplacementFingerprint,
+  type WorkspaceOnboardingPairReceipt,
+  type WorkspaceOnboardingPairTransaction,
+} from './onboardingTransaction/contracts.js';
 
-const INSTRUCTION_RELPATH = 'AGENT.md';
-const MANIFEST_RELPATH = path.join('.brainrouter', 'workspace.json');
-const INSTRUCTION_MAX_BYTES = 4 * 1024 * 1024;
-const MANIFEST_MAX_BYTES = 256 * 1024;
-const RECEIPT_MAX_BYTES = 8 * 1024 * 1024;
-const RECEIPT_LIMIT = 16;
-
-type PairPhase =
-  | 'prepared'
-  | 'instruction-committing'
-  | 'instruction-written'
-  | 'manifest-committing'
-  | 'manifest-written'
-  | 'ambiguous';
-
-export interface WorkspaceOnboardingFileSnapshot {
-  existed: boolean;
-  mode?: number;
-  dev?: number;
-  ino?: number;
-  size?: number;
-  mtimeMs?: number;
-  ctimeMs?: number;
-  contents?: Buffer;
-}
-
-export interface WorkspaceOnboardingPairTransaction {
-  workspaceRoot: string;
-  token: string;
-  receiptPath: string;
-}
-
-export interface WorkspaceOnboardingManifestClaimFingerprint {
-  mode: number;
-  dev: number;
-  ino: number;
-  size: number;
-  mtimeMs: number;
-  sha256: string;
-}
-
-export interface WorkspaceOnboardingManifestReplacementFingerprint {
-  size: number;
-  sha256: string;
-}
-
-interface EncodedFileVersion {
-  mode: number;
-  dev: number;
-  ino: number;
-  size: number;
-  mtimeMs: number;
-  ctimeMs?: number;
-  sha256: string;
-}
-
-interface EncodedFileSnapshot {
-  existed: boolean;
-  mode?: number;
-  dev?: number;
-  ino?: number;
-  size?: number;
-  mtimeMs?: number;
-  ctimeMs?: number;
-  sha256?: string;
-  contentsBase64?: string;
-}
-
-interface DesiredFileVersion {
-  size: number;
-  sha256: string;
-}
-
-interface StagedFileVersion extends EncodedFileVersion {
-  temporaryPath: string;
-}
-
-interface WorkspaceOnboardingPairReceipt {
-  version: 1;
-  phase: PairPhase;
-  workspaceRoot: string;
-  token: string;
-  instruction: {
-    before: EncodedFileSnapshot;
-    desired: DesiredFileVersion;
-    staged?: StagedFileVersion;
-    outcome?: 'created' | 'unchanged';
-    after?: EncodedFileVersion;
-  };
-  manifest: {
-    before: EncodedFileSnapshot;
-    desired: DesiredFileVersion;
-    after?: EncodedFileVersion;
-  };
-}
-
-interface ActivePairTransaction {
-  transaction: WorkspaceOnboardingPairTransaction;
-  receipt: WorkspaceOnboardingPairReceipt;
-}
+export type {
+  WorkspaceOnboardingFileSnapshot,
+  WorkspaceOnboardingManifestClaimFingerprint,
+  WorkspaceOnboardingManifestReplacementFingerprint,
+  WorkspaceOnboardingPairTransaction,
+} from './onboardingTransaction/contracts.js';
 
 const activePairTransactions = new Map<string, ActivePairTransaction>();
 
