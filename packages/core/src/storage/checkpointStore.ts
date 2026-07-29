@@ -1,6 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { getStateDir } from './store.js';
+import type { QueuedPrompt, RecoverableState } from './contracts.js';
+
+export type { QueuedPrompt, RecoverableState } from './contracts.js';
 
 /**
  * CLI-21 (0.4.4) — crash-checkpoint + offline prompt queue.
@@ -16,12 +19,6 @@ import { getStateDir } from './store.js';
  * never throws on I/O — a checkpoint that can't be written just means no
  * recovery hint, which must not break the session.
  */
-
-export interface QueuedPrompt {
-  prompt: string;
-  at: string; // ISO
-  kind: 'crash' | 'offline';
-}
 
 function encodeKey(sessionKey: string): string {
   return sessionKey.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 120);
@@ -75,7 +72,7 @@ export function clearOfflineQueue(ws: string, sessionKey: string): void {
  * (= a crash mid-turn) plus any offline-queued prompts. Empty when nothing is
  * pending.
  */
-export function readRecoverable(ws: string, sessionKey: string): { crashed: QueuedPrompt | null; offline: QueuedPrompt[] } {
+export function readRecoverable(ws: string, sessionKey: string): RecoverableState {
   const crashed = readJson<QueuedPrompt | null>(inflightPath(ws, sessionKey), null);
   return { crashed: crashed && typeof crashed.prompt === 'string' ? crashed : null, offline: readOfflineQueue(ws, sessionKey) };
 }

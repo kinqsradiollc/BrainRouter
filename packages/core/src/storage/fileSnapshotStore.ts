@@ -1,5 +1,9 @@
 import fs from 'node:fs';
 import { getSessionStateFile } from './store.js';
+import type { FileMutationRecord } from './contracts.js';
+
+export type { FileMutationRecord, RestoreAction } from './contracts.js';
+export { planRestore } from './policy/restorePlan.js';
 
 /**
  * 0.4.x-3b — file-restore undo log for `/rewind --files`.
@@ -17,44 +21,6 @@ import { getSessionStateFile } from './store.js';
  */
 
 const LOG_FILE = 'file-mutations.jsonl';
-
-export interface FileMutationRecord {
-  /** User-turn ordinal at mutation time (1-based; aligns with RewindTurn.absoluteTurn). */
-  turn: number;
-  /** Workspace-relative path. */
-  path: string;
-  /** File content before the turn's first mutation, or null if it didn't exist. */
-  priorContent: string | null;
-}
-
-export interface RestoreAction {
-  path: string;
-  action: 'write' | 'delete';
-  /** Present when action === 'write'. */
-  content?: string;
-}
-
-/**
- * Pure: plan the restore to the END of turn `turnN`. For each file mutated in
- * a turn > N, restore it to the prior content of its EARLIEST post-N mutation
- * (its state at the end of turn N). Files only touched in turns ≤ N are left
- * as-is (their current content already reflects end-of-turn-N).
- */
-export function planRestore(records: FileMutationRecord[], turnN: number): RestoreAction[] {
-  const earliestPostN = new Map<string, FileMutationRecord>();
-  for (const r of records) {
-    if (r.turn <= turnN) continue;
-    const existing = earliestPostN.get(r.path);
-    if (!existing || r.turn < existing.turn) earliestPostN.set(r.path, r);
-  }
-  return [...earliestPostN.values()]
-    .sort((a, b) => a.path.localeCompare(b.path))
-    .map((r) =>
-      r.priorContent === null
-        ? { path: r.path, action: 'delete' as const }
-        : { path: r.path, action: 'write' as const, content: r.priorContent },
-    );
-}
 
 export function recordFileMutation(workspaceRoot: string, sessionKey: string, rec: FileMutationRecord): void {
   try {
