@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseWorktreePorcelain } from '../worktree/concurrentWorktrees.js';
+import {
+  listOtherWorktrees,
+  parseWorktreePorcelain,
+  type WorktreeAwarenessHost,
+} from '../worktree/concurrentWorktrees.js';
 import { buildSystemPrompt } from '../prompt/systemPrompt.js';
 
 const PORCELAIN = [
@@ -39,4 +43,34 @@ test('WORKTREE-AWARENESS: Runtime Context warns about concurrent worktrees only 
   assert.ok(withWt.includes('/repo/wt (feature/x)'), 'lists the other worktree');
   const without = buildSystemPrompt(base);
   assert.ok(!without.includes('Concurrent work areas'), 'no awareness line for a single-worktree repo');
+});
+
+test('worktree awareness delegates Git discovery through an injected host', () => {
+  const roots: string[] = [];
+  const host: WorktreeAwarenessHost = {
+    listPorcelain: (workspaceRoot) => {
+      roots.push(workspaceRoot);
+      return [
+        'worktree /repo',
+        'branch refs/heads/release',
+        '',
+        'worktree /repo-agent',
+        'branch refs/heads/agent',
+        '',
+      ].join('\n');
+    },
+  };
+
+  assert.deepEqual(listOtherWorktrees('/repo', host), ['/repo-agent (agent)']);
+  assert.deepEqual(roots, ['/repo']);
+});
+
+test('worktree awareness stays best effort when the host cannot list Git state', () => {
+  const host: WorktreeAwarenessHost = {
+    listPorcelain: () => {
+      throw new Error('git unavailable');
+    },
+  };
+
+  assert.deepEqual(listOtherWorktrees('/repo', host), []);
 });
