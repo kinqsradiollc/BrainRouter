@@ -13,6 +13,7 @@ import {
   runPrSecurityReview,
   type PrReviewDeps,
   type PrReviewInput,
+  type PrReviewPublicationGate,
 } from "../integrations/prSecurityReview.js";
 import {
   buildVulnerabilityReviewContext,
@@ -66,7 +67,7 @@ async function reviewDependencies(
     >[0]): ReturnType<NonNullable<PrReviewDeps["prepareRepositoryContext"]>>;
     candidatesReady(input: Parameters<
       NonNullable<PrReviewDeps["onCandidatesReady"]>
-    >[0]): void | Promise<void>;
+    >[0]): PrReviewPublicationGate | void | Promise<PrReviewPublicationGate | void>;
     isCancellationRequested(): boolean | Promise<boolean>;
   },
 ): Promise<PrReviewDeps> {
@@ -145,9 +146,20 @@ export async function runScheduledPrReview(
     },
     prepareRepositoryContext: ({ changed }) =>
       assurance.current?.prepareContext(changed) ?? Promise.resolve(null),
-    candidatesReady: ({ headSha, findings, coverage, changedFiles }) =>
-      assurance.current?.recordCandidates(headSha, findings, coverage, changedFiles)
-      ?? Promise.resolve(),
+    candidatesReady: ({
+      headSha,
+      currentHeadSha,
+      findings,
+      coverage,
+      changedFiles,
+    }) =>
+      assurance.current?.recordCandidates(
+        headSha,
+        findings,
+        coverage,
+        changedFiles,
+        currentHeadSha,
+      ) ?? Promise.resolve(),
     isCancellationRequested,
     progress: (event) => {
       if (event.kind === "diff-fetched") {

@@ -372,6 +372,138 @@ describe("PR security review executor (ADR-017 D5)", () => {
       || call.startsWith("POST /repos/o/r/issues/7/comments"))).toBe(false);
   });
 
+  it("uses the durable advisory gate instead of treating a model assertion as blocking", async () => {
+    const routes: Routes = {
+      calls: [],
+      diff: DIFF_ADDED,
+      pr: { head: { sha: "head-1" } },
+    };
+    const result = await runPrSecurityReview(
+      { installationId: "42", repo: "o/r", prNumber: 7, headSha: "head-1" },
+      makeDeps(routes, {
+        llmRunner: llm(REVIEW_INLINE),
+        onCandidatesReady: ({ currentHeadSha }) => {
+          expect(currentHeadSha).toBe("head-1");
+          return {
+            status: "advisory",
+            blocked: false,
+            cleanEligible: false,
+            reason: "The candidate does not have independent evidence.",
+            blockingFindingIds: [],
+          };
+        },
+      }),
+    );
+
+    expect(result.blocking).toBe(0);
+    expect(result.assuranceGate?.status).toBe("advisory");
+    expect(routes.bodies?.["POST /repos/o/r/check-runs"] ?? "").toContain(
+      '"conclusion":"neutral"',
+    );
+    expect(routes.bodies?.["POST /repos/o/r/issues/7/comments"] ?? "").toContain(
+      "Assurance gate: **advisory**",
+    );
+  });
+
+  it("fails closed without granting a model finding blocking authority when the durable gate is unavailable", async () => {
+    const routes: Routes = {
+      calls: [],
+      diff: DIFF_ADDED,
+      pr: { head: { sha: "head-1" } },
+    };
+    const result = await runPrSecurityReview(
+      { installationId: "42", repo: "o/r", prNumber: 7, headSha: "head-1" },
+      makeDeps(routes, {
+        llmRunner: llm(REVIEW_INLINE),
+        onCandidatesReady: () => undefined,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      blocking: 0,
+      approved: false,
+      assuranceGate: {
+        status: "partial",
+        blocked: true,
+        cleanEligible: false,
+        blockingFindingIds: [],
+      },
+    });
+    expect(routes.bodies?.["POST /repos/o/r/check-runs"] ?? "").toContain(
+      '"conclusion":"failure"',
+    );
+  });
+
+  it("publishes failure only for evidence-supported blocking finding ids", async () => {
+    const routes: Routes = {
+      calls: [],
+      diff: DIFF_ADDED,
+      pr: { head: { sha: "head-1" } },
+    };
+    const result = await runPrSecurityReview(
+      { installationId: "42", repo: "o/r", prNumber: 7, headSha: "head-1" },
+      makeDeps(routes, {
+        llmRunner: llm(REVIEW_INLINE),
+        onCandidatesReady: () => ({
+          status: "blocked",
+          blocked: true,
+          cleanEligible: false,
+          reason: "One independently supported finding meets policy.",
+          blockingFindingIds: ["finding-1"],
+        }),
+      }),
+    );
+
+    expect(result.blocking).toBe(1);
+    expect(routes.bodies?.["POST /repos/o/r/check-runs"] ?? "").toContain(
+      '"conclusion":"failure"',
+    );
+    expect(routes.bodies?.["POST /repos/o/r/check-runs"] ?? "").toContain(
+      "1 evidence-supported blocking finding(s)",
+    );
+  });
+
+  it("does not approve or publish stale inline conclusions when the current head changed", async () => {
+    const routes: Routes = {
+      calls: [],
+      diff: DIFF_ADDED,
+      pr: { head: { sha: "head-new" } },
+    };
+    const result = await runPrSecurityReview(
+      { installationId: "42", repo: "o/r", prNumber: 7, headSha: "head-old" },
+      makeDeps(routes, {
+        llmRunner: llm(REVIEW_INLINE),
+        getIntegration: async () => ({
+          config: {
+            appId: "4237068",
+            reviewPolicyDefaults: { approveClean: true },
+          },
+          secret: { privateKey },
+        }),
+        onCandidatesReady: ({ currentHeadSha }) => {
+          expect(currentHeadSha).toBe("head-new");
+          return {
+            status: "stale",
+            blocked: true,
+            cleanEligible: false,
+            reason: "The reviewed revision is no longer current.",
+            blockingFindingIds: [],
+          };
+        },
+      }),
+    );
+
+    expect(result.blocking).toBe(0);
+    expect(result.inlinePosted).toBe(0);
+    expect(result.approved).toBe(false);
+    expect(routes.bodies?.["POST /repos/o/r/check-runs"] ?? "").toContain(
+      '"conclusion":"failure"',
+    );
+    expect(routes.bodies?.["POST /repos/o/r/issues/7/comments"] ?? "").toContain(
+      "Assurance gate: **stale**",
+    );
+  });
+
   it("returns forge-derived PR author, head contributor, and bounded commit counts", async () => {
     const routes: Routes = {
       calls: [], diff: DIFF_ADDED,

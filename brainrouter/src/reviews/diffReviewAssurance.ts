@@ -8,6 +8,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import {
+  calculateAssuranceGate,
   createRepositoryAssuranceCampaignService,
   type RepositoryAssuranceRunPort,
 } from "@kinqs/brainrouter-core/review";
@@ -26,6 +27,7 @@ import type {
   PrReviewCandidateDetail,
   PrReviewCoverage,
   PrReviewInput,
+  PrReviewPublicationGate,
   PrReviewResult,
 } from "../integrations/prSecurityReview.js";
 import {
@@ -91,7 +93,8 @@ export interface DiffReviewAssuranceSession {
     findings: PrReviewCandidateDetail[],
     coverage: PrReviewCoverage,
     changedFiles: number,
-  ): Promise<void>;
+    currentHeadSha?: string,
+  ): Promise<PrReviewPublicationGate>;
   complete(
     result: PrReviewResult,
     changedFiles: number,
@@ -361,6 +364,32 @@ export async function startDiffReviewAssurance(
       })
     : null;
   let candidateIds: string[] = [];
+
+  const calculatePublicationGate = async (
+    run: RepositoryAssuranceRun,
+    currentHeadSha: string | undefined,
+  ): Promise<PrReviewPublicationGate> => {
+    const findings = (await Promise.all(
+      run.findings.map((reference) => findingPort.get(reference.id)),
+    )).filter((finding): finding is NonNullable<typeof finding> => finding !== null);
+    const calculatedAt = now();
+    const gateRun: RepositoryAssuranceRun = active(run)
+      ? {
+          ...run,
+          status: run.sourceSnapshot.status === "ready" && run.coverage.status === "complete"
+            ? "completed"
+            : "partial",
+          updatedAt: calculatedAt,
+          completedAt: calculatedAt,
+        }
+      : run;
+    return calculateAssuranceGate({
+      run: gateRun,
+      findings,
+      currentHeadSha: currentHeadSha ?? "",
+    });
+  };
+
   try {
     await repositoryContext?.prepareSourceAndIndex();
   } catch (error) {
@@ -378,12 +407,13 @@ export async function startDiffReviewAssurance(
     findings: PrReviewCandidateDetail[],
     coverage: PrReviewCoverage,
     changedFiles: number,
-  ): Promise<void> => {
+    currentHeadSha?: string,
+  ): Promise<PrReviewPublicationGate> => {
     if (candidateHeadSha !== headSha) {
       throw new Error("Review candidates must match the assurance run exact revision.");
     }
     let run = (await port.get(started.id)) ?? started;
-    if (!active(run)) return;
+    if (!active(run)) return calculatePublicationGate(run, currentHeadSha);
     const calculatedAt = now();
     const contextReady = Boolean(repositoryContext?.hasPromptContext);
     const candidateResult: PrReviewResult = {
@@ -499,6 +529,18 @@ export async function startDiffReviewAssurance(
         },
       );
     }
+    run = (await port.get(run.id)) ?? run;
+    if (!active(run)) return calculatePublicationGate(run, currentHeadSha);
+    const gate = await calculatePublicationGate(run, currentHeadSha);
+    if (!terminalStage(run, "lifecycle_gate")) {
+      await campaign.runStage(run.id, "lifecycle_gate", 1, async () => ({
+        status: "succeeded",
+        inputRefs: run.findings.map((finding) => finding.id),
+        outputRefs: [`gate:${gate.status}`],
+        limitationIds: run.coverage.limitations.map((limitation) => limitation.id),
+      }));
+    }
+    return gate;
   };
 
   const complete = async (
@@ -563,12 +605,59 @@ export async function startDiffReviewAssurance(
           ...(!contextReady ? { errorCode: "DIFF_ONLY_FALLBACK" } : {}),
         }));
       }
+
+      if (!terminalStage(run, "publication")) {
+        const outputRefs = [
+          ...(result.posted ? ["forge:summary"] : []),
+          ...(result.reviewPosted ? ["forge:review"] : []),
+          ...(result.inlinePosted ? [`forge:inline:${result.inlinePosted}`] : []),
+          ...(result.checkPosted ? ["forge:check"] : []),
+          ...(result.approved ? ["forge:approval"] : []),
+        ];
+        const gate = result.assuranceGate;
+        run = await campaign.runStage(run.id, "publication", 1, async () => ({
+          status: gate && outputRefs.length > 0 ? "succeeded" : "partial",
+          inputRefs: [
+            ...candidateIds,
+            ...(gate ? [`gate:${gate.status}`] : ["gate:unavailable"]),
+          ],
+          outputRefs,
+          limitationIds: run.coverage.limitations.map((limitation) => limitation.id),
+          ...(!gate
+            ? { errorCode: "ASSURANCE_GATE_UNAVAILABLE" }
+            : outputRefs.length === 0
+              ? { errorCode: "FORGE_PUBLICATION_UNAVAILABLE" }
+              : {}),
+        }));
+      }
       await repositoryContext?.cleanup();
       run = (await port.get(run.id)) ?? run;
       if (!active(run)) return run;
+      if (result.assuranceGate?.status === "stale") {
+        const completedAt = now();
+        return port.transition({
+          runId: run.id,
+          status: "stale",
+          staleReason: result.assuranceGate.reason,
+          updatedAt: completedAt,
+          completedAt,
+        });
+      }
+      const publicationComplete = terminalStage(run, "publication")
+        && run.stages.some((receipt) =>
+          receipt.stage === "publication"
+          && receipt.attempt === 1
+          && receipt.status === "succeeded",
+        );
+      const authoritativeGate = result.assuranceGate?.status === "clean"
+        || result.assuranceGate?.status === "advisory"
+        || result.assuranceGate?.status === "blocked";
       return campaign.finish(
         run.id,
-        run.sourceSnapshot.status === "ready" && run.coverage.status === "complete"
+        run.sourceSnapshot.status === "ready"
+          && run.coverage.status === "complete"
+          && publicationComplete
+          && authoritativeGate
           ? "completed"
           : "partial",
       );

@@ -422,12 +422,17 @@ describe("diff review assurance projection", () => {
     expect(first?.stages).toEqual(expect.arrayContaining([
       expect.objectContaining({ stage: "checkout_inventory", status: "partial" }),
       expect.objectContaining({ stage: "candidate_discovery", status: "partial" }),
+      expect.objectContaining({
+        stage: "publication",
+        status: "partial",
+        errorCode: "ASSURANCE_GATE_UNAVAILABLE",
+      }),
     ]));
 
     const retried = await recordDiffReviewAssurance(input(store));
     expect(retried?.id).toBe(first?.id);
     expect(store.runs.size).toBe(1);
-    expect(retried?.stages).toHaveLength(2);
+    expect(retried?.stages).toHaveLength(3);
   });
 
   it("persists bounded exact-head model candidates before completing discovery", async () => {
@@ -436,7 +441,7 @@ describe("diff review assurance projection", () => {
     const { result, changedFiles, ...start } = request;
     const session = await startDiffReviewAssurance(start);
 
-    await session!.recordCandidates(
+    const gate = await session!.recordCandidates(
       "head-1",
       [{
         file: "src/route.ts",
@@ -448,8 +453,12 @@ describe("diff review assurance projection", () => {
       }],
       result.coverage!,
       changedFiles,
+      "head-1",
     );
-    const completed = await session!.complete(result, changedFiles);
+    const completed = await session!.complete(
+      { ...result, assuranceGate: gate },
+      changedFiles,
+    );
     const finding = [...store.findings.values()][0];
 
     expect(finding).toMatchObject({
@@ -462,6 +471,11 @@ describe("diff review assurance projection", () => {
       })],
     });
     expect(finding?.verifier).toBeUndefined();
+    expect(gate).toMatchObject({
+      status: "partial",
+      cleanEligible: false,
+      blockingFindingIds: [],
+    });
     expect(completed.findings).toEqual([
       expect.objectContaining({ id: finding?.id, state: "candidate" }),
     ]);
@@ -469,6 +483,15 @@ describe("diff review assurance projection", () => {
       expect.objectContaining({
         stage: "candidate_discovery",
         outputRefs: expect.arrayContaining([finding?.id]),
+      }),
+      expect.objectContaining({
+        stage: "lifecycle_gate",
+        outputRefs: ["gate:partial"],
+      }),
+      expect.objectContaining({
+        stage: "publication",
+        status: "succeeded",
+        inputRefs: expect.arrayContaining(["gate:partial"]),
       }),
     ]));
   });
@@ -618,12 +641,27 @@ describe("diff review assurance projection", () => {
     const store = new FakeAssuranceStore();
     const analysis = repositoryContextAnalysis();
     const request = input(store, { repositoryContext: analysis });
-    const { result, changedFiles, ...start } = request;
+    const { result, changedFiles: _changedFiles, ...start } = request;
     const session = await startDiffReviewAssurance(start);
     const prompt = await session!.prepareContext([{ path: "src/route.ts", line: 10 }]);
     expect(prompt?.text).toContain("# src/handler.ts");
 
-    const completed = await session!.complete(result, changedFiles);
+    const gate = await session!.recordCandidates(
+      "head-1",
+      [],
+      result.coverage!,
+      1,
+      "head-1",
+    );
+    expect(gate).toMatchObject({
+      status: "clean",
+      blocked: false,
+      cleanEligible: true,
+    });
+    const completed = await session!.complete(
+      { ...result, assuranceGate: gate },
+      1,
+    );
     expect(completed).toMatchObject({
       status: "completed",
       sourceSnapshot: {
@@ -641,9 +679,95 @@ describe("diff review assurance projection", () => {
       expect.objectContaining({ stage: "index", status: "succeeded" }),
       expect.objectContaining({ stage: "packet_assembly", status: "succeeded" }),
       expect.objectContaining({ stage: "candidate_discovery", status: "succeeded" }),
+      expect.objectContaining({ stage: "lifecycle_gate", status: "succeeded" }),
+      expect.objectContaining({ stage: "publication", status: "succeeded" }),
       expect.objectContaining({ stage: "cleanup", status: "succeeded" }),
     ]));
     expect(analysis.released).toEqual(["artifact-1", "index-1", "checkout-1"]);
+  });
+
+  it("keeps a full-context model-only candidate advisory without verifier evidence", async () => {
+    const store = new FakeAssuranceStore();
+    const analysis = repositoryContextAnalysis();
+    const request = input(store, { repositoryContext: analysis });
+    const { result, changedFiles: _changedFiles, ...start } = request;
+    const session = await startDiffReviewAssurance(start);
+    await session!.prepareContext([{ path: "src/route.ts", line: 10 }]);
+
+    const gate = await session!.recordCandidates(
+      "head-1",
+      [{
+        file: "src/route.ts",
+        line: 10,
+        severity: "high",
+        confidence: 95,
+        title: "Unverified command construction",
+        details: "The review model reported a possible unsafe flow.",
+      }],
+      result.coverage!,
+      1,
+      "head-1",
+    );
+    const completed = await session!.complete(
+      { ...result, assuranceGate: gate },
+      1,
+    );
+
+    expect(gate).toMatchObject({
+      status: "advisory",
+      blocked: false,
+      cleanEligible: false,
+      blockingFindingIds: [],
+    });
+    expect(completed.status).toBe("completed");
+    expect([...store.findings.values()][0]).toMatchObject({
+      state: "candidate",
+      evidence: [],
+    });
+  });
+
+  it("marks the durable run stale when the current head changes before publication", async () => {
+    const store = new FakeAssuranceStore();
+    const analysis = repositoryContextAnalysis();
+    const request = input(store, { repositoryContext: analysis });
+    const { result, changedFiles: _changedFiles, ...start } = request;
+    const session = await startDiffReviewAssurance(start);
+    await session!.prepareContext([{ path: "src/route.ts", line: 10 }]);
+
+    const gate = await session!.recordCandidates(
+      "head-1",
+      [],
+      result.coverage!,
+      1,
+      "head-new",
+    );
+    const completed = await session!.complete(
+      { ...result, assuranceGate: gate },
+      1,
+    );
+
+    expect(gate).toMatchObject({
+      status: "stale",
+      blocked: true,
+      cleanEligible: false,
+      blockingFindingIds: [],
+    });
+    expect(completed).toMatchObject({
+      status: "stale",
+      staleReason: "The assurance run does not match the current repository head.",
+    });
+    expect(completed.stages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        stage: "lifecycle_gate",
+        outputRefs: ["gate:stale"],
+      }),
+      expect.objectContaining({
+        stage: "publication",
+        status: "succeeded",
+        inputRefs: expect.arrayContaining(["gate:stale"]),
+      }),
+      expect.objectContaining({ stage: "cleanup", status: "succeeded" }),
+    ]));
   });
 
   it("persists parser source-to-sink paths as evidence-bearing candidates", async () => {
@@ -659,16 +783,31 @@ describe("diff review assurance projection", () => {
         }),
       },
     });
-    const { result, changedFiles, ...start } = request;
+    const { result, changedFiles: _changedFiles, ...start } = request;
     const session = await startDiffReviewAssurance(start);
     await session!.prepareContext([{ path: "src/source.ts", line: 4 }]);
 
-    await session!.recordCandidates("head-1", [], result.coverage!, changedFiles);
+    const gate = await session!.recordCandidates(
+      "head-1",
+      [],
+      result.coverage!,
+      1,
+      "head-1",
+    );
+    expect(gate).toMatchObject({
+      status: "blocked",
+      blocked: true,
+      cleanEligible: false,
+      blockingFindingIds: [expect.any(String)],
+    });
     expect(store.runs.get(session!.runId)?.stages).toEqual(expect.arrayContaining([
       expect.objectContaining({ stage: "candidate_discovery", status: "succeeded" }),
       expect.objectContaining({ stage: "candidate_verification", status: "succeeded" }),
     ]));
-    const completed = await session!.complete(result, changedFiles);
+    const completed = await session!.complete(
+      { ...result, assuranceGate: gate },
+      1,
+    );
     const finding = [...store.findings.values()][0];
 
     expect(finding).toMatchObject({
@@ -697,6 +836,14 @@ describe("diff review assurance projection", () => {
         status: "succeeded",
         inputRefs: [finding?.id],
         outputRefs: [finding?.id],
+      }),
+      expect.objectContaining({
+        stage: "lifecycle_gate",
+        outputRefs: ["gate:blocked"],
+      }),
+      expect.objectContaining({
+        stage: "publication",
+        inputRefs: expect.arrayContaining(["gate:blocked"]),
       }),
     ]));
   });

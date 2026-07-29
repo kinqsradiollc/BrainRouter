@@ -53,6 +53,14 @@ const result = {
   },
 };
 
+const publicationGate = {
+  status: "clean",
+  blocked: false,
+  cleanEligible: true,
+  reason: "Full coverage permits a clean conclusion.",
+  blockingFindingIds: [],
+} as const;
+
 function context(status = "running"): JobExecContext {
   return {
     jobId: "job-1",
@@ -95,7 +103,7 @@ describe("scheduled PR review repository-context composition", () => {
       packetRefs: ["packet-1"],
       artifactRefs: ["artifact-1"],
     }));
-    const recordCandidates = vi.fn(async () => undefined);
+    const recordCandidates = vi.fn(async () => publicationGate);
     const complete = vi.fn(async () => ({ status: "completed" }));
     const session = {
       runId: "run-1",
@@ -131,8 +139,9 @@ describe("scheduled PR review repository-context composition", () => {
         headSha: "head-1",
         changed: [{ path: "src/index.ts", line: 4 }],
       });
-      await deps.onCandidatesReady?.({
+      const assuranceGate = await deps.onCandidatesReady?.({
         headSha: "head-1",
+        currentHeadSha: "head-1",
         findings: [{
           file: "src/index.ts",
           severity: "high",
@@ -142,7 +151,7 @@ describe("scheduled PR review repository-context composition", () => {
         coverage: result.coverage,
         changedFiles: 3,
       });
-      return result;
+      return { ...result, assuranceGate };
     });
 
     const ctx = context();
@@ -152,7 +161,7 @@ describe("scheduled PR review repository-context composition", () => {
       repo: "owner/repository",
       prNumber: 42,
       headSha: "head-1",
-    }, ctx, "security")).resolves.toEqual(result);
+    }, ctx, "security")).resolves.toEqual({ ...result, assuranceGate: publicationGate });
 
     expect(mocks.createAnalysis).toHaveBeenCalledWith(expect.objectContaining({
       maxDiffChars: 20_000,
@@ -174,8 +183,12 @@ describe("scheduled PR review repository-context composition", () => {
       [expect.objectContaining({ file: "src/index.ts", confidence: 90 })],
       result.coverage,
       3,
+      "head-1",
     );
-    expect(complete).toHaveBeenCalledWith(result, 3);
+    expect(complete).toHaveBeenCalledWith(
+      { ...result, assuranceGate: publicationGate },
+      3,
+    );
 
     const composition = mocks.createAnalysis.mock.calls[0]?.[0];
     await expect(composition.isCancellationRequested()).resolves.toBe(false);
