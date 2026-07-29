@@ -507,8 +507,9 @@ the repository's normal security-review process before merge.
 | ID | Status | Deliverable | Acceptance evidence |
 |---|---|---|---|
 | A25-4a | `[x]` | Split the dependency-free agent protocol into event, command, interaction, callback-bridge, and envelope owners behind its unchanged root entrypoint | The package emits declarations and JavaScript successfully; callback, steering, envelope, guard, and interaction-broker fixtures pass without adding a runtime dependency |
-| A25-4b | `[ ]` | Pin lifecycle, tool-call pairing, interruption, bounded-loop, and safe-boundary steering order before extracting the turn runtime | Core fixtures cover success, failure, interruption, queued input, steer revisions, tool pairing, and turn-budget termination |
+| A25-4b | `[x]` | Pin lifecycle, tool-call pairing, interruption, bounded-loop, and safe-boundary steering order before extracting the turn runtime | Existing Core fixtures cover the run-turn success/error paths, interrupted multi-tool batches, queued and extension steering at model-safe boundaries, steering revisions, orphan/duplicate/malformed tool-call pairing, repeat guards, and adaptive/task-budget termination |
 | A25-4c | `[ ]` | Extract prompt/context, tool execution, steering, recovery, and completion phases behind the existing Agent facade | Core and CLI/Desktop host fixtures retain callback order, authority ceilings, transcript behavior, and protocol event parity |
+| A25-4c1 | `[x]` | Extract pending-input application into a host-neutral safe-boundary steering phase | Core typecheck and the in-flight extension-steer fixture prove reconciliation, untrusted-input framing, receipt lifecycle, transcript order, and continuation before the next model request |
 | A25-4d | `[ ]` | Consolidate local and cross-host delegation packets, authority attenuation, cancellation, and child-result projection | Delegation fixtures prove parent ceilings, explicit capability subsets, bounded fan-out, cancellation propagation, and identical CLI/Desktop receipts |
 
 ### Migration guardrails
