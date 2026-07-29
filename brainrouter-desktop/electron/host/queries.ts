@@ -28,6 +28,7 @@ import {
   startAccountConnectorOAuth,
   timeoutFetch,
 } from '../accountIntegration.js';
+import { fetchAccountReviewAssurance } from '../reviewAccountContract.js';
 // host/helpers — pure, closure-free helpers (config scrubbing, Track↔GitHub
 // normalization, computer-use/secret bridges, endpoint model probing, transcript
 // row reconstruction) extracted verbatim from this file.
@@ -3710,13 +3711,20 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         try {
           const account = await resolveBrainRouterAccountContext(config);
           if (!account) return { signedIn: true, canRun: false, reviews: [], error: 'No active BrainRouter organization.' };
-          const r = await fetch(`${account.baseUrl}/api/admin/reviews/jobs?limit=40`, {
+          const r = await timeoutFetch(`${account.baseUrl}/api/admin/reviews/jobs?limit=40`, {
             headers: brainRouterAccountHeaders(account),
           });
           const j = await r.json().catch(() => ({})) as { reviews?: unknown[]; canRun?: boolean; error?: string };
           if (!r.ok) return { signedIn: true, canRun: false, reviews: [], error: j.error || `HTTP ${r.status}` };
           return { signedIn: true, canRun: j.canRun === true, reviews: Array.isArray(j.reviews) ? j.reviews : [] };
         } catch (e) { return { signedIn: true, canRun: false, reviews: [], error: e instanceof Error ? e.message : 'fetch failed' }; }
+      },
+      'reviews-detail': async (a) => {
+        const config = loadConfig();
+        if (!resolveBrainRouterAccountApi(config)) throw new Error('Sign in under Settings → Account first.');
+        const account = await resolveBrainRouterAccountContext(config);
+        if (!account) throw new Error('No active BrainRouter organization.');
+        return fetchAccountReviewAssurance(account, a.jobId);
       },
       // Run a review on demand from the desktop (Dashboard → Reviews parity). POSTs to
       // the org's /run endpoint with the signed-in account key; the BACKEND re-gates on
@@ -3728,13 +3736,13 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const repo = String(a.repo ?? '');
         const prNumber = Number(a.prNumber);
         const forge = a.forge === 'gitlab' ? 'gitlab' : 'github';
-        const lens = a.lens === 'security' || a.lens === 'code' || a.lens === 'both' ? a.lens : 'both';
+        const lens = a.lens === 'security' || a.lens === 'code' || a.lens === 'pentest' || a.lens === 'both' ? a.lens : 'both';
         const segments = repo.split('/');
         if (segments.length < 2 || (forge === 'github' && segments.length !== 2) || segments.some((part) => !/^[A-Za-z0-9_.-]+$/.test(part) || part === '.' || part === '..') || !Number.isInteger(prNumber) || prNumber <= 0) return { ok: false, error: 'bad repo/prNumber' };
         try {
           const account = await resolveBrainRouterAccountContext(config);
           if (!account) return { ok: false, error: 'No active BrainRouter organization.' };
-          const r = await fetch(`${account.baseUrl}/api/admin/reviews/run`, {
+          const r = await timeoutFetch(`${account.baseUrl}/api/admin/reviews/run`, {
             method: 'POST', headers: brainRouterAccountHeaders(account, true),
             body: JSON.stringify({ repo, prNumber, lens, forge }),
           });

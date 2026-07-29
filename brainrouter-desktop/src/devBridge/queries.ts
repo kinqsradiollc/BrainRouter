@@ -9,6 +9,7 @@ import {
   previewDevWorkspaceOnboarding,
   proposeDevWorkspaceOnboarding,
 } from './onboarding.js';
+import { devReviewAssuranceDetail } from './reviewFixtures.js';
 
 // Record shapes reused by a few handlers, derived from the live state so the
 // text stays in one place (state.ts) — structurally identical to the originals.
@@ -873,9 +874,10 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       signedIn: true,
       canRun: true,
       reviews: [
-        { id: 'review-dev-1', lens: 'code', status: 'completed', repo: 'kinqsradiollc/BrainRouter', prNumber: 42, findings: 2, blocking: 0, skipped: null, error: null, updatedAt: new Date(Date.now() - 180_000).toISOString(), createdAt: new Date(Date.now() - 240_000).toISOString() },
+        { id: 'review-dev-1', lens: 'security', status: 'partial', repo: 'kinqsradiollc/BrainRouter', prNumber: 42, findings: 1, blocking: 0, skipped: null, error: null, updatedAt: new Date(Date.now() - 180_000).toISOString(), createdAt: new Date(Date.now() - 240_000).toISOString() },
       ],
     }),
+    'reviews-detail': (a) => devReviewAssuranceDetail(a.jobId),
     'reviews-run': () => ({ ok: true, jobs: 1 }),
     'track-scan-commits': () => ({ scanned: 12, linked: [{ sha: 'abc1234', key: 'BR-3', workItemKey: 'BR-3' }], transitioned: [{ key: 'BR-3', from: 'todo', to: 'in-progress' }], items: [...devTrack.items] }),
     'track-sync-members': (a) => {

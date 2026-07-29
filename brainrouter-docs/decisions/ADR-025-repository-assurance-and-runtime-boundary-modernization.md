@@ -570,7 +570,7 @@ coverage states rather than clean repository conclusions.
 |---|---|---|---|
 | A25-12a | `[x]` | Add one shared assurance-detail DTO and tenant-scoped backend projection for a review job | The API reuses the durable run and finding contracts without redefining lifecycle states; query and route fixtures prove organization/job/run scoping plus evidence and verifier-disposition projection |
 | A25-12b | `[x]` | Add typed SDK and hook consumers and render durable coverage, stages, findings, and dispositions in Dashboard review detail | SDK/hook contracts preserve the shared DTO; loading/error/cache fixtures and Dashboard presentation fixtures cover complete, partial, stale, superseded, and unresolved states |
-| A25-12c | `[ ]` | Project the same detail through the agent protocol to CLI and Desktop review surfaces | Protocol, host-query, dev-bridge, CLI, and Desktop fixtures render the same run, coverage, stage, finding, and disposition values without duplicating policy |
+| A25-12c | `[x]` | Project the same detail through the agent protocol to CLI and Desktop review surfaces | Protocol, host-query, dev-bridge, CLI, and Desktop fixtures render the same run, coverage, stage, finding, and disposition values without duplicating policy |
 | A25-12d | `[ ]` | Reconcile forge summary/check output with the shared host projections and prove cross-host parity | One fixture produces equivalent GitHub, backend, Dashboard, Desktop, and CLI state labels and never upgrades partial or unsupported evidence |
 
 ### Migration guardrails
