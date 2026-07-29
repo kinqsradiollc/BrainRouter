@@ -64,6 +64,7 @@ import {
   type ComputerUseActionResult,
   type ComputerUsePort,
   type RecordLifecycleAction,
+  type TerminalSessionView,
 } from '@kinqs/brainrouter-agent-protocol';
 // Deep imports into the CLI's built runtime (no "exports" field = allowed).
 // Extracting a proper @kinqs/brainrouter-agent package is tracked for 0.4.16.
@@ -3199,7 +3200,17 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           rows: Number(args.rows) || undefined,
           reuseKey: `workspace-terminal:${selected.id}`,
         });
-        return { ...opened, shellId: selected.id, label: selected.label };
+        const view: TerminalSessionView = {
+          id: opened.id,
+          reused: opened.reused,
+          snapshot: opened.snapshot,
+          start: opened.start,
+          next: opened.next,
+          alive: opened.alive,
+          shellId: selected.id,
+          label: selected.label,
+        };
+        return view;
       },
       'term-write': (args) => {
         return { ok: ptyRegistry.write(String(args.id), String(args.data ?? '')) };

@@ -7,14 +7,11 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import type { TerminalShellView } from '@kinqs/brainrouter-agent-protocol';
 
-export interface TerminalShell {
-  id: string;
-  label: string;
-  description: string;
+export interface TerminalShell extends TerminalShellView {
   shell: string;
   args: string[];
-  isDefault: boolean;
 }
 
 interface TerminalShellDiscoveryOptions {

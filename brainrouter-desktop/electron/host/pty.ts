@@ -1,6 +1,10 @@
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
+import {
+  normalizeTerminalGeometry,
+  normalizeTerminalReuseKey,
+} from '@kinqs/brainrouter-core/terminal';
 
 export interface PtyLike {
   readonly pid: number;
@@ -61,15 +65,6 @@ type PtySession = {
 };
 
 const DEFAULT_BUFFER_LIMIT = 400_000;
-const MIN_COLS = 2;
-const MIN_ROWS = 1;
-const MAX_GEOMETRY = 1_000;
-
-function clampGeometry(value: number | undefined, fallback: number, min: number): number {
-  const finite = typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : fallback;
-  return Math.max(min, Math.min(MAX_GEOMETRY, finite));
-}
-
 function cleanEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   return Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
 }
@@ -132,9 +127,8 @@ export class PtyRegistry {
   }
 
   open(options: PtyOpenOptions): PtyOpenResult {
-    const cols = clampGeometry(options.cols, 80, MIN_COLS);
-    const rows = clampGeometry(options.rows, 24, MIN_ROWS);
-    const reuseKey = options.reuseKey?.trim() || undefined;
+    const { cols, rows } = normalizeTerminalGeometry(options.cols, options.rows);
+    const reuseKey = normalizeTerminalReuseKey(options.reuseKey);
     const existingId = reuseKey ? this.reusable.get(reuseKey) : undefined;
     const existing = existingId ? this.sessions.get(existingId) : undefined;
     if (existing?.alive) {
@@ -158,7 +152,7 @@ export class PtyRegistry {
    * example an SSH2 channel). It gets the same bounded scrollback, reattach,
    * resize, input, and workspace-shutdown lifecycle as a local PTY. */
   adopt(pty: PtyLike, options: PtyAdoptOptions): PtyOpenResult {
-    const reuseKey = options.reuseKey?.trim() || undefined;
+    const reuseKey = normalizeTerminalReuseKey(options.reuseKey);
     const existingId = reuseKey ? this.reusable.get(reuseKey) : undefined;
     const existing = existingId ? this.sessions.get(existingId) : undefined;
     if (existing?.alive) {
@@ -191,7 +185,8 @@ export class PtyRegistry {
     const session = this.sessions.get(id);
     if (!session?.alive) return false;
     try {
-      session.pty.resize(clampGeometry(cols, 80, MIN_COLS), clampGeometry(rows, 24, MIN_ROWS));
+      const geometry = normalizeTerminalGeometry(cols, rows);
+      session.pty.resize(geometry.cols, geometry.rows);
       return true;
     } catch { return false; }
   }

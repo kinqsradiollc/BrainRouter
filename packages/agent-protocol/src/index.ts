@@ -14,3 +14,4 @@ export * from './delegation.js';
 export * from './envelope.js';
 export * from './assurance.js';
 export * from './assuranceDetail.js';
+export * from './terminal/index.js';
