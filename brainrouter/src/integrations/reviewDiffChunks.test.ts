@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { splitDiffForReview, dedupeReviewFindings } from "./reviewDiffChunks.js";
+import {
+  changedSourceLocations,
+  dedupeReviewFindings,
+  splitDiffForReview,
+} from "./reviewDiffChunks.js";
 import type { ParsedReviewFinding } from "@kinqs/brainrouter-core/review";
 
 const fileDiff = (path: string, body: string) =>
@@ -70,5 +74,32 @@ describe("dedupeReviewFindings", () => {
       f({ line: 1, summary: "first" }),
     ]);
     expect(out.map((x) => x.summary)).toEqual(["first", "second"]);
+  });
+});
+
+describe("changedSourceLocations", () => {
+  it("groups contiguous additions and retains deletion-only files", () => {
+    const diff = [
+      "diff --git a/src/a.ts b/src/a.ts",
+      "--- a/src/a.ts",
+      "+++ b/src/a.ts",
+      "@@ -10,2 +10,4 @@",
+      " context",
+      "+first",
+      "+second",
+      " context",
+      "+third",
+      "diff --git a/src/removed.ts b/src/removed.ts",
+      "--- a/src/removed.ts",
+      "+++ /dev/null",
+      "@@ -1 +0,0 @@",
+      "-removed",
+    ].join("\n");
+
+    expect(changedSourceLocations(diff)).toEqual([
+      { path: "src/a.ts", line: 11, endLine: 12 },
+      { path: "src/a.ts", line: 14 },
+      { path: "src/removed.ts" },
+    ]);
   });
 });

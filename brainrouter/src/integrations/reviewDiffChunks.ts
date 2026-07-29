@@ -8,6 +8,7 @@
  * exceeds the budget, so a chunk is always a coherent, self-describing diff.
  */
 import type { ParsedReviewFinding } from "@kinqs/brainrouter-core/review";
+import type { AssuranceSourceLocation } from "@kinqs/brainrouter-types/review";
 
 /** Split a unified diff into per-file sections (header line kept with its body). */
 function splitByFile(diff: string): string[] {
@@ -60,6 +61,85 @@ export function splitDiffForReview(diff: string, maxChars: number): string[] {
   }
   flush();
   return chunks.length > 0 ? chunks : [diff];
+}
+
+/**
+ * Convert a unified diff into bounded new-revision source ranges. Contiguous
+ * additions become one anchor; rename/binary/deletion-only sections retain a
+ * path-only anchor so exact-source coverage never silently drops a changed
+ * file merely because GitHub has no RIGHT-side line for it.
+ */
+export function changedSourceLocations(diff: string): AssuranceSourceLocation[] {
+  const locations: AssuranceSourceLocation[] = [];
+  let path: string | null = null;
+  let newLine = 0;
+  let rangeStart: number | null = null;
+  let rangeEnd: number | null = null;
+  let sectionHasAnchor = false;
+  let inHunk = false;
+
+  const flushRange = (): void => {
+    if (!path || rangeStart === null || rangeEnd === null) return;
+    locations.push({
+      path,
+      line: rangeStart,
+      ...(rangeEnd > rangeStart ? { endLine: rangeEnd } : {}),
+    });
+    sectionHasAnchor = true;
+    rangeStart = null;
+    rangeEnd = null;
+  };
+  const flushSection = (): void => {
+    flushRange();
+    if (path && !sectionHasAnchor) locations.push({ path });
+    path = null;
+    sectionHasAnchor = false;
+    inHunk = false;
+  };
+
+  for (const raw of (diff ?? "").split("\n")) {
+    if (raw.startsWith("diff --git ")) {
+      flushSection();
+      const match = /^diff --git a\/(.+) b\/(.+)$/.exec(raw);
+      path = match?.[2] ?? null;
+      continue;
+    }
+    if (raw.startsWith("+++ ")) {
+      flushRange();
+      const candidate = raw.slice(4).replace(/^b\//, "").trim();
+      if (candidate !== "/dev/null") path = candidate;
+      continue;
+    }
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(raw);
+    if (hunk) {
+      flushRange();
+      newLine = Number(hunk[1]);
+      inHunk = true;
+      continue;
+    }
+    if (!inHunk || !path) continue;
+    if (raw.startsWith("+")) {
+      if (rangeStart === null) rangeStart = newLine;
+      rangeEnd = newLine;
+      newLine += 1;
+    } else if (raw.startsWith("-")) {
+      flushRange();
+    } else if (raw.startsWith("\\")) {
+      // "\ No newline at end of file" is metadata, not source.
+    } else {
+      flushRange();
+      newLine += 1;
+    }
+  }
+  flushSection();
+
+  const seen = new Set<string>();
+  return locations.filter((location) => {
+    const key = `${location.path}:${location.line ?? 0}:${location.endLine ?? 0}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /**
