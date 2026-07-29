@@ -3,6 +3,8 @@
 // auto-chain follow-ups.
 export * from './router.js';
 export * from './delegationPolicy.js';
+export * from './crossHostPacket.js';
+export * from './taskPacketNormalization.js';
 export * from './parentContext.js';
 export * from './taskPacket.js';
 export * from './autoChain.js';

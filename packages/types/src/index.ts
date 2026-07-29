@@ -19,3 +19,4 @@ export * from "./reviews.js";
 export * from "./work-contract.js";
 export * from "./planning-schema.js";
 export * from "./provider/index.js";
+export * from "./agent/index.js";

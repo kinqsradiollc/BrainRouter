@@ -511,6 +511,8 @@ the repository's normal security-review process before merge.
 | A25-4c | `[ ]` | Extract prompt/context, tool execution, steering, recovery, and completion phases behind the existing Agent facade | Core and CLI/Desktop host fixtures retain callback order, authority ceilings, transcript behavior, and protocol event parity |
 | A25-4c1 | `[x]` | Extract pending-input application into a host-neutral safe-boundary steering phase | Core typecheck and the in-flight extension-steer fixture prove reconciliation, untrusted-input framing, receipt lifecycle, transcript order, and continuation before the next model request |
 | A25-4d | `[ ]` | Consolidate local and cross-host delegation packets, authority attenuation, cancellation, and child-result projection | Delegation fixtures prove parent ceilings, explicit capability subsets, bounded fan-out, cancellation propagation, and identical CLI/Desktop receipts |
+| A25-4d1 | `[x]` | Use one bounded task-packet contract for local children and cross-host delivery while retaining read compatibility for legacy queued rows | Types/Core builds plus Core, backend, and CLI fixtures prove one packet shape, authoritative sender identity, explicit capability/tool ceilings, bounded budgets, tool-free legacy normalization, and dependency-light host adoption |
+| A25-4d2 | `[ ]` | Make parent interruption a truthful child lifecycle transition and project one receipt through protocol, CLI, and Desktop | Fixtures prove descendant cancellation propagation, no interrupted child is reported completed or detached, and CLI/Desktop consume the same projected receipt |
 
 ### A25-8 Core review delivery slices
 
