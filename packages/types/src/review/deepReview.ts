@@ -17,6 +17,17 @@ export interface DeepReviewTelemetryThresholds {
   acceptedAt: string;
 }
 
+/** Caller-selected limits; the backend supplies program and acceptance identity. */
+export interface DeepReviewRequestConfig {
+  telemetryThresholds: Omit<
+    DeepReviewTelemetryThresholds,
+    'program' | 'acceptedBy' | 'acceptedAt'
+  >;
+  packetLimits: DeepReviewPolicy['packetLimits'];
+  budgets: DeepReviewPolicy['budgets'];
+  cancellationPollIntervalMs?: number;
+}
+
 export interface DeepReviewPolicy {
   schemaVersion: 1;
   policyHash: string;
