@@ -4,6 +4,7 @@ import type { RepositoryAssuranceProgram, RepositoryRef, RepositoryRevision } fr
 import type { SourceSnapshot } from './source.js';
 
 export const ASSURANCE_SYMBOL_KINDS = [
+  'module',
   'function',
   'method',
   'class',
@@ -66,6 +67,11 @@ export interface AssuranceCodeIndexReceipt {
   createdAt: string;
   completedAt?: string;
   errorCode?: string;
+}
+
+export interface AssuranceCodeIndexResult {
+  receipt: AssuranceCodeIndexReceipt;
+  limitations: AssuranceCoverageLimitation[];
 }
 
 export const ASSURANCE_IMPACT_RELATIONSHIPS = [

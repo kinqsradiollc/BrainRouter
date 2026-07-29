@@ -52,6 +52,7 @@
     "gray-matter": "^4.0.3",
     "nodemailer": "^9.0.3",
     "pg": "^8.22.0",
+    "typescript": "^5.4.0",
     "undici": "^7.24.8",
     "zod": "^3.22.4",
     "ws": "^8.21.0"
@@ -70,7 +71,6 @@
     "@xenova/transformers": "^2.17.2",
     "fflate": "^0.8.2",
     "tsx": "^4.7.0",
-    "typescript": "^5.4.0",
     "vitest": "^1.4.0",
     "@types/ws": "^8.18.1"
   },
