@@ -14,6 +14,7 @@ import type {
 } from "@kinqs/brainrouter-core/review";
 import type {
   AssurancePolicySnapshot,
+  AssuranceSourceLocation,
   RepositoryAssuranceProgram,
 } from "@kinqs/brainrouter-types/review";
 
@@ -58,6 +59,10 @@ export interface RepositoryContextAnalysisPorts {
   impact: RepositoryAssuranceImpactPort;
   resolveArtifact(ref: string): RepositoryContextArtifact | null;
   releaseArtifacts(refs: Iterable<string>): void | Promise<void>;
+  selectDeepReviewAnchors?(indexRef: string, limit: number): {
+    anchors: AssuranceSourceLocation[];
+    indexedFiles: number;
+  };
   isCancellationRequested?(): boolean | Promise<boolean>;
   maxModelContextBytes: number;
 }

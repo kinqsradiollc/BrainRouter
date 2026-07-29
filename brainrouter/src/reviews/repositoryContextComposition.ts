@@ -54,6 +54,8 @@ export function createRepositoryContextAnalysisPorts(
     impact,
     resolveArtifact: (ref) => impact.resolveArtifact(ref),
     releaseArtifacts: (refs) => impact.releaseArtifacts(refs),
+    selectDeepReviewAnchors: (indexRef, limit) =>
+      index.selectDeepReviewAnchors(indexRef, limit),
     isCancellationRequested: input.isCancellationRequested,
     maxModelContextBytes: contextBudget,
   };

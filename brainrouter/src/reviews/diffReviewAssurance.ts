@@ -10,6 +10,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   calculateAssuranceGate,
   createRepositoryAssuranceCampaignService,
+  parseDeepReviewPolicy,
   type RepositoryAssuranceRunPort,
 } from "@kinqs/brainrouter-core/review";
 import type { LLMRunner } from "@kinqs/brainrouter-types";
@@ -18,6 +19,8 @@ import type {
   AssuranceCoverageLimitation,
   AssurancePolicySnapshot,
   AssuranceSourceLocation,
+  DeepReviewActivationSource,
+  DeepReviewPolicy,
   RepositoryAssuranceProgram,
   RepositoryAssuranceRun,
   SourceSnapshot,
@@ -75,6 +78,10 @@ export interface StartDiffReviewAssuranceInput {
   maxDiffChars: number;
   timeoutMs: number;
   repositoryContext?: RepositoryContextAnalysisPorts;
+  deepReview?: {
+    policy: DeepReviewPolicy;
+    source: Exclude<DeepReviewActivationSource, "diff_review">;
+  };
   llmRunner?: LLMRunner;
   now?: () => string;
   nextId?: (kind: "run" | "source" | "stage") => string;
@@ -105,7 +112,32 @@ export interface DiffReviewAssuranceSession {
 function policySnapshot(
   input: StartDiffReviewAssuranceInput,
   createdAt: string,
+  deepReviewPolicy: DeepReviewPolicy | null,
 ): AssurancePolicySnapshot {
+  if (deepReviewPolicy) {
+    return {
+      id: `deep-review-v1:${deepReviewPolicy.policyHash}`,
+      policyHash: deepReviewPolicy.policyHash,
+      organizationId: deepReviewPolicy.organizationId,
+      program: deepReviewPolicy.program,
+      analyzers: [
+        { id: "typescript-parser-index", enabled: true, required: true },
+        { id: "deterministic-impact-packets", enabled: true, required: true },
+        { id: "llm-deep-review", enabled: true, required: true },
+        { id: "independent-candidate-verifier", enabled: true, required: false },
+      ],
+      packetLimits: { ...deepReviewPolicy.packetLimits },
+      budgets: { ...deepReviewPolicy.budgets },
+      redactionPolicyId: "pr-review-default",
+      publicationPolicyId: input.policy.blockOnFindings
+        ? "pr-review-blocking"
+        : "pr-review-advisory",
+      inlineFindingsEnabled: true,
+      blockingEnabled:
+        input.program !== "code_review" && input.policy.blockOnFindings,
+      createdAt,
+    };
+  }
   const analyzers = [
     { id: "typescript-parser-index", enabled: Boolean(input.repositoryContext), required: false },
     { id: "deterministic-impact-packets", enabled: Boolean(input.repositoryContext), required: false },
@@ -207,14 +239,17 @@ function repositoryContextCoverage(
   result: PrReviewResult,
   changedFiles: number,
   calculatedAt: string,
+  deepReview = false,
 ): AssuranceCoverage {
   const files = Math.max(0, Math.trunc(changedFiles));
   const analyzerFailed = !result.ok;
   const modelComplete = !analyzerFailed && Boolean(result.coverage?.complete);
   const analyzers = [
-    ...prior.analyzers.filter((analyzer) => analyzer.analyzerId !== "llm-diff-review"),
+    ...prior.analyzers.filter((analyzer) =>
+      analyzer.analyzerId !== "llm-diff-review"
+      && analyzer.analyzerId !== "llm-deep-review"),
     {
-      analyzerId: "llm-diff-review",
+      analyzerId: deepReview ? "llm-deep-review" : "llm-diff-review",
       state: analyzerFailed ? "failed" as const : modelComplete ? "covered" as const : "partial" as const,
       supportedLanguages: [],
       filesEligible: files,
@@ -310,6 +345,19 @@ export async function startDiffReviewAssurance(
   if (input.repositoryContext) {
     assertRepositoryModelContextLimit(input.repositoryContext.maxModelContextBytes);
   }
+  const deepReviewPolicy = input.deepReview
+    ? parseDeepReviewPolicy(input.deepReview.policy)
+    : null;
+  if (deepReviewPolicy && (
+    !input.repositoryContext
+    || deepReviewPolicy.organizationId !== organizationId
+    || deepReviewPolicy.repository.forge !== (input.review.forge === "gitlab" ? "gitlab" : "github")
+    || deepReviewPolicy.repository.slug !== input.review.repo.trim().toLowerCase()
+    || deepReviewPolicy.program !== input.program
+    || deepReviewPolicy.activation.requestedBy !== input.review.requestedBy
+  )) {
+    throw new Error("Deep-review policy does not match the manual review authority.");
+  }
 
   const now = input.now ?? (() => new Date().toISOString());
   const nextId = input.nextId ?? ((kind) => `${kind}-${randomUUID()}`);
@@ -326,7 +374,7 @@ export async function startDiffReviewAssurance(
     },
     revision: { headSha },
     program: input.program,
-    policySnapshot: policySnapshot(input, createdAt),
+    policySnapshot: policySnapshot(input, createdAt, deepReviewPolicy),
   });
   if (active(started)) {
     await supersedePriorRuns(input, started, port, campaign);
@@ -392,6 +440,17 @@ export async function startDiffReviewAssurance(
 
   try {
     await repositoryContext?.prepareSourceAndIndex();
+    if (deepReviewPolicy && repositoryContext && input.deepReview) {
+      await repositoryContext.enforceDeepReviewPreflight({
+        policy: deepReviewPolicy,
+        organizationId,
+        source: input.deepReview.source,
+        estimatedModelCalls: deepReviewPolicy.budgets.maxModelCalls,
+        estimatedToolCalls: 3,
+        estimatedDurationMs: deepReviewPolicy.budgets.maxDurationMs,
+        estimatedUsd: deepReviewPolicy.budgets.maxUsd,
+      });
+    }
   } catch (error) {
     try {
       await repositoryContext?.cleanup();
@@ -457,6 +516,7 @@ export async function startDiffReviewAssurance(
             candidateResult,
             changedFiles,
             calculatedAt,
+            Boolean(deepReviewPolicy),
           ),
         }
       : run;
@@ -595,7 +655,13 @@ export async function startDiffReviewAssurance(
         run = await campaign.runStage(run.id, "candidate_discovery", 1, async () => ({
           status: contextReady && run.coverage.status === "complete" ? "succeeded" : "partial",
           coverage: contextReady
-            ? repositoryContextCoverage(run.coverage, result, changedFiles, now())
+            ? repositoryContextCoverage(
+                run.coverage,
+                result,
+                changedFiles,
+                now(),
+                Boolean(deepReviewPolicy),
+              )
             : run.coverage,
           inputRefs: contextReady ? contextRefs : [run.sourceSnapshot.inventoryRef!],
           outputRefs: [...candidateIds, `memory-job:${input.jobId}`],
@@ -674,7 +740,11 @@ export async function startDiffReviewAssurance(
 
   return {
     runId: started.id,
-    prepareContext: (changed) => repositoryContext?.preparePrompt(changed) ?? Promise.resolve(null),
+    prepareContext: (changed) =>
+      deepReviewPolicy
+        ? repositoryContext?.prepareDeepPrompt(deepReviewPolicy.packetLimits.maxPackets)
+          ?? Promise.resolve(null)
+        : repositoryContext?.preparePrompt(changed) ?? Promise.resolve(null),
     recordCandidates,
     complete,
     fail: () => complete({

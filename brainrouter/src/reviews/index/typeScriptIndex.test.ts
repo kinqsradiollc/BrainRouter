@@ -131,6 +131,11 @@ describe('TypeScriptAssuranceIndexAdapter', () => {
         { relationship: 'tests', from: 'tests/route.test.ts', to: 'route' },
       ]),
     );
+    const selected = adapter.selectDeepReviewAnchors(result.receipt.indexRef, 2);
+    expect(selected.indexedFiles).toBe(9);
+    expect(selected.anchors).toHaveLength(2);
+    expect(selected.anchors[0]).toMatchObject({ path: 'src/route.ts' });
+    expect(new Set(selected.anchors.map((anchor) => anchor.path)).size).toBe(2);
 
     await adapter.release(result.receipt.indexRef);
     expect(adapter.resolve(result.receipt.indexRef)).toBeNull();
