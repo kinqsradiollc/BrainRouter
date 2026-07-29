@@ -74,6 +74,10 @@ test('cross-host transport preserves task scope but removes untrusted authority'
       origin: { fromSessionKey: 'spoofed-session' },
     },
     '2026-07-30T00:00:00.000Z',
+    {
+      originatingClient: 'peer-cli',
+      originatingWorkspace: '/workspace',
+    },
   );
 
   assert.equal(crossHost.task, local.task);
@@ -116,6 +120,10 @@ test('cross-host transport caps untrusted resource budgets', () => {
       }),
     },
     '2026-07-30T00:00:00.000Z',
+    {
+      originatingClient: 'peer-cli',
+      originatingWorkspace: '/workspace',
+    },
   );
 
   assert.equal(crossHost.toolPolicyCeiling.accessMode, 'read');

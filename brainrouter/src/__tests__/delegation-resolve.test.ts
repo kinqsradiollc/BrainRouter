@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { buildDelegatedTaskPacket } from "@kinqs/brainrouter-core/orchestration/delegation-contracts";
-import { resolveDelegationPeer, buildDelegationPacket } from "../tools/sessions/delegation-helpers.js";
+import {
+  buildDelegationPacket,
+  resolveDelegationPeer,
+  resolveDelegationSender,
+} from "../tools/sessions/delegation-helpers.js";
 
 const S = (sessionKey: string, clientKind: string, lastHeartbeatAt: string) => ({
   sessionKey,
   clientKind,
   lastHeartbeatAt,
+  workspaceRoot: `/workspaces/${sessionKey}`,
 });
 
 describe("FED-S5 resolveDelegationPeer", () => {
@@ -29,6 +34,12 @@ describe("FED-S5 resolveDelegationPeer", () => {
   it("returns null when no peer of that kind is active", () => {
     expect(resolveDelegationPeer([S("cc", "claude-code", "x")], "codex", "sender")).toBeNull();
   });
+
+  it("resolves sender metadata only from the authenticated user's session set", () => {
+    const sessions = [S("sender", "brainrouter-cli", "2026-05-29T00:00:01.000Z")];
+    expect(resolveDelegationSender(sessions, "sender")).toEqual(sessions[0]);
+    expect(resolveDelegationSender(sessions, "spoofed")).toBeNull();
+  });
 });
 
 describe("FED-S5 buildDelegationPacket", () => {
@@ -46,6 +57,7 @@ describe("FED-S5 buildDelegationPacket", () => {
         originatingWorkspace: "/ws",
       },
       "2026-05-29T00:00:00.000Z",
+      { clientKind: "brainrouter-cli", workspaceRoot: "/ws" },
     );
     expect(p.task).toBe("do the thing");
     expect(p.origin.fromSessionKey).toBe("sender-key");
@@ -60,6 +72,8 @@ describe("FED-S5 buildDelegationPacket", () => {
     expect(p.budgets.maxPromptTokens).toBe(1000);
     expect(p.userConstraints.deadline).toBe("2026-06-01");
     expect(p.origin.createdAt).toBe("2026-05-29T00:00:00.000Z");
+    expect(p.origin.originatingClient).toBe("brainrouter-cli");
+    expect(p.origin.originatingWorkspace).toBe("/ws");
   });
 
   it("defaults missing optional fields safely", () => {
@@ -105,6 +119,7 @@ describe("FED-S5 buildDelegationPacket", () => {
         originatingClient: "brainrouter-cli",
       },
       "2026-05-29T00:00:00.000Z",
+      { clientKind: "brainrouter-cli", workspaceRoot: "/trusted" },
     );
 
     expect(packet.task).toBe(taskPacket.task);
@@ -119,5 +134,7 @@ describe("FED-S5 buildDelegationPacket", () => {
     });
     expect(packet.budgets.maxDepth).toBe(1);
     expect(packet.origin.fromSessionKey).toBe("authoritative-sender");
+    expect(packet.origin.originatingClient).toBe("brainrouter-cli");
+    expect(packet.origin.originatingWorkspace).toBe("/trusted");
   });
 });

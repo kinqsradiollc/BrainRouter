@@ -24,6 +24,14 @@ export function resolveDelegationPeer(
   return candidates[0]?.sessionKey ?? null;
 }
 
+/** Resolve sender display metadata only from the authenticated user's registry. */
+export function resolveDelegationSender(
+  sessions: Pick<ActiveSessionRecord, "sessionKey" | "clientKind" | "workspaceRoot">[],
+  fromSessionKey: string,
+): Pick<ActiveSessionRecord, "sessionKey" | "clientKind" | "workspaceRoot"> | null {
+  return sessions.find((session) => session.sessionKey === fromSessionKey) ?? null;
+}
+
 /**
  * Normalize loosely typed transport input into the canonical bounded packet.
  *
@@ -34,6 +42,10 @@ export function buildDelegationPacket(
   from: string,
   payload: Record<string, unknown>,
   now: string,
+  sender?: Pick<ActiveSessionRecord, "clientKind" | "workspaceRoot">,
 ): DelegationPacket {
-  return buildCrossHostDelegationPacket(from, payload, now);
+  return buildCrossHostDelegationPacket(from, payload, now, {
+    originatingClient: sender?.clientKind,
+    originatingWorkspace: sender?.workspaceRoot,
+  });
 }

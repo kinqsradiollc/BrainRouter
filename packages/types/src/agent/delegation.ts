@@ -71,8 +71,11 @@ export interface DelegatedTaskPacket {
 }
 
 export interface DelegationOrigin {
+  /** Authoritative session identity pinned by the authenticated transport. */
   fromSessionKey: string;
+  /** Informational label resolved from the sender's active-session record. */
   originatingClient: string;
+  /** Informational label resolved from the sender's active-session record. */
   originatingWorkspace: string;
   createdAt: string;
 }

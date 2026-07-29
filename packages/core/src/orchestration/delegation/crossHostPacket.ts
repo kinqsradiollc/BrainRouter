@@ -18,30 +18,32 @@ import {
   normalizeUntrustedCrossHostTaskPacket,
 } from './taskPacketNormalization.js';
 
+export interface TrustedDelegationOrigin {
+  originatingClient?: string;
+  originatingWorkspace?: string;
+}
+
 export function buildCrossHostDelegationPacket(
   fromSessionKey: string,
   payload: Record<string, unknown>,
   createdAt: string,
+  trustedOrigin: TrustedDelegationOrigin = {},
 ): DelegationPacket {
   const candidate = record(payload.taskPacket) ?? payload;
   const taskPacket = isDelegatedTaskPacket(candidate)
     ? normalizeUntrustedCrossHostTaskPacket(candidate)
     : legacyDelegatedTaskPacket(payload);
-  const suppliedOrigin = record(payload.origin);
 
   return {
     ...taskPacket,
     origin: {
       fromSessionKey: boundedRequired(fromSessionKey, 500, 'sender session key'),
       originatingClient: bounded(
-        text(payload.originatingClient)
-          || text(suppliedOrigin?.originatingClient)
-          || 'unknown',
+        text(trustedOrigin.originatingClient) || 'unknown',
         120,
       ),
       originatingWorkspace: bounded(
-        text(payload.originatingWorkspace)
-          || text(suppliedOrigin?.originatingWorkspace),
+        text(trustedOrigin.originatingWorkspace),
         1_000,
       ),
       createdAt: boundedRequired(createdAt, 120, 'delegation creation time'),
@@ -62,12 +64,20 @@ export function normalizeStoredDelegationPacket(
         originatingWorkspace: packet.origin.originatingWorkspace,
       },
       packet.origin.createdAt,
+      {
+        originatingClient: packet.origin.originatingClient,
+        originatingWorkspace: packet.origin.originatingWorkspace,
+      },
     );
   }
   return buildCrossHostDelegationPacket(
     packet.fromSessionKey,
     legacyDelegationPayload(packet),
     packet.createdAt,
+    {
+      originatingClient: packet.originatingClient,
+      originatingWorkspace: packet.originatingWorkspace,
+    },
   );
 }
 

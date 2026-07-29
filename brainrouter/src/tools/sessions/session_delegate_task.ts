@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { memoryEngine } from "../../memory/engine.js";
-import { resolveDelegationPeer, buildDelegationPacket } from "./delegation-helpers.js";
+import {
+  buildDelegationPacket,
+  resolveDelegationPeer,
+  resolveDelegationSender,
+} from "./delegation-helpers.js";
 
 // Re-export the pure helpers so existing importers keep working; their
 // implementations live in delegation-helpers.ts (sqlite-free, vitest-able).
@@ -45,7 +49,10 @@ export const sessionDelegateTaskToolSchema = {
     type: "object",
     properties: {
       userId: { type: "string" },
-      from: { type: "string", description: "Sender sessionKey." },
+      from: {
+        type: "string",
+        description: "Sender sessionKey; must be active for the authenticated user.",
+      },
       agentKind: {
         type: "string",
         description: "Target vendor/agent kind, e.g. `codex`, `claude-code`, `brainrouter-cli`.",
@@ -53,7 +60,7 @@ export const sessionDelegateTaskToolSchema = {
       payload: {
         type: "object",
         description:
-          "Canonical input is { taskPacket, originatingClient?, originatingWorkspace? }. Legacy { goal, files?, constraints?, budget?, deadline?, note? } input remains compatible but is normalized to read-only with no implicit tools.",
+          "Canonical input is { taskPacket }. Legacy { goal, files?, constraints?, budget?, deadline?, note? } input remains compatible but is normalized to read-only with no implicit tools. Sender labels come from the active-session registry.",
       },
     },
     required: ["from", "agentKind", "payload"],
@@ -72,8 +79,12 @@ export async function handleSessionDelegateTask(args: any, options?: { defaultUs
     const params = sessionDelegateTaskSchema.parse(args ?? {});
     const userId = params.userId ?? options?.defaultUserId ?? "default";
     const now = new Date().toISOString();
-    const packet = buildDelegationPacket(params.from, params.payload, now);
-    const sessions = await memoryEngine.store.listActiveSessions({ userId, clientKind: params.agentKind });
+    const sessions = await memoryEngine.store.listActiveSessions({ userId });
+    const sender = resolveDelegationSender(sessions, params.from);
+    if (!sender) {
+      throw new Error("sender session is not active for the authenticated user");
+    }
+    const packet = buildDelegationPacket(params.from, params.payload, now, sender);
     const peer = resolveDelegationPeer(sessions, params.agentKind, params.from);
 
     if (peer) {
