@@ -155,6 +155,10 @@
       "types": "./dist/telemetry/index.d.ts",
       "default": "./dist/telemetry/index.js"
     },
+    "./terminal": {
+      "types": "./dist/terminal/index.d.ts",
+      "default": "./dist/terminal/index.js"
+    },
     "./tool": {
       "types": "./dist/tool/index.d.ts",
       "default": "./dist/tool/index.js"

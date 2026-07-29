@@ -9,23 +9,22 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { SerializeAddon } from '@xterm/addon-serialize';
+import {
+  projectTerminalRead,
+  projectTerminalSession,
+  projectTerminalShellCatalog,
+  type TerminalShellView,
+} from '@kinqs/brainrouter-agent-protocol';
 import '@xterm/xterm/css/xterm.css';
 
 // Renderer-memory only: preserves xterm's exact screen/scrollback state across
 // panel remounts without persisting potentially sensitive terminal output.
 const terminalSnapshots = new Map<string, { serialized: string; next: number }>();
 
-interface ShellRow {
-  id: string;
-  label: string;
-  description: string;
-  isDefault: boolean;
-}
-
 export function TerminalPanel(): React.ReactElement {
   const hostRef = useRef<HTMLDivElement>(null);
   const [dead, setDead] = useState(false);
-  const [shells, setShells] = useState<ShellRow[]>([]);
+  const [shells, setShells] = useState<TerminalShellView[]>([]);
   const [selected, setSelected] = useState('');
   const [activeLabel, setActiveLabel] = useState('Starting shell…');
   const [error, setError] = useState('');
@@ -81,17 +80,24 @@ export function TerminalPanel(): React.ReactElement {
       const e = msg.event as { kind: string; id?: string; ok?: boolean; result?: Record<string, unknown>; error?: string };
       if (e.kind !== 'query-result' || !e.id?.startsWith(ns)) return;
       if (e.id === `${ns}:shells` && e.ok && e.result) {
-        const available = Array.isArray(e.result.shells) ? e.result.shells as ShellRow[] : [];
-        const selectedId = typeof e.result.selected === 'string'
-          ? e.result.selected
-          : available[0]?.id ?? '';
-        setShells(available);
-        setSelected(selectedId);
-        if (selectedId) openRef.current(selectedId);
+        const catalog = projectTerminalShellCatalog(e.result);
+        if (!catalog) {
+          setError('The terminal host returned an invalid shell catalog.');
+          return;
+        }
+        setShells(catalog.shells);
+        setSelected(catalog.selected);
+        openRef.current(catalog.selected);
         return;
       }
-      if (e.id === `${ns}:open` && e.ok && e.result && typeof e.result.id === 'string') {
-        const newId = e.result.id;
+      if (e.id === `${ns}:open` && e.ok && e.result) {
+        const opened = projectTerminalSession(e.result);
+        if (!opened) {
+          setError('The terminal host returned an invalid session.');
+          setActiveLabel('Shell unavailable');
+          return;
+        }
+        const newId = opened.id;
         if (termId && termId !== newId) term.reset();
         termId = newId;
         const cached = terminalSnapshots.get(termId);
@@ -99,12 +105,12 @@ export function TerminalPanel(): React.ReactElement {
           term.write(cached.serialized);
           next = cached.next;
         } else {
-          if (typeof e.result.snapshot === 'string' && e.result.snapshot) term.write(e.result.snapshot);
-          next = typeof e.result.next === 'number' ? e.result.next : 0;
+          if (opened.snapshot) term.write(opened.snapshot);
+          next = opened.next;
         }
-        setDead(e.result.alive === false);
+        setDead(!opened.alive);
         setError('');
-        setActiveLabel(typeof e.result.label === 'string' ? e.result.label : 'Native shell');
+        setActiveLabel(opened.label);
         window.brainrouter.send({
           kind: 'query', id: `${ns}:resize`, name: 'term-resize',
           args: { id: termId, cols: term.cols, rows: term.rows },
@@ -118,9 +124,14 @@ export function TerminalPanel(): React.ReactElement {
         return;
       }
       if (e.id === `${ns}:read` && e.ok && e.result) {
-        if (typeof e.result.chunk === 'string' && e.result.chunk) term.write(e.result.chunk);
-        next = typeof e.result.next === 'number' ? e.result.next : next;
-        if (e.result.alive === false) setDead(true);
+        const read = projectTerminalRead(e.result);
+        if (!read) {
+          setError('The terminal host returned an invalid output frame.');
+          return;
+        }
+        if (read.chunk) term.write(read.chunk);
+        next = read.next;
+        if (!read.alive) setDead(true);
       }
     });
     openRef.current = (shellId, restart = false) => {
