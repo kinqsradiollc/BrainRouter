@@ -41,7 +41,11 @@ import {
   type RepositoryContextAnalysisPorts,
   type RepositoryContextPrompt,
 } from "./repositoryContextAssurance.js";
-import { normalizeReviewCandidates } from "./reviewCandidateNormalization.js";
+import {
+  mergeAssuranceCandidates,
+  normalizeDeterministicCandidates,
+  normalizeReviewCandidates,
+} from "./reviewCandidateNormalization.js";
 
 const DIFF_ONLY_LIMITATION_ID = "diff-only-repository-context";
 
@@ -356,11 +360,23 @@ export async function startDiffReviewAssurance(
             coverage,
           }, changedFiles, calculatedAt, run.coverage),
         };
-    const candidates = normalizeReviewCandidates({
+    const modelCandidates = normalizeReviewCandidates({
       run: candidateRun,
       findings,
       now: calculatedAt,
     });
+    const deterministicAnalysis = repositoryContext?.deterministicAnalysis;
+    const deterministicCandidates = deterministicAnalysis
+      ? normalizeDeterministicCandidates({
+          run: candidateRun,
+          assembly: deterministicAnalysis,
+          now: calculatedAt,
+        })
+      : [];
+    const candidates = mergeAssuranceCandidates([
+      ...modelCandidates,
+      ...deterministicCandidates,
+    ]);
     const persisted = [];
     for (const finding of candidates) persisted.push(await findingPort.save(finding));
     candidateIds = persisted.map((finding) => finding.id);

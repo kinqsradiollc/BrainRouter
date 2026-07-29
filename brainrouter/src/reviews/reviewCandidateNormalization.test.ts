@@ -8,7 +8,11 @@
 import { describe, expect, it } from "vitest";
 import { validateAssuranceFinding } from "@kinqs/brainrouter-core/review";
 import type { RepositoryAssuranceRun } from "@kinqs/brainrouter-types/review";
-import { normalizeReviewCandidates } from "./reviewCandidateNormalization.js";
+import {
+  mergeAssuranceCandidates,
+  normalizeDeterministicCandidates,
+  normalizeReviewCandidates,
+} from "./reviewCandidateNormalization.js";
 
 function run(): RepositoryAssuranceRun {
   return {
@@ -146,5 +150,134 @@ describe("review candidate normalization", () => {
     expect(candidates[0]?.title).toHaveLength(500);
     expect(candidates[0]?.mechanism).toHaveLength(4_000);
     expect(candidates[0]?.remediation).toHaveLength(4_000);
+  });
+
+  it("normalizes exact-revision source-to-sink evidence without granting authority", () => {
+    const candidates = normalizeDeterministicCandidates({
+      run: run(),
+      now: "2026-07-29T00:00:02.000Z",
+      assembly: {
+        revisionSha: "head-1",
+        indexRef: "index-1",
+        packets: [{
+          id: "packet-1",
+          revisionSha: "head-1",
+          program: "security_review",
+          changed: [{ path: "src/source.ts", line: 4 }],
+          context: [{
+            relationship: "source_to_sink",
+            distance: 1,
+            evidence: {
+              id: "evidence-1",
+              kind: "call_path",
+              summary: "source reaches intermediary",
+              revisionSha: "head-1",
+              location: { path: "src/intermediary.ts", line: 8 },
+              analyzerId: "typescript-parser-index",
+              createdAt: "2026-07-29T00:00:01.000Z",
+            },
+          }, {
+            relationship: "source_to_sink",
+            distance: 2,
+            evidence: {
+              id: "evidence-2",
+              kind: "call_path",
+              summary: "intermediary reaches sink",
+              revisionSha: "head-1",
+              location: { path: "src/sink.ts", line: 12 },
+              analyzerId: "typescript-parser-index",
+              createdAt: "2026-07-29T00:00:01.000Z",
+            },
+          }],
+          sourceToSinkPaths: [{
+            id: "path-1",
+            mechanism: "call_path",
+            source: { path: "src/source.ts", line: 4 },
+            sink: { path: "src/sink.ts", line: 12 },
+            evidenceRefs: ["evidence-1", "evidence-2"],
+          }],
+          artifactRefs: ["artifact-1"],
+          byteCount: 64,
+          truncated: false,
+          limitationIds: [],
+        }],
+        limitations: [],
+        assembledAt: "2026-07-29T00:00:01.000Z",
+      },
+    });
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({
+      revisionSha: "head-1",
+      program: "security_review",
+      state: "candidate",
+      severity: "high",
+      location: { path: "src/sink.ts", line: 12 },
+      evidence: [
+        expect.objectContaining({ id: "evidence-1", revisionSha: "head-1" }),
+        expect.objectContaining({ id: "evidence-2", revisionSha: "head-1" }),
+      ],
+      provenance: [expect.objectContaining({
+        producerKind: "deterministic_analyzer",
+        producerId: "typescript-source-to-sink",
+      })],
+    });
+    expect(candidates[0]?.verifier).toBeUndefined();
+    expect(validateAssuranceFinding(candidates[0]!)).toEqual({ ok: true, issues: [] });
+  });
+
+  it("rejects a deterministic assembly from a different revision", () => {
+    expect(() => normalizeDeterministicCandidates({
+      run: run(),
+      now: "2026-07-29T00:00:02.000Z",
+      assembly: {
+        revisionSha: "head-other",
+        indexRef: "index-1",
+        packets: [],
+        limitations: [],
+        assembledAt: "2026-07-29T00:00:01.000Z",
+      },
+    })).toThrow(/exact revision/);
+  });
+
+  it("merges same-fingerprint model and analyzer provenance without duplicate findings", () => {
+    const model = normalizeReviewCandidates({
+      run: run(),
+      now: "2026-07-29T00:00:02.000Z",
+      findings: [{
+        file: "src/sink.ts",
+        line: 12,
+        severity: "high",
+        title: "Parser-identified source-to-sink call path",
+      }],
+    })[0]!;
+    const deterministic = {
+      ...structuredClone(model),
+      confidence: 0.8,
+      evidence: [{
+        id: "evidence-1",
+        kind: "call_path" as const,
+        summary: "source reaches sink",
+        revisionSha: "head-1",
+        location: { path: "src/sink.ts", line: 12 },
+        analyzerId: "typescript-parser-index",
+        createdAt: "2026-07-29T00:00:01.000Z",
+      }],
+      provenance: [{
+        producerKind: "deterministic_analyzer" as const,
+        producerId: "typescript-source-to-sink",
+        policyHash: "policy-hash",
+        createdAt: "2026-07-29T00:00:01.000Z",
+      }],
+    };
+
+    const merged = mergeAssuranceCandidates([model, deterministic]);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.evidence).toHaveLength(1);
+    expect(merged[0]?.provenance.map((item) => item.producerKind)).toEqual([
+      "model",
+      "deterministic_analyzer",
+    ]);
   });
 });
