@@ -208,6 +208,22 @@ test("A25-9a/A25-11a persists assurance runs, findings, and exact-revision evide
         severity: "high",
       }],
     );
+    assert.equal(
+      (await store.getRepositoryAssuranceRunForJob("org-1", "job-1"))?.id,
+      "run-1",
+    );
+    assert.equal(
+      await store.getRepositoryAssuranceRunForJob("other-org", "job-1"),
+      null,
+    );
+    assert.deepEqual(
+      await store.listRepositoryAssuranceFindings("org-1", "run-1"),
+      [verifiedFinding()],
+    );
+    assert.deepEqual(
+      await store.listRepositoryAssuranceFindings("other-org", "run-1"),
+      [],
+    );
     const partialStage = await store.recordRepositoryAssuranceStage("org-1", "run-1", {
       ...runningStage,
       status: "partial",

@@ -8,10 +8,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RepositoryAssuranceRun } from "@kinqs/brainrouter-types/review";
 import {
+  getRepositoryAssuranceRunForJob,
   isAssuranceRunTransitionAllowed,
   isAssuranceFindingTransitionAllowed,
   isAssuranceStageTransitionAllowed,
   isSourceSnapshotTransitionAllowed,
+  listRepositoryAssuranceFindings,
   listReplaceableRepositoryAssuranceRunIds,
   repositoryAssuranceIdempotencyKey,
 } from "./assuranceQueries.js";
@@ -156,5 +158,104 @@ describe("repository assurance persistence policy", () => {
       "security_review",
       "42",
     ]);
+  });
+
+  it("resolves a run by both tenant and worker job identity", async () => {
+    const one = vi.fn(async (_sql: string, _params?: unknown[]) => null);
+    await expect(getRepositoryAssuranceRunForJob(
+      { one } as never,
+      "org-1",
+      "job-1",
+    )).resolves.toBeNull();
+
+    const [sql, params] = one.mock.calls[0]!;
+    expect(sql).toContain("WHERE org_id = $1 AND job_id = $2");
+    expect(sql).toContain("ORDER BY created_at DESC, id DESC");
+    expect(params).toEqual(["org-1", "job-1"]);
+  });
+
+  it("loads tenant- and run-bound finding dispositions with their evidence", async () => {
+    const timestamp = "2026-07-29T00:00:00.000Z";
+    const query = vi.fn(async (sql: string, params?: unknown[]) => {
+      if (sql.includes("FROM repository_assurance_findings")) {
+        expect(params).toEqual(["org-1", "run-1"]);
+        return {
+          rows: [{
+            org_id: "org-1",
+            id: "finding-1",
+            run_id: "run-1",
+            fingerprint: "fingerprint-1",
+            program: "security_review",
+            revision_sha: "head-1",
+            state: "verified",
+            severity: "high",
+            confidence: 0.9,
+            title: "Unsafe input",
+            mechanism: "Request input reaches a command sink.",
+            location_json: { path: "src/index.ts", line: 4 },
+            provenance_json: [{
+              producerKind: "deterministic_analyzer",
+              producerId: "parser-index",
+              policyHash: "hash-1",
+              createdAt: timestamp,
+            }],
+            coverage_limitations_json: [],
+            verifier_json: {
+              state: "verified",
+              verifierId: "independent-verifier",
+              rationale: "The exact call path supports the mechanism.",
+              evidenceRefs: ["evidence-1"],
+              decidedAt: timestamp,
+            },
+            cwe: "CWE-78",
+            cve: null,
+            remediation: "Use a non-shell API.",
+            created_at: timestamp,
+            updated_at: timestamp,
+          }],
+          rowCount: 1,
+        };
+      }
+      expect(sql).toContain("finding_id = ANY($2::text[])");
+      expect(params).toEqual(["org-1", ["finding-1"]]);
+      return {
+        rows: [{
+          finding_id: "finding-1",
+          id: "evidence-1",
+          kind: "call_path",
+          summary: "Request input reaches the command sink.",
+          revision_sha: "head-1",
+          location_json: { path: "src/index.ts", line: 4 },
+          artifact_ref: null,
+          analyzer_id: "parser-index",
+          model_id: null,
+          created_at: timestamp,
+        }],
+        rowCount: 1,
+      };
+    });
+    const tx = async <T>(
+      handler: (client: { query: typeof query }) => Promise<T>,
+    ): Promise<T> => handler({ query });
+
+    const findings = await listRepositoryAssuranceFindings(
+      { tx } as never,
+      "org-1",
+      "run-1",
+    );
+
+    expect(findings).toEqual([expect.objectContaining({
+      id: "finding-1",
+      state: "verified",
+      revisionSha: "head-1",
+      evidence: [expect.objectContaining({
+        id: "evidence-1",
+        analyzerId: "parser-index",
+      })],
+      verifier: expect.objectContaining({
+        state: "verified",
+        evidenceRefs: ["evidence-1"],
+      }),
+    })]);
   });
 });

@@ -564,6 +564,15 @@ coverage states rather than clean repository conclusions.
 | A25-11c | `[x]` | Add an independent bounded verifier adapter and record its evidence-bound disposition | Separate forced-structure verification fixtures reject stale or unsupported references, cap context and timeout, enforce the remaining campaign model-call budget, turn malformed/missing/provider-unavailable verification into `insufficient_evidence`, and persist discovery plus verification receipts before completion |
 | A25-11d | `[x]` | Calculate the coverage-aware gate and apply evidence-aware publication before forge output | No-evidence, partial, stale, mismatched, or superseded runs cannot publish clean or blocking conclusions |
 
+### A25-12 assurance projection delivery slices
+
+| ID | Status | Deliverable | Acceptance evidence |
+|---|---|---|---|
+| A25-12a | `[x]` | Add one shared assurance-detail DTO and tenant-scoped backend projection for a review job | The API reuses the durable run and finding contracts without redefining lifecycle states; query and route fixtures prove organization/job/run scoping plus evidence and verifier-disposition projection |
+| A25-12b | `[ ]` | Add typed SDK and hook consumers and render durable coverage, stages, findings, and dispositions in Dashboard review detail | SDK/hook contracts preserve the shared DTO; loading/error/cache fixtures and Dashboard presentation fixtures cover complete, partial, stale, superseded, and unresolved states |
+| A25-12c | `[ ]` | Project the same detail through the agent protocol to CLI and Desktop review surfaces | Protocol, host-query, dev-bridge, CLI, and Desktop fixtures render the same run, coverage, stage, finding, and disposition values without duplicating policy |
+| A25-12d | `[ ]` | Reconcile forge summary/check output with the shared host projections and prove cross-host parity | One fixture produces equivalent GitHub, backend, Dashboard, Desktop, and CLI state labels and never upgrades partial or unsupported evidence |
+
 ### Migration guardrails
 
 - Begin with the inventory and contracts; do not combine extraction with feature

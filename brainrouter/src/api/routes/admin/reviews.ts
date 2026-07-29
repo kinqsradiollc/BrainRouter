@@ -1,7 +1,16 @@
 /** PR review console API: org-scoped jobs, manual runs, GitHub PR metadata and timelines. */
 import { Router } from "express";
 import { mintInstallationToken, validateGithubApiBase } from "@kinqs/brainrouter-core/track";
-import type { MemoryJobRecord, RepositoryReviewAvailability, ReviewJobDto } from "@kinqs/brainrouter-types";
+import type {
+  MemoryJobRecord,
+  RepositoryReviewAvailability,
+  ReviewAssuranceDto,
+  ReviewJobDto,
+} from "@kinqs/brainrouter-types";
+import type {
+  AssuranceFinding,
+  RepositoryAssuranceRun,
+} from "@kinqs/brainrouter-types/review";
 import { memoryEngine } from "../../../memory/engine.js";
 import { requireAnyAuth, type AuthedRequest } from "../../middleware/auth.js";
 import { attachOrgContext, requirePermission } from "../../middleware/tenancy.js";
@@ -36,6 +45,14 @@ type Store = Partial<{
     severityCounts: { critical: number; high: number; medium: number; low: number; info: number };
   }>>;
   getMemoryJob(id: string): Promise<MemoryJobRecord | null>;
+  getRepositoryAssuranceRunForJob(
+    orgId: string,
+    jobId: string,
+  ): Promise<RepositoryAssuranceRun | null>;
+  listRepositoryAssuranceFindings(
+    orgId: string,
+    runId: string,
+  ): Promise<AssuranceFinding[]>;
   listMemoryJobs(filters?: { kind?: string; status?: string[]; limit?: number }): Promise<MemoryJobRecord[]>;
   enqueueMemoryJob(input: { kind: string; input: Record<string, unknown>; maxAttempts?: number }): Promise<MemoryJobRecord>;
 }>;
@@ -68,6 +85,22 @@ function reviewRecord(job: MemoryJobRecord): ReviewJobDto {
     blocking: typeof output.blocking === "number" ? output.blocking : null,
     findingsDetail: Array.isArray(output.findingsDetail) ? output.findingsDetail as ReviewJobDto["findingsDetail"] : [], progress: job.progress ?? [],
     skipped: output.skipped ?? null, error: job.error ?? output.error ?? null, updatedAt: job.updatedAt, createdAt: job.createdAt,
+  };
+}
+
+async function reviewAssurance(
+  store: Store,
+  orgId: string,
+  jobId: string,
+): Promise<ReviewAssuranceDto | null> {
+  if (!store.getRepositoryAssuranceRunForJob || !store.listRepositoryAssuranceFindings) {
+    return null;
+  }
+  const run = await store.getRepositoryAssuranceRunForJob(orgId, jobId);
+  if (!run) return null;
+  return {
+    run,
+    findings: await store.listRepositoryAssuranceFindings(orgId, run.id),
   };
 }
 
@@ -394,10 +427,15 @@ reviewsRouter.get("/summary", requirePermission("reviews:read"), async (req: Aut
 
 /** GET /jobs/:id — only return a job from the active org. */
 reviewsRouter.get("/jobs/:id", requirePermission("reviews:read"), async (req: AuthedRequest, res) => {
-  const job = await (memoryEngine.store as Store).getMemoryJob?.(String(req.params.id));
+  const store = memoryEngine.store as Store;
+  const job = await store.getMemoryJob?.(String(req.params.id));
   const input = (job?.input ?? {}) as { orgId?: unknown };
   if (!job || (input.orgId !== req.orgId) || !["pr-security-review", "pr-code-review", "pr-pentest", "domain-pentest"].includes(job.kind)) { sendError(res, 404, "Review job not found"); return; }
-  res.json({ review: reviewRecord(job), canRun: await canRun(req) });
+  const [assurance, permission] = await Promise.all([
+    reviewAssurance(store, req.orgId!, job.id),
+    canRun(req),
+  ]);
+  res.json({ review: reviewRecord(job), assurance, canRun: permission });
 });
 
 /** POST /run — validates installation access, audits requester, and refuses duplicate in-flight jobs. */
