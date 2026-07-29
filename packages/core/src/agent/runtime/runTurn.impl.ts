@@ -13,7 +13,7 @@ import {
 import { recordDenial } from '../../exec/runtime/recentDenials.js';
 import { readGoal } from '../../goal/store/goalStore.js';
 import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../../hooks/hookifyStore.js';
-import { runHooks, parseHookDecision, collectStopAdditionalContext } from '../../hooks/hooksStore.js';
+import { runHooks, parseHookDecision } from '../../hooks/hooksStore.js';
 import { listAll as listAgentDefinitions } from '../../orchestration/agents/agentRegistry.js';
 import { executeOrchestrationTool, synthesizeDelegateTools, OrchestrationContext } from '../../orchestration/tools.js';
 import {
@@ -66,9 +66,6 @@ import {
 import { isParallelSafe, parallelExecutionEnabled } from '../guards/toolSafety.js';
 import { resolveToolBudget, isBudgetCheckpoint, buildBudgetCheckpoint } from '../guards/turnBudget.js';
 import { classifyForVerification, commandWritesFiles, decideVerification, buildVerificationNudge, buildDocsOnlyVerificationNote } from '../guards/verificationGate.js';
-import { isTelemetryEnabled } from '../../telemetry/recorder/telemetry.js';
-import { recordDailyUsage } from '../../usage/usageHistoryStore.js';
-import { shrinkOversizedToolResults } from '../guards/turnEndShrink.js';
 import { browserUseAvailableFor } from '../../browser/control.js';
 import { getCurrentWorkflow } from '../../workflow/run/workflowArtifacts.js';
 import { getToolSummary, getToolPreview } from '../support/toolSummary.js';
@@ -88,7 +85,6 @@ import {
   activeProviderDef, callOpenAI, minimalReasoningEffort,
 } from '../transport/llmTransport.js';
 import { invokeModelPhase } from './modelInvocationPhase.js';
-import { normalizeTurnCompletionAnswer } from './completionPhase.js';
 import { prepareTurnContextPhase } from './contextPreparationPhase.js';
 import { repairAndRecordToolCalls } from './toolCallRepairPhase.js';
 import { authorizeToolCall } from './toolAuthorizationPhase.js';
@@ -98,6 +94,10 @@ import {
   publishToolBatch,
   repairOrphanToolResults,
 } from './toolBatchExecutionPhase.js';
+import {
+  finalizeTurnPhase,
+  resolveTurnTerminationReason,
+} from './turnFinalizationPhase.js';
 import {
   buildRequiredDelegatedStageCorrection,
   buildRequiredProfileStageCorrection,
@@ -1881,134 +1881,19 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       });
     }
 
-    // Normalize the final answer FIRST so every exit path (loop limit, empty
-    // commentary after tool calls, normal) feeds the same non-empty string
-    // into both lastAnswer and captureTurn. Previously this happened AFTER
-    // captureTurn, which meant memory capture + citation feedback silently
-    // skipped every turn that hit the loop limit or returned no prose.
-    const normalizedCompletion = normalizeTurnCompletionAnswer({
+    return await finalizeTurnPhase(this, {
+      prompt,
       answer: finalAnswer,
       exitedCleanly,
       maxLoops,
-      goalTransition: this.lastGoalTransition,
-      toolCallCount: this.lastTurnToolCalls,
-      workspaceRoot: this.workspaceRoot,
-      sessionKey: this.sessionKey,
+      loopCount,
+      callbacks,
+      activeTurnOrchestration,
+      turnSpan,
     });
-    finalAnswer = normalizedCompletion.answer;
-    this.lastTurnHitLoopLimit = normalizedCompletion.hitLoopLimit;
-    this.lastAnswer = finalAnswer;
-
-    await this.captureTurn(prompt, finalAnswer, callbacks);
-    if (this.hookAdvisoryActive()) {
-      runHooks(this.workspaceRoot, 'post-turn', {
-        payload: { prompt, answerPreview: finalAnswer.slice(0, 1000), tokens: this.lastTurnUsage },
-      });
-    }
-    // CC-hooks parity — the `stop` (top-level) / `subagent-stop` (silent worker)
-    // event, and the completion notification. These fire on the `hookNotifyActive`
-    // gate (enabled + not safe-mode) so they ALSO run for unattended/background
-    // workers — the whole point of `subagent-stop` + `agent_completed` is to tap
-    // into silent runs. A `stop` hook may return {"additionalContext":"…"}; we
-    // STORE it on `pendingStopContext` for injection into the model on the next
-    // turn (top-level) or for the parent to read after a child's drain.
-    if (this.hookNotifyActive()) {
-      try {
-        const stopEvent = this.silent ? 'subagent-stop' : 'stop';
-        const stopResults = runHooks(this.workspaceRoot, stopEvent, {
-          payload: { prompt, answerPreview: finalAnswer.slice(0, 1000), tokens: this.lastTurnUsage },
-        });
-        const extra = collectStopAdditionalContext(stopResults);
-        if (extra) {
-          this.pendingStopContext = this.pendingStopContext
-            ? `${this.pendingStopContext}\n${extra}`
-            : extra;
-        }
-      } catch { /* stop hooks are advisory — never break the turn */ }
-      // Completion notification, so a user can wire a desktop/OS notifier
-      // (`terminal-notifier`, `osascript`, a webhook curl).
-      try {
-        runHooks(this.workspaceRoot, 'notification-agent-completed', {
-          payload: { sessionKey: this.sessionKey, silent: this.silent, answerPreview: finalAnswer.slice(0, 200) },
-        });
-      } catch { /* advisory */ }
-    }
-    turnSpan.end({
-      outcome: exitedCleanly ? 'ok' : 'loop_limit',
-      loops_used: loopCount,
-      tokens_in: this.lastTurnUsage.promptTokens,
-      tokens_out: this.lastTurnUsage.completionTokens,
-      orchestration_profile_id: activeTurnOrchestration.plan.orchestrationProfileId,
-      orchestration_strategy_id: activeTurnOrchestration.plan.strategyId,
-      orchestration_selection_source: activeTurnOrchestration.plan.selectionSource,
-      orchestration_stage_count: activeTurnOrchestration.plan.stages.length,
-      orchestration_signal_ids: activeTurnOrchestration.taskSignalIds.join(','),
-      orchestration_source: activeTurnOrchestration.source,
-    });
-    // Accumulate session usage + (below) run the turn-end tool-result shrink on
-    // EVERY exit path, the loop-limit path included. A `return finalAnswer`
-    // used to sit here and skip all of it for loop-limit turns — which both
-    // undercounted session token totals for the MOST expensive turns (the ones
-    // that ran to the limit) AND left their oversized tool results uncompacted,
-    // bloating the next `/continue`. Callers detect the loop-limit branch via
-    // `lastTurnHitLoopLimit` (set above) + the answer string, not this return,
-    // so falling through to the shared tail is contract-safe.
-    this.sessionUsage.promptTokens += this.lastTurnUsage.promptTokens;
-    this.sessionUsage.completionTokens += this.lastTurnUsage.completionTokens;
-    this.sessionUsage.calls += this.lastTurnUsage.calls;
-    this.sessionUsage.turns += 1;
-    // 0.3.9 item 10 — roll cache stats into session totals.
-    this.sessionUsage.cachedTokens += this.lastTurnUsage.cachedTokens;
-    this.sessionUsage.missedTokens += this.lastTurnUsage.missedTokens;
-    // 0.4.x-4 (`/context`) — bucket this turn's usage by the skill in effect.
-    {
-      const skillKey = this.activeSkill ?? 'chat';
-      const b = this.usageBySkill.get(skillKey) ?? { promptTokens: 0, completionTokens: 0, turns: 0, calls: 0 };
-      b.promptTokens += this.lastTurnUsage.promptTokens;
-      b.completionTokens += this.lastTurnUsage.completionTokens;
-      b.calls += this.lastTurnUsage.calls;
-      b.turns += 1;
-      this.usageBySkill.set(skillKey, b);
-    }
-    // WS10 — record this turn into the persistent cross-session usage history
-    // (TOP-LEVEL agent only, so children don't double-count; survives session
-    // delete). Gated on the local telemetry toggle; best-effort, never fatal.
-    if (!this.silent && isTelemetryEnabled()) {
-      try {
-        recordDailyUsage(
-          {
-            promptTokens: this.lastTurnUsage.promptTokens,
-            completionTokens: this.lastTurnUsage.completionTokens,
-            calls: this.lastTurnUsage.calls,
-            cachedTokens: this.lastTurnUsage.cachedTokens,
-            missedTokens: this.lastTurnUsage.missedTokens,
-          },
-          Date.now(),
-        );
-      } catch { /* observability only */ }
-    }
-
-    // 0.3.9 item 12 — turn-end tool-result auto-shrink. Any `role: tool`
-    // message whose content exceeds TURN_END_RESULT_CAP_TOKENS gets
-    // replaced with the compacted version on the way out of the turn.
-    // Full raw outputs remain in the transcript layer.
-    const shrinkResult = shrinkOversizedToolResults(this.chatHistory, { resultCache: this.resultCache });
-    if (shrinkResult.shrunkCount > 0) {
-      this.memoryMetrics.compactedToolCharsAvoided += shrinkResult.charsSaved;
-      traceEvent('turn_end.shrink', {
-        shrunkCount: shrinkResult.shrunkCount,
-        charsSaved: shrinkResult.charsSaved,
-        tokensSaved: shrinkResult.tokensSaved,
-      });
-    }
-    return finalAnswer;
     } finally {
       profileStageController?.terminate(
-        this.sessionKey !== turnSessionKey
-          ? 'session-changed'
-          : this.turnAbort?.signal.aborted || this.interruptRequested
-            ? 'turn-interrupted'
-            : 'turn-ended',
+        resolveTurnTerminationReason(this, turnSessionKey),
       );
     }
 }
