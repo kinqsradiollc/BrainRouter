@@ -12,17 +12,16 @@
 import { listWorkers, staleWorkerIds, updateWorkerMeta } from '../worker/workerStore.js';
 import { listSessions, updateSession } from '../orchestration/session/orchestrator.js';
 import { listRuns, finishRun, staleRunSlugs } from '../workflow/run/workflowRun.js';
+import { nodeBackgroundTaskHost as host } from './host/nodeBackgroundTaskHost.js';
 
 /**
  * Real OS process liveness: `kill(pid, 0)` throws ESRCH when the process is
  * gone, EPERM when it exists but isn't ours (still alive). A null/0 pid is
- * treated as dead. NOT "pid === process.pid", so a CLI running its OWN live
- * workers alongside the desktop app isn't falsely reaped.
+ * treated as dead. This probes the recorded owner instead of comparing it with
+ * the current host PID, so another live CLI is not falsely reaped by Desktop.
  */
 export function pidAlive(pid: number | null | undefined): boolean {
-  if (!pid) return false;
-  try { process.kill(pid, 0); return true; }
-  catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM'; }
+  return host.isProcessAlive(pid);
 }
 
 export interface ReconcileResult { sessions: number; workers: number; runs: number }
