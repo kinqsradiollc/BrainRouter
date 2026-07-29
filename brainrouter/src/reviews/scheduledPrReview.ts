@@ -24,6 +24,7 @@ import {
   type DiffReviewAssuranceSession,
   type RepositoryAssuranceSupersessionStore,
 } from "./diffReviewAssurance.js";
+import { createRepositoryContextAnalysisPorts } from "./repositoryContextComposition.js";
 
 export type ScheduledReviewLens = "security" | "code" | "pentest";
 
@@ -60,6 +61,10 @@ async function reviewDependencies(
     assuranceReady(input: Parameters<
       NonNullable<PrReviewDeps["onAssuranceReady"]>
     >[0]): void | Promise<void>;
+    prepareRepositoryContext(input: Parameters<
+      NonNullable<PrReviewDeps["prepareRepositoryContext"]>
+    >[0]): ReturnType<NonNullable<PrReviewDeps["prepareRepositoryContext"]>>;
+    isCancellationRequested(): boolean | Promise<boolean>;
   },
 ): Promise<PrReviewDeps> {
   const engine = requireReviewEngine(ctx);
@@ -92,6 +97,8 @@ async function reviewDependencies(
       }).catch(() => {});
     },
     onAssuranceReady: observe.assuranceReady,
+    prepareRepositoryContext: observe.prepareRepositoryContext,
+    isCancellationRequested: observe.isCancellationRequested,
   };
 }
 
@@ -103,9 +110,15 @@ export async function runScheduledPrReview(
   const input = normalizeReviewInput(rawInput);
   let changedFiles = 0;
   const assurance: { current: DiffReviewAssuranceSession | null } = { current: null };
+  const isCancellationRequested = async (): Promise<boolean> => {
+    if (!ctx.jobId) return false;
+    const job = await ctx.store.getMemoryJob(ctx.jobId);
+    return String(job?.status ?? "") === "cancelled";
+  };
   const deps = await reviewDependencies(ctx, lens, input.orgId, {
-    assuranceReady: async ({ policy, headSha }) => {
+    assuranceReady: async ({ policy, headSha, checkout }) => {
       if (!ctx.jobId) return;
+      const maxDiffChars = deps.maxDiffChars ?? 60_000;
       assurance.current = await startDiffReviewAssurance({
         store: ctx.store as unknown as RepositoryAssuranceSupersessionStore,
         jobId: ctx.jobId,
@@ -116,10 +129,18 @@ export async function runScheduledPrReview(
             ? "code_review"
             : "authorized_pentest",
         policy,
-        maxDiffChars: deps.maxDiffChars ?? 60_000,
+        maxDiffChars,
         timeoutMs: deps.timeoutMs ?? 120_000,
+        repositoryContext: createRepositoryContextAnalysisPorts({
+          checkout,
+          maxDiffChars,
+          isCancellationRequested,
+        }),
       });
     },
+    prepareRepositoryContext: ({ changed }) =>
+      assurance.current?.prepareContext(changed) ?? Promise.resolve(null),
+    isCancellationRequested,
     progress: (event) => {
       if (event.kind === "diff-fetched") {
         const files = event.data?.files;
@@ -137,7 +158,12 @@ export async function runScheduledPrReview(
     await assurance.current?.complete(result, changedFiles);
     return result;
   } catch (error) {
-    await assurance.current?.fail();
+    try {
+      await assurance.current?.fail();
+    } catch {
+      // Keep the executor failure as the job's root cause. The assurance
+      // session already attempts retained-handle cleanup before it can fail.
+    }
     throw error;
   }
 }

@@ -486,7 +486,7 @@ the repository's normal security-review process before merge.
 | A25-7 | `[x]` | Add dependency-free review contract family under `packages/types/src/review/` with compatibility exports | A25-1, A25-2 | Exact-revision run, program, policy, source-snapshot, coverage/limitation, stage, evidence, finding-lineage, and verifier records build in the leaf package; round-trip, explicit partial/verified-state, program-authority, and compatibility-entrypoint fixtures pass; runtime validation and gate policy remain assigned to A25-8 Core |
 | A25-8 | `[x]` | Extract Core review domain/policy/ports/services behind curated `review` façade | A25-7 | Validation/gate fixtures, backend lifecycle compatibility, program-authority defaults, and in-memory campaign/port fixtures cover exact-revision idempotency, stage transitions, cancellation, partial/complete failure boundaries, candidate verification, and lifecycle reconciliation |
 | A25-9 | `[x]` | Introduce durable assurance-run, coverage, source-snapshot, and stage receipts in backend/protocol | A25-7 | Normalized tenant-scoped persistence, protocol projection, Core campaign adoption, explicit diff-only coverage, semantic retries, and ordered same-PR newer-head supersession fixtures |
-| A25-10 | `[ ]` | Add exact-SHA checkout, deterministic analysis adapters, and parser-backed PR impact packets | A25-8, A25-9 | Credential isolation plus cross-file caller/config/test and source-to-sink fixtures |
+| A25-10 | `[x]` | Add exact-SHA checkout, deterministic analysis adapters, and parser-backed PR impact packets | A25-8, A25-9 | Credential isolation plus cross-file caller/config/test and source-to-sink fixtures |
 | A25-11 | `[ ]` | Add candidate verification, evidence-aware publication, and coverage-aware gate calculation | A25-9, A25-10 | No-evidence/partial/stale runs cannot block or approve cleanly |
 | A25-12 | `[ ]` | Project shared domain contracts through backend API, SDK, hooks, GitHub App, CLI, Desktop, and Dashboard | A25-3 through A25-11 | One state definition, host-specific presentation only |
 | A25-13 | `[ ]` | Add explicit deep-review and authorized-assessment policies after telemetry thresholds are accepted | A25-11, A25-12 | Budget, authorization, cancellation, and evidence-retention checks |
@@ -544,7 +544,14 @@ the repository's normal security-review process before merge.
 | A25-10b | `[x]` | Add an isolated exact-SHA checkout and inventory adapter with opaque receipts and deterministic cleanup | Adapter fixtures prove fetch-scoped credentials, disabled prompts/hooks/submodules/scripts and redirects, exact-head verification, bounded inventory, cancellation, cleanup, and secret-free errors |
 | A25-10c | `[x]` | Add a parser-backed TypeScript/JavaScript symbol and relationship index with explicit unsupported-language coverage | Cross-file fixtures resolve imports, callers, callees, references, inheritance, configuration, and tests; parse failures, unreadable/oversized files, and unsupported languages remain visible limitations |
 | A25-10d | `[x]` | Assemble deterministic, risk-ranked impact packets from changed anchors and the index | Packet fixtures prove caller/callee/config/test/dependency selection, current-head call-path source-to-sink evidence, stable retries, mandatory redaction, deduplication, cancellation, artifact cleanup, and hard packet/file/byte limits |
-| A25-10e | `[ ]` | Adopt exact source, index, and packet stages in the durable review campaign while retaining the labeled diff-only fallback | Exact-head campaign fixtures publish stage, source, index, packet, coverage, cleanup, cancellation, and degraded-fallback receipts without sending an unbounded repository context |
+| A25-10e | `[x]` | Adopt exact source, index, and packet stages in the durable review campaign while retaining the labeled diff-only fallback | Exact-head campaign fixtures publish stage, source, index, packet, coverage, cleanup, cancellation, and degraded-fallback receipts without sending an unbounded repository context |
+
+A25-10 now uses one exact-head campaign path from scheduled review execution
+through checkout, parser indexing, impact-packet assembly, bounded untrusted
+model evidence, and cleanup. Fetch authorization is a non-serializable,
+single-use capability consumed by the isolated Git adapter. Unsupported,
+failed, canceled, superseded, and diff-only paths remain explicit durable
+coverage states rather than clean repository conclusions.
 
 ### Migration guardrails
 
