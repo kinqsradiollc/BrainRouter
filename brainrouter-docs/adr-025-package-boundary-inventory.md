@@ -49,7 +49,7 @@ Rules established by the current package manifests and architecture law:
 
 | Surface | Current owner and useful seam | Boundary debt | Destination and first migration |
 |---|---|---|---|
-| `packages/types` | Shared records; domain files already exist for memory, Atlas, Track, work contracts, planning, and basic review availability | Root barrel is broad; `api.ts`, `store.ts`, `track/entities.ts`, and `atlas-enrich.ts` remain large; assurance contracts are not yet a cohesive family | Add domain subpaths only for cross-package, dependency-free records. Begin with `review/`; preserve root exports during migration |
+| `packages/types` | Shared records; domain files exist for memory, Atlas, Track, work contracts, planning, and a cohesive dependency-free repository-assurance family | Root barrel is broad; `api.ts`, `store.ts`, `track/entities.ts`, and `atlas-enrich.ts` remain large; backend review DTOs still need adaptation to the assurance records | Keep `review/` as the host-neutral assurance owner behind `./review`, `./reviews`, and root compatibility exports; migrate adapters without moving runtime policy into Types |
 | `packages/agent-protocol` | Zero-dependency agent-host vocabulary with structural guards; the root now curates private event, command, interaction, callback-bridge, and envelope modules | Lifecycle and authority records remain structural mirrors that need parity fixtures before deeper agent-runtime extraction | Keep the root entrypoint unchanged and all guards pure; evolve host-neutral lifecycle records here only when Core and host fixtures prove parity |
 | `packages/core` | Headless domains with curated package exports and a minimal root barrel | Several domains mix contracts/policy/adapters; provider and router overlap; large configuration, agent, extension, workspace, browser, and orchestration modules remain | Migrate one domain at a time to contracts/domain/policy/ports/services/adapters as earned; preserve curated subsystem entrypoints |
 | `packages/sdk` | One fetch-only `BrainRouterClient` plus knowledge helpers | `client.ts` is the transport, auth refresh, and most domain methods in one 454-line class | Extract request/auth transport and domain method installers or delegates while preserving the class and root API |
@@ -66,7 +66,7 @@ Rules established by the current package manifests and architecture law:
 
 | Package | Supported entrypoints at this snapshot | Rule |
 |---|---|---|
-| types | root plus `models`, `reviews`, `work-contract`, `planning-schema`, and `atlas-ops` | Add a subpath when browser safety or bounded domain ownership requires it; do not turn every source file into an export |
+| types | root plus `models`, `review`, `reviews`, `work-contract`, `planning-schema`, `atlas-ops`, and `provider` | `review` is canonical and `reviews` is its compatibility entrypoint; add other subpaths only when browser safety or bounded domain ownership requires them |
 | agent protocol | root only | The root remains stable while its implementation splits into private siblings |
 | Core | minimal root plus curated domain subpaths such as `agent`, `config`, `provider`, `router`, `review`, `workspace`, and `workflow` | Internal services stay private; renderer-only `dist/*` access remains a documented compatibility exception |
 | SDK | root only | Preserve `BrainRouterClient`; private transport/domain delegates do not become public automatically |

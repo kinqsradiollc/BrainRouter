@@ -15,3 +15,6 @@ export interface RepositoryReviewAvailability {
   /** The repository is enrolled in event-driven review automation. */
   autoReviewEnabled: boolean;
 }
+
+/** Compatibility entrypoint for consumers that still import `./reviews`. */
+export * from './review/index.js';
