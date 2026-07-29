@@ -33,7 +33,14 @@ test('createCallbackBridge: every callback maps to its event kind with payload f
   }, 'c2');
   cb.onChildToolStart({ childId: 'agent-1', role: 'explorer', tool: 'grep_search', args: { query: 'x' } });
   cb.onChildToolEnd({ childId: 'agent-1', role: 'explorer', tool: 'grep_search', ok: true, summary: 'hit', durationMs: 12 });
-  cb.onChildComplete({ childId: 'agent-1', role: 'explorer', status: 'completed', preview: 'found it' });
+  const childReceipt = {
+    childId: 'agent-1',
+    role: 'explorer',
+    status: 'completed' as const,
+    completedAt: '2026-07-30T00:00:00.000Z',
+    preview: 'found it',
+  };
+  cb.onChildComplete(childReceipt);
   cb.onPlanUpdate([{ step: 'fix', status: 'in_progress' }], 'because');
   cb.onProfileStageUpdate({
     phase: 'updated',
@@ -83,6 +90,15 @@ test('createCallbackBridge: every callback maps to its event kind with payload f
     preview: undefined,
     callId: 'c2',
     delegationState: 'not-started',
+  });
+  assert.deepEqual(events[11], {
+    kind: 'child-complete',
+    receipt: childReceipt,
+    childId: childReceipt.childId,
+    role: childReceipt.role,
+    status: childReceipt.status,
+    preview: childReceipt.preview,
+    error: undefined,
   });
   const plan = events[12] as Extract<AgentEvent, { kind: 'plan-update' }>;
   assert.equal(plan.items[0].status, 'in_progress');

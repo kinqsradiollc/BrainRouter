@@ -12,6 +12,11 @@ import type { OrchestrationContext } from './context.js';
 import { runningChildAgents, runningPromises } from './registry.js';
 import { summarize } from './summarize.js';
 import { extractChildPreview } from './helpers.js';
+import {
+  childTurnWasInterrupted,
+  createChildExecutionReceipt,
+  finalizeInterruptedChild,
+} from './childLifecycle.js';
 
 export async function handleSendInput(args: any, ctx: OrchestrationContext): Promise<string> {
   const id = String(args.id ?? '').trim();
@@ -146,6 +151,16 @@ async function continueChildAgent(
         });
       },
     });
+    if (childTurnWasInterrupted(childAgent)) {
+      const next = finalizeInterruptedChild({
+        ctx,
+        record,
+        role: role.name,
+        output,
+        reportCompletionToParent: false,
+      });
+      return JSON.stringify({ resumed: false, ...summarize(next, true) }, null, 2);
+    }
     const completedAt = new Date().toISOString();
     const next = updateSession(ctx.workspaceRoot, record.id, {
       status: 'completed',
@@ -158,24 +173,42 @@ async function continueChildAgent(
       (childAgent.sessionUsage?.promptTokens ?? 0) +
       (childAgent.sessionUsage?.completionTokens ?? 0),
     );
-    ctx.onChildComplete?.({
+    ctx.onChildComplete?.(createChildExecutionReceipt({
       childId: record.id,
       role: role.name,
       status: 'completed',
+      completedAt,
       preview: output.length <= getCliKnobs().agentPreviewChars
         ? output
         : extractChildPreview(output, getCliKnobs().agentPreviewChars),
-    });
+    }));
     return JSON.stringify({ resumed: true, ...summarize(next, true) }, null, 2);
   } catch (err: any) {
     const message = err?.message ?? String(err);
+    if (childTurnWasInterrupted(childAgent)) {
+      const next = finalizeInterruptedChild({
+        ctx,
+        record,
+        role: role.name,
+        output: `ERROR: ${message}`,
+        reportCompletionToParent: false,
+      });
+      return JSON.stringify({ resumed: false, ...summarize(next, true) }, null, 2);
+    }
+    const completedAt = new Date().toISOString();
     const next = updateSession(ctx.workspaceRoot, record.id, {
       status: 'failed',
-      completedAt: new Date().toISOString(),
+      completedAt,
       error: message,
       finalOutput: `ERROR: ${message}`,
     });
-    ctx.onChildComplete?.({ childId: record.id, role: role.name, status: 'failed', error: message });
+    ctx.onChildComplete?.(createChildExecutionReceipt({
+      childId: record.id,
+      role: role.name,
+      status: 'failed',
+      completedAt,
+      error: message,
+    }));
     return JSON.stringify({ resumed: false, ...summarize(next, true) }, null, 2);
   } finally {
     runningChildAgents.delete(record.id);

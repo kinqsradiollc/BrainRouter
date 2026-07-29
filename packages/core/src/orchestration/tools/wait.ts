@@ -50,15 +50,15 @@ export async function handleWait(args: any, ctx: OrchestrationContext): Promise<
 
   const promise = runningPromises.get(id);
   if (promise) {
-    // DESK-6 — a Stop makes the wait return immediately. The child is NOT
-    // killed (it keeps running detached and auto-drains next turn via
-    // lastTurnPendingChildIds); the parent just stops blocking on it.
+    // A Stop makes the wait return immediately after the parent has cascaded
+    // interruption into its children. The record may still say `running` while
+    // the child unwinds, so report both the wait outcome and current child state.
     const interruptedJson = (): string => {
       const record = getSession(ctx.workspaceRoot, id);
       return JSON.stringify({
         id, status: 'interrupted', childStatus: record?.status ?? 'running',
         role: record?.role, label: record?.label,
-        summary: 'Wait interrupted by user — the child keeps running in the background.',
+        summary: 'Parent wait interrupted — child cancellation was requested and is winding down.',
       }, null, 2);
     };
     const sig = ctx.interruptSignal;

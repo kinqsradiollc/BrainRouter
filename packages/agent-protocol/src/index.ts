@@ -10,6 +10,7 @@ export * from './events.js';
 export * from './commands.js';
 export * from './interaction.js';
 export * from './callbackBridge.js';
+export * from './delegation.js';
 export * from './envelope.js';
 export * from './assurance.js';
 export * from './assuranceDetail.js';

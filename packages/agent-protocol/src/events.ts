@@ -7,6 +7,7 @@
 
 import type { InteractionRequest } from './interaction.js';
 import type { AssuranceRunEventAction, AssuranceRunEventView } from './assurance.js';
+import type { ChildExecutionReceipt } from './delegation.js';
 
 export interface EventEnvelope {
   /** Monotonic per-session sequence (gap detection over lossy transports). */
@@ -126,7 +127,16 @@ export type AgentEvent =
     }
   | { kind: 'child-tool-start'; childId: string; role: string; tool: string; args: Record<string, unknown> }
   | { kind: 'child-tool-end'; childId: string; role: string; tool: string; ok: boolean; summary: string; preview?: string; durationMs: number }
-  | { kind: 'child-complete'; childId: string; role: string; status: 'completed' | 'failed'; preview?: string; error?: string }
+  | {
+      kind: 'child-complete';
+      receipt: ChildExecutionReceipt;
+      /** Compatibility projection for hosts compiled against the prior event. */
+      childId: string;
+      role: string;
+      status: ChildExecutionReceipt['status'];
+      preview?: string;
+      error?: string;
+    }
   | { kind: 'plan-update'; items: Array<{ step: string; status: 'pending' | 'in_progress' | 'completed'; acceptance?: string }>; explanation?: string }
   | ({ kind: 'profile-stage' } & ProfileStageEventView)
   | { kind: 'compaction'; droppedMessages: number; keptMessages: number; summary: string }
