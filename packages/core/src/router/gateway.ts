@@ -36,7 +36,7 @@ export interface RouterGatewayOptions {
   transport?: RouterGatewayTransport;
   streamTransport?: RouterGatewayStreamTransport;
   maxAttempts?: number;
-  /** Receives one secret-free final receipt for a non-streaming routed call. */
+  /** Receives one secret-free final receipt for each completed routed call. */
   onRecoveryReceipt?: (receipt: ProviderRecoveryReceipt) => void;
 }
 
@@ -176,7 +176,7 @@ async function streamRoutedChat(
   res: ServerResponse,
   routes: ModelRegistryEntry[],
   body: any,
-  opts: Pick<RouterGatewayOptions, 'streamTransport' | 'maxAttempts'>,
+  opts: Pick<RouterGatewayOptions, 'streamTransport' | 'maxAttempts' | 'onRecoveryReceipt'>,
 ): Promise<void> {
   const policy = getRouterPolicy();
   const stream = opts.streamTransport ?? callOpenAIStream;
@@ -184,67 +184,67 @@ async function streamRoutedChat(
   const includeUsage = body.stream_options?.include_usage === true;
   const id = newCompletionId();
   const created = nowSeconds();
-  const tried = new Set<string>();
   let headersSent = false;
-  let firstTokenSent = false;
-  let lastFailedRoute: ModelRegistryEntry | undefined;
-  let lastFailure: ReturnType<typeof classifyRouterFailure> | undefined;
-  let lastError: unknown;
+  let activeModel = routes[0]?.model ?? 'router';
 
-  for (let i = 0; i < Math.max(1, opts.maxAttempts ?? 4); i += 1) {
-    const route = policy.pickRoute(routes.filter((r) => !tried.has(r.slug)));
-    if (!route) break;
-    if (lastFailedRoute && lastFailure) policy.noteFallback(lastFailedRoute.slug, route.slug, lastFailure);
-    tried.add(route.slug);
-    const model = route.model;
-    try {
-      const result = await stream(route.llm, body.messages ?? [], body.tools ?? [], options, {
-        onTextDelta: (text) => {
-          if (!text) return;
+  try {
+    await executeWithProviderRecovery({
+      routes,
+      policy,
+      maxAttempts: opts.maxAttempts,
+      onReceipt: opts.onRecoveryReceipt,
+      execute: async (route) => {
+        activeModel = route.model;
+        try {
+          const result = await stream(route.llm, body.messages ?? [], body.tools ?? [], options, {
+            onTextDelta: (text) => {
+              if (!text) return;
+              if (!headersSent) {
+                res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', connection: 'keep-alive', ...CORS_HEADERS });
+                headersSent = true;
+                res.write(chunkFrame(id, created, activeModel, { role: 'assistant', content: '' }, null));
+              }
+              res.write(chunkFrame(id, created, activeModel, { content: text }, null));
+            },
+          });
+          // Opening the response is the point of no return: after this, an
+          // upstream failure must terminate this stream instead of changing
+          // providers behind a partially delivered answer.
           if (!headersSent) {
             res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', connection: 'keep-alive', ...CORS_HEADERS });
             headersSent = true;
-            res.write(chunkFrame(id, created, model, { role: 'assistant', content: '' }, null));
+            res.write(chunkFrame(id, created, activeModel, { role: 'assistant', content: '' }, null));
           }
-          firstTokenSent = true;
-          res.write(chunkFrame(id, created, model, { content: text }, null));
-        },
-      });
-      // Success: open the stream if the reply was empty, emit tool_calls (if any),
-      // the terminal finish frame, an optional usage frame, then [DONE].
-      if (!headersSent) {
-        res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', connection: 'keep-alive', ...CORS_HEADERS });
-        headersSent = true;
-        res.write(chunkFrame(id, created, model, { role: 'assistant', content: '' }, null));
-      }
-      if (result.toolCalls && result.toolCalls.length) {
-        res.write(chunkFrame(id, created, model, { tool_calls: result.toolCalls }, null));
-      }
-      res.write(chunkFrame(id, created, model, {}, finishReasonFor(result)));
-      if (includeUsage && result.usage) {
-        res.write(`data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created, model, choices: [], usage: result.usage })}\n\n`);
-      }
+          if (result.toolCalls && result.toolCalls.length) {
+            res.write(chunkFrame(id, created, activeModel, { tool_calls: result.toolCalls }, null));
+          }
+          res.write(chunkFrame(id, created, activeModel, {}, finishReasonFor(result)));
+          if (includeUsage && result.usage) {
+            res.write(`data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created, model: activeModel, choices: [], usage: result.usage })}\n\n`);
+          }
+          res.end('data: [DONE]\n\n');
+          return result;
+        } catch (error) {
+          if (headersSent && error && (typeof error === 'object' || typeof error === 'function')) {
+            (error as any).brainrouterStreamStarted = true;
+          }
+          if (headersSent && (error === null || (typeof error !== 'object' && typeof error !== 'function'))) {
+            throw Object.assign(new Error(String(error)), { brainrouterStreamStarted: true });
+          }
+          throw error;
+        }
+      },
+    });
+  } catch (error) {
+    if (headersSent) {
+      // Mid-stream failure after output began — close cleanly with a stop frame.
+      res.write(chunkFrame(id, created, activeModel, {}, 'stop'));
       res.end('data: [DONE]\n\n');
-      policy.noteSuccess(route);
       return;
-    } catch (error) {
-      lastError = error;
-      const failure = classifyRouterFailure(error);
-      policy.markFailure(route, failure);
-      lastFailedRoute = route; lastFailure = failure;
-      // Can only fail over before any bytes reached the client.
-      if (firstTokenSent || headersSent || !failure.retryable) break;
     }
+    const msg = error instanceof Error ? error.message : String(error ?? 'No route available.');
+    apiError(res, 502, msg, 'api_error');
   }
-
-  if (headersSent) {
-    // Mid-stream failure after output began — close cleanly with a stop frame.
-    res.write(chunkFrame(id, created, routes[0]?.model ?? 'router', {}, 'stop'));
-    res.end('data: [DONE]\n\n');
-    return;
-  }
-  const msg = lastError instanceof Error ? lastError.message : String(lastError ?? 'No route available.');
-  apiError(res, 502, msg, 'api_error');
 }
 
 export function createRouterGatewayHandler(options: RouterGatewayOptions) {

@@ -178,6 +178,82 @@ test('router gateway streams OpenAI SSE: role → content deltas → finish → 
   } finally { await handle.close(); }
 });
 
+test('router gateway streaming falls back before output and records one recovery receipt', async () => {
+  resetRouterPolicyForTests();
+  const seen: string[] = [];
+  const receipts: any[] = [];
+  const handle = await startRouterGateway({
+    config,
+    host: '127.0.0.1',
+    port: 0,
+    onRecoveryReceipt: (receipt) => receipts.push(receipt),
+    streamTransport: async (llm, _messages, _tools, _options, handlers) => {
+      seen.push(`${llm.provider}/${llm.model}`);
+      if (llm.provider === 'groq') {
+        throw Object.assign(new Error('rate limited before output'), { status: 429 });
+      }
+      handlers.onTextDelta?.('fallback answer');
+      return { content: 'fallback answer' };
+    },
+  });
+  try {
+    const res = await fetch(`http://${handle.host}:${handle.port}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'auto', stream: true, messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    assert.equal(res.status, 200);
+    assert.match(await res.text(), /fallback answer/);
+    assert.deepEqual(seen, ['groq/shared-model', 'openrouter/shared-model']);
+    assert.equal(receipts.length, 1);
+    assert.equal(receipts[0].outcome, 'succeeded');
+    assert.deepEqual(
+      receipts[0].attempts.map((attempt: any) => [attempt.route.slug, attempt.outcome]),
+      [
+        ['groq/shared-model', 'failed'],
+        ['openrouter/shared-model', 'succeeded'],
+      ],
+    );
+  } finally {
+    await handle.close();
+  }
+});
+
+test('router gateway streaming never changes route after output has started', async () => {
+  resetRouterPolicyForTests();
+  const seen: string[] = [];
+  const receipts: any[] = [];
+  const handle = await startRouterGateway({
+    config,
+    host: '127.0.0.1',
+    port: 0,
+    onRecoveryReceipt: (receipt) => receipts.push(receipt),
+    streamTransport: async (llm, _messages, _tools, _options, handlers) => {
+      seen.push(`${llm.provider}/${llm.model}`);
+      handlers.onTextDelta?.('partial answer');
+      throw Object.assign(new Error('connection closed after output'), { status: 503 });
+    },
+  });
+  try {
+    const res = await fetch(`http://${handle.host}:${handle.port}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'auto', stream: true, messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    assert.equal(res.status, 200);
+    const text = await res.text();
+    assert.match(text, /partial answer/);
+    assert.match(text, /data: \[DONE\]/);
+    assert.deepEqual(seen, ['groq/shared-model']);
+    assert.equal(receipts.length, 1);
+    assert.equal(receipts[0].outcome, 'failed');
+    assert.equal(receipts[0].attempts.length, 1);
+    assert.equal(receipts[0].attempts[0].failure.kind, 'non_retryable');
+  } finally {
+    await handle.close();
+  }
+});
+
 test('router gateway is keyless when no serveKey is configured', async () => {
   const handle = await startRouterGateway({ config, host: '127.0.0.1', port: 0, transport: async () => ({ content: 'ok' }) });
   try {
