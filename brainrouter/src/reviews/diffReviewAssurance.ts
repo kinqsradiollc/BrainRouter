@@ -13,7 +13,9 @@ import {
 } from "@kinqs/brainrouter-core/review";
 import type {
   AssuranceCoverage,
+  AssuranceCoverageLimitation,
   AssurancePolicySnapshot,
+  AssuranceSourceLocation,
   RepositoryAssuranceProgram,
   RepositoryAssuranceRun,
   SourceSnapshot,
@@ -24,6 +26,12 @@ import {
   createBackendAssuranceRunPort,
   type RepositoryAssurancePersistenceStore,
 } from "./assuranceRunPort.js";
+import {
+  assertRepositoryModelContextLimit,
+  RepositoryContextAssuranceSession,
+  type RepositoryContextAnalysisPorts,
+  type RepositoryContextPrompt,
+} from "./repositoryContextAssurance.js";
 
 const DIFF_ONLY_LIMITATION_ID = "diff-only-repository-context";
 
@@ -47,6 +55,7 @@ export interface StartDiffReviewAssuranceInput {
   policy: ReviewPolicy;
   maxDiffChars: number;
   timeoutMs: number;
+  repositoryContext?: RepositoryContextAnalysisPorts;
   now?: () => string;
   nextId?: (kind: "run" | "source" | "stage") => string;
 }
@@ -58,6 +67,7 @@ export interface RecordDiffReviewAssuranceInput extends StartDiffReviewAssurance
 
 export interface DiffReviewAssuranceSession {
   readonly runId: string;
+  prepareContext(changed: AssuranceSourceLocation[]): Promise<RepositoryContextPrompt | null>;
   complete(
     result: PrReviewResult,
     changedFiles: number,
@@ -69,12 +79,24 @@ function policySnapshot(
   input: StartDiffReviewAssuranceInput,
   createdAt: string,
 ): AssurancePolicySnapshot {
+  const analyzers = [
+    { id: "typescript-parser-index", enabled: Boolean(input.repositoryContext), required: false },
+    { id: "deterministic-impact-packets", enabled: Boolean(input.repositoryContext), required: false },
+    { id: "llm-diff-review", enabled: true, required: true },
+  ];
+  const packetLimits = {
+    maxPackets: 20,
+    maxPacketBytes: Math.max(1_024, Math.min(16_000, input.maxDiffChars)),
+    maxFilesPerPacket: 12,
+  };
   const value = {
     version: 1,
     program: input.program,
     reviewPolicy: input.policy,
     maxDiffChars: input.maxDiffChars,
     timeoutMs: input.timeoutMs,
+    analyzers,
+    packetLimits,
   };
   const policyHash = createHash("sha256").update(JSON.stringify(value)).digest("hex");
   return {
@@ -82,12 +104,8 @@ function policySnapshot(
     policyHash,
     organizationId: String(input.review.orgId),
     program: input.program,
-    analyzers: [{ id: "llm-diff-review", enabled: true, required: true }],
-    packetLimits: {
-      maxPackets: 40,
-      maxPacketBytes: input.maxDiffChars,
-      maxFilesPerPacket: 0,
-    },
+    analyzers,
+    packetLimits,
     budgets: {
       maxModelCalls: 40,
       maxToolCalls: 0,
@@ -103,37 +121,84 @@ function policySnapshot(
   };
 }
 
+function uniqueLimitations(
+  limitations: AssuranceCoverageLimitation[],
+): AssuranceCoverageLimitation[] {
+  return [...new Map(limitations.map((item) => [item.id, item])).values()];
+}
+
 function diffOnlyCoverage(
+  result: PrReviewResult,
+  changedFiles: number,
+  calculatedAt: string,
+  prior?: AssuranceCoverage,
+): AssuranceCoverage {
+  const files = Math.max(0, Math.trunc(changedFiles));
+  const analyzerFailed = !result.ok;
+  const analyzedFiles = !analyzerFailed && result.coverage?.complete ? files : 0;
+  const limitation: AssuranceCoverageLimitation = {
+    id: DIFF_ONLY_LIMITATION_ID,
+    component: "repository_context",
+    state: "unavailable",
+    reasonCode: "DIFF_ONLY_FALLBACK",
+    summary: "Only changed diff text was available; unchanged repository context was not analyzed.",
+  };
+  const previousAnalyzers = prior?.analyzers.filter(
+    (analyzer) => analyzer.analyzerId !== "llm-diff-review",
+  ) ?? [];
+  return {
+    status: "partial",
+    filesTotal: Math.max(files, prior?.filesTotal ?? 0),
+    filesEligible: Math.max(files, prior?.filesEligible ?? 0),
+    filesAnalyzed: Math.max(analyzedFiles, prior?.filesAnalyzed ?? 0),
+    changedFilesTotal: files,
+    changedFilesAnalyzed: analyzedFiles,
+    analyzers: [
+      ...previousAnalyzers,
+      {
+        analyzerId: "llm-diff-review",
+        state: analyzerFailed ? "failed" : "partial",
+        supportedLanguages: [],
+        filesEligible: files,
+        filesAnalyzed: analyzedFiles,
+        diagnosticsProduced: Math.max(0, Math.trunc(result.findings)),
+        limitationIds: [DIFF_ONLY_LIMITATION_ID],
+      },
+    ],
+    limitations: uniqueLimitations([...(prior?.limitations ?? []), limitation]),
+    calculatedAt,
+  };
+}
+
+function repositoryContextCoverage(
+  prior: AssuranceCoverage,
   result: PrReviewResult,
   changedFiles: number,
   calculatedAt: string,
 ): AssuranceCoverage {
   const files = Math.max(0, Math.trunc(changedFiles));
   const analyzerFailed = !result.ok;
-  const analyzedFiles = !analyzerFailed && result.coverage?.complete ? files : 0;
-  return {
-    status: "partial",
-    filesTotal: files,
-    filesEligible: files,
-    filesAnalyzed: analyzedFiles,
-    changedFilesTotal: files,
-    changedFilesAnalyzed: analyzedFiles,
-    analyzers: [{
+  const modelComplete = !analyzerFailed && Boolean(result.coverage?.complete);
+  const analyzers = [
+    ...prior.analyzers.filter((analyzer) => analyzer.analyzerId !== "llm-diff-review"),
+    {
       analyzerId: "llm-diff-review",
-      state: analyzerFailed ? "failed" : "partial",
+      state: analyzerFailed ? "failed" as const : modelComplete ? "covered" as const : "partial" as const,
       supportedLanguages: [],
       filesEligible: files,
-      filesAnalyzed: analyzedFiles,
+      filesAnalyzed: modelComplete ? files : 0,
       diagnosticsProduced: Math.max(0, Math.trunc(result.findings)),
-      limitationIds: [DIFF_ONLY_LIMITATION_ID],
-    }],
-    limitations: [{
-      id: DIFF_ONLY_LIMITATION_ID,
-      component: "repository_context",
-      state: "unavailable",
-      reasonCode: "DIFF_ONLY_FALLBACK",
-      summary: "Only changed diff text was available; unchanged repository context was not analyzed.",
-    }],
+      limitationIds: [],
+    },
+  ];
+  return {
+    ...prior,
+    status: prior.status === "complete" && modelComplete ? "complete" : "partial",
+    changedFilesTotal: files,
+    changedFilesAnalyzed: modelComplete
+      ? Math.min(files, prior.changedFilesAnalyzed)
+      : 0,
+    analyzers,
     calculatedAt,
   };
 }
@@ -198,6 +263,9 @@ export async function startDiffReviewAssurance(
   const organizationId = String(input.review.orgId ?? "").trim();
   const headSha = String(input.review.headSha ?? "").trim();
   if (!organizationId || !headSha || !input.jobId.trim()) return null;
+  if (input.repositoryContext) {
+    assertRepositoryModelContextLimit(input.repositoryContext.maxModelContextBytes);
+  }
 
   const now = input.now ?? (() => new Date().toISOString());
   const nextId = input.nextId ?? ((kind) => `${kind}-${randomUUID()}`);
@@ -219,52 +287,111 @@ export async function startDiffReviewAssurance(
   if (active(started)) {
     await supersedePriorRuns(input, started, port, campaign);
   }
+  const repositoryContext = input.repositoryContext && active(started)
+    ? new RepositoryContextAssuranceSession({
+        runId: started.id,
+        runs: port,
+        campaign,
+        program: input.program,
+        policy: started.policySnapshot,
+        analysis: input.repositoryContext,
+        now,
+      })
+    : null;
+  try {
+    await repositoryContext?.prepareSourceAndIndex();
+  } catch (error) {
+    try {
+      await repositoryContext?.cleanup();
+    } catch {
+      // Preserve the preparation failure; cleanup records its own limitation
+      // whenever the durable run remains writable.
+    }
+    throw error;
+  }
 
   const complete = async (
     result: PrReviewResult,
     changedFiles: number,
   ): Promise<RepositoryAssuranceRun> => {
-    let run = (await port.get(started.id)) ?? started;
-    if (!active(run)) return run;
-    const source = diffOnlySource(
-      input,
-      headSha,
-      run.sourceSnapshot.id,
-      run.sourceSnapshot.createdAt,
-      changedFiles,
-    );
-    const coverage = diffOnlyCoverage(result, changedFiles, now());
-    run = await campaign.runStage(run.id, "checkout_inventory", 1, async () => ({
-      status: "partial",
-      source,
-      coverage,
-      outputRefs: [source.inventoryRef!],
-      limitationIds: [DIFF_ONLY_LIMITATION_ID],
-      errorCode: "DIFF_ONLY_FALLBACK",
-    }));
-
-    if (!result.ok) {
-      try {
-        await campaign.runStage(run.id, "candidate_discovery", 1, async () => {
-          throw new Error("DIFF_REVIEW_FAILED");
-        });
-      } catch {
-        return (await port.get(run.id)) ?? run;
+    try {
+      let run = (await port.get(started.id)) ?? started;
+      if (!active(run)) {
+        await repositoryContext?.cleanup();
+        return run;
       }
-    }
+      const contextReady = Boolean(repositoryContext?.hasPromptContext);
+      if (!contextReady) {
+        const source = diffOnlySource(
+          input,
+          headSha,
+          run.sourceSnapshot.id,
+          run.sourceSnapshot.createdAt,
+          changedFiles,
+        );
+        const coverage = diffOnlyCoverage(result, changedFiles, now(), run.coverage);
+        run = await campaign.runStage(
+          run.id,
+          "checkout_inventory",
+          repositoryContext ? 2 : 1,
+          async () => ({
+            status: "partial",
+            source,
+            coverage,
+            outputRefs: [source.inventoryRef!],
+            limitationIds: coverage.limitations.map((item) => item.id),
+            errorCode: "DIFF_ONLY_FALLBACK",
+          }),
+        );
+      }
 
-    run = await campaign.runStage(run.id, "candidate_discovery", 1, async () => ({
-      status: "partial",
-      inputRefs: [source.inventoryRef!],
-      outputRefs: [`memory-job:${input.jobId}`],
-      limitationIds: [DIFF_ONLY_LIMITATION_ID],
-      errorCode: "DIFF_ONLY_FALLBACK",
-    }));
-    return campaign.finish(run.id, "partial");
+      if (!result.ok) {
+        await repositoryContext?.cleanup();
+        try {
+          await campaign.runStage(run.id, "candidate_discovery", 1, async () => {
+            throw new Error("DIFF_REVIEW_FAILED");
+          });
+        } catch {
+          return (await port.get(run.id)) ?? run;
+        }
+      }
+
+      const contextRefs = repositoryContext?.contextInputRefs ?? [];
+      run = await campaign.runStage(run.id, "candidate_discovery", 1, async () => ({
+        status: contextReady && run.coverage.status === "complete" ? "succeeded" : "partial",
+        coverage: contextReady
+          ? repositoryContextCoverage(run.coverage, result, changedFiles, now())
+          : run.coverage,
+        inputRefs: contextReady ? contextRefs : [run.sourceSnapshot.inventoryRef!],
+        outputRefs: [`memory-job:${input.jobId}`],
+        limitationIds: contextReady
+          ? repositoryContext?.limitationIds ?? []
+          : run.coverage.limitations.map((item) => item.id),
+        ...(!contextReady ? { errorCode: "DIFF_ONLY_FALLBACK" } : {}),
+      }));
+      await repositoryContext?.cleanup();
+      run = (await port.get(run.id)) ?? run;
+      if (!active(run)) return run;
+      return campaign.finish(
+        run.id,
+        run.sourceSnapshot.status === "ready" && run.coverage.status === "complete"
+          ? "completed"
+          : "partial",
+      );
+    } catch (error) {
+      try {
+        await repositoryContext?.cleanup();
+      } catch {
+        // Preserve the execution failure. A cleanup-stage persistence failure
+        // must not erase the earlier root cause.
+      }
+      throw error;
+    }
   };
 
   return {
     runId: started.id,
+    prepareContext: (changed) => repositoryContext?.preparePrompt(changed) ?? Promise.resolve(null),
     complete,
     fail: () => complete({
       ok: false,
