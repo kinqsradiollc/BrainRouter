@@ -9,7 +9,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { type OnMount } from '@monaco-editor/react';
 import { hostQuery } from '../../lib/hostQuery.js';
 import { renderBody, htmlDoc } from '../../lib/docs/markdownExport.js';
-import { computeReviewChunks, applyReview, type ReviewDecision } from '@kinqs/brainrouter-core/dist/write/writeDiff.js';
+import { computeReviewChunks, applyReview, type ReviewDecision } from '@kinqs/brainrouter-core/write/review-diff';
 import { ACTION_LABEL, type InlineAction, type MonacoRange, type ReviewSession } from '../editor/markdownMode.js';
 import { type EditorTab } from '../../lib/editor/editorModel.js';
 

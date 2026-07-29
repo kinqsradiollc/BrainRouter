@@ -35,6 +35,14 @@
       "types": "./dist/command/index.d.ts",
       "default": "./dist/command/index.js"
     },
+    "./command/catalog": {
+      "types": "./dist/command/catalog.d.ts",
+      "default": "./dist/command/catalog.js"
+    },
+    "./command/parity": {
+      "types": "./dist/command/parity.d.ts",
+      "default": "./dist/command/parity.js"
+    },
     "./config": {
       "types": "./dist/config/index.d.ts",
       "default": "./dist/config/index.js"
@@ -111,6 +119,18 @@
       "types": "./dist/prototype/index.d.ts",
       "default": "./dist/prototype/index.js"
     },
+    "./prototype/detect": {
+      "types": "./dist/prototype/protoDetect.d.ts",
+      "default": "./dist/prototype/protoDetect.js"
+    },
+    "./prototype/placeholders": {
+      "types": "./dist/prototype/placeholderRender.d.ts",
+      "default": "./dist/prototype/placeholderRender.js"
+    },
+    "./prototype/prompt": {
+      "types": "./dist/prototype/prototypePrompt.d.ts",
+      "default": "./dist/prototype/prototypePrompt.js"
+    },
     "./provider": {
       "types": "./dist/provider/index.d.ts",
       "default": "./dist/provider/index.js"
@@ -118,6 +138,10 @@
     "./requirement": {
       "types": "./dist/requirement/index.d.ts",
       "default": "./dist/requirement/index.js"
+    },
+    "./requirement/frameworks": {
+      "types": "./dist/requirement/frameworks/pmFrameworks.d.ts",
+      "default": "./dist/requirement/frameworks/pmFrameworks.js"
     },
     "./review": {
       "types": "./dist/review/index.d.ts",
@@ -142,6 +166,10 @@
     "./session": {
       "types": "./dist/session/index.d.ts",
       "default": "./dist/session/index.js"
+    },
+    "./session/permission-modes": {
+      "types": "./dist/session/preferences/permissionModes.d.ts",
+      "default": "./dist/session/preferences/permissionModes.js"
     },
     "./storage": {
       "types": "./dist/storage/index.d.ts",
@@ -191,9 +219,33 @@
       "types": "./dist/workflow/index.d.ts",
       "default": "./dist/workflow/index.js"
     },
+    "./workflow/graph": {
+      "types": "./dist/workflow/graph/graph.d.ts",
+      "default": "./dist/workflow/graph/graph.js"
+    },
+    "./workflow/graph-engine": {
+      "types": "./dist/workflow/graph/graphEngine.d.ts",
+      "default": "./dist/workflow/graph/graphEngine.js"
+    },
+    "./workflow/graph-store": {
+      "types": "./dist/workflow/graph/graphStore.d.ts",
+      "default": "./dist/workflow/graph/graphStore.js"
+    },
     "./workspace": {
       "types": "./dist/workspace/index.d.ts",
       "default": "./dist/workspace/index.js"
+    },
+    "./workspace/capabilities": {
+      "types": "./dist/workspace/capabilities.d.ts",
+      "default": "./dist/workspace/capabilities.js"
+    },
+    "./workspace/profiles": {
+      "types": "./dist/workspace/profiles.d.ts",
+      "default": "./dist/workspace/profiles.js"
+    },
+    "./workspace/tool-profile-catalog": {
+      "types": "./dist/workspace/toolProfileCatalog.d.ts",
+      "default": "./dist/workspace/toolProfileCatalog.js"
     },
     "./worktree": {
       "types": "./dist/worktree/index.d.ts",
@@ -203,11 +255,14 @@
       "types": "./dist/write/index.d.ts",
       "default": "./dist/write/index.js"
     },
+    "./write/review-diff": {
+      "types": "./dist/write/writeDiff.d.ts",
+      "default": "./dist/write/writeDiff.js"
+    },
     "./version": {
       "types": "./dist/version.d.ts",
       "default": "./dist/version.js"
-    },
-    "./dist/*": "./dist/*"
+    }
   },
   "files": [
     "dist",

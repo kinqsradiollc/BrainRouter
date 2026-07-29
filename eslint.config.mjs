@@ -44,11 +44,8 @@ export default [
     plugins: { '@typescript-eslint': tsPlugin, 'react-hooks': reactHooks },
     linterOptions: { reportUnusedDisableDirectives: 'off' },
     rules: {
-      // Import @kinqs/brainrouter-core through a
-      // curated subsystem entrypoint (`@kinqs/brainrouter-core/<subsystem>`), never
-      // its compiled `dist/*` internals. Core's `./dist/*` compatibility export is
-      // still load-bearing for narrowly selected browser-safe Desktop renderer
-      // modules, so that surface is exempted below and tracked for later removal.
+      // Import @kinqs/brainrouter-core through a curated public entrypoint,
+      // never its compiled `dist/*` internals.
       'no-restricted-imports': [
         'error',
         {
@@ -62,17 +59,6 @@ export default [
         },
       ],
     },
-  },
-  {
-    // The desktop renderer is a browser (vite) bundle. A core subsystem's curated
-    // entrypoint re-exports its FULL surface — including Node-only modules
-    // (node:fs / node:crypto) that vite can't externalize for the browser, e.g.
-    // `randomUUID`. So the renderer intentionally deep-imports the specific
-    // browser-safe core modules it needs (the same reason types/atlas-ops is
-    // deep-imported). Exempt it from the core deep-import ban. The Electron host
-    // (electron/**) runs in Node and DOES use the curated entrypoints.
-    files: ['brainrouter-desktop/src/**/*.ts', 'brainrouter-desktop/src/**/*.tsx'],
-    rules: { 'no-restricted-imports': 'off' },
   },
   // Keep ESLint out of Prettier's lane (must be last).
   prettier,

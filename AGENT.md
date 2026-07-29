@@ -41,7 +41,7 @@ The full list with evidence lives in [`brainrouter-rules/00-golden-rules.md`](br
 - **⛔ Never name external reference projects or internal planning docs** in committed code, docs, comments, UI strings, or changelogs. Learn from references; ship BrainRouter-native work, cite nothing.
 - **⛔ One memory system.** Never build a parallel memory/session store; every durable fact routes through the memory engine.
 - **Relative imports carry explicit `.js` extensions** (ESM + NodeNext everywhere).
-- **⛔ Import `@kinqs/brainrouter-core` only via curated entrypoints** (`/agent`, `/config`, …). Sole exception: the desktop **renderer** (`brainrouter-desktop/src/**`) deep-imports browser-safe modules on purpose — never "fix" those or `vite build` breaks.
+- **⛔ Import `@kinqs/brainrouter-core` only via curated entrypoints** (`/agent`, `/config`, and focused browser-safe subpaths). Compiled `dist/*` internals are never a supported import surface.
 - **⛔ Security chokepoints:** MCP dispatcher pins `userId` (never trust client-supplied); user text is length-capped then passed through `redactSensitiveMemoryText` before persistence; all LLM-output JSON parsing goes through `memory/util/llm-json.ts` (`extractJsonValue`); slow LLM work never blocks an MCP reply (background + `"deferred"`).
 - **⛔ Always `await` memory-engine methods** (async Postgres — an unawaited call serializes `{}` and the dashboard shows 0/NaN).
 - **⛔ CLI knobs live under `cli.*` in `config.json`** (`getCliKnobs()`), never new `BRAINROUTER_*` env vars. **Secrets are write-only** — Settings/`safeStorage`/config, never `.env`, never echoed back by any endpoint.

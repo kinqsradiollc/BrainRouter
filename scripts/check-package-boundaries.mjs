@@ -195,9 +195,7 @@ export function checkImport({ area, filePath, specifier, policy }) {
         return violation('maintained consumers use the provider surface; router is an external compatibility façade');
       }
       if (subpath.startsWith('dist/')) {
-        if (area !== 'desktop-renderer') {
-          return violation('compiled Core internals are restricted to the Desktop renderer compatibility exception');
-        }
+        return violation('compiled Core internals are not a supported public entrypoint');
       } else if (!policy.curatedCoreExports.has(subpath)) {
         return violation(`Core subpath "${subpath}" is not a curated public export`);
       }

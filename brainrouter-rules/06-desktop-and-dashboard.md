@@ -8,19 +8,18 @@ server).
 
 ## Desktop: host vs renderer boundary
 
-### 1. ⛔ Host imports curated core entrypoints; renderer deep-imports browser-safe `dist` modules
+### 1. ⛔ Host and renderer import only curated Core entrypoints
 
-Code under `electron/**` runs in Node and MUST import core via curated subsystem
-entrypoints (`@kinqs/brainrouter-core/agent`, `/config`, …). Code under `src/**`
-(the vite renderer) is **exempt** and intentionally deep-imports specific
-browser-safe compiled modules (e.g.
-`@kinqs/brainrouter-core/dist/write/writeDiff.js`) because a curated entrypoint
-re-exports its FULL surface including `node:fs`/`node:crypto` modules that break
-`vite build`. **Never "fix" a renderer deep import to the curated entrypoint.**
+Code under `electron/**` runs in Node and imports Core through its subsystem
+entrypoints. Code under `src/**` uses focused browser-safe Core subpaths rather
+than broad barrels or compiled `dist/*` internals. When a renderer needs a pure
+Core module that is not safely exported, add a narrow package export and keep
+Node-only siblings private.
 
-- **Why:** TypeScript won't catch it — it surfaces as a broken production build.
-- **Evidence:** `eslint.config.mjs`, `brainrouter-desktop/electron/host.ts:31`,
-  `brainrouter-desktop/src/panels/planning/WorkflowsPanel.tsx:23`
+- **Why:** broad barrels can pull Node builtins into Vite, while deep imports
+  couple the renderer to Core's internal file layout.
+- **Evidence:** `eslint.config.mjs`, `packages/core/package.json`,
+  `brainrouter-desktop/src/panels/planning/WorkflowsPanel.tsx`
 
 ### 2. ⛔ `preload.cts` is the renderer's only capability surface
 
@@ -234,6 +233,6 @@ marketing hero/headers.
 
 Desktop has **no Vitest/jsdom/RTL**: `electron/**` tests compile to `dist-electron`
 and run via `node --test`; `src/**` renderer tests run via `tsx --test` and must be
-pure view-model/formatting tests (no DOM, no Electron APIs), deep-importing core
-`dist` where needed. Extract logic into pure functions (`isAllowedNavigation`,
+pure view-model/formatting tests (no DOM, no Electron APIs), importing Core
+through focused browser-safe subpaths where needed. Extract logic into pure functions (`isAllowedNavigation`,
 `buttonClass`, `scrubCliSecrets`) to test it. Full detail in [`07`](07-testing.md).

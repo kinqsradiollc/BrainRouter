@@ -25,11 +25,9 @@ else, remember these. Each links to the topical file with the full context.
    imports fail at runtime. → [`02`](02-code-style-and-conventions.md)
 
 5. **⛔ Import `@kinqs/brainrouter-core` only through curated subsystem
-   entrypoints** (`@kinqs/brainrouter-core/agent`, `/config`, …). Deep
-   `@kinqs/brainrouter-core/dist/**` imports are an ESLint **error**. The *only*
-   exception is the desktop renderer (`brainrouter-desktop/src/**`), which is
-   browser code and deep-imports specific node-safe modules on purpose — never
-   "fix" those to curated entrypoints or `vite build` breaks. → [`01`](01-monorepo-packages-and-boundaries.md)
+   entrypoints** (`@kinqs/brainrouter-core/agent`, `/config`, and focused
+   browser-safe subpaths). Deep `@kinqs/brainrouter-core/dist/**` imports are an
+   ESLint **error in every maintained consumer**. → [`01`](01-monorepo-packages-and-boundaries.md)
 
 6. **Don't grow new god files.** When a file gets large, split it into a
    per-concern sibling folder and keep the original path as a thin re-export

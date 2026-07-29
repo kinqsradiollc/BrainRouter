@@ -99,7 +99,7 @@ test('SDK and hooks are browser-safe outside tests', () => {
   assert.equal(fixture('hooks', 'packages/hooks/src/useFixture.test.ts', 'node:test'), undefined);
 });
 
-test('Core imports require curated public subpaths outside the renderer exception', () => {
+test('Core imports require curated public subpaths in every maintained consumer', () => {
   assert.match(
     fixture('cli', 'brainrouter-cli/src/fixture.ts', '@kinqs/brainrouter-core/private/path').reason,
     /not a curated public export/,
@@ -110,13 +110,21 @@ test('Core imports require curated public subpaths outside the renderer exceptio
       'brainrouter-desktop/electron/fixture.ts',
       '@kinqs/brainrouter-core/dist/workspace/profiles.js',
     ).reason,
-    /restricted to the Desktop renderer/,
+    /not a supported public entrypoint/,
+  );
+  assert.match(
+    fixture(
+      'desktop-renderer',
+      'brainrouter-desktop/src/fixture.ts',
+      '@kinqs/brainrouter-core/dist/workspace/profiles.js',
+    ).reason,
+    /not a supported public entrypoint/,
   );
   assert.equal(
     fixture(
       'desktop-renderer',
       'brainrouter-desktop/src/fixture.ts',
-      '@kinqs/brainrouter-core/dist/workspace/profiles.js',
+      '@kinqs/brainrouter-core/workspace/profiles',
     ),
     undefined,
   );

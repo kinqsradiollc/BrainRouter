@@ -4,7 +4,7 @@
  * click. The highlighted card is the nearest match to the stored combination.
  */
 import React from 'react';
-import { PERMISSION_MODES, policyForMode, nearestMode } from '@kinqs/brainrouter-core/dist/session/preferences/permissionModes.js';
+import { PERMISSION_MODES, policyForMode, nearestMode } from '@kinqs/brainrouter-core/session/permission-modes';
 
 export function PermissionModeCards({ ps, ks, onPref, onAction, setKnob }: {
   ps: (key: string, def: string) => string;

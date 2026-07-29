@@ -1,5 +1,5 @@
 /** Browser-development mirror of the reviewed onboarding host contract. */
-import { WORKSPACE_PROFILES } from '@kinqs/brainrouter-core/dist/workspace/profiles.js';
+import { WORKSPACE_PROFILES } from '@kinqs/brainrouter-core/workspace/profiles';
 import { parseOnboardingDraft } from '../components/dialogs/onboardingEditorModel.js';
 import {
   buildDevOnboardingPreview,
