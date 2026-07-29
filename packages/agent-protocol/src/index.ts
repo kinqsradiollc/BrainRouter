@@ -11,3 +11,4 @@ export * from './commands.js';
 export * from './interaction.js';
 export * from './callbackBridge.js';
 export * from './envelope.js';
+export * from './assurance.js';
