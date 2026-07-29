@@ -1,7 +1,7 @@
 # ADR-025 Package Boundary Inventory
 
-**Status:** A25-1 baseline complete · **Snapshot:** `release/0.4.17` at
-`9ef12c291` · **Decision:** ADR-025
+**Status:** A25-1 inventory and A25-2 guard pilot complete · **Baseline
+snapshot:** `release/0.4.17` at `9ef12c291` · **Decision:** ADR-025
 
 ## Purpose
 
@@ -127,21 +127,31 @@ production boundary stabilizes.
 | A25-14 agent quality | contributor rules, engineering profile planning schema, skills, runtime activation | Short global invariants plus profile/task-selected architecture, planning, code-quality, and security workflows | No prompt claims an unshipped tool or authority; unrelated profiles do not inherit engineering work |
 | A25-15 cleanup | compatibility barrels, aliases, renderer deep imports, legacy paths | Remove only after import graph and consumer evidence prove zero supported users | One deletion PR per coherent compatibility family |
 
-## Boundary guard backlog
+## Boundary guard
 
-A25-2 should add machine checks in this order:
+`scripts/check-package-boundaries.mjs` is the A25-2 source-graph gate. Root
+`lint` runs its negative fixtures and a repository scan before ESLint, while
+the staged-file hook runs the same checker only when relevant source or package
+manifests change. The guard now proves:
 
-1. Keep the current non-renderer Core `dist/**` import ban at error severity and
-   add fixtures proving the renderer exception is narrow.
-2. Assert that types and protocol do not import any `@kinqs` package or app.
-3. Assert that packages never import an application.
-4. Assert that Dashboard does not import Core or protocol.
-5. Assert that SDK remains free of `node:` imports and depends only on types.
-6. Assert that hooks use SDK/types and keep React as a peer.
-7. Record curated Core entrypoints from `package.json` and reject a new
-   cross-package deep path unless it is the documented renderer exception.
-8. Add domain contract placement checks only after the review and provider
-   pilots establish stable paths; avoid freezing speculative empty folders.
+1. types and protocol manifests remain dependency-free and cannot import
+   another BrainRouter package or application;
+2. Core, SDK, and hooks retain their declared internal dependency direction,
+   with React remaining a hooks peer dependency;
+3. SDK and hooks production modules stay free of `node:` imports while their
+   Node-based tests remain valid;
+4. Dashboard cannot import Core or protocol;
+5. non-renderer consumers cannot use Core `dist/**` internals or unexported
+   Core subpaths;
+6. the Desktop renderer exception accepts only Core `dist/**` compatibility
+   imports and does not weaken any other surface; and
+7. static imports, re-exports, dynamic imports, and `require()` calls are all
+   inspected.
+
+The checker reads Core's exact public exports from `packages/core/package.json`
+rather than duplicating that list. Domain contract-placement checks remain
+deferred until the review and provider pilots establish real stable paths;
+A25-2 intentionally does not freeze speculative empty folders.
 
 ## Per-slice completion evidence
 
