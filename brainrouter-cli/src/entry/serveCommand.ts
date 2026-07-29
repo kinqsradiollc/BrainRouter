@@ -47,7 +47,7 @@ export function registerServeCommand(program: Command): void {
           process.exitCode = 1;
           return;
         }
-        const { startRouterGateway } = await import('@kinqs/brainrouter-core/router/gateway');
+        const { startRouterGateway } = await import('@kinqs/brainrouter-core/provider');
         let handle: Awaited<ReturnType<typeof startRouterGateway>>;
         try {
           handle = await startRouterGateway({

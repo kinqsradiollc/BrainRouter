@@ -122,3 +122,18 @@ test('Core imports require curated public subpaths outside the renderer exceptio
   );
   assert.equal(fixture('backend', 'brainrouter/src/fixture.ts', '@kinqs/brainrouter-core/review'), undefined);
 });
+
+test('maintained consumers cannot build a second routing owner behind the compatibility façade', () => {
+  assert.match(
+    fixture('backend', 'brainrouter/src/fixture.ts', '@kinqs/brainrouter-core/router').reason,
+    /provider surface/,
+  );
+  assert.match(
+    fixture('core', 'packages/core/src/agent/fixture.ts', '../router/index.js').reason,
+    /provider\/routing/,
+  );
+  assert.equal(
+    fixture('core', 'packages/core/src/router/compatibility.test.ts', './index.js'),
+    undefined,
+  );
+});

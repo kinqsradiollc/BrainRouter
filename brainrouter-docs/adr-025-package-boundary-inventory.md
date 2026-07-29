@@ -127,15 +127,22 @@ production boundary stabilizes.
 | A25-14 agent quality | contributor rules, engineering profile planning schema, skills, runtime activation | Short global invariants plus profile/task-selected architecture, planning, code-quality, and security workflows | No prompt claims an unshipped tool or authority; unrelated profiles do not inherit engineering work |
 | A25-15 cleanup | compatibility barrels, aliases, renderer deep imports, legacy paths | Remove only after import graph and consumer evidence prove zero supported users | One deletion PR per coherent compatibility family |
 
-### Active provider/model migration
+### Provider/model migration
 
-A25-3a establishes the first real destination contract rather than an empty
-folder: `packages/types/src/provider/recovery.ts` owns the host-neutral receipt,
-and Core's router recovery service owns bounded route execution. The
-non-streaming router gateway is the first consumer. The agent loop and streaming
-gateway retain their characterized behavior until A25-3b and A25-3c migrate
-them separately; the `provider` and `router` public entrypoints remain unchanged
-until the final compatibility-backed ownership move.
+The provider domain is now the canonical owner. Dependency-free recovery
+receipts live in `packages/types/src/provider/`; catalog, model policy, budgets,
+provider definitions, and model services remain behind Core's curated
+`provider` entrypoint; and route selection, cooldowns, upstream policy, wire
+adapters, gateway execution, and recovery live under
+`packages/core/src/provider/routing/`.
+
+Non-streaming gateway calls, streaming calls, and the agent turn loop use the
+same bounded recovery executor. Maintained backend, CLI, Desktop, and Core
+consumers import the provider owner. The `provider` and `router` public
+entrypoints remain supported, but `router` and `router/gateway` are now thin,
+identity-tested compatibility façades. Their named owner is Provider Routing;
+their deletion is deferred to A25-15 and requires an external compatibility
+window plus a zero-consumer import audit.
 
 ## Boundary guard
 
@@ -155,7 +162,9 @@ manifests change. The guard now proves:
    Core subpaths;
 6. the Desktop renderer exception accepts only Core `dist/**` compatibility
    imports and does not weaken any other surface; and
-7. static imports, re-exports, dynamic imports, and `require()` calls are all
+7. maintained Core and host consumers use canonical Provider Routing while the
+   supported router entrypoints remain external compatibility façades; and
+8. static imports, re-exports, dynamic imports, and `require()` calls are all
    inspected.
 
 The checker reads Core's exact public exports from `packages/core/package.json`

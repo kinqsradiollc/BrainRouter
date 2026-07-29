@@ -9,7 +9,7 @@
 import chalk from 'chalk';
 import { saveConfig, getCliKnobs, sanitizeLlmProfiles, type LlmProfileConfig } from '@kinqs/brainrouter-core/config';
 import { assertModelAllowed, overlayLlmProfile } from '@kinqs/brainrouter-core/provider';
-import { aggregateCatalog, buildModelRegistry, resolveRoutes } from '@kinqs/brainrouter-core/router';
+import { aggregateCatalog, buildModelRegistry, resolveRoutes } from '@kinqs/brainrouter-core/provider';
 import { readPreferences, resolveEffort, writePreferences, normalizeEffort, getSessionMode, resolveActiveMode, setSessionMode, setSessionRuntime, getSessionRuntime } from '@kinqs/brainrouter-core/session';
 import { PROVIDER_CATALOG, findProvider } from '@kinqs/brainrouter-core/provider';
 import { loadApiKeyPrefixesConfig } from '@kinqs/brainrouter-core/config';

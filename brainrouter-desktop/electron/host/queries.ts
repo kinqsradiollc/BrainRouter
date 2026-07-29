@@ -91,7 +91,7 @@ import {
   setConfigValueAtPath,
   type LLMConfig,
 } from '@kinqs/brainrouter-core/config';
-import { aggregateCatalog, buildModelRegistry, getRouterPolicy } from '@kinqs/brainrouter-core/router';
+import { aggregateCatalog, buildModelRegistry, getRouterPolicy } from '@kinqs/brainrouter-core/provider';
 import {
   createRuntimeRunnerClient,
   listRuntimePreviewPorts,

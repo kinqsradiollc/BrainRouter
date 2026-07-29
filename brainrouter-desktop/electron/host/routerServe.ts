@@ -1,5 +1,5 @@
 import { getCliKnobs, loadConfig } from '@kinqs/brainrouter-core/config';
-import { startRouterGateway } from '@kinqs/brainrouter-core/router/gateway';
+import { startRouterGateway } from '@kinqs/brainrouter-core/provider';
 
 export interface RouterServeStatus {
   running: boolean;

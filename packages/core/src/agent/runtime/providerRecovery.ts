@@ -7,9 +7,9 @@ import type { ProviderRecoveryReceipt } from '@kinqs/brainrouter-types';
 import {
   executeWithProviderRecovery,
   type ProviderRecoveryExecution,
-} from '../../router/recovery.js';
-import type { RouterPolicy } from '../../router/policy.js';
-import type { ModelRegistryEntry, RouterFailure } from '../../router/routerTypes.js';
+} from '../../provider/routing/recovery.js';
+import type { RouterPolicy } from '../../provider/routing/policy.js';
+import type { ModelRegistryEntry, RouterFailure } from '../../provider/routing/types.js';
 
 export interface AgentProviderRecoveryFallback {
   from: ModelRegistryEntry;

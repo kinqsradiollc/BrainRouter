@@ -1,7 +1,7 @@
 import {
   applyModelEffortWireMap,
   type ModelEffortWireMap,
-} from '@kinqs/brainrouter-core/router';
+} from '@kinqs/brainrouter-core/provider';
 
 import type { GatewayResolvedModel } from './modelPolicy.js';
 import { chatTokenUsage, type GatewayTokenUsage } from './usage.js';

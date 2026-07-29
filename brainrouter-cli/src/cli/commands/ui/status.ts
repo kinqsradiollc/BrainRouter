@@ -13,7 +13,7 @@ import { callMcpTool, hasMcpTool } from '@kinqs/brainrouter-core/mcp';
 import { listSessions, reconcileStale } from '@kinqs/brainrouter-core/orchestration';
 import { readPlan } from '@kinqs/brainrouter-core/task';
 import { getConfigPath, getCliKnobs, setCliKnobOverride } from '@kinqs/brainrouter-core/config';
-import { aggregateCatalog, buildModelRegistry, getRouterPolicy, resolveRoutes } from '@kinqs/brainrouter-core/router';
+import { aggregateCatalog, buildModelRegistry, getRouterPolicy, resolveRoutes } from '@kinqs/brainrouter-core/provider';
 import { getPolicyProfile, profileNames } from '../../../runtime/exec/policyProfiles.js';
 import { describeActiveServer } from '../serverStatus/index.js';
 import type { CommandContext } from '../_context.js';

@@ -1,3 +1,7 @@
+/**
+ * Compatibility surface for existing `@kinqs/brainrouter-core/router`
+ * consumers. New consumers use the curated provider entrypoint.
+ */
 export * from './routerTypes.js';
 export * from './registry.js';
 export * from './resolve.js';

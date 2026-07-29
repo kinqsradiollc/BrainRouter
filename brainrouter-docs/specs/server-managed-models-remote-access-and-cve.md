@@ -36,7 +36,9 @@ Success means the behavior is usable end to end, tenant-isolated, observable, co
 
 - `provider_configs` already stores encrypted organization-scoped upstream configuration.
 - `/api/admin/providers` already provides provider CRUD under RBAC.
-- `packages/core/src/router/` already has useful local OpenAI-compatible routing and streaming primitives.
+- `packages/core/src/provider/routing/` owns the local OpenAI-compatible routing
+  and streaming primitives; `packages/core/src/router/` is the supported
+  compatibility façade.
 - dashboard and desktop already have account, connector, review, settings, and model surfaces.
 - the desktop relay already has scoped RPC methods, frame limits, application encryption helpers, and replay counters.
 - `packages/core/src/review/vulnerabilityIntelligence.ts` already has bounded CISA KEV parsing, cache integrity, provenance, and stale fallback.
