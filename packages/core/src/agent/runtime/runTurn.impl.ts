@@ -10,10 +10,6 @@ import { linkArtifact } from '../../artifact/artifactStore.js';
 import {
   buildRootContextEnvelope,
 } from '../../context/contextEnvelope.js';
-import { resolveToolPolicy, externalDirectoryDecision } from '../../exec/policy/execPolicy.js';
-import { isPathWithinRoots } from '../../exec/policy/pathPolicy.js';
-import { evaluatePermissionRules, primaryArgText } from '../../exec/policy/permissionRules.js';
-import { classifyShellCommand } from '../../exec/policy/shellClassifier.js';
 import { recordDenial } from '../../exec/runtime/recentDenials.js';
 import { readGoal } from '../../goal/store/goalStore.js';
 import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../../hooks/hookifyStore.js';
@@ -63,7 +59,6 @@ import { classifyDeferral, buildDeliverableCorrection } from '../guards/delivera
 import { classifyDenial, formatDenialResult } from '../guards/denialMessage.js';
 import { applyPendingSteeringAtBoundary } from './steering.js';
 import { shouldRunFanOutFollowThroughGuard } from '../guards/fanOutFollowThroughGuard.js';
-import { assessMcpToolApproval } from '../guards/mcpApproval.js';
 import { NoTTYError } from '../support/prompter.js';
 import { analyzeSchema, flattenSchema, nestArguments, type JSONSchema } from '../repair/flatten.js';
 import { isSequenceGuardExempt, buildSequenceSignature } from '../guards/repeatGuard.js';
@@ -85,10 +80,7 @@ import { trackChildObservation, parseChildDrainTimeouts, formatChildDrainTimeout
 import { explainUnknownToolName } from '../agent.js';
 import { refreshWorkspaceCapabilityState } from '../workspaceCapabilityState.js';
 import { resolveActiveTurnOrchestration } from '../../workspace/activeTurnOrchestration.js';
-import {
-  requiredSkillsBlockingMutation,
-  resolveRequiredSkillActivation,
-} from '../../workspace/requiredSkillActivation.js';
+import { resolveRequiredSkillActivation } from '../../workspace/requiredSkillActivation.js';
 import {
   adaptWorkspaceSkillCatalogText,
   resolveWorkspaceManagedSkill,
@@ -107,6 +99,7 @@ import { invokeModelPhase } from './modelInvocationPhase.js';
 import { normalizeTurnCompletionAnswer } from './completionPhase.js';
 import { prepareTurnContextPhase } from './contextPreparationPhase.js';
 import { repairAndRecordToolCalls } from './toolCallRepairPhase.js';
+import { authorizeToolCall } from './toolAuthorizationPhase.js';
 import {
   buildRequiredDelegatedStageCorrection,
   buildRequiredProfileStageCorrection,
@@ -1647,132 +1640,20 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           if (blockedByHook) {
             throw new Error(`Blocked by pre-tool hook: ${blockedByHook}`);
           }
-          // POLICY-2 — route EVERY tool (local, orchestration, worker, MCP)
-          // through the unified execution policy, not just local ones (POLICY-1).
-          // A mutating action (file edit, child spawn/delegate, shell) emits an
-          // audit + trace event; a deny throws with the policy's reason; an 'ask'
-          // a silent child can't answer fails closed. This closes the gap where
-          // spawn/delegate/worker dispatches bypassed the access-mode gate.
-          {
-            // CC-SAFETY-B2 — record any denial into the bounded, session-scoped
-            // recent-denials ring so `/recent-denials` can surface WHY the agent
-            // kept getting blocked. Best-effort; never breaks the gate.
-            const diagnosticToolName = String(name)
-              .replace(/[^A-Za-z0-9_.:-]/g, '?')
-              .slice(0, 120);
-            const denyAndRecord = (reason: string): never => {
-              try { recordDenial(this.workspaceRoot, this.sessionKey, diagnosticToolName, reason); } catch { /* best-effort */ }
-              throw new Error(reason);
-            };
-            // Defense in depth: a model can emit a stale/guessed tool name
-            // even when it was absent from the request surface. Recheck the
-            // active skill allowlist at dispatch for local, delegate, and MCP.
-            if (name !== 'reconcile_steer' && !skillAllowsTool(name)) {
-              denyAndRecord(`Tool "${diagnosticToolName}" denied by the active skill allowed-tools policy.`);
-            }
-            if (isLocal && name !== 'reconcile_steer' && !workspaceAllowsLocalTool(name)) {
-              denyAndRecord(`Tool "${diagnosticToolName}" denied by the active workspace tool-profile policy.`);
-            }
-            if (!isLocal && !workspaceAllowsMcpTool(
-              mcpToolByName.get(name) ?? { name, __rawName: name },
-            )) {
-              denyAndRecord(`Tool "${diagnosticToolName}" denied by the active workspace MCP tool policy.`);
-            }
-            // CC-P3.2 — declarative cli.permissions rules run FIRST: a deny match
-            // blocks outright; an allow match downgrades an `ask` below (it never
-            // overrides a mode-based deny — rules can't escalate read mode).
-            const ruleDecision = evaluatePermissionRules(
-              getCliKnobs().permissions, name, primaryArgText(name, args as Record<string, unknown> | null),
-              { workspace: this.workspaceRoot });
-            if (ruleDecision === 'deny') {
-              denyAndRecord(`Tool "${name}" denied: matched a cli.permissions deny rule.`);
-            }
-            // CC-SAFETY-B1 — classify-all-shell: when enabled, route EVERY
-            // run_command through the safety classifier at the gate (not just the
-            // ones a downstream heuristic catches). 'on' asks/denies on a risky
-            // verdict; 'strict' denies unless whitelisted. Silent sessions can't
-            // answer a prompt, so an 'ask' verdict fails closed there.
-            if (name === 'run_command') {
-              const knobs = getCliKnobs();
-              if (knobs.autoClassifyShell !== 'off') {
-                const cmd = String((args as { command?: unknown } | null)?.command ?? '');
-                const verdict = classifyShellCommand(cmd, {
-                  mode: knobs.autoClassifyShell,
-                  silent: this.silent,
-                  enforceWhenSilent: knobs.autoClassifyShellEnforceWhenSilent,
-                  allowlist: knobs.commandAllowlist,
-                  destructiveContext: { userIntent: this.lastUserPrompt },
-                });
-                if (verdict.decision === 'deny') {
-                  denyAndRecord(`Tool "${name}" denied by autoClassifyShell (${verdict.rule}): ${verdict.reason}`);
-                }
-                if (verdict.decision === 'ask' && this.silent) {
-                  denyAndRecord(`Tool "${name}" flagged by autoClassifyShell but this session can't prompt (fail-closed) (${verdict.rule}): ${verdict.reason}`);
-                }
-              }
-            }
-            const policy = resolveToolPolicy(name, this.accessMode, args as Record<string, unknown> | null);
-            const mcpNeedsApproval = !isLocal &&
-              assessMcpToolApproval(name, mcpToolByName.get(name)).requiresApproval;
-            if (policy.mutating || mcpNeedsApproval) {
-              const blockedSkills = requiredSkillsBlockingMutation(
-                requiredSkillActivation,
-                loadedRequiredSkills,
-              );
-              const disabledSkill = blockedSkills.find((skill) => skill.availability === 'disabled');
-              if (disabledSkill) {
-                denyAndRecord(
-                  `Tool "${name}" paused: required skill "${disabledSkill.id}" is disabled for this workspace. Enable it or revise the task before mutating.`,
-                );
-              }
-              if (blockedSkills.length > 0) {
-                denyAndRecord(
-                  `Tool "${name}" paused until required workflow skill(s) are loaded: ${blockedSkills.map((skill) => skill.id).join(', ')}. Call get_skill for each, follow the instructions, then retry.`,
-                );
-              }
-            }
-            if (ruleDecision === 'allow' && policy.decision === 'ask') {
-              policy.decision = 'allow';
-              policy.reason = 'cli.permissions allow rule';
-            }
-            if (policy.mutating) {
-              this.policyAudit.push({ tool: name, action: policy.action, decision: policy.decision, reason: policy.reason });
-              traceEvent(
-                'policy.decision',
-                { tool: name, action: policy.action, decision: policy.decision, access_mode: this.accessMode, session_key: this.sessionKey, local: isLocal },
-                { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId },
-              );
-              // HEADLESS-EVENTS — surface the policy decision to consumers.
-              callbacks.onApproval?.({ tool: name, action: policy.action, decision: policy.decision, reason: policy.reason });
-            }
-            if (policy.decision === 'deny') {
-              denyAndRecord(`Tool "${name}" denied by execution policy: ${policy.reason}.`);
-            }
-            if (policy.decision === 'ask' && this.silent) {
-              denyAndRecord(`Tool "${name}" requires approval but this session can't prompt (fail-closed): ${policy.reason}.`);
-            }
-            // POLICY-3 — external-directory gate: a file write whose target
-            // escapes the workspace is governed by the profile's
-            // `externalDirWrites` mode (deny / ask / allow). Independent of the
-            // access-mode decision above.
-            if (policy.action === 'file_edit' && typeof args?.path === 'string' && args.path) {
-              const target = path.resolve(this.workspaceRoot, args.path);
-              const ext = externalDirectoryDecision(target, this.workspaceRoot, getCliKnobs().externalDirWrites, isPathWithinRoots);
-              if (ext.decision === 'deny') {
-                denyAndRecord(`Tool "${name}" denied: ${ext.reason}.`);
-              }
-              if (ext.decision === 'ask' && this.silent) {
-                denyAndRecord(`Tool "${name}" requires approval (external write) but this session can't prompt: ${ext.reason}.`);
-              }
-            }
-          }
-          // Defense-in-depth: a LOCAL tool outside the access-mode inventory
-          // (scope/budget-filtered) is still blocked even when its action kind
-          // is allowed. Orchestration/MCP tools have their own inventory; the
-          // `allowed` set is the local-tool roster.
-          if (isLocal && !registryToolAllowed(name, this.accessMode)) {
-            throw new Error(`Tool "${name}" is not permitted in access mode "${this.accessMode}".`);
-          }
+          authorizeToolCall({
+            agent: this,
+            callbacks,
+            name,
+            args,
+            isLocal,
+            mcpTool: mcpToolByName.get(name),
+            skillAllowsTool,
+            workspaceAllowsLocalTool,
+            workspaceAllowsMcpTool,
+            requiredSkillActivation,
+            loadedRequiredSkills,
+            trace: { traceId: turnSpan.traceId, spanId: turnSpan.spanId },
+          });
           // 0.4.x-4 (`/context`) — count each tool that actually dispatches.
           this.toolCallCounts.set(name, (this.toolCallCounts.get(name) ?? 0) + 1);
           // CC-UX-E3 (`/usage`) — attribute MCP tool dispatch to its server so
