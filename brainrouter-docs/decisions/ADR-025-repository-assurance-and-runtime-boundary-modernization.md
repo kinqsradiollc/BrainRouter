@@ -512,6 +512,14 @@ the repository's normal security-review process before merge.
 | A25-4c1 | `[x]` | Extract pending-input application into a host-neutral safe-boundary steering phase | Core typecheck and the in-flight extension-steer fixture prove reconciliation, untrusted-input framing, receipt lifecycle, transcript order, and continuation before the next model request |
 | A25-4d | `[ ]` | Consolidate local and cross-host delegation packets, authority attenuation, cancellation, and child-result projection | Delegation fixtures prove parent ceilings, explicit capability subsets, bounded fan-out, cancellation propagation, and identical CLI/Desktop receipts |
 
+### A25-8 Core review delivery slices
+
+| ID | Status | Deliverable | Acceptance evidence |
+|---|---|---|---|
+| A25-8a | `[x]` | Add Core-owned assurance-record validation and evidence/coverage-aware gate policy | Validation rejects authority, revision, lifecycle, counter, stage, and finding-reference mismatches; gate fixtures prove candidate-only, partial, missing, mismatched, stale, superseded, and wrong-head evidence cannot become clean or blocking, while independently supported current-head findings follow explicit program policy |
+| A25-8b | `[ ]` | Extract finding identity/lifecycle and program policy behind the curated review façade while preserving local review compatibility | Existing parser, lens, lifecycle, severity, stale-diff, and gate fixtures retain behavior; assurance finding lineage gains deterministic fingerprint and disposition adapters |
+| A25-8c | `[ ]` | Introduce review ports and campaign services without importing Git, database, queue, provider SDK, or hosts into Core policy | In-memory port fixtures cover exact-revision run creation, stage transitions, cancellation, partial failure, candidate verification, and idempotent lifecycle reconciliation |
+
 ### Migration guardrails
 
 - Begin with the inventory and contracts; do not combine extraction with feature
