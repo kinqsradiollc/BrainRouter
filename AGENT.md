@@ -129,6 +129,17 @@ Read the skill's `SKILL.md` from the filesystem and follow it.
 - [bounded-agent-harness](skills/agent/bounded-agent-harness/SKILL.md) — caps + tool allowlists + forced structured output for weak/local models.
 - [fleet-migration](skills/agent/fleet-migration/SKILL.md) — one change across many repos as isolated, verified PRs.
 
+### Profile- and task-selected workflows
+
+The scenario map helps repository contributors choose a workflow. Product
+runtime selection is stricter: the reviewed workspace profile and planning
+schema choose the eligible skill set, while the current task or active goal
+decides which workflow skills are required now. Required skills must be loaded
+before mutation; a disabled required skill fails closed. Loading a skill
+constrains how work is performed and never expands tools, permissions,
+approvals, or mutation authority. A plan/review-only request remains read-only
+even when Planning or ADR guidance is active.
+
 ---
 
 ## ⚡ Workflow checklist

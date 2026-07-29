@@ -389,6 +389,28 @@ display.
 
 - **Evidence:** `packages/core/src/workspace/selectionCatalog.ts`, `packages/core/src/workspace/toolProfiles.ts`, `packages/core/src/workspace/onboardingSources.ts`, `packages/core/src/tests/workspace-selection-catalog.test.ts`, `packages/core/src/tests/workspace-onboarding-sources.test.ts`
 
+### 15d. Required workflow skills are selected by planning schema and task
+
+The reviewed workspace planning schema determines the workflow vocabulary for
+its profile. The active prompt and goal determine whether Planning is required;
+durable architecture and security-boundary decisions may additionally require
+ADR guidance. Enforce this through
+`workspace/requiredSkillActivation.ts` at the shared Agent authorization
+boundary, not through host-specific prompt text. A missing manifest uses the
+safe custom planning schema and preserves small-task no-op behavior.
+
+Required skills must load before the first mutating tool call. A disabled
+required skill is a visible fail-safe, not permission to continue with a weaker
+workflow. Skill activation never grants tools, capabilities, permissions,
+approvals, or mutation authority, and plan/review-only requests remain
+read-only. Keep the emitted instructions model-neutral and verify representative
+profile, security-decision, custom-schema, active-goal, and no-op prompts as a
+table-driven corpus.
+
+- **Evidence:** `packages/core/src/workspace/requiredSkillActivation.ts`,
+  `packages/core/src/agent/runtime/toolAuthorizationPhase.ts`,
+  `packages/core/src/tests/agent-quality-activation-corpus.test.ts`
+
 ### 16. ⛔ Executable plugin capabilities are consent-gated through the existing exec policy
 
 Command-type hooks and MCP command-servers shipped by a plugin stay **disabled**

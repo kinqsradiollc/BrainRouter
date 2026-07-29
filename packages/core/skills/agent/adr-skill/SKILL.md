@@ -1,6 +1,6 @@
 ---
 name: adr-skill
-description: Records decisions and documentation. Use when making architectural decisions, changing public APIs, shipping features, or when you need to record context that future engineers and agents will need to understand the codebase.
+description: Records durable architecture decisions and their implementation taskboard. Use when choosing or changing public APIs, data models, security or runtime boundaries, cross-package ownership, orchestration/context contracts, or another expensive-to-reverse design that future engineers and agents must understand.
 hints:
   - Document the 'why' (context, constraints, trade-offs) behind a change, not just the 'what'.
   - Write an ADR (Architecture Decision Record) for any decision that would be expensive to reverse.
@@ -29,6 +29,11 @@ Document decisions, not just code. The most valuable documentation captures the 
 ## Architecture Decision Records (ADRs)
 
 ADRs capture the reasoning behind significant technical decisions. They're the highest-value documentation you can write.
+
+Before choosing a design, trace the current implementation and identify the
+existing owner, public entrypoints, consumers, host effects, and compatibility
+constraints. Record proposals as proposals; do not describe an unshipped
+boundary as current behavior.
 
 ### When to Write an ADR
 
@@ -94,6 +99,21 @@ PROPOSED → ACCEPTED → (SUPERSEDED or DEPRECATED)
 
 - **Don't delete old ADRs.** They capture historical context.
 - When a decision changes, write a new ADR that references and supersedes the old one.
+
+### Ownership and delivery contract
+
+For cross-package or runtime-boundary decisions, include:
+
+- an ownership table for contracts, policy, services, ports, adapters, and UI;
+- alternatives with concrete benefits, costs, and rejection reasons;
+- compatibility, security, cancellation, persistence, and failure semantics;
+- dependency-ordered implementation slices small enough for separate PRs;
+- acceptance evidence for every slice and parent decision.
+
+Keep the ADR taskboard current as implementation lands. A checked parent row
+requires direct evidence for its full acceptance condition, not only checked
+child rows. Steering that changes scope must update the decision, task
+dependencies, and evidence before implementation continues.
 
 ## Inline Documentation
 
