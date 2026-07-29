@@ -9,20 +9,14 @@
 import type {
   AssuranceCoverage,
   AssuranceFinding,
+  AssurancePublicationProjection,
+  AssurancePublicationStatus,
   AssuranceSeverity,
   RepositoryAssuranceRun,
 } from '@kinqs/brainrouter-types/review';
+import { ASSURANCE_PUBLICATION_STATUSES } from '@kinqs/brainrouter-types/review';
 
-export type AssuranceGateStatus =
-  | 'running'
-  | 'clean'
-  | 'advisory'
-  | 'blocked'
-  | 'partial'
-  | 'failed'
-  | 'canceled'
-  | 'superseded'
-  | 'stale';
+export type AssuranceGateStatus = AssurancePublicationStatus;
 
 export interface AssuranceGateDecision {
   status: AssuranceGateStatus;
@@ -30,6 +24,73 @@ export interface AssuranceGateDecision {
   cleanEligible: boolean;
   reason: string;
   blockingFindingIds: string[];
+}
+
+const PUBLICATION_STATUS_SET = new Set<string>(ASSURANCE_PUBLICATION_STATUSES);
+
+const PUBLICATION_LABELS: Record<AssurancePublicationStatus, string> = {
+  running: 'running',
+  clean: 'clean',
+  advisory: 'advisory',
+  blocked: 'blocked',
+  partial: 'partial',
+  failed: 'failed',
+  canceled: 'canceled',
+  superseded: 'superseded',
+  stale: 'stale',
+};
+
+/**
+ * Validate a persisted or adapter-provided gate before it regains publication
+ * authority. In particular, only a clean gate may claim clean eligibility.
+ */
+export function parseAssuranceGateDecision(value: unknown): AssuranceGateDecision | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const gate = value as Record<string, unknown>;
+  if (
+    typeof gate.status !== 'string'
+    || !PUBLICATION_STATUS_SET.has(gate.status)
+    || typeof gate.blocked !== 'boolean'
+    || typeof gate.cleanEligible !== 'boolean'
+    || typeof gate.reason !== 'string'
+    || gate.reason.trim().length === 0
+    || !Array.isArray(gate.blockingFindingIds)
+    || !gate.blockingFindingIds.every((id) => typeof id === 'string' && id.trim().length > 0)
+  ) return null;
+
+  const status = gate.status as AssuranceGateStatus;
+  if (gate.blocked && gate.cleanEligible) return null;
+  if (gate.cleanEligible && status !== 'clean') return null;
+  if (status === 'clean' && (!gate.cleanEligible || gate.blocked)) return null;
+  if (status === 'blocked' && !gate.blocked) return null;
+
+  return {
+    status,
+    blocked: gate.blocked,
+    cleanEligible: gate.cleanEligible,
+    reason: gate.reason,
+    blockingFindingIds: [...gate.blockingFindingIds] as string[],
+  };
+}
+
+/** Produce the single publication record consumed by every host. */
+export function projectAssurancePublication(
+  gate: AssuranceGateDecision,
+): AssurancePublicationProjection {
+  return {
+    schemaVersion: 1,
+    status: gate.status,
+    label: PUBLICATION_LABELS[gate.status],
+    conclusion: gate.blocked
+      ? 'failure'
+      : gate.cleanEligible
+        ? 'success'
+        : 'neutral',
+    blocked: gate.blocked,
+    cleanEligible: gate.cleanEligible,
+    reason: gate.reason,
+    blockingFindingIds: [...gate.blockingFindingIds],
+  };
 }
 
 const SEVERITY_RANK: Record<AssuranceSeverity, number> = {

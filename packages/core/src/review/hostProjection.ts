@@ -8,6 +8,8 @@ export {
   projectReviewAssuranceDetailView,
   type AssuranceFindingStateView,
   type AssuranceFindingView,
+  type AssurancePublicationStatusView,
+  type AssurancePublicationView,
   type AssuranceRunStatusView,
   type ReviewAssuranceDetailView,
   type ReviewSummaryView,

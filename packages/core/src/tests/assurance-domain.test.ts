@@ -9,6 +9,8 @@ import {
   calculateAssuranceGate,
   coverageSupportsCleanConclusion,
   findingHasBlockingEvidence,
+  parseAssuranceGateDecision,
+  projectAssurancePublication,
   validateAssuranceFinding,
   validateRepositoryAssuranceRun,
 } from '../review/index.js';
@@ -323,4 +325,40 @@ test('missing or mismatched finding records make the gate partial, never clean',
     findings: [mismatched],
     currentHeadSha: 'head',
   }).status, 'partial');
+});
+
+test('publication projection is canonical and never upgrades partial evidence', () => {
+  const partial = parseAssuranceGateDecision({
+    status: 'partial',
+    blocked: true,
+    cleanEligible: false,
+    reason: 'Coverage is incomplete.',
+    blockingFindingIds: [],
+  });
+  assert.ok(partial);
+  assert.deepEqual(projectAssurancePublication(partial), {
+    schemaVersion: 1,
+    status: 'partial',
+    label: 'partial',
+    conclusion: 'failure',
+    blocked: true,
+    cleanEligible: false,
+    reason: 'Coverage is incomplete.',
+    blockingFindingIds: [],
+  });
+
+  assert.equal(parseAssuranceGateDecision({
+    status: 'partial',
+    blocked: false,
+    cleanEligible: true,
+    reason: 'Invalid upward projection.',
+    blockingFindingIds: [],
+  }), null);
+  assert.equal(parseAssuranceGateDecision({
+    status: 'clean',
+    blocked: false,
+    cleanEligible: false,
+    reason: 'Contradictory clean state.',
+    blockingFindingIds: [],
+  }), null);
 });

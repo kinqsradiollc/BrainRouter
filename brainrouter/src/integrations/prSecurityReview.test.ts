@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import { runPrSecurityReview, runPrCodeReview, type PrSecurityReviewDeps } from "./prSecurityReview.js";
+import { projectAssurancePublication } from "@kinqs/brainrouter-core/review";
 import type { LLMRunner } from "@kinqs/brainrouter-types";
 
 // A real RSA key so buildAppJwt (RS256) actually signs during token mint.
@@ -397,11 +398,14 @@ describe("PR security review executor (ADR-017 D5)", () => {
 
     expect(result.blocking).toBe(0);
     expect(result.assuranceGate?.status).toBe("advisory");
-    expect(routes.bodies?.["POST /repos/o/r/check-runs"] ?? "").toContain(
-      '"conclusion":"neutral"',
-    );
+    const publication = projectAssurancePublication(result.assuranceGate!);
+    const check = JSON.parse(
+      routes.bodies?.["POST /repos/o/r/check-runs"] ?? "{}",
+    ) as { conclusion?: string; output?: { title?: string } };
+    expect(check.conclusion).toBe(publication.conclusion);
+    expect(check.output?.title).toContain(publication.label);
     expect(routes.bodies?.["POST /repos/o/r/issues/7/comments"] ?? "").toContain(
-      "Assurance gate: **advisory**",
+      `Assurance gate: **${publication.label}**`,
     );
   });
 
@@ -431,6 +435,9 @@ describe("PR security review executor (ADR-017 D5)", () => {
     });
     expect(routes.bodies?.["POST /repos/o/r/check-runs"] ?? "").toContain(
       '"conclusion":"failure"',
+    );
+    expect(projectAssurancePublication(result.assuranceGate!).conclusion).toBe(
+      "failure",
     );
   });
 

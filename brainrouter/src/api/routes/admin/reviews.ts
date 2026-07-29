@@ -1,6 +1,10 @@
 /** PR review console API: org-scoped jobs, manual runs, GitHub PR metadata and timelines. */
 import { Router } from "express";
 import { mintInstallationToken, validateGithubApiBase } from "@kinqs/brainrouter-core/track";
+import {
+  parseAssuranceGateDecision,
+  projectAssurancePublication,
+} from "@kinqs/brainrouter-core/review";
 import type {
   MemoryJobRecord,
   RepositoryReviewAvailability,
@@ -91,16 +95,19 @@ function reviewRecord(job: MemoryJobRecord): ReviewJobDto {
 async function reviewAssurance(
   store: Store,
   orgId: string,
-  jobId: string,
+  job: MemoryJobRecord,
 ): Promise<ReviewAssuranceDto | null> {
   if (!store.getRepositoryAssuranceRunForJob || !store.listRepositoryAssuranceFindings) {
     return null;
   }
-  const run = await store.getRepositoryAssuranceRunForJob(orgId, jobId);
+  const run = await store.getRepositoryAssuranceRunForJob(orgId, job.id);
   if (!run) return null;
+  const output = (job.output ?? {}) as { assuranceGate?: unknown };
+  const gate = parseAssuranceGateDecision(output.assuranceGate);
   return {
     run,
     findings: await store.listRepositoryAssuranceFindings(orgId, run.id),
+    ...(gate ? { publication: projectAssurancePublication(gate) } : {}),
   };
 }
 
@@ -432,7 +439,7 @@ reviewsRouter.get("/jobs/:id", requirePermission("reviews:read"), async (req: Au
   const input = (job?.input ?? {}) as { orgId?: unknown };
   if (!job || (input.orgId !== req.orgId) || !["pr-security-review", "pr-code-review", "pr-pentest", "domain-pentest"].includes(job.kind)) { sendError(res, 404, "Review job not found"); return; }
   const [assurance, permission] = await Promise.all([
-    reviewAssurance(store, req.orgId!, job.id),
+    reviewAssurance(store, req.orgId!, job),
     canRun(req),
   ]);
   res.json({ review: reviewRecord(job), assurance, canRun: permission });

@@ -22,6 +22,7 @@ import {
   inlineMarkerRegex,
   parseReviewFindings,
   PENTEST_LENS,
+  projectAssurancePublication,
   resolveInlineAnchor,
   SECURITY_LENS,
   stripReasoning,
@@ -289,7 +290,8 @@ async function fetchCurrentHeadSha(input: {
 
 function gateSummary(gate: PrReviewPublicationGate | undefined): string {
   if (!gate) return "";
-  return `\n\n---\nAssurance gate: **${gate.status}** — ${gate.reason}`;
+  const publication = projectAssurancePublication(gate);
+  return `\n\n---\nAssurance gate: **${publication.label}** — ${publication.reason}`;
 }
 
 function gateConclusion(
@@ -297,9 +299,7 @@ function gateConclusion(
   fallback: "failure" | "neutral" | "success",
 ): "failure" | "neutral" | "success" {
   if (!gate) return fallback;
-  if (gate.blocked) return "failure";
-  if (gate.cleanEligible) return "success";
-  return "neutral";
+  return projectAssurancePublication(gate).conclusion;
 }
 
 function unavailablePublicationGate(
@@ -982,8 +982,11 @@ async function postGitlabCommitStatus(
     assuranceGate,
     fails ? "failure" : findings.length > 0 ? "neutral" : "success",
   );
-  const description = assuranceGate
-    ? `${assuranceGate.status}: ${assuranceGate.reason}`
+  const publication = assuranceGate
+    ? projectAssurancePublication(assuranceGate)
+    : undefined;
+  const description = publication
+    ? `${publication.label}: ${publication.reason}`
     : findings.length === 0
       ? 'No issues found'
       : fails ? `${blocking} blocking, ${findings.length} total` : `${findings.length} advisory finding(s)`;
@@ -1093,12 +1096,15 @@ async function postCheckRun(
     assuranceGate,
     (blocking > 0 && gates) ? 'failure' : findings.length > 0 ? 'neutral' : 'success',
   );
-  const title = assuranceGate
-    ? assuranceGate.blocked
+  const publication = assuranceGate
+    ? projectAssurancePublication(assuranceGate)
+    : undefined;
+  const title = publication
+    ? publication.blocked
       ? `Assurance blocked · ${blocking} supported finding(s)`
-      : assuranceGate.cleanEligible
+      : publication.cleanEligible
         ? 'Repository assurance complete'
-        : `Assurance ${assuranceGate.status}`
+        : `Assurance ${publication.label}`
     : lens.advisory
       ? (findings.length > 0 ? `${findings.length} suggestion(s)` : 'No suggestions')
       : blocking > 0 ? `${blocking} blocking · ${findings.length} finding(s)${blockOnFindings ? '' : ' (advisory)'}`
@@ -1106,8 +1112,8 @@ async function postCheckRun(
           : 'No issues found';
   const bySev = findings.reduce<Record<string, number>>((a, f) => { a[f.severity] = (a[f.severity] ?? 0) + 1; return a; }, {});
   const tally = Object.entries(bySev).map(([s, n]) => `${n} ${s}`).join(' · ') || '0';
-  const summary = assuranceGate
-    ? `${assuranceGate.reason}\n\n**${blocking} evidence-supported blocking finding(s)** · ${tally}`
+  const summary = publication
+    ? `${publication.reason}\n\n**${blocking} evidence-supported blocking finding(s)** · ${tally}`
     : findings.length === 0
       ? lens.noFindingsLine
       : `**${blocking} blocking** · ${tally}\n\nSee the pinned **${lens.name}** summary comment and the inline suggestions on this PR.`;

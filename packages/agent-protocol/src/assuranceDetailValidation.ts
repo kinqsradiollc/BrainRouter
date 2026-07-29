@@ -5,10 +5,13 @@ import {
 import {
   ASSURANCE_EVIDENCE_KIND_VIEWS,
   ASSURANCE_FINDING_STATE_VIEWS,
+  ASSURANCE_PUBLICATION_CONCLUSION_VIEWS,
+  ASSURANCE_PUBLICATION_STATUS_VIEWS,
   ASSURANCE_SEVERITY_VIEWS,
   type AssuranceCoverageLimitationView,
   type AssuranceEvidenceView,
   type AssuranceFindingView,
+  type AssurancePublicationView,
   type AssuranceProvenanceView,
   type AssuranceSourceLocationView,
   type AssuranceVerifierDispositionView,
@@ -46,6 +49,43 @@ function optionalStringArray(value: unknown): value is string[] | undefined {
 
 export function nullableNonNegativeInteger(value: unknown): value is number | null {
   return value === null || nonNegativeInteger(value);
+}
+
+export function projectPublication(value: unknown): AssurancePublicationView | null {
+  const publication = record(value);
+  if (
+    !publication
+    || publication.schemaVersion !== 1
+    || !oneOf(publication.status, ASSURANCE_PUBLICATION_STATUS_VIEWS)
+    || !nonEmpty(publication.label)
+    || !oneOf(publication.conclusion, ASSURANCE_PUBLICATION_CONCLUSION_VIEWS)
+    || typeof publication.blocked !== 'boolean'
+    || typeof publication.cleanEligible !== 'boolean'
+    || !nonEmpty(publication.reason)
+    || !Array.isArray(publication.blockingFindingIds)
+    || !publication.blockingFindingIds.every(nonEmpty)
+  ) return null;
+  if (publication.blocked && publication.cleanEligible) return null;
+  if (publication.conclusion === 'success' && (
+    publication.status !== 'clean'
+    || !publication.cleanEligible
+    || publication.blocked
+  )) return null;
+  if (publication.conclusion === 'failure' && !publication.blocked) return null;
+  if (publication.conclusion === 'neutral' && (
+    publication.blocked
+    || publication.cleanEligible
+  )) return null;
+  return {
+    schemaVersion: 1,
+    status: publication.status,
+    label: publication.label,
+    conclusion: publication.conclusion,
+    blocked: publication.blocked,
+    cleanEligible: publication.cleanEligible,
+    reason: publication.reason,
+    blockingFindingIds: publication.blockingFindingIds,
+  };
 }
 
 function projectLocation(value: unknown): AssuranceSourceLocationView | null {

@@ -6,3 +6,4 @@ export * from './coverage.js';
 export * from './analysis.js';
 export * from './finding.js';
 export * from './run.js';
+export * from './publication.js';
