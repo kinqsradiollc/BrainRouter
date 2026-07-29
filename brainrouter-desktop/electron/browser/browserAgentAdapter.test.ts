@@ -50,6 +50,33 @@ test('file upload maps workspace-relative files and never returns resolved local
   assert.deepEqual(manager.calls[0]?.command, { op: 'set-files', ref: undefined, target: 'upload', files: ['fixtures/upload.txt'] });
 });
 
+test('inactive tab creation returns the newly opened tab identity, not the user active tab', async () => {
+  const manager = new FakeManager();
+  manager.next = {
+    ok: true,
+    requestId: 'x',
+    tabId: 'tab_x_1',
+    revision: 4,
+    value: {
+      id: 'tab_agent_2',
+      revision: 1,
+      title: 'Background agent tab',
+      url: 'https://example.com/research',
+    },
+  };
+  const result = await executeAgentBrowserCommand(manager, {
+    id: 'open-background',
+    command: {
+      kind: 'tabs.open',
+      url: 'https://example.com/research',
+      activate: false,
+    },
+  }, '/tmp/workspace');
+  assert.equal(result.ok, true);
+  assert.equal(result.tabId, 'tab_agent_2');
+  assert.equal(result.pageRevision, 1);
+});
+
 test('download observations omit absolute save paths while keeping actionable ids', async () => {
   const manager = new FakeManager();
   manager.next = { ok: true, requestId: 'x', tabId: 'tab_x_1', revision: 4, value: [{ id: 'download_1', tabId: 'tab_x_1', filename: 'report.pdf', url: 'https://example.com/report.pdf', savePath: '/Users/alice/Downloads/report.pdf', receivedBytes: 10, totalBytes: 10, state: 'completed', startedAt: 1 }] };
