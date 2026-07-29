@@ -28,6 +28,7 @@ import {
   formatVulnerabilityIntelligenceContext,
   type ParsedReviewFinding,
   type ReviewLens,
+  type AssuranceGateDecision,
   type VulnerabilityIntelligenceResult,
 } from '@kinqs/brainrouter-core/review';
 import type { LLMRunner, MemoryJobProgressEvent } from '@kinqs/brainrouter-types';
@@ -91,13 +92,17 @@ export interface PrReviewDeps {
     headSha: string;
     changed: AssuranceSourceLocation[];
   }) => Promise<{ text: string; packetRefs: string[]; artifactRefs: string[] } | null>;
-  /** Persist bounded model candidates before any forge publication is attempted. */
+  /**
+   * Persist bounded candidates and return the evidence-aware publication gate
+   * before any forge output is attempted.
+   */
   onCandidatesReady?: (input: {
     headSha: string;
+    currentHeadSha?: string;
     findings: PrReviewCandidateDetail[];
     coverage: PrReviewCoverage;
     changedFiles: number;
-  }) => void | Promise<void>;
+  }) => PrReviewPublicationGate | void | Promise<PrReviewPublicationGate | void>;
   /** Stop new bounded work when the durable scheduler job was canceled. */
   isCancellationRequested?: () => boolean | Promise<boolean>;
   /**
@@ -203,6 +208,8 @@ export interface PrReviewCoverage {
   unrecordedFindings: number;
 }
 
+export type PrReviewPublicationGate = AssuranceGateDecision;
+
 export interface PrReviewResult {
   ok: boolean;
   findings: number;
@@ -230,6 +237,8 @@ export interface PrReviewResult {
   contributorsAvailable?: boolean;
   /** Only complete coverage is allowed to auto-fix an absent durable finding. */
   coverage?: PrReviewCoverage;
+  /** Durable evidence/coverage decision used for forge publication authority. */
+  assuranceGate?: PrReviewPublicationGate;
 }
 
 // Back-compat aliases (the security lens was the original single kind).
@@ -243,6 +252,67 @@ function ghHeaders(token: string, accept = 'application/vnd.github+json'): Recor
 
 function glHeaders(token: string): Record<string, string> {
   return { Authorization: `Bearer ${token}`, Accept: 'application/json' };
+}
+
+async function fetchCurrentHeadSha(input: {
+  fetchImpl: typeof fetch;
+  forge: "github" | "gitlab";
+  apiBase: string;
+  repo: string;
+  project: string;
+  prNumber: number;
+  token: string;
+}): Promise<string | undefined> {
+  try {
+    const url = input.forge === "gitlab"
+      ? `${input.apiBase}/projects/${input.project}/merge_requests/${input.prNumber}`
+      : `${input.apiBase}/repos/${input.repo}/pulls/${input.prNumber}`;
+    const response = await input.fetchImpl(url, {
+      headers: input.forge === "gitlab"
+        ? glHeaders(input.token)
+        : ghHeaders(input.token),
+    });
+    if (!response.ok) return undefined;
+    if (input.forge === "gitlab") {
+      const payload = await response.json() as {
+        sha?: string;
+        diff_refs?: GitlabDiffRefs;
+      };
+      return cleanIdentity(payload.diff_refs?.head_sha ?? payload.sha);
+    }
+    const payload = await response.json() as { head?: { sha?: string } };
+    return cleanIdentity(payload.head?.sha);
+  } catch {
+    return undefined;
+  }
+}
+
+function gateSummary(gate: PrReviewPublicationGate | undefined): string {
+  if (!gate) return "";
+  return `\n\n---\nAssurance gate: **${gate.status}** — ${gate.reason}`;
+}
+
+function gateConclusion(
+  gate: PrReviewPublicationGate | undefined,
+  fallback: "failure" | "neutral" | "success",
+): "failure" | "neutral" | "success" {
+  if (!gate) return fallback;
+  if (gate.blocked) return "failure";
+  if (gate.cleanEligible) return "success";
+  return "neutral";
+}
+
+function unavailablePublicationGate(
+  lens: ReviewLens,
+  policy: ReviewPolicy,
+): PrReviewPublicationGate {
+  return {
+    status: "partial",
+    blocked: policy.blockOnFindings && !lens.advisory,
+    cleanEligible: false,
+    reason: "The durable repository-assurance gate is unavailable.",
+    blockingFindingIds: [],
+  };
 }
 
 /**
@@ -652,26 +722,61 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
     unreviewedParts: droppedParts,
     unrecordedFindings,
   };
-  await deps.onCandidatesReady?.({
-    headSha,
-    changedFiles,
-    coverage,
-    findings: recordedFindings.map((finding) => ({
-      file: finding.file,
-      ...(finding.line ? { line: finding.line } : {}),
-      ...(finding.endLine ? { endLine: finding.endLine } : {}),
-      severity: finding.severity,
-      confidence: finding.confidence,
-      title: finding.summary,
-      ...(finding.details ? { details: finding.details } : {}),
-      ...(finding.suggestion ? { suggestion: finding.suggestion } : {}),
-      ...(finding.summary.match(/\b(CWE-\d+)\b/i)?.[1]
-        ? { cwe: finding.summary.match(/\b(CWE-\d+)\b/i)?.[1] }
-        : {}),
-      ...(finding.preExisting ? { preExisting: true } : {}),
-      ...(finding.replacement ? { suggestable: true } : {}),
-    })),
-  });
+  let assuranceGate: PrReviewPublicationGate | undefined;
+  if (deps.onCandidatesReady) {
+    const currentHeadSha = await fetchCurrentHeadSha({
+      fetchImpl: deps.fetchImpl,
+      forge,
+      apiBase,
+      repo,
+      project: gitlabProject,
+      prNumber,
+      token,
+    });
+    const candidateGate = await deps.onCandidatesReady({
+      headSha,
+      ...(currentHeadSha ? { currentHeadSha } : {}),
+      changedFiles,
+      coverage,
+      findings: recordedFindings.map((finding) => ({
+        file: finding.file,
+        ...(finding.line ? { line: finding.line } : {}),
+        ...(finding.endLine ? { endLine: finding.endLine } : {}),
+        severity: finding.severity,
+        confidence: finding.confidence,
+        title: finding.summary,
+        ...(finding.details ? { details: finding.details } : {}),
+        ...(finding.suggestion ? { suggestion: finding.suggestion } : {}),
+        ...(finding.summary.match(/\b(CWE-\d+)\b/i)?.[1]
+          ? { cwe: finding.summary.match(/\b(CWE-\d+)\b/i)?.[1] }
+          : {}),
+        ...(finding.preExisting ? { preExisting: true } : {}),
+        ...(finding.replacement ? { suggestable: true } : {}),
+      })),
+    });
+    assuranceGate = candidateGate
+      ? candidateGate
+      : unavailablePublicationGate(lens, policy);
+    progress(
+      "assurance-gate-ready",
+      `Repository assurance gate calculated: ${assuranceGate.status}`,
+      {
+        status: assuranceGate.status,
+        blocked: assuranceGate.blocked,
+        cleanEligible: assuranceGate.cleanEligible,
+        blocking: assuranceGate.blockingFindingIds.length,
+      },
+    );
+  }
+  const publicationBlocking = assuranceGate
+    ? assuranceGate.blockingFindingIds.length
+    : blocking;
+  const suppressInline = assuranceGate
+    ? assuranceGate.status === "stale"
+      || assuranceGate.status === "superseded"
+      || assuranceGate.status === "canceled"
+      || assuranceGate.status === "failed"
+    : false;
 
   // 3. Post inline review comments (with GitHub ```suggestion blocks) anchored to the
   //    diff, grouped as ONE PR review — deduped against inline comments we already
@@ -681,7 +786,7 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
     ? await listGitlabInlineMarkers(deps.fetchImpl, apiBase, gitlabProject, prNumber, token, lens)
     : await listOurInlineMarkers(deps.fetchImpl, apiBase, repo, prNumber, token, lens);
   const inline: InlineReviewComment[] = [];
-  for (const f of findings) {
+  for (const f of suppressInline ? [] : findings) {
     const anchor = resolveInlineAnchor(f, added);
     if (!anchor) continue; // no valid diff anchor → summary-only
     if (alreadyPosted.has(inlineFindingMarker(lens, f))) continue; // already surfaced on a prior run
@@ -716,7 +821,7 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
 
   // 4. Post/update ONE idempotent PINNED SUMMARY comment (keyed by the lens marker) with
   //    the full tally — the single place to read this lens's status for the whole PR.
-  const body = formatReviewSummaryComment(lens, { findings, headSha });
+  const body = `${formatReviewSummaryComment(lens, { findings, headSha })}${gateSummary(assuranceGate)}`;
   const posted = forge === 'gitlab'
     ? await upsertGitlabReviewNote(deps.fetchImpl, apiBase, gitlabProject, prNumber, body, token, lens.summaryMarker)
     : await upsertReviewComment(deps.fetchImpl, apiBase, repo, prNumber, body, token, lens.summaryMarker);
@@ -725,7 +830,10 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
   // 4b. Approve the PR from this lens when it's clean AND the repo opts in (Strix
   //     "Approve clean PRs"). Approvals only on a green lens; noise otherwise.
   let approved = false;
-  if (findings.length === 0 && policy.approveClean) {
+  const cleanEligible = assuranceGate
+    ? assuranceGate.cleanEligible
+    : findings.length === 0;
+  if (cleanEligible && policy.approveClean) {
     approved = forge === 'gitlab'
       ? await approveGitlabMergeRequest(deps.fetchImpl, apiBase, gitlabProject, prNumber, token)
       : await postGroupedReview(deps.fetchImpl, apiBase, repo, prNumber, headSha, buildReviewIntro(lens, 0), [], token, 'APPROVE');
@@ -738,9 +846,16 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
   //    with none blocking ⇒ neutral; clean ⇒ success. When the repo's `blockOnFindings`
   //    is off, the check is advisory (never 'failure'). No-op (false) without `checks: write`.
   const checkPosted = forge === 'gitlab'
-    ? await postGitlabCommitStatus(deps.fetchImpl, apiBase, gitlabProject, headSha, lens, findings, blocking, policy.blockOnFindings, token)
-    : await postCheckRun(deps.fetchImpl, apiBase, repo, headSha, lens, findings, blocking, policy.blockOnFindings, token);
-  progress("check-posted", checkPosted ? "Check run posted" : "Check run could not be posted", { conclusion: blocking > 0 && policy.blockOnFindings && !lens.advisory ? "failure" : findings.length > 0 ? "neutral" : "success" });
+    ? await postGitlabCommitStatus(deps.fetchImpl, apiBase, gitlabProject, headSha, lens, findings, publicationBlocking, policy.blockOnFindings, token, assuranceGate)
+    : await postCheckRun(deps.fetchImpl, apiBase, repo, headSha, lens, findings, publicationBlocking, policy.blockOnFindings, token, assuranceGate);
+  const fallbackConclusion = blocking > 0 && policy.blockOnFindings && !lens.advisory
+    ? "failure"
+    : findings.length > 0
+      ? "neutral"
+      : "success";
+  progress("check-posted", checkPosted ? "Check run posted" : "Check run could not be posted", {
+    conclusion: gateConclusion(assuranceGate, fallbackConclusion),
+  });
   const findingsDetail = recordedFindings.map((finding) => ({
     file: finding.file, ...(finding.line ? { line: finding.line } : {}), ...(finding.endLine ? { endLine: finding.endLine } : {}), severity: finding.severity, title: finding.summary,
     ...(finding.summary.match(/\b(CWE-\d+)\b/i)?.[1] ? { cwe: finding.summary.match(/\b(CWE-\d+)\b/i)?.[1] } : {}),
@@ -749,8 +864,18 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
   progress("done", "Review completed");
 
   return {
-    ok: true, findings: findings.length, blocking, posted, inlinePosted, reviewPosted, checkPosted, approved,
-    findingsDetail, coverage, ...contributorMetadata(),
+    ok: true,
+    findings: findings.length,
+    blocking: publicationBlocking,
+    posted,
+    inlinePosted,
+    reviewPosted,
+    checkPosted,
+    approved,
+    findingsDetail,
+    coverage,
+    ...(assuranceGate ? { assuranceGate } : {}),
+    ...contributorMetadata(),
   };
 }
 
@@ -849,17 +974,28 @@ async function postGitlabCommitStatus(
   blocking: number,
   blockOnFindings: boolean,
   token: string,
+  assuranceGate?: PrReviewPublicationGate,
 ): Promise<boolean> {
   if (!headSha) return false;
   const fails = blocking > 0 && blockOnFindings && !lens.advisory;
-  const description = findings.length === 0
-    ? 'No issues found'
-    : fails ? `${blocking} blocking, ${findings.length} total` : `${findings.length} advisory finding(s)`;
+  const conclusion = gateConclusion(
+    assuranceGate,
+    fails ? "failure" : findings.length > 0 ? "neutral" : "success",
+  );
+  const description = assuranceGate
+    ? `${assuranceGate.status}: ${assuranceGate.reason}`
+    : findings.length === 0
+      ? 'No issues found'
+      : fails ? `${blocking} blocking, ${findings.length} total` : `${findings.length} advisory finding(s)`;
   try {
     const response = await fetchImpl(`${apiBase}/projects/${project}/statuses/${encodeURIComponent(headSha)}`, {
       method: 'POST',
       headers: { ...glHeaders(token), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ state: fails ? 'failed' : 'success', name: lens.name, description: description.slice(0, 255) }),
+      body: JSON.stringify({
+        state: conclusion === "failure" ? "failed" : "success",
+        name: lens.name,
+        description: description.slice(0, 255),
+      }),
     });
     return response.ok;
   } catch { return false; }
@@ -938,22 +1074,41 @@ async function upsertReviewComment(fetchImpl: typeof fetch, apiBase: string, rep
  * `checks: write`.
  */
 async function postCheckRun(
-  fetchImpl: typeof fetch, apiBase: string, repo: string, headSha: string, lens: ReviewLens, findings: ParsedReviewFinding[], blocking: number, blockOnFindings: boolean, token: string,
+  fetchImpl: typeof fetch,
+  apiBase: string,
+  repo: string,
+  headSha: string,
+  lens: ReviewLens,
+  findings: ParsedReviewFinding[],
+  blocking: number,
+  blockOnFindings: boolean,
+  token: string,
+  assuranceGate?: PrReviewPublicationGate,
 ): Promise<boolean> {
   if (!headSha) return false;
   // Advisory lenses (code review) never fail — findings are suggestions. Security gates,
   // unless the repo opts out of blocking (then a blocking finding is neutral/advisory).
   const gates = blockOnFindings && !lens.advisory;
-  const conclusion = (blocking > 0 && gates) ? 'failure' : findings.length > 0 ? 'neutral' : 'success';
-  const title = lens.advisory
-    ? (findings.length > 0 ? `${findings.length} suggestion(s)` : 'No suggestions')
-    : blocking > 0 ? `${blocking} blocking · ${findings.length} finding(s)${blockOnFindings ? '' : ' (advisory)'}`
-      : findings.length > 0 ? `${findings.length} finding(s), none blocking`
-        : 'No issues found';
+  const conclusion = gateConclusion(
+    assuranceGate,
+    (blocking > 0 && gates) ? 'failure' : findings.length > 0 ? 'neutral' : 'success',
+  );
+  const title = assuranceGate
+    ? assuranceGate.blocked
+      ? `Assurance blocked · ${blocking} supported finding(s)`
+      : assuranceGate.cleanEligible
+        ? 'Repository assurance complete'
+        : `Assurance ${assuranceGate.status}`
+    : lens.advisory
+      ? (findings.length > 0 ? `${findings.length} suggestion(s)` : 'No suggestions')
+      : blocking > 0 ? `${blocking} blocking · ${findings.length} finding(s)${blockOnFindings ? '' : ' (advisory)'}`
+        : findings.length > 0 ? `${findings.length} finding(s), none blocking`
+          : 'No issues found';
   const bySev = findings.reduce<Record<string, number>>((a, f) => { a[f.severity] = (a[f.severity] ?? 0) + 1; return a; }, {});
   const tally = Object.entries(bySev).map(([s, n]) => `${n} ${s}`).join(' · ') || '0';
-  const summary =
-    findings.length === 0
+  const summary = assuranceGate
+    ? `${assuranceGate.reason}\n\n**${blocking} evidence-supported blocking finding(s)** · ${tally}`
+    : findings.length === 0
       ? lens.noFindingsLine
       : `**${blocking} blocking** · ${tally}\n\nSee the pinned **${lens.name}** summary comment and the inline suggestions on this PR.`;
   try {
