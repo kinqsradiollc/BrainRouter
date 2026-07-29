@@ -1,23 +1,25 @@
 /**
- * Storage service (ADR-008, Wave 2) — a per-workspace port over the turn /
- * offline-queue checkpoint store and the file-mutation snapshot store. A
- * workspace holds many sessions, so the facade binds `workspaceRoot` and keeps
- * `sessionKey` a per-call argument. Additive and behaviour-preserving: every
- * method delegates to the existing store functions. The low-level
- * `store.ts` primitive and the pure connectivity/retry predicates stay importable
- * as module utilities. No logic moved or removed.
+ * Per-workspace facade over durable turn checkpoints and file-mutation
+ * snapshots. The service binds `workspaceRoot`, keeps `sessionKey` explicit,
+ * and delegates persistence through an injected port. Restore planning remains
+ * deterministic and host-independent.
  */
-import {
-  beginTurnCheckpoint, endTurnCheckpoint, queueOfflinePrompt, readOfflineQueue,
-  clearOfflineQueue, readRecoverable, type QueuedPrompt,
-} from "./checkpointStore.js";
-import {
-  recordFileMutation, readFileMutations, planRestore,
-  type FileMutationRecord, type RestoreAction,
-} from "./fileSnapshotStore.js";
+import type {
+  FileMutationRecord,
+  QueuedPrompt,
+  RecoverableState,
+  RestoreAction,
+} from './contracts.js';
+import { nodeStoragePersistenceAdapter } from './adapters/nodeStoragePersistenceAdapter.js';
+import { planRestore } from './policy/restorePlan.js';
+import type { StoragePersistencePort } from './ports/storagePersistencePort.js';
 
-/** Result of {@link IStorageService.readRecoverable} — the store's exact shape. */
-export type RecoverableState = ReturnType<typeof readRecoverable>;
+export type {
+  FileMutationRecord,
+  QueuedPrompt,
+  RecoverableState,
+  RestoreAction,
+} from './contracts.js';
 
 /** The turn-checkpoint + file-snapshot store contract, scoped to one workspace. */
 export interface IStorageService {
@@ -32,32 +34,35 @@ export interface IStorageService {
   planRestore(records: FileMutationRecord[], turnN: number): RestoreAction[];
 }
 
-/** {@link IStorageService} backed by the in-process stores — delegates only. */
+/** {@link IStorageService} backed by an injected persistence port. */
 export class StorageService implements IStorageService {
-  constructor(private readonly workspaceRoot: string) {}
+  constructor(
+    private readonly workspaceRoot: string,
+    private readonly persistence: StoragePersistencePort = nodeStoragePersistenceAdapter,
+  ) {}
   beginTurn(sessionKey: string, prompt: string, nowIso: string): void {
-    return beginTurnCheckpoint(this.workspaceRoot, sessionKey, prompt, nowIso);
+    return this.persistence.beginTurn(this.workspaceRoot, sessionKey, prompt, nowIso);
   }
   endTurn(sessionKey: string): void {
-    return endTurnCheckpoint(this.workspaceRoot, sessionKey);
+    return this.persistence.endTurn(this.workspaceRoot, sessionKey);
   }
   queueOffline(sessionKey: string, prompt: string, nowIso: string): void {
-    return queueOfflinePrompt(this.workspaceRoot, sessionKey, prompt, nowIso);
+    return this.persistence.queueOffline(this.workspaceRoot, sessionKey, prompt, nowIso);
   }
   readOfflineQueue(sessionKey: string): QueuedPrompt[] {
-    return readOfflineQueue(this.workspaceRoot, sessionKey);
+    return this.persistence.readOfflineQueue(this.workspaceRoot, sessionKey);
   }
   clearOfflineQueue(sessionKey: string): void {
-    return clearOfflineQueue(this.workspaceRoot, sessionKey);
+    return this.persistence.clearOfflineQueue(this.workspaceRoot, sessionKey);
   }
   readRecoverable(sessionKey: string): RecoverableState {
-    return readRecoverable(this.workspaceRoot, sessionKey);
+    return this.persistence.readRecoverable(this.workspaceRoot, sessionKey);
   }
   recordFileMutation(sessionKey: string, rec: FileMutationRecord): void {
-    return recordFileMutation(this.workspaceRoot, sessionKey, rec);
+    return this.persistence.recordFileMutation(this.workspaceRoot, sessionKey, rec);
   }
   readFileMutations(sessionKey: string): FileMutationRecord[] {
-    return readFileMutations(this.workspaceRoot, sessionKey);
+    return this.persistence.readFileMutations(this.workspaceRoot, sessionKey);
   }
   planRestore(records: FileMutationRecord[], turnN: number): RestoreAction[] {
     return planRestore(records, turnN);
@@ -65,6 +70,9 @@ export class StorageService implements IStorageService {
 }
 
 /** Construct a storage service bound to a workspace. */
-export function createStorageService(workspaceRoot: string): IStorageService {
-  return new StorageService(workspaceRoot);
+export function createStorageService(
+  workspaceRoot: string,
+  persistence: StoragePersistencePort = nodeStoragePersistenceAdapter,
+): IStorageService {
+  return new StorageService(workspaceRoot, persistence);
 }
