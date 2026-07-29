@@ -13,6 +13,7 @@ import {
 import { writeWorkspaceFileAtomic } from '../workspace/fileWrite.js';
 import {
   beginWorkspaceOnboardingPairTransaction,
+  completeWorkspaceOnboardingPairTransaction,
   endWorkspaceOnboardingPairTransaction,
   markWorkspaceOnboardingInstructionCommitting,
   markWorkspaceOnboardingManifestCommitting,
@@ -122,6 +123,83 @@ test('pair recovery accepts a fully written instruction and manifest', () => {
     recoverInterruptedWorkspaceOnboardingPair(state.workspace);
     assert.equal(fs.readFileSync(instructionPath, 'utf8'), '# Instructions\n');
     assert.equal(JSON.parse(fs.readFileSync(workspaceManifestPath(state.workspace), 'utf8')).name, 'complete');
+  } finally {
+    cleanup(state, transaction);
+  }
+});
+
+test('pair recovery defers to an active owner and explicit completion cleans up', () => {
+  const state = fixture();
+  let transaction: WorkspaceOnboardingPairTransaction | undefined;
+  try {
+    const desiredManifest = createWorkspaceManifest({
+      name: 'active',
+      profile: 'research',
+      by: 'wizard',
+    });
+    transaction = beginWorkspaceOnboardingPairTransaction(state.workspace, {
+      manifestBefore: { existed: false },
+      manifestDesired: serializeWorkspaceManifest(desiredManifest),
+      instructionBefore: { existed: false },
+      instructionDesired: '# Instructions\n',
+    });
+
+    recoverInterruptedWorkspaceOnboardingPair(state.workspace);
+    assert.equal(fs.existsSync(transaction.receiptPath), true);
+
+    completeWorkspaceOnboardingPairTransaction(transaction);
+    assert.equal(fs.existsSync(transaction.receiptPath), false);
+  } finally {
+    cleanup(state, transaction);
+  }
+});
+
+test('pair recovery preserves an ambiguous concurrent write for manual recovery', () => {
+  const state = fixture();
+  const instructionPath = path.join(state.workspace, 'AGENT.md');
+  const originalManifest = createWorkspaceManifest({
+    name: 'before',
+    profile: 'engineering',
+    by: 'wizard',
+  });
+  const desiredManifest = createWorkspaceManifest({
+    name: 'after',
+    profile: 'research',
+    by: 'wizard',
+  });
+  let transaction: WorkspaceOnboardingPairTransaction | undefined;
+  try {
+    fs.writeFileSync(instructionPath, '# Before\n', { mode: 0o640 });
+    saveWorkspaceManifest(state.workspace, originalManifest);
+    transaction = beginWorkspaceOnboardingPairTransaction(state.workspace, {
+      manifestBefore: snapshot(workspaceManifestPath(state.workspace)),
+      manifestDesired: serializeWorkspaceManifest(desiredManifest),
+      instructionBefore: snapshot(instructionPath),
+      instructionDesired: '# After\n',
+    });
+    markWorkspaceOnboardingInstructionCommitting(transaction);
+    writeWorkspaceFileAtomic(state.workspace, 'AGENT.md', '# After\n', {
+      onStaged: (staged) =>
+        recordWorkspaceOnboardingInstructionStaged(transaction!, staged),
+    });
+    recordWorkspaceOnboardingInstructionWritten(
+      transaction,
+      'created',
+      snapshot(instructionPath),
+    );
+    const receiptPath = transaction.receiptPath;
+    endWorkspaceOnboardingPairTransaction(transaction);
+    transaction = undefined;
+    fs.writeFileSync(instructionPath, '# Human concurrent change\n');
+
+    recoverInterruptedWorkspaceOnboardingPair(state.workspace);
+
+    assert.equal(
+      fs.readFileSync(instructionPath, 'utf8'),
+      '# Human concurrent change\n',
+    );
+    assert.equal(JSON.parse(fs.readFileSync(receiptPath, 'utf8')).phase, 'ambiguous');
+    assert.equal(loadWorkspaceManifest(state.workspace)?.name, 'before');
   } finally {
     cleanup(state, transaction);
   }

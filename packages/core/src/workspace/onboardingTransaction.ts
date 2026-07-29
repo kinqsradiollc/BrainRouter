@@ -12,24 +12,14 @@
  */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { writeFileAtomic } from '../util/fs/atomicFile.js';
-import {
-  openWorkspaceFileParentGuard,
-  writeWorkspaceFileAtomic,
-  type WorkspaceFileParentGuard,
-  type WorkspaceFileStagedVersion,
-} from './fileWrite.js';
+import { type WorkspaceFileStagedVersion } from './fileWrite.js';
 import {
   INSTRUCTION_MAX_BYTES,
   INSTRUCTION_RELPATH,
   MANIFEST_MAX_BYTES,
   MANIFEST_RELPATH,
-  RECEIPT_LIMIT,
-  RECEIPT_MAX_BYTES,
   type ActivePairTransaction,
-  type EncodedFileVersion,
   type PairPhase,
   type WorkspaceOnboardingFileSnapshot,
   type WorkspaceOnboardingManifestClaimFingerprint,
@@ -38,23 +28,28 @@ import {
   type WorkspaceOnboardingPairTransaction,
 } from './onboardingTransaction/contracts.js';
 import {
-  decodeSnapshotContents,
   desiredVersion,
   encodeSnapshot,
   encodeStagedVersion,
   encodeVersion,
   normalizeProvidedSnapshot,
-  snapshotMatchesDesired,
-  snapshotMatchesEncodedSnapshot,
   snapshotMatchesVersion,
-  snapshotRegularFile,
   snapshotsAreExact,
   snapshotWorkspaceFile,
   snapshotWorkspaceSibling,
-  validDesiredVersion,
-  validEncodedSnapshot,
-  validEncodedVersion,
 } from './onboardingTransaction/fileSnapshots.js';
+import {
+  listWorkspaceOnboardingReceipts,
+  prepareWorkspaceOnboardingReceiptPath,
+  readWorkspaceOnboardingReceipt,
+  readWorkspaceOnboardingReceiptForToken,
+  removeWorkspaceOnboardingReceipt,
+  workspaceOnboardingTransactionOwnerIsActive,
+  writeWorkspaceOnboardingReceipt,
+} from './onboardingTransaction/receiptStore.js';
+import {
+  recoverWorkspaceOnboardingReceipt,
+} from './onboardingTransaction/receiptRecovery.js';
 
 export type {
   WorkspaceOnboardingFileSnapshot,
@@ -92,16 +87,7 @@ export function beginWorkspaceOnboardingPairTransaction(
   }
 
   const token = `${process.pid}.${crypto.randomBytes(12).toString('hex')}`;
-  const directory = receiptDirectory(root);
-  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  assertSafeReceiptDirectory(directory);
-  const existing = fs.readdirSync(directory)
-    .filter((name) => /^[0-9]+\.[0-9a-f]{24}\.json$/.test(name));
-  if (existing.length >= RECEIPT_LIMIT) {
-    throw new Error('Too many pending workspace onboarding transactions; manual recovery is required.');
-  }
-
-  const receiptPath = path.join(directory, `${token}.json`);
+  const receiptPath = prepareWorkspaceOnboardingReceiptPath(root, token);
   const transaction = { workspaceRoot: root, token, receiptPath };
   const receipt: WorkspaceOnboardingPairReceipt = {
     version: 1,
@@ -119,7 +105,7 @@ export function beginWorkspaceOnboardingPairTransaction(
   };
   activePairTransactions.set(token, { transaction, receipt });
   try {
-    writeReceipt(receiptPath, receipt, true);
+    writeWorkspaceOnboardingReceipt(receiptPath, receipt, true);
   } catch (error) {
     activePairTransactions.delete(token);
     throw error;
@@ -212,7 +198,7 @@ export function completeWorkspaceOnboardingPairTransaction(
   transaction: WorkspaceOnboardingPairTransaction,
 ): void {
   const active = activeTransaction(transaction);
-  const persisted = readReceipt(
+  const persisted = readWorkspaceOnboardingReceipt(
     transaction.receiptPath,
     transaction.workspaceRoot,
     `${transaction.token}.json`,
@@ -220,7 +206,7 @@ export function completeWorkspaceOnboardingPairTransaction(
   if (!persisted || JSON.stringify(persisted) !== JSON.stringify(active.receipt)) {
     throw new Error('Workspace onboarding transaction receipt changed before completion.');
   }
-  removeReceiptPath(transaction.receiptPath);
+  removeWorkspaceOnboardingReceipt(transaction.receiptPath);
 }
 
 /** Mark only the in-process owner inactive; recovery state is deliberately retained. */
@@ -236,27 +222,12 @@ export function endWorkspaceOnboardingPairTransaction(
 /** Recover dead pair transactions before the shared manifest read chokepoint. */
 export function recoverInterruptedWorkspaceOnboardingPair(workspaceRoot: string): void {
   const root = fs.realpathSync(workspaceRoot);
-  const directory = receiptDirectory(root);
-  try {
-    assertSafeReceiptDirectory(directory);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw error;
-  }
-  const entries = fs.readdirSync(directory)
-    .filter((name) => /^[0-9]+\.[0-9a-f]{24}\.json$/.test(name))
-    .sort();
-  if (entries.length > RECEIPT_LIMIT) {
-    throw new Error('Too many pending workspace onboarding transactions; manual recovery is required.');
-  }
-  for (const name of entries) {
-    const receiptPath = path.join(directory, name);
-    const receipt = readReceipt(receiptPath, root, name);
-    if (!receipt) {
-      throw new Error(`Invalid workspace onboarding transaction receipt: ${receiptPath}`);
+  for (const stored of listWorkspaceOnboardingReceipts(root)) {
+    if (stored.receipt.phase === 'ambiguous' ||
+        transactionOwnerIsActive(stored.receipt.token)) {
+      continue;
     }
-    if (receipt.phase === 'ambiguous' || transactionOwnerIsActive(receipt.token)) continue;
-    recoverReceipt(receiptPath, receipt);
+    recoverWorkspaceOnboardingReceipt(stored.receiptPath, stored.receipt);
   }
 }
 
@@ -274,15 +245,7 @@ export function workspaceOnboardingPairOwnsManifestReplacement(
 ): boolean {
   if (!/^[0-9]+\.[0-9a-f]{24}$/.test(token)) return false;
   const root = fs.realpathSync(workspaceRoot);
-  const directory = receiptDirectory(root);
-  try {
-    assertSafeReceiptDirectory(directory);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
-    throw error;
-  }
-  const fileName = `${token}.json`;
-  const receipt = readReceipt(path.join(directory, fileName), root, fileName);
+  const receipt = readWorkspaceOnboardingReceiptForToken(root, token);
   if (!receipt || transactionOwnerIsActive(receipt.token) ||
       (receipt.phase !== 'manifest-committing' && receipt.phase !== 'manifest-written')) {
     return false;
@@ -293,174 +256,6 @@ export function workspaceOnboardingPairOwnsManifestReplacement(
     expected.size === before.size && expected.mtimeMs === before.mtimeMs && expected.sha256 === before.sha256 &&
     receipt.manifest.desired.size === replacement.size &&
     receipt.manifest.desired.sha256 === replacement.sha256;
-}
-
-function recoverReceipt(receiptPath: string, receipt: WorkspaceOnboardingPairReceipt): void {
-  const root = receipt.workspaceRoot;
-  const instruction = snapshotWorkspaceFile(root, INSTRUCTION_RELPATH, INSTRUCTION_MAX_BYTES);
-  const manifest = snapshotWorkspaceFile(root, MANIFEST_RELPATH, MANIFEST_MAX_BYTES);
-  const instructionBefore = snapshotMatchesEncodedSnapshot(instruction, receipt.instruction.before);
-  const manifestBefore = snapshotMatchesEncodedSnapshot(manifest, receipt.manifest.before);
-  const instructionAfter = receipt.instruction.after !== undefined &&
-    snapshotMatchesVersion(instruction, receipt.instruction.after, true);
-  const instructionStagedAtTarget = receipt.instruction.staged !== undefined &&
-    snapshotMatchesVersion(instruction, receipt.instruction.staged, false);
-  const instructionOwned = receipt.instruction.outcome === 'created'
-    ? instructionAfter || instructionStagedAtTarget
-    : receipt.instruction.outcome === undefined && instructionStagedAtTarget;
-  const instructionUnchanged = receipt.instruction.outcome === 'unchanged' && instructionAfter;
-  const manifestAfter = receipt.manifest.after !== undefined &&
-    snapshotMatchesVersion(manifest, receipt.manifest.after, true);
-  const manifestDesired = (receipt.phase === 'manifest-committing' || receipt.phase === 'manifest-written') &&
-    snapshotMatchesDesired(manifest, receipt.manifest.desired);
-  const manifestCommitted = manifestAfter || manifestDesired;
-
-  if (manifestBefore) {
-    if (instructionBefore || receipt.instruction.outcome === 'unchanged') {
-      if (!removeOwnedStagedFile(receipt)) {
-        markReceiptAmbiguous(receiptPath, receipt);
-        return;
-      }
-      removeReceiptPath(receiptPath);
-      return;
-    }
-    if (instructionOwned) {
-      const ownedVersion = instructionAfter
-        ? receipt.instruction.after!
-        : receipt.instruction.staged!;
-      if (restoreInstructionBefore(receipt, ownedVersion) && removeOwnedStagedFile(receipt)) {
-        removeReceiptPath(receiptPath);
-      } else {
-        markReceiptAmbiguous(receiptPath, receipt);
-      }
-      return;
-    }
-    markReceiptAmbiguous(receiptPath, receipt);
-    return;
-  }
-
-  if (manifestCommitted && (instructionAfter || instructionStagedAtTarget || instructionUnchanged)) {
-    if (removeOwnedStagedFile(receipt)) removeReceiptPath(receiptPath);
-    else markReceiptAmbiguous(receiptPath, receipt);
-    return;
-  }
-
-  markReceiptAmbiguous(receiptPath, receipt);
-}
-
-function restoreInstructionBefore(
-  receipt: WorkspaceOnboardingPairReceipt,
-  ownedVersion: EncodedFileVersion,
-): boolean {
-  const before = receipt.instruction.before;
-  if (!before.existed) {
-    return removeOwnedInstruction(receipt.workspaceRoot, ownedVersion);
-  }
-  let beforeContents: Buffer;
-  try {
-    beforeContents = decodeSnapshotContents(before, INSTRUCTION_MAX_BYTES);
-    writeWorkspaceFileAtomic(receipt.workspaceRoot, INSTRUCTION_RELPATH, beforeContents, {
-      mode: before.mode,
-      beforeCommit: () => {
-        const current = snapshotWorkspaceFile(
-          receipt.workspaceRoot,
-          INSTRUCTION_RELPATH,
-          INSTRUCTION_MAX_BYTES,
-        );
-        if (!snapshotMatchesVersion(current, ownedVersion, false)) {
-          throw new Error('Concurrent project instruction write detected during recovery.');
-        }
-      },
-    });
-    const restored = snapshotWorkspaceFile(
-      receipt.workspaceRoot,
-      INSTRUCTION_RELPATH,
-      INSTRUCTION_MAX_BYTES,
-    );
-    return restored.existed && restored.mode === before.mode &&
-      snapshotMatchesDesired(restored, { size: before.size!, sha256: before.sha256! });
-  } catch {
-    return false;
-  }
-}
-
-function removeOwnedInstruction(root: string, ownedVersion: EncodedFileVersion): boolean {
-  let guard: WorkspaceFileParentGuard;
-  try {
-    guard = openWorkspaceFileParentGuard(root, INSTRUCTION_RELPATH);
-  } catch {
-    return false;
-  }
-  const quarantineName = `.AGENT.md.${process.pid}.${crypto.randomBytes(12).toString('hex')}.onboarding-recovery`;
-  const quarantine = guard.siblingPath(quarantineName);
-  try {
-    guard.assertStable();
-    const current = snapshotRegularFile(guard.accessTarget, INSTRUCTION_MAX_BYTES, 'project instruction file');
-    if (!snapshotMatchesVersion(current, ownedVersion, false)) return false;
-    fs.renameSync(guard.accessTarget, quarantine);
-    guard.fsyncParent();
-    guard.assertStable();
-    const moved = snapshotRegularFile(quarantine, INSTRUCTION_MAX_BYTES, 'project instruction recovery file');
-    if (!snapshotMatchesVersion(moved, ownedVersion, false)) {
-      restoreQuarantinedFile(guard.accessTarget, quarantine, guard);
-      return false;
-    }
-    const canonical = snapshotRegularFile(guard.accessTarget, INSTRUCTION_MAX_BYTES, 'project instruction file');
-    const movedAgain = snapshotRegularFile(quarantine, INSTRUCTION_MAX_BYTES, 'project instruction recovery file');
-    if (!snapshotMatchesVersion(movedAgain, ownedVersion, false)) return false;
-    fs.unlinkSync(quarantine);
-    guard.fsyncParent();
-    guard.assertStable();
-    // A concurrent creator at the canonical path is preserved. The transaction
-    // only owns the quarantined inode proven by the receipt.
-    void canonical;
-    return true;
-  } catch {
-    return false;
-  } finally {
-    guard.close();
-  }
-}
-
-function restoreQuarantinedFile(
-  target: string,
-  quarantine: string,
-  guard: { assertStable(): void; fsyncParent(): void },
-): void {
-  try {
-    guard.assertStable();
-    if (snapshotRegularFile(target, INSTRUCTION_MAX_BYTES, 'project instruction file').existed) return;
-    fs.linkSync(quarantine, target);
-    guard.fsyncParent();
-    guard.assertStable();
-    fs.unlinkSync(quarantine);
-    guard.fsyncParent();
-  } catch {
-    // Preserve the quarantine when it cannot be safely restored.
-  }
-}
-
-function removeOwnedStagedFile(receipt: WorkspaceOnboardingPairReceipt): boolean {
-  const staged = receipt.instruction.staged;
-  if (!staged) return true;
-  let guard: WorkspaceFileParentGuard | undefined;
-  try {
-    guard = openWorkspaceFileParentGuard(receipt.workspaceRoot, INSTRUCTION_RELPATH);
-    if (path.dirname(staged.temporaryPath) !== path.dirname(guard.canonicalTarget)) return false;
-    const accessTemporary = guard.siblingPath(path.basename(staged.temporaryPath));
-    guard.assertStable();
-    const current = snapshotRegularFile(accessTemporary, INSTRUCTION_MAX_BYTES, 'staged project instruction file');
-    if (!current.existed) return true;
-    if (!snapshotMatchesVersion(current, staged, false)) return false;
-    fs.unlinkSync(accessTemporary);
-    guard.fsyncParent();
-    guard.assertStable();
-    return true;
-  } catch {
-    return false;
-  } finally {
-    guard?.close();
-  }
 }
 
 function activeTransaction(transaction: WorkspaceOnboardingPairTransaction): ActivePairTransaction {
@@ -482,155 +277,13 @@ function updateActiveReceipt(
     throw new Error(`Unexpected workspace onboarding transaction phase: ${active.receipt.phase}`);
   }
   const next = update(active.receipt);
-  writeReceipt(transaction.receiptPath, next);
+    writeWorkspaceOnboardingReceipt(transaction.receiptPath, next);
   active.receipt = next;
 }
 
-function writeReceipt(
-  receiptPath: string,
-  receipt: WorkspaceOnboardingPairReceipt,
-  exclusive = false,
-): void {
-  const serialized = `${JSON.stringify(receipt)}\n`;
-  if (Buffer.byteLength(serialized) > RECEIPT_MAX_BYTES) {
-    throw new Error(`Workspace onboarding transaction receipt exceeds ${RECEIPT_MAX_BYTES} bytes.`);
-  }
-  writeFileAtomic(receiptPath, serialized, { mode: 0o600, exclusive });
-}
-
-function readReceipt(
-  receiptPath: string,
-  workspaceRoot: string,
-  fileName: string,
-): WorkspaceOnboardingPairReceipt | undefined {
-  let parsed: unknown;
-  try {
-    const snapshot = snapshotRegularFile(receiptPath, RECEIPT_MAX_BYTES, 'workspace onboarding receipt');
-    if (!snapshot.existed) return undefined;
-    parsed = JSON.parse(snapshot.contents!.toString('utf8'));
-  } catch {
-    return undefined;
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
-  const receipt = parsed as Partial<WorkspaceOnboardingPairReceipt>;
-  if (receipt.version !== 1 || !isPairPhase(receipt.phase) ||
-      receipt.workspaceRoot !== workspaceRoot || typeof receipt.token !== 'string' ||
-      fileName !== `${receipt.token}.json` || !/^[0-9]+\.[0-9a-f]{24}$/.test(receipt.token) ||
-      !validReceiptInstruction(receipt.instruction, workspaceRoot) ||
-      !validReceiptManifest(receipt.manifest) ||
-      !validReceiptPhaseState(receipt as WorkspaceOnboardingPairReceipt)) {
-    return undefined;
-  }
-  return receipt as WorkspaceOnboardingPairReceipt;
-}
-
-function validReceiptInstruction(
-  value: WorkspaceOnboardingPairReceipt['instruction'] | undefined,
-  workspaceRoot: string,
-): boolean {
-  if (!value || !validEncodedSnapshot(value.before, INSTRUCTION_MAX_BYTES) ||
-      !validDesiredVersion(value.desired, INSTRUCTION_MAX_BYTES)) return false;
-  if (value.outcome !== undefined && value.outcome !== 'created' && value.outcome !== 'unchanged') return false;
-  if (value.after !== undefined && !validEncodedVersion(value.after, INSTRUCTION_MAX_BYTES)) return false;
-  if (value.staged !== undefined) {
-    const expectedDirectory = path.join(workspaceRoot);
-    if (!validEncodedVersion(value.staged, INSTRUCTION_MAX_BYTES) ||
-        path.dirname(value.staged.temporaryPath) !== expectedDirectory ||
-        !/^\.AGENT\.md\.[0-9]+\.[0-9a-f]{24}\.tmp$/.test(path.basename(value.staged.temporaryPath))) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function validReceiptManifest(
-  value: WorkspaceOnboardingPairReceipt['manifest'] | undefined,
-): boolean {
-  return !!value && validEncodedSnapshot(value.before, MANIFEST_MAX_BYTES) &&
-    validDesiredVersion(value.desired, MANIFEST_MAX_BYTES) &&
-    (value.after === undefined || validEncodedVersion(value.after, MANIFEST_MAX_BYTES));
-}
-
-function validReceiptPhaseState(receipt: WorkspaceOnboardingPairReceipt): boolean {
-  const instructionEmpty = receipt.instruction.outcome === undefined && receipt.instruction.after === undefined;
-  const instructionRecorded = receipt.instruction.outcome !== undefined && receipt.instruction.after !== undefined;
-  if (!instructionEmpty && !instructionRecorded) return false;
-  if (receipt.phase === 'ambiguous') return true;
-  if (receipt.phase === 'prepared') {
-    return receipt.instruction.staged === undefined && instructionEmpty && receipt.manifest.after === undefined;
-  }
-  if (receipt.phase === 'instruction-committing') {
-    return instructionEmpty && receipt.manifest.after === undefined;
-  }
-  if (receipt.phase === 'instruction-written' || receipt.phase === 'manifest-committing') {
-    return instructionRecorded && receipt.manifest.after === undefined;
-  }
-  return instructionRecorded && receipt.manifest.after !== undefined;
-}
-
-function isPairPhase(value: unknown): value is PairPhase {
-  return value === 'prepared' || value === 'instruction-committing' ||
-    value === 'instruction-written' || value === 'manifest-committing' ||
-    value === 'manifest-written' || value === 'ambiguous';
-}
-
-function receiptDirectory(workspaceRoot: string): string {
-  const configuredHome = process.env.BRAINROUTER_HOME?.trim();
-  const brainrouterHome = configuredHome ? path.resolve(configuredHome) : path.join(os.homedir(), '.brainrouter');
-  const workspaceKey = crypto.createHash('sha256').update(fs.realpathSync(workspaceRoot)).digest('hex').slice(0, 32);
-  return path.join(brainrouterHome, 'transactions', 'workspace-onboarding', workspaceKey);
-}
-
-function assertSafeReceiptDirectory(directory: string): void {
-  const stat = fs.lstatSync(directory);
-  if (stat.isSymbolicLink() || !stat.isDirectory()) {
-    throw new Error(`Unsafe workspace onboarding transaction directory: ${directory}`);
-  }
-  if ((stat.mode & 0o077) !== 0) {
-    throw new Error(`Unsafe workspace onboarding transaction directory permissions: ${directory}`);
-  }
-  const currentUser = process.getuid?.();
-  if (currentUser !== undefined && stat.uid !== currentUser) {
-    throw new Error(`Unsafe workspace onboarding transaction directory owner: ${directory}`);
-  }
-}
-
-function markReceiptAmbiguous(receiptPath: string, receipt: WorkspaceOnboardingPairReceipt): void {
-  if (receipt.phase !== 'ambiguous') writeReceipt(receiptPath, { ...receipt, phase: 'ambiguous' });
-}
-
 function transactionOwnerIsActive(token: string): boolean {
-  const ownerPid = Number(token.slice(0, token.indexOf('.')));
-  if (ownerPid === process.pid) return activePairTransactions.has(token);
-  try {
-    process.kill(ownerPid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
-  }
-}
-
-function removeReceiptPath(receiptPath: string): void {
-  try {
-    fs.unlinkSync(receiptPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw error;
-  }
-  fsyncDirectory(path.dirname(receiptPath));
-}
-
-function fsyncDirectory(directory: string): void {
-  let descriptor: number | undefined;
-  try {
-    descriptor = fs.openSync(directory, fs.constants.O_RDONLY);
-    fs.fsyncSync(descriptor);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== 'EINVAL' && code !== 'ENOTSUP' && code !== 'EBADF' && code !== 'EISDIR') throw error;
-  } finally {
-    if (descriptor !== undefined) {
-      try { fs.closeSync(descriptor); } catch { /* best-effort descriptor cleanup */ }
-    }
-  }
+  return workspaceOnboardingTransactionOwnerIsActive(
+    token,
+    (candidate) => activePairTransactions.has(candidate),
+  );
 }

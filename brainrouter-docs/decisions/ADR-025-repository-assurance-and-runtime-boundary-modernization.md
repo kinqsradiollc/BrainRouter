@@ -522,7 +522,7 @@ the repository's normal security-review process before merge.
 |---|---|---|---|
 | A25-5a | `[x]` | Move onboarding transaction contracts and fixed storage limits out of the coordinator without changing its public entrypoint | Core typecheck and pair-transaction fixtures preserve the exported contract identities, phase transitions, recovery behavior, filesystem limits, and caller imports |
 | A25-5b | `[x]` | Extract workspace-file snapshots, encoding, and exact-match validation behind a focused file adapter | Snapshot and adversarial filesystem fixtures retain no-follow, inode, size, timestamp, hash, concurrent-replacement, and encoded-content integrity checks; pair-transaction fixtures preserve recovery behavior |
-| A25-5c | `[ ]` | Extract receipt persistence, validation, ownership, and recovery services behind the existing transaction facade | Recovery fixtures preserve safe-directory, bounded receipt, active-owner, ambiguous-state, rollback, and cleanup behavior |
+| A25-5c | `[x]` | Extract receipt persistence, validation, ownership, and recovery services behind the existing transaction facade | Receipt-store and recovery fixtures preserve safe-directory, bounded receipt, active-owner, ambiguous-state, rollback, staged-file handling, and idempotent cleanup behavior |
 | A25-5d | `[ ]` | Separate profile manifest/catalog/policy resolution from filesystem trust and onboarding transaction composition | No-manifest, explicit-catalog, compatibility, precedence, diagnostic, and safe-write fixtures preserve current behavior |
 
 ### A25-6 infrastructure domain delivery slices
