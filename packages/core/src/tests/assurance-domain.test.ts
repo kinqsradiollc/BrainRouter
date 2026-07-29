@@ -9,6 +9,7 @@ import {
   calculateAssuranceGate,
   coverageSupportsCleanConclusion,
   findingHasBlockingEvidence,
+  validateAssuranceFinding,
   validateRepositoryAssuranceRun,
 } from '../review/index.js';
 
@@ -163,6 +164,31 @@ test('assurance validation rejects secret-bearing extension fields at any depth'
   const result = validateRepositoryAssuranceRun(value);
   assert.equal(result.ok, false);
   assert.match(result.issues.join('\n'), /access_token is forbidden/);
+  assert.doesNotMatch(JSON.stringify(result), /must-not-cross-the-boundary/);
+});
+
+test('finding validation binds verifier decisions to current-revision evidence', () => {
+  const supported = verify(finding());
+  assert.deepEqual(validateAssuranceFinding(supported), { ok: true, issues: [] });
+
+  supported.evidence[0]!.revisionSha = 'stale-head';
+  supported.verifier!.evidenceRefs = ['missing-evidence'];
+  const result = validateAssuranceFinding(supported);
+  assert.equal(result.ok, false);
+  assert.match(result.issues.join('\n'), /revisionSha must match/);
+  assert.match(result.issues.join('\n'), /must reference persisted finding evidence/);
+});
+
+test('finding validation rejects unsupported verified assertions and secret-bearing fields', () => {
+  const unsupported = finding() as AssuranceFinding & {
+    adapter?: { authorization?: string };
+  };
+  unsupported.state = 'verified';
+  unsupported.adapter = { authorization: 'must-not-cross-the-boundary' };
+  const result = validateAssuranceFinding(unsupported);
+  assert.equal(result.ok, false);
+  assert.match(result.issues.join('\n'), /requires a verifier disposition/);
+  assert.match(result.issues.join('\n'), /authorization is forbidden/);
   assert.doesNotMatch(JSON.stringify(result), /must-not-cross-the-boundary/);
 });
 
