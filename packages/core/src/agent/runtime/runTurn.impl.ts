@@ -31,7 +31,6 @@ import {
   pendingSteeringConstraint,
 } from '../../task/steeringReceiptStore.js';
 import { evaluateSteeringToolGate } from '../../task/steeringReconciliationGate.js';
-import { isInternalSessionKey } from '../../session/transcript/sessionStore.js';
 import { readPlan } from '../../task/taskStore.js';
 import { startSpan, traceEvent } from '../../telemetry/tracing/tracing.js';
 import { localToolSpecsFromExecutors } from '../../tool/registry/executors.js';
@@ -47,25 +46,17 @@ import { extensionToolOwner } from '../../extension/registry.js';
 import { applyToolScope, rankAndCapTools, toolNameMatchesAny } from '../../tool/policy/toolBudget.js';
 import { resolveToolVisible } from '../../tool/policy/toolPolicy.js';
 import { extractCacheStats } from '../../util/tokens/cacheStats.js';
-import { unsynthesizedChildIds, mergePendingChildIds } from '../../util/agentloop/childResume.js';
-import { sanitizeModelArtifacts } from '../../util/agentloop/outputSanitize.js';
 import { makeResultHandoff, formatHandoffForModel, attachCompactedResultHandoff } from '../../util/result/resultHandoff.js';
-import { looksLikeChildSynthesisPunt } from '../../util/agentloop/synthesisGuard.js';
-import { classifyDeferral, buildDeliverableCorrection } from '../guards/deliverableCheck.js';
 import { classifyDenial, formatDenialResult } from '../guards/denialMessage.js';
-import { applyPendingSteeringAtBoundary } from './steering.js';
-import { shouldRunFanOutFollowThroughGuard } from '../guards/fanOutFollowThroughGuard.js';
 import { NoTTYError } from '../support/prompter.js';
 import { analyzeSchema, flattenSchema, nestArguments, type JSONSchema } from '../repair/flatten.js';
 import { isSequenceGuardExempt, buildSequenceSignature } from '../guards/repeatGuard.js';
-import { shouldNudgeTaskTracking, buildTaskTrackingNudge } from '../guards/taskTrackingNudge.js';
 import {
-  looksLikeDeferredToolPromise, looksLikeStalledPreamble,
   parseArgumentsOrError, suggestSimilarToolName,
 } from '../guards/toolCallRecovery.js';
 import { isParallelSafe, parallelExecutionEnabled } from '../guards/toolSafety.js';
-import { resolveToolBudget, isBudgetCheckpoint, buildBudgetCheckpoint } from '../guards/turnBudget.js';
-import { classifyForVerification, commandWritesFiles, decideVerification, buildVerificationNudge, buildDocsOnlyVerificationNote } from '../guards/verificationGate.js';
+import { resolveToolBudget } from '../guards/turnBudget.js';
+import { classifyForVerification, commandWritesFiles } from '../guards/verificationGate.js';
 import { browserUseAvailableFor } from '../../browser/control.js';
 import { getCurrentWorkflow } from '../../workflow/run/workflowArtifacts.js';
 import { getToolPreview } from '../support/toolSummary.js';
@@ -98,6 +89,7 @@ import {
   finalizeTurnPhase,
   resolveTurnTerminationReason,
 } from './turnFinalizationPhase.js';
+import { TurnLifecycleCoordinator } from './turnLifecycleCoordinator.js';
 import {
   createProfileStageControllerForTurn,
   describeProfileStageTool,
@@ -528,62 +520,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // for strong/unknown models, so this is a no-op for the common case.
     const harnessCaps = resolveLocalModelProfile(this.llmConfig.model, getCliKnobs().localModelProfile, getCliKnobs());
     const { window: budgetWindow, hardCeiling: maxLoops } = resolveToolBudget(harnessCaps.maxToolLoops);
-    let budgetCheckpointsFired = 0;
     let finalAnswer = '';
-    // Stalled-preamble guardrail counter — see the `looksLikeStalledPreamble`
-    // branch below. Bounded so a model that ONLY emits preambles can't keep
-    // the loop alive forever. Two extra iterations is enough for the model to
-    // either deliver the answer or admit it can't.
-    let preambleGuardFired = 0;
-    const PREAMBLE_GUARD_MAX = 2;
-    // Unfulfilled-tool-promise tracker. When the model says "I'll scan X in
-    // parallel" (a deferred-tool-promise) we record the tool-call count at that
-    // moment; if the turn later ends with NO new tool calls since the promise —
-    // even if the final message is a clarifying QUESTION (which escapes the
-    // preamble heuristic) — the model promised work then stalled/over-asked.
-    // -1 = no outstanding promise. Shares PREAMBLE_GUARD_MAX's budget.
-    let promisedToolsAtCount = -1;
-    // Fan-out follow-through guard. When the breadth detector injected a
-    // "default to spawn_agents" hint but the turn ends having spawned ZERO
-    // children, the model accepted a shallow single-thread answer instead of
-    // the parallel fan-out the task wanted. Nudge to actually spawn (or justify
-    // skipping). Bounded so it can't loop, and limited to interactive top-level
-    // chat turns so internal review/task transcripts don't fill with guard text.
-    let fanOutGuardFired = 0;
-    const FANOUT_GUARD_MAX = 1;
-    // CC-P6.2 — deliverable guardrail. A turn that did real tool work must END
-    // on the deliverable, not a trailing question / offer / promise. One
-    // bounded nudge, then accept whatever comes next (never loops).
-    let deliverableGuardFired = 0;
-    const DELIVERABLE_GUARD_MAX = 1;
-    // CC-P6.5 — verification gate: once-per-turn nudge when the workspace was
-    // mutated but nothing was run to verify it.
-    let verificationNudged = false;
-    // Plan-sync guardrail. The plan-honesty check otherwise lives ONLY in
-    // goal_complete — so a turn that concludes WITHOUT goal_complete (just
-    // delivers the answer) never reconciles the plan, leaving it stale (the
-    // "audit delivered, plan still ⏳" bug). Snapshot how many items are already
-    // completed; if this turn does real work but advances NONE of them while
-    // items remain open, nudge ONCE to reconcile. Note we can't gate on "called
-    // update_plan" — the model calls it to CREATE the plan (item in_progress)
-    // yet never marks anything completed; the completed-count delta is the
-    // honest signal. Bounded so a model that won't update can't loop.
-    let planSyncGuardFired = 0;
-    const PLAN_SYNC_GUARD_MAX = 1;
-    let steeringReconciliationGuardFired = 0;
-    const STEERING_RECONCILIATION_GUARD_MAX = 1;
-    // Requirement → Plan → Track synchronization is deterministic store work,
-    // not a prompt. It gets one turn-end pass after the model's plan guard.
-    let requirementPlanTrackSyncGuardFired = 0;
-    const REQUIREMENT_PLAN_TRACK_SYNC_GUARD_MAX = 1;
-    let sprintAutomationGuardFired = 0;
-    const SPRINT_AUTOMATION_GUARD_MAX = 1;
-    // MAR-3 — child-synthesis guard. `childOutputDeliveredThisTurn` flips true once a
-    // child/sub-agent's findings reach the parent this turn; the guard fires once if
-    // the model then ends with a deferral instead of synthesizing them.
-    let synthesisGuardFired = 0;
-    const SYNTHESIS_GUARD_MAX = 1;
-    let childOutputDeliveredThisTurn = false;
     let profileStageGuardFired = 0;
     const PROFILE_STAGE_GUARD_MAX = Math.min(
       16,
@@ -601,10 +538,13 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           ), 0),
       ),
     );
-    const planCompletedAtTurnStart = (() => {
-      try { return readPlan(this.workspaceRoot, this.sessionKey).items.filter((i) => i.status === 'completed').length; }
-      catch { return 0; }
-    })();
+    const lifecycleCoordinator = new TurnLifecycleCoordinator({
+      agent: this,
+      callbacks,
+      budgetWindow,
+      maxLoops,
+      fanOutHinted,
+    });
     // Tracks whether we exited the loop because the LLM stopped requesting
     // tools (clean break) vs because we hit maxLoops. Critical: an empty
     // `finalAnswer === ''` from a clean break is NOT a loop-limit timeout.
@@ -748,34 +688,8 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
 
     while (loopCount < maxLoops) {
       loopCount++;
-      // INTERRUPT — cooperative stop before the next LLM call. The note lands
-      // in history so a resumed conversation knows the turn was cut short.
-      if (this.interruptRequested) {
-        this.interruptRequested = false;
-        const note = '⏹ Turn interrupted by user.';
-        const interruptMsg = { role: 'system', content: 'The user interrupted this turn before it finished; the work above may be incomplete.' };
-        this.chatHistory.push(interruptMsg);
-        this.recordTranscript(interruptMsg);
-        callbacks.onStatusUpdate('Interrupted');
-        return note;
-      }
-      // Queue/Steer — user and extension events accepted while the turn was
-      // busy become real model input only between complete LLM/tool batches.
-      // This preserves the assistant.tool_calls -> tool-result invariant.
-      applyPendingSteeringAtBoundary(this, callbacks);
-      // ADAPTIVE TOOL BUDGET checkpoint — the agent just completed a full budget
-      // window without a final answer. Force it to self-assess (finish or keep
-      // looping) instead of silently cutting off. Injected as a user turn so the
-      // NEXT LLM call reads it and decides; bounded by MAX_BUDGET_EXTENSIONS.
-      if (isBudgetCheckpoint(loopCount, budgetWindow, budgetCheckpointsFired)) {
-        budgetCheckpointsFired += 1;
-        const used = loopCount - 1;
-        const checkpointMsg = { role: 'user', content: buildBudgetCheckpoint(used, maxLoops - used) };
-        this.chatHistory.push(checkpointMsg);
-        this.recordTranscript({ ...checkpointMsg, name: 'guard' });
-        callbacks.onStatusUpdate(`Tool-budget checkpoint at ${used} calls — reassessing whether to continue`);
-      }
-      callbacks.onStatusUpdate(`Thinking (turn ${loopCount})...`);
+      const interruptedAnswer = lifecycleCoordinator.beginLoop(loopCount);
+      if (interruptedAnswer) return interruptedAnswer;
 
       const invocation = await invokeModelPhase(this, callbacks, allTools);
       if (invocation.kind === 'interrupted') return invocation.note;
@@ -905,40 +819,16 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         callbacks.onUsageUpdate?.({ ...this.lastTurnUsage });
       }
 
-      promisedToolsAtCount = repairAndRecordToolCalls({
+      lifecycleCoordinator.setPromisedToolsAtCount(repairAndRecordToolCalls({
         agent: this,
         callbacks,
         response,
         allTools,
-        promisedToolsAtCount,
-      });
+        promisedToolsAtCount: lifecycleCoordinator.getPromisedToolsAtCount(),
+      }));
 
       if (!response.toolCalls || response.toolCalls.length === 0) {
-        // A steer may have arrived while this LLM response was streaming. The
-        // assistant message is now durably recorded and has no unpaired tool
-        // calls, so this is the earliest safe boundary to continue with it.
-        if (applyPendingSteeringAtBoundary(this, callbacks) > 0) continue;
-        const pendingSteering = pendingSteeringConstraint(
-          this.workspaceRoot,
-          this.sessionKey,
-        );
-        if (
-          pendingSteering &&
-          steeringReconciliationGuardFired < STEERING_RECONCILIATION_GUARD_MAX
-        ) {
-          steeringReconciliationGuardFired += 1;
-          const instruction = pendingSteering.phase === 'classify'
-            ? `Call \`reconcile_steer\` for receipt "${pendingSteering.receiptId}" before continuing or finishing.`
-            : `Call \`update_plan\` with steeringReceiptId "${pendingSteering.receiptId}" before related work or finishing.`;
-          const guard = {
-            role: 'user',
-            content: `A steering receipt is still pending. ${instruction}`,
-          };
-          this.chatHistory.push(guard);
-          this.recordTranscript({ ...guard, name: 'guard' });
-          callbacks.onStatusUpdate('Pending steer requires typed reconciliation');
-          continue;
-        }
+        if (lifecycleCoordinator.applyPendingSteeringGuard()) continue;
         const childProfileGuard = await runChildProfileGuardPhase({
           agent: this,
           callbacks,
@@ -951,7 +841,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         });
         profileStageGuardFired = childProfileGuard.profileStageGuardFired;
         if (childProfileGuard.childOutputDelivered) {
-          childOutputDeliveredThisTurn = true;
+          lifecycleCoordinator.markChildOutputDelivered();
         }
         if (childProfileGuard.action === 'continue') continue;
         if (childProfileGuard.action === 'finish') {
@@ -960,323 +850,13 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           break;
         }
 
-        // Empty-answer-after-tools guardrail. The model ran real tool calls this
-        // turn but returned a FINAL response with NO tool_calls AND no text — it
-        // abandoned the synthesis, so the turn would end on an empty / placeholder
-        // answer ("…the model returned no additional commentary"). This is the most
-        // common weak/free-model failure (deepseek-*-flash-free, small OS models):
-        // they run the tools then go silent. The preamble/deferral guards all miss
-        // it because they require NON-empty content. Re-prompt ONCE (bounded by the
-        // shared preamble budget) to force the actual answer from the tool results.
-        if (
-          preambleGuardFired < PREAMBLE_GUARD_MAX &&
-          this.lastTurnToolCalls > 0 &&
-          !(response.content ?? '').trim()
-        ) {
-          preambleGuardFired += 1;
-          const correction = [
-            'Runtime empty-answer guardrail tripped.',
-            `You ran ${this.lastTurnToolCalls} tool call(s) this turn, then returned an EMPTY response — no text and no further tool_calls. The user only sees your final prose and tool_calls, so right now they got nothing back.`,
-            '',
-            'Write your final answer NOW, in THIS response:',
-            "- Answer the user's original question using what the tools returned.",
-            '- Cite concrete findings (files, line numbers, values) from the tool output.',
-            '- If the results were inconclusive, say what you found and what is still unknown.',
-            '',
-            'Do NOT return empty text again, and do NOT just restate that you ran the tools.',
-          ].join('\n');
-          const guardMsg = { role: 'user', content: correction };
-          this.chatHistory.push(guardMsg);
-          this.recordTranscript({ ...guardMsg, name: 'guard' });
-          callbacks.onStatusUpdate(`Recovery: empty-answer-after-tools (${preambleGuardFired}/${PREAMBLE_GUARD_MAX}) — forcing synthesis`);
-          continue;
-        }
-
-        // Stalled-preamble guardrail: when the model emits a short preamble
-        // like "I'll start by exploring…" / "Let me check…" but ATTACHES NO
-        // tool_calls in the same response, the loop would otherwise break
-        // with that preamble as the final answer — leaving the user staring
-        // at an announcement of work the model never did. This is the most
-        // common Gemma 2B / free-tier OS-model failure mode after we started
-        // teaching them to "send a preamble before tool batches"
-        // pattern.
-        //
-        // Fire only when:
-        //   1. The turn already had ≥1 real tool call (so we know the model
-        //      engaged — this isn't a fresh "I don't have enough info" reply)
-        //   2. `looksLikeStalledPreamble(content)` matches the start-of-text
-        //      preamble regexes in toolCallRecovery.ts
-        //   3. We haven't already injected the guardrail too many times this
-        //      turn (PREAMBLE_GUARD_MAX = 2)
-        //
-        // Inject a corrective user message and continue one more iteration.
-        // The model either delivers the substantive answer or, on the next
-        // pass, writes a real reply that escapes the preamble heuristic.
-        // Fire when it's a stalled preamble AND either (a) the model already
-        // called tools this turn then stalled, OR (b) it opened with a
-        // confident "I'll run/check/spawn X" promise but emitted ZERO tools
-        // (the "narrated intent, never acted" turn — gpt-5.3-codex's
-        // "Absolutely — I'll run the full deep sweep now" stall). Without (b)
-        // a turn that promises work and does nothing slips straight through.
-        if (
-          preambleGuardFired < PREAMBLE_GUARD_MAX &&
-          looksLikeStalledPreamble(response.content) &&
-          (this.lastTurnToolCalls > 0 || looksLikeDeferredToolPromise(response.content))
-        ) {
-          preambleGuardFired += 1;
-          const preview = response.content.trim().slice(0, 140);
-          const correction = [
-            'Runtime preamble guardrail tripped.',
-            `Your last assistant message was a preamble ("${preview}${response.content.trim().length > 140 ? '…' : ''}") but ended with NO tool_calls. The user is still waiting for the actual answer — they cannot see your intent, only your tool_calls and final prose.`,
-            '',
-            'Do ONE of these now, in THIS response:',
-            '1. **Execute the next tool batch you announced** — emit structured tool_calls for the reads/grep/spawn you said you were about to do. The preamble alone does not count.',
-            '2. **Write the substantive answer the user originally asked for** — the actual analysis, findings, code references, or conclusions. Not another preamble.',
-            '',
-            'Do NOT write "I\'ll start by…", "Let me…", or any other preamble again. Either call tools or deliver the answer.',
-          ].join('\n');
-          const guardMsg = { role: 'user', content: correction };
-          this.chatHistory.push(guardMsg);
-          this.recordTranscript({ ...guardMsg, name: 'guard' });
-          callbacks.onStatusUpdate(`Recovery: preamble-without-action (${preambleGuardFired}/${PREAMBLE_GUARD_MAX}) — forcing continuation`);
-          continue;
-        }
-
-        // Promise-then-ask guardrail. The model announced tool work earlier this
-        // turn (a deferred-tool-promise) but ran NO tools since and is now ending
-        // the turn — typically by asking the user a clarifying question it could
-        // have answered itself (e.g. "which folders are projectA/projectB?" when a
-        // glob would reveal them). The preamble guard misses this because the
-        // FINAL message is a question, not a preamble. Fire one bounded nudge
-        // that steers toward DISCOVERY over asking. Bounded by the shared
-        // PREAMBLE_GUARD_MAX so it can never loop.
-        if (
-          preambleGuardFired < PREAMBLE_GUARD_MAX &&
-          promisedToolsAtCount >= 0 &&
-          this.lastTurnToolCalls === promisedToolsAtCount
-        ) {
-          preambleGuardFired += 1;
-          promisedToolsAtCount = -1; // consume the promise so it can't re-fire on the same one
-          const correction = [
-            'Runtime promise-then-ask guardrail tripped.',
-            'Earlier this turn you said you would run tools (scan / read / search / spawn …) but you ran NONE since, and you are now ending the turn — apparently to ask the user instead of acting.',
-            '',
-            'Before asking the user anything, ask yourself: **can I discover this with a tool?**',
-            '- Missing a path, a directory name, which repos match a label, what a file/config contains? → find it now with `list_dir` / `glob_files` / `grep_search` / `read_file`. Do NOT ask the user for something a tool can reveal.',
-            '- Genuinely blocked by external info no tool can provide (a credential, a product decision, an ambiguous intent)? → then ask ONE focused question as your only output, and do NOT also claim you are about to act.',
-            '',
-            'Do the work you promised: emit the tool_calls now, or deliver the substantive answer. Auto-detect sensible defaults and proceed rather than stalling on a question.',
-          ].join('\n');
-          const guardMsg = { role: 'user', content: correction };
-          this.chatHistory.push(guardMsg);
-          this.recordTranscript({ ...guardMsg, name: 'guard' });
-          callbacks.onStatusUpdate(`Recovery: promised-tools-then-asked (${preambleGuardFired}/${PREAMBLE_GUARD_MAX}) — steering to discovery`);
-          continue;
-        }
-
-        // Fan-out follow-through guardrail. The breadth detector recommended a
-        // parallel `spawn_agents` fan-out for this turn, but the model is ending
-        // the turn having spawned NO children — i.e. it delivered a shallow
-        // single-thread answer (or "I'll inspect in parallel" then a summary)
-        // instead of actually fanning out. Nudge ONCE to spawn for real, or to
-        // state explicitly why fan-out doesn't apply. Bounded → never loops.
-        if (shouldRunFanOutFollowThroughGuard({
-          fanOutHinted,
-          guardFired: fanOutGuardFired,
-          maxGuardFires: FANOUT_GUARD_MAX,
-          spawnedChildCount: spawnedChildIdsThisTurn.size,
-          interactiveTopLevel: !this.silent && this.agentDepth === 0,
-          internalSession: isInternalSessionKey(this.sessionKey),
-        })) {
-          fanOutGuardFired += 1;
-          const correction = [
-            'Runtime fan-out follow-through guardrail tripped.',
-            'A fan-out was recommended for this broad/multi-target task, but you are ending the turn having spawned ZERO child agents — that is a shallow single-thread answer, not the parallel coverage the task wanted.',
-            '',
-            'Do ONE of these now, in THIS response:',
-            '1. **Actually fan out** — emit `spawn_agents` with 3–5 children covering distinct angles/targets (one child per comparison target / subsystem), then `wait_agents` and synthesize. Discover targets yourself (`list_dir`, `glob_files`) — do not ask the user for paths you can find.',
-            '2. **Justify skipping** — if the task genuinely does not benefit from parallel children (it is small, or the targets are not separable), say so in one sentence and deliver the complete answer.',
-            '',
-            'Do NOT just promise "I\'ll inspect in parallel" and stop, and do NOT hand back a thin summary while offering to "go deeper if you want" — deliver the deep result now.',
-          ].join('\n');
-          const guardMsg = { role: 'user', content: correction };
-          this.chatHistory.push(guardMsg);
-          this.recordTranscript({ ...guardMsg, name: 'guard' });
-          callbacks.onStatusUpdate(`Recovery: fan-out-hinted-but-no-spawn (${fanOutGuardFired}/${FANOUT_GUARD_MAX}) — forcing follow-through`);
-          continue;
-        }
-
-        // CC-P6.2 — deliverable guardrail. The model did real tool work this
-        // turn but its FINAL message ends on a deferral (trailing question,
-        // "let me know…" offer, or a promise of future work) instead of the
-        // deliverable. Nudge once to deliver the result in-message, then
-        // accept the next reply regardless. Applies to child agents too —
-        // their final message IS their return value, so a deferral ending
-        // hands the parent an empty result.
-        if (
-          deliverableGuardFired < DELIVERABLE_GUARD_MAX &&
-          this.lastTurnToolCalls > 0 &&
-          // A turn that just completed/blocked the goal is terminal — the model
-          // delivered its proof via goal_complete. Don't nudge it to "deliver"
-          // again (that produced the spurious post-completion guardrail turns).
-          !this.lastGoalTransition &&
-          typeof response.content === 'string'
-        ) {
-          const deferral = classifyDeferral(response.content);
-          if (deferral) {
-            deliverableGuardFired += 1;
-            const preview = response.content.trim().slice(-160).replace(/\s+/g, ' ');
-            const guardMsg = { role: 'user', content: buildDeliverableCorrection(deferral, preview) };
-            this.chatHistory.push(guardMsg);
-            this.recordTranscript({ ...guardMsg, name: 'guard' });
-            callbacks.onStatusUpdate(`Recovery: ended-on-${deferral} (${deliverableGuardFired}/${DELIVERABLE_GUARD_MAX}) — forcing the deliverable`);
-            continue;
-          }
-        }
-
-        // CC-P6.5 — verification gate (scoping-hardened). Fires ONLY when this
-        // turn actually wrote files and ran no build/test/lint. A read-only turn
-        // never reaches here, and a workspace/session switch doesn't run a turn,
-        // so neither can trip it. A docs/config-only change isn't asked to run a
-        // check — it's asked to SAY no verification was required.
-        // Skip entirely on a goal-completing/blocking turn — the goal is done,
-        // and demanding a build/test after goal_complete is the false-positive
-        // the user saw ("you wrote files this turn" on a read-only turn).
-        const verificationDecision = this.lastGoalTransition ? 'none' : decideVerification({
-          filesWritten: this.filesWrittenThisTurn,
-          shellWroteUnknown: this.shellWroteThisTurn,
-          verified: this.verifiedThisTurn,
-          alreadyNudged: verificationNudged,
+        const terminalGuard = lifecycleCoordinator.evaluateTerminalGuards({
+          response,
+          spawnedChildIds: spawnedChildIdsThisTurn,
+          waitedChildIds: waitedChildIdsThisTurn,
         });
-        if (verificationDecision !== 'none') {
-          verificationNudged = true;
-          const docsOnly = verificationDecision === 'report-docs-only';
-          const content = docsOnly
-            ? buildDocsOnlyVerificationNote(this.filesWrittenThisTurn)
-            : buildVerificationNudge({ local: localModelProfileActive(this.llmConfig.model, getCliKnobs().localModelProfile) });
-          const guardMsg = { role: 'user', content };
-          this.chatHistory.push(guardMsg);
-          this.recordTranscript({ ...guardMsg, name: 'guard' });
-          callbacks.onStatusUpdate(docsOnly
-            ? 'Recovery: docs/config-only change — asking the agent to state no verification was required'
-            : 'Recovery: wrote files but ran no verification — nudging to verify');
-          continue;
-        }
-
-        // Plan-sync guardrail — see planCompletedAtTurnStart. The model is about
-        // to finish (no tool_calls, clean exit) but it did real work this turn
-        // yet advanced NO plan item while open items remain. That's the "work
-        // done, plan left at ⏳" bug — nudge once to reconcile, then accept the
-        // turn regardless (bounded).
-        if (planSyncGuardFired < PLAN_SYNC_GUARD_MAX && this.lastTurnToolCalls > 0) {
-          let plan: ReturnType<typeof readPlan> | { items: [] };
-          try { plan = readPlan(this.workspaceRoot, this.sessionKey); } catch { plan = { items: [] }; }
-          const open = plan.items.filter((i) => i.status !== 'completed');
-          const completedNow = plan.items.length - open.length;
-          if (plan.items.length > 0 && open.length > 0 && completedNow === planCompletedAtTurnStart) {
-            planSyncGuardFired += 1;
-            const openSummary = open
-              .map((i) => `  - [${i.status === 'in_progress' ? '⏳' : '☐'}] ${i.step}`)
-              .join('\n');
-            const correction = [
-              'Runtime plan-sync guardrail tripped.',
-              `You did work this turn but advanced no plan item, and the plan still has ${open.length} open item(s):`,
-              openSummary,
-              '',
-              'Before finishing, make the plan honest about what you ACTUALLY did this turn:',
-              '- If you completed any of these, call `update_plan` now to mark them `completed` (keep at most one `in_progress`).',
-              '- If an item is genuinely still unfinished, leave it as-is and just say so in your answer.',
-              'Then deliver your final answer — the user only sees your tool_calls and final prose, not the plan unless you sync it.',
-            ].join('\n');
-            const guardMsg = { role: 'user', content: correction };
-            this.chatHistory.push(guardMsg);
-            this.recordTranscript({ ...guardMsg, name: 'guard' });
-            callbacks.onStatusUpdate(`Recovery: plan not advanced this turn — nudging to reconcile (${planSyncGuardFired}/${PLAN_SYNC_GUARD_MAX})`);
-            continue;
-          }
-        }
-
-        // Requirement/Track sync guardrail. Runs after the model-facing
-        // plan-sync correction so a ready requirement can be materialised into
-        // a plan and board without another LLM turn. Bounded and opt-in.
-        const automation = getCliKnobs().automation;
-        if (
-          requirementPlanTrackSyncGuardFired < REQUIREMENT_PLAN_TRACK_SYNC_GUARD_MAX
-          && this.lastTurnToolCalls > 0
-          && automation.enabled
-          && automation.sync.enabled
-        ) {
-          requirementPlanTrackSyncGuardFired += 1;
-          try { this.autoSynchronizeRequirementPlanTrack(callbacks); } catch { /* best-effort — never break the reply */ }
-        }
-
-        if (
-          sprintAutomationGuardFired < SPRINT_AUTOMATION_GUARD_MAX
-          && this.lastTurnToolCalls > 0
-          && automation.enabled
-          && automation.sprints.enabled
-        ) {
-          sprintAutomationGuardFired += 1;
-          try { this.autoSynchronizeSprints(callbacks); } catch { /* best-effort — never break the reply */ }
-        }
-
-        // CC-P9.2 — task-tracking nudge. This turn did substantial multi-step
-        // tool work but no plan is being kept. Inject one per-session reminder
-        // to use update_plan (distinct from plan-sync, which needs an existing
-        // plan). Latched so it never nags.
-        if (!this.taskTrackingNudged) {
-          let planCount = 0;
-          try { planCount = readPlan(this.workspaceRoot, this.sessionKey).items.length; } catch { planCount = 0; }
-          if (shouldNudgeTaskTracking({
-            toolCallsThisTurn: this.lastTurnToolCalls,
-            planItemCount: planCount,
-            alreadyNudged: this.taskTrackingNudged,
-            silent: this.silent,
-          })) {
-            this.taskTrackingNudged = true;
-            const guardMsg = { role: 'user', content: buildTaskTrackingNudge(this.lastTurnToolCalls) };
-            this.chatHistory.push(guardMsg);
-            this.recordTranscript({ ...guardMsg, name: 'guard' });
-            callbacks.onStatusUpdate('Reminder: multi-step work with no task list — nudging to use update_plan');
-            continue;
-          }
-        }
-
-        // MAR-3 (0.4.13) — child-synthesis guard. Child results were delivered this
-        // turn but the model is ending with a deferral ("I'll summarize later" /
-        // "still working") instead of synthesizing them. Force ONE synthesis pass.
-        // Bounded → never loops.
-        if (
-          synthesisGuardFired < SYNTHESIS_GUARD_MAX &&
-          childOutputDeliveredThisTurn &&
-          looksLikeChildSynthesisPunt(response.content ?? '')
-        ) {
-          synthesisGuardFired += 1;
-          const correction = [
-            'Runtime child-synthesis guardrail tripped.',
-            'A child agent already returned its results to you THIS turn, but your answer defers ("I\'ll summarize later" / "still working") instead of delivering them.',
-            'Their output is in the conversation above. Synthesize it into your final answer for the user NOW — do not promise a future summary, and do not spawn or wait on new agents.',
-          ].join('\n');
-          const guardMsg = { role: 'user', content: correction };
-          this.chatHistory.push(guardMsg);
-          this.recordTranscript({ ...guardMsg, name: 'guard' });
-          callbacks.onStatusUpdate(`Recovery: child results delivered but answer deferred — forcing synthesis (${synthesisGuardFired}/${SYNTHESIS_GUARD_MAX})`);
-          continue;
-        }
-
-        // MAR-1 (0.4.13) — arm the auto-resume for any child spawned this turn that
-        // the model never observed/synthesized (a background spawn the drain step
-        // couldn't reach, or a wait that errored), so its result is still delivered
-        // without a manual /continue. Additive: drain timeouts already armed above;
-        // this only ever ADDS still-unsynthesized ids (deduped).
-        const unsynthesized = unsynthesizedChildIds(spawnedChildIdsThisTurn, waitedChildIdsThisTurn);
-        if (unsynthesized.length > 0) {
-          this.lastTurnPendingChildIds = mergePendingChildIds(this.lastTurnPendingChildIds, unsynthesized);
-        }
-
-        // POLISH-2 (0.4.13) — repair the `*#COLON|*` citation garble some weak models
-        // emit, so the final answer (display, transcript, memory capture) reads clean.
-        finalAnswer = response.content ? sanitizeModelArtifacts(response.content) : response.content;
+        if (terminalGuard.action === 'continue') continue;
+        finalAnswer = terminalGuard.answer;
         exitedCleanly = true;
         break;
       }
@@ -1601,7 +1181,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
               buildOrchestrationContext,
               refreshActiveSkillTools,
               markChildOutputDelivered: () => {
-                childOutputDeliveredThisTurn = true;
+                lifecycleCoordinator.markChildOutputDelivered();
               },
             });
             resultText = invocation.resultText;
