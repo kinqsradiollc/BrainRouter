@@ -47,6 +47,7 @@ export function ReviewAssurancePanel({
       </header>
       <p className={styles.notice}>{view.authorityNotice}</p>
       <dl className={styles.summary}>
+        <div><dt>Run status</dt><dd>{view.runStatus}</dd></div>
         <div><dt>Revision</dt><dd title={view.revision}>{view.revision.slice(0, 12)}</dd></div>
         <div>
           <dt>Coverage</dt>

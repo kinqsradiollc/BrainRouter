@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type {
   AssuranceFindingStateView,
+  AssurancePublicationStatusView,
   AssuranceRunStatusView,
   ReviewAssuranceDetailView,
 } from '@kinqs/brainrouter-core/review';
@@ -11,6 +12,12 @@ import {
 } from './reviewPresentation.js';
 
 const NOW = '2026-07-29T00:00:00.000Z';
+
+function publicationStatus(status: AssuranceRunStatusView): AssurancePublicationStatusView {
+  if (status === 'queued') return 'running';
+  if (status === 'completed') return 'blocked';
+  return status;
+}
 
 function detail(
   status: AssuranceRunStatusView = 'completed',
@@ -32,6 +39,18 @@ function detail(
       createdAt: NOW,
     },
     assurance: {
+      publication: {
+        schemaVersion: 1,
+        status: publicationStatus(status),
+        label: publicationStatus(status),
+        conclusion: 'failure',
+        blocked: true,
+        cleanEligible: false,
+        reason: status === 'partial'
+          ? 'Coverage is incomplete.'
+          : 'Publication policy does not permit a clean conclusion.',
+        blockingFindingIds: status === 'completed' ? ['finding-one'] : [],
+      },
       run: {
         id: 'run-one',
         organizationId: 'org-one',
@@ -125,6 +144,7 @@ test('CLI review list retains job identifiers and read/run authority', () => {
 test('CLI complete fixture renders exact run, revision, coverage, stage, finding, evidence, and disposition values', () => {
   const output = renderReviewAssuranceDetail(detail());
   assert.match(output, /Assurance run-one · security_review · completed/);
+  assert.match(output, /Publication blocked · failure/);
   assert.match(output, /Revision head-sha · base base-sha/);
   assert.match(output, /Coverage complete · 3\/3 eligible files · changed 2\/2/);
   assert.match(output, /candidate_verification · succeeded · attempt 1/);
@@ -136,6 +156,8 @@ test('CLI complete fixture renders exact run, revision, coverage, stage, finding
 test('CLI partial and unresolved fixtures retain limitations without a clean-state upgrade', () => {
   const output = renderReviewAssuranceDetail(detail('partial', 'insufficient_evidence'));
   assert.match(output, /Assurance run-one · security_review · partial/);
+  assert.match(output, /Publication partial · failure/);
+  assert.match(output, /Publication reason: Coverage is incomplete\./);
   assert.match(output, /Coverage partial · 2\/3 eligible files · changed 1\/2/);
   assert.match(output, /Coverage limitation \[failed\] index/);
   assert.match(output, /candidate_verification · partial/);
