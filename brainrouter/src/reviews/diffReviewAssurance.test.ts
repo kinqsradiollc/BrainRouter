@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type {
   AssuranceCoverage,
+  AssuranceFinding,
   AssuranceImpactPacketAssembly,
   AssuranceStageReceipt,
   RepositoryAssuranceRun,
@@ -20,6 +21,8 @@ function clone<T>(value: T): T {
 
 class FakeAssuranceStore implements RepositoryAssuranceSupersessionStore {
   readonly runs = new Map<string, RepositoryAssuranceRun>();
+  readonly findings = new Map<string, AssuranceFinding>();
+  readonly findingRuns = new Map<string, string>();
   readonly semanticIds = new Map<string, string>();
   readonly runJobs = new Map<string, string>();
   readonly jobs = new Map<string, { order: number; prNumber: number }>([
@@ -125,6 +128,47 @@ class FakeAssuranceStore implements RepositoryAssuranceSupersessionStore {
     const run = this.require(orgId, runId);
     run.coverage = clone(coverage);
     return clone(coverage);
+  }
+
+  async getRepositoryAssuranceFinding(
+    orgId: string,
+    runId: string,
+    findingId: string,
+  ): Promise<AssuranceFinding | null> {
+    const finding = this.findings.get(findingId);
+    const run = this.runs.get(runId);
+    return finding
+      && run?.policySnapshot.organizationId === orgId
+      && this.findingRuns.get(findingId) === runId
+      ? clone(finding)
+      : null;
+  }
+
+  async saveRepositoryAssuranceFinding(input: {
+    orgId: string;
+    runId: string;
+    finding: AssuranceFinding;
+  }): Promise<AssuranceFinding> {
+    const run = this.require(input.orgId, input.runId);
+    if (
+      input.finding.program !== run.program
+      || input.finding.revisionSha !== run.revision.headSha
+    ) {
+      throw new Error("finding does not match run");
+    }
+    const finding = clone(input.finding);
+    this.findings.set(finding.id, finding);
+    this.findingRuns.set(finding.id, input.runId);
+    run.findings = [
+      ...run.findings.filter((item) => item.id !== finding.id),
+      {
+        id: finding.id,
+        fingerprint: finding.fingerprint,
+        state: finding.state,
+        severity: finding.severity,
+      },
+    ];
+    return clone(finding);
   }
 
   async recordRepositoryAssuranceStage(
@@ -332,6 +376,64 @@ describe("diff review assurance projection", () => {
     expect(retried?.id).toBe(first?.id);
     expect(store.runs.size).toBe(1);
     expect(retried?.stages).toHaveLength(2);
+  });
+
+  it("persists bounded exact-head model candidates before completing discovery", async () => {
+    const store = new FakeAssuranceStore();
+    const request = input(store);
+    const { result, changedFiles, ...start } = request;
+    const session = await startDiffReviewAssurance(start);
+
+    await session!.recordCandidates(
+      "head-1",
+      [{
+        file: "src/route.ts",
+        line: 10,
+        severity: "high",
+        confidence: 94,
+        title: "CWE-78 unsafe command construction",
+        details: "Request input reaches command construction.",
+      }],
+      result.coverage!,
+      changedFiles,
+    );
+    const completed = await session!.complete(result, changedFiles);
+    const finding = [...store.findings.values()][0];
+
+    expect(finding).toMatchObject({
+      revisionSha: "head-1",
+      state: "candidate",
+      evidence: [],
+      provenance: [expect.objectContaining({
+        producerKind: "model",
+        producerId: "llm-diff-review",
+      })],
+    });
+    expect(finding?.verifier).toBeUndefined();
+    expect(completed.findings).toEqual([
+      expect.objectContaining({ id: finding?.id, state: "candidate" }),
+    ]);
+    expect(completed.stages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        stage: "candidate_discovery",
+        outputRefs: expect.arrayContaining([finding?.id]),
+      }),
+    ]));
+  });
+
+  it("rejects candidates from a different revision", async () => {
+    const store = new FakeAssuranceStore();
+    const request = input(store);
+    const { result, changedFiles, ...start } = request;
+    const session = await startDiffReviewAssurance(start);
+
+    await expect(session!.recordCandidates(
+      "head-other",
+      [],
+      result.coverage!,
+      changedFiles,
+    )).rejects.toThrow(/exact revision/);
+    expect(store.findings.size).toBe(0);
   });
 
   it("records analyzer failure without claiming repository coverage", async () => {

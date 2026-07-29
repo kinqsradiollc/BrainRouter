@@ -91,6 +91,13 @@ export interface PrReviewDeps {
     headSha: string;
     changed: AssuranceSourceLocation[];
   }) => Promise<{ text: string; packetRefs: string[]; artifactRefs: string[] } | null>;
+  /** Persist bounded model candidates before any forge publication is attempted. */
+  onCandidatesReady?: (input: {
+    headSha: string;
+    findings: PrReviewCandidateDetail[];
+    coverage: PrReviewCoverage;
+    changedFiles: number;
+  }) => void | Promise<void>;
   /** Stop new bounded work when the durable scheduler job was canceled. */
   isCancellationRequested?: () => boolean | Promise<boolean>;
   /**
@@ -169,6 +176,12 @@ export interface PrReviewFindingDetail {
   cwe?: string;
   preExisting?: boolean;
   suggestable?: boolean;
+}
+
+export interface PrReviewCandidateDetail extends PrReviewFindingDetail {
+  confidence: number;
+  details?: string;
+  suggestion?: string;
 }
 
 export interface PrReviewContributor {
@@ -628,6 +641,37 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
   const findings = dedupeReviewFindings(collected);
   const blocking = findings.filter((f) => lens.isBlocking(f)).length;
   progress("findings-parsed", "Findings parsed", { total: findings.length, blocking, ...(droppedParts > 0 ? { unreviewedParts: droppedParts } : {}) });
+  const MAX_RECORDED_FINDINGS = 500;
+  const recordedFindings = findings.slice(0, MAX_RECORDED_FINDINGS);
+  const unrecordedFindings = Math.max(0, findings.length - recordedFindings.length);
+  const coverage: PrReviewCoverage = {
+    complete: failedParts === 0 && droppedParts === 0 && unrecordedFindings === 0,
+    totalParts: allParts.length,
+    reviewedParts,
+    failedParts,
+    unreviewedParts: droppedParts,
+    unrecordedFindings,
+  };
+  await deps.onCandidatesReady?.({
+    headSha,
+    changedFiles,
+    coverage,
+    findings: recordedFindings.map((finding) => ({
+      file: finding.file,
+      ...(finding.line ? { line: finding.line } : {}),
+      ...(finding.endLine ? { endLine: finding.endLine } : {}),
+      severity: finding.severity,
+      confidence: finding.confidence,
+      title: finding.summary,
+      ...(finding.details ? { details: finding.details } : {}),
+      ...(finding.suggestion ? { suggestion: finding.suggestion } : {}),
+      ...(finding.summary.match(/\b(CWE-\d+)\b/i)?.[1]
+        ? { cwe: finding.summary.match(/\b(CWE-\d+)\b/i)?.[1] }
+        : {}),
+      ...(finding.preExisting ? { preExisting: true } : {}),
+      ...(finding.replacement ? { suggestable: true } : {}),
+    })),
+  });
 
   // 3. Post inline review comments (with GitHub ```suggestion blocks) anchored to the
   //    diff, grouped as ONE PR review — deduped against inline comments we already
@@ -697,21 +741,11 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
     ? await postGitlabCommitStatus(deps.fetchImpl, apiBase, gitlabProject, headSha, lens, findings, blocking, policy.blockOnFindings, token)
     : await postCheckRun(deps.fetchImpl, apiBase, repo, headSha, lens, findings, blocking, policy.blockOnFindings, token);
   progress("check-posted", checkPosted ? "Check run posted" : "Check run could not be posted", { conclusion: blocking > 0 && policy.blockOnFindings && !lens.advisory ? "failure" : findings.length > 0 ? "neutral" : "success" });
-  const MAX_RECORDED_FINDINGS = 500;
-  const findingsDetail = findings.slice(0, MAX_RECORDED_FINDINGS).map((finding) => ({
+  const findingsDetail = recordedFindings.map((finding) => ({
     file: finding.file, ...(finding.line ? { line: finding.line } : {}), ...(finding.endLine ? { endLine: finding.endLine } : {}), severity: finding.severity, title: finding.summary,
     ...(finding.summary.match(/\b(CWE-\d+)\b/i)?.[1] ? { cwe: finding.summary.match(/\b(CWE-\d+)\b/i)?.[1] } : {}),
     ...(finding.preExisting ? { preExisting: true } : {}), ...(finding.replacement ? { suggestable: true } : {}),
   }));
-  const unrecordedFindings = Math.max(0, findings.length - findingsDetail.length);
-  const coverage: PrReviewCoverage = {
-    complete: failedParts === 0 && droppedParts === 0 && unrecordedFindings === 0,
-    totalParts: allParts.length,
-    reviewedParts,
-    failedParts,
-    unreviewedParts: droppedParts,
-    unrecordedFindings,
-  };
   progress("done", "Review completed");
 
   return {

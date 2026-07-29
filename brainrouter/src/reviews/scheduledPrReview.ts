@@ -64,6 +64,9 @@ async function reviewDependencies(
     prepareRepositoryContext(input: Parameters<
       NonNullable<PrReviewDeps["prepareRepositoryContext"]>
     >[0]): ReturnType<NonNullable<PrReviewDeps["prepareRepositoryContext"]>>;
+    candidatesReady(input: Parameters<
+      NonNullable<PrReviewDeps["onCandidatesReady"]>
+    >[0]): void | Promise<void>;
     isCancellationRequested(): boolean | Promise<boolean>;
   },
 ): Promise<PrReviewDeps> {
@@ -98,6 +101,7 @@ async function reviewDependencies(
     },
     onAssuranceReady: observe.assuranceReady,
     prepareRepositoryContext: observe.prepareRepositoryContext,
+    onCandidatesReady: observe.candidatesReady,
     isCancellationRequested: observe.isCancellationRequested,
   };
 }
@@ -140,6 +144,9 @@ export async function runScheduledPrReview(
     },
     prepareRepositoryContext: ({ changed }) =>
       assurance.current?.prepareContext(changed) ?? Promise.resolve(null),
+    candidatesReady: ({ headSha, findings, coverage, changedFiles }) =>
+      assurance.current?.recordCandidates(headSha, findings, coverage, changedFiles)
+      ?? Promise.resolve(),
     isCancellationRequested,
     progress: (event) => {
       if (event.kind === "diff-fetched") {
