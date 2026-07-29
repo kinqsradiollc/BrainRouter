@@ -61,7 +61,9 @@ deep dives.
   [ADR-023 profile-specific orchestration plans](decisions/ADR-023-profile-specific-orchestration-plans.md) —
   bounded per-profile strategy graphs that reference reusable role JSON while preserving manifest and runtime authority ceilings;
   [ADR-024 agent work contracts, repository assurance, and browser reliability](decisions/ADR-024-agent-work-repository-assurance-and-browser-reliability.md) —
-  proposed revisioned work/steering contracts, parser-backed code intelligence, whole-context repository assurance, verified browser actions, provider recovery, and a shared human review workbench.
+  proposed revisioned work/steering contracts, parser-backed code intelligence, whole-context repository assurance, verified browser actions, provider recovery, and a shared human review workbench;
+  [ADR-025 repository assurance and runtime boundary modernization](decisions/ADR-025-repository-assurance-and-runtime-boundary-modernization.md) —
+  accepted evidence-and-coverage-led PR assurance, distinct code/security/authorized-assessment programs, and an incremental whole-platform contracts/domain/policy/ports/adapters migration across shared packages and product hosts.
 
 Published benchmark results: [`../brainrouter-benchmark/reports/`](../brainrouter-benchmark/reports/).
 
