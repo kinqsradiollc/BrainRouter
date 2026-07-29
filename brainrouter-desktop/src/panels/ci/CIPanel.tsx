@@ -10,9 +10,14 @@ import { Button } from '../../components/primitives/Button.js';
 import { summarizeChecks, ciStatusLabel, checkClass, runClass, ciDuration, type CheckRow } from '../../lib/ci/ciFormat.js';
 import type { CiApi } from '../../lib/ci/useCi.js';
 import { bridgeQuery } from '../../lib/bridgeQuery.js';
-import { normalizeReviewListResponse, pullRequestReviewTarget, reviewActionAvailability, type PullRequestReviewTarget, type ReviewActionAccess } from '../../settings/reviews/reviewPresentation.js';
+import { normalizeReviewListResponse, reviewRunBridgeRequest, type PullRequestReviewTarget, type ReviewActionAccess, type ReviewExecutionMode } from '../../settings/reviews/reviewPresentation.js';
 import { summarizePrReadiness } from '../../lib/track/prReadiness.js';
 import type { TrackPrStatus } from '../../track/TrackView.js';
+import {
+  AccountReviewActions,
+  type AccountReviewLens,
+  type AccountReviewNotice,
+} from './AccountReviewActions.js';
 
 type PrBusy = 'refresh' | 'review' | 'fix-checks' | 'merge' | null;
 type TrackPrOps = {
@@ -21,44 +26,6 @@ type TrackPrOps = {
   submitPrReview: (decision: 'comment' | 'approve' | 'request-changes', body: string) => void;
   fixFailingChecks: () => void;
 };
-type AccountReviewLens = 'security' | 'code';
-type AccountReviewNotice = { target: string; text: string; error: boolean } | null;
-type ReviewPrRef = { number?: number; url?: string };
-
-function AccountReviewActions({ pr, access, running, notice, onRun, compact = false }: {
-  pr: ReviewPrRef;
-  access: ReviewActionAccess;
-  running: string | null;
-  notice: AccountReviewNotice;
-  onRun: (target: PullRequestReviewTarget, lens: AccountReviewLens) => void;
-  compact?: boolean;
-}): React.ReactElement {
-  const target = pullRequestReviewTarget(pr.url, pr.number);
-  const targetKey = target ? `${target.repo}#${target.prNumber}` : '';
-  const availability = reviewActionAvailability(access, target);
-  const blocked = !availability.enabled || !!running;
-  const targetNotice = notice?.target === targetKey ? notice : null;
-  return (
-    <div className={`ci-account-review${compact ? ' compact' : ''}`}>
-      <div className="ci-account-review-head">
-        <span className="ci-account-review-title">BrainRouter reviews</span>
-        {access.signedIn && !access.loading ? <span className={`ci-account-review-access${access.canRun ? ' allowed' : ''}`}>{access.canRun ? 'Allowed' : 'Read only'}</span> : null}
-      </div>
-      <div className="ci-account-review-actions">
-        <Button disabled={blocked} className={running === `${targetKey}:security` ? 'is-busy' : ''} onClick={() => target && onRun(target, 'security')}>
-          {running === `${targetKey}:security` ? <span className="spinner sm" /> : <Icon name="shield" size={12} />}Security review
-        </Button>
-        <Button disabled={blocked} className={running === `${targetKey}:code` ? 'is-busy' : ''} onClick={() => target && onRun(target, 'code')}>
-          {running === `${targetKey}:code` ? <span className="spinner sm" /> : <Icon name="code" size={12} />}Code review
-        </Button>
-      </div>
-      <div className={`ci-account-review-help${targetNotice?.error ? ' error' : ''}`} role={targetNotice?.error ? 'alert' : undefined} aria-live="polite">
-        {targetNotice?.text ?? availability.help}
-      </div>
-    </div>
-  );
-}
-
 export function CIPanel({ ci, onOpenExternal, onReviewPr, trackPr, trackOps }: {
   ci: CiApi;
   onOpenExternal: (url: string) => void;
@@ -105,15 +72,18 @@ export function CIPanel({ ci, onOpenExternal, onReviewPr, trackPr, trackOps }: {
     window.setTimeout(() => setPrBusy((cur) => (cur === kind ? null : cur)), 15_000);
   };
   const refreshAll = (): void => runPrAction('refresh', () => { ci.refresh(); trackOps?.refreshPr(); void loadReviewAccess(); });
-  const runAccountReview = async (target: PullRequestReviewTarget, lens: AccountReviewLens): Promise<void> => {
+  const runAccountReview = async (target: PullRequestReviewTarget, lens: AccountReviewLens, mode: ReviewExecutionMode, limitsAccepted: boolean): Promise<void> => {
     if (!reviewAccess.signedIn || !reviewAccess.canRun || accountReviewRunning) return;
     const targetKey = `${target.repo}#${target.prNumber}`;
-    setAccountReviewRunning(`${targetKey}:${lens}`);
+    setAccountReviewRunning(`${targetKey}:${mode}:${lens}`);
     setAccountReviewNotice(null);
     try {
-      const response = await bridgeQuery<{ ok?: boolean; jobs?: number; error?: string }>('reviews-run', { ...target, lens });
+      const response = await bridgeQuery<{ ok?: boolean; jobs?: number; error?: string }>(
+        'reviews-run',
+        { ...reviewRunBridgeRequest(target, lens, mode, limitsAccepted) },
+      );
       if (!response.ok) throw new Error(response.error ?? 'The review could not be started.');
-      setAccountReviewNotice({ target: targetKey, error: false, text: `${lens === 'security' ? 'Security' : 'Code'} review queued for ${target.repo} #${target.prNumber}.` });
+      setAccountReviewNotice({ target: targetKey, error: false, text: `${mode === 'deep' ? 'Deep ' : ''}${lens === 'security' ? 'security' : 'code'} review queued for ${target.repo} #${target.prNumber}.` });
     } catch (caught) {
       setAccountReviewNotice({ target: targetKey, error: true, text: caught instanceof Error ? caught.message : 'The review could not be started.' });
     } finally {
@@ -170,7 +140,7 @@ export function CIPanel({ ci, onOpenExternal, onReviewPr, trackPr, trackOps }: {
                           {onReviewPr ? <Button onClick={() => onReviewPr({ number: p.number, title: p.title, headRefName: p.headRefName, baseRefName: p.baseRefName })}><Icon name="review" size={12} />Review with AI</Button> : null}
                           {p.url ? <Button onClick={() => onOpenExternal(p.url!)}>Open on GitHub</Button> : null}
                         </div>
-                        <AccountReviewActions pr={p} access={reviewAccess} running={accountReviewRunning} notice={accountReviewNotice} onRun={(target, lens) => void runAccountReview(target, lens)} compact />
+                        <AccountReviewActions pr={p} access={reviewAccess} running={accountReviewRunning} notice={accountReviewNotice} onRun={(target, lens, mode, limitsAccepted) => void runAccountReview(target, lens, mode, limitsAccepted)} compact />
                       </div>
                     ) : null}
                   </div>
@@ -203,7 +173,7 @@ export function CIPanel({ ci, onOpenExternal, onReviewPr, trackPr, trackOps }: {
         <Button className={prBusy === 'merge' ? 'is-busy' : ''} disabled={!canUsePrOps || !!prBusy || trackPr?.pr?.isDraft} onClick={() => runPrAction('merge', () => trackOps!.mergePr())}>{prBusy === 'merge' ? <span className="spinner sm" /> : <Icon name="check-circle" size={12} />}{prBusy === 'merge' ? 'Merging' : 'Merge PR'}</Button>
       </div>
 
-      <AccountReviewActions pr={pr ?? {}} access={reviewAccess} running={accountReviewRunning} notice={accountReviewNotice} onRun={(target, lens) => void runAccountReview(target, lens)} />
+      <AccountReviewActions pr={pr ?? {}} access={reviewAccess} running={accountReviewRunning} notice={accountReviewNotice} onRun={(target, lens, mode, limitsAccepted) => void runAccountReview(target, lens, mode, limitsAccepted)} />
 
       {/* Check-run rollup — GitHub's CI, NOT the local tool log. */}
       <div className="ci-section"><span>Checks</span></div>

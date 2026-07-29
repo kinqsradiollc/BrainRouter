@@ -1,3 +1,5 @@
+export type ReviewExecutionMode = 'diff' | 'deep';
+
 export interface ReviewListPresentation<T = unknown> {
   signedIn: boolean;
   canRun: boolean;
@@ -16,6 +18,26 @@ export interface ReviewActionAccess {
   signedIn: boolean;
   canRun: boolean;
   error?: string;
+}
+
+export interface ReviewRunBridgeRequest extends PullRequestReviewTarget {
+  lens: 'security' | 'code';
+  mode: ReviewExecutionMode;
+  deepReviewAccepted?: true;
+}
+
+export function reviewRunBridgeRequest(
+  target: PullRequestReviewTarget,
+  lens: 'security' | 'code',
+  mode: ReviewExecutionMode,
+  limitsAccepted: boolean,
+): ReviewRunBridgeRequest {
+  if (mode === 'deep' && !limitsAccepted) {
+    throw new Error('Accept the displayed deep-review limits before starting this run.');
+  }
+  return mode === 'deep'
+    ? { ...target, lens, mode, deepReviewAccepted: true }
+    : { ...target, lens, mode: 'diff' };
 }
 
 export function reviewActionAvailability(access: ReviewActionAccess, target: PullRequestReviewTarget | null): { enabled: boolean; help: string } {

@@ -3,17 +3,21 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import type { ManualReviewRunRequest } from "@kinqs/brainrouter-types";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { EmptyState } from "../../../components/EmptyState";
 import { PageHeader } from "../../../components/PageHeader";
-import { PremiumButton } from "../../../components/PremiumButton";
 import { PremiumCard } from "../../../components/PremiumCard";
 import { StatusBadge } from "../../../components/Analytics";
 import { AgentTraceGraph } from "../../../components/AgentTraceGraph";
 import { adminApi, type ReviewJob, type ReviewPullRequestDetail } from "../../../lib/adminApi";
 import { invalidateDashboardQueries, queryDashboard } from "../../../lib/dashboardQuery";
-import { REVIEW_ACTION_LABELS, reviewActionPresentation, safeReviewsReturnPath } from "../reviewPresentation";
 import { InlineLoading } from "../../../components/LoadingSpinner";
+import {
+  safeReviewsReturnPath,
+  type ReviewRunLens,
+} from "../reviewPresentation";
+import { ReviewRunCard } from "./ReviewRunCard";
 
 function lensName(lens: ReviewJob["lens"]): string {
   if (lens === "security") return "Security review";
@@ -77,7 +81,7 @@ function Detail() {
   const [canRun, setCanRun] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState<"security" | "code" | "both" | "">("");
+  const [busy, setBusy] = useState<ReviewRunLens | "">("");
 
   const validTarget = Boolean(repo && Number.isSafeInteger(number) && number > 0);
   const load = useCallback(async () => {
@@ -134,16 +138,20 @@ function Detail() {
     };
   }, [hasActiveReview, validTarget, repo, number, orgId]);
 
-  const run = async (lens: "security" | "code" | "both") => {
+  const run = async (request: ManualReviewRunRequest): Promise<boolean> => {
+    if (request.lens === "pentest") return false;
+    const lens = request.lens;
     setBusy(lens);
     setError("");
     try {
-      await adminApi.runReview({ repo, prNumber: number, lens }, orgId);
+      await adminApi.runReview(request, orgId);
       invalidateDashboardQueries(`review-pr:${orgId ?? "default"}:${repo}#${number}`);
       invalidateDashboardQueries(`review-prs:${orgId ?? ""}`);
       await load();
+      return true;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Failed to queue review");
+      return false;
     } finally {
       setBusy("");
     }
@@ -163,8 +171,6 @@ function Detail() {
       </div>
     );
   }
-
-  const action = pr ? reviewActionPresentation(canRun, pr.availability, Boolean(busy)) : { enabled: false, help: "Loading pull request review access…" };
 
   return (
     <div className="settings-page review-detail">
@@ -187,15 +193,14 @@ function Detail() {
           </main>
 
           <aside className="review-detail__aside" aria-label="Pull request review metadata">
-            <PremiumCard level={2} className="review-detail__run-card">
-              <div className="settings-cardhead"><div><h3>Run review</h3><div className="settings-hint">Uses organization policy and posts the result to this pull request.</div></div></div>
-              <div className="review-detail__run-actions">
-                <PremiumButton size="small" title={action.help} disabled={!action.enabled} onClick={() => void run("security")}>{busy === "security" ? "Queuing…" : REVIEW_ACTION_LABELS.security}</PremiumButton>
-                <PremiumButton size="small" title={action.help} disabled={!action.enabled} onClick={() => void run("code")}>{busy === "code" ? "Queuing…" : REVIEW_ACTION_LABELS.code}</PremiumButton>
-                <PremiumButton size="small" variant="primary" title={action.help} disabled={!action.enabled} onClick={() => void run("both")}>{busy === "both" ? "Queuing…" : REVIEW_ACTION_LABELS.both}</PremiumButton>
-              </div>
-              <p className="review-detail__run-help">{action.help}</p>
-            </PremiumCard>
+            <ReviewRunCard
+              repo={repo}
+              prNumber={number}
+              canRun={canRun}
+              availability={pr.availability}
+              busy={busy}
+              onRun={run}
+            />
 
             <PremiumCard level={2} className="review-detail__metadata-card">
               <div className="settings-cardhead"><div><h3>Repository</h3><div className="settings-hint">Current pull request metadata</div></div><StatusBadge tone={pr.availability.autoReviewEnabled ? "ok" : "neutral"}>{pr.availability.autoReviewEnabled ? "Automatic" : "On demand"}</StatusBadge></div>

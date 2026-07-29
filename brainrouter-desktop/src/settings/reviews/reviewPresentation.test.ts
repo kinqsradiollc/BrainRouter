@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { changeRequestUrl, githubPullRequestUrl, normalizeReviewListResponse, pullRequestReviewTarget, reviewActionAvailability } from './reviewPresentation.js';
+import { changeRequestUrl, githubPullRequestUrl, normalizeReviewListResponse, pullRequestReviewTarget, reviewActionAvailability, reviewRunBridgeRequest } from './reviewPresentation.js';
 
 test('PR review links use an explicit HTTPS URL accepted by the desktop host', () => {
   assert.equal(githubPullRequestUrl('openai/codex', 42), 'https://github.com/openai/codex/pull/42');
@@ -61,4 +61,23 @@ test('review actions remain visible but disabled with an exact auth or RBAC expl
     enabled: false, help: 'Reviews unavailable: HTTP 503',
   });
   assert.equal(reviewActionAvailability({ loading: false, signedIn: true, canRun: true }, target).enabled, true);
+});
+
+test('desktop deep review bridge requests require deliberate per-run acceptance', () => {
+  const target = { repo: 'openai/codex', prNumber: 42, forge: 'github' as const };
+  assert.deepEqual(reviewRunBridgeRequest(target, 'code', 'diff', false), {
+    ...target,
+    lens: 'code',
+    mode: 'diff',
+  });
+  assert.throws(
+    () => reviewRunBridgeRequest(target, 'security', 'deep', false),
+    /Accept the displayed deep-review limits/,
+  );
+  assert.deepEqual(reviewRunBridgeRequest(target, 'security', 'deep', true), {
+    ...target,
+    lens: 'security',
+    mode: 'deep',
+    deepReviewAccepted: true,
+  });
 });

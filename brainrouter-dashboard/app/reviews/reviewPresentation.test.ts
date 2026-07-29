@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { ReviewPullRequest } from "../../lib/adminApi";
 import {
   filterReviewPullRequests,
+  manualReviewRunRequest,
   reviewActionPresentation,
   reviewsReturnPath,
   safeReviewsReturnPath,
@@ -56,6 +57,23 @@ test("review actions use the same RBAC and repository disabled reasons as deskto
     help: "The repository could not be resolved for this change request.",
   });
   assert.equal(reviewActionPresentation(true, availability).enabled, true);
+});
+
+test("deep review requires per-run limit acceptance and diff never carries deep limits", () => {
+  assert.deepEqual(manualReviewRunRequest("acme/widgets", 7, "security", "diff", false), {
+    repo: "acme/widgets",
+    prNumber: 7,
+    lens: "security",
+    mode: "diff",
+  });
+  assert.throws(
+    () => manualReviewRunRequest("acme/widgets", 7, "security", "deep", false),
+    /Accept the displayed deep-review limits/,
+  );
+  const deep = manualReviewRunRequest("acme/widgets", 7, "both", "deep", true);
+  assert.equal(deep.mode, "deep");
+  assert.equal(deep.deepReview?.budgets.maxModelCalls, 30);
+  assert.equal(deep.deepReview?.telemetryThresholds.maxRepositoryFiles, 20_000);
 });
 
 test("list state is preserved in safe review detail return links", () => {
