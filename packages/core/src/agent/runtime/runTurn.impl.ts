@@ -7,7 +7,6 @@ import chalk from 'chalk';
 import type { Agent, RunTurnCallbacks } from '../agent.js';
 import { getCliKnobs, isRemoteBrainUrl, loadOrInitConfig } from '../../config/config.js';
 import { linkArtifact } from '../../artifact/artifactStore.js';
-import { contextWindowForBudget } from '../../context/contextWindow.js';
 import {
   buildRootContextEnvelope,
 } from '../../context/contextEnvelope.js';
@@ -16,7 +15,7 @@ import { isPathWithinRoots } from '../../exec/policy/pathPolicy.js';
 import { evaluatePermissionRules, primaryArgText } from '../../exec/policy/permissionRules.js';
 import { classifyShellCommand } from '../../exec/policy/shellClassifier.js';
 import { recordDenial } from '../../exec/runtime/recentDenials.js';
-import { readGoal, formatGoalBlock } from '../../goal/store/goalStore.js';
+import { readGoal } from '../../goal/store/goalStore.js';
 import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../../hooks/hookifyStore.js';
 import { runHooks, parseHookDecision, collectStopAdditionalContext } from '../../hooks/hooksStore.js';
 import { extractToolText } from '../../mcp/mcpUtils.js';
@@ -26,8 +25,6 @@ import {
   createActiveTurnOrchestrationRuntime,
   isOrchestrationRuntimeUnavailableError,
 } from '../../orchestration/runtime/activeTurnRuntime.js';
-import { buildFanOutHint, shouldSuggestFanOut } from '../../prompt/planning/breadthHint.js';
-import { buildNextActionMessages, parseNextActionPlan, nextActionDirective, planWantsFanOut, shouldSkipPlanner } from '../../prompt/planning/nextAction.js';
 import { compactToolOutput } from '../../prompt/compaction/toolCompaction.js';
 import { shouldFallbackModel } from '../../provider/modelFallback.js';
 import { resolveLocalModelProfile, localModelProfileActive } from '../../provider/modelFamily.js';
@@ -35,7 +32,6 @@ import { enforceTaskBudget } from '../../provider/budget.js';
 import { currentTier, detectNeedsHigh, nextTier, resolveTierLadder, stripNeedsHigh } from '../../provider/tierLadder.js';
 import { switchModelToolAvailable } from '../../provider/llmProfiles.js';
 import { buildModelRegistry, resolveRoutes } from '../../provider/routing/index.js';
-import { drainCompletions, formatCompletionFeedback } from '../../session/completion/completionInbox.js';
 import { resolveActiveMode } from '../../session/state/sessionModeStore.js';
 import {
   pendingSteeringConstraint,
@@ -58,12 +54,11 @@ import { extensionToolOwner } from '../../extension/registry.js';
 import { applyToolScope, rankAndCapTools, toolNameMatchesAny } from '../../tool/policy/toolBudget.js';
 import { resolveToolVisible } from '../../tool/policy/toolPolicy.js';
 import { extractCacheStats } from '../../util/tokens/cacheStats.js';
-import { unsynthesizedChildIds, mergePendingChildIds, buildPendingChildStatusHint } from '../../util/agentloop/childResume.js';
+import { unsynthesizedChildIds, mergePendingChildIds } from '../../util/agentloop/childResume.js';
 import { applyFederationIdentity } from '../../util/agentloop/federationIdentity.js';
 import { sanitizeModelArtifacts } from '../../util/agentloop/outputSanitize.js';
 import { makeResultHandoff, formatHandoffForModel, attachCompactedResultHandoff } from '../../util/result/resultHandoff.js';
 import { isChildSynthesisTool, resultHasChildOutput, looksLikeChildSynthesisPunt } from '../../util/agentloop/synthesisGuard.js';
-import { estimateChatHistoryTokens } from '../../util/tokens/tokenEstimate.js';
 import { classifyDeferral, buildDeliverableCorrection } from '../guards/deliverableCheck.js';
 import { classifyDenial, formatDenialResult } from '../guards/denialMessage.js';
 import { applyPendingSteeringAtBoundary } from './steering.js';
@@ -92,7 +87,6 @@ import { sanitizeToolCallsForHistory, explainUnknownToolName } from '../agent.js
 import { refreshWorkspaceCapabilityState } from '../workspaceCapabilityState.js';
 import { resolveActiveTurnOrchestration } from '../../workspace/activeTurnOrchestration.js';
 import {
-  requiredSkillActivationPrompt,
   requiredSkillsBlockingMutation,
   resolveRequiredSkillActivation,
 } from '../../workspace/requiredSkillActivation.js';
@@ -112,6 +106,7 @@ import {
 } from '../transport/llmTransport.js';
 import { invokeModelPhase } from './modelInvocationPhase.js';
 import { normalizeTurnCompletionAnswer } from './completionPhase.js';
+import { prepareTurnContextPhase } from './contextPreparationPhase.js';
 import {
   buildRequiredDelegatedStageCorrection,
   buildRequiredProfileStageCorrection,
@@ -517,214 +512,17 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     }
     callbacks.onStatusUpdate(`Loaded ${filteredLocalTools.length} local tools, ${delegateTools.length} delegate tools, and ${mcpTools.length} MCP tools.`);
 
-    // Auto-compact pre-turn check.
-    //
-    // Threshold: `cli.autoCompactTokens` (default 80_000). An absolute knob —
-    // the model's max context window is NOT the driver because (a) hitting 75%
-    // of a 1M-context model still costs real money and the user might want to
-    // compact much earlier, (b) smaller models with tight windows are better
-    // served by a hard ceiling the user explicitly set. BUT the knob is clamped
-    // DOWN to ~90% of the model window: a knob larger than the window can never
-    // fire (the provider rejects the request before that many tokens accrue), so
-    // compaction must trigger within the window, leaving output headroom.
-    //
-    // Token-count source (the actual correction in 0.3.9):
-    //   1. `lastSeenPromptTokens` — the authoritative `usage.prompt_tokens`
-    //      from the previous response. The provider charged us for this
-    //      number, so it's the truest count available.
-    //   2. Content-aware estimator (`tokenEstimate.ts → estimateChatHistoryTokens`)
-    //      — fallback for turn 1 (no usage yet) and silent runs. Buckets
-    //      chars by class (prose / code-density / CJK) so CJK pastes and
-    //      code dumps don't drift the count by 2–4× as the old
-    //      `text.length / 4` proxy did.
-    if (!this.silent) {
-      const windowCap = Math.floor(contextWindowForBudget(this.getModel()) * 0.9);
-      const autoCompactThreshold = Math.min(getCliKnobs().autoCompactTokens, windowCap);
-      const promptTokens = this.lastSeenPromptTokens !== undefined && this.lastSeenPromptTokens > 0
-        ? this.lastSeenPromptTokens
-        : estimateChatHistoryTokens(this.chatHistory as any);
-      if (promptTokens > autoCompactThreshold && this.chatHistory.length > 6) {
-        callbacks.onStatusUpdate(`Auto-compacting history (~${promptTokens.toLocaleString()} tokens > ${autoCompactThreshold.toLocaleString()})...`);
-        try {
-          const beforeLen = this.chatHistory.length;
-          const r = await this.compactHistory();
-          if (r && callbacks.onCompactionEvent) {
-            callbacks.onCompactionEvent({
-              droppedMessages: Math.max(0, beforeLen - this.chatHistory.length),
-              keptMessages: this.chatHistory.length,
-              summary: r.summary,
-            });
-          }
-          // After a successful compaction the prior `lastSeenPromptTokens`
-          // is stale — the history we just summarized doesn't reflect the
-          // new compact log. Reset so the next turn's estimator falls back
-          // to its content-aware count of the COMPACTED history.
-          this.lastSeenPromptTokens = undefined;
-        } catch {
-          // If compaction fails (no LLM, network), continue without it — better
-          // a big payload than a hard turn failure.
-        }
-      }
-    }
-
-    await this.injectRecallContext(prompt, mcpTools, callbacks);
-
-    // Lifecycle: pre-turn hook (informational; failures don't abort the turn).
-    if (this.hookAdvisoryActive()) {
-      runHooks(this.workspaceRoot, 'pre-turn', { payload: { prompt } });
-      void this.runExtensionHooks('pre-turn');
-    }
-    // CC-P4.2 — user-prompt-submit gate: a hook returning {"decision":"deny"}
-    // (or a non-zero exit) blocks the turn before any LLM call; the reason is
-    // returned to the user verbatim. BLOCKING — runs for unattended agents too.
-    if (this.hookEnforceActive()) {
-      const extDeny = await this.runExtensionHooks('user-prompt-submit', { args: { prompt } });
-      if (extDeny) return `Prompt blocked by user-prompt-submit hook: ${extDeny}`;
-      const submitResults = runHooks(this.workspaceRoot, 'user-prompt-submit', { payload: { prompt } });
-      const injectedContext: string[] = [];
-      for (const r of submitResults) {
-        const d = parseHookDecision(r.stdout);
-        const denied = d?.decision === 'deny' || (!d && r.exitCode !== 0);
-        if (denied) {
-          const reason = d?.reason?.trim() || (r.stderr || r.stdout || '').toString().trim() || `Hook ${r.hook.id} blocked this prompt`;
-          return `Prompt blocked by user-prompt-submit hook: ${reason}`;
-        }
-        // A non-denying hook may INJECT extra context for the model (e.g. a
-        // policy reminder, ticket metadata) via {"additionalContext":"…"}.
-        if (typeof d?.additionalContext === 'string' && d.additionalContext.trim()) {
-          injectedContext.push(d.additionalContext.trim());
-        }
-      }
-      if (injectedContext.length > 0) {
-        prompt = `${prompt}\n\n[hook context]\n${injectedContext.join('\n')}`;
-      }
-    }
-
-    this.lastUserPrompt = prompt;
-    this.lastTurnHitLoopLimit = false;
-    // Automation is best-effort: a store/detector throw must NEVER escape the
-    // turn and break the user's reply (the brief's hard rule). Each automation
-    // seam is guarded the same way memory capture is.
-    try { this.autoCaptureRequirement(prompt, callbacks); } catch { /* best-effort */ }
-    // Breadth-intent detection: when the user signals "do everything" / "in 1 go"
-    // / "thoroughly" / "as much as possible", inject a fan-out hint so the
-    // agent reaches for spawn_agents instead of a single sequential tool call.
-    // Skipped for child agents (silent) — they've already been narrowed by
-    // their parent.
-    let fanOutHinted = false;
-    if (!this.silent) {
-      let planned = false;
-      // NEXT-ACTION PLANNER — a focused pre-flight reasoning call DECIDES the
-      // turn's strategy (answer-direct / investigate / fan-out / workflow) and
-      // concrete subtasks, then injects a decisive directive. This replaces the
-      // keyword-only breadth guess with actual reasoning. Fail-open: any error /
-      // unparseable reply falls through to the breadthHint heuristic below.
-      if (getCliKnobs().nextActionPlanner !== 'off' && !shouldSkipPlanner(prompt)) {
-        try {
-          callbacks.onToolStart('next-action-planner', {});
-          // BUILD-LOOP P3 — the `cli.buildLoop` knob lets the planner escalate a
-          // code-writing task into the `build` workflow (off | escalate | always).
-          const buildLoop = getCliKnobs().buildLoop;
-          // POLISH-3 (0.4.13) — the planner is a one-shot CLASSIFIER (pick 1 of 5
-          // strategies); it needs no deep reasoning. Run it at low effort so
-          // reasoning-capable models don't burn a long thinking pass here — the main
-          // lever on the planner's pre-turn latency. Providers that ignore effort no-op.
-          const planResp: any = await callOpenAI(this.llmConfig, buildNextActionMessages(prompt, undefined, buildLoop), [], { effort: 'low', signal: this.turnAbort?.signal });
-          const plan = parseNextActionPlan(planResp?.content, { buildLoop });
-          if (plan) {
-            planned = true; // a valid decision (incl. answer-direct) suppresses the keyword fallback
-            const directive = nextActionDirective(plan);
-            if (directive) this.replaceTaggedSystemMessage('next-action-plan', directive);
-            if (planWantsFanOut(plan)) fanOutHinted = true;
-            callbacks.onToolEnd('next-action-planner', {
-              success: true,
-              summary: `strategy=${plan.strategy}${plan.subtasks.length ? ` (${plan.subtasks.length} subtasks)` : ''}`,
-            });
-            callbacks.onStatusUpdate(`Next-action plan: ${plan.strategy}${planWantsFanOut(plan) ? ' — fanning out' : ''}`);
-          } else {
-            callbacks.onToolEnd('next-action-planner', { success: true, summary: 'no usable plan — fail-open to heuristic' });
-          }
-        } catch {
-          callbacks.onToolEnd('next-action-planner', { success: false, summary: 'planner unavailable — fail-open to heuristic' });
-        }
-      }
-      // Fallback: planner disabled / skipped / failed / produced nothing → the
-      // keyword breadth heuristic still nudges fan-out for obvious broad prompts.
-      if (!planned) {
-        const { suggest, intent } = shouldSuggestFanOut(prompt);
-        if (suggest) {
-          fanOutHinted = true;
-          this.replaceTaggedSystemMessage('fanout-hint', buildFanOutHint(prompt, intent));
-          callbacks.onStatusUpdate(`Fan-out hint injected (signals: ${intent.signals.join(', ')})`);
-          callbacks.onToolStart('breadth-detector', { signals: intent.signals, score: intent.score });
-          callbacks.onToolEnd('breadth-detector', { success: true, summary: `fan-out hint injected (${intent.signals.length} signals)` });
-        }
-      }
-    }
-
-    // Per-turn goal anchor: re-inject a FRESH goal block at the end of the
-    // chatHistory's system messages (replaceTaggedSystemMessage appends), so
-    // it lands right before the user prompt. Pre-9d the goal block was ALSO
-    // embedded in the foundational system message (via createSystemMessage),
-    // which meant every turn carried two copies; 9d made this anchor the
-    // single source — `createSystemMessage` no longer touches goal state.
-    // The fresh re-push every iteration keeps the up-to-date iteration
-    // counter in immediate-context distance and prevents the long /goal
-    // continuation-loop drift that PR #26 originally addressed. The anchor
-    // also auto-folds the final-budget-turn wrap-up directive (via
-    // `formatGoalBlock`'s internal `goalIsOnFinalBudgetTurn` check), so
-    // the separate `goal-budget-steering` tagged message is gone too.
-    if (!this.silent) {
-      const activeGoal = readGoal(this.workspaceRoot, this.sessionKey);
-      if (activeGoal?.text && activeGoal.status === 'active') {
-        this.replaceTaggedSystemMessage('goal-anchor', formatGoalBlock(activeGoal));
-      } else {
-        // No active goal — drop any stale anchor from a prior /goal so the
-        // model doesn't keep seeing a completed/cleared goal as "current."
-        this.removeTaggedSystemMessage('goal-anchor');
-      }
-    }
-
-    const requiredSkillsPrompt = requiredSkillActivationPrompt(requiredSkillActivation);
-    if (requiredSkillsPrompt) {
-      this.replaceTaggedSystemMessage('required-skills', requiredSkillsPrompt);
-    } else {
-      this.removeTaggedSystemMessage('required-skills');
-    }
-
-    const userMsg: { role: string; content: string; images?: Array<{ mediaType: string; dataBase64: string }> } = { role: 'user', content: prompt };
-    // vision — pasted/attached images ride as a SIDECAR on the user message so
-    // `content` stays a string (every token-tally / transcript / compaction path
-    // keeps working); the payload builders inline them per provider at request
-    // time. The durable transcript (recorded above) stays text-only by design.
-    if (opts?.images?.length) userMsg.images = opts.images;
-    this.chatHistory.push(userMsg);
-    // The durable transcript record for this user message was already written
-    // at the top of runTurn (so it survives a mid-turn failure); here we only
-    // push the model-visible copy into chatHistory, after the goal anchor. A
-    // goal kickoff / continuation prompt was recorded tagged `name:'goal'` so
-    // the render layer hides it while the model still sees the clean message.
-    // MAR-4 — when children from the prior turn are still pending, hand the model the
-    // exact ids to wait on so it resolves them directly instead of guessing from list_agents.
-    const pendingChildHint = buildPendingChildStatusHint(carriedPendingChildIds);
-    if (pendingChildHint) {
-      const hintMsg = { role: 'system', content: pendingChildHint };
-      this.chatHistory.push(hintMsg);
-      this.recordTranscript(hintMsg);
-    }
-    // COMPLETION-FEEDBACK — fold in any DETACHED background actor (worker thread
-    // or fire-and-forget child) that finished since this agent's last turn, so
-    // its result lands in context the way an in-turn `wait_*` result would. The
-    // drain delivers each completion exactly once.
-    const completions = drainCompletions(this.sessionKey);
-    if (completions.length > 0) {
-      const feedback = formatCompletionFeedback(completions);
-      if (feedback) {
-        const feedbackMsg = { role: 'system', content: feedback };
-        this.chatHistory.push(feedbackMsg);
-        this.recordTranscript(feedbackMsg);
-      }
-    }
+    const preparedContext = await prepareTurnContextPhase(this, {
+      prompt,
+      callbacks,
+      mcpTools,
+      requiredSkillActivation,
+      carriedPendingChildIds,
+      ...(opts?.images ? { images: opts.images } : {}),
+    });
+    if (preparedContext.blockedAnswer) return preparedContext.blockedAnswer;
+    prompt = preparedContext.prompt;
+    const fanOutHinted = preparedContext.fanOutHinted;
 
     let loopCount = 0;
     // ADAPTIVE TOOL BUDGET — the agent should be allowed to FINISH the task,
