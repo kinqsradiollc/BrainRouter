@@ -315,9 +315,22 @@ describe("PR security review executor (ADR-017 D5)", () => {
 
   it("emits ordered progress and persists a compact, body-free finding projection", async () => {
     const events: string[] = [];
+    let candidates: unknown;
+    let publicationCallsAtCandidatePersistence = -1;
+    const routes: Routes = { calls: [], diff: DIFF_ADDED };
     const r = await runPrSecurityReview(
       { installationId: "42", repo: "o/r", prNumber: 7, headSha: "abcdef1234" },
-      { ...makeDeps({ calls: [] }), onProgress: (event) => events.push(event.kind) },
+      makeDeps(routes, {
+        llmRunner: llm(REVIEW_INLINE),
+        onProgress: (event) => events.push(event.kind),
+        onCandidatesReady: (input) => {
+          candidates = input;
+          publicationCallsAtCandidatePersistence = routes.calls.filter((call) =>
+            call.startsWith("POST /repos/o/r/pulls/7/reviews")
+            || call.startsWith("POST /repos/o/r/check-runs")
+            || call.startsWith("POST /repos/o/r/issues/7/comments")).length;
+        },
+      }),
     );
     expect(events).toContain("token-minted");
     expect(events).toContain("diff-fetched");
@@ -326,6 +339,37 @@ describe("PR security review executor (ADR-017 D5)", () => {
     expect(r.findingsDetail?.[0]).toMatchObject({ file: "x.ts", severity: "high" });
     expect(r.findingsDetail?.[0]).not.toHaveProperty("details");
     expect(r.coverage).toEqual({ complete: true, totalParts: 1, reviewedParts: 1, failedParts: 0, unreviewedParts: 0, unrecordedFindings: 0 });
+    expect(candidates).toMatchObject({
+      headSha: "abcdef1234",
+      changedFiles: 1,
+      findings: [{
+        file: "x.ts",
+        severity: "high",
+        confidence: 95,
+        details: "req.query.id flows into the query.",
+        suggestion: "parameterize",
+      }],
+    });
+    expect(publicationCallsAtCandidatePersistence).toBe(0);
+  });
+
+  it("does not publish forge output when candidate persistence fails", async () => {
+    const routes: Routes = { calls: [], diff: DIFF_ADDED };
+
+    await expect(runPrSecurityReview(
+      { installationId: "42", repo: "o/r", prNumber: 7, headSha: "abcdef1234" },
+      makeDeps(routes, {
+        llmRunner: llm(REVIEW_INLINE),
+        onCandidatesReady: async () => {
+          throw new Error("candidate persistence failed");
+        },
+      }),
+    )).rejects.toThrow(/candidate persistence failed/);
+
+    expect(routes.calls.some((call) =>
+      call.startsWith("POST /repos/o/r/pulls/7/reviews")
+      || call.startsWith("POST /repos/o/r/check-runs")
+      || call.startsWith("POST /repos/o/r/issues/7/comments"))).toBe(false);
   });
 
   it("returns forge-derived PR author, head contributor, and bounded commit counts", async () => {

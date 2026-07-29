@@ -21,7 +21,16 @@ import type {
   SourceSnapshot,
 } from "@kinqs/brainrouter-types/review";
 import type { ReviewPolicy } from "../integrations/githubWebhook.js";
-import type { PrReviewInput, PrReviewResult } from "../integrations/prSecurityReview.js";
+import type {
+  PrReviewCandidateDetail,
+  PrReviewCoverage,
+  PrReviewInput,
+  PrReviewResult,
+} from "../integrations/prSecurityReview.js";
+import {
+  createBackendAssuranceFindingPort,
+  type RepositoryAssuranceFindingPersistenceStore,
+} from "./assuranceFindingPort.js";
 import {
   createBackendAssuranceRunPort,
   type RepositoryAssurancePersistenceStore,
@@ -32,11 +41,13 @@ import {
   type RepositoryContextAnalysisPorts,
   type RepositoryContextPrompt,
 } from "./repositoryContextAssurance.js";
+import { normalizeReviewCandidates } from "./reviewCandidateNormalization.js";
 
 const DIFF_ONLY_LIMITATION_ID = "diff-only-repository-context";
 
 export interface RepositoryAssuranceSupersessionStore
-  extends RepositoryAssurancePersistenceStore {
+  extends RepositoryAssurancePersistenceStore,
+    RepositoryAssuranceFindingPersistenceStore {
   listReplaceableRepositoryAssuranceRunIds(input: {
     orgId: string;
     forge: RepositoryAssuranceRun["repository"]["forge"];
@@ -68,6 +79,12 @@ export interface RecordDiffReviewAssuranceInput extends StartDiffReviewAssurance
 export interface DiffReviewAssuranceSession {
   readonly runId: string;
   prepareContext(changed: AssuranceSourceLocation[]): Promise<RepositoryContextPrompt | null>;
+  recordCandidates(
+    headSha: string,
+    findings: PrReviewCandidateDetail[],
+    coverage: PrReviewCoverage,
+    changedFiles: number,
+  ): Promise<void>;
   complete(
     result: PrReviewResult,
     changedFiles: number,
@@ -298,6 +315,11 @@ export async function startDiffReviewAssurance(
         now,
       })
     : null;
+  const findingPort = createBackendAssuranceFindingPort(input.store, {
+    organizationId,
+    runId: started.id,
+  });
+  let candidateIds: string[] = [];
   try {
     await repositoryContext?.prepareSourceAndIndex();
   } catch (error) {
@@ -309,6 +331,40 @@ export async function startDiffReviewAssurance(
     }
     throw error;
   }
+
+  const recordCandidates = async (
+    candidateHeadSha: string,
+    findings: PrReviewCandidateDetail[],
+    coverage: PrReviewCoverage,
+    changedFiles: number,
+  ): Promise<void> => {
+    if (candidateHeadSha !== headSha) {
+      throw new Error("Review candidates must match the assurance run exact revision.");
+    }
+    const run = (await port.get(started.id)) ?? started;
+    if (!active(run)) return;
+    const calculatedAt = now();
+    const candidateRun = repositoryContext?.hasPromptContext
+      ? run
+      : {
+          ...run,
+          coverage: diffOnlyCoverage({
+            ok: true,
+            findings: findings.length,
+            posted: false,
+            headSha,
+            coverage,
+          }, changedFiles, calculatedAt, run.coverage),
+        };
+    const candidates = normalizeReviewCandidates({
+      run: candidateRun,
+      findings,
+      now: calculatedAt,
+    });
+    const persisted = [];
+    for (const finding of candidates) persisted.push(await findingPort.save(finding));
+    candidateIds = persisted.map((finding) => finding.id);
+  };
 
   const complete = async (
     result: PrReviewResult,
@@ -363,7 +419,7 @@ export async function startDiffReviewAssurance(
           ? repositoryContextCoverage(run.coverage, result, changedFiles, now())
           : run.coverage,
         inputRefs: contextReady ? contextRefs : [run.sourceSnapshot.inventoryRef!],
-        outputRefs: [`memory-job:${input.jobId}`],
+        outputRefs: [...candidateIds, `memory-job:${input.jobId}`],
         limitationIds: contextReady
           ? repositoryContext?.limitationIds ?? []
           : run.coverage.limitations.map((item) => item.id),
@@ -392,6 +448,7 @@ export async function startDiffReviewAssurance(
   return {
     runId: started.id,
     prepareContext: (changed) => repositoryContext?.preparePrompt(changed) ?? Promise.resolve(null),
+    recordCandidates,
     complete,
     fail: () => complete({
       ok: false,

@@ -95,10 +95,12 @@ describe("scheduled PR review repository-context composition", () => {
       packetRefs: ["packet-1"],
       artifactRefs: ["artifact-1"],
     }));
+    const recordCandidates = vi.fn(async () => undefined);
     const complete = vi.fn(async () => ({ status: "completed" }));
     const session = {
       runId: "run-1",
       prepareContext,
+      recordCandidates,
       complete,
       fail: vi.fn(),
     };
@@ -129,6 +131,17 @@ describe("scheduled PR review repository-context composition", () => {
         headSha: "head-1",
         changed: [{ path: "src/index.ts", line: 4 }],
       });
+      await deps.onCandidatesReady?.({
+        headSha: "head-1",
+        findings: [{
+          file: "src/index.ts",
+          severity: "high",
+          confidence: 90,
+          title: "Unsafe input",
+        }],
+        coverage: result.coverage,
+        changedFiles: 3,
+      });
       return result;
     });
 
@@ -155,6 +168,12 @@ describe("scheduled PR review repository-context composition", () => {
       repositoryContext: analysis,
     }));
     expect(prepareContext).toHaveBeenCalledWith([{ path: "src/index.ts", line: 4 }]);
+    expect(recordCandidates).toHaveBeenCalledWith(
+      "head-1",
+      [expect.objectContaining({ file: "src/index.ts", confidence: 90 })],
+      result.coverage,
+      3,
+    );
     expect(complete).toHaveBeenCalledWith(result, 3);
 
     const composition = mocks.createAnalysis.mock.calls[0]?.[0];
@@ -168,6 +187,7 @@ describe("scheduled PR review repository-context composition", () => {
     mocks.start.mockResolvedValue({
       runId: "run-1",
       prepareContext: vi.fn(),
+      recordCandidates: vi.fn(),
       complete: vi.fn(),
       fail: vi.fn(async () => {
         throw new Error("assurance projection failed");
