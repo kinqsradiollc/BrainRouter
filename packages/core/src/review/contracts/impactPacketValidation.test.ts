@@ -47,6 +47,7 @@ function assembly(): AssuranceImpactPacketAssembly {
         sourceToSinkPaths: [
           {
             id: 'path-1',
+            mechanism: 'call_path',
             source: { path: 'src/handler.ts', line: 20 },
             sink: { path: 'src/route.ts', line: 10 },
             evidenceRefs: ['evidence-caller', 'evidence-sink'],
