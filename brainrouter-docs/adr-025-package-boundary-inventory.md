@@ -127,6 +127,16 @@ production boundary stabilizes.
 | A25-14 agent quality | contributor rules, engineering profile planning schema, skills, runtime activation | Short global invariants plus profile/task-selected architecture, planning, code-quality, and security workflows | No prompt claims an unshipped tool or authority; unrelated profiles do not inherit engineering work |
 | A25-15 cleanup | compatibility barrels, aliases, renderer deep imports, legacy paths | Remove only after import graph and consumer evidence prove zero supported users | One deletion PR per coherent compatibility family |
 
+### Active provider/model migration
+
+A25-3a establishes the first real destination contract rather than an empty
+folder: `packages/types/src/provider/recovery.ts` owns the host-neutral receipt,
+and Core's router recovery service owns bounded route execution. The
+non-streaming router gateway is the first consumer. The agent loop and streaming
+gateway retain their characterized behavior until A25-3b and A25-3c migrate
+them separately; the `provider` and `router` public entrypoints remain unchanged
+until the final compatibility-backed ownership move.
+
 ## Boundary guard
 
 `scripts/check-package-boundaries.mjs` is the A25-2 source-graph gate. Root

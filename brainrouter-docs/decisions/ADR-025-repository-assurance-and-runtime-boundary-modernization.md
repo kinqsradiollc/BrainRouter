@@ -493,6 +493,15 @@ the repository's normal security-review process before merge.
 | A25-14 | `[ ]` | Update contributor docs, ADR/planning/code-quality skills, and profile/task activation policy for the modernized ownership model | A25-2 through A25-6 | Cross-model quality corpus; plan-only/engineering/security/custom activation matrix; no duplicated global checklist |
 | A25-15 | `[ ]` | Remove obsolete internal paths only after consumers leave compatibility façades | A25-3 through A25-14 | Import graph check; no supported deep imports |
 
+### A25-3 provider/model delivery slices
+
+| ID | Status | Deliverable | Acceptance evidence |
+|---|---|---|---|
+| A25-3a | `[x]` | Add a dependency-free, secret-free provider recovery receipt and one bounded Core executor; adopt it in non-streaming router gateway calls | Types/Core consumer typechecks; retryable, non-retryable, exhausted, fallback, immutability, and secret-exclusion fixtures |
+| A25-3b | `[ ]` | Adopt the executor in the agent turn loop without changing transcript, trace, cooldown, model-fallback, or interruption behavior | Agent runtime recovery fixture parity and one receipt per completed recovery campaign |
+| A25-3c | `[ ]` | Adopt the receipt contract for streaming calls while preserving the no-fallback-after-output rule | Pre-output fallback and post-output terminal-stream fixtures |
+| A25-3d | `[ ]` | Consolidate catalog, routing, policy/budget, adapters, and telemetry ownership behind the provider façade while retaining router compatibility exports | Public import parity, provider/model selection matrix, budget/fallback fixtures, and zero unsupported deep imports |
+
 ### Migration guardrails
 
 - Begin with the inventory and contracts; do not combine extraction with feature

@@ -29,6 +29,10 @@
     "./atlas-ops": {
       "types": "./dist/atlas-ops.d.ts",
       "import": "./dist/atlas-ops.js"
+    },
+    "./provider": {
+      "types": "./dist/provider/index.d.ts",
+      "import": "./dist/provider/index.js"
     }
   },
   "files": [

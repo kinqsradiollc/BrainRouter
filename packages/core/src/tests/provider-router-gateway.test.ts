@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import type { Config } from '../config/config.js';
 import type { RouterGatewayTransport } from '../router/gateway.js';
 import { startRouterGateway } from '../router/gateway.js';
+import { resetRouterPolicyForTests } from '../router/policy.js';
 
 const config: Config = {
   activeServer: 's',
@@ -109,6 +110,42 @@ test('router gateway resolves auto and falls back on first route failure', async
     }
     return { content: `from ${llm.provider}` };
   });
+});
+
+test('router gateway projects the shared recovery receipt without provider secrets', async () => {
+  resetRouterPolicyForTests();
+  const receipts: unknown[] = [];
+  const handle = await startRouterGateway({
+    config,
+    host: '127.0.0.1',
+    port: 0,
+    onRecoveryReceipt: (receipt) => receipts.push(receipt),
+    transport: async (llm) => {
+      if (llm.provider === 'groq') {
+        throw Object.assign(new Error('rate limited'), { status: 429 });
+      }
+      return { content: 'ok' };
+    },
+  });
+  try {
+    const res = await fetch(`http://${handle.host}:${handle.port}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal(receipts.length, 1);
+    assert.deepEqual(
+      (receipts[0] as any).attempts.map((attempt: any) => [attempt.route.slug, attempt.outcome]),
+      [
+        ['groq/shared-model', 'failed'],
+        ['openrouter/shared-model', 'succeeded'],
+      ],
+    );
+    assert.doesNotMatch(JSON.stringify(receipts[0]), /groq-key|or-key|base-key/);
+  } finally {
+    await handle.close();
+  }
 });
 
 test('router gateway streams OpenAI SSE: role → content deltas → finish → usage → [DONE]', async () => {

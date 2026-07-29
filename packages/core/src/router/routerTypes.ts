@@ -1,5 +1,6 @@
 import type { LLMConfig } from '../config/config.js';
 import type { ProviderDefinition } from '../provider/providers/index.js';
+import type { ProviderRecoveryFailureKind } from '@kinqs/brainrouter-types';
 
 export type ModelRequest = string;
 export type RouterStrategy = 'priority' | 'round-robin' | 'free-first';
@@ -60,12 +61,8 @@ export interface ResolveRoutesOptions {
   sessionKey?: string;
 }
 
-export type RouterFailureKind =
-  | 'provider_retryable'
-  | 'model_lockout'
-  | 'auth_rejected'
-  | 'context_overflow'
-  | 'non_retryable';
+/** Compatibility alias; the shared receipt contract owns the canonical states. */
+export type RouterFailureKind = ProviderRecoveryFailureKind;
 
 export interface RouterFailure {
   kind: RouterFailureKind;
