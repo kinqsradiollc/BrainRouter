@@ -8,6 +8,8 @@
 import type { QueryResultRow } from "pg";
 import type {
   AssuranceCoverage,
+  AssuranceEvidenceRef,
+  AssuranceFinding,
   AssurancePolicySnapshot,
   AssuranceRunStatus,
   AssuranceStageReceipt,
@@ -81,6 +83,48 @@ export interface StageRow extends QueryResultRow {
   error_code: string | null;
 }
 
+export interface FindingRow extends QueryResultRow {
+  org_id: string;
+  id: string;
+  run_id: string;
+  fingerprint: string;
+  program: AssuranceFinding["program"];
+  revision_sha: string;
+  state: AssuranceFinding["state"];
+  severity: AssuranceFinding["severity"];
+  confidence: number | string;
+  title: string;
+  mechanism: string;
+  location_json: AssuranceFinding["location"] | string;
+  provenance_json: AssuranceFinding["provenance"] | string;
+  coverage_limitations_json: AssuranceFinding["coverageLimitations"] | string;
+  verifier_json: AssuranceFinding["verifier"] | string | null;
+  cwe: string | null;
+  cve: string | null;
+  remediation: string | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+
+export interface FindingRefRow extends QueryResultRow {
+  id: string;
+  fingerprint: string;
+  state: AssuranceFinding["state"];
+  severity: AssuranceFinding["severity"];
+}
+
+export interface EvidenceRow extends QueryResultRow {
+  id: string;
+  kind: AssuranceEvidenceRef["kind"];
+  summary: string;
+  revision_sha: string;
+  location_json: AssuranceEvidenceRef["location"] | string | null;
+  artifact_ref: string | null;
+  analyzer_id: string | null;
+  model_id: string | null;
+  created_at: Date | string;
+}
+
 export interface Queryable {
   query<T extends QueryResultRow = any>(
     text: string,
@@ -110,6 +154,12 @@ export interface ReplaceableAssuranceRunsInput {
   prNumber: number;
   program: RepositoryAssuranceRun["program"];
   replacementRunId: string;
+}
+
+export interface SaveRepositoryAssuranceFindingInput {
+  orgId: string;
+  runId: string;
+  finding: AssuranceFinding;
 }
 
 export const RUN_SELECT = `

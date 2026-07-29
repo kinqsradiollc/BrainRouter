@@ -16,6 +16,7 @@ import {
   RUN_SELECT,
   type AssuranceRunRow,
   type CoverageRow,
+  type FindingRefRow,
   type Queryable,
   type ReplaceableAssuranceRunsInput,
   type SourceSnapshotRow,
@@ -108,6 +109,7 @@ function runFromRows(
   source: SourceSnapshotRow,
   coverage: CoverageRow,
   stages: StageRow[],
+  findings: FindingRefRow[],
 ): RepositoryAssuranceRun {
   const completedAt = optionalIso(runRow.completed_at);
   return {
@@ -128,7 +130,12 @@ function runFromRows(
     sourceSnapshot: sourceFromRow(source),
     coverage: coverageFromRow(coverage),
     stages: stages.map(stageFromRow),
-    findings: [],
+    findings: findings.map((finding) => ({
+      id: finding.id,
+      fingerprint: finding.fingerprint,
+      state: finding.state,
+      severity: finding.severity,
+    })),
     status: runRow.status,
     createdAt: iso(runRow.created_at),
     updatedAt: iso(runRow.updated_at),
@@ -170,10 +177,16 @@ export async function loadRun(
       WHERE run_id = $1 ORDER BY stage, attempt, id`,
     [runId],
   )).rows;
+  const findings = (await queryable.query<FindingRefRow>(
+    `SELECT id, fingerprint, state, severity
+       FROM repository_assurance_findings
+      WHERE org_id = $1 AND run_id = $2 ORDER BY created_at, id`,
+    [orgId, runId],
+  )).rows;
   if (!source || !coverage) {
     throw new Error(`Repository assurance run ${runId} is missing its source or coverage receipt.`);
   }
-  return runFromRows(runRow, source, coverage, stages);
+  return runFromRows(runRow, source, coverage, stages, findings);
 }
 
 export async function getRepositoryAssuranceRun(
@@ -186,7 +199,7 @@ export async function getRepositoryAssuranceRun(
     [orgId, runId],
   );
   if (!runRow) return null;
-  const [source, coverage, stages] = await Promise.all([
+  const [source, coverage, stages, findings] = await Promise.all([
     exec.one<SourceSnapshotRow>(
       `SELECT id, status, base_sha, head_sha, merge_base_sha, checkout_ref,
               inventory_ref, file_count, text_file_count, indexed_file_count,
@@ -208,11 +221,17 @@ export async function getRepositoryAssuranceRun(
         WHERE run_id = $1 ORDER BY stage, attempt, id`,
       [runId],
     ),
+    exec.rows<FindingRefRow>(
+      `SELECT id, fingerprint, state, severity
+         FROM repository_assurance_findings
+        WHERE org_id = $1 AND run_id = $2 ORDER BY created_at, id`,
+      [orgId, runId],
+    ),
   ]);
   if (!source || !coverage) {
     throw new Error(`Repository assurance run ${runId} is missing its source or coverage receipt.`);
   }
-  return runFromRows(runRow, source, coverage, stages);
+  return runFromRows(runRow, source, coverage, stages, findings);
 }
 
 /**

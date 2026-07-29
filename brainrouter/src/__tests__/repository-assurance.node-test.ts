@@ -10,6 +10,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import type {
   AssuranceCoverage,
+  AssuranceFinding,
   AssuranceStageReceipt,
   RepositoryAssuranceRun,
   SourceSnapshot,
@@ -74,7 +75,49 @@ function queuedRun(id: string, headSha: string): RepositoryAssuranceRun {
   };
 }
 
-test("A25-9a persists idempotent, partial, and superseded assurance state", async () => {
+function verifiedFinding(): AssuranceFinding {
+  return {
+    id: "finding-1",
+    fingerprint: "fingerprint-1",
+    program: "security_review",
+    revisionSha: "head-1",
+    state: "verified",
+    severity: "high",
+    confidence: 0.95,
+    title: "Unsafe command construction",
+    mechanism: "Untrusted input reaches command execution.",
+    location: { path: "src/execute.ts", line: 12, symbol: "execute" },
+    evidence: [{
+      id: "evidence-1",
+      kind: "call_path",
+      summary: "Parser-backed call path reaches command execution.",
+      revisionSha: "head-1",
+      location: { path: "src/execute.ts", line: 12, symbol: "execute" },
+      analyzerId: "typescript",
+      createdAt: T1,
+    }],
+    provenance: [{
+      producerKind: "deterministic_analyzer",
+      producerId: "typescript",
+      policyHash: "policy-hash",
+      createdAt: T1,
+    }],
+    coverageLimitations: [],
+    verifier: {
+      state: "verified",
+      verifierId: "independent-verifier",
+      rationale: "The exact-revision path supports the mechanism.",
+      evidenceRefs: ["evidence-1"],
+      decidedAt: T2,
+    },
+    cwe: "CWE-78",
+    remediation: "Use an argument-safe execution API.",
+    createdAt: T1,
+    updatedAt: T2,
+  };
+}
+
+test("A25-9a/A25-11a persists assurance runs, findings, and exact-revision evidence", async () => {
   const { store, cleanup } = await createTestStore({ vecDim: 0 });
   try {
     const job = await store.enqueueMemoryJob({
@@ -125,6 +168,46 @@ test("A25-9a persists idempotent, partial, and superseded assurance state", asyn
       limitationIds: [],
     };
     await store.recordRepositoryAssuranceStage("org-1", "run-1", runningStage);
+    const persistedFinding = await store.saveRepositoryAssuranceFinding({
+      orgId: "org-1",
+      runId: "run-1",
+      finding: verifiedFinding(),
+    });
+    assert.deepEqual(persistedFinding, verifiedFinding());
+    assert.deepEqual(
+      await store.saveRepositoryAssuranceFinding({
+        orgId: "org-1",
+        runId: "run-1",
+        finding: verifiedFinding(),
+      }),
+      verifiedFinding(),
+      "an identical terminal record must be idempotent",
+    );
+    await assert.rejects(
+      store.saveRepositoryAssuranceFinding({
+        orgId: "org-1",
+        runId: "run-1",
+        finding: { ...verifiedFinding(), title: "Rewritten after verification" },
+      }),
+      /has a terminal disposition/,
+    );
+    assert.deepEqual(
+      await store.getRepositoryAssuranceFinding("org-1", "run-1", "finding-1"),
+      verifiedFinding(),
+    );
+    assert.equal(
+      await store.getRepositoryAssuranceFinding("other-org", "run-1", "finding-1"),
+      null,
+    );
+    assert.deepEqual(
+      (await store.getRepositoryAssuranceRun("org-1", "run-1"))?.findings,
+      [{
+        id: "finding-1",
+        fingerprint: "fingerprint-1",
+        state: "verified",
+        severity: "high",
+      }],
+    );
     const partialStage = await store.recordRepositoryAssuranceStage("org-1", "run-1", {
       ...runningStage,
       status: "partial",
@@ -219,6 +302,14 @@ test("A25-9a persists idempotent, partial, and superseded assurance state", asyn
         attempt: 2,
       }),
       /terminal assurance run/,
+    );
+    await assert.rejects(
+      store.saveRepositoryAssuranceFinding({
+        orgId: "org-1",
+        runId: "run-1",
+        finding: verifiedFinding(),
+      }),
+      /cannot accept findings in superseded state/,
     );
   } finally {
     await cleanup();

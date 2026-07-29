@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { RepositoryAssuranceRun } from "@kinqs/brainrouter-types/review";
 import {
   isAssuranceRunTransitionAllowed,
+  isAssuranceFindingTransitionAllowed,
   isAssuranceStageTransitionAllowed,
   isSourceSnapshotTransitionAllowed,
   listReplaceableRepositoryAssuranceRunIds,
@@ -116,6 +117,15 @@ describe("repository assurance persistence policy", () => {
     expect(isSourceSnapshotTransitionAllowed("ready", "stale")).toBe(true);
     expect(isSourceSnapshotTransitionAllowed("partial", "ready")).toBe(false);
     expect(isSourceSnapshotTransitionAllowed("stale", "pending")).toBe(false);
+  });
+
+  it("allows candidate disposition but never reopens a terminal finding", () => {
+    expect(isAssuranceFindingTransitionAllowed("candidate", "verified")).toBe(true);
+    expect(isAssuranceFindingTransitionAllowed("hotspot", "insufficient_evidence")).toBe(true);
+    expect(isAssuranceFindingTransitionAllowed("insufficient_evidence", "validated")).toBe(true);
+    expect(isAssuranceFindingTransitionAllowed("verified", "candidate")).toBe(false);
+    expect(isAssuranceFindingTransitionAllowed("disputed", "verified")).toBe(false);
+    expect(isAssuranceFindingTransitionAllowed("validated", "insufficient_evidence")).toBe(false);
   });
 
   it("selects only older active heads for the same tenant and PR", async () => {

@@ -32,7 +32,7 @@ function assertInitialRun(input: CreateRepositoryAssuranceRunInput): void {
     throw new Error("Repository assurance organization id must be non-empty.");
   }
   if (run.findings.length > 0) {
-    throw new Error("Finding persistence is unavailable until the finding-lineage adapter is active.");
+    throw new Error("Repository assurance findings must be saved after their run is created.");
   }
   if (
     run.sourceSnapshot.revision.headSha !== run.revision.headSha

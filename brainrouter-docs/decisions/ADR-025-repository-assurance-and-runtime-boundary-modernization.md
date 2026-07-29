@@ -553,6 +553,15 @@ single-use capability consumed by the isolated Git adapter. Unsupported,
 failed, canceled, superseded, and diff-only paths remain explicit durable
 coverage states rather than clean repository conclusions.
 
+### A25-11 finding assurance delivery slices
+
+| ID | Status | Deliverable | Acceptance evidence |
+|---|---|---|---|
+| A25-11a | `[x]` | Persist tenant- and run-bound candidate records with normalized exact-revision evidence behind the Core finding port | Core validation rejects secret-bearing, stale, or unsupported verifier records; backend fixtures pin tenant/run scope, monotonic disposition, bounded payloads, evidence round trips, and run references |
+| A25-11b | `[ ]` | Normalize model and deterministic analyzer candidates into the shared finding contract | Candidate fixtures retain exact anchors, provenance, coverage limitations, and stable fingerprints without granting blocking authority |
+| A25-11c | `[ ]` | Add an independent bounded verifier adapter and record its evidence-bound disposition | Verifier cannot cite missing/stale evidence, exceed campaign authority, or silently turn unavailable verification into support |
+| A25-11d | `[ ]` | Calculate the coverage-aware gate and apply evidence-aware publication before forge output | No-evidence, partial, stale, mismatched, or superseded runs cannot publish clean or blocking conclusions |
+
 ### Migration guardrails
 
 - Begin with the inventory and contracts; do not combine extraction with feature
