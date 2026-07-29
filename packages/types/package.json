@@ -18,6 +18,10 @@
       "types": "./dist/reviews.d.ts",
       "import": "./dist/reviews.js"
     },
+    "./review": {
+      "types": "./dist/review/index.d.ts",
+      "import": "./dist/review/index.js"
+    },
     "./work-contract": {
       "types": "./dist/work-contract.d.ts",
       "import": "./dist/work-contract.js"
