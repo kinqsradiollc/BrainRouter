@@ -7,6 +7,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildAuthorizedAssessmentPolicy } from "@kinqs/brainrouter-core/review";
 import type { JobExecContext } from "../memory/scheduler/executors.js";
 
 const mocks = vi.hoisted(() => ({
@@ -61,6 +62,19 @@ const publicationGate = {
   blockingFindingIds: [],
 } as const;
 
+const repositoryTarget = {
+  id: "target-1",
+  orgId: "org-1",
+  createdBy: "user-1",
+  kind: "repository",
+  value: "owner/repository",
+  normalizedValue: "owner/repository",
+  label: null,
+  authorizedAt: "2026-07-29T00:00:00.000Z",
+  createdAt: "2026-07-29T00:00:00.000Z",
+  updatedAt: "2026-07-29T00:00:00.000Z",
+} as const;
+
 function context(status = "running"): JobExecContext {
   return {
     jobId: "job-1",
@@ -87,6 +101,7 @@ function context(status = "running"): JobExecContext {
     },
     store: {
       getMemoryJob: vi.fn(async () => ({ status })),
+      getPentestTarget: vi.fn(async () => repositoryTarget),
       appendJobProgress: vi.fn(async () => undefined),
     } as unknown as JobExecContext["store"],
   };
@@ -226,5 +241,34 @@ describe("scheduled PR review repository-context composition", () => {
       prNumber: 42,
       headSha: "head-1",
     }, context(), "security")).rejects.toBe(rootFailure);
+  });
+
+  it("rejects a PR pentest without a persisted assessment policy", async () => {
+    await expect(runScheduledPrReview({
+      orgId: "org-1",
+      installationId: "installation-1",
+      repo: "owner/repository",
+      prNumber: 42,
+      headSha: "head-1",
+    }, context(), "pentest")).rejects.toThrow(/persisted authorized-assessment policy/);
+    expect(mocks.execute).not.toHaveBeenCalled();
+  });
+
+  it("revalidates the authorized repository target before a PR pentest", async () => {
+    mocks.execute.mockResolvedValue(result);
+    const assessmentPolicy = buildAuthorizedAssessmentPolicy(repositoryTarget, {
+      scanMode: "code-review",
+      now: "2026-07-29T01:00:00.000Z",
+    });
+
+    await expect(runScheduledPrReview({
+      orgId: "org-1",
+      installationId: "installation-1",
+      repo: "owner/repository",
+      prNumber: 42,
+      headSha: "head-1",
+      assessmentPolicy,
+    }, context(), "pentest")).resolves.toEqual(result);
+    expect(mocks.execute).toHaveBeenCalledOnce();
   });
 });

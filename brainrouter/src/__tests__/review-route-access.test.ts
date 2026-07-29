@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   getMemoryJob: vi.fn(),
   getRepositoryAssuranceRunForJob: vi.fn(),
   listRepositoryAssuranceFindings: vi.fn(),
+  getPentestTarget: vi.fn(),
   listMemoryJobs: vi.fn(),
   enqueueMemoryJob: vi.fn(),
 }));
@@ -44,6 +45,7 @@ vi.mock("../memory/engine.js", () => ({
       getMemoryJob: mocks.getMemoryJob,
       getRepositoryAssuranceRunForJob: mocks.getRepositoryAssuranceRunForJob,
       listRepositoryAssuranceFindings: mocks.listRepositoryAssuranceFindings,
+      getPentestTarget: mocks.getPentestTarget,
       listMemoryJobs: mocks.listMemoryJobs,
       enqueueMemoryJob: mocks.enqueueMemoryJob,
     },
@@ -132,6 +134,7 @@ describe("review route GitHub accessibility", () => {
     mocks.getMemoryJob.mockResolvedValue(null);
     mocks.getRepositoryAssuranceRunForJob.mockResolvedValue(null);
     mocks.listRepositoryAssuranceFindings.mockResolvedValue([]);
+    mocks.getPentestTarget.mockResolvedValue(null);
     mocks.listMemoryJobs.mockResolvedValue([]);
     mocks.enqueueMemoryJob.mockResolvedValue({ id: "review-job-1" });
 
@@ -499,6 +502,63 @@ describe("review route GitHub accessibility", () => {
     }));
     expect(JSON.stringify(mocks.enqueueMemoryJob.mock.calls[0])).not.toContain("sealed-account-token");
     expect(JSON.stringify(response.body)).not.toContain("sealed-account-token");
+  });
+
+  it("rejects a PR pentest without a persisted matching target", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => githubResponse(200, { id: 1 })));
+
+    const response = await postJson(new URL(`${baseUrl}/api/admin/reviews/run`), headers, {
+      repo: "acme/widgets",
+      prNumber: 7,
+      lens: "pentest",
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toMatch(/authorized repository target/);
+    expect(mocks.enqueueMemoryJob).not.toHaveBeenCalled();
+  });
+
+  it("persists a bounded policy snapshot for an authorized PR pentest", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => githubResponse(200, { id: 1 })));
+    mocks.getPentestTarget.mockResolvedValue({
+      id: "target-1",
+      orgId: "org-1",
+      createdBy: "user-1",
+      kind: "repository",
+      value: "acme/widgets",
+      normalizedValue: "acme/widgets",
+      label: null,
+      authorizedAt: "2026-07-29T00:00:00.000Z",
+      createdAt: "2026-07-29T00:00:00.000Z",
+      updatedAt: "2026-07-29T00:00:00.000Z",
+    });
+
+    const response = await postJson(new URL(`${baseUrl}/api/admin/reviews/run`), headers, {
+      repo: "acme/widgets",
+      prNumber: 7,
+      lens: "pentest",
+      targetId: "target-1",
+    });
+
+    expect(response.status).toBe(202);
+    expect(mocks.enqueueMemoryJob).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "pr-pentest",
+      input: expect.objectContaining({
+        assessmentPolicy: expect.objectContaining({
+          schemaVersion: 1,
+          program: "authorized_pentest",
+          target: expect.objectContaining({
+            targetId: "target-1",
+            normalizedValue: "acme/widgets",
+          }),
+          perimeter: {
+            liveNetwork: false,
+            allowedOrigins: [],
+            allowedRepositories: ["acme/widgets"],
+          },
+        }),
+      }),
+    }));
   });
 
   it("loads App-accessible PR detail even when the repo is not enrolled for automatic review", async () => {

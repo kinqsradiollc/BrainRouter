@@ -586,6 +586,14 @@ coverage states rather than clean repository conclusions.
 | A25-12c | `[x]` | Project the same detail through the agent protocol to CLI and Desktop review surfaces | Protocol, host-query, dev-bridge, CLI, and Desktop fixtures render the same run, coverage, stage, finding, and disposition values without duplicating policy |
 | A25-12d | `[x]` | Reconcile forge summary/check output with the shared host projections and prove cross-host parity | Forge and backend fixtures consume the canonical gate projection; protocol, Dashboard, Desktop, and CLI fixtures preserve its exact label, conclusion, and reason, while contradictory partial-to-success projections fail validation |
 
+### A25-13 deep-review and authorized-assessment delivery slices
+
+| ID | Status | Deliverable | Acceptance evidence |
+|---|---|---|---|
+| A25-13a | `[x]` | Require every dynamic or source-only pentest to carry one versioned, hashed policy snapshot bound to an active persisted target | Types/Core fixtures cover authority, exact target perimeter, budget, fail-closed cancellation, and evidence-retention fields; backend route and scheduler fixtures reject missing, changed, revoked, cross-tenant, or mismatched target authority |
+| A25-13b | `[ ]` | Enforce retained-evidence expiry and raw-workspace cleanup for authorized assessments | Cleanup fixtures prove raw traffic is never retained, redacted evidence expires on policy, active runs are protected, and cleanup is idempotent |
+| A25-13c | `[ ]` | Add an explicit whole-repository deep-review policy with accepted telemetry thresholds and bounded opt-in activation | Policy fixtures prove program-specific thresholds, cost/time ceilings, cancellation, coverage labeling, and no automatic escalation from diff review |
+
 ### Migration guardrails
 
 - Begin with the inventory and contracts; do not combine extraction with feature
