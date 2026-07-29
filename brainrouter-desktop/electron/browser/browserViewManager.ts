@@ -6,7 +6,6 @@ import {
   WebContentsView,
   type BrowserWindow,
   type ContextMenuParams,
-  type DownloadItem,
   type Input,
   type Session,
   type WebContents,
@@ -32,6 +31,10 @@ import { promptForHttpAuth } from './httpAuthPrompt.js';
 import { BrowserManagerError } from './browserManagerError.js';
 import { BrowserPromptManager } from './browserPromptManager.js';
 import {
+  availableDownloadPath,
+  BrowserDownloadManager,
+} from './browserDownloadManager.js';
+import {
   BrowserWorkspaceStore,
   persistableBrowserUrl,
   type PersistedBrowserWorkspace,
@@ -53,7 +56,6 @@ import {
   type BrowserCommandRequest,
   type BrowserCommandResult,
   type BrowserConsoleEntry,
-  type BrowserDownload,
   type BrowserErrorCode,
   type BrowserEvent,
   type BrowserNetworkEntry,
@@ -141,21 +143,6 @@ function initialTab(id: string, url: string, title = 'New tab', now = Date.now()
   };
 }
 
-function safeDownloadName(name: string): string {
-  const base = path.basename(name).replace(/[\u0000-\u001f]/g, '').trim();
-  return boundBrowserText(base || 'download', 180);
-}
-
-function availableDownloadPath(directory: string, filename: string): string {
-  const ext = path.extname(filename);
-  const stem = path.basename(filename, ext);
-  let candidate = path.join(directory, filename);
-  for (let n = 1; fs.existsSync(candidate) && n < 10_000; n += 1) {
-    candidate = path.join(directory, `${stem} (${n})${ext}`);
-  }
-  return candidate;
-}
-
 function jsonBytes(value: unknown): number {
   try { return Buffer.byteLength(JSON.stringify(value), 'utf8'); } catch { return Number.POSITIVE_INFINITY; }
 }
@@ -241,12 +228,8 @@ export class BrowserViewManager {
   private tabs: BrowserTab[] = [];
   private activeTabId = '';
   private closedTabs: ClosedTab[] = [];
-  private downloads: BrowserDownload[] = [];
-  private readonly downloadItems = new Map<string, DownloadItem>();
-  private readonly downloadWorkspaces = new Map<string, string>();
   private surface: BrowserSurface = { x: 0, y: 0, width: 0, height: 0, visible: false };
   private tabSequence = 0;
-  private downloadSequence = 0;
   private readonly windowPrefix = randomUUID().replace(/-/g, '').slice(0, 10);
   // One persistent profile per workspace preserves sign-ins, cookies, storage,
   // and completed site challenges across chat sessions without sharing them
@@ -266,6 +249,7 @@ export class BrowserViewManager {
   // defaults on so the cursor shows even before the renderer syncs the toggle.
   private agentCursorEnabled = true;
   private readonly promptManager: BrowserPromptManager;
+  private readonly downloadManager: BrowserDownloadManager;
   private visibleAgentPin: {
     tabId: BrowserTabId;
     deferredSelection?: BrowserTabId;
@@ -278,12 +262,10 @@ export class BrowserViewManager {
   private readonly humanChallengeTabs = new Set<BrowserTabId>();
   private readonly trustedUserPrivateOrigins = new Set<string>();
   private readonly userOriginChecks = new Map<string, Promise<void>>();
-  private readonly agentDownloadAllowances = new Map<BrowserTabId, number>();
   private readonly syntheticInputUntil = new Map<BrowserTabId, number>();
   private readonly stagedUploads = new Map<BrowserTabId, StagedUpload>();
   private readonly pendingAuthPrompts = new Map<BrowserTabId, AbortController>();
   private readonly rawSettlements = new Map<string, Promise<void>>();
-  private downloadListener: ((event: Electron.Event, item: DownloadItem, contents: WebContents) => void) | null = null;
   private stateEmitQueued = false;
   private disposed = false;
   private workspaceGeneration = 0;
@@ -300,10 +282,35 @@ export class BrowserViewManager {
       emitState: () => { this.emitState(); },
       setStatus: (tab, text) => { this.setStatus(tab, text); },
     }, this.windowPrefix);
+    this.downloadManager = new BrowserDownloadManager({
+      listen: (partition, listener) => {
+        const browserSession = session.fromPartition(partition);
+        const handler = (
+          event: Electron.Event,
+          item: Electron.DownloadItem,
+          contents: WebContents,
+        ): void => {
+          listener(event, item, contents.id);
+        };
+        browserSession.on('will-download', handler);
+        return () => { browserSession.off('will-download', handler); };
+      },
+      prepareSavePath: (filename) => {
+        const directory = app.getPath('downloads');
+        fs.mkdirSync(directory, { recursive: true });
+        return availableDownloadPath(directory, filename);
+      },
+      showItemInFolder: (savePath) => { shell.showItemInFolder(savePath); },
+      openPath: async (savePath) => await shell.openPath(savePath),
+    }, {
+      tabForContents: (contentsId) => this.tabForContents(contentsId),
+      isAgentControlled: (tabId) => this.agentControlledTabs.has(tabId),
+      emit: (event) => { this.emit(event); },
+      emitState: () => { this.emitState(); },
+    }, this.windowPrefix, workspaceRoot, this.partition);
     configureBrowserSession(session.fromPartition(this.partition));
     this.restoreWorkspace();
     if (this.tabs.length === 0) this.createTab(BROWSER_BLANK_URL, true);
-    this.installDownloadListener();
   }
 
   getState(): BrowserState {
@@ -313,7 +320,7 @@ export class BrowserViewManager {
       tabs: this.tabs.map((tab) => ({ ...tab })),
       closedTabCount: this.closedTabs.length,
       surface: { ...this.surface },
-      downloads: this.workspaceDownloads(),
+      downloads: this.downloadManager.list(),
       permissionPrompt: this.promptManager.getPermissionPrompt(),
       dialogPrompt: this.promptManager.getDialogPrompt(),
       capabilities: {
@@ -480,7 +487,10 @@ export class BrowserViewManager {
         if (signal && tab) {
           this.agentControlledTabs.add(tab.id);
           if (AGENT_DOWNLOAD_INTERACTIONS.has(request.command.op)) {
-            this.agentDownloadAllowances.set(tab.id, Date.now() + AGENT_DOWNLOAD_GESTURE_MS);
+            this.downloadManager.allowAgentInteraction(
+              tab.id,
+              Date.now() + AGENT_DOWNLOAD_GESTURE_MS,
+            );
           }
         }
         this.assertOperationCurrent(operationGeneration, signal, tab?.id);
@@ -543,11 +553,6 @@ export class BrowserViewManager {
 
   setWorkspaceRoot(workspaceRoot: string): void {
     if (!workspaceRoot || workspaceRoot === this.workspaceRoot) return;
-    const previousSession = session.fromPartition(this.partition);
-    if (this.downloadListener) {
-      previousSession.off('will-download', this.downloadListener);
-      this.downloadListener = null;
-    }
     this.workspaceGeneration += 1;
     this.visibleAgentPin = null;
     this.persistWorkspace();
@@ -555,6 +560,7 @@ export class BrowserViewManager {
     this.workspaceRoot = workspaceRoot;
     this.partition = browserPartitionForWorkspace(workspaceRoot);
     this.workspaceStore = new BrowserWorkspaceStore(app.getPath('userData'), workspaceRoot);
+    this.downloadManager.setWorkspace(workspaceRoot, this.partition);
     this.sessionKey = null;
     this.tabs = [];
     this.activeTabId = '';
@@ -563,7 +569,6 @@ export class BrowserViewManager {
     this.userOriginChecks.clear();
     this.humanChallengeTabs.clear();
     configureBrowserSession(session.fromPartition(this.partition));
-    this.installDownloadListener();
     this.restoreWorkspace();
     if (this.tabs.length === 0) this.createTab(BROWSER_BLANK_URL, true);
     this.attachActiveView();
@@ -603,18 +608,12 @@ export class BrowserViewManager {
     this.persistWorkspace();
     this.disposed = true;
     this.promptManager.dispose();
-    if (this.downloadListener) {
-      session.fromPartition(this.partition).off('will-download', this.downloadListener);
-      this.downloadListener = null;
-    }
+    this.downloadManager.dispose();
     this.destroyAllViews();
-    this.downloadItems.clear();
-    this.downloadWorkspaces.clear();
     this.agentNavigationPolicies.clear();
     this.agentControlledTabs.clear();
     this.trustedUserPrivateOrigins.clear();
     this.userOriginChecks.clear();
-    this.agentDownloadAllowances.clear();
     this.syntheticInputUntil.clear();
     for (const tabId of [...this.stagedUploads.keys()]) this.cleanupStagedUpload(tabId);
     for (const controller of this.pendingAuthPrompts.values()) controller.abort();
@@ -849,14 +848,7 @@ export class BrowserViewManager {
           agentPolicy: inheritedPolicy ?? {},
         });
         if (agentControlled) {
-          // A target=_blank navigation remains part of the same agent action.
-          // Transfer (rather than duplicate) the one-shot download gesture so
-          // the opener and popup cannot each consume it.
-          const allowance = this.agentDownloadAllowances.get(tab.id);
-          if (allowance && allowance >= Date.now()) {
-            this.agentDownloadAllowances.delete(tab.id);
-            this.agentDownloadAllowances.set(child.id, allowance);
-          }
+          this.downloadManager.transferAgentAllowance(tab.id, child.id);
         }
         const record = this.records.get(child.id);
         if (!record) return { action: 'deny' };
@@ -975,7 +967,7 @@ export class BrowserViewManager {
         if (command.clear) await this.isolated(current.id, `(() => { try { performance.clearResourceTimings(); } catch {} return true; })()`);
         return boundBrowserArray(rows ?? [], MAX_NETWORK_ROWS);
       }
-      case 'downloads': return this.workspaceDownloads();
+      case 'downloads': return this.downloadManager.list();
       case 'click': case 'double-click': case 'hover': case 'assert-visible': case 'highlight':
         return this.pointerCommand(this.requireTab(tab), command, assertCurrent);
       case 'type': return this.typeCommand(this.requireTab(tab), command, assertCurrent);
@@ -990,7 +982,7 @@ export class BrowserViewManager {
       case 'clear-highlight': return this.isolated(this.requireTab(tab).id, `(() => { document.getElementById('__brainrouter_testid_highlights__')?.remove(); const el=window.__brainrouterHighlighted; if(el){el.style.outline=window.__brainrouterPreviousOutline||'';el.style.outlineOffset='';} window.__brainrouterHighlighted=null; return {ok:true}; })()`);
       case 'respond-permission': return this.promptManager.respondPermission(command.promptId, command.allow);
       case 'respond-dialog': return this.promptManager.respondDialog(command);
-      case 'open-download': case 'show-download': case 'cancel-download': case 'pause-download': case 'resume-download': return this.downloadCommand(command.op, command.downloadId);
+      case 'open-download': case 'show-download': case 'cancel-download': case 'pause-download': case 'resume-download': return this.downloadManager.execute(command.op, command.downloadId);
       case 'clear-data': return this.clearData(command.dataTypes);
       case 'reset-browser': return this.resetBrowser();
       case 'clear-session-data': {
@@ -1405,21 +1397,6 @@ export class BrowserViewManager {
     return { name: boundBrowserText(device.name, 128), width, height, deviceScaleFactor, isMobile: device.isMobile === true };
   }
 
-  private async downloadCommand(op: 'open-download' | 'show-download' | 'cancel-download' | 'pause-download' | 'resume-download', id: string): Promise<{ ok: true }> {
-    const download = this.downloads.find((entry) => entry.id === id);
-    if (!download || this.downloadWorkspaces.get(id) !== this.workspaceRoot) throw new BrowserManagerError('INVALID_REQUEST', 'Download was not found in the active workspace.');
-    if (op === 'cancel-download') { this.downloadItems.get(id)?.cancel(); return { ok: true }; }
-    if (op === 'pause-download') { this.downloadItems.get(id)?.pause(); return { ok: true }; }
-    if (op === 'resume-download') { this.downloadItems.get(id)?.resume(); return { ok: true }; }
-    if (!download.savePath) throw new BrowserManagerError('NOT_READY', 'Download has no saved file yet.');
-    if (op === 'show-download') shell.showItemInFolder(download.savePath);
-    else {
-      const error = await shell.openPath(download.savePath);
-      if (error) throw new BrowserManagerError('INTERNAL', error);
-    }
-    return { ok: true };
-  }
-
   /** Reset the browser to a brand-new state: close every tab (which destroys the
    *  per-tab navigation history), wipe the partition's cookies/cache/storage, and
    *  open a single fresh blank tab. This is the user-facing "reset browser". */
@@ -1458,66 +1435,8 @@ export class BrowserViewManager {
   private releaseAgentControl(tabId: BrowserTabId): void {
     this.agentNavigationPolicies.delete(tabId);
     this.agentControlledTabs.delete(tabId);
-    this.agentDownloadAllowances.delete(tabId);
+    this.downloadManager.releaseTab(tabId);
     this.syntheticInputUntil.delete(tabId);
-  }
-
-  private installDownloadListener(): void {
-    const browserSession = session.fromPartition(this.partition);
-    if (this.downloadListener) return;
-    this.downloadListener = (event, item, contents) => {
-      const tab = this.tabForContents(contents.id); if (!tab) return;
-      const id = `download_${this.windowPrefix}_${++this.downloadSequence}`;
-      const filename = safeDownloadName(item.getFilename());
-      const agentControlled = this.agentControlledTabs.has(tab.id);
-      const gestureExpires = this.agentDownloadAllowances.get(tab.id) ?? 0;
-      if (agentControlled && gestureExpires < Date.now()) {
-        // A network-tier agent navigation must not turn Content-Disposition
-        // into an implicit filesystem write. Only a recent approved computer
-        // interaction receives one bounded download opportunity.
-        event.preventDefault();
-        item.cancel();
-        const blocked: BrowserDownload = {
-          id, tabId: tab.id, filename, url: boundBrowserText(item.getURL(), 8_192), savePath: null,
-          receivedBytes: 0, totalBytes: item.getTotalBytes(), state: 'cancelled', startedAt: Date.now(),
-        };
-        this.downloads.push(blocked);
-        this.downloadWorkspaces.set(id, this.workspaceRoot);
-        this.trimDownloads();
-        this.emitDownload(blocked);
-        return;
-      }
-      if (agentControlled) this.agentDownloadAllowances.delete(tab.id);
-      const directory = app.getPath('downloads'); fs.mkdirSync(directory, { recursive: true });
-      const savePath = availableDownloadPath(directory, filename); item.setSavePath(savePath);
-      const row: BrowserDownload = { id, tabId: tab.id, filename, url: boundBrowserText(item.getURL(), 8_192), savePath, receivedBytes: 0, totalBytes: item.getTotalBytes(), state: 'progressing', startedAt: Date.now() };
-      this.downloads.push(row); this.downloadWorkspaces.set(id, this.workspaceRoot);
-      this.trimDownloads();
-      this.downloadItems.set(id, item); this.emitDownload(row);
-      item.on('updated', (_e, state) => { row.receivedBytes = item.getReceivedBytes(); row.totalBytes = item.getTotalBytes(); row.state = state === 'interrupted' ? 'interrupted' : 'progressing'; this.emitDownload(row); });
-      item.once('done', (_e, state) => { row.receivedBytes = item.getReceivedBytes(); row.totalBytes = item.getTotalBytes(); row.state = state === 'completed' ? 'completed' : state === 'cancelled' ? 'cancelled' : 'interrupted'; this.downloadItems.delete(id); this.emitDownload(row); });
-    };
-    browserSession.on('will-download', this.downloadListener);
-  }
-
-  private trimDownloads(): void {
-    if (this.downloads.length <= 100) return;
-    const removed = this.downloads.splice(0, this.downloads.length - 100);
-    for (const stale of removed) {
-      this.downloadItems.delete(stale.id);
-      this.downloadWorkspaces.delete(stale.id);
-    }
-  }
-
-  private workspaceDownloads(): BrowserDownload[] {
-    return this.downloads
-      .filter((download) => this.downloadWorkspaces.get(download.id) === this.workspaceRoot)
-      .map((download) => ({ ...download }));
-  }
-
-  private emitDownload(download: BrowserDownload): void {
-    if (this.downloadWorkspaces.get(download.id) === this.workspaceRoot) this.emit({ type: 'download', download: { ...download } });
-    this.emitState();
   }
 
   private showContextMenu(tab: BrowserTab, params: ContextMenuParams): void {
