@@ -7,3 +7,4 @@ export * from './analysis.js';
 export * from './finding.js';
 export * from './run.js';
 export * from './publication.js';
+export * from './authorizedAssessment.js';
