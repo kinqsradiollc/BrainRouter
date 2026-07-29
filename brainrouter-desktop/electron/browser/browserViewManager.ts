@@ -12,13 +12,15 @@ import {
   type WebContents,
 } from 'electron';
 import { createHash, randomUUID } from 'node:crypto';
-import { lookup } from 'node:dns/promises';
 import fs from 'node:fs';
-import { isIP } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isAllowedWebviewSrc, isMetadataOrLinkLocalAddress, isPrivateOrLocalAddress } from '../webviewPolicy.js';
+import { isAllowedWebviewSrc } from '../webviewPolicy.js';
 import { browserPermissionCheckScopes, browserPermissionRequestScope } from './browserPermissionPolicy.js';
+import {
+  resolvedBrowserDestinationAllowed,
+  type BrowserHostResolver,
+} from './browserDestinationPolicy.js';
 import { agentCursorScript, removeAgentCursorScript } from './browserCursor.js';
 import { humanChallengeReason } from './browserHumanChallenge.js';
 import {
@@ -111,42 +113,6 @@ type BrowserOperationGuard = () => void;
 
 const managersByWebContents = new Map<number, BrowserViewManager>();
 const configuredSessions = new WeakSet<Session>();
-type BrowserHostResolver = (host: string, fresh: boolean) => Promise<string[]>;
-
-async function resolvedDestinationAllowed(rawUrl: string, agentPolicy?: { allowedPrivateOrigin?: string }, resolver?: BrowserHostResolver): Promise<boolean> {
-  let host = '';
-  let origin = '';
-  try {
-    const url = new URL(rawUrl);
-    host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-    origin = url.origin;
-  }
-  catch { return false; }
-  if (!host) return false;
-  const privateAllowed = Boolean(agentPolicy?.allowedPrivateOrigin && agentPolicy.allowedPrivateOrigin === origin);
-  if (host === 'localhost' || host.endsWith('.localhost')) return !agentPolicy || privateAllowed;
-  if (isIP(host)) return !isMetadataOrLinkLocalAddress(host) && (!agentPolicy || !isPrivateOrLocalAddress(host) || privateAllowed);
-  let allow = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    const addresses = await Promise.race([
-      resolver
-        ? resolver(host, Boolean(agentPolicy)).then((rows) => rows.map((address) => ({ address })))
-        : lookup(host, { all: true, verbatim: true }),
-      new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error('DNS resolution timed out.')), 2_000); }),
-    ]);
-    allow = addresses.length > 0 && addresses.every((entry) => !isMetadataOrLinkLocalAddress(entry.address)
-      && (!agentPolicy || !isPrivateOrLocalAddress(entry.address) || privateAllowed));
-  } catch {
-    // If the preflight resolver cannot establish a safe destination, fail
-    // closed. Chromium will show a normal load failure on a subsequent retry
-    // once DNS is healthy rather than risking cloud-metadata credential access.
-    allow = false;
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-  return allow;
-}
 
 function configureBrowserSession(ses: Session): void {
   if (configuredSessions.has(ses)) return;
@@ -177,7 +143,7 @@ function configureBrowserSession(ses: Session): void {
       callback({});
       return;
     }
-    void (manager?.destinationAllowedForRequest(details.webContentsId, details.url) ?? resolvedDestinationAllowed(details.url))
+    void (manager?.destinationAllowedForRequest(details.webContentsId, details.url) ?? resolvedBrowserDestinationAllowed(details.url))
       .then((allow) => callback({ cancel: !allow }), () => callback({ cancel: true }));
   });
 }
@@ -481,7 +447,7 @@ export class BrowserViewManager {
 
   private destinationAllowed(url: string, policy?: AgentNavigationPolicy): Promise<boolean> {
     const browserSession = session.fromPartition(this.partition);
-    return resolvedDestinationAllowed(url, policy, async (host, fresh) => {
+    return resolvedBrowserDestinationAllowed(url, policy, async (host, fresh) => {
       const resolved = await browserSession.resolveHost(host, { cacheUsage: fresh ? 'disallowed' : 'allowed' });
       return resolved.endpoints.map((entry) => entry.address);
     });

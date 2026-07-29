@@ -525,6 +525,14 @@ the repository's normal security-review process before merge.
 | A25-5c | `[ ]` | Extract receipt persistence, validation, ownership, and recovery services behind the existing transaction facade | Recovery fixtures preserve safe-directory, bounded receipt, active-owner, ambiguous-state, rollback, and cleanup behavior |
 | A25-5d | `[ ]` | Separate profile manifest/catalog/policy resolution from filesystem trust and onboarding transaction composition | No-manifest, explicit-catalog, compatibility, precedence, diagnostic, and safe-write fixtures preserve current behavior |
 
+### A25-6 infrastructure domain delivery slices
+
+| ID | Status | Deliverable | Acceptance evidence |
+|---|---|---|---|
+| A25-6a | `[x]` | Extract embedded-browser DNS and private-destination policy from Electron view lifecycle | Desktop host fixtures prove human/private and agent/exact-origin authority, metadata/link-local denial, mixed DNS fail-closed behavior, and resolver failure handling |
+| A25-6b | `[ ]` | Separate embedded-browser tab lifecycle, permissions, downloads, persistence, and agent-control managers behind the existing facade | Desktop host fixtures preserve workspace/session ownership, permission, cancellation, view attachment, persistence, and event order |
+| A25-6c | `[ ]` | Separate terminal, background, connector, storage, and worktree policy/services from privileged host adapters | Per-domain fixtures preserve workspace/session scope, authority, cancellation, persistence, and cleanup |
+
 ### A25-8 Core review delivery slices
 
 | ID | Status | Deliverable | Acceptance evidence |
