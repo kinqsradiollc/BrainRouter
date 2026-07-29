@@ -8,7 +8,7 @@
 
 import type {
   AssembleAssuranceImpactPacketsInput,
-  AssuranceCodeIndexReceipt,
+  AssuranceCodeIndexResult,
   AssuranceImpactPacketAssembly,
   PrepareAssuranceSourceInput,
   PrepareAssuranceSourceResult,
@@ -28,7 +28,11 @@ export interface RepositoryAssuranceSourcePort {
 }
 
 export interface RepositoryAssuranceIndexPort {
-  update(input: UpdateAssuranceIndexInput): Promise<AssuranceCodeIndexReceipt>;
+  update(
+    input: UpdateAssuranceIndexInput,
+    cancellation?: AssuranceOperationCancellation,
+  ): Promise<AssuranceCodeIndexResult>;
+  release(indexRef: string): Promise<void>;
 }
 
 export interface RepositoryAssuranceImpactPort {
