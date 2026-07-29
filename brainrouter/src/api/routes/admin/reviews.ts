@@ -2,11 +2,13 @@
 import { Router } from "express";
 import { mintInstallationToken, validateGithubApiBase } from "@kinqs/brainrouter-core/track";
 import {
+  buildAuthorizedAssessmentPolicy,
   parseAssuranceGateDecision,
   projectAssurancePublication,
 } from "@kinqs/brainrouter-core/review";
 import type {
   MemoryJobRecord,
+  PentestTargetRecord,
   RepositoryReviewAvailability,
   ReviewAssuranceDto,
   ReviewJobDto,
@@ -58,6 +60,7 @@ type Store = Partial<{
     runId: string,
   ): Promise<AssuranceFinding[]>;
   listMemoryJobs(filters?: { kind?: string; status?: string[]; limit?: number }): Promise<MemoryJobRecord[]>;
+  getPentestTarget(id: string): Promise<PentestTargetRecord | null>;
   enqueueMemoryJob(input: { kind: string; input: Record<string, unknown>; maxAttempts?: number }): Promise<MemoryJobRecord>;
 }>;
 type Lens = "security" | "code" | "pentest" | "both";
@@ -457,11 +460,43 @@ reviewsRouter.post("/run", async (req: AuthedRequest, res) => {
   if (!authorization) { sendError(res, 400, `Repository is not available through the connected ${forge === "gitlab" ? "GitLab" : "GitHub"} authorization`); return; }
   const requested = lens === "both" ? ["security", "code"] as const : [lens] as const;
   const store = memoryEngine.store as Store;
+  let assessmentTarget: PentestTargetRecord | null = null;
+  if (lens === "pentest") {
+    const targetId = String(req.body?.targetId ?? "").trim();
+    assessmentTarget = targetId && store.getPentestTarget
+      ? await store.getPentestTarget(targetId)
+      : null;
+    if (
+      !assessmentTarget
+      || assessmentTarget.orgId !== req.orgId
+      || assessmentTarget.kind !== "repository"
+      || assessmentTarget.normalizedValue !== String(repo).toLowerCase()
+    ) {
+      sendError(res, 400, "Pentest review requires an active authorized repository target matching repo");
+      return;
+    }
+  }
   const jobs: Array<{ id: string; lens: "security" | "code" | "pentest" }> = [];
   for (const one of requested) {
     const kind = one === "security" ? "pr-security-review" : one === "pentest" ? "pr-pentest" : "pr-code-review";
     const inflight = (await store.listMemoryJobs?.({ kind, status: ["pending", "running"], limit: 500 })) ?? [];
-    const duplicate = inflight.find((job) => { const input = job.input as { orgId?: unknown; repo?: unknown; prNumber?: unknown; forge?: unknown }; return input.orgId === req.orgId && input.repo === repo && Number(input.prNumber) === prNumber && (input.forge === "gitlab" ? "gitlab" : "github") === forge; });
+    const duplicate = inflight.find((job) => {
+      const input = job.input as {
+        orgId?: unknown;
+        repo?: unknown;
+        prNumber?: unknown;
+        forge?: unknown;
+        assessmentPolicy?: { target?: { targetId?: unknown } };
+      };
+      const sameReview =
+        input.orgId === req.orgId
+        && input.repo === repo
+        && Number(input.prNumber) === prNumber
+        && (input.forge === "gitlab" ? "gitlab" : "github") === forge;
+      if (!sameReview) return false;
+      return one !== "pentest"
+        || input.assessmentPolicy?.target?.targetId === assessmentTarget?.id;
+    });
     if (duplicate) { jobs.push({ id: duplicate.id, lens: one }); continue; }
     const job = await store.enqueueMemoryJob?.({
       kind,
@@ -474,6 +509,14 @@ reviewsRouter.post("/run", async (req: AuthedRequest, res) => {
         prNumber,
         headSha: "",
         requestedBy: req.userId,
+        ...(one === "pentest" && assessmentTarget
+          ? {
+              assessmentPolicy: buildAuthorizedAssessmentPolicy(
+                assessmentTarget,
+                { scanMode: "code-review" },
+              ),
+            }
+          : {}),
       },
       maxAttempts: 3,
     });

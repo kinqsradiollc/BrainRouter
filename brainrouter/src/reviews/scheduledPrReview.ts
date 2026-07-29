@@ -8,6 +8,11 @@
 
 import type { MemoryJobProgressEvent } from "@kinqs/brainrouter-types";
 import {
+  assertAuthorizedAssessmentTarget,
+  parseAuthorizedAssessmentPolicy,
+} from "@kinqs/brainrouter-core/review";
+import type { AuthorizedAssessmentPolicy } from "@kinqs/brainrouter-types/review";
+import {
   runPrCodeReview,
   runPrPentest,
   runPrSecurityReview,
@@ -51,6 +56,28 @@ function normalizeReviewInput(input: unknown): PrReviewInput {
     prNumber: Number(value?.prNumber),
     headSha: String(value?.headSha ?? ""),
   };
+}
+
+async function validatePentestAuthorization(
+  rawInput: unknown,
+  ctx: JobExecContext,
+): Promise<AuthorizedAssessmentPolicy> {
+  const input = rawInput as Record<string, unknown> | null;
+  const policy = parseAuthorizedAssessmentPolicy(input?.assessmentPolicy);
+  if (policy.target.kind !== "repository" || policy.scanMode !== "code-review") {
+    throw new Error("PR pentests require a source-only authorized repository policy.");
+  }
+  if (
+    String(input?.repo ?? "").trim().toLowerCase() !== policy.target.normalizedValue
+    || String(input?.orgId ?? "").trim() !== policy.organizationId
+  ) {
+    throw new Error("PR pentest request does not match its authorized target policy.");
+  }
+  assertAuthorizedAssessmentTarget(
+    policy,
+    await ctx.store.getPentestTarget(policy.target.targetId),
+  );
+  return policy;
 }
 
 async function reviewDependencies(
@@ -112,14 +139,30 @@ export async function runScheduledPrReview(
   ctx: JobExecContext,
   lens: ScheduledReviewLens,
 ): Promise<unknown> {
+  const assessmentPolicy = lens === "pentest"
+    ? await validatePentestAuthorization(rawInput, ctx)
+    : null;
   const input = normalizeReviewInput(rawInput);
   let changedFiles = 0;
   const assurance: { current: DiffReviewAssuranceSession | null } = { current: null };
   const isCancellationRequested = async (): Promise<boolean> => {
     if (!ctx.jobId) return false;
     const job = await ctx.store.getMemoryJob(ctx.jobId);
-    return String(job?.status ?? "") === "cancelled";
+    if (String(job?.status ?? "") === "cancelled") return true;
+    if (!assessmentPolicy) return false;
+    try {
+      assertAuthorizedAssessmentTarget(
+        assessmentPolicy,
+        await ctx.store.getPentestTarget(assessmentPolicy.target.targetId),
+      );
+      return false;
+    } catch {
+      return true;
+    }
   };
+  if (await isCancellationRequested()) {
+    throw new Error("Review canceled before execution.");
+  }
   const deps = await reviewDependencies(ctx, lens, input.orgId, {
     assuranceReady: async ({ policy, headSha, checkout }) => {
       if (!ctx.jobId) return;
