@@ -10,7 +10,6 @@ import { linkArtifact } from '../../artifact/artifactStore.js';
 import { contextWindowForBudget } from '../../context/contextWindow.js';
 import {
   buildRootContextEnvelope,
-  materializeContextEnvelope,
 } from '../../context/contextEnvelope.js';
 import { resolveToolPolicy, externalDirectoryDecision } from '../../exec/policy/execPolicy.js';
 import { isPathWithinRoots } from '../../exec/policy/pathPolicy.js';
@@ -21,7 +20,6 @@ import { readGoal, formatGoalBlock } from '../../goal/store/goalStore.js';
 import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../../hooks/hookifyStore.js';
 import { runHooks, parseHookDecision, collectStopAdditionalContext } from '../../hooks/hooksStore.js';
 import { extractToolText } from '../../mcp/mcpUtils.js';
-import { reconnectBackoffMs, probeConnectivity } from '../../mcp/reconnect/reconnect.js';
 import { listAll as listAgentDefinitions } from '../../orchestration/agents/agentRegistry.js';
 import { executeOrchestrationTool, synthesizeDelegateTools, OrchestrationContext } from '../../orchestration/tools.js';
 import {
@@ -31,18 +29,12 @@ import {
 import { buildFanOutHint, shouldSuggestFanOut } from '../../prompt/planning/breadthHint.js';
 import { buildNextActionMessages, parseNextActionPlan, nextActionDirective, planWantsFanOut, shouldSkipPlanner } from '../../prompt/planning/nextAction.js';
 import { compactToolOutput } from '../../prompt/compaction/toolCompaction.js';
-import { isModelNotFoundError, nextFallbackModel, shouldFallbackModel } from '../../provider/modelFallback.js';
+import { shouldFallbackModel } from '../../provider/modelFallback.js';
 import { resolveLocalModelProfile, localModelProfileActive } from '../../provider/modelFamily.js';
 import { enforceTaskBudget } from '../../provider/budget.js';
 import { currentTier, detectNeedsHigh, nextTier, resolveTierLadder, stripNeedsHigh } from '../../provider/tierLadder.js';
 import { switchModelToolAvailable } from '../../provider/llmProfiles.js';
-import {
-  buildModelRegistry,
-  classifyRouterFailure,
-  getRouterPolicy,
-  resolveRoutes,
-  type RouterFailure,
-} from '../../provider/routing/index.js';
+import { buildModelRegistry, resolveRoutes } from '../../provider/routing/index.js';
 import { drainCompletions, formatCompletionFeedback } from '../../session/completion/completionInbox.js';
 import { resolveActiveMode } from '../../session/state/sessionModeStore.js';
 import {
@@ -51,7 +43,6 @@ import {
 import { evaluateSteeringToolGate } from '../../task/steeringReconciliationGate.js';
 import { readWorkContract } from '../../task/workContractStore.js';
 import { isInternalSessionKey } from '../../session/transcript/sessionStore.js';
-import { isConnectivityError, isRetryableServerError } from '../../storage/checkpointStore.js';
 import { readPlan } from '../../task/taskStore.js';
 import { startSpan, traceEvent } from '../../telemetry/tracing/tracing.js';
 import { localToolSpecsFromExecutors } from '../../tool/registry/executors.js';
@@ -75,8 +66,6 @@ import { isChildSynthesisTool, resultHasChildOutput, looksLikeChildSynthesisPunt
 import { estimateChatHistoryTokens } from '../../util/tokens/tokenEstimate.js';
 import { classifyDeferral, buildDeliverableCorrection } from '../guards/deliverableCheck.js';
 import { classifyDenial, formatDenialResult } from '../guards/denialMessage.js';
-import { resolveEffortForTurn } from '../support/effortRouting.js';
-import { recoverAgentProviderRoute } from './providerRecovery.js';
 import { applyPendingSteeringAtBoundary } from './steering.js';
 import { shouldRunFanOutFollowThroughGuard } from '../guards/fanOutFollowThroughGuard.js';
 import { assessMcpToolApproval } from '../guards/mcpApproval.js';
@@ -87,7 +76,7 @@ import { isSequenceGuardExempt, buildSequenceSignature } from '../guards/repeatG
 import { shouldNudgeTaskTracking, buildTaskTrackingNudge } from '../guards/taskTrackingNudge.js';
 import {
   dedupeToolCalls, looksLikeDeferredToolPromise, looksLikeStalledPreamble, mentionsImminentToolWork,
-  parseArgumentsOrError, sanitizeToolCallPairing, suggestSimilarToolName, synthesizeOrphanResults,
+  parseArgumentsOrError, suggestSimilarToolName, synthesizeOrphanResults,
 } from '../guards/toolCallRecovery.js';
 import { isParallelSafe, parallelExecutionEnabled } from '../guards/toolSafety.js';
 import { resolveToolBudget, isBudgetCheckpoint, buildBudgetCheckpoint, buildBudgetCeilingMessage } from '../guards/turnBudget.js';
@@ -119,9 +108,9 @@ import {
 } from '../../workspace/toolProfiles.js';
 import {
   buildChatCompletionPayload, buildResponsesPayload, resolveRequestFormat, resolveWireEffort,
-  callOpenAI, callOpenAIStream, InterruptError, isInterrupt, activeProviderDef, effortForTurnSelection,
-  minimalReasoningEffort, abortableDelay,
+  activeProviderDef, callOpenAI, minimalReasoningEffort,
 } from '../transport/llmTransport.js';
+import { invokeModelPhase } from './modelInvocationPhase.js';
 import {
   buildRequiredDelegatedStageCorrection,
   buildRequiredProfileStageCorrection,
@@ -129,14 +118,13 @@ import {
   describeProfileStageTool,
 } from './profileStageRuntime.js';
 
-function sameLlmRoute(route: { llm: { model: string; endpoint?: string; apiKey?: string } }, llm: { model: string; endpoint?: string; apiKey?: string }): boolean {
+function sameLlmRoute(
+  route: { llm: { model: string; endpoint?: string; apiKey?: string } },
+  llm: { model: string; endpoint?: string; apiKey?: string },
+): boolean {
   return route.llm.model === llm.model
     && (route.llm.endpoint ?? '') === (llm.endpoint ?? '')
     && (route.llm.apiKey ?? '') === (llm.apiKey ?? '');
-}
-
-function routeFailureStatus(failure: RouterFailure): string {
-  return failure.status ? `${failure.status}` : failure.kind.replace(/_/g, ' ');
 }
 
 export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCallbacks, opts?: { hiddenPrompt?: boolean; images?: Array<{ mediaType: string; dataBase64: string }> }): Promise<string> {
@@ -1000,301 +988,9 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       }
       callbacks.onStatusUpdate(`Thinking (turn ${loopCount})...`);
 
-      let response: { content: string; toolCalls?: any[]; usage?: { prompt_tokens?: number; completion_tokens?: number }; finishReason?: string } | undefined;
-      const invokeLlm = async () => {
-        // Transport boundary guard: never send a malformed assistant.tool_calls ↔
-        // tool-result sequence (strict gateways reject it with "tool call result
-        // does not follow tool call (2013)"). Idempotent on a well-formed history;
-        // a non-mutating copy so the in-memory guard logic still reads the raw
-        // chatHistory. loadHistory already repairs the resumed prefix — this also
-        // covers any live malformation (compaction, interrupts, guard injects).
-        const contextWindowTokens = contextWindowForBudget(this.llmConfig.model);
-        const contextEnvelope = buildRootContextEnvelope(this.chatHistory, {
-          executionId: this.sessionKey,
-          budget: {
-            maxChars: contextWindowTokens * 4,
-            maxTokens: contextWindowTokens,
-          },
-        });
-        const requestMessages = sanitizeToolCallPairing(
-          materializeContextEnvelope(contextEnvelope) as any[],
-        );
-        // Re-resolve every loop iteration so an in-session `/effort` flip
-        // (which only refreshes the system prompt) also updates the next
-        // request's reasoning_effort slot — no restart needed. Resolve from
-        // the ACTIVE SESSION (session override > workspace pref/config) so a
-        // per-chat `/effort` sticks to that chat. A spawned child with a
-        // per-run effort override (0.4.x-5) uses that instead. `fast` execution
-        // mode forces the model's MINIMUM reasoning (Fast = minimal reasoning).
-        const activeMode = resolveActiveMode(this.workspaceRoot, this.sessionKey);
-        const selectedEffort = effortForTurnSelection(activeMode, this.llmConfig.model, this.effortOverride);
-        const effort = resolveEffortForTurn(selectedEffort, this.chatHistory, getCliKnobs());
-        // TIER A: stream when the UI is listening for deltas, AND the
-        // user hasn't disabled it. Streaming opts in only when a delta
-        // callback is supplied — silent mode / children / tests stay on
-        // the non-streaming path so their behavior is unchanged.
-        const streamRequested = Boolean(
-          callbacks.onAssistantDelta || callbacks.onReasoningDelta,
-        ) && getCliKnobs().disableStream !== true;
-        if (streamRequested) {
-          let started = false;
-          try {
-            const final = await callOpenAIStream(
-              this.llmConfig,
-              requestMessages,
-              allTools,
-              { effort, signal: this.turnAbort?.signal },
-              {
-                onTextDelta: (text) => {
-                  if (!started) {
-                    started = true;
-                    callbacks.onAssistantTurnStart?.();
-                  }
-                  callbacks.onAssistantDelta?.(text);
-                },
-                onReasoningDelta: (text) => {
-                  callbacks.onReasoningDelta?.(text);
-                },
-              },
-            );
-            if (started) callbacks.onAssistantTurnEnd?.(final.content);
-            return { content: final.content, toolCalls: final.toolCalls, usage: final.usage, finishReason: final.finishReason };
-          } catch (streamErr: any) {
-            // DESK-6 — a user Stop must NOT silently restart as a non-streaming
-            // call; rethrow the interrupt so the turn unwinds. (Detect by the
-            // sentinel/flag, never message-substring — "aborted" is overloaded.)
-            if (isInterrupt(streamErr) || this.interruptRequested) throw streamErr;
-            if (started) {
-              streamErr.brainrouterStreamStarted = true;
-              callbacks.onAssistantTurnEnd?.('');
-              throw streamErr;
-            }
-            // Streaming failed (provider doesn't support SSE, malformed
-            // chunks, network blip). Fall back transparently to the
-            // non-streaming path so the turn still completes — log via
-            // status so the user can see why their text wasn't live.
-            callbacks.onStatusUpdate(`Streaming failed (${String(streamErr?.message ?? streamErr).slice(0, 120)}) — falling back to non-streaming.`);
-          }
-        }
-        return await callOpenAI(this.llmConfig, requestMessages, allTools, { effort, signal: this.turnAbort?.signal });
-      };
-      // Transient connectivity failures (fetch failed / ECONNRESET / socket
-      // hang up / timeouts) are retried with backoff before giving up — a
-      // network blip shouldn't kill a turn, a worker, or a child agent. This
-      // is why background workers (which are `silent`) were dying on the first
-      // hiccup while grok/claude-code/codex ride it out. `shouldRetryLlm` also
-      // covers transient SERVER-side failures — HTTP 5xx, gateway timeouts
-      // (the "504 Gateway Time-out" from the provider's load balancer), rate
-      // limits (429), and overload errors — not just client-side connectivity.
-      // Context-overflow and model-not-found errors are neither, so they fall
-      // straight through to the dedicated recovery in the catch below.
-      // RECONNECT (0.4.12) — Codex-style: a transient failure (timeout / disconnect
-      // / 5xx / 429) RECONNECTS with exponential backoff (honoring Retry-After) up to
-      // `llmMaxReconnects`, rather than dying on the first hiccup. AND — if the
-      // machine is genuinely OFFLINE — it keeps waiting for the link to return WITHOUT
-      // spending the reconnect budget, so a dropped connection auto-resumes once the
-      // network is back (a long background worker no longer dies on a Wi-Fi blip).
-      const maxReconnects = Math.max(1, getCliKnobs().llmMaxReconnects);
-      const OFFLINE_MAX_WAITS = 120; // generous: keep waiting for the network to return
-      const llmEndpoint = this.llmConfig?.endpoint ?? '';
-      const invokeLlmResilient = async (): Promise<Awaited<ReturnType<typeof invokeLlm>>> => {
-        // WS0 — record cache-stable-prefix stability once per logical LLM call
-        // (here, BEFORE the retry loop, so transient-failure retries don't
-        // double-count). The prefix slice is unaffected by invokeLlm's
-        // per-attempt sanitize, so deriving it from chatHistory + allTools is
-        // equivalent to the sanitized request.
-        this.recordPrefixStability(this.chatHistory, allTools);
-        let attempt = 0;
-        let offlineWaits = 0;
-        for (;;) {
-          // DESK-6 — a Stop ends the turn here, BEFORE the reconnect classifier:
-          // a user interrupt must never be mistaken for a transient blip and
-          // retried (CONNECTIVITY_RE matches "aborted", so a naive abort would
-          // reconnect — re-firing the exact request the user tried to stop).
-          if (this.interruptRequested) throw new InterruptError();
-          try {
-            return await invokeLlm();
-          } catch (err: any) {
-            if (this.interruptRequested || isInterrupt(err)) throw isInterrupt(err) ? err : new InterruptError();
-            // Only transient transport / server failures reconnect; deterministic
-            // errors (4xx, context overflow, model-not-found) fall straight through.
-            const serverSide = isRetryableServerError(err);
-            if (!serverSide && !isConnectivityError(err)) throw err;
-            // A connectivity error may just be the network being down — probe; while
-            // offline, wait for it to come back without consuming the retry budget.
-            const online = serverSide ? true : await probeConnectivity(llmEndpoint);
-            if (!online) {
-              if (offlineWaits >= OFFLINE_MAX_WAITS) throw err;
-              offlineWaits += 1;
-              const delay = reconnectBackoffMs(Math.min(offlineWaits, 6), { capMs: 15_000 });
-              callbacks.onStatusUpdate(`Waiting for connection… offline — retrying in ${(delay / 1000).toFixed(1)}s (${offlineWaits})`);
-              await abortableDelay(delay, this.turnAbort?.signal); // DESK-6 — Stop wakes the wait
-              continue;
-            }
-            attempt += 1;
-            if (attempt > maxReconnects) throw err;
-            const retryAfterMs = typeof err?.retryAfterMs === 'number' ? err.retryAfterMs : undefined;
-            const delay = reconnectBackoffMs(attempt, { retryAfterMs });
-            callbacks.onStatusUpdate(
-              `Reconnecting… ${attempt}/${maxReconnects} — ${String(err?.message ?? err).slice(0, 60)} (in ${(delay / 1000).toFixed(1)}s)`,
-            );
-            await abortableDelay(delay, this.turnAbort?.signal); // DESK-6 — Stop wakes the wait
-          }
-        }
-      };
-      const providerAttemptStartedAt = new Date().toISOString();
-      try {
-        response = await invokeLlmResilient();
-      } catch (err: any) {
-        // DESK-6 — a user Stop unwinds to the SAME clean "interrupted" answer as
-        // the loop-top check, BEFORE any reactive compaction / model-fallback
-        // recovery (so a Stop during a 504-ish moment isn't re-routed into a
-        // retry path). Mirrors the loop-top handler exactly.
-        if (isInterrupt(err) || this.interruptRequested) {
-          this.interruptRequested = false;
-          const note = '⏹ Turn interrupted by user.';
-          const interruptMsg = { role: 'system', content: 'The user interrupted this turn before it finished; the work above may be incomplete.' };
-          this.chatHistory.push(interruptMsg);
-          this.recordTranscript(interruptMsg);
-          callbacks.onStatusUpdate('Interrupted');
-          return note;
-        }
-        // Layered LLM recovery. We detect context-
-        // window-exceeded errors (the single failure mode where a fresh
-        // request is guaranteed to fail the same way) and trigger a
-        // reactive compaction before retrying ONCE. Other errors propagate
-        // unchanged — bare rethrow preserves the prior surface for
-        // network/auth/rate-limit failures the user wants to see.
-        const message = String(err?.message ?? err);
-        const routerKnobs = getCliKnobs().router;
-        if (routerKnobs.enabled) {
-          const failure = classifyRouterFailure(err);
-          if (failure.retryable) {
-            const config = loadOrInitConfig();
-            const baseName = config.providers?.base ? 'base-config' : 'base';
-            const providers = { ...(config.providers ?? {}), [baseName]: this.llmConfig };
-            const primaryChain = [
-              ...routerKnobs.chain,
-              ...getCliKnobs().fallbackModels,
-              `${baseName}/${this.llmConfig.model}`,
-            ];
-            const registry = buildModelRegistry(providers, {
-              aliases: routerKnobs.aliases,
-              chain: primaryChain,
-              order: routerKnobs.order,
-              strategy: routerKnobs.strategy,
-              passThrough: routerKnobs.passThrough,
-              availableModels: getCliKnobs().availableModels,
-              enforceAvailableModels: getCliKnobs().enforceAvailableModels,
-            });
-            const policy = getRouterPolicy({
-              cooldownBaseMs: routerKnobs.cooldownBaseMs,
-              cooldownMaxMs: routerKnobs.cooldownMaxMs,
-              sessionAffinity: routerKnobs.sessionAffinity,
-              strategy: routerKnobs.strategy,
-            });
-            const resolvedRoutes = resolveRoutes(registry, this.llmConfig.model, {
-              withFallbacks: true,
-              sessionKey: this.sessionKey,
-            });
-            const failedRoute = resolvedRoutes.find((route) => sameLlmRoute(route, this.llmConfig));
-            const initialRoute = failedRoute ?? {
-              slug: `${this.llmConfig.provider}/${this.llmConfig.model}`,
-              provider: this.llmConfig.provider,
-              model: this.llmConfig.model,
-              llm: { ...this.llmConfig },
-              label: this.llmConfig.model,
-            };
-            let attemptedRouterFallback = false;
-            try {
-              const recovery = await recoverAgentProviderRoute({
-                initialRoute,
-                initialError: err,
-                initialStartedAt: providerAttemptStartedAt,
-                routes: resolvedRoutes.filter((route) => (
-                  route.slug === initialRoute.slug || !sameLlmRoute(route, this.llmConfig)
-                )),
-                triedRoutes: this.triedRouterRoutes,
-                policy,
-                sessionKey: this.sessionKey,
-                onReceipt: callbacks.onProviderRecovery,
-                onFallback: ({ to }) => {
-                  attemptedRouterFallback = true;
-                  const from = `${this.llmConfig.provider}/${this.llmConfig.model}`;
-                  callbacks.onStatusUpdate(
-                    `Router fallback: ${from} unavailable (${routeFailureStatus(failure)}) — trying ${to.slug}...`,
-                  );
-                  this.recordTranscript({
-                    role: 'system',
-                    name: 'router',
-                    content: `router: ${from} unavailable (${routeFailureStatus(failure)}), routed to ${to.slug}`,
-                  });
-                  traceEvent('router.fallback', {
-                    from,
-                    to: to.slug,
-                    reason: failure.kind,
-                    status: failure.status ?? null,
-                  });
-                },
-                execute: async (route) => {
-                  this.llmConfig = { ...route.llm };
-                  return invokeLlmResilient();
-                },
-              });
-              response = recovery.result;
-            } catch (recoveryError: any) {
-              if (attemptedRouterFallback) {
-                throw new Error(`LLM Execution failed after router fallback: ${recoveryError?.message ?? recoveryError}`);
-              }
-            }
-          }
-        }
-        if (!response) {
-          const looksContextOverflow = /context length|context window|maximum context|too many tokens|reduce the length|prompt is too long|413|tokens? exceed/i.test(message);
-        if (looksContextOverflow && !this.silent && this.chatHistory.length > 6) {
-          callbacks.onStatusUpdate(`Context overflow detected — reactive compaction before retry...`);
-          try {
-            const beforeLen = this.chatHistory.length;
-            const r = await this.compactHistory();
-            if (r && callbacks.onCompactionEvent) {
-              callbacks.onCompactionEvent({
-                droppedMessages: Math.max(0, beforeLen - this.chatHistory.length),
-                keptMessages: this.chatHistory.length,
-                summary: r.summary,
-              });
-            }
-            response = await invokeLlmResilient();
-          } catch (retryErr: any) {
-            throw new Error(`LLM Execution failed after reactive compaction: ${retryErr?.message ?? retryErr}`);
-          }
-        } else if (
-          isModelNotFoundError(message) &&
-          (() => {
-            // CC-CONFIG-A2: walk the ORDERED fallback chain (which already appends
-            // the legacy single `cli.fallbackModel` last for back-compat). The
-            // per-turn `triedModels` set ensures we never re-try a dead candidate,
-            // so a model-not-found cascades through each fallback until one works.
-            this.triedModels.add((this.llmConfig.model ?? '').trim());
-            return nextFallbackModel(this.llmConfig.model, getCliKnobs().fallbackModels, this.triedModels) !== null;
-          })()
-        ) {
-          const from = this.llmConfig.model;
-          const fallback = nextFallbackModel(from, getCliKnobs().fallbackModels, this.triedModels) as string;
-          this.triedModelFallback = true;
-          this.triedModels.add(fallback);
-          this.setModel(fallback);
-          callbacks.onStatusUpdate(`Model "${from}" unavailable — falling back to ${fallback}...`);
-          try {
-            response = await invokeLlmResilient();
-          } catch (retryErr: any) {
-            throw new Error(`LLM Execution failed after model fallback (${from} → ${fallback}): ${retryErr?.message ?? retryErr}`);
-          }
-        } else {
-          throw new Error(`LLM Execution failed: ${message}`);
-        }
-        }
-      }
-      if (!response) throw new Error('LLM Execution failed: no response returned.');
+      const invocation = await invokeModelPhase(this, callbacks, allTools);
+      if (invocation.kind === 'interrupted') return invocation.note;
+      const response = invocation.response;
       // 0.3.9 item 13 — model-tier self-escalation. When the response
       // starts with `<<<NEEDS_HIGH>>>` (with or without `:reason`), the
       // model is telling us this task exceeds its current tier. Step
