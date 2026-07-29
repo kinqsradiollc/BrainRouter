@@ -4,24 +4,17 @@
 // (gates the merge) + 🔎 code review (advisory). Per-repo + policy config lives in the
 // dashboard; this is the "what did the bot just flag, and jump to it" surface.
 import { useCallback, useEffect, useState } from 'react';
+import type {
+  ReviewAssuranceDetailView,
+  ReviewSummaryView,
+} from '@kinqs/brainrouter-agent-protocol';
 import { bridgeQuery } from '../../lib/bridgeQuery.js';
 import { changeRequestUrl, normalizeReviewListResponse } from './reviewPresentation.js';
+import { ReviewAssuranceDetail } from './ReviewAssuranceDetail.js';
 
-interface ReviewRow {
-  id: string;
-  lens: 'security' | 'code';
-  status: string;
-  repo: string | null;
-  prNumber: number | null;
-  forge?: 'github' | 'gitlab';
-  findings: number | null;
-  blocking: number | null;
-  skipped: string | null;
-  error: string | null;
-  updatedAt: string;
-  createdAt: string;
-}
+type ReviewRow = ReviewSummaryView;
 type LoadState = 'loading' | 'signed-out' | 'ready' | 'error';
+type DetailState = 'idle' | 'loading' | 'ready' | 'error';
 
 function relTime(iso?: string): string {
   if (!iso) return '—';
@@ -41,6 +34,10 @@ export function ReviewsSettings(): React.ReactElement {
   const [error, setError] = useState('');
   const [running, setRunning] = useState('');
   const [canRun, setCanRun] = useState(false);
+  const [selectedReviewId, setSelectedReviewId] = useState('');
+  const [selectedDetail, setSelectedDetail] = useState<ReviewAssuranceDetailView | null>(null);
+  const [detailState, setDetailState] = useState<DetailState>('idle');
+  const [detailError, setDetailError] = useState('');
 
   const load = useCallback(async () => {
     setState('loading');
@@ -54,6 +51,36 @@ export function ReviewsSettings(): React.ReactElement {
     } catch (e) { setCanRun(false); setError(e instanceof Error ? e.message : 'failed to load'); setState('error'); }
   }, []);
   useEffect(() => { void load(); }, [load]);
+
+  const closeDetail = (): void => {
+    setSelectedReviewId('');
+    setSelectedDetail(null);
+    setDetailState('idle');
+    setDetailError('');
+  };
+
+  const loadDetail = async (review: ReviewRow, force = false): Promise<void> => {
+    if (!force && selectedReviewId === review.id) {
+      closeDetail();
+      return;
+    }
+    setSelectedReviewId(review.id);
+    setSelectedDetail(null);
+    setDetailError('');
+    setDetailState('loading');
+    try {
+      const result = await bridgeQuery<ReviewAssuranceDetailView>(
+        'reviews-detail',
+        { jobId: review.id },
+      );
+      if (result.review.id !== review.id) throw new Error('Review detail did not match the selected job.');
+      setSelectedDetail(result);
+      setDetailState('ready');
+    } catch (caught) {
+      setDetailError(caught instanceof Error ? caught.message : 'Could not load assurance detail.');
+      setDetailState('error');
+    }
+  };
 
   const openPr = async (r: ReviewRow): Promise<void> => {
     if (!r.repo || !r.prNumber) return;
@@ -117,7 +144,7 @@ export function ReviewsSettings(): React.ReactElement {
         const badgeColor = r.status !== 'done' ? 'var(--text-muted, #999)' : (r.blocking && r.lens === 'security') ? 'var(--danger, #e66)' : 'var(--ok, #6c9)';
         const summary = (
           <>
-            <span aria-hidden style={{ fontSize: 15 }}>{r.lens === 'security' ? '🛡️' : '🔎'}</span>
+            <span aria-hidden style={{ fontSize: 15 }}>{r.lens === 'security' ? '🛡️' : r.lens === 'pentest' ? '🧪' : '🔎'}</span>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {r.repo ?? '—'}{r.prNumber ? ` #${r.prNumber}` : ''}
@@ -129,24 +156,46 @@ export function ReviewsSettings(): React.ReactElement {
           </>
         );
         return (
-          <div key={r.id}
-            style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 2px', borderBottom: '1px solid var(--border-dim, rgba(255,255,255,0.06))' }}>
-            {clickable ? (
-              <button type="button" onClick={() => void openPr(r)} title="Open change request" aria-label={`Open ${r.repo} change request ${r.prNumber}`}
-                style={{ minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', gap: 10, padding: 0, textAlign: 'left', color: 'inherit', background: 'transparent', border: 0, cursor: 'pointer' }}>
-                {summary}
+          <div key={r.id}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 2px', borderBottom: '1px solid var(--border-dim, rgba(255,255,255,0.06))' }}>
+              {clickable ? (
+                <button type="button" onClick={() => void openPr(r)} title="Open change request" aria-label={`Open ${r.repo} change request ${r.prNumber}`}
+                  style={{ minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', gap: 10, padding: 0, textAlign: 'left', color: 'inherit', background: 'transparent', border: 0, cursor: 'pointer' }}>
+                  {summary}
+                </button>
+              ) : (
+                <div style={{ minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', gap: 10 }}>{summary}</div>
+              )}
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => void loadDetail(r)}
+                aria-expanded={selectedReviewId === r.id}
+                style={{ fontSize: 11, padding: '2px 8px', whiteSpace: 'nowrap' }}
+              >
+                {selectedReviewId === r.id ? 'Hide detail' : 'Assurance'}
               </button>
-            ) : (
-              <div style={{ minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', gap: 10 }}>{summary}</div>
+              {clickable && canRun && (
+                <button type="button" className="btn btn-ghost" onClick={(e) => void rerun(r, e)} disabled={running === r.id}
+                  title={`Re-run the ${r.lens} review on ${r.repo} #${r.prNumber}`}
+                  style={{ fontSize: 11, padding: '2px 8px', whiteSpace: 'nowrap' }}>
+                  {running === r.id ? '…' : 'Re-run'}
+                </button>
+              )}
+              <span style={{ fontSize: 11, color: badgeColor, whiteSpace: 'nowrap' }}>{r.status}</span>
+            </div>
+            {selectedReviewId === r.id && detailState === 'loading' && (
+              <div className="set-desc" style={{ padding: '10px 2px' }}>Loading durable assurance…</div>
             )}
-            {clickable && canRun && (
-              <button type="button" className="btn btn-ghost" onClick={(e) => void rerun(r, e)} disabled={running === r.id}
-                title={`Re-run the ${r.lens === 'security' ? 'security' : 'code'} review on ${r.repo} #${r.prNumber}`}
-                style={{ fontSize: 11, padding: '2px 8px', whiteSpace: 'nowrap' }}>
-                {running === r.id ? '…' : 'Re-run'}
-              </button>
+            {selectedReviewId === r.id && detailState === 'error' && (
+              <div className="set-desc" role="alert" style={{ padding: '10px 2px', color: 'var(--danger, #e66)' }}>
+                Could not load assurance: {detailError}{' '}
+                <button type="button" className="btn btn-ghost" onClick={() => void loadDetail(r, true)}>Retry</button>
+              </div>
             )}
-            <span style={{ fontSize: 11, color: badgeColor, whiteSpace: 'nowrap' }}>{r.status}</span>
+            {selectedReviewId === r.id && detailState === 'ready' && selectedDetail && (
+              <ReviewAssuranceDetail detail={selectedDetail} onClose={closeDetail} />
+            )}
           </div>
         );
       })}

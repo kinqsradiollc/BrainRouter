@@ -1,0 +1,123 @@
+.panel {
+  margin: 8px 0 14px;
+  padding: 14px;
+  border: 1px solid var(--border-dim, rgba(255, 255, 255, 0.09));
+  border-radius: 12px;
+  background: var(--surface-raised, rgba(255, 255, 255, 0.025));
+}
+
+.header,
+.findingTitle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.eyebrow,
+.summaryGrid span {
+  color: var(--text-muted, #999);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.title {
+  margin-top: 3px;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.summaryGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.summaryGrid > div,
+.receipts > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid var(--border-dim, rgba(255, 255, 255, 0.07));
+  border-radius: 8px;
+}
+
+.summaryGrid strong,
+.receipts strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+}
+
+.mono {
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.notice,
+.limitation,
+.verifier {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--warn, #d8a54d) 12%, transparent);
+  color: var(--text-secondary, #bbb);
+  font-size: 11px;
+}
+
+.section {
+  margin-top: 15px;
+}
+
+.section h4 {
+  margin: 0 0 7px;
+  font-size: 12px;
+}
+
+.receipts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 7px;
+}
+
+.receipts span,
+.receipts small {
+  color: var(--text-muted, #999);
+  font-size: 10px;
+}
+
+.finding {
+  padding: 11px 0;
+  border-top: 1px solid var(--border-dim, rgba(255, 255, 255, 0.07));
+}
+
+.findingTitle {
+  justify-content: flex-start;
+}
+
+.findingTitle span {
+  color: var(--text-muted, #999);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.findingTitle strong {
+  flex: 1;
+  font-size: 12px;
+}
+
+.location,
+.finding p,
+.evidence {
+  margin: 6px 0 0;
+  color: var(--text-secondary, #bbb);
+  font-size: 11px;
+}
+
+.evidence {
+  padding-left: 9px;
+  border-left: 2px solid var(--border, rgba(255, 255, 255, 0.15));
+}
