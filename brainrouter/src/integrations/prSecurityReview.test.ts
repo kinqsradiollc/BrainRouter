@@ -1,8 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import { runPrSecurityReview, runPrCodeReview, type PrSecurityReviewDeps } from "./prSecurityReview.js";
 import { projectAssurancePublication } from "@kinqs/brainrouter-core/review";
 import type { LLMRunner } from "@kinqs/brainrouter-types";
+
+vi.mock("@kinqs/brainrouter-core/review", async () =>
+  import("../../../packages/core/src/review/index.js"));
+vi.mock("@kinqs/brainrouter-types/review", async () =>
+  import("../../../packages/types/src/review/index.js"));
 
 // A real RSA key so buildAppJwt (RS256) actually signs during token mint.
 const { privateKey } = generateKeyPairSync("rsa", {
@@ -761,6 +766,46 @@ describe("PR security review executor (ADR-017 D5)", () => {
     expect(runs).toBe(2);        // the diff was reviewed in two turns, not truncated
     expect(r.findings).toBe(2);  // findings from BOTH parts merged
     expect(r).toMatchObject({ ok: true });
+  });
+
+  it("keeps explicit deep review within one bounded discovery call and labels its scope", async () => {
+    const fileA = ["diff --git a/a.ts b/a.ts", "--- a/a.ts", "+++ b/a.ts", "@@ -0,0 +1 @@", "+const a = " + "x".repeat(70) + ";"].join("\n");
+    const fileB = ["diff --git a/b.ts b/b.ts", "--- a/b.ts", "+++ b/b.ts", "@@ -0,0 +1 @@", "+const b = " + "y".repeat(70) + ";"].join("\n");
+    const prompts: string[] = [];
+    const r = await runPrSecurityReview(
+      {
+        installationId: "42",
+        repo: "o/r",
+        prNumber: 7,
+        headSha: "sha",
+        reviewMode: "deep",
+      },
+      makeDeps({ calls: [], diff: `${fileA}\n${fileB}` }, {
+        maxDiffChars: 150,
+        executionBudget: { maxModelCalls: 1, maxDurationMs: 60_000 },
+        prepareRepositoryContext: async () => ({
+          text: "exact parser-selected repository context",
+          packetRefs: ["packet-1"],
+          artifactRefs: ["artifact-1"],
+          coverageLabel: "bounded_whole_repository",
+        }),
+        llmRunner: {
+          run: async ({ prompt }) => {
+            prompts.push(prompt);
+            return "```json\n[]\n```";
+          },
+        },
+      }),
+    );
+
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("bounded whole-repository review");
+    expect(prompts[0]).toContain("exact parser-selected repository context");
+    expect(r.coverage).toMatchObject({
+      complete: false,
+      reviewedParts: 1,
+      unreviewedParts: 1,
+    });
   });
 
   it("marks lifecycle coverage incomplete when a later review part fails", async () => {

@@ -7,6 +7,8 @@ import {
   projectAssurancePublication,
 } from "@kinqs/brainrouter-core/review";
 import type {
+  DeepReviewPolicy,
+  DeepReviewRequestConfig,
   MemoryJobRecord,
   PentestTargetRecord,
   RepositoryReviewAvailability,
@@ -25,6 +27,7 @@ import { can } from "../../../tenancy/rbac.js";
 import { canAccessGithubRepository, isRepoAvailableForManualReview, isRepoLinkedForReview } from "../../../integrations/githubWebhook.js";
 import { resolveGithubAccountToken } from "../../../connectors/githubAccountToken.js";
 import { createReviewPullRequestLoader } from "./reviewDataLoader.js";
+import { buildManualDeepReviewRequest } from "../../../reviews/deepReviewRequest.js";
 
 export const reviewsRouter = Router();
 reviewsRouter.use(requireAnyAuth);
@@ -454,12 +457,45 @@ reviewsRouter.post("/run", async (req: AuthedRequest, res) => {
   const repo = req.body?.repo;
   const prNumber = Number(req.body?.prNumber);
   const lens = req.body?.lens as Lens;
+  const mode = req.body?.mode == null ? "diff" : req.body.mode;
   const forge = req.body?.forge === "gitlab" ? "gitlab" : "github";
-  if (!validRepo(repo, forge) || !Number.isInteger(prNumber) || prNumber <= 0 || !["security", "code", "pentest", "both"].includes(lens)) { sendError(res, 400, "repo, positive prNumber, and lens are required"); return; }
+  if (
+    !validRepo(repo, forge)
+    || !Number.isInteger(prNumber)
+    || prNumber <= 0
+    || !["security", "code", "pentest", "both"].includes(lens)
+    || !["diff", "deep"].includes(mode)
+  ) { sendError(res, 400, "repo, positive prNumber, lens, and a valid review mode are required"); return; }
+  if (
+    (mode === "deep" && lens === "pentest")
+    || (mode === "deep" && !req.body?.deepReview)
+    || (mode === "diff" && req.body?.deepReview !== undefined)
+  ) {
+    sendError(res, 400, "Deep review requires explicit code or security limits and cannot replace an authorized pentest");
+    return;
+  }
   const authorization = await manualReviewAuthorization(req.orgId!, req.userId!, repo, forge);
   if (!authorization) { sendError(res, 400, `Repository is not available through the connected ${forge === "gitlab" ? "GitLab" : "GitHub"} authorization`); return; }
   const requested = lens === "both" ? ["security", "code"] as const : [lens] as const;
   const store = memoryEngine.store as Store;
+  const deepPolicies = new Map<"security" | "code", DeepReviewPolicy>();
+  if (mode === "deep") {
+    try {
+      for (const one of requested) {
+        if (one === "pentest") continue;
+        deepPolicies.set(one, buildManualDeepReviewRequest({
+          organizationId: req.orgId!,
+          repository: { forge, slug: repo },
+          program: one === "code" ? "code_review" : "security_review",
+          requestedBy: req.userId!,
+          config: req.body.deepReview as DeepReviewRequestConfig,
+        }));
+      }
+    } catch (error) {
+      sendError(res, 400, error instanceof Error ? error.message : "Invalid deep-review limits");
+      return;
+    }
+  }
   let assessmentTarget: PentestTargetRecord | null = null;
   if (lens === "pentest") {
     const targetId = String(req.body?.targetId ?? "").trim();
@@ -486,13 +522,15 @@ reviewsRouter.post("/run", async (req: AuthedRequest, res) => {
         repo?: unknown;
         prNumber?: unknown;
         forge?: unknown;
+        reviewMode?: unknown;
         assessmentPolicy?: { target?: { targetId?: unknown } };
       };
       const sameReview =
         input.orgId === req.orgId
         && input.repo === repo
         && Number(input.prNumber) === prNumber
-        && (input.forge === "gitlab" ? "gitlab" : "github") === forge;
+        && (input.forge === "gitlab" ? "gitlab" : "github") === forge
+        && (input.reviewMode === "deep" ? "deep" : "diff") === mode;
       if (!sameReview) return false;
       return one !== "pentest"
         || input.assessmentPolicy?.target?.targetId === assessmentTarget?.id;
@@ -509,6 +547,11 @@ reviewsRouter.post("/run", async (req: AuthedRequest, res) => {
         prNumber,
         headSha: "",
         requestedBy: req.userId,
+        reviewMode: mode,
+        requestSource: "manual_api",
+        ...(mode === "deep"
+          ? { deepReviewPolicy: deepPolicies.get(one as "security" | "code") }
+          : {}),
         ...(one === "pentest" && assessmentTarget
           ? {
               assessmentPolicy: buildAuthorizedAssessmentPolicy(
@@ -518,7 +561,7 @@ reviewsRouter.post("/run", async (req: AuthedRequest, res) => {
             }
           : {}),
       },
-      maxAttempts: 3,
+      maxAttempts: mode === "deep" ? 1 : 3,
     });
     if (job) jobs.push({ id: job.id, lens: one });
   }
