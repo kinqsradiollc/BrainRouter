@@ -27,7 +27,7 @@ jobs:
     name: Build signed macOS (arm64 + x64)
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Node 22
         uses: actions/setup-node@v4
@@ -59,11 +59,16 @@ jobs:
 
       - name: Upload browser qualification evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: brainrouter-browser-qualification
           path: brainrouter-desktop/.browser-benchmarks/release-*.json
           if-no-files-found: error
+
+      # electron-builder rejects node_modules symlinks that escape the app dir
+      # (npm-workspace @kinqs/* links) — replace them with real copies first.
+      - name: Dereference workspace deps for packaging
+        run: node brainrouter-desktop/build/dereference-workspace-deps.mjs
 
       - name: Build + sign + notarize
         working-directory: brainrouter-desktop
@@ -83,7 +88,7 @@ jobs:
         run: node scripts/verify-packaged.mjs
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: brainrouter-desktop-macos
           path: |
@@ -93,7 +98,7 @@ jobs:
 
       - name: Attach to GitHub Release (tag triggers only)
         if: startsWith(github.ref, 'refs/tags/desktop-v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             brainrouter-desktop/release/*.dmg
@@ -103,7 +108,7 @@ jobs:
     name: Build Windows x64
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Node 22
         uses: actions/setup-node@v4
@@ -120,12 +125,15 @@ jobs:
       - name: Desktop regression suite
         run: npm test --workspace brainrouter-desktop
 
+      - name: Dereference workspace deps for packaging
+        run: node brainrouter-desktop/build/dereference-workspace-deps.mjs
+
       - name: Build Windows installer
         working-directory: brainrouter-desktop
         run: npm run dist:win
 
       - name: Upload Windows installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: brainrouter-desktop-windows-x64
           path: brainrouter-desktop/release/*.exe
@@ -133,6 +141,6 @@ jobs:
 
       - name: Attach Windows installer to GitHub Release (tag triggers only)
         if: startsWith(github.ref, 'refs/tags/desktop-v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: brainrouter-desktop/release/*.exe
