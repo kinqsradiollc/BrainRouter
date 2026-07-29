@@ -32,7 +32,7 @@ import {
 } from '@kinqs/brainrouter-core/review';
 import type { LLMRunner, MemoryJobProgressEvent } from '@kinqs/brainrouter-types';
 import { splitDiffForReview, dedupeReviewFindings } from './reviewDiffChunks.js';
-import { resolveReviewPolicy } from './githubWebhook.js';
+import { resolveReviewPolicy, type ReviewPolicy } from './githubWebhook.js';
 
 export interface PrReviewInput {
   orgId?: string;
@@ -66,6 +66,13 @@ export interface PrReviewDeps {
   timeoutMs?: number;
   /** Best-effort durable job activity callback (must never affect review output). */
   onProgress?: (event: Omit<MemoryJobProgressEvent, "ts">) => void;
+  /** Observe the exact effective repository policy used by this execution. */
+  onPolicyResolved?: (policy: ReviewPolicy) => void;
+  /** Start exact-head durable assurance before diff analysis or publication. */
+  onAssuranceReady?: (input: {
+    policy: ReviewPolicy;
+    headSha: string;
+  }) => void | Promise<void>;
   /**
    * Best-effort current vulnerability catalog. Injected by the worker so unit
    * tests never use the network and an unavailable feed never blocks reviews.
@@ -332,6 +339,7 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
     progress("token-minted", "Installation token minted");
   }
   const policy = resolveReviewPolicy(config, repo);
+  deps.onPolicyResolved?.({ ...policy });
   const gitlabProject = encodeURIComponent(repo);
   let gitlabDiffRefs: GitlabDiffRefs | undefined;
 
@@ -406,6 +414,9 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
     contributorsAvailable,
   });
   progress("head-resolved", headSha ? "PR head resolved" : "PR head unavailable", headSha ? { sha: headSha } : undefined);
+  if (headSha) {
+    await deps.onAssuranceReady?.({ policy: { ...policy }, headSha });
+  }
 
   // 1. Fetch the unified diff for the PR.
   let diff = '';

@@ -24,10 +24,9 @@ import { distillFocusScenes } from "../pipeline/focus/contextual-focus-builder.j
 import { digestTreeNodes } from "../tree/digest.js";
 import { enqueueAgentJob } from "./jobs.js";
 import { runConnectorSync } from "../../connectors/syncExecutor.js";
-import { runPrSecurityReview, runPrCodeReview, runPrPentest, type PrReviewInput, type PrReviewDeps } from "../../integrations/prSecurityReview.js";
+import { runScheduledPrReview } from "../../reviews/scheduledPrReview.js";
 import { runDomainPentest } from "../../integrations/domainPentest.js";
 import { runVulnerabilitySync, type VulnerabilitySyncStore } from "../../services/vulnerabilitySync/executor.js";
-import { buildVulnerabilityReviewContext, type VulnerabilityReviewContextStore } from "../../vulnerability/context.js";
 import { runVulnerabilityScan, type VulnerabilityScanStore } from "../../services/vulnerabilitySync/scan.js";
 import { KNOWLEDGE_PARSE_JOB_KIND } from "../../knowledge/contracts/document.js";
 import {
@@ -86,46 +85,6 @@ function requireEngine(ctx: JobExecContext): JobEngineOps {
     throw new Error("depth-agent executor requires an engine in the job context (not wired)");
   }
   return ctx.engine;
-}
-
-/** Shared plumbing for the PR-review lenses (security + code review) — one input/deps shape. */
-function prReviewInput(input: any): PrReviewInput {
-  const forge = input?.forge === "gitlab" ? "gitlab" : "github";
-  return {
-    orgId: typeof input?.orgId === "string" ? input.orgId : undefined,
-    installationId: String(input?.installationId ?? ""),
-    forge,
-    credentialSource: forge === "gitlab" ? "gitlab_account" : input?.credentialSource === "github_account" ? "github_account" : "github_app",
-    requestedBy: typeof input?.requestedBy === "string" ? input.requestedBy : undefined,
-    repo: String(input?.repo ?? ""),
-    prNumber: Number(input?.prNumber),
-    headSha: String(input?.headSha ?? ""),
-  };
-}
-async function prReviewDeps(ctx: JobExecContext, lens: "security" | "code" | "pentest", orgId?: string): Promise<PrReviewDeps> {
-  const engine = requireEngine(ctx);
-  const assignment = await engine.reviewAssignment?.(lens, orgId);
-  const reviewRunner = await engine.reviewRunner?.(lens, orgId);
-  return {
-    llmRunner: reviewRunner ?? ctx.llmRunner,
-    fetchImpl: fetch,
-    nowSec: () => Math.floor(Date.now() / 1000),
-    getIntegration: (installationId) => engine.findGithubAppByInstallation(installationId),
-    getUserAuthorization: (userId) => engine.findGithubAccountAuthorization?.(userId) ?? Promise.resolve(null),
-    getGitlabAuthorization: (userId, requestedOrgId) => engine.findGitlabAccountAuthorization?.(userId, requestedOrgId) ?? Promise.resolve(null),
-    getVulnerabilityContext: (input) => buildVulnerabilityReviewContext({
-      store: ctx.store as unknown as VulnerabilityReviewContextStore,
-      orgId: input.orgId,
-      repo: input.repo,
-      diff: input.diff,
-    }),
-    maxDiffChars: assignment?.maxDiffChars,
-    timeoutMs: assignment?.timeoutMs,
-    onProgress: (event) => {
-      if (!ctx.jobId) return;
-      void ctx.store.appendJobProgress(ctx.jobId, { ts: new Date().toISOString(), ...event }).catch(() => {});
-    },
-  };
 }
 
 /** Runs the agent's work for `input`; returns a compact JSON summary for `output`. */
@@ -227,9 +186,9 @@ const EXECUTORS: Record<string, JobExecutor> = {
   // ADR-017 D5 — the GitHub App bot's automatic PR reviews. Both are enqueued by the
   // pull_request webhook; each mints the installation token, reviews the diff with its
   // LENS, and posts back inline suggestions + a summary + a gating check-run.
-  "pr-security-review": async (input, ctx) => runPrSecurityReview(prReviewInput(input), await prReviewDeps(ctx, "security", typeof input?.orgId === "string" ? input.orgId : undefined)),
-  "pr-code-review": async (input, ctx) => runPrCodeReview(prReviewInput(input), await prReviewDeps(ctx, "code", typeof input?.orgId === "string" ? input.orgId : undefined)),
-  "pr-pentest": async (input, ctx) => runPrPentest(prReviewInput(input), await prReviewDeps(ctx, "pentest", typeof input?.orgId === "string" ? input.orgId : undefined)),
+  "pr-security-review": async (input, ctx) => runScheduledPrReview(input, ctx, "security"),
+  "pr-code-review": async (input, ctx) => runScheduledPrReview(input, ctx, "code"),
+  "pr-pentest": async (input, ctx) => runScheduledPrReview(input, ctx, "pentest"),
   "domain-pentest": async (input, ctx) => runDomainPentest(input, ctx),
 };
 

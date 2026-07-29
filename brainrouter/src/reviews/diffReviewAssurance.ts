@@ -1,0 +1,255 @@
+/**
+ * Durable projection for the maintained diff-only PR review fallback.
+ *
+ * This adapter deliberately records partial repository coverage: a unified diff
+ * can cover changed text, but it cannot prove unchanged callers, configuration,
+ * generated sources, or unsupported binary content were inspected.
+ */
+
+import { createHash, randomUUID } from "node:crypto";
+import {
+  createRepositoryAssuranceCampaignService,
+  type RepositoryAssuranceRunPort,
+} from "@kinqs/brainrouter-core/review";
+import type {
+  AssuranceCoverage,
+  AssurancePolicySnapshot,
+  RepositoryAssuranceProgram,
+  RepositoryAssuranceRun,
+  SourceSnapshot,
+} from "@kinqs/brainrouter-types/review";
+import type { ReviewPolicy } from "../integrations/githubWebhook.js";
+import type { PrReviewInput, PrReviewResult } from "../integrations/prSecurityReview.js";
+import {
+  createBackendAssuranceRunPort,
+  type RepositoryAssurancePersistenceStore,
+} from "./assuranceRunPort.js";
+
+const DIFF_ONLY_LIMITATION_ID = "diff-only-repository-context";
+
+export interface StartDiffReviewAssuranceInput {
+  store: RepositoryAssurancePersistenceStore;
+  jobId: string;
+  review: PrReviewInput;
+  program: RepositoryAssuranceProgram;
+  policy: ReviewPolicy;
+  maxDiffChars: number;
+  timeoutMs: number;
+  now?: () => string;
+  nextId?: (kind: "run" | "source" | "stage") => string;
+}
+
+export interface RecordDiffReviewAssuranceInput extends StartDiffReviewAssuranceInput {
+  result: PrReviewResult;
+  changedFiles: number;
+}
+
+export interface DiffReviewAssuranceSession {
+  readonly runId: string;
+  complete(
+    result: PrReviewResult,
+    changedFiles: number,
+  ): Promise<RepositoryAssuranceRun>;
+  fail(): Promise<RepositoryAssuranceRun>;
+}
+
+function policySnapshot(
+  input: StartDiffReviewAssuranceInput,
+  createdAt: string,
+): AssurancePolicySnapshot {
+  const value = {
+    version: 1,
+    program: input.program,
+    reviewPolicy: input.policy,
+    maxDiffChars: input.maxDiffChars,
+    timeoutMs: input.timeoutMs,
+  };
+  const policyHash = createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  return {
+    id: `diff-review-v1:${policyHash}`,
+    policyHash,
+    organizationId: String(input.review.orgId),
+    program: input.program,
+    analyzers: [{ id: "llm-diff-review", enabled: true, required: true }],
+    packetLimits: {
+      maxPackets: 40,
+      maxPacketBytes: input.maxDiffChars,
+      maxFilesPerPacket: 0,
+    },
+    budgets: {
+      maxModelCalls: 40,
+      maxToolCalls: 0,
+      maxDurationMs: input.timeoutMs * 40,
+    },
+    redactionPolicyId: "pr-review-default",
+    publicationPolicyId: input.policy.blockOnFindings
+      ? "pr-review-blocking"
+      : "pr-review-advisory",
+    inlineFindingsEnabled: true,
+    blockingEnabled: input.program !== "code_review" && input.policy.blockOnFindings,
+    createdAt,
+  };
+}
+
+function diffOnlyCoverage(
+  result: PrReviewResult,
+  changedFiles: number,
+  calculatedAt: string,
+): AssuranceCoverage {
+  const files = Math.max(0, Math.trunc(changedFiles));
+  const analyzerFailed = !result.ok;
+  const analyzedFiles = !analyzerFailed && result.coverage?.complete ? files : 0;
+  return {
+    status: "partial",
+    filesTotal: files,
+    filesEligible: files,
+    filesAnalyzed: analyzedFiles,
+    changedFilesTotal: files,
+    changedFilesAnalyzed: analyzedFiles,
+    analyzers: [{
+      analyzerId: "llm-diff-review",
+      state: analyzerFailed ? "failed" : "partial",
+      supportedLanguages: [],
+      filesEligible: files,
+      filesAnalyzed: analyzedFiles,
+      diagnosticsProduced: Math.max(0, Math.trunc(result.findings)),
+      limitationIds: [DIFF_ONLY_LIMITATION_ID],
+    }],
+    limitations: [{
+      id: DIFF_ONLY_LIMITATION_ID,
+      component: "repository_context",
+      state: "unavailable",
+      reasonCode: "DIFF_ONLY_FALLBACK",
+      summary: "Only changed diff text was available; unchanged repository context was not analyzed.",
+    }],
+    calculatedAt,
+  };
+}
+
+function diffOnlySource(
+  input: StartDiffReviewAssuranceInput,
+  headSha: string,
+  sourceId: string,
+  createdAt: string,
+  changedFiles: number,
+): SourceSnapshot {
+  const files = Math.max(0, Math.trunc(changedFiles));
+  return {
+    id: sourceId,
+    revision: { headSha },
+    status: "partial",
+    inventoryRef: `${input.review.forge ?? "github"}:${input.review.repo}#${input.review.prNumber}:diff`,
+    fileCount: files,
+    textFileCount: files,
+    indexedFileCount: 0,
+    unsupportedFileCount: 0,
+    createdAt,
+    completedAt: createdAt,
+    errorCode: "DIFF_ONLY_FALLBACK",
+  };
+}
+
+function active(run: RepositoryAssuranceRun): boolean {
+  return run.status === "queued" || run.status === "running";
+}
+
+export async function startDiffReviewAssurance(
+  input: StartDiffReviewAssuranceInput,
+): Promise<DiffReviewAssuranceSession | null> {
+  const organizationId = String(input.review.orgId ?? "").trim();
+  const headSha = String(input.review.headSha ?? "").trim();
+  if (!organizationId || !headSha || !input.jobId.trim()) return null;
+
+  const now = input.now ?? (() => new Date().toISOString());
+  const nextId = input.nextId ?? ((kind) => `${kind}-${randomUUID()}`);
+  const createdAt = now();
+  const port: RepositoryAssuranceRunPort = createBackendAssuranceRunPort(input.store, {
+    organizationId,
+    jobId: input.jobId,
+  });
+  const campaign = createRepositoryAssuranceCampaignService({ runs: port, now, nextId });
+  const started = await campaign.start({
+    repository: {
+      forge: input.review.forge === "gitlab" ? "gitlab" : "github",
+      slug: input.review.repo,
+    },
+    revision: { headSha },
+    program: input.program,
+    policySnapshot: policySnapshot(input, createdAt),
+  });
+
+  const complete = async (
+    result: PrReviewResult,
+    changedFiles: number,
+  ): Promise<RepositoryAssuranceRun> => {
+    let run = (await port.get(started.id)) ?? started;
+    if (!active(run)) return run;
+    const source = diffOnlySource(
+      input,
+      headSha,
+      run.sourceSnapshot.id,
+      run.sourceSnapshot.createdAt,
+      changedFiles,
+    );
+    const coverage = diffOnlyCoverage(result, changedFiles, now());
+    run = await campaign.runStage(run.id, "checkout_inventory", 1, async () => ({
+      status: "partial",
+      source,
+      coverage,
+      outputRefs: [source.inventoryRef!],
+      limitationIds: [DIFF_ONLY_LIMITATION_ID],
+      errorCode: "DIFF_ONLY_FALLBACK",
+    }));
+
+    if (!result.ok) {
+      try {
+        await campaign.runStage(run.id, "candidate_discovery", 1, async () => {
+          throw new Error("DIFF_REVIEW_FAILED");
+        });
+      } catch {
+        return (await port.get(run.id)) ?? run;
+      }
+    }
+
+    run = await campaign.runStage(run.id, "candidate_discovery", 1, async () => ({
+      status: "partial",
+      inputRefs: [source.inventoryRef!],
+      outputRefs: [`memory-job:${input.jobId}`],
+      limitationIds: [DIFF_ONLY_LIMITATION_ID],
+      errorCode: "DIFF_ONLY_FALLBACK",
+    }));
+    return campaign.finish(run.id, "partial");
+  };
+
+  return {
+    runId: started.id,
+    complete,
+    fail: () => complete({
+      ok: false,
+      findings: 0,
+      posted: false,
+      headSha,
+      error: "review execution failed",
+    }, 0),
+  };
+}
+
+export async function recordDiffReviewAssurance(
+  input: RecordDiffReviewAssuranceInput,
+): Promise<RepositoryAssuranceRun | null> {
+  const session = await startDiffReviewAssurance({
+    store: input.store,
+    jobId: input.jobId,
+    review: {
+      ...input.review,
+      headSha: input.result.headSha ?? input.review.headSha,
+    },
+    program: input.program,
+    policy: input.policy,
+    maxDiffChars: input.maxDiffChars,
+    timeoutMs: input.timeoutMs,
+    ...(input.now ? { now: input.now } : {}),
+    ...(input.nextId ? { nextId: input.nextId } : {}),
+  });
+  return session?.complete(input.result, input.changedFiles) ?? null;
+}
