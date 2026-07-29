@@ -517,7 +517,7 @@ the repository's normal security-review process before merge.
 | ID | Status | Deliverable | Acceptance evidence |
 |---|---|---|---|
 | A25-8a | `[x]` | Add Core-owned assurance-record validation and evidence/coverage-aware gate policy | Validation rejects authority, revision, lifecycle, counter, stage, and finding-reference mismatches; gate fixtures prove candidate-only, partial, missing, mismatched, stale, superseded, and wrong-head evidence cannot become clean or blocking, while independently supported current-head findings follow explicit program policy |
-| A25-8b | `[ ]` | Extract finding identity/lifecycle and program policy behind the curated review façade while preserving local review compatibility | Existing parser, lens, lifecycle, severity, stale-diff, and gate fixtures retain behavior; assurance finding lineage gains deterministic fingerprint and disposition adapters |
+| A25-8b | `[x]` | Extract finding identity/lifecycle and program authority defaults behind the curated review façade while preserving the backend compatibility path | Existing backend lifecycle fixtures retain behavior; Core fixtures pin line-stable/program-separated fingerprints, conservative paraphrase reconciliation, complete-only auto-fix, reopen/ignored disposition behavior, legacy-lens mapping, and distinct authorization/publication/evidence/blocking defaults |
 | A25-8c | `[ ]` | Introduce review ports and campaign services without importing Git, database, queue, provider SDK, or hosts into Core policy | In-memory port fixtures cover exact-revision run creation, stage transitions, cancellation, partial failure, candidate verification, and idempotent lifecycle reconciliation |
 
 ### Migration guardrails
