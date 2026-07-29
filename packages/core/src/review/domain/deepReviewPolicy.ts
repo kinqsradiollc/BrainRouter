@@ -12,6 +12,18 @@ import type {
 
 type DeepReviewPolicyPayload = Omit<DeepReviewPolicy, 'policyHash'>;
 
+export const DEEP_REVIEW_HARD_LIMITS = Object.freeze({
+  maxRepositoryFiles: 1_000_000,
+  maxEstimatedModelCalls: 200,
+  maxEstimatedToolCalls: 1_000,
+  maxEstimatedDurationMs: 2 * 60 * 60_000,
+  maxEstimatedUsd: 100,
+  maxPackets: 200,
+  maxPacketBytes: 64 * 1_024,
+  maxFilesPerPacket: 50,
+  maxCancellationPollIntervalMs: 60_000,
+});
+
 export interface BuildDeepReviewPolicyInput {
   organizationId: string;
   repository: Pick<RepositoryRef, 'forge' | 'slug'>;
@@ -78,6 +90,11 @@ function ratio(value: unknown, field: string): number {
   return number;
 }
 
+function atMost(value: number, limit: number, field: string): number {
+  if (value > limit) throw new Error(`${field} exceeds the platform limit.`);
+  return value;
+}
+
 function isoTimestamp(value: unknown, field: string): string {
   const timestamp = nonEmpty(value, field);
   if (!Number.isFinite(Date.parse(timestamp))) throw new Error(`${field} must be an ISO timestamp.`);
@@ -111,21 +128,32 @@ function thresholds(
   }
   return {
     program: thresholdProgram,
-    maxRepositoryFiles: positiveInteger(value?.maxRepositoryFiles, 'maxRepositoryFiles'),
+    maxRepositoryFiles: atMost(
+      positiveInteger(value?.maxRepositoryFiles, 'maxRepositoryFiles'),
+      DEEP_REVIEW_HARD_LIMITS.maxRepositoryFiles,
+      'maxRepositoryFiles',
+    ),
     minIndexedFileRatio: ratio(value?.minIndexedFileRatio, 'minIndexedFileRatio'),
-    maxEstimatedModelCalls: positiveInteger(
-      value?.maxEstimatedModelCalls,
+    maxEstimatedModelCalls: atMost(
+      positiveInteger(value?.maxEstimatedModelCalls, 'maxEstimatedModelCalls'),
+      DEEP_REVIEW_HARD_LIMITS.maxEstimatedModelCalls,
       'maxEstimatedModelCalls',
     ),
-    maxEstimatedToolCalls: positiveInteger(
-      value?.maxEstimatedToolCalls,
+    maxEstimatedToolCalls: atMost(
+      positiveInteger(value?.maxEstimatedToolCalls, 'maxEstimatedToolCalls'),
+      DEEP_REVIEW_HARD_LIMITS.maxEstimatedToolCalls,
       'maxEstimatedToolCalls',
     ),
-    maxEstimatedDurationMs: positiveInteger(
-      value?.maxEstimatedDurationMs,
+    maxEstimatedDurationMs: atMost(
+      positiveInteger(value?.maxEstimatedDurationMs, 'maxEstimatedDurationMs'),
+      DEEP_REVIEW_HARD_LIMITS.maxEstimatedDurationMs,
       'maxEstimatedDurationMs',
     ),
-    maxEstimatedUsd: positiveFinite(value?.maxEstimatedUsd, 'maxEstimatedUsd'),
+    maxEstimatedUsd: atMost(
+      positiveFinite(value?.maxEstimatedUsd, 'maxEstimatedUsd'),
+      DEEP_REVIEW_HARD_LIMITS.maxEstimatedUsd,
+      'maxEstimatedUsd',
+    ),
     acceptedBy: nonEmpty(value?.acceptedBy, 'acceptedBy'),
     acceptedAt: isoTimestamp(value?.acceptedAt, 'acceptedAt'),
   };
@@ -160,21 +188,31 @@ function payload(input: BuildDeepReviewPolicyInput): DeepReviewPolicyPayload {
     },
     telemetryThresholds: selectedThresholds,
     packetLimits: {
-      maxPackets: positiveInteger(input.packetLimits?.maxPackets, 'packetLimits.maxPackets'),
-      maxPacketBytes: positiveInteger(
-        input.packetLimits?.maxPacketBytes,
+      maxPackets: atMost(
+        positiveInteger(input.packetLimits?.maxPackets, 'packetLimits.maxPackets'),
+        DEEP_REVIEW_HARD_LIMITS.maxPackets,
+        'packetLimits.maxPackets',
+      ),
+      maxPacketBytes: atMost(
+        positiveInteger(input.packetLimits?.maxPacketBytes, 'packetLimits.maxPacketBytes'),
+        DEEP_REVIEW_HARD_LIMITS.maxPacketBytes,
         'packetLimits.maxPacketBytes',
       ),
-      maxFilesPerPacket: positiveInteger(
-        input.packetLimits?.maxFilesPerPacket,
+      maxFilesPerPacket: atMost(
+        positiveInteger(input.packetLimits?.maxFilesPerPacket, 'packetLimits.maxFilesPerPacket'),
+        DEEP_REVIEW_HARD_LIMITS.maxFilesPerPacket,
         'packetLimits.maxFilesPerPacket',
       ),
     },
     budgets,
     cancellation: {
       mode: 'cooperative_fail_closed',
-      pollIntervalMs: positiveInteger(
-        input.cancellationPollIntervalMs ?? 1_000,
+      pollIntervalMs: atMost(
+        positiveInteger(
+          input.cancellationPollIntervalMs ?? 1_000,
+          'cancellation.pollIntervalMs',
+        ),
+        DEEP_REVIEW_HARD_LIMITS.maxCancellationPollIntervalMs,
         'cancellation.pollIntervalMs',
       ),
     },

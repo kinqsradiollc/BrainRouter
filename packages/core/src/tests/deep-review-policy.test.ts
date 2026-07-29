@@ -174,4 +174,19 @@ test('deep-review policy rejects tampering, automatic activation, and unsafe bud
     }),
     /thresholds|policy hash/,
   );
+  assert.throws(
+    () => buildDeepReviewPolicy({
+      organizationId: 'org-1',
+      repository: { forge: 'github', slug: 'acme/app' },
+      program: 'security_review',
+      requestedBy: 'user-1',
+      telemetryThresholds: {
+        ...selected.telemetryThresholds,
+        maxEstimatedModelCalls: 201,
+      },
+      packetLimits: selected.packetLimits,
+      budgets: selected.budgets,
+    }),
+    /platform limit/,
+  );
 });
