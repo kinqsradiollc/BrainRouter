@@ -276,6 +276,23 @@ test('A25-8c cancellation stops before invoking a stage handler', async () => {
   assert.equal(canceled.stages[0]?.status, 'canceled');
 });
 
+test('A25-10e explicit cancellation allows cleanup to finish at a safe boundary first', async () => {
+  const { service } = harness();
+  const running = await start(service);
+  const cleaned = await service.runStage(running.id, 'cleanup', 1, async () => ({
+    status: 'succeeded',
+    inputRefs: ['checkout:head', 'index:head'],
+    outputRefs: ['released:checkout:head', 'released:index:head'],
+  }));
+  assert.equal(cleaned.status, 'running');
+  assert.equal(cleaned.stages[0]?.stage, 'cleanup');
+  assert.equal(cleaned.stages[0]?.status, 'succeeded');
+
+  const canceled = await service.cancel(running.id);
+  assert.equal(canceled.status, 'canceled');
+  assert.equal(canceled.completedAt, T3);
+});
+
 test('A25-8c thrown stage work records failure and leaves a terminal run', async () => {
   const { service } = harness();
   const running = await start(service);

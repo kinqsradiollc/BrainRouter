@@ -18,6 +18,7 @@ export const ASSURANCE_STAGE_NAMES = [
   'candidate_verification',
   'lifecycle_gate',
   'publication',
+  'cleanup',
 ] as const;
 
 export type AssuranceStageName = (typeof ASSURANCE_STAGE_NAMES)[number];
