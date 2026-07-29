@@ -516,6 +516,15 @@ the repository's normal security-review process before merge.
 | A25-4d1 | `[x]` | Use one bounded task-packet contract for local children and cross-host delivery while retaining read compatibility for legacy queued rows | Types/Core builds plus Core, backend, and CLI fixtures prove one packet shape, authoritative sender identity, server-clamped cross-host capability/tool ceilings and budgets, tool-free legacy normalization, and dependency-light host adoption |
 | A25-4d2 | `[x]` | Make parent interruption a truthful child lifecycle transition and project one receipt through protocol, CLI, and Desktop | Fixtures prove descendant cancellation propagation, no interrupted child is reported completed or detached, and CLI/Desktop consume the same projected receipt |
 
+### A25-5 workspace and onboarding delivery slices
+
+| ID | Status | Deliverable | Acceptance evidence |
+|---|---|---|---|
+| A25-5a | `[x]` | Move onboarding transaction contracts and fixed storage limits out of the coordinator without changing its public entrypoint | Core typecheck and pair-transaction fixtures preserve the exported contract identities, phase transitions, recovery behavior, filesystem limits, and caller imports |
+| A25-5b | `[ ]` | Extract workspace-file snapshots, encoding, and exact-match validation behind a focused file adapter | Snapshot and adversarial filesystem fixtures retain no-follow, inode, size, timestamp, hash, and concurrent-write checks |
+| A25-5c | `[ ]` | Extract receipt persistence, validation, ownership, and recovery services behind the existing transaction facade | Recovery fixtures preserve safe-directory, bounded receipt, active-owner, ambiguous-state, rollback, and cleanup behavior |
+| A25-5d | `[ ]` | Separate profile manifest/catalog/policy resolution from filesystem trust and onboarding transaction composition | No-manifest, explicit-catalog, compatibility, precedence, diagnostic, and safe-write fixtures preserve current behavior |
+
 ### A25-8 Core review delivery slices
 
 | ID | Status | Deliverable | Acceptance evidence |
