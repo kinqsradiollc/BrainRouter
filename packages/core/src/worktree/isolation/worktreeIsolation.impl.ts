@@ -1,17 +1,12 @@
-import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 /**
  * Worktree isolation implementation.
  *
- * This file is a behavior-preserving move from the legacy worktreeIsolation
- * module. The stable public path remains a thin facade while follow-up slices
- * separate contracts, policy, services, and the privileged Git/filesystem host.
+ * Policy and recovery services live here; privileged Git/filesystem/config
+ * operations are owned by the host adapter. The stable public path remains a
+ * thin compatibility facade.
  */
 import type { AccessMode } from '../../orchestration/roles/roles.js';
-import { getBrainrouterHome, getStateDir } from '../../storage/store.js';
-import { getCliKnobs } from '../../config/config.js';
-import { findGitRoot } from '../../git/workspaceGit.js';
 import type {
   ChildWorkspaceIsolationMode,
   ChildWorkspaceResolution,
@@ -20,6 +15,7 @@ import type {
   RemoveChildWorktreeResult,
   WorktreeChangeCapture,
 } from './contracts.js';
+import { nodeWorktreeIsolationHost as host } from './host/nodeWorktreeIsolationHost.js';
 
 interface PrepareChildWorkspaceInput {
   parentWorkspaceRoot: string;
@@ -34,23 +30,9 @@ function isInside(parent: string, candidate: string): boolean {
   return relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
-function runGit(cwd: string, args: string[]): { ok: boolean; stdout: string; stderr: string } {
-  const result = spawnSync('git', args, {
-    cwd,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: 15_000,
-  });
-  return {
-    ok: result.status === 0,
-    stdout: result.stdout ?? '',
-    stderr: result.stderr ?? result.error?.message ?? '',
-  };
-}
-
 // DESK-6w (T4) — owning-git-root resolution is now the shared helper, so CLI
 // worktrees and desktop workspace identity agree on the same repo root.
-const gitRoot = findGitRoot;
+const gitRoot = host.findGitRoot;
 
 function safeName(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'child';
@@ -64,14 +46,14 @@ function safeName(value: string): string {
  * the default.
  */
 function worktreeBase(): string {
-  const custom = getCliKnobs().worktreeRoot?.trim();
+  const custom = host.configuredWorktreeRoot();
   if (custom) {
     try {
-      fs.mkdirSync(custom, { recursive: true });
-      return fs.realpathSync(custom);
+      host.mkdir(custom);
+      return host.realpath(custom);
     } catch { /* unwritable custom path → fall back to the default home base */ }
   }
-  return path.join(getBrainrouterHome(), 'worktrees'); // getBrainrouterHome() is already realpath'd
+  return path.join(host.brainrouterHome(), 'worktrees'); // host home is already realpath'd
 }
 
 function defaultWorktreePath(repoRoot: string, childId: string): string {
@@ -82,21 +64,21 @@ function defaultWorktreePath(repoRoot: string, childId: string): string {
 function launchCwdInWorktree(repoRoot: string, parentLaunchCwd: string, worktreeRoot: string): string {
   let realLaunch = parentLaunchCwd;
   try {
-    realLaunch = fs.realpathSync(parentLaunchCwd);
+    realLaunch = host.realpath(parentLaunchCwd);
   } catch {
     realLaunch = path.resolve(parentLaunchCwd);
   }
   const rel = path.relative(repoRoot, realLaunch);
   if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return worktreeRoot;
   const candidate = path.join(worktreeRoot, rel);
-  return fs.existsSync(candidate) ? candidate : worktreeRoot;
+  return host.exists(candidate) ? candidate : worktreeRoot;
 }
 
 export function prepareChildWorkspace(input: PrepareChildWorkspaceInput): ChildWorkspaceResolution {
-  const parentWorkspaceRoot = fs.realpathSync(input.parentWorkspaceRoot);
+  const parentWorkspaceRoot = host.realpath(input.parentWorkspaceRoot);
   const parentLaunchCwd = (() => {
     try {
-      const real = fs.realpathSync(input.parentLaunchCwd);
+      const real = host.realpath(input.parentLaunchCwd);
       return isInside(parentWorkspaceRoot, real) ? real : parentWorkspaceRoot;
     } catch {
       return parentWorkspaceRoot;
@@ -115,9 +97,9 @@ export function prepareChildWorkspace(input: PrepareChildWorkspaceInput): ChildW
   }
 
   const worktreeRoot = defaultWorktreePath(repoRoot, input.childId);
-  if (!fs.existsSync(worktreeRoot)) {
-    fs.mkdirSync(path.dirname(worktreeRoot), { recursive: true });
-    const created = runGit(repoRoot, ['worktree', 'add', '--detach', worktreeRoot, 'HEAD']);
+  if (!host.exists(worktreeRoot)) {
+    host.mkdir(path.dirname(worktreeRoot));
+    const created = host.runGit(repoRoot, ['worktree', 'add', '--detach', worktreeRoot, 'HEAD']);
     if (!created.ok) {
       const reason = created.stderr.trim() || created.stdout.trim() || 'unknown git worktree error';
       const notice = `Child workspace isolation requested, but git worktree creation failed: ${reason}`;
@@ -126,7 +108,7 @@ export function prepareChildWorkspace(input: PrepareChildWorkspaceInput): ChildW
     }
   }
 
-  const realWorktreeRoot = fs.realpathSync(worktreeRoot);
+  const realWorktreeRoot = host.realpath(worktreeRoot);
   return {
     workspaceRoot: realWorktreeRoot,
     launchCwd: launchCwdInWorktree(repoRoot, parentLaunchCwd, realWorktreeRoot),
@@ -154,20 +136,20 @@ export function prepareSharedWorktree(
 ): { workspaceRoot: string; isolation: ChildWorktreeIsolation } | null {
   let root: string;
   try {
-    root = fs.realpathSync(parentWorkspaceRoot);
+    root = host.realpath(parentWorkspaceRoot);
   } catch {
     return null;
   }
   const repoRoot = gitRoot(root);
   if (!repoRoot || !isInside(repoRoot, root)) return null;
   const worktreeRoot = defaultWorktreePath(repoRoot, `build-${safeName(label)}`);
-  if (!fs.existsSync(worktreeRoot)) {
+  if (!host.exists(worktreeRoot)) {
     try {
-      fs.mkdirSync(path.dirname(worktreeRoot), { recursive: true });
+      host.mkdir(path.dirname(worktreeRoot));
     } catch {
       return null;
     }
-    const created = runGit(repoRoot, ['worktree', 'add', '--detach', worktreeRoot, 'HEAD']);
+    const created = host.runGit(repoRoot, ['worktree', 'add', '--detach', worktreeRoot, 'HEAD']);
     if (!created.ok) return null;
   } else {
     // BUILD-LOOP P2 (review) — a worktree left behind by a prior run with the same
@@ -178,7 +160,7 @@ export function prepareSharedWorktree(
     resetStaleWorktree(repoRoot, worktreeRoot);
   }
   let real = worktreeRoot;
-  try { real = fs.realpathSync(worktreeRoot); } catch { /* use the raw path */ }
+  try { real = host.realpath(worktreeRoot); } catch { /* use the raw path */ }
   return { workspaceRoot: real, isolation: { kind: 'git-worktree', sourceRoot: repoRoot, worktreeRoot: real } };
 }
 
@@ -186,22 +168,22 @@ export function prepareSharedWorktree(
  *  HEAD, after best-effort preserving any leftover tracked edits to a patch. */
 function resetStaleWorktree(repoRoot: string, worktreeRoot: string): void {
   try {
-    const status = runGit(worktreeRoot, ['status', '--porcelain']);
+    const status = host.runGit(worktreeRoot, ['status', '--porcelain']);
     if (status.ok && status.stdout.trim()) {
-      const diff = runGit(worktreeRoot, ['diff', 'HEAD']);
+      const diff = host.runGit(worktreeRoot, ['diff', 'HEAD']);
       if (diff.ok && diff.stdout.trim()) {
         try {
-          const dir = path.join(getStateDir(repoRoot), 'worktree-patches');
-          fs.mkdirSync(dir, { recursive: true });
-          const token = `${path.basename(worktreeRoot)}-${Date.now().toString(36)}`;
-          fs.writeFileSync(path.join(dir, `leftover-${safeName(token)}.patch`), diff.stdout, 'utf8');
+          const dir = path.join(host.stateDir(repoRoot), 'worktree-patches');
+          host.mkdir(dir);
+          const token = `${path.basename(worktreeRoot)}-${host.now().toString(36)}`;
+          host.writeText(path.join(dir, `leftover-${safeName(token)}.patch`), diff.stdout);
         } catch { /* best-effort preservation — the reset below is what matters */ }
       }
     }
   } catch { /* ignore — proceed to reset */ }
-  const head = runGit(repoRoot, ['rev-parse', 'HEAD']);
-  runGit(worktreeRoot, ['reset', '--hard', head.ok && head.stdout.trim() ? head.stdout.trim() : 'HEAD']);
-  runGit(worktreeRoot, ['clean', '-fd']);
+  const head = host.runGit(repoRoot, ['rev-parse', 'HEAD']);
+  host.runGit(worktreeRoot, ['reset', '--hard', head.ok && head.stdout.trim() ? head.stdout.trim() : 'HEAD']);
+  host.runGit(worktreeRoot, ['clean', '-fd']);
 }
 
 /**
@@ -214,17 +196,17 @@ function resetStaleWorktree(repoRoot: string, worktreeRoot: string): void {
  */
 export function isSharedWorktreeOf(parentWorkspaceRoot: string, candidate: string): boolean {
   const commonDir = (dir: string): string | null => {
-    const res = runGit(dir, ['rev-parse', '--git-common-dir']);
+    const res = host.runGit(dir, ['rev-parse', '--git-common-dir']);
     if (!res.ok) return null;
     const out = res.stdout.trim();
     if (!out) return null;
     const abs = path.isAbsolute(out) ? out : path.join(dir, out);
-    try { return fs.realpathSync(abs); } catch { return path.resolve(abs); }
+    try { return host.realpath(abs); } catch { return path.resolve(abs); }
   };
   try {
-    if (!fs.existsSync(candidate)) return false;
-    const a = commonDir(fs.realpathSync(candidate));
-    const b = commonDir(fs.realpathSync(parentWorkspaceRoot));
+    if (!host.exists(candidate)) return false;
+    const a = commonDir(host.realpath(candidate));
+    const b = commonDir(host.realpath(parentWorkspaceRoot));
     return a !== null && b !== null && a === b;
   } catch {
     return false;
@@ -252,7 +234,7 @@ export function sharedWorktreeLaunchCwd(parentWorkspaceRoot: string, parentLaunc
  * import cycle (`tools` ↔ `workflowTool`).
  */
 export function worktreePatchFile(workspaceRoot: string, childId: string): string {
-  return path.join(getStateDir(workspaceRoot), 'worktree-patches', `${childId}.patch`);
+  return path.join(host.stateDir(workspaceRoot), 'worktree-patches', `${childId}.patch`);
 }
 
 /**
@@ -270,29 +252,29 @@ export function captureWorktreeChanges(
 ): WorktreeChangeCapture {
   const capture: WorktreeChangeCapture = { changedFiles: 0 };
   try {
-    if (!fs.existsSync(worktreeRoot)) return capture;
+    if (!host.exists(worktreeRoot)) return capture;
     // Stage everything (tracked edits, new files, deletions) so the patch is
     // COMPLETE. `.gitignore` is still honored, so node_modules/build output
     // stays out — the patch only carries real source changes.
-    runGit(worktreeRoot, ['add', '-A']);
+    host.runGit(worktreeRoot, ['add', '-A']);
     const baseRef = opts.baseRef?.trim() || 'HEAD';
-    const names = runGit(worktreeRoot, ['diff', '--cached', '--name-only', baseRef]);
+    const names = host.runGit(worktreeRoot, ['diff', '--cached', '--name-only', baseRef]);
     if (!names.ok || !names.stdout.trim()) return capture;
     capture.changedFiles = names.stdout.split(/\r?\n/).filter(Boolean).length;
 
     // Full, binary-safe patch — used for both persistence and apply. Never capped.
-    const fullRes = runGit(worktreeRoot, ['diff', '--cached', '--binary', baseRef]);
+    const fullRes = host.runGit(worktreeRoot, ['diff', '--cached', '--binary', baseRef]);
     const fullPatch = fullRes.ok ? fullRes.stdout : '';
     if (fullPatch.trim() && opts.patchFile) {
       try {
-        fs.mkdirSync(path.dirname(opts.patchFile), { recursive: true });
-        fs.writeFileSync(opts.patchFile, fullPatch, 'utf8');
+        host.mkdir(path.dirname(opts.patchFile));
+        host.writeText(opts.patchFile, fullPatch);
         capture.patchPath = opts.patchFile;
       } catch { /* persistence is best-effort */ }
     }
 
     // Human preview: plain text diff, uncapped here (callers cap).
-    const previewRes = runGit(worktreeRoot, ['diff', '--cached', baseRef]);
+    const previewRes = host.runGit(worktreeRoot, ['diff', '--cached', baseRef]);
     capture.preview = (previewRes.ok ? previewRes.stdout : names.stdout).trim();
   } catch { /* capture is best-effort — never throw at teardown/archive time */ }
   return capture;
@@ -314,26 +296,26 @@ export function createDetachedWorktree(
 ): { sourceRoot: string; worktreeRoot: string; baseOid: string } | null {
   let root: string;
   try {
-    root = fs.realpathSync(parentWorkspaceRoot);
+    root = host.realpath(parentWorkspaceRoot);
   } catch {
     return null;
   }
   const repoRoot = gitRoot(root);
   if (!repoRoot || !isInside(repoRoot, root)) return null;
   const worktreeRoot = defaultWorktreePath(repoRoot, childId);
-  if (fs.existsSync(worktreeRoot)) return null;
+  if (host.exists(worktreeRoot)) return null;
   try {
-    fs.mkdirSync(path.dirname(worktreeRoot), { recursive: true });
+    host.mkdir(path.dirname(worktreeRoot));
   } catch {
     return null;
   }
-  const base = runGit(repoRoot, ['rev-parse', '--verify', `${ref}^{commit}`]);
+  const base = host.runGit(repoRoot, ['rev-parse', '--verify', `${ref}^{commit}`]);
   if (!base.ok || !/^[a-f0-9]{40,64}$/i.test(base.stdout.trim())) return null;
   const baseOid = base.stdout.trim();
-  const created = runGit(repoRoot, ['worktree', 'add', '--detach', worktreeRoot, baseOid]);
+  const created = host.runGit(repoRoot, ['worktree', 'add', '--detach', worktreeRoot, baseOid]);
   if (!created.ok) return null;
   let real = worktreeRoot;
-  try { real = fs.realpathSync(worktreeRoot); } catch { /* use the raw path */ }
+  try { real = host.realpath(worktreeRoot); } catch { /* use the raw path */ }
   return { sourceRoot: repoRoot, worktreeRoot: real, baseOid };
 }
 
@@ -370,7 +352,7 @@ export function removeChildWorktree(
   let recoveryRef: string | undefined;
 
   try {
-    if (fs.existsSync(worktreeRoot)) {
+    if (host.exists(worktreeRoot)) {
       // Capture via the shared recovery-patch writer (also used by MC-A6
       // workspace archiving): stage + count + persist the full binary patch.
       const capture = captureWorktreeChanges(worktreeRoot, { patchFile: opts.patchFile });
@@ -387,9 +369,9 @@ export function removeChildWorktree(
         // Merge-back: apply the child's work onto the parent tree on clean exit.
         // Check first so a non-applying patch never mutates the parent tree.
         if (opts.applyBack && patchPath) {
-          const check = runGit(sourceRoot, ['apply', '--check', '--whitespace=nowarn', patchPath]);
+          const check = host.runGit(sourceRoot, ['apply', '--check', '--whitespace=nowarn', patchPath]);
           if (check.ok) {
-            const applyRes = runGit(sourceRoot, ['apply', '--whitespace=nowarn', patchPath]);
+            const applyRes = host.runGit(sourceRoot, ['apply', '--whitespace=nowarn', patchPath]);
             applied = applyRes.ok;
             if (!applyRes.ok) applyError = applyRes.stderr.trim() || 'git apply failed';
           } else {
@@ -405,16 +387,16 @@ export function removeChildWorktree(
   // have created commits that are not reachable from the parent branch; pin
   // those commits under a CAS-created recovery ref. If that proof/write fails,
   // retain the whole worktree rather than relying on reflog luck.
-  if (fs.existsSync(worktreeRoot)) {
-    const childHead = runGit(worktreeRoot, ['rev-parse', '--verify', 'HEAD']);
-    const parentHead = runGit(sourceRoot, ['rev-parse', '--verify', 'HEAD']);
+  if (host.exists(worktreeRoot)) {
+    const childHead = host.runGit(worktreeRoot, ['rev-parse', '--verify', 'HEAD']);
+    const parentHead = host.runGit(sourceRoot, ['rev-parse', '--verify', 'HEAD']);
     if (childHead.ok && parentHead.ok && childHead.stdout.trim() !== parentHead.stdout.trim()) {
       const head = childHead.stdout.trim();
-      const preserved = runGit(sourceRoot, ['merge-base', '--is-ancestor', head, parentHead.stdout.trim()]);
+      const preserved = host.runGit(sourceRoot, ['merge-base', '--is-ancestor', head, parentHead.stdout.trim()]);
       if (!preserved.ok) {
         recoveryRef = `refs/brainrouter/recovery/${safeName(path.basename(worktreeRoot))}-${head.slice(0, 12)}`;
         const zero = '0'.repeat(head.length);
-        const pinned = runGit(sourceRoot, ['update-ref', recoveryRef, head, zero]);
+        const pinned = host.runGit(sourceRoot, ['update-ref', recoveryRef, head, zero]);
         if (!pinned.ok) {
           return {
             ok: false, diff, changedFiles, patchPath, applied, applyError,
@@ -426,14 +408,14 @@ export function removeChildWorktree(
   }
 
   // Remove the worktree, then prune the admin entry so `git worktree list` stays honest.
-  const removed = runGit(sourceRoot, ['worktree', 'remove', '--force', worktreeRoot]);
+  const removed = host.runGit(sourceRoot, ['worktree', 'remove', '--force', worktreeRoot]);
   if (!removed.ok) {
     return {
       ok: false, diff, changedFiles, patchPath, applied, applyError, recoveryRef,
       notice: `Worktree retained because git worktree remove failed: ${removed.stderr.trim() || 'non-zero exit'}`,
     };
   }
-  runGit(sourceRoot, ['worktree', 'prune']);
+  host.runGit(sourceRoot, ['worktree', 'prune']);
   return {
     ok: true,
     diff,
@@ -453,10 +435,10 @@ export function removeChildWorktree(
  */
 export function applyPatchFile(cwd: string, patchFile: string): { ok: boolean; error?: string } {
   try {
-    if (!fs.existsSync(patchFile)) return { ok: false, error: 'patch file not found' };
-    const check = runGit(cwd, ['apply', '--check', '--whitespace=nowarn', patchFile]);
+    if (!host.exists(patchFile)) return { ok: false, error: 'patch file not found' };
+    const check = host.runGit(cwd, ['apply', '--check', '--whitespace=nowarn', patchFile]);
     if (!check.ok) return { ok: false, error: check.stderr.trim() || 'patch does not apply cleanly' };
-    const applied = runGit(cwd, ['apply', '--whitespace=nowarn', patchFile]);
+    const applied = host.runGit(cwd, ['apply', '--whitespace=nowarn', patchFile]);
     return applied.ok ? { ok: true } : { ok: false, error: applied.stderr.trim() || 'git apply failed' };
   } catch (err: any) {
     return { ok: false, error: err?.message ?? 'git apply threw' };
@@ -481,24 +463,24 @@ export function reconcileOrphanWorktrees(workspaceRoot: string, opts?: { keepChi
   try {
     const repoRoot = gitRoot(workspaceRoot);
     if (!repoRoot) return 0;
-    runGit(repoRoot, ['worktree', 'prune']);
+    host.runGit(repoRoot, ['worktree', 'prune']);
     const base = path.join(worktreeBase(), safeName(path.basename(repoRoot)));
-    if (!fs.existsSync(base)) return 0;
+    if (!host.exists(base)) return 0;
     const tracked = new Set(
-      (runGit(repoRoot, ['worktree', 'list', '--porcelain']).stdout.match(/^worktree (.+)$/gm) ?? [])
+      (host.runGit(repoRoot, ['worktree', 'list', '--porcelain']).stdout.match(/^worktree (.+)$/gm) ?? [])
         .map((l) => l.replace(/^worktree /, '').trim()),
     );
     // Live children's worktree dir names (the dir basename is `safeName(childId)`),
     // by both the raw id and its sanitized form — never GC these.
     const keep = new Set<string>();
     for (const id of opts?.keepChildIds ?? []) { keep.add(id); keep.add(safeName(id)); }
-    for (const entry of fs.readdirSync(base)) {
+    for (const entry of host.readDirectory(base)) {
       if (keep.has(entry)) continue; // a live child owns this worktree — leave it alone
       const dir = path.join(base, entry);
       let real = dir;
-      try { real = fs.realpathSync(dir); } catch { /* use dir */ }
+      try { real = host.realpath(dir); } catch { /* use dir */ }
       if (!tracked.has(real) && !tracked.has(dir)) {
-        try { fs.rmSync(dir, { recursive: true, force: true }); removed++; } catch { /* noop */ }
+        try { host.removeTree(dir); removed++; } catch { /* noop */ }
       }
     }
   } catch { /* best-effort */ }
