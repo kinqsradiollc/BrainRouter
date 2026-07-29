@@ -16,11 +16,6 @@ import {
 } from "./diffReviewAssurance.js";
 import type { RepositoryContextAnalysisPorts } from "./repositoryContextAssurance.js";
 
-vi.mock("@kinqs/brainrouter-core/review", async () =>
-  import("../../../packages/core/src/review/index.js"));
-vi.mock("@kinqs/brainrouter-types/review", async () =>
-  import("../../../packages/types/src/review/index.js"));
-
 function clone<T>(value: T): T {
   return structuredClone(value);
 }
@@ -451,7 +446,6 @@ describe("diff review assurance projection", () => {
         orgId: "org-1",
         installationId: "installation-1",
         requestedBy: "user-1",
-        reviewMode: "deep",
         repo: "owner/repository",
         prNumber: 42,
         headSha: "head-1",
@@ -496,7 +490,6 @@ describe("diff review assurance projection", () => {
         orgId: "org-1",
         installationId: "installation-1",
         requestedBy: "user-1",
-        reviewMode: "deep",
         repo: "owner/repository",
         prNumber: 42,
         headSha: "head-1",

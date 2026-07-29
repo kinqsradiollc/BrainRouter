@@ -103,6 +103,7 @@ export class RepositoryContextAssuranceSession {
     if (this.input.program !== "code_review" && this.input.program !== "security_review") {
       throw new Error("DEEP_REVIEW_PROGRAM_UNSUPPORTED");
     }
+    const program = this.input.program;
     const telemetry: DeepReviewTelemetry = {
       repositoryFiles: run.sourceSnapshot.fileCount,
       eligibleFiles: this.indexResult.receipt.filesEligible,
@@ -121,7 +122,7 @@ export class RepositoryContextAssuranceSession {
           policy: input.policy,
           organizationId: input.organizationId,
           repository: current.repository,
-          program: this.input.program,
+          program,
           source: input.source,
           explicitRequest: true,
           telemetry,
