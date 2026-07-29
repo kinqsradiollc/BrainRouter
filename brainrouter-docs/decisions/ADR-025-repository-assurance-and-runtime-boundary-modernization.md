@@ -485,7 +485,7 @@ the repository's normal security-review process before merge.
 | A25-6 | `[ ]` | Modernize browser, terminal, background, connectors, storage, and worktree boundaries in domain slices | A25-2 | Host ownership, permission, cancellation, and persistence fixtures per slice |
 | A25-7 | `[x]` | Add dependency-free review contract family under `packages/types/src/review/` with compatibility exports | A25-1, A25-2 | Exact-revision run, program, policy, source-snapshot, coverage/limitation, stage, evidence, finding-lineage, and verifier records build in the leaf package; round-trip, explicit partial/verified-state, program-authority, and compatibility-entrypoint fixtures pass; runtime validation and gate policy remain assigned to A25-8 Core |
 | A25-8 | `[x]` | Extract Core review domain/policy/ports/services behind curated `review` façade | A25-7 | Validation/gate fixtures, backend lifecycle compatibility, program-authority defaults, and in-memory campaign/port fixtures cover exact-revision idempotency, stage transitions, cancellation, partial/complete failure boundaries, candidate verification, and lifecycle reconciliation |
-| A25-9 | `[ ]` | Introduce durable assurance-run, coverage, source-snapshot, and stage receipts in backend/protocol | A25-7 | Idempotent/superseded/partial state matrix |
+| A25-9 | `[x]` | Introduce durable assurance-run, coverage, source-snapshot, and stage receipts in backend/protocol | A25-7 | Normalized tenant-scoped persistence, protocol projection, Core campaign adoption, explicit diff-only coverage, semantic retries, and ordered same-PR newer-head supersession fixtures |
 | A25-10 | `[ ]` | Add exact-SHA checkout, deterministic analysis adapters, and parser-backed PR impact packets | A25-8, A25-9 | Credential isolation plus cross-file caller/config/test and source-to-sink fixtures |
 | A25-11 | `[ ]` | Add candidate verification, evidence-aware publication, and coverage-aware gate calculation | A25-9, A25-10 | No-evidence/partial/stale runs cannot block or approve cleanly |
 | A25-12 | `[ ]` | Project shared domain contracts through backend API, SDK, hooks, GitHub App, CLI, Desktop, and Dashboard | A25-3 through A25-11 | One state definition, host-specific presentation only |
@@ -526,7 +526,7 @@ the repository's normal security-review process before merge.
 |---|---|---|---|
 | A25-9a | `[x]` | Add normalized, tenant-scoped assurance run, source snapshot, coverage, and stage-attempt receipts beside the existing memory-job ledger | Migration and Postgres adapter preserve exact revision and policy identity; focused pure and scratch-Postgres fixtures cover equivalent-run idempotency, monotonic receipt transitions, explicit partial completion, cross-tenant isolation, terminal immutability, and same-scope supersession |
 | A25-9b | `[x]` | Add a dependency-free protocol event projection for durable runs and receipts without duplicating domain policy or promising an unimplemented host command | Protocol build and structural-guard fixtures cover every explicit program, run, source, coverage, analyzer, and stage state; partial counters and stale/superseded lifecycle evidence remain visible |
-| A25-9c | `[ ]` | Adopt the durable run adapter in backend review scheduling/execution and newer-head cancellation | Existing review-job fixtures plus exact-head, idempotent retry, partial analyzer, and superseded-push integration fixtures retain the legacy diff-review path while emitting the durable record |
+| A25-9c | `[x]` | Adopt the durable run adapter in backend review scheduling/execution and newer-head cancellation | Existing review behavior remains intact while exact-head start, idempotent retry, partial analyzer, and same-PR older-head supersession fixtures emit durable records |
 
 ### A25-9c backend adoption slices
 
@@ -534,7 +534,7 @@ the repository's normal security-review process before merge.
 |---|---|---|---|
 | A25-9c1 | `[x]` | Bind the Core assurance-run port to the existing Postgres store capability for one worker job and tenant | Adapter fixtures cover job/tenant forwarding, semantic-idempotency return, lifecycle forwarding, and cross-tenant policy rejection without widening the shared memory-store contract |
 | A25-9c2 | `[x]` | Run the current diff-review fallback through the Core campaign service and project its known coverage limits | Existing executor behavior remains intact; focused fixtures prove exact-head partial runs, semantic retry idempotency, analyzer-failure receipts, and explicit diff-only repository-context limitations |
-| A25-9c3 | `[ ]` | Link newer-head cancellation to durable same-scope supersession | Push fixtures prove pending jobs cancel and any prior durable active run points to the replacement without crossing tenant/repository/program scope |
+| A25-9c3 | `[x]` | Link newer-head cancellation to durable same-scope supersession | Pure and scratch-Postgres fixtures select only older active heads by tenant, repository, PR, program, and job creation order; Core records the replacement link without crossing scope |
 
 ### Migration guardrails
 

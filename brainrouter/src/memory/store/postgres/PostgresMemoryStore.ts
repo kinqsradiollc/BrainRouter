@@ -1199,6 +1199,12 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
     return assurance.getRepositoryAssuranceRun(this.exec, orgId, runId);
   }
 
+  public listReplaceableRepositoryAssuranceRunIds(
+    input: assurance.ReplaceableAssuranceRunsInput,
+  ): Promise<string[]> {
+    return assurance.listReplaceableRepositoryAssuranceRunIds(this.exec, input);
+  }
+
   public transitionRepositoryAssuranceRun(
     input: assurance.AssuranceRunTransition,
   ): Promise<import("@kinqs/brainrouter-types/review").RepositoryAssuranceRun> {

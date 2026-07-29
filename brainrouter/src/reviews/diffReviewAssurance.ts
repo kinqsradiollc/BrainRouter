@@ -27,8 +27,20 @@ import {
 
 const DIFF_ONLY_LIMITATION_ID = "diff-only-repository-context";
 
+export interface RepositoryAssuranceSupersessionStore
+  extends RepositoryAssurancePersistenceStore {
+  listReplaceableRepositoryAssuranceRunIds(input: {
+    orgId: string;
+    forge: RepositoryAssuranceRun["repository"]["forge"];
+    repository: string;
+    prNumber: number;
+    program: RepositoryAssuranceProgram;
+    replacementRunId: string;
+  }): Promise<string[]>;
+}
+
 export interface StartDiffReviewAssuranceInput {
-  store: RepositoryAssurancePersistenceStore;
+  store: RepositoryAssuranceSupersessionStore;
   jobId: string;
   review: PrReviewInput;
   program: RepositoryAssuranceProgram;
@@ -153,6 +165,33 @@ function active(run: RepositoryAssuranceRun): boolean {
   return run.status === "queued" || run.status === "running";
 }
 
+async function supersedePriorRuns(
+  input: StartDiffReviewAssuranceInput,
+  replacement: RepositoryAssuranceRun,
+  port: RepositoryAssuranceRunPort,
+  campaign: ReturnType<typeof createRepositoryAssuranceCampaignService>,
+): Promise<void> {
+  const ids = await input.store.listReplaceableRepositoryAssuranceRunIds({
+    orgId: replacement.policySnapshot.organizationId,
+    forge: replacement.repository.forge,
+    repository: replacement.repository.slug,
+    prNumber: input.review.prNumber,
+    program: replacement.program,
+    replacementRunId: replacement.id,
+  });
+  for (const runId of ids) {
+    const current = await port.get(runId);
+    if (!current || !active(current)) continue;
+    try {
+      await campaign.supersede(runId, replacement.id);
+    } catch (error) {
+      const raced = await port.get(runId);
+      if (raced && !active(raced)) continue;
+      throw error;
+    }
+  }
+}
+
 export async function startDiffReviewAssurance(
   input: StartDiffReviewAssuranceInput,
 ): Promise<DiffReviewAssuranceSession | null> {
@@ -177,6 +216,9 @@ export async function startDiffReviewAssurance(
     program: input.program,
     policySnapshot: policySnapshot(input, createdAt),
   });
+  if (active(started)) {
+    await supersedePriorRuns(input, started, port, campaign);
+  }
 
   const complete = async (
     result: PrReviewResult,

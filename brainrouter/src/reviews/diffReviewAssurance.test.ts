@@ -9,16 +9,24 @@ import {
   recordDiffReviewAssurance,
   startDiffReviewAssurance,
   type RecordDiffReviewAssuranceInput,
+  type RepositoryAssuranceSupersessionStore,
 } from "./diffReviewAssurance.js";
-import type { RepositoryAssurancePersistenceStore } from "./assuranceRunPort.js";
 
 function clone<T>(value: T): T {
   return structuredClone(value);
 }
 
-class FakeAssuranceStore implements RepositoryAssurancePersistenceStore {
+class FakeAssuranceStore implements RepositoryAssuranceSupersessionStore {
   readonly runs = new Map<string, RepositoryAssuranceRun>();
   readonly semanticIds = new Map<string, string>();
+  readonly runJobs = new Map<string, string>();
+  readonly jobs = new Map<string, { order: number; prNumber: number }>([
+    ["job-1", { order: 1, prNumber: 42 }],
+  ]);
+  private id = 0;
+
+  readonly nextId = (kind: "run" | "source" | "stage"): string =>
+    `${kind}-${++this.id}`;
 
   async createRepositoryAssuranceRun(input: {
     jobId: string;
@@ -37,7 +45,35 @@ class FakeAssuranceStore implements RepositoryAssurancePersistenceStore {
     if (existingId) return clone(this.runs.get(existingId)!);
     this.semanticIds.set(key, run.id);
     this.runs.set(run.id, run);
+    this.runJobs.set(run.id, input.jobId);
     return clone(run);
+  }
+
+  async listReplaceableRepositoryAssuranceRunIds(input: {
+    orgId: string;
+    forge: RepositoryAssuranceRun["repository"]["forge"];
+    repository: string;
+    prNumber: number;
+    program: RepositoryAssuranceRun["program"];
+    replacementRunId: string;
+  }): Promise<string[]> {
+    const replacement = this.runs.get(input.replacementRunId)!;
+    const replacementJob = this.jobs.get(this.runJobs.get(replacement.id)!)!;
+    return [...this.runs.values()]
+      .filter((run) => {
+        const job = this.jobs.get(this.runJobs.get(run.id)!)!;
+        return run.id !== replacement.id
+          && run.policySnapshot.organizationId === input.orgId
+          && run.repository.forge === input.forge
+          && run.repository.slug.toLowerCase() === input.repository.toLowerCase()
+          && run.program === input.program
+          && (run.status === "queued" || run.status === "running")
+          && run.revision.headSha !== replacement.revision.headSha
+          && job.prNumber === input.prNumber
+          && replacementJob.prNumber === input.prNumber
+          && job.order < replacementJob.order;
+      })
+      .map((run) => run.id);
   }
 
   async getRepositoryAssuranceRun(
@@ -114,7 +150,6 @@ function input(
   store: FakeAssuranceStore,
   overrides: Partial<RecordDiffReviewAssuranceInput> = {},
 ): RecordDiffReviewAssuranceInput {
-  let id = 0;
   let tick = 0;
   return {
     store,
@@ -151,7 +186,7 @@ function input(
     maxDiffChars: 60_000,
     timeoutMs: 120_000,
     now: () => `2026-07-29T00:00:0${tick++}.000Z`,
-    nextId: (kind) => `${kind}-${++id}`,
+    nextId: store.nextId,
     ...overrides,
   };
 }
@@ -214,6 +249,60 @@ describe("diff review assurance projection", () => {
         errorCode: "DIFF_REVIEW_FAILED",
       }),
     ]));
+  });
+
+  it("supersedes only an older active run for the same tenant, PR, and program", async () => {
+    const store = new FakeAssuranceStore();
+    const oldRequest = input(store, {
+      review: {
+        orgId: "org-1",
+        installationId: "installation-1",
+        repo: "owner/repository",
+        prNumber: 42,
+        headSha: "head-old",
+      },
+    });
+    const { result: _oldResult, changedFiles: _oldFiles, ...oldStart } = oldRequest;
+    const old = await startDiffReviewAssurance(oldStart);
+
+    store.jobs.set("job-other-pr", { order: 2, prNumber: 99 });
+    const otherRequest = input(store, {
+      jobId: "job-other-pr",
+      review: {
+        orgId: "org-1",
+        installationId: "installation-1",
+        repo: "owner/repository",
+        prNumber: 99,
+        headSha: "head-other-pr",
+      },
+    });
+    const { result: _otherResult, changedFiles: _otherFiles, ...otherStart } = otherRequest;
+    const other = await startDiffReviewAssurance(otherStart);
+
+    store.jobs.set("job-new", { order: 3, prNumber: 42 });
+    const replacementRequest = input(store, {
+      jobId: "job-new",
+      review: {
+        orgId: "org-1",
+        installationId: "installation-1",
+        repo: "owner/repository",
+        prNumber: 42,
+        headSha: "head-new",
+      },
+    });
+    const {
+      result: _replacementResult,
+      changedFiles: _replacementFiles,
+      ...replacementStart
+    } = replacementRequest;
+    const replacement = await startDiffReviewAssurance(replacementStart);
+
+    expect(store.runs.get(old!.runId)).toMatchObject({
+      status: "superseded",
+      supersededByRunId: replacement!.runId,
+    });
+    expect(store.runs.get(other!.runId)?.status).toBe("running");
+    expect(store.runs.get(replacement!.runId)?.status).toBe("running");
   });
 
   it("does not persist a run without tenant and exact-head identity", async () => {

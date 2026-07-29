@@ -5,12 +5,13 @@
  * the idempotency identity and lifecycle matrices without requiring a database.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { RepositoryAssuranceRun } from "@kinqs/brainrouter-types/review";
 import {
   isAssuranceRunTransitionAllowed,
   isAssuranceStageTransitionAllowed,
   isSourceSnapshotTransitionAllowed,
+  listReplaceableRepositoryAssuranceRunIds,
   repositoryAssuranceIdempotencyKey,
 } from "./assuranceQueries.js";
 
@@ -115,5 +116,35 @@ describe("repository assurance persistence policy", () => {
     expect(isSourceSnapshotTransitionAllowed("ready", "stale")).toBe(true);
     expect(isSourceSnapshotTransitionAllowed("partial", "ready")).toBe(false);
     expect(isSourceSnapshotTransitionAllowed("stale", "pending")).toBe(false);
+  });
+
+  it("selects only older active heads for the same tenant and PR", async () => {
+    const rows = vi.fn(async (_sql: string, _params?: unknown[]) => [{ id: "run-old" }]);
+    const result = await listReplaceableRepositoryAssuranceRunIds(
+      { rows } as never,
+      {
+        orgId: "org-1",
+        forge: "github",
+        repository: "owner/repository",
+        prNumber: 42,
+        program: "security_review",
+        replacementRunId: "run-new",
+      },
+    );
+    expect(result).toEqual(["run-old"]);
+    const [sql, params] = rows.mock.calls[0]!;
+    expect(sql).toContain("prior.status IN ('queued', 'running')");
+    expect(sql).toContain("prior.head_sha <> replacement.head_sha");
+    expect(sql).toContain("prior_job.tenant = $1");
+    expect(sql).toContain("prior_job.created_at < replacement_job.created_at");
+    expect(sql).toContain("prior_job.input_json::jsonb ->> 'prNumber'");
+    expect(params).toEqual([
+      "org-1",
+      "run-new",
+      "github",
+      "owner/repository",
+      "security_review",
+      "42",
+    ]);
   });
 });
