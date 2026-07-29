@@ -14,11 +14,9 @@ import { recordDenial } from '../../exec/runtime/recentDenials.js';
 import { readGoal } from '../../goal/store/goalStore.js';
 import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../../hooks/hookifyStore.js';
 import { runHooks, parseHookDecision, collectStopAdditionalContext } from '../../hooks/hooksStore.js';
-import { extractToolText } from '../../mcp/mcpUtils.js';
 import { listAll as listAgentDefinitions } from '../../orchestration/agents/agentRegistry.js';
 import { executeOrchestrationTool, synthesizeDelegateTools, OrchestrationContext } from '../../orchestration/tools.js';
 import {
-  createActiveTurnOrchestrationRuntime,
   isOrchestrationRuntimeUnavailableError,
 } from '../../orchestration/runtime/activeTurnRuntime.js';
 import { compactToolOutput } from '../../prompt/compaction/toolCompaction.js';
@@ -33,7 +31,6 @@ import {
   pendingSteeringConstraint,
 } from '../../task/steeringReceiptStore.js';
 import { evaluateSteeringToolGate } from '../../task/steeringReconciliationGate.js';
-import { readWorkContract } from '../../task/workContractStore.js';
 import { isInternalSessionKey } from '../../session/transcript/sessionStore.js';
 import { readPlan } from '../../task/taskStore.js';
 import { startSpan, traceEvent } from '../../telemetry/tracing/tracing.js';
@@ -51,10 +48,9 @@ import { applyToolScope, rankAndCapTools, toolNameMatchesAny } from '../../tool/
 import { resolveToolVisible } from '../../tool/policy/toolPolicy.js';
 import { extractCacheStats } from '../../util/tokens/cacheStats.js';
 import { unsynthesizedChildIds, mergePendingChildIds } from '../../util/agentloop/childResume.js';
-import { applyFederationIdentity } from '../../util/agentloop/federationIdentity.js';
 import { sanitizeModelArtifacts } from '../../util/agentloop/outputSanitize.js';
 import { makeResultHandoff, formatHandoffForModel, attachCompactedResultHandoff } from '../../util/result/resultHandoff.js';
-import { isChildSynthesisTool, resultHasChildOutput, looksLikeChildSynthesisPunt } from '../../util/agentloop/synthesisGuard.js';
+import { looksLikeChildSynthesisPunt } from '../../util/agentloop/synthesisGuard.js';
 import { classifyDeferral, buildDeliverableCorrection } from '../guards/deliverableCheck.js';
 import { classifyDenial, formatDenialResult } from '../guards/denialMessage.js';
 import { applyPendingSteeringAtBoundary } from './steering.js';
@@ -81,10 +77,6 @@ import { explainUnknownToolName } from '../agent.js';
 import { refreshWorkspaceCapabilityState } from '../workspaceCapabilityState.js';
 import { resolveActiveTurnOrchestration } from '../../workspace/activeTurnOrchestration.js';
 import { resolveRequiredSkillActivation } from '../../workspace/requiredSkillActivation.js';
-import {
-  adaptWorkspaceSkillCatalogText,
-  resolveWorkspaceManagedSkill,
-} from '../../workspace/skillToolAdapter.js';
 import { loadWorkspaceManifest } from '../../workspace/manifest.js';
 import {
   resolveWorkspaceToolSelection,
@@ -100,6 +92,7 @@ import { normalizeTurnCompletionAnswer } from './completionPhase.js';
 import { prepareTurnContextPhase } from './contextPreparationPhase.js';
 import { repairAndRecordToolCalls } from './toolCallRepairPhase.js';
 import { authorizeToolCall } from './toolAuthorizationPhase.js';
+import { invokeAuthorizedToolAdapter } from './toolAdapterInvocationPhase.js';
 import {
   buildRequiredDelegatedStageCorrection,
   buildRequiredProfileStageCorrection,
@@ -1663,78 +1656,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
             const serverId = this.serverIdFromMcpToolName(name);
             if (serverId) this.mcpServerCallCounts.set(serverId, (this.mcpServerCallCounts.get(serverId) ?? 0) + 1);
           }
-          if (isLocal) {
-            let lifecycleSummarySuffix = '';
-            let assertOrchestrationActive: (toolName: string) => void = () => {};
-            const activeOrchestrationRuntime = createActiveTurnOrchestrationRuntime({
-              ownerSessionKey: turnSessionKey,
-              currentSessionKey: () => this.sessionKey,
-              signal: this.turnAbort!.signal,
-              invoke: async (toolName, toolArgs, metadata) => {
-                  // High-cost workflow launch policy is extension metadata, not
-                  // a native-name check in the turn loop.
-                  if (metadata.workflowLaunch && this.silent) {
-                    throw new Error(`${toolName}: nested workflows are blocked for spawned/child agents because they run unattended.`);
-                  }
-                  if (metadata.workflowLaunch && !(await this.confirmRunWorkflowLaunch(toolArgs))) {
-                    throw new Error(`${toolName} declined — the high-cost workflow launch was not approved.`);
-                  }
-                  // Approval is asynchronous; the user may interrupt or switch
-                  // sessions while the prompt is open. Re-check the same owner
-                  // immediately before any work is accepted.
-                  assertOrchestrationActive(toolName);
-                  const output = await executeOrchestrationTool(toolName, toolArgs, buildOrchestrationContext());
-                  trackChildObservation(toolName, toolArgs, output, spawnedChildIdsThisTurn, waitedChildIdsThisTurn);
-                  if (isChildSynthesisTool(toolName) && resultHasChildOutput(output)) childOutputDeliveredThisTurn = true;
-                  return output;
-              },
-            });
-            assertOrchestrationActive = activeOrchestrationRuntime.assertActive;
-            try {
-              resultText = await this.executeLocalTool(name, args, {
-                orchestrationRuntime: activeOrchestrationRuntime.port,
-                lifecycleRuntime: {
-                  afterInvoke: (kind, toolArgs) => {
-                    if (kind === 'track-automation') {
-                      let automationCount = 0;
-                      try { automationCount = this.applyTrackCodeSignalAutomation(toolArgs, callbacks); } catch { /* best-effort */ }
-                      if (automationCount > 0) lifecycleSummarySuffix = ` | automation advanced ${automationCount} Track item${automationCount === 1 ? '' : 's'}`;
-                    } else if (kind === 'goal-reconcile') {
-                      try { this.autoReconcileGoalCompletion(callbacks); } catch { /* best-effort */ }
-                    } else if (kind === 'plan-update') {
-                      if (Array.isArray(toolArgs.plan) && callbacks.onPlanUpdate) {
-                        callbacks.onPlanUpdate(toolArgs.plan, toolArgs.explanation);
-                      }
-                      const receiptId = typeof toolArgs.steeringReceiptId === 'string'
-                        ? toolArgs.steeringReceiptId.trim()
-                        : '';
-                      const receipt = receiptId
-                        ? readWorkContract(this.workspaceRoot, this.sessionKey)
-                          ?.steering.find((candidate) => candidate.id === receiptId)
-                        : undefined;
-                      if (receipt) callbacks.onSteerReceipt?.(receipt);
-                    } else if (kind === 'steer-reconcile') {
-                      const receiptId = String(toolArgs.receiptId ?? '');
-                      const receipt = readWorkContract(this.workspaceRoot, this.sessionKey)
-                        ?.steering.find((candidate) => candidate.id === receiptId);
-                      if (receipt) callbacks.onSteerReceipt?.(receipt);
-                    }
-                  },
-                },
-              });
-            } finally {
-              // A required extension may invoke the port only while its own
-              // active tool call is on the stack. Captured/deferred calls fail
-              // terminally instead of replaying after the owning turn.
-              activeOrchestrationRuntime.close();
-              // profile_stage can activate or finish a skill inside this same
-              // model turn. Rebuild the request-facing subset immediately so
-              // the next iteration sees the stage policy instead of the
-              // broader tool list captured at turn start.
-              refreshActiveSkillTools();
-            }
-            summary = getToolSummary(name, args, resultText) + lifecycleSummarySuffix;
-          } else if (this.lastBudgetHiddenTools.has(name)) {
+          if (!isLocal && this.lastBudgetHiddenTools.has(name)) {
             // MAS-P4-T1: the model called an MCP tool that was trimmed from
             // this turn's inventory by the tool budget. It's real and
             // available — return a structured hint so the next turn can
@@ -1748,54 +1670,29 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
             });
             summary = `tool "${name}" hidden by budget`;
           } else {
-            // Federation tools need THIS agent's federation identity, not
-            // the chat sessionKey the LLM sees in its prompt. Rewrite the
-            // identity fields at the boundary so "check my inbox" reads the
-            // key the poller/registry actually used (otherwise the read
-            // misses the federation-key inbox and comes back empty).
-            const mcpArgs = applyFederationIdentity(name, args, this.federationSessionKey) as Record<string, any>;
-            const mcpTool = mcpToolByName.get(name);
-            await this.approveMcpToolCall(name, mcpTool, mcpArgs);
-            const rawMcpName = String(mcpTool?.__rawName ?? this.rawMcpToolName(name));
-            const mcpServerId = typeof mcpTool?.__serverId === 'string'
-              ? mcpTool.__serverId
-              : this.serverIdFromMcpToolName(name);
-            const mcpStatus = mcpServerId && typeof (this.mcpClient as any).getStatus === 'function'
-              ? (this.mcpClient as any).getStatus(mcpServerId)
-              : undefined;
-            const isBrainrouterSkillTool = ['list_skills', 'get_skill', 'search_skills'].includes(rawMcpName)
-              && (!mcpServerId || mcpStatus?.identity === 'brainrouter');
-            const localSkillResult = isBrainrouterSkillTool
-              && rawMcpName === 'get_skill'
-              && typeof mcpArgs.name === 'string'
-              && mcpArgs.file === undefined
-              ? resolveWorkspaceManagedSkill(this.workspaceRoot, mcpArgs.name, mcpArgs.section ?? 'workflow')
-              : undefined;
-            const mcpRes = localSkillResult
-              ?? await this.mcpClient.callTool(name, mcpArgs, { signal: this.turnAbort?.signal });
-            if (mcpRes.isError) {
-              isError = true;
-            }
-            resultText = extractToolText(mcpRes);
-            if (
-              isBrainrouterSkillTool &&
-              rawMcpName === 'get_skill' &&
-              !isError &&
-              typeof mcpArgs.name === 'string' &&
-              resultText.trim().length > 0
-            ) {
-              loadedRequiredSkills.add(mcpArgs.name);
-            }
-            if (isBrainrouterSkillTool && (rawMcpName === 'list_skills' || rawMcpName === 'search_skills')) {
-              resultText = adaptWorkspaceSkillCatalogText({
-                workspaceRoot: this.workspaceRoot,
-                activeCapabilities: this.activeWorkspaceCapabilities.active,
-                text: resultText,
-                tool: rawMcpName,
-                args: mcpArgs,
-              });
-            }
-            summary = `MCP: ${resultText.length} chars returned`;
+            const invocation = await invokeAuthorizedToolAdapter({
+              agent: this,
+              callbacks,
+              name,
+              args,
+              isLocal,
+              delegationLaunch: Boolean(delegationLaunch),
+              turnSessionKey,
+              mcpTool: mcpToolByName.get(name),
+              candidateNames: candidates,
+              loadedRequiredSkills,
+              spawnedChildIds: spawnedChildIdsThisTurn,
+              waitedChildIds: waitedChildIdsThisTurn,
+              buildOrchestrationContext,
+              refreshActiveSkillTools,
+              markChildOutputDelivered: () => {
+                childOutputDeliveredThisTurn = true;
+              },
+            });
+            resultText = invocation.resultText;
+            isError = invocation.isError;
+            summary = invocation.summary;
+            runtimeUnavailable = invocation.runtimeUnavailable;
           }
         } catch (err: any) {
           isError = true;
