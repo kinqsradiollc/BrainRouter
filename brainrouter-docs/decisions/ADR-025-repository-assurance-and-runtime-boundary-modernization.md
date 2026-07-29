@@ -520,6 +520,14 @@ the repository's normal security-review process before merge.
 | A25-8b | `[ ]` | Extract finding identity/lifecycle and program policy behind the curated review façade while preserving local review compatibility | Existing parser, lens, lifecycle, severity, stale-diff, and gate fixtures retain behavior; assurance finding lineage gains deterministic fingerprint and disposition adapters |
 | A25-8c | `[ ]` | Introduce review ports and campaign services without importing Git, database, queue, provider SDK, or hosts into Core policy | In-memory port fixtures cover exact-revision run creation, stage transitions, cancellation, partial failure, candidate verification, and idempotent lifecycle reconciliation |
 
+### A25-9 durable assurance delivery slices
+
+| ID | Status | Deliverable | Acceptance evidence |
+|---|---|---|---|
+| A25-9a | `[x]` | Add normalized, tenant-scoped assurance run, source snapshot, coverage, and stage-attempt receipts beside the existing memory-job ledger | Migration and Postgres adapter preserve exact revision and policy identity; focused pure and scratch-Postgres fixtures cover equivalent-run idempotency, monotonic receipt transitions, explicit partial completion, cross-tenant isolation, terminal immutability, and same-scope supersession |
+| A25-9b | `[ ]` | Add dependency-free protocol commands/events for durable run and receipt projections without duplicating domain policy | Protocol build and structural-guard fixtures cover every explicit run, source, coverage, and stage state |
+| A25-9c | `[ ]` | Adopt the durable run adapter in backend review scheduling/execution and newer-head cancellation | Existing review-job fixtures plus exact-head, idempotent retry, partial analyzer, and superseded-push integration fixtures retain the legacy diff-review path while emitting the durable record |
+
 ### Migration guardrails
 
 - Begin with the inventory and contracts; do not combine extraction with feature

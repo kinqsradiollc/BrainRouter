@@ -143,6 +143,7 @@ import * as contradiction from "./queries/contradictionQueries.js";
 import * as skillFocus from "./queries/skillFocusQueries.js";
 import * as session from "./queries/sessionQueries.js";
 import * as job from "./queries/jobQueries.js";
+import * as assurance from "./queries/assuranceQueries.js";
 import * as compression from "./queries/compressionQueries.js";
 import * as atlasIdentity from "./queries/atlasIdentityQueries.js";
 import * as graph from "./queries/graphQueries.js";
@@ -1181,6 +1182,51 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
 
   public getMemoryJobKindAggregates(options?: { now?: string }): Promise<MemoryJobKindAggregate[]> {
     return job.getMemoryJobKindAggregates(this.exec, options);
+  }
+
+  // ── repository assurance receipts ───────────────────────────────────────
+
+  public createRepositoryAssuranceRun(
+    input: assurance.CreateRepositoryAssuranceRunInput,
+  ): Promise<import("@kinqs/brainrouter-types/review").RepositoryAssuranceRun> {
+    return assurance.createRepositoryAssuranceRun(this.exec, input);
+  }
+
+  public getRepositoryAssuranceRun(
+    orgId: string,
+    runId: string,
+  ): Promise<import("@kinqs/brainrouter-types/review").RepositoryAssuranceRun | null> {
+    return assurance.getRepositoryAssuranceRun(this.exec, orgId, runId);
+  }
+
+  public transitionRepositoryAssuranceRun(
+    input: assurance.AssuranceRunTransition,
+  ): Promise<import("@kinqs/brainrouter-types/review").RepositoryAssuranceRun> {
+    return assurance.transitionRepositoryAssuranceRun(this.exec, input);
+  }
+
+  public updateRepositorySourceSnapshot(
+    orgId: string,
+    runId: string,
+    source: import("@kinqs/brainrouter-types/review").SourceSnapshot,
+  ): Promise<import("@kinqs/brainrouter-types/review").SourceSnapshot> {
+    return assurance.updateRepositorySourceSnapshot(this.exec, orgId, runId, source);
+  }
+
+  public updateRepositoryAssuranceCoverage(
+    orgId: string,
+    runId: string,
+    coverage: import("@kinqs/brainrouter-types/review").AssuranceCoverage,
+  ): Promise<import("@kinqs/brainrouter-types/review").AssuranceCoverage> {
+    return assurance.updateRepositoryAssuranceCoverage(this.exec, orgId, runId, coverage);
+  }
+
+  public recordRepositoryAssuranceStage(
+    orgId: string,
+    runId: string,
+    stage: import("@kinqs/brainrouter-types/review").AssuranceStageReceipt,
+  ): Promise<import("@kinqs/brainrouter-types/review").AssuranceStageReceipt> {
+    return assurance.recordRepositoryAssuranceStage(this.exec, orgId, runId, stage);
   }
 
   // ── compression cache (CCR) ──────────────────────────────────────────────
