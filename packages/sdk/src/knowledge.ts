@@ -1,6 +1,4 @@
-export interface BrainRouterRequestOptions {
-  signal?: AbortSignal;
-}
+export type { BrainRouterRequestOptions } from "./request.js";
 
 export type KnowledgeDocumentStatus = "queued" | "parsing" | "ready" | "failed";
 export type KnowledgeInlineSourceFormat = "text" | "markdown" | "html";

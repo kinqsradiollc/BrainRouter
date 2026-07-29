@@ -17,3 +17,4 @@ export * from "./useKnowledgeBases.js";
 export * from "./useKnowledgeDocuments.js";
 export * from "./useKnowledgeDocumentStatus.js";
 export * from "./useKnowledgeSearch.js";
+export * from "./useReviewAssurance.js";
