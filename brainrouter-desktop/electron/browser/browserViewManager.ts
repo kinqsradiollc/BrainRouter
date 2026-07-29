@@ -689,146 +689,248 @@ export class BrowserViewManager {
         this.setStatus(tab, `Blocked unsafe navigation to ${boundBrowserText(url, 256)}`);
       }
     };
-    contents.on('will-navigate', gate);
-    contents.on('will-redirect', gate);
-    contents.on('did-navigate', updateNavigation);
-    contents.on('did-navigate-in-page', updateNavigation);
-    contents.on('did-start-loading', () => { tab.loading = true; this.emitState(); });
-    contents.on('did-stop-loading', () => { tab.loading = false; updateNavigation(); });
-    contents.on('page-title-updated', (_event, title) => {
-      tab.title = boundBrowserText(title || 'New tab', 256);
-      this.updateHumanChallenge(tab);
-      this.persistWorkspace();
-      this.emitState();
-    });
-    contents.on('page-favicon-updated', (_event, favicons) => { tab.faviconUrl = favicons.find((value) => /^https?:|^data:image\//i.test(value)) ?? null; this.emitState(); });
-    contents.on('media-started-playing', () => { tab.audible = true; this.emitState(); });
-    contents.on('media-paused', () => { tab.audible = false; this.emitState(); });
-    contents.on('render-process-gone', (_event, details) => { tab.crashed = true; tab.loading = false; this.setStatus(tab, `Tab crashed (${details.reason}). Reload to recover.`); this.emitState(); });
-    contents.on('did-fail-load', (_event, code, description, validatedUrl, isMainFrame) => {
-      if (!isMainFrame || code === -3) return;
-      tab.loading = false;
-      this.setStatus(tab, `Load failed: ${description} (${boundBrowserText(validatedUrl, 512)})`);
-      this.emitState();
-    });
-    contents.on('console-message', (details) => {
-      this.nativeViews.recordConsole(tab.id, {
-        level: details.level,
-        text: boundBrowserText(details.message, 4_096),
-        source: boundBrowserText(details.sourceId, 512),
-        line: details.lineNumber,
-        at: Date.now(),
-      });
-    });
-    contents.on('before-input-event', (event, input) => {
-      if (!this.isSyntheticAgentInput(tab.id)) {
-        if (this.visibleAgentPin?.tabId === tab.id) {
-          event.preventDefault();
-          this.visibleAgentPin.userTakeoverRequested = true;
-          this.agentTakeoverHandler?.();
-          return;
-        }
-        this.releaseAgentControl(tab.id);
-      }
-      this.handleShortcut(event, input);
-    });
-    contents.on('before-mouse-event', (event) => {
-      if (!this.isSyntheticAgentInput(tab.id)) {
-        if (this.visibleAgentPin?.tabId === tab.id) {
-          event.preventDefault();
-          this.visibleAgentPin.userTakeoverRequested = true;
-          this.agentTakeoverHandler?.();
-          return;
-        }
-        this.releaseAgentControl(tab.id);
-      }
-    });
-    contents.on('context-menu', (_event, params) => this.showContextMenu(tab, params));
-    contents.on('login', (event, authenticationResponseDetails, authInfo, callback) => {
-      event.preventDefault();
-      if (authInfo.isProxy) {
-        // Proxy credentials are deliberately unsupported: presenting the
-        // destination origin for a 407 challenge can trick a user into sending
-        // site credentials to an intermediary. Fail closed without a secret UI.
-        this.setStatus(tab, `Proxy authentication was blocked for ${boundBrowserText(`${authInfo.host}:${authInfo.port}`, 512)}.`);
-        callback();
-        return;
-      }
-      let origin = authenticationResponseDetails.url;
-      try { origin = new URL(authenticationResponseDetails.url).origin; } catch { /* retain bounded URL */ }
-      const realm = boundBrowserText(authInfo.realm || authInfo.scheme || 'this site', 256);
-      this.pendingAuthPrompts.get(tab.id)?.abort();
-      const controller = new AbortController();
-      this.pendingAuthPrompts.set(tab.id, controller);
-      this.selectTab(tab.id);
-      void promptForHttpAuth(this.win, {
-        origin: boundBrowserText(origin || `${authInfo.host}:${authInfo.port}`, 512),
-        realm,
-      }, { signal: controller.signal, timeoutMs: DIALOG_TIMEOUT_MS }).then((credentials) => {
-        if (!credentials) callback();
-        else callback(boundBrowserText(credentials.username, 1_024), boundBrowserText(credentials.password, 8_192));
-      }, () => callback()).finally(() => {
-        if (this.pendingAuthPrompts.get(tab.id) === controller) this.pendingAuthPrompts.delete(tab.id);
-      });
-    });
-    contents.on('certificate-error', (event, url, error, certificate, callback, isMainFrame) => {
-      event.preventDefault();
-      if (!isMainFrame) { callback(false); return; }
-      let origin = url;
-      try { origin = new URL(url).origin; } catch { /* retain bounded URL */ }
-      const subject = certificate.subjectName || certificate.subject?.commonName || 'unknown certificate';
-      this.promptManager.presentDialog(tab, {
-        kind: 'certificate',
-        message: `${boundBrowserText(error, 256)} (${boundBrowserText(subject, 256)}). Continue only if you trust this site.`,
-        origin: boundBrowserText(origin, 512),
-      }, (response) => callback(response.accept));
-    });
-    contents.debugger.on('message', (_event, method, params) => {
-      if (method !== 'Page.javascriptDialogOpening' || !params || typeof params !== 'object') return;
-      const details = params as { type?: unknown; message?: unknown; defaultPrompt?: unknown; url?: unknown };
-      const kind = ['alert', 'confirm', 'prompt', 'beforeunload'].includes(String(details.type))
-        ? String(details.type) as 'alert' | 'confirm' | 'prompt' | 'beforeunload'
-        : 'alert';
-      this.promptManager.presentDialog(tab, {
-        kind,
-        message: boundBrowserText(details.message, 4_096),
-        defaultValue: kind === 'prompt' ? boundBrowserText(details.defaultPrompt, 4_096) : undefined,
-        origin: typeof details.url === 'string' ? boundBrowserText(details.url, 512) : undefined,
-      }, (response) => {
-        if (contents.isDestroyed() || !contents.debugger.isAttached()) return;
-        void contents.debugger.sendCommand('Page.handleJavaScriptDialog', {
-          accept: response.accept,
-          ...(kind === 'prompt' ? { promptText: boundBrowserText(response.value, 4_096) } : {}),
-        }).catch((error) => this.setStatus(tab, `Could not answer page dialog: ${error instanceof Error ? error.message : String(error)}`));
-      });
-    });
-    try {
-      this.ensureDebugger(contents);
-    } catch (error) {
-      // Browsing remains usable with Chromium's native dialogs if CDP is
-      // unavailable. Agent dialog control will fail closed instead of injecting
-      // a guest preload or weakening the page sandbox.
-      this.setStatus(tab, `Dialog automation unavailable: ${error instanceof Error ? error.message : String(error)}`);
-    }
-    contents.setWindowOpenHandler((details) => {
-      if (!this.isSafeUrl(details.url) && details.url !== 'about:blank') return { action: 'deny' };
-      try {
-        const inheritedPolicy = this.agentNavigationPolicies.get(tab.id);
-        const agentControlled = this.agentControlledTabs.has(tab.id);
-        const child = this.createTab(details.url === 'about:blank' ? BROWSER_BLANK_URL : details.url, !agentControlled, {
-          deferLoad: true,
-          agentControlled,
-          agentPolicy: inheritedPolicy ?? {},
+    this.nativeViews.wire(tab.id, {
+      gate,
+      updateNavigation,
+      startLoading: () => {
+        tab.loading = true;
+        this.emitState();
+      },
+      stopLoading: () => {
+        tab.loading = false;
+        updateNavigation();
+      },
+      updateTitle: (title) => {
+        tab.title = boundBrowserText(title || 'New tab', 256);
+        this.updateHumanChallenge(tab);
+        this.persistWorkspace();
+        this.emitState();
+      },
+      updateFavicons: (favicons) => {
+        tab.faviconUrl = favicons.find(
+          (value) => /^https?:|^data:image\//i.test(value),
+        ) ?? null;
+        this.emitState();
+      },
+      mediaStarted: () => {
+        tab.audible = true;
+        this.emitState();
+      },
+      mediaPaused: () => {
+        tab.audible = false;
+        this.emitState();
+      },
+      renderProcessGone: (reason) => {
+        tab.crashed = true;
+        tab.loading = false;
+        this.setStatus(tab, `Tab crashed (${reason}). Reload to recover.`);
+        this.emitState();
+      },
+      loadFailed: (code, description, validatedUrl, isMainFrame) => {
+        if (!isMainFrame || code === -3) return;
+        tab.loading = false;
+        this.setStatus(
+          tab,
+          `Load failed: ${description} (${boundBrowserText(validatedUrl, 512)})`,
+        );
+        this.emitState();
+      },
+      consoleMessage: (details) => {
+        this.nativeViews.recordConsole(tab.id, {
+          level: details.level,
+          text: boundBrowserText(details.message, 4_096),
+          source: boundBrowserText(details.sourceId, 512),
+          line: details.lineNumber,
+          at: Date.now(),
         });
-        if (agentControlled) {
-          this.downloadManager.transferAgentAllowance(tab.id, child.id);
+      },
+      beforeInput: (event, input) => {
+        if (!this.isSyntheticAgentInput(tab.id)) {
+          if (this.visibleAgentPin?.tabId === tab.id) {
+            event.preventDefault();
+            this.visibleAgentPin.userTakeoverRequested = true;
+            this.agentTakeoverHandler?.();
+            return;
+          }
+          this.releaseAgentControl(tab.id);
         }
-        const childContents = this.nativeViews.contents(child.id);
-        if (!childContents) return { action: 'deny' };
-        return { action: 'allow', createWindow: () => childContents };
-      } catch {
-        return { action: 'deny' };
-      }
+        this.handleShortcut(event, input);
+      },
+      beforeMouse: (event) => {
+        if (!this.isSyntheticAgentInput(tab.id)) {
+          if (this.visibleAgentPin?.tabId === tab.id) {
+            event.preventDefault();
+            this.visibleAgentPin.userTakeoverRequested = true;
+            this.agentTakeoverHandler?.();
+            return;
+          }
+          this.releaseAgentControl(tab.id);
+        }
+      },
+      contextMenu: (params) => {
+        this.showContextMenu(tab, params);
+      },
+      login: (event, authenticationResponseDetails, authInfo, callback) => {
+        event.preventDefault();
+        if (authInfo.isProxy) {
+          // Proxy credentials are deliberately unsupported: presenting the
+          // destination origin for a 407 challenge can trick a user into
+          // sending site credentials to an intermediary.
+          this.setStatus(
+            tab,
+            `Proxy authentication was blocked for ${boundBrowserText(`${authInfo.host}:${authInfo.port}`, 512)}.`,
+          );
+          callback();
+          return;
+        }
+        let origin = authenticationResponseDetails.url;
+        try {
+          origin = new URL(authenticationResponseDetails.url).origin;
+        } catch {
+          // Retain the bounded URL.
+        }
+        const realm = boundBrowserText(
+          authInfo.realm || authInfo.scheme || 'this site',
+          256,
+        );
+        this.pendingAuthPrompts.get(tab.id)?.abort();
+        const controller = new AbortController();
+        this.pendingAuthPrompts.set(tab.id, controller);
+        this.selectTab(tab.id);
+        void promptForHttpAuth(this.win, {
+          origin: boundBrowserText(
+            origin || `${authInfo.host}:${authInfo.port}`,
+            512,
+          ),
+          realm,
+        }, {
+          signal: controller.signal,
+          timeoutMs: DIALOG_TIMEOUT_MS,
+        }).then((credentials) => {
+          if (!credentials) callback();
+          else {
+            callback(
+              boundBrowserText(credentials.username, 1_024),
+              boundBrowserText(credentials.password, 8_192),
+            );
+          }
+        }, () => callback()).finally(() => {
+          if (this.pendingAuthPrompts.get(tab.id) === controller) {
+            this.pendingAuthPrompts.delete(tab.id);
+          }
+        });
+      },
+      certificateError: (
+        event,
+        url,
+        error,
+        certificate,
+        callback,
+        isMainFrame,
+      ) => {
+        event.preventDefault();
+        if (!isMainFrame) {
+          callback(false);
+          return;
+        }
+        let origin = url;
+        try {
+          origin = new URL(url).origin;
+        } catch {
+          // Retain the bounded URL.
+        }
+        const subject = certificate.subjectName
+          || certificate.subject?.commonName
+          || 'unknown certificate';
+        this.promptManager.presentDialog(tab, {
+          kind: 'certificate',
+          message: `${boundBrowserText(error, 256)} (${boundBrowserText(subject, 256)}). Continue only if you trust this site.`,
+          origin: boundBrowserText(origin, 512),
+        }, (response) => callback(response.accept));
+      },
+      debuggerMessage: (method, params) => {
+        if (
+          method !== 'Page.javascriptDialogOpening'
+          || !params
+          || typeof params !== 'object'
+        ) return;
+        const details = params as {
+          type?: unknown;
+          message?: unknown;
+          defaultPrompt?: unknown;
+          url?: unknown;
+        };
+        const kind = ['alert', 'confirm', 'prompt', 'beforeunload'].includes(
+          String(details.type),
+        )
+          ? String(details.type) as 'alert' | 'confirm' | 'prompt' | 'beforeunload'
+          : 'alert';
+        this.promptManager.presentDialog(tab, {
+          kind,
+          message: boundBrowserText(details.message, 4_096),
+          defaultValue: kind === 'prompt'
+            ? boundBrowserText(details.defaultPrompt, 4_096)
+            : undefined,
+          origin: typeof details.url === 'string'
+            ? boundBrowserText(details.url, 512)
+            : undefined,
+        }, (response) => {
+          if (contents.isDestroyed() || !contents.debugger.isAttached()) return;
+          void contents.debugger.sendCommand(
+            'Page.handleJavaScriptDialog',
+            {
+              accept: response.accept,
+              ...(kind === 'prompt'
+                ? { promptText: boundBrowserText(response.value, 4_096) }
+                : {}),
+            },
+          ).catch((error) => {
+            this.setStatus(
+              tab,
+              `Could not answer page dialog: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          });
+        });
+      },
+      initializeDebugger: (wiredContents) => {
+        try {
+          this.ensureDebugger(wiredContents);
+        } catch (error) {
+          // Browsing remains usable with native dialogs when CDP is unavailable.
+          // Agent dialog control fails closed without weakening page isolation.
+          this.setStatus(
+            tab,
+            `Dialog automation unavailable: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      },
+      openWindow: (details) => {
+        if (
+          !this.isSafeUrl(details.url)
+          && details.url !== 'about:blank'
+        ) return { action: 'deny' };
+        try {
+          const inheritedPolicy = this.agentNavigationPolicies.get(tab.id);
+          const agentControlled = this.agentControlledTabs.has(tab.id);
+          const child = this.createTab(
+            details.url === 'about:blank' ? BROWSER_BLANK_URL : details.url,
+            !agentControlled,
+            {
+              deferLoad: true,
+              agentControlled,
+              agentPolicy: inheritedPolicy ?? {},
+            },
+          );
+          if (agentControlled) {
+            this.downloadManager.transferAgentAllowance(tab.id, child.id);
+          }
+          const childContents = this.nativeViews.contents(child.id);
+          if (!childContents) return { action: 'deny' };
+          return { action: 'allow', createWindow: () => childContents };
+        } catch {
+          return { action: 'deny' };
+        }
+      },
     });
   }
 

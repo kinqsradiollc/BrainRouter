@@ -10,8 +10,18 @@ import type { BrowserTab } from './protocol.js';
 interface FakeContents {
   id: number;
   destroyed: boolean;
+  listeners: Map<string, Array<(...args: unknown[]) => void>>;
+  debugger: {
+    listeners: Map<string, Array<(...args: unknown[]) => void>>;
+    on(event: string, listener: (...args: unknown[]) => void): void;
+    emit(event: string, ...args: unknown[]): void;
+  };
+  windowOpenHandler?: (details: unknown) => unknown;
   close(): void;
+  emit(event: string, ...args: unknown[]): void;
   isDestroyed(): boolean;
+  on(event: string, listener: (...args: unknown[]) => void): void;
+  setWindowOpenHandler(handler: (details: unknown) => unknown): void;
 }
 
 interface FakeView {
@@ -51,11 +61,42 @@ function fixture(): {
   const detached: FakeView[] = [];
   const host: BrowserNativeViewHost = {
     createView: () => {
+      const debuggerListeners = new Map<
+        string,
+        Array<(...args: unknown[]) => void>
+      >();
       const contents: FakeContents = {
         id: views.length + 1,
         destroyed: false,
+        listeners: new Map(),
+        debugger: {
+          listeners: debuggerListeners,
+          on(event, listener) {
+            const rows = debuggerListeners.get(event) ?? [];
+            rows.push(listener);
+            debuggerListeners.set(event, rows);
+          },
+          emit(event, ...args) {
+            for (const listener of debuggerListeners.get(event) ?? []) {
+              listener(...args);
+            }
+          },
+        },
         close() { this.destroyed = true; },
+        emit(event, ...args) {
+          for (const listener of this.listeners.get(event) ?? []) {
+            listener(...args);
+          }
+        },
         isDestroyed() { return this.destroyed; },
+        on(event, listener) {
+          const rows = this.listeners.get(event) ?? [];
+          rows.push(listener);
+          this.listeners.set(event, rows);
+        },
+        setWindowOpenHandler(handler) {
+          this.windowOpenHandler = handler;
+        },
       };
       const view: FakeView = {
         webContents: contents,
@@ -121,6 +162,57 @@ test('native attachment reuses the active view and detaches only on change', () 
 
   manager.attach('tab-2', { ...surface, visible: false });
   assert.deepEqual(detached, [views[0], views[1]]);
+});
+
+test('native event wiring preserves host callback order and popup policy', () => {
+  const { manager, views } = fixture();
+  manager.create('persist:workspace', () => fakeTab('tab-1'));
+  const calls: string[] = [];
+  manager.wire('tab-1', {
+    gate: (_event, url) => { calls.push(`gate:${url}`); },
+    updateNavigation: () => { calls.push('navigate'); },
+    startLoading: () => { calls.push('loading'); },
+    stopLoading: () => { calls.push('loaded'); },
+    updateTitle: (title) => { calls.push(`title:${title}`); },
+    updateFavicons: () => undefined,
+    mediaStarted: () => undefined,
+    mediaPaused: () => undefined,
+    renderProcessGone: () => undefined,
+    loadFailed: () => undefined,
+    consoleMessage: () => undefined,
+    beforeInput: () => { calls.push('input'); },
+    beforeMouse: () => undefined,
+    contextMenu: () => undefined,
+    login: () => undefined,
+    certificateError: () => undefined,
+    debuggerMessage: (method) => { calls.push(`debugger:${method}`); },
+    initializeDebugger: () => { calls.push('initialize-debugger'); },
+    openWindow: (details) => {
+      calls.push(`popup:${details.url}`);
+      return { action: 'deny' };
+    },
+  });
+
+  const contents = views[0].webContents;
+  const event = { preventDefault() {} };
+  contents.emit('will-navigate', event, 'https://next.test/');
+  contents.emit('did-navigate', event);
+  contents.emit('did-start-loading');
+  contents.emit('page-title-updated', event, 'Next');
+  contents.emit('before-input-event', event, {});
+  contents.debugger.emit('message', event, 'Page.dialog', {});
+  contents.windowOpenHandler?.({ url: 'https://popup.test/' });
+
+  assert.deepEqual(calls, [
+    'initialize-debugger',
+    'gate:https://next.test/',
+    'navigate',
+    'loading',
+    'title:Next',
+    'input',
+    'debugger:Page.dialog',
+    'popup:https://popup.test/',
+  ]);
 });
 
 test('native destruction invokes cleanup before closing and removes lookup state', () => {
