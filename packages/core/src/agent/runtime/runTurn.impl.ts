@@ -15,7 +15,7 @@ import { readGoal } from '../../goal/store/goalStore.js';
 import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../../hooks/hookifyStore.js';
 import { runHooks, parseHookDecision } from '../../hooks/hooksStore.js';
 import { listAll as listAgentDefinitions } from '../../orchestration/agents/agentRegistry.js';
-import { executeOrchestrationTool, synthesizeDelegateTools, OrchestrationContext } from '../../orchestration/tools.js';
+import { synthesizeDelegateTools, OrchestrationContext } from '../../orchestration/tools.js';
 import {
   isOrchestrationRuntimeUnavailableError,
 } from '../../orchestration/runtime/activeTurnRuntime.js';
@@ -68,8 +68,8 @@ import { resolveToolBudget, isBudgetCheckpoint, buildBudgetCheckpoint } from '..
 import { classifyForVerification, commandWritesFiles, decideVerification, buildVerificationNudge, buildDocsOnlyVerificationNote } from '../guards/verificationGate.js';
 import { browserUseAvailableFor } from '../../browser/control.js';
 import { getCurrentWorkflow } from '../../workflow/run/workflowArtifacts.js';
-import { getToolSummary, getToolPreview } from '../support/toolSummary.js';
-import { trackChildObservation, parseChildDrainTimeouts, formatChildDrainTimeoutAnswer, summarizeWaitedChildOutputs } from '../support/childObservation.js';
+import { getToolPreview } from '../support/toolSummary.js';
+import { summarizeWaitedChildOutputs } from '../support/childObservation.js';
 import { explainUnknownToolName } from '../agent.js';
 import { refreshWorkspaceCapabilityState } from '../workspaceCapabilityState.js';
 import { resolveActiveTurnOrchestration } from '../../workspace/activeTurnOrchestration.js';
@@ -99,11 +99,10 @@ import {
   resolveTurnTerminationReason,
 } from './turnFinalizationPhase.js';
 import {
-  buildRequiredDelegatedStageCorrection,
-  buildRequiredProfileStageCorrection,
   createProfileStageControllerForTurn,
   describeProfileStageTool,
 } from './profileStageRuntime.js';
+import { runChildProfileGuardPhase } from './childProfileGuardPhase.js';
 
 function sameLlmRoute(
   route: { llm: { model: string; endpoint?: string; apiKey?: string } },
@@ -940,112 +939,23 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           callbacks.onStatusUpdate('Pending steer requires typed reconciliation');
           continue;
         }
-        const unobservedChildIds = [...spawnedChildIdsThisTurn].filter((id) => !waitedChildIdsThisTurn.has(id));
-        // DESK-6 — a Stop skips the auto-drain (it bypasses both interrupt
-        // seams); the loop-top check below returns the clean interrupted answer.
-        if (unobservedChildIds.length > 0 && !this.interruptRequested) {
-          const drainTimeoutMs = Math.max(1, getCliKnobs().childDrainTimeoutMs);
-          const waitName = 'wait_agents';
-          const waitArgs = { ids: unobservedChildIds, timeoutMs: drainTimeoutMs };
-
-          callbacks.onStatusUpdate(`Auto-draining ${unobservedChildIds.length} spawned child agent${unobservedChildIds.length === 1 ? '' : 's'}...`);
-          callbacks.onToolStart(waitName, waitArgs);
-          this.lastTurnToolCalls += 1;
-
-          let waitResultText = '';
-          let waitFailed = false;
-          let waitSummary = '';
-          try {
-            waitResultText = await executeOrchestrationTool(waitName, waitArgs, buildOrchestrationContext());
-            waitSummary = getToolSummary(waitName, waitArgs, waitResultText);
-            trackChildObservation(waitName, waitArgs, waitResultText, spawnedChildIdsThisTurn, waitedChildIdsThisTurn);
-          } catch (err: any) {
-            // Wait tool failure: surface the error text to the model so it can
-            // report failure rather than silently synthesizing stale output.
-            waitFailed = true;
-            waitResultText = `Tool execution failed: ${err?.message ?? String(err)}`;
-            waitSummary = err?.message ?? String(err);
-          }
-          callbacks.onToolEnd(waitName, { success: !waitFailed, summary: waitSummary, preview: !waitFailed ? getToolPreview(waitName, waitArgs, waitResultText) : undefined });
-
-          const timeouts = parseChildDrainTimeouts(waitResultText);
-          if (timeouts.length > 0) {
-            // C1 — record the timed-out ids so the REPL can poll them and
-            // auto-resume once they settle (instead of waiting for a manual /continue).
-            this.lastTurnPendingChildIds = timeouts.map((t) => t.id).filter((id) => id && id !== '(unknown)');
-            finalAnswer = formatChildDrainTimeoutAnswer(timeouts);
-            exitedCleanly = true;
-            break;
-          }
-
-          const correction = [
-            `Runtime child-drain guardrail auto-called \`${waitName}\` because this turn spawned child agents and the model tried to answer without observing them.`,
-            `Child wait result:\n${waitResultText}`,
-            'Now synthesize the child output for the user. Do not say you are waiting unless the wait result timed out.',
-          ].join('\n\n');
-          const childResultSystem = summarizeWaitedChildOutputs(waitResultText);
-          if (childResultSystem) {
-            childOutputDeliveredThisTurn = true; // MAR-3 — drained child output reached the parent
-            const systemMsg = { role: 'system', content: childResultSystem };
-            this.chatHistory.push(systemMsg);
-            this.recordTranscript(systemMsg);
-          }
-          const guardMsg = { role: 'user', content: correction };
-          this.chatHistory.push(guardMsg);
-          this.recordTranscript({ ...guardMsg, name: 'guard' });
-          continue;
+        const childProfileGuard = await runChildProfileGuardPhase({
+          agent: this,
+          callbacks,
+          spawnedChildIds: spawnedChildIdsThisTurn,
+          waitedChildIds: waitedChildIdsThisTurn,
+          buildOrchestrationContext,
+          profileStageController: activeProfileStageController,
+          profileStageGuardFired,
+          profileStageGuardMax: PROFILE_STAGE_GUARD_MAX,
+        });
+        profileStageGuardFired = childProfileGuard.profileStageGuardFired;
+        if (childProfileGuard.childOutputDelivered) {
+          childOutputDeliveredThisTurn = true;
         }
-
-        const failedProfileStage = activeProfileStageController?.failedRequiredStage();
-        if (failedProfileStage) {
-          finalAnswer =
-            `The active profile strategy failed required stage "${failedProfileStage.stageId}"` +
-            `${failedProfileStage.roleId ? ` for role "${failedProfileStage.roleId}"` : ''}. ` +
-            'Its dependent stages were not unlocked. Review the stage tool result before retrying the task.';
-          exitedCleanly = true;
-          break;
-        }
-
-        const requiredProfileAction = activeProfileStageController?.nextRequiredAction();
-        if (requiredProfileAction) {
-          if (profileStageGuardFired < PROFILE_STAGE_GUARD_MAX) {
-            profileStageGuardFired += 1;
-            const correction = buildRequiredProfileStageCorrection(requiredProfileAction);
-            const guardMsg = { role: 'user', content: correction };
-            this.chatHistory.push(guardMsg);
-            this.recordTranscript({ ...guardMsg, name: 'guard' });
-            callbacks.onStatusUpdate(
-              `Recovery: required profile stage ${requiredProfileAction.stageId}/${requiredProfileAction.skillId} ` +
-              `(${profileStageGuardFired}/${PROFILE_STAGE_GUARD_MAX})`,
-            );
-            continue;
-          }
-          finalAnswer =
-            `The active profile strategy could not finish required stage "${requiredProfileAction.stageId}" ` +
-            `because skill "${requiredProfileAction.skillId}" was not ${requiredProfileAction.action === 'begin' ? 'started' : 'completed'} ` +
-            `within the bounded runtime guard. No broader tool authority was granted.`;
-          exitedCleanly = true;
-          break;
-        }
-
-        const requiredDelegatedStage = activeProfileStageController?.nextRequiredDelegation();
-        if (requiredDelegatedStage) {
-          if (profileStageGuardFired < PROFILE_STAGE_GUARD_MAX) {
-            profileStageGuardFired += 1;
-            const correction = buildRequiredDelegatedStageCorrection(requiredDelegatedStage);
-            const guardMsg = { role: 'user', content: correction };
-            this.chatHistory.push(guardMsg);
-            this.recordTranscript({ ...guardMsg, name: 'guard' });
-            callbacks.onStatusUpdate(
-              `Recovery: required delegated stage ${requiredDelegatedStage.stageId}/${requiredDelegatedStage.roleId} ` +
-              `(${profileStageGuardFired}/${PROFILE_STAGE_GUARD_MAX})`,
-            );
-            continue;
-          }
-          finalAnswer =
-            `The active profile strategy could not launch required delegated stage ` +
-            `"${requiredDelegatedStage.stageId}" with role "${requiredDelegatedStage.roleId}" ` +
-            'within the bounded runtime guard. No child was launched outside the compiled plan.';
+        if (childProfileGuard.action === 'continue') continue;
+        if (childProfileGuard.action === 'finish') {
+          finalAnswer = childProfileGuard.answer ?? '';
           exitedCleanly = true;
           break;
         }
