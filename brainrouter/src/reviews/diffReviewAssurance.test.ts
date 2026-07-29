@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   AssuranceCoverage,
   AssuranceFinding,
@@ -345,6 +345,57 @@ function repositoryContextAnalysis(overrides: {
   };
 }
 
+function sourceToSinkAssembly(): AssuranceImpactPacketAssembly {
+  return {
+    revisionSha: "head-1",
+    indexRef: "index-1",
+    packets: [{
+      id: "packet-1",
+      revisionSha: "head-1",
+      program: "security_review",
+      changed: [{ path: "src/source.ts", line: 4 }],
+      context: [{
+        relationship: "source_to_sink",
+        distance: 1,
+        evidence: {
+          id: "evidence-1",
+          kind: "call_path",
+          summary: "source reaches intermediary",
+          revisionSha: "head-1",
+          location: { path: "src/intermediary.ts", line: 8 },
+          analyzerId: "typescript-parser-index",
+          createdAt: "2026-07-29T00:00:00.000Z",
+        },
+      }, {
+        relationship: "source_to_sink",
+        distance: 2,
+        evidence: {
+          id: "evidence-2",
+          kind: "call_path",
+          summary: "intermediary reaches sink",
+          revisionSha: "head-1",
+          location: { path: "src/sink.ts", line: 12 },
+          analyzerId: "typescript-parser-index",
+          createdAt: "2026-07-29T00:00:00.000Z",
+        },
+      }],
+      sourceToSinkPaths: [{
+        id: "path-1",
+        mechanism: "call_path",
+        source: { path: "src/source.ts", line: 4 },
+        sink: { path: "src/sink.ts", line: 12 },
+        evidenceRefs: ["evidence-1", "evidence-2"],
+      }],
+      artifactRefs: ["artifact-1"],
+      byteCount: 32,
+      truncated: false,
+      limitationIds: [],
+    }],
+    limitations: [],
+    assembledAt: "2026-07-29T00:00:00.000Z",
+  };
+}
+
 describe("diff review assurance projection", () => {
   it("records exact-head diff-only coverage as partial and retries idempotently", async () => {
     const store = new FakeAssuranceStore();
@@ -597,67 +648,32 @@ describe("diff review assurance projection", () => {
 
   it("persists parser source-to-sink paths as evidence-bearing candidates", async () => {
     const store = new FakeAssuranceStore();
-    const assembly: AssuranceImpactPacketAssembly = {
-      revisionSha: "head-1",
-      indexRef: "index-1",
-      packets: [{
-        id: "packet-1",
-        revisionSha: "head-1",
-        program: "security_review",
-        changed: [{ path: "src/source.ts", line: 4 }],
-        context: [{
-          relationship: "source_to_sink",
-          distance: 1,
-          evidence: {
-            id: "evidence-1",
-            kind: "call_path",
-            summary: "source reaches intermediary",
-            revisionSha: "head-1",
-            location: { path: "src/intermediary.ts", line: 8 },
-            analyzerId: "typescript-parser-index",
-            createdAt: "2026-07-29T00:00:00.000Z",
-          },
-        }, {
-          relationship: "source_to_sink",
-          distance: 2,
-          evidence: {
-            id: "evidence-2",
-            kind: "call_path",
-            summary: "intermediary reaches sink",
-            revisionSha: "head-1",
-            location: { path: "src/sink.ts", line: 12 },
-            analyzerId: "typescript-parser-index",
-            createdAt: "2026-07-29T00:00:00.000Z",
-          },
-        }],
-        sourceToSinkPaths: [{
-          id: "path-1",
-          mechanism: "call_path",
-          source: { path: "src/source.ts", line: 4 },
-          sink: { path: "src/sink.ts", line: 12 },
+    const analysis = repositoryContextAnalysis({ assembly: sourceToSinkAssembly() });
+    const request = input(store, {
+      repositoryContext: analysis,
+      llmRunner: {
+        run: async () => JSON.stringify({
+          state: "verified",
+          rationale: "The exact source confirms the parser path.",
           evidenceRefs: ["evidence-1", "evidence-2"],
-        }],
-        artifactRefs: ["artifact-1"],
-        byteCount: 32,
-        truncated: false,
-        limitationIds: [],
-      }],
-      limitations: [],
-      assembledAt: "2026-07-29T00:00:00.000Z",
-    };
-    const analysis = repositoryContextAnalysis({ assembly });
-    const request = input(store, { repositoryContext: analysis });
+        }),
+      },
+    });
     const { result, changedFiles, ...start } = request;
     const session = await startDiffReviewAssurance(start);
     await session!.prepareContext([{ path: "src/source.ts", line: 4 }]);
 
     await session!.recordCandidates("head-1", [], result.coverage!, changedFiles);
+    expect(store.runs.get(session!.runId)?.stages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stage: "candidate_discovery", status: "succeeded" }),
+      expect.objectContaining({ stage: "candidate_verification", status: "succeeded" }),
+    ]));
     const completed = await session!.complete(result, changedFiles);
     const finding = [...store.findings.values()][0];
 
     expect(finding).toMatchObject({
       revisionSha: "head-1",
-      state: "candidate",
+      state: "verified",
       location: { path: "src/sink.ts", line: 12 },
       evidence: [
         expect.objectContaining({ id: "evidence-1" }),
@@ -666,11 +682,54 @@ describe("diff review assurance projection", () => {
       provenance: [expect.objectContaining({
         producerKind: "deterministic_analyzer",
       })],
+      verifier: {
+        state: "verified",
+        verifierId: "bounded-independent-review-verifier:v1",
+        evidenceRefs: ["evidence-1", "evidence-2"],
+      },
     });
-    expect(finding?.verifier).toBeUndefined();
     expect(completed.findings).toEqual([
-      expect.objectContaining({ id: finding?.id, state: "candidate" }),
+      expect.objectContaining({ id: finding?.id, state: "verified" }),
     ]);
+    expect(completed.stages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        stage: "candidate_verification",
+        status: "succeeded",
+        inputRefs: [finding?.id],
+        outputRefs: [finding?.id],
+      }),
+    ]));
+  });
+
+  it("does not exceed the campaign's remaining verifier model-call budget", async () => {
+    const store = new FakeAssuranceStore();
+    const runModel = vi.fn(async () => JSON.stringify({
+      state: "verified",
+      rationale: "supported",
+      evidenceRefs: ["evidence-1", "evidence-2"],
+    }));
+    const analysis = repositoryContextAnalysis({ assembly: sourceToSinkAssembly() });
+    const request = input(store, {
+      repositoryContext: analysis,
+      llmRunner: { run: runModel },
+    });
+    const { result, changedFiles, ...start } = request;
+    const session = await startDiffReviewAssurance(start);
+    await session!.prepareContext([{ path: "src/source.ts", line: 4 }]);
+    const durableRun = store.runs.get(session!.runId)!;
+    durableRun.policySnapshot.budgets.maxModelCalls = result.coverage!.totalParts;
+
+    await session!.recordCandidates("head-1", [], result.coverage!, changedFiles);
+
+    expect(runModel).not.toHaveBeenCalled();
+    expect([...store.findings.values()][0]?.state).toBe("candidate");
+    expect(store.runs.get(session!.runId)?.stages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        stage: "candidate_verification",
+        status: "partial",
+        errorCode: "CANDIDATES_UNRESOLVED",
+      }),
+    ]));
   });
 
   it("records exact-source failure and an explicit second-attempt diff-only fallback", async () => {

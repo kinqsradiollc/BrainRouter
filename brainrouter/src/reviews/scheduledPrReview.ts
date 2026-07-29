@@ -135,6 +135,7 @@ export async function runScheduledPrReview(
         policy,
         maxDiffChars,
         timeoutMs: deps.timeoutMs ?? 120_000,
+        llmRunner: ctx.llmRunner,
         repositoryContext: createRepositoryContextAnalysisPorts({
           checkout,
           maxDiffChars,

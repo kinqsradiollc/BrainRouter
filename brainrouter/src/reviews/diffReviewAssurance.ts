@@ -11,6 +11,7 @@ import {
   createRepositoryAssuranceCampaignService,
   type RepositoryAssuranceRunPort,
 } from "@kinqs/brainrouter-core/review";
+import type { LLMRunner } from "@kinqs/brainrouter-types";
 import type {
   AssuranceCoverage,
   AssuranceCoverageLimitation,
@@ -46,6 +47,7 @@ import {
   normalizeDeterministicCandidates,
   normalizeReviewCandidates,
 } from "./reviewCandidateNormalization.js";
+import { createBoundedCandidateVerifier } from "./candidateVerifier.js";
 
 const DIFF_ONLY_LIMITATION_ID = "diff-only-repository-context";
 
@@ -71,6 +73,7 @@ export interface StartDiffReviewAssuranceInput {
   maxDiffChars: number;
   timeoutMs: number;
   repositoryContext?: RepositoryContextAnalysisPorts;
+  llmRunner?: LLMRunner;
   now?: () => string;
   nextId?: (kind: "run" | "source" | "stage") => string;
 }
@@ -104,6 +107,11 @@ function policySnapshot(
     { id: "typescript-parser-index", enabled: Boolean(input.repositoryContext), required: false },
     { id: "deterministic-impact-packets", enabled: Boolean(input.repositoryContext), required: false },
     { id: "llm-diff-review", enabled: true, required: true },
+    {
+      id: "independent-candidate-verifier",
+      enabled: Boolean(input.repositoryContext && input.llmRunner),
+      required: false,
+    },
   ];
   const packetLimits = {
     maxPackets: 20,
@@ -251,6 +259,18 @@ function active(run: RepositoryAssuranceRun): boolean {
   return run.status === "queued" || run.status === "running";
 }
 
+function terminalStage(
+  run: RepositoryAssuranceRun,
+  stage: RepositoryAssuranceRun["stages"][number]["stage"],
+  attempt = 1,
+): boolean {
+  return run.stages.some((receipt) =>
+    receipt.stage === stage
+    && receipt.attempt === attempt
+    && receipt.status !== "running",
+  );
+}
+
 async function supersedePriorRuns(
   input: StartDiffReviewAssuranceInput,
   replacement: RepositoryAssuranceRun,
@@ -323,6 +343,23 @@ export async function startDiffReviewAssurance(
     organizationId,
     runId: started.id,
   });
+  const verifier = input.llmRunner && repositoryContext
+    ? createBoundedCandidateVerifier({
+        llmRunner: input.llmRunner,
+        contextFor: () => repositoryContext.verificationContext,
+        now,
+        timeoutMs: input.timeoutMs,
+      })
+    : null;
+  const verificationCampaign = verifier
+    ? createRepositoryAssuranceCampaignService({
+        runs: port,
+        findings: findingPort,
+        verifier,
+        now,
+        nextId,
+      })
+    : null;
   let candidateIds: string[] = [];
   try {
     await repositoryContext?.prepareSourceAndIndex();
@@ -345,21 +382,54 @@ export async function startDiffReviewAssurance(
     if (candidateHeadSha !== headSha) {
       throw new Error("Review candidates must match the assurance run exact revision.");
     }
-    const run = (await port.get(started.id)) ?? started;
+    let run = (await port.get(started.id)) ?? started;
     if (!active(run)) return;
     const calculatedAt = now();
-    const candidateRun = repositoryContext?.hasPromptContext
-      ? run
-      : {
+    const contextReady = Boolean(repositoryContext?.hasPromptContext);
+    const candidateResult: PrReviewResult = {
+      ok: true,
+      findings: findings.length,
+      posted: false,
+      headSha,
+      coverage,
+    };
+    if (!contextReady) {
+      const attempt = repositoryContext ? 2 : 1;
+      if (!terminalStage(run, "checkout_inventory", attempt)) {
+        const source = diffOnlySource(
+          input,
+          headSha,
+          run.sourceSnapshot.id,
+          run.sourceSnapshot.createdAt,
+          changedFiles,
+        );
+        const diffCoverage = diffOnlyCoverage(
+          candidateResult,
+          changedFiles,
+          calculatedAt,
+          run.coverage,
+        );
+        run = await campaign.runStage(run.id, "checkout_inventory", attempt, async () => ({
+          status: "partial",
+          source,
+          coverage: diffCoverage,
+          outputRefs: [source.inventoryRef!],
+          limitationIds: diffCoverage.limitations.map((item) => item.id),
+          errorCode: "DIFF_ONLY_FALLBACK",
+        }));
+      }
+    }
+    const candidateRun = contextReady
+      ? {
           ...run,
-          coverage: diffOnlyCoverage({
-            ok: true,
-            findings: findings.length,
-            posted: false,
-            headSha,
-            coverage,
-          }, changedFiles, calculatedAt, run.coverage),
-        };
+          coverage: repositoryContextCoverage(
+            run.coverage,
+            candidateResult,
+            changedFiles,
+            calculatedAt,
+          ),
+        }
+      : run;
     const modelCandidates = normalizeReviewCandidates({
       run: candidateRun,
       findings,
@@ -380,6 +450,55 @@ export async function startDiffReviewAssurance(
     const persisted = [];
     for (const finding of candidates) persisted.push(await findingPort.save(finding));
     candidateIds = persisted.map((finding) => finding.id);
+    run = (await port.get(run.id)) ?? run;
+    if (!terminalStage(run, "candidate_discovery")) {
+      run = await campaign.runStage(run.id, "candidate_discovery", 1, async () => ({
+        status: contextReady && candidateRun.coverage.status === "complete"
+          ? "succeeded"
+          : "partial",
+        coverage: candidateRun.coverage,
+        inputRefs: contextReady
+          ? repositoryContext?.contextInputRefs ?? []
+          : [run.sourceSnapshot.inventoryRef!],
+        outputRefs: [...candidateIds, `memory-job:${input.jobId}`],
+        limitationIds: contextReady
+          ? repositoryContext?.limitationIds ?? []
+          : candidateRun.coverage.limitations.map((item) => item.id),
+        ...(!contextReady ? { errorCode: "DIFF_ONLY_FALLBACK" } : {}),
+      }));
+    }
+    if (verificationCampaign && !terminalStage(run, "candidate_verification")) {
+      const remainingModelCalls = Math.max(
+        0,
+        run.policySnapshot.budgets.maxModelCalls - coverage.totalParts,
+      );
+      const eligible = persisted.filter((finding) => finding.evidence.length > 0);
+      const selected = eligible.slice(0, remainingModelCalls);
+      run = await verificationCampaign.runStage(
+        run.id,
+        "candidate_verification",
+        1,
+        async () => {
+          const dispositions = [];
+          for (const finding of selected) {
+            dispositions.push(
+              await verificationCampaign.verifyCandidate(run.id, finding.id),
+            );
+          }
+          const unresolved = persisted.length - dispositions.filter((finding) =>
+            finding.state === "verified"
+            || finding.state === "validated"
+            || finding.state === "disputed",
+          ).length;
+          return {
+            status: unresolved === 0 ? "succeeded" : "partial",
+            inputRefs: candidateIds,
+            outputRefs: dispositions.map((finding) => finding.id),
+            ...(unresolved > 0 ? { errorCode: "CANDIDATES_UNRESOLVED" } : {}),
+          };
+        },
+      );
+    }
   };
 
   const complete = async (
@@ -393,7 +512,8 @@ export async function startDiffReviewAssurance(
         return run;
       }
       const contextReady = Boolean(repositoryContext?.hasPromptContext);
-      if (!contextReady) {
+      const fallbackAttempt = repositoryContext ? 2 : 1;
+      if (!contextReady && !terminalStage(run, "checkout_inventory", fallbackAttempt)) {
         const source = diffOnlySource(
           input,
           headSha,
@@ -405,7 +525,7 @@ export async function startDiffReviewAssurance(
         run = await campaign.runStage(
           run.id,
           "checkout_inventory",
-          repositoryContext ? 2 : 1,
+          fallbackAttempt,
           async () => ({
             status: "partial",
             source,
@@ -428,19 +548,21 @@ export async function startDiffReviewAssurance(
         }
       }
 
-      const contextRefs = repositoryContext?.contextInputRefs ?? [];
-      run = await campaign.runStage(run.id, "candidate_discovery", 1, async () => ({
-        status: contextReady && run.coverage.status === "complete" ? "succeeded" : "partial",
-        coverage: contextReady
-          ? repositoryContextCoverage(run.coverage, result, changedFiles, now())
-          : run.coverage,
-        inputRefs: contextReady ? contextRefs : [run.sourceSnapshot.inventoryRef!],
-        outputRefs: [...candidateIds, `memory-job:${input.jobId}`],
-        limitationIds: contextReady
-          ? repositoryContext?.limitationIds ?? []
-          : run.coverage.limitations.map((item) => item.id),
-        ...(!contextReady ? { errorCode: "DIFF_ONLY_FALLBACK" } : {}),
-      }));
+      if (!terminalStage(run, "candidate_discovery")) {
+        const contextRefs = repositoryContext?.contextInputRefs ?? [];
+        run = await campaign.runStage(run.id, "candidate_discovery", 1, async () => ({
+          status: contextReady && run.coverage.status === "complete" ? "succeeded" : "partial",
+          coverage: contextReady
+            ? repositoryContextCoverage(run.coverage, result, changedFiles, now())
+            : run.coverage,
+          inputRefs: contextReady ? contextRefs : [run.sourceSnapshot.inventoryRef!],
+          outputRefs: [...candidateIds, `memory-job:${input.jobId}`],
+          limitationIds: contextReady
+            ? repositoryContext?.limitationIds ?? []
+            : run.coverage.limitations.map((item) => item.id),
+          ...(!contextReady ? { errorCode: "DIFF_ONLY_FALLBACK" } : {}),
+        }));
+      }
       await repositoryContext?.cleanup();
       run = (await port.get(run.id)) ?? run;
       if (!active(run)) return run;
@@ -492,6 +614,7 @@ export async function recordDiffReviewAssurance(
     timeoutMs: input.timeoutMs,
     ...(input.now ? { now: input.now } : {}),
     ...(input.nextId ? { nextId: input.nextId } : {}),
+    ...(input.llmRunner ? { llmRunner: input.llmRunner } : {}),
   });
   return session?.complete(input.result, input.changedFiles) ?? null;
 }
