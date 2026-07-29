@@ -708,6 +708,16 @@ export async function executeAgentBrowserCommand(
     }
     const mapped = mapAgentBrowserCommand(request.command);
     const result = await manager.execute({ version: BROWSER_PROTOCOL_VERSION, id: request.id, tabId: mapped.tabId, expectedRevision: mapped.expectedRevision, command: mapped.command }, signal);
+    if (result.ok && kind === 'tabs.open') {
+      const opened = result.value && typeof result.value === 'object'
+        ? result.value as { id?: unknown; revision?: unknown }
+        : {};
+      const openedTabId = typeof opened.id === 'string' ? opened.id : result.tabId;
+      const openedRevision = Number.isSafeInteger(opened.revision)
+        ? Number(opened.revision)
+        : result.revision;
+      return success(kind, startedAt, result.value, openedTabId, openedRevision);
+    }
     if (result.ok && kind === 'page.screenshot') {
       return success(kind, startedAt, saveScreenshotArtifact(workspaceRoot, result.value), result.tabId, result.revision);
     }

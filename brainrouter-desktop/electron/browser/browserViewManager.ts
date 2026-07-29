@@ -37,6 +37,10 @@ import {
 import { BrowserNativeViewManager } from './browserNativeViewManager.js';
 import { BrowserTabStateManager } from './browserTabStateManager.js';
 import {
+  stageWorkspaceUploadFiles,
+  UploadStagingError,
+} from './uploadStaging.js';
+import {
   BrowserWorkspaceStore,
   persistableBrowserUrl,
   type PersistedBrowserWorkspace,
@@ -71,8 +75,6 @@ const ISOLATED_WORLD_ID = 1_001;
 const MAX_NETWORK_ROWS = 500;
 const DIALOG_TIMEOUT_MS = 60_000;
 const AGENT_DOWNLOAD_GESTURE_MS = 5_000;
-const MAX_STAGED_UPLOAD_FILE_BYTES = 512 * 1024 * 1024;
-const MAX_STAGED_UPLOAD_TOTAL_BYTES = 1024 * 1024 * 1024;
 const STAGED_UPLOAD_TTL_MS = 30 * 60_000;
 const AGENT_DOWNLOAD_INTERACTIONS = new Set<BrowserCommand['op']>([
   'click', 'double-click', 'type', 'press', 'drag', 'select', 'check', 'set-files', 'respond-dialog',
@@ -1052,7 +1054,12 @@ export class BrowserViewManager {
       case 'drag': return this.dragCommand(this.requireTab(tab), command, assertCurrent);
       case 'select': return this.selectCommand(this.requireTab(tab), command, assertCurrent);
       case 'check': return this.checkCommand(this.requireTab(tab), command, assertCurrent);
-      case 'set-files': return this.setFilesCommand(this.requireTab(tab), command, assertCurrent);
+      case 'set-files': return this.setFilesCommand(
+        this.requireTab(tab),
+        command,
+        assertCurrent,
+        operation.signal,
+      );
       case 'set-cursor': return this.setCursor(this.requireTab(tab), command.enabled);
       case 'set-device': return this.setDevice(this.requireTab(tab), command.device, assertCurrent);
       case 'clear-highlight': return this.isolated(this.requireTab(tab).id, `(() => { document.getElementById('__brainrouter_testid_highlights__')?.remove(); const el=window.__brainrouterHighlighted; if(el){el.style.outline=window.__brainrouterPreviousOutline||'';el.style.outlineOffset='';} window.__brainrouterHighlighted=null; return {ok:true}; })()`);
@@ -1284,10 +1291,24 @@ export class BrowserViewManager {
     tab: BrowserTab,
     command: Extract<BrowserCommand, { op: 'set-files' }>,
     assertCurrent: BrowserOperationGuard,
+    signal?: AbortSignal,
   ): Promise<{ accepted: true; fileCount: number }> {
     this.validateRef(tab, command.ref);
     if (!command.ref && !command.target) throw new BrowserManagerError('INVALID_REQUEST', 'A file input reference or test id is required.');
-    const staged = this.stageUploadFiles(command.files);
+    let staged: Awaited<ReturnType<typeof stageWorkspaceUploadFiles>>;
+    try {
+      staged = await stageWorkspaceUploadFiles({
+        workspaceRoot: this.workspaceRoot,
+        tempRoot: app.getPath('temp'),
+        files: command.files,
+        signal,
+      });
+    } catch (error) {
+      if (error instanceof UploadStagingError) {
+        throw new BrowserManagerError(error.code, error.message);
+      }
+      throw error;
+    }
     const files = staged.files;
     const token = `upload_${randomUUID().replace(/-/g, '')}`;
     assertCurrent();
@@ -1331,81 +1352,6 @@ export class BrowserViewManager {
     tab.revision += 1;
     this.emitState();
     return { accepted: true, fileCount: files.length };
-  }
-
-  private stageUploadFiles(rawFiles: string[]): { directory: string; files: string[]; cleanup: () => void } {
-    if (!Array.isArray(rawFiles) || rawFiles.length < 1 || rawFiles.length > 20) {
-      throw new BrowserManagerError('INVALID_REQUEST', 'Upload requires between 1 and 20 workspace files.');
-    }
-    let realRoot: string;
-    try { realRoot = fs.realpathSync(this.workspaceRoot); }
-    catch { throw new BrowserManagerError('DENIED', 'The active workspace cannot be resolved for upload.'); }
-    let stagingRoot = '';
-    const cleanup = (): void => {
-      if (!stagingRoot) return;
-      try { fs.rmSync(stagingRoot, { recursive: true, force: true }); } catch { /* best effort */ }
-      stagingRoot = '';
-    };
-    try {
-      stagingRoot = fs.mkdtempSync(path.join(app.getPath('temp'), 'brainrouter-browser-upload-'));
-      fs.chmodSync(stagingRoot, 0o700);
-      let totalBytes = 0;
-      const stagedFiles = rawFiles.map((raw, index) => {
-      if (typeof raw !== 'string' || raw.length < 1 || raw.length > 4_096 || /[\u0000-\u001f]/.test(raw)) {
-        throw new BrowserManagerError('INVALID_REQUEST', 'Upload file path is invalid.');
-      }
-      const canonical = raw.replace(/\\/g, '/');
-      if (path.posix.isAbsolute(canonical) || path.win32.isAbsolute(raw) || /^[a-z][a-z0-9+.-]*:/i.test(canonical) || canonical.split('/').includes('..')) {
-        throw new BrowserManagerError('DENIED', 'Upload files must be workspace-relative and cannot traverse directories.');
-      }
-      let resolved: string;
-      try { resolved = fs.realpathSync(path.resolve(realRoot, canonical)); }
-      catch { throw new BrowserManagerError('INVALID_REQUEST', `Upload file does not exist: ${boundBrowserText(canonical, 256)}`); }
-      if (resolved !== realRoot && !resolved.startsWith(`${realRoot}${path.sep}`)) {
-        throw new BrowserManagerError('DENIED', 'Upload file resolves outside the active workspace.');
-      }
-      let sourceFd = -1;
-      let destinationFd = -1;
-      try {
-        const noFollow = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
-        sourceFd = fs.openSync(resolved, fs.constants.O_RDONLY | noFollow);
-        const stats = fs.fstatSync(sourceFd);
-        const pathStats = fs.lstatSync(resolved);
-        const current = fs.realpathSync(resolved);
-        if (!stats.isFile() || pathStats.isSymbolicLink() || stats.dev !== pathStats.dev || stats.ino !== pathStats.ino
-          || (current !== realRoot && !current.startsWith(`${realRoot}${path.sep}`))) {
-          throw new BrowserManagerError('DENIED', 'Upload file changed during validation.');
-        }
-        if (stats.size > MAX_STAGED_UPLOAD_FILE_BYTES || totalBytes + stats.size > MAX_STAGED_UPLOAD_TOTAL_BYTES) {
-          throw new BrowserManagerError('TOO_LARGE', 'Upload files exceed the 1 GB staging limit.');
-        }
-        totalBytes += stats.size;
-        const itemDirectory = path.join(stagingRoot, String(index));
-        fs.mkdirSync(itemDirectory, { mode: 0o700 });
-        const filename = path.basename(canonical) || `upload-${index + 1}`;
-        const destination = path.join(itemDirectory, filename);
-        destinationFd = fs.openSync(destination, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | noFollow, 0o600);
-        const buffer = Buffer.allocUnsafe(1024 * 1024);
-        let read = 0;
-        while ((read = fs.readSync(sourceFd, buffer, 0, buffer.length, null)) > 0) {
-          let offset = 0;
-          while (offset < read) offset += fs.writeSync(destinationFd, buffer, offset, read - offset);
-        }
-        fs.fsyncSync(destinationFd);
-        return destination;
-      } catch (error) {
-        if (error instanceof BrowserManagerError) throw error;
-        throw new BrowserManagerError('INVALID_REQUEST', `Upload file cannot be read: ${boundBrowserText(canonical, 256)}`);
-      } finally {
-        if (sourceFd >= 0) try { fs.closeSync(sourceFd); } catch { /* closed */ }
-        if (destinationFd >= 0) try { fs.closeSync(destinationFd); } catch { /* closed */ }
-      }
-      });
-      return { directory: stagingRoot, files: stagedFiles, cleanup };
-    } catch (error) {
-      cleanup();
-      throw error;
-    }
   }
 
   private cleanupStagedUpload(tabId: BrowserTabId): void {
