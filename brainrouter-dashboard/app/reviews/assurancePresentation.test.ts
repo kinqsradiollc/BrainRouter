@@ -6,6 +6,7 @@ import { test } from "node:test";
 
 import type {
   AssuranceFinding,
+  AssurancePublicationStatus,
   AssuranceRunStatus,
   ReviewAssuranceDto,
 } from "@kinqs/brainrouter-types";
@@ -13,6 +14,12 @@ import type {
 import { buildReviewAssurancePresentation } from "./assurancePresentation";
 
 const NOW = "2026-07-29T00:00:00.000Z";
+
+function publicationStatus(status: AssuranceRunStatus): AssurancePublicationStatus {
+  if (status === "queued") return "running";
+  if (status === "completed") return "blocked";
+  return status;
+}
 
 function finding(
   state: AssuranceFinding["state"] = "verified",
@@ -56,6 +63,18 @@ function assurance(
   selectedFinding: AssuranceFinding = finding(),
 ): ReviewAssuranceDto {
   return {
+    publication: {
+      schemaVersion: 1,
+      status: publicationStatus(status),
+      label: publicationStatus(status),
+      conclusion: "failure",
+      blocked: true,
+      cleanEligible: false,
+      reason: status === "partial"
+        ? "Coverage is incomplete."
+        : "Publication policy does not permit a clean conclusion.",
+      blockingFindingIds: status === "completed" ? ["finding-one"] : [],
+    },
     run: {
       id: "run-one",
       repository: { forge: "github", slug: "owner/repository" },
@@ -127,24 +146,28 @@ function assurance(
   };
 }
 
-test("complete assurance is presented as revision-bound and authoritative", () => {
+test("complete run preserves the exact blocking publication projection", () => {
   const view = buildReviewAssurancePresentation(assurance());
 
-  assert.equal(view.status, "completed");
-  assert.equal(view.statusTone, "ok");
+  assert.equal(view.status, "blocked");
+  assert.equal(view.runStatus, "completed");
+  assert.equal(view.statusTone, "danger");
+  assert.equal(view.publication?.conclusion, "failure");
   assert.equal(view.coverage.status, "complete");
   assert.equal(view.coverage.files, "3/3 eligible files");
-  assert.match(view.authorityNotice, /exact revision and policy/);
+  assert.equal(view.authorityNotice, "Publication policy does not permit a clean conclusion.");
 });
 
 test("partial assurance exposes coverage gaps and partial stage receipts", () => {
   const view = buildReviewAssurancePresentation(assurance("partial"));
 
-  assert.equal(view.statusTone, "warn");
+  assert.equal(view.statusTone, "danger");
+  assert.equal(view.status, "partial");
+  assert.equal(view.runStatus, "partial");
   assert.equal(view.coverage.tone, "warn");
   assert.deepEqual(view.coverage.limitations, ["One changed file could not be indexed."]);
   assert.equal(view.stages[0].status, "partial");
-  assert.match(view.authorityNotice, /cannot represent a clean result/);
+  assert.equal(view.authorityNotice, "Coverage is incomplete.");
 });
 
 test("stale assurance explains why its revision authority expired", () => {
@@ -154,8 +177,9 @@ test("stale assurance explains why its revision authority expired", () => {
   const view = buildReviewAssurancePresentation(value);
 
   assert.equal(view.status, "stale");
-  assert.equal(view.statusTone, "warn");
-  assert.equal(view.authorityNotice, "The pull request head changed.");
+  assert.equal(view.runStatus, "stale");
+  assert.equal(view.statusTone, "danger");
+  assert.equal(view.authorityNotice, "Publication policy does not permit a clean conclusion.");
 });
 
 test("superseded assurance points reviewers to the replacing run", () => {
@@ -165,7 +189,7 @@ test("superseded assurance points reviewers to the replacing run", () => {
   const view = buildReviewAssurancePresentation(value);
 
   assert.equal(view.status, "superseded");
-  assert.match(view.authorityNotice, /run-two/);
+  assert.equal(view.runStatus, "superseded");
 });
 
 test("unresolved findings retain evidence and verifier disposition", () => {

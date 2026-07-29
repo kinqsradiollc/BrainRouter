@@ -29,8 +29,14 @@ export interface AssuranceFindingPresentation {
 
 export interface ReviewAssurancePresentation {
   status: string;
+  runStatus: string;
   statusTone: AssuranceTone;
   authorityNotice: string;
+  publication?: {
+    status: string;
+    conclusion: string;
+    reason: string;
+  };
   program: string;
   revision: string;
   coverage: {
@@ -117,15 +123,30 @@ export function buildReviewAssurancePresentation(
   assurance: ReviewAssuranceDto,
 ): ReviewAssurancePresentation {
   const { run } = assurance;
+  const publication = assurance.publication;
   const coverageTone: AssuranceTone = run.coverage.status === "complete"
     ? "ok"
     : run.coverage.status === "partial"
       ? "warn"
       : "danger";
   return {
-    status: label(run.status),
-    statusTone: runTone(run.status),
-    authorityNotice: authorityNotice(assurance),
+    status: publication?.label ?? label(run.status),
+    runStatus: label(run.status),
+    statusTone: publication
+      ? publication.conclusion === "success"
+        ? "ok"
+        : publication.conclusion === "failure"
+          ? "danger"
+          : "warn"
+      : runTone(run.status),
+    authorityNotice: publication?.reason ?? authorityNotice(assurance),
+    ...(publication ? {
+      publication: {
+        status: publication.status,
+        conclusion: publication.conclusion,
+        reason: publication.reason,
+      },
+    } : {}),
     program: label(run.program),
     revision: run.revision.headSha,
     coverage: {

@@ -72,6 +72,12 @@ export function renderReviewAssuranceDetail(detail: ReviewAssuranceDetailView): 
     `Source ${run.source.status} · ${run.source.indexedFileCount}/${run.source.textFileCount} text files indexed`,
     `Coverage ${run.coverage.status} · ${run.coverage.filesAnalyzed}/${run.coverage.filesEligible} eligible files · changed ${run.coverage.changedFilesAnalyzed}/${run.coverage.changedFilesTotal}`,
   );
+  if (detail.assurance.publication) {
+    lines.push(
+      `Publication ${detail.assurance.publication.label} · ${detail.assurance.publication.conclusion}`,
+      `Publication reason: ${detail.assurance.publication.reason}`,
+    );
+  }
   if (run.status === 'stale') lines.push(`Stale: ${run.staleReason}`);
   if (run.status === 'superseded') lines.push(`Superseded by ${run.supersededByRunId}`);
   for (const limitation of run.coverage.limitations) {

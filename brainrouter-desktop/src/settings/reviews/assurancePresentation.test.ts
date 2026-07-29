@@ -2,12 +2,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type {
   AssuranceFindingStateView,
+  AssurancePublicationStatusView,
   AssuranceRunStatusView,
   ReviewAssuranceDetailView,
 } from '@kinqs/brainrouter-agent-protocol';
 import { buildDesktopAssurancePresentation } from './assurancePresentation.js';
 
 const NOW = '2026-07-29T00:00:00.000Z';
+
+function publicationStatus(status: AssuranceRunStatusView): AssurancePublicationStatusView {
+  if (status === 'queued') return 'running';
+  if (status === 'completed') return 'blocked';
+  return status;
+}
 
 function fixture(
   status: AssuranceRunStatusView = 'completed',
@@ -21,6 +28,18 @@ function fixture(
       updatedAt: NOW, createdAt: NOW,
     },
     assurance: {
+      publication: {
+        schemaVersion: 1,
+        status: publicationStatus(status),
+        label: publicationStatus(status),
+        conclusion: 'failure',
+        blocked: true,
+        cleanEligible: false,
+        reason: status === 'partial'
+          ? 'Coverage is incomplete.'
+          : 'Publication policy does not permit a clean conclusion.',
+        blockingFindingIds: status === 'completed' ? ['finding-one'] : [],
+      },
       run: {
         id: 'run-one',
         organizationId: 'org-one',
@@ -102,6 +121,9 @@ function fixture(
 test('Desktop complete fixture presents exact protocol values', () => {
   const view = buildDesktopAssurancePresentation(fixture());
   assert.equal(view.runId, 'run-one');
+  assert.equal(view.runStatus, 'completed');
+  assert.equal(view.status, 'blocked');
+  assert.equal(view.publication?.conclusion, 'failure');
   assert.equal(view.revision, 'head-sha');
   assert.equal(view.coverage?.status, 'complete');
   assert.equal(view.coverage?.files, '3/3 eligible files');
@@ -114,6 +136,8 @@ test('Desktop complete fixture presents exact protocol values', () => {
 test('Desktop partial and unresolved fixtures never render as complete or verified', () => {
   const view = buildDesktopAssurancePresentation(fixture('partial', 'insufficient_evidence'));
   assert.equal(view.status, 'partial');
+  assert.equal(view.runStatus, 'partial');
+  assert.equal(view.publication?.reason, 'Coverage is incomplete.');
   assert.equal(view.coverage?.status, 'partial');
   assert.equal(view.coverage?.limitations[0].state, 'failed');
   assert.equal(view.stages[0].status, 'partial');

@@ -4,7 +4,14 @@ export interface DesktopAssurancePresentation {
   available: boolean;
   runId?: string;
   program?: string;
+  runStatus?: string;
   status?: string;
+  publication?: {
+    status: string;
+    label: string;
+    conclusion: string;
+    reason: string;
+  };
   revision?: string;
   baseRevision?: string;
   policy?: string;
@@ -50,7 +57,16 @@ export function buildDesktopAssurancePresentation(
     available: true,
     runId: run.id,
     program: run.program,
-    status: run.status,
+    runStatus: run.status,
+    status: detail.assurance.publication?.label ?? run.status,
+    ...(detail.assurance.publication ? {
+      publication: {
+        status: detail.assurance.publication.status,
+        label: detail.assurance.publication.label,
+        conclusion: detail.assurance.publication.conclusion,
+        reason: detail.assurance.publication.reason,
+      },
+    } : {}),
     revision: run.revision.headSha,
     ...(run.revision.baseSha ? { baseRevision: run.revision.baseSha } : {}),
     policy: `${run.policy.id} · ${run.policy.hash}`,

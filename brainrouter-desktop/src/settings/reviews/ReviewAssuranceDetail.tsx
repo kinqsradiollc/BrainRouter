@@ -29,12 +29,14 @@ export function ReviewAssuranceDetail({
           <div className={styles.summaryGrid}>
             <div><span>Run</span><strong>{view.runId}</strong></div>
             <div><span>Program</span><strong>{view.program}</strong></div>
-            <div><span>Status</span><strong>{view.status}</strong></div>
+            <div><span>Publication</span><strong>{view.status}</strong></div>
+            <div><span>Run status</span><strong>{view.runStatus}</strong></div>
             <div><span>Revision</span><strong className={styles.mono}>{view.revision}</strong></div>
             <div><span>Coverage</span><strong>{view.coverage?.status}</strong></div>
             <div><span>Source</span><strong>{view.source?.status}</strong></div>
           </div>
 
+          {view.publication && <div className={styles.notice}>{view.publication.reason}</div>}
           {view.staleReason && <div className={styles.notice}>Stale: {view.staleReason}</div>}
           {view.supersededBy && <div className={styles.notice}>Superseded by {view.supersededBy}</div>}
 
