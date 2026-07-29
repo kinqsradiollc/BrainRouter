@@ -69,6 +69,10 @@ export class RepositoryContextAssuranceSession {
     ];
   }
 
+  get deterministicAnalysis(): AssuranceImpactPacketAssembly | null {
+    return this.assembly ? structuredClone(this.assembly) : null;
+  }
+
   get limitationIds(): string[] {
     return [...this.limitations.keys()];
   }

@@ -244,6 +244,7 @@ function input(
 function repositoryContextAnalysis(overrides: {
   sourceFailure?: boolean;
   cancelAfterSource?: boolean;
+  assembly?: AssuranceImpactPacketAssembly;
 } = {}): RepositoryContextAnalysisPorts & {
   released: string[];
   impactCalls: string[][];
@@ -251,7 +252,7 @@ function repositoryContextAnalysis(overrides: {
   const released: string[] = [];
   const impactCalls: string[][] = [];
   let canceled = false;
-  const assembly: AssuranceImpactPacketAssembly = {
+  const assembly: AssuranceImpactPacketAssembly = overrides.assembly ?? {
     revisionSha: "head-1",
     indexRef: "index-1",
     packets: [{
@@ -592,6 +593,84 @@ describe("diff review assurance projection", () => {
       expect.objectContaining({ stage: "cleanup", status: "succeeded" }),
     ]));
     expect(analysis.released).toEqual(["artifact-1", "index-1", "checkout-1"]);
+  });
+
+  it("persists parser source-to-sink paths as evidence-bearing candidates", async () => {
+    const store = new FakeAssuranceStore();
+    const assembly: AssuranceImpactPacketAssembly = {
+      revisionSha: "head-1",
+      indexRef: "index-1",
+      packets: [{
+        id: "packet-1",
+        revisionSha: "head-1",
+        program: "security_review",
+        changed: [{ path: "src/source.ts", line: 4 }],
+        context: [{
+          relationship: "source_to_sink",
+          distance: 1,
+          evidence: {
+            id: "evidence-1",
+            kind: "call_path",
+            summary: "source reaches intermediary",
+            revisionSha: "head-1",
+            location: { path: "src/intermediary.ts", line: 8 },
+            analyzerId: "typescript-parser-index",
+            createdAt: "2026-07-29T00:00:00.000Z",
+          },
+        }, {
+          relationship: "source_to_sink",
+          distance: 2,
+          evidence: {
+            id: "evidence-2",
+            kind: "call_path",
+            summary: "intermediary reaches sink",
+            revisionSha: "head-1",
+            location: { path: "src/sink.ts", line: 12 },
+            analyzerId: "typescript-parser-index",
+            createdAt: "2026-07-29T00:00:00.000Z",
+          },
+        }],
+        sourceToSinkPaths: [{
+          id: "path-1",
+          mechanism: "call_path",
+          source: { path: "src/source.ts", line: 4 },
+          sink: { path: "src/sink.ts", line: 12 },
+          evidenceRefs: ["evidence-1", "evidence-2"],
+        }],
+        artifactRefs: ["artifact-1"],
+        byteCount: 32,
+        truncated: false,
+        limitationIds: [],
+      }],
+      limitations: [],
+      assembledAt: "2026-07-29T00:00:00.000Z",
+    };
+    const analysis = repositoryContextAnalysis({ assembly });
+    const request = input(store, { repositoryContext: analysis });
+    const { result, changedFiles, ...start } = request;
+    const session = await startDiffReviewAssurance(start);
+    await session!.prepareContext([{ path: "src/source.ts", line: 4 }]);
+
+    await session!.recordCandidates("head-1", [], result.coverage!, changedFiles);
+    const completed = await session!.complete(result, changedFiles);
+    const finding = [...store.findings.values()][0];
+
+    expect(finding).toMatchObject({
+      revisionSha: "head-1",
+      state: "candidate",
+      location: { path: "src/sink.ts", line: 12 },
+      evidence: [
+        expect.objectContaining({ id: "evidence-1" }),
+        expect.objectContaining({ id: "evidence-2" }),
+      ],
+      provenance: [expect.objectContaining({
+        producerKind: "deterministic_analyzer",
+      })],
+    });
+    expect(finding?.verifier).toBeUndefined();
+    expect(completed.findings).toEqual([
+      expect.objectContaining({ id: finding?.id, state: "candidate" }),
+    ]);
   });
 
   it("records exact-source failure and an explicit second-attempt diff-only fallback", async () => {
