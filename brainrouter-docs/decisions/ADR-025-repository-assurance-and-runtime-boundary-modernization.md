@@ -478,7 +478,7 @@ the repository's normal security-review process before merge.
 |---|---|---|---|---|
 | A25-0 | `[x]` | Accept, revise, or reject this ADR | — | Accepted for phased implementation on 2026-07-29 |
 | A25-1 | `[x]` | Whole-platform ownership/import inventory across types, protocol, Core, SDK, hooks, backend, CLI, Desktop, and Dashboard | A25-0 | `brainrouter-docs/adr-025-package-boundary-inventory.md`: owner map, dependency graph, public entrypoints, triage, and keep/move rationale |
-| A25-2 | `[ ]` | Define shared-contract placement and package-boundary guard pilot | A25-1 | Dependency-free types/protocol rules and negative import fixtures |
+| A25-2 | `[x]` | Define shared-contract placement and package-boundary guard pilot | A25-1 | `scripts/check-package-boundaries.mjs` enforces the graph during lint and staged-source checks; negative fixtures cover leaves, application back-edges, browser safety, Dashboard isolation, curated Core exports, and the renderer exception |
 | A25-3 | `[ ]` | Modernize provider/model catalog, routing, policy, adapters, and recovery receipts behind a curated façade | A25-1, A25-2 | Fallback/budget/recovery behavior and public import parity |
 | A25-4 | `[ ]` | Modernize agent lifecycle, context, tool execution, queue/steer, and delegation boundaries | A25-2 | Lifecycle, authority, and host-protocol fixture parity |
 | A25-5 | `[ ]` | Modernize workspace/profile/skills/capability and onboarding boundaries | A25-2 | Manifest, selection, and no-manifest compatibility matrix |
