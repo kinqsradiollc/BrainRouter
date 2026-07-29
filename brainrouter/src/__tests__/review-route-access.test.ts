@@ -504,6 +504,95 @@ describe("review route GitHub accessibility", () => {
     expect(JSON.stringify(response.body)).not.toContain("sealed-account-token");
   });
 
+  it("builds deep-review authority from the authenticated manual request", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => githubResponse(200, { id: 1 })));
+
+    const response = await postJson(new URL(`${baseUrl}/api/admin/reviews/run`), headers, {
+      repo: "acme/widgets",
+      prNumber: 7,
+      lens: "security",
+      mode: "deep",
+      deepReview: {
+        telemetryThresholds: {
+          maxRepositoryFiles: 20_000,
+          minIndexedFileRatio: 0.8,
+          maxEstimatedModelCalls: 20,
+          maxEstimatedToolCalls: 50,
+          maxEstimatedDurationMs: 20 * 60_000,
+          maxEstimatedUsd: 8,
+          acceptedBy: "attacker",
+        },
+        packetLimits: {
+          maxPackets: 20,
+          maxPacketBytes: 16_000,
+          maxFilesPerPacket: 12,
+        },
+        budgets: {
+          maxModelCalls: 15,
+          maxToolCalls: 40,
+          maxDurationMs: 15 * 60_000,
+          maxUsd: 6,
+        },
+      },
+    });
+
+    expect(response.status).toBe(202);
+    const queued = mocks.enqueueMemoryJob.mock.calls[0]?.[0];
+    expect(queued).toMatchObject({
+      kind: "pr-security-review",
+      maxAttempts: 1,
+      input: {
+        orgId: "org-1",
+        repo: "acme/widgets",
+        requestedBy: "user-1",
+        reviewMode: "deep",
+        requestSource: "manual_api",
+        deepReviewPolicy: {
+          organizationId: "org-1",
+          repository: { forge: "github", slug: "acme/widgets" },
+          program: "security_review",
+          activation: {
+            mode: "explicit_manual",
+            requestedBy: "user-1",
+            automaticEscalation: false,
+          },
+          telemetryThresholds: {
+            program: "security_review",
+            acceptedBy: "user-1",
+          },
+          coverage: { label: "bounded_whole_repository" },
+        },
+      },
+    });
+    expect(JSON.stringify(queued)).not.toContain("attacker");
+    expect(JSON.stringify(queued)).not.toContain("sealed-account-token");
+  });
+
+  it("does not infer deep review from limits or allow it to replace pentest authority", async () => {
+    const limits = {
+      telemetryThresholds: {},
+      packetLimits: {},
+      budgets: {},
+    };
+    const implicit = await postJson(new URL(`${baseUrl}/api/admin/reviews/run`), headers, {
+      repo: "acme/widgets",
+      prNumber: 7,
+      lens: "security",
+      deepReview: limits,
+    });
+    const pentest = await postJson(new URL(`${baseUrl}/api/admin/reviews/run`), headers, {
+      repo: "acme/widgets",
+      prNumber: 7,
+      lens: "pentest",
+      mode: "deep",
+      deepReview: limits,
+    });
+
+    expect(implicit.status).toBe(400);
+    expect(pentest.status).toBe(400);
+    expect(mocks.enqueueMemoryJob).not.toHaveBeenCalled();
+  });
+
   it("rejects a PR pentest without a persisted matching target", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => githubResponse(200, { id: 1 })));
 

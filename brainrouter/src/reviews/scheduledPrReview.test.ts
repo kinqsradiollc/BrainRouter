@@ -7,7 +7,10 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildAuthorizedAssessmentPolicy } from "@kinqs/brainrouter-core/review";
+import {
+  buildAuthorizedAssessmentPolicy,
+  buildDeepReviewPolicy,
+} from "@kinqs/brainrouter-core/review";
 import type { JobExecContext } from "../memory/scheduler/executors.js";
 
 const mocks = vi.hoisted(() => ({
@@ -74,6 +77,38 @@ const repositoryTarget = {
   createdAt: "2026-07-29T00:00:00.000Z",
   updatedAt: "2026-07-29T00:00:00.000Z",
 } as const;
+
+function deepPolicy() {
+  return buildDeepReviewPolicy({
+    organizationId: "org-1",
+    repository: { forge: "github", slug: "owner/repository" },
+    program: "security_review",
+    requestedBy: "user-1",
+    telemetryThresholds: {
+      program: "security_review",
+      maxRepositoryFiles: 20_000,
+      minIndexedFileRatio: 0.8,
+      maxEstimatedModelCalls: 20,
+      maxEstimatedToolCalls: 50,
+      maxEstimatedDurationMs: 20 * 60_000,
+      maxEstimatedUsd: 8,
+      acceptedBy: "user-1",
+      acceptedAt: "2026-07-30T00:00:00.000Z",
+    },
+    packetLimits: {
+      maxPackets: 20,
+      maxPacketBytes: 16_000,
+      maxFilesPerPacket: 12,
+    },
+    budgets: {
+      maxModelCalls: 15,
+      maxToolCalls: 40,
+      maxDurationMs: 15 * 60_000,
+      maxUsd: 6,
+    },
+    now: "2026-07-30T00:00:00.000Z",
+  });
+}
 
 function context(status = "running"): JobExecContext {
   return {
@@ -241,6 +276,90 @@ describe("scheduled PR review repository-context composition", () => {
       prNumber: 42,
       headSha: "head-1",
     }, context(), "security")).rejects.toBe(rootFailure);
+  });
+
+  it("binds explicit deep-review policy and budgets into exact-context execution", async () => {
+    const prepared = {
+      text: "bounded whole-repository context",
+      packetRefs: ["packet-1"],
+      artifactRefs: ["artifact-1"],
+    };
+    const prepareContext = vi.fn(async () => prepared);
+    const analysis = { source: "exact-analysis" };
+    mocks.createAnalysis.mockReturnValue(analysis);
+    mocks.start.mockResolvedValue({
+      runId: "run-1",
+      prepareContext,
+      recordCandidates: vi.fn(async () => publicationGate),
+      complete: vi.fn(async () => ({ status: "partial" })),
+      fail: vi.fn(),
+    });
+    mocks.execute.mockImplementation(async (reviewInput, deps) => {
+      expect(reviewInput.reviewMode).toBe("deep");
+      expect(deps.executionBudget).toEqual({
+        maxModelCalls: 15,
+        maxDurationMs: 15 * 60_000,
+      });
+      await deps.onAssuranceReady?.({
+        policy,
+        headSha: "head-1",
+        checkout: {
+          remoteUrl: "https://github.com/owner/repository.git",
+          takeAuthorizationHeader: () => "Authorization: Basic secret",
+        },
+      });
+      return result;
+    });
+
+    const selected = deepPolicy();
+    await expect(runScheduledPrReview({
+      orgId: "org-1",
+      installationId: "installation-1",
+      repo: "owner/repository",
+      prNumber: 42,
+      headSha: "head-1",
+      requestedBy: "user-1",
+      reviewMode: "deep",
+      requestSource: "manual_api",
+      deepReviewPolicy: selected,
+    }, context(), "security")).resolves.toEqual(result);
+
+    expect(mocks.start).toHaveBeenCalledWith(expect.objectContaining({
+      deepReview: {
+        policy: selected,
+        source: "manual_api",
+      },
+      repositoryContext: analysis,
+    }));
+  });
+
+  it("rejects implicit, webhook, and scope-mismatched deep-review activation", async () => {
+    const selected = deepPolicy();
+    await expect(runScheduledPrReview({
+      orgId: "org-1",
+      repo: "owner/repository",
+      prNumber: 42,
+      deepReviewPolicy: selected,
+    }, context(), "security")).rejects.toThrow(/cannot activate an ordinary diff review/);
+    await expect(runScheduledPrReview({
+      orgId: "org-1",
+      repo: "owner/repository",
+      prNumber: 42,
+      requestedBy: "user-1",
+      reviewMode: "deep",
+      requestSource: "webhook",
+      deepReviewPolicy: selected,
+    }, context(), "security")).rejects.toThrow(/explicit manual/);
+    await expect(runScheduledPrReview({
+      orgId: "org-other",
+      repo: "owner/repository",
+      prNumber: 42,
+      requestedBy: "user-1",
+      reviewMode: "deep",
+      requestSource: "manual_api",
+      deepReviewPolicy: selected,
+    }, context(), "security")).rejects.toThrow(/does not match/);
+    expect(mocks.execute).not.toHaveBeenCalled();
   });
 
   it("rejects a PR pentest without a persisted assessment policy", async () => {

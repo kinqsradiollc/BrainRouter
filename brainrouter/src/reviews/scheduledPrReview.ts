@@ -9,9 +9,14 @@
 import type { MemoryJobProgressEvent } from "@kinqs/brainrouter-types";
 import {
   assertAuthorizedAssessmentTarget,
+  parseDeepReviewPolicy,
   parseAuthorizedAssessmentPolicy,
 } from "@kinqs/brainrouter-core/review";
-import type { AuthorizedAssessmentPolicy } from "@kinqs/brainrouter-types/review";
+import type {
+  AuthorizedAssessmentPolicy,
+  DeepReviewPolicy,
+  DeepReviewProgram,
+} from "@kinqs/brainrouter-types/review";
 import {
   runPrCodeReview,
   runPrPentest,
@@ -52,10 +57,46 @@ function normalizeReviewInput(input: unknown): PrReviewInput {
         ? "github_account"
         : "github_app",
     requestedBy: typeof value?.requestedBy === "string" ? value.requestedBy : undefined,
+    reviewMode: value?.reviewMode === "deep" ? "deep" : "diff",
     repo: String(value?.repo ?? ""),
     prNumber: Number(value?.prNumber),
     headSha: String(value?.headSha ?? ""),
   };
+}
+
+function validateDeepReviewRequest(
+  rawInput: unknown,
+  lens: ScheduledReviewLens,
+): DeepReviewPolicy | null {
+  const input = rawInput as Record<string, unknown> | null;
+  const reviewMode = input?.reviewMode === "deep" ? "deep" : "diff";
+  if (reviewMode === "diff") {
+    if (input?.deepReviewPolicy !== undefined) {
+      throw new Error("A deep-review policy cannot activate an ordinary diff review.");
+    }
+    return null;
+  }
+  if (lens === "pentest" || input?.requestSource !== "manual_api") {
+    throw new Error("Deep review requires an explicit manual code or security request.");
+  }
+  const policy = parseDeepReviewPolicy(input?.deepReviewPolicy);
+  const program: DeepReviewProgram = lens === "code"
+    ? "code_review"
+    : "security_review";
+  const forge = input?.forge === "gitlab" ? "gitlab" : "github";
+  const repository = String(input?.repo ?? "").trim().toLowerCase();
+  const organizationId = String(input?.orgId ?? "").trim();
+  const requestedBy = String(input?.requestedBy ?? "").trim();
+  if (
+    policy.program !== program
+    || policy.repository.forge !== forge
+    || policy.repository.slug !== repository
+    || policy.organizationId !== organizationId
+    || policy.activation.requestedBy !== requestedBy
+  ) {
+    throw new Error("Deep-review policy does not match the queued manual request.");
+  }
+  return policy;
 }
 
 async function validatePentestAuthorization(
@@ -84,6 +125,7 @@ async function reviewDependencies(
   ctx: JobExecContext,
   lens: ScheduledReviewLens,
   orgId: string | undefined,
+  deepReviewPolicy: DeepReviewPolicy | null,
   observe: {
     progress(event: Omit<MemoryJobProgressEvent, "ts">): void;
     assuranceReady(input: Parameters<
@@ -131,6 +173,12 @@ async function reviewDependencies(
     prepareRepositoryContext: observe.prepareRepositoryContext,
     onCandidatesReady: observe.candidatesReady,
     isCancellationRequested: observe.isCancellationRequested,
+    ...(deepReviewPolicy ? {
+      executionBudget: {
+        maxModelCalls: deepReviewPolicy.budgets.maxModelCalls,
+        maxDurationMs: deepReviewPolicy.budgets.maxDurationMs,
+      },
+    } : {}),
   };
 }
 
@@ -142,6 +190,7 @@ export async function runScheduledPrReview(
   const assessmentPolicy = lens === "pentest"
     ? await validatePentestAuthorization(rawInput, ctx)
     : null;
+  const deepReviewPolicy = validateDeepReviewRequest(rawInput, lens);
   const input = normalizeReviewInput(rawInput);
   let changedFiles = 0;
   const assurance: { current: DiffReviewAssuranceSession | null } = { current: null };
@@ -163,7 +212,7 @@ export async function runScheduledPrReview(
   if (await isCancellationRequested()) {
     throw new Error("Review canceled before execution.");
   }
-  const deps = await reviewDependencies(ctx, lens, input.orgId, {
+  const deps = await reviewDependencies(ctx, lens, input.orgId, deepReviewPolicy, {
     assuranceReady: async ({ policy, headSha, checkout }) => {
       if (!ctx.jobId) return;
       const maxDiffChars = deps.maxDiffChars ?? 60_000;
@@ -185,10 +234,21 @@ export async function runScheduledPrReview(
           maxDiffChars,
           isCancellationRequested,
         }),
+        ...(deepReviewPolicy ? {
+          deepReview: {
+            policy: deepReviewPolicy,
+            source: "manual_api",
+          },
+        } : {}),
       });
     },
-    prepareRepositoryContext: ({ changed }) =>
-      assurance.current?.prepareContext(changed) ?? Promise.resolve(null),
+    prepareRepositoryContext: async ({ changed }) => {
+      const prepared = await (assurance.current?.prepareContext(changed)
+        ?? Promise.resolve(null));
+      return prepared && deepReviewPolicy
+        ? { ...prepared, coverageLabel: deepReviewPolicy.coverage.label }
+        : prepared;
+    },
     candidatesReady: ({
       headSha,
       currentHeadSha,

@@ -18,6 +18,7 @@ import type { ModelReasoningEffort } from "./models.js";
 import type {
   AssuranceFinding,
   AssurancePublicationProjection,
+  DeepReviewRequestConfig,
   RepositoryAssuranceRun,
 } from "./review/index.js";
 import { PublicUserRecord } from "./memory.js";
@@ -133,7 +134,14 @@ export interface ReviewJobDetailResponse {
   assurance: ReviewAssuranceDto | null;
   canRun: boolean;
 }
-export interface ManualReviewRunRequest { repo: string; prNumber: number; lens: "security" | "code" | "pentest" | "both"; forge?: "github" | "gitlab"; }
+export interface ManualReviewRunRequest {
+  repo: string;
+  prNumber: number;
+  lens: "security" | "code" | "pentest" | "both";
+  forge?: "github" | "gitlab";
+  mode?: "diff" | "deep";
+  deepReview?: DeepReviewRequestConfig;
+}
 
 export interface CursorPaginationParams {
   cursor?: string;
