@@ -498,7 +498,7 @@ the repository's normal security-review process before merge.
 | ID | Status | Deliverable | Acceptance evidence |
 |---|---|---|---|
 | A25-3a | `[x]` | Add a dependency-free, secret-free provider recovery receipt and one bounded Core executor; adopt it in non-streaming router gateway calls | Types/Core consumer typechecks; retryable, non-retryable, exhausted, fallback, immutability, and secret-exclusion fixtures |
-| A25-3b | `[ ]` | Adopt the executor in the agent turn loop without changing transcript, trace, cooldown, model-fallback, or interruption behavior | Agent runtime recovery fixture parity and one receipt per completed recovery campaign |
+| A25-3b | `[x]` | Adopt the executor in the agent turn loop without changing transcript, trace, cooldown, model-fallback, or interruption behavior | The runtime adapter includes the failed primary attempt, de-duplicates routes per turn, preserves fallback presentation, and publishes one receipt; focused executor, adapter, and run-turn fixtures cover the campaign |
 | A25-3c | `[x]` | Adopt the receipt contract for streaming calls while preserving the no-fallback-after-output rule | Gateway streaming uses the bounded executor; pre-output fallback and post-output terminal-stream fixtures preserve one receipt per campaign |
 | A25-3d | `[ ]` | Consolidate catalog, routing, policy/budget, adapters, and telemetry ownership behind the provider façade while retaining router compatibility exports | Public import parity, provider/model selection matrix, budget/fallback fixtures, and zero unsupported deep imports |
 

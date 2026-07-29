@@ -78,6 +78,7 @@ import { estimateChatHistoryTokens } from '../../util/tokens/tokenEstimate.js';
 import { classifyDeferral, buildDeliverableCorrection } from '../guards/deliverableCheck.js';
 import { classifyDenial, formatDenialResult } from '../guards/denialMessage.js';
 import { resolveEffortForTurn } from '../support/effortRouting.js';
+import { recoverAgentProviderRoute } from './providerRecovery.js';
 import { shouldRunFanOutFollowThroughGuard } from '../guards/fanOutFollowThroughGuard.js';
 import { assessMcpToolApproval } from '../guards/mcpApproval.js';
 import { NoTTYError } from '../support/prompter.js';
@@ -1182,6 +1183,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           }
         }
       };
+      const providerAttemptStartedAt = new Date().toISOString();
       try {
         response = await invokeLlmResilient();
       } catch (err: any) {
@@ -1237,56 +1239,54 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
               sessionKey: this.sessionKey,
             });
             const failedRoute = resolvedRoutes.find((route) => sameLlmRoute(route, this.llmConfig));
-            if (failedRoute) {
-              this.triedRouterRoutes.add(failedRoute.slug);
-              policy.markFailure(failedRoute, failure);
-            } else {
-              policy.markFailure({ provider: this.llmConfig.provider, model: this.llmConfig.model }, failure);
-            }
-
-            let lastRouterError: unknown = err;
+            const initialRoute = failedRoute ?? {
+              slug: `${this.llmConfig.provider}/${this.llmConfig.model}`,
+              provider: this.llmConfig.provider,
+              model: this.llmConfig.model,
+              llm: { ...this.llmConfig },
+              label: this.llmConfig.model,
+            };
             let attemptedRouterFallback = false;
-            for (;;) {
-              const candidates = resolvedRoutes.filter((route) => (
-                !this.triedRouterRoutes.has(route.slug) && !sameLlmRoute(route, this.llmConfig)
-              ));
-              const route = policy.pickRoute(candidates, this.sessionKey);
-              if (!route) break;
-              attemptedRouterFallback = true;
-              this.triedRouterRoutes.add(route.slug);
-              const from = `${this.llmConfig.provider}/${this.llmConfig.model}`;
-              callbacks.onStatusUpdate(
-                `Router fallback: ${from} unavailable (${routeFailureStatus(failure)}) — trying ${route.slug}...`,
-              );
-              this.recordTranscript({
-                role: 'system',
-                name: 'router',
-                content: `router: ${from} unavailable (${routeFailureStatus(failure)}), routed to ${route.slug}`,
+            try {
+              const recovery = await recoverAgentProviderRoute({
+                initialRoute,
+                initialError: err,
+                initialStartedAt: providerAttemptStartedAt,
+                routes: resolvedRoutes.filter((route) => (
+                  route.slug === initialRoute.slug || !sameLlmRoute(route, this.llmConfig)
+                )),
+                triedRoutes: this.triedRouterRoutes,
+                policy,
+                sessionKey: this.sessionKey,
+                onReceipt: callbacks.onProviderRecovery,
+                onFallback: ({ to }) => {
+                  attemptedRouterFallback = true;
+                  const from = `${this.llmConfig.provider}/${this.llmConfig.model}`;
+                  callbacks.onStatusUpdate(
+                    `Router fallback: ${from} unavailable (${routeFailureStatus(failure)}) — trying ${to.slug}...`,
+                  );
+                  this.recordTranscript({
+                    role: 'system',
+                    name: 'router',
+                    content: `router: ${from} unavailable (${routeFailureStatus(failure)}), routed to ${to.slug}`,
+                  });
+                  traceEvent('router.fallback', {
+                    from,
+                    to: to.slug,
+                    reason: failure.kind,
+                    status: failure.status ?? null,
+                  });
+                },
+                execute: async (route) => {
+                  this.llmConfig = { ...route.llm };
+                  return invokeLlmResilient();
+                },
               });
-              traceEvent('router.fallback', {
-                from,
-                to: route.slug,
-                reason: failure.kind,
-                status: failure.status ?? null,
-              });
-              policy.noteFallback(from, route.slug, failure);
-              this.llmConfig = { ...route.llm };
-              try {
-                response = await invokeLlmResilient();
-                policy.noteSuccess(route, this.sessionKey);
-                lastRouterError = null;
-                break;
-              } catch (retryErr: any) {
-                lastRouterError = retryErr;
-                const retryFailure = classifyRouterFailure(retryErr);
-                policy.markFailure(route, retryFailure);
-                if (!retryFailure.retryable) break;
+              response = recovery.result;
+            } catch (recoveryError: any) {
+              if (attemptedRouterFallback) {
+                throw new Error(`LLM Execution failed after router fallback: ${recoveryError?.message ?? recoveryError}`);
               }
-            }
-            if (lastRouterError === null) {
-              // Router retry succeeded; continue with the normal response handling below.
-            } else if (attemptedRouterFallback) {
-              throw new Error(`LLM Execution failed after router fallback: ${(lastRouterError as any)?.message ?? lastRouterError}`);
             }
           }
         }
