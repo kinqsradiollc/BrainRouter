@@ -9,6 +9,7 @@ export type {
   AssuranceRunTransition,
   CreateRepositoryAssuranceRunInput,
   ReplaceableAssuranceRunsInput,
+  SaveRepositoryAssuranceFindingInput,
 } from "./assuranceQueries/contracts.js";
 export {
   isAssuranceRunTransitionAllowed,
@@ -17,6 +18,11 @@ export {
   repositoryAssuranceIdempotencyKey,
 } from "./assuranceQueries/policy.js";
 export { createRepositoryAssuranceRun } from "./assuranceQueries/create.js";
+export {
+  getRepositoryAssuranceFinding,
+  isAssuranceFindingTransitionAllowed,
+  saveRepositoryAssuranceFinding,
+} from "./assuranceQueries/findings.js";
 export {
   getRepositoryAssuranceRun,
   listReplaceableRepositoryAssuranceRunIds,
