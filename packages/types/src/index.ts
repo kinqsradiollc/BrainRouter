@@ -18,3 +18,4 @@ export * from "./models.js";
 export * from "./reviews.js";
 export * from "./work-contract.js";
 export * from "./planning-schema.js";
+export * from "./provider/index.js";

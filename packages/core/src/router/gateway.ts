@@ -1,11 +1,13 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import crypto from 'node:crypto';
+import type { ProviderRecoveryReceipt } from '@kinqs/brainrouter-types';
 import type { Config, LLMConfig } from '../config/config.js';
 import { resolveCliKnobs } from '../config/config.js';
 import { callOpenAI, callOpenAIStream, type BuildPayloadOptions } from '../agent/transport/llmTransport.js';
 import { aggregateCatalog, buildModelRegistry } from './registry.js';
 import { resolveRoutes } from './resolve.js';
 import { classifyRouterFailure, getRouterPolicy } from './policy.js';
+import { executeWithProviderRecovery } from './recovery.js';
 import type { CatalogPrefixMode, ModelRegistryEntry } from './routerTypes.js';
 
 /** A non-streaming upstream call — defaults to callOpenAI; injectable for tests. */
@@ -34,6 +36,8 @@ export interface RouterGatewayOptions {
   transport?: RouterGatewayTransport;
   streamTransport?: RouterGatewayStreamTransport;
   maxAttempts?: number;
+  /** Receives one secret-free final receipt for a non-streaming routed call. */
+  onRecoveryReceipt?: (receipt: ProviderRecoveryReceipt) => void;
 }
 
 const CORS_HEADERS = {
@@ -149,33 +153,18 @@ function completionObject(id: string, created: number, model: string, result: Aw
 async function executeRoutedChat(
   routes: ModelRegistryEntry[],
   body: any,
-  opts: Pick<RouterGatewayOptions, 'transport' | 'maxAttempts'>,
+  opts: Pick<RouterGatewayOptions, 'transport' | 'maxAttempts' | 'onRecoveryReceipt'>,
 ) {
   const policy = getRouterPolicy();
   const transport = opts.transport ?? callOpenAI;
   const options = transportOptions(body);
-  let lastError: unknown;
-  let lastFailedRoute: ModelRegistryEntry | undefined;
-  let lastFailure: ReturnType<typeof classifyRouterFailure> | undefined;
-  const tried = new Set<string>();
-  for (let i = 0; i < Math.max(1, opts.maxAttempts ?? 4); i += 1) {
-    const route = policy.pickRoute(routes.filter((r) => !tried.has(r.slug)));
-    if (!route) break;
-    if (lastFailedRoute && lastFailure) policy.noteFallback(lastFailedRoute.slug, route.slug, lastFailure);
-    tried.add(route.slug);
-    try {
-      const result = await transport(route.llm, body.messages ?? [], body.tools ?? [], options);
-      policy.noteSuccess(route);
-      return { route, result };
-    } catch (error) {
-      lastError = error;
-      const failure = classifyRouterFailure(error);
-      policy.markFailure(route, failure);
-      lastFailedRoute = route; lastFailure = failure;
-      if (!failure.retryable) break;
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError ?? 'No route available.'));
+  return executeWithProviderRecovery({
+    routes,
+    policy,
+    maxAttempts: opts.maxAttempts,
+    onReceipt: opts.onRecoveryReceipt,
+    execute: (route) => transport(route.llm, body.messages ?? [], body.tools ?? [], options),
+  });
 }
 
 /**
