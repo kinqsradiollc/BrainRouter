@@ -1,10 +1,16 @@
-import type { RepositoryReviewAvailability } from "@kinqs/brainrouter-types";
+import type {
+  ManualReviewRunRequest,
+  RepositoryReviewAvailability,
+} from "@kinqs/brainrouter-types";
+import { manualDeepReviewRequestConfig } from "@kinqs/brainrouter-types/review";
 import type { ReviewJob, ReviewPullRequest } from "../../lib/adminApi";
 
 export type ReviewStatusFilter = "all" | "attention" | "running" | "complete" | "not-reviewed";
 export type ReviewAutomationFilter = "all" | "automatic" | "on-demand";
 export type ReviewDraftFilter = "all" | "ready" | "draft";
 export type ReviewSort = "updated-desc" | "updated-asc" | "created-desc" | "created-asc" | "comments-desc";
+export type ReviewExecutionMode = "diff" | "deep";
+export type ReviewRunLens = "security" | "code" | "both";
 
 export const REVIEW_ACTION_LABELS = {
   security: "Security review",
@@ -26,6 +32,27 @@ export interface ReviewListFilters {
 export interface ReviewActionPresentation {
   enabled: boolean;
   help: string;
+}
+
+export function manualReviewRunRequest(
+  repo: string,
+  prNumber: number,
+  lens: ReviewRunLens,
+  mode: ReviewExecutionMode,
+  limitsAccepted: boolean,
+): ManualReviewRunRequest {
+  if (mode === "deep" && !limitsAccepted) {
+    throw new Error("Accept the displayed deep-review limits before starting this run.");
+  }
+  return mode === "deep"
+    ? {
+        repo,
+        prNumber,
+        lens,
+        mode,
+        deepReview: manualDeepReviewRequestConfig(),
+      }
+    : { repo, prNumber, lens, mode: "diff" };
 }
 
 const ACTIVE_STATUSES = new Set(["pending", "queued", "running"]);

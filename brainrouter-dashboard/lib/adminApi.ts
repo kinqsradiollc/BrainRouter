@@ -14,6 +14,7 @@ import type {
   ModelCapabilities,
   ModelReasoningEffort,
   ModelReasoningMode,
+  ManualReviewRunRequest,
   RepositoryReviewAvailability,
 } from "@kinqs/brainrouter-types";
 
@@ -384,7 +385,7 @@ export const adminApi = {
     if (filters.sort && filters.sort !== "newest") query.set("sort", filters.sort);
     return authFetch<ReviewIssuesResponse>(`/api/admin/reviews/issues?${query.toString()}`, { orgId, signal });
   },
-  runReview: (body: { repo: string; prNumber: number; lens: "security" | "code" | "pentest" | "both" }, orgId?: string) =>
+  runReview: (body: ManualReviewRunRequest, orgId?: string) =>
     authFetch<{ jobs: { id: string; lens: "security" | "code" | "pentest" }[] }>("/api/admin/reviews/run", { method: "POST", body, orgId }),
   // ADR-016 — the deployment's GitHub OAuth App (for per-user "Connect GitHub").
   getGithubOAuthApp: () =>

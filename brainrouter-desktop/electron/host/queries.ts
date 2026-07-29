@@ -207,6 +207,7 @@ import {
 import { collectDurableRunningTasks } from '@kinqs/brainrouter-core/background';
 import type { BackgroundTaskRecord } from '@kinqs/brainrouter-types';
 import type { BackgroundTaskEventView } from '@kinqs/brainrouter-agent-protocol';
+import { desktopReviewRunRequest } from '../reviewRunRequest.js';
 // ATTACHMENTS (0.4.15 workflow gaps) — ingest files (drag/drop + picker) into
 // durable attachment records, shared with the CLI `/attach` store.
 import { ingestAttachment, attachmentContextMarkdown } from '@kinqs/brainrouter-core/attachment';
@@ -3733,18 +3734,14 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       'reviews-run': async (a) => {
         const config = loadConfig();
         if (!resolveBrainRouterAccountApi(config)) return { ok: false, error: 'Sign in under Settings → Account first.' };
-        const repo = String(a.repo ?? '');
-        const prNumber = Number(a.prNumber);
-        const forge = a.forge === 'gitlab' ? 'gitlab' : 'github';
-        const lens = a.lens === 'security' || a.lens === 'code' || a.lens === 'pentest' || a.lens === 'both' ? a.lens : 'both';
-        const segments = repo.split('/');
-        if (segments.length < 2 || (forge === 'github' && segments.length !== 2) || segments.some((part) => !/^[A-Za-z0-9_.-]+$/.test(part) || part === '.' || part === '..') || !Number.isInteger(prNumber) || prNumber <= 0) return { ok: false, error: 'bad repo/prNumber' };
+        const request = desktopReviewRunRequest(a);
+        if (!request.ok) return request;
         try {
           const account = await resolveBrainRouterAccountContext(config);
           if (!account) return { ok: false, error: 'No active BrainRouter organization.' };
           const r = await timeoutFetch(`${account.baseUrl}/api/admin/reviews/run`, {
             method: 'POST', headers: brainRouterAccountHeaders(account, true),
-            body: JSON.stringify({ repo, prNumber, lens, forge }),
+            body: JSON.stringify(request.body),
           });
           const j = await r.json().catch(() => ({})) as { jobs?: unknown[]; error?: string };
           if (!r.ok) return { ok: false, error: j.error || `HTTP ${r.status}` };
