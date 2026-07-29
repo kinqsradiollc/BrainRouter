@@ -61,7 +61,7 @@ import { isSequenceGuardExempt, buildSequenceSignature } from '../guards/repeatG
 import { shouldNudgeTaskTracking, buildTaskTrackingNudge } from '../guards/taskTrackingNudge.js';
 import {
   looksLikeDeferredToolPromise, looksLikeStalledPreamble,
-  parseArgumentsOrError, suggestSimilarToolName, synthesizeOrphanResults,
+  parseArgumentsOrError, suggestSimilarToolName,
 } from '../guards/toolCallRecovery.js';
 import { isParallelSafe, parallelExecutionEnabled } from '../guards/toolSafety.js';
 import { resolveToolBudget, isBudgetCheckpoint, buildBudgetCheckpoint } from '../guards/turnBudget.js';
@@ -93,6 +93,11 @@ import { prepareTurnContextPhase } from './contextPreparationPhase.js';
 import { repairAndRecordToolCalls } from './toolCallRepairPhase.js';
 import { authorizeToolCall } from './toolAuthorizationPhase.js';
 import { invokeAuthorizedToolAdapter } from './toolAdapterInvocationPhase.js';
+import {
+  executeToolBatch,
+  publishToolBatch,
+  repairOrphanToolResults,
+} from './toolBatchExecutionPhase.js';
 import {
   buildRequiredDelegatedStageCorrection,
   buildRequiredProfileStageCorrection,
@@ -1837,109 +1842,43 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       // serial runs (and unknown-tool fallbacks) execute one-by-one. The
       // result array is indexed by original call position so the
       // chatHistory push at the end is deterministic.
-      const processed: Array<{ toolMsg: any; fullResultText: string; systemMsg?: any } | undefined> =
-        new Array(toolCalls.length);
+      const processed = await executeToolBatch({
+        toolCalls,
+        normalizedNames,
+        parallelSafe: safeFlags,
+        executeOne: processOneToolCall,
+        interrupted: () => this.interruptRequested,
+        onInterrupted: (name, toolCall) => {
+          const delegationLaunch = registryDelegationLaunchTool(name);
+          callbacks.onToolEnd(name, {
+            success: false,
+            summary: 'turn interrupted — tool skipped',
+            ...(delegationLaunch ? { delegationState: 'not-started' as const } : {}),
+          }, toolCall.id);
+        },
+      });
 
-      const runSafeBatch = async (startIdx: number, endIdx: number): Promise<void> => {
-        // [startIdx, endIdx) — at least 1 entry; size > 1 means concurrent.
-        // Calling `processOneToolCall` synchronously schedules every batch
-        // member's onToolStart + repeat-guard prep BEFORE any await yields,
-        // so the user sees N "in flight" tool rows immediately. Promise.
-        // allSettled then waits for all to settle; any rejection is
-        // translated into a "Tool execution failed" envelope so the LLM's
-        // next turn still sees a tool_result for every original tool_call_id.
-        const slice = toolCalls.slice(startIdx, endIdx);
-        const promises = slice.map((tc: any, j: number) =>
-          processOneToolCall(tc, normalizedNames[startIdx + j]),
-        );
-        const settled = await Promise.allSettled(promises);
-        for (let k = 0; k < settled.length; k++) {
-          const s = settled[k];
-          if (s.status === 'fulfilled') {
-            processed[startIdx + k] = s.value;
-          } else {
-            const tc = slice[k];
-            const name = normalizedNames[startIdx + k];
-            const message = s.reason?.message ?? String(s.reason);
-            const resultText = `Tool execution failed: ${message}`;
-            processed[startIdx + k] = {
-              toolMsg: { role: 'tool', tool_call_id: tc.id, name, content: resultText, isError: true },
-              fullResultText: resultText,
-            };
-          }
-        }
-      };
+      publishToolBatch({
+        results: processed,
+        publishToolResult: (toolMsg, fullResultText) => {
+          this.chatHistory.push(toolMsg);
+          this.recordTranscript({ ...toolMsg, content: fullResultText });
+        },
+        publishSystemMessage: (systemMsg) => {
+          this.chatHistory.push(systemMsg);
+          this.recordTranscript(systemMsg);
+        },
+      });
 
-      let i = 0;
-      while (i < toolCalls.length) {
-        if (safeFlags[i]) {
-          let j = i + 1;
-          while (j < toolCalls.length && safeFlags[j]) j++;
-          await runSafeBatch(i, j);
-          i = j;
-        } else {
-          // Serial slot — run in isolation so any state mutation (write,
-          // spawn_agent, update_plan) completes before the next call starts.
-          processed[i] = await processOneToolCall(toolCalls[i], normalizedNames[i]);
-          i++;
-        }
-        // DESK-6 — a Stop landed while a tool was running (Bundle A/B already
-        // killed the in-flight one): don't dispatch the rest. Every remaining
-        // tool_call STILL needs a tool_result or the next provider call 400s on
-        // an unmatched tool_call — fill them with the interrupted-skip envelope
-        // (same shape as the per-tool skip at the top of processOneToolCall).
-        if (this.interruptRequested) {
-          for (let k = i; k < toolCalls.length; k++) {
-            if (processed[k]) continue;
-            const tc = toolCalls[k];
-            const name = normalizedNames[k];
-            const delegationLaunch = registryDelegationLaunchTool(name);
-            callbacks.onToolEnd(name, {
-              success: false,
-              summary: 'turn interrupted — tool skipped',
-              ...(delegationLaunch ? { delegationState: 'not-started' as const } : {}),
-            }, tc.id);
-            processed[k] = {
-              toolMsg: { role: 'tool', tool_call_id: tc.id, name, content: 'Skipped: turn interrupted by user.', isError: true },
-              fullResultText: 'Skipped: turn interrupted by user.',
-            };
-          }
-          break;
-        }
-      }
-
-      const postToolSystemMessages: any[] = [];
-      for (const entry of processed) {
-        if (!entry) continue;
-        this.chatHistory.push(entry.toolMsg);
-        // Record the FULL untruncated result so /transcript shows everything,
-        // even when the LLM-facing copy was clamped.
-        this.recordTranscript({ ...entry.toolMsg, content: entry.fullResultText });
-        if (entry.systemMsg) {
-          postToolSystemMessages.push(entry.systemMsg);
-        }
-      }
-      for (const systemMsg of postToolSystemMessages) {
-        this.chatHistory.push(systemMsg);
-        this.recordTranscript(systemMsg);
-      }
-
-      // 0.3.8-I4: orphan safety net. Even after dedupe + the per-call
-      // recovery branches above, a tool_call without a paired tool_result
-      // would 400 the next OpenAI request. Synthesize ERROR envelopes for
-      // any unmatched id so strict tool_call ↔ tool_result pairing is
-      // preserved. Synthetic content is a plain `ERROR: …` string so the
-      // R1 child-drain guardrail's parseJsonObject(resultText) returns
-      // undefined and we don't accidentally claim a child was spawned.
-      // Synthetics do NOT bump lastTurnToolCalls — they aren't real
-      // dispatches, just a well-formed-history fix.
-      const producedResults = processed.filter((p): p is NonNullable<typeof p> => !!p).map((p) => p.toolMsg);
-      const orphans = synthesizeOrphanResults(toolCalls, producedResults);
-      for (const synthetic of orphans) {
-        this.chatHistory.push(synthetic);
-        this.recordTranscript(synthetic);
-        callbacks.onStatusUpdate(`Recovery: synthesized placeholder for orphan tool_call ${synthetic.tool_call_id}.`);
-      }
+      repairOrphanToolResults({
+        toolCalls,
+        results: processed,
+        publishSyntheticResult: (synthetic) => {
+          this.chatHistory.push(synthetic);
+          this.recordTranscript(synthetic);
+          callbacks.onStatusUpdate(`Recovery: synthesized placeholder for orphan tool_call ${synthetic.tool_call_id}.`);
+        },
+      });
     }
 
     // Normalize the final answer FIRST so every exit path (loop limit, empty
