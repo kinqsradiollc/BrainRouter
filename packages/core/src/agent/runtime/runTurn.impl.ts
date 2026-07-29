@@ -66,11 +66,10 @@ import { shouldRunFanOutFollowThroughGuard } from '../guards/fanOutFollowThrough
 import { assessMcpToolApproval } from '../guards/mcpApproval.js';
 import { NoTTYError } from '../support/prompter.js';
 import { analyzeSchema, flattenSchema, nestArguments, type JSONSchema } from '../repair/flatten.js';
-import { ToolCallRepair } from '../repair/index.js';
 import { isSequenceGuardExempt, buildSequenceSignature } from '../guards/repeatGuard.js';
 import { shouldNudgeTaskTracking, buildTaskTrackingNudge } from '../guards/taskTrackingNudge.js';
 import {
-  dedupeToolCalls, looksLikeDeferredToolPromise, looksLikeStalledPreamble, mentionsImminentToolWork,
+  looksLikeDeferredToolPromise, looksLikeStalledPreamble,
   parseArgumentsOrError, suggestSimilarToolName, synthesizeOrphanResults,
 } from '../guards/toolCallRecovery.js';
 import { isParallelSafe, parallelExecutionEnabled } from '../guards/toolSafety.js';
@@ -83,7 +82,7 @@ import { browserUseAvailableFor } from '../../browser/control.js';
 import { getCurrentWorkflow } from '../../workflow/run/workflowArtifacts.js';
 import { getToolSummary, getToolPreview } from '../support/toolSummary.js';
 import { trackChildObservation, parseChildDrainTimeouts, formatChildDrainTimeoutAnswer, summarizeWaitedChildOutputs } from '../support/childObservation.js';
-import { sanitizeToolCallsForHistory, explainUnknownToolName } from '../agent.js';
+import { explainUnknownToolName } from '../agent.js';
 import { refreshWorkspaceCapabilityState } from '../workspaceCapabilityState.js';
 import { resolveActiveTurnOrchestration } from '../../workspace/activeTurnOrchestration.js';
 import {
@@ -107,6 +106,7 @@ import {
 import { invokeModelPhase } from './modelInvocationPhase.js';
 import { normalizeTurnCompletionAnswer } from './completionPhase.js';
 import { prepareTurnContextPhase } from './contextPreparationPhase.js';
+import { repairAndRecordToolCalls } from './toolCallRepairPhase.js';
 import {
   buildRequiredDelegatedStageCorrection,
   buildRequiredProfileStageCorrection,
@@ -915,150 +915,13 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         callbacks.onUsageUpdate?.({ ...this.lastTurnUsage });
       }
 
-      // 0.3.8-I4: Strict tool-call recovery. Real-world LLMs (especially
-      // smaller / quantised) sometimes emit duplicate tool_call ids in a
-      // single response. If we let both through, OpenAI's next request 400s
-      // because one of the duplicates has no paired tool_result. Dedupe
-      // before pushing the assistant message — last occurrence wins (closest
-      // to the model's final intent).
-      // Enforces the same well-formed history invariant as the pre-request
-      //   dangling-tool-call recovery, applied per-response instead.
-      if (response.toolCalls && response.toolCalls.length > 0) {
-        const deduped = dedupeToolCalls(response.toolCalls, (id) => {
-          callbacks.onStatusUpdate(`Recovery: dropped duplicate tool_call id "${id}" (last occurrence wins).`);
-        });
-        response.toolCalls = deduped;
-      }
-
-      // 0.3.9 item 11 — run the repair pipeline on the
-      // assistant's tool_calls before they reach dispatch:
-      //   • scavenge — recover calls leaked into the content channel;
-      //   • truncation — rebalance JSON in arguments cut off by
-      //     max_tokens;
-      //   • storm — suppress identical-args loops.
-      // `flatten` runs at registration time, not per-turn (see the
-      // schema-flatten patch in orchestration/tools.ts).
-      const allowedToolNames = new Set<string>(allTools.map((t: any) => t.name).filter(Boolean));
-      if (!this.toolCallRepair) {
-        this.toolCallRepair = new ToolCallRepair({
-          allowedToolNames,
-          isMutating: (call) => {
-            const n = call.function?.name ?? '';
-            return n === 'write_file' || n === 'edit_file' || n === 'apply_patch' || n === 'run_command';
-          },
-          isStormExempt: (call) => {
-            const n = call.function?.name ?? '';
-            return n === 'list_jobs' || n === 'get_status' || n === 'list_agents' || n === 'wait_agent' || n === 'wait_agents';
-          },
-        });
-      }
-      const repairInput = (response.toolCalls ?? []) as any[];
-      // Identify which originals were suppressed by storm/repair (by id) so
-      // we can synthesize matching ERROR tool_results and surface
-      // user-visible `onToolEnd` events. Otherwise the OpenAI invariant
-      // breaks (assistant tool_call with no paired tool_result) and the
-      // legacy "repeat guard tripped" UX regresses.
-      const survivingIds = new Set<string>();
-      const repaired = this.toolCallRepair.process(
-        repairInput.map((c) => ({ id: c.id, type: c.type, function: c.function })),
-        // OpenAI-compat callOpenAI() doesn't return reasoning_content
-        // separately yet — pass content as the secondary scavenge
-        // channel so DSML / leaked JSON in content is still caught.
-        null,
-        typeof response.content === 'string' ? response.content : null,
-      );
-      this.lastRepairReport = repaired.report;
-      // CLI-8 — fold this turn's report into the session totals.
-      const rr = repaired.report;
-      const touched = rr.scavenged > 0 || rr.truncationsFixed > 0 || rr.truncationsUnrecoverable > 0 || rr.stormsBroken > 0;
-      if (touched) {
-        this.repairTotals.scavenged += rr.scavenged;
-        this.repairTotals.truncationsFixed += rr.truncationsFixed;
-        this.repairTotals.truncationsUnrecoverable += rr.truncationsUnrecoverable;
-        this.repairTotals.stormsBroken += rr.stormsBroken;
-        this.repairTotals.turnsWithRepair += 1;
-      }
-      for (const c of repaired.calls) if (c.id) survivingIds.add(c.id);
-      if (repaired.report.scavenged > 0 || repaired.report.truncationsFixed > 0 || repaired.report.stormsBroken > 0) {
-        traceEvent('tool_call.repair', {
-          scavenged: repaired.report.scavenged,
-          truncationsFixed: repaired.report.truncationsFixed,
-          truncationsUnrecoverable: repaired.report.truncationsUnrecoverable,
-          stormsBroken: repaired.report.stormsBroken,
-          notes: repaired.report.notes,
-        });
-        if (repaired.report.scavenged > 0) {
-          callbacks.onStatusUpdate(`Repair: scavenged ${repaired.report.scavenged} tool call${repaired.report.scavenged === 1 ? '' : 's'} from response content.`);
-        }
-      }
-      // Surface storm-suppressed originals as `onToolEnd` events so the
-      // user sees "repeat guard tripped (Nx <tool>)" and the model
-      // receives a paired ERROR tool_result on the next request.
-      const suppressedSynthetic: any[] = [];
-      if (repairInput.length > 0) {
-        for (const original of repairInput) {
-          if (original.id && survivingIds.has(original.id)) continue;
-          // The storm pipeline-level suppression was the only path that
-          // can drop a declared call without emitting its own
-          // tool_result. Mirror the legacy guard's user-visible summary.
-          const name = original.function?.name ?? 'unknown';
-          const summary = `repeat guard tripped (storm pipeline ${name})`;
-          callbacks.onToolStart?.(name, {});
-          callbacks.onToolEnd?.(name, { success: false, summary });
-          suppressedSynthetic.push({
-            role: 'tool',
-            tool_call_id: original.id,
-            name,
-            content: `ERROR: ${summary}. The same (name, args) pair fired more times than the pipeline-level storm guard allows. Pick a different action or call goal_blocked if no further path remains.`,
-            isError: true,
-          });
-        }
-      }
-      response.toolCalls = repaired.calls.length > 0 ? (repaired.calls as any[]) : undefined;
-      // Stash the synthetic tool_results to push AFTER the assistant
-      // message lands in chatHistory — preserve OpenAI's tool_call ↔
-      // tool_result ordering.
-      (response as any)._suppressedSyntheticResults = suppressedSynthetic;
-      // Record Assistant message
-      const assistantMsg: any = { role: 'assistant', content: response.content };
-      if (response.toolCalls) {
-        // History gets args sanitized to valid JSON (execution below still uses
-        // the ORIGINAL response.toolCalls, so a malformed call still errors to the
-        // model). Prevents a later "400 invalid function arguments json string".
-        assistantMsg.tool_calls = sanitizeToolCallsForHistory(response.toolCalls);
-      }
-      this.chatHistory.push(assistantMsg);
-      this.recordTranscript(assistantMsg);
-
-      // Note an unfulfilled tool-promise: the model announced future tool work.
-      // Record the tool count so the terminal guard can tell whether the
-      // promise was actually kept (tools ran after it) or the turn stalled /
-      // pivoted to asking the user instead.
-      if (
-        (!response.toolCalls || response.toolCalls.length === 0) &&
-        (looksLikeDeferredToolPromise(response.content) || mentionsImminentToolWork(response.content))
-      ) {
-        // Arm on a strict start-anchored preamble OR a lenient "buried" forward
-        // promise (a long message that ends "…I'll proceed by locating … and
-        // run the comparison"), so the terminal guard catches the stall either
-        // way.
-        promisedToolsAtCount = this.lastTurnToolCalls;
-      } else if (response.toolCalls && response.toolCalls.length > 0) {
-        promisedToolsAtCount = -1; // a real tool batch fulfils any prior promise
-      }
-
-      // 0.3.9 item 11 — flush any storm-suppressed synthetic tool_results
-      // immediately after the assistant message so the LLM sees them
-      // paired with the original tool_call ids. Done before the
-      // no-tool_calls early-exit because the assistantMsg may still
-      // carry some surviving calls (mixed case).
-      const syntheticResults = (response as any)._suppressedSyntheticResults as any[] | undefined;
-      if (syntheticResults && syntheticResults.length > 0) {
-        for (const r of syntheticResults) {
-          this.chatHistory.push(r);
-          this.recordTranscript(r);
-        }
-      }
+      promisedToolsAtCount = repairAndRecordToolCalls({
+        agent: this,
+        callbacks,
+        response,
+        allTools,
+        promisedToolsAtCount,
+      });
 
       if (!response.toolCalls || response.toolCalls.length === 0) {
         // A steer may have arrived while this LLM response was streaming. The
