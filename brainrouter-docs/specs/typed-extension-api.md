@@ -151,7 +151,7 @@ An extension's entry module exports `activate`:
 
 ```ts
 // <workspace>/.brainrouter/extensions/warehouse/index.ts
-import type { ExtensionActivate } from '@kinqs/brainrouter-core/dist/extension/host.js';
+import type { ExtensionActivate } from '@kinqs/brainrouter-core/extension';
 export const activate: ExtensionActivate = (host) => {
   host.registerTool({ executor: queryWarehouseExecutor, accessTier: 'read', actionKind: 'network', parallelSafe: true });
 };
