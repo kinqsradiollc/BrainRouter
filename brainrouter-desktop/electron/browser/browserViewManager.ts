@@ -11,7 +11,7 @@ import {
   type Session,
   type WebContents,
 } from 'electron';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,6 +29,12 @@ import {
   standardChromeUserAgent,
 } from './browserProfile.js';
 import { promptForHttpAuth } from './httpAuthPrompt.js';
+import {
+  BrowserWorkspaceStore,
+  persistableBrowserUrl,
+  type PersistedPermissionDecision,
+  type PersistedBrowserWorkspace,
+} from './browserWorkspaceStore.js';
 import {
   BROWSER_BLANK_URL,
   BROWSER_PROTOCOL_VERSION,
@@ -95,17 +101,6 @@ type PendingDialog = {
   tabId: BrowserTabId;
   finish: (response: DialogResponse) => void;
   timer: ReturnType<typeof setTimeout>;
-};
-type PersistedPermissionDecision = {
-  origin: string;
-  permission: 'geolocation';
-  decision: 'allow' | 'block';
-};
-type PersistedTabs = {
-  version: 1;
-  activeIndex: number;
-  tabs: Array<{ url: string }>;
-  permissions?: PersistedPermissionDecision[];
 };
 type AgentNavigationPolicy = { allowedPrivateOrigin?: string };
 type StagedUpload = { directory: string; timer: ReturnType<typeof setTimeout> };
@@ -183,24 +178,6 @@ function availableDownloadPath(directory: string, filename: string): string {
 
 function jsonBytes(value: unknown): number {
   try { return Buffer.byteLength(JSON.stringify(value), 'utf8'); } catch { return Number.POSITIVE_INFINITY; }
-}
-
-function persistableBrowserUrl(raw: string): string {
-  if (!raw || raw.startsWith('data:')) return BROWSER_BLANK_URL;
-  try {
-    const url = new URL(raw);
-    url.username = '';
-    url.password = '';
-    // BrainRouter owns only restorable tab locations, never page content or
-    // credentials. Query strings/fragments commonly contain searches, document
-    // text, OAuth/SAML assertions, invite tokens, and one-time codes under
-    // arbitrary key names, so persistence deliberately keeps origin + path only.
-    url.search = '';
-    url.hash = '';
-    return url.toString();
-  } catch {
-    return BROWSER_BLANK_URL;
-  }
 }
 
 function targetScript(tabId: string, revision: number, ref?: string, target?: string, label?: string, targetType?: string): string {
@@ -297,6 +274,7 @@ export class BrowserViewManager {
   // and completed site challenges across chat sessions without sharing them
   // with another workspace.
   private partition: string;
+  private workspaceStore: BrowserWorkspaceStore;
   // The tab whose native view is currently a child of the window. Re-adding an
   // already-attached view flashes it, so attachActiveView only add/removes on a
   // real change and otherwise just re-bounds (smooth).
@@ -340,6 +318,7 @@ export class BrowserViewManager {
   constructor(private readonly win: BrowserWindow, workspaceRoot: string) {
     this.workspaceRoot = workspaceRoot;
     this.partition = browserPartitionForWorkspace(workspaceRoot);
+    this.workspaceStore = new BrowserWorkspaceStore(app.getPath('userData'), workspaceRoot);
     configureBrowserSession(session.fromPartition(this.partition));
     this.restoreWorkspace();
     if (this.tabs.length === 0) this.createTab(BROWSER_BLANK_URL, true);
@@ -595,6 +574,7 @@ export class BrowserViewManager {
     this.destroyAllViews();
     this.workspaceRoot = workspaceRoot;
     this.partition = browserPartitionForWorkspace(workspaceRoot);
+    this.workspaceStore = new BrowserWorkspaceStore(app.getPath('userData'), workspaceRoot);
     this.sessionKey = null;
     this.tabs = [];
     this.activeTabId = '';
@@ -1881,14 +1861,8 @@ export class BrowserViewManager {
     return { ok: false, requestId: boundBrowserText(id, 128), code, error: boundBrowserText(error, 1_024), ...(tab ? { tabId: tab.id, revision: tab.revision } : {}) };
   }
 
-  private persistencePath(): string {
-    const key = createHash('sha256').update(this.workspaceRoot).digest('hex').slice(0, 20);
-    return path.join(app.getPath('userData'), 'browser-tabs-v1', `${key}.json`);
-  }
-
   private restoreWorkspace(): void {
-    let persisted: PersistedTabs | null = null;
-    try { persisted = JSON.parse(fs.readFileSync(this.persistencePath(), 'utf8')) as PersistedTabs; } catch { persisted = null; }
+    const persisted = this.workspaceStore.load();
     const rows = persisted?.version === 1 && Array.isArray(persisted.tabs) ? persisted.tabs.slice(0, MAX_BROWSER_TABS) : [];
     for (const row of rows) {
       const raw = typeof row.url === 'string' && !row.url.startsWith('data:') ? row.url : BROWSER_BLANK_URL;
@@ -1914,7 +1888,7 @@ export class BrowserViewManager {
 
   private persistWorkspace(): void {
     if (this.disposed || !this.workspaceRoot) return;
-    const state: PersistedTabs = {
+    const state: PersistedBrowserWorkspace = {
       version: 1,
       activeIndex: Math.max(0, this.tabs.findIndex((tab) => tab.id === this.activeTabId)),
       tabs: this.tabs.map((tab) => ({ url: persistableBrowserUrl(tab.url) })),
@@ -1925,8 +1899,7 @@ export class BrowserViewManager {
       })),
     };
     try {
-      const file = this.persistencePath(); fs.mkdirSync(path.dirname(file), { recursive: true });
-      const tmp = `${file}.${process.pid}.tmp`; fs.writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 }); fs.renameSync(tmp, file);
+      this.workspaceStore.save(state);
     } catch { /* best effort */ }
   }
 
