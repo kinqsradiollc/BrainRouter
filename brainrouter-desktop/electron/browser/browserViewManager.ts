@@ -34,6 +34,7 @@ import {
   availableDownloadPath,
   BrowserDownloadManager,
 } from './browserDownloadManager.js';
+import { BrowserNativeViewManager } from './browserNativeViewManager.js';
 import { BrowserTabStateManager } from './browserTabStateManager.js';
 import {
   BrowserWorkspaceStore,
@@ -56,7 +57,6 @@ import {
   type BrowserCommand,
   type BrowserCommandRequest,
   type BrowserCommandResult,
-  type BrowserConsoleEntry,
   type BrowserErrorCode,
   type BrowserEvent,
   type BrowserNetworkEntry,
@@ -68,7 +68,6 @@ import {
 } from './protocol.js';
 
 const ISOLATED_WORLD_ID = 1_001;
-const MAX_CONSOLE_ROWS = 300;
 const MAX_NETWORK_ROWS = 500;
 const DIALOG_TIMEOUT_MS = 60_000;
 const AGENT_DOWNLOAD_GESTURE_MS = 5_000;
@@ -78,11 +77,6 @@ const STAGED_UPLOAD_TTL_MS = 30 * 60_000;
 const AGENT_DOWNLOAD_INTERACTIONS = new Set<BrowserCommand['op']>([
   'click', 'double-click', 'type', 'press', 'drag', 'select', 'check', 'set-files', 'respond-dialog',
 ]);
-
-type ViewRecord = {
-  view: WebContentsView;
-  console: BrowserConsoleEntry[];
-};
 
 type AgentNavigationPolicy = { allowedPrivateOrigin?: string };
 type StagedUpload = { directory: string; timer: ReturnType<typeof setTimeout> };
@@ -206,19 +200,15 @@ function performanceNetworkScript(): string {
 
 export class BrowserViewManager {
   private workspaceRoot: string;
-  private readonly records = new Map<BrowserTabId, ViewRecord>();
   private surface: BrowserSurface = { x: 0, y: 0, width: 0, height: 0, visible: false };
   private readonly windowPrefix = randomUUID().replace(/-/g, '').slice(0, 10);
   private readonly tabState: BrowserTabStateManager;
+  private readonly nativeViews: BrowserNativeViewManager;
   // One persistent profile per workspace preserves sign-ins, cookies, storage,
   // and completed site challenges across chat sessions without sharing them
   // with another workspace.
   private partition: string;
   private workspaceStore: BrowserWorkspaceStore;
-  // The tab whose native view is currently a child of the window. Re-adding an
-  // already-attached view flashes it, so attachActiveView only add/removes on a
-  // real change and otherwise just re-bounds (smooth).
-  private attachedViewId: BrowserTabId | null = null;
   private sessionKey: string | null = null;
   private readonly queues = new Map<BrowserTabId, Promise<void>>();
   private readonly emulatedTabs = new Set<BrowserTabId>();
@@ -253,6 +243,29 @@ export class BrowserViewManager {
     this.workspaceRoot = workspaceRoot;
     this.partition = browserPartitionForWorkspace(workspaceRoot);
     this.tabState = new BrowserTabStateManager(this.windowPrefix);
+    this.nativeViews = new BrowserNativeViewManager({
+      createView: (partition) => new WebContentsView({
+        webPreferences: {
+          partition,
+          sandbox: true,
+          contextIsolation: true,
+          nodeIntegration: false,
+          nodeIntegrationInWorker: false,
+          nodeIntegrationInSubFrames: false,
+          webSecurity: true,
+          allowRunningInsecureContent: false,
+          safeDialogs: true,
+          safeDialogsMessage: 'Additional dialogs from this page were blocked.',
+          // Never timer-throttle the browser view. A WebContentsView's
+          // occlusion can be mis-detected under the renderer overlay, and
+          // throttling an active tab stalls JS-heavy sites and login flows.
+          backgroundThrottling: false,
+          spellcheck: true,
+        },
+      }),
+      attachView: (view) => { this.win.contentView.addChildView(view); },
+      detachView: (view) => { this.win.contentView.removeChildView(view); },
+    });
     this.workspaceStore = new BrowserWorkspaceStore(app.getPath('userData'), workspaceRoot);
     this.promptManager = new BrowserPromptManager({
       tabForContents: (contentsId) => this.tabForContents(contentsId),
@@ -374,12 +387,11 @@ export class BrowserViewManager {
   }
 
   isTabVisible(tabId: BrowserTabId): boolean {
-    const contents = this.records.get(tabId)?.view.webContents;
-    return this.tabState.activeTabId === tabId
-      && this.surface.visible
-      && this.surface.width > 1
-      && this.surface.height > 1
-      && Boolean(contents && !contents.isDestroyed());
+    return this.nativeViews.isTabVisible(
+      tabId,
+      this.tabState.activeTabId,
+      this.surface,
+    );
   }
 
   async destinationAllowedForRequest(contentsId: number, url: string): Promise<boolean> {
@@ -630,38 +642,19 @@ export class BrowserViewManager {
     // Reject overflow before allocating a native view so a failed open cannot
     // leave an untracked WebContentsView behind.
     this.tabState.ensureCanCreate();
-    const view = new WebContentsView({
-      webPreferences: {
-        partition: this.partition,
-        sandbox: true,
-        contextIsolation: true,
-        nodeIntegration: false,
-        nodeIntegrationInWorker: false,
-        nodeIntegrationInSubFrames: false,
-        webSecurity: true,
-        allowRunningInsecureContent: false,
-        safeDialogs: true,
-        safeDialogsMessage: 'Additional dialogs from this page were blocked.',
-        // Never timer-throttle the browser view. A WebContentsView's occlusion
-        // can be mis-detected under the renderer overlay, and throttling the
-        // active tab to ~1 tick/sec makes JS-heavy sites (login flows, SPAs)
-        // crawl or stall mid-load — the "takes forever to load" symptom.
-        backgroundThrottling: false,
-        spellcheck: true,
-      },
-    });
-    view.setBackgroundColor('#ffffff');
-    const tab = this.tabState.create(url, options?.title);
+    const { tab, contents } = this.nativeViews.create(
+      this.partition,
+      () => this.tabState.create(url, options?.title),
+    );
     const id = tab.id;
-    this.records.set(id, { view, console: [] });
     if (options?.agentControlled) {
       this.agentNavigationPolicies.set(id, options.agentPolicy ?? {});
       this.agentControlledTabs.add(id);
     }
-    managersByWebContents.set(view.webContents.id, this);
-    this.wireView(tab, view.webContents);
+    managersByWebContents.set(contents.id, this);
+    this.wireView(tab, contents);
     if (active || !this.tabState.activeTabId) this.selectTab(id);
-    if (!options?.deferLoad) void view.webContents.loadURL(url).catch((error) => {
+    if (!options?.deferLoad) void contents.loadURL(url).catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       // ERR_ABORTED means the navigation was superseded/cancelled (a redirect, or
       // a new navigation started) — that is normal, not a failure. Surfacing it as
@@ -719,16 +712,13 @@ export class BrowserViewManager {
       this.emitState();
     });
     contents.on('console-message', (details) => {
-      const record = this.records.get(tab.id);
-      if (!record) return;
-      record.console.push({
+      this.nativeViews.recordConsole(tab.id, {
         level: details.level,
         text: boundBrowserText(details.message, 4_096),
         source: boundBrowserText(details.sourceId, 512),
         line: details.lineNumber,
         at: Date.now(),
       });
-      if (record.console.length > MAX_CONSOLE_ROWS) record.console.splice(0, record.console.length - MAX_CONSOLE_ROWS);
     });
     contents.on('before-input-event', (event, input) => {
       if (!this.isSyntheticAgentInput(tab.id)) {
@@ -833,9 +823,9 @@ export class BrowserViewManager {
         if (agentControlled) {
           this.downloadManager.transferAgentAllowance(tab.id, child.id);
         }
-        const record = this.records.get(child.id);
-        if (!record) return { action: 'deny' };
-        return { action: 'allow', createWindow: () => record.view.webContents };
+        const childContents = this.nativeViews.contents(child.id);
+        if (!childContents) return { action: 'deny' };
+        return { action: 'allow', createWindow: () => childContents };
       } catch {
         return { action: 'deny' };
       }
@@ -940,8 +930,9 @@ export class BrowserViewManager {
       case 'html': return this.pageHtml(this.requireTab(tab), command.maxChars);
       case 'screenshot': return this.screenshot(this.requireTab(tab), command.maxDimension, command.fullPage);
       case 'console': {
-        const current = this.requireTab(tab); const rows = [...(this.records.get(current.id)?.console ?? [])];
-        if (command.clear) { const record = this.records.get(current.id); if (record) record.console = []; }
+        const current = this.requireTab(tab);
+        const rows = this.nativeViews.consoleEntries(current.id);
+        if (command.clear) this.nativeViews.clearConsole(current.id);
         return rows;
       }
       case 'network': {
@@ -1458,34 +1449,7 @@ export class BrowserViewManager {
   }
 
   private attachActiveView(): void {
-    const active = this.records.get(this.tabState.activeTabId);
-    const shouldAttach = Boolean(
-      active
-      && this.surface.visible
-      && this.surface.width > 0
-      && this.surface.height > 0
-      && !active.view.webContents.isDestroyed(),
-    );
-
-    // Detach the currently-attached view only if it is no longer the one we want
-    // (a real tab switch, or the surface going hidden). Never touch it otherwise
-    // — removing + re-adding the same view is exactly what produces the flash.
-    const wantId = shouldAttach ? this.tabState.activeTabId : null;
-    if (this.attachedViewId && this.attachedViewId !== wantId) {
-      const prev = this.records.get(this.attachedViewId);
-      if (prev) { try { this.win.contentView.removeChildView(prev.view); } catch { /* already detached */ } }
-      this.attachedViewId = null;
-    }
-
-    if (!shouldAttach || !active) return;
-
-    // Bounds updates are smooth (no flash), so always apply them.
-    active.view.setBounds({ x: this.surface.x, y: this.surface.y, width: this.surface.width, height: this.surface.height });
-    // Add to the window tree only when it isn't already there.
-    if (this.attachedViewId !== this.tabState.activeTabId) {
-      this.win.contentView.addChildView(active.view);
-      this.attachedViewId = this.tabState.activeTabId;
-    }
+    this.nativeViews.attach(this.tabState.activeTabId, this.surface);
   }
 
   private safeUrl(raw: string): string {
@@ -1526,18 +1490,12 @@ export class BrowserViewManager {
   }
 
   private requireContents(id: string): WebContents {
-    const contents = this.records.get(id)?.view.webContents;
-    if (!contents || contents.isDestroyed()) throw new BrowserManagerError('TAB_NOT_FOUND', `Browser tab ${id} is closed.`);
-    return contents;
+    return this.nativeViews.requireContents(id);
   }
 
   private tabForContents(contentsId: number): BrowserTab | null {
-    for (const tab of this.tabState.all()) {
-      if (this.records.get(tab.id)?.view.webContents.id === contentsId) {
-        return tab;
-      }
-    }
-    return null;
+    const tabId = this.nativeViews.tabIdForContents(contentsId);
+    return tabId ? this.tabState.get(tabId) : null;
   }
 
   private validateRef(tab: BrowserTab, ref?: string): void {
@@ -1703,22 +1661,27 @@ export class BrowserViewManager {
   }
 
   private destroyView(id: string): void {
-    const record = this.records.get(id); if (!record) return;
     this.promptManager.cancelForTab(id);
-    try { this.win.contentView.removeChildView(record.view); } catch { /* detached */ }
-    if (this.attachedViewId === id) this.attachedViewId = null;
+    this.nativeViews.destroy(id, (contents) => {
+      this.cleanupNativeViewOwnership(id, contents);
+    });
+  }
+
+  private destroyAllViews(): void {
+    this.nativeViews.destroyAll((id, contents) => {
+      this.promptManager.cancelForTab(id);
+      this.cleanupNativeViewOwnership(id, contents);
+    });
+  }
+
+  private cleanupNativeViewOwnership(id: BrowserTabId, contents: WebContents): void {
     this.humanChallengeTabs.delete(id);
-    managersByWebContents.delete(record.view.webContents.id);
+    managersByWebContents.delete(contents.id);
     this.releaseAgentControl(id);
     this.cleanupStagedUpload(id);
     this.pendingAuthPrompts.get(id)?.abort();
     this.pendingAuthPrompts.delete(id);
     this.emulatedTabs.delete(id);
-    if (!record.view.webContents.isDestroyed()) record.view.webContents.close();
-    this.records.delete(id); this.queues.delete(id);
-  }
-
-  private destroyAllViews(): void {
-    for (const id of [...this.records.keys()]) this.destroyView(id);
+    this.queues.delete(id);
   }
 }
