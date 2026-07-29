@@ -278,6 +278,18 @@ export class RepositoryAssuranceCampaignService {
     });
   }
 
+  async cancel(runId: string): Promise<RepositoryAssuranceRun> {
+    const run = await requireRun(this.deps.runs, runId);
+    ensureActive(run);
+    const completedAt = this.deps.now();
+    return this.deps.runs.transition({
+      runId,
+      status: 'canceled',
+      updatedAt: completedAt,
+      completedAt,
+    });
+  }
+
   async supersede(runId: string, replacementRunId: string): Promise<RepositoryAssuranceRun> {
     const [run, replacement] = await Promise.all([
       requireRun(this.deps.runs, runId),
