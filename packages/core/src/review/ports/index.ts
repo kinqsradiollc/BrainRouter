@@ -6,3 +6,4 @@
  */
 
 export * from './assurance.js';
+export * from './analysis.js';
