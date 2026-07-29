@@ -85,6 +85,7 @@ import {
   publishToolBatch,
   repairOrphanToolResults,
 } from './toolBatchExecutionPhase.js';
+import { frameToolResultForModel } from './toolResultTrustBoundary.js';
 import {
   finalizeTurnPhase,
   resolveTurnTerminationReason,
@@ -1282,6 +1283,12 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           void this.runExtensionHooks('post-tool', { tool: name, args });
         }
 
+        // Browser observations contain page-controlled text. Frame them before
+        // compaction, result handoff, and transcript persistence so restored
+        // sessions keep the same trust boundary as the live turn.
+        const trustFrame = frameToolResultForModel(name, resultText);
+        resultText = trustFrame.content;
+
         // Tool-result clamp: huge MCP payloads (memory_recall, spawn_agent
         // outputs, big greps, file dumps) used to be re-sent to the LLM
         // verbatim every subsequent turn, which blew the context window in
@@ -1317,7 +1324,10 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         const childResultSystem = (name === 'wait_agent' || name === 'wait_agents')
           ? summarizeWaitedChildOutputs(resultText)
           : undefined;
-        const systemMsg = childResultSystem ? { role: 'system', content: childResultSystem } : undefined;
+        const resultSystemMessage = trustFrame.systemMessage ?? childResultSystem;
+        const systemMsg = resultSystemMessage
+          ? { role: 'system', content: resultSystemMessage }
+          : undefined;
         // Return; the caller pushes to chatHistory in original call order
         // (NOT settle order) and records the FULL untruncated result for
         // /transcript. Doing the push here would let parallel batches land
