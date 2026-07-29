@@ -15,6 +15,10 @@ import type {
 } from "./memory.js";
 import type { MemoryListItem } from "./store.js";
 import type { ModelReasoningEffort } from "./models.js";
+import type {
+  AssuranceFinding,
+  RepositoryAssuranceRun,
+} from "./review/index.js";
 import { PublicUserRecord } from "./memory.js";
 
 export interface SigninRequest {
@@ -115,6 +119,16 @@ export interface ReviewJobDto {
   error: string | null;
   updatedAt: string;
   createdAt: string;
+}
+/** Exact durable assurance state projected without redefining lifecycle enums. */
+export interface ReviewAssuranceDto {
+  run: RepositoryAssuranceRun;
+  findings: AssuranceFinding[];
+}
+export interface ReviewJobDetailResponse {
+  review: ReviewJobDto;
+  assurance: ReviewAssuranceDto | null;
+  canRun: boolean;
 }
 export interface ManualReviewRunRequest { repo: string; prNumber: number; lens: "security" | "code" | "pentest" | "both"; forge?: "github" | "gitlab"; }
 

@@ -21,10 +21,12 @@ export { createRepositoryAssuranceRun } from "./assuranceQueries/create.js";
 export {
   getRepositoryAssuranceFinding,
   isAssuranceFindingTransitionAllowed,
+  listRepositoryAssuranceFindings,
   saveRepositoryAssuranceFinding,
 } from "./assuranceQueries/findings.js";
 export {
   getRepositoryAssuranceRun,
+  getRepositoryAssuranceRunForJob,
   listReplaceableRepositoryAssuranceRunIds,
 } from "./assuranceQueries/records.js";
 export { transitionRepositoryAssuranceRun } from "./assuranceQueries/lifecycle.js";

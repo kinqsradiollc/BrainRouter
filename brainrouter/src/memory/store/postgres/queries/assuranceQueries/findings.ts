@@ -20,6 +20,10 @@ import type {
   SaveRepositoryAssuranceFindingInput,
 } from "./contracts.js";
 
+interface FindingEvidenceRow extends EvidenceRow {
+  finding_id: string;
+}
+
 const FINDING_SELECT = `
   SELECT org_id, id, run_id, fingerprint, program, revision_sha, state,
          severity, confidence, title, mechanism, location_json,
@@ -132,6 +136,41 @@ export function isAssuranceFindingTransitionAllowed(
     return ["verified", "disputed", "insufficient_evidence", "validated"].includes(to);
   }
   return false;
+}
+
+/** Load every bounded finding and evidence record for one tenant-scoped run. */
+export async function listRepositoryAssuranceFindings(
+  exec: Executor,
+  orgId: string,
+  runId: string,
+): Promise<AssuranceFinding[]> {
+  return exec.tx(async (client) => {
+    const rows = (await client.query<FindingRow>(
+      `${FINDING_SELECT}
+        WHERE org_id = $1 AND run_id = $2
+        ORDER BY created_at, id`,
+      [orgId, runId],
+    )).rows;
+    if (rows.length === 0) return [];
+    const evidenceRows = (await client.query<FindingEvidenceRow>(
+      `SELECT finding_id, id, kind, summary, revision_sha, location_json,
+              artifact_ref, analyzer_id, model_id, created_at
+         FROM repository_assurance_evidence
+        WHERE org_id = $1 AND finding_id = ANY($2::text[])
+        ORDER BY finding_id, created_at, id`,
+      [orgId, rows.map((row) => row.id)],
+    )).rows;
+    const evidenceByFinding = new Map<string, EvidenceRow[]>();
+    for (const evidence of evidenceRows) {
+      const current = evidenceByFinding.get(evidence.finding_id) ?? [];
+      current.push(evidence);
+      evidenceByFinding.set(evidence.finding_id, current);
+    }
+    return rows.map((row) => findingFromRows(
+      row,
+      evidenceByFinding.get(row.id) ?? [],
+    ));
+  });
 }
 
 export async function getRepositoryAssuranceFinding(

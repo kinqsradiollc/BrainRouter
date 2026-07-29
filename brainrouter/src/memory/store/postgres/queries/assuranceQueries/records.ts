@@ -234,6 +234,23 @@ export async function getRepositoryAssuranceRun(
   return runFromRows(runRow, source, coverage, stages, findings);
 }
 
+/** Resolve the latest durable assurance run owned by one tenant-scoped job. */
+export async function getRepositoryAssuranceRunForJob(
+  exec: Executor,
+  orgId: string,
+  jobId: string,
+): Promise<RepositoryAssuranceRun | null> {
+  const row = await exec.one<{ id: string }>(
+    `SELECT id
+       FROM repository_assurance_runs
+      WHERE org_id = $1 AND job_id = $2
+      ORDER BY created_at DESC, id DESC
+      LIMIT 1`,
+    [orgId, jobId],
+  );
+  return row ? getRepositoryAssuranceRun(exec, orgId, row.id) : null;
+}
+
 /**
  * Active older-head runs for the same PR and program.
  *

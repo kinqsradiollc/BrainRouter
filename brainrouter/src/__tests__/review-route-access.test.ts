@@ -15,6 +15,9 @@ const mocks = vi.hoisted(() => ({
   getReviewLifecycleSummaryForOrg: vi.fn(),
   listReviewJobsForPr: vi.fn(),
   listReviewFindingsForOrg: vi.fn(),
+  getMemoryJob: vi.fn(),
+  getRepositoryAssuranceRunForJob: vi.fn(),
+  listRepositoryAssuranceFindings: vi.fn(),
   listMemoryJobs: vi.fn(),
   enqueueMemoryJob: vi.fn(),
 }));
@@ -38,6 +41,9 @@ vi.mock("../memory/engine.js", () => ({
       getReviewLifecycleSummaryForOrg: mocks.getReviewLifecycleSummaryForOrg,
       listReviewJobsForPr: mocks.listReviewJobsForPr,
       listReviewFindingsForOrg: mocks.listReviewFindingsForOrg,
+      getMemoryJob: mocks.getMemoryJob,
+      getRepositoryAssuranceRunForJob: mocks.getRepositoryAssuranceRunForJob,
+      listRepositoryAssuranceFindings: mocks.listRepositoryAssuranceFindings,
       listMemoryJobs: mocks.listMemoryJobs,
       enqueueMemoryJob: mocks.enqueueMemoryJob,
     },
@@ -123,6 +129,9 @@ describe("review route GitHub accessibility", () => {
     });
     mocks.listReviewJobsForPr.mockResolvedValue([]);
     mocks.listReviewFindingsForOrg.mockResolvedValue([]);
+    mocks.getMemoryJob.mockResolvedValue(null);
+    mocks.getRepositoryAssuranceRunForJob.mockResolvedValue(null);
+    mocks.listRepositoryAssuranceFindings.mockResolvedValue([]);
     mocks.listMemoryJobs.mockResolvedValue([]);
     mocks.enqueueMemoryJob.mockResolvedValue({ id: "review-job-1" });
 
@@ -225,6 +234,142 @@ describe("review route GitHub accessibility", () => {
     expect(response.status).toBe(200);
     expect(response.body.reviews[0]).toMatchObject({ id: "job-1", status: "running" });
     expect(githubFetch).not.toHaveBeenCalled();
+  });
+
+  it("projects one tenant-scoped durable assurance state on review detail", async () => {
+    const timestamp = "2026-07-29T00:00:00.000Z";
+    mocks.getMemoryJob.mockResolvedValue({
+      id: "job-1",
+      kind: "pr-security-review",
+      status: "completed",
+      priority: 50,
+      attempts: 1,
+      maxAttempts: 3,
+      runAfter: timestamp,
+      lockedAt: null,
+      parentJobId: null,
+      input: {
+        orgId: "org-1",
+        repo: "acme/widgets",
+        prNumber: 7,
+        headSha: "head-1",
+      },
+      output: { findings: 1, blocking: 0, posted: true },
+      progress: [],
+      error: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    mocks.getRepositoryAssuranceRunForJob.mockResolvedValue({
+      id: "run-1",
+      repository: { forge: "github", slug: "acme/widgets" },
+      revision: { headSha: "head-1" },
+      program: "security_review",
+      policySnapshot: {
+        id: "policy-1",
+        policyHash: "hash-1",
+        organizationId: "org-1",
+        program: "security_review",
+        analyzers: [],
+        packetLimits: { maxPackets: 1, maxPacketBytes: 1, maxFilesPerPacket: 1 },
+        budgets: { maxModelCalls: 1, maxToolCalls: 0, maxDurationMs: 1 },
+        redactionPolicyId: "redaction-1",
+        publicationPolicyId: "publication-1",
+        inlineFindingsEnabled: true,
+        blockingEnabled: true,
+        createdAt: timestamp,
+      },
+      sourceSnapshot: {
+        id: "source-1",
+        revision: { headSha: "head-1" },
+        status: "ready",
+        fileCount: 1,
+        textFileCount: 1,
+        indexedFileCount: 1,
+        unsupportedFileCount: 0,
+        createdAt: timestamp,
+        completedAt: timestamp,
+      },
+      coverage: {
+        status: "complete",
+        filesTotal: 1,
+        filesEligible: 1,
+        filesAnalyzed: 1,
+        changedFilesTotal: 1,
+        changedFilesAnalyzed: 1,
+        analyzers: [],
+        limitations: [],
+        calculatedAt: timestamp,
+      },
+      stages: [],
+      findings: [{
+        id: "finding-1",
+        fingerprint: "fingerprint-1",
+        state: "insufficient_evidence",
+        severity: "high",
+      }],
+      status: "completed",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      completedAt: timestamp,
+    });
+    mocks.listRepositoryAssuranceFindings.mockResolvedValue([{
+      id: "finding-1",
+      fingerprint: "fingerprint-1",
+      program: "security_review",
+      revisionSha: "head-1",
+      state: "insufficient_evidence",
+      severity: "high",
+      confidence: 0.8,
+      title: "Unverified unsafe input",
+      mechanism: "The available evidence did not prove the reported flow.",
+      location: { path: "src/index.ts", line: 4 },
+      evidence: [],
+      provenance: [{
+        producerKind: "model",
+        producerId: "review-model",
+        policyHash: "hash-1",
+        createdAt: timestamp,
+      }],
+      coverageLimitations: [],
+      verifier: {
+        state: "insufficient_evidence",
+        verifierId: "independent-verifier",
+        rationale: "No supported evidence reference was available.",
+        evidenceRefs: [],
+        decidedAt: timestamp,
+      },
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }]);
+
+    const response = await getJson(
+      new URL(`${baseUrl}/api/admin/reviews/jobs/job-1`),
+      headers,
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body.assurance).toMatchObject({
+      run: {
+        id: "run-1",
+        status: "completed",
+        coverage: { status: "complete" },
+        findings: [{ id: "finding-1", state: "insufficient_evidence" }],
+      },
+      findings: [{
+        id: "finding-1",
+        state: "insufficient_evidence",
+        verifier: { state: "insufficient_evidence" },
+      }],
+    });
+    expect(mocks.getRepositoryAssuranceRunForJob).toHaveBeenCalledWith(
+      "org-1",
+      "job-1",
+    );
+    expect(mocks.listRepositoryAssuranceFindings).toHaveBeenCalledWith(
+      "org-1",
+      "run-1",
+    );
   });
 
   it("loads PR detail through the signed-in GitHub account when no App integration exists", async () => {
