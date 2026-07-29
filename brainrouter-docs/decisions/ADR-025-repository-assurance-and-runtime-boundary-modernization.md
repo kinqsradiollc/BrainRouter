@@ -502,6 +502,15 @@ the repository's normal security-review process before merge.
 | A25-3c | `[x]` | Adopt the receipt contract for streaming calls while preserving the no-fallback-after-output rule | Gateway streaming uses the bounded executor; pre-output fallback and post-output terminal-stream fixtures preserve one receipt per campaign |
 | A25-3d | `[x]` | Consolidate catalog, routing, policy/budget, adapters, and telemetry ownership behind the provider façade while retaining router compatibility exports | Canonical implementations live under `provider/routing` and the curated provider entrypoint; maintained consumers use that owner, identity fixtures prove router façade parity, and the boundary checker prevents new internal router ownership |
 
+### A25-4 agent runtime delivery slices
+
+| ID | Status | Deliverable | Acceptance evidence |
+|---|---|---|---|
+| A25-4a | `[x]` | Split the dependency-free agent protocol into event, command, interaction, callback-bridge, and envelope owners behind its unchanged root entrypoint | The package emits declarations and JavaScript successfully; callback, steering, envelope, guard, and interaction-broker fixtures pass without adding a runtime dependency |
+| A25-4b | `[ ]` | Pin lifecycle, tool-call pairing, interruption, bounded-loop, and safe-boundary steering order before extracting the turn runtime | Core fixtures cover success, failure, interruption, queued input, steer revisions, tool pairing, and turn-budget termination |
+| A25-4c | `[ ]` | Extract prompt/context, tool execution, steering, recovery, and completion phases behind the existing Agent facade | Core and CLI/Desktop host fixtures retain callback order, authority ceilings, transcript behavior, and protocol event parity |
+| A25-4d | `[ ]` | Consolidate local and cross-host delegation packets, authority attenuation, cancellation, and child-result projection | Delegation fixtures prove parent ceilings, explicit capability subsets, bounded fan-out, cancellation propagation, and identical CLI/Desktop receipts |
+
 ### Migration guardrails
 
 - Begin with the inventory and contracts; do not combine extraction with feature
