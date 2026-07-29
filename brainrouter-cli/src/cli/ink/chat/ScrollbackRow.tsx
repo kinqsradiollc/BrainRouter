@@ -186,8 +186,9 @@ export const ScrollbackRow = React.memo(function ScrollbackRow({ entry, accentCo
       // TL;DR, Summary blocks the child wrote) survive without being
       // clipped to terminal width like the old single-line notice was.
       const ok = entry.status === 'completed';
-      const icon = ok ? '🏁' : '💥';
-      const headerColor = ok ? 'green' : 'red';
+      const interrupted = entry.status === 'interrupted';
+      const icon = ok ? '🏁' : interrupted ? '⏹' : '💥';
+      const headerColor = ok ? 'green' : interrupted ? 'yellow' : 'red';
       const bodyLines = entry.body ? entry.body.split('\n') : [];
       const agentTime = entry.timestamp ? ` · ${formatTime(entry.timestamp)}` : '';
       return (
@@ -323,6 +324,5 @@ function formatDuration(ms: number): string {
   const s = Math.round((ms % 60_000) / 1000);
   return `${m}m ${s}s`;
 }
-
 
 

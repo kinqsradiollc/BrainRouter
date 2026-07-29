@@ -20,6 +20,10 @@ export * from './profiles/taskSignals.js';
 export * from './profiles/adaptiveStrategySelection.js';
 export * from './profiles/adaptiveStrategySelectionModel.js';
 export * from './roles/outputContracts.js';
+export type {
+  ChildExecutionReceipt,
+  ChildExecutionStatus,
+} from '@kinqs/brainrouter-agent-protocol';
 // `AccessMode` ('read' | 'write' | 'shell') is declared identically in both
 // roles.ts and agentRegistry.ts; an explicit re-export disambiguates the two
 // star exports (TS2308) and is structurally identical to either source.

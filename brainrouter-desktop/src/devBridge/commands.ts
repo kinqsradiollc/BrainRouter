@@ -102,7 +102,18 @@ export function installBridge(S: DevState, queries: Record<string, (args: Record
             emit({ kind: 'child-tool-end', childId: 'agent-8b283dc5', role: 'worker', tool: 'list_dir', ok: true, summary: 'listed 4 items in .', durationMs: 120 }, 700, ts);
             emit({ kind: 'child-tool-start', childId: 'agent-8b283dc5', role: 'worker', tool: 'write_file', args: {} }, 1200, ts);
             emit({ kind: 'child-tool-end', childId: 'agent-8b283dc5', role: 'worker', tool: 'write_file', ok: true, summary: 'wrote snake-game/src/hooks/useSnakeGame.ts', durationMs: 200 }, 1900, ts);
-            emit({ kind: 'child-complete', childId: 'agent-8b283dc5', role: 'worker', status: 'completed' }, 3200, ts);
+            emit({
+              kind: 'child-complete',
+              childId: 'agent-8b283dc5',
+              role: 'worker',
+              status: 'completed',
+              receipt: {
+                childId: 'agent-8b283dc5',
+                role: 'worker',
+                status: 'completed',
+                completedAt: new Date().toISOString(),
+              },
+            }, 3200, ts);
           }
           emit({ kind: 'status', text: 'Reading the workspace…' }, 100, ts);
           emit({ kind: 'tool-end', tool: 'grep_search', ok: true, summary: '14 hits in 6 files' }, 500, ts);

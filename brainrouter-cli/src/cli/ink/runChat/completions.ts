@@ -20,7 +20,7 @@ export function installCompletions(ctx: RunChatContext): void {
     const items: CompletionItem[] = [];
     try {
       for (const s of listSessions(agent.workspaceRoot)) {
-        if (s.status === 'completed' || s.status === 'failed') {
+        if (s.status === 'completed' || s.status === 'failed' || s.status === 'interrupted') {
           const label = s.label ? `"${s.label}"` : s.id;
           items.push({ id: `agent:${s.id}`, label: `agent ${label} ${s.status}`, ok: s.status === 'completed' });
         }

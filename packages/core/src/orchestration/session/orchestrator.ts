@@ -5,7 +5,14 @@ import { getStateDir, getStateFile, readJsonFile, writeJsonFile } from '../../st
 import { resolveRole, type AccessMode } from '../roles/roles.js';
 import type { Tier } from '../agents/agentRegistry.js';
 
-export type ChildStatus = 'pending' | 'running' | 'completed' | 'failed' | 'stale' | 'closed';
+export type ChildStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'interrupted'
+  | 'stale'
+  | 'closed';
 
 export interface ChildSessionRecord {
   id: string;

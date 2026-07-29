@@ -12,6 +12,7 @@ import type {
   PreparedProfileStageDelegation,
   ProfileStageDelegationOutput,
 } from '../runtime/profileStageController.js';
+import type { ChildExecutionReceipt } from '@kinqs/brainrouter-agent-protocol';
 
 export interface ProfileStageRuntimeController {
   invoke(args: Record<string, unknown>): Promise<string>;
@@ -59,9 +60,8 @@ export interface OrchestrationContext {
   parentTier?: Tier;
   /** Current spawn-chain depth (0 = direct child of chat root). */
   depth?: number;
-  /** DESK-6 — the parent turn's interrupt signal, so a Stop makes wait_agent(s)
-   *  return immediately ({status:'interrupted'}) instead of blocking up to the
-   *  wait timeout. The children keep running (detached) and auto-drain later. */
+  /** The parent turn's interrupt signal. A Stop unblocks waits and the parent
+   *  cascades interruption to every child it owns. */
   interruptSignal?: AbortSignal;
   mcpClient: McpClientWrapper;
   llmConfig: LLMConfig;
@@ -85,7 +85,7 @@ export interface OrchestrationContext {
    * Lets the REPL surface "✓ agent X completed" so the user knows when to act,
    * instead of seeing tool events and then silence.
    */
-  onChildComplete?: (event: { childId: string; role: string; status: 'completed' | 'failed'; preview?: string; error?: string; worktree?: { changedFiles?: number; applied?: boolean; patchPath?: string; applyError?: string; heldForReview?: boolean } }) => void;
+  onChildComplete?: (receipt: ChildExecutionReceipt) => void;
   /**
    * MAS-P4-T2 supervisor gate. When the delegation policy needs approval,
    * `handleSpawn` calls this to ask the user (returns true to allow).

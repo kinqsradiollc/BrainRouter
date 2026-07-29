@@ -36,6 +36,32 @@ test('start-turn: streams bridged events between turn-start and turn-complete', 
   assert.ok(out.every((m) => m.sessionKey === 'sess-test'));
 });
 
+test('start-turn: preserves the shared interrupted child receipt verbatim', async () => {
+  const receipt = {
+    childId: 'child-1',
+    role: 'worker',
+    status: 'interrupted' as const,
+    completedAt: '2026-07-30T00:00:00.000Z',
+    summary: 'Child execution interrupted by the parent request.',
+  };
+  const { out, send } = collect();
+  const core = createHostCore({
+    agent: fakeAgent(async (_prompt, cb) => {
+      (cb.onChildComplete as (value: typeof receipt) => void)(receipt);
+      return 'parent interrupted';
+    }),
+    send,
+  });
+
+  await core.handle({ kind: 'start-turn', prompt: 'stop' });
+
+  const event = out.find(
+    (message) => message.event.kind === 'child-complete',
+  )?.event;
+  assert.ok(event?.kind === 'child-complete');
+  assert.deepEqual(event.receipt, receipt);
+});
+
 test('start-turn: forwards inline images to runTurn opts (vision)', async () => {
   const { send } = collect();
   let seenImages: unknown;

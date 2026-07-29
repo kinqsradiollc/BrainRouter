@@ -13,6 +13,7 @@ import type {
   RecordLifecycleAction,
   SteeringReceiptEventView,
 } from './events.js';
+import type { ChildExecutionReceipt } from './delegation.js';
 
 export interface BridgedCallbacks {
   onStatusUpdate: (text: string) => void;
@@ -49,7 +50,7 @@ export interface BridgedCallbacks {
   onApproval: (event: { tool: string; action: string; decision: 'allow' | 'ask' | 'deny'; reason?: string }) => void;
   onChildToolStart: (event: { childId: string; role: string; tool: string; args: Record<string, unknown> }) => void;
   onChildToolEnd: (event: { childId: string; role: string; tool: string; ok: boolean; summary: string; preview?: string; durationMs: number }) => void;
-  onChildComplete: (event: { childId: string; role: string; status: 'completed' | 'failed'; preview?: string; error?: string }) => void;
+  onChildComplete: (receipt: ChildExecutionReceipt) => void;
 }
 
 /** Emitter the bridge writes to—the host wraps IPC/stdout behind this. */
@@ -123,6 +124,14 @@ export function createCallbackBridge(emit: EmitEvent): BridgedCallbacks {
     onApproval: (event) => emit({ kind: 'approval-decision', ...event }),
     onChildToolStart: (event) => emit({ kind: 'child-tool-start', ...event }),
     onChildToolEnd: (event) => emit({ kind: 'child-tool-end', ...event }),
-    onChildComplete: (event) => emit({ kind: 'child-complete', ...event }),
+    onChildComplete: (receipt) => emit({
+      kind: 'child-complete',
+      receipt,
+      childId: receipt.childId,
+      role: receipt.role,
+      status: receipt.status,
+      preview: receipt.preview,
+      error: receipt.error,
+    }),
   };
 }

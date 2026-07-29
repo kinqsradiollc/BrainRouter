@@ -12,7 +12,10 @@ import type { McpClientPool as McpClientWrapper } from '../mcp/mcpPool.js';
 import { NoTTYError, HEADLESS_PROMPTER, type InteractivePrompter } from './support/prompter.js';
 import type { LLMConfig } from '../config/config.js';
 import { getCliKnobs, isRemoteBrainUrl } from '../config/config.js';
-import type { ComputerUsePort } from '@kinqs/brainrouter-agent-protocol';
+import type {
+  ChildExecutionReceipt,
+  ComputerUsePort,
+} from '@kinqs/brainrouter-agent-protocol';
 import { browserUseAvailableFor, type BrowserControlPort } from '../browser/control.js';
 import { appendTranscriptEntry, isInternalSessionKey, redactText, readTranscriptEntries } from '../session/transcript/sessionStore.js';
 import { publishExternalSteering, type SteeringInput } from '../session/input/inputDelivery.js';
@@ -334,7 +337,7 @@ export interface RunTurnCallbacks {
    * supplied). Lets the REPL signal "Agent X is done" so the user isn't
    * staring at silence after the tool stream stops.
    */
-  onChildComplete?: (event: { childId: string; role: string; status: 'completed' | 'failed'; preview?: string; error?: string; worktree?: { changedFiles?: number; applied?: boolean; patchPath?: string; applyError?: string } }) => void;
+  onChildComplete?: (receipt: ChildExecutionReceipt) => void;
   /**
    * Optional: paired live child tool events surfaced from spawn_agent
    * children up to the parent REPL. Lets the UI render explicit

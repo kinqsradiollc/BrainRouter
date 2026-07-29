@@ -289,8 +289,12 @@ export function installTurnRunner(ctx: RunChatContext): void {
           const ok = event.status === 'completed';
           // Multi-line block so the agent's full headline/summary survives
           // instead of being clipped to terminal width. Falls back to the
-          // error string when the child failed.
-          const body = ok ? (event.preview ?? '') : (event.error ?? 'agent failed without an error message');
+          // shared interruption summary or error when the child did not finish.
+          const body = ok
+            ? (event.preview ?? '')
+            : event.status === 'interrupted'
+              ? (event.summary ?? 'agent interrupted')
+              : (event.error ?? 'agent failed without an error message');
           controller!.push.agentResult({
             childId: event.childId,
             role: event.role,

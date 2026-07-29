@@ -3,6 +3,7 @@
 // imported by hooks/sub-components/tests without any cycle. Re-exported from
 // ChatApp.tsx for back-compat with existing importers.
 import type React from 'react';
+import type { ChildExecutionStatus } from '@kinqs/brainrouter-core/orchestration';
 import type { SlashCommandDef } from '../prompt/SlashPalette.js';
 import type { BannerInputs } from '../../view/banner.js';
 
@@ -122,7 +123,7 @@ export type ScrollbackEntry = (
    * terminal width by Ink's `wrap="truncate"`. The body wraps freely so the
    * user can read the agent's findings without running /agent transcript.
    */
-  | { id: number; kind: 'agent-result'; childId: string; role: string; status: 'completed' | 'failed'; body: string }
+  | { id: number; kind: 'agent-result'; childId: string; role: string; status: ChildExecutionStatus; body: string }
   /** TIER B compaction row. */
   | { id: number; kind: 'compaction'; droppedMessages: number; keptMessages: number; summary: string }
   /**
@@ -158,7 +159,7 @@ export interface PushScrollback {
   /** Severity defaults to 'info' when omitted (back-compat). */
   notice(text: string, level?: 'info' | 'warn' | 'error'): void;
   /** Multi-line agent completion block — used by spawn_agent's onChildComplete callback in runChat. */
-  agentResult(event: { childId: string; role: string; status: 'completed' | 'failed'; body: string }): void;
+  agentResult(event: { childId: string; role: string; status: ChildExecutionStatus; body: string }): void;
   /** Update the live spinner label (e.g. "Thinking  5s  1.2k↑ 0.4k↓"). */
   setStatus(label: string): void;
   /** Show / hide the spinner without pushing a scrollback entry. */

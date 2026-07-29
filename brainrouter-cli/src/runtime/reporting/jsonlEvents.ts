@@ -10,10 +10,13 @@
  * so it's deterministic and unit-testable; the caller stamps real time.
  */
 
+import type { ChildExecutionReceipt } from "@kinqs/brainrouter-core/orchestration";
+
 // v2 (0.4.5, HEADLESS-EVENTS) — additive: five new event types (memory,
 // offload, cost_update, approval, code_index). All v1 events are unchanged, so
 // v1 consumers keep working; the bump signals "more event types may appear".
-export const JSONL_SCHEMA_VERSION = 2;
+// v3 adds the shared child receipt and the explicit interrupted terminal state.
+export const JSONL_SCHEMA_VERSION = 3;
 
 export type RunEvent =
   | { type: "turn_start"; sessionKey: string; prompt: string }
@@ -21,7 +24,16 @@ export type RunEvent =
   | { type: "tool_start"; name: string }
   | { type: "tool_end"; name: string; ok: boolean; summary: string }
   | { type: "child_tool"; childId: string; role: string; tool: string; ok?: boolean; summary?: string }
-  | { type: "child_complete"; childId: string; role: string; status: "completed" | "failed"; error?: string; worktree?: { changedFiles?: number; applied?: boolean; patchPath?: string; applyError?: string } }
+  | {
+      type: "child_complete";
+      receipt: ChildExecutionReceipt;
+      /** Compatibility projection retained for v1/v2 consumers. */
+      childId: string;
+      role: string;
+      status: ChildExecutionReceipt["status"];
+      error?: string;
+      worktree?: ChildExecutionReceipt["worktree"];
+    }
   | { type: "text"; text: string }
   | { type: "turn_end"; sessionKey: string; durationMs: number; usage: { promptTokens: number; completionTokens: number; calls: number; cachedTokens?: number; missedTokens?: number }; costUsd?: number }
   | { type: "error"; message: string }

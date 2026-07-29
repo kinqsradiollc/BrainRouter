@@ -33,6 +33,11 @@ import { enqueueCompletion } from '../../session/completion/completionInbox.js';
 import { getOutputContract } from '../roles/outputContracts.js';
 import { loadWorkspaceManifest } from '../../workspace/manifest.js';
 import { resolveWorkspaceCapabilities } from '../../workspace/capabilities.js';
+import {
+  childTurnWasInterrupted,
+  createChildExecutionReceipt,
+  finalizeInterruptedChild,
+} from './childLifecycle.js';
 import { workspaceToolProfileIds } from '../../workspace/toolProfiles.js';
 import { contextWindowForBudget } from '../../context/contextWindow.js';
 import { emitAgentRouteFeedback, emitAgentEvent, agentOutputEvent, type RouteOutcome } from '../../memory/memoryEvents.js';
@@ -533,6 +538,19 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
           });
         },
       });
+      if (childTurnWasInterrupted(childAgent)) {
+        finalizeInterruptedChild({
+          ctx,
+          record,
+          role: role.name,
+          output,
+          reportCompletionToParent,
+          rejectPreparedDelegation: profileStageLaunch && ctx.profileStageController
+            ? () => ctx.profileStageController!.rejectDelegation(profileStageLaunch)
+            : undefined,
+        });
+        return;
+      }
       if (profileStageLaunch && ctx.profileStageController) {
         const validation = ctx.profileStageController.inspectDelegationOutput(
           profileStageLaunch,
@@ -668,13 +686,14 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
             ? output
             : extractChildPreview(output, AGENT_PREVIEW_MAX))
         : (storedOutput ?? '').slice(0, AGENT_PREVIEW_MAX)) + mergeLine;
-      ctx.onChildComplete?.({
+      ctx.onChildComplete?.(createChildExecutionReceipt({
         childId: record.id,
         role: role.name,
         status: 'completed',
+        completedAt,
         preview: previewBody,
         worktree: worktreeSummary,
-      });
+      }));
       if (reportCompletionToParent) {
         enqueueCompletion(ctx.parentSessionKey, {
           kind: 'agent', id: record.id, status: 'completed',
@@ -721,14 +740,9 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
         }
         if (followUps.length > 0) {
           // Record on the worker so wait/summarize can surface the chain,
-          // and emit a visible note for the live REPL.
+          // while each follow-up emits its own lifecycle events. The worker
+          // already emitted its one terminal receipt above.
           updateSession(ctx.workspaceRoot, record.id, { autoChainFollowups: roles });
-          ctx.onChildComplete?.({
-            childId: record.id,
-            role: role.name,
-            status: 'completed',
-            preview: `Follow-up agents: ${roles.join(', ')} (auto-chain: ${mode})`,
-          });
         }
       }
       if (
@@ -748,6 +762,20 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
           ? err.output
           : `ERROR: ${message}`;
         const completedAt = new Date().toISOString();
+        if (childTurnWasInterrupted(childAgent)) {
+          finalizeInterruptedChild({
+            ctx,
+            record,
+            role: role.name,
+            output: syntheticOutput,
+            reportCompletionToParent,
+            rejectPreparedDelegation: profileStageLaunch && ctx.profileStageController
+              ? () => ctx.profileStageController!.rejectDelegation(profileStageLaunch)
+              : undefined,
+            completedAt,
+          });
+          return;
+        }
         if (profileStageLaunch && ctx.profileStageController) {
           ctx.profileStageController.rejectDelegation(profileStageLaunch);
         }
@@ -766,12 +794,13 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
           record,
           completedAt,
         });
-        ctx.onChildComplete?.({
+        ctx.onChildComplete?.(createChildExecutionReceipt({
           childId: record.id,
           role: role.name,
           status: 'failed',
+          completedAt,
           error: message,
-        });
+        }));
         if (reportCompletionToParent) {
           enqueueCompletion(ctx.parentSessionKey, {
             kind: 'agent', id: record.id, status: 'failed',

@@ -188,11 +188,23 @@ export function createOnAgentEvent(deps: OnAgentEventDeps): (msg: AgentEventMess
         setLiveChildren((m) => ({ ...m, [e.childId]: { childId: e.childId, role: e.role, tool: e.tool, startedAt: m[e.childId]?.startedAt ?? Date.now() } }));
         break;
       }
-      case 'child-complete':
-        push({ id: rid(), kind: 'status', text: `${e.status === 'completed' ? '✓' : '✗'} agent ${e.childId} (${e.role}) ${e.status}`, ts: Date.now() });
-        setFinishedTasks((f) => [...f.slice(-30), { id: e.childId, label: `${e.role}·${e.childId.slice(-4)}`, status: e.status === 'completed' ? 'Agent · Completed' : 'Agent · Failed' }]);
-        setLiveChildren((m) => { const n = { ...m }; delete n[e.childId]; return n; });
+      case 'child-complete': {
+        const receipt = e.receipt;
+        const marker = receipt.status === 'completed'
+          ? '✓'
+          : receipt.status === 'interrupted'
+            ? '⏹'
+            : '✗';
+        const label = receipt.status === 'completed'
+          ? 'Agent · Completed'
+          : receipt.status === 'interrupted'
+            ? 'Agent · Interrupted'
+            : 'Agent · Failed';
+        push({ id: rid(), kind: 'status', text: `${marker} agent ${receipt.childId} (${receipt.role}) ${receipt.status}`, ts: Date.now() });
+        setFinishedTasks((f) => [...f.slice(-30), { id: receipt.childId, label: `${receipt.role}·${receipt.childId.slice(-4)}`, status: label }]);
+        setLiveChildren((m) => { const n = { ...m }; delete n[receipt.childId]; return n; });
         break;
+      }
       case 'plan-update':
         setLastPlan({ items: e.items, explanation: e.explanation });
         push({ id: rid(), kind: 'status', text: 'Updated the plan', action: 'plan', ts: Date.now() });
