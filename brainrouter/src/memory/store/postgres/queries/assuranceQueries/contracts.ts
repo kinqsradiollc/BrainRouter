@@ -103,6 +103,15 @@ export interface AssuranceRunTransition {
   staleReason?: string;
 }
 
+export interface ReplaceableAssuranceRunsInput {
+  orgId: string;
+  forge: RepositoryAssuranceRun["repository"]["forge"];
+  repository: string;
+  prNumber: number;
+  program: RepositoryAssuranceRun["program"];
+  replacementRunId: string;
+}
+
 export const RUN_SELECT = `
   SELECT id, job_id, org_id, forge, repository, repository_id, default_branch,
          program, base_sha, head_sha, merge_base_sha, policy_json, status,

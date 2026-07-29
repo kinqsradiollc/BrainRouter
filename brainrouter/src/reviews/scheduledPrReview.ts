@@ -19,10 +19,10 @@ import {
   type VulnerabilityReviewContextStore,
 } from "../vulnerability/context.js";
 import type { JobExecContext } from "../memory/scheduler/executors.js";
-import type { RepositoryAssurancePersistenceStore } from "./assuranceRunPort.js";
 import {
   startDiffReviewAssurance,
   type DiffReviewAssuranceSession,
+  type RepositoryAssuranceSupersessionStore,
 } from "./diffReviewAssurance.js";
 
 export type ScheduledReviewLens = "security" | "code" | "pentest";
@@ -107,7 +107,7 @@ export async function runScheduledPrReview(
     assuranceReady: async ({ policy, headSha }) => {
       if (!ctx.jobId) return;
       assurance.current = await startDiffReviewAssurance({
-        store: ctx.store as unknown as RepositoryAssurancePersistenceStore,
+        store: ctx.store as unknown as RepositoryAssuranceSupersessionStore,
         jobId: ctx.jobId,
         review: { ...input, headSha },
         program: lens === "security"

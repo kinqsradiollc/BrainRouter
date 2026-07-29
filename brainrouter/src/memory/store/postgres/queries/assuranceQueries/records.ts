@@ -17,6 +17,7 @@ import {
   type AssuranceRunRow,
   type CoverageRow,
   type Queryable,
+  type ReplaceableAssuranceRunsInput,
   type SourceSnapshotRow,
   type StageRow,
 } from "./contracts.js";
@@ -212,4 +213,46 @@ export async function getRepositoryAssuranceRun(
     throw new Error(`Repository assurance run ${runId} is missing its source or coverage receipt.`);
   }
   return runFromRows(runRow, source, coverage, stages);
+}
+
+/**
+ * Active older-head runs for the same PR and program.
+ *
+ * Job creation time establishes push order; run completion time must never
+ * decide which head supersedes another.
+ */
+export async function listReplaceableRepositoryAssuranceRunIds(
+  exec: Executor,
+  input: ReplaceableAssuranceRunsInput,
+): Promise<string[]> {
+  const rows = await exec.rows<{ id: string }>(
+    `SELECT prior.id
+       FROM repository_assurance_runs prior
+       JOIN memory_jobs prior_job ON prior_job.id = prior.job_id
+       JOIN repository_assurance_runs replacement
+         ON replacement.org_id = $1 AND replacement.id = $2
+       JOIN memory_jobs replacement_job ON replacement_job.id = replacement.job_id
+      WHERE prior.org_id = $1
+        AND prior.id <> replacement.id
+        AND prior.forge = $3
+        AND LOWER(prior.repository) = LOWER($4)
+        AND prior.program = $5
+        AND prior.status IN ('queued', 'running')
+        AND prior.head_sha <> replacement.head_sha
+        AND prior_job.tenant = $1
+        AND replacement_job.tenant = $1
+        AND (prior_job.input_json::jsonb ->> 'prNumber') = $6
+        AND (replacement_job.input_json::jsonb ->> 'prNumber') = $6
+        AND prior_job.created_at < replacement_job.created_at
+      ORDER BY prior_job.created_at ASC, prior.id ASC`,
+    [
+      input.orgId,
+      input.replacementRunId,
+      input.forge,
+      input.repository,
+      input.program,
+      String(input.prNumber),
+    ],
+  );
+  return rows.map((row) => row.id);
 }

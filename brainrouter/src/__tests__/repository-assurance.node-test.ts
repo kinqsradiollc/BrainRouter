@@ -224,3 +224,60 @@ test("A25-9a persists idempotent, partial, and superseded assurance state", asyn
     await cleanup();
   }
 });
+
+test("A25-9c3 selects only older active heads for the replacement PR", async () => {
+  const { store, cleanup } = await createTestStore({ vecDim: 0 });
+  try {
+    const oldJob = await store.enqueueMemoryJob({
+      kind: "pr-security-review",
+      input: { orgId: "org-1", repo: "owner/repository", prNumber: 7, headSha: "head-old" },
+    }, { idGenerator: () => "job-old", now: T0 });
+    await store.createRepositoryAssuranceRun({
+      jobId: oldJob.id,
+      run: queuedRun("run-old", "head-old"),
+    });
+    await store.transitionRepositoryAssuranceRun({
+      orgId: "org-1",
+      runId: "run-old",
+      status: "running",
+      updatedAt: T0,
+    });
+
+    const otherPrJob = await store.enqueueMemoryJob({
+      kind: "pr-security-review",
+      input: { orgId: "org-1", repo: "owner/repository", prNumber: 8, headSha: "head-other" },
+    }, { idGenerator: () => "job-other-pr", now: T1 });
+    await store.createRepositoryAssuranceRun({
+      jobId: otherPrJob.id,
+      run: queuedRun("run-other-pr", "head-other"),
+    });
+    await store.transitionRepositoryAssuranceRun({
+      orgId: "org-1",
+      runId: "run-other-pr",
+      status: "running",
+      updatedAt: T1,
+    });
+
+    const replacementJob = await store.enqueueMemoryJob({
+      kind: "pr-security-review",
+      input: { orgId: "org-1", repo: "owner/repository", prNumber: 7, headSha: "head-new" },
+    }, { idGenerator: () => "job-new", now: T2 });
+    await store.createRepositoryAssuranceRun({
+      jobId: replacementJob.id,
+      run: queuedRun("run-new", "head-new"),
+    });
+
+    const replaceable = await store.listReplaceableRepositoryAssuranceRunIds({
+      orgId: "org-1",
+      forge: "github",
+      repository: "owner/repository",
+      prNumber: 7,
+      program: "security_review",
+      replacementRunId: "run-new",
+    });
+    assert.deepEqual(replaceable, ["run-old"]);
+    assert.equal((await store.getRepositoryAssuranceRun("org-1", "run-other-pr"))?.status, "running");
+  } finally {
+    await cleanup();
+  }
+});
