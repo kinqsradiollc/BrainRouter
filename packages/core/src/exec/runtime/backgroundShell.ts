@@ -12,11 +12,7 @@
  * In-process registry: like worker threads, a background shell dies with the
  * CLI process; the log file survives for post-hoc reading.
  */
-import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
-import { getStateDir } from '../../storage/store.js';
+import { nodeBackgroundShellHost as host } from './backgroundShell/host/nodeBackgroundShellHost.js';
 
 export type BgShellStatus = 'running' | 'done' | 'failed';
 
@@ -41,42 +37,30 @@ export function startBackgroundShell(input: {
   cwd: string;
   workspaceRoot: string;
 }): BgShellRun {
-  const id = `bgsh_${randomUUID().slice(0, 8)}`;
-  const logDir = path.join(getStateDir(input.workspaceRoot), 'bgshell');
-  fs.mkdirSync(logDir, { recursive: true });
-  const logPath = path.join(logDir, `${id}.log`);
-  const fd = fs.openSync(logPath, 'a');
-
-  // `detached: true` puts the shell in its OWN process group, so killing the
-  // group (negative pid) takes down the whole tree — `sh -c "npm run dev"` AND
-  // the node it spawns — instead of orphaning the real server (WS2 2.4 / WS6 6.3).
-  const child = spawn('sh', ['-c', input.command], {
-    cwd: input.cwd,
-    stdio: ['ignore', fd, fd],
-    detached: true,
-  });
+  const id = host.createId();
+  const child = host.start({ ...input, id });
   ensureExitCleanup();
   const run: BgShellRun = {
     id,
     command: input.command,
-    pid: child.pid ?? null,
+    pid: child.pid,
     status: 'running',
     exitCode: null,
-    logPath,
-    startedAt: Date.now(),
+    logPath: child.logPath,
+    startedAt: host.now(),
   };
   runs.set(id, run);
 
-  child.on('exit', (code) => {
+  child.onExit((code) => {
     run.status = code === 0 ? 'done' : 'failed';
     run.exitCode = code;
-    run.endedAt = Date.now();
-    try { fs.closeSync(fd); } catch { /* already closed */ }
+    run.endedAt = host.now();
+    child.closeLog();
   });
-  child.on('error', () => {
+  child.onError(() => {
     run.status = 'failed';
-    run.endedAt = Date.now();
-    try { fs.closeSync(fd); } catch { /* already closed */ }
+    run.endedAt = host.now();
+    child.closeLog();
   });
   return run;
 }
@@ -100,13 +84,9 @@ export function listBackgroundShells(): BgShellRun[] {
 export function killBackgroundShell(id: string, signal: NodeJS.Signals = 'SIGTERM'): boolean {
   const run = runs.get(id);
   if (!run || run.status !== 'running' || run.pid == null) return false;
-  try {
-    process.kill(-run.pid, signal); // negative pid → the whole process group
-  } catch {
-    try { process.kill(run.pid, signal); } catch { /* already gone */ }
-  }
+  host.killProcessTree(run.pid, signal);
   run.status = 'failed';
-  run.endedAt = Date.now();
+  run.endedAt = host.now();
   return true;
 }
 
@@ -128,10 +108,10 @@ let exitCleanupInstalled = false;
 function ensureExitCleanup(): void {
   if (exitCleanupInstalled) return;
   exitCleanupInstalled = true;
-  process.once('exit', () => {
+  host.onExit(() => {
     for (const run of runs.values()) {
       if (run.status === 'running' && run.pid != null) {
-        try { process.kill(-run.pid, 'SIGKILL'); } catch { /* already gone */ }
+        host.killProcessTree(run.pid, 'SIGKILL');
       }
     }
   });
@@ -179,26 +159,20 @@ export function readBackgroundOutput(id: string, fromByte = 0): BgOutputRead | n
   // `fromByte + Buffer.byteLength(buf)` overshot it and silently dropped output.
   let nextOffset = fromByte;
   try {
-    const st = fs.statSync(run.logPath);
-    size = st.size;
-    if (size > fromByte) {
-      const fd = fs.openSync(run.logPath, 'r');
-      try {
-        const len = Math.min(size - fromByte, BG_OUTPUT_CHUNK_CHARS);
-        const b = Buffer.alloc(len);
-        fs.readSync(fd, b, 0, len, fromByte);
-        // Hold an incomplete trailing multibyte char for the next read — UNLESS
-        // the run is finished and we're at EOF (a truncated final write must be
-        // emitted so polling completes instead of stalling forever).
-        const atEof = fromByte + len >= size;
-        const terminal = run.status !== 'running';
-        const complete = utf8CompletePrefixLen(b, len);
-        const emit = complete < len && !(atEof && terminal) ? complete : len;
-        buf = b.subarray(0, emit).toString('utf-8');
-        nextOffset = fromByte + emit;
-      } finally {
-        fs.closeSync(fd);
-      }
+    const read = host.readLog(run.logPath, fromByte, BG_OUTPUT_CHUNK_CHARS);
+    size = read.size;
+    if (read.bytes.length > 0) {
+      const b = Buffer.from(read.bytes);
+      const len = b.length;
+      // Hold an incomplete trailing multibyte char for the next read — UNLESS
+      // the run is finished and we're at EOF (a truncated final write must be
+      // emitted so polling completes instead of stalling forever).
+      const atEof = fromByte + len >= size;
+      const terminal = run.status !== 'running';
+      const complete = utf8CompletePrefixLen(b, len);
+      const emit = complete < len && !(atEof && terminal) ? complete : len;
+      buf = b.subarray(0, emit).toString('utf-8');
+      nextOffset = fromByte + emit;
     }
   } catch { /* log unreadable — return status only */ }
   return {
