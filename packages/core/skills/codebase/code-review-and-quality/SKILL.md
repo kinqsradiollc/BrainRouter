@@ -67,6 +67,13 @@ Does the change fit the system's design?
 
 - Does it follow existing patterns or introduce a new one? If new, is it justified?
 - Does it maintain clean module boundaries?
+- Are dependency-free cross-package records in the shared types owner and
+  agent-host wire events in the protocol owner?
+- Are deterministic domain policy, orchestration services, and privileged
+  filesystem/process/provider/UI adapters separate, with effects behind ports?
+- Does a touched file combine unrelated contracts, policy, storage, transport,
+  and presentation into a new or growing god module?
+- Do consumers use curated public entrypoints instead of internal/deep paths?
 - Is there code duplication that should be shared?
 - Are dependencies flowing in the right direction (no circular dependencies)?
 - Is the abstraction level appropriate (not over-engineered, not too coupled)?

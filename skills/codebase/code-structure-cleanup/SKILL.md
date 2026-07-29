@@ -1,10 +1,11 @@
 ---
 name: code-structure-cleanup
-description: Guides a service-layer extraction pass after an AI-built feature ships. Use when feature code works but contains duplicated mechanics, repeated API calls, or copy-pasted logic across multiple callers. Use when deciding what belongs in shared services vs. domain-specific actions.
+description: Guides behavior-preserving boundary cleanup after a feature works. Use when code has duplicated mechanics, repeated API calls, mixed contracts/policy/adapters, privileged effects inside domain logic, deep imports, or a growing god module; use to decide ownership across shared records, policy, services, ports, adapters, and presentation.
 hints: |
   - Run cleanup AFTER the feature works, never during feature development.
-  - Extract only logic repeated across 2+ callers — never abstract singletons.
+  - Extract shared mechanics only after 2+ callers; split mixed responsibilities even when a module has one caller.
   - Keep domain rules (auth, error classification, status transitions) in actions.
+  - Keep dependency-free shared records in the lowest safe package and privileged effects behind owning-package ports.
   - Replace one caller first, verify, then migrate the rest.
   - Keep the diff small and focused on the feature area only.
 ---
@@ -24,7 +25,28 @@ The fix is a two-layer architecture: **actions orchestrate domain rules** (the "
 - The agent created similar helper functions in different files.
 - A bug fix in one flow was not propagated to other flows doing the same thing.
 
-**When NOT to use:** Logic used by only one caller — extracting it is over-abstraction. Do not use this as permission to redesign the whole app.
+**When NOT to use:** A cohesive single-purpose module merely because it is
+long, or a speculative abstraction with no ownership problem. Do not use this
+as permission to redesign the whole app.
+
+## Boundary Shape
+
+Use only the layers the domain has earned:
+
+```
+contracts/      dependency-free records and stable vocabulary
+domain/         invariants and state transitions
+policy/         deterministic decisions
+ports/          capabilities required from storage, process, provider, or host
+services/       use-case orchestration over policy and ports
+adapters/       filesystem, database, provider, process, Electron, or transport effects
+presentation/   host-specific view models and UI
+```
+
+Do not create every folder mechanically. Split when a file mixes owners, when a
+host effect leaks into deterministic policy, or when a shared record sits above
+one of its consumers in the dependency graph. Keep existing public entrypoints
+as thin compatibility barrels until all maintained consumers migrate.
 
 ## The Service Layer Pattern
 
@@ -89,7 +111,8 @@ Process:
 
 1. Write the flow in action code first — establish clear behavior.
 2. Mark repeated operational chunks across callers.
-3. Extract **only** repeated, non-domain chunks to a service function.
+3. Extract repeated non-domain chunks to a service function, or separate
+   mixed contracts/policy/host effects behind the smallest earned boundary.
 4. Replace **one caller first** → verify tests pass → replace remaining callers.
 5. Run typecheck, lint, and confirm all flows still work.
 

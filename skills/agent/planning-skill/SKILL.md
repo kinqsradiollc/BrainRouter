@@ -81,6 +81,21 @@ Database schema
 
 Implementation order follows the dependency graph bottom-up: build foundations first.
 
+### Step 2a: Assign Ownership Before Files
+
+For each task, name the owner of:
+
+- dependency-free records and wire vocabulary;
+- domain validation and deterministic policy;
+- orchestration services;
+- filesystem, process, provider, credential, or UI host adapters;
+- public entrypoints and compatibility paths.
+
+Do not plan a mixed module that owns all five. Shared records belong in the
+lowest dependency-safe package; host effects remain behind ports in the owning
+runtime. Preserve supported imports during extraction, then remove a
+compatibility path only after an import-graph check proves it unused.
+
 ### Step 3: Slice Vertically
 
 Instead of building all the database, then all the API, then all the UI — build one complete feature path at a time:
@@ -147,6 +162,7 @@ Add explicit checkpoints:
 - [ ] Application builds without errors
 - [ ] Core user flow works end-to-end
 - [ ] Review with human before proceeding
+```
 
 ### Step 6: Persist the Plan
 
@@ -181,7 +197,12 @@ files merely because this skill ran.
 ```
 
 Keep exactly one execution source of truth and update it as work changes.
-```
+
+When the user steers active work, reconcile the new instruction against the
+accepted outcome and authority first. Update affected tasks, dependencies, and
+acceptance checks before continuing; preserve completed evidence that remains
+valid. Queue-only input waits for the active slice and does not silently rewrite
+its plan.
 
 ## Task Sizing Guidelines
 
