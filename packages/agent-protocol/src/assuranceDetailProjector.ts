@@ -8,6 +8,7 @@ import {
   nullableNonNegativeInteger,
   oneOf,
   projectFinding,
+  projectPublication,
   record,
 } from './assuranceDetailValidation.js';
 import { projectAssuranceRun } from './assuranceRunProjector.js';
@@ -63,12 +64,20 @@ export function projectReviewAssuranceDetailView(value: unknown): ReviewAssuranc
   if (!assurance || !Array.isArray(assurance.findings)) return null;
   const run = projectAssuranceRun(assurance.run);
   const findings = assurance.findings.map(projectFinding);
-  if (!run || findings.some((finding) => finding === null)) return null;
+  const publication = assurance.publication === undefined
+    ? undefined
+    : projectPublication(assurance.publication);
+  if (
+    !run
+    || findings.some((finding) => finding === null)
+    || publication === null
+  ) return null;
   return {
     review,
     assurance: {
       run,
       findings: findings as AssuranceFindingView[],
+      ...(publication === undefined ? {} : { publication }),
     },
     canRun: detail.canRun,
   };

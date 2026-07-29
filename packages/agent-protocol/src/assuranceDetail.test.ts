@@ -69,6 +69,18 @@ function detail(status = 'completed', selectedFinding = finding()) {
       createdAt: NOW,
     },
     assurance: {
+      publication: {
+        schemaVersion: 1,
+        status: status === 'completed' ? 'blocked' : status,
+        label: status === 'completed' ? 'blocked' : status,
+        conclusion: 'failure',
+        blocked: true,
+        cleanEligible: false,
+        reason: status === 'partial'
+          ? 'Coverage is incomplete.'
+          : 'The publication policy does not permit a clean conclusion.',
+        blockingFindingIds: status === 'completed' ? ['finding-one'] : [],
+      },
       run: {
         id: 'run-one',
         repository: { forge: 'github', slug: 'owner/repository' },
@@ -143,6 +155,8 @@ test('review assurance detail projects the same durable run, coverage, stage, fi
   assert.equal(projected.assurance.findings[0].state, 'verified');
   assert.equal(projected.assurance.findings[0].evidence[0].summary, 'The write query omits the organization identifier.');
   assert.equal(projected.assurance.findings[0].verifier?.state, 'verified');
+  assert.equal(projected.assurance.publication?.label, 'blocked');
+  assert.equal(projected.assurance.publication?.conclusion, 'failure');
 });
 
 test('partial, stale, superseded, and unresolved states are never upgraded', () => {
@@ -150,6 +164,8 @@ test('partial, stale, superseded, and unresolved states are never upgraded', () 
   assert.equal(partial?.assurance?.run.status, 'partial');
   assert.equal(partial?.assurance?.run.coverage.status, 'partial');
   assert.equal(partial?.assurance?.run.stages[0].status, 'partial');
+  assert.equal(partial?.assurance?.publication?.label, 'partial');
+  assert.equal(partial?.assurance?.publication?.conclusion, 'failure');
   assert.equal(partial?.assurance?.findings[0].state, 'insufficient_evidence');
   assert.equal(partial?.assurance?.findings[0].verifier?.state, 'insufficient_evidence');
 
@@ -192,4 +208,9 @@ test('malformed authority data is rejected instead of normalized upward', () => 
   const invalidTerminal = detail('stale');
   delete invalidTerminal.assurance.run.staleReason;
   assert.equal(projectReviewAssuranceDetailView(invalidTerminal), null);
+
+  const invalidPublication = detail('partial');
+  invalidPublication.assurance.publication.conclusion = 'success';
+  invalidPublication.assurance.publication.cleanEligible = true;
+  assert.equal(projectReviewAssuranceDetailView(invalidPublication), null);
 });

@@ -17,6 +17,7 @@ import type { MemoryListItem } from "./store.js";
 import type { ModelReasoningEffort } from "./models.js";
 import type {
   AssuranceFinding,
+  AssurancePublicationProjection,
   RepositoryAssuranceRun,
 } from "./review/index.js";
 import { PublicUserRecord } from "./memory.js";
@@ -124,6 +125,8 @@ export interface ReviewJobDto {
 export interface ReviewAssuranceDto {
   run: RepositoryAssuranceRun;
   findings: AssuranceFinding[];
+  /** Exact publication state used for forge output. Absent on legacy runs. */
+  publication?: AssurancePublicationProjection;
 }
 export interface ReviewJobDetailResponse {
   review: ReviewJobDto;

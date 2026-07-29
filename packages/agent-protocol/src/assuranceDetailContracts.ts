@@ -38,6 +38,37 @@ export const ASSURANCE_EVIDENCE_KIND_VIEWS = [
 ] as const;
 export type AssuranceEvidenceKindView = (typeof ASSURANCE_EVIDENCE_KIND_VIEWS)[number];
 
+export const ASSURANCE_PUBLICATION_STATUS_VIEWS = [
+  'running',
+  'clean',
+  'advisory',
+  'blocked',
+  'partial',
+  'failed',
+  'canceled',
+  'superseded',
+  'stale',
+] as const;
+export type AssurancePublicationStatusView = (typeof ASSURANCE_PUBLICATION_STATUS_VIEWS)[number];
+
+export const ASSURANCE_PUBLICATION_CONCLUSION_VIEWS = [
+  'success',
+  'neutral',
+  'failure',
+] as const;
+export type AssurancePublicationConclusionView = (typeof ASSURANCE_PUBLICATION_CONCLUSION_VIEWS)[number];
+
+export interface AssurancePublicationView {
+  schemaVersion: 1;
+  status: AssurancePublicationStatusView;
+  label: string;
+  conclusion: AssurancePublicationConclusionView;
+  blocked: boolean;
+  cleanEligible: boolean;
+  reason: string;
+  blockingFindingIds: string[];
+}
+
 export interface AssuranceSourceLocationView {
   path: string;
   line?: number;
@@ -126,6 +157,8 @@ export interface ReviewAssuranceDetailView {
   assurance: {
     run: AssuranceRunEventView;
     findings: AssuranceFindingView[];
+    /** Exact forge publication projection. Absent on legacy review records. */
+    publication?: AssurancePublicationView;
   } | null;
   canRun: boolean;
 }

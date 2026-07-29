@@ -254,7 +254,18 @@ describe("review route GitHub accessibility", () => {
         prNumber: 7,
         headSha: "head-1",
       },
-      output: { findings: 1, blocking: 0, posted: true },
+      output: {
+        findings: 1,
+        blocking: 0,
+        posted: true,
+        assuranceGate: {
+          status: "advisory",
+          blocked: false,
+          cleanEligible: false,
+          reason: "One candidate requires disposition.",
+          blockingFindingIds: [],
+        },
+      },
       progress: [],
       error: null,
       createdAt: timestamp,
@@ -361,6 +372,16 @@ describe("review route GitHub accessibility", () => {
         state: "insufficient_evidence",
         verifier: { state: "insufficient_evidence" },
       }],
+      publication: {
+        schemaVersion: 1,
+        status: "advisory",
+        label: "advisory",
+        conclusion: "neutral",
+        blocked: false,
+        cleanEligible: false,
+        reason: "One candidate requires disposition.",
+        blockingFindingIds: [],
+      },
     });
     expect(mocks.getRepositoryAssuranceRunForJob).toHaveBeenCalledWith(
       "org-1",
