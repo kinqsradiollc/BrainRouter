@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isSafeSshTarget, planHostCommand } from '../exec/hosts.js';
+import {
+  isSafeSshTarget,
+  planHostCommand,
+  runOnHost,
+  type HostCommandExecutor,
+} from '../exec/hosts.js';
 
 test('execution host planner keeps local commands as argv with an explicit cwd', () => {
   assert.deepEqual(planHostCommand(
@@ -44,4 +49,31 @@ test('execution host planner quotes every SSH command component and rejects targ
 test('execution host planner rejects a flag-shaped or control-character command', () => {
   assert.throws(() => planHostCommand({ id: 'local', kind: 'local' }, '--upload-pack=evil', [], '/repo'), /Unsafe execution command/);
   assert.throws(() => planHostCommand({ id: 'local', kind: 'local' }, 'git\nwhoami', [], '/repo'), /Unsafe execution command/);
+});
+
+test('runOnHost delegates the pure plan to an injected executor', () => {
+  const calls: Array<{ executable: string; args: string[]; cwd?: string; timeout: number }> = [];
+  const executor: HostCommandExecutor = {
+    run: (plan, timeout) => {
+      calls.push({ ...plan, timeout });
+      return { ok: true, stdout: 'done', stderr: '', status: 0 };
+    },
+  };
+
+  const result = runOnHost(
+    { id: 'local', kind: 'local' },
+    'git',
+    ['status', '--short'],
+    '/workspace',
+    1_500,
+    executor,
+  );
+
+  assert.deepEqual(calls, [{
+    executable: 'git',
+    args: ['status', '--short'],
+    cwd: '/workspace',
+    timeout: 1_500,
+  }]);
+  assert.deepEqual(result, { ok: true, stdout: 'done', stderr: '', status: 0 });
 });

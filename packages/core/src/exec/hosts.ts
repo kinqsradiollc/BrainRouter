@@ -1,12 +1,20 @@
-import { spawnSync } from 'node:child_process';
+import type {
+  HostCommandExecutor,
+  HostCommandPlan,
+  HostCommandResult,
+} from './host/contracts.js';
+import { nodeHostCommandExecutor } from './host/nodeHostCommandExecutor.js';
+
+export type {
+  HostCommandExecutor,
+  HostCommandPlan,
+  HostCommandResult,
+} from './host/contracts.js';
 
 export type ExecutionHost =
   | { id: string; kind: 'local'; platform?: NodeJS.Platform }
   | { id: string; kind: 'ssh'; target: string }
   | { id: string; kind: 'wsl'; distro?: string };
-
-export interface HostCommandPlan { executable: string; args: string[]; cwd?: string }
-export interface HostCommandResult { ok: boolean; stdout: string; stderr: string; status?: number }
 
 function quotePosix(value: string): string { return `'${value.replace(/'/g, `'"'"'`)}'`; }
 
@@ -26,15 +34,14 @@ export function planHostCommand(host: ExecutionHost, command: string, args: stri
   return { executable: 'ssh', args: ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', '--', host.target, 'sh', '-lc', remote] };
 }
 
-export function runOnHost(host: ExecutionHost, command: string, args: string[], cwd: string, timeout = 45_000): HostCommandResult {
+export function runOnHost(
+  host: ExecutionHost,
+  command: string,
+  args: string[],
+  cwd: string,
+  timeout = 45_000,
+  executor: HostCommandExecutor = nodeHostCommandExecutor,
+): HostCommandResult {
   const plan = planHostCommand(host, command, args, cwd);
-  const result = spawnSync(plan.executable, plan.args, {
-    cwd: plan.cwd,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    timeout,
-    maxBuffer: 16_000_000,
-    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
-  });
-  return { ok: result.status === 0 && !result.error, stdout: result.stdout ?? '', stderr: result.stderr ?? result.error?.message ?? '', status: result.status ?? undefined };
+  return executor.run(plan, timeout);
 }
