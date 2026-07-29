@@ -1,0 +1,162 @@
+# ADR-025 Package Boundary Inventory
+
+**Status:** A25-1 baseline complete · **Snapshot:** `release/0.4.17` at
+`9ef12c291` · **Decision:** ADR-025
+
+## Purpose
+
+This inventory is the execution map for the whole-platform modernization
+accepted in ADR-025. It records current owners, public entrypoints, dependency
+direction, mixed-responsibility modules, compatibility requirements, and the
+first safe migration for every maintained package and product host.
+
+Line count is a discovery signal, not a refactor rule. A large, cohesive
+generated table or state machine may remain intact. A smaller module that mixes
+contracts, policy, persistence, transport, and presentation is a higher-priority
+boundary defect. Every implementation slice must prove an ownership
+improvement, preserve behavior unless its PR explicitly changes behavior, and
+keep the old supported import path through a compatibility facade.
+
+## Authoritative dependency graph
+
+```text
+packages/types ─────────────┐
+                            ├──> packages/core ───────> backend / CLI / Desktop host
+packages/agent-protocol ────┘
+
+packages/types ───> packages/sdk ───> packages/hooks ───> Dashboard
+       │                    │                │
+       └────────────────────┴────────────────┘
+```
+
+Rules established by the current package manifests and architecture law:
+
+1. `packages/types` and `packages/agent-protocol` are leaves. They never import
+   Core or an application.
+2. Core depends on types and protocol. It owns host-neutral runtime validation,
+   domain transitions, policy, services, and local adapters behind curated
+   subsystem entrypoints.
+3. SDK is browser-safe and fetch-only. Hooks depend only on SDK, types, and
+   React as a peer.
+4. Dashboard consumes the browser-safe types/SDK/hooks subset. It does not
+   import Core or protocol.
+5. Backend, CLI, and the Electron host consume curated Core entrypoints.
+6. The Desktop renderer may deep-import a specific browser-safe Core module.
+   This is the one sanctioned exception and depends on Core's `./dist/*`
+   compatibility export until browser-safe subpaths replace each use.
+
+## Whole-platform ownership map
+
+| Surface | Current owner and useful seam | Boundary debt | Destination and first migration |
+|---|---|---|---|
+| `packages/types` | Shared records; domain files already exist for memory, Atlas, Track, work contracts, planning, and basic review availability | Root barrel is broad; `api.ts`, `store.ts`, `track/entities.ts`, and `atlas-enrich.ts` remain large; assurance contracts are not yet a cohesive family | Add domain subpaths only for cross-package, dependency-free records. Begin with `review/`; preserve root exports during migration |
+| `packages/agent-protocol` | Zero-dependency agent-host vocabulary with structural guards | `index.ts` combines events, commands, interaction broker, callback bridge, steering projection, and envelope writer in 511 lines | Split those concerns into siblings behind the unchanged root entrypoint; keep all guards pure and zero-dependency |
+| `packages/core` | Headless domains with curated package exports and a minimal root barrel | Several domains mix contracts/policy/adapters; provider and router overlap; large configuration, agent, extension, workspace, browser, and orchestration modules remain | Migrate one domain at a time to contracts/domain/policy/ports/services/adapters as earned; preserve curated subsystem entrypoints |
+| `packages/sdk` | One fetch-only `BrainRouterClient` plus knowledge helpers | `client.ts` is the transport, auth refresh, and most domain methods in one 454-line class | Extract request/auth transport and domain method installers or delegates while preserving the class and root API |
+| `packages/hooks` | One hook per file and explicit client injection already match the intended boundary | Root exports are flat and knowledge request coordination is shared informally | Keep the one-hook-per-file rule; add internal per-domain helpers only when multiple hooks share cancellation/query behavior |
+| `brainrouter` | Durable memory engine, jobs, API routes, external integrations, provider storage, and hosted services | Provider responsibilities span `providers/`, `services/modelGateway/`, and `services/gateway/`; PR review execution is concentrated in an 800-line integration; some routes contain use-case logic | Routes/tools become adapters over services; provider storage, gateway policy, and transport get explicit owners; assurance execution moves behind a service and ports |
+| `brainrouter-cli` | Terminal host, runtime composition, slash-command adapters, and Ink views | Some handlers and views still combine parsing, use cases, and rendering; `workflow/handlers.ts` remains 1,326 lines after the first split | Keep slash behavior stable; extract per-command services and view models behind existing `tryHandle*`/barrel paths |
+| `brainrouter-desktop/electron` | Privileged host, IPC adapters, native browser/PTY, and CLI/Core composition | `host/queries.ts`, browser manager, host facade, and main composition remain multi-concern; host imports some CLI implementation paths because no shared host package exists | Split query families and browser concerns behind current composers; move reusable host-neutral contracts/services down to protocol/Core rather than creating Desktop policy |
+| `brainrouter-desktop/src` | Renderer shell, feature panels, local view models, and presentation state | dev bridge and several panels/settings components mix fixtures, queries, state, and rendering; feature ownership is divided across `lib/`, `panels/`, and top-level components | Organize touched UI by feature; keep renderer-only adapters at the edge and do not move Node policy into UI folders |
+| `brainrouter-dashboard` | Next.js routes and browser presentation over types/SDK/hooks | Several pages and `adminApi.ts` own large request/view-model/rendering surfaces; reusable domain screens are split between `app/`, `components/`, and `lib/` | Keep route composition in `app/`; move domain view models/screens to feature folders and API behavior into SDK/hooks where it is shared |
+
+## Public entrypoint inventory
+
+### Shared packages
+
+| Package | Supported entrypoints at this snapshot | Rule |
+|---|---|---|
+| types | root plus `models`, `reviews`, `work-contract`, `planning-schema`, and `atlas-ops` | Add a subpath when browser safety or bounded domain ownership requires it; do not turn every source file into an export |
+| agent protocol | root only | The root remains stable while its implementation splits into private siblings |
+| Core | minimal root plus curated domain subpaths such as `agent`, `config`, `provider`, `router`, `review`, `workspace`, and `workflow` | Internal services stay private; renderer-only `dist/*` access remains a documented compatibility exception |
+| SDK | root only | Preserve `BrainRouterClient`; private transport/domain delegates do not become public automatically |
+| hooks | root only | Preserve named hook exports and explicit client injection |
+
+Applications are private composition roots, not libraries. A reusable concept
+found in an app moves down only when at least one real cross-package consumer
+needs it and the lower package can own it without importing host concerns.
+
+### Current exception that must remain explicit
+
+The Desktop renderer has specific deep Core imports for browser-safe modules.
+The root lint configuration exempts only `brainrouter-desktop/src/**`; Electron
+host code remains subject to the curated-entrypoint rule. Core's `./dist/*`
+export is therefore still load-bearing. A25-2 must correct the stale lint
+comment that says the wildcard is gone, then add negative fixtures without
+removing the exception.
+
+## Mixed-responsibility and large-module triage
+
+The following list is the initial migration queue. Test files are excluded from
+line-count prioritization; they may be split for comprehension after the owning
+production boundary stabilizes.
+
+| Priority | Current module or family | Snapshot signal | Ownership assessment | Migration strategy |
+|---|---|---:|---|---|
+| P0 | `packages/core/src/config/configTypes.ts` | 1,340 lines | Server, provider, automation, web search, marketplace, skills, routing, triggers, budget, GitHub, and CLI records share one file | Extract domain contract siblings; keep `configTypes.ts` as the compatibility barrel |
+| P0 | `packages/agent-protocol/src/index.ts` | 511 lines | Five stable protocol concerns share one implementation module | Verbatim split into events, commands, interaction, callback bridge, and envelope writer |
+| P0 | Core `provider/` + `router/` | two public subsystems | Catalog/definition and model-route execution boundaries overlap; backend has two additional gateway layers | Inventory names and call paths first, then consolidate ownership without changing public entrypoints |
+| P0 | `brainrouter/src/integrations/prSecurityReview.ts` | 800 lines | Checkout/diff intake, model review, GitHub comments/checks, coverage, and compatibility aliases share one integration | Extract assurance service, GitHub port/adapter, analysis packet builder, and publication adapter behind current functions |
+| P0 | `brainrouter-desktop/electron/host/queries.ts` | 3,969 lines | Query registration spans most product domains; it is a composer but still owns many handler bodies | Extract one query family per PR using the existing host context; keep `buildQueries` as composer |
+| P1 | `packages/core/src/agent/runtime/runTurn.impl.ts` | 2,995 lines | Cohesive turn state machine but contains separable prompt, tool, steering, recovery, and completion phases | Characterize phase callbacks and extract only after lifecycle fixtures pin ordering and bounded loops |
+| P1 | `packages/core/src/agent/agent.ts` | 2,011 lines | Agent composition owns many registries and runtime capabilities | Move composition helpers by capability; keep Agent public facade stable |
+| P1 | `packages/core/src/extension/builtin/runtime.ts` | 1,685 lines | Built-in extension construction and many execution handlers share one module | Split per built-in extension/tool family behind the existing registry |
+| P1 | `packages/core/src/agent/transport/llmTransport.ts` | 1,482 lines | Provider wire handling, retries, streaming, normalization, and tool-call transport overlap | Align request/response normalization with provider routing and recovery receipts before splitting |
+| P1 | `packages/core/src/workspace/onboardingTransaction.ts` | 977 lines | Scan, proposal, review, stale protection, and persistence transaction share one module | Extract pure transaction phases and retain the current reviewed commit facade |
+| P1 | `packages/core/src/orchestration/profiles/orchestrationProfileDefinitionFile.ts` | 855 lines | Schema parsing and filesystem trust checks are coupled | Reuse a bounded-file port only after exact fail-closed behavior is fixture-pinned |
+| P1 | `brainrouter/src/memory/store/postgres/PostgresMemoryStore.ts` | 1,608 lines | Store facade spans many memory domains; query modules already exist | Keep facade; continue moving domain operations to query/service modules without creating a second store |
+| P1 | `brainrouter/src/memory/engine.ts` | 1,280 lines | Memory facade/composition remains large | Keep one engine; extract services without moving durable truth elsewhere |
+| P1 | `brainrouter-cli/src/cli/commands/workflow/handlers.ts` | 1,326 lines | Existing split still centralizes many workflow command bodies | Extract per-subcommand handlers/services behind the current command entrypoint |
+| P1 | `brainrouter-desktop/electron/browser/browserViewManager.ts` | 1,992 lines | View lifecycle, tabs, navigation, events, permissions, downloads, and agent ownership share one class | Extract cohesive managers with injected live state; preserve BrowserViewManager facade |
+| P1 | `brainrouter-desktop/src/devBridge/queries.ts` | 1,720 lines | Browser-development fixtures and every query family share one registry | Split fixture/query families behind one deterministic dev composer |
+| P1 | `brainrouter-dashboard/app/overview/page.tsx` | 816 lines | Data loading, view model, and presentation share a route module | Extract overview feature components/view model while route keeps composition |
+| P2 | `packages/sdk/src/client.ts` | 454 lines | Still understandable, but projected assurance and provider APIs will grow it into a god class | Split before adding ADR-025 clients; preserve constructor/auth/request semantics |
+| P2 | `packages/types/src/track/entities.ts` | 537 lines | Large but cohesive domain record family | Keep unless the Track contract evolves independently enough to earn subfamilies |
+| P2 | `packages/types/src/atlas-enrich.ts` | 503 lines | Deterministic Atlas enrichment is cohesive | Keep until code-index replacement creates a real analysis/service seam |
+
+## Domain migration matrix
+
+| ADR-025 wave | Current sources of truth | Destination decision | Compatibility requirement |
+|---|---|---|---|
+| A25-2 shared boundaries | package manifests, types exports, protocol root, Core export map, lint boundary | Machine-check leaf direction, curated Core imports, and sanctioned renderer exception | No supported import breaks; negative fixtures prove forbidden edges |
+| A25-3 provider/model | Core `provider/` and `router/`; backend `providers/`, model gateway, hosted gateway; agent LLM transport | Catalog, routing, policy, transport adapters, and recovery receipts have one named owner each | Existing provider IDs, model discovery, fallback, budgets, and endpoint behavior stay stable |
+| A25-4 agent runtime | Core agent/runtime/context/tool/session/orchestration plus host protocol | Separate lifecycle, context, tool execution, delivery, and delegation boundaries | Tool-call pairing, safe-boundary Steer, authority ceilings, and bounded loops stay exact |
+| A25-5 workspace/profile | Core workspace, plugin, persona, planning, tool-profile, and onboarding modules | Manifest/contracts, catalog resolution, policy, file adapters, and transaction services are distinct | Missing-manifest behavior, precedence, diagnostics, and safe writes stay exact |
+| A25-6 infrastructure domains | Core browser/exec/background/connectors/storage/worktree plus CLI/Desktop adapters | Host-neutral policy/services remain in Core; privileged side effects remain in hosts | No permission, cancellation, workspace, or session widening |
+| A25-7–A25-13 assurance | types review/pentest records, Core review package, backend PR integration/jobs/routes, GitHub publication, Desktop/CLI/Dashboard review views | Durable assurance run, coverage, evidence, lifecycle, analysis, ports, and host projections | Current diff review remains labeled fallback until repository-context parity is proven |
+| A25-14 agent quality | contributor rules, engineering profile planning schema, skills, runtime activation | Short global invariants plus profile/task-selected architecture, planning, code-quality, and security workflows | No prompt claims an unshipped tool or authority; unrelated profiles do not inherit engineering work |
+| A25-15 cleanup | compatibility barrels, aliases, renderer deep imports, legacy paths | Remove only after import graph and consumer evidence prove zero supported users | One deletion PR per coherent compatibility family |
+
+## Boundary guard backlog
+
+A25-2 should add machine checks in this order:
+
+1. Keep the current non-renderer Core `dist/**` import ban at error severity and
+   add fixtures proving the renderer exception is narrow.
+2. Assert that types and protocol do not import any `@kinqs` package or app.
+3. Assert that packages never import an application.
+4. Assert that Dashboard does not import Core or protocol.
+5. Assert that SDK remains free of `node:` imports and depends only on types.
+6. Assert that hooks use SDK/types and keep React as a peer.
+7. Record curated Core entrypoints from `package.json` and reject a new
+   cross-package deep path unless it is the documented renderer exception.
+8. Add domain contract placement checks only after the review and provider
+   pilots establish stable paths; avoid freezing speculative empty folders.
+
+## Per-slice completion evidence
+
+Every structural PR must include:
+
+- current owner, destination owner, and unchanged public path;
+- a focused import graph/diff showing no forbidden dependency edge;
+- behavior or contract fixtures for the extracted concern;
+- a purpose header on every new module;
+- a compatibility facade when existing consumers use the old path;
+- focused typecheck/tests for the affected package and direct consumers;
+- hosted CI as the full workspace integration gate; and
+- an explicit “behavior-preserving” statement when the slice is a pure move.
+
+No slice may claim that the whole modernization is complete merely because a
+folder tree looks cleaner. ADR-025 completes only after its shared contracts,
+runtime domains, assurance pipeline, host projections, agent skills, obsolete
+path removals, and final acceptance audit all have direct evidence.

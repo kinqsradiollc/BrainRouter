@@ -46,6 +46,10 @@ deep dives.
   `readonly` / `workspace` / `trusted` profiles you switch with `/policy`.
 - **[mcp-install.md](mcp-install.md)** — installing the BrainRouter MCP server
   into MCP clients.
+- **[ADR-025 package boundary inventory](adr-025-package-boundary-inventory.md)** —
+  current package/host owners, public entrypoints, mixed-responsibility module
+  triage, migration order, and boundary-guard backlog for the accepted
+  whole-platform modernization.
 
 ### Specs & decisions
 
