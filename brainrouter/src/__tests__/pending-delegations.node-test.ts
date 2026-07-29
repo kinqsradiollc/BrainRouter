@@ -1,9 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createTestStore } from "./helpers/pgTestStore.js";
-import type { DelegationPacket } from "@kinqs/brainrouter-types";
+import type {
+  LegacyDelegationPacket,
+  StoredDelegationPacket,
+} from "@kinqs/brainrouter-types/agent";
 
-function packet(goal: string): DelegationPacket {
+function packet(goal: string): LegacyDelegationPacket {
   return {
     goal,
     fromSessionKey: "sender",
@@ -16,6 +19,10 @@ function packet(goal: string): DelegationPacket {
     deadline: null,
     createdAt: "2026-05-29T00:00:00.000Z",
   };
+}
+
+function packetGoal(packet: StoredDelegationPacket): string {
+  return "goal" in packet ? packet.goal : packet.task;
 }
 
 test("FED-S5: enqueue → list → claim oldest-first; flips status; preserves packet", async () => {
@@ -38,15 +45,15 @@ test("FED-S5: enqueue → list → claim oldest-first; flips status; preserves p
     const pending = await store.listPendingDelegations({ userId: "u1", toAgentKind: "codex", status: "pending" });
     assert.equal(pending.length, 2);
     assert.equal(pending[0].id, a.id); // oldest first
-    assert.equal(pending[0].packet.goal, "first");
+    assert.equal(packetGoal(pending[0].packet), "first");
 
     const claimed = await store.claimPendingDelegation("u1", "codex", "claimer-1", "2026-05-29T00:01:00.000Z");
-    assert.equal(claimed?.packet.goal, "first");
+    assert.equal(claimed && packetGoal(claimed.packet), "first");
     assert.equal(claimed?.status, "claimed");
     assert.equal(claimed?.toSessionKey, "claimer-1");
 
     const claimed2 = await store.claimPendingDelegation("u1", "codex", "claimer-2", "2026-05-29T00:02:00.000Z");
-    assert.equal(claimed2?.packet.goal, "second");
+    assert.equal(claimed2 && packetGoal(claimed2.packet), "second");
 
     const none = await store.claimPendingDelegation("u1", "codex", "claimer-3", "2026-05-29T00:03:00.000Z");
     assert.equal(none, null); // queue drained
@@ -66,7 +73,7 @@ test("FED-S5: claim is user-scoped (no cross-tenant leakage)", async () => {
     const otherUser = await store.claimPendingDelegation("u2", "codex", "claimer", "2026-05-29T00:01:00.000Z");
     assert.equal(otherUser, null);
     const sameUser = await store.claimPendingDelegation("u1", "codex", "claimer", "2026-05-29T00:01:00.000Z");
-    assert.equal(sameUser?.packet.goal, "u1-task");
+    assert.equal(sameUser && packetGoal(sameUser.packet), "u1-task");
   } finally {
     await cleanup();
   }

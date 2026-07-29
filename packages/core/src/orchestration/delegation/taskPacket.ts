@@ -1,6 +1,9 @@
-import type { ContextEnvelope, ContextLayerKind } from '../../context/contextEnvelope.js';
+import type { DelegatedTaskPacket } from '@kinqs/brainrouter-types/agent';
+import type { ContextEnvelope } from '../../context/contextEnvelope.js';
 import type { WorkspaceCapabilityResolution } from '../../workspace/capabilities.js';
 import type { AccessMode } from '../roles/roles.js';
+
+export type { DelegatedTaskPacket } from '@kinqs/brainrouter-types/agent';
 
 const MAX_TASK_CHARS = 12_000;
 const MAX_EXPECTATION_CHARS = 2_000;
@@ -11,63 +14,6 @@ const MAX_RECORD_IDS = 50;
 const MAX_SOURCE_FILES = 100;
 const MAX_TOOL_NAMES = 200;
 const MAX_LAYER_REFERENCES = 40;
-
-export interface DelegatedTaskPacket {
-  schemaVersion: 1;
-  task: string;
-  expectedOutput: {
-    contractId: string | null;
-    description: string;
-    requiredSections: string[];
-  };
-  persona: { id: string };
-  orchestration: {
-    roleId: string;
-    profileId?: string;
-    strategyId?: string;
-    stageId?: string;
-    skillIds?: string[];
-    assignment?: string;
-  };
-  capabilities: Pick<
-    WorkspaceCapabilityResolution,
-    'active' | 'reasons' | 'skillPacks' | 'skills' | 'toolProfiles'
-  >;
-  userConstraints: {
-    goal?: { text: string; status: string };
-    ownership?: string | null;
-    workspaceInstructionsHash?: string;
-    executionMode?: string;
-    reviewPolicy?: string;
-  };
-  planState?: string;
-  memoryBriefing: {
-    recordIds: string[];
-    excerpt?: string;
-  };
-  sources: {
-    files: string[];
-  };
-  contextLayers: Array<{
-    kind: ContextLayerKind;
-    reference: string;
-    protected: boolean;
-  }>;
-  toolPolicyCeiling: {
-    accessMode: AccessMode;
-    localTools: string[];
-    mcpTools: string[];
-    disallowedTools: string[];
-  };
-  budgets: {
-    maxWallClockMs: number;
-    maxPromptTokens: number;
-    maxCompletionTokens: number;
-    maxIterations: number;
-    maxDepth: number;
-    maxOutputChars: number;
-  };
-}
 
 export interface BuildDelegatedTaskPacketInputs {
   task: string;
@@ -85,6 +31,8 @@ export interface BuildDelegatedTaskPacketInputs {
   workspaceInstructionsHash?: string;
   executionMode?: string;
   reviewPolicy?: string;
+  constraints?: readonly string[];
+  deadline?: string | null;
   planState?: string | null;
   recalledRecordIds?: readonly string[];
   memoryExcerpt?: string | null;
@@ -180,6 +128,16 @@ export function buildDelegatedTaskPacket(
   }
   if (input.reviewPolicy) {
     packet.userConstraints.reviewPolicy = bounded(input.reviewPolicy, 80);
+  }
+  if (input.constraints?.length) {
+    packet.userConstraints.constraints = boundedList(
+      input.constraints,
+      40,
+      MAX_CONSTRAINT_CHARS,
+    );
+  }
+  if (input.deadline?.trim()) {
+    packet.userConstraints.deadline = bounded(input.deadline.trim(), 120);
   }
   if (input.planState?.trim()) {
     packet.planState = bounded(input.planState.trim(), MAX_PLAN_CHARS);

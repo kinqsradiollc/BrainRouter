@@ -1,11 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import type { LegacyDelegationPacket } from '@kinqs/brainrouter-types/agent';
 import { Agent } from '../agent/agent.js';
 import { buildRootContextEnvelope } from '../context/contextEnvelope.js';
 import {
   buildDelegatedTaskPacket,
   renderDelegatedTaskPacket,
 } from '../orchestration/delegation/taskPacket.js';
+import {
+  buildCrossHostDelegationPacket,
+  normalizeStoredDelegationPacket,
+} from '../orchestration/delegation/crossHostPacket.js';
 import { summarize } from '../orchestration/tools/summarize.js';
 
 const EMPTY_CAPABILITIES = {
@@ -56,6 +61,53 @@ test('delegated packet is bounded, versioned, and carries recomputed capability 
   assert.equal(result.memoryBriefing.recordIds.length, 50);
   assert.equal(result.sources.files.length, 100);
   assert.deepEqual(result.toolPolicyCeiling.localTools, ['read_file', 'grep_search']);
+});
+
+test('cross-host transport preserves the same bounded local task packet', () => {
+  const local = packet();
+  const crossHost = buildCrossHostDelegationPacket(
+    'sender-session',
+    {
+      taskPacket: local,
+      originatingClient: 'peer-cli',
+      originatingWorkspace: '/workspace',
+      origin: { fromSessionKey: 'spoofed-session' },
+    },
+    '2026-07-30T00:00:00.000Z',
+  );
+  const { origin, ...transportedTask } = crossHost;
+
+  assert.deepEqual(transportedTask, local);
+  assert.equal(origin.fromSessionKey, 'sender-session');
+  assert.equal(origin.originatingClient, 'peer-cli');
+});
+
+test('legacy cross-host packets normalize without implicit capability or tool grants', () => {
+  const legacy: LegacyDelegationPacket = {
+    goal: 'Inspect the API boundary.',
+    fromSessionKey: 'legacy-sender',
+    originatingClient: 'legacy-cli',
+    originatingWorkspace: '/workspace',
+    files: ['src/api.ts'],
+    constraints: ['Do not modify files.'],
+    modelHints: ['use-unbounded-model'],
+    budget: { tokens: 4_000 },
+    deadline: null,
+    createdAt: '2026-07-30T00:00:00.000Z',
+  };
+  const normalized = normalizeStoredDelegationPacket(legacy);
+
+  assert.equal(normalized.task, legacy.goal);
+  assert.deepEqual(normalized.sources.files, ['src/api.ts']);
+  assert.deepEqual(normalized.capabilities.active, []);
+  assert.deepEqual(normalized.toolPolicyCeiling, {
+    accessMode: 'read',
+    localTools: [],
+    mcpTools: [],
+    disallowedTools: [],
+  });
+  assert.equal(normalized.budgets.maxPromptTokens, 4_000);
+  assert.doesNotMatch(renderDelegatedTaskPacket(normalized), /use-unbounded-model/);
 });
 
 test('delegated packet references selected envelope layers without inheriting transcript or capability overlay', () => {

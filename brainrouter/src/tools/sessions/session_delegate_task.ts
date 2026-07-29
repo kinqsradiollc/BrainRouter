@@ -9,7 +9,7 @@ export { resolveDelegationPeer, buildDelegationPacket } from "./delegation-helpe
 /**
  * Federation Stage 5 (0.4.2) — cross-vendor delegation MCP surface.
  *
- *   - `session_delegate_task` — package a normalized {@link DelegationPacket}
+ *   - `session_delegate_task` — package a normalized bounded task packet
  *     and route it to an idle peer of the requested `agentKind`
  *     (delivered on the `delegate` inbox kind), or — when no peer is idle —
  *     park it in the `pending_delegations` queue for later claim.
@@ -53,7 +53,7 @@ export const sessionDelegateTaskToolSchema = {
       payload: {
         type: "object",
         description:
-          "Delegation packet fields: { goal, files?, constraints?, modelHints?, budget?, deadline?, note?, originatingClient?, originatingWorkspace? }. `goal` is required.",
+          "Canonical input is { taskPacket, originatingClient?, originatingWorkspace? }. Legacy { goal, files?, constraints?, budget?, deadline?, note? } input remains compatible but is normalized to read-only with no implicit tools.",
       },
     },
     required: ["from", "agentKind", "payload"],
@@ -73,10 +73,6 @@ export async function handleSessionDelegateTask(args: any, options?: { defaultUs
     const userId = params.userId ?? options?.defaultUserId ?? "default";
     const now = new Date().toISOString();
     const packet = buildDelegationPacket(params.from, params.payload, now);
-    if (!packet.goal) {
-      return toolError("session_delegate_task", new Error("payload.goal is required"));
-    }
-
     const sessions = await memoryEngine.store.listActiveSessions({ userId, clientKind: params.agentKind });
     const peer = resolveDelegationPeer(sessions, params.agentKind, params.from);
 

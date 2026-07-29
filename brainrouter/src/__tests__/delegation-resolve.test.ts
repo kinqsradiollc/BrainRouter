@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { buildDelegatedTaskPacket } from "@kinqs/brainrouter-core/orchestration/delegation-contracts";
 import { resolveDelegationPeer, buildDelegationPacket } from "../tools/sessions/delegation-helpers.js";
 
 const S = (sessionKey: string, clientKind: string, lastHeartbeatAt: string) => ({
@@ -46,24 +47,70 @@ describe("FED-S5 buildDelegationPacket", () => {
       },
       "2026-05-29T00:00:00.000Z",
     );
-    expect(p.goal).toBe("do the thing");
-    expect(p.fromSessionKey).toBe("sender-key");
-    expect(p.files).toEqual(["a.ts", "b.ts"]); // non-strings dropped
-    expect(p.constraints).toEqual([]); // non-array → []
-    expect(p.modelHints).toEqual(["prefer:reasoning"]);
-    expect(p.budget).toEqual({ tokens: 1000 });
-    expect(p.deadline).toBe("2026-06-01");
-    expect(p.createdAt).toBe("2026-05-29T00:00:00.000Z");
+    expect(p.task).toBe("do the thing");
+    expect(p.origin.fromSessionKey).toBe("sender-key");
+    expect(p.sources.files).toEqual(["a.ts", "b.ts"]); // non-strings dropped
+    expect(p.userConstraints.constraints).toBeUndefined(); // non-array → []
+    expect(p.toolPolicyCeiling).toEqual({
+      accessMode: "read",
+      localTools: [],
+      mcpTools: [],
+      disallowedTools: [],
+    });
+    expect(p.budgets.maxPromptTokens).toBe(1000);
+    expect(p.userConstraints.deadline).toBe("2026-06-01");
+    expect(p.origin.createdAt).toBe("2026-05-29T00:00:00.000Z");
   });
 
   it("defaults missing optional fields safely", () => {
     const p = buildDelegationPacket("s", { goal: "x" }, "2026-05-29T00:00:00.000Z");
-    expect(p.files).toEqual([]);
-    expect(p.constraints).toEqual([]);
-    expect(p.modelHints).toEqual([]);
-    expect(p.budget).toBeNull();
-    expect(p.deadline).toBeNull();
-    expect(p.note).toBeUndefined();
-    expect(p.originatingClient).toBe("unknown");
+    expect(p.sources.files).toEqual([]);
+    expect(p.capabilities.active).toEqual([]);
+    expect(p.toolPolicyCeiling.localTools).toEqual([]);
+    expect(p.userConstraints.deadline).toBeUndefined();
+    expect(p.origin.originatingClient).toBe("unknown");
+  });
+
+  it("re-bounds a canonical local packet and pins transport identity", () => {
+    const taskPacket = buildDelegatedTaskPacket({
+      task: "Inspect the authorization boundary.",
+      personaId: "engineer",
+      roleId: "reviewer",
+      capabilities: {
+        active: ["backend"],
+        reasons: ["server task"],
+        skillPacks: ["backend"],
+        skills: ["authorization-boundary-skill"],
+        toolProfiles: ["coding"],
+        promptBlocks: [],
+      },
+      accessMode: "read",
+      localTools: ["read_file", "grep_search"],
+      mcpTools: ["mcp_docs_search"],
+      disallowedTools: ["run_command"],
+      budgets: {
+        maxWallClockMs: 120_000,
+        maxPromptTokens: 32_000,
+        maxCompletionTokens: 4_000,
+        maxIterations: 20,
+        maxDepth: 1,
+        maxOutputChars: 12_000,
+      },
+    });
+    const packet = buildDelegationPacket(
+      "authoritative-sender",
+      {
+        taskPacket,
+        origin: { fromSessionKey: "spoofed" },
+        originatingClient: "brainrouter-cli",
+      },
+      "2026-05-29T00:00:00.000Z",
+    );
+
+    expect(packet.task).toBe(taskPacket.task);
+    expect(packet.capabilities.active).toEqual(["backend"]);
+    expect(packet.toolPolicyCeiling.localTools).toEqual(["read_file", "grep_search"]);
+    expect(packet.budgets.maxDepth).toBe(1);
+    expect(packet.origin.fromSessionKey).toBe("authoritative-sender");
   });
 });

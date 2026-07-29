@@ -6,9 +6,12 @@ import {
   adaptDelegationFor,
 } from "../orchestration/delegation.js";
 import { applyFederationIdentity } from "@kinqs/brainrouter-core/util";
-import type { DelegationPacket } from "@kinqs/brainrouter-types";
+import type {
+  DelegatedTaskPacket,
+  LegacyDelegationPacket,
+} from "@kinqs/brainrouter-types/agent";
 
-const PACKET: DelegationPacket = {
+const PACKET: LegacyDelegationPacket = {
   goal: "Refactor the auth module",
   fromSessionKey: "sender",
   originatingClient: "brainrouter-cli",
@@ -28,16 +31,21 @@ test("FED-S5 buildDelegationPayload normalizes + defaults", () => {
   assert.deepEqual(p.files, []);
   assert.deepEqual(p.constraints, []);
   assert.equal(p.budget, null);
-  assert.equal((p as any).note, undefined);
+  assert.equal(p.note, undefined);
+  const taskPacket = p.taskPacket as DelegatedTaskPacket;
+  assert.equal(taskPacket.task, "x");
+  assert.equal(taskPacket.toolPolicyCeiling.accessMode, "read");
+  assert.deepEqual(taskPacket.toolPolicyCeiling.localTools, []);
 });
 
-test("FED-S5 renderDelegationPrompt embeds goal, files, constraints, hints, budget", () => {
+test("FED-S5 legacy packet is rendered through the bounded authority contract", () => {
   const out = renderDelegationPrompt(PACKET);
   assert.match(out, /Refactor the auth module/);
   assert.match(out, /src\/auth\.ts/);
   assert.match(out, /keep the public API stable/);
-  assert.match(out, /prefer:reasoning/);
-  assert.match(out, /5000 tokens/);
+  assert.doesNotMatch(out, /prefer:reasoning/);
+  assert.match(out, /Access: read/);
+  assert.match(out, /Local tools: none/);
   assert.match(out, /Delegated from brainrouter-cli/);
 });
 

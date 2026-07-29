@@ -1,4 +1,6 @@
-import type { ActiveSessionRecord, DelegationPacket } from "@kinqs/brainrouter-types";
+import { buildCrossHostDelegationPacket } from "@kinqs/brainrouter-core/orchestration/delegation-contracts";
+import type { ActiveSessionRecord } from "@kinqs/brainrouter-types";
+import type { DelegationPacket } from "@kinqs/brainrouter-types/agent";
 
 /**
  * FED-S5 (0.4.2) — pure delegation helpers, kept free of any
@@ -22,29 +24,16 @@ export function resolveDelegationPeer(
   return candidates[0]?.sessionKey ?? null;
 }
 
-/** Normalize loosely-typed tool args into a full DelegationPacket. */
+/**
+ * Normalize loosely typed transport input into the canonical bounded packet.
+ *
+ * Legacy callers remain readable, but receive a read-only, tool-free handoff.
+ * A supplied canonical task packet is re-bounded by Core before persistence.
+ */
 export function buildDelegationPacket(
   from: string,
   payload: Record<string, unknown>,
   now: string,
 ): DelegationPacket {
-  const asStrArray = (v: unknown): string[] =>
-    Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
-  const budget =
-    payload.budget && typeof payload.budget === "object"
-      ? (payload.budget as { tokens?: number; usd?: number })
-      : null;
-  return {
-    goal: String(payload.goal ?? "").trim(),
-    fromSessionKey: from,
-    originatingClient: String(payload.originatingClient ?? "unknown"),
-    originatingWorkspace: String(payload.originatingWorkspace ?? ""),
-    files: asStrArray(payload.files),
-    constraints: asStrArray(payload.constraints),
-    modelHints: asStrArray(payload.modelHints),
-    budget,
-    deadline: typeof payload.deadline === "string" ? payload.deadline : null,
-    note: typeof payload.note === "string" && payload.note.trim() ? payload.note.trim() : undefined,
-    createdAt: now,
-  };
+  return buildCrossHostDelegationPacket(from, payload, now);
 }

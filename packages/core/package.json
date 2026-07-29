@@ -91,6 +91,10 @@
       "types": "./dist/orchestration/index.d.ts",
       "default": "./dist/orchestration/index.js"
     },
+    "./orchestration/delegation-contracts": {
+      "types": "./dist/orchestration/delegation/contracts.d.ts",
+      "default": "./dist/orchestration/delegation/contracts.js"
+    },
     "./pack": {
       "types": "./dist/pack/index.d.ts",
       "default": "./dist/pack/index.js"

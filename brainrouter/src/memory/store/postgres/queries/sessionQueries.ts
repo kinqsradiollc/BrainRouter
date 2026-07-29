@@ -14,7 +14,7 @@ import type {
   PendingDelegationEnqueueInput,
   PendingDelegationFilters,
   PendingDelegationStatus,
-  DelegationPacket,
+  StoredDelegationPacket,
 } from "@kinqs/brainrouter-types";
 import {
   activeSessionRowToRecord,
@@ -184,7 +184,7 @@ function rowToPendingDelegation(row: any): PendingDelegationRecord {
     fromSessionKey: row.from_session_key,
     toAgentKind: row.to_agent_kind,
     toSessionKey: row.to_session_key ?? null,
-    packet: (typeof row.packet_json === "string" ? JSON.parse(row.packet_json || "{}") : (row.packet_json ?? {})) as DelegationPacket,
+    packet: (typeof row.packet_json === "string" ? JSON.parse(row.packet_json || "{}") : (row.packet_json ?? {})) as StoredDelegationPacket,
     status: row.status as PendingDelegationStatus,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
