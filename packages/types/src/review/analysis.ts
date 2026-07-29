@@ -95,6 +95,7 @@ export interface AssuranceImpactContext {
 
 export interface AssuranceSourceToSinkPath {
   id: string;
+  mechanism: 'call_path' | 'data_flow' | 'configuration_flow';
   source: AssuranceSourceLocation;
   sink: AssuranceSourceLocation;
   evidenceRefs: string[];
@@ -151,6 +152,7 @@ export interface AssembleAssuranceImpactPacketsInput {
   checkoutRef: string;
   indexRef: string;
   changed: AssuranceSourceLocation[];
+  redactionPolicyId: string;
   limits: {
     maxPackets: number;
     maxPacketBytes: number;

@@ -36,5 +36,8 @@ export interface RepositoryAssuranceIndexPort {
 }
 
 export interface RepositoryAssuranceImpactPort {
-  assemble(input: AssembleAssuranceImpactPacketsInput): Promise<AssuranceImpactPacketAssembly>;
+  assemble(
+    input: AssembleAssuranceImpactPacketsInput,
+    cancellation?: AssuranceOperationCancellation,
+  ): Promise<AssuranceImpactPacketAssembly>;
 }

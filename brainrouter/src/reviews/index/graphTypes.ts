@@ -24,3 +24,7 @@ export interface CheckoutIndexResolver {
   resolve(checkoutRef: string): CheckoutIndexHandle | null;
   readEligibleTextFile(checkoutRef: string, relativePath: string, maxBytes: number): Promise<string>;
 }
+
+export interface ParserBackedIndexResolver {
+  resolve(indexRef: string): ParserBackedIndexHandle | null;
+}
