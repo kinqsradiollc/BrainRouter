@@ -79,7 +79,7 @@ import {
   parseArgumentsOrError, suggestSimilarToolName, synthesizeOrphanResults,
 } from '../guards/toolCallRecovery.js';
 import { isParallelSafe, parallelExecutionEnabled } from '../guards/toolSafety.js';
-import { resolveToolBudget, isBudgetCheckpoint, buildBudgetCheckpoint, buildBudgetCeilingMessage } from '../guards/turnBudget.js';
+import { resolveToolBudget, isBudgetCheckpoint, buildBudgetCheckpoint } from '../guards/turnBudget.js';
 import { classifyForVerification, commandWritesFiles, decideVerification, buildVerificationNudge, buildDocsOnlyVerificationNote } from '../guards/verificationGate.js';
 import { isTelemetryEnabled } from '../../telemetry/recorder/telemetry.js';
 import { recordDailyUsage } from '../../usage/usageHistoryStore.js';
@@ -111,6 +111,7 @@ import {
   activeProviderDef, callOpenAI, minimalReasoningEffort,
 } from '../transport/llmTransport.js';
 import { invokeModelPhase } from './modelInvocationPhase.js';
+import { normalizeTurnCompletionAnswer } from './completionPhase.js';
 import {
   buildRequiredDelegatedStageCorrection,
   buildRequiredProfileStageCorrection,
@@ -2507,32 +2508,17 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // into both lastAnswer and captureTurn. Previously this happened AFTER
     // captureTurn, which meant memory capture + citation feedback silently
     // skipped every turn that hit the loop limit or returned no prose.
-    if (!exitedCleanly) {
-      this.lastTurnHitLoopLimit = true;
-      finalAnswer = buildBudgetCeilingMessage(maxLoops);
-    } else if (!finalAnswer.trim()) {
-      if (this.lastGoalTransition && this.lastTurnToolCalls > 0) {
-        // The model fired goal_complete / goal_blocked but skipped the
-        // user-visible prose summary in the same response. Without this
-        // branch the user saw "Tool calls completed (N)..." and the proof
-        // string was buried in goal.json — invisible to them. Surface the
-        // proof/reason directly so the work isn't wasted, and warn that
-        // the model should have written a real answer.
-        const goal = readGoal(this.workspaceRoot, this.sessionKey);
-        const evidence = goal?.blockedReason?.trim() || '(no detail recorded)';
-        const action = this.lastGoalTransition === 'complete' ? 'completed' : 'blocked';
-        const field = this.lastGoalTransition === 'complete' ? 'proof' : 'reason';
-        finalAnswer =
-          `Goal ${action} after ${this.lastTurnToolCalls} tool call${this.lastTurnToolCalls === 1 ? '' : 's'}, ` +
-          `but the model skipped writing a user-visible answer in this turn.\n\n` +
-          `Recorded ${field}:\n${evidence}\n\n` +
-          `(If you wanted a full analysis/report, ask "summarize what you just analyzed" — the work is in memory.)`;
-      } else {
-        finalAnswer = this.lastTurnToolCalls > 0
-          ? `Tool calls completed (${this.lastTurnToolCalls}) and the model returned no additional commentary.`
-          : 'The model returned an empty response.';
-      }
-    }
+    const normalizedCompletion = normalizeTurnCompletionAnswer({
+      answer: finalAnswer,
+      exitedCleanly,
+      maxLoops,
+      goalTransition: this.lastGoalTransition,
+      toolCallCount: this.lastTurnToolCalls,
+      workspaceRoot: this.workspaceRoot,
+      sessionKey: this.sessionKey,
+    });
+    finalAnswer = normalizedCompletion.answer;
+    this.lastTurnHitLoopLimit = normalizedCompletion.hitLoopLimit;
     this.lastAnswer = finalAnswer;
 
     await this.captureTurn(prompt, finalAnswer, callbacks);
