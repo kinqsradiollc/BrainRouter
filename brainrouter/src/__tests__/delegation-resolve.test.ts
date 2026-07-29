@@ -71,7 +71,7 @@ describe("FED-S5 buildDelegationPacket", () => {
     expect(p.origin.originatingClient).toBe("unknown");
   });
 
-  it("re-bounds a canonical local packet and pins transport identity", () => {
+  it("pins transport identity and removes untrusted packet authority", () => {
     const taskPacket = buildDelegatedTaskPacket({
       task: "Inspect the authorization boundary.",
       personaId: "engineer",
@@ -108,8 +108,15 @@ describe("FED-S5 buildDelegationPacket", () => {
     );
 
     expect(packet.task).toBe(taskPacket.task);
-    expect(packet.capabilities.active).toEqual(["backend"]);
-    expect(packet.toolPolicyCeiling.localTools).toEqual(["read_file", "grep_search"]);
+    expect(packet.persona).toEqual({ id: "custom" });
+    expect(packet.orchestration).toEqual({ roleId: "worker" });
+    expect(packet.capabilities.active).toEqual([]);
+    expect(packet.toolPolicyCeiling).toEqual({
+      accessMode: "read",
+      localTools: [],
+      mcpTools: [],
+      disallowedTools: ["run_command"],
+    });
     expect(packet.budgets.maxDepth).toBe(1);
     expect(packet.origin.fromSessionKey).toBe("authoritative-sender");
   });

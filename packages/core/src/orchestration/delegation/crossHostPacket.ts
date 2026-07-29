@@ -15,7 +15,7 @@ import {
   isDelegatedTaskPacket,
   legacyDelegatedTaskPacket,
   legacyDelegationPayload,
-  normalizeDelegatedTaskPacket,
+  normalizeUntrustedCrossHostTaskPacket,
 } from './taskPacketNormalization.js';
 
 export function buildCrossHostDelegationPacket(
@@ -25,7 +25,7 @@ export function buildCrossHostDelegationPacket(
 ): DelegationPacket {
   const candidate = record(payload.taskPacket) ?? payload;
   const taskPacket = isDelegatedTaskPacket(candidate)
-    ? normalizeDelegatedTaskPacket(candidate)
+    ? normalizeUntrustedCrossHostTaskPacket(candidate)
     : legacyDelegatedTaskPacket(payload);
   const suppliedOrigin = record(payload.origin);
 

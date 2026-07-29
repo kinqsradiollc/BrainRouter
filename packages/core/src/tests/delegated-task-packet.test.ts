@@ -63,7 +63,7 @@ test('delegated packet is bounded, versioned, and carries recomputed capability 
   assert.deepEqual(result.toolPolicyCeiling.localTools, ['read_file', 'grep_search']);
 });
 
-test('cross-host transport preserves the same bounded local task packet', () => {
+test('cross-host transport preserves task scope but removes untrusted authority', () => {
   const local = packet();
   const crossHost = buildCrossHostDelegationPacket(
     'sender-session',
@@ -75,11 +75,60 @@ test('cross-host transport preserves the same bounded local task packet', () => 
     },
     '2026-07-30T00:00:00.000Z',
   );
-  const { origin, ...transportedTask } = crossHost;
 
-  assert.deepEqual(transportedTask, local);
-  assert.equal(origin.fromSessionKey, 'sender-session');
-  assert.equal(origin.originatingClient, 'peer-cli');
+  assert.equal(crossHost.task, local.task);
+  assert.deepEqual(crossHost.sources, local.sources);
+  assert.deepEqual(crossHost.persona, { id: 'custom' });
+  assert.deepEqual(crossHost.orchestration, { roleId: 'worker' });
+  assert.deepEqual(crossHost.capabilities, {
+    active: [],
+    reasons: ['cross-host handoff has no implicit capabilities'],
+    skillPacks: [],
+    skills: [],
+    toolProfiles: [],
+  });
+  assert.deepEqual(crossHost.toolPolicyCeiling, {
+    accessMode: 'read',
+    localTools: [],
+    mcpTools: [],
+    disallowedTools: ['run_command'],
+  });
+  assert.equal(crossHost.origin.fromSessionKey, 'sender-session');
+  assert.equal(crossHost.origin.originatingClient, 'peer-cli');
+});
+
+test('cross-host transport caps untrusted resource budgets', () => {
+  const crossHost = buildCrossHostDelegationPacket(
+    'sender-session',
+    {
+      taskPacket: packet({
+        accessMode: 'shell',
+        localTools: ['run_command'],
+        mcpTools: ['mcp_admin_delete'],
+        budgets: {
+          maxWallClockMs: Number.MAX_SAFE_INTEGER,
+          maxPromptTokens: Number.MAX_SAFE_INTEGER,
+          maxCompletionTokens: Number.MAX_SAFE_INTEGER,
+          maxIterations: Number.MAX_SAFE_INTEGER,
+          maxDepth: Number.MAX_SAFE_INTEGER,
+          maxOutputChars: Number.MAX_SAFE_INTEGER,
+        },
+      }),
+    },
+    '2026-07-30T00:00:00.000Z',
+  );
+
+  assert.equal(crossHost.toolPolicyCeiling.accessMode, 'read');
+  assert.deepEqual(crossHost.toolPolicyCeiling.localTools, []);
+  assert.deepEqual(crossHost.toolPolicyCeiling.mcpTools, []);
+  assert.deepEqual(crossHost.budgets, {
+    maxWallClockMs: 1_800_000,
+    maxPromptTokens: 100_000,
+    maxCompletionTokens: 16_000,
+    maxIterations: 250,
+    maxDepth: 3,
+    maxOutputChars: 24_000,
+  });
 });
 
 test('legacy cross-host packets normalize without implicit capability or tool grants', () => {

@@ -21,6 +21,40 @@ const DEFAULT_BUDGETS: DelegatedTaskPacket['budgets'] = {
   maxOutputChars: 24_000,
 };
 
+/**
+ * Normalize a packet received across a host boundary without trusting its
+ * claimed persona, orchestration, capabilities, tools, or resource budgets.
+ *
+ * The transport currently authenticates the owning user and sender session,
+ * but it does not carry a server-resolved authority profile. Until it does,
+ * cross-host execution is intentionally limited to a read-only, tool-free
+ * worker packet. Task scope and evidence references remain available.
+ */
+export function normalizeUntrustedCrossHostTaskPacket(
+  input: DelegatedTaskPacket,
+): DelegatedTaskPacket {
+  const packet = normalizeDelegatedTaskPacket(input);
+  return {
+    ...packet,
+    persona: { id: 'custom' },
+    orchestration: { roleId: 'worker' },
+    capabilities: {
+      active: [],
+      reasons: ['cross-host handoff has no implicit capabilities'],
+      skillPacks: [],
+      skills: [],
+      toolProfiles: [],
+    },
+    toolPolicyCeiling: {
+      accessMode: 'read',
+      localTools: [],
+      mcpTools: [],
+      disallowedTools: packet.toolPolicyCeiling.disallowedTools,
+    },
+    budgets: capBudgets(packet.budgets, DEFAULT_BUDGETS),
+  };
+}
+
 export function isDelegatedTaskPacket(
   value: unknown,
 ): value is DelegatedTaskPacket {
@@ -162,6 +196,23 @@ function normalizeBudgetInput(
     maxIterations: positiveInteger(budgets?.maxIterations) ?? DEFAULT_BUDGETS.maxIterations,
     maxDepth: positiveInteger(budgets?.maxDepth) ?? DEFAULT_BUDGETS.maxDepth,
     maxOutputChars: positiveInteger(budgets?.maxOutputChars) ?? DEFAULT_BUDGETS.maxOutputChars,
+  };
+}
+
+function capBudgets(
+  budgets: DelegatedTaskPacket['budgets'],
+  ceiling: DelegatedTaskPacket['budgets'],
+): DelegatedTaskPacket['budgets'] {
+  return {
+    maxWallClockMs: Math.min(budgets.maxWallClockMs, ceiling.maxWallClockMs),
+    maxPromptTokens: Math.min(budgets.maxPromptTokens, ceiling.maxPromptTokens),
+    maxCompletionTokens: Math.min(
+      budgets.maxCompletionTokens,
+      ceiling.maxCompletionTokens,
+    ),
+    maxIterations: Math.min(budgets.maxIterations, ceiling.maxIterations),
+    maxDepth: Math.min(budgets.maxDepth, ceiling.maxDepth),
+    maxOutputChars: Math.min(budgets.maxOutputChars, ceiling.maxOutputChars),
   };
 }
 
