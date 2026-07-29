@@ -1,8 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import { parseDeepReviewPolicy } from '../../../packages/core/src/review/domain/deepReviewPolicy.js';
-
-vi.mock('@kinqs/brainrouter-core/review', async () =>
-  import('../../../packages/core/src/review/index.js'));
+import { parseDeepReviewPolicy } from '@kinqs/brainrouter-core/review';
+import { describe, expect, it } from 'vitest';
 import { buildManualDeepReviewRequest } from './deepReviewRequest.js';
 
 const config = {
