@@ -34,6 +34,7 @@ import {
   availableDownloadPath,
   BrowserDownloadManager,
 } from './browserDownloadManager.js';
+import { BrowserTabStateManager } from './browserTabStateManager.js';
 import {
   BrowserWorkspaceStore,
   persistableBrowserUrl,
@@ -83,7 +84,6 @@ type ViewRecord = {
   console: BrowserConsoleEntry[];
 };
 
-type ClosedTab = { url: string; title: string };
 type AgentNavigationPolicy = { allowedPrivateOrigin?: string };
 type StagedUpload = { directory: string; timer: ReturnType<typeof setTimeout> };
 type BrowserOperationGuard = () => void;
@@ -123,24 +123,6 @@ function configureBrowserSession(ses: Session): void {
     void (manager?.destinationAllowedForRequest(details.webContentsId, details.url) ?? resolvedBrowserDestinationAllowed(details.url))
       .then((allow) => callback({ cancel: !allow }), () => callback({ cancel: true }));
   });
-}
-
-function initialTab(id: string, url: string, title = 'New tab', now = Date.now()): BrowserTab {
-  return {
-    id,
-    url,
-    title: boundBrowserText(title || 'New tab', 256),
-    faviconUrl: null,
-    loading: false,
-    canGoBack: false,
-    canGoForward: false,
-    crashed: false,
-    audible: false,
-    muted: false,
-    zoomFactor: 1,
-    revision: 0,
-    lastAccessedAt: now,
-  };
 }
 
 function jsonBytes(value: unknown): number {
@@ -225,12 +207,9 @@ function performanceNetworkScript(): string {
 export class BrowserViewManager {
   private workspaceRoot: string;
   private readonly records = new Map<BrowserTabId, ViewRecord>();
-  private tabs: BrowserTab[] = [];
-  private activeTabId = '';
-  private closedTabs: ClosedTab[] = [];
   private surface: BrowserSurface = { x: 0, y: 0, width: 0, height: 0, visible: false };
-  private tabSequence = 0;
   private readonly windowPrefix = randomUUID().replace(/-/g, '').slice(0, 10);
+  private readonly tabState: BrowserTabStateManager;
   // One persistent profile per workspace preserves sign-ins, cookies, storage,
   // and completed site challenges across chat sessions without sharing them
   // with another workspace.
@@ -273,6 +252,7 @@ export class BrowserViewManager {
   constructor(private readonly win: BrowserWindow, workspaceRoot: string) {
     this.workspaceRoot = workspaceRoot;
     this.partition = browserPartitionForWorkspace(workspaceRoot);
+    this.tabState = new BrowserTabStateManager(this.windowPrefix);
     this.workspaceStore = new BrowserWorkspaceStore(app.getPath('userData'), workspaceRoot);
     this.promptManager = new BrowserPromptManager({
       tabForContents: (contentsId) => this.tabForContents(contentsId),
@@ -310,15 +290,15 @@ export class BrowserViewManager {
     }, this.windowPrefix, workspaceRoot, this.partition);
     configureBrowserSession(session.fromPartition(this.partition));
     this.restoreWorkspace();
-    if (this.tabs.length === 0) this.createTab(BROWSER_BLANK_URL, true);
+    if (this.tabState.length === 0) this.createTab(BROWSER_BLANK_URL, true);
   }
 
   getState(): BrowserState {
     return {
       version: BROWSER_PROTOCOL_VERSION,
-      activeTabId: this.activeTabId,
-      tabs: this.tabs.map((tab) => ({ ...tab })),
-      closedTabCount: this.closedTabs.length,
+      activeTabId: this.tabState.activeTabId,
+      tabs: this.tabState.snapshot(),
+      closedTabCount: this.tabState.closedCount,
       surface: { ...this.surface },
       downloads: this.downloadManager.list(),
       permissionPrompt: this.promptManager.getPermissionPrompt(),
@@ -395,7 +375,7 @@ export class BrowserViewManager {
 
   isTabVisible(tabId: BrowserTabId): boolean {
     const contents = this.records.get(tabId)?.view.webContents;
-    return this.activeTabId === tabId
+    return this.tabState.activeTabId === tabId
       && this.surface.visible
       && this.surface.width > 1
       && this.surface.height > 1
@@ -541,7 +521,7 @@ export class BrowserViewManager {
       });
       return { result, settled };
     };
-    const queueTab = request.tabId ?? this.activeTabId;
+    const queueTab = request.tabId ?? this.tabState.activeTabId;
     // Prompts frequently arrive while a navigation or scripted interaction is
     // still occupying the tab queue. Responses must bypass that queue or auth,
     // certificate, beforeunload, and JavaScript dialogs can deadlock forever.
@@ -562,15 +542,13 @@ export class BrowserViewManager {
     this.workspaceStore = new BrowserWorkspaceStore(app.getPath('userData'), workspaceRoot);
     this.downloadManager.setWorkspace(workspaceRoot, this.partition);
     this.sessionKey = null;
-    this.tabs = [];
-    this.activeTabId = '';
-    this.closedTabs = [];
+    this.tabState.reset();
     this.trustedUserPrivateOrigins.clear();
     this.userOriginChecks.clear();
     this.humanChallengeTabs.clear();
     configureBrowserSession(session.fromPartition(this.partition));
     this.restoreWorkspace();
-    if (this.tabs.length === 0) this.createTab(BROWSER_BLANK_URL, true);
+    if (this.tabState.length === 0) this.createTab(BROWSER_BLANK_URL, true);
     this.attachActiveView();
     this.emitState();
   }
@@ -626,7 +604,11 @@ export class BrowserViewManager {
    *  of them. Never touches user-opened tabs or the tab the user is viewing. */
   private reapAgentTabs(): void {
     const MAX_AGENT_TABS = 4;
-    const reapable = this.tabs.filter((tab) => this.agentControlledTabs.has(tab.id) && tab.id !== this.activeTabId);
+    const reapable = this.tabState.all().filter(
+      (tab) =>
+        this.agentControlledTabs.has(tab.id)
+        && tab.id !== this.tabState.activeTabId,
+    );
     const excess = reapable.length - (MAX_AGENT_TABS - 1);
     for (let i = 0; i < excess; i += 1) {
       try { this.closeTab(reapable[i].id); } catch { /* best effort */ }
@@ -644,9 +626,10 @@ export class BrowserViewManager {
     // close the oldest agent-controlled tabs beyond a small cap. User-opened tabs
     // and the tab the user is currently viewing are never reaped.
     if (options?.agentControlled) this.reapAgentTabs();
-    if (this.tabs.length >= MAX_BROWSER_TABS) throw new BrowserManagerError('TAB_LIMIT', `A maximum of ${MAX_BROWSER_TABS} tabs is supported.`);
     const url = this.safeUrl(rawUrl);
-    const id = `tab_${this.windowPrefix}_${++this.tabSequence}`;
+    // Reject overflow before allocating a native view so a failed open cannot
+    // leave an untracked WebContentsView behind.
+    this.tabState.ensureCanCreate();
     const view = new WebContentsView({
       webPreferences: {
         partition: this.partition,
@@ -668,8 +651,8 @@ export class BrowserViewManager {
       },
     });
     view.setBackgroundColor('#ffffff');
-    const tab = initialTab(id, url, options?.title);
-    this.tabs.push(tab);
+    const tab = this.tabState.create(url, options?.title);
+    const id = tab.id;
     this.records.set(id, { view, console: [] });
     if (options?.agentControlled) {
       this.agentNavigationPolicies.set(id, options.agentPolicy ?? {});
@@ -677,7 +660,7 @@ export class BrowserViewManager {
     }
     managersByWebContents.set(view.webContents.id, this);
     this.wireView(tab, view.webContents);
-    if (active || !this.activeTabId) this.selectTab(id);
+    if (active || !this.tabState.activeTabId) this.selectTab(id);
     if (!options?.deferLoad) void view.webContents.loadURL(url).catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       // ERR_ABORTED means the navigation was superseded/cancelled (a redirect, or
@@ -929,7 +912,7 @@ export class BrowserViewManager {
         agentPolicy: operation.agentNewTabPolicy,
       });
       case 'select-tab': return this.selectTab(command.tabId);
-      case 'close-tab': return this.closeTab(command.tabId ?? tab?.id ?? this.activeTabId);
+      case 'close-tab': return this.closeTab(command.tabId ?? tab?.id ?? this.tabState.activeTabId);
       case 'reopen-tab': return this.reopenTab();
       case 'reorder-tab': return this.reorderTab(command.tabId, command.toIndex);
       case 'navigate': {
@@ -1001,8 +984,7 @@ export class BrowserViewManager {
       this.visibleAgentPin.deferredSelection = id;
       return { ...this.requireTab(this.resolveTab(this.visibleAgentPin.tabId)) };
     }
-    this.activeTabId = id;
-    tab.lastAccessedAt = Date.now();
+    this.tabState.select(id);
     this.attachActiveView();
     this.persistWorkspace();
     this.emitState();
@@ -1010,17 +992,12 @@ export class BrowserViewManager {
   }
 
   private closeTab(id: string): BrowserTab {
-    const index = this.tabs.findIndex((tab) => tab.id === id);
-    if (index < 0) throw new BrowserManagerError('TAB_NOT_FOUND', `Browser tab ${id} was not found.`);
-    const [tab] = this.tabs.splice(index, 1);
-    if (tab.url !== BROWSER_BLANK_URL) this.closedTabs.push({ url: persistableBrowserUrl(tab.url), title: tab.title });
-    this.closedTabs = this.closedTabs.slice(-25);
+    const removed = this.tabState.remove(id);
+    const { tab } = removed;
     this.destroyView(id);
-    if (this.tabs.length === 0) {
-      this.activeTabId = '';
+    if (removed.needsBlankTab) {
       this.createTab(BROWSER_BLANK_URL, true);
-    } else if (this.activeTabId === id) {
-      this.activeTabId = this.tabs[Math.min(index, this.tabs.length - 1)].id;
+    } else if (removed.activeChanged) {
       this.attachActiveView();
     }
     this.persistWorkspace();
@@ -1029,16 +1006,15 @@ export class BrowserViewManager {
   }
 
   private reopenTab(): BrowserTab {
-    const closed = this.closedTabs.pop();
+    const closed = this.tabState.takeClosed();
     return this.createTab(closed?.url ?? BROWSER_BLANK_URL, true, { title: closed?.title });
   }
 
   private reorderTab(id: string, toIndex: number): BrowserTab[] {
-    const from = this.tabs.findIndex((tab) => tab.id === id);
-    if (from < 0) throw new BrowserManagerError('TAB_NOT_FOUND', `Browser tab ${id} was not found.`);
-    const target = Math.max(0, Math.min(this.tabs.length - 1, Math.floor(toIndex)));
-    const [tab] = this.tabs.splice(from, 1); this.tabs.splice(target, 0, tab);
-    this.persistWorkspace(); this.emitState(); return this.tabs.map((entry) => ({ ...entry }));
+    const tabs = this.tabState.reorder(id, toIndex);
+    this.persistWorkspace();
+    this.emitState();
+    return tabs;
   }
 
   private async snapshot(tab: BrowserTab, mode: 'semantic' | 'testids' | 'accessibility' = 'semantic'): Promise<unknown> {
@@ -1401,10 +1377,12 @@ export class BrowserViewManager {
    *  per-tab navigation history), wipe the partition's cookies/cache/storage, and
    *  open a single fresh blank tab. This is the user-facing "reset browser". */
   private async resetBrowser(): Promise<{ ok: true }> {
-    for (const tab of [...this.tabs]) { try { this.closeTab(tab.id); } catch { /* best effort */ } }
+    for (const tab of [...this.tabState.all()]) {
+      try { this.closeTab(tab.id); } catch { /* best effort */ }
+    }
     await this.clearData(['cache', 'cookies', 'storage', 'history']);
     this.promptManager.clearPermissions();
-    if (this.tabs.length === 0) this.createTab(BROWSER_BLANK_URL, true);
+    if (this.tabState.length === 0) this.createTab(BROWSER_BLANK_URL, true);
     this.persistWorkspace();
     this.emitState();
     return { ok: true };
@@ -1461,20 +1439,26 @@ export class BrowserViewManager {
     const key = input.key.toLowerCase();
     if (mod && input.shift && key === 't') { event.preventDefault(); this.reopenTab(); return; }
     if (mod && key === 't') { event.preventDefault(); this.createTab(BROWSER_BLANK_URL, true); return; }
-    if (mod && key === 'w') { event.preventDefault(); this.closeTab(this.activeTabId); return; }
-    if (mod && key === 'l') { event.preventDefault(); this.win.webContents.focus(); this.emit({ type: 'focus-location', tabId: this.activeTabId }); return; }
-    if (mod && key === 'f') { event.preventDefault(); this.win.webContents.focus(); this.emit({ type: 'focus-find', tabId: this.activeTabId }); return; }
-    if (mod && key === 'r') { event.preventDefault(); this.requireContents(this.activeTabId).reload(); return; }
-    if (mod && /^[1-9]$/.test(key)) { event.preventDefault(); const index = key === '9' ? this.tabs.length - 1 : Number(key) - 1; if (this.tabs[index]) this.selectTab(this.tabs[index].id); return; }
+    if (mod && key === 'w') { event.preventDefault(); this.closeTab(this.tabState.activeTabId); return; }
+    if (mod && key === 'l') { event.preventDefault(); this.win.webContents.focus(); this.emit({ type: 'focus-location', tabId: this.tabState.activeTabId }); return; }
+    if (mod && key === 'f') { event.preventDefault(); this.win.webContents.focus(); this.emit({ type: 'focus-find', tabId: this.tabState.activeTabId }); return; }
+    if (mod && key === 'r') { event.preventDefault(); this.requireContents(this.tabState.activeTabId).reload(); return; }
+    if (mod && /^[1-9]$/.test(key)) {
+      event.preventDefault();
+      const tabs = this.tabState.all();
+      const index = key === '9' ? tabs.length - 1 : Number(key) - 1;
+      if (tabs[index]) this.selectTab(tabs[index].id);
+      return;
+    }
     if (mod && ['+', '=', '-', '0'].includes(key)) {
       event.preventDefault(); const tab = this.activeTab(); const contents = this.requireContents(tab.id); const next = key === '0' ? 1 : contents.getZoomFactor() + (key === '-' ? -0.1 : 0.1); contents.setZoomFactor(Math.min(5, Math.max(0.25, next))); tab.zoomFactor = contents.getZoomFactor(); this.emitState(); return;
     }
-    if (input.alt && key === 'left') { event.preventDefault(); const c = this.requireContents(this.activeTabId); if (c.navigationHistory.canGoBack()) c.navigationHistory.goBack(); return; }
-    if (input.alt && key === 'right') { event.preventDefault(); const c = this.requireContents(this.activeTabId); if (c.navigationHistory.canGoForward()) c.navigationHistory.goForward(); }
+    if (input.alt && key === 'left') { event.preventDefault(); const c = this.requireContents(this.tabState.activeTabId); if (c.navigationHistory.canGoBack()) c.navigationHistory.goBack(); return; }
+    if (input.alt && key === 'right') { event.preventDefault(); const c = this.requireContents(this.tabState.activeTabId); if (c.navigationHistory.canGoForward()) c.navigationHistory.goForward(); }
   }
 
   private attachActiveView(): void {
-    const active = this.records.get(this.activeTabId);
+    const active = this.records.get(this.tabState.activeTabId);
     const shouldAttach = Boolean(
       active
       && this.surface.visible
@@ -1486,7 +1470,7 @@ export class BrowserViewManager {
     // Detach the currently-attached view only if it is no longer the one we want
     // (a real tab switch, or the surface going hidden). Never touch it otherwise
     // — removing + re-adding the same view is exactly what produces the flash.
-    const wantId = shouldAttach ? this.activeTabId : null;
+    const wantId = shouldAttach ? this.tabState.activeTabId : null;
     if (this.attachedViewId && this.attachedViewId !== wantId) {
       const prev = this.records.get(this.attachedViewId);
       if (prev) { try { this.win.contentView.removeChildView(prev.view); } catch { /* already detached */ } }
@@ -1498,9 +1482,9 @@ export class BrowserViewManager {
     // Bounds updates are smooth (no flash), so always apply them.
     active.view.setBounds({ x: this.surface.x, y: this.surface.y, width: this.surface.width, height: this.surface.height });
     // Add to the window tree only when it isn't already there.
-    if (this.attachedViewId !== this.activeTabId) {
+    if (this.attachedViewId !== this.tabState.activeTabId) {
       this.win.contentView.addChildView(active.view);
-      this.attachedViewId = this.activeTabId;
+      this.attachedViewId = this.tabState.activeTabId;
     }
   }
 
@@ -1526,8 +1510,8 @@ export class BrowserViewManager {
   }
 
   private resolveTab(id?: string, required = true): BrowserTab | null {
-    const wanted = id || this.activeTabId;
-    const tab = this.tabs.find((entry) => entry.id === wanted) ?? null;
+    const wanted = id || this.tabState.activeTabId;
+    const tab = this.tabState.get(wanted);
     if (!tab && required) throw new BrowserManagerError('TAB_NOT_FOUND', `Browser tab ${wanted || '(active)'} was not found.`);
     return tab;
   }
@@ -1548,7 +1532,11 @@ export class BrowserViewManager {
   }
 
   private tabForContents(contentsId: number): BrowserTab | null {
-    for (const tab of this.tabs) if (this.records.get(tab.id)?.view.webContents.id === contentsId) return tab;
+    for (const tab of this.tabState.all()) {
+      if (this.records.get(tab.id)?.view.webContents.id === contentsId) {
+        return tab;
+      }
+    }
     return null;
   }
 
@@ -1681,15 +1669,32 @@ export class BrowserViewManager {
       ? persisted.permissions.slice(0, 200)
       : [];
     this.promptManager.restorePermissions(decisions);
-    if (this.tabs.length > 0) this.selectTab(this.tabs[Math.max(0, Math.min(this.tabs.length - 1, Math.floor(persisted?.activeIndex ?? 0)))].id);
+    const tabs = this.tabState.all();
+    if (tabs.length > 0) {
+      this.selectTab(
+        tabs[
+          Math.max(
+            0,
+            Math.min(tabs.length - 1, Math.floor(persisted?.activeIndex ?? 0)),
+          )
+        ].id,
+      );
+    }
   }
 
   private persistWorkspace(): void {
     if (this.disposed || !this.workspaceRoot) return;
     const state: PersistedBrowserWorkspace = {
       version: 1,
-      activeIndex: Math.max(0, this.tabs.findIndex((tab) => tab.id === this.activeTabId)),
-      tabs: this.tabs.map((tab) => ({ url: persistableBrowserUrl(tab.url) })),
+      activeIndex: Math.max(
+        0,
+        this.tabState.all().findIndex(
+          (tab) => tab.id === this.tabState.activeTabId,
+        ),
+      ),
+      tabs: this.tabState.all().map(
+        (tab) => ({ url: persistableBrowserUrl(tab.url) }),
+      ),
       permissions: this.promptManager.persistedPermissions(),
     };
     try {
