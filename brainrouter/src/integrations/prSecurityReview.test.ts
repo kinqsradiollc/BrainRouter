@@ -225,6 +225,42 @@ describe("PR security review executor (ADR-017 D5)", () => {
     expect(routes.calls.some((c) => c.includes("POST /repos/o/r/issues/7/comments"))).toBe(true);
   });
 
+  it("exposes the exact effective repository policy to durable observers", async () => {
+    const routes: Routes = { calls: [] };
+    const observed: unknown[] = [];
+    const ready: unknown[] = [];
+    let pullReadsAtReady = 0;
+    await runPrSecurityReview(
+      { installationId: "42", repo: "o/r", prNumber: 7, headSha: "abcdef1234" },
+      makeDeps(routes, {
+        getIntegration: async () => ({
+          config: {
+            appId: "4237068",
+            reviewPolicies: { "o/r": { blockOnFindings: false, approveClean: true } },
+          },
+          secret: { privateKey },
+        }),
+        onPolicyResolved: (policy) => observed.push(policy),
+        onAssuranceReady: async (identity) => {
+          ready.push(identity);
+          pullReadsAtReady = routes.calls.filter((call) => call === "GET /repos/o/r/pulls/7").length;
+        },
+      }),
+    );
+    expect(observed).toEqual([{
+      approveClean: true,
+      blockOnFindings: false,
+      reReviewOnPush: true,
+      codeReviewTrigger: "manual",
+    }]);
+    expect(ready).toEqual([{
+      headSha: "abcdef1234",
+      policy: observed[0],
+    }]);
+    expect(pullReadsAtReady).toBe(1);
+    expect(routes.calls.filter((call) => call === "GET /repos/o/r/pulls/7")).toHaveLength(2);
+  });
+
   it("emits ordered progress and persists a compact, body-free finding projection", async () => {
     const events: string[] = [];
     const r = await runPrSecurityReview(

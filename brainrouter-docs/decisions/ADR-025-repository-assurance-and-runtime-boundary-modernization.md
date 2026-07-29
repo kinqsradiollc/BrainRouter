@@ -533,7 +533,7 @@ the repository's normal security-review process before merge.
 | ID | Status | Deliverable | Acceptance evidence |
 |---|---|---|---|
 | A25-9c1 | `[x]` | Bind the Core assurance-run port to the existing Postgres store capability for one worker job and tenant | Adapter fixtures cover job/tenant forwarding, semantic-idempotency return, lifecycle forwarding, and cross-tenant policy rejection without widening the shared memory-store contract |
-| A25-9c2 | `[ ]` | Run the current diff-review fallback through the Core campaign service and project its known coverage limits | Existing executor/job fixtures retain publication behavior while exact-head runs, retries, analyzer failures, and diff-only limitations emit explicit durable receipts |
+| A25-9c2 | `[x]` | Run the current diff-review fallback through the Core campaign service and project its known coverage limits | Existing executor behavior remains intact; focused fixtures prove exact-head partial runs, semantic retry idempotency, analyzer-failure receipts, and explicit diff-only repository-context limitations |
 | A25-9c3 | `[ ]` | Link newer-head cancellation to durable same-scope supersession | Push fixtures prove pending jobs cancel and any prior durable active run points to the replacement without crossing tenant/repository/program scope |
 
 ### Migration guardrails
