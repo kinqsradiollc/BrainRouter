@@ -21,6 +21,8 @@ export * from './reviewSynthesis.js';
 export * from './vulnerabilityIntelligence.js';
 export * from './contracts/index.js';
 export * from './domain/index.js';
+export * from './ports/index.js';
+export * from './services/index.js';
 // reviewModel and reviewSynthesis both declare an unrelated `ReviewFinding`
 // interface (UI review-model vs multi-reviewer synthesis). No consumer imports
 // the synthesis one by name, so the public `ReviewFinding` is reviewModel's.
