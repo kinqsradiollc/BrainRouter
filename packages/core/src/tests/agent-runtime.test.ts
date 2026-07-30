@@ -3418,7 +3418,7 @@ test('runTurn serves package-owned get_skill without calling a stale global MCP 
   });
 });
 
-test('runTurn pauses mutation until a hard-triggered workflow skill is loaded', async () => {
+test('runTurn preflights a hard-triggered workflow skill before mutation', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     saveWorkspaceManifest(
       workspace,
@@ -3432,6 +3432,7 @@ test('runTurn pauses mutation until a hard-triggered workflow skill is loaded', 
         function: { name: 'write_file', arguments: '{"path":"blocked.txt","content":"no"}' },
       }],
     }]);
+    const statuses: string[] = [];
     try {
       const agent = new Agent(makeStubMcp(), { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
         workspaceRoot: workspace,
@@ -3440,17 +3441,80 @@ test('runTurn pauses mutation until a hard-triggered workflow skill is loaded', 
       });
       agent.setAccessMode('shell');
       assert.equal(await agent.runTurn('Plan the multi-stage implementation and build it.', {
-        onStatusUpdate: () => {},
+        onStatusUpdate: (status) => statuses.push(status),
         onToolStart: () => {},
         onToolEnd: () => {},
       }), 'done.');
 
-      assert.equal(fs.existsSync(path.join(workspace, 'blocked.txt')), false);
+      assert.equal(fs.readFileSync(path.join(workspace, 'blocked.txt'), 'utf8'), 'no');
       const result = agent.chatHistory.find((message: any) =>
         message.role === 'tool' && message.tool_call_id === 'premature_write');
-      assert.match(result?.content ?? '', /paused until required workflow skill.*planning-skill/i);
+      assert.doesNotMatch(result?.content ?? '', /required workflow skill/i);
       assert.ok(agent.chatHistory.some((message: any) =>
         message.role === 'system' && /Required workflow skills/.test(message.content)));
+      assert.ok(agent.chatHistory.some((message: any) =>
+        message.role === 'system' &&
+        /Required orchestration-stage skills/.test(message.content) &&
+        /Planning and Task Breakdown/.test(message.content)));
+      assert.ok(statuses.some((status) =>
+        /Loading required workflow skill: planning-skill/.test(status)));
+      assert.ok(statuses.some((status) =>
+        /Required workflow skill ready: planning-skill/.test(status)));
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('runTurn reports one disabled required-skill prerequisite without dispatching mutation', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const manifest = createWorkspaceManifest({
+      name: 'app',
+      profile: 'engineering',
+      by: 'wizard',
+    });
+    manifest.skills.disabled = ['planning-skill'];
+    saveWorkspaceManifest(workspace, manifest);
+    const restore = stubLlm([{
+      content: '',
+      tool_calls: [{
+        id: 'disabled_skill_write',
+        type: 'function',
+        function: {
+          name: 'write_file',
+          arguments: '{"path":"blocked.txt","content":"no"}',
+        },
+      }],
+    }]);
+    try {
+      const agent = new Agent(
+        makeStubMcp(),
+        { provider: 'openai', apiKey: 'k', model: 'test-model' },
+        {
+          workspaceRoot: workspace,
+          launchCwd: workspace,
+          silent: true,
+        },
+      );
+      agent.setAccessMode('shell');
+      await agent.runTurn(
+        'Plan the multi-stage implementation and build it.',
+        {
+          onStatusUpdate: () => {},
+          onToolStart: () => {},
+          onToolEnd: () => {},
+        },
+      );
+
+      assert.equal(fs.existsSync(path.join(workspace, 'blocked.txt')), false);
+      const results = agent.chatHistory.filter((message: any) =>
+        message.role === 'tool' &&
+        message.tool_call_id === 'disabled_skill_write');
+      assert.equal(results.length, 1, 'the blocked tool call stays paired once');
+      assert.match(
+        results[0]?.content ?? '',
+        /required skill "planning-skill" is disabled/i,
+      );
     } finally {
       restore();
     }
