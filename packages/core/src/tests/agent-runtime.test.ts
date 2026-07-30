@@ -3424,14 +3424,52 @@ test('runTurn preflights a hard-triggered workflow skill before mutation', async
       workspace,
       createWorkspaceManifest({ name: 'app', profile: 'engineering', by: 'wizard' }),
     );
-    const restore = stubLlm([{
-      content: '',
-      tool_calls: [{
-        id: 'premature_write',
-        type: 'function',
-        function: { name: 'write_file', arguments: '{"path":"blocked.txt","content":"no"}' },
-      }],
-    }]);
+    const restore = stubLlm([
+      {
+        content: '',
+        tool_calls: [{
+          id: 'premature_write',
+          type: 'function',
+          function: {
+            name: 'write_file',
+            arguments: '{"path":"blocked.txt","content":"no"}',
+          },
+        }],
+      },
+      {
+        content: '',
+        tool_calls: [{
+          id: 'create_phase_plan',
+          type: 'function',
+          function: {
+            name: 'update_plan',
+            arguments: JSON.stringify({
+              phases: [{
+                title: 'Implement',
+                status: 'in_progress',
+                requiredSkillIds: ['planning-skill'],
+                steps: [{
+                  step: 'Write the requested file',
+                  status: 'in_progress',
+                  acceptance: 'file contains yes',
+                }],
+              }],
+            }),
+          },
+        }],
+      },
+      {
+        content: '',
+        tool_calls: [{
+          id: 'planned_write',
+          type: 'function',
+          function: {
+            name: 'write_file',
+            arguments: '{"path":"allowed.txt","content":"yes"}',
+          },
+        }],
+      },
+    ]);
     const statuses: string[] = [];
     try {
       const agent = new Agent(makeStubMcp(), { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
@@ -3446,10 +3484,12 @@ test('runTurn preflights a hard-triggered workflow skill before mutation', async
         onToolEnd: () => {},
       }), 'done.');
 
-      assert.equal(fs.readFileSync(path.join(workspace, 'blocked.txt'), 'utf8'), 'no');
+      assert.equal(fs.existsSync(path.join(workspace, 'blocked.txt')), false);
+      assert.equal(fs.readFileSync(path.join(workspace, 'allowed.txt'), 'utf8'), 'yes');
       const result = agent.chatHistory.find((message: any) =>
         message.role === 'tool' && message.tool_call_id === 'premature_write');
-      assert.doesNotMatch(result?.content ?? '', /required workflow skill/i);
+      assert.match(result?.content ?? '', /phase-aware plan/i);
+      assert.doesNotMatch(result?.content ?? '', /call get_skill/i);
       assert.ok(agent.chatHistory.some((message: any) =>
         message.role === 'system' && /Required workflow skills/.test(message.content)));
       assert.ok(agent.chatHistory.some((message: any) =>
@@ -3534,6 +3574,26 @@ test('runTurn permits mutation after the required workflow skill is loaded', asy
           id: 'load_planning',
           type: 'function',
           function: { name: 'get_skill', arguments: '{"name":"planning-skill","section":"workflow"}' },
+        }],
+      },
+      {
+        content: '',
+        tool_calls: [{
+          id: 'plan_after_skill',
+          type: 'function',
+          function: {
+            name: 'update_plan',
+            arguments: JSON.stringify({
+              phases: [{
+                title: 'Implement',
+                status: 'in_progress',
+                steps: [{
+                  step: 'Write the requested file',
+                  status: 'in_progress',
+                }],
+              }],
+            }),
+          },
         }],
       },
       {

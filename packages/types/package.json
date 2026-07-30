@@ -30,6 +30,10 @@
       "types": "./dist/planning-schema.d.ts",
       "import": "./dist/planning-schema.js"
     },
+    "./planning": {
+      "types": "./dist/planning.d.ts",
+      "import": "./dist/planning.js"
+    },
     "./atlas-ops": {
       "types": "./dist/atlas-ops.d.ts",
       "import": "./dist/atlas-ops.js"

@@ -7,6 +7,7 @@
  */
 import path from 'node:path';
 import type { Agent, RunTurnCallbacks } from '../agent.js';
+import { commandWritesFiles } from '../guards/verificationGate.js';
 import { assessMcpToolApproval } from '../guards/mcpApproval.js';
 import { getCliKnobs } from '../../config/config.js';
 import {
@@ -22,6 +23,8 @@ import { classifyShellCommand } from '../../exec/policy/shellClassifier.js';
 import { recordDenial } from '../../exec/runtime/recentDenials.js';
 import { registryToolAllowed } from '../../tool/registry/registry.js';
 import { traceEvent } from '../../telemetry/tracing/tracing.js';
+import { planExecutionBlockReason } from '../../task/planPhases.js';
+import { readPlan } from '../../task/taskStore.js';
 import {
   requiredSkillsBlockingMutation,
   type RequiredSkillActivation,
@@ -153,6 +156,33 @@ export function authorizeToolCall(input: ToolAuthorizationInput): void {
         `${blockedSkills.map((skill) => skill.id).join(', ')}. ` +
         'Continue read-only diagnosis or report the blocked prerequisite; do not retry this mutation.',
       );
+    }
+    const planningRequired = input.requiredSkillActivation.required.some(
+      (skill) =>
+        skill.id === 'planning-skill' &&
+        skill.availability === 'available',
+    );
+    const phaseGatedMutation =
+      mcpNeedsApproval ||
+      (
+        policy.mutating &&
+        (
+          name !== 'run_command' ||
+          commandWritesFiles(String(args?.command ?? ''))
+        )
+      );
+    if (planningRequired && phaseGatedMutation) {
+      const plan = readPlan(agent.workspaceRoot, agent.sessionKey);
+      const planBlock = planExecutionBlockReason(
+        plan.phases ?? [],
+        plan.items,
+      );
+      if (planBlock) {
+        deny(
+          `Tool "${name}" not dispatched: ${planBlock}. Call update_plan ` +
+          'with ordered phases and bounded steps, then continue from the active step.',
+        );
+      }
     }
   }
 

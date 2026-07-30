@@ -658,6 +658,7 @@ export const BUILTIN_TOOL_SPECS = [
     name: 'update_plan',
     description:
       'Create or update the durable CLI task plan. Use it ONLY for work with ≥3 non-trivial steps (1–2 steps: just do them). ' +
+      'For multi-phase work, send `phases`: each phase owns bounded verifiable steps, exactly one phase and one step are in_progress, and a later phase stays pending until prior phases complete. Use legacy `plan` only for a single-phase compatibility update; never send both. ' +
       'Each item is ONE verifiable outcome in imperative voice ("Add the migration", not "Database work") — and give it an `acceptance` cue where it helps (how you\'ll know it\'s done: "tests pass", "endpoint returns 200"). ' +
       'When revising an existing item, copy its `id` from the current plan so rewording or reordering preserves task identity; omit `id` only for a new item. ' +
       'Keep at most one item `in_progress` and mark each `completed` the moment it\'s done, never in batches. Rewrite the plan as you learn — a stale plan is worse than none. Never start an item too large to finish in one focused pass; decompose it first.',
@@ -668,21 +669,70 @@ export const BUILTIN_TOOL_SPECS = [
         steeringReceiptId: { type: 'string', description: 'Required when this plan revision applies a pending plan-change Steer.' },
         plan: {
           type: 'array',
-          description: 'Ordered plan items.',
+          description: 'Legacy single-phase ordered plan items. Do not combine with phases.',
           items: {
             type: 'object',
             properties: {
               id: { type: 'string', description: 'Existing host-issued task id. Copy it unchanged when revising an item; omit for a new item.' },
               step: { type: 'string', description: 'One verifiable outcome, imperative voice.' },
               status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] },
-              acceptance: { type: 'string', description: 'Optional: how you will know this item is done (e.g. "tests pass", "file written", "benchmark hit").' }
+              acceptance: { type: 'string', description: 'Optional: how you will know this item is done (e.g. "tests pass", "file written", "benchmark hit").' },
+              evidence: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Bounded evidence references supporting completion.',
+              },
             },
-            required: ['step', 'status']
-          }
-        }
+            required: ['step', 'status'],
+          },
+        },
+        phases: {
+          type: 'array',
+          description: 'Ordered execution phases. Each phase must contain at least one bounded step.',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', description: 'Existing host-issued phase id; omit for a new phase.' },
+              title: { type: 'string', description: 'Short outcome-oriented phase title.' },
+              status: {
+                type: 'string',
+                enum: ['pending', 'in_progress', 'blocked', 'completed', 'skipped']
+              },
+              dependsOn: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Existing phase ids that must complete first. Omit for normal sequential phases.',
+              },
+              requiredSkillIds: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Reviewed workflow skill ids required by this phase.',
+              },
+              blockedReason: { type: 'string', description: 'Required when status is blocked.' },
+              steps: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string', description: 'Existing host-issued task id; omit for a new step.' },
+                    step: { type: 'string', description: 'One bounded verifiable outcome in imperative voice.' },
+                    status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] },
+                    acceptance: { type: 'string', description: 'How completion is verified.' },
+                    evidence: {
+                      type: 'array',
+                      items: { type: 'string' },
+                      description: 'Bounded evidence references supporting completion.',
+                    },
+                  },
+                  required: ['step', 'status'],
+                },
+              },
+            },
+            required: ['title', 'status', 'steps'],
+          },
+        },
       },
-      required: ['plan']
-    }
+    },
   },
   {
     name: 'track_query',
