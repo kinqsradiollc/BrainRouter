@@ -1,10 +1,10 @@
-name: Release — Desktop (signed macOS)
+name: Release — Desktop packages
 
 # CP-B — the automated signed + notarized macOS build. Everything code-side is
 # here; the ONLY thing you supply is your Apple Developer signing material as
 # repository secrets (see the `env:` block + build/PACKAGING.md). Trigger it
 # manually (Actions → "Release — Desktop" → Run workflow) or by pushing a
-# `desktop-v*` tag. It builds the per-arch (arm64 + x64) hardened-runtime app,
+# release tag. It builds the per-arch (arm64 + x64) hardened-runtime app,
 # signs it with your Developer ID cert, notarizes it via notarytool (the
 # afterSign hook), and uploads the .dmg/.zip as artifacts. Without the secrets
 # it still runs and produces an un-signed build (the notarize hook fails open),
@@ -13,7 +13,7 @@ name: Release — Desktop (signed macOS)
 on:
   workflow_dispatch:
   push:
-    tags: ['desktop-v*']
+    tags: ['desktop-v*', 'v*']
 
 permissions:
   contents: write # upload release assets when triggered by a tag
@@ -26,6 +26,8 @@ jobs:
   build-mac:
     name: Build signed macOS (arm64 + x64)
     runs-on: macos-14
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
     steps:
       - uses: actions/checkout@v7
 
@@ -38,10 +40,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Build-only tools kept out of the committed lockfile (heavy, release-only);
-      # --no-save so the deterministic install above stays the source of truth.
-      - name: Install packaging tools
-        run: npm install --no-save --workspace brainrouter-desktop electron-builder@26.15.3 @electron/notarize@3.1.1
+      - name: Ensure Electron runtime for browser qualification
+        run: |
+          env -u ELECTRON_SKIP_BINARY_DOWNLOAD npm rebuild electron
+          node -e "const fs=require('node:fs');const executable=require('electron');if(!fs.existsSync(executable))throw new Error('Electron runtime was not installed');console.log(executable)"
 
       - name: Build workspace deps (types + core)
         run: npm --prefix brainrouter-desktop run build:deps
@@ -64,6 +66,13 @@ jobs:
           name: brainrouter-browser-qualification
           path: brainrouter-desktop/.browser-benchmarks/release-*.json
           if-no-files-found: error
+          include-hidden-files: true
+
+      # Keep the browser qualification on the exact `npm ci` dependency tree.
+      # Build-only tools stay out of the committed lockfile and are installed
+      # only after runtime qualification has completed.
+      - name: Install packaging tools
+        run: npm install --no-save --workspace brainrouter-desktop electron-builder@26.15.3 @electron/notarize@3.1.1
 
       # electron-builder rejects node_modules symlinks that escape the app dir
       # (npm-workspace @kinqs/* links) — replace them with real copies first.
@@ -97,7 +106,7 @@ jobs:
           if-no-files-found: error
 
       - name: Attach to GitHub Release (tag triggers only)
-        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v3
         with:
           files: |
@@ -122,8 +131,18 @@ jobs:
       - name: Install packaging tools
         run: npm install --no-save --workspace brainrouter-desktop electron-builder@26.15.3
 
-      - name: Desktop regression suite
-        run: npm test --workspace brainrouter-desktop
+      - name: Build workspace deps (types + core)
+        run: npm --prefix brainrouter-desktop run build:deps
+
+      # The complete workspace suite runs on every PR. This lane exercises the
+      # Windows-specific desktop contracts and package graph on a real Windows
+      # host; POSIX-only filesystem fixtures do not gate the Windows installer.
+      - name: Windows desktop contracts
+        run: |
+          npm run typecheck --workspace brainrouter-desktop
+          npm run build:electron --workspace brainrouter-desktop
+          node --test brainrouter-desktop/dist-electron/host/terminalShells.test.js brainrouter-desktop/dist-electron/shellQuote.test.js brainrouter-desktop/dist-electron/windowSecurity.test.js
+          node --import tsx --test brainrouter-desktop/src/styles/visualReleaseContract.test.ts
 
       - name: Dereference workspace deps for packaging
         run: node brainrouter-desktop/build/dereference-workspace-deps.mjs
@@ -140,7 +159,7 @@ jobs:
           if-no-files-found: error
 
       - name: Attach Windows installer to GitHub Release (tag triggers only)
-        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v3
         with:
           files: brainrouter-desktop/release/*.exe

@@ -54,8 +54,6 @@ export interface AppDialogsProps {
   setCodeFont: (v: string) => void;
   theme: AppearancePreference;
   setTheme: (preference: AppearancePreference) => void;
-  visualSystemV2: boolean;
-  setVisualSystemV2: (enabled: boolean) => void;
   chatWidth: string;
   setChatWidth: (v: string) => void;
   chatSize: string;
@@ -107,7 +105,7 @@ export function AppDialogs(p: AppDialogsProps): React.ReactElement {
     pop, setPop, q, cmdCtx, commands, paletteOpen, setPaletteOpen, settings, setSettings, snapshot, usageLines,
     usageHistory, tokens, catalog, setPreference, endpointModels, providerModels, probedModels, probeLoading,
     probeError, setProbeLoading, setProbeError, setProbedModels, toolCatalog, market, execMode, codeFont, setCodeFont,
-    theme, setTheme, visualSystemV2, setVisualSystemV2, chatWidth, setChatWidth, chatSize, setChatSize, accent, setAccent, interaction, picked,
+    theme, setTheme, chatWidth, setChatWidth, chatSize, setChatSize, accent, setAccent, interaction, picked,
     setPicked, answerInteraction, trustAsk, setTrustAsk, onboardAsk, setOnboardAsk, onWorkspaceOnboarded, switchToWorkspace, sessionMenu, sessions,
     closeSessionMenu, openExternal, togglePin, toggleComplete, startRename, forkSessionAction, moveToGroup,
     sessionGroups, toggleArchive, deleteSessionAction, infoDialog, setInfoDialog, gateBlock, setGateBlock,
@@ -153,8 +151,6 @@ export function AppDialogs(p: AppDialogsProps): React.ReactElement {
         onCodeFont={setCodeFont}
         theme={theme}
         onTheme={setTheme}
-        visualSystemV2={visualSystemV2}
-        onVisualSystemV2={setVisualSystemV2}
         chatWidth={chatWidth}
         onChatWidth={setChatWidth}
         chatSize={chatSize}

@@ -50,7 +50,7 @@ test('workbench chrome controls share one explicit geometry token', () => {
   assert.match(theme, /\.settings-actions\s+\.icon-btn\s*\{[^}]*width:\s*var\(--chrome-control-size\)[^}]*height:\s*var\(--chrome-control-size\)/);
 });
 
-test('new shell styles remain reversible and use semantic theme colors', () => {
+test('released shell styles stay scoped and use semantic theme colors', () => {
   for (const source of shellStyles) {
     assert.match(source, /html\[data-visual-system="v2"\]/);
     assert.doesNotMatch(source, /#[\da-f]{3,8}\b|rgba?\(|hsla?\(/i);

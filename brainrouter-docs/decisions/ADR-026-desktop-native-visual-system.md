@@ -18,10 +18,12 @@ pickers, system appearance, accessibility preferences, and terminal processes.
 The Electron renderer will use one accessible component and token contract,
 with deliberate macOS, Windows, and Linux adaptations.
 
-The change will be delivered surface by surface behind a reversible
-`desktop.visualSystemV2` rollout setting. It will not be a single styling PR.
-The current monolithic stylesheet will become an ordered compatibility
-manifest while foundation, shell, and surface styles move into owned modules.
+The change is delivered surface by surface behind a reversible migration
+setting; the setting is removed from the 0.4.18 release after the final gate.
+The released document carries a fixed `data-visual-system="v2"` scope rather
+than a user-facing compatibility choice. It is not a single styling PR. The
+current monolithic stylesheet becomes an ordered compatibility manifest while
+foundation, shell, and surface styles move into owned modules.
 Existing behavior—including mounted panel state, browser isolation, Monaco
 editing, terminal PTYs, and the preload-only capability boundary—must remain
 intact.
@@ -307,10 +309,13 @@ Visual screenshot approval does not replace accessibility checks.
    and state-preservation checks for that surface.
 5. Enable the setting for development and opt-in preview use.
 6. Complete macOS and Windows review before making it the default.
-7. Remove compatibility selectors only after all supported modes and surfaces
-   pass the release gate.
+7. Remove the user-facing compatibility setting only after all supported modes
+   and surfaces pass the release gate. Keep the fixed document scope until the
+   remaining structural rules have moved out of the compatibility manifest.
 
-Rollback disables the new setting and restores the previous manifest order.
+During migration, rollback disables the setting. After release, rollback is
+the signed 0.4.17 package or a revert of the final rollout commit; a hidden
+renderer preference must not create two unqualified production interfaces.
 No migration PR may combine a visual change with a runtime authority, browser
 engine, terminal transport, or orchestration change.
 
@@ -328,7 +333,7 @@ engine, terminal transport, or orchestration change.
 | D26-7 | Migrate Terminal and Browser chrome without changing PTY or browser authority | **Complete** | Live native Z shell command; browser toolbar/tabs reviewed with keyboard navigation; background-agent focus isolation tests pass |
 | D26-8a | Migrate Track board, alternate layouts, menus, and detail drawer | **Complete** | Board, List, and detail drawer reviewed live in Dark and High Contrast; semantic-token contract and current-source build pass |
 | D26-8b | Migrate Atlas, workflows, meetings, and review surfaces | **Complete** | Current-source Dark review covers Atlas first-open framing, workflow test-run success, PR list and CI detail, Meetings library/detail, Meeting Track, and Teams; semantic-token and typecheck contracts pass |
-| D26-9 | Complete accessibility, performance, and cross-platform release gate; remove compatibility flag | In progress | macOS and Windows approval, accessibility evidence, budgets met, rollback tested |
+| D26-9 | Complete accessibility, performance, and cross-platform release gate; remove compatibility flag | In progress | macOS accessibility, zoom, panel-switch, and bundle gates pass; Windows package lane pending |
 
 Human review checkpoints:
 
@@ -337,8 +342,8 @@ Human review checkpoints:
 2. **Core workbench checkpoint after D26-6** — Chat, composer, Settings,
    Editor, and Files together. Settings and shared panels are ready for this
    combined checkpoint.
-3. **Release checkpoint after D26-9** — macOS and Windows modes before the
-   compatibility flag or old selectors are removed.
+3. **Release checkpoint after D26-9** — macOS review and the Windows packaging
+   lane must pass before the compatibility setting is removed.
 
 Resolved verification finding: the merged-source macOS app emitted a
 `MaxListenersExceededWarning` after registering 11 `agent-event` listeners on
@@ -357,6 +362,22 @@ states, and a dedicated High Contrast Monaco theme. The enlarged Editor was
 reviewed live in preview and editable Monaco modes before Dark mode and the
 normal panel width were restored.
 
+D26-9 macOS evidence: the final source was built and launched through the
+workspace `start` command with the released visual scope fixed at v2. System,
+Light, Dark, and High Contrast all changed their resolved document contract and
+canvas colors. At 80% and 200% zoom, the native-window clearance adjusted while
+the activity rail and topbar controls remained reachable. Keyboard navigation
+produced a visible one-pixel solid focus outline. Reduced-motion and
+forced-colors emulation both activated their media contracts, with animation
+and transition durations reduced to 0.01 ms. Switching between already-open
+Files and Workflows panels completed in 10.4 ms and 16.5 ms respectively, and
+both retained the same mounted DOM nodes.
+
+The production bundle gate recorded 1,630,286 raw / 476,147 gzip bytes for the
+initial script, 504,769 / 80,604 bytes for the initial stylesheet, and
+3,930,781 / 1,024,303 bytes for the lazy Editor chunk. Atlas, Browser, CI,
+Editor, and Workflows remained separate lazy chunks.
+
 ## Consequences
 
 ### Positive
@@ -370,7 +391,8 @@ normal panel width were restored.
 
 ### Costs
 
-- Compatibility CSS will temporarily coexist with the new modules.
+- Structural compatibility CSS will temporarily coexist with the new modules,
+  but users no longer choose between two production interfaces.
 - Every major slice needs live review on macOS and Windows.
 - Token discipline and visual characterization add work before visible
   redesign reaches every surface.
