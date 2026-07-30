@@ -1,0 +1,688 @@
+/**
+ * Knowledge, automation, meetings, and review workbench surfaces.
+ *
+ * These panels retain their feature markup, graph engines, refresh behavior,
+ * and authority boundaries. This module only normalizes their presentation.
+ */
+
+/* Atlas */
+
+html[data-visual-system="v2"] .atlas-panel {
+  gap: 0;
+  color: var(--shell-text-secondary);
+  background: var(--shell-canvas);
+}
+
+html[data-visual-system="v2"] .atlas-toolbar,
+html[data-visual-system="v2"] .atlas-breadcrumb {
+  min-height: 36px;
+  padding: 5px 8px;
+  background: var(--shell-panel);
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] :is(
+  .atlas-search,
+  .atlas-viewsel-btn,
+  .atlas-cat,
+  .atlas-meta-pill,
+  .atlas-crumb-note,
+  .atlas-impact-btn,
+  .atlas-assess-btn
+) {
+  color: var(--shell-text-secondary);
+  background: transparent;
+  border: 1px solid var(--shell-divider);
+  border-radius: var(--shell-control-radius);
+  box-shadow: none;
+}
+
+html[data-visual-system="v2"] .atlas-search {
+  background: var(--input);
+}
+
+html[data-visual-system="v2"] :is(
+  .atlas-viewsel-btn,
+  .atlas-cat,
+  .atlas-impact-btn,
+  .atlas-assess-btn
+):hover:not(:disabled) {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+  border-color: var(--shell-divider-strong);
+}
+
+html[data-visual-system="v2"] :is(
+  .atlas-viewsel-menu,
+  .atlas-commands,
+  .atlas-stories,
+  .atlas-tour
+) {
+  color: var(--shell-text-secondary);
+  background: var(--shell-elevated);
+  border-color: var(--shell-divider-strong);
+  border-radius: var(--shell-row-radius);
+  box-shadow: 0 8px 24px var(--shell-interaction-selected);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+html[data-visual-system="v2"] :is(
+  .atlas-viewsel-item,
+  .atlas-cmd-row,
+  .atlas-story
+) {
+  color: var(--shell-text-secondary);
+  border-radius: var(--shell-row-radius);
+}
+
+html[data-visual-system="v2"] :is(
+  .atlas-viewsel-item,
+  .atlas-cmd-row,
+  .atlas-story
+):hover {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+}
+
+html[data-visual-system="v2"] .atlas-canvas,
+html[data-visual-system="v2"] .atlas-rf {
+  background: var(--shell-canvas);
+}
+
+html[data-visual-system="v2"] :is(
+  .atlas-fnode,
+  .atlas-gnode,
+  .atlas-snode,
+  .atlas-enode,
+  .atlas-lcard,
+  .atlas-dcard,
+  .atlas-scard
+) {
+  color: var(--shell-text-secondary);
+  background: var(--shell-panel);
+  border-color: var(--shell-divider);
+  border-radius: var(--shell-row-radius);
+  box-shadow: none;
+  filter: none;
+  transform: none;
+}
+
+html[data-visual-system="v2"] :is(
+  .atlas-fnode,
+  .atlas-gnode,
+  .atlas-snode,
+  .atlas-enode,
+  .atlas-lcard,
+  .atlas-dcard,
+  .atlas-scard
+):hover {
+  background: var(--shell-interaction-hover);
+  border-color: var(--shell-divider-strong);
+  box-shadow: none;
+  filter: none;
+  transform: none;
+}
+
+html[data-visual-system="v2"] :is(
+  .atlas-fnode.sel,
+  .atlas-fnode.hot,
+  .atlas-snode.sel,
+  .atlas-enode.sel,
+  .atlas-story.sel
+) {
+  background: var(--shell-focus-soft);
+  border-color: var(--shell-focus);
+  box-shadow: 0 0 0 1px var(--shell-focus);
+}
+
+html[data-visual-system="v2"] :is(
+  .atlas-dcard-chip,
+  .atlas-tag,
+  .atlas-impact-chip,
+  .atlas-lcard-cx
+) {
+  background: var(--shell-interaction-subtle);
+  border-color: var(--shell-divider);
+  border-radius: var(--shell-control-radius);
+}
+
+html[data-visual-system="v2"] .atlas-detail {
+  color: var(--shell-text-secondary);
+  background: var(--shell-canvas);
+  border-color: var(--shell-divider-strong);
+  border-radius: 0;
+  box-shadow: -8px 0 24px var(--shell-interaction-selected);
+}
+
+html[data-visual-system="v2"] .atlas-detail-head {
+  background: var(--shell-panel);
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] :is(
+  .atlas-detail-section,
+  .atlas-detail-deps,
+  .atlas-detail-impact,
+  .atlas-assess
+) {
+  background: transparent;
+  border-color: var(--shell-divider);
+  border-radius: var(--shell-row-radius);
+}
+
+html[data-visual-system="v2"] .atlas-assess-btn.primary {
+  color: var(--accent-fg);
+  background: var(--shell-focus);
+  border-color: var(--shell-focus);
+}
+
+/* Workflow editor */
+
+html[data-visual-system="v2"] .wf-panel {
+  padding: 0 !important;
+  color: var(--shell-text-secondary);
+  background: var(--shell-canvas);
+}
+
+html[data-visual-system="v2"] .wf-toolbar,
+html[data-visual-system="v2"] .wf-palette {
+  gap: 6px;
+  min-height: 36px;
+  padding: 5px 8px;
+  background: var(--shell-panel);
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .wf-palette + .wf-palette {
+  min-height: 32px;
+  border-top: 0;
+}
+
+html[data-visual-system="v2"] :is(
+  .wf-add,
+  .wf-node,
+  .wf-config,
+  .wf-inspector,
+  .wf-run
+) {
+  color: var(--shell-text-secondary);
+  background: transparent;
+  border-color: var(--shell-divider);
+  border-radius: var(--shell-row-radius);
+  box-shadow: none;
+  transform: none;
+}
+
+html[data-visual-system="v2"] .wf-add:hover,
+html[data-visual-system="v2"] .wf-node:hover {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+  border-color: var(--shell-divider-strong);
+  box-shadow: none;
+  transform: none;
+}
+
+html[data-visual-system="v2"] .wf-node.selected {
+  background: var(--shell-focus-soft);
+  border-color: var(--shell-focus);
+  box-shadow: 0 0 0 1px var(--shell-focus);
+}
+
+html[data-visual-system="v2"] .wf-body {
+  gap: 0;
+  background: var(--shell-canvas);
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .wf-canvas {
+  background: var(--shell-canvas);
+  border-color: var(--shell-divider);
+  border-radius: 0;
+}
+
+html[data-visual-system="v2"] .wf-side {
+  background: var(--shell-panel);
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] :is(
+  .wf-input,
+  .wf-textarea,
+  .wf-select,
+  .wf-field input,
+  .wf-field textarea,
+  .wf-field select
+) {
+  color: var(--shell-text);
+  background: var(--input);
+  border-color: var(--shell-divider);
+  border-radius: var(--shell-control-radius);
+  box-shadow: none;
+}
+
+html[data-visual-system="v2"] :is(
+  .wf-input,
+  .wf-textarea,
+  .wf-select,
+  .wf-field input,
+  .wf-field textarea,
+  .wf-field select
+):focus {
+  outline: none;
+  border-color: var(--shell-focus);
+  box-shadow: 0 0 0 2px var(--shell-focus-soft);
+}
+
+html[data-visual-system="v2"] .wf-run-row {
+  color: var(--shell-text-secondary);
+  background: transparent;
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .react-flow__controls,
+html[data-visual-system="v2"] .react-flow__minimap {
+  background: var(--shell-panel);
+  border: 1px solid var(--shell-divider);
+  border-radius: var(--shell-control-radius);
+  box-shadow: none;
+}
+
+html[data-visual-system="v2"] .react-flow__controls-button {
+  color: var(--shell-text-secondary);
+  fill: currentColor;
+  background: transparent;
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .react-flow__controls-button:hover {
+  background: var(--shell-interaction-hover);
+}
+
+/* Meetings and meeting-track views */
+
+html[data-visual-system="v2"] .mv-shell {
+  color: var(--shell-text-secondary);
+  background: var(--shell-canvas);
+}
+
+html[data-visual-system="v2"] .mv-tabs {
+  gap: 0;
+  min-height: 36px;
+  padding: 0 10px;
+  background: var(--shell-panel);
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .mv-tab {
+  min-height: 36px;
+  padding: 0 10px;
+  color: var(--shell-text-muted);
+  background: transparent;
+  border-radius: 0;
+  font-size: 11.5px;
+  font-weight: 520;
+}
+
+html[data-visual-system="v2"] .mv-tab:hover {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+  border-radius: 0;
+}
+
+html[data-visual-system="v2"] .mv-tab.mv-on {
+  color: var(--shell-text);
+  border-color: var(--shell-focus);
+}
+
+html[data-visual-system="v2"] .mv-root {
+  grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
+  background: var(--shell-canvas);
+}
+
+html[data-visual-system="v2"] .mv-col {
+  background: var(--shell-panel);
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] :is(
+  .mv-search,
+  .mv-field input,
+  .mv-field select,
+  .mv-field textarea,
+  .mv-summary-editor,
+  .tmv input,
+  .tmv select,
+  .mtk input
+) {
+  color: var(--shell-text);
+  background: var(--input);
+  border-color: var(--shell-divider);
+  border-radius: var(--shell-control-radius);
+  box-shadow: none;
+}
+
+html[data-visual-system="v2"] :is(
+  .mv-search:focus-within,
+  .mv-field input:focus,
+  .mv-field select:focus,
+  .mv-field textarea:focus,
+  .mv-summary-editor:focus,
+  .tmv input:focus,
+  .tmv select:focus,
+  .mtk input:focus
+) {
+  outline: none;
+  border-color: var(--shell-focus);
+  box-shadow: 0 0 0 2px var(--shell-focus-soft);
+}
+
+html[data-visual-system="v2"] .mv-item {
+  color: var(--shell-text-secondary);
+  background: transparent;
+  border-color: transparent;
+  border-radius: var(--shell-row-radius);
+}
+
+html[data-visual-system="v2"] .mv-item:hover {
+  background: var(--shell-interaction-hover);
+}
+
+html[data-visual-system="v2"] .mv-item.mv-on {
+  background: var(--shell-interaction-selected);
+  border-color: var(--shell-divider-strong);
+}
+
+html[data-visual-system="v2"] .mv-dhead,
+html[data-visual-system="v2"] :is(.mtk-head, .tmv-head, .mtk-toolbar) {
+  background: var(--shell-canvas);
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .mv-dbody {
+  gap: 10px;
+  padding: 12px;
+}
+
+html[data-visual-system="v2"] :is(
+  .mv-card,
+  .mv-tpanel,
+  .mv-capture-bar,
+  .mtk-column,
+  .mtk-card,
+  .tmv-group,
+  .tmv-detail,
+  .tmv-member
+) {
+  color: var(--shell-text-secondary);
+  background: transparent;
+  border-color: var(--shell-divider);
+  border-radius: var(--shell-row-radius);
+  box-shadow: none;
+  transform: none;
+}
+
+html[data-visual-system="v2"] :is(.mtk-card, .tmv-member):hover {
+  background: var(--shell-interaction-hover);
+  border-color: var(--shell-divider-strong);
+  box-shadow: none;
+  transform: none;
+}
+
+html[data-visual-system="v2"] :is(
+  .mv-chip,
+  .mv-badge,
+  .mv-modelchip,
+  .mv-orgctx-label
+) {
+  color: var(--shell-text-secondary);
+  background: var(--shell-interaction-subtle);
+  border-color: var(--shell-divider);
+  border-radius: var(--shell-control-radius);
+}
+
+html[data-visual-system="v2"] :is(
+  .mv-primary,
+  .mv-secondary,
+  .mv-danger-btn,
+  .mv-newbtn,
+  .mv-ghost,
+  .mv-sharebtn,
+  .mv-load-more,
+  .mtk-remove,
+  .mtk-move,
+  .tmv-add
+) {
+  min-height: 28px;
+  color: var(--shell-text-secondary);
+  background: transparent;
+  border-color: var(--shell-divider);
+  border-radius: var(--shell-control-radius);
+  box-shadow: none;
+  transform: none;
+}
+
+html[data-visual-system="v2"] :is(
+  .mv-primary,
+  .mv-secondary,
+  .mv-danger-btn,
+  .mv-newbtn,
+  .mv-ghost,
+  .mv-sharebtn,
+  .mv-load-more,
+  .mtk-remove,
+  .mtk-move,
+  .tmv-add
+):hover:not(:disabled) {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+  border-color: var(--shell-divider-strong);
+  filter: none;
+  transform: none;
+}
+
+html[data-visual-system="v2"] .mv-primary {
+  color: var(--accent-fg);
+  background: var(--shell-focus);
+  border-color: var(--shell-focus);
+}
+
+html[data-visual-system="v2"] .mv-pop {
+  color: var(--shell-text-secondary);
+  background: var(--shell-elevated);
+  border-color: var(--shell-divider-strong);
+  border-radius: var(--shell-row-radius);
+  box-shadow: 0 8px 24px var(--shell-interaction-selected);
+}
+
+html[data-visual-system="v2"] :is(.mv-srow, .mv-trow) {
+  color: var(--shell-text-secondary);
+  border-radius: var(--shell-row-radius);
+}
+
+html[data-visual-system="v2"] :is(.mv-srow, .mv-trow):hover,
+html[data-visual-system="v2"] :is(.mv-srow.mv-on, .mv-trow.mv-on) {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+  border-color: var(--shell-divider);
+}
+
+/* Local review and CI */
+
+html[data-visual-system="v2"] :is(.review-panel, .ci-panel) {
+  padding: 6px 8px 18px !important;
+  color: var(--shell-text-secondary);
+  background: var(--shell-panel);
+}
+
+html[data-visual-system="v2"] :is(.review-bar, .ci-bar) {
+  min-height: 36px;
+  padding: 4px 0 8px;
+  background: var(--shell-panel);
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .ci-tabs {
+  gap: 0;
+  margin-bottom: 6px;
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .ci-tab {
+  min-height: 32px;
+  padding: 0 9px;
+  color: var(--shell-text-muted);
+  font-size: 11.5px;
+  font-weight: 520;
+}
+
+html[data-visual-system="v2"] .ci-tab:hover {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+}
+
+html[data-visual-system="v2"] .ci-tab.active {
+  color: var(--shell-text);
+}
+
+html[data-visual-system="v2"] .ci-tab.active::after {
+  left: 8px;
+  right: 8px;
+  height: 1px;
+  background: var(--shell-focus);
+}
+
+html[data-visual-system="v2"] :is(
+  .review-finding,
+  .review-gate,
+  .review-suggestion,
+  .ci-pr,
+  .ci-pr-item,
+  .ci-run,
+  .ci-account-review,
+  .ci-job
+) {
+  color: var(--shell-text-secondary);
+  background: transparent;
+  border-color: var(--shell-divider);
+  border-radius: var(--shell-row-radius);
+  box-shadow: none;
+  transform: none;
+}
+
+html[data-visual-system="v2"] :is(
+  .review-finding,
+  .ci-pr,
+  .ci-pr-item,
+  .ci-run
+):hover {
+  background: var(--shell-interaction-hover);
+  border-color: var(--shell-divider-strong);
+  box-shadow: none;
+  transform: none;
+}
+
+html[data-visual-system="v2"] .review-file-head {
+  top: -6px;
+  color: var(--shell-text-secondary);
+  background: var(--shell-panel);
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .review-summary,
+html[data-visual-system="v2"] .ci-pr-detail,
+html[data-visual-system="v2"] .ci-run-body,
+html[data-visual-system="v2"] .ci-jobs {
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .review-suggestion {
+  background: color-mix(in srgb, var(--ok) 10%, transparent);
+  border-left-color: var(--ok);
+}
+
+html[data-visual-system="v2"] .review-suggestion .rs-label {
+  color: var(--ok);
+}
+
+html[data-visual-system="v2"] .review-gate.gate-clean {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 9%, transparent);
+  border-color: color-mix(in srgb, var(--ok) 34%, var(--shell-divider));
+}
+
+html[data-visual-system="v2"] .review-gate.gate-blocked {
+  color: var(--err);
+  background: color-mix(in srgb, var(--err) 9%, transparent);
+  border-color: color-mix(in srgb, var(--err) 34%, var(--shell-divider));
+}
+
+html[data-visual-system="v2"] :is(
+  .review-gate.gate-stale,
+  .review-gate.gate-running
+) {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 9%, transparent);
+  border-color: color-mix(in srgb, var(--warn) 34%, var(--shell-divider));
+}
+
+html[data-visual-system="v2"] :is(
+  .atlas-panel,
+  .wf-panel,
+  .mv-shell,
+  .review-panel,
+  .ci-panel
+) button:focus-visible,
+html[data-visual-system="v2"] :is(
+  .atlas-panel,
+  .wf-panel,
+  .mv-shell,
+  .review-panel,
+  .ci-panel
+) [role="button"]:focus-visible {
+  outline: 2px solid var(--shell-focus);
+  outline-offset: 2px;
+}
+
+@media (max-width: 860px) {
+  html[data-visual-system="v2"] .mv-root {
+    grid-template-columns: minmax(190px, 34%) minmax(0, 1fr);
+  }
+
+  html[data-visual-system="v2"] .mv-dbody {
+    grid-template-columns: 1fr;
+  }
+
+  html[data-visual-system="v2"] .wf-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  html[data-visual-system="v2"] .wf-side {
+    max-height: 240px;
+    border-top: 1px solid var(--shell-divider);
+    border-left: 0;
+  }
+}
+
+@media (forced-colors: active) {
+  html[data-visual-system="v2"] :is(
+    .atlas-fnode.sel,
+    .atlas-snode.sel,
+    .wf-node.selected,
+    .mv-item.mv-on,
+    .ci-tab.active,
+    .review-finding
+  ) {
+    border: 1px solid Highlight;
+  }
+
+  html[data-visual-system="v2"] :is(
+    .atlas-panel,
+    .wf-panel,
+    .mv-shell,
+    .review-panel,
+    .ci-panel
+  ) :is(button, input, select, textarea) {
+    forced-color-adjust: auto;
+  }
+}

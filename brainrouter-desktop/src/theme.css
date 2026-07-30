@@ -15,6 +15,7 @@
 @import "./styles/surfaces/editorFiles.css";
 @import "./styles/surfaces/terminalBrowser.css";
 @import "./styles/surfaces/track.css";
+@import "./styles/surfaces/remainingWorkbench.css";
 
 /* ---------- app frame ---------- */
 .app { display: flex; align-items: stretch; height: 100vh; background: var(--bg); overflow: hidden; }

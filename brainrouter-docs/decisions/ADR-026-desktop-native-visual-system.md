@@ -327,8 +327,8 @@ engine, terminal transport, or orchestration change.
 | D26-6 | Migrate Editor and Files and address measured tree/editor rendering bottlenecks | **Complete** | 25,000-file projection bounded to 46 rows; shared expansion survived Files/Editor switching; lazy Monaco, edit/preview, and High Contrast reviewed live |
 | D26-7 | Migrate Terminal and Browser chrome without changing PTY or browser authority | **Complete** | Live native Z shell command; browser toolbar/tabs reviewed with keyboard navigation; background-agent focus isolation tests pass |
 | D26-8a | Migrate Track board, alternate layouts, menus, and detail drawer | **Complete** | Board, List, and detail drawer reviewed live in Dark and High Contrast; semantic-token contract and current-source build pass |
-| D26-8b | Migrate Atlas, workflows, meetings, and review surfaces | In progress | Surface inventory complete; no old cross-surface overrides |
-| D26-9 | Complete accessibility, performance, and cross-platform release gate; remove compatibility flag | Blocked by D26-6–D26-8 | macOS and Windows approval, accessibility evidence, budgets met, rollback tested |
+| D26-8b | Migrate Atlas, workflows, meetings, and review surfaces | **Complete** | Current-source Dark review covers Atlas first-open framing, workflow test-run success, PR list and CI detail, Meetings library/detail, Meeting Track, and Teams; semantic-token and typecheck contracts pass |
+| D26-9 | Complete accessibility, performance, and cross-platform release gate; remove compatibility flag | In progress | macOS and Windows approval, accessibility evidence, budgets met, rollback tested |
 
 Human review checkpoints:
 
