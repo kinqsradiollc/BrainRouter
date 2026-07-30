@@ -1,0 +1,11 @@
+html[data-visual-system="v2"] body,
+html[data-visual-system="v2"] .app,
+html[data-visual-system="v2"] .main,
+html[data-visual-system="v2"] .workrow,
+html[data-visual-system="v2"] .center {
+  background: var(--shell-canvas);
+}
+
+html[data-visual-system="v2"] .app {
+  isolation: isolate;
+}

@@ -3,6 +3,8 @@
 @import "./styles/foundation/reset.css";
 @import "./styles/foundation/typography.css";
 @import "./styles/foundation/motion.css";
+@import "./styles/shell/window.css";
+@import "./styles/shell/leftNavigation.css";
 
 /* ---------- app frame ---------- */
 .app { display: flex; align-items: stretch; height: 100vh; background: var(--bg); overflow: hidden; }

@@ -321,7 +321,7 @@ engine, terminal transport, or orchestration change.
 | D26-0 | Approve this decision and its native-boundary policy | **Complete** | User approval recorded on 2026-07-30 |
 | D26-1 | Add System/Light/Dark/High Contrast resolution, migration, preload event, and matching startup canvas | **Complete** | Preference migration tests, Electron/renderer typechecks, production source build, and live System/Light/High Contrast switching on macOS |
 | D26-2 | Add foundation modules and make `theme.css` an ordered compatibility manifest | **Complete** | Literal-color audit, current-source build, all-token and 15-style parity in Dark/Light/High Contrast, and an 8-pixel difference across 4.3 million screenshot pixels |
-| D26-3 | Migrate window shell, activity bar, sidebar, top controls, views rail, and dock | **Ready** | macOS and Windows shell screenshots; drag, resize, focus, and state checks |
+| D26-3 | Migrate window shell, activity bar, sidebar, top controls, views rail, and dock | **In progress** | Reversible preview setting and left-shell macOS review complete; top controls, views rail, dock, and Windows review remain |
 | D26-4 | Migrate Chat and composer, including visible queue/steer states | Blocked by D26-3 | Streaming and mid-turn interaction trace; narrow-window and zoom review |
 | D26-5 | Migrate views panels and Settings to shared headers, tabs, rows, and actions | Blocked by D26-3 | Inactive panels retain state; keyboard and high-contrast review |
 | D26-6 | Migrate Editor and Files and address measured tree/editor rendering bottlenecks | Blocked by D26-5 | Stable explorer expansion; Monaco remains lazy; representative performance trace |

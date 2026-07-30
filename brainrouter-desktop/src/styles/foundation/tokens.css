@@ -64,6 +64,24 @@
   --motion-fast: 120ms;
   --motion-ui: 180ms;
   --motion-reveal: 560ms;
+  --shell-canvas: var(--bg);
+  --shell-chrome: var(--sidebar);
+  --shell-panel: var(--surface);
+  --shell-elevated: var(--raised);
+  --shell-divider: var(--border);
+  --shell-divider-strong: var(--border-strong);
+  --shell-text: var(--text);
+  --shell-text-secondary: var(--text-dim);
+  --shell-text-muted: var(--text-faint);
+  --shell-interaction-subtle: var(--ov-04);
+  --shell-interaction-hover: var(--ov-07);
+  --shell-interaction-selected: var(--ov-10);
+  --shell-focus: var(--accent);
+  --shell-focus-soft: var(--accent-soft);
+  --shell-activity-width: 46px;
+  --shell-sidebar-padding: 8px;
+  --shell-control-radius: 7px;
+  --shell-row-radius: 7px;
 }
 
 [data-theme="light"] {
