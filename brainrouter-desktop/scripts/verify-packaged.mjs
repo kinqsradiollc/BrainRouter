@@ -162,10 +162,12 @@ async function runPackagedBrowserSmoke(app) {
   const workspace = path.join(tempRoot, 'workspace');
   const profile = path.join(tempRoot, 'profile');
   fs.mkdirSync(workspace, { recursive: true });
+  fs.mkdirSync(profile, { recursive: true });
   const childEnv = {
     ...process.env,
     BRAINROUTER_DESKTOP_WORKSPACE: workspace,
     BRAINROUTER_PACKAGED_SMOKE_PORT: String(port),
+    BRAINROUTER_PACKAGED_SMOKE_PROFILE: profile,
   };
   delete childEnv.ELECTRON_RUN_AS_NODE;
   // Build-only Node flags inherited from CI are rejected by packaged Electron
@@ -175,7 +177,6 @@ async function runPackagedBrowserSmoke(app) {
   let output = '';
   let launchError = null;
   const child = spawn(executable, [
-    `--user-data-dir=${profile}`,
     '--no-first-run',
   ], {
     cwd: workspace,
