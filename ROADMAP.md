@@ -13,6 +13,7 @@ a version is tagged.
 
 | Version               | State          | Theme                                                                                           |
 | --------------------- | -------------- | ----------------------------------------------------------------------------------------------- |
+| **0.4.18**            | Proposed       | Native Desktop visual system, platform-adaptive shell, accessibility, and workbench performance |
 | **0.4.17**            | Shipped        | Runtime plane, automations, connectors, review operations, and cross-surface product completion |
 | **0.4.16**            | Shipped        | Autonomous fleet, unified desktop, Track maturation, PostgreSQL brain, remote brain, and Atlas  |
 | **0.4.15**            | Shipped        | Requirement-first workflow and the first unified Chat · Track · Code workspace                  |
@@ -97,6 +98,25 @@ expanded authority stay opt-in.
       publish.
 
 Implementation checkmarks in this section describe the shipped release.
+
+## 0.4.18 — Native Desktop visual system
+
+**Status: proposed; implementation is paused for ADR approval.**
+
+- [ ] Resolve System, Light, Dark, and High Contrast appearance through a
+      narrow native host contract.
+- [ ] Replace the monolithic styling cascade with owned foundation, shell, and
+      surface modules.
+- [ ] Align the shell, Chat, Settings, Editor, Files, Terminal, Browser, and
+      remaining workbench surfaces without changing their runtime boundaries.
+- [ ] Preserve mounted panel state and meet explicit accessibility and
+      responsiveness budgets.
+- [ ] Complete live macOS and Windows review before removing the reversible
+      compatibility setting.
+
+Detailed decision and taskboard:
+[ADR-026](brainrouter-docs/decisions/ADR-026-desktop-native-visual-system.md)
+and [`brainrouter-roadmap/0.4.18.md`](brainrouter-roadmap/0.4.18.md).
 
 ## 0.5.0 — Operational scale
 
