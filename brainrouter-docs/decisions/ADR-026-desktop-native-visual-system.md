@@ -323,7 +323,7 @@ engine, terminal transport, or orchestration change.
 | D26-2 | Add foundation modules and make `theme.css` an ordered compatibility manifest | **Complete** | Literal-color audit, current-source build, all-token and 15-style parity in Dark/Light/High Contrast, and an 8-pixel difference across 4.3 million screenshot pixels |
 | D26-3 | Migrate window shell, activity bar, sidebar, top controls, views rail, and dock | **In review** | Reversible preview, full macOS shell review, and rail/dock state preservation complete; human and Windows review remain |
 | D26-4 | Migrate Chat and composer, including visible queue/steer states | Blocked by D26-3 | Streaming and mid-turn interaction trace; narrow-window and zoom review |
-| D26-5 | Migrate views panels and Settings to shared headers, tabs, rows, and actions | Blocked by D26-3 | Inactive panels retain state; keyboard and high-contrast review |
+| D26-5 | Migrate views panels and Settings to shared headers, tabs, rows, and actions | Blocked by D26-3 | Inactive panels retain state; `agent-event` listeners stay bounded across startup and panel reopen; keyboard and high-contrast review |
 | D26-6 | Migrate Editor and Files and address measured tree/editor rendering bottlenecks | Blocked by D26-5 | Stable explorer expansion; Monaco remains lazy; representative performance trace |
 | D26-7 | Migrate Terminal and Browser chrome without changing PTY or browser authority | Blocked by D26-5 | Live native-shell session; browser focus-isolation and toolbar review |
 | D26-8 | Migrate Track, Atlas, workflows, meetings, and review surfaces | Blocked by D26-5 | Surface inventory complete; no old cross-surface overrides |
@@ -337,6 +337,11 @@ Required human review checkpoints:
    Editor, and Files together.
 3. **Release checkpoint after D26-9** — macOS and Windows modes before the
    compatibility flag or old selectors are removed.
+
+Open verification finding: the merged-source macOS app currently emits a
+`MaxListenersExceededWarning` after registering 11 `agent-event` listeners on
+fresh startup. D26-5 must fix the subscription lifecycle and prove listener
+counts remain bounded; increasing the emitter limit is not an acceptable fix.
 
 ## Consequences
 
