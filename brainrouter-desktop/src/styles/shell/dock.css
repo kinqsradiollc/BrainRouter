@@ -1,0 +1,64 @@
+html[data-visual-system="v2"] .term-dock {
+  background: var(--shell-terminal);
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .term-dock-grip::after {
+  background: var(--shell-divider-strong);
+}
+
+html[data-visual-system="v2"] .term-tabs {
+  min-height: 40px;
+  gap: 2px;
+  padding: 4px 8px;
+  background: var(--shell-panel);
+  border-bottom: 1px solid var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .term-tab {
+  color: var(--shell-text-muted);
+  border-color: transparent;
+  border-radius: var(--shell-row-radius);
+}
+
+html[data-visual-system="v2"] .term-tab:hover {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+  border-color: transparent;
+}
+
+html[data-visual-system="v2"] .term-tab.active {
+  color: var(--shell-text);
+  background: var(--shell-interaction-selected);
+  border-color: var(--shell-divider);
+  box-shadow: none;
+}
+
+html[data-visual-system="v2"] .panel-chrome-actions {
+  height: var(--chrome-control-size);
+  padding: 0;
+  background: transparent;
+  border-color: transparent;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+html[data-visual-system="v2"] .panel-chrome-actions .pop-wrap,
+html[data-visual-system="v2"] .panel-chrome-actions .icon-btn,
+html[data-visual-system="v2"] .term-tabs > .icon-btn {
+  width: var(--chrome-control-size);
+  height: var(--chrome-control-size);
+  color: var(--shell-text-muted);
+  border-radius: var(--shell-control-radius);
+}
+
+html[data-visual-system="v2"] .panel-chrome-actions .icon-btn:hover,
+html[data-visual-system="v2"] .term-tabs > .icon-btn:hover {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+}
+
+html[data-visual-system="v2"] .term-dock-body {
+  padding: 6px 8px 8px;
+  background: var(--shell-terminal);
+}

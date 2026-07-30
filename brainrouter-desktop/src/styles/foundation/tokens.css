@@ -68,6 +68,7 @@
   --shell-chrome: var(--sidebar);
   --shell-panel: var(--surface);
   --shell-elevated: var(--raised);
+  --shell-terminal: var(--term-bg);
   --shell-divider: var(--border);
   --shell-divider-strong: var(--border-strong);
   --shell-text: var(--text);

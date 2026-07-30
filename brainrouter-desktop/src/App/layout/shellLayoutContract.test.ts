@@ -7,6 +7,13 @@ const foundationTokens = readFileSync(
   new URL('../../styles/foundation/tokens.css', import.meta.url),
   'utf8',
 );
+const shellStyles = [
+  'window.css',
+  'leftNavigation.css',
+  'topControls.css',
+  'viewsRail.css',
+  'dock.css',
+].map((file) => readFileSync(new URL(`../../styles/shell/${file}`, import.meta.url), 'utf8'));
 const sidebar = readFileSync(new URL('../../components/layout/Sidebar.tsx', import.meta.url), 'utf8');
 const activityBar = readFileSync(new URL('../../components/layout/ActivityBar.tsx', import.meta.url), 'utf8');
 
@@ -41,4 +48,11 @@ test('workbench chrome controls share one explicit geometry token', () => {
   assert.match(foundationTokens, /--chrome-control-size:\s*var\(--control-size\)/);
   assert.match(theme, /\.rail-top\s+\.icon-btn[\s\S]*width:\s*var\(--chrome-control-size\)/);
   assert.match(theme, /\.settings-actions\s+\.icon-btn\s*\{[^}]*width:\s*var\(--chrome-control-size\)[^}]*height:\s*var\(--chrome-control-size\)/);
+});
+
+test('new shell styles remain reversible and use semantic theme colors', () => {
+  for (const source of shellStyles) {
+    assert.match(source, /html\[data-visual-system="v2"\]/);
+    assert.doesNotMatch(source, /#[\da-f]{3,8}\b|rgba?\(|hsla?\(/i);
+  }
 });
