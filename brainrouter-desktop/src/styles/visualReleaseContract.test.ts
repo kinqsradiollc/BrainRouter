@@ -78,7 +78,10 @@ test('release automation preserves native macOS and Windows window ownership', (
   assert.match(electronMain, /titleBarStyle:\s*process\.platform === 'darwin' \? 'hiddenInset' : 'default'/);
   assert.match(workflow, /runs-on:\s*macos-14/);
   assert.match(workflow, /runs-on:\s*windows-latest/);
-  assert.match(workflow, /run:\s*npm run dist:mac/);
+  assert.match(
+    workflow,
+    /if \[\[ -z "\$\{CSC_LINK:-\}" \]\]; then[\s\S]*unset CSC_LINK CSC_KEY_PASSWORD[\s\S]*npm run dist:mac/,
+  );
   assert.match(workflow, /run:\s*npm run dist:win/);
   assert.match(workflow, /brainrouter-desktop\/release\/\*\.exe/);
   assert.match(workflow, /name:\s*Windows desktop contracts/);
