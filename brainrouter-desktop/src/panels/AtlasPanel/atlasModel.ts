@@ -120,6 +120,8 @@ export function buildRfModel(args: BuildRfModelArgs): RfModel {
         name: c.name, description: c.description, fileCount: c.fileCount, complexity: c.complexity,
         changed: showDiff ? c.nodeIds.filter((id) => nodeChanges.has(id)).length : 0,
       },
+      initialWidth: cardW,
+      initialHeight: cardH,
       style: { width: cardW },
     }));
     const edges: Edge[] = overview.edges.map((e, i) => ({
@@ -140,6 +142,8 @@ export function buildRfModel(args: BuildRfModelArgs): RfModel {
       id: c.id, type: "atlasDomain",
       position: pos.get(c.id) ?? { x: (i % fallbackCols) * (cardW + nodesep), y: Math.floor(i / fallbackCols) * (cardH + ranksep) },
       data: { name: c.name, description: c.description, entities: c.entities, flows: c.flows },
+      initialWidth: cardW,
+      initialHeight: cardH,
       style: { width: cardW },
     }));
     // Relationship edges between capabilities: labelled with the LLM relationship
@@ -174,6 +178,8 @@ export function buildRfModel(args: BuildRfModelArgs): RfModel {
       id: c.id, type: "atlasService",
       position: pos.get(c.id) ?? { x: (i % fallbackCols) * (cardW + nodesep), y: Math.floor(i / fallbackCols) * (cardH + ranksep) },
       data: { module: c.module, portPath: c.portPath, portNodeId: c.portNodeId, fileCount: c.fileCount, dependsOn: outC.get(c.id) ?? 0, dependedOnBy: inC.get(c.id) ?? 0 },
+      initialWidth: cardW,
+      initialHeight: cardH,
       style: { width: cardW },
     }));
     const maxW = Math.max(1, ...serviceModel.edges.map((e) => e.weight));
@@ -193,6 +199,8 @@ export function buildRfModel(args: BuildRfModelArgs): RfModel {
     const groupNodes: Node[] = layout.groups.map((b) => ({
       id: b.id, type: "atlasGroup", position: { x: b.x, y: b.y },
       data: { label: b.label, count: b.count, changed: changedPerGroup.get(b.id) ?? 0 },
+      initialWidth: b.width,
+      initialHeight: b.height,
       style: { width: b.width, height: b.height }, selectable: false, draggable: false, zIndex: 0,
     }));
     const fileNodes: Node[] = [];
@@ -202,6 +210,8 @@ export function buildRfModel(args: BuildRfModelArgs): RfModel {
       fileNodes.push({
         id, type: "atlasFile", parentId: layout.groupOf.get(id), extent: "parent", position: pos,
         data: { label: n.name, color: fileColor(n) },
+        initialWidth: 152,
+        initialHeight: 34,
       });
     }
     const edges: Edge[] = [];
