@@ -1,6 +1,7 @@
 # ADR-023 — Profile-Specific Orchestration Plans
 
-**Status:** Accepted and implemented in `release/0.4.17` ·
+**Status:** Accepted and implemented in `release/0.4.17`; phase-execution and
+required-skill lifecycle refinement accepted on 2026-07-30 ·
 **Builds on** ADR-021 (workspace profiles) and ADR-022 (persona,
 orchestration, and context contracts) ·
 **Refines** ADR-022 sections 4, 5, 7, and 9 without changing their authority
@@ -61,6 +62,13 @@ separately selectable specializations; capability-owned packs remain nested
 under their capability instead of appearing as duplicate skill-pack choices.
 Custom can select individual safe entries, and every effective selection
 remains beneath the existing authority and runtime ceilings.
+
+Plans are durable execution ledgers, not prose reminders. Each plan contains
+ordered phases, and each phase contains bounded, verifiable steps. The host
+owns phase/step identity, prerequisite-skill loading, transitions, and
+steering reconciliation. An agent works the current step to evidence-backed
+completion before the host advances the phase; a missing required skill becomes
+one visible prerequisite state rather than a repeated model-facing tool error.
 
 ## Context
 
@@ -1751,6 +1759,141 @@ reviewable ledger. A symbol is not marked migrated until all production
 consumers use its canonical import and the former declaration is either removed
 or recorded as a time-bounded compatibility alias.
 
+#### 13.14 Plans have host-owned phases, executable steps, and prerequisite loading
+
+The current durable plan is a flat list with stable task IDs and at most one
+`in_progress` item. That is a useful compatibility projection, but it cannot
+represent which orchestration phase owns a step, whether phase prerequisites
+are ready, or why execution has not advanced. Required workflow skills also
+have two inconsistent activation paths:
+
+| Current path | Behavior | Problem |
+|---|---|---|
+| Profile stage skill | The host resolves the selected skill, applies its subtractive tool policy, and publishes the stage transition | Lifecycle is explicit and bounded |
+| Planning/decision prerequisite | The authorization gate rejects the first mutation and tells the model to call `get_skill`, interpret it, and retry | Recovery depends on model compliance; repeated pauses look like a stuck agent |
+
+The mutation gate is correct to fail closed. The defect is making the model
+perform host lifecycle recovery after the host already knows the exact required
+skill. More prompting does not make that transition reliable. BrainRouter will
+therefore make required-skill activation and plan progression deterministic in
+Core and project the same events to CLI and Desktop.
+
+The durable plan contract becomes:
+
+```text
+plan revision
+├── phase 1: pending | in_progress | blocked | completed | skipped
+│   ├── required skills and prerequisite state
+│   ├── step 1: pending | in_progress | blocked | completed | skipped
+│   └── step 2: pending | in_progress | blocked | completed | skipped
+├── phase 2
+│   └── steps
+└── evidence and steering revision links
+```
+
+Each phase and step has a stable host-owned ID. A step declares one verifiable
+outcome, optional acceptance criteria, and evidence references. A phase
+declares dependencies, required skills, and completion policy. The runtime
+enforces:
+
+- at most one phase and one step are `in_progress`;
+- a phase starts only after its dependencies and required skills are ready;
+- an executable phase must materialize at least one bounded step before its
+  first domain mutation;
+- a step completes only after its declared acceptance or recorded evidence is
+  satisfied, or after an explicit reviewed skip;
+- a phase completes only when every required step is completed or explicitly
+  skipped;
+- the next ready phase becomes active only after the prior transition is
+  durably written;
+- goal completion remains unavailable while a required phase or step is
+  pending, active, or blocked.
+
+The agent may decompose the next phase when it becomes ready instead of
+inventing every later detail up front. It cannot begin an oversized generic
+step such as “Implement the feature”; it must split that work into focused
+steps first. Later-phase decomposition may use evidence learned in earlier
+phases, while phase objectives, dependencies, accepted requirements, and
+authority remain host-owned constraints.
+
+Legacy flat plans remain readable. Migration wraps their items in one
+compatibility phase and preserves every existing task ID. During the migration,
+`update_plan` accepts the current flat input and the new phase-aware input, but
+Core writes one canonical phase-aware state and derives the old `items`
+projection for older CLI/Desktop consumers. New shared plan DTOs belong in a
+focused `@kinqs/brainrouter-types` planning subpath; normalization,
+transitions, persistence, and authority checks remain in focused Core modules.
+
+##### Required-skill preflight and bounded recovery
+
+Required skills are preflighted at turn preparation and again when a new phase
+becomes ready:
+
+```text
+resolve planning schema and current phase
+  → intersect required skills with workspace/profile selection and authority
+  → load each available skill through the host skill resolver
+  → validate and bound the returned instructions
+  → intersect skill tool policy with all existing ceilings
+  → inject instructions into the current phase context
+  → publish ready or blocked prerequisite state
+  → allow the model to act
+```
+
+Loading never grants authority. A disabled, missing, malformed, oversized, or
+denied skill blocks the affected phase with one actionable diagnostic. It does
+not silently fall back to a weaker workflow, repeatedly ask the model to fetch
+the same skill, or loop on the blocked mutation.
+
+The existing authorization check remains as defense in depth for races and
+legacy callers. If an eligible required skill was not preflighted before a
+mutating tool call, the runtime suspends that not-yet-dispatched call, performs
+one host-owned load attempt per missing skill, then re-runs every authorization
+and approval gate before dispatching the original call exactly once. Because
+the original call has not reached an adapter, this is not a retry of a side
+effect. The runtime preserves the original tool-call ID and emits exactly one
+paired result. Failed loading emits that one result and marks the phase blocked.
+
+Limits are explicit: no more than the resolved phase skill list is loaded, each
+skill is attempted once per phase revision, total injected skill text uses the
+existing bounded stacked-instruction budget, and a steer that changes the
+required skill set creates a new plan revision before another load attempt.
+
+CLI and Desktop receive shared protocol events for:
+
+- plan revision and phase/step snapshots;
+- current phase and `Step x / y` progress;
+- prerequisite `loading`, `ready`, or `blocked` state;
+- completion evidence and phase transition;
+- steer classification, affected phase/step IDs, and resulting revision.
+
+Clients render these events but do not infer lifecycle state or advance work.
+The UI labels preflight honestly, for example **Loading planning workflow** or
+**Planning workflow unavailable**, rather than showing a failed domain tool
+that the runtime never dispatched.
+
+##### Steering revises the execution ledger
+
+Section 13.10 remains the authority contract. Phase-aware reconciliation adds
+the following transition rules:
+
+- clarification or evidence may update the current step without resetting it;
+- a tactical correction may replace or split the current step while preserving
+  completed evidence and recording why the old step changed;
+- scope, ordering, acceptance, or verification changes revise affected current
+  and future phases before the next related mutation;
+- completed phases remain immutable evidence; if new work invalidates their
+  result, the runtime appends a remediation phase instead of rewriting history;
+- a goal conflict blocks the current step and waits for explicit goal
+  resolution;
+- extension observations may append in-scope remediation or verification steps
+  but cannot mark them complete, expand authority, or approve their own fix.
+
+Queue remains a later user turn. Steer applies at the next safe boundary,
+reconciles the phase ledger, and then resumes from the resulting current step.
+Compaction and goal continuation restore the canonical phase/step state rather
+than asking the model to reconstruct progress from transcript prose.
+
 ## Profile behavior summary
 
 | Concern | Engineering | Research | Data Science | Study | Writing | Custom |
@@ -2440,6 +2583,45 @@ wire shapes before the first migration is considered complete.
   orchestration families have migrated; P23-23 is not complete while an
   unclassified public contract or known mixed-responsibility hotspot remains.
 
+### P23-24 — Phase execution ledger and required-skill lifecycle
+
+This work ships in reviewable slices and does not share a PR with Desktop
+styling or release packaging:
+
+#### P23-24a — Host-owned prerequisite loading
+
+- Extract one shared required-skill resolver used by planning prerequisites and
+  profile stages, preserving workspace/package precedence and subtractive tool
+  policy.
+- Preflight current-phase skills before the first model action and publish
+  bounded loading/ready/blocked events.
+- Keep the mutation authorization check as defense in depth; suspend and
+  re-authorize one not-yet-dispatched call once rather than returning a
+  model-dependent “call `get_skill` and retry” loop.
+- Add disabled, missing, malformed, denied, cancellation, pairing, bounded
+  retry, and approval re-check tests.
+
+#### P23-24b — Phase-aware durable plan contract
+
+- Add phase and step contracts in the planning types subpath with host-owned
+  IDs, dependencies, acceptance, evidence, skill prerequisites, and bounded
+  statuses.
+- Upgrade persisted flat plans into one compatibility phase and retain a
+  derived flat projection for older clients.
+- Make `update_plan`, goal completion, compaction, resume, and requirement
+  trace consume the canonical phase-aware state.
+- Add transition invariants so one current phase/step exists, executable phases
+  contain steps, and completion advances only after evidence-backed gates.
+
+#### P23-24c — Steering and shared CLI/Desktop projection
+
+- Reconcile Queue, Steer, background observations, and goal continuation against
+  phase and step IDs while preserving completed evidence.
+- Add protocol events and CLI/Desktop views for phase progress, `Step x / y`,
+  prerequisite loading, blocked reasons, plan revision, and steering impact.
+- Add cross-surface tests for safe-boundary steering, phase splitting,
+  remediation append, compaction, restart/resume, and contradictory goal input.
+
 ## Acceptance criteria
 
 1. All six built-in profiles resolve distinct orchestration-profile JSON.
@@ -2596,6 +2778,21 @@ wire shapes before the first migration is considered complete.
     contracts consumed by Core, CLI, Electron, dev bridges, and Desktop; the
     renderer no longer redeclares those records, while its parsers, form state,
     formatting, and React components remain in focused Desktop-owned modules.
+65. Required planning or decision skills are host-loaded and policy-bound
+    before the affected phase mutates; an eligible missing skill cannot produce
+    repeated “call `get_skill` and retry” pauses.
+66. A race at the mutation gate performs at most one load attempt per missing
+    skill and dispatches the original tool at most once after every authority
+    and approval gate is re-evaluated; failure emits exactly one paired result.
+67. Every executable phase owns at least one bounded step, only one phase and
+    one step are active, and evidence-backed completion durably advances to the
+    next ready phase.
+68. A material Steer revises affected current/future phases before related
+    mutation, preserves completed phase evidence, and appends remediation
+    instead of rewriting completed history.
+69. CLI and Desktop render the same Core-owned phase, step, prerequisite,
+    evidence, and steering-revision events and never infer or advance lifecycle
+    state independently.
 
 ## Non-goals
 
