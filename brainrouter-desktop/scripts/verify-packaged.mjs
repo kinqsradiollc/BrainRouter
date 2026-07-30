@@ -29,7 +29,12 @@ const root = path.resolve(import.meta.dirname, '..');
 const OUT_DIRS = ['dist', 'release', 'out'].map((d) => path.join(root, d));
 const EXPECTED_ELECTRON_VERSION = '43.1.1';
 const EXPECTED_CHROMIUM_MAJOR = 150;
-const PACKAGED_SMOKE_TIMEOUT_MS = 30_000;
+// A credential-less macOS package can spend tens of seconds in the OS launch
+// path before Electron creates its first renderer. Keep that cost out of the
+// bridge-readiness budget so a slow Gatekeeper/app startup is not reported as
+// a broken packaged browser.
+const PACKAGED_LAUNCH_TIMEOUT_MS = 90_000;
+const PACKAGED_BRIDGE_TIMEOUT_MS = 30_000;
 
 function walk(dir, pred, hits = [], depth = 0) {
   if (depth > 6 || !fs.existsSync(dir)) return hits;
@@ -80,7 +85,7 @@ function selectRunnableApp(apps) {
 }
 
 async function waitForDevTools(port, child, logs, launchError) {
-  const deadline = Date.now() + PACKAGED_SMOKE_TIMEOUT_MS;
+  const deadline = Date.now() + PACKAGED_LAUNCH_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (launchError()) throw new Error(`could not launch the packaged app: ${launchError().message}${logs()}`);
     if (child.exitCode !== null) {
@@ -167,6 +172,7 @@ async function runPackagedBrowserSmoke(app) {
   let launchError = null;
   const child = spawn(executable, [
     `--remote-debugging-port=${port}`,
+    '--remote-debugging-address=127.0.0.1',
     `--user-data-dir=${profile}`,
     '--no-first-run',
   ], {
@@ -213,7 +219,7 @@ async function runPackagedBrowserSmoke(app) {
     })()`;
 
     let smoke = null;
-    const bridgeDeadline = Date.now() + PACKAGED_SMOKE_TIMEOUT_MS;
+    const bridgeDeadline = Date.now() + PACKAGED_BRIDGE_TIMEOUT_MS;
     while (!smoke && Date.now() < bridgeDeadline) {
       if (launchError) throw new Error(`packaged app launch failed: ${launchError.message}${logs()}`);
       if (child.exitCode !== null) throw new Error(`packaged app exited before its browser bridge became ready${logs()}`);
