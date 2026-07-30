@@ -1,7 +1,7 @@
 # ADR-026 — Desktop Native Visual System and Platform-Adaptive Shell
 
-**Status:** Proposed for `release/0.4.18`; user approval is required before
-implementation · **Builds on:** ADR-019's Desktop security boundary and the
+**Status:** Accepted for phased implementation on `release/0.4.18` ·
+**Approved:** 2026-07-30 · **Builds on:** ADR-019's Desktop security boundary and the
 shared interface contract shipped in 0.4.17 · **Does not authorize:** runtime,
 browser-engine, terminal-transport, or orchestration changes.
 
@@ -26,7 +26,8 @@ Existing behavior—including mounted panel state, browser isolation, Monaco
 editing, terminal PTYs, and the preload-only capability boundary—must remain
 intact.
 
-Implementation must not begin until this ADR is approved.
+Implementation proceeds through the dependency-ordered slices and review gates
+below.
 
 ## Context
 
@@ -317,7 +318,7 @@ engine, terminal transport, or orchestration change.
 
 | ID | Slice | State | Acceptance evidence |
 |---|---|---|---|
-| D26-0 | Approve this decision and its native-boundary policy | **Review** | User approval recorded; no implementation before approval |
+| D26-0 | Approve this decision and its native-boundary policy | **Complete** | User approval recorded on 2026-07-30 |
 | D26-1 | Add System/Light/Dark/High Contrast resolution, migration, preload event, and matching startup canvas | Blocked by D26-0 | Preference migration tests; live system-switch check; no startup color flash |
 | D26-2 | Add foundation modules and make `theme.css` an ordered compatibility manifest | Blocked by D26-1 | Token/literal audit; unchanged baseline screenshots |
 | D26-3 | Migrate window shell, activity bar, sidebar, top controls, views rail, and dock | Blocked by D26-2 | macOS and Windows shell screenshots; drag, resize, focus, and state checks |
@@ -366,9 +367,9 @@ Required human review checkpoints:
 - Combining visual cleanup with unrelated package or runtime restructuring.
 - Drawing fake platform window controls.
 
-## Approval gate
+## Approval record
 
-Implementation is paused until the user approves this ADR. Approval includes:
+The user approved this ADR on 2026-07-30. The approval includes:
 
 1. System appearance as the default for new installations;
 2. native/default Windows and Linux frames for the initial migration;

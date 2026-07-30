@@ -13,7 +13,7 @@ a version is tagged.
 
 | Version               | State          | Theme                                                                                           |
 | --------------------- | -------------- | ----------------------------------------------------------------------------------------------- |
-| **0.4.18**            | Proposed       | Native Desktop visual system, platform-adaptive shell, accessibility, and workbench performance |
+| **0.4.18**            | In progress    | Native Desktop visual system, platform-adaptive shell, accessibility, and workbench performance |
 | **0.4.17**            | Shipped        | Runtime plane, automations, connectors, review operations, and cross-surface product completion |
 | **0.4.16**            | Shipped        | Autonomous fleet, unified desktop, Track maturation, PostgreSQL brain, remote brain, and Atlas  |
 | **0.4.15**            | Shipped        | Requirement-first workflow and the first unified Chat · Track · Code workspace                  |
@@ -101,7 +101,7 @@ Implementation checkmarks in this section describe the shipped release.
 
 ## 0.4.18 — Native Desktop visual system
 
-**Status: proposed; implementation is paused for ADR approval.**
+**Status: accepted for phased implementation on 2026-07-30.**
 
 - [ ] Resolve System, Light, Dark, and High Contrast appearance through a
       narrow native host contract.
