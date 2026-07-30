@@ -3,11 +3,11 @@
  * the CLI and the Desktop app (the interactive terminal layer stays in the CLI;
  * the agent reaches the user through an injected `InteractivePrompter` port).
  *
- * Consumers import the compiled deep paths
- * (`@kinqs/brainrouter-core/dist/<domain>/<module>.js`). The source is organized
- * by DOMAIN, not by layer:
+ * Consumers import curated domain entrypoints
+ * (`@kinqs/brainrouter-core/<domain>`). The source is organized by DOMAIN, not
+ * by layer:
  *
- *   provider/   — LLM provider catalog + per-role model routing + tier ladder
+ *   provider/   — model catalog, policy, routing/recovery, adapters, and tiers
  *   agent/      — the Agent, its prompter port, repair, patch/edit helpers
  *   tool/       — LLM tool specs/registry/executors + tool budget
  *   orchestration/ — multi-agent coordination (roles, router, phases, spawn…)
@@ -21,7 +21,7 @@
  *   pack/ · git/ · workspace/ · worktree/ — first-class workflow domains
  *   util/       — cross-cutting helpers with no natural domain home
  *
- * This barrel stays minimal during the migration; the per-module deep imports
- * are the supported surface.
+ * This root barrel stays minimal; curated domain entrypoints are the supported
+ * surface. The documented Desktop renderer exception is temporary.
  */
 export const CORE_PACKAGE = '@kinqs/brainrouter-core';

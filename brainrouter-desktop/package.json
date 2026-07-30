@@ -1,6 +1,6 @@
 {
   "name": "brainrouter-desktop",
-  "version": "0.4.16",
+  "version": "0.4.17",
   "private": true,
   "description": "BrainRouter Desktop — native macOS/Windows shell (Electron + React) over the shared @kinqs/brainrouter-core agent runtime (the same engine the CLI uses).",
   "type": "module",
@@ -10,11 +10,15 @@
     "build:electron": "node -e \"fs.rmSync('dist-electron',{recursive:true,force:true})\" && tsc -p tsconfig.electron.json",
     "build:deps": "npm --prefix ../packages/types run build && npm --prefix ../packages/agent-protocol run build && npm --prefix ../packages/core run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build:deps && npm run typecheck && npm run build:electron && node --test \"dist-electron/**/*.test.js\" && tsx --test \"src/**/*.test.ts\" \"scripts/**/*.test.ts\"",
+    "test": "npm run build:deps && npm run typecheck && npm run build:electron && node --test \"dist-electron/**/*.test.js\" \"scripts/**/*.test.mjs\" && tsx --test \"src/**/*.test.ts\" \"scripts/**/*.test.ts\"",
+    "test:browser:harness": "node --test \"scripts/**/*.test.mjs\"",
+    "test:browser:e2e": "npm run build:deps && npm run build && node scripts/browser-e2e.mjs",
+    "bench:browser:compare": "npm run build:deps && npm run build && node scripts/browser-benchmark.mjs",
     "dev": "vite",
     "start": "npm run build:deps && npm run build && electron .",
     "start:fast": "electron .",
     "electron": "electron .",
+    "rebuild:native": "npx --yes electron-builder install-app-deps",
     "reset:desktop": "node scripts/reset-desktop.mjs",
     "dist:mac": "npm run build && npx --yes electron-builder --mac --publish never",
     "dist:win": "npm run build && npx --yes electron-builder --win --publish never",
@@ -23,6 +27,7 @@
   "build": {
     "appId": "com.brainrouter.desktop",
     "productName": "BrainRouter",
+    "electronVersion": "43.1.1",
     "afterSign": "build/notarize.cjs",
     "directories": {
       "output": "release"
@@ -67,37 +72,45 @@
           ]
         }
       ]
-    },
-    "electronVersion": "33.4.11"
+    }
   },
   "dependencies": {
     "@dagrejs/dagre": "^3.0.0",
-    "@kinqs/brainrouter-agent-protocol": "^0.4.16",
-    "@kinqs/brainrouter-core": "^0.4.16",
+    "@kinqs/brainrouter-agent-protocol": "^0.4.17",
+    "@kinqs/brainrouter-core": "^0.4.17",
     "@lobehub/icons-static-svg": "^1.91.0",
     "@monaco-editor/react": "^4.7.0",
     "@nut-tree-fork/libnut": "^4.2.6",
     "@nut-tree-fork/provider-interfaces": "^4.2.6",
     "@nut-tree-fork/shared": "^4.2.6",
     "@types/react-syntax-highlighter": "^15.5.13",
+    "@types/ssh2": "^1.15.5",
     "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-serialize": "^0.14.0",
     "@xterm/xterm": "^6.0.0",
     "@xyflow/react": "^12.11.1",
     "d3-force": "^3.0.0",
     "monaco-editor": "^0.55.1",
+    "node-pty": "^1.1.0",
+    "qrcode": "^1.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",
     "react-syntax-highlighter": "^16.1.1",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "ssh2": "^1.17.0",
+    "tweetnacl": "^1.0.3",
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@types/d3-force": "^3.0.10",
     "@types/node": "^22.5.0",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^18.3.5",
     "@types/react-dom": "^18.3.0",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^4.3.1",
-    "electron": "^33.0.0",
+    "electron": "43.1.1",
     "tsx": "^4.7.0",
     "typescript": "^5.5.4",
     "vite": "^5.4.6"

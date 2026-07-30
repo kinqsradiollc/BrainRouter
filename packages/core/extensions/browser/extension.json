@@ -1,0 +1,7 @@
+{
+  "name": "browser",
+  "version": "0.4.17",
+  "description": "Control BrainRouter's embedded multi-tab browser through a live per-Agent Desktop port; no external browser fallback.",
+  "main": "index.js",
+  "contributes": ["tools"]
+}

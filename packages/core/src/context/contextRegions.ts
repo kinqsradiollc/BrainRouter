@@ -29,7 +29,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { snapshotPrefix, type PrefixSnapshot } from '../util/prefixDrift.js';
+import { snapshotPrefix, type PrefixSnapshot } from '../util/tokens/prefixDrift.js';
 
 /** PREFIX-DRIFT — which component last invalidated the prefix cache. */
 export type PrefixDriftCause = 'system' | 'tools' | 'anchors' | 'fewShots';

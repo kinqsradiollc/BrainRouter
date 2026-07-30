@@ -8,7 +8,7 @@ import {
   reindexSignature,
   shouldReindex,
   type ReindexGate,
-} from '../util/autoReindex.js';
+} from '../util/indexing/autoReindex.js';
 
 // --- extension + language --------------------------------------------------
 

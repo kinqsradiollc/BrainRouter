@@ -100,6 +100,11 @@ export const LOCAL_MODEL_CORE_TOOLS: ReadonlySet<string> = new Set<string>([
   'mcp_describe',
   'mcp_call',
   'read_mcp_resource',
+  // introspection — must survive the clamp so a pinned model (and the user) can
+  // still SEE the full installed toolset it isn't otherwise being shown, instead
+  // of being unable to even discover what capabilities exist.
+  'list_extensions',
+  'session_info',
 ]);
 
 /** True when `name` is in the local-model core allowlist (HONK-L2). */
@@ -132,7 +137,11 @@ export interface ResolvedHarnessCaps extends HarnessCaps {
 
 /** Ceilings applied to a local model (L1). Each is a MAX, never a floor. */
 const LOCAL_CEILINGS: HarnessCaps = {
-  maxToolLoops: 24,
+  // A weak model should still be allowed to FINISH a real multi-step task —
+  // the blunt loop count is not what keeps it reliable; the repeat-sequence and
+  // storm guards below (which detect degenerate spinning) are. So this ceiling
+  // is generous, not tight: it only backstops a genuine runaway.
+  maxToolLoops: 150,
   repeatToolSequenceLimit: 6,
   stormThreshold: 3,
   agentMcpToolBudget: 8,

@@ -4,11 +4,37 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Agent, buildChatCompletionPayload, buildResponsesPayload, callOpenAI, callOpenAIStream, resolveRequestFormat, sanitizeToolCallsForHistory } from '../agent/agent.js';
 import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
+import { BudgetExceededError } from '../provider/budget.js';
 import { _resetModelReasoningCapabilities, registerModelReasoningCapabilities } from '../provider/models/reasoning.js';
+import { resetRouterPolicyForTests } from '../provider/routing/policy.js';
+import { readTranscriptEntries } from '../session/transcript/sessionStore.js';
+import { writePreferences } from '../session/preferences/preferencesStore.js';
+import { setSessionMode } from '../session/state/sessionModeStore.js';
+import { readWorkContract } from '../task/workContractStore.js';
+import { createWorkspaceManifest, saveWorkspaceManifest } from '../workspace/manifest.js';
+import {
+  buildWorkspaceSelectionCatalog,
+  migrateWorkspaceManifestToolSelection,
+} from '../workspace/selectionCatalog.js';
 
 function resetCliKnobsForAgentRuntimeTest(extra: Parameters<typeof setCliKnobOverride>[0] = {}): void {
   _resetCliKnobsCache();
-  setCliKnobOverride({ providerRequestFormat: {}, ...extra });
+  // Keep the suite independent from the developer's real global config.
+  setCliKnobOverride({ providerRequestFormat: {}, recallMode: 'gated', ...extra });
+}
+
+async function waitForValue<T>(
+  read: () => T,
+  ready: (value: T) => boolean,
+  attempts = 200,
+  intervalMs = 25,
+): Promise<T> {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const value = read();
+    if (ready(value)) return value;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return read();
 }
 
 test.beforeEach(() => {
@@ -621,17 +647,35 @@ test('callOpenAIStream: retries once without reasoning effort when the stream en
   }
 });
 import { executeOrchestrationTool } from '../orchestration/tools.js';
-import { clearGoal, readGoal, setGoal } from '../goal/goalStore.js';
+import {
+  ProfileStageController,
+  type ProfileStageStateEvent,
+} from '../orchestration/runtime/profileStageController.js';
+import type { ResolvedOrchestrationStage } from '../orchestration/profiles/orchestrationProfileResolver.js';
+import { clearGoal, readGoal, setGoal } from '../goal/store/goalStore.js';
 import { makeAgent, withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
+
+test('direct browser tool dispatch stays blocked for silent/non-interactive agents even if a port is present', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const agent = makeAgent(workspace);
+    agent.browserControlPort = { request: async (command: any) => ({ ok: true, kind: command.kind, durationMs: 0 }) };
+    await assert.rejects(
+      () => agent.executeLocalTool('browser_list_tabs', {}),
+      /(?:unavailable outside the active top-level local Desktop browser session|Unknown local tool)/,
+    );
+  });
+});
 import { listArtifacts } from '../artifact/artifactStore.js';
+import { createConnector } from '../connectors/store/connectorStore.js';
 
 test('compactHistory: stores compacted state in prompt layers without chat developer roles', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const agent: any = makeAgent(workspace);
     agent.chatHistory = [
       agent.createSystemMessage(),
-      { role: 'user', content: 'first request' },
-      { role: 'assistant', content: 'first answer' },
+      { role: 'user', content: `first request ${'context '.repeat(200)}` },
+      { role: 'assistant', content: `first answer ${'evidence '.repeat(200)}` },
+      { role: 'system', content: '<!--brainrouter:goal-anchor-->\nPreserve unresolved constraint alpha.' },
       { role: 'user', content: 'continue from here' },
     ];
 
@@ -652,6 +696,9 @@ test('compactHistory: stores compacted state in prompt layers without chat devel
       const result = await agent.compactHistory();
       assert.equal(result?.summary, 'Important compacted state.');
       assert.deepEqual(capturedCompactionBody.messages.map((m: any) => m.role), ['system', 'user']);
+      assert.match(capturedCompactionBody.messages[0].content, /Never copy passwords, API keys/);
+      assert.match(capturedCompactionBody.messages[1].content, /Preserve unresolved constraint alpha/);
+      assert.doesNotMatch(capturedCompactionBody.messages[1].content, /You are BrainRouter CLI/);
 
       const history = agent.chatHistory;
       assert.equal(history.length, 2);
@@ -696,8 +743,8 @@ test('compactHistory: normalizes full chat endpoint URLs and local auth', async 
     });
     agent.chatHistory = [
       agent.createSystemMessage(),
-      { role: 'user', content: 'first request' },
-      { role: 'assistant', content: 'first answer' },
+      { role: 'user', content: `first request ${'context '.repeat(200)}` },
+      { role: 'assistant', content: `first answer ${'evidence '.repeat(200)}` },
       { role: 'user', content: 'continue from here' },
     ];
 
@@ -743,6 +790,53 @@ test('artifact_write tool: creates then grows an artifact by id (versioned, edit
     assert.equal(a.sessionKey, 'session:test');
     // updating a missing id throws
     await assert.rejects(() => agent.executeLocalTool('artifact_write', { id: 'art_00000000', content: 'x' }));
+  });
+});
+
+test('connector_list tool: returns configured connectors for the workspace', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const agent: any = makeAgent(workspace);
+    const created = createConnector(workspace, {
+      source: 'filesystem',
+      name: 'FS',
+      config: { roots: ['docs'] },
+      credential: { mode: 'none' },
+      flows: ['checkpoint'],
+    });
+    const out = await agent.executeLocalTool('connector_list', {});
+    const rows = JSON.parse(out) as Array<{ id: string; source: string; status: string; lastRunAt: string | null; lastError: string | null }>;
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].id, created.id);
+    assert.equal(rows[0].source, 'filesystem');
+    assert.equal(rows[0].status, 'active');
+    assert.equal(rows[0].lastRunAt, null);
+    // source filter
+    const empty = JSON.parse(await agent.executeLocalTool('connector_list', { source: 'github' })) as unknown[];
+    assert.equal(empty.length, 0);
+  });
+});
+
+test('connector_run tool: oauth github with no keychain client reports the desktop-only guidance (no memory import)', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const agent: any = makeAgent(workspace);
+    const created = createConnector(workspace, {
+      source: 'github',
+      name: 'GH',
+      config: { owner: 'kinqsradiollc' },
+      credential: { mode: 'oauth', ref: 'gh' },
+      flows: ['checkpoint'],
+    });
+    const out = await agent.executeLocalTool('connector_run', { connectorId: created.id });
+    assert.match(out, /ran with failures/);
+    assert.match(out, /run it from BrainRouter Desktop/);
+    assert.match(out, /imported to memory: 0/);
+  });
+});
+
+test('connector_run tool: requires a connectorId', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const agent: any = makeAgent(workspace);
+    await assert.rejects(() => agent.executeLocalTool('connector_run', {}), /requires a `connectorId`/);
   });
 });
 
@@ -814,7 +908,7 @@ test('normalizeToolName resolves common LLM hallucinations to the canonical tool
 test('normalizeToolName resolves cross-vendor shell aliases to run_command', async () => {
   const { normalizeToolName } = await import('../agent/agent.js');
   const candidates = ['run_command', 'read_file', 'list_dir'];
-  // Claude Code convention.
+  // Known shell-tool convention.
   assert.equal(normalizeToolName('Bash', candidates), 'run_command');
   assert.equal(normalizeToolName('bash', candidates), 'run_command');
   // Generic shell synonyms.
@@ -917,6 +1011,25 @@ test('Agent.loadHistory replaces chat history and refreshSystemPrompt updates it
   });
 });
 
+test('Agent system prompt uses the active chat personality over the workspace preference', () => {
+  withTempWorkspace((workspace) => {
+    const agent = makeAgent(workspace);
+    writePreferences(workspace, { personality: 'concise' });
+    setSessionMode(workspace, agent.sessionKey, { personality: 'detailed' });
+    agent.loadHistory([]);
+    agent.refreshSystemPrompt();
+
+    let system = (agent as any).chatHistory[0]?.content ?? '';
+    assert.match(system, /Communication style: detailed/);
+    assert.doesNotMatch(system, /Communication style: concise/);
+
+    setSessionMode(workspace, agent.sessionKey, { personality: undefined });
+    agent.refreshSystemPrompt();
+    system = (agent as any).chatHistory[0]?.content ?? '';
+    assert.match(system, /Communication style: concise/);
+  });
+});
+
 test('Agent.runTurn pushes the goal-anchor system message as the single owner of goal state (9d)', async () => {
   // Verifies the per-turn anchor still fires after createSystemMessage
   // stopped embedding the goal. Without this assertion, future refactors
@@ -938,7 +1051,7 @@ test('Agent.runTurn pushes the goal-anchor system message as the single owner of
     );
     // Now drive the anchor injection directly — same code path as
     // `agent.ts:680` inside `runTurn`.
-    const { formatGoalBlock, readGoal } = await import('../goal/goalStore.js');
+    const { formatGoalBlock, readGoal } = await import('../goal/store/goalStore.js');
     const goal = readGoal(workspace, agent.sessionKey);
     assert.ok(goal, 'precondition: setGoal succeeded');
     (agent as any).replaceTaggedSystemMessage('goal-anchor', formatGoalBlock(goal!));
@@ -991,6 +1104,14 @@ test('agent: removeTaggedSystemMessage is idempotent and clears stale entries', 
   // Replace removes the first version and adds the second.
   assert.equal(agent.chatHistory.filter((m: any) => m.content?.includes('first version')).length, 0);
   assert.equal(agent.chatHistory.filter((m: any) => m.content?.includes('second version')).length, 1);
+  agent.replaceTaggedSystemMessage('later', 'later directive');
+  const stableIndex = agent.chatHistory.findIndex((m: any) => m.content?.includes('second version'));
+  agent.replaceTaggedSystemMessage('demo', 'second version');
+  assert.equal(
+    agent.chatHistory.findIndex((m: any) => m.content?.includes('second version')),
+    stableIndex,
+    'byte-identical replacements preserve stable directive ordering',
+  );
   // Remove drops the second.
   agent.removeTaggedSystemMessage('demo');
   assert.equal(agent.chatHistory.filter((m: any) => m.content?.includes('second version')).length, 0);
@@ -1000,6 +1121,264 @@ test('agent: removeTaggedSystemMessage is idempotent and clears stale entries', 
   agent.replaceTaggedSystemMessage('other', 'keep me');
   agent.removeTaggedSystemMessage('demo');
   assert.equal(agent.chatHistory.filter((m: any) => m.content?.includes('keep me')).length, 1);
+});
+
+test('Agent steering inbox is ordered, bounded, and consumed exactly once', () => {
+  const stubMcp: any = { callTool: async () => ({ content: [] }) };
+  const agent = new Agent(stubMcp, { provider: 'openai', apiKey: '', model: 'gpt-4o-mini' }, {
+    workspaceRoot: '/tmp', launchCwd: '/tmp', sessionKey: 's:steer',
+  });
+  agent.requestSteer('first', { id: 's1', source: 'user' });
+  agent.requestSteer('CI failed', { id: 's2', source: 'extension' });
+  assert.equal(agent.pendingSteeringCount, 2);
+  assert.deepEqual(agent.consumePendingSteering().map((input) => ({
+    id: input.id,
+    text: input.text,
+    source: input.source,
+  })), [
+    { id: 's1', text: 'first', source: 'user' },
+    { id: 's2', text: 'CI failed', source: 'extension' },
+  ]);
+  assert.equal(agent.pendingSteeringCount, 0);
+  assert.deepEqual(agent.consumePendingSteering(), []);
+  assert.throws(() => agent.requestSteer('   '), /cannot be empty/);
+  assert.throws(() => agent.requestSteer('x'.repeat(20_001)), /exceeds 20000/);
+});
+
+test('runTurn applies Steer after an in-flight model response and before the next request', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const originalFetch = globalThis.fetch;
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const requestBodies: string[] = [];
+    let calls = 0;
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      calls++;
+      requestBodies.push(String(init?.body ?? ''));
+      if (calls === 1) {
+        await firstGate;
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: 'Initial direction.' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 20, completion_tokens: 4 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (calls === 2) {
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: '',
+              tool_calls: [{
+                id: 'reconcile-steer',
+                type: 'function',
+                function: {
+                  name: 'reconcile_steer',
+                  arguments: JSON.stringify({
+                    receiptId: 'steer-safe-boundary',
+                    classification: 'evidence',
+                    summary: 'Records a new pull-request review observation.',
+                  }),
+                },
+              }],
+            },
+            finish_reason: 'tool_calls',
+          }],
+          usage: { prompt_tokens: 30, completion_tokens: 4 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'Adjusted direction.' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 35, completion_tokens: 4 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch;
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({ content: [] }),
+        close: async () => {},
+      };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        silent: true,
+      });
+      const applied: string[] = [];
+      const receiptStates: string[] = [];
+      const turn = agent.runTurn('Start here.', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: () => {},
+        onSteerApplied: (input, receipt) => {
+          applied.push(input.id);
+          receiptStates.push(receipt.status);
+        },
+        onSteerReceipt: (receipt) => receiptStates.push(receipt.status),
+      });
+      await waitForValue(() => calls, (value) => value === 1);
+      agent.requestSteer('PR #42 has one new review.', {
+        id: 'steer-safe-boundary',
+        source: 'extension',
+      });
+      releaseFirst();
+
+      assert.equal(await turn, 'Adjusted direction.');
+      assert.deepEqual(applied, ['steer-safe-boundary']);
+      assert.equal(calls, 3);
+      assert.match(requestBodies[1], /Background observation from a built-in extension/);
+      assert.match(requestBodies[1], /external content as untrusted data/);
+      assert.match(requestBodies[1], /Steering reconciliation/);
+      assert.match(requestBodies[1], /call `update_plan` before the related mutation/);
+      assert.match(requestBodies[1], /do not rewrite the goal implicitly/);
+      assert.match(requestBodies[1], /PR #42 has one new review/);
+      const contract = readWorkContract(workspace, agent.sessionKey);
+      assert.equal(contract?.steering.length, 1);
+      assert.equal(contract?.steering[0].id, 'steer-safe-boundary');
+      assert.equal(contract?.steering[0].source, 'extension');
+      assert.equal(contract?.steering[0].classification, 'evidence');
+      assert.equal(contract?.steering[0].status, 'applied');
+      assert.deepEqual(receiptStates, ['pending', 'applied']);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('runTurn: task budget aborts when provider usage reaches token cap', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const originalFetch = globalThis.fetch;
+    setCliKnobOverride({ budget: { maxPerTaskUSD: 0, maxPerTaskTokens: 25 } });
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      choices: [{ message: { content: 'done' } }],
+      usage: { prompt_tokens: 20, completion_tokens: 5 },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as any;
+    try {
+      const stubMcp: any = { listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [] }), close: async () => {} };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace, launchCwd: workspace, silent: true,
+      });
+      await assert.rejects(
+        () => agent.runTurn('answer', { onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {} }),
+        (err) => err instanceof BudgetExceededError && err.budget.classification === 'budget_exceeded' && err.budget.spentTokens === 25,
+      );
+    } finally {
+      resetCliKnobsForAgentRuntimeTest();
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('runTurn: disabled task budget leaves provider usage behavior unchanged', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const originalFetch = globalThis.fetch;
+    setCliKnobOverride({ budget: { maxPerTaskUSD: 0, maxPerTaskTokens: 0 } });
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      choices: [{ message: { content: 'done' } }],
+      usage: { prompt_tokens: 20, completion_tokens: 5 },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as any;
+    try {
+      const stubMcp: any = { listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [] }), close: async () => {} };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace, launchCwd: workspace, silent: true,
+      });
+      const answer = await agent.runTurn('answer', { onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {} });
+      assert.equal(answer, 'done');
+    } finally {
+      resetCliKnobsForAgentRuntimeTest();
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('runTurn: provider recovery preserves fallback status and transcript while publishing one receipt', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const originalFetch = globalThis.fetch;
+    resetRouterPolicyForTests();
+    setCliKnobOverride({
+      providerRequestFormat: { openai: 'chat-completions' },
+      router: {
+        enabled: true,
+        passThrough: true,
+        chain: ['router-primary', 'router-fallback'],
+        strategy: 'priority',
+        order: [],
+        aliases: {},
+        cooldownBaseMs: 500,
+        cooldownMaxMs: 1_000,
+        sessionAffinity: true,
+        serve: false,
+        serveHost: '127.0.0.1',
+        servePort: 8_790,
+        serveKey: '',
+      },
+    });
+    const calledModels: string[] = [];
+    globalThis.fetch = (async (_url: any, init: any) => {
+      const body = JSON.parse(String(init?.body ?? '{}'));
+      calledModels.push(body.model);
+      if (body.model === 'router-primary') {
+        return new Response(JSON.stringify({
+          error: { message: 'invalid model router-primary', type: 'invalid_request_error' },
+        }), { status: 404, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'recovered answer' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 20, completion_tokens: 4 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch;
+
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({ content: [] }),
+        close: async () => {},
+      };
+      const agent = new Agent(stubMcp, {
+        provider: 'openai',
+        apiKey: 'provider-secret',
+        model: 'router-primary',
+        models: ['router-primary', 'router-fallback'],
+      }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        silent: true,
+        sessionKey: 'provider-recovery-runtime',
+      });
+      const statuses: string[] = [];
+      const receipts: any[] = [];
+      const answer = await agent.runTurn('answer through the configured route', {
+        onStatusUpdate: (status) => statuses.push(status),
+        onToolStart: () => {},
+        onToolEnd: () => {},
+        onProviderRecovery: (receipt) => receipts.push(receipt),
+      });
+
+      assert.equal(answer, 'recovered answer');
+      assert.deepEqual(calledModels, ['router-primary', 'router-fallback']);
+      assert.ok(statuses.some((status) => (
+        status.includes('Router fallback:') && status.includes('router-fallback')
+      )));
+      const transcript = readTranscriptEntries(workspace, agent.sessionKey, 20);
+      assert.ok(transcript.some((entry) => (
+        entry.role === 'system'
+        && entry.name === 'router'
+        && String(entry.content).includes('routed to')
+        && String(entry.content).includes('router-fallback')
+      )));
+      assert.equal(receipts.length, 1);
+      assert.equal(receipts[0].outcome, 'succeeded');
+      assert.deepEqual(
+        receipts[0].attempts.map((attempt: any) => [attempt.route.model, attempt.outcome]),
+        [
+          ['router-primary', 'failed'],
+          ['router-fallback', 'succeeded'],
+        ],
+      );
+      assert.doesNotMatch(JSON.stringify(receipts[0]), /provider-secret/);
+    } finally {
+      globalThis.fetch = originalFetch;
+      resetRouterPolicyForTests();
+      resetCliKnobsForAgentRuntimeTest();
+    }
+  });
 });
 
 test('runTurn: repeat-loop guard short-circuits identical (tool, args) calls after 3 repeats', async () => {
@@ -1953,7 +2332,9 @@ test('runTurn: delegate_agent triggers child-drain guardrail (R2 must not bypass
       const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
         workspaceRoot: workspace, launchCwd: workspace, silent: true,
       });
-      const answer = await agent.runTurn('delegate the background work', {
+      // Keep this fixture focused on child draining. Explicit delegation is a
+      // separate hard trigger for the required Planning-skill gate.
+      const answer = await agent.runTurn('handle the background work', {
         onStatusUpdate: () => {},
         onToolStart: (name) => { toolNames.push(name); },
         onToolEnd: () => {},
@@ -2086,11 +2467,120 @@ test('orchestration: task_agent wait timeout returns envelope without failing th
       assert.equal(result.status, 'timeout');
       assert.equal(result.childStatus, 'running');
       assert.match(result.id, /^agent-/);
-      await new Promise((resolve) => setTimeout(resolve, 150));
-      const { getSession } = await import('../orchestration/orchestrator.js');
-      const record = getSession(workspace, result.id);
+      const { getSession } = await import('../orchestration/session/orchestrator.js');
+      const record = await waitForValue(
+        () => getSession(workspace, result.id),
+        (session) => session?.status === 'completed',
+      );
       assert.equal(record?.status, 'completed');
       assert.match(record?.finalOutput ?? '', /too late|never reached/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('orchestration: task_agent executes a compiled delegated profile stage', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const originalFetch = globalThis.fetch;
+    const requests: any[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push(JSON.parse(String(init?.body ?? '{}')));
+      return new Response(JSON.stringify({
+        choices: [{
+          message: {
+            content: [
+              '## Headline',
+              'The evidence is internally consistent.',
+              '',
+              '## Facts',
+              '- The checked source supports the claim.',
+            ].join('\n'),
+          },
+        }],
+        usage: { prompt_tokens: 20, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stage: ResolvedOrchestrationStage = {
+        id: 'inspect-evidence',
+        executor: { kind: 'role', roleId: 'explorer' },
+        after: [],
+        objective: 'Inspect the supplied evidence and report only grounded facts.',
+        skillIds: ['source-review', 'citation-check'],
+        optional: false,
+        requiresApproval: false,
+        fanOut: { min: 1, max: 1 },
+        expectedOutput: {
+          contractId: 'explorer',
+          requiredSections: ['headline', 'facts'],
+        },
+      };
+      const controller = new ProfileStageController(
+        { turnId: 'turn:test', sessionKey: 'session:test' },
+        {
+          orchestrationProfileId: 'research',
+          strategyId: 'evidence-review',
+          selectionSource: 'deterministic',
+          stages: [stage],
+        },
+        {
+          loadSkill: async (id) => ({
+            id,
+            instructions: `## Workflow\nFollow the ${id} workflow.`,
+            allowedTools: id === 'source-review'
+              ? ['read_file', 'grep_search']
+              : ['read_file'],
+            disallowedTools: id === 'citation-check' ? ['write_file'] : [],
+          }),
+          setActiveSkill: () => {},
+        },
+      );
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({ content: [{ text: '{}' }] }),
+        close: async () => {},
+      };
+      const raw = await executeOrchestrationTool(
+        'task_agent',
+        {
+          stageId: 'inspect-evidence',
+          role: 'explorer',
+          prompt: 'Focus on the citation attached to claim A.',
+        },
+        {
+          workspaceRoot: workspace,
+          parentSessionKey: 'session:test',
+          parentAccessMode: 'read' as const,
+          mcpClient: stubMcp,
+          llmConfig: { provider: 'openai' as const, apiKey: 'k', model: 'test-model' },
+          launchCwd: workspace,
+          parentVisibleLocalTools: () => ['read_file', 'grep_search', 'write_file'],
+          parentVisibleMcpTools: () => [],
+          profileStageController: controller,
+        },
+      );
+
+      const result = JSON.parse(raw);
+      assert.equal(result.status, 'completed');
+      assert.equal(result.taskPacket.orchestration.profileId, 'research');
+      assert.equal(result.taskPacket.orchestration.strategyId, 'evidence-review');
+      assert.equal(result.taskPacket.orchestration.stageId, 'inspect-evidence');
+      assert.deepEqual(
+        result.taskPacket.orchestration.skillIds,
+        ['source-review', 'citation-check'],
+      );
+      assert.equal(controller.snapshot()[0].state, 'succeeded');
+
+      assert.equal(requests.length, 1);
+      const system = requests[0].messages.find((message: any) => message.role === 'system')?.content ?? '';
+      assert.match(system, /Required orchestration-stage skills/);
+      assert.match(system, /Follow the source-review workflow/);
+      assert.match(system, /Follow the citation-check workflow/);
+      const user = requests[0].messages.find((message: any) => message.role === 'user')?.content ?? '';
+      assert.match(user, /Bounded assignment scope/);
+      const toolNames = (requests[0].tools ?? []).map((tool: any) => tool.function?.name);
+      assert.deepEqual(toolNames, ['read_file']);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -2127,9 +2617,11 @@ test('orchestration: background child timeout arg does not kill the child', asyn
         ctx,
       );
       const result = JSON.parse(raw);
-      await new Promise((resolve) => setTimeout(resolve, 150));
-      const { getSession } = await import('../orchestration/orchestrator.js');
-      const record = getSession(workspace, result.id);
+      const { getSession } = await import('../orchestration/session/orchestrator.js');
+      const record = await waitForValue(
+        () => getSession(workspace, result.id),
+        (session) => session?.status === 'completed',
+      );
       assert.equal(record?.status, 'completed');
       assert.equal(record?.error, undefined);
       assert.match(record?.finalOutput ?? '', /too late/);
@@ -2240,7 +2732,7 @@ test('P1.2: agentId unknown returns error listing known ids', async () => {
 // ---------------------------------------------------------------------------
 
 test('toolSafety.isParallelSafe accepts both bare and MCP-prefixed read tools, rejects writers/orchestration/unknowns', async () => {
-  const { isParallelSafe } = await import('../agent/toolSafety.js');
+  const { isParallelSafe } = await import('../agent/guards/toolSafety.js');
   // Bare read-only locals + concurrency-safe agent spawners (0.3.9) — safe.
   for (const name of ['read_file', 'list_dir', 'grep_search', 'glob_files', 'fetch_url', 'web_search', 'task_agent', 'delegate_agent']) {
     assert.equal(isParallelSafe(name), true, `${name} must be parallel-safe`);
@@ -2267,7 +2759,7 @@ test('toolSafety.isParallelSafe accepts both bare and MCP-prefixed read tools, r
 });
 
 test('toolSafety.parallelExecutionEnabled honors cli.parallelSafeToolCalls kill switch', async () => {
-  const { parallelExecutionEnabled } = await import('../agent/toolSafety.js');
+  const { parallelExecutionEnabled } = await import('../agent/guards/toolSafety.js');
   try {
     resetCliKnobsForAgentRuntimeTest();
     assert.equal(parallelExecutionEnabled(), true, 'default ON');
@@ -2307,7 +2799,7 @@ function makeStubMcp(): any {
   };
 }
 
-test('R4: three read_file calls in one response run concurrently — total elapsed < sum of latencies', async () => {
+test('R4: three read_file calls in one response overlap in flight', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     // Three files we'll read; the slow-read is enforced by monkey-patching
     // fs.readFileSync? No — readFileSync is sync, can't yield. Instead we
@@ -2324,9 +2816,17 @@ test('R4: three read_file calls in one response run concurrently — total elaps
     // await sleep(50). That preserves true async concurrency.
     const { Agent } = await import('../agent/agent.js');
     const origExec = (Agent.prototype as any).executeLocalTool;
+    let activeReads = 0;
+    let maxActiveReads = 0;
     (Agent.prototype as any).executeLocalTool = async function (name: string, args: any) {
       if (name === 'read_file') {
-        await new Promise((res) => setTimeout(res, 50));
+        activeReads++;
+        maxActiveReads = Math.max(maxActiveReads, activeReads);
+        try {
+          await new Promise((res) => setTimeout(res, 50));
+        } finally {
+          activeReads--;
+        }
       }
       return origExec.call(this, name, args);
     };
@@ -2346,16 +2846,10 @@ test('R4: three read_file calls in one response run concurrently — total elaps
       const agent = new Agent(makeStubMcp(), { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
         workspaceRoot: workspace, launchCwd: workspace, silent: true,
       });
-      const t0 = Date.now();
       await agent.runTurn('read three files', {
         onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {},
       });
-      const elapsed = Date.now() - t0;
-      // Three 50 ms reads serialized would take ≥150 ms. Concurrent should
-      // settle in ~50 ms plus the second-LLM-call round-trip (still well
-      // under 150 ms in a stubbed test). Give a generous bound to keep CI
-      // stable but tight enough to fail if execution falls back to serial.
-      assert.ok(elapsed < 130, `expected concurrent reads (<130 ms), got ${elapsed} ms`);
+      assert.equal(maxActiveReads, 3, 'all three read_file calls must overlap instead of running serially');
       assert.equal(agent.lastTurnToolCalls, 3, 'all three tool calls must count toward lastTurnToolCalls');
     } finally {
       restore();
@@ -2753,6 +3247,838 @@ test('runTurn recovery: malformed JSON arguments surface as a structured tool_re
   });
 });
 
+test('runTurn skill allowlist filters local and MCP surfaces and rejects a guessed hidden tool', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const originalFetch = globalThis.fetch;
+    let llmCalls = 0;
+    let firstRequestBody: any;
+    let mcpCalls = 0;
+    const toolEvents: Array<{ name: string; ok: boolean; summary: string; preview?: string }> = [];
+    globalThis.fetch = (async (_url: any, opts: any) => {
+      llmCalls++;
+      const body = JSON.parse(opts.body);
+      if (llmCalls === 1) {
+        firstRequestBody = body;
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: '',
+              tool_calls: [{
+                id: 'hidden_1',
+                type: 'function',
+                function: { name: 'write_file', arguments: '{"path":"blocked.txt","content":"no"}' },
+              }],
+            },
+          }],
+          usage: { prompt_tokens: 100, completion_tokens: 10 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'done' } }],
+        usage: { prompt_tokens: 50, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const toolSchema = { type: 'object', properties: {} };
+      const stubMcp: any = {
+        listTools: async () => ({
+          tools: [
+            {
+              name: 'mcp_docs_search',
+              __rawName: 'search',
+              __serverId: 'docs',
+              description: 'Search documentation',
+              inputSchema: toolSchema,
+            },
+            {
+              name: 'mcp_docs_delete',
+              __rawName: 'delete',
+              __serverId: 'docs',
+              description: 'Delete documentation',
+              inputSchema: toolSchema,
+            },
+          ],
+        }),
+        callTool: async () => {
+          mcpCalls++;
+          return { content: [{ text: 'called' }] };
+        },
+        close: async () => {},
+      };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'm' }, {
+        workspaceRoot: workspace, launchCwd: workspace, silent: true,
+      });
+      agent.activeSkillAllowedTools = ['read_file', 'search'];
+
+      const answer = await agent.runTurn('inspect safely', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: (name, result) => toolEvents.push({
+          name,
+          ok: result.success,
+          summary: result.summary,
+          preview: result.preview,
+        }),
+      });
+
+      assert.equal(answer, 'done');
+      const exposed = firstRequestBody.tools.map((tool: any) => tool.function.name);
+      assert.ok(exposed.includes('read_file'), 'explicitly allowed local tool is exposed');
+      assert.ok(exposed.includes('mcp_docs_search'), 'bare MCP allow entry matches the namespaced tool');
+      assert.ok(!exposed.includes('write_file'), 'unlisted local tool is hidden');
+      assert.ok(!exposed.includes('run_command'), 'unlisted shell tool is hidden');
+      assert.ok(!exposed.includes('mcp_docs_delete'), 'unlisted MCP tool is hidden');
+      assert.equal(mcpCalls, 0, 'the denied local guess never falls through to MCP dispatch');
+      const denied = toolEvents.find((event) => event.name === 'write_file');
+      assert.ok(denied, 'guessed hidden tool emits a result event');
+      assert.equal(denied!.ok, false);
+      assert.match(`${denied!.summary} ${denied!.preview ?? ''}`, /allowed-tools policy/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('runTurn serves package-owned get_skill without calling a stale global MCP entry', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'app', profile: 'engineering', by: 'wizard' }),
+    );
+    const originalFetch = globalThis.fetch;
+    let llmCalls = 0;
+    let secondRequestBody: any;
+    let mcpCalls = 0;
+    globalThis.fetch = (async (_url: any, opts: any) => {
+      llmCalls += 1;
+      if (llmCalls === 1) {
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: '',
+              tool_calls: [{
+                id: 'skill_1',
+                type: 'function',
+                function: {
+                  name: 'get_skill',
+                  arguments: '{"name":"a11y-skill","section":"description"}',
+                },
+              }],
+            },
+          }],
+          usage: { prompt_tokens: 100, completion_tokens: 10 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      secondRequestBody = JSON.parse(opts.body);
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'done' } }],
+        usage: { prompt_tokens: 50, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({
+          tools: [{
+            name: 'get_skill',
+            __rawName: 'get_skill',
+            description: 'Get a skill',
+            inputSchema: {
+              type: 'object',
+              properties: { name: { type: 'string' }, section: { type: 'string' } },
+              required: ['name'],
+            },
+          }],
+        }),
+        callTool: async () => {
+          mcpCalls += 1;
+          return { content: [{ text: '# Legacy global collision' }] };
+        },
+        close: async () => {},
+      };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'm' }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        silent: true,
+      });
+      const answer = await agent.runTurn('Load the accessibility workflow explicitly.', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: () => {},
+      });
+      assert.equal(answer, 'done');
+      assert.equal(mcpCalls, 0);
+      const toolResult = secondRequestBody.messages.find((message: any) =>
+        message.role === 'tool' && message.tool_call_id === 'skill_1');
+      assert.ok(toolResult);
+      assert.match(toolResult.content, /Treat accessibility and responsive behavior as frontend acceptance criteria/);
+      assert.doesNotMatch(toolResult.content, /Legacy global collision/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('runTurn pauses mutation until a hard-triggered workflow skill is loaded', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'app', profile: 'engineering', by: 'wizard' }),
+    );
+    const restore = stubLlm([{
+      content: '',
+      tool_calls: [{
+        id: 'premature_write',
+        type: 'function',
+        function: { name: 'write_file', arguments: '{"path":"blocked.txt","content":"no"}' },
+      }],
+    }]);
+    try {
+      const agent = new Agent(makeStubMcp(), { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        silent: true,
+      });
+      agent.setAccessMode('shell');
+      assert.equal(await agent.runTurn('Plan the multi-stage implementation and build it.', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: () => {},
+      }), 'done.');
+
+      assert.equal(fs.existsSync(path.join(workspace, 'blocked.txt')), false);
+      const result = agent.chatHistory.find((message: any) =>
+        message.role === 'tool' && message.tool_call_id === 'premature_write');
+      assert.match(result?.content ?? '', /paused until required workflow skill.*planning-skill/i);
+      assert.ok(agent.chatHistory.some((message: any) =>
+        message.role === 'system' && /Required workflow skills/.test(message.content)));
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('runTurn permits mutation after the required workflow skill is loaded', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'app', profile: 'engineering', by: 'wizard' }),
+    );
+    const restore = stubLlm([
+      {
+        content: '',
+        tool_calls: [{
+          id: 'load_planning',
+          type: 'function',
+          function: { name: 'get_skill', arguments: '{"name":"planning-skill","section":"workflow"}' },
+        }],
+      },
+      {
+        content: '',
+        tool_calls: [{
+          id: 'write_after_skill',
+          type: 'function',
+          function: { name: 'write_file', arguments: '{"path":"allowed.txt","content":"yes"}' },
+        }],
+      },
+    ]);
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({
+          tools: [{
+            name: 'get_skill',
+            __rawName: 'get_skill',
+            description: 'Get a skill',
+            inputSchema: {
+              type: 'object',
+              properties: { name: { type: 'string' }, section: { type: 'string' } },
+              required: ['name'],
+            },
+          }],
+        }),
+        callTool: async () => ({ content: [{ text: '# Planning workflow\nKeep the durable plan current.' }] }),
+        close: async () => {},
+      };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        silent: true,
+      });
+      agent.setAccessMode('shell');
+      assert.equal(await agent.runTurn('Plan the multi-stage implementation and build it.', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: () => {},
+      }), 'done.');
+      assert.equal(fs.readFileSync(path.join(workspace, 'allowed.txt'), 'utf8'), 'yes');
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('runTurn applies manifest tool profiles to the model-visible local surface', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'blank', profile: 'custom', by: 'wizard' }),
+    );
+    const originalFetch = globalThis.fetch;
+    let llmCalls = 0;
+    let firstRequestBody: any;
+    let secondRequestBody: any;
+    globalThis.fetch = (async (_url: any, opts: any) => {
+      llmCalls += 1;
+      const body = JSON.parse(opts.body);
+      if (llmCalls === 1) {
+        firstRequestBody = body;
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: '',
+              tool_calls: [{
+                id: 'hidden_write',
+                type: 'function',
+                function: { name: 'write_file', arguments: '{"path":"blocked.txt","content":"no"}' },
+              }],
+            },
+          }],
+          usage: { prompt_tokens: 50, completion_tokens: 5 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      secondRequestBody = body;
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'done' } }],
+        usage: { prompt_tokens: 50, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({ content: [] }),
+        close: async () => {},
+      };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'm' }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        silent: true,
+      });
+      agent.setAccessMode('shell');
+      assert.equal(await agent.runTurn('Inspect the project.', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: () => {},
+      }), 'done');
+
+      const names = new Set((firstRequestBody.tools ?? []).map((tool: any) => tool.function?.name));
+      assert.equal(names.has('read_file'), true, 'baseline filesystem reads remain available');
+      assert.equal(names.has('update_plan'), true, 'control-plane tools remain available');
+      assert.equal(names.has('write_file'), false, 'custom empty profile does not grant coding writes');
+      assert.equal(names.has('run_command'), false, 'custom empty profile does not grant terminal execution');
+      assert.equal(names.has('web_search'), false, 'custom empty profile does not grant browser research');
+      assert.equal(fs.existsSync(path.join(workspace, 'blocked.txt')), false, 'a stale hidden call cannot write');
+      const denied = secondRequestBody.messages.find((message: any) => message.tool_call_id === 'hidden_write');
+      assert.match(denied?.content ?? '', /workspace tool-profile policy/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('runTurn gives a saved Research workspace its folder, skill, and read-only Project Knowledge tools', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const manifest = createWorkspaceManifest({ name: 'EconomicsResearch', profile: 'research', by: 'wizard' });
+    manifest.version = 3;
+    manifest.tools.mode = 'explicit-catalog';
+    manifest.tools.enabled = [];
+    saveWorkspaceManifest(workspace, manifest);
+
+    const originalFetch = globalThis.fetch;
+    let llmCalls = 0;
+    let firstRequestBody: any;
+    let lastRequestBody: any;
+    const mcpCalls: string[] = [];
+    globalThis.fetch = (async (_url: any, opts: any) => {
+      llmCalls += 1;
+      const body = JSON.parse(opts.body);
+      if (llmCalls === 1) {
+        firstRequestBody = body;
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: '',
+              tool_calls: [
+                {
+                  id: 'load_research_planning',
+                  type: 'function',
+                  function: {
+                    name: 'mcp_brain_get_skill',
+                    arguments: '{"name":"planning-skill","section":"workflow"}',
+                  },
+                },
+                {
+                  id: 'load_research_question',
+                  type: 'function',
+                  function: {
+                    name: 'mcp_brain_get_skill',
+                    arguments: '{"name":"research-question-skill","section":"workflow"}',
+                  },
+                },
+              ],
+            },
+          }],
+          usage: { prompt_tokens: 50, completion_tokens: 5 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (llmCalls === 2) {
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: '',
+              tool_calls: [
+                {
+                  id: 'research_list',
+                  type: 'function',
+                  function: { name: 'list_dir', arguments: '{"path":"."}' },
+                },
+                {
+                  id: 'research_write',
+                  type: 'function',
+                  function: { name: 'write_file', arguments: '{"path":"notes.md","content":"# Notes"}' },
+                },
+                {
+                  id: 'research_knowledge',
+                  type: 'function',
+                  function: { name: 'mcp_brain_knowledge_search', arguments: '{"query":"inflation"}' },
+                },
+                {
+                  id: 'third_party_skill_collision',
+                  type: 'function',
+                  function: { name: 'mcp_other_get_skill', arguments: '{"name":"unsafe"}' },
+                },
+              ],
+            },
+          }],
+          usage: { prompt_tokens: 50, completion_tokens: 5 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      lastRequestBody = body;
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'done' } }],
+        usage: { prompt_tokens: 50, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const tools = [
+        {
+          name: 'mcp_brain_list_skills',
+          __serverId: 'brain',
+          __rawName: 'list_skills',
+          description: 'List skills',
+          inputSchema: { type: 'object', properties: {} },
+        },
+        {
+          name: 'mcp_brain_get_skill',
+          __serverId: 'brain',
+          __rawName: 'get_skill',
+          description: 'Get a skill',
+          inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
+        },
+        {
+          name: 'mcp_brain_search_skills',
+          __serverId: 'brain',
+          __rawName: 'search_skills',
+          description: 'Search skills',
+          inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+        },
+        {
+          name: 'mcp_brain_knowledge_search',
+          __serverId: 'brain',
+          __rawName: 'knowledge_search',
+          description: 'Search project knowledge',
+          inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+        },
+        {
+          name: 'mcp_brain_knowledge_ingest',
+          __serverId: 'brain',
+          __rawName: 'knowledge_ingest',
+          description: 'Ingest project knowledge',
+          inputSchema: { type: 'object', properties: {} },
+        },
+        {
+          name: 'mcp_other_get_skill',
+          __serverId: 'other',
+          __rawName: 'get_skill',
+          description: 'Coincidentally named third-party tool',
+          inputSchema: { type: 'object', properties: { name: { type: 'string' } } },
+        },
+      ];
+      const stubMcp: any = {
+        listTools: async () => ({ tools }),
+        getServerIds: () => ['brain', 'other'],
+        getStatus: (serverId: string) => ({
+          identity: serverId === 'brain' ? 'brainrouter' : 'third-party',
+        }),
+        callTool: async (name: string) => {
+          mcpCalls.push(name);
+          return { content: [{ text: '{"results":[]}' }] };
+        },
+        close: async () => {},
+      };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'm' }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        silent: true,
+      });
+      agent.setAccessMode('shell');
+      assert.equal(await agent.runTurn('Set up this project folder.', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: () => {},
+      }), 'done');
+
+      const names = new Set((firstRequestBody.tools ?? []).map((tool: any) => tool.function?.name));
+      for (const name of [
+        'list_dir',
+        'write_file',
+        'mcp_brain_list_skills',
+        'mcp_brain_get_skill',
+        'mcp_brain_search_skills',
+        'mcp_brain_knowledge_search',
+      ]) {
+        assert.equal(names.has(name), true, name);
+      }
+      assert.equal(names.has('run_command'), false, 'Research does not receive shell authority by default');
+      assert.equal(names.has('mcp_brain_knowledge_ingest'), false, 'Project Knowledge defaults are read-only');
+      assert.equal(names.has('mcp_other_get_skill'), false, 'skill baseline is limited to the BrainRouter server');
+      assert.equal(fs.readFileSync(path.join(workspace, 'notes.md'), 'utf8'), '# Notes');
+      assert.deepEqual(mcpCalls, [
+        'mcp_brain_get_skill',
+        'mcp_brain_knowledge_search',
+      ]);
+      const denied = lastRequestBody.messages.find((message: any) =>
+        message.tool_call_id === 'third_party_skill_collision');
+      assert.match(denied?.content ?? '', /workspace MCP tool policy/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('runTurn activates Research primary-stage skills and narrows tools inside the same turn', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const manifest = createWorkspaceManifest({ name: 'EconomicsResearch', profile: 'research', by: 'wizard' });
+    manifest.version = 3;
+    manifest.tools.mode = 'explicit-catalog';
+    manifest.tools.enabled = [];
+    saveWorkspaceManifest(workspace, manifest);
+
+    const originalFetch = globalThis.fetch;
+    const requestBodies: any[] = [];
+    const stageEvents: ProfileStageStateEvent[] = [];
+    let attemptedEarlyFinal = false;
+    const calls = [
+      { id: 'begin_question', action: 'begin', stageId: 'frame', skillId: 'research-question-skill' },
+      { id: 'complete_question', action: 'complete', stageId: 'frame', skillId: 'research-question-skill' },
+      { id: 'begin_sources', action: 'begin', stageId: 'frame', skillId: 'source-strategy-skill' },
+      { id: 'complete_sources', action: 'complete', stageId: 'frame', skillId: 'source-strategy-skill' },
+      { id: 'begin_ground', action: 'begin', stageId: 'ground', skillId: 'iterative-evidence-skill' },
+      { id: 'complete_ground', action: 'complete', stageId: 'ground', skillId: 'iterative-evidence-skill' },
+    ];
+    globalThis.fetch = (async (_url: any, opts: any) => {
+      const body = JSON.parse(opts.body);
+      requestBodies.push(body);
+      if (!attemptedEarlyFinal) {
+        attemptedEarlyFinal = true;
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: 'I can answer without the profile stages.' } }],
+          usage: { prompt_tokens: 50, completion_tokens: 5 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      const next = calls.shift();
+      return new Response(JSON.stringify({
+        choices: [{
+          message: next
+            ? {
+                content: '',
+                tool_calls: [{
+                  id: next.id,
+                  type: 'function',
+                  function: {
+                    name: 'profile_stage',
+                    arguments: JSON.stringify({
+                      action: next.action,
+                      stageId: next.stageId,
+                      skillId: next.skillId,
+                    }),
+                  },
+                }],
+              }
+            : { content: 'framed' },
+        }],
+        usage: { prompt_tokens: 50, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => {
+          throw new Error('package-owned stage skills must not require an MCP round trip');
+        },
+        close: async () => {},
+      };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'm' }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        silent: true,
+      });
+      agent.setAccessMode('shell');
+      assert.equal(await agent.runTurn('Research inflation evidence and find sources.', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: () => {},
+        onProfileStageUpdate: (event) => stageEvents.push(event),
+      }), 'framed');
+
+      assert.equal(requestBodies.length, 8);
+      const toolNames = (index: number) => new Set(
+        (requestBodies[index].tools ?? []).map((tool: any) => tool.function?.name),
+      );
+      const firstProfileStage = (requestBodies[0].tools ?? [])
+        .find((tool: any) => tool.function?.name === 'profile_stage');
+      assert.match(firstProfileStage?.function?.description ?? '', /Active strategy: parallel-evidence/);
+      assert.match(firstProfileStage?.function?.description ?? '', /frame \(primary/);
+      assert.match(
+        requestBodies[1].messages.at(-1)?.content ?? '',
+        /requires you to begin skill "research-question-skill"/,
+      );
+
+      assert.deepEqual(
+        [...toolNames(2)].sort(),
+        ['glob_files', 'grep_search', 'list_dir', 'profile_stage', 'read_file'].sort(),
+        'research-question-skill narrows the next model iteration immediately',
+      );
+      assert.equal(toolNames(3).has('web_search'), true, 'completing the first skill restores the reviewed profile surface');
+      for (const expected of ['fetch_url', 'web_search', 'glob_files', 'grep_search', 'list_dir', 'profile_stage', 'read_file']) {
+        assert.equal(toolNames(4).has(expected), true, expected);
+      }
+      assert.equal(toolNames(4).has('write_file'), false, 'source strategy cannot widen into workspace writes');
+      assert.equal(toolNames(6).has('web_search'), true, 'evidence skill keeps reviewed research access');
+      assert.equal(toolNames(6).has('write_file'), false, 'evidence skill remains read-oriented');
+      assert.equal(agent.activeSkill, undefined, 'turn finalization clears stage-owned skill state');
+      assert.equal(agent.activeSkillAllowedTools, undefined);
+      assert.deepEqual(agent.activeSkillDisallowedTools, []);
+      assert.equal(stageEvents[0].phase, 'resolved');
+      assert.equal(stageEvents[0].profileId, 'research');
+      assert.equal(stageEvents[0].strategyId, 'parallel-evidence');
+      assert.equal(
+        stageEvents.some((event) => event.stages.some(
+          (stage) => stage.id === 'frame' && stage.activeSkillId === 'research-question-skill',
+        )),
+        true,
+      );
+      assert.equal(stageEvents.at(-1)?.phase, 'terminated');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('runTurn applies explicit catalog selection to exposure and dispatch', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const catalog = buildWorkspaceSelectionCatalog();
+    saveWorkspaceManifest(
+      workspace,
+      migrateWorkspaceManifestToolSelection({
+        manifest: createWorkspaceManifest({ name: 'blank', profile: 'custom', by: 'wizard' }),
+        reviewed: { profiles: [], enabled: ['web_search'], deny: [] },
+        catalog,
+      }),
+    );
+    const originalFetch = globalThis.fetch;
+    let llmCalls = 0;
+    let firstRequestBody: any;
+    let secondRequestBody: any;
+    globalThis.fetch = (async (_url: any, opts: any) => {
+      llmCalls += 1;
+      const body = JSON.parse(opts.body);
+      if (llmCalls === 1) {
+        firstRequestBody = body;
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: '',
+              tool_calls: [{
+                id: 'unselected_plan',
+                type: 'function',
+                function: { name: 'update_plan', arguments: '{"items":[]}' },
+              }],
+            },
+          }],
+          usage: { prompt_tokens: 50, completion_tokens: 5 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      secondRequestBody = body;
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'done' } }],
+        usage: { prompt_tokens: 50, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({ content: [] }),
+        close: async () => {},
+      };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'm' }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        silent: true,
+      });
+      agent.setAccessMode('shell');
+      assert.equal(await agent.runTurn('Search only.', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: () => {},
+      }), 'done');
+
+      const names = new Set((firstRequestBody.tools ?? []).map((tool: any) => tool.function?.name));
+      assert.deepEqual([...names], ['web_search', 'reconcile_steer']);
+      const denied = secondRequestBody.messages.find((message: any) => message.tool_call_id === 'unselected_plan');
+      assert.match(denied?.content ?? '', /workspace tool-profile policy/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('runTurn keeps live MCP names closed without a reviewed stable MCP surface', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const catalog = buildWorkspaceSelectionCatalog();
+    saveWorkspaceManifest(
+      workspace,
+      migrateWorkspaceManifestToolSelection({
+        manifest: createWorkspaceManifest({ name: 'blank', profile: 'custom', by: 'wizard' }),
+        reviewed: { profiles: [], enabled: [], deny: [] },
+        catalog,
+      }),
+    );
+    const originalFetch = globalThis.fetch;
+    let llmCalls = 0;
+    let firstRequestBody: any;
+    let secondRequestBody: any;
+    let mcpCalls = 0;
+    globalThis.fetch = (async (_url: any, opts: any) => {
+      llmCalls += 1;
+      const body = JSON.parse(opts.body);
+      if (llmCalls === 1) {
+        firstRequestBody = body;
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: '',
+              tool_calls: [{
+                id: 'unreviewed_mcp',
+                type: 'function',
+                function: { name: 'mcp_docs_search', arguments: '{}' },
+              }],
+            },
+          }],
+          usage: { prompt_tokens: 50, completion_tokens: 5 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      secondRequestBody = body;
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'done' } }],
+        usage: { prompt_tokens: 50, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({
+          tools: [{
+            name: 'mcp_docs_search',
+            __rawName: 'search',
+            __serverId: 'docs',
+            description: 'Search documentation',
+            inputSchema: { type: 'object', properties: {} },
+          }],
+        }),
+        callTool: async () => {
+          mcpCalls += 1;
+          return { content: [{ text: 'called' }] };
+        },
+        close: async () => {},
+      };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'm' }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        silent: true,
+      });
+      assert.equal(await agent.runTurn('Do not use tools.', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: () => {},
+      }), 'done');
+
+      const names = new Set((firstRequestBody.tools ?? []).map((tool: any) => tool.function?.name));
+      assert.equal(names.has('mcp_docs_search'), false);
+      assert.equal(mcpCalls, 0);
+      const denied = secondRequestBody.messages.find((message: any) => message.tool_call_id === 'unreviewed_mcp');
+      assert.match(denied?.content ?? '', /workspace MCP tool policy/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('runTurn combines engineering manifest profiles with task-time frontend profiles', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'app', profile: 'engineering', by: 'wizard' }),
+    );
+    const originalFetch = globalThis.fetch;
+    let requestBody: any;
+    globalThis.fetch = (async (_url: any, opts: any) => {
+      requestBody = JSON.parse(opts.body);
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'done' } }],
+        usage: { prompt_tokens: 50, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({ content: [] }),
+        close: async () => {},
+      };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'm' }, {
+        workspaceRoot: workspace,
+        launchCwd: workspace,
+        silent: true,
+      });
+      agent.setAccessMode('shell');
+      assert.equal(await agent.runTurn('Build a responsive React dashboard.', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: () => {},
+      }), 'done');
+
+      const names = new Set((requestBody.tools ?? []).map((tool: any) => tool.function?.name));
+      assert.equal(names.has('write_file'), true);
+      assert.equal(names.has('run_command'), true);
+      assert.equal(names.has('web_search'), true);
+      assert.equal(names.has('artifact_write'), true, 'Engineering artifacts remain available for frontend work');
+      assert.deepEqual(agent.activeWorkspaceCapabilities.toolProfiles, [
+        'browser', 'artifacts', 'interactive-browser',
+      ]);
+      assert.equal(agent.activeWorkspacePersonaId, 'engineer');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
 test('runTurn recovery: unknown tool name surfaces "did you mean" via normalizeToolName', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const originalFetch = globalThis.fetch;
@@ -2865,7 +4191,7 @@ test('runTurn recovery: synthetic orphan results do NOT trigger the R1 child-dra
   // text (also covered in tool-call-recovery.test.ts but we re-assert
   // through the public surface here so a regression in either layer
   // surfaces in agent-runtime as well).
-  const { synthesizeOrphanResults } = await import('../agent/toolCallRecovery.js');
+  const { synthesizeOrphanResults } = await import('../agent/guards/toolCallRecovery.js');
   const synth = synthesizeOrphanResults(
     [{ id: 'x', type: 'function', function: { name: 'spawn_agent', arguments: '{}' } }],
     [],
@@ -2927,7 +4253,7 @@ test('runTurn loop-limit turn still rolls usage into session totals + counts the
       });
       // Sanity: we really hit the loop limit (not a clean exit).
       assert.equal(agent.lastTurnHitLoopLimit, true);
-      assert.match(answer, /tool-call loop limit/);
+      assert.match(answer, /tool-call budget/);
       // The regression itself: a `return` used to fire on the loop-limit path
       // BEFORE these accumulated, so the most expensive turns vanished from
       // session totals. maxLoops=5 → ≥5 LLM calls at 10 prompt tokens each.

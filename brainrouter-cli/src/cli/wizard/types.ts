@@ -19,7 +19,7 @@
  *      pattern, not anyone's code.
  */
 
-import type { ThemeMode } from '../theme.js';
+import type { ThemeMode } from '../theme/theme.js';
 import type { ProviderEntry } from '@kinqs/brainrouter-core/provider';
 
 export type Step =

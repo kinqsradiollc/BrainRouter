@@ -18,7 +18,7 @@ import {
   handleSessionHeartbeat,
   handleSessionUnregister,
   handleSessionList,
-} from "../tools/active_sessions.js";
+} from "../tools/sessions/active_sessions.js";
 import type { ActiveSessionRecord } from "@kinqs/brainrouter-types";
 
 function parseToolText<T>(result: any): T {

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildRepairPlan, repairUntilGreen } from '../orchestration/buildLoop.js';
-import type { PhasePlanExecution } from '../orchestration/phaseOrchestrator.js';
+import { buildRepairPlan, repairUntilGreen } from '../orchestration/workflow/buildLoop.js';
+import type { PhasePlanExecution } from '../orchestration/workflow/phaseOrchestrator.js';
 
 /** A minimal build execution whose Verify phase carries `verifyOutput`. */
 function exec(verifyOutput: string): PhasePlanExecution {

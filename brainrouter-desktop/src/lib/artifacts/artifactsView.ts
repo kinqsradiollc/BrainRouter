@@ -50,6 +50,18 @@ export function artifactSummary(a: ArtifactRecord): string {
   return `${a.id} · ${a.kind} · ${a.status}`;
 }
 
+/** Languages that mark a `format: 'code'` artifact as a React component. */
+const REACT_LANGUAGES = new Set(['jsx', 'tsx', 'react', 'javascriptreact', 'typescriptreact']);
+
+/**
+ * Whether an artifact is a self-contained React component — a `code` artifact
+ * whose language is jsx/tsx (the desktop's in-scope stand-in for a dedicated
+ * `react` format, which would require a types/core change). Pure.
+ */
+export function isReactArtifact(a: Pick<ArtifactRecord, 'format' | 'language'>): boolean {
+  return a.format === 'code' && !!a.language && REACT_LANGUAGES.has(a.language.toLowerCase());
+}
+
 export const ARTIFACT_KIND_OPTIONS: ArtifactKind[] = [
   'design-note', 'sketch', 'html-prototype', 'markdown-report', 'verification-summary', 'review-export', 'other',
 ];

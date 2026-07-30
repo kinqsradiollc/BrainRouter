@@ -1,0 +1,210 @@
+"use client";
+
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useReviewAssurance } from "@kinqs/brainrouter-hooks";
+import { AgentTraceGraph } from "../../components/AgentTraceGraph";
+import { AuthGuard } from "../../components/AuthGuard";
+import { DataTable, SeverityBadge, StatusBadge } from "../../components/Analytics";
+import { EmptyState } from "../../components/EmptyState";
+import { PageHeader } from "../../components/PageHeader";
+import { PremiumButton } from "../../components/PremiumButton";
+import { ReviewAssurancePanel } from "../../components/ReviewAssurancePanel";
+import { adminApi, type ReviewIssue, type ReviewIssuesResponse } from "../../lib/adminApi";
+import { getClient } from "../../lib/client";
+import { InlineLoading } from "../../components/LoadingSpinner";
+import { useActiveOrg } from "../../components/OrgWorkspaceProvider";
+
+const TABS = ["all", "open", "in progress", "snoozed", "fixed", "ignored"] as const;
+const SEVERITIES = ["critical", "high", "medium", "low", "info"] as const;
+type Tab = typeof TABS[number];
+
+function validValue<T extends string>(value: string | null, values: readonly T[], fallback: T): T {
+  return value && values.includes(value as T) ? value as T : fallback;
+}
+
+function lifecycleProvenance(finding: ReviewIssue["finding"]): string {
+  const date = (value?: string) => {
+    if (!value) return "";
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.valueOf()) ? "" : parsed.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  };
+  if (finding.status === "fixed" && finding.fixedAt) {
+    return `Fixed ${date(finding.fixedAt)}${finding.resolvedByLogin ? ` by @${finding.resolvedByLogin}` : ""}${finding.fixedSha ? ` · ${finding.fixedSha.slice(0, 8)}` : ""}`;
+  }
+  const first = date(finding.firstSeenAt);
+  const last = date(finding.lastSeenAt);
+  if (!first && !last) return "";
+  return `First seen ${first || "—"}${last && last !== first ? ` · last seen ${last}` : ""}${finding.lastSeenSha ? ` · ${finding.lastSeenSha.slice(0, 8)}` : ""}`;
+}
+
+function Issues() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  // Active org comes from the app-wide workspace switcher (a validated, explicit
+  // selection), NOT an untrusted `?org=` URL param — the server also enforces
+  // membership per request (resolveOrgContext → 403 for non-members), so this is
+  // scoping, not a gate.
+  const { activeOrgId: activeOrg } = useActiveOrg();
+  const [tab, setTab] = useState<Tab>(() => validValue(searchParams.get("status"), TABS, "all"));
+  const [query, setQuery] = useState(() => searchParams.get("q") ?? "");
+  const [debouncedQuery, setDebouncedQuery] = useState(query);
+  const [severity, setSeverity] = useState(() => validValue(searchParams.get("severity"), ["all", ...SEVERITIES] as const, "all"));
+  const [repo, setRepo] = useState(() => searchParams.get("repository") ?? "all");
+  const [sort, setSort] = useState<"newest" | "oldest">(() => searchParams.get("sort") === "oldest" ? "oldest" : "newest");
+  const [cursor, setCursor] = useState<string | null>(() => searchParams.get("cursor"));
+  const [cursorHistory, setCursorHistory] = useState<Array<string | null>>([]);
+  const [response, setResponse] = useState<ReviewIssuesResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [traceReviewId, setTraceReviewId] = useState<string | null>(() => searchParams.get("review"));
+  const reviewClient = useMemo(
+    () => getClient().withActiveOrg(activeOrg || ""),
+    [activeOrg],
+  );
+  const reviewState = useReviewAssurance(
+    reviewClient,
+    traceReviewId ?? "",
+    activeOrg,
+  );
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedQuery(query.trim()), 250);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (debouncedQuery) params.set("q", debouncedQuery);
+    if (severity !== "all") params.set("severity", severity);
+    if (repo !== "all") params.set("repository", repo);
+    if (tab !== "all") params.set("status", tab);
+    if (sort !== "newest") params.set("sort", sort);
+    if (cursor) params.set("cursor", cursor);
+    if (traceReviewId) params.set("review", traceReviewId);
+    router.replace(params.size ? `/issues?${params}` : "/issues", { scroll: false });
+  }, [router, debouncedQuery, severity, repo, tab, sort, cursor, traceReviewId]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    adminApi.listReviewIssues({
+      limit: 50,
+      q: debouncedQuery,
+      severity,
+      repo,
+      status: tab,
+      sort,
+      ...(cursor ? { cursor } : {}),
+    }, activeOrg || undefined, controller.signal).then((result) => {
+      setResponse(result);
+      setError("");
+    }).catch((caught) => {
+      if (caught instanceof DOMException && caught.name === "AbortError") return;
+      setError(caught instanceof Error ? caught.message : "Failed to load issues");
+    }).finally(() => {
+      if (!controller.signal.aborted) setLoading(false);
+    });
+    return () => controller.abort();
+  }, [activeOrg, debouncedQuery, severity, repo, tab, sort, cursor]);
+
+  const resetPage = useCallback(() => { setCursor(null); setCursorHistory([]); }, []);
+
+  // Switching workspaces invalidates the current pagination cursor and any open
+  // agent-trace panel (they belong to the previous org). Skip the first run so a
+  // deep-linked cursor/review from the URL survives the initial org resolution.
+  const prevOrg = useRef<string | null>(null);
+  useEffect(() => {
+    if (prevOrg.current !== null && prevOrg.current !== activeOrg) {
+      setCursor(null);
+      setCursorHistory([]);
+      setTraceReviewId(null);
+    }
+    prevOrg.current = activeOrg;
+  }, [activeOrg]);
+  const repositories = useMemo(() => [...new Set((response?.issues ?? []).map((issue) => issue.repo).filter((value): value is string => Boolean(value)))].sort(), [response]);
+  const openTrace = (issue: ReviewIssue) => {
+    setTraceReviewId(issue.reviewId);
+    setError("");
+  };
+  const goNext = () => {
+    if (!response?.nextCursor) return;
+    setCursorHistory((current) => [...current, cursor]);
+    setCursor(response.nextCursor);
+  };
+  const goBack = () => {
+    setCursorHistory((current) => {
+      if (!current.length) return current;
+      setCursor(current[current.length - 1] ?? null);
+      return current.slice(0, -1);
+    });
+  };
+
+  const issues = response?.issues ?? [];
+  const severityCounts = response?.severity ?? { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
+  return (
+    <div className="settings-page">
+      <PageHeader title="Issues" description="Verified findings from reviews and connected analysis workflows." />
+      <div className="analytics-grid kpi-row">
+        {SEVERITIES.slice(0, 4).map((value) => <div className="metric-tile" key={value}><SeverityBadge severity={value} /><strong>{severityCounts[value]}</strong><span>matching findings</span></div>)}
+      </div>
+      <section className="analytics-panel issues-panel">
+        <div className="issue-tabs" role="tablist">{TABS.map((value) => <button type="button" role="tab" aria-selected={tab === value} className={tab === value ? "issue-tab issue-tab--active" : "issue-tab"} onClick={() => { setTab(value); resetPage(); }} key={value}>{value}</button>)}</div>
+        <div className="issue-filters">
+          <input className="settings-input" aria-label="Search findings" placeholder="Search issues" value={query} onChange={(event) => { setQuery(event.target.value); resetPage(); }} />
+          <select className="settings-select" aria-label="Severity filter" value={severity} onChange={(event) => { setSeverity(validValue(event.target.value, ["all", ...SEVERITIES] as const, "all")); resetPage(); }}><option value="all">All severities</option>{SEVERITIES.map((value) => <option value={value} key={value}>{value}</option>)}</select>
+          <select className="settings-select" aria-label="Repository filter" value={repo} onChange={(event) => { setRepo(event.target.value); resetPage(); }}><option value="all">All repositories</option>{repo !== "all" && !repositories.includes(repo) && <option value={repo}>{repo}</option>}{repositories.map((value) => <option value={value} key={value}>{value}</option>)}</select>
+          <select className="settings-select" aria-label="Sort issues" value={sort} onChange={(event) => { setSort(event.target.value === "oldest" ? "oldest" : "newest"); resetPage(); }}><option value="newest">Newest</option><option value="oldest">Oldest</option></select>
+        </div>
+        {(error || reviewState.error) && <div className="settings-note settings-note--error" role="alert">{error || reviewState.error}</div>}
+        {loading && !response ? <InlineLoading label="Loading matching issues…" /> : issues.length ? (
+          <>
+            <DataTable headers={["Severity", "Finding", "Repository", "Status", "Provenance"]}>{issues.map((issue) => (
+              <tr key={`${issue.reviewId}:${issue.finding.file}:${issue.finding.line ?? 0}:${issue.createdAt}`}>
+                <td><SeverityBadge severity={issue.finding.severity} /></td>
+                <td>
+                  <strong>{issue.finding.title ?? issue.finding.summary ?? "Finding"}</strong>
+                  <div className="settings-row__sub">{issue.finding.file}{issue.finding.line ? `:${issue.finding.line}` : ""}</div>
+                  {lifecycleProvenance(issue.finding) && <div className="settings-row__sub">{lifecycleProvenance(issue.finding)}</div>}
+                </td>
+                <td>{issue.repo ?? "—"}</td>
+                <td><StatusBadge tone={issue.issueStatus === "fixed" ? "ok" : issue.issueStatus === "open" ? "danger" : "warn"}>{issue.issueStatus}</StatusBadge></td>
+                <td><div className="issues-provenance">{issue.repo && issue.prNumber ? <Link className="settings-link" href={`/reviews/pr?repo=${encodeURIComponent(issue.repo)}&number=${issue.prNumber}${activeOrg ? `&org=${encodeURIComponent(activeOrg)}` : ""}`}>PR #{issue.prNumber}</Link> : <span>Review</span>}<button type="button" className="settings-link settings-link--button" onClick={() => openTrace(issue)}>Agent Trace</button></div></td>
+              </tr>
+            ))}</DataTable>
+            <div className="issues-pagination"><span>{response?.total ?? issues.length} matching issues · page shows {issues.length}</span><div><PremiumButton size="small" disabled={!cursorHistory.length} onClick={goBack}>Previous</PremiumButton><PremiumButton size="small" disabled={!response?.nextCursor} onClick={goNext}>Next</PremiumButton></div></div>
+          </>
+        ) : <EmptyState title="No matching issues" description="Run a review or adjust the filters to see verified findings." />}
+      </section>
+      {traceReviewId && (
+        <section className="issues-trace" aria-label="Originating review trace">
+          <div className="issues-trace__head">
+            <div>
+              <span>Originating review</span>
+              <h2>{reviewState.review ? `${reviewState.review.repo} #${reviewState.review.prNumber}` : "Review details"}</h2>
+            </div>
+            <button type="button" className="settings-link settings-link--button" onClick={() => setTraceReviewId(null)}>Close</button>
+          </div>
+          {reviewState.isLoading && !reviewState.review ? (
+            <InlineLoading label="Loading Agent Trace…" />
+          ) : reviewState.review ? (
+            <>
+              <AgentTraceGraph reviews={[reviewState.review]} />
+              <ReviewAssurancePanel assurance={reviewState.assurance} />
+            </>
+          ) : reviewState.error ? (
+            <div className="settings-note settings-note--error" role="alert">
+              {reviewState.error}
+              <button type="button" className="settings-link settings-link--button" onClick={reviewState.reload}>Retry</button>
+            </div>
+          ) : null}
+        </section>
+      )}
+    </div>
+  );
+}
+
+export default function IssuesPage() {
+  return <AuthGuard><Issues /></AuthGuard>;
+}

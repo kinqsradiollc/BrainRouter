@@ -1,4 +1,6 @@
 {
+  "schemaVersion": 1,
+  "kind": "orchestration-role",
   "id": "intake",
   "displayName": "Requirements intake",
   "whenToUse": "Turns a vague ask into a structured requirement (title + acceptance criteria), then hands a self-contained packet to an executor agent.",
@@ -6,7 +8,7 @@
   "model": null,
   "effort": null,
   "defaultAccess": "read",
-  "toolScope": { "local": ["*"], "mcp": ["memory_*"] },
+  "toolScope": { "local": ["*"], "mcp": ["memory_recall", "memory_search", "memory_find_related", "memory_graph_query", "list_skills", "get_skill", "search_skills", "knowledge_list", "knowledge_search"] },
   "disallowedTools": [],
   "maxIterations": 24,
   "timeoutMs": 120000,

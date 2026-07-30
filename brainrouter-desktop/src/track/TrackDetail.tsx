@@ -8,8 +8,8 @@ import React, { useState } from 'react';
 import remarkGfm from 'remark-gfm';
 import type { TrackProject, WorkItem, WorkItemPriority, Sprint, Module } from '@kinqs/brainrouter-types';
 import { Icon } from '../icons.js';
-import { TYPE_ICON } from './TrackView.js';
-import type { TrackOps } from './TrackView.js';
+import { TYPE_ICON } from './TrackView/shared/types.js';
+import type { TrackOps } from './TrackView/shared/types.js';
 import { TrackDropdown } from './Dropdown.js';
 import { Markdown, MD_COMPONENTS } from '../chat/markdown.js';
 

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sanitizeModelArtifacts } from '../util/outputSanitize.js';
+import { sanitizeModelArtifacts } from '../util/agentloop/outputSanitize.js';
 
 test('POLISH-2 sanitizeModelArtifacts: restores the colon in garbled file:line citations', () => {
   assert.equal(sanitizeModelArtifacts('See src/api/auth.ts*#COLON|*42 for the bug.'), 'See src/api/auth.ts:42 for the bug.');

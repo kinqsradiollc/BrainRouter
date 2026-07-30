@@ -15,91 +15,128 @@ import { isClientDisconnectError } from '../transport-errors.js';
 import { recordToolCall } from '../observability/metrics.js';
 import { VERSION } from '../version.js';
 import { memoryEngine } from '../memory/engine.js';
+import { knowledgeActorFromAuth } from '../knowledge/contracts/actor.js';
+import type { Role } from '../tenancy/rbac.js';
 
-// Import tools
-import { listSkills, listSkillsSchema } from '../tools/list_skills.js';
-import { getSkill, getSkillSchema } from '../tools/get_skill.js';
-import { searchSkills, searchSkillsSchema } from '../tools/search_skills.js';
-import { getPersona, getPersonaSchema } from '../tools/get_persona.js';
-import { getReference, getReferenceSchema } from '../tools/get_reference.js';
-import { listTemplateDocs, listTemplateDocsSchema } from '../tools/list_template_docs.js';
-import { getTemplateDoc, getTemplateDocSchema } from '../tools/get_template_doc.js';
-import { createSkill, createSkillSchema } from '../tools/create_skill.js';
-import { updateSkill, updateSkillSchema } from '../tools/update_skill.js';
-import { memoryCaptureTurnToolSchema, handleMemoryCaptureTurn } from '../tools/memory_capture_turn.js';
-import { memoryRecallToolSchema, handleMemoryRecall } from '../tools/memory_recall.js';
+// Import tools — grouped per domain; each barrel re-exports its modules' public
+// surface (schemas + handlers). See tools/<domain>/index.ts.
 import {
-  memoryPersonaToolSchema,
-  handleMemoryPersona,
-  memoryPersonaRefreshToolSchema,
-  handleMemoryPersonaRefresh,
-} from '../tools/memory_persona.js';
+  listSkills, listSkillsSchema,
+  getSkill, getSkillSchema,
+  searchSkills, searchSkillsSchema,
+  createSkill, createSkillSchema,
+  updateSkill, updateSkillSchema,
+  memoryRegisterSkillHintsToolSchema, handleMemoryRegisterSkillHints,
+  memoryExtractSkillToolSchema, handleMemoryExtractSkill,
+  memorySkillOutcomeToolSchema, handleMemorySkillOutcome,
+} from '../tools/skills/index.js';
 import {
-  sessionRegisterToolSchema,
-  handleSessionRegister,
-  sessionHeartbeatToolSchema,
-  handleSessionHeartbeat,
-  sessionUnregisterToolSchema,
-  handleSessionUnregister,
-  sessionListToolSchema,
-  handleSessionList,
-} from '../tools/active_sessions.js';
+  getPersona, getPersonaSchema,
+  getReference, getReferenceSchema,
+  listTemplateDocs, listTemplateDocsSchema,
+  getTemplateDoc, getTemplateDocSchema,
+} from '../tools/docs/index.js';
 import {
-  sessionSendToolSchema,
-  handleSessionSend,
-  sessionInboxReadToolSchema,
-  handleSessionInboxRead,
-  sessionInboxAckToolSchema,
-  handleSessionInboxAck,
-} from '../tools/session_inbox.js';
+  memoryRecallToolSchema, handleMemoryRecall,
+  memorySearchToolSchema, handleMemorySearch,
+  memoryRetrieveToolSchema, handleMemoryRetrieve,
+  memoryFindRelatedToolSchema, handleMemoryFindRelated,
+  memoryGraphQueryToolSchema, handleMemoryGraphQuery,
+  memoryGraphAnalyticsToolSchema, handleMemoryGraphAnalytics,
+  vulnerabilityIntelligenceToolSchema, handleVulnerabilityIntelligence,
+} from '../tools/recall/index.js';
 import {
-  sessionDelegateTaskToolSchema,
-  handleSessionDelegateTask,
-  sessionDelegationsToolSchema,
-  handleSessionDelegations,
-} from '../tools/session_delegate_task.js';
-import { memorySearchToolSchema, handleMemorySearch } from '../tools/memory_search.js';
-import { memoryContradictionsToolSchema, handleMemoryContradictions } from '../tools/memory_contradictions.js';
-import { memoryRegisterSkillHintsToolSchema, handleMemoryRegisterSkillHints } from '../tools/memory_register_skill_hints.js';
-import { memoryResolveSessionToolSchema, handleMemoryResolveSession } from '../tools/memory_resolve_session.js';
-import { memoryGraphQueryToolSchema, handleMemoryGraphQuery } from '../tools/memory_graph_query.js';
-import { memoryMarkCitedToolSchema, handleMemoryMarkCited } from '../tools/memory_mark_cited.js';
-import { memoryGovernanceToolSchemas, handleMemoryGovernanceTool } from '../tools/memory-governance.js';
-import { memoryEngineeringToolSchemas, handleMemoryEngineeringTool } from '../tools/memory-engineering.js';
-import { memoryExplainToolSchema, handleMemoryExplainRecall } from '../tools/memory-explain.js';
-import { memoryHookToolSchemas, handleMemoryHookTool } from '../tools/memory-hooks.js';
-import { memoryWorkingToolSchemas, handleMemoryWorkingTool } from '../tools/memory-working.js';
-import { memoryConsolidateToolSchema, handleMemoryConsolidate } from '../tools/memory_consolidate.js';
-import { memoryAgentStatusToolSchema, handleMemoryAgentStatus } from '../tools/memory_agent_status.js';
-import { memoryProvenanceToolSchema, handleMemoryProvenance } from '../tools/memory_provenance.js';
-import { memoryFetchSourceChunkToolSchema, handleMemoryFetchSourceChunk } from '../tools/memory_fetch_source_chunk.js';
-import { memoryFindRelatedToolSchema, handleMemoryFindRelated } from '../tools/memory_find_related.js';
-import { memoryReindexSourceToolSchema, handleMemoryReindexSource } from '../tools/memory_reindex_source.js';
-import { memoryRecordLessonToolSchema, handleMemoryRecordLesson } from '../tools/memory_record_lesson.js';
-import { memoryCreateRequirementToolSchema, handleMemoryCreateRequirement } from '../tools/memory_create_requirement.js';
-import { memoryCaptureArtifactToolSchema, handleMemoryCaptureArtifact } from '../tools/memory_capture_artifact.js';
-import { atlasPutToolSchema, handleAtlasPut, atlasGetToolSchema, handleAtlasGet, atlasListToolSchema, handleAtlasList, atlasQueryToolSchema, handleAtlasQuery, atlasImpactToolSchema, handleAtlasImpact, atlasEnrichToolSchema, handleAtlasEnrich } from '../tools/atlas_graph.js';
-import { fleetSnapshotPutToolSchema, handleFleetSnapshotPut, fleetSnapshotGetToolSchema, handleFleetSnapshotGet } from '../tools/fleet_snapshot.js';
-import { memoryCaptureAnnotationToolSchema, handleMemoryCaptureAnnotation } from '../tools/memory_capture_annotation.js';
-import { memoryExtractSkillToolSchema, handleMemoryExtractSkill } from '../tools/memory_extract_skill.js';
-import { memoryGraphAnalyticsToolSchema, handleMemoryGraphAnalytics } from '../tools/memory_graph_analytics.js';
-import { memoryReflectToolSchema, handleMemoryReflect } from '../tools/memory_reflect.js';
-import { memoryBlackboardReviewToolSchema, handleMemoryBlackboardReview } from '../tools/memory_blackboard.js';
-import { memoryTreeWalkToolSchema, handleMemoryTreeWalk } from '../tools/memory_tree_walk.js';
-import { memoryVaultExportToolSchema, handleMemoryVaultExport } from '../tools/memory_vault_export.js';
-import { memoryPruneSourcesToolSchema, handleMemoryPruneSources } from '../tools/memory_prune_sources.js';
-import { memoryAgentRunToolSchema, handleMemoryAgentRun } from '../tools/memory_agent_run.js';
-import { memoryJobRetryToolSchema, handleMemoryJobRetry } from '../tools/memory_job_retry.js';
-import { memoryCompressToolSchema, handleMemoryCompress } from '../tools/memory_compress.js';
-import { memoryRetrieveToolSchema, handleMemoryRetrieve } from '../tools/memory_retrieve.js';
-import { memoryStatsToolSchema, handleMemoryStats } from '../tools/memory_stats.js';
+  memoryCaptureTurnToolSchema, handleMemoryCaptureTurn,
+  memoryCaptureArtifactToolSchema, handleMemoryCaptureArtifact,
+  memoryCaptureAnnotationToolSchema, handleMemoryCaptureAnnotation,
+  memoryRecordLessonToolSchema, handleMemoryRecordLesson,
+  memoryCreateRequirementToolSchema, handleMemoryCreateRequirement,
+} from '../tools/capture/index.js';
+import {
+  memoryGovernanceToolSchemas, handleMemoryGovernanceTool,
+  memoryEngineeringToolSchemas, handleMemoryEngineeringTool,
+  memoryExplainToolSchema, handleMemoryExplainRecall,
+  memoryHookToolSchemas, handleMemoryHookTool,
+  memoryContradictionsToolSchema, handleMemoryContradictions,
+  memoryMarkCitedToolSchema, handleMemoryMarkCited,
+  memoryProvenanceToolSchema, handleMemoryProvenance,
+  memoryReflectToolSchema, handleMemoryReflect,
+  memoryReflectSessionToolSchema, handleMemoryReflectSession,
+} from '../tools/governance/index.js';
+import {
+  sessionRegisterToolSchema, handleSessionRegister,
+  sessionHeartbeatToolSchema, handleSessionHeartbeat,
+  sessionUnregisterToolSchema, handleSessionUnregister,
+  sessionListToolSchema, handleSessionList,
+  sessionSendToolSchema, handleSessionSend,
+  sessionInboxReadToolSchema, handleSessionInboxRead,
+  sessionInboxAckToolSchema, handleSessionInboxAck,
+  sessionDelegateTaskToolSchema, handleSessionDelegateTask,
+  sessionDelegationsToolSchema, handleSessionDelegations,
+  memoryResolveSessionToolSchema, handleMemoryResolveSession,
+} from '../tools/sessions/index.js';
+import {
+  memoryAgentStatusToolSchema, handleMemoryAgentStatus,
+  memoryAgentRunToolSchema, handleMemoryAgentRun,
+  memoryJobRetryToolSchema, handleMemoryJobRetry,
+  memoryBlackboardReviewToolSchema, handleMemoryBlackboardReview,
+} from '../tools/agents/index.js';
+import {
+  memoryConsolidateToolSchema, handleMemoryConsolidate,
+  memoryFetchSourceChunkToolSchema, handleMemoryFetchSourceChunk,
+  memoryReindexSourceToolSchema, handleMemoryReindexSource,
+  memoryPruneSourcesToolSchema, handleMemoryPruneSources,
+  memoryVaultExportToolSchema, handleMemoryVaultExport,
+} from '../tools/sources/index.js';
+import {
+  memoryPersonaToolSchema, handleMemoryPersona,
+  memoryPersonaRefreshToolSchema, handleMemoryPersonaRefresh,
+  memoryWorkingToolSchemas, handleMemoryWorkingTool,
+  memoryCompressToolSchema, handleMemoryCompress,
+  memoryTreeWalkToolSchema, handleMemoryTreeWalk,
+  memoryStatsToolSchema, handleMemoryStats,
+} from '../tools/working/index.js';
+import {
+  atlasPutToolSchema, handleAtlasPut, atlasGetToolSchema, handleAtlasGet,
+  atlasListToolSchema, handleAtlasList, atlasQueryToolSchema, handleAtlasQuery,
+  atlasImpactToolSchema, handleAtlasImpact, atlasEnrichToolSchema, handleAtlasEnrich,
+  fleetSnapshotPutToolSchema, handleFleetSnapshotPut,
+  fleetSnapshotGetToolSchema, handleFleetSnapshotGet,
+  connectorListToolSchema, handleConnectorList,
+  connectorRunToolSchema, handleConnectorRun,
+} from '../tools/atlas/index.js';
+import {
+  knowledgeListToolSchema, handleKnowledgeList,
+  knowledgeBaseCreateToolSchema, handleKnowledgeBaseCreate,
+  knowledgeIngestToolSchema, handleKnowledgeIngest,
+  knowledgeIngestDocxToolSchema, handleKnowledgeIngestDocx,
+  knowledgeIngestPdfToolSchema, handleKnowledgeIngestPdf,
+  knowledgeStatusToolSchema, handleKnowledgeStatus,
+  knowledgeRetryToolSchema, handleKnowledgeRetry,
+  knowledgeSearchToolSchema, handleKnowledgeSearch,
+} from '../tools/knowledge/index.js';
+import {
+  workspaceProfileRecommendToolSchema, handleWorkspaceProfileRecommend,
+} from '../tools/workspace/index.js';
 
 const STDIO_DEFAULT_USER_ID = process.env.BRAINROUTER_USER_ID ?? "default";
 
 export // ─── Server factory ───────────────────────────────────────────────────────────
-function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; isAdmin?: boolean }): Server {
+function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; isAdmin?: boolean; defaultOrgId?: string; defaultRole?: Role }): Server {
   const defaultUserId = options?.defaultUserId ?? STDIO_DEFAULT_USER_ID;
   const isAdmin = options?.isAdmin ?? false;
+  // C1 (ADR-016) — the caller's active org, pinned server-side so recall can
+  // surface org-shared memory. Never client-supplied (not in any tool schema).
+  const defaultOrgId = options?.defaultOrgId;
+  const knowledgeActor = knowledgeActorFromAuth({
+    userId: defaultUserId,
+    orgId: defaultOrgId,
+    role: options?.defaultRole,
+    isAdmin,
+  });
+  // Connectors are workspace-scoped file state (connectors.json under the
+  // BrainRouter home). Use the resolved local workspace root; fall back to cwd.
+  const connectorWorkspaceRoot = registry.getLocalRoot() ?? process.cwd();
   const server = new Server(
     { name: 'brainrouter-mcp-server', version: VERSION },
     { capabilities: { tools: {} } }
@@ -163,6 +200,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
           required: ['name'],
         },
       },
+      workspaceProfileRecommendToolSchema,
       {
         name: 'get_reference',
         description: 'Fetch a reference document.',
@@ -176,7 +214,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       },
       {
         name: 'list_template_docs',
-        description: 'List all project-specific template documentation.',
+        description: 'Compatibility tool for downstream clients: list project-specific template documentation. BrainRouter onboarding uses client-local contracts instead.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -186,7 +224,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       },
       {
         name: 'get_template_doc',
-        description: 'Read a project template document or section.',
+        description: 'Compatibility tool for downstream clients: read a project template document or section. BrainRouter onboarding uses client-local contracts instead.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -245,6 +283,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       sessionDelegateTaskToolSchema,
       sessionDelegationsToolSchema,
       memorySearchToolSchema,
+      vulnerabilityIntelligenceToolSchema,
       memoryContradictionsToolSchema,
       memoryRegisterSkillHintsToolSchema,
       memoryResolveSessionToolSchema,
@@ -266,8 +305,10 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       memoryCaptureArtifactToolSchema,
       memoryCaptureAnnotationToolSchema,
       memoryExtractSkillToolSchema,
+      memorySkillOutcomeToolSchema,
       memoryGraphAnalyticsToolSchema,
       memoryReflectToolSchema,
+      memoryReflectSessionToolSchema,
       memoryBlackboardReviewToolSchema,
       memoryTreeWalkToolSchema,
       memoryVaultExportToolSchema,
@@ -285,6 +326,18 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       atlasEnrichToolSchema,
       fleetSnapshotPutToolSchema,
       fleetSnapshotGetToolSchema,
+      connectorListToolSchema,
+      connectorRunToolSchema,
+      ...(knowledgeActor ? [
+        knowledgeListToolSchema,
+        knowledgeBaseCreateToolSchema,
+        knowledgeIngestToolSchema,
+        knowledgeIngestDocxToolSchema,
+        knowledgeIngestPdfToolSchema,
+        knowledgeStatusToolSchema,
+        knowledgeRetryToolSchema,
+        knowledgeSearchToolSchema,
+      ] : []),
     ],
   }));
 
@@ -315,6 +368,8 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
         case 'get_skill':     return await getSkill(registry, getSkillSchema.parse(request.params.arguments));
         case 'search_skills': return await searchSkills(registry, searchSkillsSchema.parse(request.params.arguments));
         case 'get_persona':   return await getPersona(registry, getPersonaSchema.parse(request.params.arguments));
+        case 'workspace_profile_recommend':
+          return await handleWorkspaceProfileRecommend(registry, request.params.arguments);
         case 'get_reference': return await getReference(registry, getReferenceSchema.parse(request.params.arguments));
         case 'list_template_docs': return await listTemplateDocs(registry, listTemplateDocsSchema.parse(request.params.arguments));
         case 'get_template_doc':   return await getTemplateDoc(registry, getTemplateDocSchema.parse(request.params.arguments));
@@ -328,7 +383,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
           }
           return await updateSkill(registry, updateSkillSchema.parse(request.params.arguments));
         case 'memory_capture_turn': return await handleMemoryCaptureTurn(request.params.arguments, { defaultUserId });
-        case 'memory_recall': return await handleMemoryRecall(request.params.arguments, { defaultUserId });
+        case 'memory_recall': return await handleMemoryRecall(request.params.arguments, { defaultUserId, defaultOrgId });
         case 'memory_persona': return await handleMemoryPersona(request.params.arguments, { defaultUserId });
         case 'memory_persona_refresh': return await handleMemoryPersonaRefresh(request.params.arguments, { defaultUserId });
         case 'session_register': return await handleSessionRegister(request.params.arguments, { defaultUserId });
@@ -341,6 +396,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
         case 'session_delegate_task': return await handleSessionDelegateTask(request.params.arguments, { defaultUserId });
         case 'session_delegations': return await handleSessionDelegations(request.params.arguments, { defaultUserId });
         case 'memory_search': return await handleMemorySearch(request.params.arguments, { defaultUserId });
+        case 'vulnerability_intelligence': return await handleVulnerabilityIntelligence(request.params.arguments);
         case 'memory_contradictions': return await handleMemoryContradictions(request.params.arguments, { defaultUserId });
         case 'memory_register_skill_hints': return await handleMemoryRegisterSkillHints(request.params.arguments);
         case 'memory_resolve_session': return await handleMemoryResolveSession(request.params.arguments);
@@ -413,10 +469,22 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
           return await handleMemoryCaptureAnnotation(request.params.arguments, { defaultUserId });
         case 'memory_extract_skill':
           return await handleMemoryExtractSkill(request.params.arguments, { defaultUserId });
+        case 'memory_skill_outcome':
+          // Skill reliability is a GLOBAL registry (no per-user scope), so
+          // recording outcomes / re-ranking it is an admin-only governance
+          // action — an arbitrary caller must not be able to demote everyone's
+          // skills or inflate a bad one (CWE-639). Automatic scoring is driven
+          // by trusted internal turn-outcome signals, not this tool.
+          if (!isAdmin) {
+            throw new McpError(ErrorCode.InvalidRequest, 'Admin access required for this tool');
+          }
+          return await handleMemorySkillOutcome(request.params.arguments);
         case 'memory_graph_analytics':
           return await handleMemoryGraphAnalytics(request.params.arguments, { defaultUserId });
         case 'memory_reflect':
           return await handleMemoryReflect(request.params.arguments, { defaultUserId });
+        case 'memory_reflect_session':
+          return await handleMemoryReflectSession(request.params.arguments, { defaultUserId });
         case 'memory_blackboard_review':
           return await handleMemoryBlackboardReview(request.params.arguments, { defaultUserId });
         case 'memory_tree_walk':
@@ -435,6 +503,34 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
           return await handleMemoryRetrieve(request.params.arguments, { defaultUserId });
         case 'memory_stats':
           return await handleMemoryStats(request.params.arguments, { defaultUserId });
+        case 'connector_list':
+          return await handleConnectorList(request.params.arguments, { workspaceRoot: connectorWorkspaceRoot });
+        case 'connector_run':
+          return await handleConnectorRun(request.params.arguments, { workspaceRoot: connectorWorkspaceRoot, defaultUserId });
+        case 'knowledge_list':
+          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
+          return await handleKnowledgeList(request.params.arguments, { actor: knowledgeActor });
+        case 'knowledge_base_create':
+          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
+          return await handleKnowledgeBaseCreate(request.params.arguments, { actor: knowledgeActor });
+        case 'knowledge_ingest':
+          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
+          return await handleKnowledgeIngest(request.params.arguments, { actor: knowledgeActor });
+        case 'knowledge_ingest_docx':
+          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
+          return await handleKnowledgeIngestDocx(request.params.arguments, { actor: knowledgeActor });
+        case 'knowledge_ingest_pdf':
+          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
+          return await handleKnowledgeIngestPdf(request.params.arguments, { actor: knowledgeActor });
+        case 'knowledge_status':
+          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
+          return await handleKnowledgeStatus(request.params.arguments, { actor: knowledgeActor });
+        case 'knowledge_retry':
+          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
+          return await handleKnowledgeRetry(request.params.arguments, { actor: knowledgeActor });
+        case 'knowledge_search':
+          if (!knowledgeActor) throw new McpError(ErrorCode.InvalidRequest, 'Authenticated organization context required for knowledge tools');
+          return await handleKnowledgeSearch(request.params.arguments, { actor: knowledgeActor });
         default:
           throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
       }

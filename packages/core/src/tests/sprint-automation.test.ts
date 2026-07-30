@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Agent } from '../agent/agent.js';
 import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
-import { setGoal } from '../goal/goalStore.js';
-import { createRequirement, getRequirement } from '../requirement/requirementStore.js';
+import { setGoal } from '../goal/store/goalStore.js';
+import { createRequirement, getRequirement } from '../requirement/records/requirementStore.js';
 import { updatePlan } from '../task/taskStore.js';
 import {
   createSprint,
@@ -13,7 +13,7 @@ import {
   setSprintState,
   transitionWorkItem,
 } from '../track/trackStore.js';
-import { reconcileSessionSprints } from '../track/sprintAutomation.js';
+import { reconcileSessionSprints } from '../track/automation/sprintAutomation.js';
 import { withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
 
 test('sprint automation: threshold creates one future sprint and assigns current-session items', () => {

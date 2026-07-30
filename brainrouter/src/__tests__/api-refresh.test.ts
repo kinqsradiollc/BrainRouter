@@ -23,7 +23,7 @@ describe("AUTH-REFRESH — /api/auth/refresh + /signout", () => {
   });
 
   async function start(): Promise<string> {
-    const { authRouter } = await import("../api/routes/auth.js");
+    const { authRouter } = await import("../api/routes/identity/auth.js");
     const app = express();
     app.use(express.json());
     app.use("/api/auth", authRouter);

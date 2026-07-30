@@ -1,0 +1,16 @@
+{
+  "name": "mock-ui",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Tiny TS app to demo the BrainRouter Browser panel — Extract + the command layer.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "vite": "^5.4.6"
+  }
+}

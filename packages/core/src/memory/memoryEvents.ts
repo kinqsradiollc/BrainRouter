@@ -19,6 +19,7 @@
 
 import type { McpClientPool } from '../mcp/mcpPool.js';
 import { hasMcpTool } from '../mcp/mcpUtils.js';
+import { resolveWorkspaceMemoryCaptureContext } from '../workspace/memoryCapture.js';
 
 export type RouteOutcome = 'success' | 'failure' | 'escalated';
 
@@ -53,6 +54,10 @@ export interface AgentEvent {
 interface EmitContext {
   mcpClient?: McpClientPool;
   sessionKey: string;
+  /** Absolute workspace root — hashed server-side to workspace_tag (per-workspace scoping). */
+  workspaceRoot?: string;
+  /** Project name (from .brainrouter/project.json) — hashed to project_tag. */
+  projectName?: string;
   /** Test hook — defaults to dynamic listTools via the mcp client. */
   toolNames?: Set<string>;
 }
@@ -74,6 +79,9 @@ async function emitViaCapture(
     const toolNames = ctx.toolNames ?? (await safeListToolNames(ctx.mcpClient));
     if (!hasMcpTool(toolNames, 'memory_capture_turn')) return null;
     const now = Date.now();
+    const workspaceMemoryContext = ctx.workspaceRoot
+      ? resolveWorkspaceMemoryCaptureContext(ctx.workspaceRoot)
+      : null;
     const res = await ctx.mcpClient.callTool('memory_capture_turn', {
       sessionKey: ctx.sessionKey,
       messages: [
@@ -81,6 +89,9 @@ async function emitViaCapture(
         { role: 'assistant', content: parts.assistantText, timestamp: now },
       ],
       activeSkill: parts.activeSkill,
+      ...(ctx.workspaceRoot ? { workspaceRoot: ctx.workspaceRoot } : {}),
+      ...(ctx.projectName ? { projectName: ctx.projectName } : {}),
+      ...(workspaceMemoryContext ?? {}),
     });
     if (!res || (res as any).isError) return null;
     return readRecordId(res);

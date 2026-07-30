@@ -6,7 +6,7 @@ deep dives.
 
 - **[memory-engine.md](memory-engine.md)** — the 4-layer stack, forgetting
   curve, ACE reinforcement loop, recall pipeline (FTS5 + vector + filepath
-  → RRF → priority blend → rerank → relevance judge → graph), ranking
+  → RRF → priority blend → rerank → graph), ranking
   blend, extraction robustness.
 - **[cli.md](cli.md)** — the terminal agent: startup banner & statusline,
   `/where` and `/quiet`, tool loop, access modes, `/compact`, hookify
@@ -18,6 +18,10 @@ deep dives.
 - **[hooks.md](hooks.md)** — authoring reference for shell hooks
   (`cli/hooks.json`) and hookify rules (`hooks/*.md`): events, schema,
   three worked examples, debug + limit notes.
+- **[automations.md](automations.md)** — inbound triggers → autonomous agent
+  jobs (0.4.17): webhook ingress + signature verification, `on`/`when`/`do`
+  rules, desktop setup, the loopback/tunnel reachability model, and the
+  end-to-end event → fleet job → draft PR → comment-back chain.
 - **[brain-agents.md](brain-agents.md)** — 0.4.0 design freeze for
   the brain-side agent registry, `memory_jobs` queue, and three MCP
   tools (`memory_agent_status` / `memory_agent_run` /
@@ -42,14 +46,28 @@ deep dives.
   `readonly` / `workspace` / `trusted` profiles you switch with `/policy`.
 - **[mcp-install.md](mcp-install.md)** — installing the BrainRouter MCP server
   into MCP clients.
+- **[ADR-025 package boundary inventory](adr-025-package-boundary-inventory.md)** —
+  current package/host owners, public entrypoints, mixed-responsibility module
+  triage, migration order, and boundary-guard backlog for the accepted
+  whole-platform modernization.
 
 ### Specs & decisions
 
-- **[specs/](specs/)** — design specs: [memory-accuracy](specs/memory-accuracy.md)
+- **[specs/](specs/)** — design specs: [workspace onboarding, dynamic capabilities, and project knowledge](specs/workspace-onboarding-and-capabilities.md), [memory-accuracy](specs/memory-accuracy.md)
   (+ the [audit](specs/memory-accuracy-audit.md)), [build-loop-workflow](specs/build-loop-workflow.md),
   [per-session-isolation](specs/per-session-isolation.md),
   [multi-agent-result-delivery](specs/multi-agent-result-delivery.md).
-- **[decisions/](decisions/)** — ADRs: [ADR-001 async store worker](decisions/ADR-001-async-store-worker.md).
+- **[decisions/](decisions/)** — ADRs: [ADR-001 async store worker](decisions/ADR-001-async-store-worker.md) …
+  [ADR-021 workspace onboarding: typed profiles, domain personas & the workspace knowledge subsystem](decisions/ADR-021-workspace-onboarding-typed-profiles.md) —
+  `.brainrouter/workspace.json` manifest (core chokepoint), profile presets, offline `/init` v2, bundled starter skills, and the B/C restructure phases;
+  [ADR-022 persona, orchestration, and context contracts](decisions/ADR-022-persona-orchestration-and-context-contracts.md) —
+  separate JSON persona and executable-role schemas, profile-scoped orchestration, task capabilities, and bounded context composition;
+  [ADR-023 profile-specific orchestration plans](decisions/ADR-023-profile-specific-orchestration-plans.md) —
+  bounded per-profile strategy graphs that reference reusable role JSON while preserving manifest and runtime authority ceilings;
+  [ADR-024 agent work contracts, repository assurance, and browser reliability](decisions/ADR-024-agent-work-repository-assurance-and-browser-reliability.md) —
+  proposed revisioned work/steering contracts, parser-backed code intelligence, whole-context repository assurance, verified browser actions, provider recovery, and a shared human review workbench;
+  [ADR-025 repository assurance and runtime boundary modernization](decisions/ADR-025-repository-assurance-and-runtime-boundary-modernization.md) —
+  accepted evidence-and-coverage-led PR assurance, distinct code/security/authorized-assessment programs, and an incremental whole-platform contracts/domain/policy/ports/adapters migration across shared packages and product hosts.
 
 Published benchmark results: [`../brainrouter-benchmark/reports/`](../brainrouter-benchmark/reports/).
 

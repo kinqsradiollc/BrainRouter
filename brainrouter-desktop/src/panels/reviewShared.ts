@@ -7,6 +7,8 @@ export interface ReviewFindingView {
   id?: string; file: string; line?: number; endLine?: number; severity: string; confidence: number;
   summary: string; details?: string; suggestion?: string; codeExcerpt?: string; diffHunk?: string;
   patch?: string; status?: string; canApply?: boolean;
+  /** Claude-style "Pre-existing": a real bug the diff touches but did not introduce (non-blocking). */
+  preExisting?: boolean;
 }
 export interface ReviewGateView { status: string; blocked: boolean; reason: string }
 

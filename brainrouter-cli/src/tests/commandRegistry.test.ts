@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { SLASH_COMMANDS, HELP_CATEGORIES } from '../cli/repl.js';
+import { SLASH_COMMANDS, HELP_CATEGORIES } from '../cli/prompt/repl.js';
 import {
   helpEntryTokens,
   helpPrimaryCommands,

@@ -12,7 +12,7 @@ import { listExtensions, type ExtensionInfo } from './manifest.js';
 import { isExtensionEnabled } from './extensionStore.js';
 import { isWorkspaceTrusted } from '../workspace/workspaceTrust.js';
 import { createExtensionHost, type ExtensionActivate } from './host.js';
-import { resetExtensionContributions } from './registry.js';
+import { abortExtensionReload, beginExtensionReload, commitExtensionReload } from './registry.js';
 import { refreshProviderCatalog } from '../provider/catalog.js';
 
 export interface ExtensionLoadResult {
@@ -25,18 +25,19 @@ export interface ExtensionLoadResult {
 
 /**
  * Load + activate all eligible extensions for `workspaceRoot`. Idempotent:
- * resets prior contributions first, so it's safe to call again on reload.
+ * stages a complete replacement and swaps it atomically, so a turn can never
+ * observe a half-reloaded executor/policy catalog.
  */
 export async function loadExtensions(
   workspaceRoot: string,
   opts: { version?: string } = {},
 ): Promise<ExtensionLoadResult> {
-  resetExtensionContributions();
+  beginExtensionReload();
   const result: ExtensionLoadResult = { activated: [], skippedUntrusted: [], skippedDisabled: [], errors: [] };
   const trusted = isWorkspaceTrusted(workspaceRoot);
 
   for (const ext of listExtensions(workspaceRoot)) {
-    if (!isExtensionEnabled(ext.name)) {
+    if (!ext.required && !isExtensionEnabled(ext.name)) {
       result.skippedDisabled.push(ext.name);
       continue;
     }
@@ -48,23 +49,31 @@ export async function loadExtensions(
       continue;
     }
     if (!fs.existsSync(ext.entry)) {
-      result.errors.push({ name: ext.name, error: `entry module not found: ${ext.entry}` });
+      const error = `entry module not found: ${ext.entry}`;
+      result.errors.push({ name: ext.name, error });
+      if (ext.required) { abortExtensionReload(); throw new Error(`Required core extension "${ext.name}" failed: ${error}`); }
       continue;
     }
     try {
       const mod = (await import(pathToFileURL(ext.entry).href)) as { activate?: ExtensionActivate };
       if (typeof mod.activate !== 'function') {
-        result.errors.push({ name: ext.name, error: 'module does not export activate(host)' });
+        const error = 'module does not export activate(host)';
+        result.errors.push({ name: ext.name, error });
+        if (ext.required) { abortExtensionReload(); throw new Error(`Required core extension "${ext.name}" failed: ${error}`); }
         continue;
       }
-      await mod.activate(createExtensionHost(ext.name, workspaceRoot, opts.version ?? ext.version));
+      await mod.activate(createExtensionHost(ext.name, workspaceRoot, opts.version ?? ext.version, { source: ext.source, required: ext.required }));
       result.activated.push(ext.name);
     } catch (err) {
-      // Fault isolation: a throwing extension is logged + skipped, never fatal.
-      result.errors.push({ name: ext.name, error: err instanceof Error ? err.message : String(err) });
+      // Optional extensions are fault-isolated. A required core capability is a
+      // startup invariant: keep the previous active snapshot and fail precisely.
+      const error = err instanceof Error ? err.message : String(err);
+      result.errors.push({ name: ext.name, error });
+      if (ext.required) { abortExtensionReload(); throw new Error(`Required core extension "${ext.name}" failed: ${error}`); }
     }
   }
 
+  commitExtensionReload();
   // Code-defined providers only become visible after the catalog is rebuilt.
   if (result.activated.length > 0) refreshProviderCatalog();
   return result;

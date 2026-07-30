@@ -1,0 +1,7 @@
+{
+  "name": "capability-backend",
+  "version": "1.1.0",
+  "description": "Task-scoped service, authorization, persistence, background-work, operations, and backend verification workflows.",
+  "category": "development",
+  "keywords": ["backend", "api", "authorization", "database", "operations"]
+}

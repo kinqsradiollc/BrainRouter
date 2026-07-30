@@ -21,6 +21,7 @@ import type {
   MemoryEvidence,
   MemoryJobRecord,
   MemoryJobStatus,
+  MemoryJobProgressEvent,
   MemoryOperation,
   SessionInboxKind,
   SessionInboxRecord,
@@ -79,6 +80,8 @@ export function cognitiveRowToRecord(row: any): CognitiveRecord {
     archived: Boolean(row.archived),
     workspaceTag: row.workspace_tag ?? null,
     projectTag: row.project_tag ?? null,
+    orgId: row.org_id ?? null,
+    visibility: row.visibility ?? "private",
   };
 }
 
@@ -163,6 +166,7 @@ export function jobRowToRecord(row: {
   parent_job_id: string | null;
   input_json: string;
   output_json: string | null;
+  progress_json?: string | null;
   error: string | null;
   created_at: string;
   updated_at: string;
@@ -187,6 +191,10 @@ export function jobRowToRecord(row: {
     parentJobId: row.parent_job_id,
     input: parse(row.input_json),
     output: parse(row.output_json),
+    progress: (() => {
+      const parsed = parse(row.progress_json ?? "[]");
+      return Array.isArray(parsed) ? parsed as MemoryJobProgressEvent[] : [];
+    })(),
     error: row.error,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

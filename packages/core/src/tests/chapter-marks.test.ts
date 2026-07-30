@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Agent } from '../agent/agent.js';
-import { chapterEntryContent, listChapters, formatChapters } from '../session/chapterMarks.js';
-import { loadTranscript } from '../session/sessionStore.js';
+import { chapterEntryContent, listChapters, formatChapters } from '../session/transcript/chapterMarks.js';
+import { loadTranscript } from '../session/transcript/sessionStore.js';
 import { withTempWorkspaceAsync } from './_helpers.js';
-import type { TranscriptEntry } from '../session/sessionStore.js';
+import type { TranscriptEntry } from '../session/transcript/sessionStore.js';
 
 test('listChapters/formatChapters: extracts tagged markers, skips malformed', () => {
   const entries: TranscriptEntry[] = [

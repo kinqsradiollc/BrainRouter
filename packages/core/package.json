@@ -1,6 +1,6 @@
 {
   "name": "@kinqs/brainrouter-core",
-  "version": "0.4.16",
+  "version": "0.4.17",
   "description": "BrainRouter's headless engine — config, durable stores, runtime, orchestration, telemetry, and the agent — shared verbatim by the CLI and the Desktop app so neither reaches into the other's build output.",
   "type": "module",
   "main": "dist/index.js",
@@ -35,6 +35,14 @@
       "types": "./dist/command/index.d.ts",
       "default": "./dist/command/index.js"
     },
+    "./command/catalog": {
+      "types": "./dist/command/catalog.d.ts",
+      "default": "./dist/command/catalog.js"
+    },
+    "./command/parity": {
+      "types": "./dist/command/parity.d.ts",
+      "default": "./dist/command/parity.js"
+    },
     "./config": {
       "types": "./dist/config/index.d.ts",
       "default": "./dist/config/index.js"
@@ -58,6 +66,14 @@
     "./fleet": {
       "types": "./dist/fleet/index.d.ts",
       "default": "./dist/fleet/index.js"
+    },
+    "./fanout": {
+      "types": "./dist/fanout/index.d.ts",
+      "default": "./dist/fanout/index.js"
+    },
+    "./forge": {
+      "types": "./dist/forge/index.d.ts",
+      "default": "./dist/forge/index.js"
     },
     "./git": {
       "types": "./dist/git/index.d.ts",
@@ -83,9 +99,17 @@
       "types": "./dist/orchestration/index.d.ts",
       "default": "./dist/orchestration/index.js"
     },
+    "./orchestration/delegation-contracts": {
+      "types": "./dist/orchestration/delegation/contracts.d.ts",
+      "default": "./dist/orchestration/delegation/contracts.js"
+    },
     "./pack": {
       "types": "./dist/pack/index.d.ts",
       "default": "./dist/pack/index.js"
+    },
+    "./plugin": {
+      "types": "./dist/plugin/index.d.ts",
+      "default": "./dist/plugin/index.js"
     },
     "./prompt": {
       "types": "./dist/prompt/index.d.ts",
@@ -95,6 +119,18 @@
       "types": "./dist/prototype/index.d.ts",
       "default": "./dist/prototype/index.js"
     },
+    "./prototype/detect": {
+      "types": "./dist/prototype/protoDetect.d.ts",
+      "default": "./dist/prototype/protoDetect.js"
+    },
+    "./prototype/placeholders": {
+      "types": "./dist/prototype/placeholderRender.d.ts",
+      "default": "./dist/prototype/placeholderRender.js"
+    },
+    "./prototype/prompt": {
+      "types": "./dist/prototype/prototypePrompt.d.ts",
+      "default": "./dist/prototype/prototypePrompt.js"
+    },
     "./provider": {
       "types": "./dist/provider/index.d.ts",
       "default": "./dist/provider/index.js"
@@ -103,9 +139,25 @@
       "types": "./dist/requirement/index.d.ts",
       "default": "./dist/requirement/index.js"
     },
+    "./requirement/frameworks": {
+      "types": "./dist/requirement/frameworks/pmFrameworks.d.ts",
+      "default": "./dist/requirement/frameworks/pmFrameworks.js"
+    },
     "./review": {
       "types": "./dist/review/index.d.ts",
       "default": "./dist/review/index.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime/index.d.ts",
+      "default": "./dist/runtime/index.js"
+    },
+    "./router": {
+      "types": "./dist/router/index.d.ts",
+      "default": "./dist/router/index.js"
+    },
+    "./router/gateway": {
+      "types": "./dist/router/gateway.d.ts",
+      "default": "./dist/router/gateway.js"
     },
     "./schedule": {
       "types": "./dist/schedule/index.d.ts",
@@ -114,6 +166,10 @@
     "./session": {
       "types": "./dist/session/index.d.ts",
       "default": "./dist/session/index.js"
+    },
+    "./session/permission-modes": {
+      "types": "./dist/session/preferences/permissionModes.d.ts",
+      "default": "./dist/session/preferences/permissionModes.js"
     },
     "./storage": {
       "types": "./dist/storage/index.d.ts",
@@ -127,6 +183,10 @@
       "types": "./dist/telemetry/index.d.ts",
       "default": "./dist/telemetry/index.js"
     },
+    "./terminal": {
+      "types": "./dist/terminal/index.d.ts",
+      "default": "./dist/terminal/index.js"
+    },
     "./tool": {
       "types": "./dist/tool/index.d.ts",
       "default": "./dist/tool/index.js"
@@ -134,6 +194,14 @@
     "./track": {
       "types": "./dist/track/index.d.ts",
       "default": "./dist/track/index.js"
+    },
+    "./triggers": {
+      "types": "./dist/triggers/index.d.ts",
+      "default": "./dist/triggers/index.js"
+    },
+    "./browser": {
+      "types": "./dist/browser/index.d.ts",
+      "default": "./dist/browser/index.js"
     },
     "./usage": {
       "types": "./dist/usage/index.d.ts",
@@ -151,9 +219,33 @@
       "types": "./dist/workflow/index.d.ts",
       "default": "./dist/workflow/index.js"
     },
+    "./workflow/graph": {
+      "types": "./dist/workflow/graph/graph.d.ts",
+      "default": "./dist/workflow/graph/graph.js"
+    },
+    "./workflow/graph-engine": {
+      "types": "./dist/workflow/graph/graphEngine.d.ts",
+      "default": "./dist/workflow/graph/graphEngine.js"
+    },
+    "./workflow/graph-store": {
+      "types": "./dist/workflow/graph/graphStore.d.ts",
+      "default": "./dist/workflow/graph/graphStore.js"
+    },
     "./workspace": {
       "types": "./dist/workspace/index.d.ts",
       "default": "./dist/workspace/index.js"
+    },
+    "./workspace/capabilities": {
+      "types": "./dist/workspace/capabilities.d.ts",
+      "default": "./dist/workspace/capabilities.js"
+    },
+    "./workspace/profiles": {
+      "types": "./dist/workspace/profiles.d.ts",
+      "default": "./dist/workspace/profiles.js"
+    },
+    "./workspace/tool-profile-catalog": {
+      "types": "./dist/workspace/toolProfileCatalog.d.ts",
+      "default": "./dist/workspace/toolProfileCatalog.js"
     },
     "./worktree": {
       "types": "./dist/worktree/index.d.ts",
@@ -163,30 +255,42 @@
       "types": "./dist/write/index.d.ts",
       "default": "./dist/write/index.js"
     },
+    "./write/review-diff": {
+      "types": "./dist/write/writeDiff.d.ts",
+      "default": "./dist/write/writeDiff.js"
+    },
     "./version": {
       "types": "./dist/version.d.ts",
       "default": "./dist/version.js"
-    },
-    "./dist/*": "./dist/*"
+    }
   },
   "files": [
     "dist",
     "config",
+    "personas",
     "agents",
-    "packs"
+    "orchestration-profiles",
+    "planning-schemas",
+    "packs",
+    "profile-plugins",
+    "extensions",
+    "skills"
   ],
   "scripts": {
-    "clean": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\"",
+    "clean": "node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});for(const entry of fs.readdirSync('dist'))fs.rmSync('dist/'+entry,{recursive:true,force:true})\"",
     "build": "npm run clean && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test \"dist/**/*.test.js\"",
     "prepack": "npm run build && node -e \"const fs=require('fs');function w(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=d+'/'+e.name;if(e.isDirectory())w(p);else if(/\\.test\\./.test(e.name))fs.rmSync(p)}}w('dist')\""
   },
   "dependencies": {
-    "@kinqs/brainrouter-agent-protocol": "^0.4.16",
-    "@kinqs/brainrouter-types": "^0.4.16",
+    "@kinqs/brainrouter-agent-protocol": "^0.4.17",
+    "@kinqs/brainrouter-types": "^0.4.17",
     "@modelcontextprotocol/sdk": "^1.11.0",
-    "cheerio": "^1.2.0"
+    "chalk": "^5.3.0",
+    "cheerio": "^1.2.0",
+    "yaml": "^2.0.0",
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.5.0",
@@ -211,5 +315,13 @@
   "publishConfig": {
     "access": "public"
   },
-  "sideEffects": false
+  "sideEffects": false,
+  "peerDependencies": {
+    "playwright": "^1.40.0"
+  },
+  "peerDependenciesMeta": {
+    "playwright": {
+      "optional": true
+    }
+  }
 }

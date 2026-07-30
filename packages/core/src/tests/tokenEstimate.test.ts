@@ -12,7 +12,7 @@ import {
   estimateChatHistoryTokens,
   estimateTokens,
   estimateTokensDetailed,
-} from '../util/tokenEstimate.js';
+} from '../util/tokens/tokenEstimate.js';
 
 test('estimateTokens: zero / null / non-string returns 0 without throwing', () => {
   assert.equal(estimateTokens(''), 0);

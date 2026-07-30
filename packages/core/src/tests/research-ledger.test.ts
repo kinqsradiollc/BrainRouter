@@ -6,6 +6,7 @@ import {
   crossCheck,
   summarizeLedger,
   formatBrief,
+  canonicalSourceUrl,
 } from '../research/evidenceLedger.js';
 import { setQuestion, appendEvidence, readLedger, clearLedger } from '../research/researchStore.js';
 import { withTempWorkspace } from './_helpers.js';
@@ -22,6 +23,36 @@ test('addEntry: deterministic ids, defaults, trims sources', () => {
   assert.equal(led.entries[1].stance, 'unclear'); // default
   assert.equal(led.entries[1].confidence, 'low'); // default
   assert.throws(() => addEntry(led, { claim: '   ' }, NOW), /non-empty claim/);
+});
+
+test('structured sources canonicalize, dedupe, and retain evidence provenance', () => {
+  const led = addEntry(createLedger('Q', NOW), {
+    claim: 'Measured outcome improved',
+    sourceRecords: [
+      {
+        url: 'https://example.test/report?utm_source=newsletter&b=2&a=1#results',
+        title: 'Annual report',
+        publisher: 'Example Institute',
+        authors: ['Ada Researcher'],
+        publishedDate: '2026-06-01',
+        evidence: 'The measured outcome improved by 12%.',
+        limitations: 'Observational sample.',
+      },
+      {
+        url: 'https://example.test/report?a=1&b=2',
+        title: 'Duplicate canonical URL',
+      },
+    ],
+    stance: 'support',
+  }, NOW);
+  assert.equal(canonicalSourceUrl('https://example.test/report?utm_medium=x&a=1#top'), 'https://example.test/report?a=1');
+  assert.equal(led.entries[0].sourceRecords?.length, 1, 'canonical duplicate URL is stored once');
+  assert.equal(led.entries[0].sourceRecords?.[0].accessedAt, NOW);
+  const brief = formatBrief(led);
+  assert.match(brief, /Annual report/);
+  assert.match(brief, /Example Institute/);
+  assert.match(brief, /evidence: The measured outcome improved by 12%/);
+  assert.match(brief, /limitations: Observational sample/);
 });
 
 test('crossCheck: corroborated / conflicting / single-source classification', () => {

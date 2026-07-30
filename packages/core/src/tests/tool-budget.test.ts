@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { rankAndCapTools, applyToolScope, toolRelevanceScore } from '../tool/toolBudget.js';
+import { rankAndCapTools, applyToolScope, toolNameMatchesAny, toolRelevanceScore } from '../tool/policy/toolBudget.js';
 
 const T = (name: string, description = '') => ({ name, description });
 
@@ -53,4 +53,12 @@ test('applyToolScope whitelists allow and removes disallow (suffix-aware)', () =
   assert.deepEqual(minusOne.map((t) => t.name), ['mcp_gh_create_issue']);
   // no scope → unchanged.
   assert.deepEqual(applyToolScope(tools).map((t) => t.name), tools.map((t) => t.name));
+});
+
+test('toolNameMatchesAny permits exact and namespaced MCP matches without widening local names', () => {
+  assert.equal(toolNameMatchesAny('read_file', ['read_file']), true);
+  assert.equal(toolNameMatchesAny('mcp_docs_search', ['search']), true);
+  assert.equal(toolNameMatchesAny('grep_search', ['search']), false);
+  assert.equal(toolNameMatchesAny('mcp_docs_delete', ['search']), false);
+  assert.equal(toolNameMatchesAny('read_file', []), false);
 });

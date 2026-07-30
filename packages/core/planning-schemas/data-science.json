@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "kind": "planning-schema",
+  "id": "data-science-experiment",
+  "label": "Data science experiment",
+  "description": "Hypothesis, data contract, experiment design, evaluation, and reproducibility.",
+  "profileIds": ["data-science"],
+  "planningSkillIds": ["planning-skill", "experiment-validation-skill"],
+  "sections": [
+    {
+      "id": "hypothesis",
+      "label": "Hypothesis",
+      "description": "Question, expected relationship, assumptions, and falsification criteria.",
+      "required": true
+    },
+    {
+      "id": "data-contract",
+      "label": "Data contract",
+      "description": "Inputs, provenance, schema, quality constraints, and permitted transformations.",
+      "required": true
+    },
+    {
+      "id": "experiment",
+      "label": "Experiment plan",
+      "description": "Method, baselines, splits, controls, and execution steps.",
+      "required": true
+    },
+    {
+      "id": "evaluation",
+      "label": "Evaluation protocol",
+      "description": "Metrics, thresholds, error analysis, and comparison procedure.",
+      "required": true
+    }
+  ],
+  "gates": [
+    {
+      "id": "reproducibility",
+      "label": "Reproducibility",
+      "description": "Inputs, environment, transformations, and seeds are sufficient to repeat the result."
+    },
+    {
+      "id": "leakage-bias",
+      "label": "Leakage and bias review",
+      "description": "Leakage, sampling bias, confounders, and material limitations are reviewed."
+    }
+  ]
+}

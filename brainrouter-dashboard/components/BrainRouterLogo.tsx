@@ -1,118 +1,72 @@
 "use client";
 
-import { useId } from "react";
 import type { CSSProperties } from "react";
 
-/**
- * BrainRouterLogo — the BrainRouter brand mark + wordmark, generated in code.
- *
- * The mark is a guilloché rosette: interwoven Signal rings (a 12-fold
- * flower-of-life lattice) with six memory nodes routed around a glossy
- * "recall" core. Procedurally drawn vector — intricate and hard to replicate,
- * yet crisp at any size; the bright core keeps it legible down to ~24px.
- *
- * Reusable: showWordmark={false} for the mark alone (favicons, loaders, empty
- * states); animated={false} to freeze the subtle core pulse. Honors
- * prefers-reduced-motion.
- */
+import {
+  ROUTED_B_ACCENT,
+  ROUTED_B_PATHS,
+  ROUTED_B_VIEWBOX,
+} from "../../packages/brand/routedB";
 
-const SIGNAL = "#34C28E";
-const RING = 44; // outer containing ring radius (viewBox is -50..50)
+export interface BrainRouterLogoProps {
+  /** Mark height in CSS pixels. The coded geometry is legible from 16px. */
+  size?: number;
+  showWordmark?: boolean;
+  wordmark?: string;
+  /** Use one flat violet route. Set false for a one-color mark. */
+  accented?: boolean;
+  accentColor?: string;
+  /** Kept for call-site compatibility; the Routed B is intentionally static. */
+  animated?: boolean;
+  className?: string;
+  style?: CSSProperties;
+}
 
-// flower-of-life lattice: two 6-circle rings, offset 30° → 12-fold interference
-const PETALS = Array.from({ length: 6 }, (_, i) => (i * 60 * Math.PI) / 180);
-const PETALS_OFFSET = Array.from({ length: 6 }, (_, i) => ((i * 60 + 30) * Math.PI) / 180);
-const onCircle = (a: number, dist: number) => ({ x: +(Math.cos(a) * dist).toFixed(2), y: +(Math.sin(a) * dist).toFixed(2) });
-
+/** Accessible inline-vector BrainRouter mark and optional wordmark. */
 export function BrainRouterLogo({
   size = 28,
   showWordmark = true,
   wordmark = "BrainRouter",
-  animated = true,
+  accented = true,
+  accentColor = ROUTED_B_ACCENT,
   className,
   style,
-}: {
-  /** Mark height in px (the wordmark scales from it). */
-  size?: number;
-  showWordmark?: boolean;
-  wordmark?: string;
-  /** Subtle breathing pulse on the core node (honors reduced-motion). */
-  animated?: boolean;
-  className?: string;
-  style?: CSSProperties;
-}) {
-  const uid = useId().replace(/:/g, "");
-  const grad = `${uid}-g`;
-  const coreGrad = `${uid}-core`;
-
+}: BrainRouterLogoProps) {
   return (
     <span
       className={className}
-      style={{ display: "inline-flex", alignItems: "center", gap: `${Math.round(size * 0.42)}px`, ...style }}
+      role={showWordmark ? undefined : "img"}
+      aria-label={showWordmark ? undefined : wordmark}
+      style={{ display: "inline-flex", alignItems: "center", gap: `${Math.round(size * 0.38)}px`, ...style }}
     >
       <svg
+        data-brand-mark="routed-b"
         width={size}
         height={size}
-        viewBox="-50 -50 100 100"
-        fill="none"
+        viewBox={ROUTED_B_VIEWBOX}
         aria-hidden="true"
-        style={{ display: "block", flexShrink: 0, overflow: "visible" }}
+        focusable="false"
+        style={{ display: "block", flexShrink: 0 }}
       >
-        <defs>
-          <linearGradient id={grad} x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stopColor="#7FE6BE" />
-            <stop offset="1" stopColor={SIGNAL} />
-          </linearGradient>
-          <radialGradient id={coreGrad} cx="0.38" cy="0.32" r="0.78">
-            <stop offset="0" stopColor="#7FE6BE" />
-            <stop offset="1" stopColor={SIGNAL} />
-          </radialGradient>
-        </defs>
-
-        {/* containing ring */}
-        <circle r={RING} stroke={SIGNAL} strokeWidth="1" strokeOpacity="0.32" />
-
-        {/* primary lattice — gradient stroke */}
-        {PETALS.map((a, i) => {
-          const c = onCircle(a, 22);
-          return <circle key={`p${i}`} cx={c.x} cy={c.y} r={22} stroke={`url(#${grad})`} strokeWidth="1" strokeOpacity="0.6" />;
-        })}
-        {/* offset lattice — finer, builds the 12-fold interference */}
-        {PETALS_OFFSET.map((a, i) => {
-          const c = onCircle(a, 22);
-          return <circle key={`o${i}`} cx={c.x} cy={c.y} r={22} stroke={SIGNAL} strokeWidth="0.75" strokeOpacity="0.32" />;
-        })}
-
-        {/* memory nodes routed around the ring */}
-        {PETALS.map((a, i) => {
-          const c = onCircle(a, RING);
-          return <circle key={`n${i}`} cx={c.x} cy={c.y} r={2.4} fill={SIGNAL} />;
-        })}
-
-        {/* breathing recall signal */}
-        {animated && <circle className="brl-pulse" r={7} fill={SIGNAL} />}
-
-        {/* core "recall" node */}
-        <circle r={7} fill={`url(#${coreGrad})`} />
-        <circle r={7} stroke="#fff" strokeOpacity="0.22" strokeWidth="0.8" />
-        <circle cx={-2.3} cy={-2.8} r={3} fill="#fff" fillOpacity="0.2" />
+        <path d={ROUTED_B_PATHS.upper} fill="currentColor" />
+        <path d={ROUTED_B_PATHS.lower} fill={accented ? accentColor : "currentColor"} />
       </svg>
 
-      {showWordmark && (
+      {showWordmark ? (
         <span
           style={{
+            color: "currentColor",
             fontFamily: "var(--font-sans)",
-            fontWeight: 600,
             fontSize: `${Math.round(size * 0.76)}px`,
-            letterSpacing: "-0.015em",
-            color: "var(--text)",
-            whiteSpace: "nowrap",
+            fontWeight: 600,
+            letterSpacing: "-0.025em",
             lineHeight: 1,
+            whiteSpace: "nowrap",
           }}
         >
           {wordmark}
         </span>
-      )}
+      ) : null}
     </span>
   );
 }

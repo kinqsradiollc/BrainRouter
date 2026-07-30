@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/agent';
+import { localToolSpecsFromExecutors } from '@kinqs/brainrouter-core/tool';
 import {
   askChoice,
   CancelledChoiceError,
@@ -11,7 +11,7 @@ import {
   reducePicker,
   renderPicker,
   setActiveReadline,
-} from '../cli/cliPrompt.js';
+} from '../cli/prompt/cliPrompt.js';
 import { ARTIFACT, createWorkflow, getWorkflowDir } from '@kinqs/brainrouter-core/workflow';
 import { withTempWorkspace } from './_helpers.js';
 
@@ -243,9 +243,9 @@ test('CancelledChoiceError carries a recognizable name + default message', () =>
   assert.match(err.message, /cancelled/i);
 });
 
-test('LOCAL_TOOLS registers ask_user_choice with the expected schema shape', () => {
-  const tool = LOCAL_TOOLS.find((t) => t.name === 'ask_user_choice');
-  assert.ok(tool, 'ask_user_choice should be registered in LOCAL_TOOLS');
+test('extension registry exposes ask_user_choice with the expected schema shape', () => {
+  const tool = localToolSpecsFromExecutors().find((candidate) => candidate.name === 'ask_user_choice');
+  assert.ok(tool, 'ask_user_choice should be registered by a required extension');
   const props = (tool!.inputSchema as any).properties;
   assert.ok(props.question, 'schema is missing the `question` property');
   assert.ok(props.header, 'schema is missing the `header` property');
@@ -275,7 +275,7 @@ test('LOCAL_TOOLS registers ask_user_choice with the expected schema shape', () 
 // cover the skip-if-plan-exists guard, which is filesystem-driven (no MCP).
 
 test('grill-me skip guard: fires when the current workflow has a spec.md', async () => {
-  const { shouldSkipGrillMe } = await import('../cli/commands/workflow.js');
+  const { shouldSkipGrillMe } = await import('../cli/commands/workflow/index.js');
   withTempWorkspace((workspace) => {
     const meta = createWorkflow(workspace, { title: 'auth rewrite', kind: 'spec' });
     const specAbs = path.join(getWorkflowDir(workspace, meta.slug), ARTIFACT.spec);
@@ -290,7 +290,7 @@ test('grill-me skip guard: fires when the current workflow has a spec.md', async
 });
 
 test('grill-me skip guard: stays quiet when no workflow is bound or spec.md is absent', async () => {
-  const { shouldSkipGrillMe } = await import('../cli/commands/workflow.js');
+  const { shouldSkipGrillMe } = await import('../cli/commands/workflow/index.js');
   withTempWorkspace((workspace) => {
     // No workflow bound yet → proceed.
     assert.equal(shouldSkipGrillMe(workspace, false).skip, false);
@@ -303,7 +303,7 @@ test('grill-me skip guard: stays quiet when no workflow is bound or spec.md is a
 });
 
 test('grill-me skip guard: --force bypasses even when a spec.md is present', async () => {
-  const { shouldSkipGrillMe } = await import('../cli/commands/workflow.js');
+  const { shouldSkipGrillMe } = await import('../cli/commands/workflow/index.js');
   withTempWorkspace((workspace) => {
     const meta = createWorkflow(workspace, { title: 'follow-up', kind: 'spec' });
     fs.writeFileSync(path.join(getWorkflowDir(workspace, meta.slug), ARTIFACT.spec), '# Spec\n');

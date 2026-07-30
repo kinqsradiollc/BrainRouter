@@ -14,6 +14,13 @@ import type {
   SkillActivationRecord,
 } from "./memory.js";
 import type { MemoryListItem } from "./store.js";
+import type { ModelReasoningEffort } from "./models.js";
+import type {
+  AssuranceFinding,
+  AssurancePublicationProjection,
+  DeepReviewRequestConfig,
+  RepositoryAssuranceRun,
+} from "./review/index.js";
 import { PublicUserRecord } from "./memory.js";
 
 export interface SigninRequest {
@@ -65,6 +72,75 @@ export interface UserStatusRequest {
 
 export interface UserResetKeyResponse {
   apiKey: string;
+}
+
+/** PR Review Console contracts. Findings deliberately exclude model-generated bodies. */
+export interface ReviewFindingDetailDto {
+  file: string;
+  line?: number;
+  endLine?: number;
+  severity: string;
+  title: string;
+  cwe?: string;
+  preExisting?: boolean;
+  suggestable?: boolean;
+  /** Issue lifecycle — open / in progress / snoozed / fixed / ignored (absent = open). */
+  status?: string;
+  firstSeenAt?: string;
+  lastSeenAt?: string;
+  fixedAt?: string;
+  firstSeenSha?: string;
+  lastSeenSha?: string;
+  fixedSha?: string;
+  resolvedByLogin?: string;
+}
+export interface ReviewProgressEventDto {
+  ts: string;
+  kind: string;
+  msg: string;
+  data?: Record<string, unknown>;
+  traceId?: string;
+  spanId?: string;
+  parentSpanId?: string;
+  role?: string;
+  status?: "pending" | "running" | "succeeded" | "failed" | "skipped";
+  durationMs?: number;
+}
+export interface ReviewJobDto {
+  id: string;
+  lens: "security" | "code" | "pentest";
+  status: string;
+  repo: string | null;
+  prNumber: number | null;
+  forge?: "github" | "gitlab";
+  findings: number | null;
+  blocking: number | null;
+  findingsDetail: ReviewFindingDetailDto[];
+  progress: ReviewProgressEventDto[];
+  skipped: string | null;
+  error: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/** Exact durable assurance state projected without redefining lifecycle enums. */
+export interface ReviewAssuranceDto {
+  run: RepositoryAssuranceRun;
+  findings: AssuranceFinding[];
+  /** Exact publication state used for forge output. Absent on legacy runs. */
+  publication?: AssurancePublicationProjection;
+}
+export interface ReviewJobDetailResponse {
+  review: ReviewJobDto;
+  assurance: ReviewAssuranceDto | null;
+  canRun: boolean;
+}
+export interface ManualReviewRunRequest {
+  repo: string;
+  prNumber: number;
+  lens: "security" | "code" | "pentest" | "both";
+  forge?: "github" | "gitlab";
+  mode?: "diff" | "deep";
+  deepReview?: DeepReviewRequestConfig;
 }
 
 export interface CursorPaginationParams {
@@ -172,6 +248,32 @@ export interface ExplainRecallRequest {
 }
 
 export type ExplainRecallResponse = RecallResult;
+
+/** Authenticated dashboard/SDK chat turn, scoped by the active org header. */
+export interface BrainChatRequest {
+  messages: Array<{ role: "user" | "assistant"; content: string }>;
+  sessionKey: string;
+  projectId?: string;
+  workspaceTag?: string;
+  /** Public server-managed model id from the authenticated member catalog. */
+  model?: string;
+  /** Canonical effort id; omitted delegates to the model policy default. */
+  reasoningEffort?: ModelReasoningEffort;
+}
+
+export interface BrainChatCitation {
+  recordId: string;
+  title?: string;
+  excerpt: string;
+  type?: string;
+  score?: number;
+}
+
+export interface BrainChatResponse {
+  message: { role: "assistant"; content: string };
+  citations: BrainChatCitation[];
+  recallStrategy: string;
+}
 
 export interface WorkingStep {
   nodeId: string;

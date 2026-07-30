@@ -18,6 +18,7 @@ export interface EditorApi {
   conflictPaths: string[];
   saving: boolean;
   anyDirty: boolean;
+  isDirty: (path: string) => boolean;
   /** When set, the editor should reveal this line of `path`. `seq` bumps on every
    *  request so the same path+line re-triggers a reveal (e.g. re-clicking a symbol). */
   revealLine: { path: string; line: number; seq: number } | null;
@@ -39,10 +40,30 @@ export function useEditor(opts?: { workspaceRoot?: string | null; onSaved?: (pat
   const [revealLine, setRevealLine] = useState<{ path: string; line: number; seq: number } | null>(null);
   const revealSeq = useRef(0);
 
-  const tabsRef = useRef(tabs); tabsRef.current = tabs;
+  // Monaco is the hot buffer owner between renderer projections. Do not assign
+  // the (possibly debounced) React state back into this ref on an unrelated App
+  // render, or a chat/trace update could overwrite newer editor text.
+  const tabsRef = useRef(tabs);
   const optsRef = useRef(opts); optsRef.current = opts;
   const workspaceRootRef = useRef(opts?.workspaceRoot); workspaceRootRef.current = opts?.workspaceRoot;
   const pendingSave = useRef<Record<string, string>>({});
+  const renderFlushTimer = useRef<number | null>(null);
+
+  const commitTabs = (next: EditorTab[]): void => {
+    tabsRef.current = next;
+    setTabs(next);
+  };
+  const cancelRenderFlush = (): void => {
+    if (renderFlushTimer.current === null) return;
+    window.clearTimeout(renderFlushTimer.current);
+    renderFlushTimer.current = null;
+  };
+  const flushBufferedTabs = (): void => {
+    cancelRenderFlush();
+    setTabs(tabsRef.current);
+  };
+
+  useEffect(() => () => cancelRenderFlush(), []);
 
   useEffect(() => {
     const off = window.brainrouter.onEvent((msg) => {
@@ -58,7 +79,7 @@ export function useEditor(opts?: { workspaceRoot?: string | null; onSaved?: (pat
         if (!r) return;
         if (r.error) { optsRef.current?.onToast?.(`Can't open ${path}: ${r.error}`); return; }
         if (r.kind === 'directory') return; // directories belong to the Files tree
-        setTabs((ts) => openTab(ts, r));
+        commitTabs(openTab(tabsRef.current, r));
         setActivePath(r.path);
       } else if (op === 'save') {
         setSaving(false);
@@ -66,7 +87,7 @@ export function useEditor(opts?: { workspaceRoot?: string | null; onSaved?: (pat
         if (r?.ok) {
           const saved = pendingSave.current[path];
           delete pendingSave.current[path];
-          setTabs((ts) => markSaved(ts, path, saved ?? (findTab(ts, path)?.content ?? ''), r.mtimeMs));
+          commitTabs(markSaved(tabsRef.current, path, saved ?? (findTab(tabsRef.current, path)?.content ?? ''), r.mtimeMs));
           setConflictPaths((c) => c.filter((p) => p !== path));
           optsRef.current?.onSaved?.(path);
         } else if (r?.conflict) {
@@ -93,25 +114,64 @@ export function useEditor(opts?: { workspaceRoot?: string | null; onSaved?: (pat
     window.brainrouter.send({ kind: 'query', id: `ed:read:${path}`, name: 'file-read', args: { path } });
   };
   const select = (path: string): void => setActivePath(path);
-  const change = (path: string, content: string): void => setTabs((ts) => setContent(ts, path, content));
+  const change = (path: string, content: string): void => {
+    const previous = tabsRef.current;
+    const next = setContent(previous, path, content);
+    tabsRef.current = next;
+    // The first dirty/clean transition updates app chrome immediately. Further
+    // keystrokes stay in Monaco and coalesce one renderer projection instead of
+    // rerendering the entire App tree for every character.
+    if (anyDirty(previous) !== anyDirty(next)) {
+      cancelRenderFlush();
+      setTabs(next);
+      return;
+    }
+    cancelRenderFlush();
+    renderFlushTimer.current = window.setTimeout(() => {
+      renderFlushTimer.current = null;
+      setTabs(tabsRef.current);
+    }, 120);
+  };
   const save = (path: string): void => {
     const tab = findTab(tabsRef.current, path);
     if (!tab || !isDirty(tab)) return;
+    flushBufferedTabs();
     pendingSave.current[path] = tab.content;
     setSaving(true);
     setConflictPaths((c) => c.filter((p) => p !== path));
     window.brainrouter.send({ kind: 'query', id: `ed:save:${path}`, name: 'action:file-save', args: { path, content: tab.content, expectedMtimeMs: tab.mtimeMs } });
   };
   const saveAll = (): void => { for (const p of dirtyPaths(tabsRef.current)) save(p); };
-  const revert = (path: string): void => setTabs((ts) => revertTab(ts, path));
+  const revert = (path: string): void => {
+    commitTabs(revertTab(tabsRef.current, path));
+  };
   const close = (path: string): void => {
     setActivePath((a) => nextActivePath(tabsRef.current, path, a));
-    setTabs((ts) => closeTab(ts, path));
+    commitTabs(closeTab(tabsRef.current, path));
     setConflictPaths((c) => c.filter((p) => p !== path));
   };
   const reorder = (draggedPath: string, targetPath: string): void => {
-    setTabs((ts) => reorderTabs(ts, draggedPath, targetPath));
+    commitTabs(reorderTabs(tabsRef.current, draggedPath, targetPath));
   };
 
-  return { tabs, activePath, conflictPaths, saving, anyDirty: anyDirty(tabs), revealLine, open, select, change, save, saveAll, revert, close, reorder };
+  return {
+    tabs: tabsRef.current,
+    activePath,
+    conflictPaths,
+    saving,
+    anyDirty: anyDirty(tabsRef.current),
+    isDirty: (path) => {
+      const tab = findTab(tabsRef.current, path);
+      return !!tab && isDirty(tab);
+    },
+    revealLine,
+    open,
+    select,
+    change,
+    save,
+    saveAll,
+    revert,
+    close,
+    reorder,
+  };
 }

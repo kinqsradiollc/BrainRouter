@@ -2,6 +2,7 @@ import type { RerankerServiceConfig } from "@kinqs/brainrouter-types";
 import { fetchWithExternalRetry } from "../util/retry.js";
 import { acquireRerankerSlot, acquireRerankerSlotOrNull } from "../llm/llm-semaphore.js";
 import { normalizeRequestTimeoutMs, parseRequestTimeoutMs, requestTimeoutSignal } from "../util/request-timeout.js";
+import { resolveRerankUrl } from "../../providers/wireFormat.js";
 
 export interface RankedResult {
   index: number;
@@ -73,13 +74,13 @@ export function rerankerBreakerCooldownMs(env: NodeJS.ProcessEnv = process.env):
 }
 
 export class RerankerService {
-  private readonly endpoint: string;
-  private readonly apiKey: string;
-  private readonly model: string;
+  private endpoint: string;
+  private apiKey: string;
+  private model: string;
   private readonly topN: number;
   private readonly timeoutMs: number;
   private readonly acquireWaitMs: number;
-  private readonly ready: boolean;
+  private ready: boolean;
 
   // Circuit breaker — a flapping / overloaded reranker should be SKIPPED for a
   // cooldown, not retried (and timed-out) on every single recall. `isAvailable()`
@@ -101,15 +102,27 @@ export class RerankerService {
     this.breakerThreshold = rerankerBreakerThreshold();
     this.breakerCooldownMs = rerankerBreakerCooldownMs();
 
-    // Graceful fallback: If no API key is provided, disable the reranker service.
+    // Providers live in the DB (dashboard → AI Providers), applied a moment later
+    // by applyProviderOverrides → reconfigure(). Starting unconfigured is the
+    // EXPECTED ADR-012 path, not a fault — stay silent here. A single accurate
+    // provider summary is logged once after applyProviderOverrides settles.
     this.ready = !!this.apiKey;
-    if (!this.ready) {
-      console.error("[BrainRouter] Reranker API key not set. Stage 3 reranking will be disabled. Falling back to RRF-only mode.");
-    }
   }
 
   isReady(): boolean {
     return this.ready;
+  }
+
+  /** ADR-010 P2 — apply a DB-resolved provider (endpoint/apiKey/model) at runtime. */
+  reconfigure(cfg: { endpoint?: string; apiKey?: string; model?: string }): void {
+    if (cfg.endpoint) this.endpoint = cfg.endpoint;
+    if (cfg.apiKey) this.apiKey = cfg.apiKey;
+    if (cfg.model) this.model = cfg.model;
+    // A DB-configured reranker is intentional: ready with a valid endpoint + model
+    // even WITHOUT an api key — a local reranker (bge-reranker, etc.) is keyless.
+    // Silent: reconfigure() runs on every admin provider save, so the boot summary
+    // (engine) is the one place that reports readiness, once.
+    this.ready = !!(this.endpoint && this.model);
   }
 
   /**
@@ -200,7 +213,9 @@ export class RerankerService {
       throw new Error("Reranker slot busy under parallel load; using RRF");
     }
     try {
-      const res = await fetchWithExternalRetry(this.endpoint, {
+      // The saved endpoint is a /v1 base; the /rerank PATH is appended here so the
+      // operator only needs the base URL (parity with the LLM + embeddings wires).
+      const res = await fetchWithExternalRetry(resolveRerankUrl(this.endpoint), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

@@ -52,6 +52,19 @@ export interface ReviewFinding {
   status: FindingStatus;
   canApply: boolean;
   source: 'ai-review';
+  /**
+   * Claude-style "Pre-existing" (🟣): a real bug in the code this diff touches
+   * that the diff did NOT introduce. Informational — never blocks the gate
+   * (unresolvedBlocking / reviewGate key off status + severity, not this flag).
+   */
+  preExisting?: boolean;
+  /** Pentest evidence fields.  Optional for existing PR-review findings. */
+  cvss?: number;
+  cvssVector?: string;
+  cwe?: string;
+  cve?: string;
+  poc?: string;
+  remediation?: string;
 }
 
 export interface ReviewRun {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { newlyTerminal, formatCompletionNotice, type CompletionItem } from '../runtime/completionNotices.js';
+import { newlyTerminal, formatCompletionNotice, type CompletionItem } from '../runtime/background/completionNotices.js';
 
 const item = (id: string, ok = true): CompletionItem => ({ id, label: `${id} ${ok ? 'completed' : 'failed'}`, ok });
 

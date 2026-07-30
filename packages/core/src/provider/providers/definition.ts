@@ -31,6 +31,21 @@ export interface ProviderDefinition {
   pickerVisible: boolean;
 
   /**
+   * Which model KINDS this provider serves. Omitted ⇒ `['chat']` (the historical
+   * default — every existing provider is a chat provider). Embedding/reranker-only
+   * vendors (Cohere, Voyage, Jina) set this to surface in the BrainRouter dashboard's
+   * per-kind catalog without appearing in the desktop's chat picker.
+   */
+  capabilities?: Array<'chat' | 'embedding' | 'reranker'>;
+
+  /**
+   * Known model ids for providers whose endpoint does NOT expose a live GET /models
+   * (rerank vendors like Cohere, some embedders). Seeds the model picker so the user
+   * isn't forced to type them by hand; a live /models still wins when available.
+   */
+  defaultModels?: string[];
+
+  /**
    * Primary generation wire format:
    *  - 'responses'         — POST /responses with typed `input` items
    *                          (OpenAI-native Codex shape).
@@ -56,12 +71,12 @@ export interface ProviderDefinition {
   reasoningEffort?: 'param' | 'ignored' | 'unsupported';
 
   /**
-   * Per-provider map from the CLI EffortLevel (low|medium|high|xhigh) to the
+   * Per-provider map from the canonical CLI EffortLevel to the
    * literal wire value this provider accepts, or `null` to omit for that level.
    * `medium` is omitted upstream (CLI default). Omitted ⇒ the shared
    * `DEFAULT_EFFORT_VALUE_MAP` below (the conservative OpenAI map).
    */
-  effortValueMap?: Partial<Record<'low' | 'medium' | 'high' | 'xhigh', string | null>>;
+  effortValueMap?: Partial<Record<'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max', string | null>>;
 
   /**
    * Optional map for a provider that explicitly documents binary `on`/`off` as
@@ -70,7 +85,7 @@ export interface ProviderDefinition {
    * OpenAI-compatible `reasoning_effort` field still accepts graded values.
    * Omitted ⇒ this provider does NOT accept binary effort literals.
    */
-  binaryEffortValueMap?: Partial<Record<'low' | 'medium' | 'high' | 'xhigh', string | null>>;
+  binaryEffortValueMap?: Partial<Record<'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max', string | null>>;
 
   /**
    * WIRE SHAPE for the reasoning-effort value on `/chat/completions`:
@@ -123,7 +138,7 @@ export interface ProviderDefinition {
  * `medium` is intentionally absent (it never reaches the map — the resolver
  * short-circuits it upstream).
  */
-export const DEFAULT_EFFORT_VALUE_MAP: Partial<Record<'low' | 'medium' | 'high' | 'xhigh', string | null>> = {
+export const DEFAULT_EFFORT_VALUE_MAP: Partial<Record<'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max', string | null>> = {
   low: 'low',
   high: 'high',
   xhigh: 'high',
@@ -132,8 +147,11 @@ export const DEFAULT_EFFORT_VALUE_MAP: Partial<Record<'low' | 'medium' | 'high' 
 /** Binary reasoning vocabulary for a provider that explicitly documents
  * `on`/`off` as the accepted wire-level effort vocabulary. No built-in provider
  * enables this by default; provider docs must opt in. */
-export const DEFAULT_BINARY_EFFORT_VALUE_MAP: Partial<Record<'low' | 'medium' | 'high' | 'xhigh', string | null>> = {
+export const DEFAULT_BINARY_EFFORT_VALUE_MAP: Partial<Record<'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max', string | null>> = {
+  none: 'off',
+  minimal: 'on',
   low: 'on',
   high: 'on',
   xhigh: 'on',
+  max: 'on',
 };

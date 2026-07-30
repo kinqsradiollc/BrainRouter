@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { detectRequirementShapedPrompt } from '../requirement/requirementDetector.js';
+import { detectRequirementShapedPrompt } from '../requirement/records/requirementDetector.js';
 
 test('requirement detector: imperative request with a concrete object becomes an auto-ready draft input', () => {
   const result = detectRequirementShapedPrompt('add a rate-limiter to the gateway');

@@ -108,9 +108,24 @@ wizard on the next launch.
 
 ### `/init` from inside the REPL
 
-Same wizard, same steps, but reuses the REPL's existing readline so
-you don't have to exit first. Useful when you want to swap provider
-mid-session or re-pick the MCP transport.
+Bare `/init` runs per-workspace project setup. It reads bounded local signals,
+lets you review profile, agent, capability, skill, tool, memory, and instruction
+settings, and writes only after final confirmation. It works offline from the
+CLI package and does not call the brain's skill or template-document tools.
+
+Related forms keep the two onboarding lifecycles explicit:
+
+- `/init config` reruns global provider/model/MCP setup, then offers project
+  setup after the global commit succeeds;
+- `/init --edit` reopens the reviewed workspace editor;
+- `/init scan` creates a deterministic local proposal;
+- `/init agent [description]` uses the configured session model when available
+  and falls back to the deterministic proposal;
+- `/init agentmd` keeps the legacy instruction-only scaffold.
+
+The server's `get_skill`, `list_template_docs`, and `get_template_doc` tools
+remain available for ordinary skill use and downstream clients; they are no
+longer a dependency of BrainRouter-managed workspace setup.
 
 ### `/config` settings home panel (0.3.7+)
 
@@ -422,7 +437,7 @@ provider forwarding heuristic
 | `glob_files` | Find files by glob pattern. |
 | `run_command` | Shell command (gated by confirmation + optional sandbox). Aliased as `bash` / `Bash` / `shell` / `sh` for Claude Code parity — all four route to the same gated implementation, so read-only mode can't sneak shell access. |
 | `fetch_url` | HTTP GET; strips HTML tags; clamps at 15kB. |
-| `web_search` | DuckDuckGo or `BRAINROUTER_WEB_SEARCH_ENDPOINT`. |
+| `web_search` | Managed Google browser search or an explicitly configured API provider. |
 | `update_plan` | Create/update the durable task plan. |
 | `goal_complete` | Mark the active `/goal` complete with proof. Hard-refuses while plan items are open. |
 | `goal_blocked` | Mark the active `/goal` blocked with a reason + needed unblocker. |
@@ -450,6 +465,9 @@ provider forwarding heuristic
 `memory_governance_*`, `memory_engineering_*`, `memory_consolidate`,
 `memory_diagnostics`, `list_skills`, `search_skills`, `get_skill`,
 `get_persona`, `get_reference`, `list_template_docs`, `get_template_doc`.
+
+The two template-document tools are downstream compatibility surfaces. The
+CLI's `/init` flow does not use them.
 
 The CLI hides a few MCP tools from the LLM because the auto-pipeline owns
 them (`memory_capture_turn`, `memory_mark_cited`, `memory_resolve_session`,

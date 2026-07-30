@@ -2,7 +2,7 @@ import { clampMaxResults, normalizeResult, type WebSearchProvider, type WebSearc
 
 export class CustomHttpSearchProvider implements WebSearchProvider {
   readonly id = 'custom_http' as const;
-  constructor(private readonly endpoint: string, private readonly fallback?: WebSearchProvider) {}
+  constructor(private readonly endpoint: string) {}
 
   async search(query: string, maxResults: number, signal?: AbortSignal): Promise<WebSearchResult[]> {
     const limit = clampMaxResults(maxResults);
@@ -26,10 +26,9 @@ export class CustomHttpSearchProvider implements WebSearchProvider {
         }))
         .filter((item: WebSearchResult | null): item is WebSearchResult => !!item)
         .slice(0, limit);
-      if (results.length > 0 || !this.fallback) return results;
+      return results;
     } catch {
-      if (!this.fallback) throw new Error(`Custom web search endpoint failed: ${this.endpoint}`);
+      throw new Error(`Custom web search endpoint failed: ${this.endpoint}`);
     }
-    return this.fallback.search(query, limit, signal);
   }
 }

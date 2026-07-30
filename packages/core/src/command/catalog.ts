@@ -5,20 +5,20 @@
  */
 
 export const SLASH_COMMANDS = [
-  '/help', '/status', '/workspace', '/where', '/tools', '/skills', '/reload-skills', '/plan', '/transcript',
-  '/doctor', '/policy', '/config', '/diff', '/commit', '/clear', '/compact', '/exit', '/quit',
+  '/help', '/status', '/router', '/workspace', '/where', '/tools', '/skills', '/reload-skills', '/plan', '/transcript',
+  '/doctor', '/policy', '/config', '/diff', '/commit', '/cd', '/clear', '/compact', '/exit', '/quit',
   '/roles', '/agents', '/agent', '/spawn', '/build', '/bg', '/wait', '/dm', '/broadcast', '/inbox', '/delegation-policy', '/handoff', '/pack', '/workers',
-  '/spec', '/feature-dev', '/grill-me', '/review', '/review-auto', '/simplify', '/implement-plan', '/skill', '/workflow', '/workflows', '/approve', '/requirement', '/track', '/annotation', '/artifact', '/atlas', '/attach',
+  '/spec', '/feature-dev', '/grill-me', '/review', '/reviews', '/review-auto', '/simplify', '/implement-plan', '/skill', '/workflow', '/workflows', '/approve', '/requirement', '/track', '/annotation', '/artifact', '/atlas', '/attach',
   '/memory', '/recall', '/briefing', '/refresh-memory', '/scenes', '/working', '/forget', '/brain', '/blackboard',
-  '/init', '/login', '/sessions', '/export-chat', '/find', '/recap', '/chapters', '/resume', '/rewind', '/model', '/mcp',
-  '/goal', '/copy', '/fork', '/rename', '/permissions', '/hooks', '/hookify', '/loop', '/schedule',
+  '/init', '/login', '/sessions', '/export-chat', '/find', '/recap', '/chapters', '/resume', '/rewind', '/model', '/profile', '/mcp',
+  '/goal', '/copy', '/fork', '/rename', '/permissions', '/recent-denials', '/hooks', '/hookify', '/loop', '/schedule',
   '/continue', '/auto-review', '/auto-chain', '/vim', '/statusline', '/quiet', '/release-notes',
   '/handover', '/explain', '/trace', '/failed', '/verify', '/audit',
   '/export', '/import', '/persona', '/skill-hints', '/diagnostics',
   '/tokens', '/usage', '/context', '/watch', '/yolo', '/mode', '/review-policy', '/sandbox', '/kill',
   // workflow & ergonomics commands
   '/theme', '/title', '/personality', '/effort', '/tier', '/new', '/side', '/btw', '/raw',
-  '/feedback', '/rollout', '/ps', '/fg', '/stop', '/queue', '/logout', '/apps', '/plugins',
+  '/feedback', '/rollout', '/ps', '/fg', '/stop', '/queue', '/steer', '/logout', '/apps', '/plugin', '/plugins', '/marketplace',
   '/experimental', '/memories', '/debug-config', '/mention', '/keymap', '/ide',
 ] as const;
 
@@ -38,7 +38,9 @@ export const HELP_CATEGORIES: HelpCategory[] = [
     entries: [
       { cmd: '/help [category]', desc: 'List commands; `/help <category>` for a focused page' },
       { cmd: '/status', desc: 'Connection status, LLM config, DB stats' },
+      { cmd: '/router', desc: 'Provider-router status, catalog counts, primary chain, gateway, cooldowns' },
       { cmd: '/workspace', desc: 'Active workspace and session identity' },
+      { cmd: '/cd <path>', desc: 'Move the session working directory (keeps transcript + memory; resets read-ledger and child/worktree context)' },
       { cmd: '/where', desc: 'Single-screen view of workspace, workflow, goal, plan, recall, children' },
       { cmd: '/atlas', desc: 'Build/enrich a codebase knowledge graph (files, symbols, summaries, layers, tour); explore it in the desktop Atlas panel' },
       { cmd: '/doctor', desc: 'Config, connection, memory extraction health' },
@@ -101,6 +103,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/feature-dev <feat>', desc: 'Multi-agent feature dev with spec + tasks' },
       { cmd: '/grill-me [--force] <task>', desc: 'Clarify 2–5 questions before implementing (CLARIFY mode)' },
       { cmd: '/review [scope] [--fix]', desc: 'Multi-agent code review → review.md; --fix applies + verifies surviving fixes' },
+      { cmd: '/reviews [job-id]', desc: 'List organization reviews or inspect durable coverage, evidence, and verifier state' },
       { cmd: '/simplify [scope] [--dry-run]', desc: 'Behavior-preserving code-simplification pass; --dry-run proposes only' },
       { cmd: '/implement-plan', desc: 'Execute next plan item; append walkthrough' },
       { cmd: '/approve [slug]', desc: 'Approve workflow + kick off implementation' },
@@ -158,6 +161,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/fg <id>', desc: 'Bring a background worker/child agent to the foreground (snapshot of status + transcript)' },
       { cmd: '/stop [id]', desc: 'Stop a specific worker/child by id, or (no id) stop the loop + mark stale children' },
       { cmd: '/queue [remove <n>|clear]', desc: 'View / manage messages you typed while a turn was running (they run next, in order)' },
+      { cmd: '/steer <message>', desc: 'Apply a message to the active turn at its next safe model boundary' },
     ],
   },
   {
@@ -165,6 +169,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
     title: 'Guardrails & Permissions',
     entries: [
       { cmd: '/permissions [read|write|shell]', desc: 'View or set agent access mode' },
+      { cmd: '/recent-denials [n]', desc: 'List the last N tool denials (tool + reason + time) this session' },
       { cmd: '/mode [planning|fast]', desc: 'Session execution stance (planning asks, fast skips per-call y/N for safe commands)' },
       { cmd: '/review-policy [request|proceed]', desc: 'How the agent treats multi-file approval gates' },
       { cmd: '/yolo [on|off]', desc: 'Alias for `/mode fast` + `/review-policy proceed`' },
@@ -195,10 +200,11 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/theme [auto|light|dark|mono]', desc: 'Markdown output theme' },
       { cmd: '/title <segments>', desc: 'Terminal title (model,session,branch,mode)' },
       { cmd: '/statusline <segments>', desc: 'Prompt (mode,exec,effort,branch,dirty,model,tokens,session,pr,workflow,phase,goal,plan)' },
-      { cmd: '/personality <style>', desc: 'concise | standard | detailed | pair-programmer' },
+      { cmd: '/personality [workspace|global] <style>', desc: 'Chat override by default; workspace/global persist. auto | concise | standard | detailed | pair-programmer' },
       { cmd: '/effort [low|medium|high|xhigh]', desc: 'Reasoning depth: low=terse, medium=default, high=step-by-step, xhigh=maximum (alias: max)' },
       { cmd: '/tier [name]', desc: "Show or pin the model tier on the provider's tier ladder" },
-      { cmd: '/model [name] [--session]', desc: 'Switch model; --session = this session only (not saved). cli.fallbackModel auto-swaps on model-not-found.' },
+      { cmd: '/model [auto|bare|provider/model] [--session]', desc: 'List or switch the session model request; router mode uses the unified catalog' },
+      { cmd: '/profile [list|use <name>|save <name>|delete <name>]', desc: 'Named LLM profiles (cli.llmProfiles) — saved model/endpoint/effort presets; save snapshots the session; with 2+ profiles the agent gets a switch_model tool' },
       { cmd: '/raw [on|off]', desc: 'Toggle raw scrollback' },
       { cmd: '/quiet [on|off]', desc: 'Hide recall tables, previews, briefings (model prose only)' },
       { cmd: '/vim', desc: 'Toggle vi-mode for the composer' },
@@ -208,6 +214,8 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/mcp [list|reconnect|tools]', desc: 'MCP profiles, identity tags, online/offline status, reconnect, tool namespaces' },
       { cmd: '/ide', desc: 'Show detected IDE host' },
       { cmd: '/apps  /plugins', desc: 'List workspace skills and plugin folders' },
+      { cmd: '/plugin [init|install|list|info|enable|disable|remove|validate]', desc: 'Manage plugins — bundle skills/agents/commands/hooks/mcp/connectors/workflows into a named, installable unit (also: brainrouter plugin ...)' },
+      { cmd: '/marketplace [add|remove|list|update]', desc: 'Plugin marketplaces — register git/local/http sources, then install plugins by name across them (also: brainrouter marketplace ...)' },
       { cmd: '/feedback [message]', desc: 'Append feedback entry' },
       { cmd: '/experimental [on|off]', desc: 'Toggle experimental features' },
       { cmd: '/release-notes [version|list]', desc: 'Show changelog for current (or specified) CLI version' },

@@ -1,0 +1,287 @@
+# BrainRouter production stack (ADR-010) — Postgres + the service-capable brain.
+#
+#   cd deploy/stack && cp .env.example .env  # then fill the secrets
+#   docker compose up -d --build
+#   # → brain on http://localhost:3747 (MCP at /mcp, REST /api/*, /health)
+#
+# This runs the brain as a single service-capable process (memory + cognition +
+# Atlas + tenancy/RBAC + DB providers + trigger ingress + fleet), reachable over
+# MCP — exactly the topology ADR-010 targets. The brain's own modules already
+# have IService ports (ADR-006/008); further per-PROCESS extraction (provider
+# gateway, sandboxed exec, retrieval, workers) is activated per its scale drivers
+# — see README.md for the roadmap and how to split a module out.
+#
+# Providers (LLM / embeddings / reranker) are now configured in the
+# DATABASE by an admin (dashboard → AI Providers, or POST /api/admin/providers),
+# NOT via .env. The BRAINROUTER_*_LLM/EMBEDDING/... vars below are an OPTIONAL
+# bootstrap fallback only — leave them empty for a pure DB-configured deployment.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set a real POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-brainrouter}
+    volumes:
+      - brainrouter-pg:/var/lib/postgresql/data
+      - ../postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-brainrouter}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  # Optional read cache — accelerates hot global reads (CVE catalog, dashboard
+  # GETs). The REST services degrade to an in-process cache if this is absent, so
+  # it is purely an accelerator. No persistence: it is disposable by design.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # One-shot migrator (spec §11, Tasks 32-33) — the ONLY writer of schema DDL.
+  # Every data service waits for service_completed_successfully, so a migration
+  # error fails the stack instead of racing half-migrated services.
+  migrator:
+    build:
+      context: ../..
+      dockerfile: deploy/brain/Dockerfile
+      target: migrator
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      BRAINROUTER_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-brainrouter}
+
+  brain:
+    build:
+      context: ../..
+      dockerfile: deploy/brain/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      BRAINROUTER_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-brainrouter}
+      # Optional shared read cache (falls back to in-process if unset/unreachable).
+      BRAINROUTER_REDIS_URL: ${BRAINROUTER_REDIS_URL:-redis://redis:6379}
+      # REQUIRED in production — JWT signing (sessions reset on boot without it).
+      BRAINROUTER_JWT_SECRET: ${BRAINROUTER_JWT_SECRET:?set BRAINROUTER_JWT_SECRET in .env}
+      # REQUIRED to store provider / integration API keys (AES-256-GCM KEK — a
+      # base64/hex 32-byte value). Without it, admins can configure everything
+      # except secrets. Rotate via re-seal; never commit it.
+      BRAINROUTER_SECRET_KEY: ${BRAINROUTER_SECRET_KEY:?set BRAINROUTER_SECRET_KEY (32-byte base64/hex) in .env}
+      # Which org's DB providers back the brain's own calls (default: the seeded
+      # admin's personal org). Set for a dedicated system org.
+      BRAINROUTER_SYSTEM_ORG_ID: ${BRAINROUTER_SYSTEM_ORG_ID:-}
+      # Decompose (ADR-013): this node serves the MCP plane only — the memory /
+      # agent brain. The auth + REST API is the `api` service; jobs are the
+      # `worker` service. Set SERVICE=brain to collapse back to a single node.
+      BRAINROUTER_SERVICE: "mcp"
+      BRAINROUTER_JOB_RUNNER: "off"
+      # First-admin seed (clear after first boot; the API key prints once in logs).
+      BRAINROUTER_ADMIN_PASSWORD: ${BRAINROUTER_ADMIN_PASSWORD:-}
+      BRAINROUTER_ADMIN_EMAIL: ${BRAINROUTER_ADMIN_EMAIL:-admin@example.com}
+      # AI providers (LLM / embeddings / reranker) are configured in the
+      # DB by an admin (dashboard → AI Providers), NOT via env — see ADR-012.
+      # Observability + browser CORS.
+      BRAINROUTER_METRICS: ${BRAINROUTER_METRICS:-}
+      BRAINROUTER_CORS_ORIGIN: ${BRAINROUTER_CORS_ORIGIN:-}
+      # First-party STT target for a monolith brain (SERVICE=brain mounts /v1 with
+      # the audio route in-process). Unused while SERVICE=mcp; harmless to set.
+      BRAINROUTER_STT_URL: ${BRAINROUTER_STT_URL:-http://stt:3752}
+    ports:
+      - "${BRAINROUTER_PORT:-3747}:3747"
+
+  # Provider/LLM Gateway (ADR-006 service #1) — the OpenAI-compatible model plane.
+  # Same image as the brain, different entrypoint: a standalone service serving
+  # POST /v1/chat/completions, /v1/responses, /v1/audio/transcriptions and GET
+  # /v1/models against the org's managed models (auth = a br_ API key or a
+  # models:invoke JWT). Optional — a single-node `brain` (SERVICE=brain) mounts the
+  # same /v1 surface in-process on :3747, so :3747 alone can front everything.
+  gateway:
+    build:
+      context: ../..
+      dockerfile: deploy/brain/Dockerfile
+    restart: unless-stopped
+    command: ["node", "dist/services/gateway/index.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      BRAINROUTER_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-brainrouter}
+      BRAINROUTER_JWT_SECRET: ${BRAINROUTER_JWT_SECRET}
+      # Needed to DECRYPT provider keys it returns to callers.
+      BRAINROUTER_SECRET_KEY: ${BRAINROUTER_SECRET_KEY}
+      GATEWAY_PORT: "3748"
+      # First-party speech-to-text — POST /v1/audio/transcriptions forwards here.
+      BRAINROUTER_STT_URL: ${BRAINROUTER_STT_URL:-http://stt:3752}
+    ports:
+      - "${GATEWAY_PORT:-3748}:3748"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3748/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 15s
+      timeout: 3s
+      start_period: 20s
+      retries: 5
+
+  # Whisper STT sidecar (ADR-018 M1) — first-party speech-to-text. Builds
+  # whisper.cpp + ffmpeg + a tiny Node wrapper (deploy/stt). The gateway forwards
+  # audio to it; it is NOT published to the host (internal network only), so the
+  # single-door invariant holds. Swappable behind BRAINROUTER_STT_URL.
+  stt:
+    build:
+      context: ../../deploy/stt
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      STT_PORT: "3752"
+      # Override to a larger model (ggml-small.bin / ggml-medium.bin) for accuracy.
+      WHISPER_MODEL: ${WHISPER_MODEL:-/models/ggml-base.en.bin}
+      WHISPER_THREADS: ${WHISPER_THREADS:-}
+    expose:
+      - "3752"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3752/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+
+  # Trigger Ingress (ADR-011) — the stateless hosted GitHub webhook receiver.
+  # Its own process/port; verifies the App HMAC, resolves the tenant, and enqueues
+  # into the shared Postgres queue. Point the org GitHub App webhook at this URL.
+  ingress:
+    build:
+      context: ../..
+      dockerfile: deploy/brain/Dockerfile
+    restart: unless-stopped
+    command: ["node", "dist/services/ingress/index.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      BRAINROUTER_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-brainrouter}
+      # Needed to OPEN the App's webhook secret when verifying signatures.
+      BRAINROUTER_SECRET_KEY: ${BRAINROUTER_SECRET_KEY}
+      INGRESS_PORT: "3749"
+    ports:
+      - "${INGRESS_PORT:-3749}:3749"
+
+  # Worker / Jobs (ADR-011) — drains the shared memory_jobs queue (competing
+  # consumer; scale with `--scale worker=N`). No HTTP. The brain delegates async
+  # work here (it runs with BRAINROUTER_JOB_RUNNER=off).
+  worker:
+    build:
+      context: ../..
+      dockerfile: deploy/brain/Dockerfile
+    restart: unless-stopped
+    command: ["node", "dist/services/worker/index.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      BRAINROUTER_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-brainrouter}
+      BRAINROUTER_JWT_SECRET: ${BRAINROUTER_JWT_SECRET}
+      BRAINROUTER_SECRET_KEY: ${BRAINROUTER_SECRET_KEY}
+      BRAINROUTER_JOB_RUNNER: "on"
+    healthcheck:
+      # Readiness = DB reachable + migrations table present (no fake HTTP).
+      test: ["CMD-SHELL", "node -e \"import('pg').then(async({default:pg})=>{const c=new pg.Client({connectionString:process.env.BRAINROUTER_DATABASE_URL});await c.connect();await c.query('SELECT 1 FROM schema_migrations LIMIT 1');await c.end();}).then(()=>process.exit(0)).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+
+  # Auth + REST API (ADR-013) — the identity / tenancy / admin / memory-REST plane
+  # (SERVICE=api, no MCP). Scale independently of the MCP brain; point the
+  # dashboard's API URL here. Same image, REST-only entrypoint.
+  api:
+    build:
+      context: ../..
+      dockerfile: deploy/brain/Dockerfile
+    restart: unless-stopped
+    command: ["node", "dist/index.js", "--http", "--port", "3750"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      BRAINROUTER_SERVICE: "api"
+      BRAINROUTER_JOB_RUNNER: "off"
+      BRAINROUTER_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-brainrouter}
+      # Optional shared read cache (falls back to in-process if unset/unreachable).
+      BRAINROUTER_REDIS_URL: ${BRAINROUTER_REDIS_URL:-redis://redis:6379}
+      BRAINROUTER_JWT_SECRET: ${BRAINROUTER_JWT_SECRET:?set BRAINROUTER_JWT_SECRET in .env}
+      BRAINROUTER_SECRET_KEY: ${BRAINROUTER_SECRET_KEY:?set BRAINROUTER_SECRET_KEY in .env}
+      BRAINROUTER_SYSTEM_ORG_ID: ${BRAINROUTER_SYSTEM_ORG_ID:-}
+      # First-admin seed (clear after first boot; the API key prints once in logs).
+      BRAINROUTER_ADMIN_PASSWORD: ${BRAINROUTER_ADMIN_PASSWORD:-}
+      BRAINROUTER_ADMIN_EMAIL: ${BRAINROUTER_ADMIN_EMAIL:-admin@example.com}
+      BRAINROUTER_METRICS: ${BRAINROUTER_METRICS:-}
+      BRAINROUTER_CORS_ORIGIN: ${BRAINROUTER_CORS_ORIGIN:-}
+    ports:
+      - "${API_PORT:-3750}:3750"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3750/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 15s
+      timeout: 3s
+      start_period: 20s
+      retries: 5
+
+  # Remote relay (spec §9/§11) — the public outbound-WSS broker edge. Splices
+  # opaque E2EE frames between enrolled devices; single-use tickets validated
+  # against the shared Postgres control plane. It never decrypts payloads.
+  remote-relay:
+    build:
+      context: ../..
+      dockerfile: deploy/brain/Dockerfile
+    restart: unless-stopped
+    command: ["node", "dist/services/remoteRelay/index.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      BRAINROUTER_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-brainrouter}
+      REMOTE_RELAY_PORT: "3751"
+    ports:
+      - "${REMOTE_RELAY_PORT:-3751}:3751"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3751/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 15s
+      timeout: 3s
+      start_period: 20s
+      retries: 5
+
+volumes:
+  brainrouter-pg:
+    name: brainrouter-pg

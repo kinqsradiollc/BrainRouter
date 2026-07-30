@@ -5,7 +5,7 @@ import {
   extractCacheStats,
   formatCacheStats,
   type CacheStats,
-} from '../util/cacheStats.js';
+} from '../util/tokens/cacheStats.js';
 
 test('extractCacheStats returns zeros for null / empty', () => {
   for (const v of [null, undefined, {}]) {

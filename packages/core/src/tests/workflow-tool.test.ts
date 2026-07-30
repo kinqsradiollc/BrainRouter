@@ -9,9 +9,9 @@ import {
   defaultPhaseRunner,
   runWorkflow,
   type OrchestrationDispatch,
-} from '../workflow/workflowTool.js';
-import type { PhaseRunner } from '../orchestration/phaseOrchestrator.js';
-import { readRun } from '../workflow/workflowRun.js';
+} from '../workflow/template/workflowTool.js';
+import type { PhaseRunner } from '../orchestration/workflow/phaseOrchestrator.js';
+import { readRun } from '../workflow/run/workflowRun.js';
 
 function tmpWs(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-wftool-'));

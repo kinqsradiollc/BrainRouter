@@ -24,6 +24,42 @@
 import type { IMemoryStore, MemoryJobRecord } from "@kinqs/brainrouter-types";
 import { getJobExecutor, type JobExecContext, type JobExecutor } from "./executors.js";
 import { failAgentJob } from "./jobs.js";
+import { mapWithConcurrency } from "../util/concurrency.js";
+
+/**
+ * Global in-flight ceiling per drain tick: how many jobs the runner claims and
+ * runs CONCURRENTLY. Env `BRAINROUTER_JOB_CONCURRENCY` (default 8, capped 64).
+ */
+export function readJobConcurrency(env: NodeJS.ProcessEnv = process.env): number {
+  const def = 8;
+  const raw = env.BRAINROUTER_JOB_CONCURRENCY;
+  if (raw === undefined || raw.trim() === "") return def;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 1 ? Math.min(n, 64) : def;
+}
+
+/**
+ * Per-tenant concurrency cap: at most this many of one tenant's jobs run at once,
+ * so one busy org can't starve the shared queue. Env
+ * `BRAINROUTER_JOB_TENANT_CONCURRENCY` (default 4, capped 64).
+ */
+export function readJobTenantConcurrency(env: NodeJS.ProcessEnv = process.env): number {
+  const def = 4;
+  const raw = env.BRAINROUTER_JOB_TENANT_CONCURRENCY;
+  if (raw === undefined || raw.trim() === "") return def;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 1 ? Math.min(n, 64) : def;
+}
+
+/**
+ * The store surface the runner needs beyond `IMemoryStore`. `claimNextMemoryJob`
+ * accepts an extra `perTenantLimit` on the concrete Postgres store (a wider,
+ * assignable signature); this local type lets the runner pass it without widening
+ * the shared `IMemoryStore` contract.
+ */
+type TenantAwareClaim = {
+  claimNextMemoryJob(options?: { now?: string; perTenantLimit?: number }): Promise<MemoryJobRecord | null>;
+};
 
 export interface RunAsJobOptions<T> {
   /** Higher runs sooner if ever queued. Defaults to the store default (50). */
@@ -97,8 +133,17 @@ export async function recordInlineJob(
 export interface MemoryJobRunnerOptions {
   /** How often to poll for eligible jobs. Default 3000ms. */
   intervalMs?: number;
-  /** Max jobs to drain per tick (keeps one tick bounded). Default 10. */
+  /**
+   * Global in-flight ceiling: how many jobs one tick claims and runs
+   * CONCURRENTLY. Defaults to `BRAINROUTER_JOB_CONCURRENCY` (8).
+   */
   maxPerTick?: number;
+  /**
+   * Per-tenant concurrency cap enforced at claim time — a tenant with this many
+   * `running` jobs is skipped so it can't starve the queue. `0` disables the cap.
+   * Defaults to `BRAINROUTER_JOB_TENANT_CONCURRENCY` (4).
+   */
+  perTenantLimit?: number;
   /** A `running` job whose lock is older than this is swept. Default 5 min. */
   stuckMs?: number;
   /**
@@ -134,6 +179,7 @@ export class MemoryJobRunner {
   private inProgress = false;
   private readonly intervalMs: number;
   private readonly maxPerTick: number;
+  private readonly perTenantLimit: number;
   private readonly stuckMs: number;
   private readonly resolveExecutor: (agentId: string) => JobExecutor | undefined;
   private readonly onTick?: () => void | Promise<void>;
@@ -144,7 +190,8 @@ export class MemoryJobRunner {
     options?: MemoryJobRunnerOptions,
   ) {
     this.intervalMs = options?.intervalMs ?? 3000;
-    this.maxPerTick = options?.maxPerTick ?? 10;
+    this.maxPerTick = options?.maxPerTick ?? readJobConcurrency();
+    this.perTenantLimit = options?.perTenantLimit ?? readJobTenantConcurrency();
     this.stuckMs = options?.stuckMs ?? 5 * 60_000;
     this.resolveExecutor = options?.resolveExecutor ?? getJobExecutor;
     this.onTick = options?.onTick;
@@ -164,10 +211,13 @@ export class MemoryJobRunner {
   }
 
   /**
-   * One drain pass: re-arm orphaned locks, then claim + run up to
-   * `maxPerTick` eligible jobs. Exposed for tests (call directly instead
-   * of waiting on the timer). Never throws — a failing job is recorded,
-   * not propagated.
+   * One drain pass: re-arm orphaned locks, then claim up to the global ceiling
+   * (`maxPerTick`) of eligible jobs and run them CONCURRENTLY through a bounded
+   * pool. Claims are sequential so each claim sees the previous claims' rows as
+   * `running` — that's what enforces the per-tenant cap within a single drain.
+   * The `inProgress` guard still prevents overlapping drains; parallelism lives
+   * WITHIN a drain, not across ticks. Exposed for tests (call directly instead of
+   * waiting on the timer). Never throws — a failing job is recorded, not propagated.
    */
   async tick(): Promise<void> {
     if (this.inProgress) return;
@@ -183,10 +233,16 @@ export class MemoryJobRunner {
         }
       }
       await this.store.sweepStuckMemoryJobs(this.stuckMs);
+      const claim = this.store as unknown as TenantAwareClaim;
+      const perTenantLimit = this.perTenantLimit > 0 ? this.perTenantLimit : undefined;
+      const claimed: MemoryJobRecord[] = [];
       for (let i = 0; i < this.maxPerTick; i++) {
-        const job = await this.store.claimNextMemoryJob();
+        const job = await claim.claimNextMemoryJob({ perTenantLimit });
         if (!job) break;
-        await this.runOne(job);
+        claimed.push(job);
+      }
+      if (claimed.length > 0) {
+        await mapWithConcurrency(claimed, this.maxPerTick, (job) => this.runOne(job));
       }
     } catch (err: any) {
       console.error("[BrainRouter] memory job runner tick failed:", err?.message ?? err);
@@ -206,9 +262,12 @@ export class MemoryJobRunner {
       return;
     }
     try {
-      const output = await executor(job.input, this.ctx);
+      const output = await executor(job.input, { ...this.ctx, jobId: job.id });
       await this.store.completeMemoryJob(job.id, output ?? { ok: true });
     } catch (err: any) {
+      // Keep a terminal timeline event even for executors that throw before they
+      // can emit their own progress (best effort; never mask the job failure).
+      void this.store.appendJobProgress(job.id, { ts: new Date().toISOString(), kind: "error", msg: err?.message ?? String(err) }).catch(() => {});
       // failAgentJob applies backoff and re-arms while attempts remain,
       // else marks terminal failed.
       await failAgentJob(this.store, job.id, err?.message ?? String(err));

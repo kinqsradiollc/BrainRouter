@@ -46,17 +46,21 @@ the graph to the brain; `/atlas pull` fetches it back (Phase 3d).
 on the brain to the dashboard's URL so the browser is allowed to call `/api` and
 `/mcp`.
 
-## Env (see `brainrouter/.env.example` for the full set)
+## Env — infrastructure only (see `brainrouter/.env.example` for the full set)
+
+**AI providers (LLM / embeddings / reranker) are configured in the DATABASE via
+the dashboard → AI Providers (ADR-012), NOT here.** The embedding vector width is
+derived from the embedder automatically. `.env` holds only infra + secrets:
 
 | Var | Purpose |
 | --- | --- |
 | `BRAINROUTER_DATABASE_URL` | **required** — Postgres + pgvector (compose wires this to the `postgres` service) |
+| `BRAINROUTER_SECRET_KEY` | **required to store secrets** — AES-256-GCM key that encrypts the DB-stored provider/email keys. `openssl rand -base64 32` |
 | `BRAINROUTER_JWT_SECRET` | stable session signing (required for shared deploys) |
-| `BRAINROUTER_ADMIN_PASSWORD` / `_EMAIL` | seed the first admin on first boot |
-| `BRAINROUTER_LLM_ENDPOINT` / `_API_KEY` / `_MODEL` | generative LLM for extraction + atlas enrich |
+| `BRAINROUTER_ADMIN_PASSWORD` / `_EMAIL` | seed the first admin on first boot (its API key prints once) |
 | `BRAINROUTER_METRICS=on` | expose Prometheus `/metrics` |
 | `BRAINROUTER_CORS_ORIGIN` | comma-separated browser origins allowed to call the API |
-| `BRAINROUTER_PGVECTOR_INDEX` / `_LISTS` / `_HNSW_*` | ANN index tuning |
+| `BRAINROUTER_PGVECTOR_INDEX` / `_LISTS` / `_HNSW_*` | optional ANN index tuning |
 
 ## Notes
 - The container runs `node dist/index.js --http --port 3747`; `HEALTHCHECK` hits `/health`.

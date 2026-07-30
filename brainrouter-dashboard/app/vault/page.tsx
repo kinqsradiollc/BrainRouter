@@ -10,6 +10,7 @@ import type { VaultExportEntry } from "@kinqs/brainrouter-types";
 import { getClient } from "../../lib/client";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
+import { InlineLoading } from "../../components/LoadingSpinner";
 
 export default function VaultPage() {
   const client = useMemo(() => getClient(), []);
@@ -27,11 +28,11 @@ export default function VaultPage() {
     <AuthGuard>
       <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} style={{ display: "flex", flexDirection: "column", gap: "28px" }}>
         <PageHeader
-          title="Vault"
-          description="Read-only markdown mirror of records + tree nodes, with a hash ledger so re-export only rewrites what changed. The database stays authoritative."
+          title="Export archive"
+          description="Browse a readable copy of durable knowledge that is easy to back up, review, and version with your project."
         />
         {error && <p style={{ color: "#E5675F", fontSize: "13px" }}>Could not load vault: {error}</p>}
-        {!exports && !error && <p style={{ color: "var(--color-stone-text)", fontSize: "13px" }}>Loading…</p>}
+        {!exports && !error && <InlineLoading label="Loading…" />}
         {exports && exports.length === 0 && (
           <p style={{ color: "var(--color-stone-text)", fontSize: "13px" }}>No vault exports yet. Run <code>memory_vault_export</code> to mirror memory to markdown (0.4.3).</p>
         )}

@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "kind": "orchestration-profile",
+  "id": "custom",
+  "displayName": "Custom orchestration",
+  "defaultMode": "off",
+  "fallbackStrategyId": "direct",
+  "rolePolicy": {
+    "availableRoles": [],
+    "disabledRoles": []
+  },
+  "limits": {
+    "maxParallel": 1,
+    "maxStages": 1,
+    "maxChildrenPerStage": 1,
+    "maxTotalChildren": 1,
+    "maxDepth": 1,
+    "maxRetries": 0
+  },
+  "strategies": [
+    {
+      "id": "direct",
+      "description": "Keep Custom on direct primary execution until the user explicitly configures a contributed plan.",
+      "activation": {
+        "signals": [
+          "small-scope"
+        ],
+        "explicitOnly": false
+      },
+      "stages": [
+        {
+          "id": "complete",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [],
+          "objective": "Complete the bounded task directly on the primary agent without child orchestration.",
+          "skillIds": [],
+          "optional": false
+        }
+      ]
+    }
+  ]
+}

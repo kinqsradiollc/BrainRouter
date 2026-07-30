@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { searchTranscript, formatMatches } from '../session/transcriptSearch.js';
-import type { TranscriptEntry } from '../session/sessionStore.js';
+import { searchTranscript, formatMatches } from '../session/transcript/transcriptSearch.js';
+import type { TranscriptEntry } from '../session/transcript/sessionStore.js';
 
 const T = (role: string, content: unknown, ts = '2026-06-10T03:00:00.000Z'): TranscriptEntry =>
   ({ role, content, timestamp: ts });

@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createToolService, ToolService } from '../tool/service.js';
+import { createToolService, ToolService } from '../tool/registry/service.js';
 import {
   effectiveToolRegistry, registryAllowedTools, registryParallelSafeLocal, registryEntry,
-} from '../tool/registry.js';
+} from '../tool/registry/registry.js';
 
 test('ToolService is a stateless facade — delegates to the tool registry', () => {
   const svc = createToolService();

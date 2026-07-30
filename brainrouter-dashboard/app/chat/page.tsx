@@ -1,551 +1,569 @@
 "use client";
 
-// Memory-augmented chat for the web app, styled in the BrainRouter design
-// language (Midnight Ledger / Obsidian Surfaces, per BRAINROUTER_DESIGN.MD).
-//
-// Behavior:
-//   - POSTs to the MCP server's /v1/chat/completions endpoint, which runs
-//     memory_recall + working_context briefing before forwarding upstream
-//     and captures the turn after.
-//   - SSE streaming with explicit AbortController so a new submit cancels
-//     the previous in-flight request and unmounting tears the connection
-//     down. Paired with the server's [DONE] sentinel + idle watchdog this
-//     fixes the "requests keep coming nonstop" symptom.
-//   - Visual: dark canvas, transparent cards, pill input, pill primary
-//     action, Inter body, golden accent reserved for emphasis.
+import Link from "next/link";
+import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import type { ModelPolicy } from "@kinqs/brainrouter-types";
+import { AuthGuard } from "../../components/AuthGuard";
+import { KnowledgeScopePicker, useKnowledgeScope } from "../../components/KnowledgeScopePicker";
+import { LazyMarkdown } from "../../components/LazyMarkdown";
+import { brainApi } from "../../lib/brainApi";
+import { adminApi } from "../../lib/adminApi";
+import { isAuthenticated } from "../../lib/client-auth";
+import { normalizeChatModelSelection, type ChatModelSelection } from "./chatModelSelection";
+import { InlineLoading } from "../../components/LoadingSpinner";
+import {
+  loadChatSessions,
+  sameChatScope,
+  saveChatSessions,
+  sessionTitle,
+  upsertChatSession,
+  type StoredChatMessage,
+  type StoredChatSession,
+} from "./chatSessions";
+import {
+  createChatThread,
+  deleteChatThread,
+  getChatThread,
+  listChatThreads,
+  mergeServerThreads,
+  replaceChatMessages,
+  serverMessageToStored,
+  toServerMessages,
+} from "../../lib/chatThreads";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { BASE_URL } from "../../lib/client";
-import { getApiKey, getJwt } from "../../lib/client-auth";
-import { Markdown } from "../../components/Markdown";
-import { PageHeader } from "../../components/PageHeader";
-import { useIsMobile } from "../../lib/useIsMobile";
+const categories = ["General", "Build", "Plan", "Recall", "Knowledge", "Review"] as const;
+type ChatCategory = (typeof categories)[number];
+const suggestions: Record<ChatCategory, ReadonlyArray<readonly [string, string]>> = {
+  General: [
+    ["Move a task forward", "Help me choose the next concrete step for the task in this workspace."],
+    ["Understand this project", "Summarize the project, its current state, and the most important open work."],
+    ["Check recent work", "Review what changed recently and tell me what still needs attention."],
+  ],
+  Build: [
+    ["Plan an implementation", "Turn my requested change into a focused implementation and verification plan."],
+    ["Trace a code path", "Find the code path behind the behavior I describe and explain how its parts connect."],
+    ["Diagnose a failure", "Use the available project context to narrow down the cause of a failing behavior."],
+  ],
+  Plan: [
+    ["Break down an outcome", "Turn my goal into ordered milestones, dependencies, and concrete next actions."],
+    ["Prioritize the backlog", "Help me rank the current work by impact, urgency, and dependency risk."],
+    ["Draft acceptance criteria", "Write measurable acceptance criteria for the task I am planning."],
+  ],
+  Recall: [
+    ["Inspect recent recalls", "Show which saved context has been most useful in my latest agent sessions."],
+    ["Find an earlier decision", "Recall the decision related to the topic I describe and include its evidence."],
+    ["Prepare agent context", "Assemble the most relevant recalled context for the task I am starting next."],
+  ],
+  Knowledge: [
+    ["Inspect saved knowledge", "Show what BrainRouter captured from my latest agent sessions and connected sources."],
+    ["Find source evidence", "Find the source material that supports what BrainRouter knows about the topic I describe."],
+    ["Find a knowledge gap", "Show where the selected project or workspace is missing useful durable context."],
+  ],
+  Review: [
+    ["Review recent changes", "Assess the latest project changes for correctness, regressions, and missing tests."],
+    ["Check delivery readiness", "Tell me what evidence is still missing before this work is ready to ship."],
+    ["Verify an outcome", "Build a concise verification checklist for the outcome I describe."],
+  ],
+};
 
-interface ChatMessage {
-  role: "user" | "assistant" | "system";
-  content: string;
-  id: string;
-  /** True while a streaming assistant response is still being filled. */
-  pending?: boolean;
+function nextId(prefix: string): string {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function newId(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+function isCategory(value: string): value is ChatCategory {
+  return (categories as readonly string[]).includes(value);
 }
 
-const SESSION_KEY_STORAGE = "brainrouter_chat_session_key";
-
-function loadOrCreateSessionKey(): string {
-  if (typeof window === "undefined") return "web:anonymous";
-  const existing = localStorage.getItem(SESSION_KEY_STORAGE);
-  if (existing) return existing;
-  const fresh = `web:${crypto.randomUUID()}`;
-  localStorage.setItem(SESSION_KEY_STORAGE, fresh);
-  return fresh;
-}
-
-export default function ChatPage() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  // Persistence mode for captured messages.
-  //   "sensory" — default. Store one sensory row per message; zero upstream
-  //               LLM calls per turn. The cognitive extraction cascade
-  //               (contradictions + graph + persona, each of which can fire
-  //               their own LLM call) does NOT run.
-  //   "full"    — every turn triggers the full cascade. Dozens of background
-  //               upstream calls per turn — only use when you know what you're
-  //               doing. The "Distill memories now" button is usually a better
-  //               way to learn new memories without blowing up the queue.
-  //   "off"     — stateless chat.
-  const [captureMode, setCaptureMode] = useState<"full" | "sensory" | "off">("sensory");
-  const [distilling, setDistilling] = useState<boolean>(false);
-  const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
-  const isMobile = useIsMobile();
-  const sessionKeyRef = useRef<string>("web:anonymous");
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  // AbortController lives on a ref so a fresh submit can cancel the previous
-  // in-flight stream and so unmount cleanly tears the connection down. Without
-  // this, a hung upstream connection would keep the browser fetching forever.
-  const abortRef = useRef<AbortController | null>(null);
+function ChatContent() {
+  const scopeState = useKnowledgeScope();
+  const [category, setCategory] = useState<ChatCategory>("General");
+  const [draft, setDraft] = useState("");
+  const [messages, setMessages] = useState<StoredChatMessage[]>([]);
+  const [sessions, setSessions] = useState<StoredChatSession[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState("");
+  const [creatingNew, setCreatingNew] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
+  const [threadsLoading, setThreadsLoading] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
+  const [showScope, setShowScope] = useState(false);
+  const [models, setModels] = useState<readonly ModelPolicy[]>([]);
+  const [modelSelection, setModelSelection] = useState<ChatModelSelection>({ model: "", reasoningEffort: "" });
+  const [modelsLoading, setModelsLoading] = useState(true);
+  const [modelsError, setModelsError] = useState("");
+  const sessionKey = useRef("");
+  const threadEnd = useRef<HTMLDivElement>(null);
+  const composer = useRef<HTMLTextAreaElement>(null);
+  const currentScope = useRef(scopeState.scope);
+  currentScope.current = scopeState.scope;
+  // Ids known to exist on the server, so a send/rename/delete targets the right
+  // plane (append/replace vs. create) without a per-id round-trip.
+  const serverThreadIds = useRef<Set<string>>(new Set());
+  // Latest sessions, readable inside async closures without a stale snapshot.
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
 
   useEffect(() => {
-    sessionKeyRef.current = loadOrCreateSessionKey();
-    return () => {
-      try { abortRef.current?.abort(); } catch { /* noop */ }
-    };
+    setSessions(loadChatSessions(window.localStorage));
+    setHydrated(true);
   }, []);
 
-  // Explicit, user-initiated distillation. POSTs once, server-side per-user
-  // lock prevents duplicate work even if the user clicks twice or has multiple
-  // tabs open. This is the safe way to upgrade sensory rows to cognitive
-  // memories without firing the cascade on every chat turn.
-  const distillNow = useCallback(async () => {
-    const auth = getJwt() || getApiKey();
-    if (!auth || distilling) return;
-    setDistilling(true);
-    try {
-      const res = await fetch(`${BASE_URL}/v1/distill`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${auth}` },
-        body: JSON.stringify({ sessionKey: sessionKeyRef.current }),
-      });
-      if (!res.ok) {
-        setError(`Distill failed: ${res.status}`);
-      }
-    } catch (err: any) {
-      setError(err?.message || String(err));
-    } finally {
-      setDistilling(false);
-    }
-  }, [distilling]);
-
-  // Debounced auto-scroll: smooth scrollTo on every streaming chunk fights the
-  // browser's own scroll animation. We schedule one rAF per render instead.
+  // Server reconciliation — the server is the source of truth for which threads
+  // exist. Fetch the caller's threads for the active org, merge them over the
+  // local cache, and run the one-time localStorage→server migration for any
+  // local-only threads. Signed-out or offline falls back to the local cache.
   useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const raf = requestAnimationFrame(() => {
-      el.scrollTop = el.scrollHeight;
+    if (!hydrated || scopeState.loading || !isAuthenticated()) return;
+    const orgId = scopeState.scope.orgId || undefined;
+    const scopeSnapshot = { ...currentScope.current };
+    let cancelled = false;
+    setThreadsLoading(true);
+    (async () => {
+      try {
+        const remote = await listChatThreads(orgId);
+        if (cancelled) return;
+        remote.forEach((thread) => serverThreadIds.current.add(thread.id));
+        const merged = mergeServerThreads(sessionsRef.current, remote, scopeSnapshot);
+        const rekeys = new Map<string, string>();
+        for (const stale of merged.unsynced) {
+          try {
+            const thread = await createChatThread(
+              { title: stale.title, model: stale.model, messages: toServerMessages(stale.messages) },
+              orgId,
+            );
+            serverThreadIds.current.add(thread.id);
+            rekeys.set(stale.id, thread.id);
+          } catch { /* offline/failed — keep the local copy, retry on next load */ }
+        }
+        if (cancelled) return;
+        const reconciled = merged.sessions.map((item) => {
+          const migratedId = rekeys.get(item.id);
+          return migratedId ? { ...item, id: migratedId } : item;
+        });
+        setSessions(reconciled);
+        saveChatSessions(window.localStorage, reconciled);
+        const activeMigrated = rekeys.get(sessionKey.current);
+        if (activeMigrated) { sessionKey.current = activeMigrated; setActiveSessionId(activeMigrated); }
+      } catch { /* server unreachable — keep the local cache, never crash the page */ }
+      finally { if (!cancelled) setThreadsLoading(false); }
+    })();
+    return () => { cancelled = true; };
+    // Threads are org-scoped server-side, so only the active org drives a refetch.
+  }, [hydrated, scopeState.loading, scopeState.scope.orgId]);
+
+  useEffect(() => {
+    if (scopeState.loading) return;
+    let cancelled = false;
+    setModelsLoading(true);
+    setModelsError("");
+    adminApi.modelCatalog(scopeState.scope.orgId || undefined).then((catalog) => {
+      if (cancelled) return;
+      setModels(catalog.models);
+      setModelSelection((current) => normalizeChatModelSelection(catalog.models, current));
+    }).catch((caught) => {
+      if (cancelled) return;
+      setModels([]);
+      setModelsError(caught instanceof Error ? caught.message : "Could not load managed models");
+    }).finally(() => {
+      if (!cancelled) setModelsLoading(false);
     });
-    return () => cancelAnimationFrame(raf);
-  }, [messages]);
+    return () => { cancelled = true; };
+  }, [scopeState.loading, scopeState.scope.orgId]);
 
-  const stop = useCallback(() => {
-    try { abortRef.current?.abort(); } catch { /* noop */ }
-    abortRef.current = null;
-    setBusy(false);
-  }, []);
+  useEffect(() => {
+    threadEnd.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages, sending]);
 
-  const send = useCallback(async () => {
-    const trimmed = input.trim();
-    if (!trimmed || busy) return;
-    setError(null);
+  const scopedSessions = useMemo(
+    () => sessions.filter((item) => sameChatScope(item.scope, scopeState.scope)),
+    [scopeState.scope, sessions],
+  );
 
-    // Cancel any prior in-flight request before starting a new one.
-    try { abortRef.current?.abort(); } catch { /* noop */ }
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    const userMsg: ChatMessage = { role: "user", content: trimmed, id: newId() };
-    const assistantMsg: ChatMessage = { role: "assistant", content: "", id: newId(), pending: true };
-
-    const outbound: ChatMessage[] = [...messages, userMsg];
-    setMessages([...outbound, assistantMsg]);
-    setInput("");
-    setBusy(true);
-
-    const auth = getJwt() || getApiKey();
-    if (!auth) {
-      setError("Sign in or set an API key to use chat.");
-      setBusy(false);
-      setMessages((m) => m.filter((x) => x.id !== assistantMsg.id));
+  useEffect(() => {
+    if (!hydrated || scopeState.loading || creatingNew) return;
+    const active = sessions.find((item) => item.id === activeSessionId);
+    if (active && sameChatScope(active.scope, scopeState.scope)) {
+      setModelSelection((current) => normalizeChatModelSelection(models, current.model ? current : {
+        model: active.model,
+        reasoningEffort: active.reasoningEffort,
+      }));
       return;
     }
-
-    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-    try {
-      const res = await fetch(`${BASE_URL}/v1/chat/completions`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${auth}`,
-        },
-        body: JSON.stringify({
-          // Model is server-configured; clients don't override it from the chat UI.
-          stream: true,
-          messages: outbound.map((m) => ({ role: m.role, content: m.content })),
-          brainrouter: {
-            sessionKey: sessionKeyRef.current,
-            capture_mode: captureMode,
-          },
-        }),
-        signal: controller.signal,
-      });
-
-      if (!res.ok || !res.body) {
-        const text = await res.text();
-        throw new Error(text || `Upstream returned ${res.status}`);
-      }
-
-      reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let accumulated = "";
-      let streamDone = false;
-
-      while (!streamDone) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const raw of lines) {
-          const line = raw.trim();
-          if (!line.startsWith("data:")) continue;
-          const data = line.slice(5).trim();
-          if (!data) continue;
-          if (data === "[DONE]") {
-            streamDone = true;
-            // Free the upstream socket promptly. Without this the connection
-            // can linger and the browser counts it as an in-flight request.
-            try { await reader.cancel(); } catch { /* noop */ }
-            break;
-          }
-          try {
-            const obj = JSON.parse(data);
-            const delta = obj?.choices?.[0]?.delta?.content;
-            if (typeof delta === "string" && delta.length > 0) {
-              accumulated += delta;
-              setMessages((m) =>
-                m.map((x) => (x.id === assistantMsg.id ? { ...x, content: accumulated } : x)),
-              );
-            }
-          } catch {
-            // Ignore non-JSON SSE keepalive frames.
-          }
-        }
-      }
-      setMessages((m) =>
-        m.map((x) => (x.id === assistantMsg.id ? { ...x, pending: false } : x)),
-      );
-    } catch (err: any) {
-      if (err?.name === "AbortError") {
-        // Quiet — this is our own stop() or a new submit superseding the old one.
-        setMessages((m) => m.map((x) => (x.id === assistantMsg.id ? { ...x, pending: false, content: x.content || "_(stopped)_" } : x)));
-      } else {
-        setError(err?.message || String(err));
-        setMessages((m) => m.filter((x) => x.id !== assistantMsg.id));
-      }
-    } finally {
-      try { await reader?.cancel(); } catch { /* noop */ }
-      if (abortRef.current === controller) abortRef.current = null;
-      setBusy(false);
+    const next = sessions.find((item) => sameChatScope(item.scope, scopeState.scope));
+    if (next) {
+      setActiveSessionId(next.id);
+      sessionKey.current = next.id;
+      setMessages(next.messages);
+      setCategory(isCategory(next.category) ? next.category : "General");
+      setModelSelection(normalizeChatModelSelection(models, {
+        model: next.model,
+        reasoningEffort: next.reasoningEffort,
+      }));
+    } else {
+      setActiveSessionId("");
+      sessionKey.current = "";
+      setMessages([]);
+      setDraft("");
+      setError("");
     }
-  }, [busy, input, messages, captureMode]);
+  }, [activeSessionId, creatingNew, hydrated, models, scopeState.loading, scopeState.scope, sessions]);
 
-  const resetSession = useCallback(() => {
-    if (typeof window === "undefined") return;
-    try { abortRef.current?.abort(); } catch { /* noop */ }
-    localStorage.removeItem(SESSION_KEY_STORAGE);
-    sessionKeyRef.current = loadOrCreateSessionKey();
+  const addSourceHref = useMemo(() => {
+    const query = new URLSearchParams({ panel: "connections" });
+    if (scopeState.scope.orgId) query.set("orgId", scopeState.scope.orgId);
+    if (scopeState.scope.projectId) query.set("projectId", scopeState.scope.projectId);
+    return `/integrations?${query.toString()}`;
+  }, [scopeState.scope.orgId, scopeState.scope.projectId]);
+
+  function persist(
+    id: string,
+    nextMessages: StoredChatMessage[],
+    nextCategory = category,
+    storedScope = scopeState.scope,
+    selection = modelSelection,
+  ) {
+    const next: StoredChatSession = {
+      id,
+      title: sessionTitle(nextMessages),
+      category: nextCategory,
+      scope: { ...storedScope },
+      messages: nextMessages,
+      ...(selection.model ? { model: selection.model } : {}),
+      ...(selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {}),
+      updatedAt: new Date().toISOString(),
+    };
+    setSessions((current) => {
+      const updated = upsertChatSession(current, next);
+      saveChatSessions(window.localStorage, updated);
+      return updated;
+    });
+  }
+
+  /** Rewrite a locally-minted thread id to the server id it was assigned, in
+   * both the session list and the active selection, then re-cache. */
+  function rekeySession(oldId: string, newId: string) {
+    if (oldId === newId) return;
+    setSessions((current) => {
+      const found = current.find((item) => item.id === oldId);
+      const rest = current.filter((item) => item.id !== oldId && item.id !== newId);
+      const next = found
+        ? [{ ...found, id: newId }, ...rest].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+        : rest;
+      saveChatSessions(window.localStorage, next);
+      return next;
+    });
+    if (sessionKey.current === oldId) {
+      sessionKey.current = newId;
+      setActiveSessionId(newId);
+    }
+  }
+
+  /** Push a finished turn to the server so a second device sees it: create the
+   * thread on its first turn (rekeying the local id), else replace-sync the
+   * history up. Best-effort — a failure leaves the local cache authoritative. */
+  async function syncSessionToServer(
+    localId: string,
+    wasOnServer: boolean,
+    completed: readonly StoredChatMessage[],
+    storedScope: StoredChatSession["scope"],
+    selection: ChatModelSelection,
+  ) {
+    if (!isAuthenticated()) return;
+    const orgId = storedScope.orgId || undefined;
+    const serverMessages = toServerMessages(completed);
+    try {
+      if (wasOnServer || serverThreadIds.current.has(localId)) {
+        await replaceChatMessages(localId, serverMessages, orgId);
+      } else {
+        const thread = await createChatThread(
+          { title: sessionTitle(completed), model: selection.model || undefined, messages: serverMessages },
+          orgId,
+        );
+        serverThreadIds.current.add(thread.id);
+        rekeySession(localId, thread.id);
+      }
+    } catch { /* offline/failed — the local cache still holds the turn; retry later */ }
+  }
+
+  async function sendMessage() {
+    const content = draft.trim();
+    if (!content || sending) return;
+    const requestScope = { ...scopeState.scope };
+    const requestSelection = { ...modelSelection };
+    const id = activeSessionId || nextId("dashboard_chat");
+    const wasOnServer = serverThreadIds.current.has(id);
+    const userMessage: StoredChatMessage = { id: nextId("user"), role: "user", content };
+    const history = [...messages, userMessage];
+    if (!activeSessionId) setActiveSessionId(id);
+    setCreatingNew(false);
+    sessionKey.current = id;
+    setMessages(history);
+    persist(id, history, category, requestScope, requestSelection);
+    setDraft("");
+    setSending(true);
+    setError("");
+    try {
+      const result = await brainApi.chat(
+        history.slice(-20).map(({ role, content: text }) => ({ role, content: text })),
+        id,
+        requestScope,
+        requestSelection,
+      );
+      if (result.message?.role !== "assistant" || !result.message.content?.trim()) {
+        throw new Error("The agent returned an empty response");
+      }
+      const completed: StoredChatMessage[] = [...history, {
+        ...result.message,
+        id: nextId("assistant"),
+        citations: result.citations ?? [],
+        recallStrategy: result.recallStrategy,
+      }];
+      persist(id, completed, category, requestScope, requestSelection);
+      if (sameChatScope(requestScope, currentScope.current)) setMessages(completed);
+      void syncSessionToServer(id, wasOnServer, completed, requestScope, requestSelection);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The agent could not answer");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  function newConversation() {
+    setCreatingNew(true);
+    setActiveSessionId("");
+    sessionKey.current = "";
     setMessages([]);
-    setError(null);
-  }, []);
+    setDraft("");
+    setError("");
+    requestAnimationFrame(() => composer.current?.focus());
+  }
 
-  // ---- Styles (BrainRouter design tokens; no Tailwind utility colors here) ----
+  /** Fill a skeleton thread (one synced from another device, so it has no cached
+   * body) from the server the first time it's opened. Never clobbers a local
+   * copy that already has messages — those carry citations the server can't. */
+  async function loadServerMessages(id: string, orgId?: string) {
+    if (!serverThreadIds.current.has(id) || !isAuthenticated()) return;
+    try {
+      const detail = await getChatThread(id, orgId);
+      const stored = detail.messages
+        .map(serverMessageToStored)
+        .filter((item): item is StoredChatMessage => item !== null);
+      if (!stored.length) return;
+      setSessions((current) => {
+        const target = current.find((item) => item.id === id);
+        if (!target || target.messages.length > 0) return current;
+        const next = current.map((item) => (item.id === id ? { ...item, messages: stored } : item));
+        saveChatSessions(window.localStorage, next);
+        return next;
+      });
+      if (sessionKey.current === id) setMessages((prev) => (prev.length ? prev : stored));
+    } catch { /* leave the thread empty — the composer still works */ }
+  }
 
-  const pageStyle: React.CSSProperties = {
-    display: "flex",
-    flexDirection: "column",
-    height: "calc(100vh - 80px)",
-    color: "var(--color-pure-white)",
-    fontFamily: "var(--font-inter)",
-  };
-  const ghostBtnStyle: React.CSSProperties = {
-    background: "transparent",
-    color: "var(--color-pure-white)",
-    border: "1px solid var(--border-med)",
-    borderRadius: "9999px",
-    padding: "6px 14px",
-    fontSize: "12px",
-    cursor: "pointer",
-    fontFamily: "var(--font-inter)",
-  };
-  const transcriptStyle: React.CSSProperties = {
-    flex: 1,
-    overflowY: "auto",
-    padding: isMobile ? "16px 2px" : "32px",
-    display: "flex",
-    flexDirection: "column",
-    gap: "16px",
-  };
-  const userBubbleStyle: React.CSSProperties = {
-    alignSelf: "flex-end",
-    maxWidth: "min(720px, 100%)",
-    background: "var(--color-slate-gray)",
-    color: "var(--color-pure-white)",
-    border: "1px solid var(--border-dim)",
-    borderRadius: "10px",
-    padding: "16px 20px",
-    fontSize: "14px",
-    lineHeight: 1.5,
-    whiteSpace: "pre-wrap",
-  };
-  const assistantBubbleStyle: React.CSSProperties = {
-    alignSelf: "flex-start",
-    maxWidth: "min(720px, 100%)",
-    background: "var(--color-pewter-accent)",
-    color: "var(--color-white-frost)",
-    border: "1px solid var(--border-dim)",
-    borderRadius: "10px",
-    padding: "16px 20px",
-    fontSize: "14px",
-    lineHeight: 1.5,
-    whiteSpace: "pre-wrap",
-  };
-  const bubbleLabelStyle: React.CSSProperties = {
-    fontSize: "11px",
-    textTransform: "uppercase",
-    letterSpacing: "0.06em",
-    color: "var(--color-stone-text)",
-    marginBottom: "6px",
-  };
-  const composerStyle: React.CSSProperties = {
-    borderTop: "1px solid var(--border-dim)",
-    padding: isMobile ? "14px 8px" : "20px 32px",
-    background: "var(--color-obsidian-surface)",
-  };
-  const composerInnerStyle: React.CSSProperties = {
-    display: "flex",
-    gap: "10px",
-    alignItems: "flex-end",
-    maxWidth: "920px",
-    margin: "0 auto",
-  };
-  const textareaStyle: React.CSSProperties = {
-    flex: 1,
-    background: "transparent",
-    color: "var(--color-pure-white)",
-    border: "1px solid var(--border-med)",
-    borderRadius: "20px",
-    padding: "14px 20px",
-    fontSize: "14px",
-    lineHeight: 1.5,
-    resize: "none",
-    outline: "none",
-    fontFamily: "var(--font-inter)",
-    minHeight: "52px",
-    maxHeight: "200px",
-  };
-  const primaryBtnStyle: React.CSSProperties = {
-    background: "var(--color-pure-white)",
-    color: "var(--color-midnight-ink)",
-    border: "none",
-    borderRadius: "9999px",
-    padding: "0 28px",
-    height: "44px",
-    fontSize: "13px",
-    fontWeight: 500,
-    cursor: "pointer",
-    fontFamily: "var(--font-inter)",
-    opacity: busy || !input.trim() ? 0.4 : 1,
-  };
-  const stopBtnStyle: React.CSSProperties = {
-    ...ghostBtnStyle,
-    height: "44px",
-    padding: "0 22px",
-    borderColor: "var(--color-golden-accent)",
-    color: "var(--color-golden-accent)",
-  };
-  const footnoteStyle: React.CSSProperties = {
-    fontSize: "12px",
-    color: "var(--color-stone-text)",
-    textAlign: "center",
-    marginTop: "10px",
-  };
-  const chipRowStyle: React.CSSProperties = {
-    maxWidth: "920px",
-    margin: "8px auto 0",
-    display: "flex",
-    gap: "8px",
-    justifyContent: "center",
-    flexWrap: "wrap",
-  };
-  const chipStyle: React.CSSProperties = {
-    padding: "5px 12px",
-    borderRadius: "9999px",
-    border: "1px solid var(--border-med)",
-    color: "var(--color-silver-text)",
-    fontSize: "11px",
-    textDecoration: "none",
-    fontFamily: "var(--font-inter)",
-  };
-  const emptyStyle: React.CSSProperties = {
-    margin: "auto",
-    textAlign: "center",
-    maxWidth: "440px",
-    color: "var(--color-stone-text)",
-    fontSize: "14px",
-    lineHeight: 1.6,
-  };
-  const errorBoxStyle: React.CSSProperties = {
-    alignSelf: "center",
-    maxWidth: "720px",
-    background: "rgba(52, 194, 142, 0.08)",
-    border: "1px solid var(--color-golden-accent)",
-    color: "var(--color-golden-accent)",
-    borderRadius: "10px",
-    padding: "12px 18px",
-    fontSize: "13px",
-  };
+  function openSession(item: StoredChatSession) {
+    setCreatingNew(false);
+    setActiveSessionId(item.id);
+    sessionKey.current = item.id;
+    setMessages(item.messages);
+    setCategory(isCategory(item.category) ? item.category : "General");
+    setModelSelection(normalizeChatModelSelection(models, {
+      model: item.model,
+      reasoningEffort: item.reasoningEffort,
+    }));
+    setDraft("");
+    setError("");
+    if (item.messages.length === 0) void loadServerMessages(item.id, item.scope.orgId || undefined);
+  }
+
+  function removeSession(id: string) {
+    const updated = sessions.filter((item) => item.id !== id);
+    setSessions(updated);
+    saveChatSessions(window.localStorage, updated);
+    if (serverThreadIds.current.has(id) && isAuthenticated()) {
+      void deleteChatThread(id, scopeState.scope.orgId || undefined).catch(() => { /* stays deleted locally */ });
+    }
+    serverThreadIds.current.delete(id);
+    if (activeSessionId === id) newConversation();
+  }
+
+  function selectCategory(next: ChatCategory) {
+    setCategory(next);
+    if (activeSessionId && messages.length) persist(activeSessionId, messages, next);
+  }
+
+  const activeModel = models.find((model) => model.id === modelSelection.model && model.enabled) ?? null;
+  const effortOptions = activeModel?.reasoning?.mode === "selectable" ? activeModel.reasoning.allowed : [];
+  const activeOrg = scopeState.orgs.find((org) => org.orgId === scopeState.scope.orgId);
+  const canManageModels = Boolean(activeOrg?.capabilities.includes("models:manage"));
+  const modelsEmpty = !modelsLoading && !modelsError && models.length === 0;
+
+  function selectModel(model: string) {
+    const next = normalizeChatModelSelection(models, { model });
+    setModelSelection(next);
+    if (activeSessionId && messages.length) persist(activeSessionId, messages, category, scopeState.scope, next);
+  }
+
+  function selectEffort(reasoningEffort: ChatModelSelection["reasoningEffort"]) {
+    const next = normalizeChatModelSelection(models, { model: modelSelection.model, reasoningEffort });
+    setModelSelection(next);
+    if (activeSessionId && messages.length) persist(activeSessionId, messages, category, scopeState.scope, next);
+  }
+
+  function moveCategory(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowRight") nextIndex = (index + 1) % categories.length;
+    else if (event.key === "ArrowLeft") nextIndex = (index - 1 + categories.length) % categories.length;
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = categories.length - 1;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    const next = categories[nextIndex];
+    selectCategory(next);
+    requestAnimationFrame(() => document.getElementById(`chat-category-${next.toLowerCase()}`)?.focus());
+  }
 
   return (
-    <div style={pageStyle}>
-      <div style={{ padding: isMobile ? "16px 4px 8px" : "32px 32px 16px" }}>
-        <PageHeader
-          title="Memory-Augmented Chat"
-          description="Talk to BrainRouter with your own memory. Every turn is recalled before responding and captured back after."
-        >
-          {/* Gear lives in PageHeader's right-aligned slot — no separate header row. */}
-          <div style={{ position: "relative" }}>
-            <button
-              onClick={() => setSettingsOpen((s) => !s)}
-              title="Session settings"
-              aria-expanded={settingsOpen}
-              style={{
-                ...ghostBtnStyle,
-                padding: "6px 14px",
-                borderColor: settingsOpen ? "var(--color-golden-accent)" : "var(--border-med)",
-                color: settingsOpen ? "var(--color-golden-accent)" : "var(--color-silver-text)",
-              }}
-            >
-              ⚙ Settings
-            </button>
-            {settingsOpen && (
-              <>
-                <div
-                  onClick={() => setSettingsOpen(false)}
-                  style={{ position: "fixed", inset: 0, zIndex: 10 }}
-                />
-                <div
-                  role="menu"
-                  style={{
-                    position: "absolute",
-                    top: "calc(100% + 8px)",
-                    right: 0,
-                    zIndex: 20,
-                    minWidth: "320px",
-                    background: "var(--color-charcoal-canvas)",
-                    border: "1px solid var(--border-med)",
-                    borderRadius: "10px",
-                    padding: "16px",
-                    boxShadow: "0 12px 28px rgba(0,0,0,0.45)",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "14px",
-                    fontSize: "13px",
-                    textAlign: "left",
-                  }}
-                >
-                  <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                    <span style={{ color: "var(--color-stone-text)", fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.06em" }}>Persist mode</span>
-                    <select
-                      value={captureMode}
-                      onChange={(e) => setCaptureMode(e.target.value as typeof captureMode)}
-                      style={{
-                        background: "transparent",
-                        color: "var(--color-pure-white)",
-                        border: "1px solid var(--border-med)",
-                        borderRadius: "9999px",
-                        padding: "8px 14px",
-                        fontFamily: "var(--font-inter)",
-                        fontSize: "13px",
-                        cursor: "pointer",
-                      }}
-                    >
-                      <option value="sensory">Sensory — store messages only (recommended)</option>
-                      <option value="full">Full — extract cognitive memory each turn (heavy)</option>
-                      <option value="off">Off — stateless chat</option>
-                    </select>
-                  </label>
-
-                  <div style={{ height: "1px", background: "var(--border-dim)" }} />
-
-                  <button
-                    onClick={() => { setSettingsOpen(false); void distillNow(); }}
-                    disabled={distilling}
-                    style={{
-                      ...ghostBtnStyle,
-                      width: "100%",
-                      padding: "10px 14px",
-                      borderColor: distilling ? "var(--color-stone-text)" : "var(--color-golden-accent)",
-                      color: distilling ? "var(--color-stone-text)" : "var(--color-golden-accent)",
-                      cursor: distilling ? "wait" : "pointer",
-                    }}
-                  >
-                    {distilling ? "Distilling…" : "Distill memories now"}
-                  </button>
-                  <button
-                    onClick={() => { setSettingsOpen(false); resetSession(); }}
-                    style={{ ...ghostBtnStyle, width: "100%", padding: "10px 14px" }}
-                  >
-                    Start a new session
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </PageHeader>
-      </div>
-
-      <div ref={scrollRef} style={transcriptStyle}>
-        {messages.length === 0 && (
-          <div style={emptyStyle}>
-            <p style={{ margin: 0 }}>
-              Start chatting. Your messages are recalled against your BrainRouter memory before
-              each response and captured back after.
-            </p>
-            <p style={{ marginTop: "12px", fontSize: "12px", color: "var(--color-ash-text)" }}>
-              Tip: ask about something you discussed in a previous session — the memory layer
-              should surface it automatically.
-            </p>
-          </div>
-        )}
-        {messages.map((m) => (
-          <div key={m.id} style={m.role === "user" ? userBubbleStyle : assistantBubbleStyle}>
-            <div style={bubbleLabelStyle}>
-              {m.role === "user" ? "You" : "BrainRouter"}{m.pending && " · thinking…"}
-            </div>
-            {m.role === "user" ? (
-              <div>{m.content || (m.pending ? "…" : "")}</div>
-            ) : (
-              <div className="markdown-content markdown-content--chat">
-                {m.content
-                  ? <Markdown>{m.content}</Markdown>
-                  : (m.pending ? "…" : "")}
-              </div>
-            )}
-          </div>
-        ))}
-        {error && <div style={errorBoxStyle}>{error}</div>}
-      </div>
-
-      <div style={composerStyle}>
-        <div style={composerInnerStyle}>
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                void send();
-              }
-            }}
-            placeholder="Ask anything — your memory will be consulted first."
-            rows={1}
-            style={textareaStyle}
-            disabled={busy}
-          />
-          {busy ? (
-            <button onClick={stop} style={stopBtnStyle}>Stop</button>
-          ) : (
-            <button onClick={() => void send()} disabled={!input.trim()} style={primaryBtnStyle}>
-              Send
-            </button>
-          )}
+    <div className="chat-workbench">
+      <aside className="chat-session-rail" aria-label="Chat sessions">
+        <div className="chat-session-rail__head">
+          <div><strong>Sessions</strong><span>Synced to your account</span></div>
+          <button type="button" onClick={newConversation} aria-label="New task" title="New task">+</button>
         </div>
-        <p style={footnoteStyle}>
-          Routes through <code style={{ color: "var(--color-silver-text)" }}>/v1/chat/completions</code> on your BrainRouter MCP server.
-        </p>
-        <div style={chipRowStyle}>
-          <a href="/memories" style={chipStyle}>Memories</a>
-          <a href="/scenes" style={chipStyle}>Focus scenes</a>
-          <a href="/working-memory" style={chipStyle}>Working memory</a>
-          <a href="/skills" style={chipStyle}>Skill routing</a>
+        <div className="chat-session-list">
+          {!hydrated || scopeState.loading || (threadsLoading && scopedSessions.length === 0) ? <InlineLoading label="Loading sessions…" />
+            : scopedSessions.length === 0 ? <span className="chat-session-empty">No tasks in this scope yet.</span>
+              : scopedSessions.map((item) => (
+                <div className={`chat-session-item${activeSessionId === item.id ? " active" : ""}`} key={item.id}>
+                  <button type="button" onClick={() => openSession(item)} aria-current={activeSessionId === item.id ? "page" : undefined}>
+                    <strong>{item.title}</strong>
+                    <span>{item.category} · {new Date(item.updatedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span>
+                  </button>
+                  <button type="button" className="chat-session-remove" aria-label={`Remove ${item.title}`} title="Remove session" onClick={() => removeSession(item.id)}>×</button>
+                </div>
+              ))}
+        </div>
+      </aside>
+
+      <div className={`chat-page${messages.length ? " chat-page--active" : ""}`}>
+        <div className="chat-hero">
+          <header className="chat-heading">
+            <div>
+              <span className="chat-eyebrow">Agent workbench · {category}</span>
+              <h1>{messages.length ? sessionTitle(messages) : "What should we move forward?"}</h1>
+            </div>
+            {messages.length > 0 && <button type="button" className="chat-new-button" onClick={newConversation}>New task</button>}
+          </header>
+
+          {messages.length > 0 && (
+            <section className="chat-thread" aria-live="polite" aria-label="Conversation">
+              {messages.map((item) => (
+                <article className={`chat-message chat-message--${item.role}`} key={item.id}>
+                  <div className="chat-message__role">{item.role === "user" ? "You" : "Agent"}</div>
+                  <div className="chat-message__body markdown-content markdown-content--chat"><LazyMarkdown>{item.content}</LazyMarkdown></div>
+                  {item.citations && item.citations.length > 0 && (
+                    <div className="chat-citations">
+                      <span>Context used</span>
+                      {item.citations.map((citation, index) => (
+                        <div className="chat-citation" key={`${citation.recordId}-${index}`}>
+                          <strong>{citation.title || citation.type?.replace(/_/g, " ") || `Memory ${index + 1}`}</strong>
+                          <p>{citation.excerpt}</p>
+                          {typeof citation.score === "number" && <small>{Math.round(citation.score * 100)}% match</small>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {item.recallStrategy && <div className="chat-message__meta">Recall: {item.recallStrategy}</div>}
+                </article>
+              ))}
+              {sending && <div className="chat-thinking"><span /><span /><span /> Recalling context and working on the answer</div>}
+              <div ref={threadEnd} />
+            </section>
+          )}
+
+          <form className="chat-composer" onSubmit={(event) => { event.preventDefault(); void sendMessage(); }}>
+            <textarea
+              ref={composer}
+              aria-label="Message BrainRouter"
+              placeholder="Ask about your work, recall context, or start an agent task…"
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
+            />
+            <div className="chat-composer__footer">
+              <Link href={addSourceHref} className="chat-round-button" aria-label="Add a source" title="Add a source">+</Link>
+              <button type="button" className={`chat-context-button${showScope ? " active" : ""}`} aria-expanded={showScope} onClick={() => setShowScope((current) => !current)}>Context</button>
+              <span className="chat-scope-summary">{scopeState.projects.find((project) => project.projectId === scopeState.scope.projectId)?.name ?? scopeState.orgs.find((org) => org.orgId === scopeState.scope.orgId)?.name ?? "Personal"}</span>
+              <span className="chat-composer__spacer" />
+              <label className="chat-runtime-select">
+                <span className="sr-only">Model</span>
+                <select aria-label="Model" value={modelSelection.model} disabled={modelsLoading || models.length === 0} onChange={(event) => selectModel(event.target.value)}>
+                  {modelsLoading ? <option value="">Loading models…</option>
+                    : models.length === 0 ? <option value="">No managed models</option>
+                      : models.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
+                </select>
+              </label>
+              <label className="chat-runtime-select chat-runtime-select--effort">
+                <span className="sr-only">Reasoning effort</span>
+                <select
+                  aria-label="Reasoning effort"
+                  value={modelSelection.reasoningEffort}
+                  disabled={!activeModel || activeModel.reasoning?.mode !== "selectable" || effortOptions.length === 0}
+                  onChange={(event) => selectEffort(event.target.value as ChatModelSelection["reasoningEffort"])}
+                >
+                  <option value="">{activeModel?.reasoning?.mode === "adaptive" ? "Adaptive" : "Automatic"}</option>
+                  {effortOptions.map((effort) => <option key={effort.id} value={effort.id}>{effort.label}</option>)}
+                </select>
+              </label>
+              <button type="submit" className="chat-round-button chat-send-button" aria-label="Send message" disabled={!draft.trim() || sending || modelsLoading || !activeModel}>↑</button>
+            </div>
+            {showScope && <KnowledgeScopePicker state={scopeState} compact />}
+          </form>
+
+          {modelsError && <div className="chat-model-error" role="status">Managed models unavailable. <Link href="/providers">Open Models &amp; providers</Link></div>}
+          {modelsEmpty && (
+            <div className="chat-model-error" role="status">
+              No managed model is available for {activeOrg?.name ?? "this organization"}. {canManageModels
+                ? <Link href="/providers">Configure a model</Link>
+                : <>Choose another organization under Context, or ask an organization administrator to configure one.</>}
+            </div>
+          )}
+          {error && <div className="chat-error" role="alert"><span>Message not sent.</span> {error}</div>}
+          {!messages.length && (
+            <>
+              <div className="chat-categories" role="tablist" aria-label="Conversation category">
+                {categories.map((item, index) => (
+                  <button
+                    type="button"
+                    role="tab"
+                    id={`chat-category-${item.toLowerCase()}`}
+                    aria-controls="chat-suggestions"
+                    aria-selected={category === item}
+                    tabIndex={category === item ? 0 : -1}
+                    className={category === item ? "active" : ""}
+                    onKeyDown={(event) => moveCategory(event, index)}
+                    onClick={() => selectCategory(item)}
+                    key={item}
+                  >
+                    {item}
+                  </button>
+                ))}
+              </div>
+              <div id="chat-suggestions" className="chat-suggestions" role="tabpanel" aria-labelledby={`chat-category-${category.toLowerCase()}`}>
+                {suggestions[category].map(([title, description]) => <button type="button" key={title} onClick={() => { setDraft(description); requestAnimationFrame(() => composer.current?.focus()); }}><strong>{title}</strong><span>{description}</span></button>)}
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>
   );
+}
+
+export default function ChatPage() {
+  return <AuthGuard><ChatContent /></AuthGuard>;
 }

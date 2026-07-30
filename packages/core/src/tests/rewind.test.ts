@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canRewindTo, entriesAfterRewind } from '../session/rewind.js';
-import { appendTranscriptEntry, loadTranscript, rewindTranscript } from '../session/sessionStore.js';
+import { canRewindTo, entriesAfterRewind } from '../session/transcript/rewind.js';
+import { appendTranscriptEntry, loadTranscript, rewindTranscript } from '../session/transcript/sessionStore.js';
 import { withTempWorkspaceAsync } from './_helpers.js';
 
 // WS8 — "rewind to here": truncate the conversation to a point, UNLESS code was

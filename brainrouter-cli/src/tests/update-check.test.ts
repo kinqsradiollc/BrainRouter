@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { compareSemver, formatUpdateBanner, isCacheFresh, checkForUpdate } from '../runtime/updateCheck.js';
+import { compareSemver, formatUpdateBanner, isCacheFresh, checkForUpdate } from '../runtime/update/updateCheck.js';
 
 test('CLI-22 compareSemver: numeric dotted compare, pre-release tag ignored', () => {
   assert.equal(compareSemver('0.4.4', '0.4.5'), -1);

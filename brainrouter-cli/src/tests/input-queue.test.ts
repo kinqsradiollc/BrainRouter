@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { InputQueue } from '../runtime/inputQueue.js';
+import { InputQueue } from '../runtime/input/inputQueue.js';
 
 test('C2 InputQueue enqueue: ordered, returns id + 1-based position', () => {
   const q = new InputQueue();

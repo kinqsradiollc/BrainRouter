@@ -10,7 +10,7 @@ import {
   formatCompletionFeedback,
   __resetCompletionInbox,
   type AgentCompletion,
-} from '../session/completionInbox.js';
+} from '../session/completion/completionInbox.js';
 
 function reset() {
   __resetCompletionInbox();

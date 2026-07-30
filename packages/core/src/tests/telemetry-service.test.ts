@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createTelemetryService, TelemetryService } from '../telemetry/service.js';
-import { isTelemetryEnabled } from '../telemetry/telemetry.js';
-import type { TelemetryEvent } from '../telemetry/contracts.js';
-import type { TelemetrySink } from '../telemetry/telemetryPort.js';
+import { createTelemetryService, TelemetryService } from '../telemetry/recorder/service.js';
+import { isTelemetryEnabled } from '../telemetry/recorder/telemetry.js';
+import type { TelemetryEvent } from '../telemetry/events/contracts.js';
+import type { TelemetrySink } from '../telemetry/events/telemetryPort.js';
 
 test('TelemetryService is a stateless facade — delegates to the telemetry recorder', () => {
   const svc = createTelemetryService();

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Agent } from '../agent/agent.js';
 import { _resetCliKnobsCache, resolveCliKnobs, setCliKnobOverride } from '../config/config.js';
-import { createRequirement, listRequirements } from '../requirement/requirementStore.js';
+import { createRequirement, listRequirements } from '../requirement/records/requirementStore.js';
 import { withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
 
 test('automation config defaults every automatic phase to disabled', () => {

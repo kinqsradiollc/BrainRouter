@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { _resetCliKnobsCache, resolveCliKnobs, setCliKnobOverride } from '../config/config.js';
-import { attachCompactedResultHandoff, ResultCache } from '../util/resultHandoff.js';
-import { compactToolOutput } from '../prompt/toolCompaction.js';
-import { runExtractResult } from '../tool/extractResult.js';
+import { attachCompactedResultHandoff, ResultCache } from '../util/result/resultHandoff.js';
+import { compactToolOutput } from '../prompt/compaction/toolCompaction.js';
+import { runExtractResult } from '../tool/result/extractResult.js';
 
 function withKnobs<T>(knobs: Parameters<typeof setCliKnobOverride>[0], fn: () => T): T {
   _resetCliKnobsCache();

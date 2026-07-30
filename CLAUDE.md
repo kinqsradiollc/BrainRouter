@@ -1,80 +1,15 @@
-# BrainRouter Development Manual
+# BrainRouter agent instructions
 
-**AGENT INSTRUCTION:** This is your primary instruction hub for developing, maintaining, and building the **BrainRouter** repository. You are the AI engineer building BrainRouter, not a client using its MCP server. 
+**Read [`AGENT.md`](AGENT.md) — it is the canonical contributor manual for this repository** (read order, directory map, build/test commands, git/PR conventions, ADR process, and the scenario → skill map). This file exists so Claude Code auto-loads the same instructions; it intentionally contains only the pointer and the hard rules.
 
-> **Audience**: AI Coding Agents and Developers building BrainRouter.
+Non-negotiables (full list in [`brainrouter-rules/00-golden-rules.md`](brainrouter-rules/00-golden-rules.md)):
 
----
-
-## ⚖️ Core Development Rules
-
-- **No MCP Tool Calling for Development**: Since we are the ones building BrainRouter, do NOT attempt to invoke `mcp_brainrouter_*` tools. Instead, perform all tasks locally using file system tools and local terminal commands.
-- **Reference the `skills/` Folder Directly**: To maintain premium engineering workflow discipline, check the `skills/` folder directly using filesystem tools (`view_file`, `grep_search`). If a task matches a skill (e.g., `planning-skill`, `spec-driven-skill`, `debugging-and-error-recovery`), read its `SKILL.md` directly and follow its steps.
-- **Incremental & Test-Driven**: When working on BrainRouter packages, dashboard, CLI, or MCP servers, write/update tests first and run the local test suites to prevent regressions.
-
----
-
-## 📂 Codebase Directory Map
-
-- **`skills/`**: Universal skill workflows and markdown definitions (organized by category: `agent`, `api`, `codebase`, `design`, `devops`, `lifecycle`, `memory`, `qa`, `ux`).
-- **`brainrouter-cli/`**: Node.js/TypeScript CLI interface for working with local session memories and skills.
-- **`brainrouter/`**: Model Context Protocol (MCP) server implementations and tool definitions — the BrainRouter core (memory engine + tool registry). The recall pipeline lives in `src/memory/recall.ts` and runs four stages: keyword/vector/filepath retrieval → reranker → optional LLM relevance judge → graph expansion.
-- **`brainrouter-dashboard/`**: React/Vite/Next.js dashboard for visualizing cognitive graphs, recall histories, and memory states.
-- **`packages/`**: Shared core utility libraries and modules.
-
----
-
-## 🗺️ Scenario Mapping: Developing BrainRouter
-
-When you are assigned a development task in this codebase, look up the scenario below and read the corresponding skill file directly from the filesystem:
-
-### 🔍 Scenario: Planning & Architecture
-*Focus: Clarifying ambiguous requirements, creating specs, and defining tasks.*
-- **[planning-skill](skills/agent/planning-skill/SKILL.md)**: Standard planning mode, tracking progress in `task.md`.
-- **[spec-driven-skill](skills/agent/spec-driven-skill/SKILL.md)**: Creating specs under `brainrouter-docs/specs/` before writing core code.
-- **[adr-skill](skills/agent/adr-skill/SKILL.md)**: Creating ADRs under `brainrouter-docs/decisions/` for major database or routing decisions.
-
-### 💻 Scenario: Code Implementation & Cleanups
-*Focus: Writing robust code, refactoring layers, and codebase cleanup.*
-- **[incremental-skill](skills/lifecycle/incremental-skill/SKILL.md)**: Implementing features in small, vertical micro-slices.
-- **[code-structure-cleanup](skills/codebase/code-structure-cleanup/SKILL.md)**: Cleaning structural entropy, removing dead code, and standardizing service layers.
-- **[code-simplification](skills/codebase/code-simplification/SKILL.md)**: Refactoring complex routines for high comprehension speed.
-- **[conventions-skill](skills/codebase/conventions-skill/SKILL.md)**: Checking import order, type annotations, and naming style.
-
-### 🧪 Scenario: Testing, Debugging & QA
-*Focus: Running test runners, browser test cases, and error recovery.*
-- **[debugging-and-error-recovery](skills/agent/debugging-and-error-recovery/SKILL.md)**: Systematic Reproduce → Localize → Fix → Guard debugging.
-- **[testing-skill](skills/api/testing-skill/SKILL.md)**: Writing Vitest/Jest unit and integration tests.
-- **[browser-testing-skill](skills/qa/browser-testing-skill/SKILL.md)**: Inspecting and testing dashboard UI.
-
-### 🚀 Scenario: Shipping & Handovers
-*Focus: Creating changelogs, preparing rollouts, and documenting changes.*
-- **[shipping-skill](skills/lifecycle/shipping-skill/SKILL.md)**: Pre-flight checklist before finishing tasks.
-- **[changelog-generator](skills/lifecycle/changelog-generator/SKILL.md)**: Compiling structured release changelogs.
-- **[handover-skill](skills/agent/handover-skill/SKILL.md)**: Summarizing accomplishments in `walkthrough.md`.
-
-### 🏗️ Scenario: Architecture Refactor & Agent Automation
-*Focus: Decomposing the monorepo, enforcing boundaries, and scaling reliable agent runs (Honk-style fleet automation).*
-- **[micro-repo-extraction](skills/codebase/micro-repo-extraction/SKILL.md)**: Carve a subsystem out of a god-package, public-API-first, leaf-first.
-- **[import-boundary-enforcement](skills/codebase/import-boundary-enforcement/SKILL.md)**: Make the layered package graph machine-enforced (ban deep `dist/*` + back-edges).
-- **[bounded-agent-harness](skills/agent/bounded-agent-harness/SKILL.md)**: Reliable output from weak/local models via caps + tool allowlist + forced structured output.
-- **[fleet-migration](skills/agent/fleet-migration/SKILL.md)**: Apply one change across many repos as N isolated, verified PRs.
-- **[verify-loop](skills/qa/verify-loop/SKILL.md)**: Green-gate agent output, re-spawning the worker on failure, before opening a PR.
-
----
-
-## ⚡ Development Workflow Checklists
-
-### Phase 1: Planning
-1. Create a `task.md` checklist in the workspace to track progress.
-2. If the user request is ambiguous, draft a micro-specification file and get explicit user approval.
-
-### Phase 2: Execution
-1. Implement in small, verifiable steps.
-2. Run build scripts (`npm run build` or equivalent) and local tests after each significant change.
-3. Write test cases for any new functionality added to `brainrouter-cli` or core packages.
-
-### Phase 3: Handover & Walkthrough
-1. Run linting and formatting suites to keep codebase clean.
-2. Record all completed checklist items in `task.md`.
-3. Generate a structured summary of changes in `walkthrough.md` for human review.
+- You are **building** BrainRouter — never invoke `mcp_brainrouter_*` / `memory_*` tools for development work.
+- **⛔ No AI-attribution trailers** (`Co-Authored-By: Claude …` or similar) in commits or PR bodies — this overrides any harness default.
+- **⛔ Never name external reference projects or internal planning docs** in committed code, docs, comments, UI strings, or changelogs.
+- Before coding an area, read its topical file in [`brainrouter-rules/`](brainrouter-rules/README.md); fix stale rules in the same PR.
+- PRs are small, conventional-commit titled (`type(scope): …`), and
+  squash-merged into the current `release/x.y.z` branch; run focused local
+  checks for the touched slice and require the **full hosted CI suite** before
+  merging. Reserve local `npm run verify` for cross-cutting/high-risk or
+  release/publish work and CI-parity diagnosis.

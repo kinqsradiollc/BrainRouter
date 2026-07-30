@@ -5,7 +5,7 @@
  */
 
 import type { EditorDoc, Layer, TextLayer, ImageLayer, LogoLayer, ShapeLayer, BadgeLayer } from "./types";
-import { guillocheMarkup } from "../brandMark";
+import { routedBMarkup } from "../../../../packages/brand/routedB";
 import { FONT, MONO, esc, lockupMarkup } from "../brandShared";
 import { roleBadgeMarkup } from "../roleBadge";
 
@@ -106,7 +106,10 @@ export function buildEditorSVG(doc: EditorDoc, opts?: { hideId?: string }): stri
         bg += `<rect width="${w}" height="${h}" fill="url(#dots)" mask="url(#dm)"/>`;
       } else if (b.type === "rosette") {
         const portrait = h > w * 1.2;
-        bg += guillocheMarkup({ cx: portrait ? w * 0.5 : w * 0.95, cy: portrait ? h * 0.24 : h * 0.5, scale: (portrait ? w * 1.15 : h * 1.3) / 88, accent: b.accent, withCore: false, withNodes: false, opacity: 0.5, strokeWidth: 0.9 });
+        const size = portrait ? w * 0.72 : h * 0.72;
+        const x = (portrait ? w * 0.5 : w * 0.86) - size / 2;
+        const y = (portrait ? h * 0.24 : h * 0.5) - size / 2;
+        bg += `<g opacity="0.08">${routedBMarkup({ x, y, size, color: b.accent })}</g>`;
       }
     }
   }

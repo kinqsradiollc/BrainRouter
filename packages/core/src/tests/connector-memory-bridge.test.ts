@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import type { ConnectorDocument } from '@kinqs/brainrouter-types';
+import { workspaceTagFromPath, type ConnectorDocument } from '@kinqs/brainrouter-types';
 import {
   connectorDocumentToMemoryRecord,
   connectorMemoryId,
   exportConnectorDocumentsForMemory,
-} from '../connectors/memoryBridge.js';
-import { upsertConnectorDocuments } from '../connectors/documentStore.js';
+} from '../connectors/retrieval/memoryBridge.js';
+import { upsertConnectorDocuments } from '../connectors/store/documentStore.js';
 import { withTempWorkspace } from './_helpers.js';
 
 function doc(overrides: Partial<ConnectorDocument>): ConnectorDocument {
@@ -45,8 +45,30 @@ test('connectorDocumentToMemoryRecord builds stable recall-eligible cognitive re
   assert.deepEqual(record.repoPaths, ['org/repo']);
   assert.deepEqual(record.filePaths, ['README.md']);
   assert.equal(record.metadata.connectorDocumentId, 'github:org/repo:file:README.md');
+  assert.equal(record.workspaceTag, workspaceTagFromPath('/tmp/work'));
   assert.match(record.content, /Connector file: README\.md/);
   assert.match(record.content, /Repository: org\/repo/);
+});
+
+test('connector memory export honors an explicit server-side org scope without hashing its temp workspace', () => {
+  const record = connectorDocumentToMemoryRecord({
+    ...doc({ kind: 'file', id: 'github:org/repo:file:README.md', title: 'README.md', metadata: { path: 'README.md' } }),
+    firstSeenAt: '2026-01-02T00:00:00.000Z',
+    lastSeenAt: '2026-01-03T00:00:00.000Z',
+  }, {
+    userId: 'u1',
+    workspaceRoot: '/tmp/server-connectors/conn-1',
+    orgId: 'org-1',
+    visibility: 'org',
+    workspaceTag: null,
+    projectTag: null,
+    now: '2026-01-04T00:00:00.000Z',
+  });
+
+  assert.equal(record.orgId, 'org-1');
+  assert.equal(record.visibility, 'org');
+  assert.equal(record.workspaceTag, null);
+  assert.equal(record.projectTag, null);
 });
 
 test('exportConnectorDocumentsForMemory creates a memory_import envelope from stored connector documents', () => {
@@ -61,6 +83,10 @@ test('exportConnectorDocumentsForMemory creates a memory_import envelope from st
       connectorId: 'conn_1',
       userId: 'u1',
       sessionKey: 'session:test',
+      orgId: 'org-1',
+      visibility: 'org',
+      workspaceTag: null,
+      projectTag: null,
       now: '2026-01-06T00:00:00.000Z',
     });
 
@@ -73,6 +99,10 @@ test('exportConnectorDocumentsForMemory creates a memory_import envelope from st
       connectorMemoryId('github:org/repo:issue:1'),
     ].sort());
     assert.equal(result.data.memories.find((record) => record.id === connectorMemoryId('github:org/repo:pull:2'))?.type, 'review_comment');
+    assert.ok(result.data.memories.every((record) => record.orgId === 'org-1'));
+    assert.ok(result.data.memories.every((record) => record.visibility === 'org'));
+    assert.ok(result.data.memories.every((record) => record.workspaceTag === null));
+    assert.ok(result.data.memories.every((record) => record.projectTag === null));
     assert.equal(result.data.operations?.[0].operation, 'connector_import');
     assert.deepEqual(result.data.operations?.[0].metadata.connectorIds, ['conn_1']);
   });

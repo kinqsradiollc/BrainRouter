@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isSessionNotFoundError } from '@kinqs/brainrouter-core/mcp';
-import { resolveFederationSessionKey } from '../runtime/federationRegistration.js';
+import { resolveFederationSessionKey } from '../runtime/federation/federationRegistration.js';
 
 /**
  * Coverage for the three fixes shipped on top of FED-S2:

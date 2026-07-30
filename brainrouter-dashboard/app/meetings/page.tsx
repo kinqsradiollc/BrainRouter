@@ -1,0 +1,731 @@
+"use client";
+
+/**
+ * Meetings — the dashboard mirror of the desktop Meetings mode (ADR-018). Lists the
+ * account's recallable meeting summaries and shows a detail with the same model +
+ * four-level sharing vocabulary (Private / Team / Org / Public). Real, org-scoped
+ * data from the backend at :3747 (/api/meetings) using the signed-in account's JWT
+ * — the same dataset the desktop sees for the same account. No sample data.
+ */
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { Lock, UsersThree, Buildings, GlobeHemisphereWest, Microphone, type Icon } from "@phosphor-icons/react";
+import { AuthGuard } from "../../components/AuthGuard";
+import { PageHeader } from "../../components/PageHeader";
+import { InlineLoading } from "../../components/LoadingSpinner";
+import { adminApi, authFetch, type Team } from "../../lib/adminApi";
+import { useActiveOrg } from "../../components/OrgWorkspaceProvider";
+import { BASE_URL } from "../../lib/client";
+import { getApiKey, getJwt } from "../../lib/client-auth";
+import { invalidateDashboardQueries, queryDashboard } from "../../lib/dashboardQuery";
+import styles from "./meetings.module.css";
+
+type Scope = "private" | "team" | "org" | "public";
+type SummaryStatus = "queued" | "processing" | "ready" | "failed";
+interface ListItem { id: string; title: string; date: string; scope: Scope; attendeeCount: number; summaryStatus: SummaryStatus; originOrgId: string; canEdit: boolean }
+interface ActionItem { id: string; title: string; assignee?: string; done?: boolean; trackItemId?: string }
+interface Share { scope: Scope; teamId?: string; publicUrl?: string; expiresAt?: string }
+interface Detail {
+  id: string; title: string; date: string; status: string; durationMin?: number; wordCount?: number;
+  originOrgId: string; canEdit: boolean;
+  attendees: string[]; model?: { label: string; effort?: string };
+  summaryMarkdown: string; actionItems: ActionItem[];
+  transcript: { at: string; speaker: string; text: string }[];
+  share: Share;
+  summaryStatus: SummaryStatus; summaryError?: string;
+}
+type Overview = Omit<Detail, "transcript">;
+interface TranscriptPage { segments: Array<{ ordinal: number; at: string; speaker: string; text: string }>; total: number; nextCursor: string | null }
+
+const SCOPE_META: Record<Scope, { label: string; blurb: string; badge: string; dot: string; Icon: Icon }> = {
+  private: { label: "Private", blurb: "Only you can see this meeting.", badge: styles.bPrivate, dot: "", Icon: Lock },
+  team: { label: "Team", blurb: "Members of your team can recall it.", badge: styles.bTeam, dot: styles.dotTeam, Icon: UsersThree },
+  org: { label: "Organization", blurb: "Everyone in your organization.", badge: styles.bOrg, dot: styles.dotOrg, Icon: Buildings },
+  public: { label: "Public", blurb: "Anyone with the link — redacted summary only.", badge: styles.bPublic, dot: styles.dotPublic, Icon: GlobeHemisphereWest },
+};
+const SCOPES: Scope[] = ["private", "team", "org", "public"];
+
+function ScopeBadge({ scope }: { scope: Scope }) {
+  const m = SCOPE_META[scope];
+  return <span className={`${styles.badge} ${m.badge}`}>{scope === "org" ? "Org" : m.label}</span>;
+}
+
+function TranscriptLines({ segments }: { segments: Detail["transcript"] }) {
+  const [scrollTop, setScrollTop] = useState(0);
+  const rowHeight = 58;
+  const viewportHeight = 520;
+  const overscan = 5;
+  if (segments.length <= 40) return <>{segments.map((line, index) => <TranscriptLine key={index} line={line} />)}</>;
+  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
+  const visible = Math.ceil(viewportHeight / rowHeight) + overscan * 2;
+  const end = Math.min(segments.length, start + visible);
+  return (
+    <div className={styles.transcriptViewport} style={{ height: viewportHeight }} onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)} role="list" aria-label={`${segments.length} loaded transcript segments`}>
+      <div style={{ height: segments.length * rowHeight, position: "relative" }}>
+        <div style={{ position: "absolute", top: start * rowHeight, right: 0, left: 0 }}>
+          {segments.slice(start, end).map((line, offset) => <TranscriptLine key={start + offset} line={line} />)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TranscriptLine({ line }: { line: Detail["transcript"][number] }) {
+  return <div className={styles.trLine} role="listitem">{line.at ? <span className={styles.trTs}>{line.at}</span> : null}{line.speaker ? <span className={styles.trSp}>{line.speaker}</span> : null}<span className={styles.trTx}>{line.text}</span></div>;
+}
+
+export default function MeetingsPage() {
+  const [items, setItems] = useState<ListItem[]>([]);
+  const [meetingsNext, setMeetingsNext] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<Detail | null>(null);
+  const [transcriptSegments, setTranscriptSegments] = useState<Detail["transcript"]>([]);
+  const [transcriptNext, setTranscriptNext] = useState<string | null>(null);
+  const [transcriptTotal, setTranscriptTotal] = useState(0);
+  const [transcriptLoading, setTranscriptLoading] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [teams, setTeams] = useState<Team[]>([]);
+  // ADR-019 Phase 2 — the org context comes from the app-wide workspace switcher
+  // (top of the sidebar), not a per-page picker. Every meetings call sends the
+  // active org id as the X-BrainRouter-Org header.
+  const { activeOrg, activeOrgId } = useActiveOrg();
+  const [teamsLoaded, setTeamsLoaded] = useState(false);
+  const [teamPickerOpen, setTeamPickerOpen] = useState(false);
+  const [newTeamName, setNewTeamName] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState("");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [draftTitle, setDraftTitle] = useState("");
+  const [draftTranscript, setDraftTranscript] = useState("");
+  const [createErr, setCreateErr] = useState("");
+  const [recording, setRecording] = useState(false);
+  const [recordingPaused, setRecordingPaused] = useState(false);
+  const [language, setLanguage] = useState("auto");
+  const [summaryTemplate, setSummaryTemplate] = useState("general");
+  const [editing, setEditing] = useState(false);
+  const [draftSummary, setDraftSummary] = useState("");
+  const [meetingQuery, setMeetingQuery] = useState("");
+  const [scopeFilter, setScopeFilter] = useState<Scope | "all">("all");
+  const [draftRecovered, setDraftRecovered] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("brainrouter:meeting-draft") ?? "null") as { title?: string; transcript?: string; language?: string; template?: string } | null;
+      if (saved?.title) setDraftTitle(saved.title);
+      if (saved?.transcript) setDraftTranscript(saved.transcript);
+      if (saved?.language) setLanguage(saved.language);
+      if (saved?.template) setSummaryTemplate(saved.template);
+      if (saved?.title || saved?.transcript) setDraftRecovered(true);
+    } catch { /* a malformed local draft should not block Meetings */ }
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if (draftTitle || draftTranscript) localStorage.setItem("brainrouter:meeting-draft", JSON.stringify({ title: draftTitle, transcript: draftTranscript, language, template: summaryTemplate }));
+      else localStorage.removeItem("brainrouter:meeting-draft");
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [draftTitle, draftTranscript, language, summaryTemplate]);
+
+  // Poll while notes are generating — the server keeps summarizing across refreshes,
+  // so this converges the status without the user re-triggering anything.
+  useEffect(() => {
+    if (!detail || (detail.summaryStatus !== "processing" && detail.summaryStatus !== "queued")) return;
+    const id = detail.id;
+    let alive = true;
+    const timer = setInterval(async () => {
+      try {
+        const overview = await authFetch<Overview>(`/api/meetings/${id}/overview`, { orgId: activeOrgId || undefined });
+        if (!alive) return;
+        setDetail((cur) => (cur && cur.id === id ? { ...cur, ...overview } : cur));
+        setItems((list) => list.map((m) => (m.id === id ? { ...m, summaryStatus: overview.summaryStatus } : m)));
+      } catch { /* transient — keep polling */ }
+    }, 3000);
+    return () => { alive = false; clearInterval(timer); };
+  }, [detail?.id, detail?.summaryStatus, activeOrgId]);
+
+  const saveSummary = useCallback(async () => {
+    if (!detail) return;
+    setBusy("save-summary");
+    try {
+      const d = await authFetch<Detail>(`/api/meetings/${detail.id}/summary`, { method: "PATCH", body: { summaryMarkdown: draftSummary }, orgId: activeOrgId || undefined });
+      invalidateDashboardQueries(`meetings:overview:${activeOrgId || "default"}:${detail.id}`);
+      setDetail(d);
+      setEditing(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not save the summary.");
+    } finally {
+      setBusy("");
+    }
+  }, [detail, draftSummary, activeOrgId]);
+
+  const transcribe = useCallback(async (blob: Blob) => {
+    setBusy("transcribe");
+    setCreateErr("");
+    try {
+      if (!blob.size) throw new Error("The selected audio file is empty.");
+      if (blob.size > 40 * 1024 * 1024) throw new Error("Audio must be 40 MB or smaller.");
+      const token = getJwt() || getApiKey() || "";
+      const res = await fetch(`${BASE_URL}/v1/audio/transcriptions${language === "auto" ? "" : `?language=${encodeURIComponent(language)}`}`, {
+        method: "POST",
+        headers: { "Content-Type": blob.type || "audio/webm", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: blob,
+      });
+      if (!res.ok) throw new Error(`Transcription failed (${res.status})`);
+      const out = (await res.json()) as { text?: string };
+      const text = (out.text ?? "").trim();
+      if (text) setDraftTranscript((cur) => (cur ? `${cur}\n${text}` : text));
+      else setCreateErr("No speech was detected in the recording.");
+    } catch (caught) {
+      setCreateErr(caught instanceof Error ? caught.message : "Transcription failed.");
+    } finally {
+      setBusy("");
+    }
+  }, [language]);
+
+  const startRecording = useCallback(async () => {
+    setCreateErr("");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const rec = new MediaRecorder(stream);
+      chunksRef.current = [];
+      rec.ondataavailable = (e) => { if (e.data.size) chunksRef.current.push(e.data); };
+      rec.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        void transcribe(new Blob(chunksRef.current, { type: rec.mimeType || "audio/webm" }));
+      };
+      recorderRef.current = rec;
+      rec.start();
+      setRecording(true);
+      setRecordingPaused(false);
+    } catch {
+      setCreateErr("Microphone access was denied or is unavailable.");
+    }
+  }, [transcribe]);
+
+  const stopRecording = useCallback(() => {
+    recorderRef.current?.stop();
+    recorderRef.current = null;
+    setRecording(false);
+    setRecordingPaused(false);
+  }, []);
+
+  const toggleRecordingPause = useCallback(() => {
+    const recorder = recorderRef.current;
+    if (!recorder) return;
+    if (recorder.state === "recording") { recorder.pause(); setRecordingPaused(true); }
+    else if (recorder.state === "paused") { recorder.resume(); setRecordingPaused(false); }
+  }, []);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await queryDashboard(`meetings:list:${activeOrgId || "default"}`, () => authFetch<{ meetings: ListItem[]; nextCursor: string | null }>("/api/meetings?limit=50", { orgId: activeOrgId || undefined }), { ttlMs: 30_000 });
+      const list = r.meetings ?? [];
+      setItems(list);
+      setMeetingsNext(r.nextCursor);
+      setSelectedId((cur) => (cur && list.some((m) => m.id === cur) ? cur : list[0]?.id ?? null));
+      setError("");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not load meetings.");
+      setItems([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [activeOrgId]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const loadMoreMeetings = useCallback(async () => {
+    if (!meetingsNext || busy === "more-meetings") return;
+    setBusy("more-meetings");
+    try {
+      const page = await authFetch<{ meetings: ListItem[]; nextCursor: string | null }>(`/api/meetings?limit=50&cursor=${encodeURIComponent(meetingsNext)}`, { orgId: activeOrgId || undefined });
+      setItems((current) => [...current, ...page.meetings.filter((item) => !current.some((existing) => existing.id === item.id))]);
+      setMeetingsNext(page.nextCursor);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not load more meetings.");
+    } finally {
+      setBusy("");
+    }
+  }, [meetingsNext, busy, activeOrgId]);
+
+  useEffect(() => {
+    if (!selectedId) { setDetail(null); return; }
+    const controller = new AbortController();
+    const id = selectedId;
+    setDetail(null);
+    setDetailLoading(true);
+    setDetailError("");
+    setTeamPickerOpen(false);
+    setTranscriptSegments([]);
+    setTranscriptNext(null);
+    setTranscriptTotal(0);
+    setTranscriptLoading(true);
+    // NOTE: the cached fetcher must NOT take this effect's abort signal — queryDashboard
+    // dedupes concurrent callers onto one promise, so aborting it here would poison the
+    // shared request for the next caller (the notes-vanish-after-workspace-switch bug:
+    // the switch reset aborts this run while the list reload auto-reselects the same
+    // meeting and receives the already-aborted promise). Staleness is handled by the
+    // `controller.signal.aborted` guards below instead.
+    void queryDashboard(`meetings:overview:${activeOrgId || "default"}:${id}`, () => authFetch<Overview>(`/api/meetings/${id}/overview`, { orgId: activeOrgId || undefined }), { ttlMs: 30_000 }).then((overview) => {
+      if (!controller.signal.aborted) { setDetail({ ...overview, transcript: [] }); setShareOpen(false); }
+    }).catch((caught) => {
+      if (!controller.signal.aborted) {
+        setDetail(null);
+        setDetailError(caught instanceof Error ? caught.message : "Could not load this meeting.");
+      }
+    }).finally(() => { if (!controller.signal.aborted) setDetailLoading(false); });
+    void authFetch<TranscriptPage>(`/api/meetings/${id}/transcript?limit=100`, { signal: controller.signal, orgId: activeOrgId || undefined }).then((page) => {
+      if (controller.signal.aborted) return;
+      setTranscriptSegments(page.segments);
+      setTranscriptNext(page.nextCursor);
+      setTranscriptTotal(page.total);
+    }).catch(() => {}).finally(() => { if (!controller.signal.aborted) setTranscriptLoading(false); });
+    return () => controller.abort();
+    // Keyed on selectedId only: a workspace switch always clears the selection (via
+    // the activeOrgId reset effect; the detail then reloads under the new org through
+    // a fresh selection), while the harmless startup "" -> org-id resolution leaves
+    // the selection untouched — so re-running here on activeOrgId would only flash
+    // the detail on first paint.
+  }, [selectedId]);
+
+  const loadMoreTranscript = useCallback(async () => {
+    if (!detail || !transcriptNext || transcriptLoading) return;
+    const id = detail.id;
+    setTranscriptLoading(true);
+    try {
+      const page = await authFetch<TranscriptPage>(`/api/meetings/${id}/transcript?limit=100&cursor=${encodeURIComponent(transcriptNext)}`, { orgId: activeOrgId || undefined });
+      if (detail.id === id) setTranscriptSegments((current) => [...current, ...page.segments]);
+      setTranscriptNext(page.nextCursor);
+      setTranscriptTotal(page.total);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not load more transcript.");
+    } finally {
+      setTranscriptLoading(false);
+    }
+  }, [detail, transcriptNext, transcriptLoading, activeOrgId]);
+
+  // Load the SELECTED org's teams lazily the first time the share menu opens —
+  // most meetings never get shared to a team, so we don't fetch on load. The list
+  // is org-scoped (organization teams for the selected org + the caller's personal
+  // teams) so the picker can group them and offer an org-linked create.
+  const loadTeams = useCallback(async () => {
+    try {
+      const teamsResult = await queryDashboard(`teams:list:${activeOrgId || "default"}`, () => adminApi.listTeams(activeOrgId || undefined), { ttlMs: 30_000 });
+      setTeams(teamsResult.teams ?? []);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not load teams.");
+    } finally {
+      setTeamsLoaded(true);
+    }
+  }, [activeOrgId]);
+
+  useEffect(() => { if (shareOpen && !teamsLoaded) void loadTeams(); }, [shareOpen, teamsLoaded, loadTeams]);
+
+  // A personal workspace cannot own organization teams, so org-linked affordances
+  // only appear when the active workspace is a real shared organization.
+  const shareOrg = activeOrg && activeOrg.isPersonal !== true ? activeOrg : undefined;
+  const organizationTeams = useMemo(() => teams.filter((team) => team.kind === "organization"), [teams]);
+  const personalTeams = useMemo(() => teams.filter((team) => team.kind === "personal"), [teams]);
+
+  // Switching workspace (via the global sidebar switcher) re-scopes everything:
+  // meetings are org-partitioned, so drop the open meeting/detail, close the share
+  // menu, and let the list + team picker reload for the new context. Skips the
+  // initial resolution (prev === null) so first paint doesn't flash a reset.
+  const prevOrgRef = useRef<string | null>(null);
+  useEffect(() => {
+    const prev = prevOrgRef.current;
+    prevOrgRef.current = activeOrgId;
+    if (prev === null || prev === activeOrgId) return;
+    setSelectedId(null);
+    setDetail(null);
+    setShareOpen(false);
+    setTeamPickerOpen(false);
+    setTeams([]);
+    setTeamsLoaded(false);
+  }, [activeOrgId]);
+
+  // Team scope REQUIRES a teamId (the backend 400s without one). Selecting the
+  // Team row with no team chosen just reveals the picker; a concrete team POSTs.
+  const setScope = useCallback(async (scope: Scope, teamId?: string, justCreated?: Team) => {
+    if (!detail) return;
+    if (scope === "team" && !teamId) { setTeamPickerOpen(true); return; }
+    // Defence in depth: only share to a team the caller actually belongs to. The
+    // server also enforces this (assertUserInTeam), so this just fails fast in the
+    // UI. A team created a moment ago is passed explicitly because the `teams`
+    // state captured by this closure does not include it yet.
+    const known = justCreated ? [...teams, justCreated] : teams;
+    if (scope === "team" && teamId && known.length && !known.some((t) => t.id === teamId)) {
+      setError("You can only share to a team you belong to.");
+      return;
+    }
+    setBusy("share");
+    try {
+      const body = scope === "team" ? { scope, teamId } : { scope };
+      const share = await authFetch<Share>(`/api/meetings/${detail.id}/scope`, { method: "POST", body, orgId: activeOrgId || undefined });
+      invalidateDashboardQueries(`meetings:overview:${activeOrgId || "default"}:${detail.id}`);
+      setDetail((d) => (d ? { ...d, share } : d));
+      setItems((list) => list.map((m) => (m.id === detail.id ? { ...m, scope } : m)));
+      if (scope !== "team") setTeamPickerOpen(false);
+      setShareOpen(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not change sharing.");
+    } finally { setBusy(""); }
+  }, [detail, teams, activeOrgId]);
+
+  // Inline create keeps meeting sharing first-class to the enterprise structure:
+  // inside a shared organization it creates an ORGANIZATION team bound to that
+  // org; in a personal workspace it creates a personal cross-org team. The new
+  // team is selected immediately so the meeting is shared in the same gesture.
+  const createTeamInline = useCallback(async () => {
+    const name = newTeamName.trim();
+    if (!name) return;
+    setBusy("create-team");
+    try {
+      const { team } = await adminApi.createTeam(name, shareOrg ? "organization" : "personal", activeOrgId || undefined);
+      invalidateDashboardQueries("teams:");
+      setTeams((cur) => [...cur, team]);
+      setNewTeamName("");
+      await setScope("team", team.id, team);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not create the team.");
+    } finally {
+      setBusy("");
+    }
+  }, [newTeamName, setScope, shareOrg, activeOrgId]);
+
+  const regenerate = useCallback(async () => {
+    if (!detail) return;
+    setBusy("regen");
+    try {
+      const d = await authFetch<Detail>(`/api/meetings/${detail.id}/regenerate`, { method: "POST", orgId: activeOrgId || undefined });
+      invalidateDashboardQueries(`meetings:overview:${activeOrgId || "default"}:${detail.id}`);
+      setDetail(d);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not regenerate the summary.");
+    } finally {
+      setBusy("");
+    }
+  }, [detail, activeOrgId]);
+
+  // Owner-only hard delete — also removes the transcript source + recallable
+  // summary record server-side, so the meeting doesn't linger in memory recall.
+  const deleteMeeting = useCallback(async () => {
+    if (!detail?.canEdit) return;
+    if (!window.confirm(`Delete "${detail.title}"? Its transcript, notes and recallable summary are removed permanently.`)) return;
+    setBusy("delete");
+    try {
+      await authFetch(`/api/meetings/${detail.id}`, { method: "DELETE", orgId: activeOrgId || undefined });
+      invalidateDashboardQueries("meetings:");
+      setSelectedId(null);
+      setDetail(null);
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not delete the meeting.");
+    } finally {
+      setBusy("");
+    }
+  }, [detail, activeOrgId, load]);
+
+  const toggleAction = useCallback(async (action: ActionItem) => {
+    if (!detail) return;
+    const done = !action.done;
+    setBusy(`action:${action.id}`);
+    try {
+      await authFetch(`/api/meetings/${detail.id}/actions/${action.id}`, { method: "POST", body: { done }, orgId: activeOrgId || undefined });
+      invalidateDashboardQueries(`meetings:overview:${activeOrgId || "default"}:${detail.id}`);
+      setDetail((d) => (d ? { ...d, actionItems: d.actionItems.map((x) => (x.id === action.id ? { ...x, done } : x)) } : d));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not update the action item.");
+    } finally { setBusy(""); }
+  }, [detail, activeOrgId]);
+
+  // Track / untrack a meeting action — creates (or removes) a real Track work item
+  // server-side, so it shows up on the Track board here and on the desktop.
+  const toggleTrack = useCallback(async (action: ActionItem) => {
+    if (!detail) return;
+    const linked = Boolean(action.trackItemId);
+    setBusy(`track:${action.id}`);
+    try {
+      if (linked) {
+        await authFetch(`/api/meetings/${detail.id}/actions/${action.id}/track`, { method: "DELETE", orgId: activeOrgId || undefined });
+        setDetail((d) => (d ? { ...d, actionItems: d.actionItems.map((x) => (x.id === action.id ? { ...x, trackItemId: undefined } : x)) } : d));
+      } else {
+        const res = await authFetch<{ trackItemId: string }>(`/api/meetings/${detail.id}/actions/${action.id}/track`, { method: "POST", orgId: activeOrgId || undefined });
+        setDetail((d) => (d ? { ...d, actionItems: d.actionItems.map((x) => (x.id === action.id ? { ...x, trackItemId: res.trackItemId } : x)) } : d));
+      }
+      invalidateDashboardQueries(`meetings:overview:${activeOrgId || "default"}:${detail.id}`);
+      invalidateDashboardQueries("track:");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not update Track.");
+    } finally { setBusy(""); }
+  }, [detail, activeOrgId]);
+
+  const submitCreate = useCallback(async () => {
+    if (!draftTitle.trim() || !draftTranscript.trim()) { setCreateErr("A title and a transcript are required."); return; }
+    setBusy("create");
+    setCreateErr("");
+    try {
+      const out = await authFetch<{ id: string }>("/api/meetings", { method: "POST", body: { title: draftTitle.trim(), transcript: draftTranscript, template: summaryTemplate }, orgId: activeOrgId || undefined });
+      invalidateDashboardQueries("meetings:");
+      setCreateOpen(false);
+      setDraftTitle("");
+      setDraftTranscript("");
+      setDraftRecovered(false);
+      localStorage.removeItem("brainrouter:meeting-draft");
+      await load();
+      setSelectedId(out.id);
+    } catch (caught) {
+      setCreateErr(caught instanceof Error ? caught.message : "Could not create the meeting.");
+    } finally {
+      setBusy("");
+    }
+  }, [draftTitle, draftTranscript, summaryTemplate, load, activeOrgId]);
+
+  const summaryBlocks = useMemo(() => renderSummary(detail?.summaryMarkdown ?? ""), [detail?.summaryMarkdown]);
+  const filteredItems = useMemo(() => {
+    const needle = meetingQuery.trim().toLowerCase();
+    return items.filter((item) => (scopeFilter === "all" || item.scope === scopeFilter) && (!needle || item.title.toLowerCase().includes(needle)));
+  }, [items, meetingQuery, scopeFilter]);
+
+  return (
+    <AuthGuard>
+      <PageHeader title="Meetings" description="Recallable meeting summaries across your organization." />
+      <div className={styles.page}>
+      {error ? <div className={styles.errorBar} role="alert">{error}</div> : null}
+      <div className={styles.wrap}>
+        <div className={styles.list}>
+          <div className={styles.listHead}>
+            <div><span className={styles.eyebrow}>Library</span><h2>Meetings <span>{items.length}</span></h2></div>
+            <button type="button" className={styles.newBtn} onClick={() => { setCreateErr(""); setCreateOpen(true); }}>+ New</button>
+          </div>
+          <div className={styles.listTools}>
+            <label className={styles.listSearch}><span aria-hidden="true">⌕</span><span className="sr-only">Search meetings</span><input value={meetingQuery} onChange={(event) => setMeetingQuery(event.target.value)} placeholder="Search meetings" />{meetingQuery ? <button type="button" onClick={() => setMeetingQuery("")} aria-label="Clear meeting search">×</button> : null}</label>
+            <div className={styles.scopeFilters} role="group" aria-label="Filter meeting visibility">
+              {(["all", "private", "team", "org", "public"] as const).map((value) => <button key={value} type="button" className={scopeFilter === value ? styles.scopeFilterOn : ""} aria-pressed={scopeFilter === value} onClick={() => setScopeFilter(value)}>{value === "all" ? "All" : value === "org" ? "Org" : value[0]?.toUpperCase() + value.slice(1)}</button>)}
+            </div>
+          </div>
+          <div className={styles.listRows}>
+          {filteredItems.map((m) => (
+            <button type="button" key={m.id} className={`${styles.item}${m.id === selectedId ? ` ${styles.itemOn}` : ""}`} onClick={() => setSelectedId(m.id)} aria-pressed={m.id === selectedId}>
+              <div className={styles.itemT}>{m.title}</div>
+              <div className={styles.itemM}><span className={styles.itemD}>{m.date}</span><span className={`${styles.statusDot} ${styles[`status_${m.summaryStatus}`]}`} title={`Summary ${m.summaryStatus}`} /><ScopeBadge scope={m.scope} />{!m.canEdit ? <span className={styles.sharedBadge}>Shared with me</span> : null}</div>
+            </button>
+          ))}
+          {filteredItems.length === 0 ? (
+            <div className={styles.listEmpty}>{loading ? <InlineLoading label="Loading meetings…" /> : items.length ? "No meetings match these filters." : "No meetings yet. Record, import audio, or paste a transcript to begin."}</div>
+          ) : null}
+          </div>
+          {meetingsNext ? <button type="button" className={styles.listMore} disabled={busy === "more-meetings"} onClick={() => void loadMoreMeetings()}>{busy === "more-meetings" ? "Loading…" : "Load more meetings"}</button> : null}
+        </div>
+
+        {detail ? (
+          <div className={styles.detail}>
+            <div className={styles.dHead}>
+              <div className={styles.dHeadRow}>
+                <div>
+                  <h3>{detail.title}</h3>
+                  <div className={styles.att}>{detail.attendees.length ? detail.attendees.join(", ") : "No attendees recorded"}</div>
+                </div>
+                <div className={styles.hActions}>
+                  {detail.canEdit ? <button type="button" className={styles.shareBtn} disabled={busy === "share"} onClick={() => setShareOpen((v) => !v)} aria-haspopup="menu" aria-expanded={shareOpen}>
+                    <span className={`${styles.dot} ${SCOPE_META[detail.share.scope].dot}`} />
+                    {SCOPE_META[detail.share.scope].label}
+                    {detail.share.scope === "team" && detail.share.teamId ? ` · ${teams.find((t) => t.id === detail.share.teamId)?.name ?? "Team"}` : ""} ▾
+                  </button> : <span className={styles.sharedBadge}>Shared with you · read only</span>}
+                  {detail.model ? <span className={styles.modelChip}>{detail.model.label}{detail.model.effort ? <> · <b>{detail.model.effort}</b></> : null}</span> : null}
+                  {detail.canEdit && shareOpen ? (
+                    <div className={styles.pop} role="menu">
+                      <div className={styles.popH}>Who can access</div>
+                      {SCOPES.map((s) => {
+                        const ScopeIcon = SCOPE_META[s].Icon;
+                        return (
+                            <button key={s} type="button" disabled={busy === "share"} className={`${styles.srow}${detail.share.scope === s ? ` ${styles.srowOn}` : ""}`} onClick={() => void setScope(s)} role="menuitemradio" aria-checked={detail.share.scope === s}>
+                            <span className={styles.srowIc}><ScopeIcon size={16} /></span>
+                            <span><span className={styles.srowLb}>{SCOPE_META[s].label}</span><span className={styles.srowDs}>{SCOPE_META[s].blurb}</span></span>
+                          </button>
+                        );
+                      })}
+                      {teamPickerOpen || detail.share.scope === "team" ? (
+                        <div className={styles.linkzone}>
+                          {!teamsLoaded ? (
+                            <InlineLoading label="Loading teams…" />
+                          ) : (
+                            <>
+                              {teams.length === 0 ? (
+                                <div className={styles.teamPickH}>
+                                  {shareOrg
+                                    ? <>No teams in <b>{shareOrg.name}</b> yet — create the first organization team below to share this meeting.</>
+                                    : "No teams yet — create a personal cross-organization team below to share this meeting."}
+                                </div>
+                              ) : (
+                                <>
+                                  <div className={styles.teamPickH}>Share with team</div>
+                                  <select className={styles.teamSel} value={detail.share.teamId ?? ""} onChange={(e) => { if (e.target.value) void setScope("team", e.target.value); }} aria-label="Share with team">
+                                    <option value="" disabled>Select a team…</option>
+                                    {organizationTeams.length ? <optgroup label={`Organization teams — ${shareOrg?.name ?? organizationTeams[0].orgName ?? "current organization"}`}>{organizationTeams.map((team) => <option key={team.id} value={team.id}>{team.name}{team.orgName ? ` · ${team.orgName}` : ""}</option>)}</optgroup> : null}
+                                    {personalTeams.length ? <optgroup label="Personal teams · cross-organization · explicit access">{personalTeams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</optgroup> : null}
+                                  </select>
+                                  {shareOrg && organizationTeams.length === 0 ? (
+                                    <div className={styles.teamPickNote}>No organization teams in <b>{shareOrg.name}</b> yet — create one below to keep this meeting linked to your organization.</div>
+                                  ) : null}
+                                </>
+                              )}
+                              <div className={styles.teamCreateLabel}>{shareOrg ? <>Create team in <b>{shareOrg.name}</b></> : "Create personal team"}</div>
+                              <div className={styles.teamCreateRow}>
+                                <input value={newTeamName} onChange={(e) => setNewTeamName(e.target.value)} placeholder={shareOrg ? "Team name (e.g. Platform)" : "Team name (e.g. Research circle)"} aria-label="New team name" onKeyDown={(e) => { if (e.key === "Enter") void createTeamInline(); }} />
+                                <button type="button" onClick={() => void createTeamInline()} disabled={busy === "create-team" || !newTeamName.trim()}>{busy === "create-team" ? "Creating…" : "Create"}</button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      ) : null}
+                      {detail.share.scope === "public" && detail.share.publicUrl ? (
+                        <div className={styles.linkzone}>
+                          <div className={styles.linkrow}>
+                            <input readOnly value={detail.share.publicUrl} aria-label="Public link" />
+                            <button type="button" onClick={() => { void navigator.clipboard?.writeText(detail.share.publicUrl ?? ""); setCopied(true); window.setTimeout(() => setCopied(false), 1600); }}>{copied ? "Copied" : "Copy"}</button>
+                          </div>
+                          <div className={styles.linkMeta}>
+                            <span>{detail.share.expiresAt ? `Expires ${detail.share.expiresAt} · ` : ""}summary only</span>
+                            <button type="button" className={styles.revoke} onClick={() => void setScope("private")}>Revoke link</button>
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+              <div className={styles.metastrip}>
+                <span className={styles.chip}><i />{detail.status ? detail.status[0].toUpperCase() + detail.status.slice(1) : "Recorded"}</span>
+                <span className={styles.chip}>{detail.date}</span>
+                {detail.durationMin ? <span className={styles.chip}>{detail.durationMin} min</span> : null}
+                {detail.wordCount ? <span className={styles.chip}>{detail.wordCount.toLocaleString()} words</span> : null}
+                {detail.canEdit ? <button type="button" className={styles.chip} onClick={() => void regenerate()}
+                  disabled={busy === "regen" || detail.summaryStatus === "processing" || detail.summaryStatus === "queued"} style={{ cursor: "pointer" }}>
+                  {detail.summaryStatus === "processing" || detail.summaryStatus === "queued" ? "● Summarizing…" : busy === "regen" ? "Regenerating…" : "↻ Regenerate"}
+                </button> : null}
+                {detail.canEdit ? <button type="button" className={`${styles.chip} ${styles.chipDanger}`} onClick={() => void deleteMeeting()} disabled={busy === "delete"} style={{ cursor: "pointer" }}>
+                  {busy === "delete" ? "Deleting…" : "Delete"}
+                </button> : null}
+              </div>
+            </div>
+            <div className={styles.body}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 14, minWidth: 0 }}>
+                <div className={styles.card}>
+                  <div className={styles.cardLab} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span>Summary</span>
+                    {detail.canEdit && detail.summaryStatus === "ready" && !editing ? (
+                      <button type="button" className={styles.track} onClick={() => { setDraftSummary(detail.summaryMarkdown); setEditing(true); }}>✎ Edit</button>
+                    ) : null}
+                  </div>
+                  {detail.summaryStatus === "processing" || detail.summaryStatus === "queued" ? (
+                    <div className={styles.empty}>● Generating notes… this keeps running on the server — you can leave or refresh.</div>
+                  ) : detail.summaryStatus === "failed" ? (
+                    <div className={styles.errorBar} role="alert">{(detail.summaryError || "Summary generation failed.") + (detail.canEdit ? " Check the meeting-summary model, then Regenerate." : " The meeting owner can regenerate it.")}</div>
+                  ) : editing ? (
+                    <>
+                      <textarea className={styles.modalTextarea} value={draftSummary} onChange={(e) => setDraftSummary(e.target.value)} rows={12} aria-label="Edit summary" />
+                      <div className={styles.modalActions}>
+                        <button type="button" className={styles.track} onClick={() => setEditing(false)}>Cancel</button>
+                        <button type="button" className={styles.newBtn} onClick={() => void saveSummary()} disabled={busy === "save-summary"}>{busy === "save-summary" ? "Saving…" : "Save"}</button>
+                      </div>
+                    </>
+                  ) : (
+                    summaryBlocks
+                  )}
+                </div>
+                {detail.actionItems.length ? (
+                  <div className={styles.card}>
+                    <div className={styles.cardLab}>Action items</div>
+                    {detail.actionItems.map((a) => (
+                      <div key={a.id} className={styles.ai}>
+                        <label className={styles.aiTxt} style={{ display: "flex", gap: 8, alignItems: "flex-start", cursor: detail.canEdit ? "pointer" : "default" }}>
+                          <input type="checkbox" checked={Boolean(a.done)} disabled={!detail.canEdit || busy === `action:${a.id}`} onChange={() => void toggleAction(a)} style={{ marginTop: 3 }} />
+                          <span style={a.done ? { textDecoration: "line-through", opacity: 0.6 } : undefined}>
+                            {a.title}{a.assignee ? <span className={styles.aiWho}>→ {a.assignee}</span> : null}
+                          </span>
+                        </label>
+                        {detail.canEdit ? <button type="button" className={styles.track} disabled={busy === `track:${a.id}`} title={a.trackItemId ? "Remove from Track" : "Add to Track"} onClick={() => void toggleTrack(a)}>{busy === `track:${a.id}` ? "Updating…" : a.trackItemId ? "In Track ✓" : "Track ↗"}</button> : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+              <div className={styles.card}>
+                <div className={styles.cardLab}>Transcript {transcriptTotal ? <span className={styles.transcriptCount}>{transcriptSegments.length} / {transcriptTotal}</span> : null}</div>
+                {transcriptSegments.length ? <TranscriptLines segments={transcriptSegments} /> : <div className={styles.empty}>{transcriptLoading ? "Loading transcript…" : "No transcript."}</div>}
+                {transcriptNext ? <button type="button" className={styles.loadMore} disabled={transcriptLoading} onClick={() => void loadMoreTranscript()}>{transcriptLoading ? "Loading…" : "Load 100 more"}</button> : null}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className={styles.detail}><div className={styles.empty}>{detailLoading ? <InlineLoading label="Loading meeting…" /> : detailError ? <><strong>Meeting unavailable</strong><span>{detailError}</span><button type="button" className={styles.track} onClick={() => { const id = selectedId; setSelectedId(null); queueMicrotask(() => setSelectedId(id)); }}>Try again</button></> : items.length ? "Select a meeting." : "No meeting selected."}</div></div>
+        )}
+      </div>
+
+      {createOpen ? (
+        <div className={styles.modalScrim} role="dialog" aria-modal="true" aria-labelledby="new-meeting-title" onClick={() => setCreateOpen(false)} onKeyDown={(event) => { if (event.key === "Escape") setCreateOpen(false); }}>
+          <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+            <div className={styles.modalHead}><div><span className={styles.eyebrow}>Capture</span><h2 id="new-meeting-title">New meeting</h2></div><button type="button" onClick={() => setCreateOpen(false)} aria-label="Close new meeting dialog">×</button></div>
+            <input
+              className={styles.modalInput}
+              placeholder="Title (e.g. Weekly product sync)"
+              value={draftTitle}
+              autoFocus
+              onChange={(e) => setDraftTitle(e.target.value)}
+              aria-label="Meeting title"
+            />
+            <textarea
+              className={styles.modalTextarea}
+              placeholder="Paste a transcript, or record above — Whisper produces plain text (no speaker labels)."
+              value={draftTranscript}
+              onChange={(e) => setDraftTranscript(e.target.value)}
+              rows={10}
+              aria-label="Transcript"
+            />
+            <div className={styles.captureOptions}>
+              <label>Template<select value={summaryTemplate} onChange={(event) => setSummaryTemplate(event.target.value)} aria-label="Meeting summary template"><option value="general">General notes</option><option value="standup">Standup</option><option value="one-on-one">1:1</option><option value="retrospective">Retrospective</option></select></label>
+              <label>Language<select value={language} onChange={(event) => setLanguage(event.target.value)} aria-label="Transcription language"><option value="auto">Auto detect</option><option value="en">English</option><option value="es">Spanish</option><option value="fr">French</option><option value="de">German</option><option value="ja">Japanese</option><option value="ko">Korean</option><option value="zh">Chinese</option></select></label>
+              <label className={styles.importAudio}>Import audio<input type="file" accept="audio/*,.webm,.m4a,.mp3,.wav,.ogg" onChange={(event) => { const file = event.target.files?.[0]; if (file) void transcribe(file); event.target.value = ""; }} /></label>
+              <span>{draftRecovered ? "Recovered your saved draft" : "Drafts are saved on this device"}</span>
+            </div>
+            {createErr ? <div className={styles.errorBar} role="alert">{createErr}</div> : null}
+            <div className={styles.modalActions} style={{ justifyContent: "space-between" }}>
+              <div className={styles.recordActions}><button type="button" className={styles.track} onClick={() => (recording ? stopRecording() : void startRecording())} disabled={busy === "transcribe"}>{recording ? "■ Stop recording" : busy === "transcribe" ? "Transcribing…" : <><Microphone size={13} weight="fill" /> Record</>}</button>{recording ? <button type="button" className={styles.track} onClick={toggleRecordingPause}>{recordingPaused ? "▶ Resume" : "Ⅱ Pause"}</button> : null}</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button type="button" className={styles.track} onClick={() => { if (recording) stopRecording(); setCreateOpen(false); }}>Cancel</button>
+                <button type="button" className={styles.newBtn} onClick={() => void submitCreate()} disabled={busy === "create" || recording}>
+                  {busy === "create" ? "Creating…" : "Create + summarize"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      </div>
+    </AuthGuard>
+  );
+}
+
+function renderSummary(md: string) {
+  const out: ReactElement[] = [];
+  let list: string[] = [];
+  const flush = () => { if (list.length) { out.push(<ul key={`u${out.length}`}>{list.map((li, i) => <li key={i}>{li}</li>)}</ul>); list = []; } };
+  for (const raw of md.split("\n")) {
+    const line = raw.trim();
+    if (!line) { flush(); continue; }
+    if (line.startsWith("- ")) { list.push(line.slice(2)); continue; }
+    flush();
+    if (line.startsWith("#")) out.push(<h4 key={out.length}>{line.replace(/^#+\s*/, "")}</h4>);
+    else out.push(<p key={out.length}>{line}</p>);
+  }
+  flush();
+  return out;
+}

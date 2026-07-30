@@ -1,6 +1,7 @@
 import type { EmbeddingServiceConfig } from "@kinqs/brainrouter-types";
 import { fetchWithExternalRetry } from "../util/retry.js";
 import { acquireEmbeddingSlot } from "../llm/llm-semaphore.js";
+import { resolveEmbeddingsUrl } from "../../providers/wireFormat.js";
 import { normalizeRequestTimeoutMs, parseRequestTimeoutMs, requestTimeoutSignal } from "../util/request-timeout.js";
 
 /**
@@ -13,35 +14,63 @@ export function embeddingTimeoutMs(env: NodeJS.ProcessEnv = process.env): number
   return parseRequestTimeoutMs(env.BRAINROUTER_EMBEDDING_TIMEOUT_MS);
 }
 
+/**
+ * Fallback pgvector column width for a BRAND-NEW store when the real embedder
+ * dimension isn't known yet (nothing embedded, no recorded meta). It is NOT a
+ * source of truth: `cognitive_vec` adopts whatever a running store already has
+ * at boot, and the write path re-dimensions it to the live embedder's actual
+ * output length. 768 matches common local embedders (nomic-embed-text, bge).
+ * The dimension is DB-driven — never set from env.
+ */
+export const DEFAULT_EMBEDDING_DIMENSIONS = 768;
+
 export class EmbeddingService {
-  private readonly endpoint: string;
-  private readonly apiKey: string;
-  private readonly model: string;
+  private endpoint: string;
+  private apiKey: string;
+  private model: string;
   private readonly dimensions: number;
   private readonly timeoutMs: number;
-  private readonly ready: boolean;
+  private ready: boolean;
 
   constructor(config: EmbeddingServiceConfig) {
     this.endpoint = config.endpoint ?? "https://api.openai.com/v1/embeddings";
     this.apiKey = config.apiKey ?? "";
     this.model = config.model ?? "text-embedding-3-small";
-    this.dimensions = config.dimensions ?? 768;
+    this.dimensions = config.dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS;
     // 0 = no timeout: wait for the server (see embeddingTimeoutMs / request-timeout.ts).
     this.timeoutMs = normalizeRequestTimeoutMs(config.timeoutMs ?? embeddingTimeoutMs());
 
-    // Graceful fallback: If no API key is provided, we disable the embedding service.
+    // Providers live in the DB (dashboard → AI Providers), applied a moment later
+    // by applyProviderOverrides → reconfigure(). Starting unconfigured is the
+    // EXPECTED ADR-012 path, not a fault — stay silent here. A single accurate
+    // provider summary is logged once after applyProviderOverrides settles.
     this.ready = !!this.apiKey;
-    if (!this.ready) {
-      console.error("[BrainRouter] Embedding API key not set. Vector search will be disabled. Falling back to FTS-only mode.");
-    }
   }
 
   getDimensions(): number {
     return this.dimensions;
   }
 
+  getModel(): string {
+    return this.model;
+  }
+
   isReady(): boolean {
     return this.ready;
+  }
+
+  /** ADR-010 P2 — apply a DB-resolved provider (endpoint/apiKey/model) at runtime,
+   *  recomputing readiness. Only called when a DB config exists (else env stands). */
+  reconfigure(cfg: { endpoint?: string; apiKey?: string; model?: string }): void {
+    if (cfg.endpoint) this.endpoint = cfg.endpoint;
+    if (cfg.apiKey) this.apiKey = cfg.apiKey;
+    if (cfg.model) this.model = cfg.model;
+    // A DB-configured provider is intentional, so it's ready with a valid endpoint
+    // + model even WITHOUT an api key — local embedders (LM Studio, Ollama, etc.)
+    // are keyless. The key is only sent when present. Silent: reconfigure() runs
+    // on every admin provider save, so the boot summary (engine) is the one place
+    // that reports readiness, once.
+    this.ready = !!(this.endpoint && this.model);
   }
 
   /**
@@ -61,7 +90,9 @@ export class EmbeddingService {
     // pool still bounds embedding bursts on its own backend.
     const release = await acquireEmbeddingSlot();
     try {
-      const res = await fetchWithExternalRetry(this.endpoint, {
+      // The saved endpoint is a /v1 base; the embeddings PATH is appended here so
+      // the operator never has to type `/embeddings` (parity with the LLM wire).
+      const res = await fetchWithExternalRetry(resolveEmbeddingsUrl(this.endpoint), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

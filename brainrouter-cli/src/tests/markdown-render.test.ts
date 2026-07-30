@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { renderMarkdown, unwrapMarkdownFences, preserveAnsiAcrossNewlines, extractMarkdownSegments, fitColumns, renderTable } from '../cli/ink/markdownRender.js';
+import { renderMarkdown, unwrapMarkdownFences, preserveAnsiAcrossNewlines, extractMarkdownSegments, fitColumns, renderTable, renderTaskListCheckboxes } from '../cli/ink/text/markdownRender.js';
 
 const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
 const displayWidth = (s: string) => [...stripAnsi(s)].length;
@@ -196,4 +196,39 @@ test('renderMarkdown: a table renders as a box, not a fenced code block', () => 
   assert.match(out, /┴/);
   assert.match(stripAnsi(out), /before/);
   assert.match(stripAnsi(out), /after/);
+});
+
+// --- CC-UX-E2: GFM task-list checkboxes -------------------------------
+
+test('renderTaskListCheckboxes: rewrites unchecked and checked items to glyphs', () => {
+  const src = '- [ ] pending task\n- [x] done task\n- [X] also done';
+  const out = renderTaskListCheckboxes(src);
+  assert.equal(out, '- ☐ pending task\n- ☑ done task\n- ☑ also done');
+});
+
+test('renderTaskListCheckboxes: handles *, + and ordered markers, preserves indent', () => {
+  const src = '* [ ] star\n+ [x] plus\n1. [ ] first\n2. [x] second\n  - [ ] nested';
+  const out = renderTaskListCheckboxes(src);
+  assert.equal(out, '* ☐ star\n+ ☑ plus\n1. ☐ first\n2. ☑ second\n  - ☐ nested');
+});
+
+test('renderTaskListCheckboxes: leaves non-task lines and inline brackets untouched', () => {
+  const src = '# Heading\nPlain text with [a link](x) and array[0].\n- a normal bullet\n[ ] not a list item';
+  assert.equal(renderTaskListCheckboxes(src), src);
+});
+
+test('renderTaskListCheckboxes: preserves item text including inline markdown', () => {
+  const src = '- [x] ship **bold** and `code`';
+  assert.equal(renderTaskListCheckboxes(src), '- ☑ ship **bold** and `code`');
+});
+
+test('renderMarkdown: with checkboxes:true renders task-list glyphs in output', () => {
+  const out = stripAnsi(renderMarkdown('- [ ] todo\n- [x] done', { checkboxes: true }));
+  assert.match(out, /☐/);
+  assert.match(out, /☑/);
+});
+
+test('renderMarkdown: with checkboxes:false leaves raw brackets (opt-out is back-compat)', () => {
+  const out = stripAnsi(renderMarkdown('- [ ] todo', { checkboxes: false }));
+  assert.ok(!out.includes('☐'), 'no checkbox glyph when opted out');
 });

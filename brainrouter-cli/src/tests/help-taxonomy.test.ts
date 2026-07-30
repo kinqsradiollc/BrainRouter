@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { HELP_CATEGORIES, SLASH_COMMANDS } from '../cli/repl.js';
+import { HELP_CATEGORIES, SLASH_COMMANDS } from '../cli/prompt/repl.js';
 
 /**
  * Invocation signature: the leading `/command` plus any following LITERAL

@@ -137,18 +137,35 @@ test("PostgresMemoryStore: core round-trip against a fresh pgvector database", a
   await store.init();
   await store.initVec(8);
 
+  // Pentest targets are org/user scoped and therefore exercise the tenancy FKs.
+  await store.createUser('u1', 'br_test_u1', 'Pentest owner');
+  await store.createOrganization({ orgId: 'org-pentest', name: 'Pentest Org', slug: 'pentest-org', plan: 'team' });
+  await store.addOrgMember('org-pentest', 'u1', 'owner');
+  const target = await store.createPentestTarget('org-pentest', 'u1', { kind: 'domain', value: 'https://Example.test/path', authorized: true });
+  assert.equal(target.normalizedValue, 'https://example.test');
+  assert.equal((await store.listPentestTargets('org-pentest')).length, 1);
+  assert.equal((await store.getPentestTarget(target.id))?.orgId, 'org-pentest');
+
   // version() works (sqlite_version → version()).
   const version = await store.getSqliteVersion();
   assert.match(version, /PostgreSQL/i, "getSqliteVersion returns the pg version banner");
 
   // ── cognitive upsert → getMemoryById ──
-  const r1 = cog({ id: "rec-1", content: "the recall pipeline reranks keyword and vector candidates", filePaths: ["src/memory/recall.ts"] });
+  const r1 = cog({
+    id: "rec-1",
+    content: "the recall pipeline reranks keyword and vector candidates",
+    filePaths: ["src/memory/recall.ts"],
+    orgId: "org-pentest",
+    visibility: "private",
+  });
   await store.upsertCognitive(r1);
   const fetched = await store.getMemoryById("u1", "rec-1");
   assert.ok(fetched, "getMemoryById returns the upserted record");
   assert.equal(fetched!.content, r1.content);
   assert.equal(fetched!.type, "episodic");
   assert.deepEqual(fetched!.filePaths, ["src/memory/recall.ts"]);
+  assert.equal(fetched!.orgId, "org-pentest", "cognitive records retain their organization scope");
+  assert.equal(fetched!.visibility, "private", "cognitive records retain their visibility");
 
   // tenant isolation: another user can't read it.
   assert.equal(await store.getMemoryById("other", "rec-1"), null, "record is user-scoped");
@@ -174,7 +191,7 @@ test("PostgresMemoryStore: core round-trip against a fresh pgvector database", a
   assert.ok(vecHits[0].score >= vecHits[vecHits.length - 1].score, "vector results ordered by descending similarity");
 
   // ── sensory stream ──
-  const s1: SensoryRecord = { id: "sen-1", userId: "u1", sessionKey: "sess-1", sessionId: "sid-1", role: "user", messageText: "first turn", recordedAt: iso(-2000), timestamp: Date.now() - 2000, skillTag: "" };
+  const s1: SensoryRecord = { id: "sen-1", userId: "u1", sessionKey: "sess-1", sessionId: "sid-1", role: "user", messageText: "first turn", recordedAt: iso(-2000), timestamp: Date.now() - 2000, skillTag: "", memoryTags: ["engineering", "ui:react"] };
   const s2: SensoryRecord = { id: "sen-2", userId: "u1", sessionKey: "sess-1", sessionId: "sid-1", role: "assistant", messageText: "second turn", recordedAt: iso(-1000), timestamp: Date.now() - 1000, skillTag: "" };
   await store.upsertSensory(s1);
   await store.upsertSensory(s2);
@@ -182,6 +199,8 @@ test("PostgresMemoryStore: core round-trip against a fresh pgvector database", a
   assert.equal(recent.length, 2, "both sensory rows returned");
   assert.equal(recent[0].id, "sen-1", "sensory messages chronological (oldest first)");
   assert.equal(recent[1].id, "sen-2");
+  assert.deepEqual(recent[0].memoryTags, ["engineering", "ui:react"], "workspace memory tags round-trip until extraction");
+  assert.deepEqual(recent[1].memoryTags, [], "legacy captures normalize to an empty tag list");
   assert.equal(typeof recent[0].timestamp, "number", "bigint timestamp coerced to a number");
   assert.equal(await store.getUnextractedSensoryCount("u1", "sess-1"), 2);
   await store.markSensoryExtracted("u1", "sess-1", ["sen-1"]);
@@ -198,6 +217,153 @@ test("PostgresMemoryStore: core round-trip against a fresh pgvector database", a
   const done = await store.completeMemoryJob(job.id, { extracted: 3 });
   assert.equal(done!.status, "done", "completeMemoryJob transitions running → done");
   assert.deepEqual(done!.output, { extracted: 3 });
+
+  // ── durable review lifecycle + contributor attribution ──
+  const reviewInput = {
+    orgId: "org-pentest", forge: "github", installationId: "42", repo: "acme/app", prNumber: 17,
+    headSha: "sha-1", prAuthor: "alice", triggeredByLogin: "alice",
+  };
+  const finding = {
+    file: "src/render.ts", line: 12, severity: "high",
+    title: "[CWE-79] Unsanitized user input reaches the HTML response", cwe: "CWE-79",
+  };
+  const completeCoverage = {
+    complete: true, totalParts: 1, reviewedParts: 1, failedParts: 0, unreviewedParts: 0, unrecordedFindings: 0,
+  };
+  const enqueueAndCompleteReview = async (input: Record<string, unknown>, output: Record<string, unknown>, at: string) => {
+    const queued = await store.enqueueMemoryJob({ kind: "pr-security-review", input }, { now: at });
+    assert.ok(await store.startMemoryJob(queued.id, { now: at }));
+    assert.ok(await store.completeMemoryJob(queued.id, output, { now: at }));
+    return queued.id;
+  };
+  const firstReviewId = await enqueueAndCompleteReview(reviewInput, {
+    ok: true, findings: 1, findingsDetail: [finding], coverage: completeCoverage, headSha: "sha-1",
+    prAuthor: "alice", headContributor: "bob", contributorsAvailable: true,
+    contributors: [
+      { login: "alice", displayName: "Alice", commitCount: 1, isAuthor: true },
+      { login: "bob", displayName: "Bob", commitCount: 1, isAuthor: false },
+    ],
+  }, "2026-07-17T01:00:00.000Z");
+
+  const inspectQuery = async (sql: string, params: unknown[] = []) => {
+    const client = new Client({ connectionString: dbUrl(ADMIN_URL, DB_NAME) });
+    await client.connect();
+    try { return await client.query(sql, params); } finally { await client.end(); }
+  };
+  let lifecycle = await inspectQuery("SELECT * FROM review_findings WHERE org_id = $1", ["org-pentest"]);
+  assert.equal(lifecycle.rowCount, 1, "first review discovers one durable finding");
+  assert.equal(lifecycle.rows[0].status, "open");
+  assert.equal(lifecycle.rows[0].first_seen_review_id, firstReviewId);
+  const contributorRows = await inspectQuery(
+    "SELECT login, is_author, commit_count FROM review_pr_contributors WHERE org_id = $1 ORDER BY login",
+    ["org-pentest"],
+  );
+  assert.deepEqual(contributorRows.rows, [
+    { login: "alice", is_author: true, commit_count: 1 },
+    { login: "bob", is_author: false, commit_count: 1 },
+  ]);
+
+  // A partial review can observe/discover but must never auto-fix by absence.
+  await enqueueAndCompleteReview({ ...reviewInput, headSha: "sha-2" }, {
+    ok: true, findings: 0, findingsDetail: [], headSha: "sha-2",
+    coverage: { ...completeCoverage, complete: false, failedParts: 1, reviewedParts: 0 },
+    headContributor: "carol", contributors: [{ login: "carol", commitCount: 1, isAuthor: false }],
+  }, "2026-07-17T02:00:00.000Z");
+  lifecycle = await inspectQuery("SELECT status FROM review_findings WHERE org_id = $1", ["org-pentest"]);
+  assert.equal(lifecycle.rows[0].status, "open", "partial review does not mark an absent issue fixed");
+
+  const fixingReviewId = await enqueueAndCompleteReview({ ...reviewInput, headSha: "sha-3" }, {
+    ok: true, findings: 0, findingsDetail: [], coverage: completeCoverage, headSha: "sha-3",
+    headContributor: "carol", contributors: [{ login: "carol", commitCount: 2, isAuthor: false }],
+  }, "2026-07-17T03:00:00.000Z");
+  lifecycle = await inspectQuery(
+    "SELECT status, fixed_review_id, fixed_sha, resolved_by_login FROM review_findings WHERE org_id = $1",
+    ["org-pentest"],
+  );
+  assert.deepEqual(lifecycle.rows[0], {
+    status: "fixed", fixed_review_id: fixingReviewId, fixed_sha: "sha-3", resolved_by_login: "carol",
+  });
+
+  await enqueueAndCompleteReview({ ...reviewInput, headSha: "sha-4" }, {
+    ok: true, findings: 1, findingsDetail: [{ ...finding, line: 88 }], coverage: completeCoverage, headSha: "sha-4",
+    headContributor: "dave", contributors: [{ login: "dave", commitCount: 1, isAuthor: false }],
+  }, "2026-07-17T04:00:00.000Z");
+  lifecycle = await inspectQuery(
+    "SELECT status, line_start, fixed_at, resolved_by_login FROM review_findings WHERE org_id = $1",
+    ["org-pentest"],
+  );
+  assert.deepEqual(lifecycle.rows[0], { status: "open", line_start: 88, fixed_at: null, resolved_by_login: null });
+  const eventRows = await inspectQuery(
+    "SELECT event_type FROM review_finding_events WHERE org_id = $1 ORDER BY occurred_at, event_type",
+    ["org-pentest"],
+  );
+  assert.deepEqual(eventRows.rows.map((row) => row.event_type), ["discovered", "fixed", "reopened"]);
+  const durableIssues = await store.listReviewFindingsForOrg("org-pentest", {
+    repo: "acme/app", severity: "high", status: "open", search: "unsanitized", limit: 10,
+  });
+  assert.equal(durableIssues.length, 1, "Issues reads one durable row instead of one row per commit");
+  assert.equal(durableIssues[0].reviewId, firstReviewId);
+  assert.equal(durableIssues[0].finding.status, "open");
+  const lifecycleSummary = await store.getReviewLifecycleSummaryForOrg("org-pentest", "2026-07-17T00:00:00.000Z");
+  assert.equal(lifecycleSummary.metrics.issuesFound, 1);
+  assert.equal(lifecycleSummary.metrics.openIssues, 1);
+  assert.equal(lifecycleSummary.history.reduce((sum, row) => sum + row.fixed, 0), 1, "fixed events remain auditable after reopening");
+  assert.equal(lifecycleSummary.contributors.find((row) => row.login === "carol")?.findingsFixed, 1);
+
+  // A slow older job must not overwrite the lifecycle established by a newer
+  // commit that completed first.
+  const older = await store.enqueueMemoryJob({ kind: "pr-security-review", input: { ...reviewInput, prNumber: 18, headSha: "old" } }, { now: "2026-07-17T05:00:00.000Z" });
+  const newer = await store.enqueueMemoryJob({ kind: "pr-security-review", input: { ...reviewInput, prNumber: 18, headSha: "new" } }, { now: "2026-07-17T06:00:00.000Z" });
+  assert.ok(await store.startMemoryJob(older.id, { now: "2026-07-17T06:01:00.000Z" }));
+  assert.ok(await store.startMemoryJob(newer.id, { now: "2026-07-17T06:01:00.000Z" }));
+  assert.ok(await store.completeMemoryJob(newer.id, {
+    ok: true, findings: 1, findingsDetail: [finding], coverage: completeCoverage, headSha: "new",
+  }, { now: "2026-07-17T07:00:00.000Z" }));
+  assert.ok(await store.completeMemoryJob(older.id, {
+    ok: true, findings: 0, findingsDetail: [], coverage: completeCoverage, headSha: "old",
+  }, { now: "2026-07-17T08:00:00.000Z" }));
+  const outOfOrder = await inspectQuery(
+    "SELECT status, last_seen_sha, fixed_sha FROM review_findings WHERE org_id = $1 AND pr_number = 18",
+    ["org-pentest"],
+  );
+  assert.deepEqual(outOfOrder.rows[0], { status: "open", last_seen_sha: "new", fixed_sha: null }, "older completion cannot regress a newer commit");
+
+  // Legacy done jobs (before coverage/lifecycle projection shipped) are replayed
+  // once in chronological order and remain idempotent on the next boot.
+  const legacyProgress = JSON.stringify([
+    { ts: "2026-07-16T01:00:00.000Z", kind: "diff-fetched", msg: "fetched", data: { unreviewedParts: 0 } },
+    { ts: "2026-07-16T01:01:00.000Z", kind: "done", msg: "complete" },
+  ]);
+  const insertLegacyReview = async (id: string, createdAt: string, headSha: string, findingsDetail: unknown[]) => {
+    await inspectQuery(
+      `INSERT INTO memory_jobs
+        (id, kind, status, priority, attempts, max_attempts, run_after, input_json, output_json, progress_json, created_at, updated_at)
+       VALUES ($1,'pr-security-review','done',50,0,3,$2,$3,$4,$5,$2,$2)`,
+      [id, createdAt, JSON.stringify({ ...reviewInput, prNumber: 19, headSha }),
+        JSON.stringify({ ok: true, findings: findingsDetail.length, findingsDetail, headSha }), legacyProgress],
+    );
+  };
+  await insertLegacyReview("legacy-review-1", "2026-07-16T01:00:00.000Z", "legacy-1", [finding]);
+  await insertLegacyReview("legacy-review-2", "2026-07-16T02:00:00.000Z", "legacy-2", [{ ...finding, line: 44 }]);
+  await insertLegacyReview("legacy-review-3", "2026-07-16T03:00:00.000Z", "legacy-3", []);
+  await store.init();
+  const legacyFinding = await inspectQuery(
+    "SELECT status, first_seen_review_id, last_seen_review_id, fixed_review_id FROM review_findings WHERE org_id = $1 AND pr_number = 19",
+    ["org-pentest"],
+  );
+  assert.deepEqual(legacyFinding.rows[0], {
+    status: "fixed", first_seen_review_id: "legacy-review-1", last_seen_review_id: "legacy-review-2", fixed_review_id: "legacy-review-3",
+  });
+  const legacyEventsBefore = await inspectQuery(
+    "SELECT event_type FROM review_finding_events WHERE org_id = $1 AND pr_number = 19 ORDER BY occurred_at, event_type",
+    ["org-pentest"],
+  );
+  assert.deepEqual(legacyEventsBefore.rows.map((row) => row.event_type), ["discovered", "observed", "fixed"]);
+  await store.init();
+  const legacyEventsAfter = await inspectQuery("SELECT COUNT(*)::integer AS n FROM review_finding_events WHERE org_id = $1 AND pr_number = 19", ["org-pentest"]);
+  const legacyProjectionCount = await inspectQuery("SELECT COUNT(*)::integer AS n FROM review_job_projections WHERE review_id LIKE 'legacy-review-%'");
+  assert.equal(legacyEventsAfter.rows[0].n, 3, "re-running the boot backfill does not duplicate events");
+  assert.equal(legacyProjectionCount.rows[0].n, 3, "every clean or finding-bearing legacy review has an idempotency row");
 
   // ── active sessions (federation) ──
   const reg = await store.registerActiveSession({

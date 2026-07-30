@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { appendVerbositySteering, VERBOSITY_SENTINEL } from '../prompt/verbositySteering.js';
+import { appendVerbositySteering, VERBOSITY_SENTINEL } from '../prompt/steering/verbositySteering.js';
 
 test('verbosity steering level zero leaves the system prompt byte-for-byte unchanged', () => {
   const prompt = 'base system prompt\n\nrole overlay';

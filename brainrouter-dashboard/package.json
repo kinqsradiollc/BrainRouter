@@ -1,8 +1,10 @@
 {
   "name": "dashboard",
   "private": true,
-  "version": "0.4.16",
+  "version": "0.4.17",
+  "type": "module",
   "scripts": {
+    "predev": "npm --prefix .. run build:packages:dashboard",
     "dev": "NODE_OPTIONS='--no-deprecation' next dev",
     "build": "next build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -12,9 +14,9 @@
     "cf:deploy": "npm run build:cf && wrangler deploy"
   },
   "dependencies": {
-    "@kinqs/brainrouter-hooks": "^0.4.16",
-    "@kinqs/brainrouter-sdk": "^0.4.16",
-    "@kinqs/brainrouter-types": "^0.4.16",
+    "@kinqs/brainrouter-hooks": "^0.4.17",
+    "@kinqs/brainrouter-sdk": "^0.4.17",
+    "@kinqs/brainrouter-types": "^0.4.17",
     "@opennextjs/cloudflare": "^1.20.1",
     "@phosphor-icons/react": "^2.1.10",
     "framer-motion": "^12.42.2",
@@ -26,12 +28,14 @@
     "react-dom": "^19.2.6",
     "react-markdown": "^10.1.0",
     "rehype-katex": "^7.0.1",
-    "remark-math": "^6.0.0"
+    "remark-math": "^6.0.0",
+    "three": "^0.185.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "@types/three": "^0.185.1",
     "esbuild": "^0.25.12",
     "typescript": "^5.5.4",
     "wrangler": "^4.0.0"

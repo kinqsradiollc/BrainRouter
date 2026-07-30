@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { appendTranscriptEntry, forkSession, loadTranscript } from '../session/sessionStore.js';
+import { appendTranscriptEntry, forkSession, loadTranscript } from '../session/transcript/sessionStore.js';
 
 const tmpWs = (): string => fs.mkdtempSync(path.join(os.tmpdir(), 'fork-'));
 const t1 = '2026-06-10T00:00:01.000Z';

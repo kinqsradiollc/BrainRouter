@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import chalk from 'chalk';
-import { NoTTYError } from '../cliPrompt.js';
+import { NoTTYError } from '../prompt/cliPrompt.js';
 import { writePreferences } from '@kinqs/brainrouter-core/session';
 import {
   loadOrInitConfig,
@@ -28,7 +28,7 @@ import {
 } from './types.js';
 import { pickFromList, promptText, type PickerRow } from './picker.js';
 import { selectModel } from './modelsApi.js';
-import { buildTheme, type Theme, type ThemeMode } from '../theme.js';
+import { buildTheme, type Theme, type ThemeMode } from '../theme/theme.js';
 
 /**
  * 0.3.7 onboarding wizard — drives the Step state machine over the new

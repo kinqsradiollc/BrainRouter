@@ -1,172 +1,174 @@
 "use client";
 
 import Link from "next/link";
-import { motion } from "framer-motion";
+import { useRef } from "react";
+import { motion, useReducedMotion, useScroll, useSpring, useTransform } from "framer-motion";
 import { PremiumButton } from "../components/PremiumButton";
-import { itemVariants, pulseVariants } from "../components/home/landingData";
-import { EcosystemSection } from "../components/home/EcosystemSection";
-import { HeroGraph } from "../components/home/HeroGraph";
+import { ProductOrbit } from "../components/ProductOrbit";
+import { PRODUCT_CAPABILITIES, PRODUCT_LOOP, PRODUCT_SURFACES } from "../lib/homeProductStory";
 import { STATIC_PRESENTATION } from "../lib/presentation";
-import { ScrollBeam } from "../components/home/ScrollBeam";
-import { SlideForgetting } from "../components/home/SlideForgetting";
-import { SlideHumanMemory } from "../components/home/SlideHumanMemory";
-import { SlideMapping } from "../components/home/SlideMapping";
-import { SlideRecall } from "../components/home/SlideRecall";
-import { SlideReinforce } from "../components/home/SlideReinforce";
-import { SlideCli } from "../components/home/SlideCli";
 
-/**
- * Home — a scroll-driven, auto-playing "slide deck" that explains the product
- * grounded in real memory science. The narrative arc:
- *   Hero → the forgetting problem → how human memory works → how BrainRouter
- *   mirrors it (layer for layer) → the recall pipeline → consolidation & decay →
- *   the CLI → the surfaces it runs on → start.
- * Every science claim links its source (see components/home/Slide*). Animations
- * fire on scroll (whileInView) plus continuous ambient loops — no clicks needed.
- */
+const KNOWLEDGE_STEPS = [
+  {
+    index: "01",
+    title: "Carries decisions across sessions",
+    copy: "Project choices, preferences, and lessons stay available, so the next conversation does not begin from zero.",
+  },
+  {
+    index: "02",
+    title: "Keeps the current task focused",
+    copy: "Short-term notes stay close to the active task while durable knowledge remains ready for later work.",
+  },
+  {
+    index: "03",
+    title: "Finds what is useful now",
+    copy: "BrainRouter combines meaning, keywords, file paths, and related ideas to choose a small, relevant set of context.",
+  },
+  {
+    index: "04",
+    title: "Shows where knowledge came from",
+    copy: "Evidence stays attached, disagreements are flagged, and you can inspect why something was recalled.",
+  },
+  {
+    index: "05",
+    title: "Improves as work continues",
+    copy: "Useful knowledge becomes easier to find. Outdated or unused information can fade instead of crowding every prompt.",
+  },
+] as const;
+
 export default function HomePage() {
+  const reduceMotion = useReducedMotion();
+  const revealInitial = reduceMotion ? false : { opacity: 0, y: 24 };
+  // Cinematic hero staging: kicker → headline lines → copy → actions → proof,
+  // then the operations graph "powers on". Collapses to no-ops under reduced motion.
+  const stage = (delay: number) => reduceMotion ? {} : {
+    initial: { opacity: 0, y: 26, filter: "blur(6px)" },
+    animate: { opacity: 1, y: 0, filter: "blur(0px)" },
+    transition: { duration: .65, delay, ease: [0.16, 1, 0.3, 1] as const },
+  };
+
+  // Scroll choreography: a page progress beam, and a film-style exit — the
+  // foreground title card rises away while the scene behind it slowly zooms
+  // in (backgrounds move less than foregrounds). Inert under reduced motion.
+  const { scrollYProgress } = useScroll();
+  const progress = useSpring(scrollYProgress, { stiffness: 170, damping: 30, mass: 0.3 });
+  const heroRef = useRef<HTMLElement>(null);
+  const { scrollYProgress: heroProgress } = useScroll({ target: heroRef, offset: ["start start", "end start"] });
+  const heroCopyY = useTransform(heroProgress, [0, 1], [0, -80]);
+  const heroVisualY = useTransform(heroProgress, [0, 1], [0, 46]);
+  const heroVisualScale = useTransform(heroProgress, [0, 1], [1, 1.08]);
+
   return (
-    <>
-      <ScrollBeam />
-      <div style={{ display: "flex", flexDirection: "column", gap: "72px", paddingBottom: "80px" }}>
-        {/* Hero */}
-        <motion.section variants={itemVariants} initial="hidden" animate="show" style={{ position: "relative", paddingTop: "8px" }}>
-          {/* atmospheric aura behind the hero (subtle, single Signal radial) */}
-          <div aria-hidden style={{ position: "absolute", inset: "-60px -80px auto -120px", height: 460, background: "var(--aura-signal)", pointerEvents: "none" }} />
-
-          <div className="hero-grid">
-            {/* Left — copy */}
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "22px", position: "relative" }}>
-              <motion.div
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: "8px",
-                  padding: "5px 12px", borderRadius: "var(--radius-pill)",
-                  background: "var(--accent-wash)", border: "1px solid var(--border-hover-accent)",
-                }}
-              >
-                <motion.span variants={pulseVariants} animate="animate" style={{ width: "7px", height: "7px", borderRadius: "50%", background: "var(--accent)" }} />
-                <span style={{ fontFamily: "var(--font-mono)", fontSize: "11px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--accent)", fontWeight: 500 }}>
-                  Memory-first AI
-                </span>
-              </motion.div>
-
-              <h1 style={{ fontSize: "clamp(34px, 4vw, 52px)", lineHeight: 1.06, fontWeight: 600, letterSpacing: "-0.03em", margin: 0, maxWidth: "15ch", color: "var(--text)" }}>
-                The cognitive memory layer for <span style={{ color: "var(--accent)" }}>autonomous AI agents</span>.
-              </h1>
-
-              <p style={{ color: "var(--text-secondary)", fontSize: "17px", lineHeight: 1.6, maxWidth: "50ch", margin: 0 }}>
-                BrainRouter turns messy, unstructured chat history into clean, persistent memory — it remembers preferences, self-corrects stale facts, and surfaces the right context on every turn.
-              </p>
-
-              <div style={{ display: "flex", gap: "12px", marginTop: "6px", flexWrap: "wrap" }}>
-                {!STATIC_PRESENTATION && (
-                  <>
-                    <Link href="/overview">
-                      <PremiumButton variant="primary" style={{ padding: "12px 22px", borderRadius: "10px", fontSize: "14px" }}>
-                        <span>Launch dashboard</span>
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ width: "15px", height: "15px" }}>
-                          <line x1="5" y1="12" x2="19" y2="12" />
-                          <polyline points="12 5 19 12 12 19" />
-                        </svg>
-                      </PremiumButton>
-                    </Link>
-                    <Link href="/memories">
-                      <PremiumButton variant="ghost" style={{ padding: "12px 22px", borderRadius: "10px", fontSize: "14px" }}>
-                        <span>Inspect memories</span>
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ width: "15px", height: "15px" }}>
-                          <line x1="5" y1="12" x2="19" y2="12" />
-                          <polyline points="12 5 19 12 12 19" />
-                        </svg>
-                      </PremiumButton>
-                    </Link>
-                  </>
-                )}
-                <a href="https://github.com/kinqsradiollc/BrainRouter" target="_blank" rel="noopener noreferrer" style={{ textDecoration: "none" }}>
-                  <PremiumButton variant="text" style={{ padding: "12px 18px", borderRadius: "10px", fontSize: "14px", display: "flex", alignItems: "center", gap: "8px" }}>
-                    <svg style={{ width: "16px", height: "16px" }} viewBox="0 0 24 24" fill="currentColor">
-                      <path fillRule="evenodd" clipRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482C19.138 20.193 22 16.44 22 12.017 22 6.484 17.522 2 12 2z" />
-                    </svg>
-                    <span>GitHub</span>
-                  </PremiumButton>
-                </a>
-              </div>
-            </div>
-
-            {/* Right — product motif */}
-            <div style={{ display: "flex", justifyContent: "center", alignItems: "center" }}>
-              <HeroGraph />
-            </div>
-          </div>
-        </motion.section>
-
-        {/* The animated, scroll-driven narrative.
-            id anchors back the public nav (Memory / CLI / Features). */}
-        <SlideForgetting />
-        <SlideHumanMemory id="memory" />
-        <SlideMapping />
-        <SlideRecall />
-        <SlideReinforce />
-        <SlideCli id="cli" />
-
-        {/* Where it runs — EcosystemSection carries id="features" */}
-        <EcosystemSection />
-
-        {/* Closing CTA */}
-        <motion.section
-          variants={itemVariants}
-          initial="hidden"
-          whileInView="show"
-          viewport={{ once: true, margin: "-90px" }}
-          style={{
-            position: "relative",
-            overflow: "hidden",
-            borderRadius: "20px",
-            border: "1px solid var(--border-med)",
-            background: "var(--surface-raised)",
-            padding: "clamp(32px, 5vw, 64px)",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            gap: "18px",
-            textAlign: "center",
-          }}
-        >
-          <div aria-hidden style={{ position: "absolute", inset: "-50% -10% auto -10%", height: 380, background: "var(--aura-signal)", pointerEvents: "none" }} />
-
-          <h2 style={{ position: "relative", fontSize: "clamp(28px, 3.4vw, 42px)", fontWeight: 600, letterSpacing: "-0.02em", margin: 0, maxWidth: "18ch", color: "var(--text)" }}>
-            Give your agent a memory that <span style={{ color: "var(--accent)" }}>compounds</span>.
-          </h2>
-          <p style={{ position: "relative", color: "var(--text-secondary)", fontSize: "16px", lineHeight: 1.6, maxWidth: "54ch", margin: 0 }}>
-            Short-term feeds long-term, unused facts fade, cited ones are reinforced — the same loop your mind runs, for every agent you ship.
-          </p>
-          <div style={{ position: "relative", display: "flex", gap: "12px", flexWrap: "wrap", justifyContent: "center", marginTop: "6px" }}>
+    <div className="platform-landing">
+      <motion.div className="platform-scroll-progress" style={reduceMotion ? undefined : { scaleX: progress }} aria-hidden />
+      {/* Immersive hero — the operations graph IS the viewport; copy floats on
+          the scene like a title card. On exit the scene zooms subtly while the
+          foreground rises away (film-style pull). */}
+      <motion.section ref={heroRef} className="platform-hero-cine" initial={reduceMotion ? false : { opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: .6 }}>
+        <motion.div className="platform-hero-cine-scene" aria-hidden style={reduceMotion ? undefined : { y: heroVisualY, scale: heroVisualScale }}>
+          <ProductOrbit immersive />
+        </motion.div>
+        <div className="platform-hero-cine-grade" aria-hidden />
+        <motion.div className="platform-hero-cine-fg" style={reduceMotion ? undefined : { y: heroCopyY }}>
+          <motion.span className="platform-kicker" {...stage(0)}><i /> Open agent operations workspace</motion.span>
+          <h1>
+            <motion.span className="platform-hero-line" {...stage(.08)}>Move every agent</motion.span>
+            <motion.span className="platform-hero-line" {...stage(.2)}>task from <em>intent</em></motion.span>
+            <motion.span className="platform-hero-line" {...stage(.32)}>to verified work.</motion.span>
+          </h1>
+          <motion.div className="platform-actions" {...stage(.5)}>
             {!STATIC_PRESENTATION && (
-              <Link href="/overview">
-                <PremiumButton variant="primary" style={{ padding: "12px 22px", borderRadius: "10px", fontSize: "14px" }}>
-                  <span>Launch dashboard</span>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ width: "15px", height: "15px" }}>
-                    <line x1="5" y1="12" x2="19" y2="12" />
-                    <polyline points="12 5 19 12 12 19" />
-                  </svg>
-                </PremiumButton>
-              </Link>
+              <Link href="/overview"><PremiumButton variant="primary">Open workspace <span aria-hidden>→</span></PremiumButton></Link>
             )}
-            <a href="https://github.com/kinqsradiollc/BrainRouter" target="_blank" rel="noopener noreferrer" style={{ textDecoration: "none" }}>
-              <PremiumButton variant={STATIC_PRESENTATION ? "primary" : "ghost"} style={{ padding: "12px 22px", borderRadius: "10px", fontSize: "14px", display: "flex", alignItems: "center", gap: "8px" }}>
-                <svg style={{ width: "16px", height: "16px" }} viewBox="0 0 24 24" fill="currentColor">
-                  <path fillRule="evenodd" clipRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482C19.138 20.193 22 16.44 22 12.017 22 6.484 17.522 2 12 2z" />
-                </svg>
-                <span>View on GitHub</span>
-              </PremiumButton>
+            <a href="https://github.com/kinqsradiollc/BrainRouter" target="_blank" rel="noopener noreferrer">
+              <PremiumButton variant="ghost">View source</PremiumButton>
             </a>
-            <Link href="/#memory" style={{ textDecoration: "none" }}>
-              <PremiumButton variant="text" style={{ padding: "12px 18px", borderRadius: "10px", fontSize: "14px" }}>
-                <span>How it works</span>
-              </PremiumButton>
-            </Link>
-          </div>
-        </motion.section>
-      </div>
-    </>
+          </motion.div>
+          <motion.div className="platform-proof" aria-label="BrainRouter product surfaces" {...stage(.62)}>
+            <span>Desktop</span><span>CLI</span><span>Dashboard</span><span>MCP + API</span>
+          </motion.div>
+        </motion.div>
+        <motion.aside className="platform-hero-cine-note" {...stage(.74)}>
+          <p>BrainRouter keeps the workbench, models, projects, teams, connected systems, permissions, durable knowledge, automation, and review evidence on one shared task path.</p>
+          <span><i /> task state synchronized · models · tools · sources · memory · review</span>
+        </motion.aside>
+      </motion.section>
+
+      <motion.section className="platform-route-strip" aria-label="BrainRouter workflow" initial={revealInitial} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, amount: .45 }} transition={{ duration: .55, ease: [0.16, 1, 0.3, 1] }}>
+        <span className="platform-route-label">One continuous task</span>
+        <div>
+          {PRODUCT_LOOP.map((step, index) => (
+            <motion.span key={step.label} data-tone={step.tone}
+              initial={reduceMotion ? false : { opacity: 0, y: 14 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true, amount: .6 }}
+              transition={{ duration: .45, delay: reduceMotion ? 0 : index * .09, ease: [0.16, 1, 0.3, 1] }}>
+              <i />{step.label}{index < PRODUCT_LOOP.length - 1 && <b aria-hidden>→</b>}
+            </motion.span>
+          ))}
+        </div>
+        <small>Shared project · permissions · context</small>
+      </motion.section>
+
+      <motion.section className="platform-capabilities" id="platform" initial={revealInitial} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, amount: .12 }} transition={{ duration: .6, ease: [0.16, 1, 0.3, 1] }}>
+        <header>
+          <span className="platform-kicker">One task, every capability</span>
+          <h2>The workspace changes with the work.</h2>
+          <p>Use the same task context across planning, implementation, connected data, durable knowledge, and review.</p>
+        </header>
+        <div className="platform-capability-list">
+          {PRODUCT_CAPABILITIES.map((capability, index) => (
+            <motion.article key={capability.index} data-tone={capability.tone} initial={reduceMotion ? false : { opacity: 0, x: 18 }} whileInView={{ opacity: 1, x: 0 }} viewport={{ once: true, amount: .55 }} transition={{ duration: .45, delay: reduceMotion ? 0 : index * .055, ease: [0.16, 1, 0.3, 1] }}>
+              <span className="platform-index">{capability.index}</span>
+              <div><h3>{capability.title}</h3><p>{capability.copy}</p></div>
+              <code>{capability.label}</code>
+              <i className="platform-capability-signal" aria-hidden />
+            </motion.article>
+          ))}
+        </div>
+      </motion.section>
+
+      <motion.section className="platform-knowledge" id="knowledge" initial={revealInitial} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, amount: .12 }} transition={{ duration: .6, ease: [0.16, 1, 0.3, 1] }}>
+        <div className="platform-knowledge-heading">
+          <span className="platform-kicker">Knowledge that stays understandable</span>
+          <h2>BrainRouter remembers without becoming a black box.</h2>
+          <p>It keeps the parts of work worth carrying forward, brings back only what helps, and lets you inspect or correct the result.</p>
+          {!STATIC_PRESENTATION && <Link href="/knowledge" className="platform-text-link">Explore knowledge <span aria-hidden>→</span></Link>}
+        </div>
+        <div className="platform-knowledge-list">
+          {KNOWLEDGE_STEPS.map((step, index) => (
+            <motion.article key={step.index} initial={reduceMotion ? false : { opacity: 0, x: 18 }} whileInView={{ opacity: 1, x: 0 }} viewport={{ once: true, amount: .6 }} transition={{ duration: .4, delay: reduceMotion ? 0 : index * .045 }}>
+              <span>{step.index}</span>
+              <div><h3>{step.title}</h3><p>{step.copy}</p></div>
+            </motion.article>
+          ))}
+        </div>
+      </motion.section>
+
+      <motion.section className="platform-system" id="workflows" initial={revealInitial} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, amount: .15 }} transition={{ duration: .6, ease: [0.16, 1, 0.3, 1] }}>
+        <div className="platform-system-copy">
+          <span className="platform-kicker">Shared core</span>
+          <h2>Four ways to work. One workspace.</h2>
+          <p>Your models, permissions, connected tools, workflows, and useful context stay consistent wherever you use BrainRouter.</p>
+        </div>
+        <div className="platform-surface-grid">
+          {PRODUCT_SURFACES.map((surface, index) => (
+            <motion.article key={surface.title} data-tone={surface.tone} initial={reduceMotion ? false : { opacity: 0, scale: .985 }} whileInView={{ opacity: 1, scale: 1 }} viewport={{ once: true, amount: .45 }} transition={{ duration: .4, delay: reduceMotion ? 0 : index * .06 }}><span>0{index + 1}</span><i aria-hidden /><h3>{surface.title}</h3><p>{surface.copy}</p></motion.article>
+          ))}
+        </div>
+      </motion.section>
+
+      <motion.section className="platform-principles" id="connectors" initial={revealInitial} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, amount: .3 }} transition={{ duration: .55, ease: [0.16, 1, 0.3, 1] }}>
+        <div><span>Stay in control</span><p>Your workspace data and local actions remain under your control.</p></div>
+        <div><span>Know before something changes</span><p>Permissions and approvals are visible when an action matters.</p></div>
+        <div><span>Choose your models</span><p>Use supported model providers without rebuilding the way you work.</p></div>
+      </motion.section>
+
+      <motion.section className="platform-cta" initial={revealInitial} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, amount: .4 }} transition={{ duration: .6, ease: [0.16, 1, 0.3, 1] }}>
+        <div className="platform-cta-orbit" aria-hidden><i /><i /><i /><i /><i /></div>
+        <div><span className="platform-kicker">Start from the task</span><h2>Move work forward without losing context.</h2></div>
+        {!STATIC_PRESENTATION && <Link href="/overview"><PremiumButton variant="primary">Open BrainRouter <span aria-hidden>→</span></PremiumButton></Link>}
+      </motion.section>
+    </div>
   );
 }

@@ -72,27 +72,38 @@ export interface Theme {
   accentSoft: string;
   border: string;
 }
+
+/** Canonical flat export palette; Brand Studio templates consume these roles. */
+export const BRAND_EXPORT_COLORS = Object.freeze({
+  canvas: "#07070B",
+  surface: "#0B0C12",
+  overlay: "#12131B",
+  text: "#FAFAFA",
+  secondary: "#A1A1AA",
+  muted: "#85858F",
+  primary: "#D8DBE2",
+  route: "#7C4DFF",
+});
+
 export const THEMES: Record<string, Theme> = {
-  void: { label: "Void", bg: "#0B0D0F", bg2: "#14171A", text: "#ECEFF2", sub: "#9BA3AC", muted: "#5E6670", accent: "#34C28E", accentSoft: "rgba(52,194,142,0.16)", border: "rgba(255,255,255,0.10)" },
-  signal: { label: "Signal", bg: "#06120D", bg2: "#0B2018", text: "#ECFBF4", sub: "#8FC8B2", muted: "#5E8B79", accent: "#42D6A0", accentSoft: "rgba(66,214,160,0.22)", border: "rgba(66,214,160,0.20)" },
-  light: { label: "Light", bg: "#FAFAFA", bg2: "#FFFFFF", text: "#15181B", sub: "#4B535B", muted: "#8A929B", accent: "#1E9E73", accentSoft: "rgba(30,158,115,0.12)", border: "rgba(16,19,22,0.12)" },
+  void: { label: "Graphite", bg: BRAND_EXPORT_COLORS.canvas, bg2: BRAND_EXPORT_COLORS.surface, text: BRAND_EXPORT_COLORS.text, sub: BRAND_EXPORT_COLORS.secondary, muted: BRAND_EXPORT_COLORS.muted, accent: BRAND_EXPORT_COLORS.primary, accentSoft: "rgba(216,219,226,0.10)", border: "rgba(255,255,255,0.10)" },
+  signal: { label: "Slate", bg: "#0B0C12", bg2: "#12131B", text: "#FAFAFA", sub: "#A1A1AA", muted: "#85858F", accent: "#D8DBE2", accentSoft: "rgba(216,219,226,0.10)", border: "rgba(255,255,255,0.14)" },
+  light: { label: "Paper", bg: "#FAFAFA", bg2: "#FFFFFF", text: "#16191C", sub: "#4B535B", muted: "#68717B", accent: "#20242A", accentSoft: "rgba(32,36,42,0.10)", border: "rgba(16,19,22,0.12)" },
 };
 export type ThemeKey = keyof typeof THEMES;
 
 /** Accent override palette (defaults to the theme's own accent). */
 export const ACCENTS: Record<string, { label: string; hex: string }> = {
-  theme: { label: "Theme", hex: "" },
-  signal: { label: "Signal", hex: "#34C28E" },
-  amber: { label: "Amber", hex: "#E0A063" },
-  iris: { label: "Iris", hex: "#7C8CF8" },
-  rose: { label: "Rose", hex: "#E5675F" },
-  gold: { label: "Gold", hex: "#D8B45A" },
+  theme: { label: "Theme neutral", hex: "" },
+  silver: { label: "Silver", hex: BRAND_EXPORT_COLORS.primary },
+  graphite: { label: "Graphite", hex: "#34343D" },
+  violet: { label: "Route violet", hex: BRAND_EXPORT_COLORS.route },
 };
 export type AccentKey = keyof typeof ACCENTS;
 
 export const BACKGROUNDS = {
-  rosette: "Guilloché",
-  aura: "Aura glow",
+  rosette: "Route field",
+  aura: "Soft field",
   grid: "Dot grid",
   gradient: "Gradient",
   solid: "Solid",
@@ -133,7 +144,7 @@ export type RoleKey = keyof typeof ROLES;
 export const AVATAR_SHAPES = { circle: "Circle", rounded: "Rounded", square: "Square" } as const;
 export type AvatarShape = keyof typeof AVATAR_SHAPES;
 
-export const RINGS = { gradient: "Gradient ring", solid: "Solid ring", guilloche: "Guilloché ring", duo: "Dual arc", thin: "Hairline" } as const;
+export const RINGS = { gradient: "Neutral ring", solid: "Solid ring", guilloche: "Route frame", duo: "Dual arc", thin: "Hairline" } as const;
 export type RingKey = keyof typeof RINGS;
 
 export interface BrandConfig {
@@ -187,7 +198,7 @@ export const DEFAULT_CONFIG: BrandConfig = {
 
   imageDataUrl: null,
   avatarShape: "circle",
-  ring: "gradient",
+  ring: "solid",
   ringWidth: 5,
   avatarTransparent: true,
 
@@ -211,4 +222,9 @@ export function dimsFor(cfg: BrandConfig): { w: number; h: number } {
     return { w: Math.round(s * 3.9), h: s }; // full lockup
   }
   return { w: SIZES[cfg.preset].w, h: SIZES[cfg.preset].h };
+}
+
+/** The logo remains vector-only; composed posters and avatars may be flattened. */
+export function allowsRasterExport(mode: Mode): boolean {
+  return mode !== "logo";
 }

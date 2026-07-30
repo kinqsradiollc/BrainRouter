@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 import { createBrokerPort, createHostCore, isUnsavedNewSessionKey, type AgentLike } from './hostCore.js';
 import { InteractionBroker } from '@kinqs/brainrouter-agent-protocol';
 import type { AgentEventMessage } from '@kinqs/brainrouter-agent-protocol';
+import {
+  __resetExternalSteering,
+  publishExternalSteering,
+} from '@kinqs/brainrouter-core/session';
 
 function fakeAgent(behavior?: (prompt: string, cb: Record<string, unknown>) => Promise<string>): AgentLike {
   return {
@@ -30,6 +34,32 @@ test('start-turn: streams bridged events between turn-start and turn-complete', 
   const done = out[3].event as Extract<AgentEventMessage['event'], { kind: 'turn-complete' }>;
   assert.equal(done.answer, 'answer to: do it');
   assert.ok(out.every((m) => m.sessionKey === 'sess-test'));
+});
+
+test('start-turn: preserves the shared interrupted child receipt verbatim', async () => {
+  const receipt = {
+    childId: 'child-1',
+    role: 'worker',
+    status: 'interrupted' as const,
+    completedAt: '2026-07-30T00:00:00.000Z',
+    summary: 'Child execution interrupted by the parent request.',
+  };
+  const { out, send } = collect();
+  const core = createHostCore({
+    agent: fakeAgent(async (_prompt, cb) => {
+      (cb.onChildComplete as (value: typeof receipt) => void)(receipt);
+      return 'parent interrupted';
+    }),
+    send,
+  });
+
+  await core.handle({ kind: 'start-turn', prompt: 'stop' });
+
+  const event = out.find(
+    (message) => message.event.kind === 'child-complete',
+  )?.event;
+  assert.ok(event?.kind === 'child-complete');
+  assert.deepEqual(event.receipt, receipt);
 });
 
 test('start-turn: forwards inline images to runTurn opts (vision)', async () => {
@@ -102,6 +132,146 @@ test('start-turn while running → turn-error (no concurrent turns)', async () =
     (m.event as { message: string }).message.includes('already running')));
   release();
   await first;
+});
+
+test('Queue accepts input during a turn and runs it FIFO after the turn settles', async () => {
+  const { out, send } = collect();
+  let releaseFirst!: () => void;
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const prompts: string[] = [];
+  let resolveSecond!: () => void;
+  const secondDone = new Promise<void>((resolve) => { resolveSecond = resolve; });
+  const agent: AgentLike = {
+    sessionKey: 'sess-queue',
+    runTurn: async (prompt) => {
+      prompts.push(prompt);
+      if (prompts.length === 1) await firstGate;
+      else resolveSecond();
+      return `done:${prompt}`;
+    },
+  };
+  const core = createHostCore({ agent, send });
+
+  const first = core.handle({ kind: 'start-turn', prompt: 'first' });
+  await core.handle({ kind: 'start-turn', prompt: 'second', delivery: 'queue', deliveryId: 'q1' });
+  const queued = out.find((message) => message.event.kind === 'input-delivery' && message.event.id === 'q1');
+  assert.ok(queued && queued.event.kind === 'input-delivery');
+  assert.equal(queued.event.state, 'queued');
+  assert.equal(queued.event.position, 1);
+
+  releaseFirst();
+  await first;
+  await secondDone;
+  assert.deepEqual(prompts, ['first', 'second']);
+  assert.ok(out.some((message) =>
+    message.event.kind === 'input-delivery'
+    && message.event.id === 'q1'
+    && message.event.state === 'running'));
+});
+
+test('Steer enters the running Agent and reports when the safe boundary applies it', async () => {
+  const { out, send } = collect();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let callbacks: Record<string, unknown> = {};
+  const pending: Array<{ id: string; text: string; source: 'user' | 'extension'; createdAt: number }> = [];
+  const agent: AgentLike = {
+    sessionKey: 'sess-steer',
+    runTurn: async (_prompt, cb) => {
+      callbacks = cb;
+      await gate;
+      const steering = pending.shift();
+      if (steering) (callbacks.onSteerApplied as (input: typeof steering) => void)(steering);
+      return 'done';
+    },
+    requestSteer: (text, options) => {
+      const steering = { id: options?.id ?? 'generated', text, source: options?.source ?? 'user', createdAt: Date.now() };
+      pending.push(steering);
+      return steering;
+    },
+    consumePendingSteering: () => pending.splice(0),
+    get pendingSteeringCount() { return pending.length; },
+  };
+  const core = createHostCore({ agent, send });
+
+  const first = core.handle({ kind: 'start-turn', prompt: 'first' });
+  await core.handle({ kind: 'start-turn', prompt: 'new direction', delivery: 'steer', deliveryId: 's1' });
+  assert.ok(out.some((message) =>
+    message.event.kind === 'input-delivery'
+    && message.event.id === 's1'
+    && message.event.state === 'steered'));
+  release();
+  await first;
+  assert.ok(out.some((message) =>
+    message.event.kind === 'input-delivery'
+    && message.event.id === 's1'
+    && message.event.state === 'applied'));
+});
+
+test('extension results steer a running desktop session without blocking it', async () => {
+  __resetExternalSteering();
+  const { out, send } = collect();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const received: Array<{ text: string; source?: string }> = [];
+  const agent: AgentLike = {
+    sessionKey: 'sess-extension-running',
+    runTurn: async () => { await gate; return 'done'; },
+    requestSteer: (text, options) => {
+      received.push({ text, source: options?.source });
+      return {
+        id: options?.id ?? 'generated',
+        text,
+        source: options?.source ?? 'user',
+        createdAt: Date.now(),
+      };
+    },
+  };
+  const core = createHostCore({ agent, send });
+
+  const turn = core.handle({ kind: 'start-turn', prompt: 'keep coding' });
+  publishExternalSteering('sess-extension-running', 'CI failed', { id: 'ci-failed-1' });
+
+  assert.deepEqual(received, [{ text: 'CI failed', source: 'extension' }]);
+  assert.ok(out.some((message) =>
+    message.event.kind === 'input-delivery'
+    && message.event.id === 'ci-failed-1'
+    && message.event.state === 'steered'
+    && message.event.source === 'extension'));
+
+  release();
+  await turn;
+  await core.handle({ kind: 'shutdown' });
+  __resetExternalSteering();
+});
+
+test('extension results start an idle desktop follow-up with visible delivery state', async () => {
+  __resetExternalSteering();
+  const { out, send } = collect();
+  let resolveTurn!: () => void;
+  const turnStarted = new Promise<void>((resolve) => { resolveTurn = resolve; });
+  const prompts: string[] = [];
+  const agent: AgentLike = {
+    sessionKey: 'sess-extension-idle',
+    runTurn: async (prompt) => {
+      prompts.push(prompt);
+      resolveTurn();
+      return 'handled';
+    },
+  };
+  const core = createHostCore({ agent, send });
+
+  publishExternalSteering('sess-extension-idle', 'A reviewer requested changes', { id: 'review-1' });
+  await turnStarted;
+
+  assert.deepEqual(prompts, ['A reviewer requested changes']);
+  assert.ok(out.some((message) =>
+    message.event.kind === 'input-delivery'
+    && message.event.id === 'review-1'
+    && message.event.source === 'extension'));
+
+  await core.handle({ kind: 'shutdown' });
+  __resetExternalSteering();
 });
 
 test('DESK-5q resume during a running turn is deferred until the turn unwinds', async () => {
@@ -373,6 +543,24 @@ test('set-model: switches + persists; persist failure degrades gracefully', asyn
   assert.ok(out.some((m) => m.event.kind === 'status' && (m.event as { text: string }).text.includes('persisting failed')));
 });
 
+test('start-turn is blocked before agent execution when active model policy is invalid', async () => {
+  const sent: AgentEventMessage[] = [];
+  let runs = 0;
+  const fake = fakeAgent(async () => { runs += 1; return 'should not run'; });
+  const core = createHostCore({
+    agent: fake,
+    send: (message) => sent.push(message),
+    validateTurn: () => 'This managed model is no longer available. Choose another model before sending.',
+  });
+
+  await core.handle({ kind: 'start-turn', prompt: 'hello' });
+
+  assert.equal(runs, 0);
+  assert.equal(sent.some((message) => message.event.kind === 'turn-start'), false);
+  assert.equal(sent.some((message) => message.event.kind === 'turn-error'
+    && /choose another model/i.test(message.event.message)), true);
+});
+
 test('createBrokerPort: confirm/choice round-trip + dismissal fails closed', async () => {
   const broker = new InteractionBroker();
   const emitted: Array<{ kind: string; request: { id: string; type: string } }> = [];
@@ -473,6 +661,22 @@ test('set-model providerName + persist:false → cross-provider PER-SESSION (reb
   assert.equal(rebuilt[0]?.apiKey, 'sk-x', 'incl. the resolved key (main-process only)');
   assert.deepEqual(sessionLlms, [['sess-test', { provider: 'anthropic', model: 'claude-opus-4-8', endpoint: 'https://api.anthropic.com' }]], 'wrote the FULL session override (no secret)');
   assert.deepEqual(global, [], 'never touched the global default → no sync to other sessions');
+});
+
+test('set-model with an unavailable named provider fails closed without changing the model', async () => {
+  const { out, send } = collect();
+  const agent = modelAgent();
+  const core = createHostCore({
+    agent,
+    send,
+    resolveProviderLlm: async () => undefined,
+  });
+
+  await core.handle({ kind: 'set-model', model: 'removed-managed-model', persist: false, providerName: 'brainrouter-account' });
+
+  assert.equal(agent.getModel?.(), 'init-model');
+  assert.ok(out.some((message) => message.event.kind === 'turn-error'
+    && (message.event as { message: string }).message.includes('unavailable')));
 });
 
 test('set-model providerName + persist:true → cross-provider GLOBAL default (persistProviderModel + clears session)', async () => {

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { WorkItem } from '@kinqs/brainrouter-types';
-import { parseTrackQuery, matchesTrackQuery } from '../track/query.js';
+import { parseTrackQuery, matchesTrackQuery } from '../track/query/query.js';
 
 function wi(p: Partial<WorkItem>): WorkItem {
   return {

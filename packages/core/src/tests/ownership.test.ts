@@ -5,7 +5,7 @@ import {
   pathWithinOwnership,
   ownershipRequirementError,
   ownershipWriteViolation,
-} from '../orchestration/ownership.js';
+} from '../orchestration/ownership/ownership.js';
 
 test('pathWithinOwnership: ** matches nested paths under the prefix', () => {
   assert.equal(pathWithinOwnership('src/payments/**', 'src/payments/api.ts'), true);

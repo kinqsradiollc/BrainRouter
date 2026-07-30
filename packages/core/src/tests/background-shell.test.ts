@@ -8,7 +8,7 @@ import {
   killBackgroundShell,
   killAllBackgroundShells,
   __resetBackgroundShells,
-} from '../exec/backgroundShell.js';
+} from '../exec/runtime/backgroundShell.js';
 import { withTempWorkspaceAsync } from './_helpers.js';
 import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
 
@@ -94,7 +94,7 @@ test('run_command background:true + task_output end-to-end through the executor'
     __resetBackgroundShells();
     const { Agent } = await import('../agent/agent.js');
     // Silent agents need the parent fast-mode opt-in for safe shell commands.
-    const { writePreferences } = await import('../session/preferencesStore.js');
+    const { writePreferences } = await import('../session/preferences/preferencesStore.js');
     writePreferences(workspace, { executionMode: 'fast' });
     const stubMcp: any = { listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [{ text: '{}' }] }), close: async () => {} };
     // Background runs are unsandboxed (v1), so they are refused while the

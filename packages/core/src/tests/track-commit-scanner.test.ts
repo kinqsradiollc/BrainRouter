@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ensureProject, createWorkItem, getWorkItem, transitionWorkItem } from '../track/trackStore.js';
-import { parseCommitKeys, scanCommitsForTrack } from '../track/commitScanner.js';
+import { parseCommitKeys, scanCommitsForTrack } from '../track/git/commitScanner.js';
 import { withTempWorkspace } from './_helpers.js';
 
 test('parseCommitKeys: strict <KEY>-<n>, deduped, normalized, boundary-safe', () => {

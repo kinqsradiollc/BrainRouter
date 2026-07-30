@@ -2,9 +2,11 @@
 // `@kinqs/brainrouter-core/track` instead of deep `dist/track/*.js` paths,
 // keeping the subsystem's file layout internal. Full public surface; the
 // internal service layer (service.ts) stays unexported.
-export * from './commitScanner.js';
-export * from './gitWorkflow.js';
+export * from './git/index.js';
+export * from './github/index.js';
 export * from './githubSync.js';
-export * from './query.js';
-export * from './sprintAutomation.js';
+export * from './githubSync/githubApp.js';
+export * from './forgeSync/gitlabCompat.js';
+export * from './query/index.js';
+export * from './automation/index.js';
 export * from './trackStore.js';

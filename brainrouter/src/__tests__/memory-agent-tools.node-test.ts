@@ -56,10 +56,11 @@ process.env.BRAINROUTER_DATABASE_URL = scratchUrl();
 process.env.DATABASE_URL = scratchUrl();
 process.env.BRAINROUTER_JOB_RUNNER = "off";
 
-const { handleMemoryAgentStatus } = await import("../tools/memory_agent_status.js");
-const { handleMemoryAgentRun } = await import("../tools/memory_agent_run.js");
-const { handleMemoryJobRetry } = await import("../tools/memory_job_retry.js");
+const { handleMemoryAgentStatus } = await import("../tools/agents/memory_agent_status.js");
+const { handleMemoryAgentRun } = await import("../tools/agents/memory_agent_run.js");
+const { handleMemoryJobRetry } = await import("../tools/agents/memory_job_retry.js");
 const { memoryEngine } = await import("../memory/engine.js");
+const { listBrainAgents } = await import("../memory/agents/registry.js");
 
 // The Postgres store is genuinely async — wait for migrations / seed-admin
 // before the first store-using call.
@@ -88,10 +89,13 @@ function parse(result: any): any {
   return JSON.parse(result.content[0].text);
 }
 
-test("memory_agent_status lists all 14 agents, idle before any jobs", async () => {
+test("memory_agent_status lists every registered agent, idle before any jobs", async () => {
   const res = await handleMemoryAgentStatus({});
   const { agents } = parse(res);
-  assert.equal(agents.length, 14);
+  assert.deepEqual(
+    agents.map((agent: any) => agent.id),
+    listBrainAgents().map((agent) => agent.id),
+  );
   const extractor = agents.find((a: any) => a.id === "cognitive_extractor");
   assert.equal(extractor.lastJobStatus, "idle");
   assert.equal(extractor.pendingJobs, 0);

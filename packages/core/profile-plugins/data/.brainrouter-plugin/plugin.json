@@ -1,0 +1,7 @@
+{
+  "name": "profile-data",
+  "version": "2.2.0",
+  "description": "Reproducible data analysis and experiment validation workflows.",
+  "category": "data",
+  "keywords": ["data", "analysis", "experiments"]
+}

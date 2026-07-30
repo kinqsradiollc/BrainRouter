@@ -5,7 +5,8 @@ import {
   describeContractForPrompt,
   getOutputContract,
   parseChildOutput,
-} from '../orchestration/outputContracts.js';
+  validateChildOutputSections,
+} from '../orchestration/roles/outputContracts.js';
 
 /**
  * MAS-P2-M5 — output-contract scaffolding tests.
@@ -204,4 +205,35 @@ test('parseChildOutput: reviewer + architect contracts parse representative outp
   );
   assert.equal(architect?.contractStatus, 'parsed');
   assert.match(architect!.fields.recommendation, /Lazy-loaded/);
+});
+
+test('validateChildOutputSections enforces only the reviewed stage subset', () => {
+  const output = [
+    '## Alternatives',
+    '1. Option A',
+    '2. Option B',
+    '',
+    '## Tradeoffs',
+    '- A is smaller; B is broader.',
+    '',
+    '## Recommendation',
+    'Choose A.',
+  ].join('\n');
+  assert.deepEqual(
+    validateChildOutputSections(
+      'architect',
+      output,
+      ['alternatives', 'tradeoffs', 'recommendation'],
+    ),
+    {
+      accepted: true,
+      missingSections: [],
+      parsed: parseChildOutput('architect', output),
+    },
+  );
+  assert.deepEqual(
+    validateChildOutputSections('architect', output, ['headline', 'recommendation'])
+      .missingSections,
+    ['headline'],
+  );
 });

@@ -40,12 +40,17 @@ if (envFile) {
   const result = dotenv.config({ path: envFile });
   const count = Object.keys(result.parsed ?? {}).length;
   process.stderr.write(`env: loaded ${count} var${count === 1 ? '' : 's'} from ${envFile}\n`);
+} else if (process.env.BRAINROUTER_DATABASE_URL || process.env.DATABASE_URL) {
+  // No .env file on disk, but the environment is already populated — this is the
+  // normal case for a container started with an env_file / --env (docker compose,
+  // k8s, systemd). The vars ARE set; there is nothing to load and nothing wrong.
+  process.stderr.write('env: using variables from the process environment (no .env file needed)\n');
 } else {
   process.stderr.write(
-    `env: no .env file found — looked at:\n` +
+    `env: no .env file found and no database URL in the environment — looked at:\n` +
     `  $BRAINROUTER_ENV_FILE  (${process.env.BRAINROUTER_ENV_FILE ? 'set, but missing' : 'unset'})\n` +
     `  ~/.config/brainrouter/server.env\n` +
     `  ${path.join(process.cwd(), '.env')}\n` +
-    `Run 'brainrouter-mcp init' to scaffold one (or set BRAINROUTER_LLM_API_KEY and friends in your shell).\n`
+    `Run 'brainrouter-mcp init' to scaffold one (or set the required database/auth variables in your service environment).\n`
   );
 }

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { collectDashboardTasks, collectRunningTasks, formatBackgroundTasks, groupTasksByKind, summarizeTasks, shellRunToTask, type BackgroundTask } from '../background/backgroundTasks.js';
-import { createSession, updateSession } from '../orchestration/orchestrator.js';
+import { createSession, updateSession } from '../orchestration/session/orchestrator.js';
 import { createWorker } from '../worker/workerStore.js';
 import { createBackgroundTask, updateBackgroundTask } from '../background/backgroundTaskStore.js';
 

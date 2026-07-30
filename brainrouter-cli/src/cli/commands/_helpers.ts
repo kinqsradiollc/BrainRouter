@@ -9,7 +9,7 @@
  */
 
 import chalk from 'chalk';
-import { spinner } from '../spinner.js';
+import { spinner } from '../prompt/spinner.js';
 import type { Agent } from '@kinqs/brainrouter-core/agent';
 import { callMcpTool, type McpClientPool as McpClientWrapper } from '@kinqs/brainrouter-core/mcp';
 import { clampPayload, extractMemories, renderMemoryCards } from '../../memory/formatters.js';
@@ -141,6 +141,16 @@ export async function runSkillByName(
     }
     loader.succeed(chalk.green(`Skill loaded: ${skillName} (${skill.source})`));
     prompt = buildSkillPrompt(skill, { input: userInput, orchestration });
+    // CC-SKILLS-D3 — apply the skill's `disallowed-tools` for this turn (cleared
+    // by turnRunner alongside activeSkill once the turn settles).
+    agent.activeSkillDisallowedTools = skill.disallowedTools ?? [];
+    agent.activeSkillAllowedTools = skill.allowedTools;
+    if (agent.activeSkillAllowedTools !== undefined) {
+      console.log(chalk.gray(`  Allowed tools this turn: ${agent.activeSkillAllowedTools.join(', ') || '(none)'}`));
+    }
+    if (agent.activeSkillDisallowedTools.length > 0) {
+      console.log(chalk.gray(`  Disallowed tools this turn: ${agent.activeSkillDisallowedTools.join(', ')}`));
+    }
   } catch (err: any) {
     loader.fail(chalk.red(`Failed to resolve skill "${skillName}": ${err.message}`));
     return;
@@ -149,5 +159,6 @@ export async function runSkillByName(
   // The activeSkill stays latched while the turn runs; runAgentTurn's
   // continuation loop will clear it via the post-turn hook.
   agent.activeSkill = skillName;
+  agent.activeSkills = [skillName];
   runTurn(prompt);
 }

@@ -15,7 +15,7 @@ import {
   reconcileStaleRuns,
   type WorkflowRunPhase,
   type WorkflowRun,
-} from '../workflow/workflowRun.js';
+} from '../workflow/run/workflowRun.js';
 
 function tmpWs(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-wfphase-'));

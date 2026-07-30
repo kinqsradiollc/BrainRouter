@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildRecap } from '../session/sessionRecap.js';
-import type { TranscriptEntry } from '../session/sessionStore.js';
+import { buildRecap } from '../session/transcript/sessionRecap.js';
+import type { TranscriptEntry } from '../session/transcript/sessionStore.js';
 
 const T = (role: string, content: unknown, extra: Partial<TranscriptEntry> = {}): TranscriptEntry =>
   ({ role, content, timestamp: '2026-06-10T04:00:00.000Z', ...extra });
@@ -20,9 +20,9 @@ test('buildRecap: counts, last prompt/answer, tools, files, plan, goal', () => {
   ];
   const lines = buildRecap({
     entries,
-    plan: { updatedAt: '', items: [
-      { step: 'fix blend', status: 'completed' },
-      { step: 'add regression test', status: 'in_progress' },
+    plan: { schemaVersion: 1, revision: 1, updatedAt: '', items: [
+      { id: 'task_recap_fix', step: 'fix blend', status: 'completed' },
+      { id: 'task_recap_test', step: 'add regression test', status: 'in_progress' },
     ] },
     goalText: 'ship the recall fix',
     goalStatus: 'active',

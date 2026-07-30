@@ -1,6 +1,24 @@
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 
+const RENDERER_ENTRY_BUDGET_BYTES = 1_750_000;
+
+/** Monaco's language workers are deliberately isolated, on-demand assets and
+ * can be several MB. Replace Vite's one-size-fits-all warning with a budget for
+ * the renderer entry that actually determines launch/first-paint cost. */
+function rendererEntryBudget(): Plugin {
+  return {
+    name: 'renderer-entry-budget',
+    generateBundle(_options, bundle) {
+      for (const output of Object.values(bundle)) {
+        if (output.type === 'chunk' && output.isEntry && output.code.length > RENDERER_ENTRY_BUDGET_BYTES) {
+          this.warn(`Renderer entry ${output.fileName} is ${(output.code.length / 1_000_000).toFixed(2)} MB; budget is ${(RENDERER_ENTRY_BUDGET_BYTES / 1_000_000).toFixed(2)} MB.`);
+        }
+      }
+    },
+  };
+}
+
 /**
  * Dev-only model-probe proxy. The browser preview can't fetch a provider's
  * `/models` directly — it's cross-origin and most LLM gateways send NO CORS
@@ -53,9 +71,14 @@ function modelProbeProxy(): Plugin {
 
 // Renderer build — plain SPA served from dist/ inside the packaged app.
 export default defineConfig({
-  plugins: [react(), modelProbeProxy()],
+  plugins: [react(), modelProbeProxy(), rendererEntryBudget()],
   base: './',
-  build: { outDir: 'dist' },
+  build: {
+    outDir: 'dist',
+    // The largest emitted files are lazy Monaco chunks/workers. Their size does
+    // not affect startup; rendererEntryBudget keeps the launch path guarded.
+    chunkSizeWarningLimit: 7_200,
+  },
   // Monaco ships its language services as web workers. Emit them as same-origin
   // ES-module chunks (via the `?worker` imports in src/lib/editor/monacoEnv.ts)
   // so they load under the packaged file:// CSP — never the blocked blob/CDN worker.

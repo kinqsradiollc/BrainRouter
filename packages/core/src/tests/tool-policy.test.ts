@@ -1,7 +1,7 @@
 /** Per-tool enable/disable policy (cli.toolOverrides) + protected core. */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isProtectedCoreTool, resolveToolVisible, PROTECTED_CORE_TOOLS } from '../tool/toolPolicy.js';
+import { isProtectedCoreTool, resolveToolVisible, PROTECTED_CORE_TOOLS } from '../tool/policy/toolPolicy.js';
 import { resolveCliKnobs } from '../config/config.js';
 
 test('isProtectedCoreTool covers lifecycle + file/shell core, not the long tail', () => {

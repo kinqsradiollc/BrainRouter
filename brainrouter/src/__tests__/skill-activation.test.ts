@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { IMemoryStore, SkillActivationRecord, SkillHintsRecord } from "@kinqs/brainrouter-types";
-import { detectPrewarmSkills, decayPotential, spikeSkill } from "../memory/pipeline/skill-prewarm.js";
+import { detectPrewarmSkills, decayPotential, spikeSkill } from "../memory/pipeline/skill/skill-prewarm.js";
 
 class InMemoryActivationStore {
   private activations = new Map<string, SkillActivationRecord[]>();

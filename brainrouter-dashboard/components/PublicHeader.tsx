@@ -3,175 +3,47 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { useTheme } from "./ThemeProvider";
 import { useAuth } from "./AuthProvider";
 import { useIsMobile } from "../lib/useIsMobile";
 import { STATIC_PRESENTATION } from "../lib/presentation";
-import { BrainRouterLogo } from "./BrainRouterLogo";
 
 const DOCS_URL = "https://github.com/kinqsradiollc/BrainRouter/tree/HEAD/brainrouter-docs";
+const NAV = [
+  { label: "Home", href: "/" },
+  { label: "Workbench", href: "/#platform" },
+  { label: "Knowledge", href: "/#knowledge" },
+  { label: "Surfaces", href: "/#workflows" },
+  { label: "About", href: "/about" },
+] as const;
 
 export function PublicHeader() {
   const pathname = usePathname();
-  const { theme, toggleTheme } = useTheme();
   const { isAuthenticated } = useAuth();
   const isMobile = useIsMobile(768);
   const [menuOpen, setMenuOpen] = useState(false);
-  // Collapse the mobile menu on navigation and when we grow back to desktop.
   useEffect(() => { setMenuOpen(false); }, [pathname]);
   useEffect(() => { if (!isMobile) setMenuOpen(false); }, [isMobile]);
-
-  // Shared link set — rendered inline on desktop and stacked in the mobile panel.
-  const NAV: { label: string; href: string; external?: boolean; active?: boolean }[] = [
-    { label: "Home", href: "/", active: pathname === "/" },
-    { label: "Memory", href: "/#memory" },
-    { label: "CLI", href: "/#cli" },
-    { label: "Features", href: "/#features" },
-    { label: "Docs", href: DOCS_URL, external: true },
-    { label: "About", href: "/about", active: pathname === "/about" },
-  ];
 
   return (
     <header className="public-header">
       <div className="public-header-inner">
-        <Link href="/" className="logo" aria-label="BrainRouter — home">
-          <BrainRouterLogo size={26} />
-        </Link>
-
-        <nav className="public-nav">
-          <Link href="/" className={`public-nav-link ${pathname === "/" ? "active" : ""}`}>
-            Home
-          </Link>
-          <Link href="/#memory" className="public-nav-link">
-            Memory
-          </Link>
-          <Link href="/#cli" className="public-nav-link">
-            CLI
-          </Link>
-          <Link href="/#features" className="public-nav-link">
-            Features
-          </Link>
-          <a href={DOCS_URL} target="_blank" rel="noopener noreferrer" className="public-nav-link">
-            Docs
-          </a>
-          <Link href="/about" className={`public-nav-link ${pathname === "/about" ? "active" : ""}`}>
-            About
-          </Link>
-          <a
-            href="https://github.com/kinqsradiollc/BrainRouter"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="public-nav-link"
-            style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}
-          >
-            <svg style={{ width: "16px", height: "16px" }} viewBox="0 0 24 24" fill="currentColor">
-              <path fillRule="evenodd" clipRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482C19.138 20.193 22 16.44 22 12.017 22 6.484 17.522 2 12 2z" />
-            </svg>
-            GitHub
-          </a>
-          
-          {/* Theme Toggle Button */}
-          <button
-            onClick={toggleTheme}
-            title={theme === "light" ? "Switch to Dark Theme" : "Switch to Light Theme"}
-            style={{
-              background: "transparent",
-              border: "none",
-              color: "var(--color-stone-text)",
-              cursor: "pointer",
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: "4px",
-              borderRadius: "50%",
-              transition: "all 0.2s cubic-bezier(0.16, 1, 0.3, 1)",
-              outline: "none"
-            }}
-            onMouseOver={(e) => {
-              e.currentTarget.style.color = "var(--color-pure-white)";
-              e.currentTarget.style.transform = "scale(1.1) rotate(15deg)";
-            }}
-            onMouseOut={(e) => {
-              e.currentTarget.style.color = "var(--color-stone-text)";
-              e.currentTarget.style.transform = "scale(1) rotate(0deg)";
-            }}
-          >
-            {theme === "light" ? (
-              <svg style={{ width: "18px", height: "18px" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-              </svg>
-            ) : (
-              <svg style={{ width: "18px", height: "18px" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="5" />
-                <line x1="12" y1="1" x2="12" y2="3" />
-                <line x1="12" y1="21" x2="12" y2="23" />
-                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
-                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
-                <line x1="1" y1="12" x2="3" y2="12" />
-                <line x1="21" y1="12" x2="23" y2="12" />
-                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
-                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
-              </svg>
-            )}
-          </button>
-
-          {/* Auth CTA hidden in presentation-only mode (sign-in disabled). */}
-          {!STATIC_PRESENTATION && (
-            <Link href={isAuthenticated ? "/overview" : "/auth"}>
-              <button className="pill-btn button-gold-primary" style={{ padding: "8px 18px", borderRadius: "var(--radius-pill)", fontSize: "13px", fontWeight: 600 }}>
-                {isAuthenticated ? "Open dashboard" : "Sign In"}
-              </button>
-            </Link>
-          )}
+        <nav className="public-nav" aria-label="Public navigation">
+          {NAV.map((item) => <Link key={item.label} href={item.href} className={`public-nav-link${pathname === item.href ? " active" : ""}`}>{item.label}</Link>)}
+          <a href={DOCS_URL} target="_blank" rel="noopener noreferrer" className="public-nav-link">Docs</a>
+          <a href="https://github.com/kinqsradiollc/BrainRouter" target="_blank" rel="noopener noreferrer" className="public-nav-link">GitHub</a>
+          {!STATIC_PRESENTATION && <Link href={isAuthenticated ? "/overview" : "/auth"} className="public-header-cta">{isAuthenticated ? "Open dashboard" : "Sign in"}</Link>}
         </nav>
-
-        {/* Mobile menu trigger — CSS hides this on desktop and hides .public-nav here. */}
-        <button
-          className="public-menu-btn"
-          onClick={() => setMenuOpen((o) => !o)}
-          aria-label={menuOpen ? "Close menu" : "Open menu"}
-          aria-expanded={menuOpen}
-          style={{ background: "transparent", border: "1px solid var(--border-med)", borderRadius: "8px", width: "40px", height: "40px", color: "var(--color-stone-text)", cursor: "pointer", alignItems: "center", justifyContent: "center" }}
-        >
-          {menuOpen ? (
-            <svg style={{ width: 20, height: 20 }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
-          ) : (
-            <svg style={{ width: 20, height: 20 }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="18" x2="21" y2="18" /></svg>
-          )}
+        <button type="button" className="public-menu-btn" onClick={() => setMenuOpen((open) => !open)} aria-label={menuOpen ? "Close menu" : "Open menu"} aria-expanded={menuOpen}>
+          {menuOpen ? "×" : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 7h16M4 12h16M4 17h16" /></svg>}
         </button>
       </div>
-
       {menuOpen && (
-        <div className="public-menu-panel">
-          {NAV.map((item) =>
-            item.external ? (
-              <a key={item.label} href={item.href} target="_blank" rel="noopener noreferrer" className="public-menu-link">
-                {item.label}
-              </a>
-            ) : (
-              <Link key={item.label} href={item.href} className={`public-menu-link${item.active ? " active" : ""}`}>
-                {item.label}
-              </Link>
-            )
-          )}
-          <a href="https://github.com/kinqsradiollc/BrainRouter" target="_blank" rel="noopener noreferrer" className="public-menu-link">
-            GitHub
-          </a>
-          <button
-            onClick={toggleTheme}
-            className="public-menu-link"
-            style={{ background: "transparent", border: "none", textAlign: "left", cursor: "pointer", font: "inherit", width: "100%" }}
-          >
-            {theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
-          </button>
-          {!STATIC_PRESENTATION && (
-            <Link href={isAuthenticated ? "/overview" : "/auth"} style={{ marginTop: "6px" }}>
-              <button className="pill-btn button-gold-primary" style={{ width: "100%", padding: "12px 18px", borderRadius: "var(--radius-pill)", fontSize: "14px", fontWeight: 600 }}>
-                {isAuthenticated ? "Open dashboard" : "Sign In"}
-              </button>
-            </Link>
-          )}
-        </div>
+        <nav className="public-menu-panel" aria-label="Mobile public navigation">
+          {NAV.map((item) => <Link key={item.label} href={item.href} className="public-menu-link">{item.label}</Link>)}
+          <a href={DOCS_URL} target="_blank" rel="noopener noreferrer" className="public-menu-link">Docs</a>
+          <a href="https://github.com/kinqsradiollc/BrainRouter" target="_blank" rel="noopener noreferrer" className="public-menu-link">GitHub</a>
+          {!STATIC_PRESENTATION && <Link href={isAuthenticated ? "/overview" : "/auth"} className="public-header-cta">{isAuthenticated ? "Open dashboard" : "Sign in"}</Link>}
+        </nav>
       )}
     </header>
   );

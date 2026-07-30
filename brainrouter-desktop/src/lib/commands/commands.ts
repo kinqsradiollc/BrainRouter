@@ -11,8 +11,10 @@
 import type { PanelId } from '../../panels/index.js';
 
 export type SettingsSection =
+  | 'account'
   | 'general' | 'models' | 'permissions' | 'memory' | 'hooks' | 'workflow-automation'
-  | 'extensions' | 'connectors' | 'tools' | 'data-connectors' | 'advanced' | 'observability' | 'appearance' | 'commands';
+  | 'runtime' | 'automations' | 'reviews'
+  | 'extensions' | 'connectors' | 'tools' | 'data-connectors' | 'marketplace' | 'advanced' | 'observability' | 'appearance' | 'commands';
 
 export interface CmdCtx {
   send(command: unknown): void;
@@ -93,6 +95,7 @@ export const WIRED: Record<string, Wire> = {
 
   // -- settings deep links --
   '/model': { kind: 'settings', section: 'models' },
+  '/profile': { kind: 'settings', section: 'models' },
   '/tier': { kind: 'settings', section: 'general' },
   '/effort': { kind: 'settings', section: 'general' },
   '/personality': { kind: 'settings', section: 'general' },

@@ -10,10 +10,10 @@
  * or deployed behind ADR-005's transport later — without touching callers. No
  * logic moved or removed. The port lives here because its result types live here.
  */
-import { decideExecutionPolicy, type AccessMode, type ActionKind, type PolicyResult } from "./execPolicy.js";
-import { evaluateCommandPolicy, type CommandPolicy } from "./commandPolicy.js";
-import { isDangerousCommand, resolveRunCommandApproval, type RunCommandApproval } from "./dangerousCommand.js";
-import { evaluateDestructiveCommand, type DestructiveContext, type DestructiveVerdict } from "./destructiveCommandGuard.js";
+import { decideExecutionPolicy, type AccessMode, type ActionKind, type PolicyResult } from "./policy/execPolicy.js";
+import { evaluateCommandPolicy, type CommandPolicy } from "./policy/commandPolicy.js";
+import { isDangerousCommand, resolveRunCommandApproval, type RunCommandApproval } from "./guard/dangerousCommand.js";
+import { evaluateDestructiveCommand, type DestructiveContext, type DestructiveVerdict } from "./guard/destructiveCommandGuard.js";
 
 /** The execution-policy + command-safety service contract. */
 export interface IExecService {

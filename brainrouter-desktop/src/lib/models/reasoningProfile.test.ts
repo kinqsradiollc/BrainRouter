@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { reasoningProfileForModel, reasoningPillLabel, sliderIndexForEffort, effortAtSliderFraction } from './reasoningProfile.js';
+import type { ModelPolicy } from '@kinqs/brainrouter-types';
 
 test('generic graded reasoners (GPT-5, GLM, Qwen3, DeepSeek) offer Low/Medium/High, no Extra high', () => {
   // Claude is special-cased with its own extended scale — covered separately below.
@@ -114,38 +115,76 @@ test('effortAtSliderFraction snaps a drag position to the nearest stop', () => {
   assert.equal(effortAtSliderFraction(reasoningProfileForModel('gpt-4o'), 0.5), null, 'no stops → null');
 });
 
-test('Claude Opus gets the extended 6-tier scale (Low … Extra, Max, Ultracode)', () => {
+test('custom Claude models use the inferred scale without inventing ultracode', () => {
   const p = reasoningProfileForModel('claude-opus-4-8');
   assert.equal(p.family, 'claude');
   assert.equal(p.kind, 'graded');
-  assert.deepEqual(p.options.map((o) => o.label), ['Low', 'Medium', 'High', 'Extra', 'Max', 'Ultracode']);
-  assert.deepEqual(p.options.map((o) => o.level), ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode']);
-});
-
-test('other Claude models top out at Max (5 tiers, no Ultracode)', () => {
-  for (const m of ['claude-sonnet-4-6', 'claude-haiku-4-5', 'anthropic/claude-3-7-sonnet']) {
-    const p = reasoningProfileForModel(m);
-    assert.deepEqual(p.options.map((o) => o.label), ['Low', 'Medium', 'High', 'Extra', 'Max'], m);
-    assert.equal(p.options.some((o) => o.level === 'ultracode'), false, m);
-  }
+  assert.equal(p.source, 'inferred');
+  assert.deepEqual(p.options.map((o) => o.label), ['Low', 'Medium', 'High', 'Extra', 'Max']);
+  assert.deepEqual(p.options.map((o) => o.level), ['low', 'medium', 'high', 'xhigh', 'max']);
 });
 
 test('reasoningPillLabel shows the Claude tier label (Extra, not "Extra high")', () => {
   const opus = reasoningProfileForModel('claude-opus-4-8');
-  assert.equal(reasoningPillLabel(opus, 'ultracode', false), 'Ultracode');
   assert.equal(reasoningPillLabel(opus, 'max', false), 'Max');
   assert.equal(reasoningPillLabel(opus, 'xhigh', false), 'Extra');
   assert.equal(reasoningPillLabel(opus, 'high', false), 'High');
-  assert.equal(reasoningPillLabel(opus, 'ultracode', true), 'Fast', 'Fast still overrides');
+  assert.equal(reasoningPillLabel(opus, 'max', true), 'Fast', 'Fast still overrides');
 });
 
-test('slider math spans the Claude scales (and clamps ultracode on non-opus)', () => {
-  const opus = reasoningProfileForModel('claude-opus-4-8'); // 6 stops
-  assert.equal(sliderIndexForEffort(opus, 'ultracode'), 5);
+test('slider math spans the custom Claude scale through max', () => {
+  const opus = reasoningProfileForModel('claude-opus-4-8');
+  assert.equal(sliderIndexForEffort(opus, 'max'), 4);
   assert.equal(sliderIndexForEffort(opus, 'xhigh'), 3);
-  assert.equal(effortAtSliderFraction(opus, 1), 'ultracode');
-  assert.equal(effortAtSliderFraction(opus, 0.8), 'max', 'round(4.0) → Max');
+  assert.equal(effortAtSliderFraction(opus, 1), 'max');
+  assert.equal(effortAtSliderFraction(opus, 0.9), 'max', 'round(3.6) → Max');
+});
 
-  const sonnet = reasoningProfileForModel('claude-sonnet-4-6'); // 5 stops, no ultracode
-  assert.equal(sliderIndexForEffort(sonnet, 'ultracode'), 4, 'ultracode clamps to Max on non-opus Claude');
+test('managed model profile uses the exact server effort list and labels', () => {
+  const policy: ModelPolicy = {
+    id: 'claude-fable-5', label: 'Claude Fable 5', provider: 'brainrouter', enabled: true,
+    capabilities: { streaming: true, tools: true, responses: true, reasoning: true },
+    reasoning: {
+      default: 'high',
+      allowed: [
+        { id: 'none', label: 'Off' },
+        { id: 'minimal', label: 'Minimal' },
+        { id: 'max', label: 'Max' },
+      ],
+      source: 'verified', mode: 'selectable',
+    },
+    provenance: { source: 'verified' }, revision: 'r1',
+  };
+  const profile = reasoningProfileForModel(policy.id, policy);
+  assert.equal(profile.source, 'server');
+  assert.deepEqual(profile.options, [
+    { level: 'none', label: 'Off' },
+    { level: 'minimal', label: 'Minimal' },
+    { level: 'max', label: 'Max' },
+  ]);
+});
+
+test('managed model options are ordered Faster→Smarter regardless of server order', () => {
+  // A server list sent NOT ascending must not put "Minimal" on the Smarter end or
+  // make Fast (profile.min) target the highest effort.
+  const policy: ModelPolicy = {
+    id: 'claude-fable-5', label: 'Claude Fable 5', provider: 'brainrouter', enabled: true,
+    capabilities: { streaming: true, tools: true, responses: true, reasoning: true },
+    reasoning: {
+      default: 'high',
+      allowed: [
+        { id: 'max', label: 'Max' },
+        { id: 'high', label: 'High' },
+        { id: 'medium', label: 'Medium' },
+        { id: 'minimal', label: 'Minimal' },
+      ],
+      source: 'verified', mode: 'selectable',
+    },
+    provenance: { source: 'verified' }, revision: 'r1',
+  };
+  const profile = reasoningProfileForModel(policy.id, policy);
+  assert.deepEqual(profile.options.map((o) => o.level), ['minimal', 'medium', 'high', 'max'], 'ascending');
+  assert.equal(profile.min, 'minimal', 'Fast targets the lowest effort, not the highest');
+  assert.equal(sliderIndexForEffort(profile, 'minimal'), 0, 'Minimal sits at the Faster end');
+  assert.equal(sliderIndexForEffort(profile, 'max'), 3, 'Max sits at the Smarter end');
 });

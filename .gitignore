@@ -19,12 +19,17 @@ yarn-error.log*
 
 # Build/Dist
 dist/
+# Compiled Electron output — always rebuilt by `npm start` / `build:electron` /
+# electron-builder, so it's never used fresh. Tracking it bloated diffs and made
+# the PR-review bot review compiled JS (flagging pre-existing source as new).
+dist-electron/
 build/
 # …but the desktop's electron-builder resources (entitlements, notarize hook,
 # packaging docs) are source, not build output — they must be tracked.
 !brainrouter-desktop/build/
 !brainrouter-desktop/build/**
 out/
+brainrouter-desktop/release/
 .next/
 .open-next/
 .wrangler/
@@ -40,13 +45,20 @@ brainrouter-cli/changelog/
 .env.development.local
 .env.test.local
 .env.production.local
+# .env backups (may hold secrets) — never commit them
+.env.bak
+.env.*.bak
+*.env.bak
 
 # TypeScript incremental build cache
 *.tsbuildinfo
 
-# Per-user tooling state (Claude Code, brainrouter migration leftovers)
+# Per-user tooling state (Claude Code, brainrouter migration leftovers).
+# Workspace manifests are deliberately team-shareable; every other child of
+# `.brainrouter/` remains local runtime state.
 .claude/
-.brainrouter/
+**/.brainrouter/*
+!**/.brainrouter/workspace.json
 .brainrouter.migrated/
 brainrouter/memory.db
 brainrouter/mcp_server.log
@@ -75,9 +87,9 @@ brainrouter-benchmark/envs/
 # (not the package-local test folders under brainrouter-cli/, brainrouter/, etc.)
 /test/
 
-# Local Projects
-projects
-conceptCode
+# Local Projects (root-level scratch dir only — NOT app/projects, packages, etc.)
+/projects/
+/conceptCode/
 brainrouter/brain.db
 TENCENTDB_AGENT_MEMORY.md
 
@@ -114,6 +126,11 @@ AWSPrep
 FULL_TASKS_*.md
 FULL_TASKS_*.MD
 walkthrough.md
+IMPLEMENTATION_PLAN_*.md
+*_CODEX_BRIEF.md
+MOTOR_CORTEX_*.md
+GREP_SEARCH_*.md
+task-*.md
 
 # Local-only research/audit artifacts + scratch (consult, never commit)
 audit-*.json
@@ -123,3 +140,4 @@ ClaudeCode*.md
 # Dev-only renderer control-gallery harness (not part of the app)
 brainrouter-desktop/preview.html
 brainrouter-desktop/src/preview.tsx
+deploy/dev/.env

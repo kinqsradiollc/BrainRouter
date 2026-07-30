@@ -2,10 +2,9 @@
 // `@kinqs/brainrouter-core/tool` instead of deep `dist/tool/*.js` paths,
 // keeping the subsystem's file layout internal. Full public surface; the
 // internal service layer (service.ts) stays unexported.
-export * from './executors.js';
-export * from './extractResult.js';
-export * from './names.js';
-export * from './registry.js';
-export * from './specs.js';
-export * from './toolBudget.js';
-export * from './toolPolicy.js';
+export * from './registry/executors.js';
+export * from './result/extractResult.js';
+export * from './specs/names.js';
+export * from './registry/registry.js';
+export * from './policy/toolBudget.js';
+export * from './policy/toolPolicy.js';

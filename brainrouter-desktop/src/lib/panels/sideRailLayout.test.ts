@@ -4,10 +4,19 @@ import {
   SIDE_RAIL_MAX,
   SIDE_RAIL_MIN,
   clampSideRailWidth,
+  environmentPanelLayout,
+  openWidthFor,
   reorderByValue,
   sideRailClassName,
   sideRailFullscreenTitle,
 } from './sideRailLayout.js';
+
+test('environment panel becomes a visible drawer instead of disappearing without column room', () => {
+  assert.deepEqual(environmentPanelLayout(false, false, false), { mounted: false, drawer: false });
+  assert.deepEqual(environmentPanelLayout(true, true, false), { mounted: false, drawer: false });
+  assert.deepEqual(environmentPanelLayout(true, false, true), { mounted: true, drawer: false });
+  assert.deepEqual(environmentPanelLayout(true, false, false), { mounted: true, drawer: true });
+});
 
 test('clampSideRailWidth keeps the rail within its normal drag bounds', () => {
   assert.equal(clampSideRailWidth(120), SIDE_RAIL_MIN);
@@ -45,4 +54,26 @@ test('reorderByValue is stable for no-op and unknown values', () => {
   assert.equal(reorderByValue(tabs, 'files', 'files'), tabs);
   assert.equal(reorderByValue(tabs, 'missing', 'files'), tabs);
   assert.equal(reorderByValue(tabs, 'files', 'missing'), tabs);
+});
+
+test('openWidthFor widens to the Browser comfortable width, never shrinks', () => {
+  assert.equal(openWidthFor('browser', SIDE_RAIL_MIN), 500); // 240 -> 500 on open
+  assert.equal(openWidthFor('browser', 640), 640);           // already wider: unchanged
+  assert.equal(openWidthFor('browser', 500), 500);           // exactly at the default
+});
+
+test('openWidthFor leaves a rail already at max, and never widens a panel with no preference', () => {
+  // already at (or above) the rail max: widen is a no-op, and the clamped
+  // preference (≤ max) never over-widens past the current width.
+  assert.equal(openWidthFor('browser', SIDE_RAIL_MAX), SIDE_RAIL_MAX);
+  assert.equal(openWidthFor('browser', SIDE_RAIL_MAX + 500), SIDE_RAIL_MAX + 500);
+  // a panel without an OPEN_WIDTH preference keeps whatever width it had.
+  assert.equal(openWidthFor('files', 300), 300);
+  assert.equal(openWidthFor('files', SIDE_RAIL_MIN), SIDE_RAIL_MIN);
+});
+
+test('openWidthFor leaves panels without a preferred width untouched', () => {
+  assert.equal(openWidthFor('files', SIDE_RAIL_MIN), SIDE_RAIL_MIN);
+  assert.equal(openWidthFor('atlas', 300), 300);
+  assert.equal(openWidthFor('editor', 720), 720);
 });

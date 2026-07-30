@@ -6,12 +6,26 @@
  * Security posture unchanged: contextIsolation on, typed preload only,
  * senderFrame + shape validation on every inbound command.
  */
-import { app, BrowserWindow, dialog, ipcMain, utilityProcess, type UtilityProcess } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell, utilityProcess, type UtilityProcess } from 'electron';
+// Connector Phase 2 — OAuth device flow + keychain secrets live in MAIN
+// (safeStorage is unavailable in a utilityProcess); hosts read over the port.
+import { requestDeviceCode, pollOnce, type DeviceCodeGrant } from './githubOauth.js';
+import { getSecret, setSecret, deleteSecret, hasSecret, secretStorageMode } from './secretStore.js';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isAgentCommand } from '@kinqs/brainrouter-agent-protocol';
+import {
+  isBrowserControlCancelMessage,
+  isBrowserControlRequestMessage,
+} from '@kinqs/brainrouter-core/browser';
 import { isWorkspaceTrusted, trustWorkspace, untrustWorkspace, listTrustedWorkspaces } from '@kinqs/brainrouter-core/workspace';
+import {
+  getWorkspaceManifestInfo,
+  previewWorkspaceOnboardingFromPayload,
+  saveWorkspaceManifestFromPayload,
+} from './workspaceOnboarding.js';
 import { listTranscripts, type TranscriptSummary } from '@kinqs/brainrouter-core/session';
 import { getStateDir } from '@kinqs/brainrouter-core/storage';
 // T1 — global dashboard disk reads (no live host needed): running tasks + last
@@ -32,9 +46,18 @@ import {
 import { isAllowedNavigation, allowedOriginFor } from './windowSecurity.js';
 import { addOpened, noteActivity, reorderWorkspace, type ActivityReason } from './recents.js';
 import { createComputerUsePort } from './computerUse.js';
+import { hardenWebviewPreferences, isAllowedArtifactWebviewSrc } from './webviewPolicy.js';
+import { registerMeetingsBridge } from './meetingsBridge.js';
+import { registerChatSyncBridge } from './chatSyncBridge.js';
 import { checkComputerUsePermissions, openAccessibilitySettings, openScreenRecordingSettings } from './computerUsePermissions.js';
 import { setupTray } from './tray.js';
-import { hardenWebviewPreferences, isAllowedWebviewSrc } from './webviewPolicy.js';
+import { BrowserViewManager } from './browser/browserViewManager.js';
+import { BrowserAgentControlManager } from './browser/browserAgentControlManager.js';
+import { isBrowserCommand } from './browser/protocol.js';
+import { concreteRendererBrowserTarget } from './browser/rendererCommandTarget.js';
+import { shouldBypassRendererVisibleQueue } from './browser/visibleQueuePolicy.js';
+import { resolveDesktopBootstrapState } from './accountIntegration.js';
+import { initAutoUpdate } from './updater.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -52,12 +75,25 @@ function reconcileWorkspaceBackground(workspaceRoot: string): void {
  */
 interface WinPool {
   win: BrowserWindow;
+  browser: BrowserViewManager;
   hosts: Map<string, UtilityProcess>; // workspaceRoot → live host process
   lastSession: Map<string, string>;   // workspaceRoot → its last-viewed sessionKey
   pool: HostPoolState;                 // pure lifecycle state (tested policy)
   retiring: Set<string>;               // roots whose host we're intentionally killing
+  agentBrowserControl: BrowserAgentControlManager;
 }
 const wins = new Map<number, WinPool>(); // webContents.id → WinPool
+
+// PERF — preload asks once, synchronously, before React renders. This is a tiny
+// local config read (no network/keychain/host dependency) so the first frame can
+// already show the durable signed-in identity instead of flashing signed-out.
+ipcMain.on('desktop-bootstrap-state', (event) => {
+  if (event.senderFrame !== event.sender.mainFrame) {
+    event.returnValue = null;
+    return;
+  }
+  event.returnValue = resolveDesktopBootstrapState(loadConfig(), os.userInfo().username);
+});
 
 const recentsPath = (): string => path.join(app.getPath('userData'), 'recent-workspaces.json');
 type WorkspaceSessionRow = TranscriptSummary & { lastRole?: string };
@@ -84,6 +120,103 @@ async function handleComputerUseRequest(wp: WinPool, host: UtilityProcess, reque
     host.postMessage({ kind: 'computer-use-response', id: request.id, ok: true, result });
   } catch (err) {
     host.postMessage({ kind: 'computer-use-response', id: request.id, ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+// ── Connector Phase 2: keychain secrets (host → main) ─────────────────────────
+// safeStorage only exists in the main process; the agent host requests values
+// over its parent port (mirroring the computer-use bridge). Account sign-in is
+// also hosted, so its two bounded account credentials may be set/deleted here.
+
+type SecretRequest =
+  | { kind: 'secret-request'; id: string; op: 'get'; key: string }
+  | { kind: 'secret-request'; id: string; op: 'set'; key: string; value: string }
+  | { kind: 'secret-request'; id: string; op: 'delete'; key: string };
+
+const HOST_WRITABLE_ACCOUNT_SECRETS = new Set(['account:access-token', 'account:refresh-token']);
+
+function isSecretRequest(value: unknown): value is SecretRequest {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  if (v.kind !== 'secret-request' || typeof v.id !== 'string' || typeof v.key !== 'string') return false;
+  if (v.op === 'get' || v.op === 'delete') return true;
+  return v.op === 'set' && typeof v.value === 'string';
+}
+
+function handleSecretRequest(host: UtilityProcess, request: SecretRequest): void {
+  try {
+    if (request.op === 'get') {
+      const value = getSecret(app.getPath('userData'), request.key);
+      host.postMessage({ kind: 'secret-response', id: request.id, ok: true, value });
+      return;
+    }
+    if (!HOST_WRITABLE_ACCOUNT_SECRETS.has(request.key)) throw new Error('Host secret write is not allowed for this key.');
+    if (request.op === 'delete') {
+      deleteSecret(app.getPath('userData'), request.key);
+      host.postMessage({ kind: 'secret-response', id: request.id, ok: true });
+      return;
+    }
+    // No hard fail when the OS keychain is unavailable: setSecret already falls
+    // back to a 0600 base64 file (the module's intended behavior — refusing to
+    // store would push the token into plaintext config.json, which is worse). We
+    // surface the mode so the UI can show a non-blocking "not OS-encrypted" note.
+    const { mode } = setSecret(app.getPath('userData'), request.key, request.value);
+    host.postMessage({ kind: 'secret-response', id: request.id, ok: true, mode });
+  } catch (err) {
+    host.postMessage({ kind: 'secret-response', id: request.id, ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+// ── Connector Phase 2: GitHub OAuth device flow (renderer-invoked) ────────────
+// One pending grant per connector. The renderer drives the poll cadence with
+// the interval we return; the token never leaves the main process — on success
+// it goes straight into the keychain-backed secret store.
+const pendingOauthGrants = new Map<string, { clientId: string; grant: DeviceCodeGrant }>();
+
+async function handleGhOauth(payload: { op?: string; connectorId?: string; clientId?: string }): Promise<Record<string, unknown>> {
+  const connectorId = typeof payload.connectorId === 'string' ? payload.connectorId : '';
+  if (!connectorId) return { error: 'connectorId is required.' };
+  const secretKey = `connector:${connectorId}:github-oauth`;
+  switch (payload.op) {
+    case 'start': {
+      const clientId = typeof payload.clientId === 'string' ? payload.clientId.trim() : '';
+      if (!clientId) return { error: 'No OAuth client id configured. Set cli.github.oauthClientId in Settings → Advanced (register a GitHub OAuth App with device flow enabled).' };
+      try {
+        const grant = await requestDeviceCode(clientId);
+        pendingOauthGrants.set(connectorId, { clientId, grant });
+        void shell.openExternal(grant.verificationUri).catch(() => { /* headless — the renderer shows the URL */ });
+        return { userCode: grant.userCode, verificationUri: grant.verificationUri, intervalSec: grant.intervalSec, expiresAtMs: grant.expiresAtMs };
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+    case 'poll': {
+      const entry = pendingOauthGrants.get(connectorId);
+      if (!entry) return { status: 'error', error: 'No authorization in progress for this connector.' };
+      const result = await pollOnce(entry.clientId, entry.grant, {});
+      if (result.status === 'pending') {
+        entry.grant.intervalSec = result.nextIntervalSec;
+        return { status: 'pending', nextIntervalSec: result.nextIntervalSec, expiresAtMs: entry.grant.expiresAtMs };
+      }
+      pendingOauthGrants.delete(connectorId);
+      if (result.status === 'authorized') {
+        const stored = setSecret(app.getPath('userData'), secretKey, result.accessToken);
+        return { status: 'authorized', scope: result.scope, storageMode: stored.mode };
+      }
+      if (result.status === 'error') return { status: 'error', error: result.message };
+      return { status: result.status };
+    }
+    case 'cancel':
+      pendingOauthGrants.delete(connectorId);
+      return { ok: true };
+    case 'disconnect':
+      pendingOauthGrants.delete(connectorId);
+      deleteSecret(app.getPath('userData'), secretKey);
+      return { ok: true };
+    case 'status':
+      return { hasToken: hasSecret(app.getPath('userData'), secretKey), storageMode: secretStorageMode() };
+    default:
+      return { error: `Unknown gh-oauth op "${String(payload.op)}".` };
   }
 }
 
@@ -173,8 +306,20 @@ function spawnHost(wp: WinPool, workspaceRoot: string): UtilityProcess {
   });
   host.on('message', (msg) => {
     if (wp.win.isDestroyed()) return;
+    if (isBrowserControlRequestMessage(msg)) {
+      void wp.agentBrowserControl.handleRequest(host, workspaceRoot, msg);
+      return;
+    }
+    if (isBrowserControlCancelMessage(msg)) {
+      wp.agentBrowserControl.cancelRequest(host, msg.id);
+      return;
+    }
     if (isComputerUseRequest(msg)) {
       void handleComputerUseRequest(wp, host, msg);
+      return;
+    }
+    if (isSecretRequest(msg)) {
+      handleSecretRequest(host, msg);
       return;
     }
     if (msg && typeof msg === 'object') {
@@ -186,13 +331,18 @@ function spawnHost(wp: WinPool, workspaceRoot: string): UtilityProcess {
       // Real background work (a child/worker produced output) is activity too.
       else if (kind === 'child-tool-end' || kind === 'child-complete') markWorkspaceActivity(workspaceRoot, 'background-task');
       // Remember each workspace's last-viewed session so we can re-announce it
-      // when the user switches back to a parked (reused) host.
-      else if (kind === 'session-changed' && typeof ev?.sessionKey === 'string') wp.lastSession.set(workspaceRoot, ev.sessionKey);
+      // when the user switches back to a parked (reused) host. The Browser
+      // records the active chat without rotating its workspace-scoped profile.
+      else if (kind === 'session-changed' && typeof ev?.sessionKey === 'string') {
+        wp.lastSession.set(workspaceRoot, ev.sessionKey);
+        try { wp.browser?.setSession(ev.sessionKey); } catch (err) { console.error('[browser] setSession failed', err); }
+      }
     }
     const tagged = (msg && typeof msg === 'object') ? { ...(msg as object), workspaceRoot } : msg;
     wp.win.webContents.send('agent-event', tagged);
   });
   host.on('exit', (code) => {
+    wp.agentBrowserControl.releaseHost(host);
     wp.hosts.delete(workspaceRoot);
     wp.pool = removeEntry(wp.pool, workspaceRoot);
     if (wp.retiring.delete(workspaceRoot)) return; // intentional reap/shutdown — not an error
@@ -228,6 +378,10 @@ function retireHost(wp: WinPool, workspaceRoot: string): void {
  */
 function activateWorkspace(wp: WinPool, workspaceRoot: string): void {
   const now = Date.now();
+  const outgoingRoot = wp.pool.activeRoot;
+  if (outgoingRoot && outgoingRoot !== workspaceRoot) {
+    wp.agentBrowserControl.invalidateWorkspace();
+  }
   const plan = planActivate(wp.pool, workspaceRoot, now);
   for (const root of plan.reap) retireHost(wp, root);
   const wasActive = wp.pool.activeRoot;
@@ -243,6 +397,9 @@ function activateWorkspace(wp: WinPool, workspaceRoot: string): void {
     if (host && last) { try { host.postMessage({ kind: 'resume-session', sessionKey: last }); } catch { /* gone */ } }
   }
   wp.win.setTitle(`BrainRouter — ${path.basename(workspaceRoot)}`);
+  // Browser tabs and storage are window-owned and restored through one
+  // persistent, isolated profile per workspace.
+  wp.browser.setWorkspaceRoot(workspaceRoot);
   // Activating/switching is membership only; it must not change the user's
   // project order.
   markWorkspaceOpened(workspaceRoot);
@@ -260,29 +417,68 @@ function openWorkspaceWindow(workspaceRoot: string): void {
     title: `BrainRouter — ${path.basename(workspaceRoot)}`,
     backgroundColor: '#262624',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    // Pin the macOS traffic lights so their centre (~y20) sits on the 40px
+    // titlebar band's centre regardless of macOS version — keeps the top row
+    // consistent instead of the lights floating in the top third.
+    ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 16, y: 13 } } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
-      // §3 D3 — allow <webview> ONLY for the prototype preview; every attach is
-      // hardened + src-gated by the will-attach-webview handler below.
+      // Browser pages live in main-owned WebContentsViews. The only remaining
+      // renderer-owned webview is the sandboxed local Artifact/prototype preview,
+      // gated below so it cannot become a second general-purpose browser.
       webviewTag: true,
     },
   });
+  const browser = new BrowserViewManager(win, workspaceRoot);
+  let wp!: WinPool;
+  const agentBrowserControl = new BrowserAgentControlManager({
+    browser,
+    window: {
+      isDestroyed: () => win.isDestroyed(),
+      isVisible: () => win.isVisible(),
+      show: () => win.show(),
+      focus: () => win.focus(),
+      requestSurface: (command, generation) => {
+        win.webContents.send('browser:open-request', {
+          reason: 'agent',
+          command,
+          generation,
+        });
+      },
+    },
+    isWorkspaceOwner: (host, root) => (
+      wp.pool.activeRoot === root && wp.hosts.get(root) === host
+    ),
+  });
+  wp = {
+    win,
+    browser,
+    hosts: new Map(),
+    lastSession: new Map(),
+    pool: emptyPool(),
+    retiring: new Set(),
+    agentBrowserControl,
+  };
+  browser.setAgentTakeoverHandler(() => wp.agentBrowserControl.handleUserTakeover());
+  wins.set(win.webContents.id, wp);
 
-  // §3 D3 — secure-webview gate: harden every attached webview (no preload/node,
-  // sandboxed, isolated) and restrict its src to a self-contained data:text/html
-  // doc or an authorized prototype file under THIS workspace. Anything else is
-  // refused. The policy is a pure, unit-tested helper (webviewPolicy.ts).
   win.webContents.on('will-attach-webview', (event, webPreferences, params) => {
     hardenWebviewPreferences(webPreferences as unknown as Record<string, unknown>);
-    if (!isAllowedWebviewSrc(typeof params.src === 'string' ? params.src : '', workspaceRoot)) {
-      event.preventDefault();
-    }
+    const activeRoot = wp.pool.activeRoot || workspaceRoot;
+    if (!isAllowedArtifactWebviewSrc(typeof params.src === 'string' ? params.src : '', activeRoot)) event.preventDefault();
   });
-  const wp: WinPool = { win, hosts: new Map(), lastSession: new Map(), pool: emptyPool(), retiring: new Set() };
-  wins.set(win.webContents.id, wp);
+  win.webContents.on('did-attach-webview', (_event, guest) => {
+    const gate = (event: { preventDefault(): void }, url: string): void => {
+      const activeRoot = wp.pool.activeRoot || workspaceRoot;
+      if (!isAllowedArtifactWebviewSrc(url, activeRoot)) event.preventDefault();
+    };
+    guest.on('will-navigate', gate);
+    guest.on('will-redirect', gate);
+    guest.setWindowOpenHandler(() => ({ action: 'deny' }));
+  });
 
   // SEC: deny all renderer-initiated window.open (target=_blank, window.open, etc.).
   // The renderer has no legitimate need to spawn a second BrowserWindow.
@@ -300,7 +496,9 @@ function openWorkspaceWindow(workspaceRoot: string): void {
   win.on('closed', () => {
     for (const [id, w] of wins) {
       if (w.win !== win) continue;
+      w.agentBrowserControl.dispose();
       for (const [root, host] of w.hosts) { w.retiring.add(root); try { host.postMessage({ kind: 'shutdown' }); } catch { /* gone */ } }
+      w.browser.dispose();
       wins.delete(id);
     }
   });
@@ -341,6 +539,17 @@ app.whenReady().then(() => {
     quit: () => app.quit(),
   });
 
+  // DESK-6 — auto-update scaffold. No-op unless this is a PACKAGED build with
+  // BRAINROUTER_UPDATE_CHANNEL set AND electron-updater installed (see updater.ts).
+  // Forwards update lifecycle events to every window on the 'update-event' channel.
+  void initAutoUpdate({
+    emit: (event) => {
+      for (const wp of wins.values()) {
+        if (!wp.win.isDestroyed()) wp.win.webContents.send('update-event', event);
+      }
+    },
+  });
+
   ipcMain.on('agent-command', (event, raw: unknown) => {
     const wp = wins.get(event.sender.id);
     if (!wp || event.senderFrame !== wp.win.webContents.mainFrame) return;
@@ -348,6 +557,59 @@ app.whenReady().then(() => {
     // Route to the ACTIVE workspace's host; background hosts keep running untouched.
     const host = wp.pool.activeRoot ? wp.hosts.get(wp.pool.activeRoot) : undefined;
     host?.postMessage(raw);
+  });
+
+  // First-class Browser IPC. Every call is bound to the BrowserWindow whose
+  // main renderer sent it; subframes and stale/detached renderers are refused.
+  ipcMain.handle('browser:get-state', (event) => {
+    const wp = wins.get(event.sender.id);
+    if (!wp || event.senderFrame !== wp.win.webContents.mainFrame) return null;
+    return wp.browser.getState();
+  });
+  ipcMain.handle('browser:command', (event, raw: unknown) => {
+    const wp = wins.get(event.sender.id);
+    if (!wp || event.senderFrame !== wp.win.webContents.mainFrame || !isBrowserCommand(raw)) {
+      return { ok: false, requestId: 'renderer_invalid', code: 'INVALID_REQUEST', error: 'Invalid browser command sender or payload.' };
+    }
+    // Most user browser commands share the visible-operation queue with agent
+    // actions. Recovery on the already-visible tab must remain re-entrant, and
+    // selecting another tab skips this outer FIFO so an unrelated load cannot
+    // make normal browser chrome unresponsive. The manager still defers a switch
+    // while an exact-visible agent pin is active.
+    const generation = wp.agentBrowserControl.generation;
+    const targetTabId = concreteRendererBrowserTarget(raw, wp.browser.getState());
+    const cancelled = () => ({
+      ok: false as const,
+      requestId: 'renderer_stale_workspace',
+      code: 'CANCELLED' as const,
+      error: 'Browser command was cancelled because the active workspace changed.',
+    });
+    const execute = async () => {
+      if (!wp.agentBrowserControl.isGenerationCurrent(generation)) return cancelled();
+      const result = await wp.browser.executeRaw(raw, targetTabId);
+      return wp.agentBrowserControl.isGenerationCurrent(generation) ? result : cancelled();
+    };
+    const bypassVisibleQueue = shouldBypassRendererVisibleQueue(
+      raw.op,
+      Boolean(targetTabId && wp.browser.isTabVisible(targetTabId)),
+    );
+    return bypassVisibleQueue ? execute() : wp.agentBrowserControl.enqueueVisibleOperation(execute);
+  });
+  ipcMain.on('browser:set-surface', (event, raw: unknown) => {
+    const wp = wins.get(event.sender.id);
+    if (!wp || event.senderFrame !== wp.win.webContents.mainFrame) return;
+    try {
+      const envelope = raw && typeof raw === 'object' && 'surface' in raw
+        ? raw as { surface: unknown; openGeneration?: unknown }
+        : { surface: raw, openGeneration: undefined };
+      const surface = wp.browser.setSurface(envelope.surface);
+      if (Number.isSafeInteger(envelope.openGeneration)) {
+        wp.agentBrowserControl.acknowledgeSurface(
+          Number(envelope.openGeneration),
+          surface.visible && surface.width > 1 && surface.height > 1,
+        );
+      }
+    } catch { /* malformed renderer geometry */ }
   });
 
   // Workspace management — main-process concerns, separate channel from the
@@ -391,9 +653,46 @@ app.whenReady().then(() => {
     openWorkspaceWindow(workspaceRoot);
     return { opened: true };
   });
+  // Workspace onboarding manifest bridge. The renderer never
+  // touches `.brainrouter/workspace.json`; main goes through the core
+  // chokepoint. Trust, top-frame ownership, and the window's active workspace
+  // are all enforced so a stale or embedded renderer cannot cross projects.
+  ipcMain.handle('workspace:manifest-get', (event, root: unknown) => {
+    if (typeof root !== 'string' || !fs.existsSync(root)) return { ok: false, error: 'Unknown workspace.' };
+    const wp = wins.get(event.sender.id);
+    if (!wp || event.senderFrame !== wp.win.webContents.mainFrame || wp.pool.activeRoot !== root) {
+      return { ok: false, error: 'Workspace is no longer active.' };
+    }
+    if (!isWorkspaceTrusted(root)) return { ok: false, error: 'Workspace is not trusted.' };
+    return { ok: true, ...getWorkspaceManifestInfo(root, loadConfig()) };
+  });
+  ipcMain.handle('workspace:manifest-preview', (event, root: unknown, payload: unknown) => {
+    if (typeof root !== 'string' || !fs.existsSync(root)) {
+      return { ok: false, error: 'Unknown workspace.' };
+    }
+    const wp = wins.get(event.sender.id);
+    if (!wp || event.senderFrame !== wp.win.webContents.mainFrame || wp.pool.activeRoot !== root) {
+      return { ok: false, error: 'Workspace is no longer active.' };
+    }
+    if (!isWorkspaceTrusted(root)) return { ok: false, error: 'Workspace is not trusted.' };
+    return previewWorkspaceOnboardingFromPayload(root, payload, loadConfig());
+  });
+  ipcMain.handle('workspace:manifest-save', (event, root: unknown, payload: unknown) => {
+    if (typeof root !== 'string' || !fs.existsSync(root)) return { saved: false, error: 'Unknown workspace.' };
+    const wp = wins.get(event.sender.id);
+    if (!wp || event.senderFrame !== wp.win.webContents.mainFrame || wp.pool.activeRoot !== root) {
+      return { saved: false, stale: true, error: 'Workspace is no longer active.' };
+    }
+    if (!isWorkspaceTrusted(root)) return { saved: false, error: 'Workspace is not trusted.' };
+    return saveWorkspaceManifestFromPayload(root, payload, loadConfig());
+  });
   // T1 — trust persistence lives in the shared CLI store (not renderer
   // localStorage), so CLI + desktop agree and it survives reinstalls.
   ipcMain.handle('workspace:isTrusted', (_e, root: unknown) => ({ trusted: typeof root === 'string' && isWorkspaceTrusted(root) }));
+  // Connector Phase 2 — GitHub OAuth device flow (start/poll/cancel/disconnect/
+  // status). Tokens never reach the renderer; success writes the keychain store.
+  ipcMain.handle('gh-oauth', (_e, payload: unknown) =>
+    handleGhOauth((payload && typeof payload === 'object' ? payload : {}) as { op?: string; connectorId?: string; clientId?: string }));
   ipcMain.handle('workspace:trust', (_e, root: unknown) => { if (typeof root === 'string') trustWorkspace(root); return { trusted: true }; });
   ipcMain.handle('workspace:untrust', (_e, root: unknown) => { if (typeof root === 'string') untrustWorkspace(root); return { trusted: false }; });
   ipcMain.handle('workspace:trustedList', () => ({ trusted: listTrustedWorkspaces() }));
@@ -429,6 +728,8 @@ app.whenReady().then(() => {
     if (typeof dragged !== 'string' || typeof target !== 'string') return { recents: readRecents() };
     return { recents: markWorkspaceReordered(dragged, target) };
   });
+  registerMeetingsBridge();
+  registerChatSyncBridge();
   ipcMain.handle('computerUse:checkPermissions', () => checkComputerUsePermissions());
   ipcMain.handle('computerUse:openAccessibilitySettings', () => openAccessibilitySettings());
   ipcMain.handle('computerUse:openScreenRecordingSettings', () => openScreenRecordingSettings());

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { Agent } from '../agent/agent.js';
-import { checkWaitCondition, waitUntilCondition } from '../util/waitUntil.js';
+import { checkWaitCondition, waitUntilCondition } from '../util/agentloop/waitUntil.js';
 import { withTempWorkspaceAsync } from './_helpers.js';
 
 test('checkWaitCondition: exists + contains + missing', () => {

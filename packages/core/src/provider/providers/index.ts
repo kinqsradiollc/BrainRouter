@@ -8,18 +8,19 @@
  * tier-ladder-only entries.
  */
 import type { ProviderDefinition } from './definition.js';
-import { openai } from './openai.js';
-import { anthropic } from './anthropic.js';
-import { gemini } from './gemini.js';
-import { openrouter } from './openrouter.js';
-import { zenmux } from './zenmux.js';
-import { groq } from './groq.js';
-import { azure } from './azure.js';
-import { openaiCompatible } from './openai-compatible.js';
-import { opencode } from './opencode.js';
-import { lmstudio } from './lmstudio.js';
-import { ollama } from './ollama.js';
-import { deepseek } from './deepseek.js';
+import { openai } from './openai/index.js';
+import { anthropic } from './anthropic/index.js';
+import { gemini } from './gemini/index.js';
+import { openrouter } from './openrouter/index.js';
+import { zenmux } from './zenmux/index.js';
+import { groq } from './groq/index.js';
+import { azure } from './azure/index.js';
+import { openaiCompatible } from './openai-compatible/index.js';
+import { opencode } from './opencode/index.js';
+import { lmstudio } from './lmstudio/index.js';
+import { ollama } from './ollama/index.js';
+import { deepseek } from './deepseek/index.js';
+import { cohere, voyage, jina } from './rerankEmbed/index.js';
 
 export type { ProviderDefinition } from './definition.js';
 
@@ -39,7 +40,21 @@ export const BUILTIN_PROVIDERS: ProviderDefinition[] = [
   lmstudio,
   ollama,
   deepseek,
+  // Embedding / reranker vendors (hidden from the chat picker; capability-tagged).
+  cohere,
+  voyage,
+  jina,
 ];
+
+/** Provider serves this model kind. Omitted `capabilities` ⇒ chat-only (the default). */
+export function providerServesKind(p: ProviderDefinition, kind: 'chat' | 'embedding' | 'reranker'): boolean {
+  return (p.capabilities ?? ['chat']).includes(kind);
+}
+
+/** Providers that serve a given model kind — the per-kind catalog for a picker. */
+export function providersForKind(kind: 'chat' | 'embedding' | 'reranker'): ProviderDefinition[] {
+  return BUILTIN_PROVIDERS.filter((p) => providerServesKind(p, kind));
+}
 
 /** id → definition, for O(1) lookup (catalog merge, tier ladders, …). */
 export const PROVIDER_REGISTRY: ReadonlyMap<string, ProviderDefinition> = new Map(

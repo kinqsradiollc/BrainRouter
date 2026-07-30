@@ -2,12 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { clearGoal, formatGoalBlock, pauseGoal, readGoal, resumeGoal, setGoal } from '../goal/goalStore.js';
+import { clearGoal, formatGoalBlock, pauseGoal, readGoal, resumeGoal, setGoal } from '../goal/store/goalStore.js';
 import { Agent } from '../agent/agent.js';
 import { withTempWorkspace } from './_helpers.js';
 
 test('formatBudget renders the unlimited default as "unlimited" and explicit numbers as-is', async () => {
-  const { formatBudget, DEFAULT_GOAL_BUDGET, UNLIMITED_BUDGET_THRESHOLD } = await import('../goal/goalStore.js');
+  const { formatBudget, DEFAULT_GOAL_BUDGET, UNLIMITED_BUDGET_THRESHOLD } = await import('../goal/store/goalStore.js');
   assert.equal(formatBudget(DEFAULT_GOAL_BUDGET), 'unlimited');
   assert.equal(formatBudget(UNLIMITED_BUDGET_THRESHOLD), 'unlimited');
   assert.equal(formatBudget(UNLIMITED_BUDGET_THRESHOLD - 1), String(UNLIMITED_BUDGET_THRESHOLD - 1));
@@ -18,7 +18,7 @@ test('formatBudget renders the unlimited default as "unlimited" and explicit num
 });
 
 test('goalHasBudgetLeft returns true forever when default budget is in effect (effectively unlimited)', async () => {
-  const { goalHasBudgetLeft, DEFAULT_GOAL_BUDGET } = await import('../goal/goalStore.js');
+  const { goalHasBudgetLeft, DEFAULT_GOAL_BUDGET } = await import('../goal/store/goalStore.js');
   // Simulate a long-running goal that's done 50,000 iterations — default budget should still permit more.
   const goal: any = {
     text: 'long-running goal',
@@ -82,7 +82,7 @@ test('goalStore: set/read/clear round-trip and formatGoalBlock includes outcome 
 });
 
 test('goalStore: setGoal rejects text longer than GOAL_TEXT_MAX_CHARS', async () => {
-  const { GoalTooLongError, GOAL_TEXT_MAX_CHARS } = await import('../goal/goalStore.js');
+  const { GoalTooLongError, GOAL_TEXT_MAX_CHARS } = await import('../goal/store/goalStore.js');
   withTempWorkspace((workspace) => {
     // At-cap input is accepted.
     const atCap = 'x'.repeat(GOAL_TEXT_MAX_CHARS);
@@ -102,7 +102,7 @@ test('goalStore: setGoal rejects text longer than GOAL_TEXT_MAX_CHARS', async ()
 });
 
 test('goalStore: lifecycle helpers — pause, resume, complete, blocked, budget, tick', async () => {
-  const { pauseGoal, resumeGoal, completeGoal, blockGoal, setGoalBudget, tickGoalIteration } = await import('../goal/goalStore.js');
+  const { pauseGoal, resumeGoal, completeGoal, blockGoal, setGoalBudget, tickGoalIteration } = await import('../goal/store/goalStore.js');
   withTempWorkspace((workspace) => {
     const sessionKey = 'brainrouter-cli:test:main';
     setGoal(workspace, 'reach the moon', sessionKey);
@@ -161,7 +161,7 @@ test('goalStore: per-session goals are isolated from each other', () => {
 });
 
 test('goalStore: setGoal throws GoalConflictError when overwriting an active goal without force', async () => {
-  const { GoalConflictError, completeGoal } = await import('../goal/goalStore.js');
+  const { GoalConflictError, completeGoal } = await import('../goal/store/goalStore.js');
   withTempWorkspace((workspace) => {
     const sk = 'brainrouter-cli:test:conflict';
     setGoal(workspace, 'first goal', sk);
@@ -189,7 +189,7 @@ test('goalStore: GoalConflictError message reflects the actual existing status',
   // Copilot review noted that the prior message hardcoded "already active"
   // even when the existing goal was paused / blocked / usage_limited,
   // misleading users via the REPL's catch path. Verify status-aware wording.
-  const { GoalConflictError, pauseGoal, blockGoal, usageLimitGoal } = await import('../goal/goalStore.js');
+  const { GoalConflictError, pauseGoal, blockGoal, usageLimitGoal } = await import('../goal/store/goalStore.js');
   withTempWorkspace((workspace) => {
     const sk = 'brainrouter-cli:test:conflict-msg';
     setGoal(workspace, 'first', sk);
@@ -286,7 +286,7 @@ test('goalStore: formatGoalBlock auto-detects final-budget turn from goal state 
 });
 
 test('goalStore: buildGoalContinuationPrompt references the anchor instead of echoing the goal text (9d)', async () => {
-  const { buildGoalContinuationPrompt } = await import('../goal/goalStore.js');
+  const { buildGoalContinuationPrompt } = await import('../goal/store/goalStore.js');
   const goal = {
     text: 'ship the auth refactor', setAt: '', status: 'active' as const,
     startedAt: '', updatedAt: '', budget: { maxIterations: 10, iterationsUsed: 3 },
@@ -308,7 +308,7 @@ test('goalStore: buildGoalContinuationPrompt references the anchor instead of ec
 });
 
 test('goalStore: token budget tracking + usage_limited transition', async () => {
-  const { setGoalTokenBudget, addGoalTokens, usageLimitGoal, goalHasBudgetLeft, goalIsOnFinalBudgetTurn } = await import('../goal/goalStore.js');
+  const { setGoalTokenBudget, addGoalTokens, usageLimitGoal, goalHasBudgetLeft, goalIsOnFinalBudgetTurn } = await import('../goal/store/goalStore.js');
   withTempWorkspace((workspace) => {
     const sk = 'brainrouter-cli:test:tokens';
     const g0 = setGoal(workspace, 'finish auth refactor', sk);
@@ -348,7 +348,7 @@ test('goalStore: token budget tracking + usage_limited transition', async () => 
 });
 
 test('goalStore: editGoal unified update changes text/status/budget/tokens in one call', async () => {
-  const { editGoal } = await import('../goal/goalStore.js');
+  const { editGoal } = await import('../goal/store/goalStore.js');
   withTempWorkspace((workspace) => {
     const sk = 'brainrouter-cli:test:edit';
     setGoal(workspace, 'initial outcome', sk);
@@ -369,7 +369,7 @@ test('goalStore: editGoal unified update changes text/status/budget/tokens in on
   });
 });
 
-test('goalStore: legacy workspace-level goal only falls back for no-session reads; first session-scoped setGoal archives it', async () => {
+test('goalStore: legacy workspace-level goal only falls back for no-session reads; first session-scoped setGoal retires it (no archive)', async () => {
   const { getStateDir, getStateFile, getSessionStateDir } = await import('../storage/store.js');
   withTempWorkspace((workspace) => {
     // Old layout — write directly to the workspace-level file.
@@ -384,14 +384,11 @@ test('goalStore: legacy workspace-level goal only falls back for no-session read
     assert.equal(readGoal(workspace, sessionKey)?.text, 'session-scoped');
     // Session bucket holds the new goal.
     assert.equal(fs.existsSync(path.join(getSessionStateDir(workspace, sessionKey), 'goal.json')), true);
-    // Legacy file is gone (archived, not left where another session would re-pick it up).
+    // Legacy file is gone (deleted, not left where another session would re-pick it up).
     assert.equal(fs.existsSync(getStateFile(workspace, 'goal.json')), false);
-    // Archived into the per-user cli state dir, NOT into the project workspace tree.
-    const archiveDir = path.join(getStateDir(workspace), '.brainrouter.migrated');
-    const migrated = fs.readdirSync(archiveDir);
-    assert.equal(migrated.length, 1);
-    assert.match(migrated[0]!, /^legacy-goal-.*\.json$/);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(archiveDir, migrated[0]!), 'utf8')).text, 'legacy goal');
+    // We no longer create a `.brainrouter.migrated` archive — neither in the
+    // per-user cli state dir nor in the project workspace tree.
+    assert.equal(fs.existsSync(path.join(getStateDir(workspace), '.brainrouter.migrated')), false);
     // Guardrail: the project workspace tree is not polluted (0.3.3 invariant).
     assert.equal(fs.existsSync(path.join(workspace, '.brainrouter.migrated')), false);
   });
@@ -421,8 +418,8 @@ test('goalStore: session A goal does not leak into session B (regression for cro
 // -----------------------------------------------------------------------
 
 test('resolveGoalScope: always returns session scope when sessionKey is provided (workflow priority removed)', async () => {
-  const { resolveGoalScope } = await import('../goal/goalStore.js');
-  const { createWorkflow } = await import('../workflow/workflowArtifacts.js');
+  const { resolveGoalScope } = await import('../goal/store/goalStore.js');
+  const { createWorkflow } = await import('../workflow/run/workflowArtifacts.js');
   withTempWorkspace((workspace) => {
     const sk = 'brainrouter-cli:test:scope-session-always';
     // No workflow → session scope.
@@ -445,7 +442,7 @@ test('resolveGoalScope: always returns session scope when sessionKey is provided
 });
 
 test('resolveGoalScope: falls back to legacy when no sessionKey', async () => {
-  const { resolveGoalScope } = await import('../goal/goalStore.js');
+  const { resolveGoalScope } = await import('../goal/store/goalStore.js');
   withTempWorkspace((workspace) => {
     const legacyScope = resolveGoalScope(workspace);
     assert.equal(legacyScope.scope, 'legacy');
@@ -454,7 +451,7 @@ test('resolveGoalScope: falls back to legacy when no sessionKey', async () => {
 });
 
 test('goal stays session-scoped even with a workflow bound (no <workflow>/goal.json written)', async () => {
-  const { createWorkflow, getWorkflowDir } = await import('../workflow/workflowArtifacts.js');
+  const { createWorkflow, getWorkflowDir } = await import('../workflow/run/workflowArtifacts.js');
   withTempWorkspace((workspace) => {
     const sk = 'brainrouter-cli:test:no-workflow-goal';
     const meta = createWorkflow(workspace, { title: 'cache rewrite', kind: 'spec', sessionKey: sk });
@@ -479,7 +476,7 @@ test('goal stays session-scoped even with a workflow bound (no <workflow>/goal.j
 });
 
 test('switching workflows does NOT change the session goal (workflows = navigation, goals = runtime)', async () => {
-  const { createWorkflow, setCurrentWorkflow, getCurrentWorkflow } = await import('../workflow/workflowArtifacts.js');
+  const { createWorkflow, setCurrentWorkflow, getCurrentWorkflow } = await import('../workflow/run/workflowArtifacts.js');
   withTempWorkspace((workspace) => {
     const sk = 'brainrouter-cli:test:swap-keeps-goal';
     const a = createWorkflow(workspace, { title: 'workflow A', kind: 'feature-dev', sessionKey: sk });
@@ -520,7 +517,7 @@ test('pauseGoal / resumeGoal operate on the session goal regardless of workflow 
   // Both routes call pauseGoal/resumeGoal at session scope — workflow
   // binding doesn't change which goal file gets touched (there's only
   // one — the session's).
-  const { createWorkflow } = await import('../workflow/workflowArtifacts.js');
+  const { createWorkflow } = await import('../workflow/run/workflowArtifacts.js');
   withTempWorkspace((workspace) => {
     const sk = 'brainrouter-cli:test:pause-with-workflow';
     createWorkflow(workspace, { title: 'auth overhaul', kind: 'feature-dev', sessionKey: sk });
@@ -576,7 +573,7 @@ test('9d-bugfix: session B does NOT inherit session A\'s workflow binding (or it
   // a goal must NOT bleed into session B reading either. Session B
   // remains free to `/goal` independently.
   const { createWorkflow, getCurrentWorkflow, getLastUsedWorkflow } =
-    await import('../workflow/workflowArtifacts.js');
+    await import('../workflow/run/workflowArtifacts.js');
   withTempWorkspace((workspace) => {
     const sessionA = 'brainrouter-cli:session:A';
     const sessionB = 'brainrouter-cli:session:B';
@@ -621,7 +618,7 @@ test('9d-bugfix: setCurrentWorkflow without sessionKey still updates the workspa
   // and `getCurrentWorkflow(workspace)` (no sessionKey) keep working —
   // they just don't bind any specific session.
   const { setCurrentWorkflow, getCurrentWorkflow, getLastUsedWorkflow } =
-    await import('../workflow/workflowArtifacts.js');
+    await import('../workflow/run/workflowArtifacts.js');
   withTempWorkspace((workspace) => {
     setCurrentWorkflow(workspace, 'legacy-slug');
     assert.equal(getLastUsedWorkflow(workspace), 'legacy-slug');
@@ -634,7 +631,7 @@ test('9d-bugfix: setCurrentWorkflow without sessionKey still updates the workspa
 
 test('9d-bugfix: clearSessionWorkflow unbinds the session without touching the workspace hint', async () => {
   const { createWorkflow, clearSessionWorkflow, getCurrentWorkflow, getLastUsedWorkflow } =
-    await import('../workflow/workflowArtifacts.js');
+    await import('../workflow/run/workflowArtifacts.js');
   withTempWorkspace((workspace) => {
     const sk = 'brainrouter-cli:session:clear';
     const wf = createWorkflow(workspace, { title: 'auth refactor', kind: 'feature-dev', sessionKey: sk });
@@ -651,7 +648,7 @@ test('9d-bugfix: clearSessionWorkflow unbinds the session without touching the w
 });
 
 test('decideGoalContinuation: stop / continue / corrective / halt / usage-limited', async () => {
-  const { decideGoalContinuation } = await import('../goal/goalStore.js');
+  const { decideGoalContinuation } = await import('../goal/store/goalStore.js');
   const base = {
     text: 'do x', setAt: 'a', startedAt: 'a', updatedAt: 'a', status: 'active' as const,
     budget: { maxIterations: 10, iterationsUsed: 2 },

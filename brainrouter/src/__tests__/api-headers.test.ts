@@ -25,6 +25,20 @@ describe("API-HEADERS-CORS — isOriginAllowed", () => {
     expect(isOriginAllowed(undefined, ["https://a.test"])).toBe(false);
     expect(isOriginAllowed("https://anything.test", ["*"])).toBe(true);
   });
+
+  it("dev-permissive allows any localhost/127.0.0.1 origin, but not in production", () => {
+    const allow = ["https://app.prod"];
+    // devPermissive → any local origin passes even when not in the allowlist.
+    expect(isOriginAllowed("http://localhost:3000", allow, true)).toBe(true);
+    expect(isOriginAllowed("http://localhost:5173", allow, true)).toBe(true);
+    expect(isOriginAllowed("http://127.0.0.1:8080", allow, true)).toBe(true);
+    expect(isOriginAllowed("https://localhost", allow, true)).toBe(true);
+    // A non-local foreign origin still needs the allowlist.
+    expect(isOriginAllowed("https://evil.test", allow, true)).toBe(false);
+    // Production (devPermissive=false, the default) rejects unlisted localhost.
+    expect(isOriginAllowed("http://localhost:3000", allow)).toBe(false);
+    expect(isOriginAllowed("http://localhost:3000", allow, false)).toBe(false);
+  });
 });
 
 describe("API-HEADERS-CORS — middleware integration", () => {
@@ -70,6 +84,10 @@ describe("API-HEADERS-CORS — middleware integration", () => {
     expect(evil.status).toBe(403);
     const ok = await fetch(`${base}/x`, { method: "OPTIONS", headers: { Origin: "https://app.test" } });
     expect(ok.status).toBe(204);
+    // The dashboard sends the active-org header on admin/tenancy calls; it must
+    // be listed in Allow-Headers or the browser blocks the request in preflight.
+    const allowHeaders = ok.headers.get("access-control-allow-headers") ?? "";
+    expect(allowHeaders).toContain("X-BrainRouter-Org");
   });
 
   it("lets a no-Origin request (curl / server-to-server) through", async () => {

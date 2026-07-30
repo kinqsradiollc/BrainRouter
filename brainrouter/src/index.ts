@@ -37,30 +37,55 @@ import fs from "node:fs";
 import { Registry } from './registry.js';
 import { resolveRegistryConfig } from './resolver.js';
 import { buildMcpServer } from './transport/mcpServer.js';
+import {
+  matchesMcpSessionIdentity,
+  type McpSessionIdentity,
+} from './transport/mcpSessionIdentity.js';
 import { recordHttp, routeBucket, renderPrometheus, metricsSnapshot } from './observability/metrics.js';
+import { collectSystemStatus } from './observability/status.js';
+import { modelGateway } from './services/modelGateway/modelGateway.js';
 
 import { memoryEngine, closeMemoryEngine } from './memory/engine.js';
+import { resolveOrgContext } from './tenancy/context.js';
 import path from 'node:path';
 import { decideMcpAcceptPromotion } from './api/mcpAcceptHeader.js';
-import { usersRouter } from './api/routes/users.js';
-import { memoriesRouter } from './api/routes/memories.js';
-import { scenesRouter } from './api/routes/scenes.js';
-import { personaRouter } from './api/routes/persona.js';
-import { sessionsRouter } from './api/routes/sessions.js';
-import { contradictionsRouter } from './api/routes/contradictions.js';
-import { statsRouter } from './api/routes/stats.js';
-import { brainRouter } from './api/routes/brain.js';
-import { graphRouter } from './api/routes/graph.js';
-import { authRouter } from './api/routes/auth.js';
-import { chatCompletionsRouter } from './api/routes/chat-completions.js';
-import { governanceRouter } from './api/routes/governance.js';
-import { evidenceRouter } from './api/routes/evidence.js';
-import { fleetRouter } from './api/routes/fleet.js';
-import { hooksRouter } from './api/routes/hooks.js';
-import { workingRouter } from './api/routes/working.js';
-import { skillsRouter } from './api/routes/skills.js';
-import { USING_FALLBACK_JWT_SECRET, IS_PRODUCTION, jwtSecretBootError } from './api/middleware/auth.js';
-import { securityHeaders, corsMiddleware } from './api/middleware/securityHeaders.js';
+import { authRouter, usersRouter, sessionsRouter } from './api/routes/identity/index.js';
+import { meetingsRouter, publicMeetingsRouter } from './api/routes/meetings.js';
+import { trackRouter } from './api/routes/track.js';
+import { teamsRouter } from './api/routes/teams.js';
+import { chatThreadsRouter } from './api/routes/chatThreads.js';
+import { publicSharePageRouter } from './api/routes/publicShare.js';
+import { vulnerabilitiesRouter } from './api/routes/vulnerabilities.js';
+import { orgsRouter, projectsRouter, githubReposRouter } from './api/routes/tenancy/index.js';
+import { connectorOauthRouter } from './api/routes/connectors/oauth.js';
+import { connectorManageRouter } from './api/routes/connectors/manage.js';
+import { githubConnectorRouter, githubConnectorAdminRouter } from './api/routes/connectors/github.js';
+import { providersRouter, agentModelsRouter, recallSettingsRouter, integrationsRouter, reviewsRouter, pentestsRouter, adminEmailRouter, adminOrgsRouter, adminModelsRouter } from './api/routes/admin/index.js';
+import { modelsRouter } from './api/routes/models/index.js';
+import { remoteRouter } from './api/routes/remote/index.js';
+import {
+  knowledgeBasesRouter,
+  knowledgeDistillationRouter,
+  knowledgeDocumentsRouter,
+  knowledgeSearchRouter,
+} from './api/routes/knowledge/index.js';
+import { triggersRouter } from './api/routes/triggers/index.js';
+import {
+  memoriesRouter,
+  contradictionsRouter,
+  evidenceRouter,
+  graphRouter,
+  scenesRouter,
+  personaRouter,
+  statsRouter,
+  skillsRouter,
+  workingRouter,
+} from './api/routes/memory/index.js';
+import { brainRouter, fleetRouter, hooksRouter, governanceRouter } from './api/routes/agent/index.js';
+import { USING_FALLBACK_JWT_SECRET, IS_PRODUCTION, jwtSecretBootError, JWT_SECRET } from './api/middleware/auth.js';
+import { GatewayProviderService } from './services/gateway/providerPool.js';
+import { mountGatewayDataPlane } from './services/gateway/server.js';
+import { securityHeaders, corsMiddleware, resolveCorsAllowlist } from './api/middleware/securityHeaders.js';
 import { resolveJsonBodyLimit, payloadTooLargeHandler } from './api/bodyLimit.js';
 import { createRateLimiter } from './api/middleware/rateLimit.js';
 import { errorHandler } from './api/middleware/errorHandler.js';
@@ -112,7 +137,11 @@ memoryEngine.autoScanSkillHints(uniqueSkillsDirs);
 if (USE_HTTP) {
   // ── HTTP / Streamable-HTTP transport ────────────────────────────────────────
   // Each client session gets its own Server + Transport instance.
-  const sessions = new Map<string, { server: Server; transport: StreamableHTTPServerTransport }>();
+  const sessions = new Map<string, {
+    server: Server;
+    transport: StreamableHTTPServerTransport;
+    identity: McpSessionIdentity;
+  }>();
   // Tracks which User-Agents we've already warned about for missing
   // `text/event-stream` in their Accept header — one warning per UA
   // so a chatty client doesn't drown the logs.
@@ -141,13 +170,21 @@ if (USE_HTTP) {
   // BRAINROUTER_CORS_ORIGIN may be a comma-separated list; only listed origins
   // are reflected and only they receive credentials.
   app.use(securityHeaders({ production: IS_PRODUCTION }));
-  app.use(corsMiddleware());
+  // In dev, any localhost origin is allowed so the dashboard "just works"; in
+  // production only BRAINROUTER_CORS_ORIGIN is reflected.
+  app.use(corsMiddleware(resolveCorsAllowlist(), { production: IS_PRODUCTION }));
 
   // BRAIN-BODY-LIMIT — size the JSON body limit for real MCP payloads (capture
   // transcripts, multi-record recall/sync). body-parser's stock 100kb default
   // rejected large but legitimate requests; override via BRAINROUTER_MAX_BODY_SIZE.
   const jsonBodyLimit = resolveJsonBodyLimit();
-  app.use(express.json({ limit: jsonBodyLimit }));
+  // ADR-010 P6b — stash the raw bytes so the GitHub webhook ingress can verify
+  // the X-Hub-Signature-256 HMAC over the exact payload (re-serialized JSON
+  // wouldn't byte-match). Cheap: one Buffer reference per request.
+  app.use(express.json({
+    limit: jsonBodyLimit,
+    verify: (req: express.Request & { rawBody?: Buffer }, _res, buf) => { req.rawBody = buf; },
+  }));
   // API-AUTHN (0.4.9) — fail closed in production if no JWT secret is configured.
   const jwtBootErr = jwtSecretBootError(IS_PRODUCTION, USING_FALLBACK_JWT_SECRET);
   if (jwtBootErr) {
@@ -169,20 +206,110 @@ if (USE_HTTP) {
     });
   }
 
-  // Health check
+  // ADR-013 — this process's role. `brain` (default) serves BOTH the MCP tool
+  // plane AND the REST/auth API (single-node, unchanged). Decompose a fleet by
+  // running `mcp` (the memory/agent brain — MCP only) and `api` (auth + REST API
+  // — no MCP) as separate services; each still boots the shared engine + DB.
+  const SERVICE = (process.env.BRAINROUTER_SERVICE ?? "brain").toLowerCase();
+  const serveRest = SERVICE === "brain" || SERVICE === "api";
+  const serveMcp = SERVICE === "brain" || SERVICE === "mcp";
+  // SINGLE GATEWAY — front the OpenAI-compatible /v1 model-gateway on THIS port so
+  // clients (desktop BrainRouter provider, CLI, any OpenAI-compat caller) only ever
+  // need :3747. Default ON for the single-node `brain`; OFF for the decomposed
+  // stack (SERVICE=mcp/api) where a dedicated gateway container serves :3748 — set
+  // BRAINROUTER_INPROCESS_GATEWAY=on to force it, =off to opt a brain out.
+  const serveGateway = process.env.BRAINROUTER_INPROCESS_GATEWAY === "on"
+    || (SERVICE === "brain" && process.env.BRAINROUTER_INPROCESS_GATEWAY !== "off");
+
+  // Health check (fast liveness probe).
   app.get('/health', (_req: Request, res: Response) => {
-    res.json({ status: 'ok', transport: 'http', root: config.localRoot });
+    res.json({ status: 'ok', transport: 'http', service: SERVICE, root: config.localRoot });
   });
 
+  // Public status aggregation for the single gateway — reports the health of every
+  // component (gateway / REST / MCP / database / memory). Unauthenticated + not
+  // rate-limited (mounted before the /api throttle) so a status page or external
+  // monitor can poll it. 503 when any component is down.
+  app.get('/api/status', async (_req: Request, res: Response) => {
+    const status = await collectSystemStatus({
+      service: SERVICE,
+      serveRest,
+      serveMcp,
+      pingDb: () => memoryEngine.ping(),
+      uptimeSec: Math.round(process.uptime()),
+      checkedAt: new Date().toISOString(),
+      modelKinds: modelGateway.snapshot(),
+    });
+    res.status(status.status === 'down' ? 503 : 200).json(status);
+  });
+
+  // SINGLE-GATEWAY MOUNT — the OpenAI-compatible /v1 surface (chat/completions,
+  // responses, models) on this same port, so :3747 is the one door clients need.
+  // Auth here is the gateway's own (a `br_` API key or a models:invoke JWT — NOT
+  // the plain /api JWT); it shares the brain's JWT_SECRET + Postgres so a token
+  // minted by /api/auth validates here. Skipped (falls back to the standalone
+  // :3748 gateway) when no database URL is configured.
+  if (serveGateway) {
+    const gatewayDbUrl = process.env.BRAINROUTER_DATABASE_URL ?? process.env.DATABASE_URL;
+    if (gatewayDbUrl) {
+      const gatewayService = new GatewayProviderService(gatewayDbUrl, JWT_SECRET);
+      app.use('/v1', apiRateLimit);
+      mountGatewayDataPlane(app, gatewayService);
+      // Point internal scoped dispatch (dashboard brain-chat) at THIS in-process
+      // gateway (base URL — modelGateway appends /v1/chat/completions) so a
+      // single-node deploy needs no separate :3748 process.
+      if (!process.env.BRAINROUTER_MODEL_GATEWAY_URL) {
+        process.env.BRAINROUTER_MODEL_GATEWAY_URL = `http://127.0.0.1:${PORT}`;
+      }
+      console.error(`[BrainRouter] in-process model gateway mounted at /v1 (single-port ${SERVICE}).`);
+    } else {
+      console.error('[BrainRouter] in-process /v1 gateway skipped: no BRAINROUTER_DATABASE_URL; use the standalone gateway service.');
+    }
+  }
+
+  if (serveRest) {
   app.use("/api", apiRateLimit);
   app.use("/api/auth/signin", authRateLimit);
   app.use("/api/auth/signup", authRateLimit);
   app.use("/api/auth", authRouter);
   app.use("/api/users", usersRouter);
+  app.use("/api/orgs", orgsRouter);
+  app.use("/api/orgs", projectsRouter);
+  app.use("/api/orgs", githubReposRouter);
+  app.use("/api/connectors", githubConnectorRouter);
+  app.use("/api/admin/connectors", githubConnectorAdminRouter);
+  app.use("/api/admin/providers", providersRouter);
+  app.use("/api/admin/models", adminModelsRouter);
+  app.use("/api/models", modelsRouter);
+  app.use("/api/knowledge", knowledgeBasesRouter);
+  app.use("/api/knowledge", knowledgeDistillationRouter);
+  app.use("/api/knowledge", knowledgeDocumentsRouter);
+  app.use("/api/knowledge", knowledgeSearchRouter);
+  app.use("/api/remote", remoteRouter);
+  app.use("/api/admin/agent-models", agentModelsRouter);
+  app.use("/api/admin/recall-settings", recallSettingsRouter);
+  app.use("/api/admin/integrations", integrationsRouter);
+  app.use("/api/connectors", connectorOauthRouter);
+  app.use("/api/connectors", connectorManageRouter);
+  app.use("/api/admin/reviews", reviewsRouter);
+  app.use("/api/admin/pentests", pentestsRouter);
+  app.use("/api/admin/email", adminEmailRouter);
+  app.use("/api/admin/orgs", adminOrgsRouter);
+  // Hosted webhook ingress — unauthenticated by JWT (verifies the App's HMAC).
+  app.use("/api/triggers", triggersRouter);
   app.use("/api/memories", memoriesRouter);
   app.use("/api/scenes", scenesRouter);
   app.use("/api/persona", personaRouter);
   app.use("/api/sessions", sessionsRouter);
+  app.use("/api/meetings", meetingsRouter);
+  app.use("/api/public/meetings", publicMeetingsRouter);
+  app.use("/api/track", trackRouter);
+  app.use("/api/teams", teamsRouter);
+  app.use("/api/chat/threads", chatThreadsRouter);
+  // Human-facing public share page — the /m/<token> link minted for a public meeting.
+  app.use("/m", publicSharePageRouter);
+  app.use("/api/vulnerabilities", vulnerabilitiesRouter);
+  app.use("/api/vulnerability", vulnerabilitiesRouter);
   app.use("/api/contradictions", contradictionsRouter);
   app.use("/api/stats", statsRouter);
   app.use("/api/brain", brainRouter);
@@ -193,14 +320,7 @@ if (USE_HTTP) {
   app.use("/api/hooks", hooksRouter);
   app.use("/api/working", workingRouter);
   app.use("/api/skills", skillsRouter);
-  // OpenAI-compatible chat endpoint (memory-augmented):
-  //   POST /v1/chat/completions  — standard OpenAI body, sessionKey via body.brainrouter.sessionKey or X-BrainRouter-Session header
-  //   GET  /v1/models            — returns the configured upstream model
-  // DoS backstop — the same generous, env-tunable global limiter the /api surface
-  // uses (BRAINROUTER_RATE_LIMIT_MAX, default 600/min). Above normal agent +
-  // proxy traffic, so it only catches a runaway/abusive client.
-  app.use("/v1", apiRateLimit);
-  app.use("/v1", chatCompletionsRouter);
+  } // end serveRest
 
   // MCP endpoint — handles POST (requests) and GET (SSE stream).
   //
@@ -257,17 +377,42 @@ if (USE_HTTP) {
       return;
     }
     const effectiveUserId = user.userId;
+    // C1 (ADR-016) — resolve the caller's active org (X-BrainRouter-Org header,
+    // else their default org) so the MCP recall path can surface org-shared memory.
+    // A repeated header arrives as string[] — coerce safely so `.trim()` can't throw.
+    const orgHeader = req.headers['x-brainrouter-org'];
+    const requestedOrg = (Array.isArray(orgHeader) ? orgHeader[0] : orgHeader)?.trim() || undefined;
+    const orgCtx = await resolveOrgContext(memoryEngine.tenancy, effectiveUserId, requestedOrg).catch(() => null);
+    // If the caller EXPLICITLY requested an org it can't access, fail loud instead of
+    // silently falling back to no-org (defense-in-depth over the recall layer, which
+    // already refuses any client-supplied filters.orgId — org is server-pinned). CWE-284.
+    if (requestedOrg && !orgCtx?.orgId) {
+      res.status(403).json({ error: 'Not a member of the requested organization.' });
+      return;
+    }
+    const defaultOrgId = orgCtx?.orgId;
+    const requestIdentity: McpSessionIdentity = {
+      userId: effectiveUserId,
+      orgId: defaultOrgId,
+      role: orgCtx?.role,
+      isAdmin: user.isAdmin,
+    };
 
     if (req.method === 'POST' && !sessionId) {
       // New session — initialise
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (id) => {
-          sessions.set(id, { server: mcpServer, transport });
+          sessions.set(id, { server: mcpServer, transport, identity: requestIdentity });
         },
       });
 
-      const mcpServer = buildMcpServer(registry, { defaultUserId: effectiveUserId, isAdmin: user.isAdmin });
+      const mcpServer = buildMcpServer(registry, {
+        defaultUserId: effectiveUserId,
+        isAdmin: user.isAdmin,
+        defaultOrgId,
+        defaultRole: orgCtx?.role,
+      });
 
       transport.onclose = () => {
         const id = [...sessions.entries()].find(([, v]) => v.transport === transport)?.[0];
@@ -285,22 +430,29 @@ if (USE_HTTP) {
       res.status(404).json({ error: 'Session not found. Send a POST without mcp-session-id to initialise.' });
       return;
     }
+    if (!matchesMcpSessionIdentity(session.identity, requestIdentity)) {
+      res.status(403).json({ error: 'MCP session authentication context changed. Reconnect to continue.' });
+      return;
+    }
 
     await session.transport.handleRequest(req, res, req.body);
   }
 
   // DoS backstop on the MCP tool transport (env-tunable; default 600/min — well
   // above a normal agent's tool-call cadence, so it only trips a runaway).
-  app.use('/mcp', apiRateLimit);
-  app.post('/mcp', handleMcp);
-  app.get('/mcp', handleMcp);
+  // Mounted only when this process serves the MCP plane (SERVICE=brain|mcp).
+  if (serveMcp) {
+    app.use('/mcp', apiRateLimit);
+    app.post('/mcp', handleMcp);
+    app.get('/mcp', handleMcp);
 
-  // DELETE — client-side session teardown
-  app.delete('/mcp', (req: Request, res: Response) => {
-    const sessionId = req.headers['mcp-session-id'] as string | undefined;
-    if (sessionId) sessions.delete(sessionId);
-    res.status(204).send();
-  });
+    // DELETE — client-side session teardown
+    app.delete('/mcp', (req: Request, res: Response) => {
+      const sessionId = req.headers['mcp-session-id'] as string | undefined;
+      if (sessionId) sessions.delete(sessionId);
+      res.status(204).send();
+    });
+  }
 
   const dashboardDist = path.resolve(process.cwd(), "..", "dashboard", "dist");
   if (fs.existsSync(dashboardDist)) {

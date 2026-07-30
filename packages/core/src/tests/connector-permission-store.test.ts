@@ -6,8 +6,8 @@ import {
   deleteConnectorPermissions,
   listConnectorPermissions,
   upsertConnectorPermissions,
-} from '../connectors/permissionStore.js';
-import { createConnector, deleteConnector } from '../connectors/connectorStore.js';
+} from '../connectors/store/permissionStore.js';
+import { createConnector, deleteConnector } from '../connectors/store/connectorStore.js';
 import { withTempWorkspace } from './_helpers.js';
 
 function permission(overrides: Partial<ConnectorPermission>): ConnectorPermission {

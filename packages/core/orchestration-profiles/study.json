@@ -1,0 +1,231 @@
+{
+  "schemaVersion": 1,
+  "kind": "orchestration-profile",
+  "id": "study",
+  "displayName": "Study orchestration",
+  "defaultMode": "explicit",
+  "fallbackStrategyId": "direct-tutoring",
+  "rolePolicy": {
+    "availableRoles": [
+      "explorer"
+    ],
+    "disabledRoles": [
+      "fleet"
+    ]
+  },
+  "limits": {
+    "maxParallel": 2,
+    "maxStages": 5,
+    "maxChildrenPerStage": 2,
+    "maxTotalChildren": 2,
+    "maxDepth": 2,
+    "maxRetries": 1
+  },
+  "strategies": [
+    {
+      "id": "direct-tutoring",
+      "description": "Keep a bounded learning question conversational on the primary tutor.",
+      "activation": {
+        "signals": [
+          "small-scope"
+        ],
+        "explicitOnly": false
+      },
+      "stages": [
+        {
+          "id": "respond",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [],
+          "objective": "Respond to the bounded learning question on the primary tutor while preserving learner agency and checking understanding when appropriate.",
+          "skillIds": [],
+          "optional": false
+        }
+      ]
+    },
+    {
+      "id": "diagnose-teach-check",
+      "description": "Diagnose the learner, map the next objective, teach it, and check observable understanding on the primary tutor.",
+      "activation": {
+        "signals": [
+          "learning-assessment"
+        ],
+        "explicitOnly": false
+      },
+      "stages": [
+        {
+          "id": "diagnose",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [],
+          "objective": "Diagnose the learner's target, demonstrated prerequisites, misconceptions, constraints, and uncertainty before choosing instruction.",
+          "skillIds": [
+            "learner-diagnostic-skill"
+          ],
+          "optional": false
+        },
+        {
+          "id": "map-objective",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "diagnose"
+          ],
+          "objective": "Select one prerequisite-valid objective and define observable, objective-type mastery evidence without treating presentation as progress.",
+          "skillIds": [
+            "learning-plan-skill"
+          ],
+          "optional": false
+        },
+        {
+          "id": "teach",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "map-objective"
+          ],
+          "objective": "Teach the selected objective from the learner's prior knowledge using one coherent model, a worked example, a boundary case, and fading support.",
+          "skillIds": [
+            "tutoring-explanation-skill"
+          ],
+          "optional": false
+        },
+        {
+          "id": "check",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "teach"
+          ],
+          "objective": "Check the declared mastery gate with observable reasoning, preserve the learner's evidence, and choose advance or remediation without answer leakage.",
+          "skillIds": [
+            "learning-assessment-skill"
+          ],
+          "optional": false
+        }
+      ]
+    },
+    {
+      "id": "remediate",
+      "description": "Diagnose an observed error, apply the smallest correction, and re-check with a changed task on the primary tutor.",
+      "activation": {
+        "signals": [
+          "remediation"
+        ],
+        "explicitOnly": false
+      },
+      "stages": [
+        {
+          "id": "diagnose-error",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [],
+          "objective": "Reconstruct the learner's reasoning and verify the earliest causal error without treating one ambiguous answer as a stable misconception.",
+          "skillIds": [
+            "learner-diagnostic-skill"
+          ],
+          "optional": false
+        },
+        {
+          "id": "correct",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "diagnose-error"
+          ],
+          "objective": "Apply the smallest corrective intervention, change representation or support as needed, and preserve learner agency.",
+          "skillIds": [
+            "error-remediation-skill"
+          ],
+          "optional": false
+        },
+        {
+          "id": "recheck",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "correct"
+          ],
+          "objective": "Re-check the same objective independently with a nearby but non-identical task and keep the objective open unless its mastery gate clears.",
+          "skillIds": [
+            "learning-assessment-skill"
+          ],
+          "optional": false
+        }
+      ]
+    },
+    {
+      "id": "source-explanation",
+      "description": "Gather bounded source material read-only, then explain and check one objective on the primary tutor.",
+      "activation": {
+        "signals": [
+          "source-explanation"
+        ],
+        "explicitOnly": false
+      },
+      "stages": [
+        {
+          "id": "gather",
+          "executor": {
+            "kind": "role",
+            "roleId": "explorer"
+          },
+          "after": [],
+          "objective": "Gather authoritative source material for one assigned learning objective, preserving precise provenance, assumptions, disagreements, and access gaps without teaching or grading the learner.",
+          "skillIds": [
+            "learning-source-skill"
+          ],
+          "fanOut": {
+            "min": 1,
+            "max": 2
+          },
+          "optional": false,
+          "expectedOutput": {
+            "contractId": "explorer",
+            "requiredSections": [
+              "headline",
+              "files-read",
+              "facts"
+            ]
+          }
+        },
+        {
+          "id": "teach",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "gather"
+          ],
+          "objective": "Teach one objective from the gathered source material, separating the source's claims from inference and adapting the explanation to the learner.",
+          "skillIds": [
+            "tutoring-explanation-skill"
+          ],
+          "optional": false
+        },
+        {
+          "id": "check",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "teach"
+          ],
+          "objective": "Check the learner's understanding through observable reasoning or transfer and route material errors to a later remediation cycle.",
+          "skillIds": [
+            "learning-assessment-skill"
+          ],
+          "optional": false
+        }
+      ]
+    }
+  ]
+}

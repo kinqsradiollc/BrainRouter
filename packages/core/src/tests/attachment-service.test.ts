@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createAttachmentService, AttachmentService } from '../attachment/service.js';
-import { getAttachment, listAttachments, safeAttachmentName, attachmentDir, type CreateAttachmentInput } from '../attachment/attachmentStore.js';
+import { getAttachment, listAttachments, safeAttachmentName, attachmentDir, type CreateAttachmentInput } from '../attachment/store/attachmentStore.js';
 
 test('AttachmentService is a per-workspace facade — delegates to the attachment store', () => {
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'attach-svc-'));

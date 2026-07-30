@@ -5,10 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { withTempWorkspaceAsync } from './_helpers.js';
-import { prepareChildWorkspace, removeChildWorktree, reconcileOrphanWorktrees, applyPatchFile, prepareSharedWorktree, isSharedWorktreeOf, sharedWorktreeLaunchCwd, mergeBackLine } from '../worktree/worktreeIsolation.js';
-import { finalizeBuildLoop, finalizeFanOutBuild, verifyLooksGreen, reviewHasBlocker } from '../orchestration/buildLoop.js';
+import { prepareChildWorkspace, removeChildWorktree, reconcileOrphanWorktrees, applyPatchFile, prepareSharedWorktree, isSharedWorktreeOf, sharedWorktreeLaunchCwd, mergeBackLine, captureWorktreeChanges, createDetachedWorktree } from '../worktree/worktreeIsolation.js';
+import { finalizeBuildLoop, finalizeFanOutBuild, verifyLooksGreen, reviewHasBlocker } from '../orchestration/workflow/buildLoop.js';
 import { executeOrchestrationTool, trackedPromiseFor } from '../orchestration/tools.js';
-import { getSession, pruneWorktreePatches } from '../orchestration/orchestrator.js';
+import { getSession, pruneWorktreePatches } from '../orchestration/session/orchestrator.js';
 import { getStateDir, getBrainrouterHome } from '../storage/store.js';
 import { setCliKnobOverride, _resetCliKnobsCache, getCliKnobs } from '../config/config.js';
 
@@ -169,6 +169,74 @@ test('CODEX-WORKTREE-CLEANUP removeChildWorktree captures the diff then removes 
     assert.equal(fs.existsSync(resolved.workspaceRoot), false);
     const list = git(workspace, ['worktree', 'list', '--porcelain']).stdout;
     assert.ok(!list.includes(resolved.workspaceRoot), 'git worktree list no longer references the removed worktree');
+  });
+});
+
+test('worktree cleanup pins an unreachable committed HEAD to a recovery ref before removal', async () => {
+  await withGitWorkspace(async (workspace) => {
+    const resolved = prepareChildWorkspace({
+      parentWorkspaceRoot: workspace,
+      parentLaunchCwd: workspace,
+      childId: `agent-committed-${Date.now()}`,
+      access: 'write',
+      mode: 'auto',
+    });
+    assert.ok(resolved.isolation);
+    fs.writeFileSync(path.join(resolved.workspaceRoot, 'committed.txt'), 'committed only in child\n');
+    git(resolved.workspaceRoot, ['add', '.']);
+    assert.equal(git(resolved.workspaceRoot, ['commit', '-m', 'child commit']).ok, true);
+    const childHead = git(resolved.workspaceRoot, ['rev-parse', 'HEAD']).stdout.trim();
+
+    const out = removeChildWorktree(resolved.isolation);
+    assert.equal(out.ok, true, out.notice);
+    assert.ok(out.recoveryRef?.startsWith('refs/brainrouter/recovery/'));
+    assert.equal(git(workspace, ['rev-parse', '--verify', out.recoveryRef!]).stdout.trim(), childHead);
+    assert.equal(fs.existsSync(resolved.workspaceRoot), false);
+  });
+});
+
+test('fan-out capture includes committed and uncommitted changes relative to its launch base', async () => {
+  await withGitWorkspace(async (workspace) => {
+    const created = createDetachedWorktree(workspace, `fanout-capture-${Date.now()}`, 'HEAD');
+    assert.ok(created);
+    const patchFile = path.join(workspace, '.test-patches', 'fanout.patch');
+    try {
+      fs.writeFileSync(path.join(created.worktreeRoot, 'committed.txt'), 'committed candidate work\n');
+      git(created.worktreeRoot, ['add', '.']);
+      assert.equal(git(created.worktreeRoot, ['commit', '-m', 'candidate commit']).ok, true);
+      fs.writeFileSync(path.join(created.worktreeRoot, 'src', 'index.ts'), 'export const x = 9; // uncommitted candidate work\n');
+
+      const captured = captureWorktreeChanges(created.worktreeRoot, { patchFile, baseRef: created.baseOid });
+      assert.equal(captured.changedFiles, 2);
+      const patch = fs.readFileSync(patchFile, 'utf8');
+      assert.match(patch, /committed\.txt/);
+      assert.match(patch, /uncommitted candidate work/);
+    } finally {
+      git(workspace, ['worktree', 'remove', '--force', created.worktreeRoot]);
+    }
+  });
+});
+
+test('worktree cleanup fails closed and retains a locked worktree when git refuses removal', async () => {
+  await withGitWorkspace(async (workspace) => {
+    const resolved = prepareChildWorkspace({
+      parentWorkspaceRoot: workspace,
+      parentLaunchCwd: workspace,
+      childId: `agent-locked-${Date.now()}`,
+      access: 'write',
+      mode: 'auto',
+    });
+    assert.ok(resolved.isolation);
+    assert.equal(git(workspace, ['worktree', 'lock', resolved.workspaceRoot]).ok, true);
+    try {
+      const out = removeChildWorktree(resolved.isolation);
+      assert.equal(out.ok, false);
+      assert.match(out.notice ?? '', /retained/i);
+      assert.equal(fs.existsSync(resolved.workspaceRoot), true);
+    } finally {
+      git(workspace, ['worktree', 'unlock', resolved.workspaceRoot]);
+      git(workspace, ['worktree', 'remove', '--force', resolved.workspaceRoot]);
+    }
   });
 });
 

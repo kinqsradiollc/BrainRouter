@@ -26,10 +26,35 @@ test('createCallbackBridge: every callback maps to its event kind with payload f
   cb.onReasoningDelta('thinking…');
   cb.onToolStart('read_file', { path: 'a.ts' }, 'c1');
   cb.onToolEnd('read_file', { success: true, summary: '42 lines', preview: 'line1' }, 'c1');
+  cb.onToolEnd('delegate_agent', {
+    success: false,
+    summary: 'delegation not started',
+    delegationState: 'not-started',
+  }, 'c2');
   cb.onChildToolStart({ childId: 'agent-1', role: 'explorer', tool: 'grep_search', args: { query: 'x' } });
   cb.onChildToolEnd({ childId: 'agent-1', role: 'explorer', tool: 'grep_search', ok: true, summary: 'hit', durationMs: 12 });
-  cb.onChildComplete({ childId: 'agent-1', role: 'explorer', status: 'completed', preview: 'found it' });
+  const childReceipt = {
+    childId: 'agent-1',
+    role: 'explorer',
+    status: 'completed' as const,
+    completedAt: '2026-07-30T00:00:00.000Z',
+    preview: 'found it',
+  };
+  cb.onChildComplete(childReceipt);
   cb.onPlanUpdate([{ step: 'fix', status: 'in_progress' }], 'because');
+  cb.onProfileStageUpdate({
+    phase: 'updated',
+    profileId: 'research',
+    strategyId: 'investigate',
+    selectionSource: 'deterministic',
+    stages: [{
+      id: 'collect',
+      state: 'running',
+      executor: 'role',
+      roleId: 'explorer',
+      skillIds: ['source-research'],
+    }],
+  });
   cb.onCompactionEvent({ droppedMessages: 10, keptMessages: 4, summary: 'compacted' });
   cb.onMemoryEvent({ level: 'warn', text: 'capture blocked' });
   cb.onRequirementEvent({ action: 'created', requirementId: 'req_1', title: 'Need it', status: 'ready', provenance: { linkedMemoryIds: ['mem_1'] } });
@@ -41,21 +66,50 @@ test('createCallbackBridge: every callback maps to its event kind with payload f
 
   assert.deepEqual(events.map((e) => e.kind), [
     'status', 'assistant-turn-start', 'assistant-delta', 'assistant-delta', 'assistant-turn-end',
-    'reasoning-delta', 'tool-start', 'tool-end', 'child-tool-start', 'child-tool-end',
-    'child-complete', 'plan-update', 'compaction', 'memory', 'requirement-event',
+    'reasoning-delta', 'tool-start', 'tool-end', 'tool-end', 'child-tool-start', 'child-tool-end',
+    'child-complete', 'plan-update', 'profile-stage', 'compaction', 'memory', 'requirement-event',
     'artifact-event', 'annotation-event', 'provenance', 'approval-decision', 'usage-live',
   ]);
   // LIVE usage forwards the turn's running totals untouched (UI adds it to the base).
-  assert.deepEqual(events[19], { kind: 'usage-live', promptTokens: 1200, completionTokens: 340, calls: 3, cachedTokens: 900 });
+  assert.deepEqual(events[21], { kind: 'usage-live', promptTokens: 1200, completionTokens: 340, calls: 3, cachedTokens: 900 });
   assert.deepEqual(events[6], { kind: 'tool-start', tool: 'read_file', args: { path: 'a.ts' }, callId: 'c1' });
-  assert.deepEqual(events[7], { kind: 'tool-end', tool: 'read_file', ok: true, summary: '42 lines', preview: 'line1', callId: 'c1' });
-  const plan = events[11] as Extract<AgentEvent, { kind: 'plan-update' }>;
+  assert.deepEqual(events[7], {
+    kind: 'tool-end',
+    tool: 'read_file',
+    ok: true,
+    summary: '42 lines',
+    preview: 'line1',
+    callId: 'c1',
+    delegationState: undefined,
+  });
+  assert.deepEqual(events[8], {
+    kind: 'tool-end',
+    tool: 'delegate_agent',
+    ok: false,
+    summary: 'delegation not started',
+    preview: undefined,
+    callId: 'c2',
+    delegationState: 'not-started',
+  });
+  assert.deepEqual(events[11], {
+    kind: 'child-complete',
+    receipt: childReceipt,
+    childId: childReceipt.childId,
+    role: childReceipt.role,
+    status: childReceipt.status,
+    preview: childReceipt.preview,
+    error: undefined,
+  });
+  const plan = events[12] as Extract<AgentEvent, { kind: 'plan-update' }>;
   assert.equal(plan.items[0].status, 'in_progress');
   assert.equal(plan.explanation, 'because');
-  const requirement = events[14] as Extract<AgentEvent, { kind: 'requirement-event' }>;
+  const profileStage = events[13] as Extract<AgentEvent, { kind: 'profile-stage' }>;
+  assert.equal(profileStage.profileId, 'research');
+  assert.equal(profileStage.stages[0].state, 'running');
+  const requirement = events[16] as Extract<AgentEvent, { kind: 'requirement-event' }>;
   assert.equal(requirement.requirementId, 'req_1');
   assert.deepEqual(requirement.provenance?.linkedMemoryIds, ['mem_1']);
-  const annotation = events[16] as Extract<AgentEvent, { kind: 'annotation-event' }>;
+  const annotation = events[18] as Extract<AgentEvent, { kind: 'annotation-event' }>;
   assert.equal(annotation.targetKind, 'file');
 });
 
@@ -64,6 +118,48 @@ test('createCallbackBridge: memory event falls back kind→text and defaults lev
   const cb = createCallbackBridge((e) => events.push(e));
   cb.onMemoryEvent({ kind: 'skipped', reason: 'policy' });
   assert.deepEqual(events[0], { kind: 'memory', level: 'info', text: 'policy' });
+});
+
+test('createCallbackBridge: steering receipt lifecycle preserves revisions', () => {
+  const events: AgentEvent[] = [];
+  const cb = createCallbackBridge((event) => events.push(event));
+  const pending = {
+    id: 'steer_1',
+    source: 'user' as const,
+    receivedAt: '2026-07-28T01:00:00.000Z',
+    priorRevision: 2,
+    affectedRequirementIds: [],
+    affectedTaskIds: ['task_1'],
+    summary: 'Change verification order.',
+    status: 'pending' as const,
+  };
+  cb.onSteerApplied({
+    id: 'steer_1',
+    text: 'Verify first.',
+    source: 'user',
+    createdAt: 1,
+  }, pending);
+  cb.onSteerReceipt({
+    ...pending,
+    classification: 'plan_change',
+    status: 'applied',
+    appliedAt: '2026-07-28T01:01:00.000Z',
+    resultingRevision: 3,
+  });
+
+  assert.deepEqual(events[0], {
+    kind: 'input-delivery',
+    id: 'steer_1',
+    mode: 'steer',
+    state: 'applied',
+    text: 'Verify first.',
+    source: 'user',
+    receipt: pending,
+  });
+  assert.equal(events[1].kind, 'steering-receipt');
+  if (events[1].kind === 'steering-receipt') {
+    assert.equal(events[1].receipt.resultingRevision, 3);
+  }
 });
 
 // --- envelope writer -----------------------------------------------------------
@@ -82,6 +178,8 @@ test('createEnvelopeWriter: stamps monotonic seq + ts + sessionKey', () => {
 
 test('guards: accept valid, reject malformed', () => {
   assert.equal(isAgentCommand({ kind: 'start-turn', prompt: 'hi' }), true);
+  assert.equal(isAgentCommand({ kind: 'start-turn', prompt: 'later', delivery: 'queue', deliveryId: 'd1' }), true);
+  assert.equal(isAgentCommand({ kind: 'start-turn', prompt: 'change direction', delivery: 'steer', deliveryId: 'd2' }), true);
   // start-turn carries optional inline images for vision-capable models.
   assert.equal(isAgentCommand({ kind: 'start-turn', prompt: 'see this', images: [{ mediaType: 'image/png', dataBase64: 'AAAA' }] }), true);
   assert.equal(isAgentCommand({ kind: 'interrupt' }), true);

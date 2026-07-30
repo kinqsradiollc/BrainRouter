@@ -2,14 +2,22 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { getStateDir, getStateFile } from '../storage/store.js';
-import { appendTranscriptEntry, listTranscripts, readTranscriptEntries, redactText } from '../session/sessionStore.js';
-import { formatPlan, readPlan, updatePlan, seedPlanFromRequirement } from '../task/taskStore.js';
-import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, getWorkflowDir, listWorkflows, slugify } from '../workflow/workflowArtifacts.js';
+import { getSessionStateFile, getStateDir, getStateFile } from '../storage/store.js';
+import { appendTranscriptEntry, listTranscripts, readTranscriptEntries, redactText } from '../session/transcript/sessionStore.js';
+import {
+  formatPlan,
+  readPlan,
+  updatePlan,
+  seedPlanFromRequirement,
+  type PlanState,
+} from '../task/taskStore.js';
+import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, getWorkflowDir, listWorkflows, slugify } from '../workflow/run/workflowArtifacts.js';
 import { addHook, readHooks, removeHook, runHooks, setHookEnabled } from '../hooks/hooksStore.js';
-import { applyYoloOff, applyYoloOn, readPreferences, writePreferences, normalizeEffort } from '../session/preferencesStore.js';
+import { applyYoloOff, applyYoloOn, readPreferences, writePreferences, normalizeEffort } from '../session/preferences/preferencesStore.js';
+import { resolvePersonality } from '../session/preferences/personality.js';
 import { withTempWorkspace } from './_helpers.js';
 import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
+import { createWorkspaceManifest, saveWorkspaceManifest } from '../workspace/manifest.js';
 
 test('CLI state helpers live under ~/.brainrouter, not the workspace', () => {
   withTempWorkspace((workspace) => {
@@ -62,6 +70,9 @@ test('plan store persists and validates durable plan state', () => {
     });
 
     assert.equal(state.items.length, 2);
+    assert.equal(state.schemaVersion, 1);
+    assert.equal(state.revision, 1);
+    assert.ok(state.items.every((item) => /^task_/.test(item.id)));
     assert.match(formatPlan(readPlan(workspace)), /\[\/\] Wire update_plan/);
     assert.throws(
       () => updatePlan(workspace, {
@@ -71,6 +82,68 @@ test('plan store persists and validates durable plan state', () => {
         ],
       }),
       /At most one plan item/,
+    );
+  });
+});
+
+test('R1 plan migration assigns durable ids and revisions without losing legacy state', () => {
+  withTempWorkspace((workspace) => {
+    const sessionKey = 'session:legacy-plan';
+    const filePath = getSessionStateFile(workspace, sessionKey, 'tasks.json');
+    fs.writeFileSync(filePath, JSON.stringify({
+      explanation: 'legacy plan',
+      updatedAt: '2026-07-20T00:00:00.000Z',
+      requirementId: 'req_legacy',
+      items: [
+        { step: 'Inspect the current contract', status: 'completed' },
+        { step: 'Implement the migration', status: 'in_progress', acceptance: 'migration test passes' },
+      ],
+    }), 'utf8');
+
+    const migrated = readPlan(workspace, sessionKey);
+    assert.equal(migrated.schemaVersion, 1);
+    assert.equal(migrated.revision, 0);
+    assert.equal(migrated.requirementId, 'req_legacy');
+    assert.equal(new Set(migrated.items.map((item) => item.id)).size, 2);
+
+    const persisted = JSON.parse(fs.readFileSync(filePath, 'utf8')) as PlanState;
+    assert.equal(persisted.schemaVersion, 1, 'the migration reader persists the new schema');
+    assert.deepEqual(
+      persisted.items.map((item) => item.id),
+      migrated.items.map((item) => item.id),
+      'migrated identities remain durable across process reads',
+    );
+  });
+});
+
+test('R1 plan updates preserve ids through rewording and reordering', () => {
+  withTempWorkspace((workspace) => {
+    const first = updatePlan(workspace, {
+      plan: [
+        { step: 'Inspect the current contract', status: 'completed' },
+        { step: 'Implement the migration', status: 'in_progress' },
+      ],
+    });
+    const [inspect, implement] = first.items;
+
+    const revised = updatePlan(workspace, {
+      plan: [
+        { id: implement.id, step: 'Implement and verify the migration', status: 'completed' },
+        { id: inspect.id, step: 'Inspect the existing contract', status: 'completed' },
+        { id: 'task_modelinvented', step: 'Document the result', status: 'in_progress' },
+      ],
+    });
+
+    assert.equal(revised.revision, 2);
+    assert.deepEqual(
+      revised.items.slice(0, 2).map((item) => item.id),
+      [implement.id, inspect.id],
+      'explicit existing ids survive both reorder and reword',
+    );
+    assert.notEqual(
+      revised.items[2].id,
+      'task_modelinvented',
+      'the host does not trust a model-issued id for a new task',
     );
   });
 });
@@ -91,7 +164,7 @@ test('transcript store redacts secrets and reads recent entries', () => {
 });
 
 test('sessionStore: appendTranscriptEntry dedupes consecutive identical user prompts', async () => {
-  const { appendTranscriptEntry, readTranscriptEntries } = await import('../session/sessionStore.js');
+  const { appendTranscriptEntry, readTranscriptEntries } = await import('../session/transcript/sessionStore.js');
   withTempWorkspace((workspace) => {
     const sk = 'brainrouter-cli:test:dedup';
     appendTranscriptEntry(workspace, sk, { role: 'user', content: 'help me with X' });
@@ -164,7 +237,7 @@ test('workflowArtifacts: artifactRelativePath stays inside workspace and listWor
 });
 
 test('workflowArtifacts: stay in the workspace so they can be committed', async () => {
-  const { getWorkflowsRoot } = await import('../workflow/workflowArtifacts.js');
+  const { getWorkflowsRoot } = await import('../workflow/run/workflowArtifacts.js');
   withTempWorkspace((workspace) => {
     const root = getWorkflowsRoot(workspace);
     assert.equal(root, path.join(fs.realpathSync(workspace), '.brainrouter', 'workflows'));
@@ -215,6 +288,8 @@ test('preferencesStore: defaults include theme + personality + statusline fields
     const prefs = readPreferences(workspace);
     assert.equal(prefs.theme, 'auto');
     assert.equal(prefs.personality, 'standard');
+    assert.equal(prefs.personalityMode, 'auto');
+    assert.equal(prefs.personalitySource, 'fallback');
     assert.equal(prefs.rawScrollback, false);
     assert.equal(prefs.experimental, false);
     assert.equal(prefs.memoriesEnabled, true);
@@ -227,8 +302,111 @@ test('preferencesStore: writePreferences merges new theme/personality fields', (
     const prefs = readPreferences(workspace);
     assert.equal(prefs.theme, 'dark');
     assert.equal(prefs.personality, 'concise');
+    assert.equal(prefs.personalityMode, 'manual');
+    assert.equal(prefs.personalitySource, 'workspace');
     // Old defaults still present
     assert.equal(prefs.statusline, 'mode');
+  });
+});
+
+test('preferencesStore: legacy personality values remain explicit workspace overrides', () => {
+  withTempWorkspace((workspace) => {
+    fs.writeFileSync(
+      getStateFile(workspace, 'preferences.json'),
+      JSON.stringify({ personality: 'detailed' }),
+    );
+    const prefs = readPreferences(workspace);
+    assert.equal(prefs.personality, 'detailed');
+    assert.equal(prefs.personalityMode, 'manual');
+    assert.equal(prefs.personalitySource, 'workspace');
+  });
+});
+
+test('personality resolver follows chat, workspace, global, profile, fallback precedence', () => {
+  assert.deepEqual(
+    resolvePersonality({
+      profile: 'research',
+      globalDefault: 'concise',
+      workspaceOverride: 'standard',
+      chatOverride: 'pair-programmer',
+    }),
+    { style: 'pair-programmer', source: 'chat' },
+  );
+  assert.deepEqual(
+    resolvePersonality({ profile: 'research', globalDefault: 'concise' }),
+    { style: 'concise', source: 'global' },
+  );
+  assert.deepEqual(
+    resolvePersonality({ profile: 'research' }),
+    { style: 'detailed', source: 'profile' },
+  );
+  assert.deepEqual(
+    resolvePersonality({ profile: 'custom' }),
+    { style: 'standard', source: 'fallback' },
+  );
+});
+
+test('preferencesStore: auto personality follows the profile without replacing a manual choice', () => {
+  withTempWorkspace((workspace) => {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'papers', profile: 'research', by: 'wizard' }),
+    );
+    assert.deepEqual(
+      {
+        personality: readPreferences(workspace).personality,
+        mode: readPreferences(workspace).personalityMode,
+        source: readPreferences(workspace).personalitySource,
+      },
+      { personality: 'detailed', mode: 'auto', source: 'profile' },
+    );
+
+    writePreferences(workspace, { personality: 'concise' });
+    assert.deepEqual(
+      {
+        personality: readPreferences(workspace).personality,
+        mode: readPreferences(workspace).personalityMode,
+        source: readPreferences(workspace).personalitySource,
+      },
+      { personality: 'concise', mode: 'manual', source: 'workspace' },
+    );
+
+    writePreferences(workspace, { personalityMode: 'auto' });
+    assert.deepEqual(
+      {
+        personality: readPreferences(workspace).personality,
+        mode: readPreferences(workspace).personalityMode,
+        source: readPreferences(workspace).personalitySource,
+      },
+      { personality: 'detailed', mode: 'auto', source: 'profile' },
+    );
+  });
+});
+
+test('preferencesStore: global personality default sits below a workspace override and above profile recommendation', () => {
+  withTempWorkspace((workspace) => {
+    saveWorkspaceManifest(
+      workspace,
+      createWorkspaceManifest({ name: 'papers', profile: 'research', by: 'wizard' }),
+    );
+    setCliKnobOverride({ personalityDefault: 'concise' });
+
+    assert.deepEqual(
+      {
+        personality: readPreferences(workspace).personality,
+        source: readPreferences(workspace).personalitySource,
+      },
+      { personality: 'concise', source: 'global' },
+    );
+
+    writePreferences(workspace, { personality: 'pair-programmer' });
+    assert.deepEqual(
+      {
+        personality: readPreferences(workspace).personality,
+        source: readPreferences(workspace).personalitySource,
+      },
+      { personality: 'pair-programmer', source: 'workspace' },
+    );
   });
 });
 
@@ -331,18 +509,18 @@ test('preferencesStore: effort defaults to medium and round-trips through write+
   });
 });
 
-test('normalizeEffort: canonical levels pass through; max and ultracode are distinct top tiers; case-insensitive', () => {
+test('normalizeEffort: canonical API levels pass through exactly; legacy ultracode fails closed', () => {
+  assert.equal(normalizeEffort('none'), 'none');
+  assert.equal(normalizeEffort('minimal'), 'minimal');
   assert.equal(normalizeEffort('low'), 'low');
   assert.equal(normalizeEffort('medium'), 'medium');
   assert.equal(normalizeEffort('high'), 'high');
   // xhigh must pass through (previously dropped to undefined → resolveEffort fell back to medium).
   assert.equal(normalizeEffort('xhigh'), 'xhigh');
-  // max and ultracode are their OWN tiers above xhigh (the desktop Claude slider).
-  // Kept DISTINCT (max no longer aliases xhigh) so the slider position persists.
   assert.equal(normalizeEffort('max'), 'max');
   assert.equal(normalizeEffort('  MAX  '), 'max');
-  assert.equal(normalizeEffort('ultracode'), 'ultracode');
-  assert.equal(normalizeEffort('Ultracode'), 'ultracode');
+  assert.equal(normalizeEffort('ultracode'), undefined);
+  assert.equal(normalizeEffort('Ultracode'), undefined);
   assert.equal(normalizeEffort('XHigh'), 'xhigh');
   // unknown / non-string → undefined
   assert.equal(normalizeEffort('turbo'), undefined);
@@ -350,7 +528,7 @@ test('normalizeEffort: canonical levels pass through; max and ultracode are dist
 });
 
 test('resolveEffort: cli.effort > preference > default', async () => {
-  const { resolveEffort } = await import('../session/preferencesStore.js');
+  const { resolveEffort } = await import('../session/preferences/preferencesStore.js');
   withTempWorkspace((workspace) => {
     try {
       // Default (no config knob, no pref) → medium.
@@ -483,8 +661,8 @@ test('sessionStore: legacy transcripts/<encoded>.jsonl remains discoverable', as
   });
 });
 
-test('cliState: migration neutralizes the legacy <workspace>/.brainrouter (preserves workflows/)', async () => {
-  const { getStateDir } = await import('../storage/store.js');
+test('cliState: migration neutralizes the legacy <workspace>/.brainrouter (rescues to home, deletes in place, no archive)', async () => {
+  const { getStateDir, getWorkspaceStateRoot } = await import('../storage/store.js');
   withTempWorkspace((workspace) => {
     const legacy = path.join(workspace, '.brainrouter');
     fs.mkdirSync(path.join(legacy, 'cli'), { recursive: true });
@@ -492,14 +670,43 @@ test('cliState: migration neutralizes the legacy <workspace>/.brainrouter (prese
     fs.mkdirSync(path.join(legacy, 'workflows', 'feat-x'), { recursive: true });
     fs.writeFileSync(path.join(legacy, 'cli', 'tasks.json'), JSON.stringify({ items: [] }));
     fs.writeFileSync(path.join(legacy, 'workflows', 'feat-x', 'spec.md'), '# Committable spec');
+    fs.writeFileSync(path.join(legacy, 'workspace.json'), '{"profile":"engineering"}\n');
+    const claimName = '.workspace.json.123.0123456789abcdef01234567.claim';
+    fs.writeFileSync(path.join(legacy, claimName), '{"profile":"research"}\n');
 
     getStateDir(workspace); // triggers migration
 
-    // Legacy cli/ and hooks/ archived; workflows/ kept in workspace.
+    // Legacy cli/ and hooks/ are deleted in place; every committable workspace
+    // artifact and an in-flight manifest recovery claim remain untouched.
     assert.equal(fs.existsSync(path.join(legacy, 'cli')), false);
     assert.equal(fs.existsSync(path.join(legacy, 'hooks')), false);
     assert.equal(fs.existsSync(path.join(legacy, 'workflows', 'feat-x', 'spec.md')), true);
-    assert.equal(fs.existsSync(path.join(workspace, '.brainrouter.migrated', 'cli', 'tasks.json')), true);
+    assert.equal(fs.readFileSync(path.join(legacy, 'workspace.json'), 'utf8'), '{"profile":"engineering"}\n');
+    assert.equal(fs.readFileSync(path.join(legacy, claimName), 'utf8'), '{"profile":"research"}\n');
+    // The rescued state lives in the user-global home, NOT in an in-workspace archive.
+    const home = getWorkspaceStateRoot(workspace);
+    assert.equal(fs.existsSync(path.join(home, 'cli', 'tasks.json')), true);
+    // No `.brainrouter.migrated` archive is ever created in the project tree.
+    assert.equal(fs.existsSync(path.join(workspace, '.brainrouter.migrated')), false);
+  });
+});
+
+test('cliState: migration sweeps a pre-existing stale <workspace>/.brainrouter.migrated archive', async () => {
+  const { getStateDir } = await import('../storage/store.js');
+  withTempWorkspace((workspace) => {
+    // Simulate an older build that left an archive folder behind.
+    const staleArchive = path.join(workspace, '.brainrouter.migrated');
+    fs.mkdirSync(path.join(staleArchive, 'cli'), { recursive: true });
+    fs.writeFileSync(path.join(staleArchive, 'cli', 'tasks.json'), JSON.stringify({ items: [] }));
+    // A legacy tree must exist for the migration body to run at all.
+    const legacy = path.join(workspace, '.brainrouter');
+    fs.mkdirSync(path.join(legacy, 'cli'), { recursive: true });
+    fs.writeFileSync(path.join(legacy, 'cli', 'tasks.json'), JSON.stringify({ items: [] }));
+
+    getStateDir(workspace); // triggers migration + sweep
+
+    // The stale archive is gone after migration completes.
+    assert.equal(fs.existsSync(staleArchive), false);
   });
 });
 

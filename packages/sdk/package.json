@@ -1,6 +1,6 @@
 {
   "name": "@kinqs/brainrouter-sdk",
-  "version": "0.4.16",
+  "version": "0.4.17",
   "description": "BrainRouter SDK — typed client helpers for talking to a BrainRouter MCP server from your own Node/browser code.",
   "type": "module",
   "main": "dist/index.js",
@@ -9,14 +9,17 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "clean": "node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});for(const entry of fs.readdirSync('dist'))fs.rmSync('dist/'+entry,{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "prepack": "npm run build"
+    "test": "npm run build && node --test \"dist/**/*.test.js\"",
+    "prepack": "npm run build && node -e \"const fs=require('fs');function w(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=d+'/'+e.name;if(e.isDirectory())w(p);else if(/\\.test\\./.test(e.name))fs.rmSync(p)}}w('dist')\""
   },
   "dependencies": {
-    "@kinqs/brainrouter-types": "^0.4.16"
+    "@kinqs/brainrouter-types": "^0.4.17"
   },
   "devDependencies": {
+    "@types/node": "^22.5.0",
     "typescript": "^5.5.4"
   },
   "keywords": [

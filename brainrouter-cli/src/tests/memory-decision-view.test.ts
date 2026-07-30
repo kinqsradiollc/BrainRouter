@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatMemoryDecisions } from '../runtime/memoryDecisionView.js';
+import { formatMemoryDecisions } from '../runtime/observability/memoryDecisionView.js';
 
 test('CLI-6 formatMemoryDecisions: decision + sources + skipped + injected records (priority-ordered)', () => {
   const out = formatMemoryDecisions({

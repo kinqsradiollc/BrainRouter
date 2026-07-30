@@ -1,0 +1,81 @@
+{
+  "version": 3,
+  "name": "BrainRouter",
+  "profile": "engineering",
+  "onboarded": {
+    "at": "2026-07-27T01:27:57.889Z",
+    "by": "wizard"
+  },
+  "persona": {
+    "default": "engineer",
+    "enabled": [
+      "engineer"
+    ]
+  },
+  "orchestration": {
+    "mode": "adaptive",
+    "availableRoles": [
+      "explorer",
+      "architect",
+      "worker",
+      "reviewer",
+      "verifier"
+    ],
+    "disabledRoles": [
+      "fleet"
+    ],
+    "maxParallel": 4
+  },
+  "agents": {
+    "default": "engineer",
+    "enabled": [
+      "engineer"
+    ]
+  },
+  "capabilities": {
+    "enabled": [
+      "frontend",
+      "backend"
+    ],
+    "disabled": []
+  },
+  "skills": {
+    "packs": [
+      "engineering"
+    ],
+    "enabled": [
+      "planning-skill",
+      "spec-driven-skill",
+      "adr-skill",
+      "debugging-and-error-recovery",
+      "testing-skill",
+      "conventions-skill",
+      "code-review-and-quality",
+      "incremental-skill",
+      "shipping-skill",
+      "changelog-generator",
+      "verify-loop"
+    ],
+    "disabled": []
+  },
+  "tools": {
+    "mode": "explicit-catalog",
+    "enabled": [],
+    "profiles": [
+      "coding",
+      "shell",
+      "browser",
+      "artifacts",
+      "planning-session",
+      "orchestration"
+    ],
+    "deny": []
+  },
+  "memory": {
+    "tags": [
+      "engineering"
+    ],
+    "captureHint": "code"
+  },
+  "instructions": "AGENT.md"
+}

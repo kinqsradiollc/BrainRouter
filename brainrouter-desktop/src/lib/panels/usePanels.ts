@@ -8,13 +8,14 @@ import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 
 import type { PanelId } from '../../panels/index.js';
 import { devPanels, devFlag } from '../devFlags.js';
 import { VALID_PANEL_IDS } from '../../constants.js';
-import { clampSideRailWidth, reorderByValue, SIDE_RAIL_MIN } from './sideRailLayout.js';
+import { clampSideRailWidth, openWidthFor, reorderByValue, SIDE_RAIL_MIN } from './sideRailLayout.js';
 
 // Persisted layouts can carry renamed/retired panel ids. The Markdown writing
 // experience ('write' → 'docs') folded into the Editor, so both map to 'editor'.
-// Unknown ids are dropped, and duplicates are collapsed, so an upgrade never
-// leaves a dead or doubled tab.
-const PANEL_ID_ALIASES: Record<string, PanelId> = { write: 'editor', docs: 'editor' };
+// The Browser panel's internal id was renamed 'uitest' → 'browser', so a persisted
+// open-tab layout survives the rename. Unknown ids are dropped, and duplicates are
+// collapsed, so an upgrade never leaves a dead or doubled tab.
+const PANEL_ID_ALIASES: Record<string, PanelId> = { write: 'editor', docs: 'editor', uitest: 'browser' };
 const migratePanelId = (id: string): PanelId => (PANEL_ID_ALIASES[id] ?? id) as PanelId;
 const migratePanelIds = (ids: unknown[]): PanelId[] => {
   const seen = new Set<PanelId>();
@@ -172,10 +173,15 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
     if (id === 'requirements') q('q-req', 'requirement-list'); // REQUIREMENT-RECORDS — list on open
     if (id === 'annotations') q('q-annot', 'annotation-list'); // ANNOTATION-RECORDS — list on open
     if (id === 'artifacts') { q('q-art', 'artifact-list'); q('q-annot', 'annotation-list'); } // ARTIFACT-RECORDS — list on open (+ annotations so §8 artifact annotations show)
+    if (id === 'plan') q('q-annot', 'annotation-list'); // §plan-comments — load per-step comments on open
     if (id === 'diff') q('q-review-current', 'review-current'); // Wave 7 — show the review gate in the Changes area
     setSideTabs((t) => (t.includes(id) ? t : [...t, id]));
     setActiveSideTab(id);
     setSidePanelOpen(true);
+    // §panel-width — open certain panels (e.g. the Browser) at a comfortable
+    // width; widen-only, so a manual resize is never overridden, and a no-op
+    // returns the same number so React skips the re-render.
+    setSideWidth((w) => openWidthFor(id, w));
   }
   function closeSideTab(id: PanelId): void {
     setSideTabs((tabs) => {

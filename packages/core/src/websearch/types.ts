@@ -1,4 +1,4 @@
-export const WEB_SEARCH_PROVIDERS = ['duckduckgo', 'serper', 'google_pse', 'brave', 'searxng', 'custom_http'] as const;
+export const WEB_SEARCH_PROVIDERS = ['serper', 'google_pse', 'brave', 'searxng', 'custom_http'] as const;
 export type WebSearchProviderId = (typeof WEB_SEARCH_PROVIDERS)[number];
 
 export interface WebSearchResult {
@@ -30,6 +30,9 @@ export interface CrawlerOptions {
   userAgent: string;
   signal?: AbortSignal;
   fetchImpl?: typeof fetch;
+  /** Re-checked per redirect hop so a redirect can't leave the egress allowlist
+   *  (the handler only vets the initial URL). Return false to block a target. */
+  isEgressAllowed?: (url: string) => boolean;
 }
 
 export function normalizeResult(input: {

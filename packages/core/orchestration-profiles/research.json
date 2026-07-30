@@ -1,0 +1,364 @@
+{
+  "schemaVersion": 1,
+  "kind": "orchestration-profile",
+  "id": "research",
+  "displayName": "Research orchestration",
+  "defaultMode": "adaptive",
+  "fallbackStrategyId": "direct-answer",
+  "rolePolicy": {
+    "availableRoles": [
+      "explorer",
+      "reviewer"
+    ],
+    "disabledRoles": [
+      "fleet"
+    ]
+  },
+  "limits": {
+    "maxParallel": 3,
+    "maxStages": 6,
+    "maxChildrenPerStage": 3,
+    "maxTotalChildren": 6,
+    "maxDepth": 2,
+    "maxRetries": 1
+  },
+  "strategies": [
+    {
+      "id": "direct-answer",
+      "description": "Answer a bounded research question directly on the primary researcher.",
+      "activation": {
+        "signals": [
+          "small-scope"
+        ],
+        "explicitOnly": false
+      },
+      "stages": [
+        {
+          "id": "answer",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [],
+          "objective": "Answer the bounded question directly and distinguish sourced evidence, inference, uncertainty, and missing evidence.",
+          "skillIds": [],
+          "optional": false
+        }
+      ]
+    },
+    {
+      "id": "question-decomposition",
+      "description": "Bound the question and source strategy before any broad evidence collection.",
+      "activation": {
+        "signals": [
+          "question-decomposition"
+        ],
+        "explicitOnly": false
+      },
+      "stages": [
+        {
+          "id": "frame",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [],
+          "objective": "Define the decision target, primary question, non-overlapping sub-questions, evidence threshold, and stopping condition.",
+          "skillIds": [
+            "research-question-skill"
+          ],
+          "optional": false
+        },
+        {
+          "id": "source-plan",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "frame"
+          ],
+          "objective": "Map each sub-question to suitable source types, retrieval modes, freshness constraints, fallbacks, and disconfirming searches.",
+          "skillIds": [
+            "source-strategy-skill"
+          ],
+          "optional": false
+        },
+        {
+          "id": "deliver",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "source-plan"
+          ],
+          "objective": "Present the bounded question and source plan for review without starting collection.",
+          "skillIds": [],
+          "optional": false
+        }
+      ]
+    },
+    {
+      "id": "parallel-evidence",
+      "description": "Collect independent evidence in bounded read-only branches, audit citations, then synthesize on the primary researcher.",
+      "activation": {
+        "signals": [
+          "evidence-collection"
+        ],
+        "explicitOnly": false
+      },
+      "stages": [
+        {
+          "id": "frame",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [],
+          "objective": "Confirm disjoint evidence questions, source scope, evidence threshold, and stopping condition before fan-out.",
+          "skillIds": [
+            "research-question-skill",
+            "source-strategy-skill"
+          ],
+          "optional": false
+        },
+        {
+          "id": "ground",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "frame"
+          ],
+          "objective": "Restore prior findings and queries, ground unresolved gaps in available project and local evidence, and prepare at most three non-duplicate external probes under an explicit stop budget.",
+          "skillIds": [
+            "iterative-evidence-skill"
+          ],
+          "optional": false
+        },
+        {
+          "id": "collect",
+          "executor": {
+            "kind": "role",
+            "roleId": "explorer"
+          },
+          "after": [
+            "ground"
+          ],
+          "objective": "Collect evidence for one assigned sub-question, preserving provenance, dates, contradictions, limitations, and access gaps without drafting the conclusion.",
+          "skillIds": [
+            "evidence-research-skill"
+          ],
+          "fanOut": {
+            "min": 1,
+            "max": 3
+          },
+          "optional": true,
+          "expectedOutput": {
+            "contractId": "explorer",
+            "requiredSections": [
+              "headline",
+              "files-read",
+              "facts"
+            ]
+          }
+        },
+        {
+          "id": "ledger",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "collect"
+          ],
+          "objective": "Normalize collected observations into atomic claims with support, contradiction, independence, limitations, and confidence.",
+          "skillIds": [
+            "claim-ledger-skill"
+          ],
+          "optional": false
+        },
+        {
+          "id": "audit",
+          "executor": {
+            "kind": "role",
+            "roleId": "reviewer"
+          },
+          "after": [
+            "ledger"
+          ],
+          "objective": "Audit material claims for citation resolution, entailment, scope, freshness, independence, uncertainty, and question coverage.",
+          "skillIds": [
+            "citation-verification-skill",
+            "research-review-skill"
+          ],
+          "fanOut": {
+            "min": 1,
+            "max": 1
+          },
+          "optional": false,
+          "expectedOutput": {
+            "contractId": "reviewer",
+            "requiredSections": [
+              "headline",
+              "findings"
+            ]
+          }
+        },
+        {
+          "id": "synthesize",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "audit"
+          ],
+          "objective": "Produce the decision-ready synthesis from the reviewed ledger, preserving provenance, disagreement, confidence, and unresolved gaps.",
+          "skillIds": [
+            "source-synthesis-skill"
+          ],
+          "optional": false
+        }
+      ]
+    },
+    {
+      "id": "citation-review",
+      "description": "Review an existing research artifact for evidence and citation integrity without reopening collection by default.",
+      "activation": {
+        "signals": [
+          "citation-review"
+        ],
+        "explicitOnly": false
+      },
+      "stages": [
+        {
+          "id": "audit",
+          "executor": {
+            "kind": "role",
+            "roleId": "reviewer"
+          },
+          "after": [],
+          "objective": "Review the artifact for question coverage, material claim support, citation entailment, independence, freshness, contradictions, and calibrated uncertainty.",
+          "skillIds": [
+            "citation-verification-skill",
+            "research-review-skill"
+          ],
+          "fanOut": {
+            "min": 1,
+            "max": 1
+          },
+          "optional": false,
+          "expectedOutput": {
+            "contractId": "reviewer",
+            "requiredSections": [
+              "headline",
+              "findings"
+            ]
+          }
+        },
+        {
+          "id": "deliver",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "audit"
+          ],
+          "objective": "Deliver the bounded citation audit, separating blocking evidence defects from advisory improvements.",
+          "skillIds": [],
+          "optional": false
+        }
+      ]
+    },
+    {
+      "id": "academic-paper",
+      "description": "Draft a paper from a reviewed claim ledger, independently audit citations and paper quality, then apply bounded corrections on the primary researcher.",
+      "activation": {
+        "signals": [
+          "academic-paper"
+        ],
+        "explicitOnly": false
+      },
+      "stages": [
+        {
+          "id": "frame",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [],
+          "objective": "Confirm the research question, audience constraints, contribution story, evidence boundary, and stopping condition before drafting.",
+          "skillIds": [
+            "research-question-skill",
+            "source-strategy-skill"
+          ],
+          "optional": false
+        },
+        {
+          "id": "ledger",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "frame"
+          ],
+          "objective": "Freeze an auditable claim ledger for every material novelty, method, comparative, numerical, and generalization claim.",
+          "skillIds": [
+            "claim-ledger-skill"
+          ],
+          "optional": false
+        },
+        {
+          "id": "draft",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "ledger"
+          ],
+          "objective": "Draft the paper and its claim-evidence map, terminology map, section contracts, reverse outline, figure and table inventory, experiment coverage, and limitations.",
+          "skillIds": [
+            "source-synthesis-skill",
+            "academic-paper-drafting-skill"
+          ],
+          "optional": false
+        },
+        {
+          "id": "audit",
+          "executor": {
+            "kind": "role",
+            "roleId": "reviewer"
+          },
+          "after": [
+            "draft"
+          ],
+          "objective": "Independently verify citations and adversarially review contribution, soundness, evidence, experiments, reproducibility, presentation, and limitations with bounded prioritized findings.",
+          "skillIds": [
+            "citation-verification-skill",
+            "academic-paper-review-skill"
+          ],
+          "fanOut": {
+            "min": 1,
+            "max": 1
+          },
+          "optional": false,
+          "expectedOutput": {
+            "contractId": "reviewer",
+            "requiredSections": [
+              "headline",
+              "findings"
+            ]
+          }
+        },
+        {
+          "id": "revise",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "audit"
+          ],
+          "objective": "Resolve blocking and material findings, record dispositions, rerun the claim-evidence and reverse-outline checks, and deliver the paper with remaining limitations visible.",
+          "skillIds": [
+            "academic-paper-drafting-skill"
+          ],
+          "optional": false
+        }
+      ]
+    }
+  ]
+}

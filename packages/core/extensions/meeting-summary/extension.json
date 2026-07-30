@@ -1,0 +1,7 @@
+{
+  "name": "meeting-summary",
+  "version": "0.4.17",
+  "description": "Deterministic meeting-summary formatting with stable overview, decision, template, and action-item sections.",
+  "main": "index.js",
+  "contributes": ["tools"]
+}

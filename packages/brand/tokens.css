@@ -1,0 +1,25 @@
+/*
+ * BrainRouter cross-surface semantic inputs.
+ *
+ * Product CSS maps these stable `--br-*` roles to its local vocabulary. Keep
+ * platform geometry separate: browser controls are 32px; Electron controls
+ * are 30px so they align with native window chrome.
+ */
+:root {
+  --br-color-canvas: #07070b;
+  --br-color-surface-raised: #0b0c12;
+  --br-color-surface-overlay: #12131b;
+  --br-color-text-primary: #fafafa;
+  --br-color-text-secondary: #a1a1aa;
+  --br-color-text-muted: #85858f;
+  --br-color-divider: rgba(255, 255, 255, 0.10);
+  --br-color-divider-strong: rgba(255, 255, 255, 0.14);
+  --br-color-interaction: #d8dbe2;
+  --br-color-interaction-soft: rgba(216, 219, 226, 0.08);
+  --br-color-brand-route: #7c4dff;
+  --br-color-status-success: #22c55e;
+  --br-color-status-warning: #eab308;
+  --br-color-status-danger: #ef4444;
+  --br-dashboard-control-size: 32px;
+  --br-desktop-control-size: 30px;
+}

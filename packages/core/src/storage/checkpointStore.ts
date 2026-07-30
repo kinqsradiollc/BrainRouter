@@ -1,6 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { getStateDir } from './store.js';
+import type { QueuedPrompt, RecoverableState } from './contracts.js';
+
+export type { QueuedPrompt, RecoverableState } from './contracts.js';
 
 /**
  * CLI-21 (0.4.4) — crash-checkpoint + offline prompt queue.
@@ -16,12 +19,6 @@ import { getStateDir } from './store.js';
  * never throws on I/O — a checkpoint that can't be written just means no
  * recovery hint, which must not break the session.
  */
-
-export interface QueuedPrompt {
-  prompt: string;
-  at: string; // ISO
-  kind: 'crash' | 'offline';
-}
 
 function encodeKey(sessionKey: string): string {
   return sessionKey.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 120);
@@ -75,7 +72,7 @@ export function clearOfflineQueue(ws: string, sessionKey: string): void {
  * (= a crash mid-turn) plus any offline-queued prompts. Empty when nothing is
  * pending.
  */
-export function readRecoverable(ws: string, sessionKey: string): { crashed: QueuedPrompt | null; offline: QueuedPrompt[] } {
+export function readRecoverable(ws: string, sessionKey: string): RecoverableState {
   const crashed = readJson<QueuedPrompt | null>(inflightPath(ws, sessionKey), null);
   return { crashed: crashed && typeof crashed.prompt === 'string' ? crashed : null, offline: readOfflineQueue(ws, sessionKey) };
 }
@@ -105,16 +102,21 @@ export function shouldRetryConnectivity(err: unknown, attempt: number, maxAttemp
 // HTTP statuses worth retrying: request/gateway timeouts (408/504), rate limits
 // (429), and transient server / gateway / overload errors (500/502/503 + the
 // 52x Cloudflare and 529 "overloaded" variants). NOT 4xx like 400/401/403/404 —
-// those are deterministic client errors that a retry can't fix.
+// those are deterministic client errors that a retry can't fix — EXCEPT a 400
+// whose BODY reveals a masked UPSTREAM failure (an OpenAI-compatible proxy that
+// relays an upstream 5xx/timeout as `400 "Upstream request failed"`), which the
+// message branch below catches. See RETRYABLE_SERVER_RE.
 const RETRYABLE_HTTP_STATUS = new Set([408, 409, 425, 429, 500, 502, 503, 504, 520, 522, 523, 524, 529]);
 
 // Textual forms of the same transient server/gateway failures, for providers
 // whose errors arrive as a string (no structured `status`). The numeric branch
 // is anchored to an "(API) error: <code>" / "status: <code>" prefix so a bare
 // "500" elsewhere in a message (e.g. "500 tokens") can't masquerade as a
-// retryable status; the gateway/overload phrases match on their own.
+// retryable status; the gateway/overload phrases match on their own. The
+// `upstream …` clause makes a proxy 400 that masks an upstream failure retryable
+// (a genuine invalid-param 400 doesn't say "upstream request failed").
 const RETRYABLE_SERVER_RE =
-  /(?:api )?error:?\s*(?:40[89]|425|429|5\d{2})\b|status(?: code)?:?\s*(?:40[89]|425|429|5\d{2})\b|gateway time-?out|bad gateway|service (?:is )?unavailable|temporarily unavailable|server (?:is )?overloaded|overloaded_error|too many requests|internal server error|server had an error/i;
+  /(?:api )?error:?\s*(?:40[89]|425|429|5\d{2})\b|status(?: code)?:?\s*(?:40[89]|425|429|5\d{2})\b|gateway time-?out|bad gateway|service (?:is )?unavailable|temporarily unavailable|server (?:is )?overloaded|overloaded_error|too many requests|internal server error|server had an error|upstream request failed|upstream[\s\S]{0,40}(?:failed|failure|error|time?d?\s*out|unavailable)/i;
 
 /**
  * True when an error is a transient SERVER-side failure that a retry can fix:

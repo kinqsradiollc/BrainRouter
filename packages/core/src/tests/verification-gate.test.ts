@@ -9,7 +9,7 @@ import {
   shouldNudgeVerification,
   buildVerificationNudge,
   buildDocsOnlyVerificationNote,
-} from '../agent/verificationGate.js';
+} from '../agent/guards/verificationGate.js';
 import { withTempWorkspaceAsync } from './_helpers.js';
 
 // --- pure classifiers -------------------------------------------------------
@@ -50,6 +50,17 @@ test('commandWritesFiles: redirects + write commands, not reads', () => {
   assert.equal(commandWritesFiles('git status'), false);
   assert.equal(commandWritesFiles('node app.js 2>&1'), false);
   assert.equal(commandWritesFiles('curl x > /dev/null'), false);
+});
+
+test('commandWritesFiles: a redirect/write-verb INSIDE a quoted arg is not a write', () => {
+  // Read-only investigation greps: the `>` / write-verb lives in the pattern,
+  // not the shell — these must NOT trip the verification guardrail.
+  assert.equal(commandWritesFiles("grep 'a > b' *.ts"), false);
+  assert.equal(commandWritesFiles('grep -rn "x >> y" src'), false);
+  assert.equal(commandWritesFiles(`grep "rm -rf" .`), false);
+  assert.equal(commandWritesFiles("rg 'return a > b' packages"), false);
+  // A real redirect OUTSIDE quotes still counts.
+  assert.equal(commandWritesFiles(`grep 'a > b' *.ts > out.txt`), true);
 });
 
 test('isDocsOrConfigPath: docs + config, not code (.txt is ambiguous → not docs)', () => {

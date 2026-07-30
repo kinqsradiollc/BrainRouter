@@ -39,7 +39,7 @@ export default function TimelinePage() {
   return (
     <AuthGuard>
       <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-        <PageHeader title="Timeline" description="Chronological memory operations across capture, recall, governance, and import/export activity.">
+        <PageHeader title="Activity history" description="Follow when knowledge was saved, recalled, updated, reviewed, imported, or exported.">
           <PremiumButton size="small" variant="ghost" onClick={() => setShowAdvanced(!showAdvanced)}>
             {showAdvanced ? "Hide filter" : "Session filter"}
           </PremiumButton>

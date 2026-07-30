@@ -149,23 +149,6 @@ const identityDistiller: BrainAgent = {
   dependsOn: ["cognitive_extractor"],
 };
 
-const relevanceJudge: BrainAgent = {
-  id: "relevance_judge",
-  description: "Scores recall candidates for relevance to the active query.",
-  inputSchema: { type: "object", properties: { query: { type: "string" }, candidateIds: { type: "array", items: { type: "string" } } } },
-  outputSchema: { type: "object", properties: { kept: { type: "array", items: { type: "string" } } } },
-  modelClass: "judge",
-  maxAttempts: 1,
-  timeoutMs: 30_000,
-  batchSize: 20,
-  // Recall judging is request-scoped and runs in-line; no in-flight dedup.
-  idempotencyKey: () => "",
-  reads: ["cognitive_records"],
-  writes: [],
-  emits: [],
-  dependsOn: [],
-};
-
 // ── 0.4.3 (MEM-10) — depth-pipeline agents ────────────────────────────────
 // Data-driven rows so the scheduler / status / dashboard know these job kinds.
 // Execute-wiring onto the live operations (chunker, reconcile, tree, vault,
@@ -267,6 +250,63 @@ const benchmarkEval: BrainAgent = {
   dependsOn: [],
 };
 
+const connectorSync: BrainAgent = {
+  id: "connector_sync",
+  description: "Imports an enabled server-side connector through its checkpoint runtime.",
+  inputSchema: { type: "object", properties: { connectorId: { type: "string" }, userId: { type: "string" } }, required: ["connectorId"] },
+  outputSchema: { type: "object", properties: { ok: { type: "boolean" }, documents: { type: "number" }, imported: { type: "number" } } },
+  modelClass: "none",
+  maxAttempts: 3,
+  timeoutMs: 300_000,
+  batchSize: 1,
+  idempotencyKey: (input) => {
+    const connectorId = (input as Record<string, unknown> | null)?.connectorId;
+    return typeof connectorId === "string" && connectorId ? `connector:${connectorId}` : "";
+  },
+  reads: ["connector_configs"],
+  writes: ["source_documents", "source_chunks", "cognitive_records", "connector_configs"],
+  emits: [],
+  dependsOn: [],
+};
+
+const vulnerabilitySync: BrainAgent = {
+  id: "vulnerability_sync",
+  description: "Incrementally refreshes NVD, CISA KEV, and FIRST EPSS vulnerability intelligence.",
+  inputSchema: { type: "object", properties: {
+    mode: { type: "string", enum: ["scheduled", "manual"] },
+    sourceId: { type: "string", enum: ["nvd", "cisa-kev", "first-epss"] },
+  } },
+  outputSchema: { type: "object", properties: { epssCandidates: { type: "number" } } },
+  modelClass: "none",
+  maxAttempts: 4,
+  timeoutMs: 600_000,
+  batchSize: 1,
+  idempotencyKey: () => "vulnerability:global",
+  reads: ["vulnerability_sources", "vulnerabilities", "vulnerability_matches"],
+  writes: ["vulnerability_sources", "vulnerability_feed_runs", "vulnerabilities", "vulnerability_observations"],
+  emits: [],
+  dependsOn: [],
+};
+
+const vulnerabilityScan: BrainAgent = {
+  id: "vulnerability_scan",
+  description: "Matches one persisted repository inventory against OSV exact package versions.",
+  inputSchema: { type: "object", properties: { orgId: { type: "string" }, repo: { type: "string" }, scanId: { type: "string" } }, required: ["orgId", "repo", "scanId"] },
+  outputSchema: { type: "object", properties: { componentsSeen: { type: "number" }, matchesFound: { type: "number" }, truncated: { type: "boolean" } } },
+  modelClass: "none",
+  maxAttempts: 3,
+  timeoutMs: 300_000,
+  batchSize: 1,
+  idempotencyKey: (input) => {
+    const scanId = (input as Record<string, unknown> | null)?.scanId;
+    return typeof scanId === "string" && scanId ? `vulnerability-scan:${scanId}` : "";
+  },
+  reads: ["asset_components"],
+  writes: ["vulnerability_scans", "vulnerability_matches", "vulnerability_observations"],
+  emits: [],
+  dependsOn: [],
+};
+
 const BUILT_IN_AGENTS: readonly BrainAgent[] = Object.freeze([
   cognitiveExtractor,
   memoryDeduper,
@@ -275,13 +315,15 @@ const BUILT_IN_AGENTS: readonly BrainAgent[] = Object.freeze([
   focusShiftJudge,
   focusDistiller,
   identityDistiller,
-  relevanceJudge,
   sourceChunker,
   blackboardReconciler,
   treeSealer,
   treeDigest,
   vaultExporter,
   benchmarkEval,
+  connectorSync,
+  vulnerabilitySync,
+  vulnerabilityScan,
 ]);
 
 const BY_ID: ReadonlyMap<string, BrainAgent> = new Map(BUILT_IN_AGENTS.map((a) => [a.id, a]));

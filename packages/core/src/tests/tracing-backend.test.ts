@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatTraceForBackend } from '../telemetry/tracing.js';
+import { formatTraceForBackend } from '../telemetry/tracing/tracing.js';
 
 const EVT = {
   ts: '2026-05-29T00:00:00.000Z',

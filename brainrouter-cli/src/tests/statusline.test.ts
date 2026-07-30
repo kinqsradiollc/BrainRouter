@@ -5,7 +5,7 @@ import {
   formatTokenCount,
   renderSegment,
   type SegmentInputs,
-} from '../cli/statusline.js';
+} from '../cli/view/statusline.js';
 
 function baseInputs(over: Partial<SegmentInputs> = {}): SegmentInputs {
   return {

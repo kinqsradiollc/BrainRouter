@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createSessionService, SessionService } from '../session/service.js';
+import { createSessionService, SessionService } from '../session/transcript/service.js';
 import {
   readTranscriptEntries, readTranscriptTail, listTranscripts, loadTranscript, getTranscriptPath,
-} from '../session/sessionStore.js';
+} from '../session/transcript/sessionStore.js';
 
 test('SessionService is a per-workspace facade — delegates to the session store', () => {
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'session-svc-'));

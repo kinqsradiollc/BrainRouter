@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SLASH_COMMANDS, HELP_CATEGORIES } from '@kinqs/brainrouter-core/dist/command/catalog.js';
-import { validateCatalogParity } from '@kinqs/brainrouter-core/dist/command/parity.js';
+import { SLASH_COMMANDS, HELP_CATEGORIES } from '@kinqs/brainrouter-core/command/catalog';
+import { validateCatalogParity } from '@kinqs/brainrouter-core/command/parity';
 import { buildCommandList, resolveSlashInput, WIRED, WIRE_KINDS, BRIDGE_COMMANDS, type CommandsCatalog } from './commands.js';
 
 // The desktop serves the CLI's OWN catalog; build it the same way the host does.

@@ -1,6 +1,6 @@
 {
   "name": "@kinqs/brainrouter-mcp-server",
-  "version": "0.4.16",
+  "version": "0.4.17",
   "description": "BrainRouter MCP server — the cognitive memory engine. Exposes recall, capture, focus scenes, persona, contradictions, skills, and graph queries as MCP tools for any MCP-speaking agent.",
   "type": "module",
   "main": "dist/index.js",
@@ -9,6 +9,9 @@
   },
   "files": [
     "dist",
+    "!dist/**/__tests__/**",
+    "!dist/**/*.test.*",
+    "!dist/**/*.node-test.*",
     "skills",
     "agents",
     "references",
@@ -26,6 +29,7 @@
     "dev:http": "tsx watch src/index.ts -- --http --port 3747",
     "start": "node dist/index.js",
     "start:http": "node dist/index.js --http --port 3747",
+    "migrate:postgres": "node dist/migrate.js",
     "test": "vitest run && npm run test:integration",
     "test:integration": "tsc && node scripts/copy-migrations.mjs && node --test --import ./dist/__tests__/helpers/test-teardown.js --test-concurrency=1 'dist/**/*.node-test.js'",
     "setup:mcp": "node scripts/setup-mcp.js",
@@ -42,14 +46,22 @@
     "setup:admin": "node scripts/setup-admin.js"
   },
   "dependencies": {
-    "@kinqs/brainrouter-types": "^0.4.16",
+    "@kinqs/brainrouter-core": "^0.4.17",
+    "@kinqs/brainrouter-types": "^0.4.17",
     "@modelcontextprotocol/sdk": "^1.11.0",
     "dotenv": "^16.4.5",
     "express": "^5.2.1",
     "glob": "^11.0.0",
     "gray-matter": "^4.0.3",
+    "nodemailer": "^9.0.3",
     "pg": "^8.22.0",
-    "zod": "^3.22.4"
+    "typescript": "^5.4.0",
+    "undici": "^7.24.8",
+    "zod": "^3.22.4",
+    "ws": "^8.21.0"
+  },
+  "optionalDependencies": {
+    "ioredis": "^5.4.1"
   },
   "engines": {
     "node": ">=22.0.0"
@@ -57,11 +69,13 @@
   "devDependencies": {
     "@types/express": "^5.0.6",
     "@types/node": "^22.0.0",
+    "@types/nodemailer": "^8.0.1",
     "@types/pg": "^8.20.0",
     "@xenova/transformers": "^2.17.2",
+    "fflate": "^0.8.2",
     "tsx": "^4.7.0",
-    "typescript": "^5.4.0",
-    "vitest": "^1.4.0"
+    "vitest": "^1.4.0",
+    "@types/ws": "^8.18.1"
   },
   "keywords": [
     "ai",

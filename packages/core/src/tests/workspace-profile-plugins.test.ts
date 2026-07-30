@@ -1,0 +1,445 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { summarizeProvides } from '../plugin/discovery.js';
+import { parsePersonaDefinition } from '../workspace/personaDefinitionFile.js';
+import {
+  findWorkspaceProfilePlugin,
+  inspectWorkspaceProfilePlugins,
+  WORKSPACE_PROFILE_PLUGIN_DEFINITIONS,
+} from '../workspace/profilePlugins.js';
+
+const PACKAGE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
+
+function allowedTools(skillId: string): string[] {
+  return profileAllowedTools('research', skillId);
+}
+
+function profileAllowedTools(profileId: string, skillId: string): string[] {
+  const profile = findWorkspaceProfilePlugin(profileId);
+  assert.ok(profile);
+  const body = fs.readFileSync(path.join(profile.skillsRoot, skillId, 'SKILL.md'), 'utf8');
+  const flow = body.match(/^allowed-tools:\s*\[([^\]]*)\]$/m)?.[1];
+  assert.notEqual(flow, undefined, `${skillId} must declare a bounded allowed-tools list`);
+  return flow!.split(',').map((value) => value.trim()).filter(Boolean);
+}
+
+function intersection(...lists: readonly string[][]): string[] {
+  return lists.reduce<string[]>(
+    (shared, list) => shared.filter((tool) => list.includes(tool)),
+    [...(lists[0] ?? [])],
+  );
+}
+
+test('C2 package-owned profile plugins use the standard versioned plugin contract', () => {
+  const catalog = inspectWorkspaceProfilePlugins();
+  const expectedVersions = new Map([
+    ['research', '2.5.0'],
+    ['study', '2.4.0'],
+    ['data', '2.2.0'],
+    ['writing', '2.3.0'],
+    ['frontend', '1.1.0'],
+    ['backend', '1.1.0'],
+    ['academic-paper', '2.5.0'],
+    ['computational-research', '2.2.0'],
+    ['data-visualization', '2.2.0'],
+    ['programming-lab', '2.4.0'],
+    ['technical-documentation', '2.3.0'],
+  ]);
+
+  assert.deepEqual(catalog.unavailable, []);
+  assert.deepEqual(
+    catalog.available.map((plugin) => plugin.id),
+    [
+      'study', 'research', 'data', 'writing', 'frontend', 'backend',
+      'academic-paper', 'computational-research', 'data-visualization',
+      'programming-lab',
+      'technical-documentation',
+    ],
+  );
+  for (const plugin of catalog.available) {
+    assert.equal(plugin.version, expectedVersions.get(plugin.id));
+    assert.equal(plugin.plugin.manifest.version, plugin.version);
+    assert.equal(plugin.plugin.manifest.name, plugin.pluginName);
+    assert.ok(summarizeProvides(plugin.plugin).skills >= plugin.skillIds.length);
+    assert.ok(summarizeProvides(plugin.plugin).personas >= plugin.personaIds.length);
+    assert.equal(summarizeProvides(plugin.plugin).agents, 0);
+    if (plugin.personaIds.length === 0) {
+      assert.equal(plugin.personasRoot, undefined);
+    } else {
+      const personasRoot = plugin.personasRoot;
+      assert.ok(personasRoot);
+      for (const personaId of plugin.personaIds) {
+        const body: string = fs.readFileSync(path.join(personasRoot, `${personaId}.json`), 'utf8');
+        assert.equal(parsePersonaDefinition(body, personaId).id, personaId);
+      }
+    }
+  }
+});
+
+test('study and writing expose bounded skills for every delegated stage', () => {
+  const study = findWorkspaceProfilePlugin('study');
+  const writing = findWorkspaceProfilePlugin('writing');
+  assert.ok(study);
+  assert.ok(writing);
+  assert.ok(study.skillIds.includes('learning-source-skill'));
+  assert.ok(writing.skillIds.includes('writing-critique-skill'));
+
+  for (const [profileId, skillId] of [
+    ['study', 'learning-source-skill'],
+    ['writing', 'writing-critique-skill'],
+  ]) {
+    const tools = profileAllowedTools(profileId, skillId);
+    for (const required of [
+      'read_file', 'list_dir', 'knowledge_list', 'knowledge_search',
+      'fetch_url', 'web_search', 'research_note',
+    ]) {
+      assert.ok(tools.includes(required), `${skillId}: ${required}`);
+    }
+    for (const mutation of ['write_file', 'edit_file', 'apply_patch', 'artifact_write']) {
+      assert.equal(tools.includes(mutation), false, `${skillId}: ${mutation}`);
+    }
+  }
+});
+
+test('research profile exposes separate task-selectable workflow skills', () => {
+  const research = findWorkspaceProfilePlugin('research');
+
+  assert.ok(research);
+  assert.equal(research.kind, 'profile');
+  assert.equal(research.version, '2.5.0');
+  assert.deepEqual(research.skillIds, [
+    'research-question-skill',
+    'source-strategy-skill',
+    'iterative-evidence-skill',
+    'evidence-research-skill',
+    'claim-ledger-skill',
+    'source-synthesis-skill',
+    'citation-verification-skill',
+    'research-review-skill',
+    'academic-paper-drafting-skill',
+    'academic-paper-review-skill',
+  ]);
+});
+
+test('research skills retain folder, artifact, and citation tools through stacked intersections', () => {
+  const research = findWorkspaceProfilePlugin('research');
+  assert.ok(research);
+  for (const skillId of research.skillIds) {
+    assert.ok(allowedTools(skillId).includes('list_dir'), `${skillId}: workspace discovery`);
+  }
+
+  for (const skillId of ['academic-paper-drafting-skill', 'source-synthesis-skill']) {
+    assert.ok(allowedTools(skillId).includes('artifact_write'), `${skillId}: deliverable artifact`);
+  }
+
+  const researchAudit = intersection(
+    allowedTools('citation-verification-skill'),
+    allowedTools('research-review-skill'),
+  );
+  assert.ok(researchAudit.includes('fetch_url'));
+  assert.ok(researchAudit.includes('web_search'));
+
+  const paperAudit = intersection(
+    allowedTools('citation-verification-skill'),
+    allowedTools('academic-paper-review-skill'),
+  );
+  assert.ok(paperAudit.includes('fetch_url'));
+  assert.ok(paperAudit.includes('web_search'));
+  for (const toolId of [
+    'browser_snapshot',
+    'browser_find_element',
+    'browser_open_tab',
+    'browser_navigate',
+    'browser_click',
+    'browser_type',
+    'browser_scroll',
+    'browser_close_tab',
+  ]) {
+    assert.ok(researchAudit.includes(toolId), `research audit: ${toolId}`);
+    assert.ok(paperAudit.includes(toolId), `paper audit: ${toolId}`);
+  }
+  for (const toolId of [
+    'browser_upload_files',
+    'browser_permission',
+    'browser_set_device',
+    'browser_run_flow',
+  ]) {
+    assert.equal(researchAudit.includes(toolId), false, `research audit excludes ${toolId}`);
+    assert.equal(paperAudit.includes(toolId), false, `paper audit excludes ${toolId}`);
+  }
+
+  const reviewer = JSON.parse(
+    fs.readFileSync(path.join(PACKAGE_ROOT, 'agents', 'reviewer.json'), 'utf8'),
+  ) as { defaultAccess: string; disallowedTools: string[] };
+  assert.equal(reviewer.defaultAccess, 'read');
+  assert.equal(reviewer.disallowedTools.includes('fetch_url'), false);
+  assert.equal(reviewer.disallowedTools.includes('web_search'), false);
+});
+
+test('study profile exposes separate task-selectable tutoring workflows', () => {
+  const study = findWorkspaceProfilePlugin('study');
+
+  assert.ok(study);
+  assert.equal(study.kind, 'profile');
+  assert.equal(study.version, '2.4.0');
+  assert.deepEqual(study.skillIds, [
+    'learner-diagnostic-skill',
+    'learning-plan-skill',
+    'tutoring-explanation-skill',
+    'learning-assessment-skill',
+    'error-remediation-skill',
+    'retrieval-practice-skill',
+    'learning-source-skill',
+  ]);
+});
+
+test('C2 every declared profile skill is discoverable and machine-addressable', () => {
+  const catalog = inspectWorkspaceProfilePlugins();
+
+  for (const plugin of catalog.available) {
+    for (const skillId of plugin.skillIds) {
+      const skillFile = path.join(plugin.skillsRoot, skillId, 'SKILL.md');
+      const body = fs.readFileSync(skillFile, 'utf8');
+      assert.match(body, new RegExp(`^---\\nname: ${skillId}\\n`, 'm'));
+      assert.match(body, /^description: .+$/m);
+      assert.match(body, /^## Overview$/m);
+      assert.match(body, /^## When to Use$/m);
+      assert.match(body, /^## Workflow$/m);
+      assert.match(body, /^## Verification$/m);
+    }
+  }
+});
+
+test('C2 frontend stays a capability plugin and owns the design verification skills', () => {
+  const frontend = findWorkspaceProfilePlugin('frontend');
+
+  assert.ok(frontend);
+  assert.equal(frontend.kind, 'capability');
+  assert.equal(frontend.pluginName, 'capability-frontend');
+  assert.deepEqual(frontend.skillIds, ['a11y-skill', 'browser-testing-skill', 'taste-skill']);
+  assert.deepEqual(frontend.personaIds, []);
+  assert.equal(frontend.personasRoot, undefined);
+  assert.equal(WORKSPACE_PROFILE_PLUGIN_DEFINITIONS.some((plugin) => plugin.pluginName.includes('builder')), false);
+});
+
+test('backend stays an engineer capability and owns bounded service workflows', () => {
+  const backend = findWorkspaceProfilePlugin('backend');
+
+  assert.ok(backend);
+  assert.equal(backend.kind, 'capability');
+  assert.equal(backend.pluginName, 'capability-backend');
+  assert.deepEqual(backend.skillIds, [
+    'api-service-design-skill',
+    'authorization-boundary-skill',
+    'data-integrity-migration-skill',
+    'background-work-skill',
+    'production-readiness-skill',
+    'backend-testing-skill',
+  ]);
+  assert.deepEqual(backend.personaIds, []);
+  assert.equal(backend.personasRoot, undefined);
+});
+
+test('academic-paper capability reuses the reviewed Research paper workflows', () => {
+  const paper = findWorkspaceProfilePlugin('academic-paper');
+
+  assert.ok(paper);
+  assert.equal(paper.kind, 'capability');
+  assert.equal(paper.pluginName, 'profile-research');
+  assert.equal(paper.version, '2.5.0');
+  assert.deepEqual(paper.skillIds, [
+    'source-synthesis-skill',
+    'citation-verification-skill',
+    'academic-paper-drafting-skill',
+    'academic-paper-review-skill',
+  ]);
+  assert.deepEqual(paper.personaIds, []);
+  assert.equal(paper.personasRoot, undefined);
+});
+
+test('computational-research capability reuses the reviewed Data Science workflows', () => {
+  const computational = findWorkspaceProfilePlugin('computational-research');
+
+  assert.ok(computational);
+  assert.equal(computational.kind, 'capability');
+  assert.equal(computational.pluginName, 'profile-data');
+  assert.equal(computational.version, '2.2.0');
+  assert.deepEqual(computational.skillIds, [
+    'data-analysis-skill',
+    'experiment-validation-skill',
+  ]);
+  assert.deepEqual(computational.personaIds, []);
+  assert.equal(computational.personasRoot, undefined);
+});
+
+test('data-visualization capability owns a bounded Data Science visualization workflow', () => {
+  const visualization = findWorkspaceProfilePlugin('data-visualization');
+
+  assert.ok(visualization);
+  assert.equal(visualization.kind, 'capability');
+  assert.equal(visualization.pluginName, 'profile-data');
+  assert.equal(visualization.version, '2.2.0');
+  assert.deepEqual(visualization.skillIds, ['data-visualization-skill']);
+  assert.deepEqual(visualization.personaIds, []);
+  assert.equal(visualization.personasRoot, undefined);
+  const body = fs.readFileSync(
+    path.join(visualization.skillsRoot, 'data-visualization-skill', 'SKILL.md'),
+    'utf8',
+  );
+  const flow = body.match(/^allowed-tools:\s*\[([^\]]*)\]$/m)?.[1];
+  assert.notEqual(flow, undefined);
+  const tools = new Set(flow!.split(',').map((value) => value.trim()).filter(Boolean));
+  for (const toolId of [
+    'list_dir',
+    'notebook_edit',
+    'run_command',
+    'artifact_write',
+    'browser_snapshot',
+    'browser_screenshot',
+    'browser_console',
+    'browser_network',
+    'browser_set_device',
+    'browser_run_flow',
+  ]) {
+    assert.ok(tools.has(toolId), toolId);
+  }
+  assert.equal(tools.has('web_search'), false);
+  assert.equal(tools.has('fetch_url'), false);
+});
+
+test('programming-lab capability owns a bounded executable tutoring workflow', () => {
+  const lab = findWorkspaceProfilePlugin('programming-lab');
+
+  assert.ok(lab);
+  assert.equal(lab.kind, 'capability');
+  assert.equal(lab.pluginName, 'profile-study');
+  assert.equal(lab.version, '2.4.0');
+  assert.deepEqual(lab.skillIds, ['programming-lab-skill']);
+  assert.deepEqual(lab.personaIds, []);
+  assert.equal(lab.personasRoot, undefined);
+  const body = fs.readFileSync(
+    path.join(lab.skillsRoot, 'programming-lab-skill', 'SKILL.md'),
+    'utf8',
+  );
+  const flow = body.match(/^allowed-tools:\s*\[([^\]]*)\]$/m)?.[1];
+  assert.notEqual(flow, undefined);
+  const tools = new Set(flow!.split(',').map((value) => value.trim()).filter(Boolean));
+  for (const toolId of [
+    'list_dir',
+    'write_file',
+    'notebook_edit',
+    'lsp',
+    'run_command',
+    'artifact_write',
+  ]) {
+    assert.ok(tools.has(toolId), toolId);
+  }
+  assert.equal([...tools].some((toolId) => toolId.startsWith('browser_')), false);
+});
+
+test('technical-documentation capability owns a bounded Writing workflow', () => {
+  const documentation = findWorkspaceProfilePlugin('technical-documentation');
+
+  assert.ok(documentation);
+  assert.equal(documentation.kind, 'capability');
+  assert.equal(documentation.pluginName, 'profile-writing');
+  assert.equal(documentation.version, '2.3.0');
+  assert.deepEqual(documentation.skillIds, ['technical-documentation-skill']);
+  assert.deepEqual(documentation.personaIds, []);
+  assert.equal(documentation.personasRoot, undefined);
+  const body = fs.readFileSync(
+    path.join(documentation.skillsRoot, 'technical-documentation-skill', 'SKILL.md'),
+    'utf8',
+  );
+  const flow = body.match(/^allowed-tools:\s*\[([^\]]*)\]$/m)?.[1];
+  assert.notEqual(flow, undefined);
+  const tools = new Set(flow!.split(',').map((value) => value.trim()).filter(Boolean));
+  for (const toolId of [
+    'list_dir',
+    'write_file',
+    'run_command',
+    'fetch_url',
+    'web_search',
+    'artifact_write',
+  ]) {
+    assert.ok(tools.has(toolId), toolId);
+  }
+  assert.equal(tools.has('notebook_edit'), false);
+  assert.equal([...tools].some((toolId) => toolId.startsWith('browser_')), false);
+});
+
+test('C2 profile plugins declare matching personas without executable specialists', () => {
+  const catalog = inspectWorkspaceProfilePlugins();
+  const personasByProfile = Object.fromEntries(
+    catalog.available.map((plugin) => [plugin.id, plugin.personaIds]),
+  );
+
+  assert.deepEqual(personasByProfile, {
+    study: ['tutor'],
+    research: ['researcher'],
+    data: ['data-scientist'],
+    writing: ['writer'],
+    frontend: [],
+    backend: [],
+    'academic-paper': [],
+    'computational-research': [],
+    'data-visualization': [],
+    'programming-lab': [],
+    'technical-documentation': [],
+  });
+});
+
+test('C2 missing package artifacts are reported as unavailable instead of throwing', (t) => {
+  const emptyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'profile-plugins-'));
+  t.after(() => fs.rmSync(emptyRoot, { recursive: true, force: true }));
+
+  const catalog = inspectWorkspaceProfilePlugins({ root: emptyRoot });
+  assert.equal(catalog.available.length, 0);
+  assert.equal(catalog.unavailable.length, WORKSPACE_PROFILE_PLUGIN_DEFINITIONS.length);
+  assert.equal(findWorkspaceProfilePlugin('frontend', { root: emptyRoot }), undefined);
+});
+
+test('C2 malformed package-owned versions fail availability without affecting sibling plugins', (t) => {
+  const source = path.dirname(inspectWorkspaceProfilePlugins().available[0].root);
+  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'profile-plugin-version-'));
+  t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
+  fs.cpSync(source, fixtureRoot, { recursive: true });
+  const manifestPath = path.join(fixtureRoot, 'frontend', '.brainrouter-plugin', 'plugin.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
+  fs.writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, version: 'draft' }, null, 2)}\n`);
+
+  const catalog = inspectWorkspaceProfilePlugins({ root: fixtureRoot });
+  assert.deepEqual(catalog.available.map((plugin) => plugin.id), [
+    'study', 'research', 'data', 'writing', 'backend',
+    'academic-paper', 'computational-research', 'data-visualization',
+    'programming-lab', 'technical-documentation',
+  ]);
+  assert.equal(catalog.unavailable[0]?.id, 'frontend');
+  assert.match(catalog.unavailable[0]?.reason ?? '', /semantic/);
+});
+
+test('C2 a missing profile persona fails that plugin closed without affecting siblings', (t) => {
+  const source = path.dirname(inspectWorkspaceProfilePlugins().available[0].root);
+  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'profile-plugin-persona-'));
+  t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
+  fs.cpSync(source, fixtureRoot, { recursive: true });
+  fs.rmSync(path.join(fixtureRoot, 'research', 'personas', 'researcher.json'));
+
+  const catalog = inspectWorkspaceProfilePlugins({ root: fixtureRoot });
+  assert.deepEqual(catalog.available.map((plugin) => plugin.id), [
+    'study', 'data', 'writing', 'frontend', 'backend',
+    'academic-paper', 'computational-research', 'data-visualization',
+    'programming-lab', 'technical-documentation',
+  ]);
+  assert.equal(catalog.unavailable[0]?.id, 'research');
+  assert.match(catalog.unavailable[0]?.reason ?? '', /missing valid persona file: researcher/);
+});
+
+test('C2 the published core package declares its profile plugin assets', () => {
+  const packageJson = JSON.parse(fs.readFileSync(path.join(PACKAGE_ROOT, 'package.json'), 'utf8')) as { files?: string[] };
+  assert.ok(packageJson.files?.includes('profile-plugins'));
+});

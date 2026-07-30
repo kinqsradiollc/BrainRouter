@@ -22,28 +22,40 @@ export function resolveCorsAllowlist(env: NodeJS.ProcessEnv = process.env): stri
   return raw.split(",").map((o) => o.trim()).filter(Boolean);
 }
 
-/** True when `origin` is explicitly allowlisted (or the allowlist is `*`). */
-export function isOriginAllowed(origin: string | undefined, allowlist: string[]): boolean {
+/** A local dev origin: http(s)://localhost or 127.0.0.1 on any port. */
+const LOCALHOST_ORIGIN_RE = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i;
+
+/**
+ * True when `origin` is explicitly allowlisted (or the allowlist is `*`). When
+ * `devPermissive` is set (non-production), ANY localhost / 127.0.0.1 origin is
+ * allowed too — so a dashboard on any local port "just works" in dev without
+ * pinning BRAINROUTER_CORS_ORIGIN. Production is unaffected (explicit allowlist).
+ */
+export function isOriginAllowed(origin: string | undefined, allowlist: string[], devPermissive = false): boolean {
   if (!origin) return false;
-  return allowlist.includes("*") || allowlist.includes(origin);
+  if (allowlist.includes("*") || allowlist.includes(origin)) return true;
+  if (devPermissive && LOCALHOST_ORIGIN_RE.test(origin)) return true;
+  return false;
 }
 
 /**
  * CORS: reflect only an allowed Origin (credentials only then). Same-origin /
  * no-Origin requests (curl, server-to-server, the MCP client) pass through; a
- * disallowed cross-origin preflight is rejected 403.
+ * disallowed cross-origin preflight is rejected 403. In non-production any
+ * localhost origin is allowed (see isOriginAllowed).
  */
-export function corsMiddleware(allowlist: string[] = resolveCorsAllowlist()) {
+export function corsMiddleware(allowlist: string[] = resolveCorsAllowlist(), opts: { production?: boolean } = {}) {
+  const devPermissive = !(opts.production ?? process.env.NODE_ENV === "production");
   return (req: Request, res: Response, next: NextFunction): void => {
     const origin = req.headers.origin;
-    const allowed = isOriginAllowed(origin, allowlist);
+    const allowed = isOriginAllowed(origin, allowlist, devPermissive);
     res.setHeader("Vary", "Origin");
     if (allowed) {
       res.setHeader("Access-Control-Allow-Origin", origin!);
       res.setHeader("Access-Control-Allow-Credentials", "true");
     }
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, PATCH, DELETE");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, mcp-session-id");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, mcp-session-id, X-BrainRouter-Org, X-BrainRouter-Session");
     if (req.method === "OPTIONS") {
       res.sendStatus(allowed || !origin ? 204 : 403);
       return;

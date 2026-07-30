@@ -1,0 +1,13 @@
+-- Remove the retired "judge" provider kind (the relevance judge was removed;
+-- recall no longer runs an LLM relevance filter). Legacy deployments seeded a
+-- kind='judge' provider row from BRAINROUTER_RELEVANCE_JUDGE_* / BRAINROUTER_LLM_*
+-- env on first boot. Now that "judge" is no longer a ProviderKind, the row-reader
+-- coerces any unknown kind back to "llm" (providerConfigQueries.ts) — so an
+-- orphaned judge row would resurface as a PHANTOM duplicate LLM provider in the
+-- admin UI and could be picked as a default. Delete them.
+--
+-- `provider_models` FK-cascades on provider_configs delete (020), so the judge
+-- providers' probed models go with them. `is_default` is a column on the row
+-- itself (007), so deleting the row also clears its default flag — nothing else
+-- to null out.
+DELETE FROM provider_configs WHERE kind = 'judge';

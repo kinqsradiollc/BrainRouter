@@ -8,7 +8,7 @@ import { AuthGuard } from "../../components/AuthGuard";
 import { EmptyState } from "../../components/EmptyState";
 import { PageHeader } from "../../components/PageHeader";
 import { FilterBar } from "../../components/FilterBar";
-import { Mermaid } from "../../components/Mermaid";
+import { LazyMermaid } from "../../components/LazyMermaid";
 import { PremiumCard } from "../../components/PremiumCard";
 import { motion } from "framer-motion";
 
@@ -86,7 +86,7 @@ export default function WorkingMemoryPage() {
   return (
     <AuthGuard>
       <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-        <PageHeader title="Working Memory" description="Short-term session refs, step summaries, and Mermaid task canvas.">
+        <PageHeader title="Current task context" description="See the steps, references, and short-term notes BrainRouter is using for this session.">
           <button
             onClick={() => setShowAdvanced(!showAdvanced)}
             className="pill-btn pill-btn-ghost"
@@ -165,7 +165,7 @@ export default function WorkingMemoryPage() {
             <section className="table-container" style={{ padding: "18px" }}>
               <h2 style={{ margin: 0, fontSize: "18px" }}>Canvas</h2>
               {context.canvas?.trim()
-                ? <Mermaid>{context.canvas}</Mermaid>
+                ? <LazyMermaid>{context.canvas}</LazyMermaid>
                 : <div style={{ color: "var(--color-stone-text)", fontStyle: "italic", padding: "20px 0", textAlign: "center" }}>
                     No working memory steps yet.
                   </div>}

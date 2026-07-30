@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { attachFederation } from '../runtime/federationRegistration.js';
+import { attachFederation } from '../runtime/federation/federationRegistration.js';
 
 /**
  * FED-S2-T6 — CLI federation registration lifecycle.

@@ -1,12 +1,51 @@
 {
   "name": "@kinqs/brainrouter-types",
-  "version": "0.4.16",
+  "version": "0.4.17",
   "description": "Shared TypeScript types for BrainRouter — used by the CLI, MCP server, and SDK.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./models": {
+      "types": "./dist/models.d.ts",
+      "import": "./dist/models.js"
+    },
+    "./reviews": {
+      "types": "./dist/reviews.d.ts",
+      "import": "./dist/reviews.js"
+    },
+    "./review": {
+      "types": "./dist/review/index.d.ts",
+      "import": "./dist/review/index.js"
+    },
+    "./work-contract": {
+      "types": "./dist/work-contract.d.ts",
+      "import": "./dist/work-contract.js"
+    },
+    "./planning-schema": {
+      "types": "./dist/planning-schema.d.ts",
+      "import": "./dist/planning-schema.js"
+    },
+    "./atlas-ops": {
+      "types": "./dist/atlas-ops.d.ts",
+      "import": "./dist/atlas-ops.js"
+    },
+    "./provider": {
+      "types": "./dist/provider/index.d.ts",
+      "import": "./dist/provider/index.js"
+    },
+    "./agent": {
+      "types": "./dist/agent/index.d.ts",
+      "import": "./dist/agent/index.js"
+    }
+  },
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.test.*"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -14,6 +53,7 @@
     "prepack": "npm run build"
   },
   "devDependencies": {
+    "@types/node": "^22.5.0",
     "typescript": "^5.5.4"
   },
   "keywords": [

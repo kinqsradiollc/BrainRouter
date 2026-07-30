@@ -16,8 +16,6 @@
  * reusable decisions — the caller captures a memory note and links its id back
  * via `linkBackgroundTaskMemory`.
  */
-import { randomUUID } from 'node:crypto';
-import { getStateFile, readJsonFile, writeJsonFile } from '../storage/store.js';
 import {
   isActiveBackgroundTask,
   type BackgroundTaskKind,
@@ -26,38 +24,32 @@ import {
   type BackgroundTaskStatus,
   type BackgroundTaskTranscriptRef,
 } from '@kinqs/brainrouter-types';
+import type {
+  BackgroundTaskFile,
+  StoredBackgroundTask,
+} from './host/contracts.js';
+import { nodeBackgroundTaskHost as host } from './host/nodeBackgroundTaskHost.js';
 
 /**
  * Stored shape = the durable contract plus an internal `pid` (the process that
  * owns the in-flight work). `pid` is a runtime tag used only by the boot
  * reconcile to flip orphaned tasks; it is not part of the public contract.
  */
-type StoredTask = BackgroundTaskRecord & { pid?: number };
-
-interface TaskFile {
-  tasks: StoredTask[];
-}
-
-const FILE_NAME = 'backgroundTasks.json';
 /** Keep at most this many terminal tasks per workspace (newest kept). */
 const TERMINAL_CAP = 200;
 
-function file(workspaceRoot: string): string {
-  return getStateFile(workspaceRoot, FILE_NAME);
-}
-
 // A FRESH default literal per read — never a shared constant, since callers
 // build new arrays off `.tasks` (see planHistoryStore for the same reasoning).
-function readFile(workspaceRoot: string): TaskFile {
-  return readJsonFile<TaskFile>(file(workspaceRoot), { tasks: [] });
+function readFile(workspaceRoot: string): BackgroundTaskFile {
+  return host.read(workspaceRoot);
 }
 
-function writeFile(workspaceRoot: string, data: TaskFile): void {
-  writeJsonFile(file(workspaceRoot), data);
+function writeFile(workspaceRoot: string, data: BackgroundTaskFile): void {
+  host.write(workspaceRoot, data);
 }
 
 function nowIso(): string {
-  return new Date().toISOString();
+  return host.nowIso();
 }
 
 export interface CreateBackgroundTaskInput {
@@ -85,8 +77,8 @@ export function createBackgroundTask(
   const data = readFile(workspaceRoot);
   const at = nowIso();
   const status = input.status ?? 'queued';
-  const record: StoredTask = {
-    id: `btask_${randomUUID().slice(0, 8)}`,
+  const record: StoredBackgroundTask = {
+    id: host.createId(),
     kind: input.kind,
     status,
     title: input.title,
@@ -96,7 +88,7 @@ export function createBackgroundTask(
     linkedMemoryIds: [],
     createdAt: at,
     updatedAt: at,
-    pid: process.pid,
+    pid: host.ownerPid(),
   };
   if (status === 'running') record.startedAt = at;
   if (input.requirementId) record.requirementId = input.requirementId;
@@ -267,7 +259,7 @@ export function reconcileBackgroundTasks(
 }
 
 /** Drop the oldest terminal tasks beyond {@link TERMINAL_CAP}. Active tasks are kept. */
-function prune(data: TaskFile): TaskFile {
+function prune(data: BackgroundTaskFile): BackgroundTaskFile {
   const terminal = data.tasks.filter((t) => !isActiveBackgroundTask(t.status));
   if (terminal.length <= TERMINAL_CAP) return data;
   // Sort terminal newest-first, keep the cap, then re-assemble preserving the

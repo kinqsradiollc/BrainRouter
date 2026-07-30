@@ -93,6 +93,14 @@ export interface AtlasNode {
   lineRange?: [number, number];
   /** 1–3 sentence plain-English description (filled by LLM enrichment). */
   summary?: string;
+  /**
+   * COST-CACHE — a cheap fingerprint of the exact inputs the `summary` was
+   * generated from (path + language + symbol names). On re-enrichment a file
+   * whose fingerprint is unchanged reuses its cached `summary` instead of paying
+   * for another LLM call, so an incremental re-enrich only spends tokens on the
+   * files that actually changed. Set by `enrichAtlasGraph`.
+   */
+  summarySig?: string;
   /** Free-form labels, e.g. `["entry-point", "async"]`. */
   tags?: string[];
   complexity?: AtlasComplexity;

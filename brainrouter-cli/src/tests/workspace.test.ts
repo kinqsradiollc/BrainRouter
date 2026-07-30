@@ -133,6 +133,58 @@ test('FS-FIX grep_search + globFiles skip .claude / .brainrouter (worktree copie
   });
 });
 
+// GREP-HARDEN — no single model-supplied query can block the host main thread.
+test('GREP-HARDEN grep_search does not hang on a catastrophic-backtracking pattern', () => {
+  withTempWorkspace(() => {
+    fs.mkdirSync('src', { recursive: true });
+    // One very long non-matching line — the classic backtracking trap. Before the
+    // fix, `local.*remote.*runtime` against this pegged the CPU for minutes.
+    fs.writeFileSync('src/big.ts', 'local x remote y '.repeat(4000) + '\n');
+    const ws = fs.realpathSync(process.cwd());
+    const t0 = Date.now();
+    const hits = grepSearch('local.*remote.*runtime', ws, ws);
+    const ms = Date.now() - t0;
+    assert.ok(ms < 500, `grep_search took ${ms}ms — must stay well under the time budget`);
+    // The giant line is skipped (over the length cap), so there's no real hit, and
+    // the scan flags that it returned partial results.
+    assert.ok(hits.some((h) => h.path === '(search truncated)'), 'truncation is flagged to the model');
+  });
+});
+
+test('GREP-HARDEN grep_search skips lines over the length cap', () => {
+  withTempWorkspace(() => {
+    // Line 1 is 2001+ chars (over the 2000 cap) and carries NEEDLE; line 2 is short.
+    fs.writeFileSync('a.txt', `${'x'.repeat(2001)}NEEDLE\nshort NEEDLE\n`);
+    const ws = fs.realpathSync(process.cwd());
+    const hits = grepSearch('NEEDLE', ws, ws).filter((h) => h.path !== '(search truncated)');
+    assert.deepEqual(hits.map((h) => h.line), [2], 'only the short line matches');
+  });
+});
+
+test('GREP-HARDEN grep_search skips files over the size cap', () => {
+  withTempWorkspace(() => {
+    fs.mkdirSync('src', { recursive: true });
+    fs.writeFileSync('src/huge.ts', 'NEEDLE\n'.repeat(400_000)); // ~2.8 MB, over the 2 MB cap
+    fs.writeFileSync('src/small.ts', 'NEEDLE\n');
+    const ws = fs.realpathSync(process.cwd());
+    const hits = grepSearch('NEEDLE', ws, ws).filter((h) => h.path !== '(search truncated)');
+    assert.deepEqual(hits.map((h) => h.path), ['src/small.ts'], 'the oversize file is skipped');
+  });
+});
+
+test('GREP-HARDEN grep_search skips dist-electron/ and *.map files', () => {
+  withTempWorkspace(() => {
+    fs.mkdirSync('dist-electron', { recursive: true });
+    fs.mkdirSync('src', { recursive: true });
+    fs.writeFileSync('dist-electron/host.js', 'NEEDLE\n');
+    fs.writeFileSync('src/bundle.js.map', 'NEEDLE\n');
+    fs.writeFileSync('src/real.ts', 'NEEDLE\n');
+    const ws = fs.realpathSync(process.cwd());
+    const hits = grepSearch('NEEDLE', ws, ws).filter((h) => h.path !== '(search truncated)');
+    assert.deepEqual(hits.map((h) => h.path), ['src/real.ts'], 'build output + source maps are skipped');
+  });
+});
+
 test('getToolPreview renders list_dir entries with type icons and sizes', () => {
   const result = JSON.stringify([
     { name: 'src', type: 'directory' },

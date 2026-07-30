@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "BrainRouter",
+    "slug": "brainrouter-mobile",
+    "version": "0.4.17",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "scheme": "brainrouter",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.brainrouter.mobile",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Scan the one-time encrypted pairing code shown by BrainRouter Desktop."
+      }
+    },
+    "android": {
+      "package": "com.brainrouter.mobile",
+      "permissions": ["CAMERA", "POST_NOTIFICATIONS"]
+    },
+    "plugins": [
+      ["expo-camera", { "cameraPermission": "Scan the one-time encrypted pairing code shown by BrainRouter Desktop." }],
+      "expo-secure-store",
+      "expo-notifications"
+    ]
+  }
+}

@@ -2,8 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
-import { SIZES } from "../brandPresets";
-import { LOCKUPS, ROLES, type LockupKey } from "../brandPresets";
+import { BRAND_EXPORT_COLORS as C, LOCKUPS, ROLES, SIZES, type LockupKey } from "../brandPresets";
 import type { Layer, TextLayer, ImageLayer, LogoLayer, ShapeLayer, BadgeLayer, Background } from "./types";
 import { useEditor } from "./useEditor";
 import { EditorCanvas } from "./EditorCanvas";
@@ -13,8 +12,8 @@ import { downloadPNGFromSVG, downloadSVGString } from "../exportUtil";
 
 /* ── tiny styled controls ──────────────────────────────────────────────── */
 const mono: CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--text-muted)", fontWeight: 600 };
-const fieldBox: CSSProperties = { width: "100%", padding: "7px 9px", borderRadius: 6, background: "var(--surface-overlay)", border: "1px solid var(--border)", color: "var(--text)", fontSize: 13, outline: "none", fontFamily: "var(--font-sans)" };
-const actBtn: CSSProperties = { padding: "6px 4px", borderRadius: 6, fontSize: 11.5, cursor: "pointer", background: "var(--surface-overlay)", border: "1px solid var(--border)", color: "var(--text-secondary)", fontWeight: 500 };
+const fieldBox: CSSProperties = { width: "100%", minHeight: "var(--control-size)", padding: "0 9px", borderRadius: 6, background: "var(--surface-overlay)", border: "1px solid var(--border)", color: "var(--text)", fontSize: 13, outline: "none", fontFamily: "var(--font-sans)" };
+const actBtn: CSSProperties = { minHeight: "var(--control-size)", padding: "0 6px", borderRadius: 6, fontSize: 11.5, cursor: "pointer", background: "var(--surface-overlay)", border: "1px solid var(--border)", color: "var(--text-secondary)", fontWeight: 500 };
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -30,12 +29,12 @@ function Num({ value, onChange, min, max, step }: { value: number; onChange: (v:
 function Range({ value, onChange, min, max, step }: { value: number; onChange: (v: number) => void; min: number; max: number; step?: number }) {
   return <input type="range" value={value} min={min} max={max} step={step ?? 1} onChange={(e) => onChange(Number(e.target.value))} style={{ width: "100%", accentColor: "var(--accent)" }} />;
 }
-/** Memory-Instrument palette — quick on-brand picks under every colour input. */
-const SWATCHES = ["#34C28E", "#ECEFF2", "#9BA3AC", "#5E6670", "#14171A", "#0B0D0F", "#E0A063", "#3C434B"];
+/** Shared neutral palette with one optional flat route-violet swatch. */
+const SWATCHES = [C.text, C.primary, C.secondary, C.muted, C.route, C.overlay, C.surface, C.canvas];
 function Color({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      <input type="color" value={value?.startsWith("#") ? value : "#34c28e"} onChange={(e) => onChange(e.target.value)} style={{ width: "100%", height: 34, padding: 2, borderRadius: 6, background: "var(--surface-overlay)", border: "1px solid var(--border)", cursor: "pointer" }} />
+      <input type="color" value={value?.startsWith("#") ? value : C.primary} onChange={(e) => onChange(e.target.value)} style={{ width: "100%", height: "var(--control-size)", padding: 2, borderRadius: 6, background: "var(--surface-overlay)", border: "1px solid var(--border)", cursor: "pointer" }} />
       <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
         {SWATCHES.map((c) => (
           <button key={c} type="button" title={c} onClick={() => onChange(c)} style={{ width: 18, height: 18, borderRadius: 4, background: c, border: value?.toLowerCase() === c.toLowerCase() ? "2px solid var(--accent)" : "1px solid var(--border)", cursor: "pointer", padding: 0 }} />
@@ -48,13 +47,13 @@ function Seg<T extends string>({ value, onChange, opts }: { value: T; onChange: 
   return (
     <div style={{ display: "grid", gridTemplateColumns: `repeat(${opts.length}, 1fr)`, gap: 4 }}>
       {opts.map((o) => (
-        <button key={o.v} type="button" onClick={() => onChange(o.v)} style={{ padding: "6px 4px", borderRadius: 6, fontSize: 12, cursor: "pointer", background: o.v === value ? "var(--accent-wash)" : "var(--surface-overlay)", border: `1px solid ${o.v === value ? "var(--border-hover-accent)" : "var(--border)"}`, color: o.v === value ? "var(--accent)" : "var(--text-secondary)", fontWeight: o.v === value ? 600 : 500 }}>{o.label}</button>
+        <button key={o.v} type="button" aria-pressed={o.v === value} onClick={() => onChange(o.v)} style={{ minHeight: "var(--control-size)", padding: "0 6px", borderRadius: 6, fontSize: 12, cursor: "pointer", background: o.v === value ? "var(--accent-wash)" : "var(--surface-overlay)", border: `1px solid ${o.v === value ? "var(--border-hover-accent)" : "var(--border)"}`, color: o.v === value ? "var(--accent)" : "var(--text-secondary)", fontWeight: o.v === value ? 600 : 500 }}>{o.label}</button>
       ))}
     </div>
   );
 }
 function tbBtn(active = false): CSSProperties {
-  return { padding: "7px 12px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", background: active ? "var(--accent)" : "var(--surface-overlay)", border: `1px solid ${active ? "var(--accent)" : "var(--border-strong)"}`, color: active ? "#06130E" : "var(--text)" };
+  return { minHeight: "var(--control-size)", padding: "0 12px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", background: active ? "var(--accent)" : "var(--surface-overlay)", border: `1px solid ${active ? "var(--accent)" : "var(--border-strong)"}`, color: active ? "var(--surface-base)" : "var(--text)" };
 }
 
 function readImage(file: File, cb: (dataUrl: string) => void) {
@@ -97,7 +96,7 @@ function LayersPanel({ ed }: { ed: ReturnType<typeof useEditor> }) {
           <button onClick={() => reorder(selId, "up")} style={{ ...tbBtn(), flex: 1, padding: "6px 0" }} title="Bring forward">↑</button>
           <button onClick={() => reorder(selId, "down")} style={{ ...tbBtn(), flex: 1, padding: "6px 0" }} title="Send back">↓</button>
           <button onClick={() => duplicate(selId)} style={{ ...tbBtn(), flex: 1, padding: "6px 0", fontSize: 11 }} title="Duplicate">Dup</button>
-          <button onClick={() => remove(selId)} style={{ ...tbBtn(), flex: 1, padding: "6px 0", fontSize: 11, color: "#E5675F" }} title="Delete">Del</button>
+          <button onClick={() => remove(selId)} style={{ ...tbBtn(), flex: 1, padding: 0, fontSize: 11, color: "var(--danger)" }} title="Delete">Del</button>
         </div>
       )}
     </div>
@@ -126,7 +125,7 @@ function Inspector({ ed }: { ed: ReturnType<typeof useEditor> }) {
               <Row label="Width"><Num value={doc.width} onChange={(v) => updateDoc({ width: Math.max(64, v) })} /></Row>
               <Row label="Height"><Num value={doc.height} onChange={(v) => updateDoc({ height: Math.max(64, v) })} /></Row>
             </div>
-            <Row label="Background"><Seg<Background["type"]> value={doc.background.type} onChange={(v) => setBg({ type: v })} opts={[{ v: "rosette", label: "Guilloché" }, { v: "grid", label: "Grid" }, { v: "solid", label: "Solid" }]} /></Row>
+            <Row label="Background"><Seg<Background["type"]> value={doc.background.type} onChange={(v) => setBg({ type: v })} opts={[{ v: "rosette", label: "Route field" }, { v: "grid", label: "Grid" }, { v: "solid", label: "Solid" }]} /></Row>
             <Seg<Background["type"]> value={doc.background.type} onChange={(v) => setBg({ type: v })} opts={[{ v: "gradient", label: "Gradient" }, { v: "transparent", label: "None" }]} />
             {(doc.background.type === "solid" || doc.background.type === "grid" || doc.background.type === "rosette") && <Row label="Color"><Color value={doc.background.color} onChange={(v) => setBg({ color: v })} /></Row>}
             {doc.background.type === "gradient" && (
@@ -209,9 +208,9 @@ function Inspector({ ed }: { ed: ReturnType<typeof useEditor> }) {
 
             {l.type === "shape" && (() => { const sh = l as ShapeLayer; return <>
               <Row label="Shape"><Seg<"rect" | "ellipse" | "line"> value={sh.shape} onChange={(v) => up({ shape: v })} opts={[{ v: "rect", label: "Rect" }, { v: "ellipse", label: "Ellipse" }, { v: "line", label: "Line" }]} /></Row>
-              {sh.shape !== "line" && <Row label="Fill"><Color value={sh.fill === "none" ? "#34c28e" : sh.fill} onChange={(v) => up({ fill: v })} /></Row>}
-              {sh.shape !== "line" && <button onClick={() => up({ fill: sh.fill === "none" ? "#34C28E" : "none" })} style={{ ...tbBtn(), padding: "6px 10px" }}>{sh.fill === "none" ? "Add fill" : "No fill"}</button>}
-              <Row label="Stroke"><Color value={sh.stroke === "none" ? "#34c28e" : sh.stroke} onChange={(v) => up({ stroke: v, strokeWidth: sh.strokeWidth || 4 })} /></Row>
+              {sh.shape !== "line" && <Row label="Fill"><Color value={sh.fill === "none" ? C.primary : sh.fill} onChange={(v) => up({ fill: v })} /></Row>}
+              {sh.shape !== "line" && <button onClick={() => up({ fill: sh.fill === "none" ? C.primary : "none" })} style={tbBtn()}>{sh.fill === "none" ? "Add fill" : "No fill"}</button>}
+              <Row label="Stroke"><Color value={sh.stroke === "none" ? C.primary : sh.stroke} onChange={(v) => up({ stroke: v, strokeWidth: sh.strokeWidth || 4 })} /></Row>
               <Row label={`Stroke width ${sh.strokeWidth}`}><Range value={sh.strokeWidth} min={0} max={40} onChange={(v) => up({ strokeWidth: v })} /></Row>
               {sh.shape === "rect" && <Row label={`Corner ${sh.radius}`}><Range value={sh.radius} min={0} max={Math.round(Math.min(sh.w, sh.h) / 2)} onChange={(v) => up({ radius: v })} /></Row>}
             </>; })()}

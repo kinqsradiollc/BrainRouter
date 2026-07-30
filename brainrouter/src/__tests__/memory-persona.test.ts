@@ -11,7 +11,7 @@ import { memoryEngine } from "../memory/engine.js";
 import {
   handleMemoryPersona,
   handleMemoryPersonaRefresh,
-} from "../tools/memory_persona.js";
+} from "../tools/working/memory_persona.js";
 
 function parseToolText<T>(result: any): T {
   return JSON.parse(result.content[0].text);

@@ -4,69 +4,53 @@
  * edge to resize). Every CLI slash command surfaces here: ⌘K palette, the
  * composer "/" popup, and the categorized Settings modal.
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react';
-import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
-import {
-  DiffPanel, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel, WorktreesPanel, ReviewPanel,
-  RequirementsPanel, AnnotationsPanel, ArtifactsPanel, AtlasPanel, WorkflowsPanel, MemoryPanel, PrototypePanel, TasksPanel, TerminalPanel, ToolsPanel, ContextPanel, PANEL_DEFS, type PanelId, type SearchHit, type ReviewFindingView,
-} from './panels/index.js';
-import type { RequirementRecord, AnnotationRecord, ArtifactRecord, AtlasGraph, TrackProject, WorkItem, WorkItemType, Sprint, SprintState, Module, SavedView, TrackLayout, AutomationRule, AutomationTrigger, AutomationAction, ProjectMember, ProjectRole } from '@kinqs/brainrouter-types';
-import { TrackView, type GitTrackContext, type SyncConfig, type SyncResult, type TrackPrStatus } from './track/TrackView.js';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
+// UI-TEST fusion — the generated screen map + user-journey stories the Atlas
+// Screens mode + Browser panel render, and that runStory replays.
+import type { UiMap, Story } from '@kinqs/brainrouter-core/browser';
+import { PANEL_DEFS, type PanelId, type SearchHit } from './panels/index.js';
+import type { RequirementRecord, AnnotationRecord, ArtifactRecord, AtlasGraph, TrackProject, WorkItem, Sprint, Module, SavedView, AutomationRule, ProjectMember } from '@kinqs/brainrouter-types';
+import type { GitTrackContext, SyncConfig, SyncResult, TrackPrStatus } from './track/TrackView.js';
 import type { ScheduleRecordView } from './lib/schedule/scheduleView.js';
-import { SESSION_BASE } from './lib/session/sessionPagination.js';
-import { mergeOptimistic } from './lib/session/sessionOrder.js';
-import { setEntry } from './lib/review/reviewWorkspace.js';
+import { SESSION_BASE } from './lib/session/list/sessionPagination.js';
 import { usePanels } from './lib/panels/usePanels.js';
-import { detectOS, captureCombo } from './lib/shortcuts/shortcuts.js';
-import { hostQuery } from './lib/hostQuery.js';
-import { buildCommandList, runCommand, resolveSlashInput, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './lib/commands/commands.js';
+import { environmentPanelLayout } from './lib/panels/sideRailLayout.js';
+import {
+  workspaceViewContextFromManifest,
+  type WorkspaceViewContext,
+} from './lib/panels/viewRecommendations.js';
+import { buildCommandList, runCommand, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './lib/commands/commands.js';
 import { tagQueryId } from './lib/workspace/workspaceEvents.js';
-import { duplicateTitleKeys } from './lib/session/sessionDisplay.js';
-import { CommandPalette } from './palette.js';
-import { SettingsDialog, type ConfigSnapshot, type UsageHistory } from './settings.js';
+import { duplicateTitleKeys } from './lib/session/list/sessionDisplay.js';
+import { type ConfigSnapshot, type UsageHistory } from './settings.js';
+import type { MarketplaceState } from './settings/marketplace/index.js';
 import { installDevBridge } from './devBridge.js';
-import { Icon } from './icons.js';
-import type { AttachmentUpload, PlanItem, ToolItem, ChatRow, SessionRow, FleetRow, PopId } from './types.js';
+import type { AttachmentUpload, PlanItem, ChatRow, FleetRow, PopId, ComponentTag } from './types.js';
 import type { PlanDecisionView } from './lib/plan/planReviewView.js';
-import { fileFromSummary, fmtAge, fmt, download } from './lib/format.js';
-import { FOREGROUND_ONLY_KINDS } from './constants.js';
 import { useClosable } from './lib/useClosable.js';
-import { rid } from './lib/rid.js';
 import { useAgentEvents, type ToolCatalog } from './lib/agent/useAgentEvents.js';
 import { useEditor } from './lib/editor/useEditor.js';
 import { useCi } from './lib/ci/useCi.js';
-import { type DashTab, type DashTask, type WorkspaceDash } from './lib/workspace/dashboard.js';
-// Monaco is ~5MB — lazy-load the editor panel so it only loads when first opened.
-const EditorPanel = lazy(() => import('./panels/EditorPanel.js').then((m) => ({ default: m.EditorPanel })));
-// CI + Dashboard are optional panels rarely opened on load — lazy so they stay
-// out of the initial bundle / first paint.
-const CIPanel = lazy(() => import('./panels/CIPanel.js').then((m) => ({ default: m.CIPanel })));
-const DashboardPanel = lazy(() => import('./panels/DashboardPanel.js').then((m) => ({ default: m.DashboardPanel })));
-import { MessageRow } from './chat/MessageRow.js';
-import { SessionStatus, PrStatusIcon } from './components/SessionStatus.js';
-import { prStatusFor } from './lib/ci/prStatus.js';
-import { Composer } from './components/Composer.js';
+import { type DashTab, type WorkspaceDash } from './lib/workspace/dashboard.js';
 import { useComposerDerived } from './lib/composer/useComposerDerived.js';
-import { buildPromptWithAttachments, readyAttachments } from './lib/attachments/attachmentPrompt.js';
-import { useSessionSidebar } from './lib/session/useSessionSidebar.js';
-import { reorderProjectRoots, withCachedProjectSessions } from './lib/session/projectSessionsView.js';
+import { readyAttachments } from './lib/attachments/attachmentPrompt.js';
+import { useSessionSidebar } from './lib/session/hooks/useSessionSidebar.js';
+import { reorderProjectRoots } from './lib/session/workspaces/projectSessionsView.js';
 import { useGitState } from './lib/git/useGitState.js';
-import { useSessionState } from './lib/session/useSessionState.js';
-import { saveExpandedProjects, withExpanded } from './lib/session/expandedProjectsStore.js';
-import { sessionRowsCacheKey } from './lib/session/sessionCache.js';
-import { workspaceRunCounts, runningWorkspaceSet } from './lib/workspace/runningIndicators.js';
-import { useSessionActions } from './lib/session/useSessionActions.js';
-import { GIT_VISIBLE_POLL_MS, gitPollRefreshDue, gitRefreshDue } from './lib/git/gitFreshness.js';
-import { TopbarRight } from './components/TopbarRight.js';
-import { Sidebar } from './components/Sidebar.js';
-import { ChatThread } from './components/ChatThread.js';
-import type { GoalRecord } from './components/GoalBanner.js';
-import { ViewsRail } from './components/ViewsRail.js';
-import { EnvironmentPanel } from './components/EnvironmentPanel.js';
-import { TerminalDock } from './components/TerminalDock.js';
-import { InfoAndGateDialogs } from './components/InfoAndGateDialogs.js';
-import { InteractionDialogs } from './components/InteractionDialogs.js';
-import { ExportAndMenuDialogs } from './components/ExportAndMenuDialogs.js';
+import { useSessionState } from './lib/session/hooks/useSessionState.js';
+import { withExpanded } from './lib/session/workspaces/expandedProjectsStore.js';
+import { sessionRowsCacheKey } from './lib/session/list/sessionCache.js';
+import { nextBrowserOpenGeneration } from './lib/browser/browserPanelModel.js';
+import { useSessionActions } from './lib/session/hooks/useSessionActions.js';
+import { Sidebar } from './components/layout/Sidebar.js';
+import { ActivityBar } from './components/layout/ActivityBar.js';
+import { WorkspaceOrgProvider } from './lib/orgContext.js';
+import type { GoalRecord } from './components/chat/GoalBanner.js';
+import { useZoom, useAppHandlers, useAppEffects, useDashboardTasks } from './App/hooks/index.js';
+import { buildTrackOps } from './App/track/index.js';
+import { buildRenderPanelBody, buildRenderSessionNode, buildRenderRow } from './App/render/index.js';
+import { AppDialogs, MainContent } from './App/layout/index.js';
 
 installDevBridge();
 
@@ -86,6 +70,10 @@ export function App(): React.ReactElement {
     activeWsRef, workspaceGenRef, pendingWorkspaceRef, pendingResumeRef, trustAsk, setTrustAsk, runningWs, setRunningWs,
     setSessionRunning,
   } = useSessionState();
+  const [onboardAsk, setOnboardAsk] = useState<string | null>(null);
+  const [onboardedByRoot, setOnboardedByRoot] = useState<Record<string, boolean>>({});
+  const [workspaceViewContextByRoot, setWorkspaceViewContextByRoot] = useState<Record<string, WorkspaceViewContext>>({});
+  const onboardingDismissedRef = useRef<Set<string>>(new Set());
 
   const cachedSessionRowsRef = useRef<Record<string, ChatRow[]>>({});
   const [rows, setRowsState] = useState<ChatRow[]>([]);
@@ -99,6 +87,7 @@ export function App(): React.ReactElement {
     });
   }, [activeWsRef, sessionKeyRef]);
   const [statusLine, setStatusLine] = useState('');
+  const [lastRouterFallback, setLastRouterFallback] = useState<string | null>(null);
   const [reasoningTail, setReasoningTail] = useState('');
   const [liveText, setLiveText] = useState('');
   const [fleet, setFleet] = useState<FleetRow[]>([]);
@@ -106,10 +95,52 @@ export function App(): React.ReactElement {
   // so the Background panel shows verification/review/revision outcomes, not just
   // what's running. Sourced from the durable `tasks-list` query (status: all).
   const [recentTasks, setRecentTasks] = useState<FleetRow[]>([]);
-  const [info, setInfo] = useState<{ sessionKey?: string; model?: string; workspaceRoot?: string; username?: string }>({});
+  const [info, setInfo] = useState<{
+    sessionKey?: string;
+    model?: string;
+    provider?: string;
+    workspaceRoot?: string;
+    username?: string;
+    accountSignedIn?: boolean;
+    accountEmail?: string;
+  }>(() => {
+    const status = window.brainrouter.getBootstrapState?.()?.accountStatus;
+    const account = status?.account;
+    return {
+      username: account?.displayName || account?.email || undefined,
+      accountSignedIn: status?.signedIn === true,
+      accountEmail: account?.email || undefined,
+    };
+  });
   const [hostUp, setHostUp] = useState(false);
   const [interaction, setInteraction] = useState<InteractionRequest | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
+
+  // Ask once after the active host becomes authoritative. Root, generation,
+  // and cancellation guards prevent a late response from reopening setup for
+  // a project the user has already left.
+  useEffect(() => {
+    if (!hostUp) {
+      setOnboardAsk(null);
+      return;
+    }
+    const root = info.workspaceRoot;
+    if (!root || !window.brainrouter.workspaceManifest) return;
+    setOnboardAsk((current) => current === root ? current : null);
+    const generation = workspaceGenRef.current;
+    let cancelled = false;
+    void window.brainrouter.workspaceManifest(root).then((result) => {
+      if (cancelled || workspaceGenRef.current !== generation || activeWsRef.current !== root || !result.ok) return;
+      const onboarded = result.onboarded === true;
+      setOnboardedByRoot((current) => ({ ...current, [root]: onboarded }));
+      setWorkspaceViewContextByRoot((current) => ({
+        ...current,
+        [root]: workspaceViewContextFromManifest(result.manifest),
+      }));
+      if (!onboarded && !onboardingDismissedRef.current.has(root)) setOnboardAsk(root);
+    }).catch(() => { /* the persistent sidebar action remains available for retry */ });
+    return () => { cancelled = true; };
+  }, [activeWsRef, hostUp, info.workspaceRoot, workspaceGenRef]);
   const [railOpen, setRailOpen] = useState(() => {
     const saved = localStorage.getItem('br-rail-open');
     return saved !== null ? saved === '1' : true;
@@ -134,7 +165,7 @@ export function App(): React.ReactElement {
   const [efficiency, setEfficiency] = useState<{ compactions: number; droppedMessages: number; memoriesRecalled: number }>({ compactions: 0, droppedMessages: 0, memoriesRecalled: 0 });
   // Workspace MODE — Chat · Track · Code, switched from the left sidebar (each
   // swaps the whole main surface). Code is the default agentic-coding view.
-  const [mode, setMode] = useState<'chat' | 'track' | 'code'>('code');
+  const [mode, setMode] = useState<'chat' | 'track' | 'code' | 'meetings'>('code');
   // Track mode data (the per-workspace project + its work items), fed by the
   // host `track-*` queries. Mutations re-fetch the item list.
   const [track, setTrack] = useState<{ project: TrackProject | null; items: WorkItem[]; sprints: Sprint[]; modules: Module[]; views: SavedView[]; automations: AutomationRule[]; members: ProjectMember[]; sync: { config: SyncConfig | null; result: SyncResult | null }; git: GitTrackContext | null; pr: TrackPrStatus | null }>({ project: null, items: [], sprints: [], modules: [], views: [], automations: [], members: [], sync: { config: null, result: null }, git: null, pr: null });
@@ -148,6 +179,9 @@ export function App(): React.ReactElement {
   const [snapshot, setSnapshot] = useState<ConfigSnapshot | null>(null);
   const [usageLines, setUsageLines] = useState<string[]>([]);
   const [usageHistory, setUsageHistory] = useState<UsageHistory | null>(null); // WS10 — cross-session heatmap
+  // PLUGIN-MARKETPLACE P4-desktop — the Marketplace panel's data slice (installed
+  // plugins + registry search hits + the pending consent disclosure).
+  const [market, setMarket] = useState<MarketplaceState>({ installed: null, hits: null, searching: false, error: '', consent: null });
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settings, setSettings] = useState<{ open: boolean; section: SettingsSection }>({ open: false, section: 'general' });
   const [infoDialog, setInfoDialog] = useState<{ title: string; body: string } | null>(null);
@@ -164,39 +198,7 @@ export function App(): React.ReactElement {
   const [statsTab, setStatsTab] = useState<'overview' | 'models'>('overview');
   const [statsRange, setStatsRange] = useState<'all' | '30d' | '7d'>('all');
 
-  const [zoomFactor, setZoomFactorState] = useState(() => {
-    const saved = localStorage.getItem('br-zoom-factor');
-    return saved ? parseFloat(saved) : 1.0;
-  });
-
-  const zoomIn = () => {
-    setZoomFactorState((z) => {
-      const next = Math.min(2.5, z + 0.1);
-      localStorage.setItem('br-zoom-factor', next.toFixed(1));
-      return next;
-    });
-  };
-
-  const zoomOut = () => {
-    setZoomFactorState((z) => {
-      const next = Math.max(0.5, z - 0.1);
-      localStorage.setItem('br-zoom-factor', next.toFixed(1));
-      return next;
-    });
-  };
-
-  const resetZoom = () => {
-    setZoomFactorState(1.0);
-    localStorage.setItem('br-zoom-factor', '1.0');
-  };
-
-  useEffect(() => {
-    if (window.brainrouter && typeof window.brainrouter.setZoomFactor === 'function') {
-      window.brainrouter.setZoomFactor(zoomFactor);
-    } else if (document.body) {
-      document.body.style.zoom = zoomFactor.toString();
-    }
-  }, [zoomFactor]);
+  const { zoomFactor, zoomIn, zoomOut, resetZoom } = useZoom();
   // DESK-4m — popovers (one open at a time) across composer, top bar, and menus.
   const [pop, setPop] = useState<PopId>('');
   // DESK-5q/5r — context fill for the composer ring (vs the auto-compact limit).
@@ -258,6 +260,11 @@ export function App(): React.ReactElement {
   const [atlasEnriching, setAtlasEnriching] = useState(false); // ATLAS-4b — LLM enrichment in flight
   const [atlasAssessing, setAtlasAssessing] = useState<string | null>(null); // ATLAS-14 — path being assessed
   const [atlasAssessments, setAtlasAssessments] = useState<Record<string, import('./lib/atlas/atlasView.js').AtlasChangeAssessment>>({});
+  const [atlasUiMap, setAtlasUiMap] = useState<UiMap | null>(null); // UI-TEST fusion — generated screen map for the Atlas Screens mode
+  const [atlasStories, setAtlasStories] = useState<Story[]>([]); // UI Stories — named user journeys for the Atlas Screens mode
+  // §a11y-inspect — component reference tags dragged from the Browser panel's
+  // Accessibility list (and story chips); serialized into the prompt on send.
+  const [componentTags, setComponentTags] = useState<ComponentTag[]>([]);
   // ANNOTATION-RECORDS — this workspace's durable feedback records, from the CLI store.
   const [annotations, setAnnotations] = useState<AnnotationRecord[]>([]);
   // ARTIFACT-RECORDS — this workspace's durable Artifact Records, from the CLI store.
@@ -302,93 +309,7 @@ export function App(): React.ReactElement {
     window.brainrouter.send({ kind: 'query', id: tagQueryId(id, workspaceGenRef.current), name, args });
   };
 
-  // Fetch the tool enable/disable catalog (built-in + connected MCP tools) when
-  // Settings opens, so the Tools section can render a toggle per tool.
-  useEffect(() => {
-    if (settings.open) q('q-toolcat', 'tool-catalog');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings.open]);
-
-  // Track mode — fetch the project + work items on entering Track or switching
-  // workspace; mutations return the updated list (handled in useAgentEvents).
-  useEffect(() => {
-    if (mode !== 'track') return;
-    q('q-track-project', 'track-project');
-    q('q-track-items', 'track-items');
-    q('q-track-sprints', 'track-sprints');
-    q('q-track-modules', 'track-modules');
-    q('q-track-views', 'track-views');
-    q('q-track-automations', 'track-automations');
-    q('q-track-members', 'track-members');
-    q('q-track-sync-config', 'track-sync-config');
-    q('q-track-git-context', 'track-git-context');
-    q('q-track-pr-status', 'track-pr-status');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, info.workspaceRoot]);
-
-  // Auto-refresh Track every 25s while it's open, so board items, sync state,
-  // git context, and PR status reflect external changes (commits, GitHub) on
-  // their own — no manual Refresh. Quiet + flicker-free: results replace state
-  // in useAgentEvents, and identical data produces no DOM change.
-  useEffect(() => {
-    if (mode !== 'track') return;
-    const t = window.setInterval(() => {
-      q('q-track-items', 'track-items');
-      q('q-track-sync-config', 'track-sync-config');
-      q('q-track-git-context', 'track-git-context');
-      q('q-track-pr-status', 'track-pr-status');
-    }, 25_000);
-    return () => window.clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, info.workspaceRoot]);
-
-  // A4 — Chat is a READ-ONLY conversational stance: the agent can read, search,
-  // and reason, but cannot write files or run shell. Entering Chat pins the
-  // active agent to 'read' access; Code/Track restore the default 'shell'. Re-
-  // asserted on every mode switch so a fresh/swapped agent inherits the stance.
-  useEffect(() => {
-    // Distinct id from the manual settings selector ('a-access') so the
-    // automatic, mode-driven switch stays SILENT — no per-switch toast.
-    q('a-mode-access', 'action:set-access', { mode: mode === 'chat' ? 'read' : 'shell' });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, info.sessionKey]);
-  const trackOps = {
-    create: (input: { title: string; type: WorkItemType; status: string }) => q('q-track-create', 'track-create', input),
-    transition: (idOrKey: string, toStatus: string) => q('q-track-transition', 'track-transition', { idOrKey, toStatus }),
-    update: (idOrKey: string, patch: Partial<WorkItem>) => q('q-track-update-item', 'track-update-item', { idOrKey, patch }),
-    comment: (idOrKey: string, body: string) => q('q-track-comment', 'track-comment', { idOrKey, body }),
-    link: (idOrKey: string, input: { codeLinks?: WorkItem['codeLinks']; linkedMemoryIds?: string[]; blocks?: string }) => q('q-track-link', 'track-link', { idOrKey, ...input }),
-    assignSprint: (idOrKey: string, sprintId: string | null) => q('q-track-assign-sprint', 'track-assign-sprint', { idOrKey, sprintId }),
-    createSprint: (name: string, goal?: string) => q('q-track-create-sprint', 'track-create-sprint', { name, goal }),
-    sprintState: (id: string, state: SprintState) => q('q-track-sprint-state', 'track-sprint-state', { id, state }),
-    assignModule: (idOrKey: string, moduleId: string | null) => q('q-track-assign-module', 'track-assign-module', { idOrKey, moduleId }),
-    createModule: (name: string, description?: string) => q('q-track-create-module', 'track-create-module', { name, description }),
-    updateModule: (id: string, patch: Partial<Module>) => q('q-track-module-update', 'track-module-update', { id, patch }),
-    deleteModule: (id: string) => q('q-track-module-delete', 'track-module-delete', { id }),
-    saveView: (input: { name: string; layout: TrackLayout; query?: string; filters?: Record<string, string> }) => q('q-track-save-view', 'track-save-view', { input }),
-    deleteView: (id: string) => q('q-track-delete-view', 'track-delete-view', { id }),
-    createAutomation: (input: { name: string; trigger: AutomationTrigger; condition?: string; actions: AutomationAction[] }) => q('q-track-create-automation', 'track-create-automation', input),
-    updateAutomation: (id: string, patch: Partial<AutomationRule>) => q('q-track-update-automation', 'track-update-automation', { id, patch }),
-    deleteAutomation: (id: string) => q('q-track-delete-automation', 'track-delete-automation', { id }),
-    addMember: (input: { id: string; name?: string; role: ProjectRole }) => q('q-track-add-member', 'track-add-member', input),
-    updateMemberRole: (id: string, role: ProjectRole) => q('q-track-update-member-role', 'track-update-member-role', { id, role }),
-    removeMember: (id: string) => q('q-track-remove-member', 'track-remove-member', { id }),
-    syncMembers: () => q('q-track-sync-members', 'track-sync-members', {}),
-    sync: (direction: 'import' | 'export' | 'sync', dryRun: boolean) => {
-      q('q-track-sync', 'track-sync', { direction, dryRun });
-      // A real run can create/modify items — refresh the board shortly after.
-      if (!dryRun) window.setTimeout(() => { q('q-track-items', 'track-items'); }, 600);
-    },
-    importGhIssues: () => q('q-track-gh-issues', 'track-gh-issues-import', {}),
-    scanCommits: () => q('q-track-scan', 'track-scan-commits'),
-    refreshGit: () => q('q-track-git-context', 'track-git-context'),
-    startGitWork: (idOrKey: string) => q('q-track-start-work', 'track-start-work', { idOrKey }),
-    refreshPr: () => q('q-track-pr-status', 'track-pr-status'),
-    createDraftPr: (idOrKey: string) => q('q-track-create-pr', 'track-create-pr', { idOrKey }),
-    mergePr: () => q('q-track-merge-pr', 'track-merge-pr', {}),
-    submitPrReview: (decision: 'comment' | 'approve' | 'request-changes', body: string) => q('q-track-submit-pr-review', 'track-submit-pr-review', { decision, body }),
-    fixFailingChecks: () => q('q-track-fix-checks', 'track-fix-failing-checks', {}),
-  };
+  const trackOps = buildTrackOps(q);
 
   // T4 — git/diff/review STATE + the Changes-tab git action (runGit). Every symbol
   // is destructured back so existing references (render JSX, useAgentEvents ctx)
@@ -411,6 +332,58 @@ export function App(): React.ReactElement {
     ensurePanel, closeSideTab, reorderSideTab, togglePanel, openSideView, openBottomDock, addBottomTab, closeBottomTab, resizeTerminal, resetTermDock,
   } = usePanels(q);
 
+  // Agent browser commands target a main-owned native view even when its React
+  // panel is unmounted. Expose the Browser first so it can report bounds and the
+  // user sees the exact tab the agent is about to operate.
+  const ensurePanelRef = useRef(ensurePanel);
+  ensurePanelRef.current = ensurePanel;
+  useEffect(() => {
+    let active = true;
+    let latestGeneration: number | undefined;
+    let firstFrame: number | undefined;
+    let secondFrame: number | undefined;
+    let timer: number | undefined;
+    const cancelScheduled = (): void => {
+      if (firstFrame !== undefined) cancelAnimationFrame(firstFrame);
+      if (secondFrame !== undefined) cancelAnimationFrame(secondFrame);
+      if (timer !== undefined) window.clearTimeout(timer);
+      firstFrame = undefined;
+      secondFrame = undefined;
+      timer = undefined;
+    };
+    const off = window.brainrouter.browser?.onOpenRequest?.((request) => {
+      const nextGeneration = nextBrowserOpenGeneration(latestGeneration, request.generation);
+      if (nextGeneration === undefined || nextGeneration === latestGeneration) return;
+      latestGeneration = nextGeneration;
+      cancelScheduled();
+      ensurePanelRef.current('browser');
+      // BrowserPanel owns the native-surface rectangle. Forward only the newest
+      // generation after React can mount/unhide it; delayed older callbacks must
+      // never detach a newer acknowledged native view.
+      const forward = (): void => {
+        if (!active || latestGeneration !== nextGeneration) return;
+        window.dispatchEvent(new CustomEvent('br-browser-open-generation', { detail: { ...request, generation: nextGeneration } }));
+      };
+      queueMicrotask(forward);
+      firstFrame = requestAnimationFrame(() => {
+        firstFrame = undefined;
+        secondFrame = requestAnimationFrame(() => {
+          secondFrame = undefined;
+          forward();
+        });
+      });
+      timer = window.setTimeout(() => {
+        timer = undefined;
+        forward();
+      }, 100);
+    });
+    return () => {
+      active = false;
+      cancelScheduled();
+      off?.();
+    };
+  }, []);
+
   // T5 — in-app code editor. Self-contained (own host round-trips); on a save it
   // refreshes git status + changed files and re-checks the review gate (the
   // working tree just changed). Reads/writes go through the host, never the fs.
@@ -419,12 +392,6 @@ export function App(): React.ReactElement {
     onSaved: () => { q('q-git', 'git-info'); q('q-files', 'changed-files'); q('q-list', 'list-files', { refresh: true }); q('q-review-gate', 'review-gate'); },
     onToast: setToast,
   });
-  // T5 — warn before a reload/close drops unsaved editor changes.
-  useEffect(() => {
-    const handler = (e: BeforeUnloadEvent) => { if (editor.anyDirty) { e.preventDefault(); e.returnValue = ''; } };
-    window.addEventListener('beforeunload', handler);
-    return () => window.removeEventListener('beforeunload', handler);
-  }, [editor.anyDirty]);
 
   // T6 — GitHub CI/CD (real `gh` status, kept separate from local tool success).
   const ci = useCi({ workspaceRoot: workspaces.current ?? info.workspaceRoot, onToast: setToast });
@@ -435,7 +402,6 @@ export function App(): React.ReactElement {
   const [dashTab, setDashTab] = useState<DashTab>('running');
   const [globalBoards, setGlobalBoards] = useState<WorkspaceDash[] | null>(null);
   const [dashBusy, setDashBusy] = useState(false);
-  const pendingDashboardTaskRef = useRef<DashTask | null>(null);
 
   // T4 — session/workspace/panel ACTION functions (no command-catalog deps) live
   // in useSessionActions. Every symbol is destructured back so existing references
@@ -446,7 +412,7 @@ export function App(): React.ReactElement {
     refreshSession, refreshSidebar, refreshGit, resumeSession, resumeSessionRef, resumeTimerRef,
     openTask, openWorkflow, viewToTop, answerInteraction, requestStop,
     switchToWorkspace, openProject, openWorktree, addProject, toggleProject,
-    openSettings, openFile, closeEditorTab, openUrl, openCiPanel, refreshDashboard, openDashboard,
+    openSettings, openFile, closeEditorTab, openUrl, openCiPanel, refreshDashboard,
     closeSessionMenu, setMeta, togglePin, toggleComplete, toggleArchive, moveToGroup,
     startRename, commitRename, forkSessionAction, deleteSessionAction, openExternal, openSessionMenu,
   } = useSessionActions({
@@ -462,39 +428,6 @@ export function App(): React.ReactElement {
     pendingGitRef, ensurePanel, resetTermDock, editor, ci,
   });
 
-  // Git/branch is LIVE environment state, not durable session truth — re-read
-  // it when the window regains focus or the tab becomes visible, so a branch
-  // switched in another terminal shows up instead of a stale one. Debounced
-  // (gitRefreshDue) so the focus + paired visibilitychange collapse to one.
-  const lastGitFocusRef = useRef(0);
-  const lastGitPollRef = useRef(0);
-  useEffect(() => {
-    const onWake = (): void => {
-      if (!hostUp) return;
-      const now = Date.now();
-      if (!gitRefreshDue(lastGitFocusRef.current, now, document.visibilityState === 'visible')) return;
-      lastGitFocusRef.current = now;
-      refreshGit();
-    };
-    window.addEventListener('focus', onWake);
-    document.addEventListener('visibilitychange', onWake);
-    return () => { window.removeEventListener('focus', onWake); document.removeEventListener('visibilitychange', onWake); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hostUp]);
-
-  useEffect(() => {
-    if (!hostUp) return;
-    const onPoll = (): void => {
-      const now = Date.now();
-      if (!gitPollRefreshDue(lastGitPollRef.current, now, document.visibilityState === 'visible')) return;
-      lastGitPollRef.current = now;
-      refreshGit();
-    };
-    onPoll();
-    const timer = window.setInterval(onPoll, GIT_VISIBLE_POLL_MS);
-    return () => window.clearInterval(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hostUp]);
 
   const pendingCmdRef = useRef('');
   function runBridge(cmd: string, argText = ''): void {
@@ -513,274 +446,31 @@ export function App(): React.ReactElement {
     bridge: runBridge,
   };
 
-  useEffect(() => {
-    if (!running) return;
-    // DESK-5r — context ring: lastSeenPromptTokens grows after each LLM call
-    // within the turn, so polling shows context fill rise live. (The elapsed
-    // timer is now self-contained in <WorkElapsed/>, so no app-wide tick here.)
-    const fp = setInterval(() => { q('q-ctx', 'context-usage'); }, 2000);
-    q('q-ctx', 'context-usage'); // immediate, don't wait the first interval
-    return () => { clearInterval(fp); };
-  }, [running]);
-
-  // §7 — keep the plan version history LIVE. A new plan VERSION under auto/YOLO
-  // mode records an `actor:'auto'` approval in core (agent.maybeAutoApprovePlan)
-  // with NO prompt; without this the "approved · auto" entry only appears after
-  // the user clicks Approve. Re-fetch the history whenever the plan's step
-  // STRUCTURE changes (a new version → a decision was just recorded), so the
-  // auto-approval shows up on its own. Keyed on the step signature so a plain
-  // status tick (same steps) doesn't spam the host.
-  const planSigRef = useRef('');
-  useEffect(() => {
-    const sig = (lastPlan?.items ?? []).map((it) => it.step).join('');
-    if (sig && sig !== planSigRef.current) {
-      planSigRef.current = sig;
-      // small delay so core has flushed recordPlanDecision before we read.
-      const t = setTimeout(() => q('q-plan-history', 'plan-history'), 200);
-      return () => clearTimeout(t);
-    }
-  }, [lastPlan]);
-
-  // The Worktrees panel only fetched on its FIRST open (ensurePanel). Switching
-  // back to an already-open tab (or restoring it in full-screen) left the list
-  // at its stale empty state → "No worktrees" even when the repo has some.
-  // Re-read whenever it becomes the active side tab, or the workspace changes.
-  useEffect(() => {
-    if (activeSideTab === 'worktrees') q('q-worktrees', 'git-worktrees');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSideTab, info.workspaceRoot]);
-
-  // DESK-5w — keep the per-session background-task list fresh even when the
-  // VIEWED chat is idle: another chat may be running work whose tasks should
-  // appear/clear in the sidebar (and reflect the boot-time stale reconcile).
-  useEffect(() => {
-    const tick = (): void => { q('q-fleet', 'fleet'); q('q-tasks-recent', 'tasks-list', { scope: 'workspace', status: 'all' }); };
-    const t = setInterval(tick, 3000);
-    tick();
-    return () => clearInterval(t);
-  }, []);
-  // Fix 4 / §3 — keep the CROSS-workspace running indicators fresh (durable-merged
-  // global dashboard) so a workspace with a background task shows a running dot +
-  // count even when it isn't the active one, and survives host reload / refresh.
-  // Light: small per-workspace JSON reads; does not toggle the dashboard's busy
-  // state. Skipped when the bridge has no globalDashboard (browser dev mock).
-  useEffect(() => {
-    if (!window.brainrouter.globalDashboard) return;
-    let alive = true;
-    const tick = (): void => {
-      window.brainrouter.globalDashboard?.()
-        .then((r) => { if (alive) setGlobalBoards((r.workspaces ?? []) as unknown as WorkspaceDash[]); })
-        .catch(() => { /* disk/gh unreadable */ });
-    };
-    tick();
-    const t = setInterval(tick, 5000);
-    return () => { alive = false; clearInterval(t); };
-  }, []);
-
-  // T14 — keep the Schedules panel fresh (cheap store read) so nextRun/lastRun
-  // tick and another head's /schedule edits show up.
-  useEffect(() => {
-    const t = setInterval(() => q('q-schedule', 'schedule-list'), 5000);
-    q('q-schedule', 'schedule-list');
-    return () => clearInterval(t);
-  }, []);
-
-  // Wave 1 — main pushes project membership/state updates and explicit manual
-  // reorders. Opening/viewing/activity does not promote projects, so the list
-  // stays stable while you browse.
-  useEffect(() => {
-    const off = window.brainrouter.onRecentsChanged?.((data) => {
-      setWorkspaces((w) => ({ ...w, recents: data.recents }));
-      setProjSessions((prev) => {
-        const state = prev[data.workspaceRoot];
-        if (!state) return prev;
-        return { ...prev, [data.workspaceRoot]: { ...state, loadedAt: 0 } };
-      });
-    });
-    return () => off?.();
-  }, []);
-
-  // DESK-5w — while a task's conversation is open, refresh it so a running
-  // worker/subagent's chat updates as it works.
-  useEffect(() => {
-    if (!taskView) return;
-    const { kind, id, parentSessionKey } = taskView;
-    q('q-task-transcript', 'task-transcript', { kind, id, parentSessionKey: parentSessionKey ?? '' });
-    const t = setInterval(() => q('q-task-transcript', 'task-transcript', { kind, id, parentSessionKey: parentSessionKey ?? '' }), 2500);
-    return () => clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [taskView?.id, taskView?.kind, taskView?.parentSessionKey]);
-
-  // DESK-6w — while a workflow card is open, refresh its phases/agent stats live.
-  useEffect(() => {
-    if (!workflowView) return;
-    const slug = workflowView.slug;
-    const t = setInterval(() => q('q-workflow-detail', 'workflow-detail', { slug }), 2500);
-    return () => clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workflowView?.slug]);
-
-  // DESK-6w — keep the auto-scroll suppressor in sync with any card view.
-  useEffect(() => { cardOpenRef.current = !!(taskView || workflowView); }, [taskView, workflowView]);
-
-  // Close any open task/workflow CARD the moment the active session changes —
-  // a catch-all so navigating between sessions always drops back to the chat
-  // (matching sub-agents), no matter which navigation path fired. Opening a card
-  // doesn't change viewKey, so a freshly-opened card is never cleared by this.
-  useEffect(() => { setTaskView(null); setWorkflowView(null); }, [viewKey]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    document.documentElement.style.setProperty('--chat-w', chatWidth === 'narrow' ? '720px' : chatWidth === 'wide' ? '980px' : '840px');
-    document.documentElement.style.setProperty('--chat-fs', chatSize === 'small' ? '13.5px' : chatSize === 'large' ? '15.5px' : '14.5px');
-    localStorage.setItem('br-chat-w', chatWidth);
-    localStorage.setItem('br-chat-fs', chatSize);
-  }, [chatWidth, chatSize]);
-
-  useEffect(() => {
-    if (!toast) return;
-    const t = setTimeout(() => setToast(''), 3500);
-    return () => clearTimeout(t);
-  }, [toast]);
-
-  useEffect(() => {
-    localStorage.setItem('br-env-open', envOpen ? '1' : '0');
-  }, [envOpen]);
-
-  useEffect(() => {
-    localStorage.setItem('br-rail-w', String(railWidth));
-  }, [railWidth]);
-
-  useEffect(() => {
-    localStorage.setItem('br-rail-open', railOpen ? '1' : '0');
-  }, [railOpen]);
-
-  // Fix 4 — persist sidebar workspace expansion so it survives refresh / host
-  // reload / workspace switch (the collapse-on-switch bug). User-controlled.
-  useEffect(() => {
-    saveExpandedProjects(expandedProjects);
-  }, [expandedProjects]);
-
-  // DESK-5h — track the workrow's real width (window size AND panel state both
-  // change it); drives the Environment column's show/yield logic.
-  useEffect(() => {
-    const el = workrowRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => setWorkW(el.clientWidth));
-    ro.observe(el);
-    setWorkW(el.clientWidth);
-    return () => ro.disconnect();
-  }, []);
-
-  // §5.9 — user shortcut overrides (cli.shortcuts), read once; dispatched
-  // ADDITIVELY below (an override fires its action; the built-in defaults stay).
-  const shortcutOverridesRef = useRef<Record<string, string>>({});
-  useEffect(() => { void hostQuery<{ overrides?: Record<string, string> }>('shortcuts-get').then((r) => { if (r?.overrides) shortcutOverridesRef.current = r.overrides; }); }, []);
-
-  useEffect(() => {
-    const os = detectOS();
-    // App-action map for the registry ids that have a handler here.
-    const ACTIONS: Record<string, () => void> = {
-      palette: () => setPaletteOpen((p) => !p),
-      'panel-diff': () => togglePanel('diff'),
-      'panel-files': () => togglePanel('files'),
-      'panel-files-alt': () => togglePanel('files'),
-      'panel-plan': () => togglePanel('plan'),
-      'panel-fullscreen': () => { setSideFullScreen((v) => !v); setSidePanelOpen(true); },
-      terminal: () => setTermDockOpen((o) => !o),
-      settings: () => openSettings('general'),
-    };
-    const h = (e: KeyboardEvent) => {
-      // §5.9 — honour a user override first (additive: matches only when set).
-      const overrides = shortcutOverridesRef.current;
-      if (Object.keys(overrides).length) {
-        const pressed = captureCombo(e, os);
-        if (pressed) {
-          for (const id in overrides) {
-            if (overrides[id] === pressed && ACTIONS[id]) { e.preventDefault(); ACTIONS[id](); return; }
-          }
-        }
-      }
-      const mod = e.metaKey || e.ctrlKey;
-      if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); setPaletteOpen((p) => !p); }
-      // View shortcuts (parity with the reference app's Views menu)
-      if (mod && e.shiftKey && e.key.toLowerCase() === 'd') { e.preventDefault(); togglePanel('diff'); }
-      if (mod && e.shiftKey && e.key.toLowerCase() === 'f') { e.preventDefault(); togglePanel('files'); }
-      if (mod && e.shiftKey && e.key.toLowerCase() === 'g') { e.preventDefault(); togglePanel('plan'); }
-      if (mod && e.shiftKey && e.key.toLowerCase() === 'e') { e.preventDefault(); setSideFullScreen((v) => !v); setSidePanelOpen(true); }
-      if (mod && !e.shiftKey && e.key.toLowerCase() === 'p') { e.preventDefault(); togglePanel('files'); }
-      if (e.ctrlKey && e.key === '`') { e.preventDefault(); setTermDockOpen((o) => !o); }
-      if (mod && !e.shiftKey && /^[1-9]$/.test(e.key)) {
-        const idx = Number(e.key) - 1;
-        const sess = sessionsRef.current[idx];
-        if (sess) { e.preventDefault(); resumeSessionRef.current(sess.sessionKey); }
-      }
-      if (mod && e.key === ',') { e.preventDefault(); openSettings('general'); }
-      // Zoom shortcuts
-      if (mod && (e.key === '=' || e.key === '+')) { e.preventDefault(); zoomIn(); }
-      if (mod && e.key === '-') { e.preventDefault(); zoomOut(); }
-      if (mod && e.key === '0') { e.preventDefault(); resetZoom(); }
-    };
-    window.addEventListener('keydown', h);
-    return () => window.removeEventListener('keydown', h);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // §panel-drawer — Esc closes the drawer (only when unpinned). Skipped while
-  // focus is in the composer / an input, where Esc has its own meaning (e.g.
-  // stopping a turn) so a quick Esc there never also dismisses the panel.
-  useEffect(() => {
-    if (!sidePanelOpen || sidePinned) return;
-    const onEsc = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      const ae = document.activeElement as HTMLElement | null;
-      if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.closest('.composer'))) return;
-      setSidePanelOpen(false);
-    };
-    window.addEventListener('keydown', onEsc);
-    return () => window.removeEventListener('keydown', onEsc);
-  }, [sidePanelOpen, sidePinned, setSidePanelOpen]);
-
-  useEffect(() => {
-    document.documentElement.style.setProperty('--mono',
-      codeFont.trim() ? `"${codeFont.trim()}", "SF Mono", Consolas, monospace` : '"SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace');
-    localStorage.setItem('br-code-font', codeFont);
-  }, [codeFont]);
-
-  useEffect(() => {
-    // DESK-5m — mark macOS so the rail can reserve the traffic-light strip
-    // (the frameless hiddenInset window puts the lights over the top-left).
-    // §shortcuts — expose the OS (mac/windows/linux) so CSS and the shortcut
-    // formatter render platform-correct keys (was mac-only for the traffic lights).
-    document.documentElement.dataset.os = detectOS();
-    document.documentElement.dataset.theme = theme;
-    localStorage.setItem('br-desktop-theme', theme);
-  }, [theme]);
-
-  useEffect(() => {
-    // Codex-style accent customization: one color drives accent + its soft tint.
-    const root = document.documentElement.style;
-    if (accent) {
-      root.setProperty('--accent', accent);
-      root.setProperty('--accent-soft', `${accent}21`);
-    } else {
-      root.removeProperty('--accent');
-      root.removeProperty('--accent-soft');
-    }
-    localStorage.setItem('br-accent', accent);
-  }, [accent]);
+  // T-effects — the shell's standalone side effects (host polling, event
+  // listeners, localStorage persistence, document bindings) live in one hook now.
+  // Its effects keep their original order + deps, so behavior is unchanged.
+  useAppEffects({
+    q, settingsOpen: settings.open, mode, info, hostUp, refreshGit, editorAnyDirty: editor.anyDirty, running,
+    lastPlan, activeSideTab, setGlobalBoards, setWorkspaces, setProjSessions, taskView, workflowView,
+    cardOpenRef, setTaskView, setWorkflowView, viewKey, chatWidth, chatSize, toast, setToast, envOpen,
+    railWidth, railOpen, expandedProjects, workrowRef, setWorkW, setPaletteOpen, togglePanel, ensurePanel, setSideFullScreen,
+    setSidePanelOpen, setTermDockOpen, openSettings, sessionsRef, resumeSessionRef, zoomIn, zoomOut, resetZoom,
+    sidePanelOpen, sidePinned, codeFont, theme, accent,
+  });
 
   // DESK-5j — no auto-close at a px breakpoint: ⌘+/- zoom shrinks the CSS
   // viewport, and the rail vanishing mid-zoom read as the UI breaking apart.
   // Panels are user-controlled; columns shrink in place instead.
 
   useAgentEvents({
-    setRows, setRunning, setStopping, setTurnStart, setStatusLine, setReasoningTail, setLiveText, setToolLog,
+    setRows, setRunning, setStopping, setTurnStart, setStatusLine, setLastRouterFallback, setReasoningTail, setLiveText, setToolLog,
     setLiveChildren, setFinishedTasks, setLastPlan, setGoalState, setPlanHistory, setTokens, setLiveTurn, setEfficiency, setTrack, setInteraction, setPicked, setViewKey,
     setTaskView, setWorkflowView, setInfo, setWorkspaces, setRunningWs, setHostUp, setLastTurnFails,
     setDraft, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
     setBranches, setModelsLoading, setEndpointModels, setToolCatalog, setProviderModels, setProbedModels, setProbeLoading, setProbeError, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
-    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, setAtlasAssessments, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
+    setMarket,
+    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, setAtlasAssessments, setAtlasUiMap, setAtlasStories, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setFilesLoading, setFilesTruncated, setFilesError, setAttachmentUploads,
     setAtBottom,
@@ -790,243 +480,24 @@ export function App(): React.ReactElement {
     q, refreshSession, refreshSidebar, runGit, setSessionRunning, info, gitInfo, homeStats, branches,
   });
 
-  function submit(override?: string): void {
-    const typedPrompt = (override ?? draft).trim();
-    const pendingAttachments = attachmentUploads.filter((a) => a.status === 'reading' || a.status === 'attaching');
-    const failedAttachments = attachmentUploads.filter((a) => a.status === 'failed');
-    const attached = readyAttachments(attachmentUploads);
-    const imagesToSend = pastedImages.map((p) => ({ mediaType: p.mediaType, dataBase64: p.dataBase64 }));
-    if (running || stopping) return;
-    if (!typedPrompt && attached.length === 0 && imagesToSend.length === 0) return;
-    if (pendingAttachments.length > 0) {
-      setToast(pendingAttachments.length === 1 ? `Still attaching ${pendingAttachments[0].name}…` : `Still attaching ${pendingAttachments.length} files…`);
-      return;
-    }
-    if (failedAttachments.length > 0) {
-      setToast(failedAttachments.length === 1 ? `Remove failed attachment ${failedAttachments[0].name} before sending.` : 'Remove failed attachments before sending.');
-      return;
-    }
-    // §vision — an image-only send (no typed text, no file attachments) gets a
-    // sensible default question so the model has something to answer about it.
-    const promptText = typedPrompt || (imagesToSend.length > 0 && attached.length === 0 ? "What's in this image?" : typedPrompt);
-    const prompt = buildPromptWithAttachments(promptText, attached);
-    const displayPrompt = typedPrompt
-      || (attached.length === 1 ? `Use attached file: ${attached[0].name}`
-        : attached.length > 1 ? `Use ${attached.length} attached files`
-        : imagesToSend.length === 1 ? 'Pasted an image'
-        : `Pasted ${imagesToSend.length} images`);
-    // T8 — a slash command is NEVER sent to the LLM. Route it through the
-    // command registry: bridge runs against the CLI stores, known commands run
-    // their wire (panel/settings/native/cli fallback), and an UNKNOWN slash
-    // surfaces a command-output card instead of becoming a chat prompt.
-    const slash = resolveSlashInput(typedPrompt, commands);
-    if (slash.kind !== 'not-slash') {
-      if (attached.length > 0 || imagesToSend.length > 0) {
-        setToast('Attachments and images are sent with chat messages, not slash commands.');
-        return;
-      }
-      setDraft('');
-      if (slash.kind === 'bridge') runBridge(slash.cmd, slash.args);
-      else if (slash.kind === 'command') runCommand(slash.command, cmdCtx);
-      else {
-        const nowTs = Date.now();
-        const stableCmdId = `${sessionKeyRef.current ?? 'global'}-cmd-out-${nowTs}-${typedPrompt.slice(0, 32).replace(/[^a-zA-Z0-9]/g, '_')}`;
-        setRows((r) => [...r, { id: stableCmdId, kind: 'cmd-out', cmd: typedPrompt,
-          lines: [`Unknown command \`${slash.base}\` — type \`/\` to browse commands, or run it in the terminal CLI.`], ts: nowTs }]);
-      }
-      return;
-    }
-    lastPromptRef.current = typedPrompt;
-    // §goal-autonomy — a real user message preempts any queued goal continuation.
-    goalContPendingRef.current = null;
-    const nowTs = Date.now();
-    const stableId = `${sessionKeyRef.current ?? 'global'}-user-${nowTs}-${displayPrompt.slice(0, 32).replace(/[^a-zA-Z0-9]/g, '_')}`;
-    setRows((r) => [...r, { id: stableId, kind: 'user', text: displayPrompt, ts: nowTs }]);
-    if (!override) setDraft('');
-    if (attached.length > 0) setAttachmentUploads((prev) => prev.filter((a) => !attached.some((sent) => sent.id === a.id)));
-    if (imagesToSend.length > 0) setPastedImages([]);
-    setRunning(true);
-    // DESK-5v — mark THIS session running so its spinner survives a switch away.
-    setSessionRunning(sessionKeyRef.current ?? info.sessionKey ?? '', true);
-    setTurnStart(Date.now());
-    turnFailsRef.current = 0;
-    // DESK-6t — show this chat in "Projects" IMMEDIATELY (optimistic row), so a
-    // brand-new chat doesn't stay invisible in the sidebar until the turn ends.
-    // refreshSession() shortly after reconciles it with the host-backed row.
-    const sk = sessionKeyRef.current ?? info.sessionKey;
-    if (sk) {
-      // §session-pr — record the branch this session is running on so the sidebar
-      // can show its live PR status; persisted via session meta + mirrored on the
-      // optimistic row for an immediate icon.
-      if (branches.current) q('q-session-branch', 'action:session-meta', { sessionKey: sk, patch: { branch: branches.current } });
-      const optimistic: SessionRow = { sessionKey: sk, firstUserMessage: displayPrompt, modifiedAt: new Date().toISOString(), turnCount: 1, lastRole: 'user', branch: branches.current ?? null };
-      // Wave 2 — track it as pending so subsequent list-sessions refreshes MERGE
-      // it (instead of replacing it away) until the host transcript confirms it.
-      if (!pendingSessionsRef.current.some((s) => s.sessionKey === sk)) pendingSessionsRef.current = [optimistic, ...pendingSessionsRef.current];
-      setSessions((prev) => mergeOptimistic(prev.filter((s) => s.sessionKey !== sk), [optimistic]));
-      sessionsRef.current = mergeOptimistic(sessionsRef.current.filter((s) => s.sessionKey !== sk), [optimistic]);
-      setProjSessions((prev) => {
-        const root = activeWsRef.current ?? info.workspaceRoot ?? workspaces.current;
-        if (!root) return prev;
-        const rows = mergeOptimistic((prev[root]?.rows ?? []).filter((s) => s.sessionKey !== sk), [optimistic]);
-        return withCachedProjectSessions(prev, root, rows);
-      });
-      setTimeout(() => refreshSession(), 400);
-    }
-    window.brainrouter.send({ kind: 'start-turn', prompt, ...(imagesToSend.length ? { images: imagesToSend } : {}) });
-  }
+  // T-handlers — composer + attachment handlers (submit, AI PR review, file
+  // attachments, pasted-image staging, header rename) live in a hook now. Every
+  // symbol is destructured back so existing references (render JSX) are unchanged.
+  const { submit, submitDelivery, reviewPrWithAi, attachFiles, addPastedImages, renameCurrentSession } = useAppHandlers({
+    q, draft, setDraft, attachmentUploads, setAttachmentUploads, pastedImages, setPastedImages,
+    running, stopping, setToast, commands, cmdCtx, runBridge, sessionKeyRef, setRows, lastPromptRef,
+    goalContPendingRef, setRunning, setSessionRunning, info, setTurnStart, turnFailsRef, branches,
+    pendingSessionsRef, setSessions, sessionsRef, setProjSessions, activeWsRef, workspaces, refreshSession,
+    ensurePanel, viewKey, componentTags, setComponentTags,
+  });
 
-  // AI PR review — kick the agent to review a PR on an ISOLATED git worktree so
-  // the user's working tree stays untouched. The agent creates the worktree with
-  // its own shell, reads the diff, works the code-review checklist, gives a
-  // verdict, and cleans up. Reuses the normal turn flow via submit(override).
-  const reviewPrWithAi = (pr: { number: number; title?: string; headRefName?: string; baseRefName?: string }): void => {
-    if (running || stopping) {
-      setToast('Finish the current turn before starting an AI review.');
-      return;
-    }
-    const base = pr.baseRefName ? `\`${pr.baseRefName}\`` : 'the base branch';
-    const head = pr.headRefName ? `\`${pr.headRefName}\`` : 'the PR branch';
-    const wt = `.worktrees/pr-${pr.number}`;
-    const prompt = [
-      `Review pull request #${pr.number}${pr.title ? ` ("${pr.title}")` : ''} — ${head} → ${base}.`,
-      `Do the review on an ISOLATED git worktree so my working tree stays untouched:`,
-      `1. Check out the PR head into a worktree: \`git fetch origin pull/${pr.number}/head\` then \`git worktree add --detach ${wt} FETCH_HEAD\`.`,
-      `2. Read the change in context: \`gh pr diff ${pr.number}\` for the diff, then open the changed files under \`${wt}\`.`,
-      `3. Work the review checklist: what is this change trying to achieve; does it actually achieve that (read the code, not the description); are there tests and did they actually validate the change; does it break existing functionality (check callers + adjacent behavior); do you genuinely understand what the feature does.`,
-      `4. Give a clear verdict — approve or request changes — with specific \`file:line\` references for each point.`,
-      `When finished, clean up: \`git worktree remove --force ${wt}\`.`,
-    ].join('\n');
-    submit(prompt);
-  };
-
-  // §5 — attach dropped/picked files: read each as base64 in the renderer and
-  // ingest into a durable attachment record (the host preserves the original,
-  // extracts text/metadata, links to memory) as a visible 'attachment' task.
-  const attachFiles = (files: File[]): void => {
-    const batch = files.slice(0, 8); // bound a stray multi-select
-    const uploads = batch.map((file) => ({
-      id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-      name: file.name,
-      size: file.size,
-      status: 'reading' as const,
-    }));
-    if (uploads.length) setAttachmentUploads((prev) => [...prev, ...uploads]);
-    batch.forEach((file, index) => {
-      const upload = uploads[index];
-      const reader = new FileReader();
-      reader.onload = () => {
-        const out = reader.result;
-        if (typeof out !== 'string') {
-          setAttachmentUploads((prev) => prev.map((u) => u.id === upload.id ? { ...u, status: 'failed', detail: 'Could not read this file.' } : u));
-          setToast(`✗ Could not read ${file.name}`);
-          return;
-        }
-        const base64 = out.includes(',') ? out.slice(out.indexOf(',') + 1) : out;
-        setAttachmentUploads((prev) => prev.map((u) => u.id === upload.id ? { ...u, status: 'attaching' } : u));
-        q(`q-attach:${upload.id}`, 'attachment-ingest', { name: file.name, dataBase64: base64 });
-      };
-      reader.onerror = () => {
-        setAttachmentUploads((prev) => prev.map((u) => u.id === upload.id ? { ...u, status: 'failed', detail: 'Could not read this file.' } : u));
-        setToast(`✗ Could not read ${file.name}`);
-      };
-      reader.readAsDataURL(file);
-    });
-    if (batch.length) {
-      setToast(batch.length === 1 ? `Attaching ${batch[0].name}…` : `Attaching ${batch.length} files…`);
-      ensurePanel('tasks');
-    }
-  };
-
-  // §vision — read pasted images as base64 and stage them for the next send (a
-  // vision model receives them inline via start-turn `images`). Size-guarded and
-  // capped; these bypass the text-extracting attachment pipeline by design.
-  const addPastedImages = (files: File[]): void => {
-    const imgs = files.filter((f) => f.type.startsWith('image/')).slice(0, 6);
-    imgs.forEach((file) => {
-      if (file.size > 12 * 1024 * 1024) { setToast(`Image too large (max 12 MB): ${file.name || 'pasted image'}`); return; }
-      const reader = new FileReader();
-      reader.onload = () => {
-        const out = reader.result;
-        if (typeof out !== 'string') { setToast('✗ Could not read pasted image'); return; }
-        const base64 = out.includes(',') ? out.slice(out.indexOf(',') + 1) : out;
-        const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-        setPastedImages((prev) => [...prev, { id, mediaType: file.type || 'image/png', dataBase64: base64 }]);
-      };
-      reader.onerror = () => setToast('✗ Could not read pasted image');
-      reader.readAsDataURL(file);
-    });
-  };
-
-  // header rename — persist a new title for the currently-viewed session via the
-  // SAME host write the sidebar's rename uses (action:session-meta → title). The
-  // header drives this from its own local edit state (see ChatThread), so it
-  // never collides with the sidebar's inline-rename input.
-  const renameCurrentSession = (title: string): void => {
-    const t = title.trim();
-    if (viewKey && t) q('q-session-meta', 'action:session-meta', { sessionKey: viewKey, patch: { title: t } });
-  };
-
-  // DESK-5n — the Running list the panels show: live in-turn children (from
-  // child-* events) unioned with the disk-backed fleet (detached /bg workers,
-  // workflows). Dedup by id, preferring the disk entry (it carries worktree).
-  const runningTasks = useMemo<FleetRow[]>(() => {
-    const byId = new Map<string, FleetRow>();
-    for (const c of Object.values(liveChildren)) {
-      byId.set(c.childId, { kind: 'agent', id: c.childId, label: `${c.role}·${c.childId.slice(-4)}${c.tool ? ` — ${c.tool}` : ''}`, role: c.role, startedAt: new Date(c.startedAt).toISOString(), parentSessionKey: viewKey });
-    }
-    for (const f of fleet) byId.set(f.id, f); // disk entry wins on collision
-    return [...byId.values()];
-  }, [liveChildren, fleet, viewKey]);
-  // Background work is workspace-scoped UI, not chat-list content. Chat rows stay
-  // pure conversations; task/workflow transcripts open from the Background panel.
-  const backgroundTasks = runningTasks;
-  const dashBoards = useMemo<WorkspaceDash[]>(() => {
-    if (dashScope === 'all') return globalBoards ?? [];
-    const tasks: DashTask[] = [];
-    const seen = new Set<string>();
-    const add = (task: DashTask): void => {
-      if (!task.id) return;
-      const key = `${task.kind}:${task.id}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      tasks.push({ ...task, workspaceRoot: activeRoot });
-    };
-    for (const f of backgroundTasks) add({ ...f, workspaceRoot: activeRoot, status: f.status ?? 'running' });
-    for (const f of recentTasks) add({ ...f, workspaceRoot: activeRoot });
-    for (const t of finishedTasks) add({ kind: 'agent', id: t.id, label: t.label, status: /fail|stale|interrupt/i.test(t.status) ? 'failed' : 'completed', workspaceRoot: activeRoot });
-    const activeDisk = globalBoards?.find((b) => b.workspaceRoot === activeRoot);
-    for (const t of activeDisk?.tasks ?? []) add({ ...t, workspaceRoot: activeRoot });
-    return [{ workspaceRoot: activeRoot, tasks, reviewGate }];
-  }, [dashScope, globalBoards, backgroundTasks, recentTasks, finishedTasks, activeRoot, reviewGate]);
-  const openDashboardTask = useCallback((t: DashTask): void => {
-    if (t.workspaceRoot && t.workspaceRoot !== activeRoot) {
-      pendingDashboardTaskRef.current = t;
-      switchToWorkspace(t.workspaceRoot);
-      return;
-    }
-    openTask(t as FleetRow);
-  }, [activeRoot, openTask, switchToWorkspace]);
-  useEffect(() => {
-    const pending = pendingDashboardTaskRef.current;
-    if (!pending || !hostUp) return;
-    if (pending.workspaceRoot && pending.workspaceRoot !== activeRoot) return;
-    pendingDashboardTaskRef.current = null;
-    const row = backgroundTasks.find((t) => t.id === pending.id) ?? (pending as FleetRow);
-    openTask(row);
-  }, [activeRoot, backgroundTasks, hostUp, openTask]);
-  // Fix 4 / §3 — cross-workspace running indicators. globalBoards (durable +
-  // live, polled below) gives the active-task count per NON-active workspace;
-  // the active workspace prefers its live fleet. Drives the sidebar dot + count
-  // so a background task in workspace A stays visible while viewing workspace B.
-  const workspaceRunCount = useMemo<Map<string, number>>(
-    () => workspaceRunCounts(globalBoards, activeRoot, runningTasks.length),
-    [globalBoards, activeRoot, runningTasks],
-  );
-  const runningWorkspaces = useMemo<Set<string>>(
-    () => runningWorkspaceSet(runningWs, workspaceRunCount),
-    [runningWs, workspaceRunCount],
-  );
+  // T-dashtasks — the background/dashboard task derivations (Running list, boards,
+  // cross-workspace indicators, open-task action) live in a hook now. Bodies + deps
+  // are unchanged; every symbol is destructured back for the render + Sidebar.
+  const { runningTasks, backgroundTasks, dashBoards, openDashboardTask, workspaceRunCount, runningWorkspaces } = useDashboardTasks({
+    liveChildren, fleet, viewKey, dashScope, globalBoards, recentTasks, finishedTasks, activeRoot,
+    reviewGate, runningWs, hostUp, openTask, switchToWorkspace,
+  });
   // DESK-6u — if the chat on screen was forked, resolve its parent so we can show
   // a "Forked from conversation" link back to the original.
   const forkParent = useMemo(() => {
@@ -1037,67 +508,18 @@ export function App(): React.ReactElement {
   // so identical-looking rows stay distinguishable.
   const dupeTitleKeys = useMemo(() => duplicateTitleKeys(sessions), [sessions]);
 
-  // DESK-6m — one chat row with its ⋮ menu trigger + pinned/completed state +
-  // inline rename. Background tasks are not rendered as chats.
-  const renderSessionNode = (s: SessionRow, i: number): React.ReactElement => {
-    const running = runningSessions.includes(s.sessionKey);
-    // §session-pr — match the session's branch to its PR (skipped while a turn
-    // runs; the running spinner takes priority over the PR icon).
-    const pr = running ? null : prStatusFor(s.branch, ci.prByBranch);
-    return (
-    <React.Fragment key={s.sessionKey}>
-      <div className={`session-wrap${s.sessionKey === viewKey ? ' active' : ''}${s.status === 'completed' ? ' completed' : ''}${sessionMenu?.key === s.sessionKey ? ' menu-open' : ''}`}
-        onContextMenu={(e) => openSessionMenu(e, s.sessionKey)}>
-        {renamingKey === s.sessionKey ? (
-          <input className="session-rename" autoFocus value={renameDraft}
-            onChange={(e) => setRenameDraft(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') commitRename(); else if (e.key === 'Escape') setRenamingKey(null); }}
-            onBlur={commitRename} />
-        ) : (
-          <button className="project-session" title={s.firstUserMessage || s.sessionKey}
-            onClick={() => resumeSession(s.sessionKey)}>
-            {s.pinned ? <span className="st st-pin" title="Pinned"><Icon name="pin" size={11} /></span>
-              : (s.forkedFrom && !running)
-                ? <span className="st st-fork" title="Forked conversation"><Icon name="branch" size={11} /></span>
-                : pr
-                  ? <PrStatusIcon status={pr.status} pr={pr.pr} />
-                  : <SessionStatus s={s} working={running} />}
-            <span className="session-title">
-              {s.firstUserMessage || s.sessionKey}
-              {dupeTitleKeys.has(s.sessionKey) && s.modifiedAt ? <span className="title-age"> · {fmtAge(s.modifiedAt)}</span> : null}
-            </span>
-            {s.status === 'completed' ? <span className="session-done" title="Completed"><Icon name="check-circle" size={11} /></span> : null}
-            {!s.group && i < 9 ? <span className="session-cmd">⌘{i + 1}</span> : null}
-            {s.modifiedAt && !dupeTitleKeys.has(s.sessionKey) ? <span className="session-age">{fmtAge(s.modifiedAt)}</span> : null}
-          </button>
-        )}
-        <button className="session-menu-btn icon-btn" aria-label="Chat options" onClick={(e) => openSessionMenu(e, s.sessionKey)}><Icon name="dots" size={13} /></button>
-      </div>
-    </React.Fragment>
-    );
-  };
+  // DESK-6m — one sidebar chat node (status icon, inline rename, ⋮ menu) via a
+  // build closure; the composed render + Sidebar consume it unchanged.
+  const renderSessionNode = buildRenderSessionNode({
+    runningSessions, ci, viewKey, sessionMenu, openSessionMenu, renamingKey, renameDraft, setRenameDraft,
+    commitRename, setRenamingKey, resumeSession, dupeTitleKeys,
+  });
 
-  // DESK-5w (#4 lag) — render ONE transcript row. Extracted + memoized (below)
-  // so streaming deltas / the per-second tick don't re-render the whole history
-  // (every <Markdown> was re-parsing on every ~18ms delta — the source of lag).
-  const renderRow = (r: ChatRow, liveLast: boolean): React.ReactElement => (
-    <MessageRow
-      key={r.id}
-      r={r}
-      liveLast={liveLast}
-      inlineDiffs={inlineDiffs}
-      onRequestDiff={(f) => q('q-inline-diff', 'file-diff', { path: f })}
-      onOpenFile={(f) => openFile(f)}
-      onOpenDiff={(f) => { setDiffTarget({ path: f, line: 1 }); ensurePanel('diff'); q('q-diff', 'file-diff', { path: f }); }}
-      onOpenPlan={() => ensurePanel('plan')}
-      onDismissError={(id) => {
-        setRows((rs) => rs.filter((x) => x.id !== id));
-        for (const k of Object.keys(errorsBySession.current)) errorsBySession.current[k] = errorsBySession.current[k].filter((er) => er.id !== id);
-      }}
-      onFork={(ts) => forkSessionAction(sessionKeyRef.current ?? '', ts)}
-      onRewind={(ts) => q('a-rewind', 'action:rewind-to', { ts })}
-    />
-  );
+  // DESK-5w (#4 lag) — render ONE transcript row via a build closure; memoized
+  // below so streaming deltas don't re-render the whole history.
+  const renderRow = buildRenderRow({
+    q, inlineDiffs, openFile, setDiffTarget, ensurePanel, setRows, errorsBySession, forkSessionAction, sessionKeyRef,
+  });
   // Memoized on [rows, inlineDiffs, running] ONLY — NOT liveText/nowTick — so the
   // in-progress stream below re-renders alone, leaving history untouched.
   const transcriptEls = useMemo(
@@ -1139,195 +561,115 @@ export function App(): React.ReactElement {
     runCommand(c, cmdCtx);
   }
 
-  // DESK-5f — tab CONTENT only; the tab strip owns titles and closing.
-  const renderPanelBody = (id: PanelId): React.ReactElement | null => {
-    switch (id) {
-      case 'context': return (
-        <ContextPanel
-          hostUp={hostUp} running={running}
-          model={info.model} workspaceRoot={info.workspaceRoot} sessionKey={info.sessionKey}
-          gitInfo={gitInfo} branch={branches.current}
-          tokens={tokens} liveTurn={liveTurn} contextUsage={contextUsage} efficiency={efficiency}
-          bgCount={runningTasks.length} configDir="~/.config/brainrouter"
-        />);
-      case 'files': return <FilesPanel files={allFiles} statuses={statuses} onOpen={openFile} grepHits={grepHits}
-        onGrep={(gq) => q('q-grep', 'search-content', { q: gq })}
-        onRefresh={() => { q('q-list', 'list-files', { refresh: true }); q('q-files', 'changed-files'); }}
-        loading={filesLoading} truncated={filesTruncated} error={filesError} />;
-      case 'file': return <FileViewerPanel view={fileView} />;
-      case 'editor': return (
-        <Suspense fallback={<div className="row status"><span className="spinner" /> Loading editor…</div>}>
-          <EditorPanel
-            tabs={editor.tabs} activePath={editor.activePath} conflictPaths={editor.conflictPaths} saving={editor.saving} revealLine={editor.revealLine}
-            onSelect={editor.select} onChange={editor.change} onSave={editor.save} onSaveAll={editor.saveAll}
-            onRevert={editor.revert} onClose={closeEditorTab} onReorder={editor.reorder}
-            onOpenFile={(f) => openFile(f)} onOpenUrl={openUrl}
-            onAnnotateSelection={(path, body, anchor) => {
-              q('q-annot-create', 'annotation-create', {
-                type: 'file',
-                body,
-                anchor: { filePath: path, startLine: anchor.startLine, endLine: anchor.endLine, selectedText: anchor.selectedText },
-              });
-              setTimeout(() => q('q-annot', 'annotation-list'), 150);
-              setToast('Selected code saved as an annotation.');
-            }} />
-        </Suspense>
-      );
-      case 'ci': return <Suspense fallback={<div className="row status"><span className="spinner" /> Loading…</div>}><CIPanel ci={ci} onOpenExternal={openUrl} onReviewPr={reviewPrWithAi} trackPr={track.pr} trackOps={trackOps} /></Suspense>;
-      case 'diff': return (
-        <DiffPanel gitInfo={gitInfo} changed={changedFiles} diff={diffView}
-          scrollToLine={diffView && diffTarget && diffView.path === diffTarget.path ? diffTarget.line : undefined}
-          onPick={(p) => { setDiffTarget(null); q('q-diff', 'file-diff', { path: p }); }}
-          onBack={() => { setDiffTarget(null); setDiffView(null); }} onOpenFile={openFile}
-          onGit={runGit} onGitBypass={(kind, msg) => runGit(kind, msg, { bypass: true })} gitBusy={gitBusy}
-          reviewGate={reviewGate} onReview={() => ensurePanel('review')}
-          findingsByFile={reviewFindingsByFile} />);
-      case 'terminal': return <TerminalPanel />;
-      case 'tools': return <ToolsPanel log={toolLog} />;
-      case 'tasks': return <TasksPanel fleet={backgroundTasks} recent={recentTasks} finished={finishedTasks} onClear={() => setFinishedTasks([])} onOpen={(id) => { const f = backgroundTasks.find((t) => t.id === id) ?? recentTasks.find((t) => t.id === id); if (f) openTask(f); }} onKill={(id) => { q('a-killbg', 'action:kill-bgshell', { id }); setTimeout(() => q('q-fleet', 'fleet'), 150); }} />;
-      case 'dashboard': return <Suspense fallback={<div className="row status"><span className="spinner" /> Loading…</div>}><DashboardPanel scope={dashScope} setScope={(s) => { setDashScope(s); if (s === 'all') refreshDashboard(); }}
-        tab={dashTab} setTab={setDashTab} boards={dashBoards} busy={dashBusy} onRefresh={refreshDashboard}
-        onOpenTask={openDashboardTask}
-        onStopTask={(t) => { if (!t.workspaceRoot || t.workspaceRoot === activeRoot) { window.brainrouter.send({ kind: 'interrupt' }); setToast('Interrupt sent to this workspace.'); } else { switchToWorkspace(t.workspaceRoot); setToast('Opening that workspace before stopping its tasks.'); } }} /></Suspense>;
-      case 'plan': {
-        // §7 — record an approval/changes-requested decision, then re-fetch the
-        // history so the new version appears in the panel.
-        const refreshHistory = () => setTimeout(() => q('q-plan-history', 'plan-history'), 150);
-        return <PlanPanel plan={lastPlan} history={planHistory}
-          onApprove={() => { q('q-plan-decision', 'plan-record-decision', { verdict: 'approved' }); refreshHistory(); setToast('Plan approved — snapshot saved to the version history.'); }}
-          onRequestChanges={(feedback) => {
-            // §1 — launch a REAL background plan-revision task (the host returns
-            // it; q-plan-decision surfaces success/error). Stash the feedback so
-            // it can be restored to the composer if the task fails to start.
-            planFeedbackRef.current = feedback;
-            q('q-plan-decision', 'plan-record-decision', { verdict: 'changes-requested', feedback });
-            refreshHistory();
-            ensurePanel('tasks');
-            setToast('Requesting changes — starting a background revision task…');
-          }}
-          onAnnotateStep={(item, index, body) => {
-            q('q-annot-create', 'annotation-create', {
-              type: 'plan',
-              targetId: `plan-step:${index + 1}`,
-              body,
-              anchor: { block: `Step ${index + 1}`, selectedText: item.step },
-            });
-            setTimeout(() => q('q-annot', 'annotation-list'), 150);
-            setToast('Plan step saved as an annotation.');
-          }} />;
-      }
-      case 'search': return <SearchPanel hits={searchHits} onSearch={(query) => q('q-search', 'search-transcript', { q: query })} />;
-      case 'workflows': return <WorkflowsPanel />;
-      case 'memory': return <MemoryPanel />;
-      case 'prototype': return <PrototypePanel />;
-      case 'schedule': return <SchedulePanel schedules={schedules} now={Date.now()}
-        onAdd={(kind, expr, command) => { q('q-schedule', 'schedule-add', { kind, expr, command }); setTimeout(() => q('q-schedule', 'schedule-list'), 150); }}
-        onRemove={(id) => { q('q-schedule', 'schedule-remove', { id }); setTimeout(() => q('q-schedule', 'schedule-list'), 150); }}
-        onToggle={(id, enabled) => { q('q-schedule', 'schedule-toggle', { id, enabled }); setTimeout(() => q('q-schedule', 'schedule-list'), 150); }} />;
-      case 'worktrees': return <WorktreesPanel worktrees={worktrees} diffs={worktreeDiffs}
-        onCreate={(name, ref) => { q('q-worktree-create', 'worktree-create', { name, ref }); setTimeout(() => q('q-worktrees', 'git-worktrees'), 250); }}
-        onRemove={(path) => { q('q-worktree-remove', 'worktree-remove', { path }); setTimeout(() => q('q-worktrees', 'git-worktrees'), 250); }}
-        onOpen={(path) => openWorktree(path)}
-        onDiff={(path) => q('q-worktree-diff', 'worktree-diff', { path })} />;
-      case 'review': {
-        const refresh = () => setTimeout(() => q('q-review-current', 'review-current'), 120);
-        const fixPrompt = (f: ReviewFindingView) => `Fix this review finding in \`${f.file}${f.line ? `:${f.line}` : ''}\` (${f.severity}): ${f.summary}`;
-        return <ReviewPanel review={review} gate={reviewGate} running={reviewRunning}
-          onRun={() => { setReviewRunningByWs((m) => ({ ...m, [activeRoot]: true })); setReviewByWs((m) => setEntry(m, activeRoot, null)); q('q-review-diff', 'review-diff'); }}
-          onDiscuss={(f) => setDraft(`About the review finding in \`${f.file}${f.line ? `:${f.line}` : ''}\` (${f.severity}): ${f.summary}\n\nWhat's the fix?`)}
-          onApply={(f) => { if (f.id) { q('q-review-apply', 'review-apply-suggestion', { id: f.id }); refresh(); setTimeout(() => { q('q-files', 'changed-files'); q('q-gitinfo', 'git-info'); }, 450); } }}
-          onAskFix={(f) => {
-            // T3 — launch a scoped fix agent for THIS finding (not just a draft);
-            // it edits the file, then the review re-runs. Falls back to a draft if
-            // the finding has no id.
-            if (f.id) { setReviewRunningByWs((m) => ({ ...m, [activeRoot]: true })); setToast('Fixing this finding — the agent is editing the file…'); q('q-review-fix', 'review-fix-finding', { id: f.id }); }
-            else { setDraft(fixPrompt(f)); setToast('Fix request drafted — press Enter to ask the agent.'); }
-          }}
-          onDismiss={(f) => { if (f.id) { q('q-review-dismiss', 'review-dismiss-finding', { id: f.id }); refresh(); } }}
-          onResolve={(f) => { if (f.id) { q('q-review-resolve', 'review-resolve-finding', { id: f.id }); refresh(); } }}
-          onTriage={(f, status) => { if (f.id) { q('q-review-triage', 'review-set-finding-status', { id: f.id, status }); refresh(); } }}
-          onAnnotate={(f) => {
-            // §9 — capture a review finding as a durable annotation: a review-finding
-            // record referencing the finding by id, anchored to its file/lines, with
-            // the finding's severity. Refreshes the annotation slice afterwards.
-            const sev = (['info', 'low', 'medium', 'high'] as const).includes(f.severity as never) ? f.severity : undefined;
-            q('q-annot-create', 'annotation-create', {
-              type: 'review-finding', targetId: f.id, body: f.summary, severity: sev,
-              anchor: { filePath: f.file, startLine: f.line, endLine: f.endLine },
-            });
-            setTimeout(() => q('q-annot', 'annotation-list'), 150);
-            setToast('Finding saved as an annotation — see the Annotations view.');
-          }}
-          onOpenFile={(f) => openFile(f.file)}
-          onOpenDiff={(f) => { setDiffTarget({ path: f.file, line: f.line }); ensurePanel('diff'); q('q-diff', 'file-diff', { path: f.file }); }} />;
-      }
-      case 'atlas':
-        return <AtlasPanel graph={atlasGraph} building={atlasBuilding} enriching={atlasEnriching}
-          onLoad={() => q('q-atlas', 'atlas-graph')}
-          onBuild={() => { setAtlasBuilding(true); q('q-atlas-build', 'atlas-build'); }}
-          onEnrich={() => { setAtlasEnriching(true); q('q-atlas-enrich', 'atlas-enrich'); }}
-          onOpenFile={openFile} changedFiles={changedFiles}
-          assessments={atlasAssessments} assessing={atlasAssessing}
-          onAssess={(path) => { setAtlasAssessing(path); q('q-atlas-explain', 'atlas-explain-change', { path }); }} />;
-      case 'requirements': {
-        const refresh = () => setTimeout(() => q('q-req', 'requirement-list'), 150);
-        return <RequirementsPanel requirements={requirements}
-          onCreate={(title) => { q('q-req-create', 'requirement-create', { title }); refresh(); }}
-          onSetStatus={(id, status) => { q('q-req-update', 'requirement-update', { id, status }); refresh(); }}
-          onSetPriority={(id, priority) => { q('q-req-update', 'requirement-update', { id, priority }); refresh(); }}
-          onAddCriterion={(id, text) => { q('q-req-update', 'requirement-update', { id, criterion: text }); refresh(); }}
-          onDelete={(id) => { q('q-req-delete', 'requirement-delete', { id }); refresh(); setToast('Requirement deleted.'); }}
-          onSeedPlan={(id) => { q('q-req-seed', 'requirement-seed-plan', { id }); refresh(); setToast('Seeded this session\'s plan from the requirement — it shows in Plan on the next turn.'); }}
-          onPromote={(id) => { q('q-req-promote', 'requirement-promote', { id }); refresh(); setTimeout(() => q('q-track-items', 'track-items'), 250); setToast('Promoted to ready — planned + tracked on the board.'); }}
-          onApplyFramework={(text) => { setDraft(text); setToast('Framework prompt added to the composer — edit it, then press Enter.'); }} />;
-      }
-      case 'annotations': {
-        // ANNOTATION-RECORDS — status set re-fetches the list; export round-trips
-        // the markdown back through q-annot-export, which drops it into the
-        // composer draft (the "export feedback to the session" path).
-        const refresh = () => setTimeout(() => q('q-annot', 'annotation-list'), 150);
-        return <AnnotationsPanel annotations={annotations}
-          onSetStatus={(id, status) => { q('q-annot-status', 'annotation-set-status', { id, status }); refresh(); }}
-          onExport={(filter) => { q('q-annot-export', 'annotation-export', filter); }}
-          onAddComment={(id, body) => { q('q-annot-comment', 'annotation-add-comment', { id, body }); refresh(); }}
-          onSelectTarget={(a) => { if (a.anchor?.filePath) { setDiffTarget({ path: a.anchor.filePath, line: a.anchor.startLine }); ensurePanel('diff'); q('q-diff', 'file-diff', { path: a.anchor.filePath }); } }} />;
-      }
-      case 'artifacts': {
-        // ARTIFACT-RECORDS — create/status-set re-fetch the list; Preview resolves
-        // the artifact's content via q-art-read (file via the safe workspace read,
-        // or inline), which merges the content back onto the matching record.
-        const refresh = () => setTimeout(() => q('q-art', 'artifact-list'), 150);
-        // §8 — annotations targeting an artifact use the artifact's format as the
-        // annotation kind (markdown/html), else the generic 'artifact' target.
-        const annTypeFor = (fmt: string): 'markdown' | 'html' | 'artifact' => fmt === 'markdown' ? 'markdown' : fmt === 'html' ? 'html' : 'artifact';
-        return <ArtifactsPanel artifacts={artifacts} annotations={annotations}
-          onCreate={(title) => { q('q-art-create', 'artifact-create', { kind: 'markdown-report', title }); refresh(); }}
-          onSetStatus={(id, status) => { q('q-art-update', 'artifact-update', { id, status }); refresh(); }}
-          onPreview={(a) => { q('q-art-read', 'artifact-read', { id: a.id }); }}
-          onSave={(id, content) => { q('q-art-save', 'artifact-save', { id, content }); refresh(); setTimeout(() => q('q-art-read', 'artifact-read', { id }), 250); setToast('Artifact saved.'); }}
-          onRevert={(id, version) => { q('q-art-revert', 'artifact-revert', { id, version }); refresh(); setTimeout(() => q('q-art-read', 'artifact-read', { id }), 250); setToast(`Reverted to v${version}.`); }}
-          onSendToChat={(text) => { setDraft(text); setToast('Artifact sent to the composer — press Enter to continue.'); }}
-          onAnnotate={(a, body) => { q('q-annot-create', 'annotation-create', { type: annTypeFor(a.format), targetId: a.id, artifactId: a.id, body }); setTimeout(() => q('q-annot', 'annotation-list'), 150); setToast('Annotation saved to this artifact.'); }} />;
-      }
-      default: return null;
+  // DESK-5f — tab CONTENT only; the tab strip owns titles and closing. The
+  // switch body lives in buildRenderPanelBody now (every value it closes over is
+  // passed on the ctx), so both the side rail and the terminal dock share it.
+  // Run a UI Story: enrich its steps with resolver hints (label/type/route) from
+  // the current map, hand them to the Browser panel, and ask the host to ensure
+  // the app is served (probe → start the dev server → wait). The ensure-app result
+  // carries the resolved URL back to the Browser panel, which replays it live.
+  const enrichStorySteps = (story: Story, uiMap: UiMap | null): Array<Record<string, unknown>> => {
+    const elByTestId = new Map<string, { label?: string; type?: string }>();
+    const routeById = new Map<string, string | null>();
+    for (const s of uiMap?.screens ?? []) {
+      routeById.set(s.id, s.route ?? null);
+      for (const e of s.elements) if (!elByTestId.has(e.testID)) elByTestId.set(e.testID, { label: e.label, type: e.type });
     }
+    return story.steps.map((st) => {
+      if (st.action === 'navigate') return { action: 'navigate', target: st.target, route: routeById.get(st.target) ?? null };
+      const el = elByTestId.get(st.target);
+      const base: Record<string, unknown> = { action: st.action, target: st.target, label: el?.label, type: el?.type };
+      if (st.action === 'type') base.text = st.text;
+      return base;
+    });
   };
+  const runStory = (story: Story): void => {
+    const url = (localStorage.getItem('br-browser-url') || '').trim();
+    try { localStorage.setItem('br-browser-runstory', JSON.stringify({ id: story.id, title: story.title, steps: enrichStorySteps(story, atlasUiMap) })); } catch { /* ignore */ }
+    ensurePanel('browser');
+    setToast(`Preparing "${story.title}"…`);
+    window.dispatchEvent(new CustomEvent('br-browser-log', { detail: { message: `▶ Preparing "${story.title}" — ensuring the app is served…` } }));
+    q('q-browser-ensure', 'browser:ensure-app', url ? { url } : {});
+  };
+
+  // The Browser panel takes no props, so its "save this screenshot" and "story run
+  // finished" handoffs arrive as window events carrying the payload; forward each
+  // to the host, which writes files under .brainrouter/ui-tests/ (a report run also
+  // registers a markdown Artifact). Results toast via useAgentEvents.
+  useEffect(() => {
+    const onSaveShot = (e: Event): void => {
+      const d = (e as CustomEvent<{ dataUrl?: string; name?: string }>).detail;
+      if (d?.dataUrl) q('q-browser-shot', 'browser:save-screenshot', { dataUrl: d.dataUrl, name: d.name });
+    };
+    const onRunResult = (e: Event): void => {
+      const d = (e as CustomEvent<Record<string, unknown>>).detail;
+      if (d) q('q-browser-report', 'browser:run-report', d);
+    };
+    // A11y-row -> source: the Browser panel asks App to open a file at a line.
+    const onOpenFile = (e: Event): void => {
+      const d = (e as CustomEvent<{ path?: string; line?: number }>).detail;
+      if (d?.path) openFile(d.path, typeof d.line === 'number' ? d.line : undefined);
+    };
+    // The Browser panel wants the UI map but has none yet -> load the manifest;
+    // its result lands in atlasUiMap and is mirrored back via localStorage.
+    const onLoadUiMap = (): void => { q('q-browser-manifest', 'browser:manifest'); };
+    window.addEventListener('br-browser-savescreenshot', onSaveShot);
+    window.addEventListener('br-browser-runresult', onRunResult);
+    window.addEventListener('br-browser-openfile', onOpenFile);
+    window.addEventListener('br-browser-loaduimap', onLoadUiMap);
+    return () => {
+      window.removeEventListener('br-browser-savescreenshot', onSaveShot);
+      window.removeEventListener('br-browser-runresult', onRunResult);
+      window.removeEventListener('br-browser-openfile', onOpenFile);
+      window.removeEventListener('br-browser-loaduimap', onLoadUiMap);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Mirror the generated UI map to localStorage so the (propless) Browser panel
+  // can resolve Accessibility rows to their source files, and notify an open panel.
+  useEffect(() => {
+    try {
+      if (atlasUiMap) localStorage.setItem('br-browser-uimap', JSON.stringify(atlasUiMap));
+      else localStorage.removeItem('br-browser-uimap');
+    } catch { /* ignore quota / serialization errors */ }
+    window.dispatchEvent(new CustomEvent('br-browser-uimap'));
+  }, [atlasUiMap]);
+
+  const renderPanelBody = buildRenderPanelBody({
+    q, hostUp, running, info, gitInfo, branches, tokens, liveTurn, contextUsage, efficiency, runningTasks,
+    allFiles, statuses, openFile, grepHits, filesLoading, filesTruncated, filesError, fileView, editor,
+    closeEditorTab, openUrl, setToast, ci, reviewPrWithAi, track, trackOps, changedFiles, diffView, diffTarget,
+    setDiffTarget, ensurePanel, setDiffView, runGit, gitBusy, reviewGate, reviewFindingsByFile, toolLog,
+    backgroundTasks, recentTasks, finishedTasks, setFinishedTasks, openTask, submit, taskView, setTaskView, renderRow,
+    requestStop, closeSideTab, dashScope, setDashScope,
+    refreshDashboard, dashTab, setDashTab, dashBoards, dashBusy, openDashboardTask, switchToWorkspace, activeRoot,
+    lastPlan, planHistory, planFeedbackRef, searchHits, schedules, worktrees, worktreeDiffs, openWorktree,
+    review, reviewRunning, setReviewRunningByWs, setReviewByWs, setDraft, atlasGraph, atlasBuilding, atlasEnriching,
+    atlasAssessments, atlasAssessing, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, requirements,
+    annotations, artifacts,
+    atlasUiMap, atlasStories, runStory,
+  });
   const tabTitle = (id: PanelId): string =>
-    id === 'file' && fileView?.path ? fileView.path.split('/').pop()! : PANEL_DEFS.find((d) => d.id === id)?.title ?? id;
+    id === 'file' && fileView?.path ? fileView.path.split('/').pop()!
+      : id === 'task-detail' && taskView ? (taskView.title || taskView.role || 'Task')
+      : PANEL_DEFS.find((d) => d.id === id)?.title ?? id;
 
   // DESK-5f/5h — animated presence for every show/hide surface.
   // Env column may ONLY appear when the chat keeps its full natural content
   // width (760px content + padding ≈ 820): opening Environment must never
   // visibly shrink the conversation. No room → column AND toggle yield.
   const envRoom = !sideFullScreen && (workW === 0 || workW - (sidePanelOpen ? sideWidth : 0) - 316 >= 820 / zoomFactor);
-  const envVisible = envOpen && !homeMode && envRoom;
+  const envLayout = environmentPanelLayout(envOpen, homeMode, envRoom);
   const railAnim = useClosable(railOpen);
   const sideAnim = useClosable(sidePanelOpen);
   const dockAnim = useClosable(termDockOpen);
-  const envAnim = useClosable(envVisible, 150);
+  const envAnim = useClosable(envLayout.mounted, 150);
 
   return (
+    <WorkspaceOrgProvider>
     <div className="app">
+      <ActivityBar mode={mode} setMode={setMode} railOpen={railOpen} setRailOpen={setRailOpen} />
       <Sidebar railAnim={railAnim} railWidth={railWidth} setRailOpen={setRailOpen} setRailWidth={setRailWidth}
         setPaletteOpen={setPaletteOpen} ensurePanel={ensurePanel} setSidePanelOpen={setSidePanelOpen}
         recentsSort={recentsSort} setRecentsSort={setRecentsSort} workspaces={workspaces} info={info}
@@ -1339,175 +681,88 @@ export function App(): React.ReactElement {
         setShowArchived={setShowArchived} showArchived={showArchived}
         expandedProjects={expandedProjects} projSessions={projSessions} runningWs={runningWorkspaces} runningSessions={runningSessions} workspaceRunCount={workspaceRunCount}
         openProject={openProject} toggleProject={toggleProject} reorderProject={reorderProject} addProject={addProject}
-        mode={mode} setMode={setMode} />
-
-      <div className="main">
-        {mode === 'track' ? (
-          <div className="workrow track-workrow" ref={workrowRef}>
-            <TrackView project={track.project} items={track.items} sprints={track.sprints} modules={track.modules} views={track.views} automations={track.automations} members={track.members} sync={track.sync} git={track.git} pr={track.pr} ops={trackOps} railOpen={railOpen} onOpenRail={() => setRailOpen(true)} />
-            {sidePanelOpen && !sidePinned && !sideFullScreen ? (
-              <div className="side-scrim" onClick={() => setSidePanelOpen(false)} aria-hidden="true" />
-            ) : null}
-            <ViewsRail sideAnim={sideAnim} sideWidth={sideWidth} setSideWidth={setSideWidth} sideFullScreen={sideFullScreen}
-              setSidePanelOpen={setSidePanelOpen} sidePinned={sidePinned} setSidePinned={setSidePinned}
-              activeSideTab={activeSideTab} sideTabs={sideTabs} setActiveSideTab={setActiveSideTab} closeSideTab={closeSideTab} reorderSideTab={reorderSideTab}
-              tabTitle={tabTitle}
-              renderPanelBody={renderPanelBody} openSideView={openSideView} lastPlan={lastPlan} changedFiles={changedFiles}
-              backgroundTasks={backgroundTasks} fleet={fleet} toolLog={toolLog} schedules={schedules}
-              worktrees={worktrees} review={review} requirements={requirements} annotations={annotations} artifacts={artifacts} ci={ci}
-              envRoom={false} />
-          </div>
-        ) : (<>
-        <div className="workrow" ref={workrowRef}>
-          <ChatThread
-            homeMode={homeMode} railOpen={railOpen} setRailOpen={setRailOpen} gitInfo={gitInfo} info={info}
-            sessionTitle={sessionTitle} taskView={taskView} setTaskView={setTaskView} chatRef={chatRef}
-            atBottomRef={atBottomRef} setAtBottom={setAtBottom} workflowView={workflowView} setWorkflowView={setWorkflowView}
-            renderRow={renderRow} homeStats={homeStats} statsTab={statsTab} setStatsTab={setStatsTab}
-            statsRange={statsRange} setStatsRange={setStatsRange} snapshot={snapshot} sessions={sessions}
-            viewKey={viewKey} onRenameCurrent={renameCurrentSession}
-            resumeSession={resumeSession} forkParent={forkParent} transcriptEls={transcriptEls} liveText={liveText}
-            goal={goalState}
-            onGoalResume={() => runBridge('goal', 'resume')}
-            // WS7 — pausing the goal also interrupts the in-flight turn, so the
-            // pause button and the chat Stop button converge on the same state.
-            onGoalPause={() => { runBridge('goal', 'pause'); window.brainrouter.send({ kind: 'interrupt' }); }}
-            onGoalClear={() => runBridge('goal', 'clear')}
-            onGoalEdit={(text) => { q('a-goal-edit', 'action:goal-edit', { text }); }}
-            running={running} turnStart={turnStart} reasoningTail={reasoningTail} statusLine={statusLine}
-            interaction={interaction} answerInteraction={answerInteraction} q={q} chatEnd={chatEnd} atBottom={atBottom}
-            hasConversation={hasConversation} changedFiles={changedFiles} ensurePanel={ensurePanel}
-            composer={
-              <>
-              {mode === 'chat' ? (
-                <div className="chat-readonly" title="Chat keeps the agent read-only — it can read, search and explain, but won't edit files or run commands. Switch to Code to make changes.">
-                  <Icon name="eye" size={12} /> Read-only — Chat explores &amp; explains; switch to <button className="chat-readonly-link" onClick={() => setMode('code')}>Code</button> to make changes
-                </div>
-              ) : null}
-              <Composer
-                draft={draft} setDraft={setDraft} running={running} stopping={stopping} submit={submit}
-                // WS7 — the chat Stop button also pauses an active goal, so an
-                // interrupt doesn't leave the goal "active" and silently auto-resume.
-                requestStop={() => { requestStop(); if (goalState?.status === 'active') runBridge('goal', 'pause'); }}
-                slashActive={slashActive} slashMatches={slashMatches} commands={commands} slashSel={slashSel} setSlashSel={setSlashSel}
-                setSlashDismissed={setSlashDismissed} onRunSlash={runSlash} pop={pop} setPop={setPop} q={q}
-                modeLabel={modeLabel} effort={effort} info={info} branches={branches}
-                endpointModels={endpointModels} allowedModels={defaultProviderModels} modelsLoading={modelsLoading} setModelsLoading={setModelsLoading}
-                connectedProviders={snapshot?.providers ?? []} defaultProviderName={snapshot?.defaultProviderName ?? null}
-                modelChoices={modelChoices} modelScope={modelScope} setModelScope={setModelScope}
-                hasConversation={hasConversation} contextUsage={contextUsage} tokens={tokens} openSettings={openSettings}
-                onAttach={attachFiles}
-                attachments={attachmentUploads}
-                canSubmit={readyAttachments(attachmentUploads).length > 0}
-                onClearAttachment={(id) => setAttachmentUploads((prev) => prev.filter((u) => u.id !== id))}
-                pastedImages={pastedImages}
-                onPasteImages={addPastedImages}
-                onClearPastedImage={(id) => setPastedImages((prev) => prev.filter((pi) => pi.id !== id))} />
-              </>
-            } />
-
-          {/* Chat mode is a FOCUSED conversation — the code workbench (Environment
-              column, side panels, terminal) appears only in Code mode. */}
-          {mode === 'code' ? (<>
-          {/* DESK-5h — Environment as a LAYOUT COLUMN: the chat reflows next
-              to it; it can never cover content. Yields via envRoom. */}
-          <EnvironmentPanel envAnim={envAnim} openSettings={openSettings} gitInfo={gitInfo} ensurePanel={ensurePanel}
-            setTermDockOpen={setTermDockOpen} branches={branches} pop={pop} setPop={setPop} q={q} commitSubjects={commitSubjects} ci={ci}
-            openCiPanel={openCiPanel} lastTurnFails={lastTurnFails} backgroundTasks={backgroundTasks} openTask={openTask} />
-
-          {/* §panel-drawer — scrim over the chat when the panel is an unpinned
-              drawer; clicking it (i.e. clicking outside the panel) closes it. */}
-          {sidePanelOpen && !sidePinned && !sideFullScreen ? (
-            <div className="side-scrim" onClick={() => setSidePanelOpen(false)} aria-hidden="true" />
-          ) : null}
-          <ViewsRail sideAnim={sideAnim} sideWidth={sideWidth} setSideWidth={setSideWidth} sideFullScreen={sideFullScreen}
-            setSidePanelOpen={setSidePanelOpen} sidePinned={sidePinned} setSidePinned={setSidePinned}
-            activeSideTab={activeSideTab} sideTabs={sideTabs} setActiveSideTab={setActiveSideTab} closeSideTab={closeSideTab} reorderSideTab={reorderSideTab}
-            tabTitle={tabTitle}
-            renderPanelBody={renderPanelBody} openSideView={openSideView} lastPlan={lastPlan} changedFiles={changedFiles}
-            backgroundTasks={backgroundTasks} fleet={fleet} toolLog={toolLog} schedules={schedules}
-            worktrees={worktrees} review={review} requirements={requirements} annotations={annotations} artifacts={artifacts} ci={ci}
-            envRoom={envRoom} />
-          </>) : null}
-        </div>
-
-        {mode === 'code' ? (
-        <TerminalDock dockAnim={dockAnim} termDockHeight={termDockHeight} resizeTerminal={resizeTerminal}
-          termTabs={termTabs} activeTerm={activeTerm} setActiveTerm={setActiveTerm} closeBottomTab={closeBottomTab}
-          pop={pop} setPop={setPop} addBottomTab={addBottomTab} setTermDockOpen={setTermDockOpen}
-          tabTitle={tabTitle} gitInfo={gitInfo} renderPanelBody={renderPanelBody} />
-        ) : null}
-        </>)}
-
-        {/* DESK-5h — window control cluster, pinned top-right of the content
-            area (absolute — visual position is unaffected by DOM order).
-            MUST be the LAST child of .main: Electron builds drag regions in
-            DOM order, so this cluster's no-drag rect has to subtract AFTER
-            the chat-head's drag rect is added. Placed earlier, the drag
-            region re-covers the buttons and swallows every click — the
-            browser preview ignores app-region, which is why it only broke
-            in the real Electron shell. */}
-        <TopbarRight mode={mode} homeMode={homeMode} envRoom={envRoom} envOpen={envOpen} setEnvOpen={setEnvOpen} q={q}
-          termDockOpen={termDockOpen} setTermDockOpen={setTermDockOpen} sidePanelOpen={sidePanelOpen} sideWidth={sideWidth}
-          setSidePanelOpen={setSidePanelOpen} sideFullScreen={sideFullScreen} setSideFullScreen={setSideFullScreen}
-          sideTabs={sideTabs} activeSideTab={activeSideTab} ensurePanel={ensurePanel} openBottomDock={openBottomDock}
-          pop={pop} setPop={setPop} openSettings={openSettings} />
-      </div>
-
-      {pop && pop !== 'export' ? <div className="picker-backdrop" onClick={() => setPop('')} /> : null}
-
-      <CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)}
-        onRun={(c) => runCommand(c, cmdCtx)} />
-
-      <SettingsDialog
-        open={settings.open}
-        section={settings.section}
-        setSection={(s) => setSettings({ open: true, section: s })}
-        onClose={() => setSettings((st) => ({ ...st, open: false }))}
-        snapshot={snapshot}
-        usageLines={usageLines}
-        usageHistory={usageHistory}
-        tokens={tokens}
-        commands={commands}
-        catalog={catalog}
-        onPref={setPreference}
-        endpointModels={endpointModels}
-        providerModels={providerModels}
-        probedModels={probedModels}
-        probeLoading={probeLoading}
-        probeError={probeError}
-        onProbe={(a) => { setProbeLoading(true); setProbeError(''); q('q-probe', 'list-models-probe', a); }}
-        toolCatalog={toolCatalog}
-        onProbeReset={() => { setProbedModels([]); setProbeLoading(false); setProbeError(''); }}
-        onModelSave={(model) => window.brainrouter.send({ kind: 'set-model', model, persist: true })}
-        onAction={(id, name, args) => {
-          if (name === 'new-session') { window.brainrouter.send({ kind: 'new-session' }); setSettings((st) => ({ ...st, open: false })); return; }
-          q(id, name, args);
+        workspaceOnboarded={activeSidebarRoot ? onboardedByRoot[activeSidebarRoot] : undefined}
+        openWorkspaceSetup={() => {
+          if (!activeSidebarRoot) return;
+          onboardingDismissedRef.current.delete(activeSidebarRoot);
+          setOnboardAsk(activeSidebarRoot);
         }}
-        onRunCommand={(c) => { setSettings((st) => ({ ...st, open: false })); runCommand(c, cmdCtx); }}
-        execMode={execMode}
-        codeFont={codeFont}
-        onCodeFont={setCodeFont}
-        theme={theme}
-        onTheme={setTheme}
-        chatWidth={chatWidth}
-        onChatWidth={setChatWidth}
-        chatSize={chatSize}
-        onChatSize={setChatSize}
-        accent={accent}
-        onAccent={setAccent}
-      />
+        openAccountSettings={() => openSettings('account')} />
 
-      <InteractionDialogs interaction={interaction} picked={picked} setPicked={setPicked} answerInteraction={answerInteraction}
-        trustAsk={trustAsk} setTrustAsk={setTrustAsk} switchToWorkspace={switchToWorkspace} />
+      <MainContent
+        mode={mode} setMode={setMode} workrowRef={workrowRef} track={track} trackOps={trackOps}
+        railOpen={railOpen} setRailOpen={setRailOpen} sidePanelOpen={sidePanelOpen} sidePinned={sidePinned}
+        sideFullScreen={sideFullScreen} setSidePanelOpen={setSidePanelOpen} setSidePinned={setSidePinned}
+        sideAnim={sideAnim} sideWidth={sideWidth} setSideWidth={setSideWidth} activeSideTab={activeSideTab}
+        sideTabs={sideTabs} setActiveSideTab={setActiveSideTab} closeSideTab={closeSideTab} reorderSideTab={reorderSideTab}
+        tabTitle={tabTitle} renderPanelBody={renderPanelBody} openSideView={openSideView} lastPlan={lastPlan}
+        changedFiles={changedFiles} backgroundTasks={backgroundTasks} fleet={fleet} toolLog={toolLog} schedules={schedules}
+        worktrees={worktrees} review={review} requirements={requirements} annotations={annotations} artifacts={artifacts}
+        ci={ci} envRoom={envRoom} envDrawer={envLayout.drawer} homeMode={homeMode} gitInfo={gitInfo} info={info} sessionTitle={sessionTitle}
+        taskView={taskView} setTaskView={setTaskView} chatRef={chatRef} atBottomRef={atBottomRef} setAtBottom={setAtBottom}
+        workflowView={workflowView} setWorkflowView={setWorkflowView} renderRow={renderRow} homeStats={homeStats}
+        statsTab={statsTab} setStatsTab={setStatsTab} statsRange={statsRange} setStatsRange={setStatsRange}
+        snapshot={snapshot} sessions={sessions} viewKey={viewKey} renameCurrentSession={renameCurrentSession}
+        resumeSession={resumeSession} forkParent={forkParent} transcriptEls={transcriptEls} liveText={liveText}
+        goalState={goalState} runBridge={runBridge} q={q} running={running} turnStart={turnStart}
+        reasoningTail={reasoningTail} statusLine={statusLine} interaction={interaction} answerInteraction={answerInteraction}
+        chatEnd={chatEnd} atBottom={atBottom} hasConversation={hasConversation} ensurePanel={ensurePanel}
+        draft={draft} setDraft={setDraft} stopping={stopping} submit={submit} submitDelivery={submitDelivery} requestStop={requestStop}
+        slashActive={slashActive} slashMatches={slashMatches} commands={commands} slashSel={slashSel} setSlashSel={setSlashSel}
+        setSlashDismissed={setSlashDismissed} runSlash={runSlash} pop={pop} setPop={setPop} modeLabel={modeLabel}
+        effort={effort} branches={branches} endpointModels={endpointModels} defaultProviderModels={defaultProviderModels}
+        routerCatalog={snapshot?.routerCatalog} routerFallback={lastRouterFallback}
+        modelsLoading={modelsLoading} setModelsLoading={setModelsLoading} modelChoices={modelChoices} modelScope={modelScope}
+        setModelScope={setModelScope} contextUsage={contextUsage} tokens={tokens} openSettings={openSettings}
+        attachFiles={attachFiles} attachmentUploads={attachmentUploads} canSubmit={readyAttachments(attachmentUploads).length > 0}
+        setAttachmentUploads={setAttachmentUploads} pastedImages={pastedImages} addPastedImages={addPastedImages}
+        setPastedImages={setPastedImages}
+        componentTags={componentTags}
+        onDropTag={(tag) => setComponentTags((prev) => prev.some((t) => t.ref === tag.ref) ? prev : [...prev, { ...tag, id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}` }])}
+        onClearComponentTag={(id) => setComponentTags((prev) => prev.filter((t) => t.id !== id))}
+        envAnim={envAnim} setTermDockOpen={setTermDockOpen} commitSubjects={commitSubjects}
+        openCiPanel={openCiPanel} lastTurnFails={lastTurnFails} openTask={openTask} dockAnim={dockAnim}
+        termDockHeight={termDockHeight} resizeTerminal={resizeTerminal} termTabs={termTabs} activeTerm={activeTerm}
+        setActiveTerm={setActiveTerm} closeBottomTab={closeBottomTab} addBottomTab={addBottomTab} envOpen={envOpen}
+        setEnvOpen={setEnvOpen} termDockOpen={termDockOpen} setSideFullScreen={setSideFullScreen} openBottomDock={openBottomDock}
+        workspaceViewContext={workspaceViewContextByRoot[activeRoot] ?? { profileId: 'custom', capabilityIds: [] }} />
 
-      <ExportAndMenuDialogs pop={pop} setPop={setPop} q={q} sessionMenu={sessionMenu} sessions={sessions}
-        closeSessionMenu={closeSessionMenu} openExternal={openExternal} togglePin={togglePin} toggleComplete={toggleComplete}
-        startRename={startRename} forkSessionAction={forkSessionAction} moveToGroup={moveToGroup} sessionGroups={sessionGroups}
-        toggleArchive={toggleArchive} deleteSessionAction={deleteSessionAction} />
-      <InfoAndGateDialogs infoDialog={infoDialog} setInfoDialog={setInfoDialog} gateBlock={gateBlock} setGateBlock={setGateBlock}
+      <AppDialogs
+        pop={pop} setPop={setPop} q={q} cmdCtx={cmdCtx} commands={commands}
+        paletteOpen={paletteOpen} setPaletteOpen={setPaletteOpen}
+        settings={settings} setSettings={setSettings} snapshot={snapshot} usageLines={usageLines}
+        usageHistory={usageHistory} tokens={tokens} catalog={catalog} setPreference={setPreference}
+        endpointModels={endpointModels} providerModels={providerModels} probedModels={probedModels}
+        probeLoading={probeLoading} probeError={probeError} setProbeLoading={setProbeLoading}
+        setProbeError={setProbeError} setProbedModels={setProbedModels} toolCatalog={toolCatalog}
+        market={market}
+        execMode={execMode} codeFont={codeFont} setCodeFont={setCodeFont} theme={theme} setTheme={setTheme}
+        chatWidth={chatWidth} setChatWidth={setChatWidth} chatSize={chatSize} setChatSize={setChatSize}
+        accent={accent} setAccent={setAccent}
+        interaction={interaction} picked={picked} setPicked={setPicked} answerInteraction={answerInteraction}
+        trustAsk={trustAsk} setTrustAsk={setTrustAsk} switchToWorkspace={switchToWorkspace}
+        onboardAsk={onboardAsk} setOnboardAsk={(root) => {
+          if (root === null && onboardAsk) onboardingDismissedRef.current.add(onboardAsk);
+          setOnboardAsk(root);
+        }}
+        onWorkspaceOnboarded={(root) => {
+          onboardingDismissedRef.current.delete(root);
+          setOnboardedByRoot((current) => ({ ...current, [root]: true }));
+          void window.brainrouter.workspaceManifest?.(root).then((result) => {
+            if (!result.ok) return;
+            setWorkspaceViewContextByRoot((current) => ({
+              ...current,
+              [root]: workspaceViewContextFromManifest(result.manifest),
+            }));
+          }).catch(() => {});
+        }}
+        sessionMenu={sessionMenu} sessions={sessions} closeSessionMenu={closeSessionMenu} openExternal={openExternal}
+        togglePin={togglePin} toggleComplete={toggleComplete} startRename={startRename} forkSessionAction={forkSessionAction}
+        moveToGroup={moveToGroup} sessionGroups={sessionGroups} toggleArchive={toggleArchive} deleteSessionAction={deleteSessionAction}
+        infoDialog={infoDialog} setInfoDialog={setInfoDialog} gateBlock={gateBlock} setGateBlock={setGateBlock}
         activeRoot={activeRoot} ensurePanel={ensurePanel} setReviewRunningByWs={setReviewRunningByWs} setReviewByWs={setReviewByWs}
-        q={q} pendingGitRef={pendingGitRef} runGit={runGit} setToast={setToast} setGitBusy={setGitBusy} toast={toast} />
+        pendingGitRef={pendingGitRef} runGit={runGit} setToast={setToast} setGitBusy={setGitBusy} toast={toast} />
     </div>
+    </WorkspaceOrgProvider>
   );
 }

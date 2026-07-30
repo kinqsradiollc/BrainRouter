@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "kind": "planning-schema",
+  "id": "study-learning",
+  "label": "Learning progression",
+  "description": "Learning objective, learner diagnostic, lesson sequence, practice, and mastery checks.",
+  "profileIds": ["study"],
+  "planningSkillIds": ["planning-skill", "learning-plan-skill"],
+  "sections": [
+    {
+      "id": "objective",
+      "label": "Learning objective",
+      "description": "Observable learner outcome, scope, and desired depth.",
+      "required": true
+    },
+    {
+      "id": "diagnostic",
+      "label": "Learner diagnostic",
+      "description": "Prior knowledge, misconceptions, preferences, and accessibility needs.",
+      "required": true
+    },
+    {
+      "id": "sequence",
+      "label": "Lesson sequence",
+      "description": "Concept order, examples, practice, feedback, and pacing.",
+      "required": true
+    },
+    {
+      "id": "mastery",
+      "label": "Mastery checks",
+      "description": "Retrieval, application, explanation, and remediation checks.",
+      "required": true
+    }
+  ],
+  "gates": [
+    {
+      "id": "comprehension",
+      "label": "Learner comprehension",
+      "description": "The learner demonstrates understanding rather than only receiving an explanation."
+    },
+    {
+      "id": "progression",
+      "label": "Progression",
+      "description": "The next lesson follows demonstrated mastery or an explicit remediation step."
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { appendTranscriptEntry, listTranscripts } from '../session/sessionStore.js';
+import { appendTranscriptEntry, listTranscripts } from '../session/transcript/sessionStore.js';
 import { withTempWorkspaceAsync } from './_helpers.js';
 
 // WS4 — `/goal` records the goal text as an untagged user transcript entry the

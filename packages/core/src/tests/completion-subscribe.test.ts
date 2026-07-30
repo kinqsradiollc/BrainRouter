@@ -5,7 +5,7 @@ import {
   enqueueCompletion,
   pendingCompletionCount,
   __resetCompletionInbox,
-} from '../session/completionInbox.js';
+} from '../session/completion/completionInbox.js';
 
 // WS1 — the auto-resume primitive: a host subscribes and, when a detached
 // child/worker finishes for an IDLE parent session, fires a synthesis turn

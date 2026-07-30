@@ -21,10 +21,16 @@
  * The schema (001_init + 002_schema) is applied by `init()` via the migration
  * runner; `cognitive_vec` is deferred to `initVec` because its dimension is
  * embedder-dependent.
+ *
+ * ── Structure ──────────────────────────────────────────────────────────────
+ * The concrete SQL for every domain was extracted (byte-identical) into the
+ * `queries/*.ts` sibling modules; each helper is a free function taking an
+ * `Executor` (this store's `rows`/`one`/`run`/`tx` primitives) plus, where a
+ * method reached into store state, a small `VecContext`/`CcrContext`. The class
+ * below keeps the `IMemoryStore` surface + lifecycle/pgvector bootstrap and
+ * delegates the rest.
  */
 
-import { randomUUID, createHash } from "node:crypto";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 import type {
@@ -36,10 +42,7 @@ import type {
   PendingDelegationRecord,
   PendingDelegationEnqueueInput,
   PendingDelegationFilters,
-  PendingDelegationStatus,
-  DelegationPacket,
   MemoryJobRecord,
-  MemoryJobStatus,
   MemoryJobEnqueueInput,
   MemoryJobListFilters,
   MemoryJobKindAggregate,
@@ -84,42 +87,122 @@ import type {
   AtlasWorkspaceSummary,
   FleetSnapshotEntry,
   IMemoryStore,
+  PentestTargetInput,
+  PentestTargetRecord,
 } from "@kinqs/brainrouter-types";
+import type { AssessmentEvidenceCleanupResult } from "@kinqs/brainrouter-types/review";
 import { createPgPool } from "./connection.js";
-import { loadMigrations, applyMigrations } from "./migrate.js";
+import { loadMigrations, applyMigrations, withSchemaLock } from "./migrate.js";
 import {
-  parseJsonObject,
-  cognitiveRowToRecord,
-  evidenceRowToRecord,
-  activeSessionRowToRecord,
-  inboxRowToRecord,
-  jobRowToRecord,
-  operationRowToRecord,
-  toVectorLiteral,
-  ftsHasTerms,
-  orTsQuery,
-  tsRankToScore,
   asNumber,
-  pg,
   type CompressionEntryInput,
   type CompressionEntryMetadata,
   type CompressionRetrieval,
   type CompressionStats,
 } from "./converters.js";
-import { extractIntraFileCallEdges } from "../../recall/code-retrieval.js";
-import { expandImportRecord, readImportChunkChars } from "../../pipeline/chunk-import.js";
 import { mapWithConcurrency, readEmbedConcurrency } from "../../util/concurrency.js";
+import type { Executor } from "./queries/executor.js";
+import type { KnowledgeBaseRecord, UpdateKnowledgeBaseInput } from "../../../knowledge/contracts/base.js";
+import type {
+  KnowledgeChunkEmbeddingInput,
+  KnowledgeChunkInput,
+  KnowledgeChunkRecord,
+  KnowledgeDocumentEnqueueResult,
+  KnowledgeDerivedDocumentInput,
+  KnowledgeDerivedDocumentResult,
+  KnowledgeDocumentListFilters,
+  KnowledgeDocumentProcessingRecord,
+  KnowledgeDocumentRecord,
+  KnowledgeDocumentRetryRecord,
+  KnowledgeDocumentStatusUpdate,
+  KnowledgeParseCommitResult,
+  KnowledgeParseJobInput,
+} from "../../../knowledge/contracts/document.js";
+import type {
+  KnowledgeLexicalSearchHit,
+  KnowledgeSearchScope,
+  KnowledgeVectorSearchHit,
+  KnowledgeVectorSearchInput,
+} from "../../../knowledge/contracts/search.js";
+import type { VecContext } from "./queries/searchQueries.js";
+import {
+  DEFAULT_TTL_SECONDS,
+  DEFAULT_MAX_ENTRIES,
+  type CcrContext,
+} from "./queries/compressionQueries.js";
+import * as sensory from "./queries/sensoryQueries.js";
+import * as meetings from "./queries/meetingsQueries.js";
+import * as track from "./queries/trackQueries.js";
+import * as teams from "./queries/teamsQueries.js";
+import * as chatThreads from "./queries/chatThreadsQueries.js";
+import * as vulnerability from "./queries/vulnerabilityQueries.js";
+import * as vulnScans from "./queries/vulnerabilityScanQueries.js";
+import * as cognitive from "./queries/cognitiveQueries.js";
+import * as operations from "./queries/operationsQueries.js";
+import * as search from "./queries/searchQueries.js";
+import * as contradiction from "./queries/contradictionQueries.js";
+import * as skillFocus from "./queries/skillFocusQueries.js";
+import * as session from "./queries/sessionQueries.js";
+import * as job from "./queries/jobQueries.js";
+import * as assurance from "./queries/assuranceQueries.js";
+import * as assessmentEvidence from "./queries/assessmentEvidenceQueries.js";
+import * as compression from "./queries/compressionQueries.js";
+import * as atlasIdentity from "./queries/atlasIdentityQueries.js";
+import * as graph from "./queries/graphQueries.js";
+import * as userStats from "./queries/userStatsQueries.js";
+import * as sourcesTree from "./queries/sourcesTreeQueries.js";
+import * as tenancy from "./queries/tenancyQueries.js";
+import * as emailAuth from "./queries/emailAuthQueries.js";
+import * as orgPersona from "./queries/orgPersonaQueries.js";
+import * as sharing from "./queries/memorySharingQueries.js";
+import * as projects from "./queries/projectQueries.js";
+import * as knowledgeBases from "./queries/knowledgeBaseQueries.js";
+import * as knowledgeDocuments from "./queries/knowledgeDocumentQueries.js";
+import * as knowledgeSearch from "./queries/knowledgeSearchQueries.js";
+import * as adminConsole from "./queries/adminConsoleQueries.js";
+import * as providerCfg from "./queries/providerConfigQueries.js";
+import * as modelPolicy from "./queries/modelPolicyQueries.js";
+import * as remoteAccess from "./queries/remoteAccessQueries.js";
+import * as remoteControl from "./queries/remoteControlQueries.js";
+import * as integrationCfg from "./queries/integrationConfigQueries.js";
+import * as connectorCfg from "./queries/connectorConfigQueries.js";
+import * as pentestTargets from "./queries/pentestTargetQueries.js";
+import type { TenancyStore } from "../../../tenancy/store.js";
+import type { Role } from "../../../tenancy/rbac.js";
+import type { OrganizationRecord, OrgMemberRecord, OrgMembership, OrgPlan } from "../../../tenancy/types.js";
+import type { ProviderStore } from "../../../providers/store.js";
+import type { ProviderConfigRecord, ProviderConfigInput, ProviderKind, ResolvedProviderConfig } from "../../../providers/types.js";
+import type {
+  ModelPolicyStore,
+  ProviderModelInput,
+  ProviderModelPatch,
+  ProviderModelRecord,
+} from "../../../providers/modelPolicyStore.js";
+import type {
+  DeviceSessionInput,
+  DeviceSessionRecord,
+  DeviceSessionRotationInput,
+  DeviceSessionRotationResult,
+  RemoteAccessAuditInput,
+  RemoteAccessAuditRecord,
+  RemoteAccessGrantInput,
+  RemoteAccessGrantRecord,
+  RemoteAccessStore,
+  RemoteDeviceInput,
+  RemoteDeviceKind,
+  RemoteDeviceRecord,
+  RemoteEnrollmentChallengeInput,
+  RemoteEnrollmentChallengeRecord,
+  RemoteGrantDecision,
+  RemoteRelayTicketInput,
+  RemoteRelayTicketRecord,
+  RemoteRelayTicketRevocation,
+} from "../../../remote/store.js";
+import type { IntegrationStore } from "../../../integrations/store.js";
+import type { ConnectorStore, ConnectorConfigRecord, ConnectorConfigInput, ConnectorConfigPatch, ResolvedConnector, OAuthAppConfig, ResolvedOAuthApp } from "../../../connectors/store.js";
+import type { IntegrationConfigRecord, IntegrationConfigInput, IntegrationKind, ResolvedIntegration } from "../../../integrations/types.js";
 
 const MIGRATIONS_DIR = fileURLToPath(new URL("./migrations", import.meta.url));
-
-// CCR knobs (mirrors SqliteCompressionStore defaults; ported because the pg CCR
-// implementation lives inline rather than in a shared class).
-const HASH_PATTERN = /^[a-f0-9]{24}$/;
-const DEFAULT_TTL_SECONDS = 1_800;
-const DEFAULT_MAX_ENTRIES = 1_000;
-const PURGE_INTERVAL_SECONDS = 60;
-const QUERY_RESULT_LIMIT = 20;
-const ESTIMATED_USD_PER_MILLION_TOKENS = 3;
 
 function readPositiveInteger(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
@@ -145,23 +228,6 @@ export function vecIndexDdl(): string | null {
   const lists = readPositiveInteger(process.env.BRAINROUTER_PGVECTOR_LISTS, 100);
   return `${head} ivfflat (embedding vector_cosine_ops) WITH (lists = ${lists})`;
 }
-function hashContent(content: string): string {
-  return createHash("sha256").update(content).digest("hex").slice(0, 24);
-}
-function assertHash(hash: string): void {
-  if (!HASH_PATTERN.test(hash)) {
-    throw new Error("Compression hashes must contain exactly 24 lowercase hexadecimal characters.");
-  }
-}
-function ccrQueryTerms(query: string): Set<string> {
-  return new Set(query.toLowerCase().match(/[a-z0-9_]{2,}/g) ?? []);
-}
-function ccrItemScore(item: unknown, terms: Set<string>): number {
-  const itemTerms = new Set(JSON.stringify(item).toLowerCase().match(/[a-z0-9_]{2,}/g) ?? []);
-  let score = 0;
-  for (const term of terms) if (itemTerms.has(term)) score += 1;
-  return score;
-}
 
 export interface PostgresMemoryStoreOptions {
   /** Pass an existing pool (e.g. a test harness on a scratch database). */
@@ -169,7 +235,7 @@ export interface PostgresMemoryStoreOptions {
   compressionStore?: { ttlSeconds?: number; maxEntries?: number; now?: () => number };
 }
 
-export class PostgresMemoryStore implements IMemoryStore {
+export class PostgresMemoryStore implements IMemoryStore, TenancyStore, ProviderStore, ModelPolicyStore, RemoteAccessStore, IntegrationStore, ConnectorStore {
   private readonly pool: Pool;
   private readonly ownsPool: boolean;
   private vecReady = false;
@@ -180,6 +246,11 @@ export class PostgresMemoryStore implements IMemoryStore {
   private readonly ccrMaxEntries: number;
   private readonly ccrClock: () => number;
   private ccrLastPurgeAt = Number.NEGATIVE_INFINITY;
+
+  // Execution surfaces threaded to the extracted query helpers.
+  private readonly exec: Executor;
+  private readonly vecCtx: VecContext;
+  private readonly ccrCtx: CcrContext;
 
   constructor(connection: string | Pool, options?: PostgresMemoryStoreOptions) {
     if (options?.pool) {
@@ -195,6 +266,29 @@ export class PostgresMemoryStore implements IMemoryStore {
     this.ccrTtlSeconds = options?.compressionStore?.ttlSeconds ?? readPositiveInteger(process.env.BRAINROUTER_CCR_TTL_SECONDS, DEFAULT_TTL_SECONDS);
     this.ccrMaxEntries = options?.compressionStore?.maxEntries ?? readPositiveInteger(process.env.BRAINROUTER_CCR_MAX_ENTRIES, DEFAULT_MAX_ENTRIES);
     this.ccrClock = options?.compressionStore?.now ?? (() => Math.floor(Date.now() / 1_000));
+
+    // `self` lets the context getters read this instance's mutable pgvector /
+    // CCR-purge state live, rather than snapshotting it at construction time.
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this;
+    this.exec = {
+      rows: (text, params) => this.rows(text, params),
+      one: (text, params) => this.one(text, params),
+      run: (text, params) => this.run(text, params),
+      tx: (fn) => this.tx(fn),
+    };
+    this.vecCtx = {
+      get vecReady() { return self.vecReady; },
+      get vecDimensions() { return self.vecDimensions; },
+      initVec: (dimensions, opts) => this.initVec(dimensions, opts),
+    };
+    this.ccrCtx = {
+      ccrTtlSeconds: this.ccrTtlSeconds,
+      ccrMaxEntries: this.ccrMaxEntries,
+      ccrClock: () => this.ccrClock(),
+      getCcrLastPurgeAt: () => self.ccrLastPurgeAt,
+      setCcrLastPurgeAt: (value) => { self.ccrLastPurgeAt = value; },
+    };
   }
 
   // ── low-level query helpers ────────────────────────────────────────────
@@ -242,11 +336,28 @@ export class PostgresMemoryStore implements IMemoryStore {
   public async init(): Promise<void> {
     const migrations = loadMigrations(MIGRATIONS_DIR);
     await applyMigrations(this.pool, migrations);
+    await job.backfillReviewLifecycle(this.exec);
   }
 
-  public async initVec(dimensions: number): Promise<void> {
+  public async initVec(dimensions: number, opts?: { allowRebuild?: boolean }): Promise<void> {
     if (dimensions <= 0) return;
+    // Serialize this DDL with migrations across processes (see withSchemaLock):
+    // CREATE TABLE IF NOT EXISTS embedding_meta / cognitive_vec race the same way
+    // migrations do when two boots overlap.
+    //
+    // allowRebuild (default true): the WRITE path passes a CONFIRMED embedding
+    // length and MAY drop+recreate cognitive_vec on a genuine dimension change
+    // (an embedder swap → the old vectors are the wrong width and get re-embedded).
+    // BOOT passes allowRebuild:false — it must NEVER drop on a *guessed* dimension,
+    // so the existing store's width is adopted as-is and stored vectors are safe
+    // even when the boot hint is stale.
+    const allowRebuild = opts?.allowRebuild ?? true;
+    const effectiveDim = await withSchemaLock(this.pool, () => this.initVecLocked(dimensions, allowRebuild));
+    this.vecDimensions = effectiveDim;
+    this.vecReady = true;
+  }
 
+  private async initVecLocked(dimensions: number, allowRebuild: boolean): Promise<number> {
     await this.pool.query(`
       CREATE TABLE IF NOT EXISTS embedding_meta (
         id integer PRIMARY KEY CHECK (id = 1),
@@ -255,32 +366,44 @@ export class PostgresMemoryStore implements IMemoryStore {
       )
     `);
 
-    // Detect an existing cognitive_vec and its dimension. pgvector stores the
-    // declared dim in the column's atttypmod (typmod - 4 == dimensions for
-    // `vector(N)`). Drop + recreate on a dimension change, mirroring the SQLite
-    // store's vec0 recreate path.
+    // Read the EXISTING cognitive_vec column dimension. pgvector stores the
+    // declared dimension verbatim in atttypmod (NO varlena +4 header: a
+    // `vector(768)` column has atttypmod = 768; an undimensioned `vector` column
+    // has atttypmod = -1). NULLIF(...,-1) maps the latter to NULL.
     const dimRow = await this.one<{ dim: number | null }>(
-      `SELECT (atttypmod - 4) AS dim
+      `SELECT NULLIF(a.atttypmod, -1) AS dim
          FROM pg_attribute a
          JOIN pg_class c ON c.oid = a.attrelid
         WHERE c.relname = 'cognitive_vec' AND a.attname = 'embedding' AND a.attnum > 0 AND NOT a.attisdropped`,
     );
     const existingDim = dimRow && dimRow.dim != null ? asNumber(dimRow.dim, -1) : -1;
+    const metaRow = await this.one<{ dimensions: number }>("SELECT dimensions FROM embedding_meta WHERE id = 1");
+    const metaDim = metaRow ? asNumber(metaRow.dimensions, -1) : -1;
 
-    if (existingDim !== -1 && existingDim !== dimensions) {
+    // Effective dimension. On the write path the passed length is authoritative.
+    // On boot we ADOPT what already exists (the live column, else the recorded
+    // meta) and only fall back to the passed default for a truly fresh store —
+    // so a stale boot hint can never drop a populated cognitive_vec.
+    const effectiveDim = allowRebuild
+      ? dimensions
+      : (existingDim > 0 ? existingDim : (metaDim > 0 ? metaDim : dimensions));
+
+    // Destructive rebuild ONLY when a real, differing dimension is confirmed.
+    if (existingDim > 0 && existingDim !== effectiveDim) {
       await this.pool.query("DROP TABLE IF EXISTS cognitive_vec");
-      await this.run("UPDATE embedding_meta SET dimensions = $1, created_at = $2 WHERE id = 1", [dimensions, new Date().toISOString()]);
-    } else {
-      const meta = await this.one<{ dimensions: number }>("SELECT dimensions FROM embedding_meta WHERE id = 1");
-      if (!meta) {
-        await this.run("INSERT INTO embedding_meta (id, dimensions, created_at) VALUES (1, $1, $2)", [dimensions, new Date().toISOString()]);
-      }
+    }
+    if (metaDim !== effectiveDim) {
+      await this.run(
+        `INSERT INTO embedding_meta (id, dimensions, created_at) VALUES (1, $1, $2)
+         ON CONFLICT (id) DO UPDATE SET dimensions = EXCLUDED.dimensions, created_at = EXCLUDED.created_at`,
+        [effectiveDim, new Date().toISOString()],
+      );
     }
 
     await this.pool.query(
       `CREATE TABLE IF NOT EXISTS cognitive_vec (
          record_id text PRIMARY KEY,
-         embedding vector(${dimensions})
+         embedding vector(${effectiveDim})
        )`,
     );
     // Cosine ANN index — tunable via env (defaults preserve the prior behaviour:
@@ -302,12 +425,17 @@ export class PostgresMemoryStore implements IMemoryStore {
       }
     }
 
-    this.vecDimensions = dimensions;
-    this.vecReady = true;
+    return effectiveDim;
   }
 
   public isVecAvailable(): boolean {
     return this.vecReady && this.vecDimensions > 0;
+  }
+
+  /** The active embedding dimension (0 when the vector table isn't built yet). Used
+   *  by the dashboard guard that warns before a dimension-changing embedder swap. */
+  public getVecDimensions(): number {
+    return this.vecReady ? this.vecDimensions : 0;
   }
 
   public async reembedStaleRecords(embedder: (text: string) => Promise<Float32Array>): Promise<number> {
@@ -346,2353 +474,1223 @@ export class PostgresMemoryStore implements IMemoryStore {
     if (this.ownsPool) await this.pool.end();
   }
 
+  /** Liveness probe for the status gateway — a trivial round-trip to Postgres. */
+  public async ping(): Promise<boolean> {
+    try { await this.exec.one("SELECT 1 AS ok"); return true; } catch { return false; }
+  }
+
+  // ── email/auth (ADR-014 P-B2: settings, tokens, invites) ─────────────────
+  public getSetting<T = unknown>(key: string): Promise<T | null> { return emailAuth.getSetting<T>(this.exec, key); }
+  public setSetting(key: string, value: unknown): Promise<void> { return emailAuth.setSetting(this.exec, key, value, new Date().toISOString()); }
+  public createAuthToken(rec: { tokenHash: string; kind: string; userId?: string | null; email?: string | null; expiresAt: string; createdAt: string }): Promise<void> { return emailAuth.createAuthToken(this.exec, rec); }
+  public consumeAuthToken(tokenHash: string, kind: string, nowIso: string): Promise<emailAuth.AuthTokenRecord | null> { return emailAuth.consumeAuthToken(this.exec, tokenHash, kind, nowIso); }
+  public setEmailVerified(userId: string): Promise<void> { return emailAuth.setEmailVerified(this.exec, userId); }
+  public createInvite(rec: emailAuth.OrgInviteRecord): Promise<void> { return emailAuth.createInvite(this.exec, rec); }
+  public getInviteByHash(tokenHash: string): Promise<emailAuth.OrgInviteRecord | null> { return emailAuth.getInviteByHash(this.exec, tokenHash); }
+  public acceptInvite(tokenHash: string, nowIso: string): Promise<emailAuth.OrgInviteRecord | null> { return emailAuth.acceptInvite(this.exec, tokenHash, nowIso); }
+  public listInvites(orgId: string): Promise<emailAuth.OrgInviteRecord[]> { return emailAuth.listInvites(this.exec, orgId); }
+  public revokeInvite(tokenHash: string): Promise<void> { return emailAuth.revokeInvite(this.exec, tokenHash); }
+
+  // ── team consensus persona (ADR-014 P-C) ─────────────────────────────────
+  public getOrgSharedIdentityCognitives(orgId: string, limit = 100): Promise<any[]> { return orgPersona.getOrgSharedIdentityCognitives(this.exec, orgId, limit); }
+  public getOrgIdentity(orgId: string): Promise<orgPersona.OrgIdentityRecord | null> { return orgPersona.getOrgIdentity(this.exec, orgId); }
+  public upsertOrgIdentity(rec: orgPersona.OrgIdentityRecord): Promise<void> { return orgPersona.upsertOrgIdentity(this.exec, rec); }
+
+  // ── artifact/memory sharing (ADR-014 P-D) ────────────────────────────────
+  public setMemoryVisibility(recordId: string, userId: string, orgId: string, visibility: "private" | "team" | "org", teamId?: string | null): Promise<boolean> { return sharing.setMemoryVisibility(this.exec, recordId, userId, orgId, visibility, teamId); }
+  public listOrgSharedMemories(orgId: string, limit = 50): Promise<sharing.SharedMemory[]> { return sharing.listOrgSharedMemories(this.exec, orgId, limit); }
+
+  // ── projects + per-project access (ADR-014 P-E) ──────────────────────────
+  public createProject(rec: projects.ProjectRecord): Promise<void> { return projects.createProject(this.exec, rec); }
+  public getProject(projectId: string): Promise<projects.ProjectRecord | null> { return projects.getProject(this.exec, projectId); }
+  public getAccessibleProject(projectId: string, orgId: string, userId: string, canAccessRestricted: boolean): Promise<projects.ProjectRecord | null> { return projects.getAccessibleProject(this.exec, projectId, orgId, userId, canAccessRestricted); }
+  public countProjects(orgId: string): Promise<number> { return projects.countProjects(this.exec, orgId); }
+  public updateProject(projectId: string, patch: { name?: string; repoUrl?: string | null; restricted?: boolean }): Promise<projects.ProjectRecord | null> { return projects.updateProject(this.exec, projectId, patch); }
+  public deleteProject(projectId: string): Promise<void> { return projects.deleteProject(this.exec, projectId); }
+  public listAccessibleProjects(orgId: string, userId: string, isOrgAdmin: boolean): Promise<projects.ProjectRecord[]> { return projects.listAccessibleProjects(this.exec, orgId, userId, isOrgAdmin); }
+  public addProjectMember(projectId: string, userId: string, role: string, now: string): Promise<void> { return projects.addProjectMember(this.exec, projectId, userId, role, now); }
+  public removeProjectMember(projectId: string, userId: string): Promise<void> { return projects.removeProjectMember(this.exec, projectId, userId); }
+  // ── project knowledge bases (ADR-021) ─────────────────────────────────────
+  public createKnowledgeBase(record: KnowledgeBaseRecord): Promise<void> { return knowledgeBases.createKnowledgeBase(this.exec, record); }
+  public getKnowledgeBase(baseId: string, orgId: string, projectId: string): Promise<KnowledgeBaseRecord | null> { return knowledgeBases.getKnowledgeBase(this.exec, baseId, orgId, projectId); }
+  public listKnowledgeBases(orgId: string, projectId: string): Promise<KnowledgeBaseRecord[]> { return knowledgeBases.listKnowledgeBases(this.exec, orgId, projectId); }
+  public updateKnowledgeBase(baseId: string, orgId: string, projectId: string, patch: UpdateKnowledgeBaseInput & { updatedAt: string }): Promise<KnowledgeBaseRecord | null> { return knowledgeBases.updateKnowledgeBase(this.exec, baseId, orgId, projectId, patch); }
+  public deleteKnowledgeBase(baseId: string, orgId: string, projectId: string): Promise<boolean> { return knowledgeBases.deleteKnowledgeBase(this.exec, baseId, orgId, projectId); }
+  public createKnowledgeDocument(record: KnowledgeDocumentRecord): Promise<void> { return knowledgeDocuments.createKnowledgeDocument(this.exec, record); }
+  public enqueueKnowledgeDocument(record: KnowledgeDocumentRecord, jobId: string): Promise<KnowledgeDocumentEnqueueResult> { return knowledgeDocuments.enqueueKnowledgeDocument(this.exec, record, jobId); }
+  public enqueueDerivedKnowledgeDocuments(inputs: KnowledgeDerivedDocumentInput[]): Promise<KnowledgeDerivedDocumentResult[]> { return knowledgeDocuments.enqueueDerivedKnowledgeDocuments(this.exec, inputs); }
+  public markKnowledgeDocumentParsing(input: KnowledgeParseJobInput, updatedAt: string): Promise<KnowledgeDocumentRecord | null> { return knowledgeDocuments.markKnowledgeDocumentParsing(this.exec, input, updatedAt); }
+  public commitKnowledgeDocumentParse(input: KnowledgeParseJobInput, chunks: KnowledgeChunkInput[], readyAt: string): Promise<KnowledgeParseCommitResult | null> { return knowledgeDocuments.commitKnowledgeDocumentParse(this.exec, input, chunks, readyAt); }
+  public failKnowledgeDocumentParse(input: KnowledgeParseJobInput, statusMessage: string, updatedAt: string): Promise<KnowledgeDocumentRecord | null> { return knowledgeDocuments.failKnowledgeDocumentParse(this.exec, input, statusMessage, updatedAt); }
+  public listKnowledgeChunks(documentId: string, baseId: string, orgId: string, projectId: string): Promise<KnowledgeChunkRecord[]> { return knowledgeDocuments.listKnowledgeChunks(this.exec, documentId, baseId, orgId, projectId); }
+  public upsertKnowledgeChunkEmbeddings(input: KnowledgeParseJobInput, embeddings: KnowledgeChunkEmbeddingInput[], updatedAt: string): Promise<number> { return knowledgeDocuments.upsertKnowledgeChunkEmbeddings(this.exec, input, embeddings, updatedAt); }
+  public getKnowledgeDocumentProcessing(input: KnowledgeParseJobInput): Promise<KnowledgeDocumentProcessingRecord | null> { return knowledgeDocuments.getKnowledgeDocumentProcessing(this.exec, input); }
+  public retryKnowledgeDocumentProcessing(input: KnowledgeParseJobInput, jobId: string, now: string): Promise<KnowledgeDocumentRetryRecord | null> { return knowledgeDocuments.retryKnowledgeDocumentProcessing(this.exec, input, jobId, now); }
+  public getKnowledgeDocument(documentId: string, baseId: string, orgId: string, projectId: string): Promise<KnowledgeDocumentRecord | null> { return knowledgeDocuments.getKnowledgeDocument(this.exec, documentId, baseId, orgId, projectId); }
+  public listKnowledgeDocumentSourceIds(derivedDocumentId: string, baseId: string, orgId: string, projectId: string): Promise<string[]> { return knowledgeDocuments.listKnowledgeDocumentSourceIds(this.exec, derivedDocumentId, baseId, orgId, projectId); }
+  public getKnowledgeDocumentByContentHash(contentSha256: string, baseId: string, orgId: string, projectId: string): Promise<KnowledgeDocumentRecord | null> { return knowledgeDocuments.getKnowledgeDocumentByContentHash(this.exec, contentSha256, baseId, orgId, projectId); }
+  public listKnowledgeDocuments(baseId: string, orgId: string, projectId: string, filters?: KnowledgeDocumentListFilters): Promise<KnowledgeDocumentRecord[]> { return knowledgeDocuments.listKnowledgeDocuments(this.exec, baseId, orgId, projectId, filters); }
+  public updateKnowledgeDocumentStatus(documentId: string, baseId: string, orgId: string, projectId: string, update: KnowledgeDocumentStatusUpdate): Promise<KnowledgeDocumentRecord | null> { return knowledgeDocuments.updateKnowledgeDocumentStatus(this.exec, documentId, baseId, orgId, projectId, update); }
+  public searchKnowledgeChunksByText(scope: KnowledgeSearchScope, query: string): Promise<KnowledgeLexicalSearchHit[]> { return knowledgeSearch.searchKnowledgeChunksByText(this.exec, scope, query); }
+  public searchKnowledgeChunksByVector(scope: KnowledgeSearchScope, input: KnowledgeVectorSearchInput): Promise<KnowledgeVectorSearchHit[]> { return knowledgeSearch.searchKnowledgeChunksByVector(this.exec, scope, input); }
+  // Meetings (ADR-018) — index table + revocable public share tokens.
+  public createMeeting(m: meetings.CreateMeetingInput): Promise<void> { return meetings.createMeeting(this.exec, m); }
+  public listMeetings(orgId: string, userId: string, limit?: number): Promise<meetings.MeetingRow[]> { return meetings.listMeetings(this.exec, orgId, userId, limit); }
+  public listMeetingsPage(orgId: string, userId: string, limit?: number, cursor?: meetings.MeetingListCursor): Promise<meetings.MeetingRow[]> { return meetings.listMeetingsPage(this.exec, orgId, userId, limit, cursor); }
+  public getMeeting(orgId: string, userId: string, id: string): Promise<meetings.MeetingRow | null> { return meetings.getMeeting(this.exec, orgId, userId, id); }
+  public getMeetingOverview(orgId: string, userId: string, id: string): Promise<meetings.MeetingRow | null> { return meetings.getMeetingOverview(this.exec, orgId, userId, id); }
+  public getMeetingTranscriptText(orgId: string, userId: string, id: string): Promise<string | null> { return meetings.getMeetingTranscriptText(this.exec, orgId, userId, id); }
+  public insertMeetingTranscriptSegments(meetingId: string, segments: meetings.MeetingTranscriptSegment[]): Promise<void> { return meetings.insertMeetingTranscriptSegments(this.exec, meetingId, segments); }
+  public listMeetingTranscriptSegments(orgId: string, userId: string, id: string, cursor?: number, limit?: number): Promise<meetings.MeetingTranscriptSegment[]> { return meetings.listMeetingTranscriptSegments(this.exec, orgId, userId, id, cursor, limit); }
+  public setMeetingScope(id: string, orgId: string, userId: string, scope: meetings.MeetingScope, teamId: string | null): Promise<boolean> { return meetings.setMeetingScope(this.exec, id, orgId, userId, scope, teamId); }
+  public createMeetingShareToken(s: { token: string; meetingId: string; orgId: string; createdBy: string; expiresAt?: string }): Promise<void> { return meetings.createShareToken(this.exec, s); }
+  public revokeMeetingShareTokens(meetingId: string): Promise<number> { return meetings.revokeShareTokens(this.exec, meetingId); }
+  public getMeetingActiveShareToken(meetingId: string): Promise<{ token: string; expiresAt: string | null } | null> { return meetings.getActiveShareToken(this.exec, meetingId); }
+  public updateMeetingSummary(id: string, userId: string, summaryMarkdown: string, actionItems: meetings.MeetingRow["actionItems"]): Promise<boolean> { return meetings.updateMeetingSummary(this.exec, id, userId, summaryMarkdown, actionItems); }
+  public updateMeetingActionItems(id: string, userId: string, actionItems: meetings.MeetingRow["actionItems"]): Promise<boolean> { return meetings.updateMeetingActionItems(this.exec, id, userId, actionItems); }
+  public setMeetingSummaryStatus(id: string, userId: string, status: meetings.MeetingRow["summaryStatus"], error?: string | null): Promise<boolean> { return meetings.setMeetingSummaryStatus(this.exec, id, userId, status, error); }
+  public setMeetingSummaryRecords(id: string, userId: string, summaryRecordId: string | null, transcriptSourceId: string | null): Promise<boolean> { return meetings.setMeetingSummaryRecords(this.exec, id, userId, summaryRecordId, transcriptSourceId); }
+  public getMeetingByShareToken(token: string): Promise<meetings.MeetingRow | null> { return meetings.getMeetingByShareToken(this.exec, token); }
+  public deleteMeeting(id: string, orgId: string, userId: string): Promise<meetings.DeletedMeetingRefs | null> { return meetings.deleteMeeting(this.exec, id, orgId, userId); }
+
+  // ── Track (migration 034) — org-scoped, collaborative work items ──
+  public createTrackItem(input: track.CreateTrackItemInput): Promise<track.TrackItemRow> { return track.createTrackItem(this.exec, input); }
+  public listTrackItems(orgId: string, opts?: { includeArchived?: boolean; limit?: number }): Promise<track.TrackItemRow[]> { return track.listTrackItems(this.exec, orgId, opts); }
+  public getTrackItem(orgId: string, id: string): Promise<track.TrackItemRow | null> { return track.getTrackItem(this.exec, orgId, id); }
+  public getTrackItemBySourceRef(orgId: string, sourceRef: string): Promise<track.TrackItemRow | null> { return track.getTrackItemBySourceRef(this.exec, orgId, sourceRef); }
+  public transitionTrackItem(orgId: string, id: string, status: string, statusCategory: track.TrackStatusCategory): Promise<track.TrackItemRow | null> { return track.transitionTrackItem(this.exec, orgId, id, status, statusCategory); }
+  public updateTrackItem(orgId: string, id: string, patch: track.UpdateTrackItemPatch): Promise<track.TrackItemRow | null> { return track.updateTrackItem(this.exec, orgId, id, patch); }
+  public deleteTrackItem(orgId: string, id: string): Promise<boolean> { return track.deleteTrackItem(this.exec, orgId, id); }
+
+  // ── Team spaces (migrations 035/037) — organization + personal groups ──
+  public createTeam(input: teams.CreateTeamInput): Promise<teams.TeamRow> { return teams.createTeam(this.exec, input); }
+  public listTeamsForUser(orgId: string, userId: string, includeAllOrgTeams?: boolean): Promise<teams.TeamRow[]> { return teams.listTeamsForUser(this.exec, orgId, userId, includeAllOrgTeams); }
+  public getTeam(orgId: string, id: string): Promise<teams.TeamRow | null> { return teams.getTeam(this.exec, orgId, id); }
+  public isTeamMember(orgId: string, teamId: string, userId: string): Promise<boolean> { return teams.isTeamMember(this.exec, orgId, teamId, userId); }
+  public listTeamMembers(orgId: string, teamId: string, callerUserId: string, canViewAllOrgTeams?: boolean): Promise<teams.TeamMemberRow[]> { return teams.listTeamMembers(this.exec, orgId, teamId, callerUserId, canViewAllOrgTeams); }
+  public insertTeamOwner(teamId: string, userId: string): Promise<boolean> { return teams.insertTeamOwner(this.exec, teamId, userId); }
+  public addTeamMember(orgId: string, teamId: string, userId: string, role: teams.TeamMemberRole | undefined, callerUserId: string, canManageOrgTeams?: boolean): Promise<boolean> { return teams.addTeamMember(this.exec, orgId, teamId, userId, role, callerUserId, canManageOrgTeams); }
+  public removeTeamMember(orgId: string, teamId: string, userId: string, callerUserId: string, canManageOrgTeams?: boolean): Promise<boolean> { return teams.removeTeamMember(this.exec, orgId, teamId, userId, callerUserId, canManageOrgTeams); }
+  public transferPersonalTeamOwnership(teamId: string, fromUserId: string, toUserId: string): Promise<boolean> { return teams.transferPersonalTeamOwnership(this.exec, teamId, fromUserId, toUserId); }
+  public deleteTeam(orgId: string, id: string): Promise<boolean> { return teams.deleteTeam(this.exec, orgId, id); }
+
+  // ── Chat threads (migration 036) — per-user private chat history within an org ──
+  public createChatThread(input: chatThreads.CreateChatThreadInput): Promise<chatThreads.ChatThreadRow> { return chatThreads.createThread(this.exec, input); }
+  public listChatThreads(orgId: string, userId: string, limit?: number): Promise<chatThreads.ChatThreadRow[]> { return chatThreads.listThreads(this.exec, orgId, userId, limit); }
+  public getChatThread(orgId: string, userId: string, id: string): Promise<chatThreads.ChatThreadWithMessages | null> { return chatThreads.getThread(this.exec, orgId, userId, id); }
+  public countChatThreads(orgId: string, userId: string): Promise<number> { return chatThreads.threadCount(this.exec, orgId, userId); }
+  public appendChatMessage(orgId: string, userId: string, threadId: string, msg: chatThreads.AppendChatMessageInput): Promise<chatThreads.ChatMessageRow | null> { return chatThreads.appendMessage(this.exec, orgId, userId, threadId, msg); }
+  public renameChatThread(orgId: string, userId: string, id: string, title: string, model?: string | null): Promise<chatThreads.ChatThreadRow | null> { return chatThreads.renameThread(this.exec, orgId, userId, id, title, model); }
+  public deleteChatThread(orgId: string, userId: string, id: string): Promise<boolean> { return chatThreads.deleteThread(this.exec, orgId, userId, id); }
+  public replaceChatMessages(orgId: string, userId: string, threadId: string, messages: chatThreads.AppendChatMessageInput[]): Promise<chatThreads.ChatThreadWithMessages | null> { return chatThreads.replaceMessages(this.exec, orgId, userId, threadId, messages); }
+  // CVE catalog (spec §10, Task 26) — global world data, no org scoping.
+  public ensureVulnerabilitySource(source: { id: import("../../../vulnerability/types.js").VulnerabilitySourceId; displayName: string; kind: string }): Promise<void> { return vulnerability.ensureVulnerabilitySource(this.exec, source); }
+  public getVulnerabilitySource(id: string) { return vulnerability.getVulnerabilitySource(this.exec, id); }
+  public listVulnerabilitySources() { return vulnerability.listVulnerabilitySources(this.exec); }
+  public listActiveVulnerabilityFeedRuns() { return vulnerability.listActiveVulnerabilityFeedRuns(this.exec); }
+  public startVulnerabilityFeedRun(sourceId: string) { return vulnerability.startVulnerabilityFeedRun(this.exec, sourceId); }
+  public updateVulnerabilityFeedRunProgress(runId: string, progress: { itemsSeen: number; itemsUpserted: number; cursorAfter?: Record<string, unknown> }) { return vulnerability.updateVulnerabilityFeedRunProgress(this.exec, runId, progress); }
+  public finishVulnerabilityFeedRun(runId: string, outcome: Parameters<typeof vulnerability.finishVulnerabilityFeedRun>[2]) { return vulnerability.finishVulnerabilityFeedRun(this.exec, runId, outcome); }
+  public upsertVulnerabilityObservation(observation: import("../../../vulnerability/types.js").VulnerabilityObservation) { return vulnerability.upsertVulnerabilityObservation(this.exec, observation); }
+  public listVulnerabilities(filters: vulnerability.VulnerabilityListFilters) { return vulnerability.listVulnerabilities(this.exec, filters); }
+  public getVulnerability(cveId: string) { return vulnerability.getVulnerability(this.exec, cveId); }
+  public listVulnerabilityRangesForPackage(ecosystem: string, packageName: string) { return vulnerability.listRangesForPackage(this.exec, ecosystem, packageName); }
+  // Org-scoped exposure (spec §10, Tasks 29-31).
+  public createVulnerabilityScan(input: { orgId: string; userId: string; repo: string }) { return vulnScans.createVulnerabilityScan(this.exec, input); }
+  public finishVulnerabilityScan(orgId: string, scanId: string, outcome: Parameters<typeof vulnScans.finishVulnerabilityScan>[3]) { return vulnScans.finishVulnerabilityScan(this.exec, orgId, scanId, outcome); }
+  public getVulnerabilityScan(orgId: string, scanId: string) { return vulnScans.getVulnerabilityScan(this.exec, orgId, scanId); }
+  public listVulnerabilityScans(orgId: string, limit?: number) { return vulnScans.listVulnerabilityScans(this.exec, orgId, limit); }
+  public replaceAssetComponents(orgId: string, repo: string, scanId: string, components: Parameters<typeof vulnScans.replaceAssetComponents>[4]) { return vulnScans.replaceAssetComponents(this.exec, orgId, repo, scanId, components); }
+  public listAssetComponents(filters: Parameters<typeof vulnScans.listAssetComponents>[1]) { return vulnScans.listAssetComponents(this.exec, filters); }
+  public listVulnerabilityMatches(orgId: string, filters?: Parameters<typeof vulnScans.listVulnerabilityMatches>[2]) { return vulnScans.listVulnerabilityMatches(this.exec, orgId, filters); }
+  public upsertVulnerabilityMatch(orgId: string, repo: string, scanId: string, match: import("../../../vulnerability/types.js").VulnerabilityMatch) { return vulnScans.upsertVulnerabilityMatch(this.exec, orgId, repo, scanId, match); }
+  public setVulnerabilityMatchStatus(orgId: string, matchId: string, status: "open" | "dismissed", reason?: string) { return vulnScans.setVulnerabilityMatchStatus(this.exec, orgId, matchId, status, reason); }
+  public upsertVulnerabilityWatch(input: { orgId: string; userId: string; repo: string }) { return vulnScans.upsertVulnerabilityWatch(this.exec, input); }
+  public listVulnerabilityWatches(orgId: string) { return vulnScans.listVulnerabilityWatches(this.exec, orgId); }
+  public listActiveVulnerabilityWatches(limit?: number) { return vulnScans.listActiveVulnerabilityWatches(this.exec, limit); }
+  public finishVulnerabilityWatchRun(watchId: string, outcome: { status: "active" | "error"; error?: string }) { return vulnScans.finishVulnerabilityWatchRun(this.exec, watchId, outcome); }
+  public deleteVulnerabilityWatch(orgId: string, watchId: string) { return vulnScans.deleteVulnerabilityWatch(this.exec, orgId, watchId); }
+  public recordVulnerabilityWatchEvent(event: { watchId: string; matchId: string; transition: string }) { return vulnScans.recordWatchEvent(this.exec, event); }
+  public listProjectMembers(projectId: string): Promise<projects.ProjectMemberRecord[]> { return projects.listProjectMembers(this.exec, projectId); }
+
+  // ── admin console + audit (ADR-014 P-F) ──────────────────────────────────
+  public listAllOrgsWithStats(limit = 500): Promise<adminConsole.OrgStatsRow[]> { return adminConsole.listAllOrgsWithStats(this.exec, limit); }
+  public logOrgAudit(rec: { orgId: string; actorId?: string | null; action: string; target?: string | null; detail?: string | null; createdAt: string }): Promise<void> { return adminConsole.logOrgAudit(this.exec, rec); }
+  public listOrgAudit(orgId: string, limit = 100): Promise<adminConsole.OrgAuditRow[]> { return adminConsole.listOrgAudit(this.exec, orgId, limit); }
+
+  // ── tenancy (ADR-010 P1: organizations + membership/roles) ───────────────
+
+  public createOrganization(input: { orgId: string; name: string; slug: string; plan?: OrgPlan }): Promise<OrganizationRecord> {
+    return tenancy.createOrganization(this.exec, input);
+  }
+  public getOrganization(orgId: string): Promise<OrganizationRecord | null> {
+    return tenancy.getOrganization(this.exec, orgId);
+  }
+  public updateOrganizationPlan(orgId: string, plan: OrgPlan): Promise<OrganizationRecord> {
+    return tenancy.updateOrganizationPlan(this.exec, orgId, plan);
+  }
+  public updateAllowedDomains(orgId: string, domains: string[]): Promise<OrganizationRecord> {
+    return tenancy.updateAllowedDomains(this.exec, orgId, domains);
+  }
+  public addOrgMember(orgId: string, userId: string, role: Role): Promise<void> {
+    return tenancy.addOrgMember(this.exec, orgId, userId, role);
+  }
+  public removeOrgMember(orgId: string, userId: string): Promise<void> {
+    return tenancy.removeOrgMember(this.exec, orgId, userId);
+  }
+  public getMemberRole(orgId: string, userId: string): Promise<Role | null> {
+    return tenancy.getMemberRole(this.exec, orgId, userId);
+  }
+  public listOrgMembers(orgId: string): Promise<OrgMemberRecord[]> {
+    return tenancy.listOrgMembers(this.exec, orgId);
+  }
+  public listOrgMembershipsForUser(userId: string): Promise<OrgMembership[]> {
+    return tenancy.listOrgMembershipsForUser(this.exec, userId);
+  }
+  public setDefaultOrg(userId: string, orgId: string): Promise<void> {
+    return tenancy.setDefaultOrg(this.exec, userId, orgId);
+  }
+  public getDefaultOrgId(userId: string): Promise<string | null> {
+    return tenancy.getDefaultOrgId(this.exec, userId);
+  }
+  public ensurePersonalOrg(userId: string, displayName?: string): Promise<OrganizationRecord> {
+    return tenancy.ensurePersonalOrg(this.exec, userId, displayName);
+  }
+
+  // ── provider configs (ADR-010 P2: DB-backed providers, no .env) ──────────
+
+  public listProviderConfigs(orgId: string, kind?: ProviderKind): Promise<ProviderConfigRecord[]> {
+    return providerCfg.listProviderConfigs(this.exec, orgId, kind);
+  }
+  public getProviderConfig(id: string): Promise<ProviderConfigRecord | null> {
+    return providerCfg.getProviderConfig(this.exec, id);
+  }
+  public createProviderConfig(orgId: string, input: ProviderConfigInput, createdBy?: string): Promise<ProviderConfigRecord> {
+    return providerCfg.createProviderConfig(this.exec, orgId, input, createdBy);
+  }
+  public updateProviderConfig(id: string, patch: Partial<ProviderConfigInput>): Promise<ProviderConfigRecord | null> {
+    return providerCfg.updateProviderConfig(this.exec, id, patch);
+  }
+  public deleteProviderConfig(id: string): Promise<void> {
+    return providerCfg.deleteProviderConfig(this.exec, id);
+  }
+  public setDefaultProvider(orgId: string, kind: ProviderKind, id: string): Promise<void> {
+    return providerCfg.setDefaultProvider(this.exec, orgId, kind, id);
+  }
+  public getDefaultResolvedProvider(orgId: string, kind: ProviderKind): Promise<ResolvedProviderConfig | null> {
+    return providerCfg.getDefaultResolvedProvider(this.exec, orgId, kind);
+  }
+  public getResolvedProvider(id: string): Promise<ResolvedProviderConfig | null> {
+    return providerCfg.getResolvedProvider(this.exec, id);
+  }
+
+  // ── server-managed model policies ─────────────────────────────────────────
+
+  public listProviderModels(orgId: string, enabledOnly = false): Promise<ProviderModelRecord[]> {
+    return modelPolicy.listProviderModels(this.exec, orgId, enabledOnly);
+  }
+  public getProviderModel(orgId: string, id: string): Promise<ProviderModelRecord | null> {
+    return modelPolicy.getProviderModel(this.exec, orgId, id);
+  }
+  public getProviderModelByPublicId(orgId: string, publicModelId: string, enabledOnly = false): Promise<ProviderModelRecord | null> {
+    return modelPolicy.getProviderModelByPublicId(this.exec, orgId, publicModelId, enabledOnly);
+  }
+  public createProviderModel(orgId: string, input: ProviderModelInput): Promise<ProviderModelRecord> {
+    return modelPolicy.createProviderModel(this.exec, orgId, input);
+  }
+  public updateProviderModel(orgId: string, id: string, patch: ProviderModelPatch): Promise<ProviderModelRecord | null> {
+    return modelPolicy.updateProviderModel(this.exec, orgId, id, patch);
+  }
+  public deleteProviderModel(orgId: string, id: string): Promise<boolean> {
+    return modelPolicy.deleteProviderModel(this.exec, orgId, id);
+  }
+  public setDefaultProviderModel(orgId: string, id: string): Promise<boolean> {
+    return modelPolicy.setDefaultProviderModel(this.exec, orgId, id);
+  }
+  public reorderProviderModels(orgId: string, ids: readonly string[]): Promise<void> {
+    return modelPolicy.reorderProviderModels(this.exec, orgId, ids);
+  }
+  public ensureModelGatewayServicePrincipal(orgId: string): Promise<string> {
+    return modelPolicy.ensureModelGatewayServicePrincipal(this.exec, orgId);
+  }
+
+  // ── remote device identities, sessions, grants, and metadata audit ────────
+
+  public createRemoteDevice(orgId: string, userId: string, input: RemoteDeviceInput): Promise<RemoteDeviceRecord> {
+    return remoteAccess.createRemoteDevice(this.exec, orgId, userId, input);
+  }
+  public getRemoteDevice(orgId: string, userId: string, deviceId: string): Promise<RemoteDeviceRecord | null> {
+    return remoteAccess.getRemoteDevice(this.exec, orgId, userId, deviceId);
+  }
+  public getRemoteDeviceByInstallation(orgId: string, userId: string, installationId: string): Promise<RemoteDeviceRecord | null> {
+    return remoteAccess.getRemoteDeviceByInstallation(this.exec, orgId, userId, installationId);
+  }
+  public listRemoteDevices(orgId: string, userId: string, kind?: RemoteDeviceKind): Promise<RemoteDeviceRecord[]> {
+    return remoteAccess.listRemoteDevices(this.exec, orgId, userId, kind);
+  }
+  public touchRemoteDevice(orgId: string, userId: string, deviceId: string, at?: string): Promise<boolean> {
+    return remoteAccess.touchRemoteDevice(this.exec, orgId, userId, deviceId, at);
+  }
+  public revokeRemoteDevice(orgId: string, userId: string, deviceId: string, reasonCode: string, at?: string): Promise<boolean> {
+    return remoteAccess.revokeRemoteDevice(this.exec, orgId, userId, deviceId, reasonCode, at);
+  }
+  public createDeviceSession(orgId: string, userId: string, input: DeviceSessionInput): Promise<DeviceSessionRecord> {
+    return remoteAccess.createDeviceSession(this.exec, orgId, userId, input);
+  }
+  public getDeviceSession(orgId: string, userId: string, sessionId: string): Promise<DeviceSessionRecord | null> {
+    return remoteAccess.getDeviceSession(this.exec, orgId, userId, sessionId);
+  }
+  public getDeviceSessionByTokenHash(orgId: string, userId: string, tokenHash: string): Promise<DeviceSessionRecord | null> {
+    return remoteAccess.getDeviceSessionByTokenHash(this.exec, orgId, userId, tokenHash);
+  }
+  public rotateDeviceSession(orgId: string, userId: string, input: DeviceSessionRotationInput, at?: string): Promise<DeviceSessionRotationResult> {
+    return remoteAccess.rotateDeviceSession(this.exec, orgId, userId, input, at);
+  }
+  public revokeDeviceSessionFamily(orgId: string, userId: string, familyId: string, reasonCode: string, at?: string): Promise<boolean> {
+    return remoteAccess.revokeDeviceSessionFamily(this.exec, orgId, userId, familyId, reasonCode, at);
+  }
+  public createRemoteAccessGrant(orgId: string, userId: string, input: RemoteAccessGrantInput): Promise<RemoteAccessGrantRecord> {
+    return remoteAccess.createRemoteAccessGrant(this.exec, orgId, userId, input);
+  }
+  public getRemoteAccessGrant(orgId: string, userId: string, grantId: string): Promise<RemoteAccessGrantRecord | null> {
+    return remoteAccess.getRemoteAccessGrant(this.exec, orgId, userId, grantId);
+  }
+  public listRemoteAccessGrants(orgId: string, userId: string): Promise<RemoteAccessGrantRecord[]> {
+    return remoteAccess.listRemoteAccessGrants(this.exec, orgId, userId);
+  }
+  public decideRemoteAccessGrant(orgId: string, userId: string, grantId: string, desktopDeviceId: string, decision: RemoteGrantDecision, at?: string): Promise<RemoteAccessGrantRecord | null> {
+    return remoteAccess.decideRemoteAccessGrant(this.exec, orgId, userId, grantId, desktopDeviceId, decision, at);
+  }
+  public revokeRemoteAccessGrant(orgId: string, userId: string, grantId: string, reasonCode: string, at?: string): Promise<boolean> {
+    return remoteAccess.revokeRemoteAccessGrant(this.exec, orgId, userId, grantId, reasonCode, at);
+  }
+  public appendRemoteAccessAudit(orgId: string, userId: string, input: RemoteAccessAuditInput, at?: string): Promise<RemoteAccessAuditRecord> {
+    return remoteAccess.appendRemoteAccessAudit(this.exec, orgId, userId, input, at);
+  }
+  public listRemoteAccessAudit(orgId: string, userId: string, limit?: number): Promise<RemoteAccessAuditRecord[]> {
+    return remoteAccess.listRemoteAccessAudit(this.exec, orgId, userId, limit);
+  }
+
+  public createRemoteEnrollmentChallenge(orgId: string, userId: string, input: RemoteEnrollmentChallengeInput, at?: string): Promise<RemoteEnrollmentChallengeRecord> {
+    return remoteControl.createRemoteEnrollmentChallenge(this.exec, orgId, userId, input, at);
+  }
+  public getRemoteEnrollmentChallenge(orgId: string, userId: string, challengeId: string): Promise<RemoteEnrollmentChallengeRecord | null> {
+    return remoteControl.getRemoteEnrollmentChallenge(this.exec, orgId, userId, challengeId);
+  }
+  public consumeRemoteEnrollmentChallenge(orgId: string, userId: string, challengeId: string, challengeHash: string, at?: string): Promise<boolean> {
+    return remoteControl.consumeRemoteEnrollmentChallenge(this.exec, orgId, userId, challengeId, challengeHash, at);
+  }
+  public createRemoteRelayTicket(orgId: string, userId: string, input: RemoteRelayTicketInput, at?: string): Promise<RemoteRelayTicketRecord> {
+    return remoteControl.createRemoteRelayTicket(this.exec, orgId, userId, input, at);
+  }
+  public consumeRemoteRelayTicket(tokenHash: string, audience: "remote-relay", presentingDeviceId: string, at?: string): Promise<RemoteRelayTicketRecord | null> {
+    return remoteControl.consumeRemoteRelayTicket(this.exec, tokenHash, audience, presentingDeviceId, at);
+  }
+  public revokeRemoteRelayTickets(orgId: string, userId: string, selector: RemoteRelayTicketRevocation, reasonCode: string, at?: string): Promise<number> {
+    return remoteControl.revokeRemoteRelayTickets(this.exec, orgId, userId, selector, reasonCode, at);
+  }
+
+  // ── integrations (ADR-010 P6: org-scoped GitHub App etc.) ────────────────
+
+  public listIntegrationConfigs(orgId: string, kind?: IntegrationKind): Promise<IntegrationConfigRecord[]> {
+    return integrationCfg.listIntegrationConfigs(this.exec, orgId, kind);
+  }
+  public getIntegrationConfig(id: string): Promise<IntegrationConfigRecord | null> {
+    return integrationCfg.getIntegrationConfig(this.exec, id);
+  }
+  public createIntegrationConfig(orgId: string, input: IntegrationConfigInput, createdBy?: string): Promise<IntegrationConfigRecord> {
+    return integrationCfg.createIntegrationConfig(this.exec, orgId, input, createdBy);
+  }
+  public updateIntegrationConfig(id: string, patch: Partial<IntegrationConfigInput>): Promise<IntegrationConfigRecord | null> {
+    return integrationCfg.updateIntegrationConfig(this.exec, id, patch);
+  }
+  public deleteIntegrationConfig(id: string): Promise<void> {
+    return integrationCfg.deleteIntegrationConfig(this.exec, id);
+  }
+  public getResolvedIntegration(orgId: string, kind: IntegrationKind): Promise<ResolvedIntegration | null> {
+    return integrationCfg.getResolvedIntegration(this.exec, orgId, kind);
+  }
+  public findIntegrationByInstallation(kind: IntegrationKind, installationId: string): Promise<(ResolvedIntegration & { orgId: string }) | null> {
+    return integrationCfg.findIntegrationByInstallation(this.exec, kind, installationId);
+  }
+
+  // ── connectors (ADR-016 C2: per-user connector config + sealed OAuth token) ──
+  public listConnectors(userId: string): Promise<ConnectorConfigRecord[]> { return connectorCfg.listConnectors(this.exec, userId); }
+  public listAllEnabledConnectors(): Promise<ConnectorConfigRecord[]> { return connectorCfg.listAllEnabledConnectors(this.exec); }
+  public getConnector(id: string): Promise<ConnectorConfigRecord | null> { return connectorCfg.getConnector(this.exec, id); }
+  public getResolvedConnector(id: string): Promise<ResolvedConnector | null> { return connectorCfg.getResolvedConnector(this.exec, id); }
+  public createConnector(userId: string, input: ConnectorConfigInput): Promise<ConnectorConfigRecord> { return connectorCfg.createConnector(this.exec, userId, input); }
+  public updateConnector(id: string, patch: ConnectorConfigPatch): Promise<ConnectorConfigRecord | null> { return connectorCfg.updateConnector(this.exec, id, patch); }
+  public deleteConnector(id: string): Promise<void> { return connectorCfg.deleteConnector(this.exec, id); }
+  public getResolvedOAuthApp(orgId: string, source: string): Promise<ResolvedOAuthApp | null> { return connectorCfg.getResolvedOAuthApp(this.exec, orgId, source); }
+  public upsertOAuthApp(orgId: string, source: string, clientId: string, clientSecret: string | undefined, scopes?: string): Promise<OAuthAppConfig> { return connectorCfg.upsertOAuthApp(this.exec, orgId, source, clientId, clientSecret, scopes); }
+
   // ── sensory ────────────────────────────────────────────────────────────
 
-  public async upsertSensory(record: SensoryRecord): Promise<void> {
-    await this.run(
-      `INSERT INTO sensory_stream (record_id, user_id, session_key, session_id, role, message_text, recorded_at, timestamp, skill_tag)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       ON CONFLICT (record_id) DO UPDATE SET
-         message_text = EXCLUDED.message_text,
-         recorded_at = EXCLUDED.recorded_at,
-         timestamp = EXCLUDED.timestamp`,
-      [record.id, record.userId, record.sessionKey, record.sessionId, record.role, record.messageText, record.recordedAt, record.timestamp, record.skillTag],
-    );
+  public upsertSensory(record: SensoryRecord): Promise<void> {
+    return sensory.upsertSensory(this.exec, record);
   }
 
-  public async getRecentSensoryMessages(userId: string, sessionKey: string, limit: number, afterIsoTime = ""): Promise<SensoryRecord[]> {
-    const rows = await this.rows<any>(
-      `SELECT record_id, user_id, session_key, session_id, role, message_text, recorded_at, timestamp, skill_tag
-         FROM sensory_stream
-        WHERE user_id = $1 AND session_key = $2 AND recorded_at > $3 AND extracted_at IS NULL
-        ORDER BY recorded_at DESC
-        LIMIT $4`,
-      [userId, sessionKey, afterIsoTime, limit],
-    );
-    // Reverse so chronologically oldest-first (matches SQLite store).
-    return rows.reverse().map((r) => ({
-      id: r.record_id,
-      userId: r.user_id,
-      sessionKey: r.session_key,
-      sessionId: r.session_id,
-      role: r.role,
-      messageText: r.message_text,
-      recordedAt: r.recorded_at,
-      timestamp: asNumber(r.timestamp),
-      skillTag: r.skill_tag,
-    }));
+  public getRecentSensoryMessages(userId: string, sessionKey: string, limit: number, afterIsoTime = ""): Promise<SensoryRecord[]> {
+    return sensory.getRecentSensoryMessages(this.exec, userId, sessionKey, limit, afterIsoTime);
   }
 
-  public async getUnextractedSensoryCount(userId: string, sessionKey: string): Promise<number> {
-    const row = await this.one<{ count: string }>(
-      "SELECT COUNT(*) AS count FROM sensory_stream WHERE user_id = $1 AND session_key = $2 AND extracted_at IS NULL",
-      [userId, sessionKey],
-    );
-    return asNumber(row?.count);
+  public getUnextractedSensoryCount(userId: string, sessionKey: string): Promise<number> {
+    return sensory.getUnextractedSensoryCount(this.exec, userId, sessionKey);
   }
 
-  public async markSensoryExtracted(userId: string, sessionKey: string, recordIds: string[], extractedAt = new Date().toISOString()): Promise<void> {
-    if (recordIds.length === 0) return;
-    await this.run(
-      "UPDATE sensory_stream SET extracted_at = $1 WHERE user_id = $2 AND session_key = $3 AND record_id = ANY($4::text[])",
-      [extractedAt, userId, sessionKey, recordIds],
-    );
+  public markSensoryExtracted(userId: string, sessionKey: string, recordIds: string[], extractedAt = new Date().toISOString()): Promise<void> {
+    return sensory.markSensoryExtracted(this.exec, userId, sessionKey, recordIds, extractedAt);
   }
 
   // ── cognitive ──────────────────────────────────────────────────────────
 
-  private cognitiveUpsertParams(record: CognitiveRecord): any[] {
-    return [
-      record.id, record.userId, record.sessionKey, record.sessionId, record.content,
-      record.type, record.priority, record.sceneName, record.skillTag,
-      record.halfLifeDays, record.supersededBy, record.invalidAt || null, record.timestampStr,
-      record.timestampStart, record.timestampEnd, record.createdTime,
-      record.updatedTime, JSON.stringify(record.metadata), record.confidence ?? 0.65,
-      record.status ?? "active", record.sourceKind ?? "", record.verificationStatus ?? "",
-      JSON.stringify(record.repoPaths ?? []), JSON.stringify(record.filePaths ?? []),
-      JSON.stringify(record.commands ?? []), record.workspaceTag ?? null, record.projectTag ?? null,
-    ];
+  public upsertCognitiveBatch(entries: Array<{ record: CognitiveRecord; embedding?: Float32Array }>, options?: { skipAudit?: boolean }): Promise<void> {
+    return cognitive.upsertCognitiveBatch(this.exec, this.vecReady, entries, options);
   }
 
-  private async upsertCognitiveMeta(client: PoolClient, record: CognitiveRecord): Promise<void> {
-    await client.query(
-      `INSERT INTO cognitive_records (
-         record_id, user_id, session_key, session_id, content, type, priority, scene_name, skill_tag,
-         half_life_days, superseded_by, invalid_at, timestamp_str, timestamp_start, timestamp_end,
-         created_time, updated_time, metadata_json, confidence, status, source_kind, verification_status,
-         repo_paths_json, file_paths_json, commands_json, workspace_tag, project_tag
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
-       ON CONFLICT (record_id) DO UPDATE SET
-         content=EXCLUDED.content,
-         type=EXCLUDED.type,
-         priority=EXCLUDED.priority,
-         scene_name=EXCLUDED.scene_name,
-         skill_tag=EXCLUDED.skill_tag,
-         half_life_days=EXCLUDED.half_life_days,
-         superseded_by=EXCLUDED.superseded_by,
-         invalid_at=EXCLUDED.invalid_at,
-         timestamp_str=EXCLUDED.timestamp_str,
-         timestamp_start=EXCLUDED.timestamp_start,
-         timestamp_end=EXCLUDED.timestamp_end,
-         updated_time=EXCLUDED.updated_time,
-         metadata_json=EXCLUDED.metadata_json,
-         confidence=EXCLUDED.confidence,
-         status=EXCLUDED.status,
-         source_kind=EXCLUDED.source_kind,
-         verification_status=EXCLUDED.verification_status,
-         repo_paths_json=EXCLUDED.repo_paths_json,
-         file_paths_json=EXCLUDED.file_paths_json,
-         commands_json=EXCLUDED.commands_json,
-         workspace_tag=COALESCE(EXCLUDED.workspace_tag, cognitive_records.workspace_tag),
-         project_tag=COALESCE(EXCLUDED.project_tag, cognitive_records.project_tag)`,
-      this.cognitiveUpsertParams(record),
-    );
+  public upsertCognitive(record: CognitiveRecord, options?: { skipAudit?: boolean }): Promise<void> {
+    return cognitive.upsertCognitive(this.exec, record, options);
   }
 
-  private async replaceFileIndexTx(client: PoolClient, record: CognitiveRecord): Promise<void> {
-    await client.query("DELETE FROM memory_file_index WHERE user_id = $1 AND record_id = $2", [record.userId, record.id]);
-    const filePaths = [...new Set((record.filePaths ?? []).map((fp) => fp.trim()).filter(Boolean))];
-    for (const filePath of filePaths) {
-      await client.query(
-        "INSERT INTO memory_file_index (id, user_id, record_id, file_path, symbol, created_time) VALUES ($1,$2,$3,$4,'',$5)",
-        [randomUUID(), record.userId, record.id, filePath, record.createdTime],
-      );
-    }
+  public invalidateCognitiveRecord(userId: string, recordId: string, supersededById: string): Promise<void> {
+    return cognitive.invalidateCognitiveRecord(this.exec, userId, recordId, supersededById);
   }
 
-  private async insertOperationTx(client: PoolClient, op: MemoryOperation): Promise<void> {
-    await client.query(
-      `INSERT INTO memory_operations (id, user_id, record_id, operation, actor, session_key, reason, created_at, metadata_json)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-       ON CONFLICT (id) DO UPDATE SET
-         operation=EXCLUDED.operation, actor=EXCLUDED.actor, session_key=EXCLUDED.session_key,
-         reason=EXCLUDED.reason, metadata_json=EXCLUDED.metadata_json`,
-      [op.id, op.userId, op.recordId, op.operation, op.actor, op.sessionKey, op.reason, op.createdAt, JSON.stringify(op.metadata ?? {})],
-    );
+  public getMemoryById(userId: string, recordId: string): Promise<CognitiveRecord | null> {
+    return cognitive.getMemoryById(this.exec, userId, recordId);
   }
 
-  public async upsertCognitiveBatch(entries: Array<{ record: CognitiveRecord; embedding?: Float32Array }>, options?: { skipAudit?: boolean }): Promise<void> {
-    await this.tx(async (client) => {
-      for (const entry of entries) {
-        const record = entry.record;
-        await this.upsertCognitiveMeta(client, record);
-        // FTS column is generated — no FTS insert needed.
-        if (entry.embedding && this.vecReady) {
-          await client.query(
-            `INSERT INTO cognitive_vec (record_id, embedding) VALUES ($1, $2::vector)
-             ON CONFLICT (record_id) DO UPDATE SET embedding = EXCLUDED.embedding`,
-            [record.id, toVectorLiteral(entry.embedding)],
-          );
-        }
-        await this.replaceFileIndexTx(client, record);
-        if (!options?.skipAudit) {
-          await this.insertOperationTx(client, {
-            id: randomUUID(), userId: record.userId, recordId: record.id,
-            operation: "cognitive_upsert", actor: "system", sessionKey: record.sessionKey,
-            reason: "", createdAt: new Date().toISOString(), metadata: { batch: true, type: record.type },
-          });
-        }
-      }
-    });
+  public getMemoriesByFilePath(userId: string, filePath: string, limit: number): Promise<CognitiveRecord[]> {
+    return cognitive.getMemoriesByFilePath(this.exec, userId, filePath, limit);
   }
 
-  public async upsertCognitive(record: CognitiveRecord, options?: { skipAudit?: boolean }): Promise<void> {
-    await this.tx(async (client) => {
-      await this.upsertCognitiveMeta(client, record);
-      await this.replaceFileIndexTx(client, record);
-      if (!options?.skipAudit) {
-        await this.insertOperationTx(client, {
-          id: randomUUID(), userId: record.userId, recordId: record.id,
-          operation: "cognitive_upsert", actor: "system", sessionKey: record.sessionKey,
-          reason: "", createdAt: new Date().toISOString(), metadata: { type: record.type },
-        });
-      }
-    });
+  public findLessonByFingerprint(userId: string, fingerprint: string): Promise<CognitiveRecord | null> {
+    return cognitive.findLessonByFingerprint(this.exec, userId, fingerprint);
   }
 
-  public async invalidateCognitiveRecord(userId: string, recordId: string, supersededById: string): Promise<void> {
-    const now = new Date().toISOString();
-    await this.run(
-      "UPDATE cognitive_records SET invalid_at = $1, superseded_by = $2, status = 'superseded' WHERE user_id = $3 AND record_id = $4",
-      [now, supersededById, userId, recordId],
-    );
-    await this.insertOperation({
-      id: randomUUID(), userId, recordId, operation: "cognitive_supersede", actor: "system",
-      sessionKey: "", reason: `Superseded by ${supersededById}`, createdAt: now, metadata: { supersededById },
-    });
+  public findLessonsByConflictKey(userId: string, conflictKey: string): Promise<CognitiveRecord[]> {
+    return cognitive.findLessonsByConflictKey(this.exec, userId, conflictKey);
   }
 
-  public async getMemoryById(userId: string, recordId: string): Promise<CognitiveRecord | null> {
-    const row = await this.one("SELECT * FROM cognitive_records WHERE record_id = $1 AND user_id = $2", [recordId, userId]);
-    return row ? cognitiveRowToRecord(row) : null;
+  public listLessonsForHygiene(userId: string, limit: number): Promise<CognitiveRecord[]> {
+    return cognitive.listLessonsForHygiene(this.exec, userId, limit);
   }
 
-  public async getMemoriesByFilePath(userId: string, filePath: string, limit: number): Promise<CognitiveRecord[]> {
-    const rows = await this.rows(
-      `SELECT r.*
-         FROM memory_file_index i
-         JOIN cognitive_records r ON r.user_id = i.user_id AND r.record_id = i.record_id
-        WHERE i.user_id = $1 AND (i.file_path = $2 OR i.file_path LIKE $3)
-          AND r.invalid_at IS NULL AND r.archived = 0
-        ORDER BY i.created_time DESC, r.priority DESC
-        LIMIT $4`,
-      [userId, filePath, `%${filePath}%`, limit],
-    );
-    return rows.map(cognitiveRowToRecord);
-  }
-
-  public async findLessonByFingerprint(userId: string, fingerprint: string): Promise<CognitiveRecord | null> {
-    const row = await this.one(
-      `SELECT r.* FROM cognitive_records r
-        WHERE r.user_id = $1 AND r.type = 'lesson'
-          AND r.metadata_json::jsonb ->> 'fingerprint' = $2
-          AND r.invalid_at IS NULL AND r.archived = 0
-        ORDER BY r.created_time DESC LIMIT 1`,
-      [userId, fingerprint],
-    );
-    return row ? cognitiveRowToRecord(row) : null;
-  }
-
-  public async findLessonsByConflictKey(userId: string, conflictKey: string): Promise<CognitiveRecord[]> {
-    const rows = await this.rows(
-      `SELECT r.* FROM cognitive_records r
-        WHERE r.user_id = $1 AND r.type = 'lesson'
-          AND r.metadata_json::jsonb ->> 'conflictKey' = $2
-          AND r.invalid_at IS NULL AND r.archived = 0
-        ORDER BY r.created_time DESC LIMIT 50`,
-      [userId, conflictKey],
-    );
-    return rows.map(cognitiveRowToRecord);
-  }
-
-  public async listLessonsForHygiene(userId: string, limit: number): Promise<CognitiveRecord[]> {
-    const rows = await this.rows(
-      `SELECT r.* FROM cognitive_records r
-        WHERE r.user_id = $1 AND r.type = 'lesson'
-          AND r.invalid_at IS NULL AND r.archived = 0
-        ORDER BY r.created_time ASC LIMIT $2`,
-      [userId, Math.max(1, limit)],
-    );
-    return rows.map(cognitiveRowToRecord);
-  }
-
-  public async updateCognitiveConfidence(userId: string, recordId: string, confidence: number, status: MemoryStatus): Promise<void> {
-    const now = new Date().toISOString();
-    await this.run(
-      "UPDATE cognitive_records SET confidence = $1, status = $2, archived = CASE WHEN $3 = 'archived' THEN 1 ELSE archived END, updated_time = $4 WHERE user_id = $5 AND record_id = $6",
-      [confidence, status, status, now, userId, recordId],
-    );
-    await this.insertOperation({
-      id: randomUUID(), userId, recordId, operation: "cognitive_status_update", actor: "system",
-      sessionKey: "", reason: "", createdAt: now, metadata: { confidence, status },
-    });
+  public updateCognitiveConfidence(userId: string, recordId: string, confidence: number, status: MemoryStatus): Promise<void> {
+    return cognitive.updateCognitiveConfidence(this.exec, userId, recordId, confidence, status);
   }
 
   // ── evidence + operations ───────────────────────────────────────────────
 
-  public async insertEvidence(ev: MemoryEvidence): Promise<void> {
-    await this.run(
-      `INSERT INTO memory_evidence (id, user_id, record_id, kind, ref, excerpt, observed_at, metadata_json)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-       ON CONFLICT (id) DO UPDATE SET
-         kind=EXCLUDED.kind, ref=EXCLUDED.ref, excerpt=EXCLUDED.excerpt,
-         observed_at=EXCLUDED.observed_at, metadata_json=EXCLUDED.metadata_json`,
-      [ev.id, ev.userId, ev.recordId, ev.kind, ev.ref, ev.excerpt, ev.observedAt, JSON.stringify(ev.metadata ?? {})],
-    );
-    await this.insertOperation({
-      id: randomUUID(), userId: ev.userId, recordId: ev.recordId, operation: "evidence_add", actor: "system",
-      sessionKey: "", reason: "", createdAt: new Date().toISOString(), metadata: { evidenceId: ev.id, kind: ev.kind, ref: ev.ref },
-    });
+  public insertEvidence(ev: MemoryEvidence): Promise<void> {
+    return operations.insertEvidence(this.exec, ev);
   }
 
-  public async getEvidenceByRecord(userId: string, recordId: string): Promise<MemoryEvidence[]> {
-    const rows = await this.rows(
-      `SELECT id, user_id, record_id, kind, ref, excerpt, observed_at, metadata_json
-         FROM memory_evidence WHERE user_id = $1 AND record_id = $2
-        ORDER BY observed_at DESC, id ASC`,
-      [userId, recordId],
-    );
-    return rows.map(evidenceRowToRecord);
+  public getEvidenceByRecord(userId: string, recordId: string): Promise<MemoryEvidence[]> {
+    return operations.getEvidenceByRecord(this.exec, userId, recordId);
   }
 
-  public async listEvidence(
+  public listEvidence(
     userId: string,
     filters?: EvidenceListFilters,
     pagination?: CursorPaginationOptions<{ observedAt: string; id: string }>,
   ): Promise<MemoryEvidence[]> {
-    const where = ["user_id = ?"];
-    const args: any[] = [userId];
-    if (filters?.recordId) { where.push("record_id = ?"); args.push(filters.recordId); }
-    if (filters?.kind) { where.push("kind = ?"); args.push(filters.kind); }
-    if (pagination?.cursor) {
-      where.push("(observed_at < ? OR (observed_at = ? AND id > ?))");
-      args.push(pagination.cursor.observedAt, pagination.cursor.observedAt, pagination.cursor.id);
-    }
-    args.push(pagination?.limit ?? 100);
-    const rows = await this.rows(
-      pg(`SELECT id, user_id, record_id, kind, ref, excerpt, observed_at, metadata_json
-            FROM memory_evidence WHERE ${where.join(" AND ")}
-           ORDER BY observed_at DESC, id ASC LIMIT ?`),
-      args,
-    );
-    return rows.map(evidenceRowToRecord);
+    return operations.listEvidence(this.exec, userId, filters, pagination);
   }
 
-  public async insertOperation(op: MemoryOperation): Promise<void> {
-    await this.run(
-      `INSERT INTO memory_operations (id, user_id, record_id, operation, actor, session_key, reason, created_at, metadata_json)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-       ON CONFLICT (id) DO UPDATE SET
-         operation=EXCLUDED.operation, actor=EXCLUDED.actor, session_key=EXCLUDED.session_key,
-         reason=EXCLUDED.reason, metadata_json=EXCLUDED.metadata_json`,
-      [op.id, op.userId, op.recordId, op.operation, op.actor, op.sessionKey, op.reason, op.createdAt, JSON.stringify(op.metadata ?? {})],
-    );
+  public insertOperation(op: MemoryOperation): Promise<void> {
+    return operations.insertOperation(this.exec, op);
   }
 
-  public async getOperationLog(
+  public getOperationLog(
     userId: string,
     options?: CursorPaginationOptions<{ createdAt: string; id: string }>,
     filters?: OperationLogFilters,
   ): Promise<MemoryOperation[]> {
-    const where = ["user_id = ?"];
-    const args: any[] = [userId];
-    if (filters?.operation) { where.push("operation = ?"); args.push(filters.operation); }
-    if (filters?.sessionKey) { where.push("session_key = ?"); args.push(filters.sessionKey); }
-    if (filters?.createdAfter) { where.push("created_at >= ?"); args.push(filters.createdAfter); }
-    if (filters?.createdBefore) { where.push("created_at <= ?"); args.push(filters.createdBefore); }
-    if (options?.cursor) {
-      where.push("(created_at < ? OR (created_at = ? AND id > ?))");
-      args.push(options.cursor.createdAt, options.cursor.createdAt, options.cursor.id);
-    }
-    args.push(options?.limit ?? 100);
-    const rows = await this.rows(
-      pg(`SELECT id, user_id, record_id, operation, actor, session_key, reason, created_at, metadata_json
-            FROM memory_operations WHERE ${where.join(" AND ")}
-           ORDER BY created_at DESC, id ASC LIMIT ?`),
-      args,
-    );
-    return rows.map(operationRowToRecord);
+    return operations.getOperationLog(this.exec, userId, options, filters);
   }
 
-  public async exportMemories(userId: string): Promise<MemoryExport> {
-    const memoryRows = await this.rows("SELECT * FROM cognitive_records WHERE user_id = $1 ORDER BY created_time ASC, record_id ASC", [userId]);
-    const evidenceRows = await this.rows("SELECT * FROM memory_evidence WHERE user_id = $1 ORDER BY observed_at ASC, id ASC", [userId]);
-    const operationRows = await this.rows("SELECT * FROM memory_operations WHERE user_id = $1 ORDER BY created_at ASC, id ASC", [userId]);
-    return {
-      version: 1,
-      exportedAt: new Date().toISOString(),
-      userId,
-      memories: memoryRows.map(cognitiveRowToRecord),
-      evidence: evidenceRows.map(evidenceRowToRecord),
-      operations: operationRows.map(operationRowToRecord),
-    };
+  public exportMemories(userId: string): Promise<MemoryExport> {
+    return operations.exportMemories(this.exec, userId);
   }
 
-  public async importMemories(userId: string, data: MemoryImport): Promise<ImportResult> {
-    let importedMemories = 0;
-    let importedEvidence = 0;
-    let importedOperations = 0;
-    await this.tx(async (client) => {
-      const chunkChars = readImportChunkChars();
-      const memories = (data.memories ?? []).flatMap((r) => expandImportRecord(r, chunkChars));
-      for (const record of memories) {
-        await this.upsertCognitiveMeta(client, { ...record, userId });
-        await this.replaceFileIndexTx(client, { ...record, userId });
-        importedMemories++;
-      }
-      for (const ev of data.evidence ?? []) {
-        await client.query(
-          `INSERT INTO memory_evidence (id, user_id, record_id, kind, ref, excerpt, observed_at, metadata_json)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-           ON CONFLICT (id) DO UPDATE SET
-             kind=EXCLUDED.kind, ref=EXCLUDED.ref, excerpt=EXCLUDED.excerpt,
-             observed_at=EXCLUDED.observed_at, metadata_json=EXCLUDED.metadata_json`,
-          [ev.id, userId, ev.recordId, ev.kind, ev.ref, ev.excerpt, ev.observedAt, JSON.stringify(ev.metadata ?? {})],
-        );
-        importedEvidence++;
-      }
-      for (const op of data.operations ?? []) {
-        await client.query(
-          `INSERT INTO memory_operations (id, user_id, record_id, operation, actor, session_key, reason, created_at, metadata_json)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-           ON CONFLICT (id) DO NOTHING`,
-          [op.id, userId, op.recordId, op.operation, op.actor, op.sessionKey, op.reason, op.createdAt, JSON.stringify(op.metadata ?? {})],
-        );
-        importedOperations++;
-      }
-      const now = new Date().toISOString();
-      await client.query(
-        `INSERT INTO memory_operations (id, user_id, record_id, operation, actor, session_key, reason, created_at, metadata_json)
-         VALUES ($1,$2,NULL,'import','system','','',$3,$4)`,
-        [randomUUID(), userId, now, JSON.stringify({ importedMemories, importedEvidence, importedOperations })],
-      );
-    });
-    return { importedMemories, importedEvidence, importedOperations };
+  public importMemories(userId: string, data: MemoryImport): Promise<ImportResult> {
+    return operations.importMemories(this.exec, userId, data);
   }
 
-  public async hardDeleteMemory(userId: string, recordId: string, reason: string): Promise<void> {
-    const now = new Date().toISOString();
-    await this.tx(async (client) => {
-      await client.query("DELETE FROM memory_evidence WHERE user_id = $1 AND record_id = $2", [userId, recordId]);
-      await client.query("DELETE FROM memory_file_index WHERE user_id = $1 AND record_id = $2", [userId, recordId]);
-      // cognitive_vec has no user_id column (record-id keyed); delete by id.
-      await client.query("DELETE FROM cognitive_vec WHERE record_id = $1", [recordId]).catch(() => undefined);
-      await client.query("DELETE FROM cognitive_records WHERE user_id = $1 AND record_id = $2", [userId, recordId]);
-      await client.query(
-        `INSERT INTO memory_operations (id, user_id, record_id, operation, actor, session_key, reason, created_at, metadata_json)
-         VALUES ($1,$2,$3,'governance_delete','system','',$4,$5,'{}')`,
-        [randomUUID(), userId, recordId, reason, now],
-      );
-    });
+  public hardDeleteMemory(userId: string, recordId: string, reason: string): Promise<void> {
+    return operations.hardDeleteMemory(this.exec, userId, recordId, reason);
   }
 
   // ── FTS (tsvector + GIN) ──────────────────────────────────────────────
 
-  public async searchCognitiveFts(userId: string, query: string, limit: number): Promise<CognitiveFtsResult[]> {
-    if (!ftsHasTerms(query)) return [];
-    const rows = await this.rows<any>(
-      `SELECT r.record_id, r.user_id, r.content, r.type, r.priority, r.scene_name, r.skill_tag,
-              r.session_key, r.timestamp_str, r.created_time, r.citation_count,
-              ts_rank(r.content_tsv, plainto_tsquery('english', $2)) AS rank
-         FROM cognitive_records r
-        WHERE r.user_id = $1 AND r.content_tsv @@ plainto_tsquery('english', $2)
-          AND r.invalid_at IS NULL AND r.archived = 0
-        ORDER BY rank DESC
-        LIMIT $3`,
-      [userId, query, limit],
-    );
-    return rows.map((r) => ({
-      record_id: r.record_id, user_id: r.user_id, content: r.content, type: r.type,
-      priority: asNumber(r.priority, 50), scene_name: r.scene_name, skill_tag: r.skill_tag,
-      score: tsRankToScore(asNumber(r.rank)), timestamp_str: r.timestamp_str,
-      timestamp_start: "", timestamp_end: "", session_key: r.session_key, session_id: "",
-      metadata_json: "{}", created_time: r.created_time, citation_count: asNumber(r.citation_count),
-    }));
+  public searchCognitiveFts(userId: string, query: string, limit: number, orgId?: string): Promise<CognitiveFtsResult[]> {
+    return search.searchCognitiveFts(this.exec, userId, query, limit, orgId);
   }
 
-  public async searchCognitiveFtsAsOf(userId: string, query: string, limit: number, asOf: string): Promise<CognitiveFtsResult[]> {
-    if (!ftsHasTerms(query)) return [];
-    const rows = await this.rows<any>(
-      `SELECT r.record_id, r.user_id, r.content, r.type, r.priority, r.scene_name, r.skill_tag,
-              r.session_key, r.timestamp_str, r.created_time,
-              ts_rank(r.content_tsv, plainto_tsquery('english', $2)) AS rank
-         FROM cognitive_records r
-        WHERE r.user_id = $1 AND r.content_tsv @@ plainto_tsquery('english', $2)
-          AND r.created_time <= $3
-          AND (r.invalid_at IS NULL OR r.invalid_at > $3)
-          AND r.archived = 0
-        ORDER BY rank DESC
-        LIMIT $4`,
-      [userId, query, asOf, limit],
-    );
-    return rows.map((r) => ({
-      record_id: r.record_id, user_id: r.user_id, content: r.content, type: r.type,
-      priority: asNumber(r.priority, 50), scene_name: r.scene_name, skill_tag: r.skill_tag,
-      score: tsRankToScore(asNumber(r.rank)), timestamp_str: r.timestamp_str,
-      timestamp_start: "", timestamp_end: "", session_key: r.session_key, session_id: "",
-      metadata_json: "{}", created_time: r.created_time,
-    }));
+  public searchCognitiveFtsAsOf(userId: string, query: string, limit: number, asOf: string): Promise<CognitiveFtsResult[]> {
+    return search.searchCognitiveFtsAsOf(this.exec, userId, query, limit, asOf);
   }
 
   // ── vector (pgvector) ────────────────────────────────────────────────
 
-  public async upsertCognitiveVec(recordId: string, embedding: Float32Array): Promise<void> {
-    if (!this.vecReady) return;
-    if (this.vecDimensions !== embedding.length) {
-      await this.initVec(embedding.length);
-    }
-    if (!this.vecReady) return;
-    await this.run(
-      `INSERT INTO cognitive_vec (record_id, embedding) VALUES ($1, $2::vector)
-       ON CONFLICT (record_id) DO UPDATE SET embedding = EXCLUDED.embedding`,
-      [recordId, toVectorLiteral(embedding)],
-    );
+  public upsertCognitiveVec(recordId: string, embedding: Float32Array): Promise<void> {
+    return search.upsertCognitiveVec(this.exec, this.vecCtx, recordId, embedding);
   }
 
-  public async searchCognitiveVec(userId: string, queryEmbedding: Float32Array, limit: number): Promise<VectorSearchResult[]> {
-    if (!this.vecReady) return [];
-    if (this.vecDimensions !== queryEmbedding.length) {
-      await this.initVec(queryEmbedding.length);
-    }
-    if (!this.vecDimensions) return [];
-    try {
-      const rows = await this.rows<any>(
-        `SELECT v.record_id, (v.embedding <=> $1::vector) AS distance,
-                r.user_id, r.content, r.type, r.priority, r.scene_name, r.skill_tag,
-                r.session_key, r.timestamp_str, r.created_time
-           FROM cognitive_vec v
-           JOIN cognitive_records r ON v.record_id = r.record_id
-          WHERE r.user_id = $2 AND r.invalid_at IS NULL AND r.archived = 0
-          ORDER BY v.embedding <=> $1::vector
-          LIMIT $3`,
-        [toVectorLiteral(queryEmbedding), userId, limit],
-      );
-      return rows.map((r) => ({
-        record_id: r.record_id, user_id: r.user_id, content: r.content, type: r.type,
-        priority: asNumber(r.priority, 50), scene_name: r.scene_name, skill_tag: r.skill_tag,
-        score: 1 - asNumber(r.distance), timestamp_str: r.timestamp_str,
-        timestamp_start: "", timestamp_end: "", session_key: r.session_key, session_id: "",
-        metadata_json: "{}", created_time: r.created_time,
-      }));
-    } catch (e) {
-      console.error("[BrainRouter] Vector search failed:", e);
-      return [];
-    }
+  public searchCognitiveVec(userId: string, queryEmbedding: Float32Array, limit: number, orgId?: string): Promise<VectorSearchResult[]> {
+    return search.searchCognitiveVec(this.exec, this.vecCtx, userId, queryEmbedding, limit, orgId);
   }
 
   // ── contradictions ───────────────────────────────────────────────────
 
-  public async upsertContradiction(data: {
+  public upsertContradiction(data: {
     id: string; userId: string; recordIdA: string; recordIdB: string; reason: string; confidence: number; createdTime?: string;
   }): Promise<void> {
-    await this.run(
-      `INSERT INTO contradictions (id, user_id, record_id_a, record_id_b, reason, confidence, created_time)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)
-       ON CONFLICT (id) DO UPDATE SET reason=EXCLUDED.reason, confidence=EXCLUDED.confidence`,
-      [data.id, data.userId, data.recordIdA, data.recordIdB, data.reason, data.confidence, data.createdTime ?? new Date().toISOString()],
-    );
+    return contradiction.upsertContradiction(this.exec, data);
   }
 
-  public async getPendingContradictions(userId: string, pagination?: CursorPaginationOptions<{ confidence: number; id: string }>, statusFilter: "pending" | "resolved" | "dismissed" | "all" = "pending"): Promise<ContradictionRecord[]> {
-    const where = ["c.user_id = ?"];
-    const args: any[] = [userId];
-    if (statusFilter !== "all") {
-      where.push("c.status = ?");
-      args.push(statusFilter);
-    }
-    if (pagination?.cursor) {
-      where.push("(c.confidence < ? OR (c.confidence = ? AND c.id > ?))");
-      args.push(pagination.cursor.confidence, pagination.cursor.confidence, pagination.cursor.id);
-    }
-    args.push(pagination?.limit ?? 20);
-    const rows = await this.rows<any>(
-      pg(`SELECT c.*, r1.content AS content_a, r2.content AS content_b
-            FROM contradictions c
-            JOIN cognitive_records r1 ON c.record_id_a = r1.record_id
-            JOIN cognitive_records r2 ON c.record_id_b = r2.record_id
-           WHERE ${where.join(" AND ")}
-           ORDER BY c.confidence DESC, c.id ASC LIMIT ?`),
-      args,
-    );
-    return rows as unknown as ContradictionRecord[];
+  public getPendingContradictions(userId: string, pagination?: CursorPaginationOptions<{ confidence: number; id: string }>, statusFilter: "pending" | "resolved" | "dismissed" | "all" = "pending"): Promise<ContradictionRecord[]> {
+    return contradiction.getPendingContradictions(this.exec, userId, pagination, statusFilter);
   }
 
-  public async resolveContradiction(id: string, userId: string, status: "resolved" | "dismissed"): Promise<void> {
-    await this.run("UPDATE contradictions SET status = $1 WHERE id = $2 AND user_id = $3", [status, id, userId]);
-    await this.insertOperation({
-      id: randomUUID(), userId, recordId: id, operation: "contradiction_resolve", actor: "system",
-      sessionKey: "", reason: status, createdAt: new Date().toISOString(), metadata: { contradictionId: id, status },
-    });
+  public resolveContradiction(id: string, userId: string, status: "resolved" | "dismissed"): Promise<void> {
+    return contradiction.resolveContradiction(this.exec, id, userId, status);
   }
 
   // ── skill hints / activations ───────────────────────────────────────────
 
-  public async upsertSkillHints(skillName: string, hints: string, sourceFile = ""): Promise<void> {
-    await this.run(
-      `INSERT INTO skill_extraction_hints (skill_name, hints, source_file, registered_at)
-       VALUES ($1,$2,$3,$4)
-       ON CONFLICT (skill_name) DO UPDATE SET hints=EXCLUDED.hints, source_file=EXCLUDED.source_file, registered_at=EXCLUDED.registered_at`,
-      [skillName, hints, sourceFile, new Date().toISOString()],
-    );
+  public upsertSkillHints(skillName: string, hints: string, sourceFile = ""): Promise<void> {
+    return skillFocus.upsertSkillHints(this.exec, skillName, hints, sourceFile);
   }
 
-  public async listSkillHints(): Promise<SkillHintsRecord[]> {
-    const rows = await this.rows<any>("SELECT skill_name, hints, source_file, registered_at FROM skill_extraction_hints ORDER BY registered_at DESC");
-    return rows.map((r) => ({ skillName: r.skill_name, hints: r.hints, sourceFile: r.source_file, registeredAt: r.registered_at }));
+  public listSkillHints(): Promise<SkillHintsRecord[]> {
+    return skillFocus.listSkillHints(this.exec);
   }
 
-  public async getSkillHints(skillName: string): Promise<string | null> {
-    const row = await this.one<{ hints: string }>("SELECT hints FROM skill_extraction_hints WHERE skill_name = $1", [skillName]);
-    return row?.hints ?? null;
+  public getSkillHints(skillName: string): Promise<string | null> {
+    return skillFocus.getSkillHints(this.exec, skillName);
   }
 
-  public async getSkillActivations(userId: string): Promise<SkillActivationRecord[]> {
-    const rows = await this.rows<any>(
-      "SELECT skill_name, potential, last_decay_time FROM skill_activations WHERE user_id = $1 ORDER BY potential DESC, skill_name ASC",
-      [userId],
-    );
-    return rows.map((r) => ({ skillName: r.skill_name, potential: asNumber(r.potential), lastDecayTime: r.last_decay_time }));
+  public recordSkillOutcome(skillName: string, success: boolean): Promise<SkillHintsRecord | null> {
+    return skillFocus.recordSkillOutcome(this.exec, skillName, success);
   }
 
-  public async upsertSkillActivations(userId: string, activations: SkillActivationRecord[]): Promise<void> {
-    if (activations.length === 0) return;
-    await this.tx(async (client) => {
-      for (const record of activations) {
-        await client.query(
-          `INSERT INTO skill_activations (user_id, skill_name, potential, last_decay_time)
-           VALUES ($1,$2,$3,$4)
-           ON CONFLICT (user_id, skill_name) DO UPDATE SET potential=EXCLUDED.potential, last_decay_time=EXCLUDED.last_decay_time`,
-          [userId, record.skillName, record.potential, record.lastDecayTime],
-        );
-      }
-    });
+  public listSkillReliability(): Promise<SkillHintsRecord[]> {
+    return skillFocus.listSkillReliability(this.exec);
+  }
+
+  public getSkillActivations(userId: string): Promise<SkillActivationRecord[]> {
+    return skillFocus.getSkillActivations(this.exec, userId);
+  }
+
+  public upsertSkillActivations(userId: string, activations: SkillActivationRecord[]): Promise<void> {
+    return skillFocus.upsertSkillActivations(this.exec, userId, activations);
   }
 
   // ── contextual focus ───────────────────────────────────────────────────
 
-  public async upsertContextualFocus(record: ContextualFocusRecord): Promise<void> {
-    await this.run(
-      `INSERT INTO contextual_focus (id, user_id, scene_name, summary_md, heat_score, last_active_time, created_time, updated_time)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-       ON CONFLICT (user_id, scene_name) DO UPDATE SET
-         summary_md=EXCLUDED.summary_md, heat_score=EXCLUDED.heat_score,
-         last_active_time=EXCLUDED.last_active_time, updated_time=EXCLUDED.updated_time`,
-      [record.id, record.userId, record.sceneName, record.summaryMd, record.heatScore, record.lastActiveTime, record.createdTime, record.updatedTime],
-    );
+  public upsertContextualFocus(record: ContextualFocusRecord): Promise<void> {
+    return skillFocus.upsertContextualFocus(this.exec, record);
   }
 
-  private focusRow(r: any): ContextualFocusRecord {
-    return {
-      id: r.id, userId: r.user_id, sceneName: r.scene_name, summaryMd: r.summary_md,
-      heatScore: asNumber(r.heat_score), lastActiveTime: r.last_active_time,
-      createdTime: r.created_time, updatedTime: r.updated_time,
-    };
+  public getTopContextualFocus(userId: string, limit = 3, cursor?: { heatScore: number; id: string }): Promise<ContextualFocusRecord[]> {
+    return skillFocus.getTopContextualFocus(this.exec, userId, limit, cursor);
   }
 
-  public async getTopContextualFocus(userId: string, limit = 3, cursor?: { heatScore: number; id: string }): Promise<ContextualFocusRecord[]> {
-    const where = ["user_id = ?"];
-    const args: any[] = [userId];
-    if (cursor) {
-      where.push("(heat_score < ? OR (heat_score = ? AND id > ?))");
-      args.push(cursor.heatScore, cursor.heatScore, cursor.id);
-    }
-    args.push(limit);
-    const rows = await this.rows<any>(
-      pg(`SELECT id, user_id, scene_name, summary_md, heat_score, last_active_time, created_time, updated_time
-            FROM contextual_focus WHERE ${where.join(" AND ")}
-           ORDER BY heat_score DESC, id ASC LIMIT ?`),
-      args,
-    );
-    return rows.map((r) => this.focusRow(r));
+  public decayContextualFocusHeatScores(userId: string, decayFactor = 0.95): Promise<void> {
+    return skillFocus.decayContextualFocusHeatScores(this.exec, userId, decayFactor);
   }
 
-  public async decayContextualFocusHeatScores(userId: string, decayFactor = 0.95): Promise<void> {
-    await this.run("UPDATE contextual_focus SET heat_score = heat_score * $1 WHERE user_id = $2", [decayFactor, userId]);
+  public boostContextualFocusHeatScore(userId: string, sceneName: string, boost = 20): Promise<void> {
+    return skillFocus.boostContextualFocusHeatScore(this.exec, userId, sceneName, boost);
   }
 
-  public async boostContextualFocusHeatScore(userId: string, sceneName: string, boost = 20): Promise<void> {
-    await this.run(
-      "UPDATE contextual_focus SET heat_score = LEAST(100.0, heat_score + $1), last_active_time = $2 WHERE user_id = $3 AND scene_name = $4",
-      [boost, new Date().toISOString(), userId, sceneName],
-    );
+  public getCognitivesByFocus(userId: string, sceneName: string, limit = 30): Promise<any[]> {
+    return skillFocus.getCognitivesByFocus(this.exec, userId, sceneName, limit);
   }
 
-  public async getCognitivesByFocus(userId: string, sceneName: string, limit = 30): Promise<any[]> {
-    return this.rows(
-      "SELECT record_id, content, type, priority, skill_tag, created_time FROM cognitive_records WHERE user_id = $1 AND scene_name = $2 AND invalid_at IS NULL ORDER BY priority DESC LIMIT $3",
-      [userId, sceneName, limit],
-    );
+  public getContextualFocusCount(userId: string): Promise<number> {
+    return skillFocus.getContextualFocusCount(this.exec, userId);
   }
 
-  public async getContextualFocusCount(userId: string): Promise<number> {
-    const row = await this.one<{ count: string }>("SELECT COUNT(*) AS count FROM contextual_focus WHERE user_id = $1", [userId]);
-    return asNumber(row?.count);
+  public getColdContextualFocus(userId: string, limit: number): Promise<ContextualFocusRecord[]> {
+    return skillFocus.getColdContextualFocus(this.exec, userId, limit);
   }
 
-  public async getColdContextualFocus(userId: string, limit: number): Promise<ContextualFocusRecord[]> {
-    const rows = await this.rows<any>(
-      "SELECT id, user_id, scene_name, summary_md, heat_score, last_active_time, created_time, updated_time FROM contextual_focus WHERE user_id = $1 ORDER BY heat_score ASC LIMIT $2",
-      [userId, limit],
-    );
-    return rows.map((r) => this.focusRow(r));
+  public deleteContextualFocus(userId: string, sceneIds: string[]): Promise<void> {
+    return skillFocus.deleteContextualFocus(this.exec, userId, sceneIds);
   }
 
-  public async deleteContextualFocus(userId: string, sceneIds: string[]): Promise<void> {
-    if (sceneIds.length === 0) return;
-    await this.run("DELETE FROM contextual_focus WHERE user_id = $1 AND id = ANY($2::text[])", [userId, sceneIds]);
+  public getContextualFocusByName(userId: string, sceneName: string): Promise<ContextualFocusRecord | null> {
+    return skillFocus.getContextualFocusByName(this.exec, userId, sceneName);
   }
 
-  public async getContextualFocusByName(userId: string, sceneName: string): Promise<ContextualFocusRecord | null> {
-    const row = await this.one<any>(
-      "SELECT id, user_id, scene_name, summary_md, heat_score, last_active_time, created_time, updated_time FROM contextual_focus WHERE user_id = $1 AND scene_name = $2",
-      [userId, sceneName],
-    );
-    return row ? this.focusRow(row) : null;
+  public getDistinctSceneNames(userId: string): Promise<string[]> {
+    return skillFocus.getDistinctSceneNames(this.exec, userId);
   }
 
-  public async getDistinctSceneNames(userId: string): Promise<string[]> {
-    const rows = await this.rows<{ scene_name: string }>("SELECT DISTINCT scene_name FROM cognitive_records WHERE user_id = $1 AND scene_name != ''", [userId]);
-    return rows.map((r) => r.scene_name);
-  }
-
-  public async renameFocusInCognitiveRecords(userId: string, oldName: string, canonicalName: string): Promise<void> {
-    await this.tx(async (client) => {
-      await client.query("UPDATE cognitive_records SET scene_name = $1, updated_time = $2 WHERE user_id = $3 AND scene_name = $4", [canonicalName, new Date().toISOString(), userId, oldName]);
-      await client.query("DELETE FROM contextual_focus WHERE user_id = $1 AND scene_name = $2", [userId, oldName]);
-    });
+  public renameFocusInCognitiveRecords(userId: string, oldName: string, canonicalName: string): Promise<void> {
+    return skillFocus.renameFocusInCognitiveRecords(this.exec, userId, oldName, canonicalName);
   }
 
   // ── workspace / project tags ─────────────────────────────────────────────
 
-  public async getWorkspaceTagsByRecordIds(userId: string, recordIds: string[]): Promise<Map<string, string | null>> {
-    const result = new Map<string, string | null>();
-    if (recordIds.length === 0) return result;
-    for (const id of recordIds) result.set(id, null);
-    const rows = await this.rows<{ record_id: string; workspace_tag: string | null }>(
-      "SELECT record_id, workspace_tag FROM cognitive_records WHERE user_id = $1 AND record_id = ANY($2::text[])",
-      [userId, recordIds],
-    );
-    for (const row of rows) result.set(row.record_id, row.workspace_tag ?? null);
-    return result;
+  public getWorkspaceTagsByRecordIds(userId: string, recordIds: string[]): Promise<Map<string, string | null>> {
+    return skillFocus.getWorkspaceTagsByRecordIds(this.exec, userId, recordIds);
   }
 
-  public async getProjectTagsByRecordIds(userId: string, recordIds: string[]): Promise<Map<string, string | null>> {
-    const result = new Map<string, string | null>();
-    if (recordIds.length === 0) return result;
-    for (const id of recordIds) result.set(id, null);
-    const rows = await this.rows<{ record_id: string; project_tag: string | null }>(
-      "SELECT record_id, project_tag FROM cognitive_records WHERE user_id = $1 AND record_id = ANY($2::text[])",
-      [userId, recordIds],
-    );
-    for (const row of rows) result.set(row.record_id, row.project_tag ?? null);
-    return result;
+  public getProjectTagsByRecordIds(userId: string, recordIds: string[]): Promise<Map<string, string | null>> {
+    return skillFocus.getProjectTagsByRecordIds(this.exec, userId, recordIds);
   }
 
   // ── active sessions (federation) ─────────────────────────────────────────
 
-  public async registerActiveSession(record: ActiveSessionRecord): Promise<ActiveSessionRecord> {
-    await this.run(
-      `INSERT INTO active_sessions (session_key, user_id, client_kind, workspace_root, started_at, last_heartbeat_at, metadata_json, usage_json)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-       ON CONFLICT (session_key, user_id) DO UPDATE SET
-         client_kind = EXCLUDED.client_kind,
-         workspace_root = EXCLUDED.workspace_root,
-         last_heartbeat_at = EXCLUDED.last_heartbeat_at,
-         metadata_json = EXCLUDED.metadata_json,
-         usage_json = COALESCE(EXCLUDED.usage_json, active_sessions.usage_json)`,
-      [record.sessionKey, record.userId, record.clientKind, record.workspaceRoot, record.startedAt, record.lastHeartbeatAt, JSON.stringify(record.metadata ?? {}), record.usage ? JSON.stringify(record.usage) : null],
-    );
-    return (await this.getActiveSession(record.userId, record.sessionKey))!;
+  public registerActiveSession(record: ActiveSessionRecord): Promise<ActiveSessionRecord> {
+    return session.registerActiveSession(this.exec, record);
   }
 
-  public async heartbeatActiveSession(userId: string, sessionKey: string, at: string, usage?: ActiveSessionUsage | null): Promise<boolean> {
-    const changed = await this.run(
-      `UPDATE active_sessions SET last_heartbeat_at = $1, usage_json = COALESCE($2, usage_json) WHERE session_key = $3 AND user_id = $4`,
-      [at, usage ? JSON.stringify(usage) : null, sessionKey, userId],
-    );
-    return changed > 0;
+  public heartbeatActiveSession(userId: string, sessionKey: string, at: string, usage?: ActiveSessionUsage | null): Promise<boolean> {
+    return session.heartbeatActiveSession(this.exec, userId, sessionKey, at, usage);
   }
 
-  public async listActiveSessions(filters: ActiveSessionFilters): Promise<ActiveSessionRecord[]> {
-    const where: string[] = [];
-    const params: any[] = [];
-    if (filters.userId) { where.push("user_id = ?"); params.push(filters.userId); }
-    if (filters.clientKind) { where.push("client_kind = ?"); params.push(filters.clientKind); }
-    if (filters.workspaceRoot) { where.push("workspace_root = ?"); params.push(filters.workspaceRoot); }
-    if (!filters.includeStale) {
-      const threshold = filters.staleThresholdMs ?? 2 * 60 * 1000;
-      where.push("last_heartbeat_at >= ?");
-      params.push(new Date(Date.now() - threshold).toISOString());
-    }
-    const whereSql = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
-    const rows = await this.rows<any>(
-      pg(`SELECT session_key, user_id, client_kind, workspace_root, started_at, last_heartbeat_at, metadata_json, usage_json
-            FROM active_sessions ${whereSql}
-           ORDER BY last_heartbeat_at DESC, session_key ASC`),
-      params,
-    );
-    return rows.map((row) => activeSessionRowToRecord(row, filters.includeUsage ?? false));
+  public listActiveSessions(filters: ActiveSessionFilters): Promise<ActiveSessionRecord[]> {
+    return session.listActiveSessions(this.exec, filters);
   }
 
-  public async unregisterActiveSession(userId: string, sessionKey: string): Promise<boolean> {
-    const changed = await this.run("DELETE FROM active_sessions WHERE session_key = $1 AND user_id = $2", [sessionKey, userId]);
-    return changed > 0;
+  public unregisterActiveSession(userId: string, sessionKey: string): Promise<boolean> {
+    return session.unregisterActiveSession(this.exec, userId, sessionKey);
   }
 
-  public async sweepActiveSessions(olderThanMs: number): Promise<number> {
-    return this.run("DELETE FROM active_sessions WHERE last_heartbeat_at < $1", [new Date(Date.now() - olderThanMs).toISOString()]);
-  }
-
-  private async getActiveSession(userId: string, sessionKey: string): Promise<ActiveSessionRecord | null> {
-    const row = await this.one<any>(
-      `SELECT session_key, user_id, client_kind, workspace_root, started_at, last_heartbeat_at, metadata_json, usage_json
-         FROM active_sessions WHERE session_key = $1 AND user_id = $2`,
-      [sessionKey, userId],
-    );
-    return row ? activeSessionRowToRecord(row, true) : null;
+  public sweepActiveSessions(olderThanMs: number): Promise<number> {
+    return session.sweepActiveSessions(this.exec, olderThanMs);
   }
 
   // ── session inbox (federation) ───────────────────────────────────────────
 
-  public async sendSessionMessage(
+  public sendSessionMessage(
     record: Omit<SessionInboxRecord, "id" | "createdAt" | "deliveredAt">,
     options?: { idGenerator?: () => string; now?: string },
   ): Promise<SessionInboxRecord[]> {
-    const now = options?.now ?? new Date().toISOString();
-    const idFor = options?.idGenerator ?? (() => randomUUID());
-    const recipients = await this.resolveInboxRecipients(record.userId, record.toSessionKey);
-    if (recipients.length === 0) return [];
-    const rows: SessionInboxRecord[] = [];
-    await this.tx(async (client) => {
-      for (const recipientSessionKey of recipients) {
-        const id = idFor();
-        await client.query(
-          `INSERT INTO session_inbox (id, user_id, from_session_key, to_session_key, kind, payload_json, created_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-          [id, record.userId, record.fromSessionKey, recipientSessionKey, record.kind, JSON.stringify(record.payload ?? {}), now],
-        );
-        rows.push({
-          id, userId: record.userId, fromSessionKey: record.fromSessionKey, toSessionKey: recipientSessionKey,
-          kind: record.kind, payload: record.payload ?? {}, createdAt: now, deliveredAt: null,
-        });
-      }
-    });
-    return rows;
+    return session.sendSessionMessage(this.exec, record, options);
   }
 
-  private async resolveInboxRecipients(userId: string, address: string): Promise<string[]> {
-    if (!address) return [];
-    if (address === "*" || address.toLowerCase() === "broadcast") {
-      return this.activeSessionKeysForUser(userId);
-    }
-    const wildcardMatch = /^([^:]+):\*$/.exec(address);
-    if (wildcardMatch) {
-      return this.activeSessionKeysForUser(userId, wildcardMatch[1]);
-    }
-    return [address];
+  public readSessionInbox(filters: SessionInboxFilters): Promise<SessionInboxRecord[]> {
+    return session.readSessionInbox(this.exec, filters);
   }
 
-  private async activeSessionKeysForUser(userId: string, clientKindFilter?: string): Promise<string[]> {
-    const activeCutoff = new Date(Date.now() - 2 * 60 * 1000).toISOString();
-    const rows = clientKindFilter
-      ? await this.rows<{ session_key: string }>(
-          "SELECT session_key FROM active_sessions WHERE user_id = $1 AND client_kind = $2 AND last_heartbeat_at >= $3",
-          [userId, clientKindFilter, activeCutoff],
-        )
-      : await this.rows<{ session_key: string }>(
-          "SELECT session_key FROM active_sessions WHERE user_id = $1 AND last_heartbeat_at >= $2",
-          [userId, activeCutoff],
-        );
-    return rows.map((r) => r.session_key);
+  public ackSessionInbox(userId: string, toSessionKey: string, ids: string[], at: string): Promise<number> {
+    return session.ackSessionInbox(this.exec, userId, toSessionKey, ids, at);
   }
 
-  public async readSessionInbox(filters: SessionInboxFilters): Promise<SessionInboxRecord[]> {
-    const limit = filters.limit ?? 50;
-    const includeDelivered = filters.includeDelivered ?? false;
-    const where: string[] = ["user_id = ?", "to_session_key = ?"];
-    const params: any[] = [filters.userId, filters.toSessionKey];
-    if (!includeDelivered) where.push("delivered_at IS NULL");
-    params.push(limit);
-    const rows = await this.rows<any>(
-      pg(`SELECT id, user_id, from_session_key, to_session_key, kind, payload_json, created_at, delivered_at
-            FROM session_inbox WHERE ${where.join(" AND ")}
-           ORDER BY created_at ASC, id ASC LIMIT ?`),
-      params,
-    );
-    return rows.map(inboxRowToRecord);
-  }
-
-  public async ackSessionInbox(userId: string, toSessionKey: string, ids: string[], at: string): Promise<number> {
-    if (ids.length === 0) return 0;
-    const capped = ids.slice(0, 500);
-    return this.run(
-      `UPDATE session_inbox SET delivered_at = $1
-        WHERE user_id = $2 AND to_session_key = $3 AND delivered_at IS NULL AND id = ANY($4::text[])`,
-      [at, userId, toSessionKey, capped],
-    );
-  }
-
-  public async sweepSessionInbox(olderThanMs: number): Promise<number> {
-    return this.run(
-      "DELETE FROM session_inbox WHERE delivered_at IS NOT NULL AND delivered_at < $1",
-      [new Date(Date.now() - olderThanMs).toISOString()],
-    );
+  public sweepSessionInbox(olderThanMs: number): Promise<number> {
+    return session.sweepSessionInbox(this.exec, olderThanMs);
   }
 
   // ── pending delegations (federation) ─────────────────────────────────────
 
-  private rowToPendingDelegation(row: any): PendingDelegationRecord {
-    return {
-      id: row.id,
-      userId: row.user_id,
-      fromSessionKey: row.from_session_key,
-      toAgentKind: row.to_agent_kind,
-      toSessionKey: row.to_session_key ?? null,
-      packet: (typeof row.packet_json === "string" ? JSON.parse(row.packet_json || "{}") : (row.packet_json ?? {})) as DelegationPacket,
-      status: row.status as PendingDelegationStatus,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      claimedAt: row.claimed_at ?? null,
-    };
+  public enqueuePendingDelegation(input: PendingDelegationEnqueueInput, options?: { idGenerator?: () => string; now?: string }): Promise<PendingDelegationRecord> {
+    return session.enqueuePendingDelegation(this.exec, input, options);
   }
 
-  public async enqueuePendingDelegation(input: PendingDelegationEnqueueInput, options?: { idGenerator?: () => string; now?: string }): Promise<PendingDelegationRecord> {
-    const now = options?.now ?? new Date().toISOString();
-    const id = (options?.idGenerator ?? (() => randomUUID()))();
-    await this.run(
-      `INSERT INTO pending_delegations (id, user_id, from_session_key, to_agent_kind, to_session_key, packet_json, status, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,NULL,$5,'pending',$6,$7)`,
-      [id, input.userId, input.fromSessionKey, input.toAgentKind, JSON.stringify(input.packet ?? {}), now, now],
-    );
-    return {
-      id, userId: input.userId, fromSessionKey: input.fromSessionKey, toAgentKind: input.toAgentKind,
-      toSessionKey: null, packet: input.packet, status: "pending", createdAt: now, updatedAt: now, claimedAt: null,
-    };
+  public listPendingDelegations(filters: PendingDelegationFilters): Promise<PendingDelegationRecord[]> {
+    return session.listPendingDelegations(this.exec, filters);
   }
 
-  public async listPendingDelegations(filters: PendingDelegationFilters): Promise<PendingDelegationRecord[]> {
-    const clauses = ["user_id = ?"];
-    const params: any[] = [filters.userId];
-    if (filters.toAgentKind) { clauses.push("to_agent_kind = ?"); params.push(filters.toAgentKind); }
-    if (filters.status) { clauses.push("status = ?"); params.push(filters.status); }
-    const limit = Math.min(Math.max(filters.limit ?? 50, 1), 200);
-    params.push(limit);
-    const rows = await this.rows<any>(
-      pg(`SELECT * FROM pending_delegations WHERE ${clauses.join(" AND ")} ORDER BY created_at ASC LIMIT ?`),
-      params,
-    );
-    return rows.map((r) => this.rowToPendingDelegation(r));
-  }
-
-  public async claimPendingDelegation(userId: string, toAgentKind: string, toSessionKey: string, at: string): Promise<PendingDelegationRecord | null> {
-    // Atomic claim: SELECT ... FOR UPDATE SKIP LOCKED so concurrent claimers get
-    // distinct rows (the pg analogue of the SQLite single-writer SELECT→UPDATE).
-    return this.tx(async (client) => {
-      const sel = await client.query<any>(
-        `SELECT * FROM pending_delegations
-          WHERE user_id = $1 AND to_agent_kind = $2 AND status = 'pending'
-          ORDER BY created_at ASC LIMIT 1
-          FOR UPDATE SKIP LOCKED`,
-        [userId, toAgentKind],
-      );
-      const row = sel.rows[0];
-      if (!row) return null;
-      await client.query(
-        `UPDATE pending_delegations SET status = 'claimed', to_session_key = $1, claimed_at = $2, updated_at = $3 WHERE id = $4`,
-        [toSessionKey, at, at, row.id],
-      );
-      return this.rowToPendingDelegation({ ...row, status: "claimed", to_session_key: toSessionKey, claimed_at: at, updated_at: at });
-    });
+  public claimPendingDelegation(userId: string, toAgentKind: string, toSessionKey: string, at: string): Promise<PendingDelegationRecord | null> {
+    return session.claimPendingDelegation(this.exec, userId, toAgentKind, toSessionKey, at);
   }
 
   // ── memory jobs queue (BRAIN-P1) ─────────────────────────────────────────
 
-  private static readonly JOB_COLUMNS =
-    "id, kind, status, priority, attempts, max_attempts, run_after, locked_at, parent_job_id, input_json, output_json, error, created_at, updated_at";
-
-  public async enqueueMemoryJob(input: MemoryJobEnqueueInput, options?: { idGenerator?: () => string; now?: string }): Promise<MemoryJobRecord> {
-    const now = options?.now ?? new Date().toISOString();
-    const id = (options?.idGenerator ?? (() => randomUUID()))();
-    await this.run(
-      `INSERT INTO memory_jobs (id, kind, status, priority, attempts, max_attempts, run_after, locked_at, parent_job_id, input_json, output_json, error, created_at, updated_at)
-       VALUES ($1,$2,'pending',$3,0,$4,$5,NULL,$6,$7,NULL,NULL,$8,$9)`,
-      [id, input.kind, input.priority ?? 50, input.maxAttempts ?? 3, input.runAfter ?? now, input.parentJobId ?? null, JSON.stringify(input.input ?? {}), now, now],
-    );
-    return (await this.getMemoryJob(id))!;
+  public enqueueMemoryJob(input: MemoryJobEnqueueInput, options?: { idGenerator?: () => string; now?: string }): Promise<MemoryJobRecord> {
+    return job.enqueueMemoryJob(this.exec, input, options);
   }
 
-  public async getMemoryJob(id: string): Promise<MemoryJobRecord | null> {
-    const row = await this.one(`SELECT ${PostgresMemoryStore.JOB_COLUMNS} FROM memory_jobs WHERE id = $1`, [id]);
-    return row ? jobRowToRecord(row as any) : null;
+  public getMemoryJob(id: string): Promise<MemoryJobRecord | null> {
+    return job.getMemoryJob(this.exec, id);
   }
 
-  public async listMemoryJobs(filters?: MemoryJobListFilters): Promise<MemoryJobRecord[]> {
-    const where: string[] = [];
-    const params: any[] = [];
-    if (filters?.kind) { where.push("kind = ?"); params.push(filters.kind); }
-    if (filters?.status) {
-      const statuses = Array.isArray(filters.status) ? filters.status : [filters.status];
-      if (statuses.length > 0) {
-        where.push(`status IN (${statuses.map(() => "?").join(",")})`);
-        params.push(...statuses);
-      }
-    }
-    params.push(filters?.limit ?? 100);
-    const rows = await this.rows(
-      pg(`SELECT ${PostgresMemoryStore.JOB_COLUMNS} FROM memory_jobs
-            ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
-           ORDER BY priority DESC, created_at ASC, id ASC LIMIT ?`),
-      params,
-    );
-    return rows.map((r) => jobRowToRecord(r as any));
+  public listMemoryJobs(filters?: MemoryJobListFilters): Promise<MemoryJobRecord[]> {
+    return job.listMemoryJobs(this.exec, filters);
   }
 
-  public async claimNextMemoryJob(options?: { now?: string }): Promise<MemoryJobRecord | null> {
-    const now = options?.now ?? new Date().toISOString();
-    return this.tx(async (client) => {
-      const sel = await client.query<{ id: string }>(
-        `SELECT id FROM memory_jobs
-          WHERE status = 'pending' AND run_after <= $1
-          ORDER BY priority DESC, run_after ASC, id ASC
-          LIMIT 1
-          FOR UPDATE SKIP LOCKED`,
-        [now],
-      );
-      const candidate = sel.rows[0];
-      if (!candidate) return null;
-      await client.query(
-        "UPDATE memory_jobs SET status = 'running', locked_at = $1, updated_at = $2 WHERE id = $3 AND status = 'pending'",
-        [now, now, candidate.id],
-      );
-      const row = (await client.query(`SELECT ${PostgresMemoryStore.JOB_COLUMNS} FROM memory_jobs WHERE id = $1`, [candidate.id])).rows[0];
-      return row ? jobRowToRecord(row as any) : null;
-    });
+  public appendJobProgress(id: string, event: import("@kinqs/brainrouter-types").MemoryJobProgressEvent): Promise<void> {
+    return job.appendJobProgress(this.exec, id, event);
+  }
+  public heartbeatMemoryJob(id: string): Promise<boolean> {
+    return job.heartbeatMemoryJob(this.exec, id);
   }
 
-  public async startMemoryJob(id: string, options?: { now?: string }): Promise<MemoryJobRecord | null> {
-    const now = options?.now ?? new Date().toISOString();
-    const changed = await this.run(
-      "UPDATE memory_jobs SET status = 'running', locked_at = $1, updated_at = $2 WHERE id = $3 AND status = 'pending'",
-      [now, now, id],
-    );
-    if (changed === 0) return null;
-    return this.getMemoryJob(id);
+  /** ADR-017 D5 — recent PR-review jobs for an org's Reviews dashboard (newest-first). */
+  public listReviewJobsForOrg(orgId: string, limit?: number): Promise<MemoryJobRecord[]> {
+    return job.listReviewJobsForOrg(this.exec, orgId, limit);
+  }
+  public listReviewJobSummariesForOrg(orgId: string, limit?: number): Promise<MemoryJobRecord[]> {
+    return job.listReviewJobSummariesForOrg(this.exec, orgId, limit);
+  }
+  public listReviewAnalyticsForOrg(orgId: string, since: string, limit?: number): Promise<MemoryJobRecord[]> {
+    return job.listReviewAnalyticsForOrg(this.exec, orgId, since, limit);
+  }
+  public getReviewLifecycleSummaryForOrg(orgId: string, since: string): Promise<job.ReviewLifecycleSummary> {
+    return job.getReviewLifecycleSummaryForOrg(this.exec, orgId, since);
+  }
+  public listReviewJobsForPr(orgId: string, repo: string, prNumber: number, limit?: number): Promise<MemoryJobRecord[]> {
+    return job.listReviewJobsForPr(this.exec, orgId, repo, prNumber, limit);
+  }
+  public listReviewFindingsForOrg(orgId: string, query?: job.ReviewFindingQuery): Promise<job.ReviewFindingRow[]> {
+    return job.listReviewFindingsForOrg(this.exec, orgId, query);
+  }
+  public listPentestJobsForOrg(orgId: string, limit?: number): Promise<MemoryJobRecord[]> { return job.listPentestJobsForOrg(this.exec, orgId, limit); }
+
+  public createPentestTarget(orgId: string, createdBy: string, input: PentestTargetInput): Promise<PentestTargetRecord> { return pentestTargets.createPentestTarget(this.exec, orgId, createdBy, input); }
+  public getPentestTarget(id: string): Promise<PentestTargetRecord | null> { return pentestTargets.getPentestTarget(this.exec, id); }
+  public listPentestTargets(orgId: string): Promise<PentestTargetRecord[]> { return pentestTargets.listPentestTargets(this.exec, orgId); }
+  public deletePentestTarget(orgId: string, id: string): Promise<boolean> { return pentestTargets.deletePentestTarget(this.exec, orgId, id); }
+
+  public claimNextMemoryJob(options?: { now?: string; perTenantLimit?: number }): Promise<MemoryJobRecord | null> {
+    return job.claimNextMemoryJob(this.exec, options);
   }
 
-  public async completeMemoryJob(id: string, output: unknown, options?: { now?: string }): Promise<MemoryJobRecord | null> {
-    const now = options?.now ?? new Date().toISOString();
-    const changed = await this.run(
-      "UPDATE memory_jobs SET status = 'done', output_json = $1, error = NULL, locked_at = NULL, updated_at = $2 WHERE id = $3 AND status = 'running'",
-      [JSON.stringify(output ?? null), now, id],
-    );
-    if (changed === 0) return null;
-    return this.getMemoryJob(id);
+  /** Supersede-cancel still-pending review jobs for a PR when a newer push arrives. */
+  public cancelSupersededReviewJobs(input: { orgId: string; repo: string; prNumber: number }, options?: { now?: string }): Promise<number> {
+    return job.cancelSupersededReviewJobs(this.exec, input, options);
   }
 
-  public async failMemoryJob(id: string, error: string, options?: { now?: string; backoffMs?: number }): Promise<MemoryJobRecord | null> {
-    const now = options?.now ?? new Date().toISOString();
-    const job = await this.getMemoryJob(id);
-    if (!job || job.status !== "running") return null;
-    const attempts = job.attempts + 1;
-    if (attempts < job.maxAttempts) {
-      const runAfter = new Date(Date.parse(now) + (options?.backoffMs ?? 0)).toISOString();
-      await this.run(
-        "UPDATE memory_jobs SET status = 'pending', attempts = $1, error = $2, run_after = $3, locked_at = NULL, updated_at = $4 WHERE id = $5",
-        [attempts, error, runAfter, now, id],
-      );
-    } else {
-      await this.run(
-        "UPDATE memory_jobs SET status = 'failed', attempts = $1, error = $2, locked_at = NULL, updated_at = $3 WHERE id = $4",
-        [attempts, error, now, id],
-      );
-    }
-    return this.getMemoryJob(id);
+  public startMemoryJob(id: string, options?: { now?: string }): Promise<MemoryJobRecord | null> {
+    return job.startMemoryJob(this.exec, id, options);
   }
 
-  public async retryMemoryJob(id: string, options?: { now?: string }): Promise<MemoryJobRecord | null> {
-    const now = options?.now ?? new Date().toISOString();
-    await this.run(
-      "UPDATE memory_jobs SET status = 'pending', attempts = 0, run_after = $1, locked_at = NULL, error = NULL, updated_at = $2 WHERE id = $3 AND status IN ('failed', 'cancelled')",
-      [now, now, id],
-    );
-    return this.getMemoryJob(id);
+  public completeMemoryJob(id: string, output: unknown, options?: { now?: string }): Promise<MemoryJobRecord | null> {
+    return job.completeMemoryJob(this.exec, id, output, options);
   }
 
-  public async cancelMemoryJob(id: string, options?: { now?: string; reason?: string }): Promise<MemoryJobRecord | null> {
-    const now = options?.now ?? new Date().toISOString();
-    await this.run(
-      "UPDATE memory_jobs SET status = 'cancelled', error = COALESCE($1, error), locked_at = NULL, updated_at = $2 WHERE id = $3 AND status IN ('pending', 'running')",
-      [options?.reason ?? null, now, id],
-    );
-    return this.getMemoryJob(id);
+  public failMemoryJob(id: string, error: string, options?: { now?: string; backoffMs?: number }): Promise<MemoryJobRecord | null> {
+    return job.failMemoryJob(this.exec, id, error, options);
   }
 
-  public async sweepStuckMemoryJobs(stuckMs: number, options?: { now?: string }): Promise<number> {
-    const now = options?.now ?? new Date().toISOString();
-    const cutoff = new Date(Date.parse(now) - stuckMs).toISOString();
-    return this.run(
-      "UPDATE memory_jobs SET status = 'cancelled', error = 'swept: lock expired', locked_at = NULL, updated_at = $1 WHERE status = 'running' AND locked_at IS NOT NULL AND locked_at < $2",
-      [now, cutoff],
-    );
+  public retryMemoryJob(id: string, options?: { now?: string }): Promise<MemoryJobRecord | null> {
+    return job.retryMemoryJob(this.exec, id, options);
   }
 
-  public async getMemoryJobKindAggregates(options?: { now?: string }): Promise<MemoryJobKindAggregate[]> {
-    const now = options?.now ?? new Date().toISOString();
-    const since24h = new Date(Date.parse(now) - 24 * 60 * 60 * 1000).toISOString();
-    const kinds = (await this.rows<{ kind: string }>("SELECT DISTINCT kind FROM memory_jobs ORDER BY kind ASC")).map((r) => r.kind);
-    const out: MemoryJobKindAggregate[] = [];
-    for (const kind of kinds) {
-      const latest = await this.one<{ status: string; updated_at: string }>(
-        "SELECT status, updated_at FROM memory_jobs WHERE kind = $1 ORDER BY updated_at DESC, id DESC LIMIT 1", [kind],
-      );
-      const lastCompleted = await this.one<{ updated_at: string }>(
-        "SELECT updated_at FROM memory_jobs WHERE kind = $1 AND status = 'done' ORDER BY updated_at DESC LIMIT 1", [kind],
-      );
-      const pending = await this.one<{ n: string }>("SELECT COUNT(*) AS n FROM memory_jobs WHERE kind = $1 AND status = 'pending'", [kind]);
-      const terminal = await this.one<{ done: string | null; failed: string | null }>(
-        `SELECT SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS done,
-                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed
-           FROM memory_jobs WHERE kind = $1 AND updated_at >= $2 AND status IN ('done','failed')`,
-        [kind, since24h],
-      );
-      const done = asNumber(terminal?.done);
-      const failed = asNumber(terminal?.failed);
-      const total = done + failed;
-      out.push({
-        kind,
-        lastStatus: (latest?.status ?? "pending") as MemoryJobStatus,
-        lastCompletedAt: lastCompleted?.updated_at ?? null,
-        pendingJobs: asNumber(pending?.n),
-        successRate24h: total > 0 ? done / total : null,
-      });
-    }
-    return out;
+  public cancelMemoryJob(id: string, options?: { now?: string; reason?: string }): Promise<MemoryJobRecord | null> {
+    return job.cancelMemoryJob(this.exec, id, options);
+  }
+
+  public sweepStuckMemoryJobs(stuckMs: number, options?: { now?: string }): Promise<number> {
+    return job.sweepStuckMemoryJobs(this.exec, stuckMs, options);
+  }
+
+  public expireAuthorizedAssessmentEvidence(
+    options?: { now?: string },
+  ): Promise<AssessmentEvidenceCleanupResult> {
+    return assessmentEvidence.expireAuthorizedAssessmentEvidence(this.exec, options);
+  }
+
+  public getMemoryJobKindAggregates(options?: { now?: string }): Promise<MemoryJobKindAggregate[]> {
+    return job.getMemoryJobKindAggregates(this.exec, options);
+  }
+
+  // ── repository assurance receipts ───────────────────────────────────────
+
+  public createRepositoryAssuranceRun(
+    input: assurance.CreateRepositoryAssuranceRunInput,
+  ): Promise<import("@kinqs/brainrouter-types/review").RepositoryAssuranceRun> {
+    return assurance.createRepositoryAssuranceRun(this.exec, input);
+  }
+
+  public getRepositoryAssuranceRun(
+    orgId: string,
+    runId: string,
+  ): Promise<import("@kinqs/brainrouter-types/review").RepositoryAssuranceRun | null> {
+    return assurance.getRepositoryAssuranceRun(this.exec, orgId, runId);
+  }
+
+  public getRepositoryAssuranceRunForJob(
+    orgId: string,
+    jobId: string,
+  ): Promise<import("@kinqs/brainrouter-types/review").RepositoryAssuranceRun | null> {
+    return assurance.getRepositoryAssuranceRunForJob(this.exec, orgId, jobId);
+  }
+
+  public getRepositoryAssuranceFinding(
+    orgId: string,
+    runId: string,
+    findingId: string,
+  ): Promise<import("@kinqs/brainrouter-types/review").AssuranceFinding | null> {
+    return assurance.getRepositoryAssuranceFinding(this.exec, orgId, runId, findingId);
+  }
+
+  public listRepositoryAssuranceFindings(
+    orgId: string,
+    runId: string,
+  ): Promise<import("@kinqs/brainrouter-types/review").AssuranceFinding[]> {
+    return assurance.listRepositoryAssuranceFindings(this.exec, orgId, runId);
+  }
+
+  public saveRepositoryAssuranceFinding(
+    input: assurance.SaveRepositoryAssuranceFindingInput,
+  ): Promise<import("@kinqs/brainrouter-types/review").AssuranceFinding> {
+    return assurance.saveRepositoryAssuranceFinding(this.exec, input);
+  }
+
+  public listReplaceableRepositoryAssuranceRunIds(
+    input: assurance.ReplaceableAssuranceRunsInput,
+  ): Promise<string[]> {
+    return assurance.listReplaceableRepositoryAssuranceRunIds(this.exec, input);
+  }
+
+  public transitionRepositoryAssuranceRun(
+    input: assurance.AssuranceRunTransition,
+  ): Promise<import("@kinqs/brainrouter-types/review").RepositoryAssuranceRun> {
+    return assurance.transitionRepositoryAssuranceRun(this.exec, input);
+  }
+
+  public updateRepositorySourceSnapshot(
+    orgId: string,
+    runId: string,
+    source: import("@kinqs/brainrouter-types/review").SourceSnapshot,
+  ): Promise<import("@kinqs/brainrouter-types/review").SourceSnapshot> {
+    return assurance.updateRepositorySourceSnapshot(this.exec, orgId, runId, source);
+  }
+
+  public updateRepositoryAssuranceCoverage(
+    orgId: string,
+    runId: string,
+    coverage: import("@kinqs/brainrouter-types/review").AssuranceCoverage,
+  ): Promise<import("@kinqs/brainrouter-types/review").AssuranceCoverage> {
+    return assurance.updateRepositoryAssuranceCoverage(this.exec, orgId, runId, coverage);
+  }
+
+  public recordRepositoryAssuranceStage(
+    orgId: string,
+    runId: string,
+    stage: import("@kinqs/brainrouter-types/review").AssuranceStageReceipt,
+  ): Promise<import("@kinqs/brainrouter-types/review").AssuranceStageReceipt> {
+    return assurance.recordRepositoryAssuranceStage(this.exec, orgId, runId, stage);
   }
 
   // ── compression cache (CCR) ──────────────────────────────────────────────
 
-  private ccrToMetadata(row: any): CompressionEntryMetadata {
-    return {
-      hash: row.hash,
-      userId: row.user_id,
-      compressedContent: row.compressed_content,
-      originalTokens: row.original_tokens == null ? null : asNumber(row.original_tokens),
-      compressedTokens: row.compressed_tokens == null ? null : asNumber(row.compressed_tokens),
-      originalItemCount: row.original_item_count == null ? null : asNumber(row.original_item_count),
-      compressedItemCount: row.compressed_item_count == null ? null : asNumber(row.compressed_item_count),
-      toolName: row.tool_name,
-      queryContext: row.query_context,
-      compressionStrategy: row.compression_strategy,
-      createdAt: asNumber(row.created_at),
-      ttlSeconds: asNumber(row.ttl),
-      retrievalCount: asNumber(row.retrieval_count),
-      lastAccessed: row.last_accessed == null ? null : asNumber(row.last_accessed),
-    };
+  public storeCompressionEntry(input: CompressionEntryInput): Promise<CompressionEntryMetadata> {
+    return compression.storeCompressionEntry(this.exec, this.ccrCtx, input);
   }
 
-  private async ccrPurgeExpired(now: number): Promise<void> {
-    if (now - this.ccrLastPurgeAt < PURGE_INTERVAL_SECONDS) return;
-    await this.run("DELETE FROM ccr_entries WHERE created_at + ttl <= $1", [now]);
-    this.ccrLastPurgeAt = now;
+  public retrieveCompressionEntry(userId: string, hash: string, query?: string): Promise<CompressionRetrieval | null> {
+    return compression.retrieveCompressionEntry(this.exec, this.ccrCtx, userId, hash, query);
   }
 
-  private async ccrGetRow(userId: string, hash: string): Promise<any | null> {
-    return this.one(
-      `SELECT hash, user_id, original_content, compressed_content, original_tokens, compressed_tokens,
-              original_item_count, compressed_item_count, tool_name, query_context, compression_strategy,
-              created_at, ttl, retrieval_count, last_accessed
-         FROM ccr_entries WHERE hash = $1 AND user_id = $2`,
-      [hash, userId],
-    );
+  public getCompressionEntryMetadata(userId: string, hash: string): Promise<CompressionEntryMetadata | null> {
+    return compression.getCompressionEntryMetadata(this.exec, userId, hash);
   }
 
-  public async storeCompressionEntry(input: CompressionEntryInput): Promise<CompressionEntryMetadata> {
-    const now = this.ccrClock();
-    await this.ccrPurgeExpired(now);
-    const computedHash = hashContent(input.originalContent);
-    const hash = input.hash ?? computedHash;
-    assertHash(hash);
-    if (hash !== computedHash) throw new Error("Compression hash does not match the original content.");
-
-    const existing = await this.ccrGetRow(input.userId, hash);
-    if (existing) return this.ccrToMetadata(existing);
-
-    await this.run(
-      `INSERT INTO ccr_entries (
-         hash, user_id, original_content, compressed_content, original_tokens, compressed_tokens,
-         original_item_count, compressed_item_count, tool_name, query_context, compression_strategy,
-         created_at, ttl, retrieval_count, last_accessed
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,0,NULL)`,
-      [
-        hash, input.userId, input.originalContent, input.compressedContent ?? null,
-        input.originalTokens ?? null, input.compressedTokens ?? null,
-        input.originalItemCount ?? null, input.compressedItemCount ?? null,
-        input.toolName ?? null, input.queryContext ?? null, input.compressionStrategy ?? null,
-        now, this.ccrTtlSeconds,
-      ],
-    );
-    await this.ccrEvictOverflow();
-    return (await this.getCompressionEntryMetadata(input.userId, hash))!;
-  }
-
-  private async ccrEvictOverflow(): Promise<void> {
-    const row = await this.one<{ count: string }>("SELECT COUNT(*) AS count FROM ccr_entries");
-    const overflow = asNumber(row?.count) - this.ccrMaxEntries;
-    if (overflow <= 0) return;
-    // ctid identifies exactly one physical row (pg analogue of SQLite rowid),
-    // so eviction can't drop another tenant's still-fresh row that shares a hash.
-    await this.run(
-      `DELETE FROM ccr_entries
-        WHERE ctid IN (SELECT ctid FROM ccr_entries ORDER BY created_at ASC, ctid ASC LIMIT $1)`,
-      [overflow],
-    );
-  }
-
-  public async retrieveCompressionEntry(userId: string, hash: string, query?: string): Promise<CompressionRetrieval | null> {
-    if (!HASH_PATTERN.test(hash)) return null;
-    const now = this.ccrClock();
-    const row = await this.ccrGetRow(userId, hash);
-    if (!row) return null;
-    if (asNumber(row.created_at) + asNumber(row.ttl) <= now) {
-      await this.run("DELETE FROM ccr_entries WHERE hash = $1 AND user_id = $2", [hash, userId]);
-      return null;
-    }
-    const retrievalCount = asNumber(row.retrieval_count) + 1;
-    await this.run("UPDATE ccr_entries SET retrieval_count = $1, last_accessed = $2 WHERE hash = $3 AND user_id = $4", [retrievalCount, now, hash, userId]);
-    const entry = this.ccrToMetadata({ ...row, retrieval_count: retrievalCount, last_accessed: now });
-    const results = query ? this.ccrSelectQueryResults(row.original_content, query) : null;
-    if (results) return { kind: "subset", entry, results };
-    return { kind: "full", entry, originalContent: row.original_content };
-  }
-
-  public async getCompressionEntryMetadata(userId: string, hash: string): Promise<CompressionEntryMetadata | null> {
-    if (!HASH_PATTERN.test(hash)) return null;
-    const row = await this.ccrGetRow(userId, hash);
-    return row ? this.ccrToMetadata(row) : null;
-  }
-
-  public async getCompressionStats(userId: string): Promise<CompressionStats> {
-    await this.ccrPurgeExpired(this.ccrClock());
-    const aggregate = await this.one<any>(
-      `SELECT COUNT(*) AS compressions,
-              COALESCE(SUM(retrieval_count), 0) AS retrievals,
-              COALESCE(SUM(original_tokens), 0) AS original_tokens,
-              COALESCE(SUM(compressed_tokens), 0) AS compressed_tokens
-         FROM ccr_entries WHERE user_id = $1`,
-      [userId],
-    );
-    const recentEvents = await this.rows<any>(
-      `SELECT hash, created_at, original_tokens, compressed_tokens, retrieval_count, compression_strategy
-         FROM ccr_entries WHERE user_id = $1 ORDER BY created_at DESC, hash DESC LIMIT 10`,
-      [userId],
-    );
-    const originalTokens = asNumber(aggregate?.original_tokens);
-    const compressedTokens = asNumber(aggregate?.compressed_tokens);
-    const totalTokensSaved = Math.max(0, originalTokens - compressedTokens);
-    return {
-      compressions: asNumber(aggregate?.compressions),
-      retrievals: asNumber(aggregate?.retrievals),
-      totalTokensSaved,
-      savingsPercent: originalTokens === 0 ? 0 : Math.round((totalTokensSaved / originalTokens) * 100),
-      estimatedCostSavedUsd: Number(((totalTokensSaved / 1_000_000) * ESTIMATED_USD_PER_MILLION_TOKENS).toFixed(6)),
-      recentEvents: recentEvents.map((event) => ({
-        hash: event.hash,
-        createdAt: asNumber(event.created_at),
-        originalTokens: event.original_tokens == null ? null : asNumber(event.original_tokens),
-        compressedTokens: event.compressed_tokens == null ? null : asNumber(event.compressed_tokens),
-        retrievalCount: asNumber(event.retrieval_count),
-        compressionStrategy: event.compression_strategy,
-      })),
-      store: { entries: asNumber(aggregate?.compressions), maxEntries: this.ccrMaxEntries },
-    };
-  }
-
-  private ccrSelectQueryResults(originalContent: string, query: string): unknown[] | null {
-    const terms = ccrQueryTerms(query);
-    if (terms.size === 0) return null;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(originalContent);
-    } catch {
-      return null;
-    }
-    if (!Array.isArray(parsed)) return null;
-    return parsed
-      .map((item, index) => ({ item, index, score: ccrItemScore(item, terms) }))
-      .filter(({ score }) => score > 0)
-      .sort((left, right) => right.score - left.score || left.index - right.index)
-      .slice(0, QUERY_RESULT_LIMIT)
-      .map(({ item }) => item);
+  public getCompressionStats(userId: string): Promise<CompressionStats> {
+    return compression.getCompressionStats(this.exec, this.ccrCtx, userId);
   }
 
   // ── core identity ─────────────────────────────────────────────────────
 
-  public async upsertCoreIdentity(record: CoreIdentityRecord): Promise<void> {
-    await this.run(
-      `INSERT INTO core_identity (user_id, persona_md, cognitive_count_at_generation, created_time, updated_time)
-       VALUES ($1,$2,$3,$4,$5)
-       ON CONFLICT (user_id) DO UPDATE SET
-         persona_md=EXCLUDED.persona_md,
-         cognitive_count_at_generation=EXCLUDED.cognitive_count_at_generation,
-         updated_time=EXCLUDED.updated_time`,
-      [record.userId, record.personaMd, record.cognitiveCountAtGeneration, record.createdTime, record.updatedTime],
-    );
+  public upsertCoreIdentity(record: CoreIdentityRecord): Promise<void> {
+    return atlasIdentity.upsertCoreIdentity(this.exec, record);
   }
 
-  public async getCoreIdentity(userId: string): Promise<CoreIdentityRecord | null> {
-    const row = await this.one<any>("SELECT user_id, persona_md, cognitive_count_at_generation, created_time, updated_time FROM core_identity WHERE user_id = $1", [userId]);
-    if (!row) return null;
-    return {
-      userId: row.user_id, personaMd: row.persona_md,
-      cognitiveCountAtGeneration: asNumber(row.cognitive_count_at_generation),
-      createdTime: row.created_time, updatedTime: row.updated_time,
-    };
+  public getCoreIdentity(userId: string): Promise<CoreIdentityRecord | null> {
+    return atlasIdentity.getCoreIdentity(this.exec, userId);
   }
 
   // ── Atlas graph persistence (REMOTE-BRAIN Phase 3) ──────────────────────
 
-  public async putAtlasGraph(userId: string, workspaceTag: string, graph: AtlasGraph): Promise<void> {
-    const nodeCount = Array.isArray(graph?.nodes) ? graph.nodes.length : 0;
-    await this.run(
-      `INSERT INTO atlas_graphs (user_id, workspace_tag, graph_json, node_count, updated_at)
-       VALUES ($1,$2,$3,$4,$5)
-       ON CONFLICT (user_id, workspace_tag) DO UPDATE SET
-         graph_json=EXCLUDED.graph_json,
-         node_count=EXCLUDED.node_count,
-         updated_at=EXCLUDED.updated_at`,
-      [userId, workspaceTag, JSON.stringify(graph), nodeCount, new Date().toISOString()],
-    );
+  public putAtlasGraph(userId: string, workspaceTag: string, graph: AtlasGraph): Promise<void> {
+    return atlasIdentity.putAtlasGraph(this.exec, userId, workspaceTag, graph);
   }
 
-  public async getAtlasGraph(userId: string, workspaceTag: string): Promise<AtlasGraph | null> {
-    const row = await this.one<{ graph_json: string }>(
-      "SELECT graph_json FROM atlas_graphs WHERE user_id = $1 AND workspace_tag = $2",
-      [userId, workspaceTag],
-    );
-    if (!row) return null;
-    try {
-      return JSON.parse(row.graph_json) as AtlasGraph;
-    } catch {
-      return null; // corrupt row — treat as absent rather than throwing
-    }
+  public getAtlasGraph(userId: string, workspaceTag: string): Promise<AtlasGraph | null> {
+    return atlasIdentity.getAtlasGraph(this.exec, userId, workspaceTag);
   }
 
-  public async listAtlasWorkspaces(userId: string): Promise<AtlasWorkspaceSummary[]> {
-    const rows = await this.rows<{ workspace_tag: string; node_count: unknown; updated_at: string }>(
-      "SELECT workspace_tag, node_count, updated_at FROM atlas_graphs WHERE user_id = $1 ORDER BY updated_at DESC",
-      [userId],
-    );
-    return rows.map((r) => ({
-      workspaceTag: r.workspace_tag,
-      nodeCount: asNumber(r.node_count),
-      updatedAt: r.updated_at,
-    }));
+  public listAtlasWorkspaces(userId: string): Promise<AtlasWorkspaceSummary[]> {
+    return atlasIdentity.listAtlasWorkspaces(this.exec, userId);
   }
 
-  // HONK-H3.3 — fleet snapshot store-and-serve (mirrors the atlas_graphs pattern).
-  public async putFleetSnapshot(userId: string, host: string, snapshot: unknown, jobCount: number): Promise<void> {
-    await this.run(
-      `INSERT INTO fleet_snapshots (user_id, host, snapshot_json, job_count, updated_at)
-       VALUES ($1,$2,$3,$4,$5)
-       ON CONFLICT (user_id, host) DO UPDATE SET
-         snapshot_json=EXCLUDED.snapshot_json,
-         job_count=EXCLUDED.job_count,
-         updated_at=EXCLUDED.updated_at`,
-      [userId, host, JSON.stringify(snapshot ?? null), Math.max(0, Math.floor(jobCount) || 0), new Date().toISOString()],
-    );
+  public putFleetSnapshot(userId: string, host: string, snapshot: unknown, jobCount: number): Promise<void> {
+    return atlasIdentity.putFleetSnapshot(this.exec, userId, host, snapshot, jobCount);
   }
 
-  public async getFleetSnapshots(userId: string): Promise<FleetSnapshotEntry[]> {
-    const rows = await this.rows<{ host: string; snapshot_json: string; job_count: unknown; updated_at: string }>(
-      "SELECT host, snapshot_json, job_count, updated_at FROM fleet_snapshots WHERE user_id = $1 ORDER BY updated_at DESC",
-      [userId],
-    );
-    return rows.map((r) => {
-      let snapshot: unknown = null;
-      try {
-        snapshot = JSON.parse(r.snapshot_json);
-      } catch {
-        snapshot = null; // corrupt row — relay as empty rather than throwing
-      }
-      return { host: r.host, snapshot, jobCount: asNumber(r.job_count), updatedAt: r.updated_at };
-    });
+  public getFleetSnapshots(userId: string): Promise<FleetSnapshotEntry[]> {
+    return atlasIdentity.getFleetSnapshots(this.exec, userId);
   }
 
-  public async getIdentityAndInstructionCognitives(userId: string, limit = 100): Promise<any[]> {
-    return this.rows(
-      "SELECT record_id, content, type, priority, skill_tag, created_time FROM cognitive_records WHERE user_id = $1 AND type IN ('persona','instruction') AND invalid_at IS NULL ORDER BY priority DESC, created_time DESC LIMIT $2",
-      [userId, limit],
-    );
+  public getIdentityAndInstructionCognitives(userId: string, limit = 100): Promise<any[]> {
+    return atlasIdentity.getIdentityAndInstructionCognitives(this.exec, userId, limit);
   }
 
   // ── scheduler state ───────────────────────────────────────────────────
 
-  public async getSchedulerState(userId: string): Promise<SchedulerState> {
-    const row = await this.one<any>(
-      "SELECT cognitive_count_since_last_focus, cognitive_count_since_last_identity, total_cognitive_count, extraction_errors, last_error_message, last_error_at FROM scheduler_state WHERE user_id = $1",
-      [userId],
-    );
-    if (!row) {
-      return { cognitiveCountSinceLastFocus: 0, cognitiveCountSinceLastIdentity: 0, totalCognitiveCount: 0, extractionErrors: 0, lastErrorMessage: null, lastErrorAt: null };
-    }
-    return {
-      cognitiveCountSinceLastFocus: asNumber(row.cognitive_count_since_last_focus),
-      cognitiveCountSinceLastIdentity: asNumber(row.cognitive_count_since_last_identity),
-      totalCognitiveCount: asNumber(row.total_cognitive_count),
-      extractionErrors: asNumber(row.extraction_errors),
-      lastErrorMessage: row.last_error_message ?? null,
-      lastErrorAt: row.last_error_at ?? null,
-    };
+  public getSchedulerState(userId: string): Promise<SchedulerState> {
+    return atlasIdentity.getSchedulerState(this.exec, userId);
   }
 
-  public async incrementSchedulerCognitiveCount(userId: string, count: number): Promise<void> {
-    await this.run(
-      `INSERT INTO scheduler_state (user_id, cognitive_count_since_last_focus, cognitive_count_since_last_identity, total_cognitive_count)
-       VALUES ($1,$2,$3,$4)
-       ON CONFLICT (user_id) DO UPDATE SET
-         cognitive_count_since_last_focus = scheduler_state.cognitive_count_since_last_focus + EXCLUDED.cognitive_count_since_last_focus,
-         cognitive_count_since_last_identity = scheduler_state.cognitive_count_since_last_identity + EXCLUDED.cognitive_count_since_last_identity,
-         total_cognitive_count = scheduler_state.total_cognitive_count + EXCLUDED.total_cognitive_count`,
-      [userId, count, count, count],
-    );
+  public incrementSchedulerCognitiveCount(userId: string, count: number): Promise<void> {
+    return atlasIdentity.incrementSchedulerCognitiveCount(this.exec, userId, count);
   }
 
-  public async resetSchedulerFocusCount(userId: string): Promise<void> {
-    await this.run("UPDATE scheduler_state SET cognitive_count_since_last_focus = 0 WHERE user_id = $1", [userId]);
+  public resetSchedulerFocusCount(userId: string): Promise<void> {
+    return atlasIdentity.resetSchedulerFocusCount(this.exec, userId);
   }
 
-  public async resetSchedulerIdentityCount(userId: string): Promise<void> {
-    await this.run("UPDATE scheduler_state SET cognitive_count_since_last_identity = 0 WHERE user_id = $1", [userId]);
+  public resetSchedulerIdentityCount(userId: string): Promise<void> {
+    return atlasIdentity.resetSchedulerIdentityCount(this.exec, userId);
   }
 
-  public async recordExtractionFailure(userId: string, message: string): Promise<void> {
-    const now = new Date().toISOString();
-    await this.run(
-      `INSERT INTO scheduler_state (user_id, extraction_errors, last_error_message, last_error_at)
-       VALUES ($1,1,$2,$3)
-       ON CONFLICT (user_id) DO UPDATE SET
-         extraction_errors = COALESCE(scheduler_state.extraction_errors, 0) + 1,
-         last_error_message = EXCLUDED.last_error_message,
-         last_error_at = EXCLUDED.last_error_at`,
-      [userId, message.slice(0, 1000), now],
-    );
+  public recordExtractionFailure(userId: string, message: string): Promise<void> {
+    return atlasIdentity.recordExtractionFailure(this.exec, userId, message);
   }
 
-  public async resetExtractionFailures(userId: string): Promise<void> {
-    await this.run(
-      `INSERT INTO scheduler_state (user_id, extraction_errors, last_error_message, last_error_at)
-       VALUES ($1,0,NULL,NULL)
-       ON CONFLICT (user_id) DO UPDATE SET extraction_errors = 0, last_error_message = NULL, last_error_at = NULL`,
-      [userId],
-    );
+  public resetExtractionFailures(userId: string): Promise<void> {
+    return atlasIdentity.resetExtractionFailures(this.exec, userId);
   }
 
-  public async getExtractionStatus(userId: string): Promise<ExtractionStatus> {
-    const state = await this.getSchedulerState(userId);
-    return {
-      extractionErrors: state.extractionErrors,
-      lastErrorMessage: state.lastErrorMessage,
-      lastErrorAt: state.lastErrorAt,
-      syncPaused: state.extractionErrors >= 5,
-    };
+  public getExtractionStatus(userId: string): Promise<ExtractionStatus> {
+    return atlasIdentity.getExtractionStatus(this.exec, userId);
   }
 
-  public async sweepUnextractedBacklog(options: { olderThanMs: number; minUnextracted?: number; maxFailures?: number; limit?: number }): Promise<StalledExtractionBacklog[]> {
-    const cutoff = new Date(Date.now() - options.olderThanMs).toISOString();
-    const minUnextracted = options.minUnextracted ?? 1;
-    const maxFailures = options.maxFailures ?? 5;
-    const limit = options.limit ?? 20;
-    const rows = await this.rows<any>(
-      `SELECT
-         l0.user_id,
-         l0.session_key,
-         COALESCE(MAX(l0.session_id), '') AS session_id,
-         COUNT(*) AS unextracted_count,
-         MAX(l0.recorded_at) AS latest_recorded_at,
-         COALESCE(ss.extraction_errors, 0) AS extraction_errors,
-         ss.last_error_message
-       FROM sensory_stream l0
-       LEFT JOIN scheduler_state ss ON ss.user_id = l0.user_id
-       WHERE l0.extracted_at IS NULL
-       GROUP BY l0.user_id, l0.session_key, ss.extraction_errors, ss.last_error_message
-       HAVING COUNT(*) >= $1 AND MAX(l0.recorded_at) <= $2 AND COALESCE(ss.extraction_errors, 0) < $3
-       ORDER BY MAX(l0.recorded_at) ASC
-       LIMIT $4`,
-      [minUnextracted, cutoff, maxFailures, limit],
-    );
-    return rows.map((row) => ({
-      userId: row.user_id,
-      sessionKey: row.session_key,
-      sessionId: row.session_id ?? "",
-      unextractedCount: asNumber(row.unextracted_count),
-      latestRecordedAt: row.latest_recorded_at ?? "",
-      extractionErrors: asNumber(row.extraction_errors),
-      lastErrorMessage: row.last_error_message ?? null,
-    }));
+  public sweepUnextractedBacklog(options: { olderThanMs: number; minUnextracted?: number; maxFailures?: number; limit?: number }): Promise<StalledExtractionBacklog[]> {
+    return atlasIdentity.sweepUnextractedBacklog(this.exec, options);
   }
 
   // ── graph (nodes + edges) ─────────────────────────────────────────────
 
-  public async getAllGraphNodes(userId: string): Promise<GraphNode[]> {
-    const rows = await this.rows<any>(
-      "SELECT id, user_id, entity, entity_type, skill_tag, confidence, source_record_id, created_time FROM graph_nodes WHERE user_id = $1",
-      [userId],
-    );
-    return rows.map((r) => this.graphNodeRow(r));
+  public getAllGraphNodes(userId: string): Promise<GraphNode[]> {
+    return graph.getAllGraphNodes(this.exec, userId);
   }
 
-  public async getAllGraphEdges(userId: string): Promise<GraphEdge[]> {
-    const rows = await this.rows<any>(
-      "SELECT id, user_id, from_node_id, to_node_id, relation, skill_tag, confidence, source_record_id, created_time FROM graph_edges WHERE user_id = $1",
-      [userId],
-    );
-    return rows.map((r) => this.graphEdgeRow(r));
+  public getAllGraphEdges(userId: string): Promise<GraphEdge[]> {
+    return graph.getAllGraphEdges(this.exec, userId);
   }
 
-  private graphNodeRow(r: any): GraphNode {
-    return {
-      id: r.id, userId: r.user_id, entity: r.entity, entityType: r.entity_type,
-      skillTag: r.skill_tag, confidence: asNumber(r.confidence, 1), sourceRecordId: r.source_record_id, createdTime: r.created_time,
-    };
+  public upsertGraphNode(node: GraphNode): Promise<void> {
+    return graph.upsertGraphNode(this.exec, node);
   }
 
-  private graphEdgeRow(r: any): GraphEdge {
-    return {
-      id: r.id, userId: r.user_id, fromNodeId: r.from_node_id, toNodeId: r.to_node_id,
-      relation: r.relation, skillTag: r.skill_tag, confidence: asNumber(r.confidence, 1),
-      sourceRecordId: r.source_record_id, createdTime: r.created_time,
-    };
+  public upsertGraphEdge(edge: GraphEdge): Promise<void> {
+    return graph.upsertGraphEdge(this.exec, edge);
   }
 
-  public async upsertGraphNode(node: GraphNode): Promise<void> {
-    await this.run(
-      `INSERT INTO graph_nodes (id, user_id, entity, entity_type, skill_tag, confidence, source_record_id, created_time)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-       ON CONFLICT (id) DO UPDATE SET
-         entity_type=EXCLUDED.entity_type, skill_tag=EXCLUDED.skill_tag,
-         confidence=EXCLUDED.confidence, source_record_id=EXCLUDED.source_record_id`,
-      [node.id, node.userId, node.entity, node.entityType, node.skillTag || "", node.confidence, node.sourceRecordId, node.createdTime],
-    );
+  public getGraphNodeByEntity(userId: string, entity: string): Promise<GraphNode | null> {
+    return graph.getGraphNodeByEntity(this.exec, userId, entity);
   }
 
-  public async upsertGraphEdge(edge: GraphEdge): Promise<void> {
-    await this.run(
-      `INSERT INTO graph_edges (id, user_id, from_node_id, to_node_id, relation, skill_tag, confidence, source_record_id, created_time)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-       ON CONFLICT (user_id, from_node_id, to_node_id, relation) DO UPDATE SET
-         skill_tag=EXCLUDED.skill_tag, confidence=EXCLUDED.confidence,
-         source_record_id=EXCLUDED.source_record_id, created_time=EXCLUDED.created_time`,
-      [edge.id, edge.userId, edge.fromNodeId, edge.toNodeId, edge.relation, edge.skillTag || "", edge.confidence, edge.sourceRecordId, edge.createdTime],
-    );
-  }
-
-  public async getGraphNodeByEntity(userId: string, entity: string): Promise<GraphNode | null> {
-    const row = await this.one<any>(
-      "SELECT id, user_id, entity, entity_type, skill_tag, confidence, source_record_id, created_time FROM graph_nodes WHERE user_id = $1 AND LOWER(entity) = LOWER($2)",
-      [userId, entity],
-    );
-    return row ? this.graphNodeRow(row) : null;
-  }
-
-  public async getGraphNeighbors(userId: string, entityId: string, skillTag?: string, maxHops = 2): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> {
-    const visitedNodes = new Map<string, GraphNode>();
-    const visitedEdges = new Map<string, GraphEdge>();
-    const nodeById = async (id: string): Promise<GraphNode | null> => {
-      const row = await this.one<any>(
-        "SELECT id, user_id, entity, entity_type, skill_tag, confidence, source_record_id, created_time FROM graph_nodes WHERE user_id = $1 AND id = $2",
-        [userId, id],
-      );
-      return row ? this.graphNodeRow(row) : null;
-    };
-    const start = await nodeById(entityId);
-    if (!start) return { nodes: [], edges: [] };
-    visitedNodes.set(start.id, start);
-
-    let queue = [start.id];
-    let currentHop = 0;
-    while (queue.length > 0 && currentHop < maxHops) {
-      const nextQueue: string[] = [];
-      for (const nodeId of queue) {
-        const params: any[] = [userId, nodeId, nodeId];
-        let edgeSql =
-          "SELECT id, user_id, from_node_id, to_node_id, relation, skill_tag, confidence, source_record_id, created_time FROM graph_edges WHERE user_id = ? AND (from_node_id = ? OR to_node_id = ?)";
-        if (skillTag) {
-          edgeSql += " AND (skill_tag = ? OR skill_tag = '')";
-          params.push(skillTag);
-        }
-        const edgeRows = await this.rows<any>(pg(edgeSql), params);
-        for (const row of edgeRows) {
-          const edge = this.graphEdgeRow(row);
-          visitedEdges.set(edge.id, edge);
-          const neighborId = edge.fromNodeId === nodeId ? edge.toNodeId : edge.fromNodeId;
-          if (!visitedNodes.has(neighborId)) {
-            const neighbor = await nodeById(neighborId);
-            if (neighbor) {
-              visitedNodes.set(neighborId, neighbor);
-              nextQueue.push(neighborId);
-            }
-          }
-        }
-      }
-      queue = nextQueue;
-      currentHop++;
-    }
-    return { nodes: Array.from(visitedNodes.values()), edges: Array.from(visitedEdges.values()) };
+  public getGraphNeighbors(userId: string, entityId: string, skillTag?: string, maxHops = 2): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> {
+    return graph.getGraphNeighbors(this.exec, userId, entityId, skillTag, maxHops);
   }
 
   // ── ACE feedback loop ──────────────────────────────────────────────────
 
-  public async markCited(userId: string, recordIds: string[]): Promise<void> {
-    if (recordIds.length === 0) return;
-    const now = new Date().toISOString();
-    await this.run(
-      `UPDATE cognitive_records SET citation_count = citation_count + 1, last_cited_at = $1, never_cited_count = 0, updated_time = $2
-        WHERE user_id = $3 AND record_id = ANY($4::text[])`,
-      [now, now, userId, recordIds],
-    );
+  public markCited(userId: string, recordIds: string[]): Promise<void> {
+    return cognitive.markCited(this.exec, userId, recordIds);
   }
 
-  public async incrementNeverCited(userId: string, recordIds: string[]): Promise<{ recordId: string; neverCitedCount: number }[]> {
-    if (recordIds.length === 0) return [];
-    const now = new Date().toISOString();
-    await this.run(
-      "UPDATE cognitive_records SET never_cited_count = never_cited_count + 1, updated_time = $1 WHERE user_id = $2 AND record_id = ANY($3::text[])",
-      [now, userId, recordIds],
-    );
-    const rows = await this.rows<any>(
-      "SELECT record_id, never_cited_count FROM cognitive_records WHERE user_id = $1 AND record_id = ANY($2::text[])",
-      [userId, recordIds],
-    );
-    return rows.map((r) => ({ recordId: r.record_id, neverCitedCount: asNumber(r.never_cited_count) }));
+  public incrementNeverCited(userId: string, recordIds: string[]): Promise<{ recordId: string; neverCitedCount: number }[]> {
+    return cognitive.incrementNeverCited(this.exec, userId, recordIds);
   }
 
-  public async archiveCognitiveRecord(userId: string, recordId: string): Promise<void> {
-    const now = new Date().toISOString();
-    await this.run("UPDATE cognitive_records SET archived = 1, status = 'archived', updated_time = $1 WHERE user_id = $2 AND record_id = $3", [now, userId, recordId]);
-    await this.insertOperation({
-      id: randomUUID(), userId, recordId, operation: "archive", actor: "system",
-      sessionKey: "", reason: "", createdAt: now, metadata: {},
-    });
+  public promoteDurableMemories(minConfidence: number, minCorroborations: number): Promise<number> {
+    return cognitive.promoteDurableMemories(this.exec, minConfidence, minCorroborations);
   }
 
-  public async getRecentSkillContextCognitives(userId: string, limit: number): Promise<{ skillTag: string; createdTime: string }[]> {
-    const rows = await this.rows<any>(
-      `SELECT skill_tag, created_time FROM cognitive_records
-        WHERE user_id = $1 AND type = 'skill_context' AND skill_tag != '' AND invalid_at IS NULL AND archived = 0
-        ORDER BY created_time DESC LIMIT $2`,
-      [userId, limit],
-    );
-    return rows.map((r) => ({ skillTag: r.skill_tag, createdTime: r.created_time }));
+  public listMemoryUserIds(): Promise<string[]> {
+    return cognitive.listMemoryUserIds(this.exec);
+  }
+
+  public archiveCognitiveRecord(userId: string, recordId: string): Promise<void> {
+    return cognitive.archiveCognitiveRecord(this.exec, userId, recordId);
+  }
+
+  public getRecentSkillContextCognitives(userId: string, limit: number): Promise<{ skillTag: string; createdTime: string }[]> {
+    return cognitive.getRecentSkillContextCognitives(this.exec, userId, limit);
   }
 
   // ── users ──────────────────────────────────────────────────────────────
 
-  private userRow(row: any): UserRecord {
-    return {
-      userId: row.user_id,
-      apiKey: row.api_key,
-      passwordHash: row.password_hash ?? null,
-      displayName: row.display_name ?? "",
-      email: row.email ?? "",
-      isAdmin: Boolean(row.is_admin),
-      status: row.status === "disabled" ? "disabled" : "active",
-      createdAt: row.created_at,
-    };
+  public createUser(userId: string, apiKey: string, displayName = "", isAdmin = false): Promise<UserRecord> {
+    return userStats.createUser(this.exec, userId, apiKey, displayName, isAdmin);
   }
 
-  public async createUser(userId: string, apiKey: string, displayName = "", isAdmin = false): Promise<UserRecord> {
-    const createdAt = new Date().toISOString();
-    await this.run(
-      `INSERT INTO users (user_id, api_key, password_hash, display_name, email, is_admin, status, created_at)
-       VALUES ($1,$2,NULL,$3,'',$4,'active',$5)`,
-      [userId, apiKey, displayName, isAdmin ? 1 : 0, createdAt],
-    );
-    return { userId, apiKey, passwordHash: null, displayName, email: "", isAdmin, status: "active", createdAt };
+  public getUserByApiKey(apiKey: string): Promise<UserRecord | null> {
+    return userStats.getUserByApiKey(this.exec, apiKey);
   }
 
-  public async getUserByApiKey(apiKey: string): Promise<UserRecord | null> {
-    const row = await this.one("SELECT user_id, api_key, password_hash, display_name, email, is_admin, status, created_at FROM users WHERE api_key = $1", [apiKey]);
-    return row ? this.userRow(row) : null;
+  public getUserByEmail(email: string): Promise<UserRecord | null> {
+    return userStats.getUserByEmail(this.exec, email);
   }
 
-  public async getUserByEmail(email: string): Promise<UserRecord | null> {
-    const row = await this.one("SELECT user_id, api_key, password_hash, display_name, email, is_admin, status, created_at FROM users WHERE lower(email) = lower($1)", [email]);
-    return row ? this.userRow(row) : null;
+  public getUserById(userId: string): Promise<UserRecord | null> {
+    return userStats.getUserById(this.exec, userId);
   }
 
-  public async getUserById(userId: string): Promise<UserRecord | null> {
-    const row = await this.one("SELECT user_id, api_key, password_hash, display_name, email, is_admin, status, created_at FROM users WHERE user_id = $1", [userId]);
-    return row ? this.userRow(row) : null;
+  public updateUserPassword(userId: string, passwordHash: string): Promise<void> {
+    return userStats.updateUserPassword(this.exec, userId, passwordHash);
+  }
+  public updateUserEmail(userId: string, email: string): Promise<void> {
+    return userStats.updateUserEmail(this.exec, userId, email);
+  }
+  public updateUserDisplayName(userId: string, displayName: string): Promise<void> {
+    return userStats.updateUserDisplayName(this.exec, userId, displayName);
+  }
+  public updateUserStatus(userId: string, status: "active" | "disabled"): Promise<void> {
+    return userStats.updateUserStatus(this.exec, userId, status);
+  }
+  public updateUserApiKey(userId: string, apiKey: string): Promise<void> {
+    return userStats.updateUserApiKey(this.exec, userId, apiKey);
   }
 
-  public async updateUserPassword(userId: string, passwordHash: string): Promise<void> {
-    await this.run("UPDATE users SET password_hash = $1 WHERE user_id = $2", [passwordHash, userId]);
-  }
-  public async updateUserEmail(userId: string, email: string): Promise<void> {
-    await this.run("UPDATE users SET email = $1 WHERE user_id = $2", [email, userId]);
-  }
-  public async updateUserDisplayName(userId: string, displayName: string): Promise<void> {
-    await this.run("UPDATE users SET display_name = $1 WHERE user_id = $2", [displayName, userId]);
-  }
-  public async updateUserStatus(userId: string, status: "active" | "disabled"): Promise<void> {
-    await this.run("UPDATE users SET status = $1 WHERE user_id = $2", [status, userId]);
-  }
-  public async updateUserApiKey(userId: string, apiKey: string): Promise<void> {
-    await this.run("UPDATE users SET api_key = $1 WHERE user_id = $2", [apiKey, userId]);
+  public listUsers(pagination?: CursorPaginationOptions<{ createdAt: string; userId: string }>): Promise<UserRecord[]> {
+    return userStats.listUsers(this.exec, pagination);
   }
 
-  public async listUsers(pagination?: CursorPaginationOptions<{ createdAt: string; userId: string }>): Promise<UserRecord[]> {
-    const where: string[] = [];
-    const args: any[] = [];
-    if (pagination?.cursor) {
-      where.push("(created_at < ? OR (created_at = ? AND user_id > ?))");
-      args.push(pagination.cursor.createdAt, pagination.cursor.createdAt, pagination.cursor.userId);
-    }
-    args.push(pagination?.limit ?? 500);
-    const rows = await this.rows(
-      pg(`SELECT user_id, api_key, password_hash, display_name, email, is_admin, status, created_at
-            FROM users ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
-           ORDER BY created_at DESC, user_id ASC LIMIT ?`),
-      args,
-    );
-    return rows.map((row) => this.userRow(row));
-  }
-
-  public async deleteUser(userId: string): Promise<void> {
-    await this.tx(async (client) => {
-      for (const table of [
-        "users", "sensory_stream", "cognitive_records", "contradictions", "contextual_focus",
-        "core_identity", "scheduler_state", "graph_nodes", "graph_edges", "cognitive_connections",
-        "memory_evidence", "memory_operations", "memory_file_index",
-      ]) {
-        await client.query(`DELETE FROM ${table} WHERE user_id = $1`, [userId]);
-      }
-    });
+  public deleteUser(userId: string): Promise<void> {
+    return userStats.deleteUser(this.exec, userId);
   }
 
   // ── list + stats ─────────────────────────────────────────────────────
 
-  public async listMemories(
+  public listMemories(
     userId: string,
     filters?: MemoryListFilters,
     pagination?: CursorPaginationOptions<{ createdTime: string; recordId: string }>,
   ): Promise<MemoryListItem[]> {
-    const where: string[] = ["user_id = ?"];
-    const args: any[] = [userId];
-    if (filters?.query) { where.push("content LIKE ?"); args.push(`%${filters.query}%`); }
-    if (filters?.type) { where.push("type = ?"); args.push(filters.type); }
-    if (filters?.scene) { where.push("scene_name = ?"); args.push(filters.scene); }
-    if (filters?.skill) { where.push("skill_tag = ?"); args.push(filters.skill); }
-    if (typeof filters?.archived === "boolean") { where.push("archived = ?"); args.push(filters.archived ? 1 : 0); }
-    if (pagination?.cursor) {
-      where.push("(created_time < ? OR (created_time = ? AND record_id > ?))");
-      args.push(pagination.cursor.createdTime, pagination.cursor.createdTime, pagination.cursor.recordId);
-    }
-    args.push(pagination?.limit ?? 500);
-    const rows = await this.rows<any>(
-      pg(`SELECT record_id, content, type, priority, scene_name, skill_tag, created_time, citation_count, never_cited_count, archived
-            FROM cognitive_records WHERE ${where.join(" AND ")}
-           ORDER BY created_time DESC, record_id ASC LIMIT ?`),
-      args,
-    );
-    return rows.map((row) => ({
-      recordId: row.record_id,
-      content: row.content,
-      type: row.type,
-      priority: asNumber(row.priority, 50),
-      sceneName: row.scene_name ?? "",
-      skillTag: row.skill_tag ?? "",
-      createdTime: row.created_time,
-      citationCount: asNumber(row.citation_count),
-      neverCitedCount: asNumber(row.never_cited_count),
-      archived: Boolean(row.archived),
-    }));
+    return userStats.listMemories(this.exec, userId, filters, pagination);
   }
 
-  public async getMemoryStats(userId: string): Promise<{
+  public getMemoryStats(userId: string): Promise<{
     total: number; archived: number; byType: Record<string, number>; citationRate: number;
     lastRecallAt: string | null; sensoryTotal: number; sensoryUnextracted: number;
     focusSceneTotal: number; extraction: ExtractionStatus;
   }> {
-    const totalRow = await this.one<{ c: string }>("SELECT COUNT(*) AS c FROM cognitive_records WHERE user_id = $1", [userId]);
-    const archivedRow = await this.one<{ c: string }>("SELECT COUNT(*) AS c FROM cognitive_records WHERE user_id = $1 AND archived = 1", [userId]);
-    const typeRows = await this.rows<{ type: string; c: string }>("SELECT type, COUNT(*) AS c FROM cognitive_records WHERE user_id = $1 GROUP BY type", [userId]);
-    const citationRows = await this.one<{ cited: string | null; total: string }>("SELECT SUM(citation_count) AS cited, COUNT(*) AS total FROM cognitive_records WHERE user_id = $1", [userId]);
-    const sensoryTotalRow = await this.one<{ c: string; last_at: string | null }>("SELECT COUNT(*) AS c, MAX(recorded_at) AS last_at FROM sensory_stream WHERE user_id = $1", [userId]);
-    const sensoryUnextractedRow = await this.one<{ c: string }>("SELECT COUNT(*) AS c FROM sensory_stream WHERE user_id = $1 AND extracted_at IS NULL", [userId]);
-
-    const byType: Record<string, number> = {};
-    for (const row of typeRows) byType[row.type] = asNumber(row.c);
-
-    const totalRecords = asNumber(totalRow?.c);
-    const cited = asNumber(citationRows?.cited);
-    return {
-      total: totalRecords,
-      archived: asNumber(archivedRow?.c),
-      byType,
-      citationRate: totalRecords > 0 ? cited / totalRecords : 0,
-      lastRecallAt: sensoryTotalRow?.last_at ?? null,
-      sensoryTotal: asNumber(sensoryTotalRow?.c),
-      sensoryUnextracted: asNumber(sensoryUnextractedRow?.c),
-      focusSceneTotal: await this.getContextualFocusCount(userId),
-      extraction: await this.getExtractionStatus(userId),
-    };
+    return userStats.getMemoryStats(this.exec, userId);
   }
 
   // ── dendritic connections ───────────────────────────────────────────────
 
-  public async upsertConnection(userId: string, sourceId: string, targetId: string, weight: number): Promise<void> {
-    await this.run(
-      `INSERT INTO cognitive_connections (user_id, source_id, target_id, weight, last_activated_at)
-       VALUES ($1,$2,$3,$4, now()::text)
-       ON CONFLICT (user_id, source_id, target_id) DO UPDATE SET weight = EXCLUDED.weight, last_activated_at = now()::text`,
-      [userId, sourceId, targetId, weight],
-    );
+  public upsertConnection(userId: string, sourceId: string, targetId: string, weight: number): Promise<void> {
+    return userStats.upsertConnection(this.exec, userId, sourceId, targetId, weight);
   }
 
-  public async getConnectionsForSource(userId: string, sourceId: string): Promise<Array<{ targetId: string; weight: number }>> {
-    const rows = await this.rows<any>(
-      "SELECT target_id, weight FROM cognitive_connections WHERE user_id = $1 AND source_id = $2 AND weight >= 0.1",
-      [userId, sourceId],
-    );
-    return rows.map((r) => ({ targetId: r.target_id, weight: asNumber(r.weight) }));
+  public getConnectionsForSource(userId: string, sourceId: string): Promise<Array<{ targetId: string; weight: number }>> {
+    return userStats.getConnectionsForSource(this.exec, userId, sourceId);
   }
 
-  public async strengthenConnectionsBatch(userId: string, pairs: Array<{ source: string; target: string }>, delta: number): Promise<void> {
-    if (pairs.length === 0) return;
-    await this.tx(async (client) => {
-      const sql =
-        `INSERT INTO cognitive_connections (user_id, source_id, target_id, weight, last_activated_at)
-         VALUES ($1,$2,$3,$4, now()::text)
-         ON CONFLICT (user_id, source_id, target_id) DO UPDATE SET
-           weight = LEAST(1.0, cognitive_connections.weight + $5), last_activated_at = now()::text`;
-      for (const pair of pairs) {
-        await client.query(sql, [userId, pair.source, pair.target, delta, delta]);
-        await client.query(sql, [userId, pair.target, pair.source, delta, delta]);
-      }
-    });
+  public strengthenConnectionsBatch(userId: string, pairs: Array<{ source: string; target: string }>, delta: number): Promise<void> {
+    return userStats.strengthenConnectionsBatch(this.exec, userId, pairs, delta);
   }
 
-  public async decayConnections(userId: string, decayFactor: number): Promise<void> {
-    await this.run("UPDATE cognitive_connections SET weight = GREATEST(0.0, weight * $1) WHERE user_id = $2", [decayFactor, userId]);
+  public decayConnections(userId: string, decayFactor: number): Promise<void> {
+    return userStats.decayConnections(this.exec, userId, decayFactor);
   }
 
-  public async pruneConnections(userId: string, threshold: number): Promise<void> {
-    await this.run("DELETE FROM cognitive_connections WHERE user_id = $1 AND weight < $2", [userId, threshold]);
+  public pruneConnections(userId: string, threshold: number): Promise<void> {
+    return userStats.pruneConnections(this.exec, userId, threshold);
   }
 
-  public async getAllConnections(userId: string): Promise<Array<{ sourceId: string; targetId: string; weight: number; lastActivatedAt: string }>> {
-    const rows = await this.rows<any>("SELECT source_id, target_id, weight, last_activated_at FROM cognitive_connections WHERE user_id = $1", [userId]);
-    return rows.map((r) => ({ sourceId: r.source_id, targetId: r.target_id, weight: asNumber(r.weight), lastActivatedAt: r.last_activated_at ?? "" }));
+  public getAllConnections(userId: string): Promise<Array<{ sourceId: string; targetId: string; weight: number; lastActivatedAt: string }>> {
+    return userStats.getAllConnections(this.exec, userId);
   }
 
   // ── source documents + chunks ───────────────────────────────────────────
 
-  private rowToSourceDocument(row: any): SourceDocument {
-    return {
-      id: row.id,
-      userId: row.user_id,
-      workspaceTag: row.workspace_tag ?? null,
-      kind: row.kind,
-      uri: row.uri ?? null,
-      hash: row.hash,
-      title: row.title ?? "",
-      createdAt: row.created_at,
-      metadata: row.metadata_json ? (typeof row.metadata_json === "string" ? JSON.parse(row.metadata_json) : row.metadata_json) : {},
-    };
+  public getSourceDocumentByHash(userId: string, hash: string, scope?: sourcesTree.SourceDocumentScope): Promise<SourceDocument | null> {
+    return sourcesTree.getSourceDocumentByHash(this.exec, userId, hash, scope);
   }
 
-  private rowToSourceChunk(row: any): SourceChunk {
-    return {
-      id: row.id,
-      documentId: row.document_id,
-      ordinal: asNumber(row.ordinal),
-      content: row.content,
-      tokenCount: asNumber(row.token_count),
-      filePath: row.file_path ?? null,
-      symbol: row.symbol ?? null,
-      startLine: row.start_line == null ? null : asNumber(row.start_line),
-      endLine: row.end_line == null ? null : asNumber(row.end_line),
-      hash: row.hash,
-    };
+  public getSourceDocument(id: string): Promise<SourceDocument | null> {
+    return sourcesTree.getSourceDocument(this.exec, id);
   }
 
-  public async getSourceDocumentByHash(userId: string, hash: string): Promise<SourceDocument | null> {
-    const row = await this.one("SELECT * FROM source_documents WHERE user_id = $1 AND hash = $2 LIMIT 1", [userId, hash]);
-    return row ? this.rowToSourceDocument(row) : null;
+  public hasFreshSourceDocument(userId: string, uri: string): Promise<boolean> {
+    return sourcesTree.hasFreshSourceDocument(this.exec, userId, uri);
   }
 
-  public async getSourceDocument(id: string): Promise<SourceDocument | null> {
-    const row = await this.one("SELECT * FROM source_documents WHERE id = $1", [id]);
-    return row ? this.rowToSourceDocument(row) : null;
+  public setSourceDocumentChurn(documentId: string, commitCount90d: number | null, lastCommitDate: string | null): Promise<void> {
+    return sourcesTree.setSourceDocumentChurn(this.exec, documentId, commitCount90d, lastCommitDate);
   }
 
-  public async hasFreshSourceDocument(userId: string, uri: string): Promise<boolean> {
-    const row = await this.one("SELECT 1 FROM source_documents WHERE user_id = $1 AND uri = $2 AND COALESCE(stale, 0) = 0 LIMIT 1", [userId, uri]);
-    return !!row;
+  public getRecordsMaxChurn(userId: string, recordIds: string[]): Promise<Map<string, number>> {
+    return sourcesTree.getRecordsMaxChurn(this.exec, userId, recordIds);
   }
 
-  public async setSourceDocumentChurn(documentId: string, commitCount90d: number | null, lastCommitDate: string | null): Promise<void> {
-    await this.run("UPDATE source_documents SET commit_count_90d = $1, last_commit_date = $2 WHERE id = $3", [commitCount90d, lastCommitDate, documentId]);
+  public getSourceDocuments(
+    userId: string,
+    limit = 100,
+    filters: sourcesTree.SourceDocumentListFilters = {},
+  ): Promise<Array<SourceDocument & { chunkCount: number }>> {
+    return sourcesTree.getSourceDocuments(this.exec, userId, limit, filters);
   }
 
-  public async getRecordsMaxChurn(userId: string, recordIds: string[]): Promise<Map<string, number>> {
-    const out = new Map<string, number>();
-    if (recordIds.length === 0) return out;
-    const rows = await this.rows<any>(
-      `SELECT l.record_id AS rid, MAX(COALESCE(d.commit_count_90d, 0)) AS churn
-         FROM cognitive_source_links l
-         JOIN source_chunks sc ON sc.id = l.chunk_id
-         JOIN source_documents d ON d.id = sc.document_id
-        WHERE l.user_id = $1 AND l.record_id = ANY($2::text[])
-        GROUP BY l.record_id
-        HAVING MAX(COALESCE(d.commit_count_90d, 0)) > 0`,
-      [userId, recordIds],
-    );
-    for (const r of rows) out.set(String(r.rid), asNumber(r.churn));
-    return out;
+  public pruneTranscriptSources(userId: string, beforeIso: string): Promise<{ prunedDocs: number; prunedChunks: number }> {
+    return sourcesTree.pruneTranscriptSources(this.exec, userId, beforeIso);
   }
 
-  public async getSourceDocuments(userId: string, limit = 100): Promise<Array<SourceDocument & { chunkCount: number }>> {
-    const rows = await this.rows<any>(
-      `SELECT d.*, (SELECT COUNT(*) FROM source_chunks c WHERE c.document_id = d.id) AS chunk_count
-         FROM source_documents d WHERE d.user_id = $1 ORDER BY d.created_at DESC LIMIT $2`,
-      [userId, limit],
-    );
-    return rows.map((r) => ({ ...this.rowToSourceDocument(r), chunkCount: asNumber(r.chunk_count) }));
+  public createSourceDocument(input: Omit<SourceDocument, "id" | "createdAt"> & { id?: string; createdAt?: string }): Promise<SourceDocument> {
+    return sourcesTree.createSourceDocument(this.exec, input);
   }
 
-  public async pruneTranscriptSources(userId: string, beforeIso: string): Promise<{ prunedDocs: number; prunedChunks: number }> {
-    return this.tx(async (client) => {
-      const doomed = (await client.query<{ id: string }>(
-        `SELECT d.id FROM source_documents d
-          WHERE d.user_id = $1 AND d.kind = 'transcript' AND d.created_at < $2
-            AND NOT EXISTS (
-              SELECT 1 FROM source_chunks c
-              JOIN cognitive_source_links l ON l.chunk_id = c.id
-              WHERE c.document_id = d.id
-            )`,
-        [userId, beforeIso],
-      )).rows;
-      if (doomed.length === 0) return { prunedDocs: 0, prunedChunks: 0 };
-      let prunedChunks = 0;
-      for (const { id } of doomed) {
-        const res = await client.query("DELETE FROM source_chunks WHERE document_id = $1", [id]);
-        prunedChunks += res.rowCount ?? 0;
-        await client.query("DELETE FROM source_documents WHERE id = $1 AND user_id = $2", [id, userId]);
-      }
-      return { prunedDocs: doomed.length, prunedChunks };
-    });
+  public lookupDocumentByPathHash(userId: string, uri: string, hash: string): Promise<{ id: string; stale: boolean } | null> {
+    return sourcesTree.lookupDocumentByPathHash(this.exec, userId, uri, hash);
   }
 
-  public async createSourceDocument(input: Omit<SourceDocument, "id" | "createdAt"> & { id?: string; createdAt?: string }): Promise<SourceDocument> {
-    const existing = await this.getSourceDocumentByHash(input.userId, input.hash);
-    if (existing) return existing;
-    const doc: SourceDocument = {
-      id: input.id ?? randomUUID(),
-      userId: input.userId,
-      workspaceTag: input.workspaceTag ?? null,
-      kind: input.kind,
-      uri: input.uri ?? null,
-      hash: input.hash,
-      title: input.title ?? "",
-      createdAt: input.createdAt ?? new Date().toISOString(),
-      metadata: input.metadata,
-    };
-    await this.run(
-      `INSERT INTO source_documents (id, user_id, workspace_tag, kind, uri, hash, title, created_at, metadata_json)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      [doc.id, doc.userId, doc.workspaceTag, doc.kind, doc.uri, doc.hash, doc.title, doc.createdAt, JSON.stringify(doc.metadata ?? {})],
-    );
-    return doc;
+  public markSourceDocumentsStaleByPath(userId: string, uri: string): Promise<number> {
+    return sourcesTree.markSourceDocumentsStaleByPath(this.exec, userId, uri);
   }
 
-  public async lookupDocumentByPathHash(userId: string, uri: string, hash: string): Promise<{ id: string; stale: boolean } | null> {
-    const row = await this.one<any>(
-      `SELECT id, COALESCE(stale, 0) AS stale FROM source_documents WHERE user_id = $1 AND uri = $2 AND hash = $3 ORDER BY created_at DESC LIMIT 1`,
-      [userId, uri, hash],
-    );
-    return row ? { id: String(row.id), stale: asNumber(row.stale) !== 0 } : null;
+  public reviveSourceDocument(documentId: string): Promise<void> {
+    return sourcesTree.reviveSourceDocument(this.exec, documentId);
   }
 
-  public async markSourceDocumentsStaleByPath(userId: string, uri: string): Promise<number> {
-    return this.run("UPDATE source_documents SET stale = 1 WHERE user_id = $1 AND uri = $2 AND COALESCE(stale, 0) = 0", [userId, uri]);
+  public findImportedDocument(userId: string, candidateBase: string): Promise<SourceDocument | null> {
+    return sourcesTree.findImportedDocument(this.exec, userId, candidateBase);
   }
 
-  public async reviveSourceDocument(documentId: string): Promise<void> {
-    await this.run("UPDATE source_documents SET stale = 0 WHERE id = $1", [documentId]);
+  public addSourceChunks(documentId: string, chunks: SourceChunkInput[]): Promise<SourceChunk[]> {
+    return sourcesTree.addSourceChunks(this.exec, documentId, chunks);
   }
 
-  public async findImportedDocument(userId: string, candidateBase: string): Promise<SourceDocument | null> {
-    const exts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs"];
-    const candidates = exts.map((e) => candidateBase + e).concat(exts.map((e) => `${candidateBase}/index${e}`));
-    const row = await this.one<any>(
-      `SELECT * FROM source_documents WHERE user_id = $1 AND COALESCE(stale,0)=0 AND uri = ANY($2::text[]) ORDER BY created_at DESC LIMIT 1`,
-      [userId, candidates],
-    );
-    return row ? this.rowToSourceDocument(row) : null;
+  public getSourceChunk(id: string): Promise<SourceChunk | null> {
+    return sourcesTree.getSourceChunk(this.exec, id);
   }
 
-  public async addSourceChunks(documentId: string, chunks: SourceChunkInput[]): Promise<SourceChunk[]> {
-    return this.tx(async (client) => {
-      const startOrdinal = asNumber(
-        (await client.query<{ n: string }>("SELECT COUNT(*) AS n FROM source_chunks WHERE document_id = $1", [documentId])).rows[0]?.n,
-      );
-      const parent = (await client.query<{ user_id?: string; workspace_tag?: string }>(
-        "SELECT user_id, workspace_tag FROM source_documents WHERE id = $1", [documentId],
-      )).rows[0];
-      const out: SourceChunk[] = [];
-      for (let i = 0; i < chunks.length; i++) {
-        const c = chunks[i];
-        const chunk: SourceChunk = {
-          id: randomUUID(),
-          documentId,
-          ordinal: startOrdinal + i,
-          content: c.content,
-          tokenCount: c.tokenCount,
-          filePath: c.filePath ?? null,
-          symbol: c.symbol ?? null,
-          startLine: c.startLine ?? null,
-          endLine: c.endLine ?? null,
-          hash: createHash("sha1").update(c.content).digest("hex"),
-        };
-        await client.query(
-          `INSERT INTO source_chunks (id, document_id, user_id, workspace_tag, ordinal, content, token_count, file_path, symbol, start_line, end_line, hash)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-          [chunk.id, chunk.documentId, parent?.user_id ?? null, parent?.workspace_tag ?? null, chunk.ordinal, chunk.content, chunk.tokenCount, chunk.filePath, chunk.symbol, chunk.startLine, chunk.endLine, chunk.hash],
-        );
-        out.push(chunk);
-      }
-      const codeChunks = out.filter((c) => c.symbol);
-      if (codeChunks.length >= 2) {
-        const edges = extractIntraFileCallEdges(codeChunks.map((c) => ({ id: c.id, symbol: c.symbol, content: c.content })));
-        for (const e of edges) {
-          await client.query(
-            "INSERT INTO code_symbol_edges (document_id, from_chunk_id, to_chunk_id, kind) VALUES ($1,$2,$3,'calls') ON CONFLICT DO NOTHING",
-            [documentId, e.fromChunkId, e.toChunkId],
-          );
-        }
-      }
-      return out;
-    });
+  public getSourceChunksByDocument(documentId: string): Promise<SourceChunk[]> {
+    return sourcesTree.getSourceChunksByDocument(this.exec, documentId);
   }
 
-  public async getSourceChunk(id: string): Promise<SourceChunk | null> {
-    const row = await this.one("SELECT * FROM source_chunks WHERE id = $1", [id]);
-    return row ? this.rowToSourceChunk(row) : null;
+  public getSourceChunkByFileLine(userId: string, filePath: string, line: number): Promise<SourceChunk | null> {
+    return sourcesTree.getSourceChunkByFileLine(this.exec, userId, filePath, line);
   }
 
-  public async getSourceChunksByDocument(documentId: string): Promise<SourceChunk[]> {
-    const rows = await this.rows("SELECT * FROM source_chunks WHERE document_id = $1 ORDER BY ordinal ASC", [documentId]);
-    return rows.map((r) => this.rowToSourceChunk(r));
-  }
-
-  public async getSourceChunkByFileLine(userId: string, filePath: string, line: number): Promise<SourceChunk | null> {
-    const needle = filePath.replace(/^\.\//, "");
-    const row = await this.one<any>(
-      `SELECT * FROM source_chunks
-        WHERE user_id = $1 AND file_path IS NOT NULL AND (file_path = $2 OR file_path LIKE $3)
-          AND start_line IS NOT NULL AND end_line IS NOT NULL AND start_line <= $4 AND end_line >= $4
-        ORDER BY (end_line - start_line) ASC LIMIT 1`,
-      [userId, needle, `%${needle}`, line],
-    );
-    return row ? this.rowToSourceChunk(row) : null;
-  }
-
-  public async searchSourceChunksFts(
+  public searchSourceChunksFts(
     userId: string,
     query: string,
     limit: number,
     opts?: { excludeChunkId?: string; excludeDocumentId?: string; filePathLike?: string[] },
   ): Promise<Array<SourceChunk & { ftsRank: number }>> {
-    if (!ftsHasTerms(query)) return [];
-    // Code search seeds from a chunk's identifier bag, where ANY shared token is
-    // a useful neighbour — match with OR semantics (FTS5 parity), not the AND of
-    // `plainto_tsquery`. Without this a camelCase seed (`parseConfig`, stored as
-    // the single lexeme `parseconfig`) never matches a split `parse & config`
-    // query. `orTsQuery` restricts tokens to `[\p{L}\p{N}_]`, so the body is a
-    // safe `to_tsquery` input. `english` config keeps consistency with the
-    // generated `content_tsv` column (migration 002) so the GIN index applies.
-    const tsq = orTsQuery(query);
-    if (!tsq) return [];
-    const cap = Math.max(1, Math.min(200, limit));
-    const fetch = Math.min(200, cap * 4);
-    // Generated content_tsv covers content + symbol (migration 002). Rank with
-    // ts_rank; the SQLite path uses FTS5 `rank` ascending — here higher ts_rank
-    // is better, and the code reranker (MEM-26/27) refines either way.
-    const rows = await this.rows<any>(
-      `SELECT sc.*, ts_rank(sc.content_tsv, to_tsquery('english', $2)) AS fts_rank
-         FROM source_chunks sc
-         JOIN source_documents d ON d.id = sc.document_id
-        WHERE sc.user_id = $1 AND sc.content_tsv @@ to_tsquery('english', $2) AND COALESCE(d.stale, 0) = 0
-        ORDER BY fts_rank DESC
-        LIMIT $3`,
-      [userId, tsq, fetch],
-    );
-    const exts = opts?.filePathLike;
-    const out: Array<SourceChunk & { ftsRank: number }> = [];
-    for (const r of rows) {
-      if (opts?.excludeChunkId && r.id === opts.excludeChunkId) continue;
-      if (opts?.excludeDocumentId && r.document_id === opts.excludeDocumentId) continue;
-      if (exts && exts.length > 0) {
-        const fp: string = r.file_path ?? "";
-        if (!exts.some((e) => fp.endsWith(e))) continue;
-      }
-      out.push({ ...this.rowToSourceChunk(r), ftsRank: asNumber(r.fts_rank) });
-      if (out.length >= cap) break;
-    }
-    return out;
+    return sourcesTree.searchSourceChunksFts(this.exec, userId, query, limit, opts);
   }
 
-  public async isSourceDocumentReferenced(documentId: string): Promise<boolean> {
-    const row = await this.one(
-      "SELECT 1 FROM source_chunks c JOIN cognitive_source_links l ON l.chunk_id = c.id WHERE c.document_id = $1 LIMIT 1",
-      [documentId],
-    );
-    return !!row;
+  public isSourceDocumentReferenced(documentId: string): Promise<boolean> {
+    return sourcesTree.isSourceDocumentReferenced(this.exec, documentId);
   }
 
-  public async replaceSourceChunks(documentId: string, chunks: SourceChunkInput[]): Promise<SourceChunk[]> {
-    await this.tx(async (client) => {
-      await client.query("DELETE FROM code_symbol_edges WHERE document_id = $1", [documentId]);
-      await client.query("DELETE FROM source_chunks WHERE document_id = $1", [documentId]);
-    });
-    return this.addSourceChunks(documentId, chunks);
+  public replaceSourceChunks(documentId: string, chunks: SourceChunkInput[]): Promise<SourceChunk[]> {
+    return sourcesTree.replaceSourceChunks(this.exec, documentId, chunks);
   }
 
-  public async getCodeEdgeNeighbors(userId: string, chunkId: string, direction: "callees" | "callers"): Promise<SourceChunk[]> {
-    const col = direction === "callees" ? "from_chunk_id" : "to_chunk_id";
-    const other = direction === "callees" ? "to_chunk_id" : "from_chunk_id";
-    const rows = await this.rows<any>(
-      `SELECT sc.* FROM code_symbol_edges e
-         JOIN source_chunks sc ON sc.id = e.${other}
-        WHERE e.${col} = $1 AND (sc.user_id = $2 OR sc.user_id IS NULL)`,
-      [chunkId, userId],
-    );
-    return rows.map((r) => this.rowToSourceChunk(r));
+  public getCodeEdgeNeighbors(userId: string, chunkId: string, direction: "callees" | "callers"): Promise<SourceChunk[]> {
+    return sourcesTree.getCodeEdgeNeighbors(this.exec, userId, chunkId, direction);
   }
 
-  public async linkRecordSources(userId: string, recordId: string, chunkIds: string[]): Promise<void> {
-    if (chunkIds.length === 0) return;
-    const now = new Date().toISOString();
-    await this.tx(async (client) => {
-      for (const chunkId of chunkIds) {
-        await client.query(
-          "INSERT INTO cognitive_source_links (user_id, record_id, chunk_id, created_at) VALUES ($1,$2,$3,$4) ON CONFLICT (record_id, chunk_id) DO NOTHING",
-          [userId, recordId, chunkId, now],
-        );
-      }
-    });
+  public linkRecordSources(userId: string, recordId: string, chunkIds: string[]): Promise<void> {
+    return sourcesTree.linkRecordSources(this.exec, userId, recordId, chunkIds);
   }
 
-  public async getStorageGovernanceStats(userId: string): Promise<{
+  public getStorageGovernanceStats(userId: string): Promise<{
     sourceDocuments: number;
     sourceChunks: { count: number; chars: number; orphanCount: number; orphanChars: number };
     treeNodes: { count: number; chars: number };
     vaultExports: number;
   }> {
-    const docs = await this.one<{ n: string }>("SELECT COUNT(*) AS n FROM source_documents WHERE user_id = $1", [userId]);
-    const chunks = await this.one<{ n: string; chars: string }>("SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(content)), 0) AS chars FROM source_chunks WHERE user_id = $1", [userId]);
-    const orphans = await this.one<{ n: string; chars: string }>(
-      `SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(content)), 0) AS chars
-         FROM source_chunks
-        WHERE user_id = $1 AND id NOT IN (SELECT chunk_id FROM cognitive_source_links WHERE user_id = $1)`,
-      [userId],
-    );
-    const tree = await this.one<{ n: string; chars: string }>("SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(summary_md)), 0) AS chars FROM memory_tree_nodes WHERE user_id = $1", [userId]);
-    const vault = await this.one<{ n: string }>("SELECT COUNT(*) AS n FROM vault_exports WHERE user_id = $1", [userId]);
-    return {
-      sourceDocuments: asNumber(docs?.n),
-      sourceChunks: { count: asNumber(chunks?.n), chars: asNumber(chunks?.chars), orphanCount: asNumber(orphans?.n), orphanChars: asNumber(orphans?.chars) },
-      treeNodes: { count: asNumber(tree?.n), chars: asNumber(tree?.chars) },
-      vaultExports: asNumber(vault?.n),
-    };
+    return sourcesTree.getStorageGovernanceStats(this.exec, userId);
   }
 
-  public async getRecordSourceChunks(userId: string, recordId: string): Promise<SourceChunk[]> {
-    const rows = await this.rows<any>(
-      `SELECT sc.* FROM cognitive_source_links l
-         JOIN source_chunks sc ON sc.id = l.chunk_id
-        WHERE l.record_id = $1 AND l.user_id = $2
-        ORDER BY sc.document_id ASC, sc.ordinal ASC`,
-      [recordId, userId],
-    );
-    return rows.map((r) => this.rowToSourceChunk(r));
+  public getRecordSourceChunks(userId: string, recordId: string): Promise<SourceChunk[]> {
+    return sourcesTree.getRecordSourceChunks(this.exec, userId, recordId);
   }
 
-  public async isRecordSourceStale(userId: string, recordId: string): Promise<boolean> {
-    const row = await this.one(
-      `SELECT 1 FROM cognitive_source_links l
-         JOIN source_chunks sc ON sc.id = l.chunk_id
-         JOIN source_documents d ON d.id = sc.document_id
-        WHERE l.record_id = $1 AND l.user_id = $2 AND COALESCE(d.stale, 0) = 1 LIMIT 1`,
-      [recordId, userId],
-    );
-    return !!row;
+  public isRecordSourceStale(userId: string, recordId: string): Promise<boolean> {
+    return sourcesTree.isRecordSourceStale(this.exec, userId, recordId);
   }
 
   // ── blackboard ─────────────────────────────────────────────────────────
 
-  private rowToBlackboardItem(row: any): BlackboardItem {
-    return {
-      id: row.id,
-      userId: row.user_id,
-      sourceChunkId: row.source_chunk_id ?? null,
-      candidate: typeof row.candidate_json === "string" ? JSON.parse(row.candidate_json) : row.candidate_json,
-      score: asNumber(row.score),
-      status: row.status,
-      conflictIds: row.conflict_ids_json ? (typeof row.conflict_ids_json === "string" ? JSON.parse(row.conflict_ids_json) : row.conflict_ids_json) : [],
-      createdAt: row.created_at,
-      committedRecordId: row.committed_record_id ?? null,
-    };
+  public stageBlackboardItems(userId: string, items: BlackboardItemInput[]): Promise<BlackboardItem[]> {
+    return sourcesTree.stageBlackboardItems(this.exec, userId, items);
   }
 
-  public async stageBlackboardItems(userId: string, items: BlackboardItemInput[]): Promise<BlackboardItem[]> {
-    const now = new Date().toISOString();
-    const staged: BlackboardItem[] = [];
-    await this.tx(async (client) => {
-      for (const input of items) {
-        const id = `bb_${randomUUID()}`;
-        await client.query(
-          `INSERT INTO memory_blackboard_items (id, user_id, source_chunk_id, candidate_json, score, status, conflict_ids_json, created_at, committed_record_id)
-           VALUES ($1,$2,$3,$4,$5,'pending','[]',$6,NULL)`,
-          [id, userId, input.sourceChunkId ?? null, JSON.stringify(input.candidate), input.score ?? 0, now],
-        );
-        staged.push({
-          id, userId, sourceChunkId: input.sourceChunkId ?? null, candidate: input.candidate,
-          score: input.score ?? 0, status: "pending", conflictIds: [], createdAt: now, committedRecordId: null,
-        });
-      }
-    });
-    return staged;
+  public getBlackboardItem(id: string): Promise<BlackboardItem | null> {
+    return sourcesTree.getBlackboardItem(this.exec, id);
   }
 
-  public async getBlackboardItem(id: string): Promise<BlackboardItem | null> {
-    const row = await this.one("SELECT * FROM memory_blackboard_items WHERE id = $1 LIMIT 1", [id]);
-    return row ? this.rowToBlackboardItem(row) : null;
+  public getBlackboardItems(userId: string, status?: BlackboardStatus): Promise<BlackboardItem[]> {
+    return sourcesTree.getBlackboardItems(this.exec, userId, status);
   }
 
-  public async getBlackboardItems(userId: string, status?: BlackboardStatus): Promise<BlackboardItem[]> {
-    const rows = status
-      ? await this.rows("SELECT * FROM memory_blackboard_items WHERE user_id = $1 AND status = $2 ORDER BY score DESC, created_at ASC", [userId, status])
-      : await this.rows("SELECT * FROM memory_blackboard_items WHERE user_id = $1 ORDER BY created_at ASC", [userId]);
-    return rows.map((r) => this.rowToBlackboardItem(r));
-  }
-
-  public async updateBlackboardItem(
+  public updateBlackboardItem(
     id: string,
     patch: { status?: BlackboardStatus; score?: number; conflictIds?: string[]; committedRecordId?: string | null },
   ): Promise<void> {
-    const sets: string[] = [];
-    const vals: any[] = [];
-    if (patch.status !== undefined) { sets.push("status = ?"); vals.push(patch.status); }
-    if (patch.score !== undefined) { sets.push("score = ?"); vals.push(patch.score); }
-    if (patch.conflictIds !== undefined) { sets.push("conflict_ids_json = ?"); vals.push(JSON.stringify(patch.conflictIds)); }
-    if (patch.committedRecordId !== undefined) { sets.push("committed_record_id = ?"); vals.push(patch.committedRecordId); }
-    if (sets.length === 0) return;
-    vals.push(id);
-    await this.run(pg(`UPDATE memory_blackboard_items SET ${sets.join(", ")} WHERE id = ?`), vals);
+    return sourcesTree.updateBlackboardItem(this.exec, id, patch);
   }
 
   // ── memory tree ─────────────────────────────────────────────────────────
 
-  private rowToTreeNode(row: any): MemoryTreeNode {
-    return {
-      id: row.id,
-      userId: row.user_id,
-      kind: row.kind,
-      parentId: row.parent_id ?? null,
-      level: asNumber(row.level),
-      summaryMd: row.summary_md ?? "",
-      sourceChunkIds: row.source_chunk_ids_json ? (typeof row.source_chunk_ids_json === "string" ? JSON.parse(row.source_chunk_ids_json) : row.source_chunk_ids_json) : [],
-      sealedAt: row.sealed_at ?? null,
-      heatScore: asNumber(row.heat_score),
-      createdAt: row.created_at,
-    };
+  public getTreeNodeIdByChunkId(userId: string, chunkId: string): Promise<string | null> {
+    return sourcesTree.getTreeNodeIdByChunkId(this.exec, userId, chunkId);
   }
 
-  public async getTreeNodeIdByChunkId(userId: string, chunkId: string): Promise<string | null> {
-    const needle = `%"${chunkId.replace(/[\\%_]/g, (c) => "\\" + c)}"%`;
-    // `seq DESC` is the faithful analogue of SQLite's `rowid DESC` tiebreak: on
-    // a created_at tie (same-millisecond appends) it deterministically returns
-    // the newest covering node rather than an arbitrary heap-ordered row.
-    const row = await this.one<{ id: string }>(
-      `SELECT id FROM memory_tree_nodes
-        WHERE user_id = $1 AND source_chunk_ids_json LIKE $2 ESCAPE '\\'
-        ORDER BY created_at DESC, seq DESC LIMIT 1`,
-      [userId, needle],
-    );
-    return row?.id ?? null;
+  public appendTreeNode(userId: string, input: MemoryTreeNodeInput): Promise<MemoryTreeNode> {
+    return sourcesTree.appendTreeNode(this.exec, userId, input);
   }
 
-  public async appendTreeNode(userId: string, input: MemoryTreeNodeInput): Promise<MemoryTreeNode> {
-    const node: MemoryTreeNode = {
-      id: `tree_${randomUUID()}`,
-      userId,
-      kind: input.kind,
-      parentId: input.parentId ?? null,
-      level: input.level ?? 0,
-      summaryMd: input.summaryMd,
-      sourceChunkIds: input.sourceChunkIds ?? [],
-      sealedAt: null,
-      heatScore: input.heatScore ?? 0,
-      createdAt: new Date().toISOString(),
-    };
-    await this.run(
-      `INSERT INTO memory_tree_nodes (id, user_id, kind, parent_id, level, summary_md, source_chunk_ids_json, sealed_at, heat_score, created_at, scene_key)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,NULL,$8,$9,$10)`,
-      [node.id, userId, node.kind, node.parentId, node.level, node.summaryMd, JSON.stringify(node.sourceChunkIds), node.heatScore, node.createdAt, input.sceneKey ?? null],
-    );
-    return node;
+  public getDistinctScenes(userId: string): Promise<Array<{ sceneName: string; recordCount: number }>> {
+    return sourcesTree.getDistinctScenes(this.exec, userId);
   }
 
-  public async getDistinctScenes(userId: string): Promise<Array<{ sceneName: string; recordCount: number }>> {
-    const rows = await this.rows<{ scenename: string; recordcount: string }>(
-      `SELECT scene_name AS sceneName, COUNT(*) AS recordCount
-         FROM cognitive_records
-        WHERE user_id = $1 AND archived = 0 AND scene_name IS NOT NULL AND scene_name != ''
-        GROUP BY scene_name
-        ORDER BY recordCount DESC`,
-      [userId],
-    );
-    // pg lowercases unquoted output aliases; read either casing safely.
-    return rows.map((r: any) => ({ sceneName: r.scenename ?? r.sceneName, recordCount: asNumber(r.recordcount ?? r.recordCount) }));
+  public getSceneLeafKeys(userId: string): Promise<string[]> {
+    return sourcesTree.getSceneLeafKeys(this.exec, userId);
   }
 
-  public async getSceneLeafKeys(userId: string): Promise<string[]> {
-    const rows = await this.rows<{ scene_key: string }>(
-      "SELECT DISTINCT scene_key FROM memory_tree_nodes WHERE user_id = $1 AND scene_key IS NOT NULL",
-      [userId],
-    );
-    return rows.map((r) => r.scene_key);
+  public getSceneRecordContents(userId: string, sceneName: string, limit = 8): Promise<string[]> {
+    return sourcesTree.getSceneRecordContents(this.exec, userId, sceneName, limit);
   }
 
-  public async getSceneRecordContents(userId: string, sceneName: string, limit = 8): Promise<string[]> {
-    const rows = await this.rows<{ content: string }>(
-      "SELECT content FROM cognitive_records WHERE user_id = $1 AND scene_name = $2 AND archived = 0 ORDER BY created_time DESC LIMIT $3",
-      [userId, sceneName, limit],
-    );
-    return rows.map((r) => r.content);
+  public getUnsealedSceneLeaves(userId: string, limit = 50): Promise<MemoryTreeNode[]> {
+    return sourcesTree.getUnsealedSceneLeaves(this.exec, userId, limit);
   }
 
-  public async getUnsealedSceneLeaves(userId: string, limit = 50): Promise<MemoryTreeNode[]> {
-    const rows = await this.rows<any>(
-      `SELECT * FROM memory_tree_nodes
-        WHERE user_id = $1 AND scene_key IS NOT NULL AND level = 0 AND sealed_at IS NULL AND parent_id IS NULL
-        ORDER BY created_at ASC LIMIT $2`,
-      [userId, limit],
-    );
-    return rows.map((r) => this.rowToTreeNode(r));
+  public getTreeNode(id: string): Promise<MemoryTreeNode | null> {
+    return sourcesTree.getTreeNode(this.exec, id);
   }
 
-  public async getTreeNode(id: string): Promise<MemoryTreeNode | null> {
-    const row = await this.one("SELECT * FROM memory_tree_nodes WHERE id = $1 LIMIT 1", [id]);
-    return row ? this.rowToTreeNode(row) : null;
+  public getTreeChildren(parentId: string): Promise<MemoryTreeNode[]> {
+    return sourcesTree.getTreeChildren(this.exec, parentId);
   }
 
-  public async getTreeChildren(parentId: string): Promise<MemoryTreeNode[]> {
-    const rows = await this.rows("SELECT * FROM memory_tree_nodes WHERE parent_id = $1 ORDER BY created_at ASC", [parentId]);
-    return rows.map((r) => this.rowToTreeNode(r));
+  public getTreeRoots(userId: string, kind?: MemoryTreeKind): Promise<MemoryTreeNode[]> {
+    return sourcesTree.getTreeRoots(this.exec, userId, kind);
   }
 
-  public async getTreeRoots(userId: string, kind?: MemoryTreeKind): Promise<MemoryTreeNode[]> {
-    const rows = kind
-      ? await this.rows("SELECT * FROM memory_tree_nodes WHERE user_id = $1 AND parent_id IS NULL AND kind = $2 ORDER BY heat_score DESC, created_at ASC", [userId, kind])
-      : await this.rows("SELECT * FROM memory_tree_nodes WHERE user_id = $1 AND parent_id IS NULL ORDER BY heat_score DESC, created_at ASC", [userId]);
-    return rows.map((r) => this.rowToTreeNode(r));
+  public setTreeParent(childIds: string[], parentId: string): Promise<void> {
+    return sourcesTree.setTreeParent(this.exec, childIds, parentId);
   }
 
-  public async setTreeParent(childIds: string[], parentId: string): Promise<void> {
-    if (childIds.length === 0) return;
-    await this.run("UPDATE memory_tree_nodes SET parent_id = $1 WHERE id = ANY($2::text[])", [parentId, childIds]);
+  public sealTreeNode(id: string): Promise<void> {
+    return sourcesTree.sealTreeNode(this.exec, id);
   }
 
-  public async sealTreeNode(id: string): Promise<void> {
-    await this.run("UPDATE memory_tree_nodes SET sealed_at = $1 WHERE id = $2 AND sealed_at IS NULL", [new Date().toISOString(), id]);
+  public updateTreeNodeSummary(id: string, summaryMd: string): Promise<void> {
+    return sourcesTree.updateTreeNodeSummary(this.exec, id, summaryMd);
   }
 
-  public async updateTreeNodeSummary(id: string, summaryMd: string): Promise<void> {
-    await this.run("UPDATE memory_tree_nodes SET summary_md = $1 WHERE id = $2", [summaryMd, id]);
-  }
-
-  public async getAllTreeNodes(userId: string): Promise<MemoryTreeNode[]> {
-    const rows = await this.rows("SELECT * FROM memory_tree_nodes WHERE user_id = $1 ORDER BY level ASC, created_at ASC", [userId]);
-    return rows.map((r) => this.rowToTreeNode(r));
+  public getAllTreeNodes(userId: string): Promise<MemoryTreeNode[]> {
+    return sourcesTree.getAllTreeNodes(this.exec, userId);
   }
 
   // ── vault export ledger ──────────────────────────────────────────────────
 
-  public async upsertVaultExport(userId: string, input: VaultExportInput): Promise<void> {
-    await this.run(
-      `INSERT INTO vault_exports (user_id, path, hash, kind, ref_id, exported_at)
-       VALUES ($1,$2,$3,$4,$5,$6)
-       ON CONFLICT (user_id, path) DO UPDATE SET hash = EXCLUDED.hash, kind = EXCLUDED.kind, ref_id = EXCLUDED.ref_id, exported_at = EXCLUDED.exported_at`,
-      [userId, input.path, input.hash, input.kind, input.refId, new Date().toISOString()],
-    );
+  public upsertVaultExport(userId: string, input: VaultExportInput): Promise<void> {
+    return sourcesTree.upsertVaultExport(this.exec, userId, input);
   }
 
-  public async getVaultExports(userId: string): Promise<VaultExportEntry[]> {
-    const rows = await this.rows<any>("SELECT * FROM vault_exports WHERE user_id = $1 ORDER BY path ASC", [userId]);
-    return rows.map((r) => ({ userId: r.user_id, path: r.path, hash: r.hash, kind: r.kind, refId: r.ref_id, exportedAt: r.exported_at }));
+  public getVaultExports(userId: string): Promise<VaultExportEntry[]> {
+    return sourcesTree.getVaultExports(this.exec, userId);
   }
 }

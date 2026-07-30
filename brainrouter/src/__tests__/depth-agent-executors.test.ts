@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { getJobExecutor, onDemandRunnableAgentIds, type JobExecContext } from "../memory/scheduler/executors.js";
+import { KNOWLEDGE_PARSE_JOB_KIND } from "../knowledge/contracts/document.js";
 
 /**
  * 0.4.3 (MEM-10) — the three depth agents wired as on-demand executors
@@ -18,6 +19,18 @@ describe("depth-agent executors", () => {
       expect(ids, id).toContain(id);
       expect(getJobExecutor(id)).toBeTypeOf("function");
     }
+  });
+
+  it("registers vulnerability intelligence sync as an on-demand executor", () => {
+    expect(onDemandRunnableAgentIds()).toContain("vulnerability_sync");
+    expect(getJobExecutor("vulnerability_sync")).toBeTypeOf("function");
+    expect(onDemandRunnableAgentIds()).toContain("vulnerability_scan");
+    expect(getJobExecutor("vulnerability_scan")).toBeTypeOf("function");
+  });
+
+  it("resolves knowledge parsing internally without advertising manual execution", () => {
+    expect(getJobExecutor(KNOWLEDGE_PARSE_JOB_KIND)).toBeTypeOf("function");
+    expect(onDemandRunnableAgentIds()).not.toContain(KNOWLEDGE_PARSE_JOB_KIND);
   });
 
   it("benchmark_eval delegates to engine.runRetrievalBenchmark", async () => {

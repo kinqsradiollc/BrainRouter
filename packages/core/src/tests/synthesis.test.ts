@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { synthesizeChildren, renderSynthesis } from '../orchestration/synthesis.js';
+import { synthesizeChildren, renderSynthesis } from '../orchestration/workflow/synthesis.js';
 
 // A reviewer's output contract requires a "## Summary" + "## Findings" (per
 // outputContracts.ts). A compliant body parses; a bare one doesn't.
@@ -57,7 +57,7 @@ test('a role with no output contract reports contractStatus none + preview', () 
 
 // MAS-SANITIZE (B5) — a child that leaked tool-call-shaped markup as TEXT (the
 // NotionApp2 minimax worker) must NOT propagate that into the parent's prompt.
-import { sanitizeForHandoff } from '../orchestration/synthesis.js';
+import { sanitizeForHandoff } from '../orchestration/workflow/synthesis.js';
 
 test('sanitizeForHandoff strips reasoning blocks and tool-call-shaped markup', () => {
   const dirty = 'Before <think>secret chain of thought</think> after ' +

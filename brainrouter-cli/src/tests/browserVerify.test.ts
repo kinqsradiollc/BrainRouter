@@ -6,7 +6,7 @@ import {
   classifyArtifacts,
   runBrowserSmoke,
   formatBrowserSmokeResult,
-} from '../runtime/browserVerify.js';
+} from '../runtime/verify/browserVerify.js';
 
 test('buildBrowserSmokeCommand substitutes {url}/{out} and the ${...} variants', () => {
   assert.equal(

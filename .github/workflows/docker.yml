@@ -1,0 +1,48 @@
+name: Docker image
+
+# Validate that the deploy brain image builds from a clean tree, so it stops
+# silently drifting (a stale lockfile, a moved file, a broken COPY only surfaced
+# at `docker compose up --build` time before this). Build-ONLY — no registry
+# push. Runs only when an image input changes. Not a required check; it's an
+# early-warning that the production image still compiles.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "deploy/brain/**"
+      - "deploy/stt/**"
+      - "brainrouter/**"
+      - "packages/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".dockerignore"
+      - ".github/workflows/docker.yml"
+
+concurrency:
+  group: docker-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  brain-image:
+    name: Build brain image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      # Build the default `runtime` target (the migrator/worker/api/gateway share
+      # its base, so a green runtime build validates all of them). GHA cache keeps
+      # the npm-ci + workspace-build layers warm across runs.
+      - name: Build brain (runtime target)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/brain/Dockerfile
+          target: runtime
+          push: false
+          load: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

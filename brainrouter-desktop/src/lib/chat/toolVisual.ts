@@ -11,7 +11,13 @@ export interface ToolVisual {
   tone: ToolTone;
 }
 
-export function toolVisual(tool: string): ToolVisual {
+export type ToolOutcome = 'pending' | 'succeeded' | 'failed';
+
+export function toolVisual(
+  tool: string,
+  outcome: ToolOutcome = 'succeeded',
+  delegationState?: 'accepted' | 'not-started',
+): ToolVisual {
   const t = (tool || '').toLowerCase().replace(/^mcp_[a-z0-9]+_/, '');
   const has = (s: string) => t.includes(s);
   if (t === 'write_file' || t === 'create_file') return { verb: 'Wrote', icon: 'file', tone: 'edit' };
@@ -21,6 +27,8 @@ export function toolVisual(tool: string): ToolVisual {
   if (has('grep') || (has('search') && !has('web') && !has('memory'))) return { verb: 'Searched', icon: 'search', tone: 'search' };
   if (has('glob') || has('list_dir') || has('list_files') || has('ls')) return { verb: 'Listed', icon: 'folder', tone: 'list' };
   if (has('web') || has('fetch_url') || has('http')) return { verb: 'Fetched', icon: 'globe', tone: 'web' };
+  if (delegationState === 'not-started') return { verb: 'Delegation not started', icon: 'tasks', tone: 'agent' };
+  if (delegationState === 'accepted') return { verb: 'Delegated', icon: 'tasks', tone: 'agent' };
   if (has('agent') || has('spawn') || has('delegate') || has('workflow') || has('task')) return { verb: 'Delegated', icon: 'tasks', tone: 'agent' };
   if (has('memory') || has('recall') || has('persona') || has('briefing')) return { verb: 'Memory', icon: 'plan', tone: 'memory' };
   return { verb: 'Used', icon: 'diff', tone: 'default' };

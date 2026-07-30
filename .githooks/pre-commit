@@ -18,7 +18,12 @@ files=$(git diff --cached --name-only --diff-filter=ACM \
   | grep -vE '(^|/)(dist|dist-electron|node_modules)/' \
   || true)
 
-if [ -z "$files" ]; then
+boundary_changed=$(git diff --cached --name-only --diff-filter=ACM \
+  | grep -E '(^|/)(package\.json|[^/]+\.(ts|tsx|js|mjs|cjs))$' \
+  | grep -vE '(^|/)(dist|dist-electron|node_modules)/' \
+  || true)
+
+if [ -z "$files" ] && [ -z "$boundary_changed" ]; then
   exit 0
 fi
 
@@ -32,5 +37,11 @@ if [ ! -x "$eslint_bin" ]; then
 fi
 
 echo "pre-commit: linting staged files…"
-# shellcheck disable=SC2086
-"$eslint_bin" --no-error-on-unmatched-pattern $files
+if [ -n "$boundary_changed" ]; then
+  # shellcheck disable=SC2086
+  node "$root/scripts/check-package-boundaries.mjs" --files $files
+fi
+if [ -n "$files" ]; then
+  # shellcheck disable=SC2086
+  "$eslint_bin" --no-error-on-unmatched-pattern $files
+fi

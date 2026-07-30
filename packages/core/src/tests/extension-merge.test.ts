@@ -6,8 +6,8 @@ import {
   extensionHookHandlers,
   registerExtensionHook,
 } from '../extension/registry.js';
-import { registryAllowedTools, effectiveToolRegistry } from '../tool/registry.js';
-import { localToolExecutor } from '../tool/executors.js';
+import { registryAllowedTools, effectiveToolRegistry } from '../tool/registry/registry.js';
+import { localToolExecutor } from '../tool/registry/executors.js';
 import { PROVIDER_CATALOG, refreshProviderCatalog } from '../provider/catalog.js';
 
 const readTool = {
@@ -34,7 +34,7 @@ test('a contributed read tool is exposed in read mode, executes, and is gated by
 
   const exec = localToolExecutor('query_warehouse')!;
   assert.equal(exec.accessTier(), 'read');
-  assert.equal(await exec.handle({ args: {}, legacyHandle: async () => 'unused' }), 'rows: 3');
+  assert.equal(await exec.handle({ args: {} }), 'rows: 3');
   resetExtensionContributions();
 });
 

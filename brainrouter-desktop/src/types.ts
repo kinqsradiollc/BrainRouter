@@ -3,11 +3,22 @@
  * session + fleet rows, and the workflow-detail shape. Extracted from App.tsx
  * so the chat components and the App shell agree on one definition.
  */
+import type { SteeringReceiptEventView } from '@kinqs/brainrouter-agent-protocol';
+
 /** Composer / header popover ids (which menu is open). */
 export type PopId = '' | 'mode' | 'model' | 'effort' | 'ctx' | 'export' | 'branch' | 'branch-env' | 'plus' | 'splus' | 'bplus' | 'repo' | 'local' | 'commit' | 'title' | 'editor';
 
 export type PlanItem = { step: string; status: 'pending' | 'in_progress' | 'completed'; acceptance?: string };
-export type ToolItem = { id: number | string; tool: string; summary: string; preview?: string; ok: boolean; child?: string; file?: string };
+export type ToolItem = {
+  id: number | string;
+  tool: string;
+  summary: string;
+  preview?: string;
+  ok: boolean;
+  child?: string;
+  file?: string;
+  delegationState?: 'accepted' | 'not-started';
+};
 
 /** One recalled memory shown in a pre-turn briefing row. */
 export type BriefingRecord = { id: string; type?: string; priority?: number; content?: string; source?: string; score?: number };
@@ -15,8 +26,17 @@ export type BriefingRecord = { id: string; type?: string; priority?: number; con
 /** One file in an end-of-turn changeset card (Codex-style: path · status · +/-). */
 export type ChangesetFile = { path: string; status: string; added: number; removed: number };
 
+export type DeliveryMeta = {
+  id: string;
+  mode: 'queue' | 'steer';
+  state: 'queued' | 'steered' | 'applied' | 'running' | 'completed' | 'canceled';
+  position?: number;
+  receipt?: SteeringReceiptEventView;
+};
+
 export type ChatRow =
-  | { id: number | string; kind: 'user'; text: string; ts: number }
+  | { id: number | string; kind: 'user'; text: string; ts: number; delivery?: DeliveryMeta }
+  | { id: number | string; kind: 'delivery'; text: string; ts: number; source: 'extension'; delivery: DeliveryMeta }
   | { id: number | string; kind: 'assistant'; text: string; ts: number }
   | { id: number | string; kind: 'status'; text: string; ts: number; action?: 'plan' }
   | { id: number | string; kind: 'error'; text: string; detail?: string; ts: number }
@@ -24,6 +44,10 @@ export type ChatRow =
   | { id: number | string; kind: 'loading'; ts: number }
   | { id: number | string; kind: 'briefing'; sources: string[]; records: BriefingRecord[]; ts: number }
   | { id: number | string; kind: 'changeset'; files: ChangesetFile[]; insertions: number; deletions: number; ts: number }
+  // ARTIFACT-INLINE (F2) — a compact chip in the transcript when the agent
+  // authors/updates an artifact (artifact_write), with an "Open" affordance that
+  // pops the Artifacts panel and focuses this artifact by id.
+  | { id: number | string; kind: 'artifact'; artifactId: string; title: string; format: string; artifactKind?: string; version?: number; action: 'created' | 'updated'; ts: number }
   | { id: number | string; kind: 'tool-group'; items: ToolItem[]; ts: number };
 
 export interface SessionRow {
@@ -59,6 +83,27 @@ export interface AttachmentUpload {
   attachmentId?: string;
   kind?: string;
   contextMarkdown?: string;
+  // §vision — for image attachments we retain the raw bytes + mime so the send
+  // path can forward them as an inline vision image (image_url sidecar), the
+  // same channel pasted images use. Non-image attachments leave these unset.
+  mediaType?: string;
+  dataBase64?: string;
+}
+
+/**
+ * §a11y-inspect (UI-TEST fusion) — a reference tag dragged from the Browser
+ * panel's Accessibility list (a source symbol → `ref` = `path:line#id`) or a UI
+ * Story chip (carries ordered `steps`). Rendered as a chip in the composer and
+ * serialized into the outgoing prompt on send.
+ */
+export interface ComponentTag {
+  id: string;
+  name: string;
+  kind?: string;
+  ref: string;
+  filePath?: string;
+  line?: number;
+  steps?: Array<{ action: string; target: string; text?: string }>;
 }
 
 export interface TaskViewState {

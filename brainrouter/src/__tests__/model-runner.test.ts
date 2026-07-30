@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ModelLLMRunner } from "../memory/llm/modelRunner.js";
+import { ModelLLMRunner, type LlmProviderOverride } from "../memory/llm/modelRunner.js";
 import {
   cognitiveBreakerOpen,
   recordCognitiveFailure,
@@ -30,13 +30,21 @@ function bodyOf(call: unknown[]): any {
   return JSON.parse(init.body as string);
 }
 
+/**
+ * ADR-012 — the runner's credentials now come from the DB-resolved provider
+ * override, not `.env`. `mk()` sets a remote-endpoint override (so the local
+ * timeout floor doesn't apply) and merges any per-test fields (e.g. fallback).
+ */
+function mk(over: Partial<LlmProviderOverride> = {}): ModelLLMRunner {
+  const r = new ModelLLMRunner();
+  r.setProviderOverride({ endpoint: "https://example.test/v1/chat/completions", apiKey: "test-key", ...over });
+  return r;
+}
+
 describe("ModelLLMRunner fallback model", () => {
   beforeEach(() => {
     resetCognitiveBreakerForTests();
     resetSemaphoreForTests();
-    vi.stubEnv("BRAINROUTER_LLM_API_KEY", "test-key");
-    // Keep the endpoint remote so the local 10-min timeout floor doesn't apply.
-    vi.stubEnv("BRAINROUTER_LLM_ENDPOINT", "https://example.test/v1/chat/completions");
   });
 
   afterEach(() => {
@@ -46,14 +54,13 @@ describe("ModelLLMRunner fallback model", () => {
     resetCognitiveBreakerForTests();
   });
 
-  it("falls back to BRAINROUTER_LLM_FALLBACK_MODEL on 502, then succeeds", async () => {
-    vi.stubEnv("BRAINROUTER_LLM_FALLBACK_MODEL", "fallback-model");
+  it("falls back to the provider's fallbackModel on 502, then succeeds", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(errorResponse(502, "Bad Gateway"))
       .mockResolvedValueOnce(okResponse("from-fallback"));
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await new ModelLLMRunner().run({ prompt: "hi", taskId: "cognitive-extraction" });
+    const result = await mk({ fallbackModel: "fallback-model" }).run({ prompt: "hi", taskId: "cognitive-extraction" });
 
     expect(result).toBe("from-fallback");
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -62,25 +69,22 @@ describe("ModelLLMRunner fallback model", () => {
   });
 
   it("does NOT fall back on a 400 client error", async () => {
-    vi.stubEnv("BRAINROUTER_LLM_FALLBACK_MODEL", "fallback-model");
     const fetchMock = vi.fn().mockResolvedValue(errorResponse(400, "Bad Request"));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(new ModelLLMRunner().run({ prompt: "hi", taskId: "t" })).rejects.toThrow(/400/);
+    await expect(mk({ fallbackModel: "fallback-model" }).run({ prompt: "hi", taskId: "t" })).rejects.toThrow(/400/);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("is a no-op when no fallback model is configured", async () => {
-    vi.stubEnv("BRAINROUTER_LLM_FALLBACK_MODEL", "");
     const fetchMock = vi.fn().mockResolvedValue(errorResponse(502, "Bad Gateway"));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(new ModelLLMRunner().run({ prompt: "hi", taskId: "t" })).rejects.toThrow(/502/);
+    await expect(mk().run({ prompt: "hi", taskId: "t" })).rejects.toThrow(/502/);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("falls back on a timeout error", async () => {
-    vi.stubEnv("BRAINROUTER_LLM_FALLBACK_MODEL", "fallback-model");
     const timeoutErr = new Error("The operation was aborted due to timeout");
     timeoutErr.name = "TimeoutError";
     const fetchMock = vi.fn()
@@ -88,7 +92,7 @@ describe("ModelLLMRunner fallback model", () => {
       .mockResolvedValueOnce(okResponse("recovered"));
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await new ModelLLMRunner().run({ prompt: "hi", taskId: "t" });
+    const result = await mk({ fallbackModel: "fallback-model" }).run({ prompt: "hi", taskId: "t" });
 
     expect(result).toBe("recovered");
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -100,10 +104,17 @@ describe("ModelLLMRunner fallback model", () => {
       .mockResolvedValueOnce(okResponse("loaded-now"));
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await new ModelLLMRunner().run({ prompt: "hi", taskId: "t" });
+    const result = await mk().run({ prompt: "hi", taskId: "t" });
 
     expect(result).toBe("loaded-now");
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("is unconfigured (LLM_NOT_CONFIGURED) when no provider override is set", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(new ModelLLMRunner().run({ prompt: "hi", taskId: "t" })).rejects.toMatchObject({ code: "LLM_NOT_CONFIGURED" });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
@@ -111,8 +122,6 @@ describe("ModelLLMRunner request body options", () => {
   beforeEach(() => {
     resetCognitiveBreakerForTests();
     resetSemaphoreForTests();
-    vi.stubEnv("BRAINROUTER_LLM_API_KEY", "test-key");
-    vi.stubEnv("BRAINROUTER_LLM_ENDPOINT", "https://example.test/v1/chat/completions");
   });
 
   afterEach(() => {
@@ -126,7 +135,7 @@ describe("ModelLLMRunner request body options", () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse());
     vi.stubGlobal("fetch", fetchMock);
 
-    await new ModelLLMRunner().run({ prompt: "hi", taskId: "cognitive-extraction" });
+    await mk().run({ prompt: "hi", taskId: "cognitive-extraction" });
 
     const body = bodyOf(fetchMock.mock.calls[0]);
     expect(body.max_tokens).toBe(256);
@@ -135,12 +144,11 @@ describe("ModelLLMRunner request body options", () => {
 
   it("adds response_format for extraction only when JSON mode is on", async () => {
     vi.stubEnv("BRAINROUTER_LLM_JSON_MODE", "on");
-    // Fresh Response per call — a body can only be read once, and run() is called twice here.
     const fetchMock = vi.fn().mockImplementation(async () => okResponse());
     vi.stubGlobal("fetch", fetchMock);
 
-    await new ModelLLMRunner().run({ prompt: "hi", taskId: "cognitive-extraction" });
-    await new ModelLLMRunner().run({ prompt: "hi", taskId: "graph-extraction" });
+    await mk().run({ prompt: "hi", taskId: "cognitive-extraction" });
+    await mk().run({ prompt: "hi", taskId: "graph-extraction" });
 
     expect(bodyOf(fetchMock.mock.calls[0]).response_format).toEqual({ type: "json_object" });
     expect(bodyOf(fetchMock.mock.calls[1]).response_format).toBeUndefined();
@@ -156,8 +164,6 @@ describe("ModelLLMRunner structured output (forced tool)", () => {
   beforeEach(() => {
     resetCognitiveBreakerForTests();
     resetSemaphoreForTests();
-    vi.stubEnv("BRAINROUTER_LLM_API_KEY", "test-key");
-    vi.stubEnv("BRAINROUTER_LLM_ENDPOINT", "https://example.test/v1/chat/completions");
   });
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -170,7 +176,7 @@ describe("ModelLLMRunner structured output (forced tool)", () => {
     const fetchMock = vi.fn().mockResolvedValue(toolResponse("emit", args));
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await new ModelLLMRunner().run({ prompt: "hi", taskId: "cognitive-extraction", tool });
+    const result = await mk().run({ prompt: "hi", taskId: "cognitive-extraction", tool });
 
     expect(result).toBe(args); // raw tool-call arguments, not message.content
     const body = bodyOf(fetchMock.mock.calls[0]);
@@ -182,7 +188,7 @@ describe("ModelLLMRunner structured output (forced tool)", () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse("[]"));
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await new ModelLLMRunner().run({ prompt: "hi", taskId: "t", tool });
+    const result = await mk().run({ prompt: "hi", taskId: "t", tool });
     expect(result).toBe("[]");
   });
 
@@ -192,7 +198,7 @@ describe("ModelLLMRunner structured output (forced tool)", () => {
       .mockResolvedValueOnce(okResponse("[]"));
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await new ModelLLMRunner().run({ prompt: "hi", taskId: "t", tool });
+    const result = await mk().run({ prompt: "hi", taskId: "t", tool });
 
     expect(result).toBe("[]");
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -205,7 +211,7 @@ describe("ModelLLMRunner structured output (forced tool)", () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse("plain"));
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await new ModelLLMRunner().run({ prompt: "hi", taskId: "t" });
+    const result = await mk().run({ prompt: "hi", taskId: "t" });
     expect(result).toBe("plain");
     expect(bodyOf(fetchMock.mock.calls[0]).tools).toBeUndefined();
   });
@@ -215,8 +221,6 @@ describe("cognitive circuit breaker", () => {
   beforeEach(() => {
     resetCognitiveBreakerForTests();
     resetSemaphoreForTests();
-    vi.stubEnv("BRAINROUTER_LLM_API_KEY", "test-key");
-    vi.stubEnv("BRAINROUTER_LLM_ENDPOINT", "https://example.test/v1/chat/completions");
   });
 
   afterEach(() => {
@@ -253,7 +257,7 @@ describe("cognitive circuit breaker", () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse());
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(new ModelLLMRunner().run({ prompt: "hi", taskId: "t" }))
+    await expect(mk().run({ prompt: "hi", taskId: "t" }))
       .rejects.toThrow(/circuit open/);
     expect(fetchMock).not.toHaveBeenCalled();
   });

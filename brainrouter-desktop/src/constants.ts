@@ -34,5 +34,6 @@ export const VALID_PANEL_IDS = new Set<PanelId>(PANEL_DEFS.map((p) => p.id));
 export const FOREGROUND_ONLY_KINDS = new Set<string>([
   'status', 'reasoning-delta', 'assistant-turn-start', 'assistant-delta',
   'assistant-turn-end', 'tool-end', 'child-tool-start', 'child-tool-end',
-  'child-complete', 'plan-update', 'compaction', 'memory', 'tokens-updated', 'notice',
+  'child-complete', 'plan-update', 'profile-stage', 'compaction', 'memory', 'tokens-updated', 'notice',
+  'input-delivery',
 ]);

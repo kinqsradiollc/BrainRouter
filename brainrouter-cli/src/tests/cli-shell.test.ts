@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { buildTheme, resolveTheme } from '../cli/theme.js';
-import { renderBanner, resolveDisplayedMcpState } from '../cli/banner.js';
-import { isKnownSegment, renderSegment, renderSegments, SEGMENT_NAMES } from '../cli/statusline.js';
-import { gatherWhereInputs, renderWhere } from '../cli/whereView.js';
+import { buildTheme, resolveTheme } from '../cli/theme/theme.js';
+import { renderBanner, resolveDisplayedMcpState } from '../cli/view/banner.js';
+import { isKnownSegment, renderSegment, renderSegments, SEGMENT_NAMES } from '../cli/view/statusline.js';
+import { gatherWhereInputs, renderWhere } from '../cli/view/whereView.js';
 import { readPreferences, writePreferences } from '@kinqs/brainrouter-core/session';
 import { blockGoal, setGoal, tickGoalIteration } from '@kinqs/brainrouter-core/goal';
 import { updatePlan } from '@kinqs/brainrouter-core/task';
@@ -43,15 +43,11 @@ function withTempWorkspace(fn: (workspace: string) => void) {
 
 test('theme: mono palette returns identity (no ANSI escapes) for color tokens', () => {
   const theme = buildTheme('mono');
-  // mono should leave plain strings unchanged on all semantic tokens
-  // EXCEPT heading which keeps bold for legibility — that's the documented
-  // tradeoff in theme.ts.
-  for (const token of ['primary', 'secondary', 'success', 'warning', 'danger', 'info', 'muted', 'dim', 'plain'] as const) {
+  // Mono is byte-plain for pipes, snapshots, and reduced-color terminals.
+  for (const token of ['primary', 'secondary', 'success', 'warning', 'danger', 'info', 'muted', 'dim', 'heading', 'plain'] as const) {
     const styled = theme[token]('hello');
     assert.equal(styled, 'hello', `mono.${token} should be identity`);
   }
-  // heading is bold even in mono; just assert it contains the original text
-  assert.ok(theme.heading('hello').includes('hello'));
 });
 
 test('theme: dark palette wraps text and reports mode = dark', () => {

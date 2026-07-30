@@ -30,27 +30,7 @@ interface CodeBlockProps {
 }
 
 // Lazy chunk: pull Prism + the prism theme only when a code block first renders.
-const LazyHighlighter = React.lazy(async () => {
-  const [{ Prism }, { oneDark }] = await Promise.all([
-    import('react-syntax-highlighter'),
-    import('react-syntax-highlighter/dist/esm/styles/prism'),
-  ]);
-  const Highlighter = Prism as unknown as React.ComponentType<Record<string, unknown>>;
-  return {
-    default: ({ code, language, showLineNumbers }: CodeBlockProps) => (
-      <Highlighter
-        language={language}
-        style={oneDark}
-        showLineNumbers={showLineNumbers}
-        customStyle={{ background: 'transparent', margin: 0, padding: 0, fontSize: '12px', lineHeight: '1.55' }}
-        codeTagProps={{ style: { fontFamily: 'var(--mono)', fontSize: '12px' } }}
-        lineNumberStyle={{ minWidth: '38px', paddingRight: '14px', color: 'var(--text-faint)', userSelect: 'none' }}
-      >
-        {code}
-      </Highlighter>
-    ),
-  };
-});
+const LazyHighlighter = React.lazy(() => import('./PrismCodeBlock.js'));
 
 /** Theme-matched code block: transparent bg, our mono var, dim gutter. */
 export function CodeBlock({ code, language, showLineNumbers }: CodeBlockProps): React.ReactElement {

@@ -13,15 +13,15 @@ vi.mock("../memory/engine.js", () => ({ memoryEngine: { store } }));
 import {
   handleMemoryCompress,
   memoryCompressToolSchema,
-} from "../tools/memory_compress.js";
+} from "../tools/working/memory_compress.js";
 import {
   handleMemoryRetrieve,
   memoryRetrieveToolSchema,
-} from "../tools/memory_retrieve.js";
+} from "../tools/recall/memory_retrieve.js";
 import {
   handleMemoryStats,
   memoryStatsToolSchema,
-} from "../tools/memory_stats.js";
+} from "../tools/working/memory_stats.js";
 
 function parseToolText<T>(result: { content: Array<{ text: string }> }): T {
   return JSON.parse(result.content[0]!.text);

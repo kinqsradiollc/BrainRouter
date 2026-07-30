@@ -1,163 +1,131 @@
-# BrainRouter Roadmap
+# BrainRouter roadmap
 
-Top-level planning index — kept short. Shipped detail lives in
-[`CHANGELOG.md`](CHANGELOG.md) + [`brainrouter-changelog/`](brainrouter-changelog/);
-design specs in [`brainrouter-docs/specs/`](brainrouter-docs/specs/).
+This is the planning index for work that is not yet released. Shipped detail
+lives in [`CHANGELOG.md`](CHANGELOG.md) and
+[`brainrouter-changelog/`](brainrouter-changelog/); design decisions live in
+[`brainrouter-docs/`](brainrouter-docs/).
 
----
+## Release status
 
-## Shipped
+The latest tagged release is **0.4.17** (2026-07-30). A capability present on a
+development branch is not considered shipped until its release gate passes and
+a version is tagged.
 
-Latest published: **0.4.15** (2026-06-22) — the requirement-first workflow + the
-unified workspace (Chat · Track · Code) with a code-aware Jira-class board, a
-desktop UI pass, and a closing UX & reliability program (child auto-resume,
-destructive-command guard, MCP auto-reconnect + brain/tools split, provider
-gallery with live `/models`, cross-session usage heatmap, cross-workspace
-session menu).
+| Version               | State          | Theme                                                                                           |
+| --------------------- | -------------- | ----------------------------------------------------------------------------------------------- |
+| **0.4.17**            | Shipped        | Runtime plane, automations, connectors, review operations, and cross-surface product completion |
+| **0.4.16**            | Shipped        | Autonomous fleet, unified desktop, Track maturation, PostgreSQL brain, remote brain, and Atlas  |
+| **0.4.15**            | Shipped        | Requirement-first workflow and the first unified Chat · Track · Code workspace                  |
+| **0.4.14**            | Shipped        | Recall accuracy, grid TUI, and background workers that report back                              |
+| **0.4.13**            | Shipped        | Sub-agent result delivery and REPL reliability                                                  |
+| **0.4.12**            | Shipped        | Build Loop, worktree-aware orchestration, and input queue                                       |
+| **0.4.11**            | Shipped        | Isolated worktree merge-back and memory verification                                            |
+| **0.4.10**            | Shipped        | Memory-home hardening, mobile dashboard, and edge runtime                                       |
+| **0.4.9**             | Shipped        | Dashboard redesign, auth refresh, and API hardening                                             |
+| **0.4.8 and earlier** | Shipped        | Workflow, coding-agent, federation, and memory foundations                                      |
 
-| Version | Theme | Date |
-|---|---|---|
-| 0.4.15 | Requirement-first workflow · unified workspace (Chat·Track·Code) · desktop UX & reliability pass | 2026-06-22 |
-| 0.4.14 | Memory accuracy (2 rounds) · grid TUI + fleet sidebar · workers that report back | 2026-06-10 |
-| 0.4.13 | Sub-agent result delivery (resume + synthesis guard) · REPL polish | 2026-06-07 |
-| 0.4.12 | The Build Loop · multi-agent reconnect + parent-wait timeouts · `/queue` · accuracy fixes | 2026-06-05 |
-| 0.4.11 | Worktree merge-back isolation · self-hydrating config · memory verify + churn decay | 2026-06-04 |
-| 0.4.10 | Memory-home hardening · mobile dashboard · Cloudflare Worker runtime | 2026-06-03 |
-| 0.4.9 | Dashboard redesign ("The Memory Instrument") · auth refresh tokens · API hardening | 2026-06-03 |
-| 0.4.8 | Deterministic multi-phase workflow orchestration (PhasePlan engine) | 2026-06-02 |
-| 0.4.7 | Coding-agent parity · agentic autonomy · staleness-aware recall | 2026-06-02 |
-| 0.4.6 | Behavior-preserving structural refactor | 2026-06-01 |
-| 0.4.5 | Release hygiene · competitive catch-up · CLI polish | 2026-06-01 |
-| ≤ 0.4.4 | Memory depth + pipeline + multi-agent foundations | → changelog |
+Full release notes: [`CHANGELOG.md`](CHANGELOG.md).
 
-Full detail: [`brainrouter-changelog/`](brainrouter-changelog/).
+## What 0.4.16 established
 
----
+BrainRouter is already a multi-surface agent operations product. Desktop is the
+primary workbench, while Dashboard is the shared operations surface.
 
-## 0.4.14 — Memory Accuracy + TUI shell · branch `release/0.4.14` · spec [`memory-accuracy.md`](brainrouter-docs/specs/memory-accuracy.md)
+- **Desktop** is the primary Electron workbench for Chat, Code, and Track. It
+  includes projects and sessions, Monaco editing and diffs, plans,
+  requirements, tools, terminal, Atlas, workflows, automations, settings, and
+  local review.
+- **CLI** runs the same agent runtime, model routing, permission system,
+  orchestration, workflows, and memory lifecycle in a terminal-native shell.
+- **Dashboard** manages authenticated organizations, projects, providers,
+  connections, repositories, knowledge, fleet work, and review operations.
+- **Brain** serves PostgreSQL-backed MCP and REST contracts for memory,
+  tenancy, connectors, jobs, and shared clients.
+- **Track** provides board, list, backlog, sprint, roadmap, reports,
+  automation, members, and repository synchronization inside the workbench.
 
-Benchmark-driven recall overhaul (MemBench · LoCoMo · LongMemEval), in two rounds.
-**Status: SHIPPED 2026-06-10 — merged to `main`, tagged `v0.4.14`, published to npm.**
+The changelog remains the source of truth for the exact shipped inventory.
 
-**Round 1 — granularity (shipped):** the one-record-per-session granularity wrecked
-long-session reranking/judging. Fixed by chunking on import, a length-aware reranker
-cap, a judge result-floor, embed-on-import, and a transient-embed retry.
-- [x] MEM-AUDIT · MEM-CHUNK · MEM-RERANK · MEM-JUDGE · MEM-VEC · MEM-EMBED-RETRY · ASYNC-1
+## 0.4.17 — Runtime body and product completion
 
-**Round 2 — recall quality (shipped):** the clean 6-split sweep exposed that the
-reranker/judge *replaced* the retriever order — collapsing recall and losing to a
-plain recency baseline. Fixes follow one rule: *score → sort → take top-N, never
-hard-drop.* Results: [`reports/0.4.14-recall-delta.md`](brainrouter-benchmark/reports/0.4.14-recall-delta.md).
-- [x] MEM-JUDGE2 — judge **reorders** (approved-first), never drops below the retriever
-- [x] MEM-BLEND — **blend** reranker score with the recency/RRF score instead of replacing it
-- [x] MEM-RERANK2 — char-budgeted reranker pool to cut long-session latency
-- [x] MEM-ROUTE — reflective queries skip the cross-encoder (retriever+judge path)
-- [x] MEM-EVAL — per-stage benchmark gate + final 6-split sweep vs the saved baseline
+**Status: shipped on 2026-07-30.** The release adds an execution plane,
+project-aware onboarding, and source-grounded Project knowledge while making
+the Dashboard and Desktop feel like one coherent product. It remains
+default-safe: hosted or container execution, inbound triggers, and other
+expanded authority stay opt-in.
 
-Deferred per [`ADR-001`](brainrouter-docs/decisions/ADR-001-async-store-worker.md): ASYNC-2/3 (worker-thread store).
-Follow-up: benchmark importer per-record timestamps so the recency signal is measurable.
+### Runtime and automation
 
-**TUI shell + worker orchestration (merged to the release branch 2026-06-09, #344):**
-grid TUI (view router · 70/30 workspace split · context sidebar with the running
-fleet split into sub-agents / workers / workflows — role, worktree marker, live
-elapsed), model-spawned background worker threads (depth/tier-gated), a completion
-inbox so detached background work reports its results into the agent's next turn,
-and a scrollback overhaul (accurate height packing, scroll mode, live turn timer).
+- [x] Runtime port with process, worktree, opt-in container, and declared hosted
+      backends; lifecycle controls, archives, and app-preview port registration.
+- [x] Inbound automation foundation for signed GitHub, GitLab, Slack, and Jira
+      events with repository allowlists and redelivery idempotency.
+- [x] Requirement intake, suggested-task scanning, fleet jobs, and verified
+      draft-PR delivery paths.
+- [x] Critic gates, task budgets, named model profiles, and role-aware model
+      routing.
+- [x] Plugin packaging, validation, installation, consent, registry search, and
+      desktop marketplace controls.
+- [x] Desktop runtime monitor, automation controls, provider configuration, and
+      write-only secret handling.
 
----
+### Shared product surface
 
-## 0.4.15 — The Agent Behind the Glass · plan [`brainrouter-roadmap/0.4.15.md`](brainrouter-roadmap/0.4.15.md)
+- [x] A durable interface contract for dashboard, desktop, and CLI naming,
+      semantic color, navigation, forms, motion, and accessibility.
+- [x] Focused Settings navigation: a category rail and subsection selector render
+      one panel at a time instead of one long settings document.
+- [x] Authenticated dashboard chat with organization, project, and workspace
+      knowledge scope and attributable source links.
+- [x] Server-backed source ownership and filtering across organization, project,
+      workspace, and user boundaries.
+- [x] Account-linked connector OAuth with sealed server-side credentials and a
+      shared connection state for dashboard and desktop.
+- [x] Desktop Track repository detection, account-backed synchronization,
+      account-managed automations, and server-backed pull-request review history.
+- [x] GitHub pull-request review operations with separate security and code
+      lenses, repository policies, evidence, and live job status.
+- [x] Separate global and project onboarding with reviewed conversational
+      proposals, offline fallback, one engineer, and per-task capability
+      activation across CLI and Desktop.
+- [x] Organization- and Project-scoped knowledge from bounded
+      text/HTML/PDF/DOCX ingest through processing, retry, hybrid retrieval,
+      citations, recommendations, distillation, and Dashboard/Desktop clients.
+- [x] Complete the onboarding and Project-knowledge hosted CI,
+      browser/Electron acceptance, and documentation reconciliation gates.
+- [x] Complete the remaining release-wide validation, bump versions, tag, and
+      publish.
 
-A **complete reverse-engineering of the strongest reference coding agent** —
-decomposed into twelve subsystems, each mapped against what BrainRouter has and
-rebuilt as testable contracts. Keeps the 0.4.14 UI. Threads: **A** chat ergonomics
-· **B** prompt OS + turn-engine contracts (deliverable guard, batching, autonomy/
-assessment rules, denied-tool semantics, verification gate) · **C** per-tool
-contracts (read-before-edit, unique-match edits) · **D** context OS (stable cached
-prefix, reminder channel, structured compaction) · **E** first-class task tracker
-· **F** programmable workflows (scripted stages, schema-validated child outputs,
-budgets, resume) · **G** background runtime (bg shell + output polling, wait-until,
-cron agents, recurring loop) · **H** session lifecycle (resume, rewind, branch,
-chapters) · **I** plan mode + declarative permissions + hook gates · **J**
-interaction layer (structured multi-choice questions, side-task chips, skill
-auto-trigger, md commands) · **K** headless stream-json surface · **L** the
-agent-behavior benchmark that gates it all. · **M** BrainRouter Desktop — native macOS/Windows app (Electron + React over the unchanged agent runtime; chat, approvals, fleet sidebar, sessions as real UI; signed installers + auto-update; ships as alpha beside the TUI).
+Implementation checkmarks in this section describe the shipped release.
 
----
+## 0.5.0 — Operational scale
 
-## Delivered in 0.4.15 — The unified workspace: **Chat · Track · Code**
+Planned themes, subject to validation and reprioritization:
 
-One app, three modes over the *same* workspace + the *same* memory, so planning,
-coordination, and implementation never leave the building. A mode switcher (top
-of the **left sidebar**) flips the surface; the project, the memory, and the agent
-are shared across all three. **Shipped in 0.4.15.**
-
-- **Chat** — conversational/assistant mode: ask, explore, design, and draft
-  without the full coding-agent loop. Lightweight and **read-only** (the agent is
-  pinned to look-only access — no writes or shell); promotes a thread into a Code
-  turn or a Track item when it's ready.
-- **Track** — a first-party, **Jira-class project-management surface**, fully
-  in-app so everything stays in one place. **Each workspace is a project** with its
-  own management. Target scope (everything an engineering team needs):
-  - **Work items** — issues / stories / bugs / tasks / sub-tasks, **epics**, and
-    custom types; configurable workflow states + transitions; priority, labels,
-    components, assignees, watchers, estimates, due dates, comments, attachments,
-    activity history.
-  - **Planning** — **backlog**, **sprints/iterations** (start/complete, capacity,
-    burndown), **boards** (kanban + scrum, swimlanes, WIP limits), and **roadmap**
-    (epics over time, dependencies).
-  - **Views & query** — board / list / table / timeline, saved filters, and a
-    JQL-style query language; reports (velocity, cumulative flow, cycle/lead time).
-  - **Automation & process** — rules/triggers, templates, required fields/gates,
-    SLAs; per-project configuration and permissions.
-  - **Code-aware (the differentiator)** — the agent **reads and writes the tracker
-    as a first-class tool**: items link to branches / commits / PRs / review
-    findings / artifacts; status moves with the work; the existing requirement →
-    plan → task → review → verify flow maps onto Track items; everything captures
-    into BrainRouter memory with full provenance. Each project's board is queryable
-    by the agent so it can pick up, update, and close work itself.
-- **Code** — today's agentic coding mode (the desktop + TUI), unchanged.
-
-Shared substrate: one memory pipeline, one workspace/session model, one provider
-config; Track items, Chat threads, and Code turns all reference the same
-provenance-tracked records. **Delivered** across the full stack: data model +
-per-workspace store (`packages/types/track.ts` + `packages/core/src/track/`), the
-`track_query`/`track_update` agent tools, the `/track` CLI, and the desktop Track
-surface (nine views — Board · List · Backlog · Sprint · Roadmap · Reports ·
-Automation · Members · Sync) with a JQL-style query language, automation rules,
-per-project roles/permissions, and two-way GitHub Issues sync.
-
----
-
-## 0.5.0 — Power-user surface
-
-- [ ] Fullscreen `/focus` TUI + plugin marketplace + trust/signature model.
-- [ ] Brain Phase 6 — engineering sync providers (Git / GitHub / docs / logs) + proactive situation reports.
-- [ ] Dashboard per-agent recall view + drill-down.
-
----
+- [ ] Hosted-runtime deployment and operational controls for teams.
+- [ ] Stronger fleet observability across queues, workers, costs, and artifacts.
+- [ ] Per-agent recall diagnostics and evidence drill-down in the dashboard.
+- [ ] Verified provider and connector compatibility matrix.
+- [ ] Stable `@kinqs/brainrouter-sdk` 1.0 contract.
+- [ ] Release-grade packaging and update coverage across supported desktop
+      platforms.
 
 ## Designed, not scheduled
 
-- Per-session isolation (two terminals on one repo) — [`per-session-isolation.md`](brainrouter-docs/specs/per-session-isolation.md).
-
-## Wishlist (post-0.5.0)
-
-- Docker image for the MCP server.
-- Dashboard memory explorer with recall-score explanations.
-- Dashboard parity with CLI goals / hooks / workflows.
-- Verified provider matrix (OpenAI, Anthropic, Gemini, OpenRouter, LM Studio, Ollama).
-- `@kinqs/brainrouter-sdk` 1.0 public API lock.
-
----
+- Per-session isolation for multiple terminals on one repository —
+  [`per-session-isolation.md`](brainrouter-docs/specs/per-session-isolation.md).
+- Additional knowledge ingestion providers after the current OAuth and runtime
+  connector matrix is verified.
+- A published MCP server container image.
 
 ## Documentation map
 
-| File | Purpose |
-|---|---|
-| [`CHANGELOG.md`](CHANGELOG.md) | Shipped changes |
-| [`brainrouter-changelog/`](brainrouter-changelog/) | Per-version changelog detail |
-| [`brainrouter-roadmap/`](brainrouter-roadmap/) | Per-release plans |
-| [`brainrouter-docs/specs/`](brainrouter-docs/specs/) | Design specs (memory-accuracy, build-loop, per-session isolation, multi-agent result delivery) |
-| [`brainrouter-docs/decisions/`](brainrouter-docs/decisions/) | ADRs (async store worker) |
-| [`brainrouter-benchmark/reports/`](brainrouter-benchmark/reports/) | Published benchmark results |
+| File                                                               | Purpose                                         |
+| ------------------------------------------------------------------ | ----------------------------------------------- |
+| [`CHANGELOG.md`](CHANGELOG.md)                                     | Tagged releases and shipped behavior            |
+| [`brainrouter-changelog/`](brainrouter-changelog/)                 | Detailed release notes                          |
+| [`brainrouter-roadmap/`](brainrouter-roadmap/)                     | Release-specific plans                          |
+| [`brainrouter-docs/specs/`](brainrouter-docs/specs/)               | Feature and architecture specifications         |
+| [`brainrouter-docs/decisions/`](brainrouter-docs/decisions/)       | Architecture decisions                          |
+| [`brainrouter-benchmark/reports/`](brainrouter-benchmark/reports/) | Published benchmark evidence                    |
+| [`design.md`](design.md)                                           | Shared dashboard and desktop interface contract |

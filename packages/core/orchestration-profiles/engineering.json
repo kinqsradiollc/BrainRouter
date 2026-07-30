@@ -1,0 +1,357 @@
+{
+  "schemaVersion": 1,
+  "kind": "orchestration-profile",
+  "id": "engineering",
+  "displayName": "Engineering orchestration",
+  "defaultMode": "adaptive",
+  "fallbackStrategyId": "direct",
+  "rolePolicy": {
+    "availableRoles": [
+      "explorer",
+      "architect",
+      "worker",
+      "reviewer",
+      "verifier"
+    ],
+    "disabledRoles": [
+      "fleet"
+    ]
+  },
+  "limits": {
+    "maxParallel": 4,
+    "maxStages": 6,
+    "maxChildrenPerStage": 3,
+    "maxTotalChildren": 8,
+    "maxDepth": 2,
+    "maxRetries": 1
+  },
+  "strategies": [
+    {
+      "id": "direct",
+      "description": "Keep a small or conversational task on the primary engineer.",
+      "activation": {
+        "signals": [
+          "small-scope"
+        ],
+        "explicitOnly": false
+      },
+      "stages": [
+        {
+          "id": "complete",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [],
+          "objective": "Complete the bounded engineering task directly.",
+          "skillIds": [],
+          "optional": false
+        }
+      ]
+    },
+    {
+      "id": "investigate",
+      "description": "Inspect unfamiliar code or behavior before the primary engineer synthesizes the answer.",
+      "activation": {
+        "signals": [
+          "investigation"
+        ],
+        "explicitOnly": false
+      },
+      "stages": [
+        {
+          "id": "inspect",
+          "executor": {
+            "kind": "role",
+            "roleId": "explorer"
+          },
+          "after": [],
+          "objective": "Map the affected surfaces, constraints, and current behavior.",
+          "skillIds": [
+            "planning-skill"
+          ],
+          "fanOut": {
+            "min": 1,
+            "max": 2
+          },
+          "optional": false,
+          "expectedOutput": {
+            "contractId": "explorer",
+            "requiredSections": [
+              "headline",
+              "files-read",
+              "facts"
+            ]
+          }
+        },
+        {
+          "id": "synthesize",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "inspect"
+          ],
+          "objective": "Synthesize the investigation into a direct engineering conclusion.",
+          "skillIds": [],
+          "optional": false
+        }
+      ]
+    },
+    {
+      "id": "design",
+      "description": "Inspect constraints and produce a bounded engineering design before delivery.",
+      "activation": {
+        "signals": [
+          "architecture-design"
+        ],
+        "explicitOnly": false
+      },
+      "stages": [
+        {
+          "id": "inspect",
+          "executor": {
+            "kind": "role",
+            "roleId": "explorer"
+          },
+          "after": [],
+          "objective": "Map current architecture, boundaries, and constraints relevant to the design.",
+          "skillIds": [
+            "planning-skill"
+          ],
+          "fanOut": {
+            "min": 1,
+            "max": 1
+          },
+          "optional": true,
+          "expectedOutput": {
+            "contractId": "explorer",
+            "requiredSections": [
+              "headline",
+              "files-read",
+              "facts"
+            ]
+          }
+        },
+        {
+          "id": "architect",
+          "executor": {
+            "kind": "role",
+            "roleId": "architect"
+          },
+          "after": [
+            "inspect"
+          ],
+          "objective": "Produce a bounded design that respects the mapped constraints.",
+          "skillIds": [
+            "adr-skill",
+            "spec-driven-skill"
+          ],
+          "fanOut": {
+            "min": 1,
+            "max": 1
+          },
+          "optional": false,
+          "expectedOutput": {
+            "contractId": "architect",
+            "requiredSections": [
+              "alternatives",
+              "tradeoffs",
+              "recommendation"
+            ]
+          }
+        },
+        {
+          "id": "deliver",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "architect"
+          ],
+          "objective": "Review and deliver the design to the user without starting implementation.",
+          "skillIds": [],
+          "optional": false
+        }
+      ]
+    },
+    {
+      "id": "delivery",
+      "description": "Investigate, implement, review, and verify a bounded software change.",
+      "activation": {
+        "signals": [
+          "implementation",
+          "bug-fix",
+          "multi-surface-change"
+        ],
+        "explicitOnly": false
+      },
+      "stages": [
+        {
+          "id": "inspect",
+          "executor": {
+            "kind": "role",
+            "roleId": "explorer"
+          },
+          "after": [],
+          "objective": "Map the affected surfaces, constraints, and existing behavior.",
+          "skillIds": [
+            "planning-skill"
+          ],
+          "fanOut": {
+            "min": 1,
+            "max": 2
+          },
+          "optional": true,
+          "expectedOutput": {
+            "contractId": "explorer",
+            "requiredSections": [
+              "headline",
+              "files-read",
+              "facts"
+            ]
+          }
+        },
+        {
+          "id": "implement",
+          "executor": {
+            "kind": "role",
+            "roleId": "worker"
+          },
+          "after": [
+            "inspect"
+          ],
+          "objective": "Implement the reviewed requirement within assigned ownership and authority.",
+          "skillIds": [
+            "incremental-skill",
+            "testing-skill"
+          ],
+          "fanOut": {
+            "min": 1,
+            "max": 1
+          },
+          "optional": false,
+          "expectedOutput": {
+            "contractId": "worker",
+            "requiredSections": [
+              "files-changed",
+              "summary"
+            ]
+          }
+        },
+        {
+          "id": "review",
+          "executor": {
+            "kind": "role",
+            "roleId": "reviewer"
+          },
+          "after": [
+            "implement"
+          ],
+          "objective": "Review the resulting change against the request, repository policy, and security boundaries.",
+          "skillIds": [
+            "code-review-and-quality"
+          ],
+          "fanOut": {
+            "min": 1,
+            "max": 1
+          },
+          "optional": true,
+          "expectedOutput": {
+            "contractId": "reviewer",
+            "requiredSections": [
+              "findings"
+            ]
+          }
+        },
+        {
+          "id": "verify",
+          "executor": {
+            "kind": "role",
+            "roleId": "verifier"
+          },
+          "after": [
+            "implement"
+          ],
+          "objective": "Verify the requested behavior with proportionate automated and runtime checks.",
+          "skillIds": [
+            "verify-loop"
+          ],
+          "fanOut": {
+            "min": 1,
+            "max": 1
+          },
+          "optional": true,
+          "expectedOutput": {
+            "contractId": "verifier",
+            "requiredSections": [
+              "commands",
+              "pass-fail"
+            ]
+          }
+        },
+        {
+          "id": "deliver",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "review",
+            "verify"
+          ],
+          "objective": "Resolve blocking findings and deliver the verified result.",
+          "skillIds": [
+            "shipping-skill"
+          ],
+          "optional": false
+        }
+      ]
+    },
+    {
+      "id": "review-only",
+      "description": "Review an existing engineering artifact without implementing changes.",
+      "activation": {
+        "signals": [
+          "review"
+        ],
+        "explicitOnly": false
+      },
+      "stages": [
+        {
+          "id": "review",
+          "executor": {
+            "kind": "role",
+            "roleId": "reviewer"
+          },
+          "after": [],
+          "objective": "Review the supplied artifact against its requirements and repository policy.",
+          "skillIds": [
+            "code-review-and-quality"
+          ],
+          "fanOut": {
+            "min": 1,
+            "max": 1
+          },
+          "optional": false,
+          "expectedOutput": {
+            "contractId": "reviewer",
+            "requiredSections": [
+              "findings"
+            ]
+          }
+        },
+        {
+          "id": "deliver",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "review"
+          ],
+          "objective": "Synthesize the review findings and clearly separate blockers from advisory observations.",
+          "skillIds": [],
+          "optional": false
+        }
+      ]
+    }
+  ]
+}

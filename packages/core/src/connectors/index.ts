@@ -3,10 +3,8 @@
 // keeping the subsystem's file layout internal. Full public surface; the
 // internal service layer (service.ts) stays unexported.
 export * from './catalog.js';
-export * from './connectorStore.js';
-export * from './definitionTransfer.js';
-export * from './documentStore.js';
-export * from './githubConnector.js';
-export * from './memoryBridge.js';
-export * from './permissionStore.js';
-export * from './slimRetrieval.js';
+export * from './apiSourceConnectors.js';
+export * from './store/index.js';
+export * from './sources/index.js';
+export * from './retrieval/index.js';
+export * from './runtime/index.js';

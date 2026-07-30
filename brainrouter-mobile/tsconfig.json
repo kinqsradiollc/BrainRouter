@@ -1,0 +1,9 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "types": ["react", "react-native", "node"]
+  },
+  "include": ["App.tsx", "src/**/*.ts", "src/**/*.tsx", "e2e/**/*.ts"]
+}

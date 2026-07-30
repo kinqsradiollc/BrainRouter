@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { handleMemoryWorkingTool } from "../tools/memory-working.js";
+import { handleMemoryWorkingTool } from "../tools/working/memory-working.js";
 
 function parseToolJson(result: { content: Array<{ type: string; text: string }> }) {
   return JSON.parse(result.content[0]!.text);

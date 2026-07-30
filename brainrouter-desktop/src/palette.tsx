@@ -33,9 +33,17 @@ export function CommandList({ commands, filter, selected, onPick, onHover }: {
 }
 
 export function filterCommands(commands: DeskCommand[], filter: string): DeskCommand[] {
+  // The catalog carries one entry per SUBCOMMAND (/agents, /agents tree,
+  // /agents why … all share base "/agents"). The palette dispatches by base
+  // and shows the name only, so collapse to ONE row per base — the first
+  // occurrence, which the catalog lists as the primary form. Settings →
+  // Commands still lists every subcommand; only these popups dedup.
+  const byBase = new Map<string, DeskCommand>();
+  for (const c of commands) if (!byBase.has(c.base)) byBase.set(c.base, c);
+  const unique = [...byBase.values()];
   const q = filter.trim().toLowerCase().replace(/^\//, '');
-  if (!q) return commands.slice(0, 60);
-  const scored = commands
+  if (!q) return unique.slice(0, 60);
+  const scored = unique
     .map((c) => {
       const name = c.base.slice(1);
       const hay = `${name} ${c.desc}`.toLowerCase();

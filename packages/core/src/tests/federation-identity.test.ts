@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyFederationIdentity } from '../util/federationIdentity.js';
+import { applyFederationIdentity } from '../util/agentloop/federationIdentity.js';
 
 const FED = 'fed-uuid-1234';
 

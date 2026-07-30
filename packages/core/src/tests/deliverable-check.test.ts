@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Agent } from '../agent/agent.js';
-import { classifyDeferral, buildDeliverableCorrection } from '../agent/deliverableCheck.js';
+import { classifyDeferral, buildDeliverableCorrection } from '../agent/guards/deliverableCheck.js';
 import { withTempWorkspaceAsync } from './_helpers.js';
 
 // --- CC-P6.2 pure heuristics --------------------------------------------------
@@ -29,6 +29,23 @@ test('classifyDeferral: substantive endings pass clean', () => {
   // Early promise followed by the actual result is fine.
   assert.equal(classifyDeferral("I'll check the config first. Checked: the value is 42, which confirms the bug. Patched and verified."), null);
   assert.equal(classifyDeferral(''), null);
+});
+
+test('classifyDeferral: a report ending on a Markdown table row is a deliverable, not a question', () => {
+  // The investigation-report false positive: the message ends with a table
+  // whose last cell happens to contain a '?'. That's the deliverable, not the
+  // model deferring — it must NOT be classified as a trailing question.
+  const report = [
+    '## Root causes',
+    '',
+    '| Bug | File | Fix |',
+    '|-----|------|-----|',
+    '| Banner stuck | useAgentEvents.ts:1124 | refresh goalState |',
+    '| Which first? | — | your call? |',
+  ].join('\n');
+  assert.equal(classifyDeferral(report), null);
+  // A plain trailing question still trips it.
+  assert.equal(classifyDeferral('Here is the summary. Which bug should I fix first?'), 'question');
 });
 
 test('buildDeliverableCorrection: names the deferral kind and demands the result', () => {

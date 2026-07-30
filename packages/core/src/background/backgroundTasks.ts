@@ -13,10 +13,10 @@
  * with history. A persistent side rail is part of the 0.5.0 fullscreen TUI.
  */
 import { listWorkers } from '../worker/workerStore.js';
-import { listSessions } from '../orchestration/orchestrator.js';
-import { listRuns, summarizePhases, formatActivePhase } from '../workflow/workflowRun.js';
+import { listSessions } from '../orchestration/session/orchestrator.js';
+import { listRuns, summarizePhases, formatActivePhase } from '../workflow/run/workflowRun.js';
 import { currentPhase, listBackgroundTasks } from './backgroundTaskStore.js';
-import { listBackgroundShells, type BgShellRun } from '../exec/backgroundShell.js';
+import { listBackgroundShells, type BgShellRun } from '../exec/runtime/backgroundShell.js';
 import type { BackgroundTaskRecord } from '@kinqs/brainrouter-types';
 
 export type BackgroundTaskKind = 'agent' | 'worker' | 'workflow' | 'shell';
