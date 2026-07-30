@@ -41,7 +41,21 @@ test('createCallbackBridge: every callback maps to its event kind with payload f
     preview: 'found it',
   };
   cb.onChildComplete(childReceipt);
-  cb.onPlanUpdate([{ step: 'fix', status: 'in_progress' }], 'because');
+  cb.onPlanUpdate(
+    [{ id: 'task_fix', step: 'fix', status: 'in_progress' }],
+    'because',
+    {
+      revision: 3,
+      phases: [{
+        id: 'phase_build',
+        title: 'Build',
+        status: 'in_progress',
+        dependsOn: [],
+        requiredSkillIds: ['planning-skill'],
+        stepIds: ['task_fix'],
+      }],
+    },
+  );
   cb.onProfileStageUpdate({
     phase: 'updated',
     profileId: 'research',
@@ -103,6 +117,8 @@ test('createCallbackBridge: every callback maps to its event kind with payload f
   const plan = events[12] as Extract<AgentEvent, { kind: 'plan-update' }>;
   assert.equal(plan.items[0].status, 'in_progress');
   assert.equal(plan.explanation, 'because');
+  assert.equal(plan.revision, 3);
+  assert.equal(plan.phases?.[0]?.id, 'phase_build');
   const profileStage = events[13] as Extract<AgentEvent, { kind: 'profile-stage' }>;
   assert.equal(profileStage.profileId, 'research');
   assert.equal(profileStage.stages[0].state, 'running');

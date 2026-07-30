@@ -14,6 +14,7 @@ import type {
   SteeringReceiptEventView,
 } from './events.js';
 import type { ChildExecutionReceipt } from './delegation.js';
+import type { PlanPhaseView, PlanStepView } from './planning.js';
 
 export interface BridgedCallbacks {
   onStatusUpdate: (text: string) => void;
@@ -38,7 +39,11 @@ export interface BridgedCallbacks {
   onAssistantDelta: (chunk: string) => void;
   onAssistantTurnEnd: () => void;
   onReasoningDelta: (chunk: string) => void;
-  onPlanUpdate: (items: Array<{ step: string; status: 'pending' | 'in_progress' | 'completed'; acceptance?: string }>, explanation?: string) => void;
+  onPlanUpdate: (
+    items: PlanStepView[],
+    explanation?: string,
+    state?: { revision?: number; phases?: PlanPhaseView[] },
+  ) => void;
   onProfileStageUpdate: (event: ProfileStageEventView) => void;
   onCompactionEvent: (event: { droppedMessages: number; keptMessages: number; summary: string }) => void;
   onUsageUpdate: (usage: { promptTokens: number; completionTokens: number; calls: number; cachedTokens?: number; missedTokens?: number }) => void;
@@ -93,7 +98,13 @@ export function createCallbackBridge(emit: EmitEvent): BridgedCallbacks {
     onAssistantDelta: (text) => emit({ kind: 'assistant-delta', text }),
     onAssistantTurnEnd: () => emit({ kind: 'assistant-turn-end' }),
     onReasoningDelta: (text) => emit({ kind: 'reasoning-delta', text }),
-    onPlanUpdate: (items, explanation) => emit({ kind: 'plan-update', items, explanation }),
+    onPlanUpdate: (items, explanation, state) => emit({
+      kind: 'plan-update',
+      items,
+      explanation,
+      revision: state?.revision,
+      phases: state?.phases,
+    }),
     onProfileStageUpdate: (event) => emit({ kind: 'profile-stage', ...event }),
     onCompactionEvent: (event) => emit({ kind: 'compaction', ...event }),
     onMemoryEvent: (event) => {

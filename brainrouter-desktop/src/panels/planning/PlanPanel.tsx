@@ -13,10 +13,10 @@ import {
   planHistoryRows, planApprovalState, approvalLabel, isEmptyDiff,
   type PlanDecisionView,
 } from '../../lib/plan/planReviewView.js';
-import type { PlanItem } from '../../types.js';
+import type { PlanItem, PlanView } from '../../types.js';
 
 export function PlanPanel({ plan, history, annotations, onApprove, onRequestChanges, onAnnotateStep }: {
-  plan: { items: PlanItem[]; explanation?: string } | null;
+  plan: PlanView | null;
   history?: PlanDecisionView[];
   /** Open comments on plan steps (type 'plan'), matched per step by targetId. */
   annotations?: Array<{ id: string; type?: string; targetId?: string; body: string; status?: string }>;
@@ -48,6 +48,8 @@ export function PlanPanel({ plan, history, annotations, onApprove, onRequestChan
 
   const state = planApprovalState(plan, decisions);
   const rows = planHistoryRows(decisions);
+  const phases = plan.phases ?? [];
+  const itemById = new Map(plan.items.map((item) => [item.id, item]));
   // A finished plan (every step completed) needs no approval — show a complete
   // banner and drop the Approve / Request-changes controls (the version history
   // stays available below).
@@ -74,6 +76,29 @@ export function PlanPanel({ plan, history, annotations, onApprove, onRequestChan
       ) : null}
 
       {plan.explanation ? <div className="plan-why">{plan.explanation}</div> : null}
+      {phases.length ? (
+        <div className="plan-phase-list" aria-label="Plan phases">
+          {phases.map((phase, phaseIndex) => {
+            const phaseItems = phase.stepIds
+              .map((id) => itemById.get(id))
+              .filter((item): item is PlanItem => Boolean(item));
+            const activeStep = phaseItems.findIndex((item) => item.status === 'in_progress');
+            return (
+              <div key={phase.id} className={`plan-phase ${phase.status}`}>
+                <div className="plan-phase-title">
+                  <span>Phase {phaseIndex + 1}/{phases.length}</span>
+                  <strong>{phase.title}</strong>
+                  <span>{phase.status.replace('_', ' ')}</span>
+                </div>
+                {phase.status === 'in_progress' && activeStep >= 0 ? (
+                  <div className="plan-phase-progress">Step {activeStep + 1}/{phaseItems.length}</div>
+                ) : null}
+                {phase.blockedReason ? <div className="plan-phase-blocked">{phase.blockedReason}</div> : null}
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
       {plan.items.map((it, i) => {
         const notes = notesForStep(i);
         const open = annotating === i;

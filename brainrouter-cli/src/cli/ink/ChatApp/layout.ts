@@ -78,7 +78,8 @@ export function estimateEntryHeight(entry: ScrollbackEntry, cols: number, verbos
     case 'memory':
       return 1;
     case 'plan':
-      return 1 + (entry.explanation ? 1 : 0) + entry.items.length + 1;
+      return 1 + (entry.explanation ? 1 : 0) + entry.items.length +
+        (entry.phases?.length ?? 0) * 2 + 1;
     case 'agent-result': {
       // Body wraps (wrap="wrap") inside a paddingLeft={4} column.
       return 1 + estimateTextHeight(entry.body ?? '', Math.max(1, cols - 4));
