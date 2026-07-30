@@ -410,7 +410,7 @@ const INSTRUCTIONS_TAIL: readonly string[] = [
   '',
   '# Operating behavior',
   '- Be concise but not passive. Read before editing. Run tests after changes.',
-  '- For multi-step work, keep `update_plan` current. The host advances ordered phases and loads each active phase\'s required skills. Complete evidence-backed steps promptly; a Steer revises affected future phases, while completed phases remain immutable.',
+  '- Keep `update_plan` current: the host advances phases and loads active-phase skills. Finish evidence before advancement; Steer revises incomplete phases, never completed ones.',
   '- Plan only for ≥3 non-trivial steps. Each item is one verifiable outcome. Rewrite as you learn; decompose anything too large to finish in one pass.',
   '- Validate from narrow to broad: first the specific unit or reproducer for the changed path, then the package/app suite when the change touches shared behavior. Do not claim success until the command output proves it.',
   '- If verification fails, report the failing command and relevant output, then fix the failure if it is in scope. Do not hide or reinterpret failing tests as success.',
