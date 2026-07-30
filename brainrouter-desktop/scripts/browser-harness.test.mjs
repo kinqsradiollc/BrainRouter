@@ -6,10 +6,13 @@ import test from 'node:test';
 
 import {
   chromiumMajor,
-  prepareElectronHarnessLayout,
   processTreeSample,
   startFixtureServer,
 } from './browser-harness.mjs';
+import {
+  createElectronHarnessEnvironment,
+  prepareElectronHarnessLayout,
+} from './electron-harness-layout.mjs';
 
 test('fixture is loopback-only and references only its own deterministic assets', async () => {
   const fixture = await startFixtureServer();
@@ -53,6 +56,13 @@ test('Electron qualification starts from a hermetic valid installation', () => {
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-browser-layout-'));
   try {
     const layout = prepareElectronHarnessLayout(temporaryRoot);
+    const environment = createElectronHarnessEnvironment(layout, {
+      HOME: '/user/home',
+      USERPROFILE: 'C:\\Users\\person',
+      BRAINROUTER_HOME: '/user/state',
+      BRAINROUTER_DESKTOP_WORKSPACE: '/user/workspace',
+      KEEP_ME: 'yes',
+    });
     assert.equal(layout.home, path.join(temporaryRoot, 'home'));
     assert.equal(layout.state, path.join(temporaryRoot, 'state'));
     assert.ok(fs.statSync(layout.profile).isDirectory());
@@ -63,6 +73,11 @@ test('Electron qualification starts from a hermetic valid installation', () => {
       'utf8',
     ));
     assert.deepEqual(config, { activeServer: '', servers: {} });
+    assert.equal(environment.HOME, layout.home);
+    assert.equal(environment.USERPROFILE, layout.home);
+    assert.equal(environment.BRAINROUTER_HOME, layout.state);
+    assert.equal(environment.BRAINROUTER_DESKTOP_WORKSPACE, layout.workspace);
+    assert.equal(environment.KEEP_ME, 'yes');
   } finally {
     fs.rmSync(temporaryRoot, { recursive: true, force: true });
   }

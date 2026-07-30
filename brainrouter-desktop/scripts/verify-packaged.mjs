@@ -24,6 +24,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 
+import {
+  createElectronHarnessEnvironment,
+  prepareElectronHarnessLayout,
+} from './electron-harness-layout.mjs';
+
 const root = path.resolve(import.meta.dirname, '..');
 const OUT_DIRS = ['dist', 'release', 'out'].map((d) => path.join(root, d));
 const EXPECTED_ELECTRON_VERSION = '43.1.1';
@@ -97,14 +102,11 @@ async function stopChild(child) {
 async function runPackagedBrowserSmoke(app) {
   const executable = packagedExecutable(app);
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-packaged-browser-'));
-  const workspace = path.join(tempRoot, 'workspace');
-  const profile = path.join(tempRoot, 'profile');
+  const layout = prepareElectronHarnessLayout(tempRoot);
+  const { workspace, profile } = layout;
   const resultPath = path.join(profile, 'result.json');
-  fs.mkdirSync(workspace, { recursive: true });
-  fs.mkdirSync(profile, { recursive: true });
   const childEnv = {
-    ...process.env,
-    BRAINROUTER_DESKTOP_WORKSPACE: workspace,
+    ...createElectronHarnessEnvironment(layout),
     BRAINROUTER_PACKAGED_SMOKE_PROFILE: profile,
     BRAINROUTER_PACKAGED_SMOKE_RESULT: resultPath,
   };

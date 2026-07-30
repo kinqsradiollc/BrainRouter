@@ -6,6 +6,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 
+import {
+  createElectronHarnessEnvironment,
+  prepareElectronHarnessLayout,
+} from './electron-harness-layout.mjs';
+
 const START_TIMEOUT_MS = 30_000;
 const COMMAND_TIMEOUT_MS = 20_000;
 
@@ -225,7 +230,8 @@ export async function launchElectron({ desktopRoot, electronApp = '' }) {
   const launch = resolveElectronLaunch(desktopRoot, electronApp);
   const port = await reservePort();
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-browser-e2e-'));
-  const { profile, workspace, home, state } = prepareElectronHarnessLayout(temporaryRoot);
+  const layout = prepareElectronHarnessLayout(temporaryRoot);
+  const { profile, workspace } = layout;
   const args = [
     `--remote-debugging-port=${port}`,
     `--user-data-dir=${profile}`,
@@ -233,13 +239,7 @@ export async function launchElectron({ desktopRoot, electronApp = '' }) {
     '--disable-background-networking',
     ...launch.args,
   ];
-  const environment = {
-    ...process.env,
-    HOME: home,
-    USERPROFILE: home,
-    BRAINROUTER_HOME: state,
-    BRAINROUTER_DESKTOP_WORKSPACE: workspace,
-  };
+  const environment = createElectronHarnessEnvironment(layout);
   delete environment.ELECTRON_RUN_AS_NODE;
   delete environment.VITE_DEV_SERVER_URL;
   delete environment.BRAINROUTER_UPDATE_CHANNEL;
@@ -269,30 +269,6 @@ export async function launchElectron({ desktopRoot, electronApp = '' }) {
     fs.rmSync(temporaryRoot, { recursive: true, force: true });
     throw error;
   }
-}
-
-/**
- * Give browser qualification a first-run-safe, hermetic installation. Desktop's
- * synchronous preload bootstrap intentionally requires config.json; without this
- * empty valid skeleton a clean hosted runner exits before exposing the browser
- * bridge and the test accidentally depends on a developer's real home directory.
- */
-export function prepareElectronHarnessLayout(temporaryRoot) {
-  const profile = path.join(temporaryRoot, 'profile');
-  const workspace = path.join(temporaryRoot, 'workspace');
-  const home = path.join(temporaryRoot, 'home');
-  const state = path.join(temporaryRoot, 'state');
-  const configDir = path.join(home, '.config', 'brainrouter');
-  fs.mkdirSync(profile, { recursive: true });
-  fs.mkdirSync(workspace, { recursive: true });
-  fs.mkdirSync(state, { recursive: true });
-  fs.mkdirSync(configDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(configDir, 'config.json'),
-    `${JSON.stringify({ activeServer: '', servers: {} }, null, 2)}\n`,
-    { mode: 0o600 },
-  );
-  return { profile, workspace, home, state };
 }
 
 export function findInstalledBrowser(explicitPath = '') {
