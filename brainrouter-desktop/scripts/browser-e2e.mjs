@@ -342,6 +342,8 @@ async function measureRetentionAndSwitches({ switches, retainedValue }) {
   );
   let before, beforeInput, beforeScroll;
   let beforeScrollYObserved = 0;
+  let previousBaselineScrollY = 0;
+  let stableBaselineReads = 0;
   const baselineDeadline = Date.now() + 10_000;
   let lastScrollAttempt = 0;
   let lastTypeAttempt = 0;
@@ -357,6 +359,14 @@ async function measureRetentionAndSwitches({ switches, retainedValue }) {
     beforeScroll = before.value?.nodes?.find((node) => node.testid === 'scroll-state');
     const activeTitle = state.tabs.find((tab) => tab.id === first.id)?.title;
     beforeScrollYObserved = Math.max(parseScrollY(beforeScroll), parseScrollY(activeTitle));
+    if (beforeInput?.value === retainedValue && beforeScrollYObserved > 0) {
+      stableBaselineReads = beforeScrollYObserved === previousBaselineScrollY
+        ? stableBaselineReads + 1
+        : 1;
+      previousBaselineScrollY = beforeScrollYObserved;
+    } else {
+      stableBaselineReads = 0;
+    }
     if (beforeInput?.value !== retainedValue && Date.now() - lastTypeAttempt >= 250) {
       await call({ op: 'type', target: 'retained-input', text: retainedValue, replace: true });
       lastTypeAttempt = Date.now();
@@ -365,11 +375,11 @@ async function measureRetentionAndSwitches({ switches, retainedValue }) {
       await call({ op: 'scroll', x: 450, y: 310, deltaY: 1_200 });
       lastScrollAttempt = Date.now();
     }
-  } while (Date.now() < baselineDeadline && !(beforeInput?.value === retainedValue && beforeScrollYObserved > 0));
-  if (beforeInput?.value !== retainedValue || beforeScrollYObserved === 0) {
+  } while (Date.now() < baselineDeadline && stableBaselineReads < 3);
+  if (beforeInput?.value !== retainedValue || beforeScrollYObserved === 0 || stableBaselineReads < 3) {
     const activeTitle = state.tabs.find((tab) => tab.id === first.id)?.title;
     throw new Error(
-      `retention baseline did not settle (input=${String(beforeInput?.value ?? '')}, snapshotScroll=${parseScrollY(beforeScroll)}, title=${String(activeTitle ?? '')})`,
+      `retention baseline did not settle (input=${String(beforeInput?.value ?? '')}, snapshotScroll=${parseScrollY(beforeScroll)}, stableReads=${stableBaselineReads}, title=${String(activeTitle ?? '')})`,
     );
   }
   const switchMs = [];
@@ -380,14 +390,34 @@ async function measureRetentionAndSwitches({ switches, retainedValue }) {
     switchMs.push(performance.now() - started);
   }
   await call({ op: 'select-tab', tabId: first.id });
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  const after = await call({ op: 'snapshot', mode: 'testids' });
-  state = await api.getState();
-  const afterInput = after.value?.nodes?.find((node) => node.testid === 'retained-input');
-  const afterScroll = after.value?.nodes?.find((node) => node.testid === 'scroll-state');
-  const active = state.tabs.find((tab) => tab.id === state.activeTabId);
   const beforeScrollY = beforeScrollYObserved;
-  const afterScrollY = Math.max(parseScrollY(afterScroll), parseScrollY(active?.title));
+  const finalDeadline = Date.now() + 10_000;
+  let afterInput, afterScroll, active;
+  let afterScrollY = 0;
+  let finalStateReady = false;
+  do {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    state = await api.getState();
+    if (state.activeTabId !== first.id) {
+      await call({ op: 'select-tab', tabId: first.id });
+      continue;
+    }
+    if (!surfaceReady(state.surface) && Date.now() - lastSurfaceAttempt >= 250) {
+      api.setSurface(benchmarkSurface);
+      lastSurfaceAttempt = Date.now();
+      continue;
+    }
+    const after = await call({ op: 'snapshot', mode: 'testids' });
+    afterInput = after.value?.nodes?.find((node) => node.testid === 'retained-input');
+    afterScroll = after.value?.nodes?.find((node) => node.testid === 'scroll-state');
+    active = state.tabs.find((tab) => tab.id === state.activeTabId);
+    afterScrollY = Math.max(parseScrollY(afterScroll), parseScrollY(active?.title));
+    finalStateReady = (
+      afterInput?.value === retainedValue
+      && active?.url === originalUrl
+      && Math.abs(beforeScrollY - afterScrollY) <= 2
+    );
+  } while (Date.now() < finalDeadline && !finalStateReady);
   return {
     switchMs,
     switchCount: switches,
