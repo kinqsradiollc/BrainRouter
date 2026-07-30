@@ -30,6 +30,7 @@ export interface ReconcileSteeringReceiptInput {
   summary: string;
   affectedRequirementIds?: string[];
   affectedTaskIds?: string[];
+  affectedPhaseIds?: string[];
 }
 
 export interface PendingSteeringConstraint {
@@ -53,6 +54,7 @@ export function beginSteeringReceipt(
     priorRevision: current.plan.revision,
     affectedRequirementIds: [],
     affectedTaskIds: [],
+    affectedPhaseIds: [],
     summary: summarizeSteer(input.text),
     status: 'pending',
   };
@@ -89,8 +91,14 @@ export function reconcileSteeringReceipt(
   if (!summary) throw new Error('Steering reconciliation summary cannot be empty.');
   const affectedRequirementIds = uniqueIds(input.affectedRequirementIds);
   const affectedTaskIds = uniqueIds(input.affectedTaskIds);
+  const affectedPhaseIds = uniqueIds(input.affectedPhaseIds);
   assertKnownIds(affectedRequirementIds, current.requirements.map((entry) => entry.id), 'requirement');
   assertKnownIds(affectedTaskIds, current.tasks.map((entry) => entry.id), 'task');
+  assertKnownIds(
+    affectedPhaseIds,
+    readPlan(workspaceRoot, sessionKey).phases?.map((phase) => phase.id) ?? [],
+    'phase',
+  );
   const status: SteeringReceipt['status'] =
     input.classification === 'plan_change'
       ? 'pending'
@@ -111,6 +119,7 @@ export function reconcileSteeringReceipt(
             summary,
             affectedRequirementIds,
             affectedTaskIds,
+            affectedPhaseIds,
             status,
             ...(status === 'applied' ? { appliedAt: now } : {}),
           }

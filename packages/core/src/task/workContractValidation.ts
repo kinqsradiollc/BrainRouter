@@ -188,6 +188,9 @@ function validateSteeringArray(value: unknown, errors: string[]): void {
     }
     validateIdArray(receipt.affectedRequirementIds, `${label}.affectedRequirementIds`, errors);
     validateIdArray(receipt.affectedTaskIds, `${label}.affectedTaskIds`, errors);
+    if (receipt.affectedPhaseIds !== undefined) {
+      validateIdArray(receipt.affectedPhaseIds, `${label}.affectedPhaseIds`, errors);
+    }
     if (typeof receipt.summary !== 'string' || receipt.summary.length > MAX_SUMMARY_LENGTH) {
       errors.push(`${label}.summary must be a bounded string.`);
     }

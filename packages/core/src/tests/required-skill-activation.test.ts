@@ -100,3 +100,26 @@ test('reviewed workspace planning selection drives runtime skill activation', ()
     ['planning-skill', 'research-question-skill'],
   );
 });
+
+test('the active durable phase adds its required workflows without widening disabled skills', () => {
+  const manifest = createWorkspaceManifest({
+    name: 'app',
+    profile: 'engineering',
+    by: 'wizard',
+  });
+  manifest.skills.disabled = ['verify-loop'];
+  const activation = resolveRequiredSkillActivation({
+    prompt: 'Continue the current step.',
+    activeGoal: true,
+    manifest,
+    phaseRequiredSkillIds: ['adr-skill', 'verify-loop', 'adr-skill'],
+  });
+  assert.deepEqual(
+    activation.required.map((skill) => [skill.id, skill.availability]),
+    [
+      ['planning-skill', 'available'],
+      ['adr-skill', 'available'],
+      ['verify-loop', 'disabled'],
+    ],
+  );
+});

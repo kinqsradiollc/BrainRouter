@@ -1149,6 +1149,9 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
           affectedTaskIds: Array.isArray(args.affectedTaskIds)
             ? args.affectedTaskIds.map(String)
             : [],
+          affectedPhaseIds: Array.isArray(args.affectedPhaseIds)
+            ? args.affectedPhaseIds.map(String)
+            : [],
         });
         return JSON.stringify(receipt, null, 2);
       }

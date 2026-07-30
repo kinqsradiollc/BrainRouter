@@ -21,6 +21,7 @@ const MAX_STEPS_PER_PHASE = 128;
 export function reconcilePlanPhases(input: {
   phases: PlanPhaseInput[];
   current: readonly StoredPlanPhase[];
+  currentItems: readonly StoredPlanStep[];
   reconciledItems: readonly StoredPlanStep[];
 }): StoredPlanPhase[] {
   if (!Array.isArray(input.phases) || input.phases.length === 0) {
@@ -79,8 +80,74 @@ export function reconcilePlanPhases(input: {
     };
   });
 
+  assertCompletedPhasesImmutable({
+    currentPhases: input.current,
+    currentItems: input.currentItems,
+    nextPhases: phases,
+    nextItems: input.reconciledItems,
+  });
   validatePhaseTransitions(phases, input.reconciledItems);
   return phases;
+}
+
+/**
+ * Activate the first ready phase and its first pending step when a plan update
+ * leaves no active work. This makes phase-to-phase progression host-owned
+ * while preserving a blocked phase and every explicit dependency.
+ */
+export function advancePlanProgress(input: {
+  phases: readonly StoredPlanPhase[];
+  items: readonly StoredPlanStep[];
+}): { phases: StoredPlanPhase[]; items: StoredPlanStep[] } {
+  const phases = input.phases.map((phase) => ({
+    ...phase,
+    dependsOn: [...phase.dependsOn],
+    requiredSkillIds: [...phase.requiredSkillIds],
+    stepIds: [...phase.stepIds],
+  }));
+  const items = input.items.map((item) => ({
+    ...item,
+    ...(item.evidence ? { evidence: [...item.evidence] } : {}),
+  }));
+  if (
+    phases.some((phase) => phase.status === 'in_progress') ||
+    phases.some((phase) => phase.status === 'blocked')
+  ) {
+    return { phases, items };
+  }
+
+  const itemsById = new Map(items.map((item) => [item.id, item]));
+  const terminal = (phase: StoredPlanPhase): boolean =>
+    phase.status === 'completed' || phase.status === 'skipped';
+
+  for (let index = 0; index < phases.length; index += 1) {
+    const phase = phases[index];
+    if (phase.status !== 'pending') continue;
+    if (phases.slice(0, index).some((candidate) => !terminal(candidate))) break;
+    if (phase.dependsOn.some((id) => {
+      const dependency = phases.find((candidate) => candidate.id === id);
+      return !dependency || !terminal(dependency);
+    })) continue;
+
+    const phaseItems = phase.stepIds.flatMap((id) => {
+      const item = itemsById.get(id);
+      return item ? [item] : [];
+    });
+    const nextStep = phaseItems.find((item) => item.status === 'pending');
+    if (!nextStep) {
+      if (phaseItems.every((item) => item.status === 'completed')) {
+        phases[index] = { ...phase, status: 'completed' };
+        continue;
+      }
+      break;
+    }
+    nextStep.status = 'in_progress';
+    phases[index] = { ...phase, status: 'in_progress', blockedReason: undefined };
+    break;
+  }
+
+  validatePhaseTransitions(phases, items);
+  return { phases, items };
 }
 
 export function compatibilityPlanPhases(input: {
@@ -321,6 +388,39 @@ export function planExecutionBlockReason(
       : 'set exactly one ready phase and one bounded step to in_progress before mutating';
   }
   return undefined;
+}
+
+function assertCompletedPhasesImmutable(input: {
+  currentPhases: readonly StoredPlanPhase[];
+  currentItems: readonly StoredPlanStep[];
+  nextPhases: readonly StoredPlanPhase[];
+  nextItems: readonly StoredPlanStep[];
+}): void {
+  const currentItems = new Map(input.currentItems.map((item) => [item.id, item]));
+  const nextItems = new Map(input.nextItems.map((item) => [item.id, item]));
+  for (const current of input.currentPhases) {
+    if (current.status !== 'completed') continue;
+    const next = input.nextPhases.find((phase) => phase.id === current.id);
+    const samePhase =
+      next?.status === 'completed' &&
+      next.title === current.title &&
+      JSON.stringify(next.stepIds) === JSON.stringify(current.stepIds);
+    const sameSteps = current.stepIds.every((id) => {
+      const before = currentItems.get(id);
+      const after = nextItems.get(id);
+      return before !== undefined && after !== undefined &&
+        before.status === 'completed' &&
+        after.status === 'completed' &&
+        before.step === after.step &&
+        before.acceptance === after.acceptance &&
+        JSON.stringify(before.evidence ?? []) === JSON.stringify(after.evidence ?? []);
+    });
+    if (!samePhase || !sameSteps) {
+      throw new Error(
+        `Completed phase "${current.title}" is immutable; append a remediation phase instead of rewriting completed work or evidence.`,
+      );
+    }
+  }
 }
 
 function assignPhaseIds(

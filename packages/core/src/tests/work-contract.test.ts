@@ -259,8 +259,10 @@ test('Plan-changing Steer remains pending until its matching plan revision is st
       classification: 'plan_change',
       summary: 'Adds compatibility verification before implementation.',
       affectedTaskIds: [initial.items[0].id],
+      affectedPhaseIds: [initial.phases![0].id],
     });
     assert.equal(classified.status, 'pending');
+    assert.deepEqual(classified.affectedPhaseIds, [initial.phases![0].id]);
     assert.deepEqual(
       pendingSteeringConstraint(workspace, sessionKey),
       { receiptId: 'steer_plan', phase: 'revise_plan' },

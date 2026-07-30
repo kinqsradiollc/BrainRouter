@@ -22,6 +22,7 @@ export function resolveRequiredSkillActivation(input: {
   prompt: string;
   activeGoal: boolean;
   manifest?: Pick<WorkspaceManifest, 'profile' | 'planning' | 'skills'> | null;
+  phaseRequiredSkillIds?: readonly string[];
 }): RequiredSkillActivation {
   const required: RequiredRuntimeSkill[] = [];
   const disabled = new Set(input.manifest?.skills.disabled ?? []);
@@ -41,6 +42,9 @@ export function resolveRequiredSkillActivation(input: {
   };
 
   for (const skill of schemaActivation.requiredSkills) add(skill.id, skill.reason);
+  for (const skillId of input.phaseRequiredSkillIds ?? []) {
+    add(skillId, 'the active durable plan phase requires this workflow');
+  }
   if (requiresExplicitArchitectureDecision(input.prompt) &&
       !required.some((skill) => skill.id === 'adr-skill')) {
     add('adr-skill', 'the request explicitly requires a durable architecture or cross-surface decision');
