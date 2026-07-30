@@ -54,8 +54,8 @@ test('repository guidance preserves unrelated dirty work and forbids generic rol
   });
   assert.match(prompt, /dirty worktree is not a blocker/i);
   assert.match(prompt, /preserve unrelated user changes/i);
-  assert.match(prompt, /failed build or test calls for causal diagnosis/i);
-  assert.match(prompt, /not generic error recovery/i);
+  assert.match(prompt, /failed checks need diagnosis/i);
+  assert.match(prompt, /not generic rollback/i);
 });
 
 test('worktree awareness delegates Git discovery through an injected host', () => {
