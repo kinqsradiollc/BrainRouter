@@ -134,6 +134,9 @@ async function runPackagedBrowserSmoke(app) {
     }
     const smoke = result.smoke;
     if (!smoke?.bridge) throw new Error(`packaged app renderer did not expose the browser bridge${logs()}`);
+    if (!smoke.hostOk || !smoke.manifestOk) {
+      throw new Error(`packaged app utility host or workspace manifest failed: ${JSON.stringify(smoke)}${logs()}`);
+    }
     const chromiumMatch = /(?:Chrome|Chromium)\/(\d+)\./.exec(
       typeof smoke.userAgent === 'string' ? smoke.userAgent : '',
     );
@@ -193,7 +196,7 @@ if (installers.length)
   console.log(`✓ ${installers.length} installer(s): ${installers.map((p) => path.basename(p)).join(', ')}`);
 else errors.push('no .dmg/.zip installer produced');
 
-// 2) the app bundle + unpacked native module
+// 2) the app bundle + unpacked utility-host dependencies
 const apps = outDirs.flatMap((dir) => walk(dir, (p, e) => e.isDirectory() && p.endsWith('.app')));
 if (!apps.length) {
   errors.push('no .app bundle found in the output');
@@ -203,6 +206,13 @@ if (!apps.length) {
     const nodeFiles = fs.existsSync(unpacked) ? walk(unpacked, (p) => p.endsWith('.node')) : [];
     const libnut = nodeFiles.some((p) => /libnut/i.test(p));
     const nodePty = nodeFiles.some((p) => /node-pty|pty\.node/i.test(p));
+    const qrcodeEntry = path.join(unpacked, 'node_modules', 'qrcode', 'lib', 'index.js');
+    const dijkstraEntry = path.join(unpacked, 'node_modules', 'dijkstrajs', 'dijkstra.js');
+    const utilityHostEntries = [
+      ['tweetnacl', path.join(unpacked, 'node_modules', 'tweetnacl', 'nacl-fast.js')],
+      ['ws', path.join(unpacked, 'node_modules', 'ws', 'index.js')],
+      ['yaml', path.join(unpacked, 'node_modules', 'yaml', 'dist', 'index.js')],
+    ];
     if (libnut)
       console.log(`✓ ${path.basename(app)}: libnut native module unpacked (${nodeFiles.length} .node file(s))`);
     else
@@ -214,6 +224,23 @@ if (!apps.length) {
       errors.push(
         `${path.basename(app)}: node-pty .node not found under app.asar.unpacked — interactive terminals would fail at runtime`,
       );
+    if (fs.existsSync(qrcodeEntry)) console.log(`✓ ${path.basename(app)}: utility-host QR module unpacked`);
+    else
+      errors.push(
+        `${path.basename(app)}: qrcode entry not found under app.asar.unpacked — the utility host would fail during startup`,
+      );
+    if (fs.existsSync(dijkstraEntry)) console.log(`✓ ${path.basename(app)}: utility-host QR dependency unpacked`);
+    else
+      errors.push(
+        `${path.basename(app)}: dijkstrajs entry not found under app.asar.unpacked — QR generation would fail at runtime`,
+      );
+    for (const [packageName, entry] of utilityHostEntries) {
+      if (fs.existsSync(entry)) console.log(`✓ ${path.basename(app)}: utility-host ${packageName} module unpacked`);
+      else
+        errors.push(
+          `${path.basename(app)}: ${packageName} entry not found under app.asar.unpacked — the utility host would fail during startup`,
+        );
+    }
 
     // 3) signing + entitlements (advisory)
     if (process.platform === 'darwin') {

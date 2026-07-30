@@ -380,8 +380,17 @@ function markWorkspaceReordered(dragged: string, target: string): string[] {
  *  keeps surfaces straight with multiple hosts live) and tracks turn-running
  *  state so a busy workspace is never reaped. */
 function spawnHost(wp: WinPool, workspaceRoot: string): UtilityProcess {
-  const host = utilityProcess.fork(path.join(__dirname, 'host.js'), [], {
-    env: { ...process.env, BRAINROUTER_DESKTOP_WORKSPACE: workspaceRoot },
+  const unpackedNodeModules = app.isPackaged
+    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules')
+    : null;
+  const host = utilityProcess.fork(path.join(__dirname, 'hostBootstrap.js'), [], {
+    env: {
+      ...process.env,
+      BRAINROUTER_DESKTOP_WORKSPACE: workspaceRoot,
+      ...(unpackedNodeModules
+        ? { BRAINROUTER_DESKTOP_UNPACKED_NODE_MODULES: unpackedNodeModules }
+        : {}),
+    },
     serviceName: `brainrouter-agent-host:${path.basename(workspaceRoot)}`,
   });
   host.on('message', (msg) => {

@@ -32,10 +32,36 @@ interface PackagedSmokeResult {
 const PACKAGED_SMOKE_TIMEOUT_MS = 30_000;
 
 const PACKAGED_BROWSER_EXPRESSION = `(async () => {
-  const api = globalThis.brainrouter && globalThis.brainrouter.browser;
-  if (!api || typeof api.getState !== 'function' || typeof api.command !== 'function') {
+  const bridge = globalThis.brainrouter;
+  const api = bridge && bridge.browser;
+  if (!api || typeof api.getState !== 'function' || typeof api.command !== 'function'
+      || typeof bridge.send !== 'function' || typeof bridge.onEvent !== 'function'
+      || typeof bridge.workspaceManifest !== 'function') {
     return { bridge: false };
   }
+  const queryId = 'packaged-smoke-session-info';
+  const host = await new Promise((resolve) => {
+    let off = () => {};
+    const finish = (value) => {
+      clearTimeout(timer);
+      off();
+      resolve(value);
+    };
+    const timer = setTimeout(
+      () => finish({ ok: false, error: 'utility host query timed out' }),
+      20000,
+    );
+    off = bridge.onEvent((message) => {
+      const event = message && message.event ? message.event : message;
+      if (!event || event.kind !== 'query-result' || event.id !== queryId) return;
+      finish(event);
+    });
+    bridge.send({ kind: 'query', id: queryId, name: 'session-info' });
+  });
+  const workspaceRoot = host && host.ok && host.result && host.result.workspaceRoot;
+  const manifest = typeof workspaceRoot === 'string'
+    ? await bridge.workspaceManifest(workspaceRoot)
+    : null;
   const initial = await api.getState();
   const first = await api.command({ op: 'create-tab', url: 'about:blank', active: true });
   const second = await api.command({ op: 'create-tab', url: 'about:blank', active: true });
@@ -43,6 +69,8 @@ const PACKAGED_BROWSER_EXPRESSION = `(async () => {
   const finalState = await api.getState();
   return {
     bridge: true,
+    hostOk: host && host.ok === true,
+    manifestOk: manifest && manifest.ok === true,
     initialCount: Array.isArray(initial && initial.tabs) ? initial.tabs.length : -1,
     finalCount: Array.isArray(finalState && finalState.tabs) ? finalState.tabs.length : -1,
     firstOk: first && first.ok === true,
