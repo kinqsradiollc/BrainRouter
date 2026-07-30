@@ -58,6 +58,7 @@ import { concreteRendererBrowserTarget } from './browser/rendererCommandTarget.j
 import { shouldBypassRendererVisibleQueue } from './browser/visibleQueuePolicy.js';
 import { resolveDesktopBootstrapState } from './accountIntegration.js';
 import { initAutoUpdate } from './updater.js';
+import { configurePackagedSmokeDevTools } from './packagedSmokeBootstrap.js';
 import {
   APPEARANCE_PREFERENCES,
   appearanceWindowBackground,
@@ -69,6 +70,8 @@ import {
 } from './appearancePolicy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+configurePackagedSmokeDevTools(app);
 
 function reconcileWorkspaceBackground(workspaceRoot: string): void {
   try { reconcileStaleBackgroundTasks(workspaceRoot, pidAlive); } catch { /* best-effort */ }
