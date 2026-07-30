@@ -248,7 +248,8 @@ After completing all increments for a task:
 - [ ] The full test suite passes.
 - [ ] The build is clean and error-free.
 - [ ] The feature works end-to-end as specified.
-- [ ] No uncommitted files or styling junk are left behind.
+- [ ] No agent-owned uncommitted files or styling junk are left behind;
+      unrelated pre-existing user changes remain preserved and untouched.
 
 ## Verification
 After completing the skill, confirm:

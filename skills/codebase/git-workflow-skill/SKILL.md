@@ -173,7 +173,8 @@ git worktree remove ../project-feature-a
 Benefits:
 - Multiple agents can work on different features simultaneously
 - No branch switching needed (each directory has its own branch)
-- If one experiment fails, delete the worktree — nothing is lost
+- If one experiment fails, preserve its evidence and remove only that
+  agent-owned worktree after confirming no useful uncommitted work remains
 - Changes are isolated until explicitly merged
 
 ## The Save Point Pattern
@@ -183,16 +184,29 @@ Agent starts work
     │
     ├── Makes a change
     │   ├── Test passes? → Commit → Continue
-    │   └── Test fails? → Revert to last commit → Investigate
+    │   └── Test fails? → Diagnose → Fix or narrowly undo agent-owned lines
     │
     ├── Makes another change
     │   ├── Test passes? → Commit → Continue
-    │   └── Test fails? → Revert to last commit → Investigate
+    │   └── Test fails? → Diagnose → Fix or narrowly undo agent-owned lines
     │
     └── Feature complete → All commits form a clean history
 ```
 
-This pattern means you never lose more than one increment of work. If an agent goes off the rails, `git reset --hard HEAD` takes you back to the last successful state.
+Save points make the agent's own increments auditable; they are not permission
+to discard the user's repository state. Before changing anything, inspect
+`git status`, `git diff`, and active worktrees read-only:
+
+- preserve unrelated uncommitted files without asking the user to clean them;
+- layer safe non-overlapping changes on the current file;
+- use an owned isolated worktree for genuine overlap when possible;
+- ask only when the exact in-scope collision cannot be preserved automatically.
+
+Never use `git reset --hard`, `git clean`, checkout/restore, stash, or revert as
+generic recovery. If a failed experiment must be removed, apply a targeted
+inverse patch only to the lines created by that experiment, or abandon its
+isolated worktree after preserving any useful evidence. A failed check is first
+a diagnosis problem, not a rollback instruction.
 
 ## Change Summaries
 
