@@ -12,7 +12,7 @@ context for each release.
 |---:|---|---|---|
 | — | 0.3.7 → 0.4.13 | Shipped | Per-version detail in [`../brainrouter-changelog/`](../brainrouter-changelog/) |
 | 1 | **[0.4.17](0.4.17.md)** | Shipped | How do workspaces become project-aware and source-grounded without broadening authority? |
-| 2 | **[0.4.18](0.4.18.md)** | In progress | How does Desktop feel native and remain fast without changing runtime authority? |
+| 2 | **[0.4.18](0.4.18.md)** | Qualified, unpublished | How does Desktop feel native and remain fast without changing runtime authority? |
 | 3 | **[0.5.0](0.5.0.md)** | Sketched | How do we build the power-user TUI, plugin marketplace, and engineering sync providers? |
 
 Latest published: **[0.4.17](../brainrouter-changelog/0.4.17.md)** on 2026-07-30.
