@@ -83,6 +83,23 @@
   --shell-sidebar-padding: 8px;
   --shell-control-radius: 7px;
   --shell-row-radius: 7px;
+  --terminal-selection: rgba(255, 255, 255, 0.18);
+  --terminal-ansi-black: #1d1f21;
+  --terminal-ansi-red: #cc6666;
+  --terminal-ansi-green: #b5bd68;
+  --terminal-ansi-yellow: #f0c674;
+  --terminal-ansi-blue: #81a2be;
+  --terminal-ansi-magenta: #b294bb;
+  --terminal-ansi-cyan: #8abeb7;
+  --terminal-ansi-white: #c5c8c6;
+  --terminal-ansi-bright-black: #666666;
+  --terminal-ansi-bright-red: #d54e53;
+  --terminal-ansi-bright-green: #b9ca4a;
+  --terminal-ansi-bright-yellow: #e7c547;
+  --terminal-ansi-bright-blue: #7aa6da;
+  --terminal-ansi-bright-magenta: #c397d8;
+  --terminal-ansi-bright-cyan: #70c0b1;
+  --terminal-ansi-bright-white: #eaeaea;
 }
 
 [data-theme="light"] {
@@ -147,6 +164,23 @@
   --ov-18: rgba(24, 26, 31, 0.18);
   --ov-20: rgba(24, 26, 31, 0.2);
   --ov-26: rgba(24, 26, 31, 0.26);
+  --terminal-selection: rgba(79, 95, 199, 0.2);
+  --terminal-ansi-black: #24262b;
+  --terminal-ansi-red: #b4232f;
+  --terminal-ansi-green: #247a3d;
+  --terminal-ansi-yellow: #8a6200;
+  --terminal-ansi-blue: #3155ad;
+  --terminal-ansi-magenta: #7b4595;
+  --terminal-ansi-cyan: #19717a;
+  --terminal-ansi-white: #d7d8db;
+  --terminal-ansi-bright-black: #666b74;
+  --terminal-ansi-bright-red: #cf222e;
+  --terminal-ansi-bright-green: #16803c;
+  --terminal-ansi-bright-yellow: #9a6700;
+  --terminal-ansi-bright-blue: #4f5fc7;
+  --terminal-ansi-bright-magenta: #9656b3;
+  --terminal-ansi-bright-cyan: #247f89;
+  --terminal-ansi-bright-white: #ffffff;
 }
 
 [data-theme="hc"] {
@@ -183,6 +217,23 @@
   --err: #fb7185;
   --err-soft: rgba(251, 113, 133, 0.18);
   --term-bg: #000000;
+  --terminal-selection: rgba(255, 255, 255, 0.28);
+  --terminal-ansi-black: #000000;
+  --terminal-ansi-red: #ff7b8a;
+  --terminal-ansi-green: #69f09a;
+  --terminal-ansi-yellow: #ffe66d;
+  --terminal-ansi-blue: #7db7ff;
+  --terminal-ansi-magenta: #e29bff;
+  --terminal-ansi-cyan: #72e7ef;
+  --terminal-ansi-white: #ffffff;
+  --terminal-ansi-bright-black: #b4b4bd;
+  --terminal-ansi-bright-red: #ff9da8;
+  --terminal-ansi-bright-green: #91ffb6;
+  --terminal-ansi-bright-yellow: #fff09a;
+  --terminal-ansi-bright-blue: #a8ceff;
+  --terminal-ansi-bright-magenta: #edbdff;
+  --terminal-ansi-bright-cyan: #a4f4f8;
+  --terminal-ansi-bright-white: #ffffff;
   --r-sm: 7px;
   --r-md: 10px;
   --r-lg: 13px;

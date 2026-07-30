@@ -16,6 +16,7 @@ import {
   type TerminalShellView,
 } from '@kinqs/brainrouter-agent-protocol';
 import '@xterm/xterm/css/xterm.css';
+import { terminalTheme } from './terminalTheme.js';
 
 // Renderer-memory only: preserves xterm's exact screen/scrollback state across
 // panel remounts without persisting potentially sensitive terminal output.
@@ -33,7 +34,6 @@ export function TerminalPanel(): React.ReactElement {
     const el = hostRef.current;
     if (!el) return;
     const mono = getComputedStyle(document.documentElement).getPropertyValue('--mono').trim() || 'monospace';
-    const styles = getComputedStyle(document.documentElement);
     const term = new Terminal({
       fontFamily: mono,
       fontSize: 13,
@@ -42,29 +42,7 @@ export function TerminalPanel(): React.ReactElement {
       cursorBlink: true,
       cursorStyle: 'block',
       scrollback: 10_000,
-      theme: {
-        background: styles.getPropertyValue('--term-bg').trim() || '#121212',
-        foreground: styles.getPropertyValue('--text').trim() || '#ececec',
-        cursor: styles.getPropertyValue('--text').trim() || '#ececec',
-        cursorAccent: styles.getPropertyValue('--term-bg').trim() || '#121212',
-        selectionBackground: 'rgba(255,255,255,0.18)',
-        black: '#1d1f21',
-        red: '#cc6666',
-        green: '#b5bd68',
-        yellow: '#f0c674',
-        blue: '#81a2be',
-        magenta: '#b294bb',
-        cyan: '#8abeb7',
-        white: '#c5c8c6',
-        brightBlack: '#666666',
-        brightRed: '#d54e53',
-        brightGreen: '#b9ca4a',
-        brightYellow: '#e7c547',
-        brightBlue: '#7aa6da',
-        brightMagenta: '#c397d8',
-        brightCyan: '#70c0b1',
-        brightWhite: '#eaeaea',
-      },
+      theme: terminalTheme(getComputedStyle(document.documentElement)),
     });
     const fit = new FitAddon();
     const serialize = new SerializeAddon();
@@ -173,9 +151,17 @@ export function TerminalPanel(): React.ReactElement {
       } catch { /* detached */ }
     });
     ro.observe(el);
+    const themeObserver = new MutationObserver(() => {
+      term.options.theme = terminalTheme(getComputedStyle(document.documentElement));
+    });
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme'],
+    });
     return () => {
       clearInterval(poll);
       ro.disconnect();
+      themeObserver.disconnect();
       data.dispose();
       off();
       if (termId) terminalSnapshots.set(termId, { serialized: serialize.serialize(), next });
