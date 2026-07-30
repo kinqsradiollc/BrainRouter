@@ -88,6 +88,8 @@ export function SettingsDialog(props: {
   onCodeFont: (f: string) => void;
   theme: AppearancePreference;
   onTheme: (theme: AppearancePreference) => void;
+  visualSystemV2: boolean;
+  onVisualSystemV2: (enabled: boolean) => void;
   chatWidth: string;
   onChatWidth: (w: string) => void;
   chatSize: string;
@@ -744,6 +746,9 @@ export function SettingsDialog(props: {
                 ]}
                 onChange={(value) => props.onTheme(value as AppearancePreference)}
               />
+            </Row>
+            <Row title="New desktop design" desc="Preview the redesigned native workbench shell. Turn it off at any time to restore the current interface.">
+              <Toggle on={props.visualSystemV2} onChange={props.onVisualSystemV2} />
             </Row>
             <Row title="Code font" desc="Monospace font for code, diffs and the terminal panel (desktop only).">
               <input className="ctl" value={props.codeFont} placeholder="e.g. JetBrains Mono" onChange={(e) => props.onCodeFont(e.target.value)} />
