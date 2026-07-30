@@ -49,7 +49,8 @@ runs the whole signed + notarized macOS build on a GitHub `macos-14` runner —
 you don't need a local Mac build. Add these **repository secrets** once
 (Settings → Secrets and variables → Actions), then trigger the workflow
 manually (Actions → "Release — Desktop" → Run workflow) or by pushing a
-`desktop-v*` tag:
+normal `vX.Y.Z` release tag. The legacy `desktop-v*` namespace remains available
+for desktop-only rebuilds:
 
 | Repo secret | Maps to | What |
 |-------------|---------|------|
