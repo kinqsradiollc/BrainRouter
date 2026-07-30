@@ -49,9 +49,7 @@ import { WorkspaceOrgProvider } from './lib/orgContext.js';
 import type { GoalRecord } from './components/chat/GoalBanner.js';
 import {
   bootstrapAppearanceDocument,
-  bootstrapVisualSystemDocument,
   useAppearance,
-  useVisualSystem,
   useZoom,
   useAppHandlers,
   useAppEffects,
@@ -63,7 +61,6 @@ import { AppDialogs, MainContent } from './App/layout/index.js';
 
 installDevBridge();
 bootstrapAppearanceDocument();
-bootstrapVisualSystemDocument();
 
 export function App(): React.ReactElement {
   const [draft, setDraft] = useState('');
@@ -201,7 +198,6 @@ export function App(): React.ReactElement {
   const [slashDismissed, setSlashDismissed] = useState(false);
   const [codeFont, setCodeFont] = useState(() => localStorage.getItem('br-code-font') ?? '');
   const { preference: theme, setPreference: setTheme } = useAppearance();
-  const { enabled: visualSystemV2, setEnabled: setVisualSystemV2 } = useVisualSystem();
   const [recentsSort, setRecentsSort] = useState<'recent' | 'alpha'>('recent');
   const [homeStats, setHomeStats] = useState<{
     sessions: number; turns: number; activeDays: number; currentStreak: number;
@@ -749,7 +745,6 @@ export function App(): React.ReactElement {
         setProbeError={setProbeError} setProbedModels={setProbedModels} toolCatalog={toolCatalog}
         market={market}
         execMode={execMode} codeFont={codeFont} setCodeFont={setCodeFont} theme={theme} setTheme={setTheme}
-        visualSystemV2={visualSystemV2} setVisualSystemV2={setVisualSystemV2}
         chatWidth={chatWidth} setChatWidth={setChatWidth} chatSize={chatSize} setChatSize={setChatSize}
         accent={accent} setAccent={setAccent}
         interaction={interaction} picked={picked} setPicked={setPicked} answerInteraction={answerInteraction}
