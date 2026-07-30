@@ -1,6 +1,6 @@
 {
   "name": "@kinqs/brainrouter-core",
-  "version": "0.4.17",
+  "version": "0.4.18",
   "description": "BrainRouter's headless engine — config, durable stores, runtime, orchestration, telemetry, and the agent — shared verbatim by the CLI and the Desktop app so neither reaches into the other's build output.",
   "type": "module",
   "main": "dist/index.js",
@@ -284,8 +284,8 @@
     "prepack": "npm run build && node -e \"const fs=require('fs');function w(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=d+'/'+e.name;if(e.isDirectory())w(p);else if(/\\.test\\./.test(e.name))fs.rmSync(p)}}w('dist')\""
   },
   "dependencies": {
-    "@kinqs/brainrouter-agent-protocol": "^0.4.17",
-    "@kinqs/brainrouter-types": "^0.4.17",
+    "@kinqs/brainrouter-agent-protocol": "^0.4.18",
+    "@kinqs/brainrouter-types": "^0.4.18",
     "@modelcontextprotocol/sdk": "^1.11.0",
     "chalk": "^5.3.0",
     "cheerio": "^1.2.0",

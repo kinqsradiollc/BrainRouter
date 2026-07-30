@@ -1,6 +1,6 @@
 {
   "name": "brainrouter-desktop",
-  "version": "0.4.17",
+  "version": "0.4.18",
   "private": true,
   "description": "BrainRouter Desktop — native macOS/Windows shell (Electron + React) over the shared @kinqs/brainrouter-core agent runtime (the same engine the CLI uses).",
   "type": "module",
@@ -77,8 +77,8 @@
   },
   "dependencies": {
     "@dagrejs/dagre": "^3.0.0",
-    "@kinqs/brainrouter-agent-protocol": "^0.4.17",
-    "@kinqs/brainrouter-core": "^0.4.17",
+    "@kinqs/brainrouter-agent-protocol": "^0.4.18",
+    "@kinqs/brainrouter-core": "^0.4.18",
     "@lobehub/icons-static-svg": "^1.91.0",
     "@monaco-editor/react": "^4.7.0",
     "@nut-tree-fork/libnut": "^4.2.6",
