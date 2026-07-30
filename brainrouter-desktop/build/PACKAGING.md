@@ -81,3 +81,12 @@ yours — a signing identity + interactive macOS TCC grants:
    `screenshot` then `left_click`/`type` a real app end-to-end (with the approval
    prompt on each mutating action).
 3. `npm run dist:win` → an `.nsis` installer that loads the native module.
+
+## Monorepo note
+
+npm workspaces install `@kinqs/*` as symlinks into the root `node_modules`;
+electron-builder rejects symlinks that escape the app directory. The release
+workflow runs [`build/dereference-workspace-deps.mjs`](./dereference-workspace-deps.mjs)
+after `build:deps` to replace those links with real copies (package.json +
+`dist/`). Run it manually before a local `npm run dist:mac`; the next
+`npm install` restores the symlinks.

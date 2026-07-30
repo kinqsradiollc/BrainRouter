@@ -1,7 +1,7 @@
 {
   "name": "brainrouter-monorepo",
   "private": true,
-  "version": "0.4.16",
+  "version": "0.4.17",
   "workspaces": [
     "packages/*",
     "brainrouter",
@@ -39,7 +39,7 @@
     "prepare": "node scripts/install-git-hooks.mjs",
     "hooks:install": "node scripts/install-git-hooks.mjs",
     "format:check": "prettier --check .",
-    "verify": "npm run typecheck && npm run lint && npm run test",
+    "verify": "npm run build && npm run typecheck && npm run lint && npm run test",
     "cli": "npm run build -w @kinqs/brainrouter-cli --silent && node brainrouter-cli/dist/index.js",
     "cli:nobuild": "node brainrouter-cli/dist/index.js"
   },
@@ -58,7 +58,7 @@
     "typescript": "^6.0.3"
   },
   "dependencies": {
-    "@kinqs/brainrouter-mcp-server": "^0.4.16",
+    "@kinqs/brainrouter-mcp-server": "^0.4.17",
     "@modelcontextprotocol/sdk": "^1.11.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6"

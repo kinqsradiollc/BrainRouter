@@ -1,6 +1,6 @@
 # ADR-023 — Profile-Specific Orchestration Plans
 
-**Status:** Accepted; implementation in progress for `release/0.4.17` ·
+**Status:** Accepted and implemented in `release/0.4.17` ·
 **Builds on** ADR-021 (workspace profiles) and ADR-022 (persona,
 orchestration, and context contracts) ·
 **Refines** ADR-022 sections 4, 5, 7, and 9 without changing their authority

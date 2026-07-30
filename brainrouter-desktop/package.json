@@ -1,6 +1,6 @@
 {
   "name": "brainrouter-desktop",
-  "version": "0.4.16",
+  "version": "0.4.17",
   "private": true,
   "description": "BrainRouter Desktop — native macOS/Windows shell (Electron + React) over the shared @kinqs/brainrouter-core agent runtime (the same engine the CLI uses).",
   "type": "module",
@@ -8,7 +8,7 @@
   "scripts": {
     "build": "npm run build:electron && vite build",
     "build:electron": "node -e \"fs.rmSync('dist-electron',{recursive:true,force:true})\" && tsc -p tsconfig.electron.json",
-    "build:deps": "npm run build -w @kinqs/brainrouter-types && npm run build -w @kinqs/brainrouter-agent-protocol && npm run build -w @kinqs/brainrouter-core",
+    "build:deps": "npm --prefix ../packages/types run build && npm --prefix ../packages/agent-protocol run build && npm --prefix ../packages/core run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build:deps && npm run typecheck && npm run build:electron && node --test \"dist-electron/**/*.test.js\" \"scripts/**/*.test.mjs\" && tsx --test \"src/**/*.test.ts\" \"scripts/**/*.test.ts\"",
     "test:browser:harness": "node --test \"scripts/**/*.test.mjs\"",
@@ -76,8 +76,8 @@
   },
   "dependencies": {
     "@dagrejs/dagre": "^3.0.0",
-    "@kinqs/brainrouter-agent-protocol": "^0.4.16",
-    "@kinqs/brainrouter-core": "^0.4.16",
+    "@kinqs/brainrouter-agent-protocol": "^0.4.17",
+    "@kinqs/brainrouter-core": "^0.4.17",
     "@lobehub/icons-static-svg": "^1.91.0",
     "@monaco-editor/react": "^4.7.0",
     "@nut-tree-fork/libnut": "^4.2.6",
@@ -88,7 +88,7 @@
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-serialize": "^0.14.0",
     "@xterm/xterm": "^6.0.0",
-    "@xyflow/react": "^12.11.0",
+    "@xyflow/react": "^12.11.1",
     "d3-force": "^3.0.0",
     "monaco-editor": "^0.55.1",
     "node-pty": "^1.1.0",
@@ -114,5 +114,6 @@
     "tsx": "^4.7.0",
     "typescript": "^5.5.4",
     "vite": "^5.4.6"
-  }
+  },
+  "author": "kinqsradio"
 }

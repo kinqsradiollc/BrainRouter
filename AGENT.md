@@ -55,7 +55,7 @@ The full list with evidence lives in [`brainrouter-rules/00-golden-rules.md`](br
 ```bash
 npm install                 # workspace root
 npm run build               # packages (types → agent-protocol → core → sdk → hooks) then apps
-npm run verify              # typecheck + lint + all workspace tests
+npm run verify              # build + typecheck + lint + all workspace tests
 npm run test -ws --if-present   # or per workspace:
 npm test -w @kinqs/brainrouter-core        # node --test over dist
 npm test -w @kinqs/brainrouter-mcp-server  # vitest + integration

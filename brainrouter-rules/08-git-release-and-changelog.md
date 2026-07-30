@@ -153,14 +153,14 @@ file. Explicitly rejected ideas live in
 
 ### 11. npm publish is manual, in dependency order, with absolute paths
 
-Publish order is fixed: `packages/types` → `packages/sdk` → `packages/hooks` →
-`brainrouter` → `brainrouter-cli`, using **absolute** `cd` paths (on macOS's
-case-insensitive FS, relative `cd ../brainrouter` can land on the private monorepo
-root `BrainRouter/` and fail with `EPRIVATE`) and no inline `#` comments (zsh
-treats them as args). Auth is a granular `@kinqs/*` npm token with Bypass-2FA in
-`~/.npmrc`. Before publishing: `npm run verify` green, then `npm pack --dry-run`
-per package to check name/version, no `*.test.*` files, no `.env`/credentials, sane
-sizes.
+Publish order is fixed: `packages/types` → `packages/agent-protocol` →
+`packages/core` → `packages/sdk` → `packages/hooks` → `brainrouter` →
+`brainrouter-cli`, using **absolute** `cd` paths (on macOS's case-insensitive FS,
+relative `cd ../brainrouter` can land on the private monorepo root `BrainRouter/`
+and fail with `EPRIVATE`) and no inline `#` comments (zsh treats them as args).
+Auth is a granular `@kinqs/*` npm token with Bypass-2FA in `~/.npmrc`. Before
+publishing: `npm run verify` green, then `npm pack --dry-run` per package to check
+name/version, no `*.test.*` files, no `.env`/credentials, sane sizes.
 
 - **Why:** each package's deps pin the real semver of the ones published before it,
   so out-of-order publishes leave the registry unresolvable.

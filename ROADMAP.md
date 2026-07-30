@@ -7,14 +7,13 @@ lives in [`CHANGELOG.md`](CHANGELOG.md) and
 
 ## Release status
 
-The latest tagged release is **0.4.16** (2026-07-01). Version **0.4.17** is the
-active, unreleased development line. A capability present on a development
-branch is not considered shipped until its release gate passes and a version is
-tagged.
+The latest tagged release is **0.4.17** (2026-07-30). A capability present on a
+development branch is not considered shipped until its release gate passes and
+a version is tagged.
 
 | Version               | State          | Theme                                                                                           |
 | --------------------- | -------------- | ----------------------------------------------------------------------------------------------- |
-| **0.4.17**            | In development | Runtime plane, automations, connectors, review operations, and cross-surface product completion |
+| **0.4.17**            | Shipped        | Runtime plane, automations, connectors, review operations, and cross-surface product completion |
 | **0.4.16**            | Shipped        | Autonomous fleet, unified desktop, Track maturation, PostgreSQL brain, remote brain, and Atlas  |
 | **0.4.15**            | Shipped        | Requirement-first workflow and the first unified Chat · Track · Code workspace                  |
 | **0.4.14**            | Shipped        | Recall accuracy, grid TUI, and background workers that report back                              |
@@ -49,12 +48,11 @@ The changelog remains the source of truth for the exact shipped inventory.
 
 ## 0.4.17 — Runtime body and product completion
 
-**Status: feature implementation complete; release validation and publishing in
-progress.** The active line adds an execution plane, project-aware onboarding,
-and source-grounded Project knowledge while making the Dashboard and Desktop
-feel like one coherent product. The release remains default-safe: hosted or
-container execution, inbound triggers, and other expanded authority stay
-opt-in.
+**Status: shipped on 2026-07-30.** The release adds an execution plane,
+project-aware onboarding, and source-grounded Project knowledge while making
+the Dashboard and Desktop feel like one coherent product. It remains
+default-safe: hosted or container execution, inbound triggers, and other
+expanded authority stay opt-in.
 
 ### Runtime and automation
 
@@ -95,11 +93,10 @@ opt-in.
       citations, recommendations, distillation, and Dashboard/Desktop clients.
 - [x] Complete the onboarding and Project-knowledge hosted CI,
       browser/Electron acceptance, and documentation reconciliation gates.
-- [ ] Complete the remaining release-wide validation, bump versions, tag, and
+- [x] Complete the remaining release-wide validation, bump versions, tag, and
       publish.
 
-Implementation checkmarks in this section describe the active development line,
-not a published release.
+Implementation checkmarks in this section describe the shipped release.
 
 ## 0.5.0 — Operational scale
 

@@ -1,6 +1,6 @@
 # Spec: Workspace Onboarding, Dynamic Capabilities, and Project Knowledge
 
-Status: Implemented on `release/0.4.17` (unreleased; 2026-07-26)
+Status: Shipped in 0.4.17 (2026-07-30)
 Owner: Core / CLI / Desktop / Brain / Dashboard
 Decision: ADR-021
 Target: `release/0.4.17` through small, independently reviewed PRs
