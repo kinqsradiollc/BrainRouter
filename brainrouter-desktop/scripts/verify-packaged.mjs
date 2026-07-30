@@ -159,6 +159,9 @@ async function runPackagedBrowserSmoke(app) {
   fs.mkdirSync(workspace, { recursive: true });
   const childEnv = { ...process.env, BRAINROUTER_DESKTOP_WORKSPACE: workspace };
   delete childEnv.ELECTRON_RUN_AS_NODE;
+  // Build-only Node flags inherited from CI are rejected by packaged Electron
+  // and can prevent the application from reaching its first renderer.
+  delete childEnv.NODE_OPTIONS;
   delete childEnv.VITE_DEV_SERVER_URL;
   let output = '';
   let launchError = null;
