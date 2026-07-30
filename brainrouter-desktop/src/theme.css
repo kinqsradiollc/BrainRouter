@@ -5,6 +5,9 @@
 @import "./styles/foundation/motion.css";
 @import "./styles/shell/window.css";
 @import "./styles/shell/leftNavigation.css";
+@import "./styles/shell/topControls.css";
+@import "./styles/shell/viewsRail.css";
+@import "./styles/shell/dock.css";
 
 /* ---------- app frame ---------- */
 .app { display: flex; align-items: stretch; height: 100vh; background: var(--bg); overflow: hidden; }
