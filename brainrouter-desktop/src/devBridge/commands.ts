@@ -8,12 +8,34 @@ import {
   previewDevWorkspaceOnboarding,
   saveDevWorkspaceManifest,
 } from './onboarding.js';
+import {
+  APPEARANCE_STORAGE_KEY,
+  browserAppearanceState,
+  normalizeAppearancePreference,
+  type AppearancePreference,
+  type DesktopAppearanceState,
+} from '../lib/theme/appearance.js';
 
 export function installBridge(S: DevState, queries: Record<string, (args: Record<string, unknown>) => unknown>): void {
   const {
     listeners, recentsListeners, runningSessions, emit, devSessionModels, resolvedModel, trustedRoots, SESSIONS_BY_ROOT, mergeMeta,
     onboarding,
   } = S;
+  let appearancePreference = normalizeAppearancePreference(localStorage.getItem(APPEARANCE_STORAGE_KEY));
+  const appearanceListeners = new Set<(state: DesktopAppearanceState) => void>();
+  const appearanceQueries = [
+    globalThis.matchMedia?.('(prefers-color-scheme: dark)'),
+    globalThis.matchMedia?.('(forced-colors: active)'),
+    globalThis.matchMedia?.('(prefers-contrast: more)'),
+    globalThis.matchMedia?.('(prefers-reduced-transparency: reduce)'),
+  ].filter((query): query is MediaQueryList => Boolean(query));
+  const emitAppearance = (): DesktopAppearanceState => {
+    const state = browserAppearanceState(appearancePreference);
+    for (const listener of appearanceListeners) listener(state);
+    return state;
+  };
+  for (const query of appearanceQueries) query.addEventListener('change', emitAppearance);
+
   (window as unknown as { brainrouter: unknown }).brainrouter = {
     // Demo workspace contexts so the activity-bar workspace switcher renders in
     // browser dev (Electron's preload provides the real org-scoped bridge).
@@ -41,6 +63,19 @@ export function installBridge(S: DevState, queries: Record<string, (args: Record
           },
         },
       };
+    },
+    appearance: {
+      getState(): DesktopAppearanceState {
+        return browserAppearanceState(appearancePreference);
+      },
+      async setPreference(preference: AppearancePreference): Promise<DesktopAppearanceState> {
+        appearancePreference = normalizeAppearancePreference(preference);
+        return emitAppearance();
+      },
+      onChanged(listener: (state: DesktopAppearanceState) => void): () => void {
+        appearanceListeners.add(listener);
+        return () => appearanceListeners.delete(listener);
+      },
     },
     send(command: AgentCommand): void {
       switch (command.kind) {

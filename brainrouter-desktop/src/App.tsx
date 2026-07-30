@@ -47,12 +47,20 @@ import { Sidebar } from './components/layout/Sidebar.js';
 import { ActivityBar } from './components/layout/ActivityBar.js';
 import { WorkspaceOrgProvider } from './lib/orgContext.js';
 import type { GoalRecord } from './components/chat/GoalBanner.js';
-import { useZoom, useAppHandlers, useAppEffects, useDashboardTasks } from './App/hooks/index.js';
+import {
+  bootstrapAppearanceDocument,
+  useAppearance,
+  useZoom,
+  useAppHandlers,
+  useAppEffects,
+  useDashboardTasks,
+} from './App/hooks/index.js';
 import { buildTrackOps } from './App/track/index.js';
 import { buildRenderPanelBody, buildRenderSessionNode, buildRenderRow } from './App/render/index.js';
 import { AppDialogs, MainContent } from './App/layout/index.js';
 
 installDevBridge();
+bootstrapAppearanceDocument();
 
 export function App(): React.ReactElement {
   const [draft, setDraft] = useState('');
@@ -189,7 +197,7 @@ export function App(): React.ReactElement {
   const [slashSel, setSlashSel] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
   const [codeFont, setCodeFont] = useState(() => localStorage.getItem('br-code-font') ?? '');
-  const [theme, setTheme] = useState(() => localStorage.getItem('br-desktop-theme') ?? 'dark');
+  const { preference: theme, setPreference: setTheme } = useAppearance();
   const [recentsSort, setRecentsSort] = useState<'recent' | 'alpha'>('recent');
   const [homeStats, setHomeStats] = useState<{
     sessions: number; turns: number; activeDays: number; currentStreak: number;
@@ -455,7 +463,7 @@ export function App(): React.ReactElement {
     cardOpenRef, setTaskView, setWorkflowView, viewKey, chatWidth, chatSize, toast, setToast, envOpen,
     railWidth, railOpen, expandedProjects, workrowRef, setWorkW, setPaletteOpen, togglePanel, ensurePanel, setSideFullScreen,
     setSidePanelOpen, setTermDockOpen, openSettings, sessionsRef, resumeSessionRef, zoomIn, zoomOut, resetZoom,
-    sidePanelOpen, sidePinned, codeFont, theme, accent,
+    sidePanelOpen, sidePinned, codeFont, accent,
   });
 
   // DESK-5j — no auto-close at a px breakpoint: ⌘+/- zoom shrinks the CSS

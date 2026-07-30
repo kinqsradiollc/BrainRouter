@@ -103,7 +103,7 @@ Implementation checkmarks in this section describe the shipped release.
 
 **Status: accepted for phased implementation on 2026-07-30.**
 
-- [ ] Resolve System, Light, Dark, and High Contrast appearance through a
+- [x] Resolve System, Light, Dark, and High Contrast appearance through a
       narrow native host contract.
 - [ ] Replace the monolithic styling cascade with owned foundation, shell, and
       surface modules.

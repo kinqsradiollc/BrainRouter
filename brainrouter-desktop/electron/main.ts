@@ -6,7 +6,7 @@
  * Security posture unchanged: contextIsolation on, typed preload only,
  * senderFrame + shape validation on every inbound command.
  */
-import { app, BrowserWindow, dialog, ipcMain, shell, utilityProcess, type UtilityProcess } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell, utilityProcess, type UtilityProcess } from 'electron';
 // Connector Phase 2 — OAuth device flow + keychain secrets live in MAIN
 // (safeStorage is unavailable in a utilityProcess); hosts read over the port.
 import { requestDeviceCode, pollOnce, type DeviceCodeGrant } from './githubOauth.js';
@@ -58,6 +58,15 @@ import { concreteRendererBrowserTarget } from './browser/rendererCommandTarget.j
 import { shouldBypassRendererVisibleQueue } from './browser/visibleQueuePolicy.js';
 import { resolveDesktopBootstrapState } from './accountIntegration.js';
 import { initAutoUpdate } from './updater.js';
+import {
+  APPEARANCE_PREFERENCES,
+  appearanceWindowBackground,
+  desktopAppearanceState,
+  nativeThemeSource,
+  normalizeAppearancePreference,
+  type AppearancePreference,
+  type DesktopAppearanceState,
+} from './appearancePolicy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -84,6 +93,63 @@ interface WinPool {
 }
 const wins = new Map<number, WinPool>(); // webContents.id → WinPool
 
+// D26-1 — appearance is a small app-level preference rather than renderer-only
+// state. Main resolves the native signals before BrowserWindow creation so the
+// startup canvas, dialogs, and OS-owned chrome agree with the renderer.
+let appearancePreference: AppearancePreference = 'system';
+
+function appearancePath(): string {
+  return path.join(app.getPath('userData'), 'appearance.json');
+}
+
+function readAppearancePreference(): AppearancePreference {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(appearancePath(), 'utf8')) as { preference?: unknown };
+    return normalizeAppearancePreference(parsed.preference);
+  } catch {
+    return 'system';
+  }
+}
+
+function writeAppearancePreference(preference: AppearancePreference): void {
+  try {
+    const target = appearancePath();
+    const temporary = `${target}.tmp`;
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(temporary, `${JSON.stringify({ version: 1, preference }, null, 2)}\n`, { mode: 0o600 });
+    fs.renameSync(temporary, target);
+  } catch {
+    // Appearance persistence is best-effort. The renderer retains the same
+    // preference in localStorage and will re-synchronize on its next launch.
+  }
+}
+
+function currentAppearanceState(): DesktopAppearanceState {
+  return desktopAppearanceState(appearancePreference, {
+    dark: nativeTheme.shouldUseDarkColors,
+    highContrast: nativeTheme.shouldUseHighContrastColors,
+    reducedTransparency: nativeTheme.prefersReducedTransparency,
+  });
+}
+
+function publishAppearanceState(): DesktopAppearanceState {
+  const state = currentAppearanceState();
+  const background = appearanceWindowBackground(state.resolved);
+  for (const wp of wins.values()) {
+    if (wp.win.isDestroyed()) continue;
+    wp.win.setBackgroundColor(background);
+    wp.win.webContents.send('appearance:changed', state);
+  }
+  return state;
+}
+
+function setAppearancePreference(preference: AppearancePreference): DesktopAppearanceState {
+  appearancePreference = preference;
+  writeAppearancePreference(preference);
+  nativeTheme.themeSource = nativeThemeSource(preference);
+  return publishAppearanceState();
+}
+
 // PERF — preload asks once, synchronously, before React renders. This is a tiny
 // local config read (no network/keychain/host dependency) so the first frame can
 // already show the durable signed-in identity instead of flashing signed-out.
@@ -93,6 +159,16 @@ ipcMain.on('desktop-bootstrap-state', (event) => {
     return;
   }
   event.returnValue = resolveDesktopBootstrapState(loadConfig(), os.userInfo().username);
+});
+
+// Synchronous by design: preload caches this tiny in-memory snapshot before
+// React paints. It performs no disk or network work.
+ipcMain.on('appearance:get-state', (event) => {
+  if (event.senderFrame !== event.sender.mainFrame) {
+    event.returnValue = null;
+    return;
+  }
+  event.returnValue = currentAppearanceState();
 });
 
 const recentsPath = (): string => path.join(app.getPath('userData'), 'recent-workspaces.json');
@@ -415,7 +491,7 @@ function openWorkspaceWindow(workspaceRoot: string): void {
   const win = new BrowserWindow({
     width: 1280, height: 840, minWidth: 900, minHeight: 600,
     title: `BrainRouter — ${path.basename(workspaceRoot)}`,
-    backgroundColor: '#262624',
+    backgroundColor: appearanceWindowBackground(currentAppearanceState().resolved),
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     // Pin the macOS traffic lights so their centre (~y20) sits on the 40px
     // titlebar band's centre regardless of macOS version — keeps the top row
@@ -518,6 +594,10 @@ app.commandLine.appendSwitch('enable-features', 'OverlayScrollbar');
 let tray: ReturnType<typeof setupTray> = null;
 
 app.whenReady().then(() => {
+  appearancePreference = readAppearancePreference();
+  nativeTheme.themeSource = nativeThemeSource(appearancePreference);
+  nativeTheme.on('updated', publishAppearanceState);
+
   // T1 — the folder the app launched in is implicitly trusted (the user chose
   // it); every OTHER workspace must be trusted before main will open it.
   const launchRoot = process.env.BRAINROUTER_DESKTOP_WORKSPACE || readRecents()[0] || process.cwd();
@@ -631,6 +711,16 @@ app.whenReady().then(() => {
   ipcMain.handle('workspace:sessions', (_event, root: unknown, rawLimit: unknown) => {
     const limit = typeof rawLimit === 'number' ? rawLimit : Number(rawLimit ?? 80);
     return readWorkspaceSessions(typeof root === 'string' ? root : '', limit);
+  });
+  ipcMain.handle('appearance:set-preference', (event, raw: unknown) => {
+    const wp = wins.get(event.sender.id);
+    if (!wp || event.senderFrame !== wp.win.webContents.mainFrame) {
+      throw new Error('Appearance preference sender is not an active BrainRouter window.');
+    }
+    if (typeof raw !== 'string' || !APPEARANCE_PREFERENCES.includes(raw as AppearancePreference)) {
+      throw new Error('Unsupported appearance preference.');
+    }
+    return setAppearancePreference(raw as AppearancePreference);
   });
   ipcMain.handle('workspace:open', (event, workspaceRoot: unknown) => {
     if (typeof workspaceRoot !== 'string' || !fs.existsSync(workspaceRoot)) return { opened: false };
