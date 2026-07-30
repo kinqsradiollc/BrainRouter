@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { prepareAsarRead, verifyAsarRead } from '../../fs/boundedFileIdentity.js';
 import {
   WORKSPACE_SELECTION_CATALOG_MAX_ENTRIES,
   WORKSPACE_SELECTION_STABLE_ID,
@@ -94,19 +95,25 @@ function readSkillFileMetadata(
 ): SafeSkillDescriptor | undefined {
   let descriptor: number | undefined;
   try {
+    const boundaryRoot = containmentRoot ?? path.dirname(filePath);
+    const asarGuard = prepareAsarRead(filePath, boundaryRoot, boundaryRoot);
     descriptor = fs.openSync(
       filePath,
       fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0),
     );
     const stat = fs.fstatSync(descriptor);
     if (!stat.isFile() || stat.size > MAX_SKILL_FILE_BYTES) return undefined;
-    const realFile = fs.realpathSync(filePath);
-    const resolvedStat = fs.statSync(realFile);
-    if (stat.dev !== resolvedStat.dev || stat.ino !== resolvedStat.ino) return undefined;
-    if (containmentRoot) {
-      const realContainmentRoot = fs.realpathSync(containmentRoot);
-      const relative = path.relative(realContainmentRoot, realFile);
-      if (relative.startsWith('..') || path.isAbsolute(relative)) return undefined;
+    if (asarGuard) {
+      if (!verifyAsarRead(asarGuard, filePath, stat)) return undefined;
+    } else {
+      const realFile = fs.realpathSync(filePath);
+      const resolvedStat = fs.statSync(realFile);
+      if (stat.dev !== resolvedStat.dev || stat.ino !== resolvedStat.ino) return undefined;
+      if (containmentRoot) {
+        const realContainmentRoot = fs.realpathSync(containmentRoot);
+        const relative = path.relative(realContainmentRoot, realFile);
+        if (relative.startsWith('..') || path.isAbsolute(relative)) return undefined;
+      }
     }
     const bytes = Buffer.alloc(MAX_SKILL_FILE_BYTES + 1);
     let read = 0;

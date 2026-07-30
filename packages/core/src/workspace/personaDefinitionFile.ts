@@ -7,6 +7,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { prepareAsarRead, verifyAsarRead } from '../fs/boundedFileIdentity.js';
 import { containsWorkspaceSecretMaterial } from './workspaceContentSafety.js';
 
 export const PERSONA_SCHEMA_VERSION = 1 as const;
@@ -155,6 +156,7 @@ function readBoundedRegularFile(filePath: string, boundaryRoot: string, containm
       throw new Error('Persona definition escaped its declared personas directory.');
     }
     rejectSymlinkSegments(resolvedBoundary, resolvedFile);
+    const asarGuard = prepareAsarRead(resolvedFile, resolvedBoundary, resolvedContainment);
 
     const noFollow = fs.constants.O_NOFOLLOW ?? 0;
     fd = fs.openSync(resolvedFile, fs.constants.O_RDONLY | noFollow);
@@ -167,15 +169,21 @@ function readBoundedRegularFile(filePath: string, boundaryRoot: string, containm
       throw new Error(`Persona definition must be 1-${PERSONA_DEFINITION_MAX_BYTES} bytes.`);
     }
 
-    const realBoundary = fs.realpathSync.native(resolvedBoundary);
-    const realContainment = fs.realpathSync.native(resolvedContainment);
-    const realFile = fs.realpathSync.native(resolvedFile);
-    if (!isContainedPath(realFile, realBoundary) || !isContainedPath(realFile, realContainment)) {
-      throw new Error('Persona definition escaped its declared personas directory.');
-    }
-    const pathStat = fs.statSync(realFile);
-    if (pathStat.dev !== openedStat.dev || pathStat.ino !== openedStat.ino) {
-      throw new Error('Persona definition changed while it was being opened.');
+    if (asarGuard) {
+      if (!verifyAsarRead(asarGuard, resolvedFile, openedStat)) {
+        throw new Error('Persona definition changed while it was being opened.');
+      }
+    } else {
+      const realBoundary = fs.realpathSync.native(resolvedBoundary);
+      const realContainment = fs.realpathSync.native(resolvedContainment);
+      const realFile = fs.realpathSync.native(resolvedFile);
+      if (!isContainedPath(realFile, realBoundary) || !isContainedPath(realFile, realContainment)) {
+        throw new Error('Persona definition escaped its declared personas directory.');
+      }
+      const pathStat = fs.statSync(realFile);
+      if (pathStat.dev !== openedStat.dev || pathStat.ino !== openedStat.ino) {
+        throw new Error('Persona definition changed while it was being opened.');
+      }
     }
 
     const buffer = Buffer.allocUnsafe(PERSONA_DEFINITION_MAX_BYTES + 1);
