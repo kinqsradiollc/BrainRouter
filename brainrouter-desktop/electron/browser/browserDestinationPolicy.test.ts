@@ -6,7 +6,10 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolvedBrowserDestinationAllowed } from './browserDestinationPolicy.js';
+import {
+  recordUserPrivateOriginTrust,
+  resolvedBrowserDestinationAllowed,
+} from './browserDestinationPolicy.js';
 
 test('human navigation may use private origins while agent navigation requires an exact trust grant', async () => {
   assert.equal(await resolvedBrowserDestinationAllowed('http://localhost:5173'), true);
@@ -68,4 +71,34 @@ test('invalid URLs, empty DNS results, and resolver failures fail closed', async
     {},
     async () => { throw new Error('dns unavailable'); },
   ), false);
+});
+
+test('trusted human private origins skip repeated destination resolution', async () => {
+  const trusted = new Set<string>();
+  const checks = new Map<string, Promise<void>>();
+  let calls = 0;
+  const destinationAllowed = async (
+    _url: string,
+    policy?: { allowedPrivateOrigin?: string },
+  ): Promise<boolean> => {
+    calls += 1;
+    return policy === undefined;
+  };
+
+  await recordUserPrivateOriginTrust(
+    'http://localhost:5173/first',
+    trusted,
+    checks,
+    destinationAllowed,
+  );
+  assert.equal(calls, 2);
+  assert.deepEqual([...trusted], ['http://localhost:5173']);
+
+  await recordUserPrivateOriginTrust(
+    'http://localhost:5173/second',
+    trusted,
+    checks,
+    destinationAllowed,
+  );
+  assert.equal(calls, 2, 'an established exact-origin trust grant is reused');
 });
