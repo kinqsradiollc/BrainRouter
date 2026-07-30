@@ -39,7 +39,7 @@
     "prepare": "node scripts/install-git-hooks.mjs",
     "hooks:install": "node scripts/install-git-hooks.mjs",
     "format:check": "prettier --check .",
-    "verify": "npm run typecheck && npm run lint && npm run test",
+    "verify": "npm run build && npm run typecheck && npm run lint && npm run test",
     "cli": "npm run build -w @kinqs/brainrouter-cli --silent && node brainrouter-cli/dist/index.js",
     "cli:nobuild": "node brainrouter-cli/dist/index.js"
   },

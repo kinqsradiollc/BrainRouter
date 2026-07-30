@@ -171,8 +171,9 @@ on port 0 / 127.0.0.1 and close when done.
 ### 11. Run suites from the root; Postgres required for the brain
 
 Canonical invocation is root `npm run test` (`= npm run test -ws --if-present`),
-typically after root `npm run build`; `npm run verify` chains typecheck + lint +
-test. Workspaces without a test script are skipped. To run the brain's integration
+typically after root `npm run build`; `npm run verify` builds the workspace graph
+before chaining typecheck + lint + test. Workspaces without a test script are
+skipped. To run the brain's integration
 tests you need a reachable pgvector Postgres — set `BRAINROUTER_TEST_PG_ADMIN_URL`/
 `BRAINROUTER_DATABASE_URL` or run default docker creds
 (`postgres:postgres@localhost:5432`). **Per-workspace runs miss cross-workspace

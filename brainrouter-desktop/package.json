@@ -3,7 +3,6 @@
   "version": "0.4.17",
   "private": true,
   "description": "BrainRouter Desktop — native macOS/Windows shell (Electron + React) over the shared @kinqs/brainrouter-core agent runtime (the same engine the CLI uses).",
-  "author": "kinqsradio",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {

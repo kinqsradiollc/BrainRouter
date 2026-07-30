@@ -9,6 +9,9 @@
   },
   "files": [
     "dist",
+    "!dist/**/__tests__/**",
+    "!dist/**/*.test.*",
+    "!dist/**/*.node-test.*",
     "skills",
     "agents",
     "references",
