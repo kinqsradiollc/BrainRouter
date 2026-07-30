@@ -23,6 +23,49 @@ export type PersistedBrowserWorkspace = {
   permissions?: PersistedPermissionDecision[];
 };
 
+export interface BrowserWorkspacePersistenceTimers {
+  set(callback: () => void, delayMs: number): unknown;
+  clear(handle: unknown): void;
+}
+
+const SYSTEM_PERSISTENCE_TIMERS: BrowserWorkspacePersistenceTimers = {
+  set: (callback, delayMs) => setTimeout(callback, delayMs),
+  clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
+/**
+ * Coalesce navigation/title persistence bursts while retaining an explicit
+ * synchronous flush for tab mutations and host shutdown.
+ */
+export class BrowserWorkspacePersistenceQueue {
+  private pending: unknown = null;
+
+  constructor(
+    private readonly persist: () => void,
+    private readonly delayMs = 50,
+    private readonly timers: BrowserWorkspacePersistenceTimers =
+      SYSTEM_PERSISTENCE_TIMERS,
+  ) {}
+
+  schedule(): void {
+    if (this.pending !== null) return;
+    this.pending = this.timers.set(() => {
+      this.pending = null;
+      this.persist();
+    }, this.delayMs);
+    const handle = this.pending as { unref?: () => void };
+    handle?.unref?.();
+  }
+
+  flush(): void {
+    if (this.pending !== null) {
+      this.timers.clear(this.pending);
+      this.pending = null;
+    }
+    this.persist();
+  }
+}
+
 export function persistableBrowserUrl(raw: string): string {
   if (!raw || raw.startsWith('data:')) return BROWSER_BLANK_URL;
   try {

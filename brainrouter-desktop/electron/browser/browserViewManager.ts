@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { isAllowedWebviewSrc } from '../webviewPolicy.js';
 import { browserPermissionCheckScopes, browserPermissionRequestScope } from './browserPermissionPolicy.js';
 import {
+  recordUserPrivateOriginTrust,
   resolvedBrowserDestinationAllowed,
   type BrowserHostResolver,
 } from './browserDestinationPolicy.js';
@@ -41,6 +42,7 @@ import {
   UploadStagingError,
 } from './uploadStaging.js';
 import {
+  BrowserWorkspacePersistenceQueue,
   BrowserWorkspaceStore,
   persistableBrowserUrl,
   type PersistedBrowserWorkspace,
@@ -240,6 +242,7 @@ export class BrowserViewManager {
   private stateEmitQueued = false;
   private disposed = false;
   private workspaceGeneration = 0;
+  private readonly workspacePersistence: BrowserWorkspacePersistenceQueue;
 
   constructor(private readonly win: BrowserWindow, workspaceRoot: string) {
     this.workspaceRoot = workspaceRoot;
@@ -269,6 +272,9 @@ export class BrowserViewManager {
       detachView: (view) => { this.win.contentView.removeChildView(view); },
     });
     this.workspaceStore = new BrowserWorkspaceStore(app.getPath('userData'), workspaceRoot);
+    this.workspacePersistence = new BrowserWorkspacePersistenceQueue(
+      () => this.writeWorkspaceState(),
+    );
     this.promptManager = new BrowserPromptManager({
       tabForContents: (contentsId) => this.tabForContents(contentsId),
       selectTab: (tabId) => { this.selectTab(tabId); },
@@ -682,7 +688,7 @@ export class BrowserViewManager {
       this.updateHumanChallenge(tab);
       if (!this.agentControlledTabs.has(tab.id)) void this.recordUserPrivateOrigin(tab.url);
       tab.revision += 1;
-      this.persistWorkspace();
+      this.workspacePersistence.schedule();
       this.emitState();
     };
     const gate = (event: { preventDefault(): void }, url: string): void => {
@@ -705,7 +711,7 @@ export class BrowserViewManager {
       updateTitle: (title) => {
         tab.title = boundBrowserText(title || 'New tab', 256);
         this.updateHumanChallenge(tab);
-        this.persistWorkspace();
+        this.workspacePersistence.schedule();
         this.emitState();
       },
       updateFavicons: (favicons) => {
@@ -962,25 +968,12 @@ export class BrowserViewManager {
   }
 
   private recordUserPrivateOrigin(rawUrl: string): Promise<void> {
-    let origin = '';
-    try {
-      const url = new URL(rawUrl);
-      if (url.protocol !== 'http:' && url.protocol !== 'https:') return Promise.resolve();
-      origin = url.origin;
-    } catch { return Promise.resolve(); }
-    const existing = this.userOriginChecks.get(origin);
-    if (existing) return existing;
-    const check = (async () => {
-      // A private origin is trusted only when Chromium reached it while the tab
-      // was under explicit user control. Merely sharing an origin string with
-      // an agent-opened tab is insufficient and cannot bless DNS rebinding.
-      if (await this.destinationAllowed(rawUrl, {})) return;
-      if (await this.destinationAllowed(rawUrl)) this.trustedUserPrivateOrigins.add(origin);
-    })().finally(() => {
-      if (this.userOriginChecks.get(origin) === check) this.userOriginChecks.delete(origin);
-    });
-    this.userOriginChecks.set(origin, check);
-    return check;
+    return recordUserPrivateOriginTrust(
+      rawUrl,
+      this.trustedUserPrivateOrigins,
+      this.userOriginChecks,
+      (url, policy) => this.destinationAllowed(url, policy),
+    );
   }
 
   private assertOperationCurrent(generation: number, signal?: AbortSignal, tabId?: BrowserTabId): void {
@@ -1689,6 +1682,10 @@ export class BrowserViewManager {
   }
 
   private persistWorkspace(): void {
+    this.workspacePersistence.flush();
+  }
+
+  private writeWorkspaceState(): void {
     if (this.disposed || !this.workspaceRoot) return;
     const state: PersistedBrowserWorkspace = {
       version: 1,

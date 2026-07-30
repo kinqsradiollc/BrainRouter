@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import {
+  BrowserWorkspacePersistenceQueue,
   BrowserWorkspaceStore,
   persistableBrowserUrl,
 } from './browserWorkspaceStore.js';
@@ -67,4 +68,36 @@ test('browser workspace store round-trips permission decisions and fails closed 
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('browser workspace persistence coalesces event bursts and flushes lifecycle writes', () => {
+  const timer = { pending: null as (() => void) | null };
+  let clears = 0;
+  let writes = 0;
+  const queue = new BrowserWorkspacePersistenceQueue(
+    () => { writes += 1; },
+    50,
+    {
+      set: (callback) => {
+        timer.pending = callback;
+        return callback;
+      },
+      clear: () => {
+        clears += 1;
+        timer.pending = null;
+      },
+    },
+  );
+
+  queue.schedule();
+  queue.schedule();
+  assert.equal(writes, 0);
+  timer.pending?.();
+  assert.equal(writes, 1, 'one delayed write represents the whole event burst');
+
+  queue.schedule();
+  queue.flush();
+  assert.equal(clears, 1);
+  assert.equal(writes, 2, 'flush persists once and cancels the delayed duplicate');
+  assert.equal(timer.pending, null);
 });
