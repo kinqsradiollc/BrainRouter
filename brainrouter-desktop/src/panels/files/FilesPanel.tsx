@@ -46,7 +46,7 @@ export function FilesPanel({ workspaceKey, files, statuses, onOpen, grepHits, on
         </div>
       ) : null}
       {error ? <div className="panel-mini-status warn"><span>{error}</span></div> : null}
-      <div className="scroll">
+      <div className={`scroll${contentMode ? '' : ' file-explorer-host'}`}>
         {contentMode ? (
           grepHits === null ? <div className="empty">Press Enter to search file contents.</div>
             : grepHits.length === 0 ? <div className="empty center-empty">No matches</div>
