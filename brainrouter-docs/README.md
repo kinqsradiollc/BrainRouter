@@ -67,7 +67,9 @@ deep dives.
   [ADR-024 agent work contracts, repository assurance, and browser reliability](decisions/ADR-024-agent-work-repository-assurance-and-browser-reliability.md) —
   proposed revisioned work/steering contracts, parser-backed code intelligence, whole-context repository assurance, verified browser actions, provider recovery, and a shared human review workbench;
   [ADR-025 repository assurance and runtime boundary modernization](decisions/ADR-025-repository-assurance-and-runtime-boundary-modernization.md) —
-  accepted evidence-and-coverage-led PR assurance, distinct code/security/authorized-assessment programs, and an incremental whole-platform contracts/domain/policy/ports/adapters migration across shared packages and product hosts.
+  accepted evidence-and-coverage-led PR assurance, distinct code/security/authorized-assessment programs, and an incremental whole-platform contracts/domain/policy/ports/adapters migration across shared packages and product hosts;
+  [ADR-026 Desktop native visual system and platform-adaptive shell](decisions/ADR-026-desktop-native-visual-system.md) —
+  proposed semantic styling layers, native window boundaries, system appearance, state-preserving surface contracts, and a small-PR migration gated by live macOS and Windows review.
 
 Published benchmark results: [`../brainrouter-benchmark/reports/`](../brainrouter-benchmark/reports/).
 
