@@ -1155,7 +1155,9 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
       case 'update_plan': {
         const state = updatePlan(this.workspaceRoot, {
           explanation: args.explanation,
-          plan: args.plan,
+          ...(Array.isArray(args.phases)
+            ? { phases: args.phases }
+            : { plan: args.plan }),
         }, this.sessionKey);
         if (typeof args.steeringReceiptId === 'string' && args.steeringReceiptId.trim()) {
           applySteeringPlanRevision(

@@ -8,32 +8,28 @@
  */
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import type {
+  PlanPhaseInput,
+  PlanSnapshot,
+  PlanStep,
+  PlanStepStatus,
+  StoredPlanPhase,
+  StoredPlanStep,
+} from '@kinqs/brainrouter-types/planning';
 import { getStateFile, getSessionStateFile, readJsonFile, writeJsonFile } from '../storage/store.js';
+import {
+  compatibilityPlanPhases,
+  currentPlanProgress,
+  normalizeStoredPlanPhases,
+  reconcilePlanPhases,
+} from './planPhases.js';
 
-export type PlanItemStatus = 'pending' | 'in_progress' | 'completed';
+export type PlanItemStatus = PlanStepStatus;
+export type PlanItem = PlanStep;
+export type StoredPlanItem = StoredPlanStep;
+export type { PlanPhaseInput, StoredPlanPhase };
 
-export interface PlanItem {
-  /**
-   * Stable host-owned identity. Optional on update input for compatibility;
-   * every item returned by the store has one.
-   */
-  id?: string;
-  step: string;
-  status: PlanItemStatus;
-  /** PARITY-Q: optional acceptance cue — how this item is verified done. */
-  acceptance?: string;
-}
-
-export interface StoredPlanItem extends PlanItem {
-  id: string;
-}
-
-export interface PlanState {
-  schemaVersion: 1;
-  revision: number;
-  explanation?: string;
-  updatedAt: string;
-  items: StoredPlanItem[];
+export interface PlanState extends PlanSnapshot {
   /**
    * 0.4.15 workflow — the requirement this plan is anchored to, when the plan
    * was seeded from (or later linked to) a RequirementRecord. Carried forward
@@ -49,6 +45,7 @@ const EMPTY_PLAN: PlanState = {
   revision: 0,
   updatedAt: '',
   items: [],
+  phases: [],
 };
 
 const PLAN_ITEM_ID_PATTERN = /^task_[a-z0-9_-]{8,80}$/i;
@@ -79,18 +76,39 @@ export function readPlan(workspaceRoot: string, sessionKey?: string): PlanState 
 
 export function updatePlan(
   workspaceRoot: string,
-  input: { explanation?: string; plan: PlanItem[]; requirementId?: string },
+  input: {
+    explanation?: string;
+    plan?: PlanItem[];
+    phases?: PlanPhaseInput[];
+    requirementId?: string;
+  },
   sessionKey?: string,
 ): PlanState {
-  if (!Array.isArray(input.plan)) {
-    throw new Error('plan must be an array.');
+  const hasPlan = Array.isArray(input.plan);
+  const hasPhases = Array.isArray(input.phases);
+  if (hasPlan === hasPhases) {
+    throw new Error('Provide exactly one of plan or phases.');
   }
 
   const current = readPlan(workspaceRoot, sessionKey);
-  const items = reconcilePlanItems(input.plan, current.items);
+  const rawItems = hasPhases
+    ? input.phases!.flatMap((phase) => phase.steps)
+    : input.plan!;
+  const items = reconcilePlanItems(rawItems, current.items);
   if (items.filter(item => item.status === 'in_progress').length > 1) {
     throw new Error('At most one plan item can be in_progress.');
   }
+  const phases = hasPhases
+    ? reconcilePlanPhases({
+        phases: input.phases!,
+        current: current.phases ?? [],
+        reconciledItems: items,
+      })
+    : compatibilityPlanPhases({
+        items,
+        current: current.phases ?? [],
+        title: input.explanation,
+      });
 
   // Carry the requirement anchor forward: an explicit input.requirementId wins,
   // otherwise preserve whatever the current plan was anchored to so a routine
@@ -105,6 +123,7 @@ export function updatePlan(
       : undefined,
     updatedAt: new Date().toISOString(),
     items,
+    phases,
     ...(requirementId ? { requirementId } : {}),
   };
 
@@ -139,11 +158,32 @@ export function formatPlan(state: PlanState): string {
   if (state.explanation) {
     lines.push(state.explanation);
   }
-  for (const item of state.items) {
-    lines.push(
-      `- [${statusMarker(item.status)}] ${item.step}` +
-      `${item.acceptance ? `  — ✓ ${item.acceptance}` : ''}  [id: ${item.id}]`,
-    );
+  if (state.phases?.length) {
+    const itemsById = new Map(state.items.map((item) => [item.id, item]));
+    const progress = currentPlanProgress(state.phases, state.items);
+    for (const phase of state.phases) {
+      const current = phase.id === progress.phase?.id && progress.stepIndex
+        ? ` — Step ${progress.stepIndex} / ${progress.stepCount}`
+        : '';
+      lines.push(
+        `\n${phase.title} [${phase.status}]${current} [id: ${phase.id}]`,
+      );
+      for (const stepId of phase.stepIds) {
+        const item = itemsById.get(stepId);
+        if (!item) continue;
+        lines.push(
+          `- [${statusMarker(item.status)}] ${item.step}` +
+          `${item.acceptance ? `  — ✓ ${item.acceptance}` : ''}  [id: ${item.id}]`,
+        );
+      }
+    }
+  } else {
+    for (const item of state.items) {
+      lines.push(
+        `- [${statusMarker(item.status)}] ${item.step}` +
+        `${item.acceptance ? `  — ✓ ${item.acceptance}` : ''}  [id: ${item.id}]`,
+      );
+    }
   }
   return lines.join('\n');
 }
@@ -160,7 +200,9 @@ export function hashPlanState(state: PlanState): string {
       step: item.step,
       status: item.status,
       acceptance: item.acceptance,
+      evidence: item.evidence,
     })),
+    phases: state.phases,
   };
   return crypto.createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
 }
@@ -223,11 +265,18 @@ function normalizePlanItem(item: PlanItem, index: number): PlanItem {
   const id = typeof item.id === 'string' && PLAN_ITEM_ID_PATTERN.test(item.id)
     ? item.id
     : undefined;
+  const evidence = Array.isArray(item.evidence)
+    ? [...new Set(item.evidence
+      .filter((entry): entry is string =>
+        typeof entry === 'string' && entry.trim().length > 0)
+      .map((entry) => entry.trim().slice(0, 500)))].slice(0, 64)
+    : undefined;
   return {
     ...(id ? { id } : {}),
     step,
     status,
     ...(acceptance ? { acceptance } : {}),
+    ...(evidence?.length ? { evidence } : {}),
   };
 }
 
@@ -261,12 +310,23 @@ function normalizePlanState(
       : undefined,
     updatedAt,
     items,
+    phases: normalizeStoredPlanPhases(
+      (record as { phases?: unknown }).phases,
+      items,
+    ) ?? compatibilityPlanPhases({
+      items,
+      current: [],
+      title: typeof record.explanation === 'string'
+        ? record.explanation
+        : undefined,
+    }),
     ...(typeof record.requirementId === 'string' && record.requirementId.trim()
       ? { requirementId: record.requirementId.trim() }
       : {}),
   };
   const migrated = record.schemaVersion !== 1 ||
     record.revision !== revision ||
+    !Array.isArray((record as { phases?: unknown }).phases) ||
     items.some((item, index) => (record.items as PlanItem[])[index]?.id !== item.id);
   return { state, migrated };
 }

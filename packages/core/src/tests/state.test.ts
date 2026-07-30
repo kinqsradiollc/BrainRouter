@@ -72,6 +72,7 @@ test('plan store persists and validates durable plan state', () => {
     assert.equal(state.items.length, 2);
     assert.equal(state.schemaVersion, 1);
     assert.equal(state.revision, 1);
+    assert.equal(state.phases?.length, 1);
     assert.ok(state.items.every((item) => /^task_/.test(item.id)));
     assert.match(formatPlan(readPlan(workspace)), /\[\/\] Wire update_plan/);
     assert.throws(
@@ -82,6 +83,65 @@ test('plan store persists and validates durable plan state', () => {
         ],
       }),
       /At most one plan item/,
+    );
+  });
+});
+
+test('phase-aware plans enforce one current phase and one bounded current step', () => {
+  withTempWorkspace((workspace) => {
+    const state = updatePlan(workspace, {
+      explanation: 'Ship in evidence-backed phases',
+      phases: [
+        {
+          title: 'Design the contract',
+          status: 'in_progress',
+          requiredSkillIds: ['planning-skill'],
+          steps: [
+            {
+              step: 'Record the phase contract',
+              status: 'in_progress',
+              acceptance: 'ADR updated',
+            },
+            { step: 'Review the contract', status: 'pending' },
+          ],
+        },
+        {
+          title: 'Implement the contract',
+          status: 'pending',
+          steps: [
+            { step: 'Add the runtime transition', status: 'pending' },
+          ],
+        },
+      ],
+    });
+
+    assert.equal(state.phases?.length, 2);
+    assert.equal(state.items.length, 3);
+    assert.deepEqual(
+      state.phases?.[0].stepIds,
+      state.items.slice(0, 2).map((item) => item.id),
+    );
+    assert.deepEqual(state.phases?.[1].dependsOn, [state.phases?.[0].id]);
+    assert.match(
+      formatPlan(state),
+      /Design the contract \[in_progress\] — Step 1 \/ 2/,
+    );
+    assert.throws(
+      () => updatePlan(workspace, {
+        phases: [
+          {
+            title: 'First',
+            status: 'pending',
+            steps: [{ step: 'Finish first', status: 'pending' }],
+          },
+          {
+            title: 'Second',
+            status: 'in_progress',
+            steps: [{ step: 'Start second', status: 'in_progress' }],
+          },
+        ],
+      }),
+      /cannot start before (?:dependency|earlier phases)/,
     );
   });
 });
@@ -105,9 +165,11 @@ test('R1 plan migration assigns durable ids and revisions without losing legacy 
     assert.equal(migrated.revision, 0);
     assert.equal(migrated.requirementId, 'req_legacy');
     assert.equal(new Set(migrated.items.map((item) => item.id)).size, 2);
+    assert.equal(migrated.phases?.length, 1);
 
     const persisted = JSON.parse(fs.readFileSync(filePath, 'utf8')) as PlanState;
     assert.equal(persisted.schemaVersion, 1, 'the migration reader persists the new schema');
+    assert.equal(persisted.phases?.length, 1, 'legacy items migrate into one compatibility phase');
     assert.deepEqual(
       persisted.items.map((item) => item.id),
       migrated.items.map((item) => item.id),
