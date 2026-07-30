@@ -90,7 +90,14 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npm run dist:mac
+        run: |
+          # GitHub expands an unset secret to an empty string. electron-builder
+          # interprets an empty CSC_LINK as the working directory and fails
+          # before it can exercise the documented unsigned-build fallback.
+          if [[ -z "${CSC_LINK:-}" ]]; then
+            unset CSC_LINK CSC_KEY_PASSWORD
+          fi
+          npm run dist:mac
 
       - name: Verify the packaged build
         working-directory: brainrouter-desktop

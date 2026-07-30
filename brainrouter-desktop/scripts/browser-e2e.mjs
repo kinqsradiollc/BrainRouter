@@ -337,8 +337,11 @@ async function measureRetentionAndSwitches({ switches, retainedValue }) {
   // AND a non-zero scroll registered before capturing the baseline — otherwise
   // we'd measure a premature read (scroll:0) rather than true state retention.
   // If retention were genuinely broken this simply times out and the gate fails.
-  const parseScrollY = (node) => Number(/scroll:(\d+)/.exec(String(node?.name || ''))?.[1] || 0);
+  const parseScrollY = (value) => Number(
+    /scroll:(\d+)/.exec(String(typeof value === 'string' ? value : value?.name || ''))?.[1] || 0,
+  );
   let before, beforeInput, beforeScroll;
+  let beforeScrollYObserved = 0;
   const baselineDeadline = Date.now() + 10_000;
   let lastScrollAttempt = 0;
   let lastTypeAttempt = 0;
@@ -352,18 +355,21 @@ async function measureRetentionAndSwitches({ switches, retainedValue }) {
     before = await call({ op: 'snapshot', mode: 'testids' });
     beforeInput = before.value?.nodes?.find((node) => node.testid === 'retained-input');
     beforeScroll = before.value?.nodes?.find((node) => node.testid === 'scroll-state');
+    const activeTitle = state.tabs.find((tab) => tab.id === first.id)?.title;
+    beforeScrollYObserved = Math.max(parseScrollY(beforeScroll), parseScrollY(activeTitle));
     if (beforeInput?.value !== retainedValue && Date.now() - lastTypeAttempt >= 250) {
       await call({ op: 'type', target: 'retained-input', text: retainedValue, replace: true });
       lastTypeAttempt = Date.now();
     }
-    if (parseScrollY(beforeScroll) === 0 && Date.now() - lastScrollAttempt >= 250) {
+    if (beforeScrollYObserved === 0 && Date.now() - lastScrollAttempt >= 250) {
       await call({ op: 'scroll', x: 450, y: 310, deltaY: 1_200 });
       lastScrollAttempt = Date.now();
     }
-  } while (Date.now() < baselineDeadline && !(beforeInput?.value === retainedValue && parseScrollY(beforeScroll) > 0));
-  if (beforeInput?.value !== retainedValue || parseScrollY(beforeScroll) === 0) {
+  } while (Date.now() < baselineDeadline && !(beforeInput?.value === retainedValue && beforeScrollYObserved > 0));
+  if (beforeInput?.value !== retainedValue || beforeScrollYObserved === 0) {
+    const activeTitle = state.tabs.find((tab) => tab.id === first.id)?.title;
     throw new Error(
-      `retention baseline did not settle (input=${String(beforeInput?.value ?? '')}, scroll=${parseScrollY(beforeScroll)})`,
+      `retention baseline did not settle (input=${String(beforeInput?.value ?? '')}, snapshotScroll=${parseScrollY(beforeScroll)}, title=${String(activeTitle ?? '')})`,
     );
   }
   const switchMs = [];
@@ -380,10 +386,8 @@ async function measureRetentionAndSwitches({ switches, retainedValue }) {
   const afterInput = after.value?.nodes?.find((node) => node.testid === 'retained-input');
   const afterScroll = after.value?.nodes?.find((node) => node.testid === 'scroll-state');
   const active = state.tabs.find((tab) => tab.id === state.activeTabId);
-  const beforeScrollText = String(beforeScroll?.name || '');
-  const afterScrollText = String(afterScroll?.name || active?.title || '');
-  const beforeScrollY = Number(/scroll:(\d+)/.exec(beforeScrollText)?.[1] || 0);
-  const afterScrollY = Number(/scroll:(\d+)/.exec(afterScrollText)?.[1] || 0);
+  const beforeScrollY = beforeScrollYObserved;
+  const afterScrollY = Math.max(parseScrollY(afterScroll), parseScrollY(active?.title));
   return {
     switchMs,
     switchCount: switches,
