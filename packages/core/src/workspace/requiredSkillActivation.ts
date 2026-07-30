@@ -66,7 +66,7 @@ export function requiredSkillActivationPrompt(activation: RequiredSkillActivatio
     '',
     ...lines,
     '',
-    'Before the first mutating tool call, load each available required skill with `get_skill` and follow it unless the host already embedded that skill for this turn.',
+    'The host preflights each available required skill before the first model action. Follow the embedded workflow instructions; do not call `get_skill` merely to acknowledge them.',
     'A disabled required skill is a visible fail-safe: explain the limitation and ask the user to enable it; do not silently continue with a weaker workflow.',
     'Loading a skill never expands tool, profile, permission, or approval authority.',
   ].join('\n');

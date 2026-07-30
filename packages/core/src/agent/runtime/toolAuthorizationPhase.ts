@@ -39,6 +39,7 @@ export interface ToolAuthorizationInput {
   workspaceAllowsMcpTool(tool: unknown): boolean;
   requiredSkillActivation: RequiredSkillActivation;
   loadedRequiredSkills: ReadonlySet<string>;
+  attemptedRequiredSkills: ReadonlySet<string>;
   trace: { traceId: string; spanId: string };
 }
 
@@ -142,10 +143,15 @@ export function authorizeToolCall(input: ToolAuthorizationInput): void {
       );
     }
     if (blockedSkills.length > 0) {
+      const attempted = blockedSkills.filter((skill) =>
+        input.attemptedRequiredSkills.has(skill.id));
       deny(
-        `Tool "${name}" paused until required workflow skill(s) are loaded: ` +
-        `${blockedSkills.map((skill) => skill.id).join(', ')}. Call get_skill ` +
-        'for each, follow the instructions, then retry.',
+        `Tool "${name}" not dispatched because required workflow skill(s) ` +
+        `${attempted.length === blockedSkills.length
+          ? 'could not be loaded by the host'
+          : 'are not ready'}: ` +
+        `${blockedSkills.map((skill) => skill.id).join(', ')}. ` +
+        'Continue read-only diagnosis or report the blocked prerequisite; do not retry this mutation.',
       );
     }
   }

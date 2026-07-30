@@ -18,7 +18,7 @@ test('required skill activation applies shared Planning and ADR hard triggers', 
     ['planning-skill', 'research-question-skill', 'adr-skill'],
   );
   assert.equal(activation.planningSchema.id, 'research-evidence');
-  assert.match(requiredSkillActivationPrompt(activation), /Before the first mutating tool call/);
+  assert.match(requiredSkillActivationPrompt(activation), /host preflights each available required skill/i);
 });
 
 test('active goals require Planning while small obvious changes do not', () => {
