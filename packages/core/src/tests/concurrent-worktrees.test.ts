@@ -45,6 +45,19 @@ test('WORKTREE-AWARENESS: Runtime Context warns about concurrent worktrees only 
   assert.ok(!without.includes('Concurrent work areas'), 'no awareness line for a single-worktree repo');
 });
 
+test('repository guidance preserves unrelated dirty work and forbids generic rollback recovery', () => {
+  const prompt = buildSystemPrompt({
+    workspaceRoot: '/repo/main',
+    launchCwd: '/repo/main',
+    sessionKey: 's1',
+    nowMs: 0,
+  });
+  assert.match(prompt, /dirty worktree is not a blocker/i);
+  assert.match(prompt, /preserve unrelated user changes/i);
+  assert.match(prompt, /failed build or test calls for causal diagnosis/i);
+  assert.match(prompt, /not generic error recovery/i);
+});
+
 test('worktree awareness delegates Git discovery through an injected host', () => {
   const roots: string[] = [];
   const host: WorktreeAwarenessHost = {
