@@ -650,6 +650,11 @@ export const BUILTIN_TOOL_SPECS = [
           items: { type: 'string' },
           description: 'Existing plan task ids affected by this steer.',
         },
+        affectedPhaseIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Existing durable plan phase ids affected by this steer.',
+        },
       },
       required: ['receiptId', 'classification', 'summary'],
     },
@@ -658,10 +663,10 @@ export const BUILTIN_TOOL_SPECS = [
     name: 'update_plan',
     description:
       'Create or update the durable CLI task plan. Use it ONLY for work with ≥3 non-trivial steps (1–2 steps: just do them). ' +
-      'For multi-phase work, send `phases`: each phase owns bounded verifiable steps, exactly one phase and one step are in_progress, and a later phase stays pending until prior phases complete. Use legacy `plan` only for a single-phase compatibility update; never send both. ' +
+      'For multi-phase work, send `phases`: each phase owns bounded verifiable steps and a later phase stays pending until dependencies complete. The host starts the first ready phase/step and advances to the next ready phase when an update completes the current one. Use legacy `plan` only for a single-phase compatibility update; never send both. ' +
       'Each item is ONE verifiable outcome in imperative voice ("Add the migration", not "Database work") — and give it an `acceptance` cue where it helps (how you\'ll know it\'s done: "tests pass", "endpoint returns 200"). ' +
       'When revising an existing item, copy its `id` from the current plan so rewording or reordering preserves task identity; omit `id` only for a new item. ' +
-      'Keep at most one item `in_progress` and mark each `completed` the moment it\'s done, never in batches. Rewrite the plan as you learn — a stale plan is worse than none. Never start an item too large to finish in one focused pass; decompose it first.',
+      'Keep at most one item `in_progress` and mark each `completed` the moment it\'s done, never in batches. Completed phases and evidence are immutable; append a remediation phase for later corrections. Rewrite future work as you learn — a stale plan is worse than none. Never start an item too large to finish in one focused pass; decompose it first.',
     inputSchema: {
       type: 'object',
       properties: {

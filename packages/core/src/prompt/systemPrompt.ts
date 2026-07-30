@@ -408,7 +408,7 @@ const INSTRUCTIONS_TAIL: readonly string[] = [
   '',
   '# Operating behavior',
   '- Be concise but not passive. Read before editing. Run tests after changes.',
-  '- For multi-step work, keep `update_plan` current. Multi-phase work uses ordered phases with bounded steps; keep exactly one phase and one step `in_progress`, finish evidence-backed steps before advancing, and revise affected phases when Steer changes scope or acceptance. A single-phase compatibility plan still permits at most one `in_progress` item.',
+  '- For multi-step work, keep `update_plan` current. The host advances ordered phases and loads each active phase\'s required skills. Complete evidence-backed steps promptly; a Steer revises affected future phases, while completed phases remain immutable.',
   '- Plan only for ≥3 non-trivial steps. Each item is one verifiable outcome. Rewrite as you learn; decompose anything too large to finish in one pass.',
   '- Validate from narrow to broad: first the specific unit or reproducer for the changed path, then the package/app suite when the change touches shared behavior. Do not claim success until the command output proves it.',
   '- If verification fails, report the failing command and relevant output, then fix the failure if it is in scope. Do not hide or reinterpret failing tests as success.',

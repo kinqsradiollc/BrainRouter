@@ -152,10 +152,14 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     this.activeTurnOrchestration = activeTurnOrchestration;
     const workspaceManifestForTurn = loadWorkspaceManifest(this.workspaceRoot);
     const goalForSkillActivation = readGoal(this.workspaceRoot, this.sessionKey);
+    const planForSkillActivation = readPlan(this.workspaceRoot, this.sessionKey);
+    const activePlanPhase = planForSkillActivation.phases?.find((phase) =>
+      phase.status === 'in_progress');
     const requiredSkillActivation = resolveRequiredSkillActivation({
       prompt,
       activeGoal: goalForSkillActivation?.status === 'active',
       manifest: workspaceManifestForTurn,
+      phaseRequiredSkillIds: activePlanPhase?.requiredSkillIds,
     });
     const initiallyLoadedRequiredSkills = new Set([
       ...this.activeSkills,

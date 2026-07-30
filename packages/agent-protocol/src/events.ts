@@ -105,6 +105,7 @@ export interface SteeringReceiptEventView {
   resultingRevision?: number;
   affectedRequirementIds: string[];
   affectedTaskIds: string[];
+  affectedPhaseIds?: string[];
   summary: string;
   status: 'pending' | 'applied' | 'rejected' | 'needs_user';
 }

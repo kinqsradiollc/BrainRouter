@@ -20,6 +20,7 @@ import { getStateFile, getSessionStateFile, readJsonFile, writeJsonFile } from '
 import {
   compatibilityPlanPhases,
   currentPlanProgress,
+  advancePlanProgress,
   normalizeStoredPlanPhases,
   reconcilePlanPhases,
 } from './planPhases.js';
@@ -94,21 +95,26 @@ export function updatePlan(
   const rawItems = hasPhases
     ? input.phases!.flatMap((phase) => phase.steps)
     : input.plan!;
-  const items = reconcilePlanItems(rawItems, current.items);
-  if (items.filter(item => item.status === 'in_progress').length > 1) {
+  const reconciledItems = reconcilePlanItems(rawItems, current.items);
+  if (reconciledItems.filter(item => item.status === 'in_progress').length > 1) {
     throw new Error('At most one plan item can be in_progress.');
   }
-  const phases = hasPhases
+  const reconciledPhases = hasPhases
     ? reconcilePlanPhases({
         phases: input.phases!,
         current: current.phases ?? [],
-        reconciledItems: items,
+        currentItems: current.items,
+        reconciledItems,
       })
     : compatibilityPlanPhases({
-        items,
+        items: reconciledItems,
         current: current.phases ?? [],
         title: input.explanation,
       });
+  const advanced = advancePlanProgress({
+    phases: reconciledPhases,
+    items: reconciledItems,
+  });
 
   // Carry the requirement anchor forward: an explicit input.requirementId wins,
   // otherwise preserve whatever the current plan was anchored to so a routine
@@ -122,8 +128,8 @@ export function updatePlan(
       ? input.explanation.trim()
       : undefined,
     updatedAt: new Date().toISOString(),
-    items,
-    phases,
+    items: advanced.items,
+    phases: advanced.phases,
     ...(requirementId ? { requirementId } : {}),
   };
 

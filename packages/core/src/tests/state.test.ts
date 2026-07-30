@@ -42,10 +42,11 @@ test('seedPlanFromRequirement anchors a plan to a requirement and updatePlan pre
       { id: 'req_abc12345', acceptanceCriteria: ['handles empty input', 'returns 200 on success'] },
       sessionKey,
     );
-    // one pending item per criterion, anchored to the requirement
+    // one item per criterion, anchored to the requirement; the host starts the
+    // first bounded step so execution cannot stall between planning and work.
     assert.equal(seeded.requirementId, 'req_abc12345');
     assert.deepEqual(seeded.items.map((i) => i.step), ['handles empty input', 'returns 200 on success']);
-    assert.ok(seeded.items.every((i) => i.status === 'pending'));
+    assert.deepEqual(seeded.items.map((i) => i.status), ['in_progress', 'pending']);
     assert.equal(readPlan(workspace, sessionKey).requirementId, 'req_abc12345');
 
     // a routine update_plan (no requirementId) must NOT drop the anchor
@@ -142,6 +143,89 @@ test('phase-aware plans enforce one current phase and one bounded current step',
         ],
       }),
       /cannot start before (?:dependency|earlier phases)/,
+    );
+  });
+});
+
+test('phase plans auto-start ready work, advance phases, and preserve completed evidence', () => {
+  withTempWorkspace((workspace) => {
+    const initial = updatePlan(workspace, {
+      phases: [
+        {
+          title: 'Inspect',
+          status: 'pending',
+          steps: [{ step: 'Inspect the contract', status: 'pending' }],
+        },
+        {
+          title: 'Implement',
+          status: 'pending',
+          requiredSkillIds: ['verify-loop'],
+          steps: [{ step: 'Implement the contract', status: 'pending' }],
+        },
+      ],
+    });
+    assert.deepEqual(initial.phases?.map((phase) => phase.status), ['in_progress', 'pending']);
+    assert.deepEqual(initial.items.map((item) => item.status), ['in_progress', 'pending']);
+
+    const [inspectPhase, implementPhase] = initial.phases!;
+    const [inspectStep, implementStep] = initial.items;
+    const advanced = updatePlan(workspace, {
+      phases: [
+        {
+          id: inspectPhase.id,
+          title: inspectPhase.title,
+          status: 'completed',
+          steps: [{
+            id: inspectStep.id,
+            step: inspectStep.step,
+            status: 'completed',
+            evidence: ['inspection-log'],
+          }],
+        },
+        {
+          id: implementPhase.id,
+          title: implementPhase.title,
+          status: 'pending',
+          requiredSkillIds: implementPhase.requiredSkillIds,
+          steps: [{
+            id: implementStep.id,
+            step: implementStep.step,
+            status: 'pending',
+          }],
+        },
+      ],
+    });
+    assert.deepEqual(advanced.phases?.map((phase) => phase.status), ['completed', 'in_progress']);
+    assert.deepEqual(advanced.items.map((item) => item.status), ['completed', 'in_progress']);
+
+    assert.throws(
+      () => updatePlan(workspace, {
+        phases: [
+          {
+            id: inspectPhase.id,
+            title: inspectPhase.title,
+            status: 'completed',
+            steps: [{
+              id: inspectStep.id,
+              step: 'Rewrite the completed inspection',
+              status: 'completed',
+              evidence: ['different-evidence'],
+            }],
+          },
+          {
+            id: implementPhase.id,
+            title: implementPhase.title,
+            status: 'in_progress',
+            requiredSkillIds: implementPhase.requiredSkillIds,
+            steps: [{
+              id: implementStep.id,
+              step: implementStep.step,
+              status: 'in_progress',
+            }],
+          },
+        ],
+      }),
+      /append a remediation phase/,
     );
   });
 });
