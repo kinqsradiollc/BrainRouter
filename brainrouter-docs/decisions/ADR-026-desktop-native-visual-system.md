@@ -323,7 +323,7 @@ engine, terminal transport, or orchestration change.
 | D26-2 | Add foundation modules and make `theme.css` an ordered compatibility manifest | **Complete** | Literal-color audit, current-source build, all-token and 15-style parity in Dark/Light/High Contrast, and an 8-pixel difference across 4.3 million screenshot pixels |
 | D26-3 | Migrate window shell, activity bar, sidebar, top controls, views rail, and dock | **Complete** | Reversible preview, full macOS shell review, rail/dock state preservation, and owner approval complete; Windows remains part of D26-9 |
 | D26-4 | Migrate Chat and composer, including visible queue/steer states | **Complete** | Current-source Electron review at normal and increased zoom; deterministic running-turn trace verified visible Queue, Steer, Queued, and Steer pending states |
-| D26-5 | Migrate views panels and Settings to shared headers, tabs, rows, and actions | Ready | Inactive panels retain state; `agent-event` listeners stay bounded across startup and panel reopen; keyboard and high-contrast review |
+| D26-5 | Migrate views panels and Settings to shared headers, tabs, rows, and actions | **In progress** | Inactive panels retain state; `agent-event` listeners stay bounded across startup and panel reopen; keyboard and high-contrast review |
 | D26-6 | Migrate Editor and Files and address measured tree/editor rendering bottlenecks | Blocked by D26-5 | Stable explorer expansion; Monaco remains lazy; representative performance trace |
 | D26-7 | Migrate Terminal and Browser chrome without changing PTY or browser authority | Blocked by D26-5 | Live native-shell session; browser focus-isolation and toolbar review |
 | D26-8 | Migrate Track, Atlas, workflows, meetings, and review surfaces | Blocked by D26-5 | Surface inventory complete; no old cross-surface overrides |
@@ -338,10 +338,11 @@ Human review checkpoints:
 3. **Release checkpoint after D26-9** — macOS and Windows modes before the
    compatibility flag or old selectors are removed.
 
-Open verification finding: the merged-source macOS app currently emits a
+Resolved verification finding: the merged-source macOS app emitted a
 `MaxListenersExceededWarning` after registering 11 `agent-event` listeners on
-fresh startup. D26-5 must fix the subscription lifecycle and prove listener
-counts remain bounded; increasing the emitter limit is not an acceptable fix.
+fresh startup. D26-5 now multiplexes renderer subscribers through one bounded
+native listener, detaches it after the final unsubscribe, and covers reopen
+lifecycle behavior without increasing the emitter limit.
 
 ## Consequences
 

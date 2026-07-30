@@ -3,6 +3,9 @@
  * channel; workspace management (main-process dialogs) on invoke channels.
  */
 const { contextBridge, ipcRenderer, webFrame } = require('electron');
+const { createIpcListenerHub } = require('./ipcListenerHub.cjs');
+
+const agentEvents = createIpcListenerHub(ipcRenderer, 'agent-event');
 
 // Credential-free, local-only identity captured before the utility host boots.
 // sendSync is deliberate here: one small config read removes the signed-out
@@ -39,9 +42,7 @@ contextBridge.exposeInMainWorld('brainrouter', {
     ipcRenderer.send('agent-command', command);
   },
   onEvent(listener: (msg: unknown) => void): () => void {
-    const wrapped = (_e: unknown, msg: unknown) => listener(msg);
-    ipcRenderer.on('agent-event', wrapped);
-    return () => ipcRenderer.removeListener('agent-event', wrapped);
+    return agentEvents.subscribe(listener);
   },
   // User-controlled project ordering: main pushes updated recents for activity
   // membership changes and explicit drag/drop reorders.
