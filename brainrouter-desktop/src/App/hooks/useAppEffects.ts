@@ -65,7 +65,6 @@ export interface AppEffectsCtx {
   sidePanelOpen: boolean;
   sidePinned: boolean;
   codeFont: string;
-  theme: string;
   accent: string;
 }
 
@@ -76,7 +75,7 @@ export function useAppEffects(ctx: AppEffectsCtx): void {
     setWorkflowView, viewKey, chatWidth, chatSize, toast, setToast, envOpen, railWidth, railOpen,
     expandedProjects, workrowRef, setWorkW, setPaletteOpen, togglePanel, ensurePanel, setSideFullScreen, setSidePanelOpen,
     setTermDockOpen, openSettings, sessionsRef, resumeSessionRef, zoomIn, zoomOut, resetZoom, sidePanelOpen,
-    sidePinned, codeFont, theme, accent,
+    sidePinned, codeFont, accent,
   } = ctx;
 
   // F1 — pop the Artifacts panel open when the agent writes an artifact (like
@@ -468,12 +467,10 @@ export function useAppEffects(ctx: AppEffectsCtx): void {
     // §shortcuts — expose the OS (mac/windows/linux) so CSS and the shortcut
     // formatter render platform-correct keys (was mac-only for the traffic lights).
     document.documentElement.dataset.os = detectOS();
-    document.documentElement.dataset.theme = theme;
-    localStorage.setItem('br-desktop-theme', theme);
-  }, [theme]);
+  }, []);
 
   useEffect(() => {
-    // Codex-style accent customization: one color drives accent + its soft tint.
+    // One user-selected color drives the app-wide accent and its soft tint.
     const root = document.documentElement.style;
     if (accent) {
       root.setProperty('--accent', accent);

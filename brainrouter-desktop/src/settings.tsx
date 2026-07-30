@@ -39,6 +39,7 @@ import {
   type SettingsGroup,
   type UsageHistory,
 } from './settings/shared/types.js';
+import type { AppearancePreference } from './lib/theme/appearance.js';
 
 // §public-surface — types consumed by App.tsx and the agent/composer hooks are
 // re-exported so importers keep resolving them from `./settings.js` unchanged.
@@ -85,8 +86,8 @@ export function SettingsDialog(props: {
   execMode?: string;
   codeFont: string;
   onCodeFont: (f: string) => void;
-  theme: string;
-  onTheme: (t: string) => void;
+  theme: AppearancePreference;
+  onTheme: (theme: AppearancePreference) => void;
   chatWidth: string;
   onChatWidth: (w: string) => void;
   chatSize: string;
@@ -727,12 +728,22 @@ export function SettingsDialog(props: {
           <div className="set-h">Appearance</div>
           <SetGroup title="Desktop">
             <Row title="Accent color" desc="Interactive accent across the app — pick anything. Empty resets to the theme default.">
-              <input type="color" className="ctl color-ctl" value={props.accent || (props.theme === 'hc' ? '#a79cff' : '#8b7cff')} onChange={(e) => props.onAccent(e.target.value)} />
+              <input type="color" className="ctl color-ctl"
+                value={props.accent || (props.theme === 'light' ? '#4f5fc7' : props.theme === 'hc' ? '#4c8dff' : '#8b7cff')}
+                onChange={(e) => props.onAccent(e.target.value)} />
               {props.accent ? <button className="btn" onClick={() => props.onAccent('')}>Reset</button> : null}
             </Row>
-            <Row title="Desktop theme" desc="Graphite Mono = near-black neutral with an indigo accent (the desktop default). High-contrast = pure near-black.">
-              <Select value={props.theme === 'hc' ? 'High-contrast dark' : 'Graphite Mono'} options={['Graphite Mono', 'High-contrast dark']}
-                onChange={(v) => props.onTheme(v === 'High-contrast dark' ? 'hc' : 'dark')} />
+            <Row title="Appearance" desc="System follows your operating system automatically. High Contrast also activates when the OS requests it.">
+              <ChoiceControl
+                value={props.theme}
+                options={[
+                  { value: 'system', label: 'System', detail: 'follow the operating system' },
+                  { value: 'light', label: 'Light', detail: 'light workbench' },
+                  { value: 'dark', label: 'Dark', detail: 'dark workbench' },
+                  { value: 'hc', label: 'High Contrast', detail: 'maximum separation' },
+                ]}
+                onChange={(value) => props.onTheme(value as AppearancePreference)}
+              />
             </Row>
             <Row title="Code font" desc="Monospace font for code, diffs and the terminal panel (desktop only).">
               <input className="ctl" value={props.codeFont} placeholder="e.g. JetBrains Mono" onChange={(e) => props.onCodeFont(e.target.value)} />

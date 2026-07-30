@@ -10,9 +10,30 @@ const { contextBridge, ipcRenderer, webFrame } = require('electron');
 let desktopBootstrapState: unknown = null;
 try { desktopBootstrapState = ipcRenderer.sendSync('desktop-bootstrap-state'); } catch { /* older main process */ }
 
+// D26-1 — cached synchronously so the renderer can resolve System appearance
+// before React paints. Future OS changes arrive on the bounded event below.
+let desktopAppearanceState: unknown = null;
+try { desktopAppearanceState = ipcRenderer.sendSync('appearance:get-state'); } catch { /* older main process */ }
+
 contextBridge.exposeInMainWorld('brainrouter', {
   getBootstrapState(): unknown {
     return desktopBootstrapState;
+  },
+  appearance: {
+    getState(): unknown {
+      return desktopAppearanceState;
+    },
+    setPreference(preference: unknown): Promise<unknown> {
+      return ipcRenderer.invoke('appearance:set-preference', preference);
+    },
+    onChanged(listener: (state: unknown) => void): () => void {
+      const wrapped = (_event: unknown, state: unknown) => {
+        desktopAppearanceState = state;
+        listener(state);
+      };
+      ipcRenderer.on('appearance:changed', wrapped);
+      return () => ipcRenderer.removeListener('appearance:changed', wrapped);
+    },
   },
   send(command: unknown): void {
     ipcRenderer.send('agent-command', command);

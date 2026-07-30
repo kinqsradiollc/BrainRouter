@@ -319,8 +319,8 @@ engine, terminal transport, or orchestration change.
 | ID | Slice | State | Acceptance evidence |
 |---|---|---|---|
 | D26-0 | Approve this decision and its native-boundary policy | **Complete** | User approval recorded on 2026-07-30 |
-| D26-1 | Add System/Light/Dark/High Contrast resolution, migration, preload event, and matching startup canvas | Blocked by D26-0 | Preference migration tests; live system-switch check; no startup color flash |
-| D26-2 | Add foundation modules and make `theme.css` an ordered compatibility manifest | Blocked by D26-1 | Token/literal audit; unchanged baseline screenshots |
+| D26-1 | Add System/Light/Dark/High Contrast resolution, migration, preload event, and matching startup canvas | **Complete** | Preference migration tests, Electron/renderer typechecks, production source build, and live System/Light/High Contrast switching on macOS |
+| D26-2 | Add foundation modules and make `theme.css` an ordered compatibility manifest | **Ready** | Token/literal audit; unchanged baseline screenshots |
 | D26-3 | Migrate window shell, activity bar, sidebar, top controls, views rail, and dock | Blocked by D26-2 | macOS and Windows shell screenshots; drag, resize, focus, and state checks |
 | D26-4 | Migrate Chat and composer, including visible queue/steer states | Blocked by D26-3 | Streaming and mid-turn interaction trace; narrow-window and zoom review |
 | D26-5 | Migrate views panels and Settings to shared headers, tabs, rows, and actions | Blocked by D26-3 | Inactive panels retain state; keyboard and high-contrast review |
