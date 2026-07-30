@@ -5,7 +5,7 @@
  * switch body (and its behavior) is unchanged. The hook calls
  * `createHandleQueryResult(ctx)` once and hands the result to the event handler.
  */
-import type { PlanItem, ChatRow, ChangesetFile, SessionRow, FleetRow, WorkflowDetail } from '../../../types.js';
+import type { PlanView, ChatRow, ChangesetFile, SessionRow, FleetRow, WorkflowDetail } from '../../../types.js';
 import type { TrackProject, WorkItem, Sprint, Module, SavedView, AutomationRule, ProjectMember } from '@kinqs/brainrouter-types';
 import type { GitTrackContext, SyncConfig, SyncResult, TrackPrStatus } from '../../../track/TrackView.js';
 import type { SearchHit, ReviewFindingView } from '../../../panels/index.js';
@@ -283,8 +283,8 @@ export function createHandleQueryResult(ctx: AgentEventsCtx): (rawId: string, re
       case 'q-plan': {
         // This session's durable plan (empty for a new chat). Null/empty → clear
         // the panel rather than leave the previous session's plan showing.
-        const p = result as { items?: PlanItem[]; explanation?: string } | null;
-        setLastPlan(p && Array.isArray(p.items) && p.items.length ? { items: p.items, explanation: p.explanation } : null);
+        const p = result as PlanView | null;
+        setLastPlan(p && Array.isArray(p.items) && p.items.length ? p : null);
         return;
       }
       // §7 PLAN REVIEW — this session's plan decision history (the version log).

@@ -206,7 +206,12 @@ export function createOnAgentEvent(deps: OnAgentEventDeps): (msg: AgentEventMess
         break;
       }
       case 'plan-update':
-        setLastPlan({ items: e.items, explanation: e.explanation });
+        setLastPlan({
+          items: e.items,
+          explanation: e.explanation,
+          revision: e.revision,
+          phases: e.phases,
+        });
         push({ id: rid(), kind: 'status', text: 'Updated the plan', action: 'plan', ts: Date.now() });
         break;
       case 'profile-stage':

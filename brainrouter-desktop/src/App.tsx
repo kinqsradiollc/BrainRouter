@@ -26,7 +26,7 @@ import { duplicateTitleKeys } from './lib/session/list/sessionDisplay.js';
 import { type ConfigSnapshot, type UsageHistory } from './settings.js';
 import type { MarketplaceState } from './settings/marketplace/index.js';
 import { installDevBridge } from './devBridge.js';
-import type { AttachmentUpload, PlanItem, ChatRow, FleetRow, PopId, ComponentTag } from './types.js';
+import type { AttachmentUpload, PlanItem, PlanView, ChatRow, FleetRow, PopId, ComponentTag } from './types.js';
 import type { PlanDecisionView } from './lib/plan/planReviewView.js';
 import { useClosable } from './lib/useClosable.js';
 import { useAgentEvents, type ToolCatalog } from './lib/agent/useAgentEvents.js';
@@ -177,7 +177,7 @@ export function App(): React.ReactElement {
   // Track mode data (the per-workspace project + its work items), fed by the
   // host `track-*` queries. Mutations re-fetch the item list.
   const [track, setTrack] = useState<{ project: TrackProject | null; items: WorkItem[]; sprints: Sprint[]; modules: Module[]; views: SavedView[]; automations: AutomationRule[]; members: ProjectMember[]; sync: { config: SyncConfig | null; result: SyncResult | null }; git: GitTrackContext | null; pr: TrackPrStatus | null }>({ project: null, items: [], sprints: [], modules: [], views: [], automations: [], members: [], sync: { config: null, result: null }, git: null, pr: null });
-  const [lastPlan, setLastPlan] = useState<{ items: PlanItem[]; explanation?: string } | null>(null);
+  const [lastPlan, setLastPlan] = useState<PlanView | null>(null);
   const [goalState, setGoalState] = useState<GoalRecord | null>(null);
   const [planHistory, setPlanHistory] = useState<PlanDecisionView[]>([]);
   const [searchHits, setSearchHits] = useState<SearchHit[] | null>(null);

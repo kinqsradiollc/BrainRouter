@@ -6,7 +6,7 @@
  */
 import type React from 'react';
 import type { InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
-import type { AttachmentUpload, PlanItem, ToolItem, ChatRow, ChangesetFile, SessionRow, FleetRow, TaskViewState, WorkflowDetail } from '../../../types.js';
+import type { AttachmentUpload, PlanItem, PlanView, ToolItem, ChatRow, ChangesetFile, SessionRow, FleetRow, TaskViewState, WorkflowDetail } from '../../../types.js';
 import type { TrackProject, WorkItem, Sprint, Module, SavedView, AutomationRule, ProjectMember } from '@kinqs/brainrouter-types';
 import type { GitTrackContext, SyncConfig, SyncResult, TrackPrStatus } from '../../../track/TrackView.js';
 import type { SearchHit, ReviewFindingView, GrepHit } from '../../../panels/index.js';
@@ -63,7 +63,7 @@ export interface AgentEventsCtx {
   setToolLog: React.Dispatch<React.SetStateAction<Array<{ id: number; tool: string; ok: boolean; summary: string }>>>;
   setLiveChildren: React.Dispatch<React.SetStateAction<Record<string, { childId: string; role: string; tool?: string; startedAt: number }>>>;
   setFinishedTasks: React.Dispatch<React.SetStateAction<Array<{ id: string; label: string; status: string }>>>;
-  setLastPlan: React.Dispatch<React.SetStateAction<{ items: PlanItem[]; explanation?: string } | null>>;
+  setLastPlan: React.Dispatch<React.SetStateAction<PlanView | null>>;
   setGoalState: React.Dispatch<React.SetStateAction<import('../../../components/chat/GoalBanner.js').GoalRecord | null>>;
   setPlanHistory: React.Dispatch<React.SetStateAction<PlanDecisionView[]>>;
   setTokens: React.Dispatch<React.SetStateAction<{ promptTokens: number; completionTokens: number; turns: number; cachedTokens?: number } | null>>;

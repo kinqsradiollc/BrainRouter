@@ -13,7 +13,7 @@ import type { RequirementRecord, AnnotationRecord, ArtifactRecord, AtlasGraph } 
 import type { TrackPrStatus } from '../../track/TrackView.js';
 import type { ScheduleRecordView } from '../../lib/schedule/scheduleView.js';
 import { setEntry } from '../../lib/review/reviewWorkspace.js';
-import type { PlanItem, FleetRow, TaskViewState, ChatRow } from '../../types.js';
+import type { PlanItem, PlanView, FleetRow, TaskViewState, ChatRow } from '../../types.js';
 import type { PlanDecisionView } from '../../lib/plan/planReviewView.js';
 import type { GitState } from '../../lib/git/useGitState.js';
 import type { useEditor } from '../../lib/editor/useEditor.js';
@@ -100,7 +100,7 @@ export interface RenderPanelBodyCtx {
   openDashboardTask: (t: DashTask) => void;
   switchToWorkspace: (root: string) => void;
   activeRoot: string;
-  lastPlan: { items: PlanItem[]; explanation?: string } | null;
+  lastPlan: PlanView | null;
   planHistory: PlanDecisionView[];
   planFeedbackRef: React.MutableRefObject<string>;
   searchHits: SearchHit[] | null;

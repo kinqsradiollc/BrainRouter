@@ -3,12 +3,17 @@
  * session + fleet rows, and the workflow-detail shape. Extracted from App.tsx
  * so the chat components and the App shell agree on one definition.
  */
-import type { SteeringReceiptEventView } from '@kinqs/brainrouter-agent-protocol';
+import type {
+  PlanStepView,
+  PlanUpdateView,
+  SteeringReceiptEventView,
+} from '@kinqs/brainrouter-agent-protocol';
 
 /** Composer / header popover ids (which menu is open). */
 export type PopId = '' | 'mode' | 'model' | 'effort' | 'ctx' | 'export' | 'branch' | 'branch-env' | 'plus' | 'splus' | 'bplus' | 'repo' | 'local' | 'commit' | 'title' | 'editor';
 
-export type PlanItem = { step: string; status: 'pending' | 'in_progress' | 'completed'; acceptance?: string };
+export type PlanItem = PlanStepView;
+export type PlanView = PlanUpdateView;
 export type ToolItem = {
   id: number | string;
   tool: string;

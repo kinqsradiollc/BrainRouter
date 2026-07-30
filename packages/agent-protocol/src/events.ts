@@ -8,6 +8,7 @@
 import type { InteractionRequest } from './interaction.js';
 import type { AssuranceRunEventAction, AssuranceRunEventView } from './assurance.js';
 import type { ChildExecutionReceipt } from './delegation.js';
+import type { PlanUpdateView } from './planning.js';
 
 export interface EventEnvelope {
   /** Monotonic per-session sequence (gap detection over lossy transports). */
@@ -137,7 +138,7 @@ export type AgentEvent =
       preview?: string;
       error?: string;
     }
-  | { kind: 'plan-update'; items: Array<{ step: string; status: 'pending' | 'in_progress' | 'completed'; acceptance?: string }>; explanation?: string }
+  | ({ kind: 'plan-update' } & PlanUpdateView)
   | ({ kind: 'profile-stage' } & ProfileStageEventView)
   | { kind: 'compaction'; droppedMessages: number; keptMessages: number; summary: string }
   | { kind: 'memory'; level: 'info' | 'warn'; text: string; op?: string; sources?: string[]; records?: BriefingRecord[] }
