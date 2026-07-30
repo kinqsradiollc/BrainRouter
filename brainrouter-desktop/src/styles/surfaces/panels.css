@@ -1,0 +1,196 @@
+/**
+ * ADR-026 D26-5 — shared workbench panel presentation.
+ *
+ * Feature panels keep their existing state and domain markup. This module owns
+ * the common density, rows, controls, focus treatment, and empty-state rhythm.
+ */
+
+html[data-visual-system="v2"] .views-rail .panel-body {
+  color: var(--shell-text-secondary);
+  background: var(--shell-panel);
+  font-weight: 400;
+  line-height: 1.48;
+}
+
+html[data-visual-system="v2"] .views-rail .panel-body.scroll,
+html[data-visual-system="v2"] .views-rail .panel-body .scroll {
+  padding: 6px 8px 18px !important;
+}
+
+html[data-visual-system="v2"] .views-rail .panel-body .req-row,
+html[data-visual-system="v2"] .views-rail .panel-body .sched-row,
+html[data-visual-system="v2"] .views-rail .panel-body .wt-row,
+html[data-visual-system="v2"] .views-rail .panel-body .ci-run,
+html[data-visual-system="v2"] .views-rail .panel-body .review-finding,
+html[data-visual-system="v2"] .views-rail .panel-body .plan-item,
+html[data-visual-system="v2"] .views-rail .panel-body .toollog-row,
+html[data-visual-system="v2"] .views-rail .panel-body .task-row,
+html[data-visual-system="v2"] .views-rail .panel-body .plan-decision,
+html[data-visual-system="v2"] .views-rail .panel-body .search-hit,
+html[data-visual-system="v2"] .views-rail .panel-body .grep-hit,
+html[data-visual-system="v2"] .views-rail .panel-body .kv,
+html[data-visual-system="v2"] .views-rail .panel-body .dash-ws,
+html[data-visual-system="v2"] .views-rail .panel-body .ci-status,
+html[data-visual-system="v2"] .views-rail .panel-body .ci-pr {
+  background: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border-color: var(--shell-divider) !important;
+  border-radius: var(--shell-row-radius) !important;
+  box-shadow: none !important;
+  transform: none !important;
+  transition:
+    background var(--motion-fast) ease,
+    border-color var(--motion-fast) ease !important;
+}
+
+html[data-visual-system="v2"] .views-rail .panel-body .req-row:hover,
+html[data-visual-system="v2"] .views-rail .panel-body .sched-row:hover,
+html[data-visual-system="v2"] .views-rail .panel-body .wt-row:hover,
+html[data-visual-system="v2"] .views-rail .panel-body .ci-run:hover,
+html[data-visual-system="v2"] .views-rail .panel-body .review-finding:hover,
+html[data-visual-system="v2"] .views-rail .panel-body .plan-item:hover,
+html[data-visual-system="v2"] .views-rail .panel-body .toollog-row:hover,
+html[data-visual-system="v2"] .views-rail .panel-body .task-row:hover,
+html[data-visual-system="v2"] .views-rail .panel-body .plan-decision:hover,
+html[data-visual-system="v2"] .views-rail .panel-body .search-hit:hover,
+html[data-visual-system="v2"] .views-rail .panel-body .grep-hit:hover,
+html[data-visual-system="v2"] .views-rail .panel-body .kv:hover,
+html[data-visual-system="v2"] .views-rail .panel-body .dash-row:hover,
+html[data-visual-system="v2"] .views-rail .panel-body .ci-pr:hover {
+  background: var(--shell-interaction-hover) !important;
+  border-color: var(--shell-divider-strong) !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+html[data-visual-system="v2"] .views-rail .panel-body .req-row:active,
+html[data-visual-system="v2"] .views-rail .panel-body .sched-row:active,
+html[data-visual-system="v2"] .views-rail .panel-body .wt-row:active,
+html[data-visual-system="v2"] .views-rail .panel-body .review-finding:active,
+html[data-visual-system="v2"] .views-rail .panel-body .plan-item:active,
+html[data-visual-system="v2"] .views-rail .panel-body .toollog-row:active,
+html[data-visual-system="v2"] .views-rail .panel-body .task-row:active,
+html[data-visual-system="v2"] .views-rail .panel-body .search-hit:active,
+html[data-visual-system="v2"] .views-rail .panel-body .grep-hit:active,
+html[data-visual-system="v2"] .views-rail .panel-body .kv:active {
+  transform: none !important;
+}
+
+html[data-visual-system="v2"] .views-rail .panel-body .req-row.active,
+html[data-visual-system="v2"] .views-rail .panel-body .plan-item.in_progress {
+  background: var(--shell-focus-soft) !important;
+  border-color: color-mix(in srgb, var(--shell-focus) 42%, var(--shell-divider)) !important;
+  box-shadow: none !important;
+}
+
+html[data-visual-system="v2"] .views-rail .panel-body .plan-item.completed {
+  background: transparent !important;
+  border-color: var(--shell-divider) !important;
+  opacity: 1;
+}
+
+html[data-visual-system="v2"] .views-rail .panel-body .plan-item.completed .plan-step {
+  color: var(--shell-text-muted);
+  text-decoration: none;
+  opacity: 1;
+}
+
+html[data-visual-system="v2"] .views-rail .panel-body input.filter,
+html[data-visual-system="v2"] .views-rail .panel-body select.filter,
+html[data-visual-system="v2"] .views-rail .panel-body textarea.art-edit,
+html[data-visual-system="v2"] .views-rail .panel-body .files-toolbar input.filter,
+html[data-visual-system="v2"] .views-rail .toolbar-input {
+  color: var(--shell-text) !important;
+  background-color: var(--input) !important;
+  border-color: var(--shell-divider) !important;
+  border-radius: var(--shell-control-radius) !important;
+  box-shadow: none !important;
+}
+
+html[data-visual-system="v2"] .views-rail .panel-body input.filter:focus,
+html[data-visual-system="v2"] .views-rail .panel-body select.filter:focus,
+html[data-visual-system="v2"] .views-rail .panel-body textarea.art-edit:focus,
+html[data-visual-system="v2"] .views-rail .panel-body .files-toolbar input.filter:focus,
+html[data-visual-system="v2"] .views-rail .toolbar-input:focus {
+  border-color: var(--shell-focus) !important;
+  box-shadow: 0 0 0 2px var(--shell-focus-soft) !important;
+}
+
+html[data-visual-system="v2"] .views-rail .panel-body button.btn,
+html[data-visual-system="v2"] .views-rail .panel-body button.wt-btn,
+html[data-visual-system="v2"] .views-rail .panel-body button.sched-add-btn,
+html[data-visual-system="v2"] .views-rail .panel-body .review-bar button.btn,
+html[data-visual-system="v2"] .views-rail .panel-body .ci-bar button.btn {
+  min-height: 28px !important;
+  padding: 5px 9px !important;
+  color: var(--shell-text-secondary) !important;
+  background: transparent !important;
+  border-color: var(--shell-divider) !important;
+  border-radius: var(--shell-control-radius) !important;
+  box-shadow: none !important;
+  font-size: 11.5px !important;
+  font-weight: 500 !important;
+  transform: none !important;
+}
+
+html[data-visual-system="v2"] .views-rail .panel-body button.btn:hover,
+html[data-visual-system="v2"] .views-rail .panel-body button.wt-btn:hover,
+html[data-visual-system="v2"] .views-rail .panel-body button.sched-add-btn:hover,
+html[data-visual-system="v2"] .views-rail .panel-body .review-bar button.btn:hover,
+html[data-visual-system="v2"] .views-rail .panel-body .ci-bar button.btn:hover {
+  color: var(--shell-text) !important;
+  background: var(--shell-interaction-hover) !important;
+  border-color: var(--shell-divider-strong) !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+html[data-visual-system="v2"] .views-rail .panel-body button.btn.primary,
+html[data-visual-system="v2"] .views-rail .panel-body button.sched-add-btn,
+html[data-visual-system="v2"] .views-rail .panel-body .review-bar button.btn.primary,
+html[data-visual-system="v2"] .views-rail .panel-body .ci-bar button.btn.primary {
+  color: var(--accent-fg) !important;
+  background: var(--shell-focus) !important;
+  border-color: var(--shell-focus) !important;
+}
+
+html[data-visual-system="v2"] .views-rail .panel-body button:focus-visible,
+html[data-visual-system="v2"] .views-rail .panel-body [role="button"]:focus-visible,
+html[data-visual-system="v2"] .views-rail .panel-body [role="tab"]:focus-visible,
+html[data-visual-system="v2"] .views-rail .panel-body [role="treeitem"]:focus-visible {
+  outline: 2px solid var(--shell-focus);
+  outline-offset: 2px;
+}
+
+html[data-visual-system="v2"] .views-rail .panel-body .tasks-section,
+html[data-visual-system="v2"] .views-rail .panel-body .ci-section {
+  border-color: var(--shell-divider) !important;
+  color: var(--shell-text-muted) !important;
+  font-weight: 560 !important;
+}
+
+html[data-visual-system="v2"] .views-rail .panel-body .tasks-section span::before,
+html[data-visual-system="v2"] .views-rail .panel-body .ci-section span::before {
+  background: var(--shell-text-muted);
+  box-shadow: none;
+}
+
+html[data-visual-system="v2"] .views-rail .panel-body .empty {
+  gap: 4px !important;
+  padding: 18px 10px !important;
+  color: var(--shell-text-muted) !important;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  line-height: 1.5 !important;
+}
+
+@media (forced-colors: active) {
+  html[data-visual-system="v2"] .views-rail .panel-body button,
+  html[data-visual-system="v2"] .views-rail .panel-body input,
+  html[data-visual-system="v2"] .views-rail .panel-body select,
+  html[data-visual-system="v2"] .views-rail .panel-body textarea {
+    forced-color-adjust: auto;
+  }
+}

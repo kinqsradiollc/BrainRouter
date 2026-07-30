@@ -10,6 +10,8 @@
 @import "./styles/shell/dock.css";
 @import "./styles/surfaces/chat.css";
 @import "./styles/surfaces/composer.css";
+@import "./styles/surfaces/panels.css";
+@import "./styles/surfaces/settings.css";
 
 /* ---------- app frame ---------- */
 .app { display: flex; align-items: stretch; height: 100vh; background: var(--bg); overflow: hidden; }
