@@ -1,6 +1,6 @@
 # ADR-026 — Desktop Native Visual System and Platform-Adaptive Shell
 
-**Status:** Accepted for phased implementation on `release/0.4.18` ·
+**Status:** Accepted; implementation complete on `release/0.4.18`; publication paused ·
 **Approved:** 2026-07-30 · **Builds on:** ADR-019's Desktop security boundary and the
 shared interface contract shipped in 0.4.17 · **Does not authorize:** runtime,
 browser-engine, terminal-transport, or orchestration changes.
@@ -333,7 +333,7 @@ engine, terminal transport, or orchestration change.
 | D26-7 | Migrate Terminal and Browser chrome without changing PTY or browser authority | **Complete** | Live native Z shell command; browser toolbar/tabs reviewed with keyboard navigation; background-agent focus isolation tests pass |
 | D26-8a | Migrate Track board, alternate layouts, menus, and detail drawer | **Complete** | Board, List, and detail drawer reviewed live in Dark and High Contrast; semantic-token contract and current-source build pass |
 | D26-8b | Migrate Atlas, workflows, meetings, and review surfaces | **Complete** | Current-source Dark review covers Atlas first-open framing, workflow test-run success, PR list and CI detail, Meetings library/detail, Meeting Track, and Teams; semantic-token and typecheck contracts pass |
-| D26-9 | Complete accessibility, performance, and cross-platform release gate; remove compatibility flag | In progress | macOS accessibility, zoom, panel-switch, and bundle gates pass; Windows package lane pending |
+| D26-9 | Complete accessibility, performance, and cross-platform release gate; remove compatibility flag | **Complete** | Exact-head macOS and Windows qualification passed; fixed v2 scope has no compatibility setting; publication remains paused |
 
 Human review checkpoints:
 
@@ -342,8 +342,9 @@ Human review checkpoints:
 2. **Core workbench checkpoint after D26-6** — Chat, composer, Settings,
    Editor, and Files together. Settings and shared panels are ready for this
    combined checkpoint.
-3. **Release checkpoint after D26-9** — macOS review and the Windows packaging
-   lane must pass before the compatibility setting is removed.
+3. **Release checkpoint after D26-9** — complete on 2026-07-30; macOS review,
+   the enforced browser comparison, packaged-app verification, and the Windows
+   packaging lane passed on the same release head.
 
 Resolved verification finding: the merged-source macOS app emitted a
 `MaxListenersExceededWarning` after registering 11 `agent-event` listeners on
@@ -377,6 +378,32 @@ The production bundle gate recorded 1,630,286 raw / 476,147 gzip bytes for the
 initial script, 504,769 / 80,604 bytes for the initial stylesheet, and
 3,930,781 / 1,024,303 bytes for the lazy Editor chunk. Atlas, Browser, CI,
 Editor, and Workflows remained separate lazy chunks.
+
+D26-9 exact-head evidence: release head
+`f900181864403f9cf0672f0dc8dcd5ce92e38af7` passed
+[Desktop qualification run 30547658722](https://github.com/kinqsradiollc/BrainRouter/actions/runs/30547658722)
+on macOS arm64 and Windows x64. The macOS lane passed the Desktop regression
+suite, real Electron browser E2E, enforced 20-run same-hardware Chrome
+comparison, workspace-dependency dereference, package creation, clean-profile
+packaged verification, and artifact upload. The packaged verifier loaded the
+utility host and workspace manifest, reported Chromium 150, created two
+distinct native tabs, and executed a browser state command without depending
+on a developer config. The Windows lane passed its Desktop contracts,
+dependency dereference, installer build, and artifact upload.
+
+The browser E2E completed 1,000 warm tab switches and 100 create/close cycles
+with no tab crash, retained the active tab's form and scroll state without a
+reload, and recorded p95 values of 20.2 ms for blank-tab creation, 8.8 ms for
+warm tab switching, and 0.5 ms for bridge dispatch. The enforced comparison
+recorded 12.9 ms, 7.2 ms, and 0.7 ms respectively; twenty-tab incremental RSS
+was 0.76 times the same-runner Chrome value. All 11 enforced comparison gates
+passed with no failure. Speedometer, representative-page Web Vitals, and
+long-task trace attribution remain explicitly separate informational
+benchmarks and were not fabricated by the loopback release gate.
+
+This qualification was a branch-triggered verification run. Tag-only release
+attachment steps were skipped, and 0.4.18 was not tagged, published, merged to
+`main`, or released.
 
 ## Consequences
 
