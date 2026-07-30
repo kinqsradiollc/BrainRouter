@@ -39,8 +39,8 @@
       "package.json"
     ],
     "asarUnpack": [
-      "**/*.node",
-      "node_modules/@nut-tree-fork/libnut-*/**/*"
+      "node_modules/**/*",
+      "!node_modules/@kinqs/**/*"
     ],
     "mac": {
       "hardenedRuntime": true,
