@@ -375,7 +375,7 @@ export function EditorPanel({ workspaceKey, files, fileStatuses, filesLoading, t
                 aria-label="Filter editor files"
                 onChange={(event) => explorer.setFilter(event.target.value)}
               />
-              <div className="editor-explorer-tree scroll">
+              <div className="editor-explorer-tree file-explorer-host">
                 {files.length ? (
                   <FileExplorer
                     files={files}
