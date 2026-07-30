@@ -1,0 +1,282 @@
+/**
+ * ADR-026 D26-5 — native Settings hierarchy and shared configuration rows.
+ *
+ * Settings remains a single keyboard-contained dialog. The preview replaces
+ * decorative depth with platform-adaptive surfaces, dividers, and focus rings.
+ */
+
+html[data-visual-system="v2"] .overlay {
+  background: color-mix(in srgb, var(--shell-canvas) 76%, transparent);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+html[data-visual-system="v2"] .settings-modal {
+  width: min(1040px, 92vw);
+  height: min(700px, 88vh);
+  color: var(--shell-text);
+  background: var(--shell-panel);
+  border-color: var(--shell-divider-strong);
+  border-radius: 12px;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+html[data-visual-system="v2"] .settings-modal.zoomed {
+  width: min(1320px, 98vw);
+  height: min(900px, 96vh);
+}
+
+html[data-visual-system="v2"] .settings-nav {
+  width: 220px;
+  padding: 12px 8px;
+  background: var(--shell-chrome);
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .settings-brand {
+  min-height: 38px;
+  padding: 0 7px 9px;
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .settings-brand-mark {
+  width: 20px;
+  height: 20px;
+  flex-basis: 20px;
+  padding: 0;
+  color: var(--shell-text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+html[data-visual-system="v2"] .settings-brand strong {
+  color: var(--shell-text);
+  font-size: 12px;
+  font-weight: 560;
+}
+
+html[data-visual-system="v2"] .settings-search {
+  min-height: 32px;
+  margin-block: 9px 5px;
+  color: var(--shell-text);
+  background: var(--input);
+  border-color: var(--shell-divider);
+  border-radius: var(--shell-control-radius);
+}
+
+html[data-visual-system="v2"] .settings-search:focus {
+  border-color: var(--shell-focus);
+  box-shadow: 0 0 0 2px var(--shell-focus-soft);
+}
+
+html[data-visual-system="v2"] .settings-modal .nav-head {
+  margin: 10px 8px 4px;
+  color: var(--shell-text-muted);
+}
+
+html[data-visual-system="v2"] .settings-modal .nav-item.settings-category {
+  min-height: 46px;
+  padding: 6px 8px;
+  color: var(--shell-text-secondary);
+  background: transparent;
+  border-radius: var(--shell-row-radius);
+}
+
+html[data-visual-system="v2"] .settings-modal .nav-item.settings-category:hover {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+  transform: none;
+}
+
+html[data-visual-system="v2"] .settings-modal .nav-item.settings-category.active {
+  color: var(--shell-text);
+  background: var(--shell-interaction-selected);
+  box-shadow: inset 2px 0 0 var(--shell-focus);
+}
+
+html[data-visual-system="v2"] .settings-modal .nav-item.settings-category .nav-icon,
+html[data-visual-system="v2"] .settings-modal .nav-item.settings-category.active .nav-icon {
+  color: var(--shell-text-secondary);
+  opacity: 1;
+}
+
+html[data-visual-system="v2"] .settings-modal .nav-item.settings-category small {
+  color: var(--shell-text-muted);
+}
+
+html[data-visual-system="v2"] .settings-content {
+  background: var(--shell-panel);
+}
+
+html[data-visual-system="v2"] .settings-subnav {
+  min-height: 46px;
+  padding-inline: 22px 52px;
+  gap: 18px;
+  background: var(--shell-panel);
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .settings-subnav button {
+  min-height: 38px;
+  padding-block: 8px 9px;
+  color: var(--shell-text-muted);
+}
+
+html[data-visual-system="v2"] .settings-subnav button:hover {
+  color: var(--shell-text);
+}
+
+html[data-visual-system="v2"] .settings-subnav button.active {
+  color: var(--shell-text);
+}
+
+html[data-visual-system="v2"] .settings-subnav button.active::after {
+  height: 1px;
+  background: var(--shell-focus);
+}
+
+html[data-visual-system="v2"] .settings-content > .set-body {
+  padding: 22px 28px 36px;
+  animation-duration: var(--motion-fast);
+}
+
+html[data-visual-system="v2"] .settings-modal .set-body {
+  gap: 16px;
+}
+
+html[data-visual-system="v2"] .settings-modal .set-h {
+  color: var(--shell-text);
+  font-size: 19px;
+  line-height: 26px;
+  font-weight: 560;
+}
+
+html[data-visual-system="v2"] .settings-modal .set-desc {
+  color: var(--shell-text-muted);
+}
+
+html[data-visual-system="v2"] .settings-modal .set-group {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--shell-divider);
+  border-radius: 0;
+}
+
+html[data-visual-system="v2"] .settings-modal .set-group > .set-h2 {
+  padding: 11px 0 7px;
+  color: var(--shell-text-muted);
+  background: transparent;
+  font-weight: 600;
+}
+
+html[data-visual-system="v2"] .settings-modal .set-group[data-collapsible="true"]:not(.open) {
+  padding-bottom: 0;
+  background: transparent;
+}
+
+html[data-visual-system="v2"] .settings-modal .set-group-toggle {
+  color: var(--shell-text-muted);
+  border-radius: var(--shell-control-radius);
+}
+
+html[data-visual-system="v2"] .settings-modal .set-group-toggle:hover,
+html[data-visual-system="v2"] .settings-modal .set-group-toggle:focus-visible {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+}
+
+html[data-visual-system="v2"] .settings-modal .set-row {
+  min-height: 52px;
+  padding-block: 10px;
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .settings-modal .set-title {
+  color: var(--shell-text);
+  font-size: 12px;
+  font-weight: 540;
+}
+
+html[data-visual-system="v2"] .settings-modal .ctl,
+html[data-visual-system="v2"] .settings-modal select,
+html[data-visual-system="v2"] .settings-modal input:not([type="checkbox"]):not([type="color"]) {
+  color: var(--shell-text);
+  background: var(--input);
+  border-color: var(--shell-divider);
+  border-radius: var(--shell-control-radius);
+  box-shadow: none;
+}
+
+html[data-visual-system="v2"] .settings-modal .ctl:focus,
+html[data-visual-system="v2"] .settings-modal select:focus,
+html[data-visual-system="v2"] .settings-modal input:not([type="checkbox"]):not([type="color"]):focus {
+  border-color: var(--shell-focus);
+  box-shadow: 0 0 0 2px var(--shell-focus-soft);
+}
+
+html[data-visual-system="v2"] .settings-actions.panel-chrome-actions {
+  top: 8px;
+  right: 9px;
+  height: 30px;
+  padding: 1px;
+  background: transparent;
+  border-color: transparent;
+  border-radius: var(--shell-row-radius);
+  box-shadow: none;
+}
+
+html[data-visual-system="v2"] .settings-actions .icon-btn {
+  color: var(--shell-text-muted);
+  border-radius: var(--shell-control-radius);
+}
+
+html[data-visual-system="v2"] .settings-actions .icon-btn:hover,
+html[data-visual-system="v2"] .settings-actions .icon-btn:focus-visible {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+  border-color: transparent;
+}
+
+html[data-visual-system="v2"] .settings-actions .icon-btn.active {
+  color: var(--shell-text);
+  background: var(--shell-interaction-selected);
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .settings-modal button:focus-visible,
+html[data-visual-system="v2"] .settings-modal [role="tab"]:focus-visible {
+  outline: 2px solid var(--shell-focus);
+  outline-offset: 2px;
+}
+
+@media (max-width: 760px) {
+  html[data-visual-system="v2"] .settings-modal {
+    width: 96vw;
+    max-width: 96vw;
+  }
+
+  html[data-visual-system="v2"] .settings-nav {
+    width: 184px;
+  }
+
+  html[data-visual-system="v2"] .settings-modal .nav-item.settings-category small {
+    display: none;
+  }
+
+  html[data-visual-system="v2"] .settings-content > .set-body {
+    padding-inline: 18px;
+  }
+}
+
+@media (forced-colors: active) {
+  html[data-visual-system="v2"] .settings-modal,
+  html[data-visual-system="v2"] .settings-nav,
+  html[data-visual-system="v2"] .settings-subnav,
+  html[data-visual-system="v2"] .settings-modal .set-group {
+    border-color: CanvasText;
+  }
+}
