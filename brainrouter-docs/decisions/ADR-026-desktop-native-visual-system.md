@@ -324,7 +324,7 @@ engine, terminal transport, or orchestration change.
 | D26-3 | Migrate window shell, activity bar, sidebar, top controls, views rail, and dock | **Complete** | Reversible preview, full macOS shell review, rail/dock state preservation, and owner approval complete; Windows remains part of D26-9 |
 | D26-4 | Migrate Chat and composer, including visible queue/steer states | **Complete** | Current-source Electron review at normal and increased zoom; deterministic running-turn trace verified visible Queue, Steer, Queued, and Steer pending states |
 | D26-5 | Migrate views panels and Settings to shared headers, tabs, rows, and actions | **Complete** | Inactive panels retain state; one bounded native `agent-event` listener survives startup and panel reopen; keyboard, zoom, and high-contrast review complete |
-| D26-6 | Migrate Editor and Files and address measured tree/editor rendering bottlenecks | **In progress** | Stable explorer expansion; Monaco remains lazy; representative performance trace |
+| D26-6 | Migrate Editor and Files and address measured tree/editor rendering bottlenecks | **Complete** | 25,000-file projection bounded to 46 rows; shared expansion survived Files/Editor switching; lazy Monaco, edit/preview, and High Contrast reviewed live |
 | D26-7 | Migrate Terminal and Browser chrome without changing PTY or browser authority | Blocked by D26-5 | Live native-shell session; browser focus-isolation and toolbar review |
 | D26-8 | Migrate Track, Atlas, workflows, meetings, and review surfaces | Blocked by D26-5 | Surface inventory complete; no old cross-surface overrides |
 | D26-9 | Complete accessibility, performance, and cross-platform release gate; remove compatibility flag | Blocked by D26-6–D26-8 | macOS and Windows approval, accessibility evidence, budgets met, rollback tested |
@@ -351,7 +351,10 @@ fixture indexed and flattened in 24 ms on the release workstation, with no more
 than 46 React rows in a 720-pixel viewport. The current-source macOS app retained
 the same expanded directory when switching from Files to Editor and after
 closing and reopening the panel. Monaco remains a separate lazy chunk; visual
-migration is still in progress.
+migration now uses flat workbench tabs, an integrated explorer, native control
+states, and a dedicated High Contrast Monaco theme. The enlarged Editor was
+reviewed live in preview and editable Monaco modes before Dark mode and the
+normal panel width were restored.
 
 ## Consequences
 

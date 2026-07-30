@@ -164,12 +164,29 @@ function defineThemes(): void {
       'diffEditor.removedTextBackground': '#9a67002e',
     },
   });
+  monaco.editor.defineTheme('brainrouter-high-contrast', {
+    base: 'hc-black',
+    inherit: true,
+    rules: [],
+    colors: {
+      'editor.background': cssColor('--term-bg', '#000000'),
+      'editor.foreground': cssColor('--text', '#ffffff'),
+      'editorCursor.foreground': cssColor('--accent', '#ffffff'),
+      'editor.selectionBackground': cssColor('--accent-soft', '#ffffff33'),
+      'editorLineNumber.foreground': cssColor('--text-faint', '#b4b4bd'),
+      'editorLineNumber.activeForeground': cssColor('--text', '#ffffff'),
+      'editorError.foreground': cssColor('--err', '#fb7185'),
+      'editorWarning.foreground': cssColor('--warn', '#fde047'),
+    },
+  });
 }
 
 /** The Monaco theme id for the app's current data-theme. */
 export function editorTheme(): string {
   const t = typeof document !== 'undefined' ? document.documentElement.getAttribute('data-theme') : null;
-  return t === 'light' ? 'brainrouter-light' : 'brainrouter-dark';
+  if (t === 'light') return 'brainrouter-light';
+  if (t === 'hc') return 'brainrouter-high-contrast';
+  return 'brainrouter-dark';
 }
 
 /** Idempotent: wire workers, point the react loader at bundled monaco, define themes. */
