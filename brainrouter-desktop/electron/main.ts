@@ -58,7 +58,8 @@ import { concreteRendererBrowserTarget } from './browser/rendererCommandTarget.j
 import { shouldBypassRendererVisibleQueue } from './browser/visibleQueuePolicy.js';
 import { resolveDesktopBootstrapState } from './accountIntegration.js';
 import { initAutoUpdate } from './updater.js';
-import { configurePackagedSmokeDevTools } from './packagedSmokeBootstrap.js';
+import { configurePackagedSmokeProfile } from './packagedSmokeBootstrap.js';
+import { runPackagedBrowserSmokeIfRequested } from './packagedBrowserSmoke.js';
 import {
   APPEARANCE_PREFERENCES,
   appearanceWindowBackground,
@@ -71,7 +72,7 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-configurePackagedSmokeDevTools(app);
+configurePackagedSmokeProfile(app);
 
 function reconcileWorkspaceBackground(workspaceRoot: string): void {
   try { reconcileStaleBackgroundTasks(workspaceRoot, pidAlive); } catch { /* best-effort */ }
@@ -839,6 +840,11 @@ app.whenReady().then(() => {
     _resetCliKnobsCache();
     return { ok: true, computerUse: cfg.cli.computerUse };
   });
+
+  const packagedSmokeWindow = [...wins.values()][0]?.win;
+  if (packagedSmokeWindow) {
+    void runPackagedBrowserSmokeIfRequested(app, packagedSmokeWindow);
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
