@@ -3,6 +3,10 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 const theme = readFileSync(new URL('../../theme.css', import.meta.url), 'utf8');
+const foundationTokens = readFileSync(
+  new URL('../../styles/foundation/tokens.css', import.meta.url),
+  'utf8',
+);
 const sidebar = readFileSync(new URL('../../components/layout/Sidebar.tsx', import.meta.url), 'utf8');
 const activityBar = readFileSync(new URL('../../components/layout/ActivityBar.tsx', import.meta.url), 'utf8');
 
@@ -34,7 +38,7 @@ test('narrow layouts keep every drawer and topbar reopen control reachable', () 
 });
 
 test('workbench chrome controls share one explicit geometry token', () => {
-  assert.match(theme, /--chrome-control-size:\s*var\(--control-size\)/);
+  assert.match(foundationTokens, /--chrome-control-size:\s*var\(--control-size\)/);
   assert.match(theme, /\.rail-top\s+\.icon-btn[\s\S]*width:\s*var\(--chrome-control-size\)/);
   assert.match(theme, /\.settings-actions\s+\.icon-btn\s*\{[^}]*width:\s*var\(--chrome-control-size\)[^}]*height:\s*var\(--chrome-control-size\)/);
 });
