@@ -6,7 +6,7 @@
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
-    "build": "npm run build:electron && vite build",
+    "build": "npm run build:electron && vite build && npm run verify:visual-release",
     "build:electron": "node -e \"fs.rmSync('dist-electron',{recursive:true,force:true})\" && tsc -p tsconfig.electron.json",
     "build:deps": "npm --prefix ../packages/types run build && npm --prefix ../packages/agent-protocol run build && npm --prefix ../packages/core run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -22,6 +22,7 @@
     "reset:desktop": "node scripts/reset-desktop.mjs",
     "dist:mac": "npm run build && npx --yes electron-builder --mac --publish never",
     "dist:win": "npm run build && npx --yes electron-builder --win --publish never",
+    "verify:visual-release": "node scripts/verify-visual-release.mjs",
     "verify:packaged": "node scripts/verify-packaged.mjs"
   },
   "build": {

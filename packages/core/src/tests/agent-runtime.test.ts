@@ -3708,7 +3708,7 @@ test('runTurn applies manifest tool profiles to the model-visible local surface'
   });
 });
 
-test('runTurn gives a saved Research workspace its folder, skill, and read-only Project Knowledge tools', async () => {
+test('runTurn preloads Research question workflow and keeps its first turn scoped', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const manifest = createWorkspaceManifest({ name: 'EconomicsResearch', profile: 'research', by: 'wizard' });
     manifest.version = 3;
@@ -3861,27 +3861,37 @@ test('runTurn gives a saved Research workspace its folder, skill, and read-only 
       }), 'done');
 
       const names = new Set((firstRequestBody.tools ?? []).map((tool: any) => tool.function?.name));
-      for (const name of [
-        'list_dir',
-        'write_file',
-        'mcp_brain_list_skills',
-        'mcp_brain_get_skill',
-        'mcp_brain_search_skills',
-        'mcp_brain_knowledge_search',
-      ]) {
+      for (const name of ['list_dir']) {
         assert.equal(names.has(name), true, name);
       }
+      assert.ok(firstRequestBody.messages.some((message: any) =>
+        message.role === 'system' &&
+        /Research question/i.test(message.content)));
+      assert.equal(
+        names.has('write_file'),
+        false,
+        'Research planning preflight keeps the first turn read-only',
+      );
       assert.equal(names.has('run_command'), false, 'Research does not receive shell authority by default');
       assert.equal(names.has('mcp_brain_knowledge_ingest'), false, 'Project Knowledge defaults are read-only');
+      assert.equal(
+        names.has('mcp_brain_knowledge_search'),
+        false,
+        'question refinement finishes before evidence search begins',
+      );
       assert.equal(names.has('mcp_other_get_skill'), false, 'skill baseline is limited to the BrainRouter server');
-      assert.equal(fs.readFileSync(path.join(workspace, 'notes.md'), 'utf8'), '# Notes');
-      assert.deepEqual(mcpCalls, [
-        'mcp_brain_get_skill',
-        'mcp_brain_knowledge_search',
-      ]);
+      assert.equal(
+        fs.existsSync(path.join(workspace, 'notes.md')),
+        false,
+        'a stale write call cannot bypass the preflight tool policy',
+      );
+      assert.deepEqual(mcpCalls, ['get_skill']);
+      const blockedSearch = lastRequestBody.messages.find((message: any) =>
+        message.tool_call_id === 'research_knowledge');
+      assert.match(blockedSearch?.content ?? '', /active skill allowed-tools policy/i);
       const denied = lastRequestBody.messages.find((message: any) =>
         message.tool_call_id === 'third_party_skill_collision');
-      assert.match(denied?.content ?? '', /workspace MCP tool policy/i);
+      assert.match(denied?.content ?? '', /active skill allowed-tools policy/i);
     } finally {
       globalThis.fetch = originalFetch;
     }

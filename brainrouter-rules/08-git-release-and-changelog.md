@@ -63,11 +63,12 @@ coupled change as one `* type(scope): …` bullet so the squash body remains rea
 ### 4. Release trains on `release/x.y.z`; tag `vX.Y.Z` on the merge to main
 
 Each version is developed on a `release/x.y.z` branch (current:
-`release/0.4.17`). Feature PRs target the release branch and are squash-merged. To
+`release/0.4.18`). Feature PRs target the release branch and are squash-merged. To
 ship: merge `origin/main` into the release branch, land the bump + changelog
 commits, open a PR from the release branch into `main`, and tag the merge commit
 `vX.Y.Z`. Release-bump work can go through a `chore/release-x.y.z` side branch.
-Desktop signed builds use a separate `desktop-v*` tag namespace.
+The same release tag also starts the desktop packaging pipeline; the legacy
+`desktop-v*` tag namespace remains accepted for desktop-only rebuilds.
 
 - **Why:** `main` and `release/*` are branch-protected (PR + green "Build & Test
   (Node 22.x)" required); the `vX.Y.Z` tag on the main-merge commit marks a
@@ -195,10 +196,11 @@ edit the root copies expecting effect, and never commit them.**
 
 - **Evidence:** `.gitignore:121-122`
 
-### 15. Desktop releases are a separate tag-triggered signed-build pipeline
+### 15. Desktop packages share the release tag and keep a manual rebuild path
 
 Signed/notarized macOS builds run via `.github/workflows/release-desktop.yml`,
-triggered manually or by pushing a `desktop-v*` tag (not `vX.Y.Z`).
+triggered by a normal `vX.Y.Z` release tag, manually, or by the legacy
+`desktop-v*` desktop-only tag.
 `electron-builder` + `@electron/notarize` install with `npm install --no-save` so
 the committed lockfile stays the deterministic source of truth; without Apple
 secrets the pipeline fails open to an unsigned build so it stays verifiable.
