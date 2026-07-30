@@ -6,6 +6,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import {
   configurePackagedSmokeDevTools,
   resolvePackagedSmokePort,
@@ -19,6 +20,7 @@ test('D26-9 resolves only unprivileged TCP ports for packaged smoke', () => {
 });
 
 test('D26-9 configures loopback DevTools only for an explicit packaged smoke launch', () => {
+  const profile = path.resolve('/tmp/brainrouter-packaged-smoke-profile');
   const switches: Array<[string, string | undefined]> = [];
   const app = {
     isPackaged: true,
@@ -32,13 +34,42 @@ test('D26-9 configures loopback DevTools only for an explicit packaged smoke lau
   assert.equal(configurePackagedSmokeDevTools(app, {}), false);
   assert.deepEqual(switches, []);
   assert.equal(
-    configurePackagedSmokeDevTools(app, { BRAINROUTER_PACKAGED_SMOKE_PORT: '43821' }),
+    configurePackagedSmokeDevTools(app, {
+      BRAINROUTER_PACKAGED_SMOKE_PORT: '43821',
+      BRAINROUTER_PACKAGED_SMOKE_PROFILE: profile,
+    }),
     true,
   );
   assert.deepEqual(switches, [
+    ['user-data-dir', profile],
     ['remote-debugging-address', '127.0.0.1'],
     ['remote-debugging-port', '43821'],
   ]);
+});
+
+test('D26-9 refuses remote debugging without an absolute isolated profile', () => {
+  const switches: Array<[string, string | undefined]> = [];
+  const app = {
+    isPackaged: true,
+    commandLine: {
+      appendSwitch(name: string, value?: string): void {
+        switches.push([name, value]);
+      },
+    },
+  };
+
+  assert.equal(
+    configurePackagedSmokeDevTools(app, { BRAINROUTER_PACKAGED_SMOKE_PORT: '43821' }),
+    false,
+  );
+  assert.equal(
+    configurePackagedSmokeDevTools(app, {
+      BRAINROUTER_PACKAGED_SMOKE_PORT: '43821',
+      BRAINROUTER_PACKAGED_SMOKE_PROFILE: 'relative/profile',
+    }),
+    false,
+  );
+  assert.deepEqual(switches, []);
 });
 
 test('D26-9 ignores the packaged smoke seam in development', () => {
@@ -53,7 +84,10 @@ test('D26-9 ignores the packaged smoke seam in development', () => {
   };
 
   assert.equal(
-    configurePackagedSmokeDevTools(app, { BRAINROUTER_PACKAGED_SMOKE_PORT: '43821' }),
+    configurePackagedSmokeDevTools(app, {
+      BRAINROUTER_PACKAGED_SMOKE_PORT: '43821',
+      BRAINROUTER_PACKAGED_SMOKE_PROFILE: path.resolve('/tmp/brainrouter-packaged-smoke-profile'),
+    }),
     false,
   );
   assert.deepEqual(switches, []);
