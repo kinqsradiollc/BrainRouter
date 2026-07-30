@@ -8,6 +8,8 @@
 @import "./styles/shell/topControls.css";
 @import "./styles/shell/viewsRail.css";
 @import "./styles/shell/dock.css";
+@import "./styles/surfaces/chat.css";
+@import "./styles/surfaces/composer.css";
 
 /* ---------- app frame ---------- */
 .app { display: flex; align-items: stretch; height: 100vh; background: var(--bg); overflow: hidden; }

@@ -1,0 +1,238 @@
+/**
+ * ADR-026 D26-4 — compact, anchored composer and explicit queue/steer states.
+ *
+ * This preview-scoped module changes presentation only. The active-turn
+ * delivery contract remains owned by the existing composer handlers.
+ */
+
+html[data-visual-system="v2"] .composer {
+  padding-block: 8px 14px;
+}
+
+html[data-visual-system="v2"] .composer .box,
+html[data-visual-system="v2"] .home-mode .composer .box {
+  padding: 9px 10px 7px;
+  background: var(--input);
+  border-color: var(--shell-divider-strong);
+  border-radius: 12px;
+  box-shadow: none;
+}
+
+html[data-visual-system="v2"] .composer .box:focus-within {
+  border-color: var(--shell-focus);
+  box-shadow: 0 0 0 2px var(--shell-focus-soft);
+}
+
+html[data-visual-system="v2"] .composer .box.drag-over {
+  border-color: var(--shell-focus);
+  box-shadow: 0 0 0 2px var(--shell-focus-soft);
+}
+
+html[data-visual-system="v2"] .composer textarea {
+  min-height: 32px;
+  padding-block-end: 7px;
+  color: var(--shell-text);
+}
+
+html[data-visual-system="v2"] .composer textarea::placeholder {
+  color: var(--shell-text-muted);
+}
+
+html[data-visual-system="v2"] .composer-controls {
+  gap: 4px;
+  margin-top: 4px;
+}
+
+html[data-visual-system="v2"] .composer-controls .chip,
+html[data-visual-system="v2"] .composer-controls .ctx-chip,
+html[data-visual-system="v2"] .composer-controls .model-pill,
+html[data-visual-system="v2"] .composer-controls .effort-pill,
+html[data-visual-system="v2"] .composer-controls .ctx-ring-btn {
+  min-height: var(--chrome-control-size);
+  color: var(--shell-text-secondary);
+  background: transparent;
+  border-color: transparent;
+  border-radius: var(--shell-control-radius);
+}
+
+html[data-visual-system="v2"] .composer-controls .chip:hover,
+html[data-visual-system="v2"] .composer-controls .ctx-chip:hover,
+html[data-visual-system="v2"] .composer-controls .model-pill:hover,
+html[data-visual-system="v2"] .composer-controls .effort-pill:hover,
+html[data-visual-system="v2"] .composer-controls .ctx-ring-btn:hover {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+  border-color: transparent;
+}
+
+html[data-visual-system="v2"] .composer-controls button:focus-visible,
+html[data-visual-system="v2"] .input-attach:focus-visible,
+html[data-visual-system="v2"] .input-send:focus-visible,
+html[data-visual-system="v2"] .input-stop:focus-visible,
+html[data-visual-system="v2"] .delivery-mode-btn:focus-visible {
+  outline: 2px solid var(--shell-focus);
+  outline-offset: 2px;
+}
+
+html[data-visual-system="v2"] .model-effort-control {
+  background: transparent;
+  border-color: var(--shell-divider);
+  border-radius: var(--shell-control-radius);
+}
+
+html[data-visual-system="v2"] .model-effort-control .composer-effort {
+  border-inline-start-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .input-attach,
+html[data-visual-system="v2"] .input-stop {
+  color: var(--shell-text-muted);
+}
+
+html[data-visual-system="v2"] .input-attach:hover {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+}
+
+html[data-visual-system="v2"] .input-send {
+  width: 26px;
+  height: 26px;
+  color: var(--accent-fg);
+  background: var(--accent);
+  border: 0;
+  box-shadow: none;
+}
+
+html[data-visual-system="v2"] .input-send:not(:disabled):hover {
+  color: var(--accent-fg);
+  background: var(--accent);
+  filter: none;
+}
+
+html[data-visual-system="v2"] .input-send:disabled {
+  color: var(--shell-text-muted);
+  background: var(--shell-interaction-subtle);
+}
+
+html[data-visual-system="v2"] .input-stop {
+  border-radius: var(--shell-control-radius);
+}
+
+html[data-visual-system="v2"] .input-stop:hover {
+  color: var(--err);
+  background: var(--err-soft);
+}
+
+html[data-visual-system="v2"] .delivery-mode-btn {
+  height: 26px;
+  padding-inline: 8px;
+  color: var(--shell-text-secondary);
+  background: var(--shell-panel);
+  border-color: var(--shell-divider);
+  border-radius: var(--shell-control-radius);
+}
+
+html[data-visual-system="v2"] .delivery-mode-btn:hover,
+html[data-visual-system="v2"] .delivery-mode-btn[aria-expanded="true"] {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+  border-color: var(--shell-divider-strong);
+}
+
+html[data-visual-system="v2"] .delivery-mode-btn[data-delivery-mode="steer"] {
+  color: var(--shell-focus);
+  background: var(--shell-focus-soft);
+  border-color: color-mix(in srgb, var(--shell-focus) 35%, var(--shell-divider));
+}
+
+html[data-visual-system="v2"] .delivery-menu {
+  padding: 4px;
+  background: var(--shell-elevated);
+  border-color: var(--shell-divider-strong);
+  border-radius: var(--shell-row-radius);
+  box-shadow: none;
+}
+
+html[data-visual-system="v2"] .delivery-menu .menu-item {
+  min-height: 42px;
+  border-radius: var(--shell-control-radius);
+}
+
+html[data-visual-system="v2"] .delivery-menu .menu-item[aria-checked="true"] {
+  background: var(--shell-interaction-selected);
+}
+
+html[data-visual-system="v2"] .attachment-strip {
+  gap: 5px;
+}
+
+html[data-visual-system="v2"] .attachment-chip,
+html[data-visual-system="v2"] .tag-chip,
+html[data-visual-system="v2"] .image-chip {
+  background: var(--shell-panel);
+  border-color: var(--shell-divider);
+  border-radius: var(--shell-control-radius);
+}
+
+html[data-visual-system="v2"] .attachment-chip.attached {
+  color: var(--shell-text);
+  background: var(--shell-panel);
+  border-color: color-mix(in srgb, var(--ok) 35%, var(--shell-divider));
+}
+
+html[data-visual-system="v2"] .attachment-chip.failed {
+  color: var(--warn);
+  background: var(--shell-panel);
+  border-color: color-mix(in srgb, var(--warn) 40%, var(--shell-divider));
+}
+
+html[data-visual-system="v2"] .slash-pop,
+html[data-visual-system="v2"] .mention-pop {
+  background: var(--shell-elevated);
+  border-color: var(--shell-divider-strong);
+  border-radius: var(--shell-row-radius);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+html[data-visual-system="v2"] .mention-item.sel,
+html[data-visual-system="v2"] .mention-item:hover,
+html[data-visual-system="v2"] .mention-item:focus-visible {
+  background: var(--shell-interaction-selected);
+}
+
+@container center (max-width: 620px) {
+  html[data-visual-system="v2"] .composer {
+    padding-block-end: 10px;
+  }
+
+  html[data-visual-system="v2"] .composer-controls {
+    row-gap: 3px;
+  }
+}
+
+@container center (max-width: 460px) {
+  html[data-visual-system="v2"] .delivery-mode-btn {
+    width: 28px;
+    padding: 0;
+    justify-content: center;
+    overflow: hidden;
+    color: transparent;
+  }
+
+  html[data-visual-system="v2"] .delivery-mode-btn svg {
+    flex: none;
+    color: var(--shell-text-secondary);
+  }
+}
+
+@media (forced-colors: active) {
+  html[data-visual-system="v2"] .composer .box,
+  html[data-visual-system="v2"] .delivery-mode-btn,
+  html[data-visual-system="v2"] .delivery-menu,
+  html[data-visual-system="v2"] .attachment-chip,
+  html[data-visual-system="v2"] .tag-chip {
+    border-color: CanvasText;
+  }
+}

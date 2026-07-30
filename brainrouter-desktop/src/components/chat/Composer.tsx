@@ -399,17 +399,19 @@ export function Composer(p: ComposerProps): React.ReactElement {
           <span className="delivery-picker pop-wrap">
             {deliveryMenuOpen ? (
               <div className="menu-pop delivery-menu" role="menu" aria-label="Send while agent is working">
-                <button type="button" className="menu-item" onClick={() => { setDeliveryMode('queue'); setDeliveryMenuOpen(false); }}>
+                <button type="button" role="menuitemradio" aria-checked={deliveryMode === 'queue'} className="menu-item" onClick={() => { setDeliveryMode('queue'); setDeliveryMenuOpen(false); }}>
                   <span className="mi-check">{deliveryMode === 'queue' ? '✓' : ''}</span>
                   <span>Queue<span className="choice-detail">Run after the current turn</span></span>
                 </button>
-                <button type="button" className="menu-item" onClick={() => { setDeliveryMode('steer'); setDeliveryMenuOpen(false); }}>
+                <button type="button" role="menuitemradio" aria-checked={deliveryMode === 'steer'} className="menu-item" onClick={() => { setDeliveryMode('steer'); setDeliveryMenuOpen(false); }}>
                   <span className="mi-check">{deliveryMode === 'steer' ? '✓' : ''}</span>
                   <span>Steer<span className="choice-detail">Apply at the next safe model boundary</span></span>
                 </button>
               </div>
             ) : null}
-            <button type="button" className="delivery-mode-btn" onClick={() => setDeliveryMenuOpen((open) => !open)}
+            <button type="button" className="delivery-mode-btn" data-delivery-mode={deliveryMode}
+              aria-haspopup="menu" aria-expanded={deliveryMenuOpen}
+              onClick={() => setDeliveryMenuOpen((open) => !open)}
               title={`Messages will ${deliveryMode === 'queue' ? 'run after this turn' : 'steer the active turn'}`}>
               {deliveryMode === 'queue' ? 'Queue' : 'Steer'} <Icon name="chev-down" size={9} />
             </button>
