@@ -1894,6 +1894,36 @@ reconciles the phase ledger, and then resumes from the resulting current step.
 Compaction and goal continuation restore the canonical phase/step state rather
 than asking the model to reconstruct progress from transcript prose.
 
+##### Repository state is classified, not “cleaned”
+
+A clean implementation slice means the agent's own diff has clear ownership.
+It does not mean the user's whole worktree must be clean. Before repository
+mutation, the runtime planning context distinguishes:
+
+| Observed state | Required behavior |
+|---|---|
+| Unrelated uncommitted files | Preserve and ignore them; do not ask the user to discard, checkout, stash, commit, or explain them |
+| In-scope file changed but edits do not overlap | Read the current file and layer the authorized change carefully; report both ownerships in handoff |
+| In-scope overlapping edits | Use an isolated worktree/branch from the intended base when that preserves both versions; otherwise identify the exact conflicting file/hunk and ask one precise question |
+| Another active worktree or agent | Stay inside the current owned worktree; do not switch, merge, remove, or rewrite the other owner |
+| Agent's own failed uncommitted experiment | Apply a targeted inverse patch only to lines created by that attempt, or abandon its isolated worktree; never use repository-wide cleanup |
+| Explicit user request to restore/revert | Confirm the exact files or commits and consequence, then use the narrowest auditable operation |
+
+Read-only `git status`, `git diff`, branch, log, and worktree inspection are
+normal discovery and do not require permission. `checkout`, `restore`, `reset`,
+`clean`, `stash`, and `revert` are not generic recovery tools. The agent must
+not propose them merely because unrelated changes exist, a branch is not the
+expected name, or a check fails. A failed check first produces a causal
+diagnosis and an in-scope fix; rollback is considered only when the user's
+accepted outcome or release policy actually calls for rollback.
+
+The runtime should not turn every ambiguous repository state into a model
+deliberation loop. It supplies a bounded change-ownership summary with the
+current phase, and the plan records one of `preserve`, `layer`, `isolate`, or
+`blocked-overlap`. Only `blocked-overlap` can require user input, and its prompt
+must name the exact collision and decision. This state never expands mutation
+authority.
+
 ## Profile behavior summary
 
 | Concern | Engineering | Research | Data Science | Study | Writing | Custom |
@@ -2622,6 +2652,21 @@ styling or release packaging:
 - Add cross-surface tests for safe-boundary steering, phase splitting,
   remediation append, compaction, restart/resume, and contradictory goal input.
 
+#### P23-24d — Change ownership and non-destructive repository recovery
+
+- Add a bounded repository-state classifier that separates unrelated dirty
+  files, safe in-scope layering, overlapping edits, other-worktree ownership,
+  and agent-owned failed attempts.
+- Feed the classification into planning and phase execution so unrelated state
+  is preserved silently, isolated work is preferred for real overlap, and only
+  an exact unresolved collision asks the user.
+- Remove generic checkout/revert/reset/stash suggestions from default planning
+  and git workflow instructions; retain narrow rollback guidance only for
+  explicit rollback tasks and agent-owned changes.
+- Add tests proving dirty unrelated files do not pause work, other worktrees
+  are not touched, failed checks do not trigger rollback advice, and an
+  overlapping target reports the exact file/hunk without destructive action.
+
 ## Acceptance criteria
 
 1. All six built-in profiles resolve distinct orchestration-profile JSON.
@@ -2793,6 +2838,12 @@ styling or release packaging:
 69. CLI and Desktop render the same Core-owned phase, step, prerequisite,
     evidence, and steering-revision events and never infer or advance lifecycle
     state independently.
+70. Unrelated dirty files never cause a checkout, restore, reset, stash,
+    commit, revert, or user prompt; the agent preserves them and proceeds within
+    its owned scope.
+71. Overlapping in-scope edits use an isolated worktree when safe or produce one
+    exact collision question, while failed checks prefer diagnosis and
+    in-scope repair over generic rollback advice.
 
 ## Non-goals
 
