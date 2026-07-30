@@ -20,7 +20,6 @@
  * macOS hardware (TCC can't be granted non-interactively); it's printed below.
  */
 import fs from 'node:fs';
-import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
@@ -30,11 +29,8 @@ const OUT_DIRS = ['dist', 'release', 'out'].map((d) => path.join(root, d));
 const EXPECTED_ELECTRON_VERSION = '43.1.1';
 const EXPECTED_CHROMIUM_MAJOR = 150;
 // A credential-less macOS package can spend tens of seconds in the OS launch
-// path before Electron creates its first renderer. Keep that cost out of the
-// bridge-readiness budget so a slow Gatekeeper/app startup is not reported as
-// a broken packaged browser.
+// path before Electron creates its first renderer.
 const PACKAGED_LAUNCH_TIMEOUT_MS = 90_000;
-const PACKAGED_BRIDGE_TIMEOUT_MS = 30_000;
 
 function walk(dir, pred, hits = [], depth = 0) {
   if (depth > 6 || !fs.existsSync(dir)) return hits;
@@ -48,19 +44,6 @@ function walk(dir, pred, hits = [], depth = 0) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function reservePort() {
-  const server = net.createServer();
-  await new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('could not reserve a DevTools port');
-  const { port } = address;
-  await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
-  return port;
 }
 
 function packagedExecutable(app) {
@@ -84,66 +67,22 @@ function selectRunnableApp(apps) {
   return candidates.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
 }
 
-async function waitForDevTools(port, child, logs, launchError) {
+async function waitForPackagedSmokeResult(resultPath, child, logs, launchError) {
   const deadline = Date.now() + PACKAGED_LAUNCH_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (launchError()) throw new Error(`could not launch the packaged app: ${launchError().message}${logs()}`);
-    if (child.exitCode !== null) {
-      throw new Error(`packaged app exited with code ${child.exitCode} before browser smoke started${logs()}`);
-    }
     try {
-      const [versionResponse, targetsResponse] = await Promise.all([
-        fetch(`http://127.0.0.1:${port}/json/version`),
-        fetch(`http://127.0.0.1:${port}/json/list`),
-      ]);
-      if (versionResponse.ok && targetsResponse.ok) {
-        const version = await versionResponse.json();
-        const targets = await targetsResponse.json();
-        if (Array.isArray(targets) && targets.length > 0) return { version, targets };
-      }
+      if (fs.existsSync(resultPath)) return JSON.parse(fs.readFileSync(resultPath, 'utf8'));
     } catch {
-      // The DevTools endpoint appears after Electron creates its first renderer.
+      // The app writes through a temporary file and renames atomically. Retry
+      // only for an unexpected filesystem race.
+    }
+    if (child.exitCode !== null) {
+      throw new Error(`packaged app exited with code ${child.exitCode} before browser smoke completed${logs()}`);
     }
     await delay(200);
   }
-  throw new Error(`timed out waiting for the packaged app DevTools endpoint${logs()}`);
-}
-
-async function evaluateCdp(webSocketDebuggerUrl, expression) {
-  return new Promise((resolve, reject) => {
-    const socket = new WebSocket(webSocketDebuggerUrl);
-    const timeout = setTimeout(() => {
-      socket.close();
-      reject(new Error('DevTools evaluation timed out'));
-    }, 10_000);
-    socket.addEventListener('error', () => {
-      clearTimeout(timeout);
-      reject(new Error('could not connect to the packaged renderer DevTools target'));
-    }, { once: true });
-    socket.addEventListener('open', () => {
-      socket.send(JSON.stringify({
-        id: 1,
-        method: 'Runtime.evaluate',
-        params: { expression, awaitPromise: true, returnByValue: true },
-      }));
-    }, { once: true });
-    socket.addEventListener('message', (event) => {
-      let message;
-      try { message = JSON.parse(String(event.data)); } catch { return; }
-      if (message.id !== 1) return;
-      clearTimeout(timeout);
-      socket.close();
-      if (message.error) {
-        reject(new Error(message.error.message || 'DevTools evaluation failed'));
-        return;
-      }
-      if (message.result?.exceptionDetails) {
-        reject(new Error(message.result.exceptionDetails.exception?.description || 'renderer evaluation threw'));
-        return;
-      }
-      resolve(message.result?.result?.value);
-    });
-  });
+  throw new Error(`timed out waiting for the packaged browser smoke result${logs()}`);
 }
 
 async function stopChild(child) {
@@ -157,17 +96,17 @@ async function stopChild(child) {
 
 async function runPackagedBrowserSmoke(app) {
   const executable = packagedExecutable(app);
-  const port = await reservePort();
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-packaged-browser-'));
   const workspace = path.join(tempRoot, 'workspace');
   const profile = path.join(tempRoot, 'profile');
+  const resultPath = path.join(profile, 'result.json');
   fs.mkdirSync(workspace, { recursive: true });
   fs.mkdirSync(profile, { recursive: true });
   const childEnv = {
     ...process.env,
     BRAINROUTER_DESKTOP_WORKSPACE: workspace,
-    BRAINROUTER_PACKAGED_SMOKE_PORT: String(port),
     BRAINROUTER_PACKAGED_SMOKE_PROFILE: profile,
+    BRAINROUTER_PACKAGED_SMOKE_RESULT: resultPath,
   };
   delete childEnv.ELECTRON_RUN_AS_NODE;
   // Build-only Node flags inherited from CI are rejected by packaged Electron
@@ -189,65 +128,18 @@ async function runPackagedBrowserSmoke(app) {
   child.once('error', (error) => { launchError = error; });
   const logs = () => output ? `\n--- packaged app output ---\n${output}` : '';
   try {
-    const { version } = await waitForDevTools(port, child, logs, () => launchError);
-    const browserVersion = typeof version?.Browser === 'string' ? version.Browser : '';
-    const chromiumMatch = /(?:Chrome|Chromium)\/(\d+)\./.exec(browserVersion);
+    const result = await waitForPackagedSmokeResult(resultPath, child, logs, () => launchError);
+    if (!result?.ok) {
+      throw new Error(`packaged app browser self-test failed: ${result?.error || 'unknown error'}${logs()}`);
+    }
+    const smoke = result.smoke;
+    if (!smoke?.bridge) throw new Error(`packaged app renderer did not expose the browser bridge${logs()}`);
+    const chromiumMatch = /(?:Chrome|Chromium)\/(\d+)\./.exec(
+      typeof smoke.userAgent === 'string' ? smoke.userAgent : '',
+    );
     if (!chromiumMatch || Number(chromiumMatch[1]) !== EXPECTED_CHROMIUM_MAJOR) {
-      throw new Error(`packaged runtime reported ${browserVersion || 'no Chromium version'}; expected Chromium ${EXPECTED_CHROMIUM_MAJOR}`);
+      throw new Error(`packaged runtime reported ${smoke.userAgent || 'no Chromium user agent'}; expected Chromium ${EXPECTED_CHROMIUM_MAJOR}`);
     }
-
-    const expression = `(async () => {
-      const api = globalThis.brainrouter && globalThis.brainrouter.browser;
-      if (!api || typeof api.getState !== 'function' || typeof api.command !== 'function') {
-        return { bridge: false };
-      }
-      const initial = await api.getState();
-      const first = await api.command({ op: 'create-tab', url: 'about:blank', active: true });
-      const second = await api.command({ op: 'create-tab', url: 'about:blank', active: true });
-      const command = await api.command({ op: 'state' });
-      const finalState = await api.getState();
-      return {
-        bridge: true,
-        initialCount: Array.isArray(initial && initial.tabs) ? initial.tabs.length : -1,
-        finalCount: Array.isArray(finalState && finalState.tabs) ? finalState.tabs.length : -1,
-        firstOk: first && first.ok === true,
-        secondOk: second && second.ok === true,
-        commandOk: command && command.ok === true,
-        firstId: first && first.value && first.value.id,
-        secondId: second && second.value && second.value.id,
-        nativeTabs: finalState && finalState.capabilities && finalState.capabilities.nativeTabs === true,
-        sameVisibleTabAutomation: finalState && finalState.capabilities && finalState.capabilities.sameVisibleTabAutomation === true,
-        userAgent: navigator.userAgent,
-      };
-    })()`;
-
-    let smoke = null;
-    const bridgeDeadline = Date.now() + PACKAGED_BRIDGE_TIMEOUT_MS;
-    while (!smoke && Date.now() < bridgeDeadline) {
-      if (launchError) throw new Error(`packaged app launch failed: ${launchError.message}${logs()}`);
-      if (child.exitCode !== null) throw new Error(`packaged app exited before its browser bridge became ready${logs()}`);
-      let targets = [];
-      try {
-        const response = await fetch(`http://127.0.0.1:${port}/json/list`);
-        if (response.ok) targets = await response.json();
-      } catch {
-        // Retry while the packaged renderer starts.
-      }
-      const pageTargets = Array.isArray(targets)
-        ? targets.filter((target) => target?.type === 'page' && typeof target.webSocketDebuggerUrl === 'string')
-        : [];
-      for (const target of pageTargets) {
-        try {
-          const result = await evaluateCdp(target.webSocketDebuggerUrl, expression);
-          if (result?.bridge) { smoke = result; break; }
-        } catch {
-          // Browser WebContentsViews are also page targets; only the app
-          // renderer owns the preload bridge, so probe targets until it appears.
-        }
-      }
-      if (!smoke) await delay(200);
-    }
-    if (!smoke) throw new Error(`packaged app renderer did not expose the browser bridge${logs()}`);
     if (!smoke.firstOk || !smoke.secondOk || !smoke.commandOk) {
       throw new Error(`packaged browser command failed: ${JSON.stringify(smoke)}`);
     }
