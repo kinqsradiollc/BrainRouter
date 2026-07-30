@@ -13,6 +13,7 @@
 @import "./styles/surfaces/panels.css";
 @import "./styles/surfaces/settings.css";
 @import "./styles/surfaces/editorFiles.css";
+@import "./styles/surfaces/terminalBrowser.css";
 
 /* ---------- app frame ---------- */
 .app { display: flex; align-items: stretch; height: 100vh; background: var(--bg); overflow: hidden; }
