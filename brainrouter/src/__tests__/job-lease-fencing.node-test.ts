@@ -192,6 +192,73 @@ test("a healthy lease is not swept, and expiry uses the database clock", async (
   }
 });
 
+test("dedup is scoped by tenant — one org cannot suppress or read another's job", async () => {
+  const { store, cleanup } = await createTestStore();
+  try {
+    // Same kind, same logical key, DIFFERENT tenants. Before migration 049 the
+    // index ignored the tenant, so the second caller received the first
+    // tenant's full job record — cross-tenant disclosure, and a trivial way to
+    // suppress another tenant's work by enqueueing first.
+    const key = "a/b:7:security";
+    const orgA = await store.enqueueMemoryJob({
+      kind: "pr-security-review",
+      input: { orgId: "orgA", repo: "a/b", prNumber: 7, secret: "A-only" },
+      idempotencyKey: key,
+    });
+    const orgB = await store.enqueueMemoryJob({
+      kind: "pr-security-review",
+      input: { orgId: "orgB", repo: "a/b", prNumber: 7 },
+      idempotencyKey: key,
+    });
+
+    assert.notEqual(orgB.id, orgA.id, "orgB must get its own job, not orgA's");
+    assert.equal((orgB.input as { orgId: string }).orgId, "orgB");
+    assert.equal((orgB.input as { secret?: string }).secret, undefined,
+      "orgB must never receive orgA's job payload");
+
+    // Dedup still holds WITHIN a tenant.
+    const orgAAgain = await store.enqueueMemoryJob({
+      kind: "pr-security-review",
+      input: { orgId: "orgA", repo: "a/b", prNumber: 7 },
+      idempotencyKey: key,
+    });
+    assert.equal(orgAAgain.id, orgA.id);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("tenant-less jobs still deduplicate (NULL tenants must not compare distinct)", async () => {
+  const { store, cleanup } = await createTestStore();
+  try {
+    // A bare `tenant` column in the unique index would silently stop
+    // deduplicating these, because NULLs compare as distinct in Postgres.
+    const first = await store.enqueueMemoryJob({ kind: "some_job", input: { n: 1 }, idempotencyKey: "k" });
+    const second = await store.enqueueMemoryJob({ kind: "some_job", input: { n: 1 }, idempotencyKey: "k" });
+    assert.equal(second.id, first.id);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("a duplicate enqueue whose winner already finished inserts instead of throwing", async () => {
+  const { store, cleanup } = await createTestStore();
+  try {
+    const key = "burst-key";
+    const winner = await store.enqueueMemoryJob({ kind: "some_job", input: {}, idempotencyKey: key });
+    await store.startMemoryJob(winner.id);
+    await store.completeMemoryJob(winner.id, { ok: true });
+
+    // The winner is terminal, so it has left the partial index. A second
+    // enqueue must produce a fresh job rather than failing to resolve one.
+    const next = await store.enqueueMemoryJob({ kind: "some_job", input: {}, idempotencyKey: key });
+    assert.notEqual(next.id, winner.id);
+    assert.equal(next.status, "pending");
+  } finally {
+    await cleanup();
+  }
+});
+
 test("claiming through the queue issues an epoch the caller can fence with", async () => {
   const { store, cleanup } = await createTestStore();
   try {

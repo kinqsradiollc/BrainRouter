@@ -97,8 +97,20 @@ export async function runAsJob<T>(
   });
   // ADR-027 D12 — carry the lease epoch issued by the start transition so a
   // sweep that reclaims this job mid-flight fences our write-back.
+  //
+  // A null return means a queue worker claimed the job between our enqueue and
+  // our start. We do NOT own the lease, and continuing would write terminal
+  // state with an undefined epoch — which the store treats as "unfenced" and
+  // would let this process overwrite the run that actually owns it. That is
+  // precisely the failure the fencing token exists to prevent, so refuse.
   const started = await store.startMemoryJob(job.id);
-  const leaseEpoch = started?.leaseEpoch;
+  if (!started) {
+    throw new Error(
+      `runAsJob(${agentId}): job ${job.id} was claimed by another worker before this ` +
+      'process could start it; refusing to run without a lease.',
+    );
+  }
+  const leaseEpoch = started.leaseEpoch;
   try {
     const result = await fn();
     const summary = options?.summarize ? options.summarize(result) : { ok: true };
@@ -126,8 +138,11 @@ export async function recordInlineJob(
 ): Promise<void> {
   try {
     const job = await store.enqueueMemoryJob({ kind: agentId, input, maxAttempts: 1 });
-    await store.startMemoryJob(job.id);
-    await store.completeMemoryJob(job.id, summary ?? { ok: true });
+    // Same lease rule as runAsJob: if a queue worker claimed this audit row
+    // first, it owns the terminal write and we must not race it.
+    const started = await store.startMemoryJob(job.id);
+    if (!started) return;
+    await store.completeMemoryJob(job.id, summary ?? { ok: true }, { leaseEpoch: started.leaseEpoch });
   } catch (err: any) {
     console.error(`[BrainRouter] recordInlineJob(${agentId}) failed:`, err?.message ?? err);
   }

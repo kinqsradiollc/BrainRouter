@@ -418,27 +418,46 @@ export async function enqueueMemoryJob(exec: Executor, input: MemoryJobEnqueueIn
   const now = options?.now ?? new Date().toISOString();
   const id = (options?.idGenerator ?? (() => randomUUID()))();
   const key = input.idempotencyKey?.trim() ? input.idempotencyKey.trim() : null;
-  const inserted = await exec.run(
+  const tenant = tenantForJobInput(input.input);
+
+  const attemptInsert = (): Promise<number> => exec.run(
     `INSERT INTO memory_jobs (id, kind, status, priority, attempts, max_attempts, run_after, locked_at, lease_epoch, parent_job_id, tenant, idempotency_key, input_json, output_json, error, created_at, updated_at)
      VALUES ($1,$2,'pending',$3,0,$4,$5,NULL,0,$6,$7,$8,$9,NULL,NULL,$10,$11)
      ON CONFLICT DO NOTHING`,
-    [id, input.kind, input.priority ?? 50, input.maxAttempts ?? 3, input.runAfter ?? now, input.parentJobId ?? null, tenantForJobInput(input.input), key, JSON.stringify(input.input ?? {}), now, now],
+    [id, input.kind, input.priority ?? 50, input.maxAttempts ?? 3, input.runAfter ?? now, input.parentJobId ?? null, tenant, key, JSON.stringify(input.input ?? {}), now, now],
   );
-  if (inserted > 0) return (await getMemoryJob(exec, id))!;
-  // Lost the race (or a duplicate arrived): return the in-flight job that won.
-  // Re-reading by key rather than by id is deliberate — our id was never used.
-  const existing = key
-    ? await exec.one(
-        `SELECT ${JOB_COLUMNS} FROM memory_jobs
-          WHERE kind = $1 AND idempotency_key = $2 AND status IN ('pending','running')
-          ORDER BY created_at ASC, id ASC LIMIT 1`,
-        [input.kind, key],
-      )
-    : null;
-  if (existing) return jobRowToRecord(existing as any);
-  // No key, or the winner reached a terminal state between the conflict and
-  // this read. Neither leaves us a job to return, so surface it rather than
-  // inventing one — the caller must decide whether to retry.
+
+  // The in-flight winner for this key, scoped to the SAME tenant. Migration 049
+  // scopes the index the same way: without the tenant predicate this read could
+  // hand one tenant another tenant's full job record.
+  const inFlightWinner = async (): Promise<MemoryJobRecord | null> => {
+    if (!key) return null;
+    const row = await exec.one(
+      `SELECT ${JOB_COLUMNS} FROM memory_jobs
+        WHERE kind = $1 AND idempotency_key = $2
+          AND COALESCE(tenant, '') = COALESCE($3, '')
+          AND status IN ('pending','running')
+        ORDER BY created_at ASC, id ASC LIMIT 1`,
+      [input.kind, key, tenant],
+    );
+    return row ? jobRowToRecord(row as any) : null;
+  };
+
+  if (await attemptInsert() > 0) return (await getMemoryJob(exec, id))!;
+
+  const existing = await inFlightWinner();
+  if (existing) return existing;
+
+  // The conflict was real but the winner reached a terminal state before we
+  // could read it, so the partial index no longer covers that row. Our own id
+  // was never inserted, so a single retry is safe and now succeeds — throwing
+  // here would turn an ordinary burst of duplicate webhooks into an error.
+  if (await attemptInsert() > 0) return (await getMemoryJob(exec, id))!;
+
+  // Lost the retry to yet another concurrent enqueue: that job is the answer.
+  const raced = await inFlightWinner();
+  if (raced) return raced;
+
   throw new Error(`enqueueMemoryJob: could not insert or resolve an in-flight job for kind "${input.kind}".`);
 }
 
