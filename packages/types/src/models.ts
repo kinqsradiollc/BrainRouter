@@ -24,11 +24,82 @@ export interface ModelCapabilityProvenance {
   verifiedAt?: string;
 }
 
+/**
+ * ADR-027 D4.1 — non-text inputs a model can accept on the wire.
+ *
+ * A SET rather than a `vision: boolean`, because native document input raises
+ * exactly the same question and would otherwise force a breaking change one
+ * release later: some providers accept a PDF directly, which lets us skip
+ * extraction entirely for those models.
+ */
+export const MODEL_INPUT_MODALITIES = ['image', 'pdf', 'audio'] as const;
+
+export type ModelInputModality = (typeof MODEL_INPUT_MODALITIES)[number];
+
+/**
+ * What non-text input a model accepts.
+ *
+ * `unknown` is deliberately DISTINCT from "accepts nothing". A BYOK model whose
+ * operator never annotated it is unknown, not text-only — silently disabling
+ * image input on a perfectly capable model is its own bug. Callers must decide
+ * what to do about uncertainty rather than having it decided for them.
+ */
+export type ModelInputModalitySupport =
+  | { status: 'unknown' }
+  | { status: 'known'; accepts: readonly ModelInputModality[] };
+
+/** Whether a specific input may be sent to a model. */
+export type ModalityVerdict = 'accepted' | 'unsupported' | 'unknown';
+
 export interface ModelCapabilities {
   streaming: boolean;
   tools: boolean;
   responses: boolean;
   reasoning: boolean;
+  /**
+   * ADR-027 D4.1. Optional so existing catalog records stay valid; an absent
+   * value reads as `unknown`, never as "text only" — see
+   * {@link modelAcceptsModality}.
+   */
+  input?: ModelInputModalitySupport;
+}
+
+/**
+ * The single place that answers "can I send this to that model?".
+ *
+ * Every surface — composer, router, agent tools — must go through here rather
+ * than reading the field directly, so the unknown-vs-unsupported distinction
+ * cannot be flattened by accident at one call site.
+ */
+export function modelAcceptsModality(
+  capabilities: Pick<ModelCapabilities, 'input'> | null | undefined,
+  modality: ModelInputModality,
+): ModalityVerdict {
+  const input = capabilities?.input;
+  if (!input || input.status === 'unknown') return 'unknown';
+  return input.accepts.includes(modality) ? 'accepted' : 'unsupported';
+}
+
+/** Narrow an unknown value to a {@link ModelInputModality}. */
+export function isModelInputModality(value: unknown): value is ModelInputModality {
+  return typeof value === 'string'
+    && (MODEL_INPUT_MODALITIES as readonly string[]).includes(value);
+}
+
+/**
+ * Parse a stored/wire capability blob into {@link ModelInputModalitySupport}.
+ *
+ * Anything malformed degrades to `unknown` rather than to an empty accept-list:
+ * a parse failure is an absence of information, and treating it as "supports
+ * nothing" would silently disable a capable model.
+ */
+export function parseModelInputModalities(value: unknown): ModelInputModalitySupport {
+  if (!value || typeof value !== 'object') return { status: 'unknown' };
+  const raw = (value as { accepts?: unknown }).accepts;
+  if (!Array.isArray(raw)) return { status: 'unknown' };
+  const accepts = raw.filter(isModelInputModality);
+  // An explicitly empty list is meaningful — "we checked, it takes text only".
+  return { status: 'known', accepts: [...new Set(accepts)] };
 }
 
 export interface ModelReasoningEffortOption {
