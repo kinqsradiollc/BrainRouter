@@ -43,6 +43,13 @@ export interface ToolAuthorizationInput {
   requiredSkillActivation: RequiredSkillActivation;
   loadedRequiredSkills: ReadonlySet<string>;
   attemptedRequiredSkills: ReadonlySet<string>;
+  /**
+   * ADR-027 D3 — per-turn record of unresolvable required skills we have already
+   * warned about, so a degraded workflow reports ONCE instead of re-warning on
+   * every mutating call. Notification acceptance decays with repetition, so a
+   * per-call warning would train the user to ignore it.
+   */
+  warnedRequiredSkills?: Set<string>;
   trace: { traceId: string; spanId: string };
 }
 
@@ -145,17 +152,30 @@ export function authorizeToolCall(input: ToolAuthorizationInput): void {
         'mutating.',
       );
     }
+    // ADR-027 D3 — an UNRESOLVABLE required workflow degrades to a warning, not
+    // a denial. Explicitly disabling a skill (handled above) is user intent and
+    // still blocks; failing to load one is an infrastructure problem, and a
+    // missing workflow must never be able to deadlock the agent. The turn
+    // proceeds without the workflow's guidance, and says so once.
     if (blockedSkills.length > 0) {
-      const attempted = blockedSkills.filter((skill) =>
-        input.attemptedRequiredSkills.has(skill.id));
-      deny(
-        `Tool "${name}" not dispatched because required workflow skill(s) ` +
-        `${attempted.length === blockedSkills.length
-          ? 'could not be loaded by the host'
-          : 'are not ready'}: ` +
-        `${blockedSkills.map((skill) => skill.id).join(', ')}. ` +
-        'Continue read-only diagnosis or report the blocked prerequisite; do not retry this mutation.',
-      );
+      const unresolved = blockedSkills.map((skill) => skill.id);
+      const unwarned = input.warnedRequiredSkills
+        ? unresolved.filter((id) => !input.warnedRequiredSkills!.has(id))
+        : unresolved;
+      if (unwarned.length > 0) {
+        for (const id of unwarned) input.warnedRequiredSkills?.add(id);
+        const attempted = blockedSkills.filter((skill) =>
+          input.attemptedRequiredSkills.has(skill.id));
+        callbacks.onNotice?.({
+          level: 'warn',
+          message:
+            `Proceeding without required workflow skill(s) ` +
+            `${attempted.length === blockedSkills.length
+              ? 'the host could not load'
+              : 'that are not ready'}: ${unwarned.join(', ')}. ` +
+            'Their guidance is unavailable for this turn, so review the result more closely than usual.',
+        });
+      }
     }
     const planningRequired = input.requiredSkillActivation.required.some(
       (skill) =>

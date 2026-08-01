@@ -43,6 +43,12 @@ export interface SkillListItem {
    * invocation. Absent/empty when the skill declares no triggers.
    */
   triggers?: string[];
+  /**
+   * ADR-027 D3 — the skill declared `disable-model-invocation`. It stays
+   * explicitly invokable by a human but is kept out of the ambient catalog the
+   * model sees, so its description never enters the turn window.
+   */
+  disableModelInvocation?: boolean;
 }
 
 const WORKSPACE_SKILL_ROOTS = ['skills', '.brainrouter/skills'];
@@ -152,6 +158,7 @@ export function listFilesystemSkills(
           // MC-E2 — surface declared keyword triggers so the dispatch path
           // can arm dormant skills without re-reading every SKILL.md.
           ...(parsed.triggers.length ? { triggers: parsed.triggers } : {}),
+          ...(parsed.disableModelInvocation ? { disableModelInvocation: true } : {}),
         });
       } else {
         // A same-named skill in a LOWER-precedence root — record it as shadowed
@@ -177,6 +184,9 @@ export function applyWorkspaceSkillCatalogPolicy(
   skills: SkillListItem[],
   policy: WorkspaceSkillCatalogPolicy,
 ): SkillListItem[] {
+  // ADR-027 D3 — a human-only skill is never ambient, regardless of manifest
+  // state. It remains resolvable by explicit name.
+  skills = skills.filter((skill) => !skill.disableModelInvocation);
   if (!policy.managed) return skills.sort(sortSkills);
   const disabled = new Set(policy.disabledSkillIds);
   const managed = new Set(policy.managedSkillIds);
@@ -329,7 +339,7 @@ function findSkillFiles(root: string): string[] {
   return results;
 }
 
-function parseSkillFile(filePath: string): { name: string; description?: string; triggers: string[] } | undefined {
+function parseSkillFile(filePath: string): { name: string; description?: string; triggers: string[]; disableModelInvocation?: boolean } | undefined {
   let raw: string;
   try { raw = fs.readFileSync(filePath, 'utf8'); } catch { return undefined; }
 
@@ -338,7 +348,15 @@ function parseSkillFile(filePath: string): { name: string; description?: string;
   const name = readYamlScalar(block, 'name') ?? path.basename(path.dirname(filePath));
   const description = readYamlScalar(block, 'description') ?? firstParagraph(raw);
   if (!name) return undefined;
-  return { name, description, triggers: parseSkillTriggersFrontmatter(raw) };
+  // ADR-027 D3 — honor `disable-model-invocation`: a human-only skill must not be
+  // model-invocable, and its description must stay out of the model's catalog.
+  const humanOnly = readYamlScalar(block, 'disable-model-invocation');
+  return {
+    name,
+    description,
+    triggers: parseSkillTriggersFrontmatter(raw),
+    ...(humanOnly?.toLowerCase() === 'true' ? { disableModelInvocation: true } : {}),
+  };
 }
 
 function readYamlScalar(block: string, key: string): string | undefined {
