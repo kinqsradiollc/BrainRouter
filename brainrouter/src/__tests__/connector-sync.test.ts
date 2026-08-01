@@ -46,11 +46,16 @@ describe("connector sync scheduler", () => {
     };
 
     await expect(enqueueConnectorSyncs(store, connectorStore)).resolves.toBe(1);
+    // ADR-027 D12 — the scheduler still skips in-flight connectors itself (it
+    // lists them above), and now ALSO passes the agent's idempotency key so the
+    // partial unique index is a second line of defence against a duplicate
+    // slipping through the gap between the list and the insert.
     expect(enqueued).toEqual([{
       kind: "connector_sync",
       input: { connectorId: "conn_new", userId: "u2" },
       priority: undefined,
       maxAttempts: 3,
+      idempotencyKey: "connector:conn_new",
     }]);
   });
 });

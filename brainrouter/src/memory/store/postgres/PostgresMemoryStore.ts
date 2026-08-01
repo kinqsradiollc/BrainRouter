@@ -1116,11 +1116,11 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
     return job.listMemoryJobs(this.exec, filters);
   }
 
-  public appendJobProgress(id: string, event: import("@kinqs/brainrouter-types").MemoryJobProgressEvent): Promise<void> {
-    return job.appendJobProgress(this.exec, id, event);
+  public appendJobProgress(id: string, event: import("@kinqs/brainrouter-types").MemoryJobProgressEvent, leaseEpoch?: number): Promise<void> {
+    return job.appendJobProgress(this.exec, id, event, leaseEpoch);
   }
-  public heartbeatMemoryJob(id: string): Promise<boolean> {
-    return job.heartbeatMemoryJob(this.exec, id);
+  public heartbeatMemoryJob(id: string, leaseEpoch?: number): Promise<boolean> {
+    return job.heartbeatMemoryJob(this.exec, id, undefined, leaseEpoch);
   }
 
   /** ADR-017 D5 — recent PR-review jobs for an org's Reviews dashboard (newest-first). */
@@ -1162,11 +1162,11 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
     return job.startMemoryJob(this.exec, id, options);
   }
 
-  public completeMemoryJob(id: string, output: unknown, options?: { now?: string }): Promise<MemoryJobRecord | null> {
+  public completeMemoryJob(id: string, output: unknown, options?: { now?: string; leaseEpoch?: number }): Promise<MemoryJobRecord | null> {
     return job.completeMemoryJob(this.exec, id, output, options);
   }
 
-  public failMemoryJob(id: string, error: string, options?: { now?: string; backoffMs?: number }): Promise<MemoryJobRecord | null> {
+  public failMemoryJob(id: string, error: string, options?: { now?: string; backoffMs?: number; leaseEpoch?: number }): Promise<MemoryJobRecord | null> {
     return job.failMemoryJob(this.exec, id, error, options);
   }
 
@@ -1178,7 +1178,7 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
     return job.cancelMemoryJob(this.exec, id, options);
   }
 
-  public sweepStuckMemoryJobs(stuckMs: number, options?: { now?: string }): Promise<number> {
+  public sweepStuckMemoryJobs(stuckMs: number, options?: { now?: string; backoffMs?: number }): Promise<number> {
     return job.sweepStuckMemoryJobs(this.exec, stuckMs, options);
   }
 

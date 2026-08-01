@@ -482,14 +482,27 @@ Ordered so that blockers land first and each phase is independently shippable.
 
 ## 5. Open questions for the owner
 
+### Resolved
+
+**Q2 — how aggressive is the local gate? → ADVISORY BY DEFAULT, OPT-IN BLOCKING.** The desktop
+pre-commit gate reports findings and lets the commit through unless the workspace explicitly opts
+into blocking. This follows the oversight evidence in §1: a gate that blocks at the moment of
+commit is the one people route around or switch off entirely, and a disabled gate reviews nothing.
+The PR gate remains the thing that actually gates. (D9, P6-1)
+
+**Q4 — retention defaults? → 90 DAYS OF DETAIL, THEN COMPACT.** Append-forever data (job progress
+timelines, usage events, finding events, raw memory rows) keeps full detail for 90 days, after
+which it is summarized into compact records and the raw rows are dropped. Long enough for a
+quarterly audit and for incident forensics; short enough to bound growth predictably. This is the
+first rung of the D11 ladder and the trigger for everything above it. (D11, P1-6, P2-1)
+
+### Still open
+
 1. **Which design language?** The reference carries two simultaneously. We must pick one for the
    whole app. (D5)
-2. **How aggressive should the local gate be** — advisory only, or able to block a commit?
-3. **Is the graph engine (D2) in scope for 0.4.19**, or does it want its own release? It is the
+2. **Is the graph engine (D2) in scope for 0.4.19**, or does it want its own release? It is the
    largest single item here.
-4. **Retention defaults** — 30 days for session inactivity is stated; what are the defaults for
-   attachments and raw memory rows before compaction?
-5. **Does the frontend-builder persona stay inside engineering** (as decided in ADR-021), or does
+3. **Does the frontend-builder persona stay inside engineering** (as decided in ADR-021), or does
    the document-understanding work argue for more profiles?
-6. **Comprehension measurement is the most speculative part of D1.** Is measuring it worth the
+4. **Comprehension measurement is the most speculative part of D1.** Is measuring it worth the
    risk of it feeling like surveillance of the user's own attention?
