@@ -260,6 +260,62 @@ complementary rather than competing:
 The isolation posture for anything that executes untrusted code follows the same layering:
 least-privilege permission profile, then container, then syscall filtering.
 
+#### D9.1 — Both gates must reason over the repository, not the diff
+
+A reviewer that sees only a diff cannot distinguish "this change removes a guard" from "this change
+removes a redundant guard because three other guards in the same function still hold". That is not a
+hypothetical: it is the exact failure this ADR's own P0 hit. The PR bot flagged the required-skill
+degradation in `toolAuthorizationPhase.ts` as fail-open authorization (CWE-863) because the diff hunk
+does not show that access mode, execution policy, permission rules, path policy, and approval are
+five separate fail-closed checks in the *same function*, twenty lines below the hunk. The finding was
+a false positive produced by missing context, not by a weak model.
+
+The two gates fail this differently, and the fix is different for each.
+
+**The PR gate has the plumbing but forbids using it.** Exact-revision checkout already exists —
+`prSecurityReview.ts` carries a single-use `checkout` capability and a `prepareRepositoryContext`
+hook, and the scheduler wires both (`scheduledPrReview.ts:245`). But the prompt contradicts the
+plumbing: `securityReview.ts:56` and `codeReviewContract.ts:35` both instruct the model *"You are a
+single-shot reviewer with NO tools: do not ask to open other files or run commands. Base every
+finding on evidence visible in the diff itself."* A model given repository context and simultaneously
+told to ignore everything outside the diff will follow the stronger, more specific instruction. The
+contract text must be brought in line with the capability that now exists. Separately, the context is
+bounded to **changed** anchors only, which is the wrong boundary — see below.
+
+**The local gate already reads files but cannot say what it covered.** `reviewFindings.ts:168–173`
+correctly tells the local reviewer *"you are NOT limited to the diff — VERIFY every finding against
+the real codebase with your read-only tools"*, gives it `read_file` / `grep_search`, and feeds it a
+deterministic blast radius to choose callers from. The tooling is right. What is missing is
+accounting: the set of files the model happened to open is not recorded, so "I reviewed the
+repository" has no denominator and no reproducibility.
+
+Both gates therefore adopt three properties from the additive-proof approach described above:
+
+1. **A deterministic in-scope inventory, computed before the model runs.** Enumerate candidate files
+   with a fixed, sorted, reproducible command rather than letting the model decide what exists. The
+   inventory is the coverage denominator: every file is reviewed, deliberately excluded by a named
+   rule, or explicitly reported as unreviewed. "The model did not open it" stops being silently
+   indistinguishable from "the model cleared it".
+2. **Expansion from changed code to unchanged neighbours.** When a change touches a shared helper,
+   the reviewer must read its call sites *even though they are unchanged* — both to find the real
+   impact and, critically, to use correct-looking siblings as **negative controls**. A pattern that
+   appears in twelve unchanged call sites and one changed one is usually the house convention, not a
+   new vulnerability. This single rule is the strongest available defence against the false-positive
+   class described at the top of this section.
+3. **Stable fingerprints and an explicit coverage record.** A finding's identity derives from
+   `(rule, target, anchor, instance)` so the same issue keeps the same identity across runs, and
+   every run emits what was and was not covered. Without this, re-review re-litigates settled
+   findings and suppression cannot be audited.
+
+The local gate keeps its subtractive, high-precision disposition and the PR gate keeps its additive,
+auditable one — D9's split stands. Repository grounding is orthogonal to that split: it is what makes
+*either* philosophy trustworthy, because both of them reason about whether a guard exists elsewhere.
+
+The cost is real and bounded: reading neighbours multiplies review tokens. The inventory is therefore
+computed deterministically and cheaply outside the model, expansion is capped by the blast radius the
+local gate already computes, and the PR gate's existing per-part budget (`maxModelCalls`) governs how
+far expansion may go before the run reports reduced coverage rather than exceeding budget silently.
+
 ### D10 — Browser reads become durable, citable artifacts
 
 Instead of scraping pages into the transcript, a page read produces a **stored markdown artifact

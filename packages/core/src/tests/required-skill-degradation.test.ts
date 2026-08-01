@@ -1,11 +1,10 @@
 /**
- * ADR-027 D3 — the required-workflow gate is FAIL-CLOSED.
+ * ADR-027 D3 — narrow, evidenced degradation of the required-workflow gate.
  *
- * The ADR proposed degrading an unresolvable required skill to a warning so a
- * missing workflow could not deadlock the agent. Security review rejected that
- * twice (CWE-863): a skill load failure is attacker-influenceable, and 0.4.18's
- * auto-loading preflight already resolves the common deadlock. These tests lock
- * the fail-closed property in so it cannot regress silently.
+ * Only "the host attempted the load and it failed" degrades to a warning. That
+ * is the sole case where denying wedges the agent with no recovery path, and
+ * fail-closed there is a trivial self-DoS: corrupting one SKILL.md would brick
+ * the agent. Every other case stays fail-closed.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -19,10 +18,12 @@ function activation(availability: 'available' | 'disabled'): RequiredSkillActiva
   };
 }
 
-function run(input: {
+function harness(input: {
   activation: RequiredSkillActivation;
+  warned?: Set<string>;
   attempted?: Set<string>;
-}): void {
+}): { run: () => void; notices: Array<{ level: string; message: string }> } {
+  const notices: Array<{ level: string; message: string }> = [];
   const agent: any = {
     workspaceRoot: '/tmp/does-not-matter',
     sessionKey: 'k',
@@ -30,37 +31,53 @@ function run(input: {
     silent: false,
     policyAudit: [] as unknown[],
   };
-  authorizeToolCall({
-    agent,
-    callbacks: { onStatusUpdate: () => {}, onNotice: () => {} } as any,
-    name: 'write_file',
-    args: { path: 'a.txt', content: 'x' },
-    isLocal: true,
-    skillAllowsTool: () => true,
-    workspaceAllowsLocalTool: () => true,
-    workspaceAllowsMcpTool: () => true,
-    requiredSkillActivation: input.activation,
-    loadedRequiredSkills: new Set<string>(),
-    attemptedRequiredSkills: input.attempted ?? new Set<string>(['adr-skill']),
-    trace: { traceId: 't', spanId: 's' },
-  } as any);
+  const run = (): void => {
+    authorizeToolCall({
+      agent,
+      callbacks: {
+        onStatusUpdate: () => {},
+        onNotice: (n: { level: 'info' | 'warn'; message: string }) => { notices.push(n); },
+      },
+      name: 'write_file',
+      args: { path: 'a.txt', content: 'x' },
+      isLocal: true,
+      skillAllowsTool: () => true,
+      workspaceAllowsLocalTool: () => true,
+      workspaceAllowsMcpTool: () => true,
+      requiredSkillActivation: input.activation,
+      loadedRequiredSkills: new Set<string>(),
+      attemptedRequiredSkills: input.attempted ?? new Set<string>(['adr-skill']),
+      ...(input.warned ? { warnedRequiredSkills: input.warned } : {}),
+      trace: { traceId: 't', spanId: 's' },
+    } as any);
+  };
+  return { run, notices };
 }
 
-test('a required skill the host ATTEMPTED and failed to load still blocks the mutation', () => {
-  assert.throws(
-    () => run({ activation: activation('available') }),
-    /could not be loaded by the host/,
-    'a load failure must not open the gate — it is attacker-influenceable',
-  );
+test('a skill the host ATTEMPTED and failed to load warns once and does NOT block', () => {
+  const warned = new Set<string>();
+  const { run, notices } = harness({ activation: activation('available'), warned });
+
+  assert.doesNotThrow(run, 'a corrupt SKILL.md must not brick the agent');
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].level, 'warn');
+  assert.match(notices[0].message, /could not load/);
+  assert.match(notices[0].message, /adr-skill/);
+
+  const second = harness({ activation: activation('available'), warned });
+  assert.doesNotThrow(second.run);
+  assert.equal(second.notices.length, 0, 'no duplicate warning within a turn');
 });
 
-test('a required skill the host never attempted still blocks the mutation', () => {
-  assert.throws(
-    () => run({ activation: activation('available'), attempted: new Set<string>() }),
-    /are not ready/,
-  );
+test('a skill the host NEVER ATTEMPTED still blocks — no evidence it is unloadable', () => {
+  const { run } = harness({
+    activation: activation('available'),
+    attempted: new Set<string>(),
+  });
+  assert.throws(run, /are not ready/);
 });
 
-test('an explicitly disabled required skill blocks with a distinct reason', () => {
-  assert.throws(() => run({ activation: activation('disabled') }), /disabled for this workspace/);
+test('an explicitly DISABLED skill still blocks — that is user intent', () => {
+  const { run } = harness({ activation: activation('disabled') });
+  assert.throws(run, /disabled for this workspace/);
 });

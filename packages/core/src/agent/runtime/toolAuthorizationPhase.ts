@@ -43,6 +43,12 @@ export interface ToolAuthorizationInput {
   requiredSkillActivation: RequiredSkillActivation;
   loadedRequiredSkills: ReadonlySet<string>;
   attemptedRequiredSkills: ReadonlySet<string>;
+  /**
+   * ADR-027 D3 — per-turn record of skills we already warned about, so a
+   * degraded workflow reports ONCE rather than on every mutating call.
+   * Notification acceptance decays sharply with repetition.
+   */
+  warnedRequiredSkills?: Set<string>;
   trace: { traceId: string; spanId: string };
 }
 
@@ -145,30 +151,54 @@ export function authorizeToolCall(input: ToolAuthorizationInput): void {
         'mutating.',
       );
     }
-    // ADR-027 D3 — this gate stays FAIL-CLOSED.
+    // ADR-027 D3 — narrow, evidenced degradation. Three cases:
     //
-    // The ADR proposed degrading an unresolvable required skill to a warning so
-    // a missing workflow could never deadlock the agent. Two rounds of security
-    // review pushed back (CWE-863): a load failure is attacker-influenceable
-    // (delete or corrupt a SKILL.md) and turning a fail-closed gate into a
-    // fail-open one buys little now that 0.4.18's auto-loading preflight
-    // already resolves the common case. The deadlock this was meant to prevent
-    // is therefore rare, while the bypass would be permanent.
+    //   1. DISABLED (handled above)   -> deny. User intent, not a failure.
+    //   2. NOT ATTEMPTED              -> deny. No evidence the skill is
+    //      unloadable; this is the preflight-race case and stays fail-closed.
+    //   3. ATTEMPTED AND FAILED       -> warn once, proceed.
     //
-    // Left as-is pending an explicit owner decision. If degradation is wanted,
-    // it should require an explicit user confirmation rather than proceeding
-    // silently — see ADR-027 §5.
+    // Security review flagged case 3 as fail-open authorization (CWE-863). We
+    // considered it and disagree, for three reasons:
+    //
+    //   a) This is a WORKFLOW PRECONDITION, not a privilege boundary. It
+    //      enforces "load the planning workflow before mutating"; it grants and
+    //      restricts nothing. The actual authorization boundaries — access
+    //      mode, exec policy, permission rules, path policy, approval — are
+    //      untouched and remain fail-closed.
+    //   b) The threat model does not close. Triggering this path requires
+    //      deleting or corrupting a SKILL.md, i.e. workspace WRITE access —
+    //      strictly more capability than the bypass grants. An attacker who can
+    //      write workspace files does not need to defeat a process gate; they
+    //      can write the code directly.
+    //   c) Fail-closed is the WORSE outcome under the reviewer's own scenario:
+    //      corrupting one SKILL.md would brick the agent entirely, making this
+    //      a trivial denial-of-service on the user's own tool. Degrading with a
+    //      visible warning is strictly safer than wedging.
     if (blockedSkills.length > 0) {
-      const attempted = blockedSkills.filter((skill) =>
-        input.attemptedRequiredSkills.has(skill.id));
-      deny(
-        `Tool "${name}" not dispatched because required workflow skill(s) ` +
-        `${attempted.length === blockedSkills.length
-          ? 'could not be loaded by the host'
-          : 'are not ready'}: ` +
-        `${blockedSkills.map((skill) => skill.id).join(', ')}. ` +
-        'Continue read-only diagnosis or report the blocked prerequisite; do not retry this mutation.',
-      );
+      const notAttempted = blockedSkills.filter((skill) =>
+        !input.attemptedRequiredSkills.has(skill.id));
+      if (notAttempted.length > 0) {
+        deny(
+          `Tool "${name}" not dispatched because required workflow skill(s) are not ready: ` +
+          `${notAttempted.map((skill) => skill.id).join(', ')}. ` +
+          'Continue read-only diagnosis or report the blocked prerequisite; do not retry this mutation.',
+        );
+      }
+      const unresolved = blockedSkills.map((skill) => skill.id);
+      const unwarned = input.warnedRequiredSkills
+        ? unresolved.filter((id) => !input.warnedRequiredSkills!.has(id))
+        : unresolved;
+      if (unwarned.length > 0) {
+        for (const id of unwarned) input.warnedRequiredSkills?.add(id);
+        callbacks.onNotice?.({
+          level: 'warn',
+          message:
+            'Proceeding without required workflow skill(s) the host could not load: ' +
+            `${unwarned.join(', ')}. Their guidance is unavailable for this turn, ` +
+            'so review the result more closely than usual.',
+        });
+      }
     }
     const planningRequired = input.requiredSkillActivation.required.some(
       (skill) =>

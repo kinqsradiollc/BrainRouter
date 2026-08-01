@@ -174,6 +174,8 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       callbacks,
     });
     const loadedRequiredSkills = requiredSkillPreflight.loadedSkillIds;
+    // ADR-027 D3 — warn once per skill per turn, not per mutating call.
+    const warnedRequiredSkills = new Set<string>();
     // MAR-4 — snapshot children carried over from the previous turn BEFORE the reset,
     // so a "is it done?" question this turn can resolve those exact ids.
     const carriedPendingChildIds = [...this.lastTurnPendingChildIds];
@@ -1170,6 +1172,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
             loadedRequiredSkills,
             attemptedRequiredSkills:
               requiredSkillPreflight.attemptedSkillIds,
+            warnedRequiredSkills,
             trace: { traceId: turnSpan.traceId, spanId: turnSpan.spanId },
           });
           // 0.4.x-4 (`/context`) — count each tool that actually dispatches.
