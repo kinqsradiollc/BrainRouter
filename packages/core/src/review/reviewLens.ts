@@ -39,8 +39,18 @@ export interface ReviewLens {
    * so it isn't a required CI check. Security gates; code review advises.
    */
   advisory: boolean;
-  /** The single-shot, diff-only review contract appended after the diff. */
-  buildContract(): string;
+  /**
+   * The review contract appended after the diff.
+   *
+   * ADR-027 D9.1 — `repositoryContext` says whether exact-revision repository
+   * context was actually supplied above. It exists because the contract used to
+   * assert unconditionally that the reviewer had no tools and must ignore
+   * everything outside the diff, which directly contradicted the context the
+   * scheduler had already attached. Given both, a model follows the stronger,
+   * more specific instruction and reasons from the diff alone — which is how a
+   * guard twenty lines below a hunk goes unseen.
+   */
+  buildContract(options?: { repositoryContext?: boolean }): string;
   /** Whether a finding should BLOCK the merge (drives the check-run conclusion). */
   isBlocking(f: ParsedReviewFinding): boolean;
 }
