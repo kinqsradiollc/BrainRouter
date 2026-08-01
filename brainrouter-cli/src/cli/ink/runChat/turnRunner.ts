@@ -204,11 +204,11 @@ export function installTurnRunner(ctx: RunChatContext): void {
           });
           renderInFlightStatus();
         },
-        onPlanUpdate: (items, explanation) => {
+        onPlanUpdate: (items, explanation, state) => {
           // Explanation rides on the plan entry itself (renders as a dim-italic
           // line above the checklist) rather than as a separate memory event,
           // so the explanation visually anchors to the plan it describes.
-          controller!.push.plan(items, explanation);
+          controller!.push.plan(items, explanation, state);
           tickStatus('Thinking');
         },
         onProfileStageUpdate: (event) => {

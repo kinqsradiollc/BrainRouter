@@ -157,6 +157,8 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
         id: b.id, type: "atlasScreen", position: { x: b.x, y: b.y },
         data: { title: s?.title ?? b.label, route: s?.route ?? null, count: s?.elementCount ?? b.count, hidden: hiddenOf.get(b.id) ?? 0, selected: selectedScreens.has(b.id), hasFile: !!s?.filePath },
         className: storyNodes.has(b.id) ? "atlas-story-hot" : undefined,
+        initialWidth: b.width,
+        initialHeight: b.height,
         style: { width: b.width, height: b.height }, draggable: false, zIndex: 0,
       };
     });
@@ -168,6 +170,8 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
         id, type: "atlasElement", parentId: layout.groupOf.get(id), extent: "parent", position: pos,
         data: { label: el.testID, action: el.action, color: atlasElementColor(el.action) },
         className: storyNodes.has(id) ? "atlas-story-hot" : undefined,
+        initialWidth: 148,
+        initialHeight: 30,
       });
     }
     // Journey edges — connect the highlighted story's element nodes in step order.
@@ -321,7 +325,19 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
           // thousands of file nodes stays responsive when panning/zooming.
           onlyRenderVisibleElements
           proOptions={{ hideAttribution: true }}
-          onInit={(inst) => { rfRef.current = inst; }}
+          onInit={(inst) => {
+            rfRef.current = inst;
+            // React Flow's visibility virtualization can leave every node hidden
+            // until the first explicit viewport calculation. Frame the complete
+            // id set once the canvas has mounted so Atlas is populated on open.
+            requestAnimationFrame(() => {
+              void inst.fitView({
+                nodes: rfNodes.map((n) => ({ id: n.id })),
+                padding: 0.2,
+                maxZoom: 1.2,
+              });
+            });
+          }}
           onNodeClick={(_e, n) => {
             if (n.type === "atlasScreen") {
               // Single-click toggles a screen's selection (for "extract selected").
@@ -372,9 +388,9 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
             if (n.type === "atlasGroup") return "transparent";
             const gn = byId.get(n.id);
             return gn ? fileColor(gn) : "var(--accent)";
-          }} maskColor="rgba(0,0,0,0.55)"
+          }} maskColor="var(--shell-interaction-selected)"
             // Compact: the default 200×150 swallowed the narrow side panel.
-            style={{ width: 124, height: 86, background: "var(--surface)", border: "1px solid var(--border)" }} />
+            style={{ width: 124, height: 86, background: "var(--shell-panel)", border: "1px solid var(--shell-divider)" }} />
         </ReactFlow>
         </div>
 

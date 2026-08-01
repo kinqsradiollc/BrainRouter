@@ -316,7 +316,7 @@ export function WorkflowsPanel(_props: WorkflowsPanelProps): React.ReactElement 
           >
             <Background color="var(--border)" gap={20} size={1} />
             <Controls showInteractive={false} />
-            <MiniMap pannable zoomable maskColor="rgba(0,0,0,0.55)" style={{ width: 120, height: 80, background: 'var(--surface)', border: '1px solid var(--border)' }} />
+            <MiniMap pannable zoomable maskColor="var(--shell-interaction-selected)" style={{ width: 120, height: 80, background: 'var(--shell-panel)', border: '1px solid var(--shell-divider)' }} />
           </ReactFlow>
         </div>
 

@@ -133,35 +133,53 @@ export const ScrollbackRow = React.memo(function ScrollbackRow({ entry, accentCo
     }
     case 'plan': {
       const planTime = entry.timestamp ? ` · ${formatTime(entry.timestamp)}` : '';
+      const byId = new Map(entry.items.map((item) => [item.id, item]));
+      const renderItem = (item: (typeof entry.items)[number], key: string | number) => {
+        const mark = item.status === 'completed' ? '✓' : item.status === 'in_progress' ? '⏳' : '☐';
+        const color = item.status === 'completed' ? 'green' : item.status === 'in_progress' ? 'yellow' : 'gray';
+        const stepLines = String(item.step).split('\n');
+        return (
+          <Box key={key} flexDirection="column">
+            <Box>
+              <Text color={color}>  {mark} </Text>
+              <Text color={item.status === 'completed' ? 'gray' : undefined}>{stepLines[0]}</Text>
+            </Box>
+            {stepLines.slice(1).map((line, j) => (
+              <Box key={j}>
+                <Text>{'      '}</Text>
+                <Text color={item.status === 'completed' ? 'gray' : undefined} dimColor>{line}</Text>
+              </Box>
+            ))}
+          </Box>
+        );
+      };
       return (
         <Box flexDirection="column" marginTop={1}>
-          <Text color="gray" bold>📋 Plan{planTime}</Text>
+          <Text color="gray" bold>📋 Plan{entry.revision ? ` r${entry.revision}` : ''}{planTime}</Text>
           {entry.explanation ? (
             <Box marginBottom={1}>
               <Text color="gray" dimColor italic>   ↳ {entry.explanation}</Text>
             </Box>
           ) : null}
-          {entry.items.map((item, i) => {
-            const mark = item.status === 'completed' ? '✓' : item.status === 'in_progress' ? '⏳' : '☐';
-            const color = item.status === 'completed' ? 'green' : item.status === 'in_progress' ? 'yellow' : 'gray';
-            // Multi-line steps indent under the first line so the checkbox
-            // anchor stays visually attached to the whole step.
-            const stepLines = String(item.step).split('\n');
-            return (
-              <Box key={i} flexDirection="column">
-                <Box>
-                  <Text color={color}>  {mark} </Text>
-                  <Text color={item.status === 'completed' ? 'gray' : undefined}>{stepLines[0]}</Text>
-                </Box>
-                {stepLines.slice(1).map((line, j) => (
-                  <Box key={j}>
-                    <Text>{'      '}</Text>
-                    <Text color={item.status === 'completed' ? 'gray' : undefined} dimColor>{line}</Text>
+          {entry.phases?.length
+            ? entry.phases.map((phase, phaseIndex) => {
+                const phaseItems = phase.stepIds
+                  .map((id) => byId.get(id))
+                  .filter((item): item is (typeof entry.items)[number] => Boolean(item));
+                const activeStep = phaseItems.findIndex((item) => item.status === 'in_progress');
+                return (
+                  <Box key={phase.id} flexDirection="column" marginTop={phaseIndex > 0 ? 1 : 0}>
+                    <Text bold color={phase.status === 'in_progress' ? 'yellow' : phase.status === 'completed' ? 'green' : 'gray'}>
+                      {`  Phase ${phaseIndex + 1}/${entry.phases!.length} · ${phase.title} · ${phase.status}`}
+                    </Text>
+                    {phase.status === 'in_progress' && activeStep >= 0 ? (
+                      <Text color="gray" dimColor>{`    Step ${activeStep + 1}/${phaseItems.length}`}</Text>
+                    ) : null}
+                    {phaseItems.map((item) => renderItem(item, item.id ?? item.step))}
                   </Box>
-                ))}
-              </Box>
-            );
-          })}
+                );
+              })
+            : entry.items.map((item, i) => renderItem(item, i))}
         </Box>
       );
     }
@@ -324,5 +342,4 @@ function formatDuration(ms: number): string {
   const s = Math.round((ms % 60_000) / 1000);
   return `${m}m ${s}s`;
 }
-
 

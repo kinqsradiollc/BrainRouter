@@ -1,6 +1,6 @@
 {
   "name": "@kinqs/brainrouter-types",
-  "version": "0.4.17",
+  "version": "0.4.18",
   "description": "Shared TypeScript types for BrainRouter — used by the CLI, MCP server, and SDK.",
   "type": "module",
   "main": "dist/index.js",
@@ -29,6 +29,10 @@
     "./planning-schema": {
       "types": "./dist/planning-schema.d.ts",
       "import": "./dist/planning-schema.js"
+    },
+    "./planning": {
+      "types": "./dist/planning.d.ts",
+      "import": "./dist/planning.js"
     },
     "./atlas-ops": {
       "types": "./dist/atlas-ops.d.ts",

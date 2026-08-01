@@ -6,6 +6,7 @@ import type React from 'react';
 import type { ChildExecutionStatus } from '@kinqs/brainrouter-core/orchestration';
 import type { SlashCommandDef } from '../prompt/SlashPalette.js';
 import type { BannerInputs } from '../../view/banner.js';
+import type { PlanStep, StoredPlanPhase } from '@kinqs/brainrouter-types/planning';
 
 // --- Public props ------------------------------------------------------
 
@@ -113,7 +114,14 @@ export type ScrollbackEntry = (
   | { id: number; kind: 'tool'; header: string; ok: boolean; durationMs?: number; preview?: string }
   | { id: number; kind: 'memory'; level: 'info' | 'warn'; text: string }
   /** Plan rendering: optional `explanation` renders above the checklist as a dim line. */
-  | { id: number; kind: 'plan'; items: { step: string; status: 'pending' | 'in_progress' | 'completed' }[]; explanation?: string }
+  | {
+      id: number;
+      kind: 'plan';
+      items: PlanStep[];
+      explanation?: string;
+      revision?: number;
+      phases?: StoredPlanPhase[];
+    }
   /** Notice severity:  info → gray dim · warn → yellow · error → red bold. */
   | { id: number; kind: 'notice'; text: string; level?: 'info' | 'warn' | 'error' }
   /**
@@ -155,7 +163,11 @@ export interface PushScrollback {
    */
   tool(header: string, ok: boolean, opts?: { preview?: string; durationMs?: number }): void;
   memory(level: 'info' | 'warn', text: string): void;
-  plan(items: { step: string; status: 'pending' | 'in_progress' | 'completed' }[], explanation?: string): void;
+  plan(
+    items: PlanStep[],
+    explanation?: string,
+    state?: { revision?: number; phases?: StoredPlanPhase[] },
+  ): void;
   /** Severity defaults to 'info' when omitted (back-compat). */
   notice(text: string, level?: 'info' | 'warn' | 'error'): void;
   /** Multi-line agent completion block — used by spawn_agent's onChildComplete callback in runChat. */

@@ -1,13 +1,14 @@
 // Signed-build helper (CI): electron-builder refuses node_modules entries that
 // are symlinks escaping the app directory — exactly what npm workspaces create
 // for @kinqs/* (root node_modules/@kinqs/X → ../../packages/X). Replace each
-// workspace symlink with a REAL copy (package.json + dist + license) so the
-// module collector sees ordinary packages. Run AFTER build:deps (dist must
-// exist) and BEFORE electron-builder. `npm install` restores the symlinks, so
-// local trees self-heal.
+// workspace symlink with a REAL copy of the package's declared `files` contract
+// so the module collector sees ordinary packages with every runtime asset.
+// Run AFTER build:deps (dist must exist) and BEFORE electron-builder.
+// `npm install` restores the symlinks, so local trees self-heal.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { copyDeclaredPackageFiles } from './workspace-package-files.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const scopeDir = path.join(repoRoot, 'node_modules', '@kinqs');
@@ -33,13 +34,16 @@ for (const entry of fs.readdirSync(scopeDir)) {
     console.log(`[dereference-workspace-deps] ${entry}: no dist build — skipping (not a packaged dep)`);
     continue;
   }
+  const packageJson = JSON.parse(fs.readFileSync(pkgJson, 'utf8'));
   fs.rmSync(linkPath);
   fs.mkdirSync(linkPath, { recursive: true });
   fs.copyFileSync(pkgJson, path.join(linkPath, 'package.json'));
-  fs.cpSync(dist, path.join(linkPath, 'dist'), { recursive: true, dereference: true });
+  const copied = copyDeclaredPackageFiles(target, linkPath, packageJson);
   for (const extra of ['LICENSE', 'README.md']) {
     const src = path.join(target, extra);
     if (fs.existsSync(src)) fs.copyFileSync(src, path.join(linkPath, extra));
   }
-  console.log(`[dereference-workspace-deps] ${entry}: symlink → real copy (${target})`);
+  console.log(
+    `[dereference-workspace-deps] ${entry}: symlink → real copy (${target}; files: ${copied.join(', ')})`,
+  );
 }

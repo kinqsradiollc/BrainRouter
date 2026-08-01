@@ -14,6 +14,7 @@ import {
   createActiveTurnOrchestrationRuntime,
   isOrchestrationRuntimeUnavailableError,
 } from '../../orchestration/runtime/activeTurnRuntime.js';
+import { readPlan } from '../../task/taskStore.js';
 import { readWorkContract } from '../../task/workContractStore.js';
 import { applyFederationIdentity } from '../../util/agentloop/federationIdentity.js';
 import {
@@ -193,10 +194,15 @@ async function invokeLocalAdapter(
               // Goal reconciliation is best-effort.
             }
           } else if (kind === 'plan-update') {
-            if (Array.isArray(toolArgs.plan) && callbacks.onPlanUpdate) {
+            if (
+              (Array.isArray(toolArgs.plan) || Array.isArray(toolArgs.phases)) &&
+              callbacks.onPlanUpdate
+            ) {
+              const state = readPlan(agent.workspaceRoot, agent.sessionKey);
               callbacks.onPlanUpdate(
-                toolArgs.plan,
-                toolArgs.explanation,
+                state.items,
+                state.explanation,
+                state,
               );
             }
             publishSteeringReceipt(agent, callbacks, toolArgs.steeringReceiptId);

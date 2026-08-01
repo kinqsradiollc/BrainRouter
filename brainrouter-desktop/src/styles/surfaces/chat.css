@@ -1,0 +1,193 @@
+/**
+ * ADR-026 D26-4 — native workbench presentation for the conversation surface.
+ *
+ * The selectors are deliberately preview-scoped so the legacy visual system
+ * remains the rollback path. Conversation state and delivery semantics stay in
+ * React; this module owns only hierarchy, focus, density, and responsive layout.
+ */
+
+html[data-visual-system="v2"] .chat {
+  padding-block: 20px 12px;
+  color: var(--shell-text);
+  background: var(--shell-canvas);
+}
+
+html[data-visual-system="v2"] .chat .row {
+  margin-bottom: 20px;
+  animation-duration: var(--motion-fast);
+}
+
+html[data-visual-system="v2"] .chat .assistant {
+  color: var(--shell-text);
+  line-height: 1.62;
+}
+
+html[data-visual-system="v2"] .chat .user {
+  padding: 8px 12px;
+  color: var(--shell-text);
+  background: var(--shell-interaction-subtle);
+  border-color: var(--shell-divider);
+  border-radius: 10px 10px 3px 10px;
+  box-shadow: none;
+}
+
+html[data-visual-system="v2"] .chat .status {
+  color: var(--shell-text-muted);
+}
+
+html[data-visual-system="v2"] .chat .md pre,
+html[data-visual-system="v2"] .chat .md table,
+html[data-visual-system="v2"] .approval-card,
+html[data-visual-system="v2"] .error-card {
+  background: var(--shell-panel);
+  border-color: var(--shell-divider);
+  border-radius: var(--shell-row-radius);
+  box-shadow: none;
+}
+
+html[data-visual-system="v2"] .chat .md code {
+  background: var(--shell-elevated);
+}
+
+html[data-visual-system="v2"] .msg-actions {
+  min-height: 24px;
+  color: var(--shell-text-muted);
+}
+
+html[data-visual-system="v2"] .row:hover .msg-actions,
+html[data-visual-system="v2"] .row:focus-within .msg-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+html[data-visual-system="v2"] .msg-actions .icon-btn {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: var(--shell-text-muted);
+  border: 0;
+  border-radius: var(--shell-control-radius);
+}
+
+html[data-visual-system="v2"] .msg-actions .icon-btn:hover,
+html[data-visual-system="v2"] .msg-actions .icon-btn:focus-visible {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+}
+
+html[data-visual-system="v2"] .workline-container {
+  padding-inline: 2px;
+  color: var(--shell-text-secondary);
+}
+
+html[data-visual-system="v2"] .workline-think {
+  background: transparent;
+  border-color: var(--shell-divider);
+  border-radius: var(--shell-row-radius);
+}
+
+html[data-visual-system="v2"] .workline-think > summary:hover,
+html[data-visual-system="v2"] .workline-think > summary:focus-visible {
+  color: var(--shell-text);
+  background: var(--shell-interaction-subtle);
+}
+
+html[data-visual-system="v2"] .think-block {
+  border-inline-start-color: var(--shell-divider-strong);
+}
+
+html[data-visual-system="v2"] .delivery-row {
+  max-width: var(--content-w);
+  padding: 9px 11px;
+  background: var(--shell-interaction-subtle);
+  border: 1px solid var(--shell-divider);
+  border-inline-start: 2px solid var(--shell-text-muted);
+  border-radius: var(--shell-row-radius);
+}
+
+html[data-visual-system="v2"] .delivery-row:has(.delivery-badge.steer) {
+  border-inline-start-color: var(--shell-focus);
+}
+
+html[data-visual-system="v2"] .delivery-source {
+  color: var(--shell-text-muted);
+}
+
+html[data-visual-system="v2"] .delivery-copy {
+  color: var(--shell-text-secondary);
+}
+
+html[data-visual-system="v2"] .delivery-badge {
+  min-height: 18px;
+  padding: 2px 7px;
+  color: var(--shell-text-muted);
+  background: var(--shell-panel);
+  border-color: var(--shell-divider);
+  border-radius: 999px;
+}
+
+html[data-visual-system="v2"] .delivery-badge.steer {
+  color: var(--shell-focus);
+  background: var(--shell-focus-soft);
+  border-color: color-mix(in srgb, var(--shell-focus) 35%, var(--shell-divider));
+}
+
+html[data-visual-system="v2"] .delivery-badge.state-canceled {
+  color: var(--err);
+  background: var(--err-soft);
+  border-color: color-mix(in srgb, var(--err) 40%, var(--shell-divider));
+}
+
+html[data-visual-system="v2"] .jump-latest {
+  bottom: 112px;
+  min-height: var(--chrome-control-size);
+  padding: 0 11px;
+  color: var(--shell-text);
+  background: var(--shell-elevated);
+  border-color: var(--shell-divider-strong);
+  border-radius: var(--shell-control-radius);
+  box-shadow: none;
+}
+
+html[data-visual-system="v2"] .jump-latest:hover,
+html[data-visual-system="v2"] .jump-latest:focus-visible {
+  background: var(--shell-interaction-hover);
+  border-color: var(--shell-focus);
+}
+
+html[data-visual-system="v2"] .approval-card {
+  padding: 12px 14px;
+}
+
+html[data-visual-system="v2"] .approval-actions button:focus-visible,
+html[data-visual-system="v2"] .jump-latest:focus-visible,
+html[data-visual-system="v2"] .workline-think > summary:focus-visible {
+  outline: 2px solid var(--shell-focus);
+  outline-offset: 2px;
+}
+
+@container center (max-width: 620px) {
+  html[data-visual-system="v2"] .chat {
+    padding-block-start: 14px;
+  }
+
+  html[data-visual-system="v2"] .chat .row {
+    margin-bottom: 16px;
+  }
+
+  html[data-visual-system="v2"] .chat .user {
+    max-width: 90%;
+  }
+
+  html[data-visual-system="v2"] .delivery-row {
+    max-width: var(--content-w);
+  }
+}
+
+@media (forced-colors: active) {
+  html[data-visual-system="v2"] .delivery-row,
+  html[data-visual-system="v2"] .delivery-badge,
+  html[data-visual-system="v2"] .chat .user {
+    border-color: CanvasText;
+  }
+}

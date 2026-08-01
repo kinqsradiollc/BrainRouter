@@ -1,0 +1,157 @@
+html[data-visual-system="v2"] .views-rail,
+html[data-visual-system="v2"] .panel-col,
+html[data-visual-system="v2"] .env-col {
+  background: var(--shell-panel);
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .views-rail {
+  gap: 0;
+  padding: 0 var(--shell-sidebar-padding) 8px;
+}
+
+html[data-visual-system="v2"] .views-rail.drawer {
+  box-shadow: -16px 0 40px color-mix(in srgb, var(--shell-text) 14%, transparent);
+}
+
+html[data-visual-system="v2"] .col-grip:hover,
+html[data-visual-system="v2"] .col-grip.active {
+  background: var(--shell-focus-soft);
+  box-shadow: inset 1px 0 0 var(--shell-focus);
+}
+
+html[data-visual-system="v2"] .side-head,
+html[data-visual-system="v2"] .panel-head {
+  min-height: 40px;
+  background: var(--shell-panel);
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .side-head {
+  padding-right: 2px;
+  border-bottom: 1px solid var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .side-head-title {
+  color: var(--shell-text-secondary);
+  font-weight: 560;
+}
+
+html[data-visual-system="v2"] .side-head-btn {
+  color: var(--shell-text-muted);
+  border-radius: var(--shell-control-radius);
+}
+
+html[data-visual-system="v2"] .side-head-btn:hover {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+}
+
+html[data-visual-system="v2"] .side-head-btn.active {
+  color: var(--shell-text);
+  background: var(--shell-interaction-selected);
+}
+
+html[data-visual-system="v2"] .side-tabs-list {
+  gap: 2px;
+}
+
+html[data-visual-system="v2"] .side-tabs .side-tab {
+  border-radius: var(--shell-row-radius);
+}
+
+html[data-visual-system="v2"] .side-tabs .side-tab:hover {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .side-tabs .side-tab.active {
+  color: var(--shell-text);
+  background: var(--shell-interaction-selected);
+  border-color: var(--shell-divider);
+  box-shadow: none;
+}
+
+html[data-visual-system="v2"] .side-tabs .side-tab .term-tab-x {
+  width: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+html[data-visual-system="v2"] .side-tabs .side-tab.active .term-tab-x,
+html[data-visual-system="v2"] .side-tabs .side-tab:hover .term-tab-x,
+html[data-visual-system="v2"] .side-tabs .side-tab:focus-within .term-tab-x {
+  width: 16px;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+html[data-visual-system="v2"] .side-body {
+  padding: 8px 2px 0;
+}
+
+html[data-visual-system="v2"] .views-rail .side-chooser {
+  gap: 12px !important;
+  padding: 46px 2px 8px !important;
+}
+
+html[data-visual-system="v2"] .chooser-search {
+  min-height: 32px;
+  color: var(--shell-text);
+  background: var(--shell-interaction-subtle);
+  border-color: var(--shell-divider);
+  border-radius: var(--shell-control-radius);
+}
+
+html[data-visual-system="v2"] .chooser-search:focus {
+  border-color: var(--shell-focus);
+  box-shadow: 0 0 0 1px var(--shell-focus-soft);
+}
+
+html[data-visual-system="v2"] .side-chooser-options {
+  gap: 12px;
+}
+
+html[data-visual-system="v2"] .side-launcher-group {
+  gap: 2px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+html[data-visual-system="v2"] .side-launcher-group-title {
+  padding: 0 7px 4px;
+  color: var(--shell-text-muted);
+}
+
+html[data-visual-system="v2"] .views-rail .side-launcher-group .side-launcher {
+  min-height: 34px !important;
+  color: var(--shell-text-secondary) !important;
+  background: transparent !important;
+  border-color: transparent !important;
+  border-radius: var(--shell-row-radius) !important;
+}
+
+html[data-visual-system="v2"] .views-rail .side-launcher-group .side-launcher:hover {
+  color: var(--shell-text) !important;
+  background: var(--shell-interaction-hover) !important;
+  border-color: transparent !important;
+  transform: none !important;
+}
+
+html[data-visual-system="v2"] .side-launcher-group .side-launcher.sel {
+  color: var(--shell-text) !important;
+  background: var(--shell-interaction-selected) !important;
+  border-color: var(--shell-divider) !important;
+  box-shadow: none !important;
+}
+
+@container sidepanel (max-width: 350px) {
+  html[data-visual-system="v2"] .side-tabs-list .side-tab.active .tab-label {
+    display: inline !important;
+    max-width: 88px;
+  }
+}

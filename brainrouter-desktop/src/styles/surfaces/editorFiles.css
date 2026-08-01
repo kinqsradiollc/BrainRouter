@@ -1,0 +1,376 @@
+/**
+ * File explorer and code-editor presentation for the native visual system.
+ *
+ * The explorer model, file IO, editor authority, and Monaco lifecycle remain
+ * unchanged. This module only aligns their workbench chrome and interaction
+ * states with the native visual system.
+ */
+
+html[data-visual-system="v2"] .views-rail .panel-body:has(.files-toolbar) {
+  padding: 0;
+  background: var(--shell-panel);
+}
+
+html[data-visual-system="v2"] .views-rail .files-toolbar {
+  min-height: 39px;
+  margin: 0;
+  padding: 5px 6px;
+  gap: 4px;
+  border-bottom: 1px solid var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .views-rail .files-toolbar .filter {
+  height: 28px;
+  padding: 4px 8px;
+  margin: 0;
+  border-radius: var(--shell-control-radius);
+  font-size: 11.5px;
+}
+
+html[data-visual-system="v2"] .views-rail .files-refresh {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--shell-control-radius);
+  color: var(--shell-text-muted);
+  background: transparent;
+}
+
+html[data-visual-system="v2"] .views-rail .files-refresh:hover:not(:disabled) {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+}
+
+html[data-visual-system="v2"] .views-rail .panel-mini-status {
+  min-height: 25px;
+  margin: 0;
+  padding: 5px 9px;
+  border-bottom: 1px solid var(--shell-divider);
+  color: var(--shell-text-muted);
+  background: transparent;
+}
+
+html[data-visual-system="v2"] .views-rail .file-explorer-host {
+  padding: 3px 4px 12px !important;
+  background: var(--shell-panel);
+}
+
+html[data-visual-system="v2"] .file-explorer-viewport {
+  scrollbar-color: var(--shell-divider-strong) transparent;
+  scrollbar-width: thin;
+}
+
+html[data-visual-system="v2"] .tree-row,
+html[data-visual-system="v2"] .file-row {
+  min-height: 24px;
+  gap: 5px;
+  padding-top: 0;
+  padding-bottom: 0;
+  padding-right: 6px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--shell-text-secondary);
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+  transition:
+    background var(--motion-fast) ease,
+    color var(--motion-fast) ease;
+}
+
+html[data-visual-system="v2"] .tree-row:hover,
+html[data-visual-system="v2"] .file-row:hover {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+  box-shadow: none;
+  transform: none;
+}
+
+html[data-visual-system="v2"] .tree-row.selected,
+html[data-visual-system="v2"] .file-row.selected {
+  color: var(--shell-text);
+  background: var(--shell-interaction-selected);
+  box-shadow: inset 2px 0 0 var(--shell-focus);
+}
+
+html[data-visual-system="v2"] .tree-chevron {
+  width: 11px;
+  color: var(--shell-text-muted);
+}
+
+html[data-visual-system="v2"] .tree-folder {
+  color: var(--shell-text-muted);
+  opacity: 1;
+}
+
+html[data-visual-system="v2"] .tree-row.file,
+html[data-visual-system="v2"] .file-row {
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+html[data-visual-system="v2"] .tree-row .fstat,
+html[data-visual-system="v2"] .file-row .fstat {
+  width: 14px;
+  height: 20px;
+  margin-left: auto;
+  border-radius: 0;
+  color: var(--warn);
+  background: transparent;
+  font-size: 10px;
+}
+
+html[data-visual-system="v2"] .tree-row .fstat.s-A,
+html[data-visual-system="v2"] .file-row .fstat.s-A {
+  color: var(--ok);
+  background: transparent;
+}
+
+html[data-visual-system="v2"] .tree-row .fstat.s-D,
+html[data-visual-system="v2"] .file-row .fstat.s-D {
+  color: var(--err);
+  background: transparent;
+}
+
+html[data-visual-system="v2"] .tree-row .fstat.s-u,
+html[data-visual-system="v2"] .file-row .fstat.s-u {
+  color: var(--shell-text-muted);
+  background: transparent;
+}
+
+html[data-visual-system="v2"] .views-rail .grep-hit {
+  padding: 6px 8px;
+  border-width: 0 0 1px;
+  border-radius: 0 !important;
+}
+
+html[data-visual-system="v2"] .editor-panel {
+  color: var(--shell-text-secondary);
+  background: var(--shell-panel);
+}
+
+html[data-visual-system="v2"] .editor-tabs {
+  min-height: 36px;
+  gap: 0;
+  padding: 0 4px 0 0;
+  border-color: var(--shell-divider);
+  background: var(--shell-chrome);
+}
+
+html[data-visual-system="v2"] .editor-tabs-list {
+  align-self: stretch;
+  gap: 0;
+}
+
+html[data-visual-system="v2"] .editor-tab {
+  min-width: 92px;
+  height: 35px;
+  gap: 7px;
+  padding: 0 7px 0 10px;
+  border: 0;
+  border-right: 1px solid var(--shell-divider);
+  border-radius: 0;
+  color: var(--shell-text-muted);
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+  transition:
+    background var(--motion-fast) ease,
+    color var(--motion-fast) ease;
+}
+
+html[data-visual-system="v2"] .editor-tab:hover {
+  color: var(--shell-text-secondary);
+  background: var(--shell-interaction-hover);
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .editor-tab.active {
+  color: var(--shell-text);
+  background: var(--shell-panel);
+  border-color: var(--shell-divider);
+  box-shadow: none;
+}
+
+html[data-visual-system="v2"] .editor-tab.focused {
+  box-shadow: inset 0 -1px 0 var(--shell-focus);
+}
+
+html[data-visual-system="v2"] .editor-tab.split {
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .editor-tab.dragging {
+  opacity: 0.55;
+  border: 0;
+}
+
+html[data-visual-system="v2"] .editor-tab.drop-target {
+  color: var(--shell-text);
+  background: var(--shell-focus-soft);
+  box-shadow: inset 2px 0 0 var(--shell-focus);
+}
+
+html[data-visual-system="v2"] .editor-actions {
+  gap: 2px;
+  padding-left: 4px;
+}
+
+html[data-visual-system="v2"] .editor-icon-act,
+html[data-visual-system="v2"] .editor-act {
+  min-width: 26px;
+  height: 26px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: var(--shell-control-radius);
+  color: var(--shell-text-muted);
+  background: transparent;
+  box-shadow: none;
+}
+
+html[data-visual-system="v2"] .editor-icon-act:hover:not(:disabled),
+html[data-visual-system="v2"] .editor-act:hover:not(:disabled) {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+  border-color: transparent;
+}
+
+html[data-visual-system="v2"] .editor-icon-act.active,
+html[data-visual-system="v2"] .editor-act.active {
+  color: var(--shell-text);
+  background: var(--shell-interaction-selected);
+  border-color: transparent;
+}
+
+html[data-visual-system="v2"] .editor-workspace.explorer-open {
+  grid-template-columns: clamp(180px, 28%, 300px) minmax(0, 1fr);
+}
+
+html[data-visual-system="v2"] .editor-explorer {
+  border-color: var(--shell-divider);
+  background: var(--shell-chrome);
+}
+
+html[data-visual-system="v2"] .editor-explorer-head {
+  height: 31px;
+  padding: 0 4px 0 9px;
+  border-color: var(--shell-divider);
+  color: var(--shell-text-muted);
+  background: transparent;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+html[data-visual-system="v2"] .editor-explorer-filter {
+  height: 27px;
+  margin: 5px 6px;
+  width: calc(100% - 12px);
+  padding: 4px 7px;
+  border-color: var(--shell-divider);
+  border-radius: var(--shell-control-radius);
+  color: var(--shell-text);
+  background: var(--input);
+  box-shadow: none;
+}
+
+html[data-visual-system="v2"] .editor-explorer-filter:focus {
+  border-color: var(--shell-focus);
+  outline: 0;
+  box-shadow: 0 0 0 2px var(--shell-focus-soft);
+}
+
+html[data-visual-system="v2"] .editor-explorer-tree {
+  padding: 2px 3px 10px;
+}
+
+html[data-visual-system="v2"] .editor-explorer-show {
+  width: 30px;
+  color: var(--shell-text-muted);
+}
+
+html[data-visual-system="v2"] .editor-explorer-show:hover {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+}
+
+html[data-visual-system="v2"] .editor-breadcrumbs,
+html[data-visual-system="v2"] .editor-pane-head,
+html[data-visual-system="v2"] .editor-md-bar,
+html[data-visual-system="v2"] .editor-status {
+  border-color: var(--shell-divider);
+  background: var(--shell-panel);
+}
+
+html[data-visual-system="v2"] .editor-breadcrumbs {
+  min-height: 27px;
+  padding: 0 9px;
+  color: var(--shell-text-muted);
+}
+
+html[data-visual-system="v2"] .editor-breadcrumbs .current {
+  color: var(--shell-text-secondary);
+}
+
+html[data-visual-system="v2"] .editor-pane.focused::before {
+  height: 1px;
+  background: var(--shell-focus);
+  opacity: 1;
+}
+
+html[data-visual-system="v2"] .editor-pane + .editor-pane,
+html[data-visual-system="v2"] .editor-md-preview {
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .editor-pane-head {
+  color: var(--shell-text-secondary);
+}
+
+html[data-visual-system="v2"] .editor-conflict,
+html[data-visual-system="v2"] .editor-banner {
+  border-color: var(--shell-divider);
+  box-shadow: none;
+}
+
+html[data-visual-system="v2"] .editor-status {
+  min-height: 23px;
+  gap: 9px;
+  padding: 2px 8px;
+  color: var(--shell-text-muted);
+  background: var(--shell-chrome);
+}
+
+html[data-visual-system="v2"] .editor-md-preview {
+  color: var(--shell-text-secondary);
+  background: var(--shell-panel);
+}
+
+html[data-visual-system="v2"] .editor-icon-act:focus-visible,
+html[data-visual-system="v2"] .editor-act:focus-visible,
+html[data-visual-system="v2"] .editor-tab:focus-visible,
+html[data-visual-system="v2"] .tree-row:focus-visible,
+html[data-visual-system="v2"] .file-row:focus-visible {
+  outline: 2px solid var(--shell-focus);
+  outline-offset: -2px;
+}
+
+@container panel (max-width: 700px) {
+  html[data-visual-system="v2"] .editor-workspace.explorer-open {
+    grid-template-columns: clamp(150px, 36%, 220px) minmax(0, 1fr);
+  }
+
+  html[data-visual-system="v2"] .editor-actions {
+    max-width: 48%;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+  }
+}
+
+@media (forced-colors: active) {
+  html[data-visual-system="v2"] .editor-tab.active,
+  html[data-visual-system="v2"] .tree-row.selected,
+  html[data-visual-system="v2"] .file-row.selected {
+    outline: 1px solid Highlight;
+    outline-offset: -1px;
+  }
+}

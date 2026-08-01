@@ -32,6 +32,10 @@ import {
   requiredSkillActivationPrompt,
   type RequiredSkillActivation,
 } from '../../workspace/requiredSkillActivation.js';
+import {
+  requiredSkillPreflightPrompt,
+  type RequiredSkillPreflightResult,
+} from './requiredSkillPreflight.js';
 import { callOpenAI } from '../transport/llmTransport.js';
 
 export interface PrepareTurnContextInput {
@@ -39,6 +43,7 @@ export interface PrepareTurnContextInput {
   callbacks: RunTurnCallbacks;
   mcpTools: unknown[];
   requiredSkillActivation: RequiredSkillActivation;
+  requiredSkillPreflight: RequiredSkillPreflightResult;
   carriedPendingChildIds: string[];
   images?: Array<{ mediaType: string; dataBase64: string }>;
 }
@@ -163,6 +168,7 @@ export async function prepareTurnContextPhase(
   );
   applyGoalAnchor(agent);
   applyRequiredSkillAnchor(agent, input.requiredSkillActivation);
+  applyRequiredSkillWorkflows(agent, input.requiredSkillPreflight);
   appendUserMessage(agent, prompt, input.images);
   appendPendingChildHint(
     agent,
@@ -171,6 +177,18 @@ export async function prepareTurnContextPhase(
   appendCompletionFeedback(agent);
 
   return { prompt, fanOutHinted };
+}
+
+function applyRequiredSkillWorkflows(
+  agent: Agent,
+  preflight: RequiredSkillPreflightResult,
+): void {
+  const prompt = requiredSkillPreflightPrompt(preflight);
+  if (prompt) {
+    agent.replaceTaggedSystemMessage('required-skill-workflows', prompt);
+  } else {
+    agent.removeTaggedSystemMessage('required-skill-workflows');
+  }
 }
 
 async function preparePlanningHint(

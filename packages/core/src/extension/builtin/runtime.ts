@@ -1149,13 +1149,18 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
           affectedTaskIds: Array.isArray(args.affectedTaskIds)
             ? args.affectedTaskIds.map(String)
             : [],
+          affectedPhaseIds: Array.isArray(args.affectedPhaseIds)
+            ? args.affectedPhaseIds.map(String)
+            : [],
         });
         return JSON.stringify(receipt, null, 2);
       }
       case 'update_plan': {
         const state = updatePlan(this.workspaceRoot, {
           explanation: args.explanation,
-          plan: args.plan,
+          ...(Array.isArray(args.phases)
+            ? { phases: args.phases }
+            : { plan: args.plan }),
         }, this.sessionKey);
         if (typeof args.steeringReceiptId === 'string' && args.steeringReceiptId.trim()) {
           applySteeringPlanRevision(

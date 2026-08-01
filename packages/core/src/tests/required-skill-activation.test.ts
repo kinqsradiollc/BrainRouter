@@ -18,7 +18,7 @@ test('required skill activation applies shared Planning and ADR hard triggers', 
     ['planning-skill', 'research-question-skill', 'adr-skill'],
   );
   assert.equal(activation.planningSchema.id, 'research-evidence');
-  assert.match(requiredSkillActivationPrompt(activation), /Before the first mutating tool call/);
+  assert.match(requiredSkillActivationPrompt(activation), /host preflights each available required skill/i);
 });
 
 test('active goals require Planning while small obvious changes do not', () => {
@@ -98,5 +98,28 @@ test('reviewed workspace planning selection drives runtime skill activation', ()
   assert.deepEqual(
     activation.required.map((skill) => skill.id),
     ['planning-skill', 'research-question-skill'],
+  );
+});
+
+test('the active durable phase adds its required workflows without widening disabled skills', () => {
+  const manifest = createWorkspaceManifest({
+    name: 'app',
+    profile: 'engineering',
+    by: 'wizard',
+  });
+  manifest.skills.disabled = ['verify-loop'];
+  const activation = resolveRequiredSkillActivation({
+    prompt: 'Continue the current step.',
+    activeGoal: true,
+    manifest,
+    phaseRequiredSkillIds: ['adr-skill', 'verify-loop', 'adr-skill'],
+  });
+  assert.deepEqual(
+    activation.required.map((skill) => [skill.id, skill.availability]),
+    [
+      ['planning-skill', 'available'],
+      ['adr-skill', 'available'],
+      ['verify-loop', 'disabled'],
+    ],
   );
 });

@@ -16,6 +16,7 @@ import { runCommand, type CmdCtx, type CommandsCatalog, type DeskCommand, type S
 import type { PopId, SessionRow } from '../../types.js';
 import type { PanelId } from '../../panels/index.js';
 import type { GitState } from '../../lib/git/useGitState.js';
+import type { AppearancePreference } from '../../lib/theme/appearance.js';
 
 type Query = (id: string, name: string, args?: Record<string, unknown>) => void;
 
@@ -51,8 +52,8 @@ export interface AppDialogsProps {
   execMode: string;
   codeFont: string;
   setCodeFont: (v: string) => void;
-  theme: string;
-  setTheme: (v: string) => void;
+  theme: AppearancePreference;
+  setTheme: (preference: AppearancePreference) => void;
   chatWidth: string;
   setChatWidth: (v: string) => void;
   chatSize: string;

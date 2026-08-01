@@ -26,7 +26,7 @@ import { duplicateTitleKeys } from './lib/session/list/sessionDisplay.js';
 import { type ConfigSnapshot, type UsageHistory } from './settings.js';
 import type { MarketplaceState } from './settings/marketplace/index.js';
 import { installDevBridge } from './devBridge.js';
-import type { AttachmentUpload, PlanItem, ChatRow, FleetRow, PopId, ComponentTag } from './types.js';
+import type { AttachmentUpload, PlanItem, PlanView, ChatRow, FleetRow, PopId, ComponentTag } from './types.js';
 import type { PlanDecisionView } from './lib/plan/planReviewView.js';
 import { useClosable } from './lib/useClosable.js';
 import { useAgentEvents, type ToolCatalog } from './lib/agent/useAgentEvents.js';
@@ -47,12 +47,20 @@ import { Sidebar } from './components/layout/Sidebar.js';
 import { ActivityBar } from './components/layout/ActivityBar.js';
 import { WorkspaceOrgProvider } from './lib/orgContext.js';
 import type { GoalRecord } from './components/chat/GoalBanner.js';
-import { useZoom, useAppHandlers, useAppEffects, useDashboardTasks } from './App/hooks/index.js';
+import {
+  bootstrapAppearanceDocument,
+  useAppearance,
+  useZoom,
+  useAppHandlers,
+  useAppEffects,
+  useDashboardTasks,
+} from './App/hooks/index.js';
 import { buildTrackOps } from './App/track/index.js';
 import { buildRenderPanelBody, buildRenderSessionNode, buildRenderRow } from './App/render/index.js';
 import { AppDialogs, MainContent } from './App/layout/index.js';
 
 installDevBridge();
+bootstrapAppearanceDocument();
 
 export function App(): React.ReactElement {
   const [draft, setDraft] = useState('');
@@ -169,7 +177,7 @@ export function App(): React.ReactElement {
   // Track mode data (the per-workspace project + its work items), fed by the
   // host `track-*` queries. Mutations re-fetch the item list.
   const [track, setTrack] = useState<{ project: TrackProject | null; items: WorkItem[]; sprints: Sprint[]; modules: Module[]; views: SavedView[]; automations: AutomationRule[]; members: ProjectMember[]; sync: { config: SyncConfig | null; result: SyncResult | null }; git: GitTrackContext | null; pr: TrackPrStatus | null }>({ project: null, items: [], sprints: [], modules: [], views: [], automations: [], members: [], sync: { config: null, result: null }, git: null, pr: null });
-  const [lastPlan, setLastPlan] = useState<{ items: PlanItem[]; explanation?: string } | null>(null);
+  const [lastPlan, setLastPlan] = useState<PlanView | null>(null);
   const [goalState, setGoalState] = useState<GoalRecord | null>(null);
   const [planHistory, setPlanHistory] = useState<PlanDecisionView[]>([]);
   const [searchHits, setSearchHits] = useState<SearchHit[] | null>(null);
@@ -189,7 +197,7 @@ export function App(): React.ReactElement {
   const [slashSel, setSlashSel] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
   const [codeFont, setCodeFont] = useState(() => localStorage.getItem('br-code-font') ?? '');
-  const [theme, setTheme] = useState(() => localStorage.getItem('br-desktop-theme') ?? 'dark');
+  const { preference: theme, setPreference: setTheme } = useAppearance();
   const [recentsSort, setRecentsSort] = useState<'recent' | 'alpha'>('recent');
   const [homeStats, setHomeStats] = useState<{
     sessions: number; turns: number; activeDays: number; currentStreak: number;
@@ -455,7 +463,7 @@ export function App(): React.ReactElement {
     cardOpenRef, setTaskView, setWorkflowView, viewKey, chatWidth, chatSize, toast, setToast, envOpen,
     railWidth, railOpen, expandedProjects, workrowRef, setWorkW, setPaletteOpen, togglePanel, ensurePanel, setSideFullScreen,
     setSidePanelOpen, setTermDockOpen, openSettings, sessionsRef, resumeSessionRef, zoomIn, zoomOut, resetZoom,
-    sidePanelOpen, sidePinned, codeFont, theme, accent,
+    sidePanelOpen, sidePinned, codeFont, accent,
   });
 
   // DESK-5j — no auto-close at a px breakpoint: ⌘+/- zoom shrinks the CSS

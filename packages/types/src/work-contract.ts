@@ -72,6 +72,8 @@ export interface SteeringReceipt {
   resultingRevision?: number;
   affectedRequirementIds: string[];
   affectedTaskIds: string[];
+  /** Durable plan phases explicitly changed or invalidated by this steer. */
+  affectedPhaseIds?: string[];
   summary: string;
   status: "pending" | "applied" | "rejected" | "needs_user";
 }

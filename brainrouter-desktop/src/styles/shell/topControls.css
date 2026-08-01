@@ -1,0 +1,60 @@
+html[data-visual-system="v2"] .chat-head {
+  height: 40px;
+  padding-block: 0;
+  border-bottom: 1px solid var(--shell-divider);
+  background: var(--shell-canvas);
+}
+
+html[data-visual-system="v2"] .topbar-right {
+  top: 5px;
+  gap: 2px;
+  min-height: var(--chrome-control-size);
+}
+
+html[data-visual-system="v2"] .main:has(.views-rail) .topbar-right {
+  padding: 0;
+  background: transparent;
+  border-color: transparent;
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+html[data-visual-system="v2"] .topbar-div {
+  height: 16px;
+  margin-inline: 4px;
+  background: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .top-toggle,
+html[data-visual-system="v2"] .app-switcher {
+  width: var(--chrome-control-size);
+  min-width: var(--chrome-control-size);
+  height: var(--chrome-control-size);
+  min-height: var(--chrome-control-size);
+  padding: 0;
+  color: var(--shell-text-muted);
+  background: transparent;
+  border-color: transparent;
+  border-radius: var(--shell-control-radius);
+}
+
+html[data-visual-system="v2"] .top-toggle:hover,
+html[data-visual-system="v2"] .app-switcher:hover {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+  transform: none;
+}
+
+html[data-visual-system="v2"] .top-toggle.active,
+html[data-visual-system="v2"] .app-switcher.active {
+  color: var(--shell-text);
+  background: var(--shell-interaction-selected);
+  border-color: var(--shell-divider-strong);
+}
+
+html[data-visual-system="v2"] .topbar-right > .pop-wrap {
+  width: var(--chrome-control-size);
+  height: var(--chrome-control-size);
+}

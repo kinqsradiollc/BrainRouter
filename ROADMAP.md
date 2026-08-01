@@ -7,22 +7,23 @@ lives in [`CHANGELOG.md`](CHANGELOG.md) and
 
 ## Release status
 
-The latest tagged release is **0.4.17** (2026-07-30). A capability present on a
+The latest tagged release is **0.4.18** (2026-08-01). A capability present on a
 development branch is not considered shipped until its release gate passes and
 a version is tagged.
 
-| Version               | State          | Theme                                                                                           |
-| --------------------- | -------------- | ----------------------------------------------------------------------------------------------- |
-| **0.4.17**            | Shipped        | Runtime plane, automations, connectors, review operations, and cross-surface product completion |
-| **0.4.16**            | Shipped        | Autonomous fleet, unified desktop, Track maturation, PostgreSQL brain, remote brain, and Atlas  |
-| **0.4.15**            | Shipped        | Requirement-first workflow and the first unified Chat · Track · Code workspace                  |
-| **0.4.14**            | Shipped        | Recall accuracy, grid TUI, and background workers that report back                              |
-| **0.4.13**            | Shipped        | Sub-agent result delivery and REPL reliability                                                  |
-| **0.4.12**            | Shipped        | Build Loop, worktree-aware orchestration, and input queue                                       |
-| **0.4.11**            | Shipped        | Isolated worktree merge-back and memory verification                                            |
-| **0.4.10**            | Shipped        | Memory-home hardening, mobile dashboard, and edge runtime                                       |
-| **0.4.9**             | Shipped        | Dashboard redesign, auth refresh, and API hardening                                             |
-| **0.4.8 and earlier** | Shipped        | Workflow, coding-agent, federation, and memory foundations                                      |
+| Version               | State                  | Theme                                                                                           |
+| --------------------- | ---------------------- | ----------------------------------------------------------------------------------------------- |
+| **0.4.18**            | Shipped                | Native Desktop visual system, platform-adaptive shell, accessibility, and workbench performance |
+| **0.4.17**            | Shipped                | Runtime plane, automations, connectors, review operations, and cross-surface product completion |
+| **0.4.16**            | Shipped                | Autonomous fleet, unified desktop, Track maturation, PostgreSQL brain, remote brain, and Atlas  |
+| **0.4.15**            | Shipped                | Requirement-first workflow and the first unified Chat · Track · Code workspace                  |
+| **0.4.14**            | Shipped                | Recall accuracy, grid TUI, and background workers that report back                              |
+| **0.4.13**            | Shipped                | Sub-agent result delivery and REPL reliability                                                  |
+| **0.4.12**            | Shipped                | Build Loop, worktree-aware orchestration, and input queue                                       |
+| **0.4.11**            | Shipped                | Isolated worktree merge-back and memory verification                                            |
+| **0.4.10**            | Shipped                | Memory-home hardening, mobile dashboard, and edge runtime                                       |
+| **0.4.9**             | Shipped                | Dashboard redesign, auth refresh, and API hardening                                             |
+| **0.4.8 and earlier** | Shipped                | Workflow, coding-agent, federation, and memory foundations                                      |
 
 Full release notes: [`CHANGELOG.md`](CHANGELOG.md).
 
@@ -97,6 +98,29 @@ expanded authority stay opt-in.
       publish.
 
 Implementation checkmarks in this section describe the shipped release.
+
+## 0.4.18 — Native Desktop visual system
+
+**Status: implementation and qualification complete; publication paused.**
+
+- [x] Resolve System, Light, Dark, and High Contrast appearance through a
+      narrow native host contract.
+- [x] Replace the monolithic styling cascade with owned foundation, shell, and
+      surface modules.
+- [x] Align the shell, Chat, Settings, Editor, Files, Terminal, Browser, and
+      remaining workbench surfaces without changing their runtime boundaries.
+- [x] Preserve mounted panel state and meet explicit accessibility and
+      responsiveness budgets.
+- [x] Complete live macOS and Windows review before removing the reversible
+      compatibility setting.
+
+0.4.18 is the latest published release: qualification passed, the owner
+authorized publication, and it was tagged `v0.4.18` and merged to `main` on
+2026-08-01.
+
+Detailed decision and taskboard:
+[ADR-026](brainrouter-docs/decisions/ADR-026-desktop-native-visual-system.md)
+and [`brainrouter-roadmap/0.4.18.md`](brainrouter-roadmap/0.4.18.md).
 
 ## 0.5.0 — Operational scale
 

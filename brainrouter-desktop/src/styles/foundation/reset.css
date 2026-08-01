@@ -1,0 +1,96 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+button {
+  background: transparent;
+}
+
+button,
+input,
+textarea,
+select,
+label,
+a,
+.composer,
+.composer *,
+.chat,
+.chat *,
+.branchbar,
+.menu-pop,
+.menu-pop *,
+.env-pop,
+.env-pop *,
+.env-col,
+.env-col *,
+.topbar-right,
+.topbar-right *,
+.panel-col,
+.panel-col *,
+.views-rail,
+.views-rail *,
+.term-dock,
+.term-dock *,
+.palette,
+.palette *,
+.dialog,
+.dialog *,
+.settings-modal,
+.settings-modal * {
+  -webkit-app-region: no-drag;
+}
+
+button:focus {
+  outline: none;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--accent-soft);
+  outline-offset: 1px;
+}
+
+* {
+  scrollbar-color: var(--ov-16) transparent;
+  scrollbar-width: thin;
+}
+
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 3.5px solid transparent;
+  border-radius: 999px;
+  background: var(--ov-13);
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:vertical {
+  min-height: 36px;
+}
+
+::-webkit-scrollbar-thumb:horizontal {
+  min-width: 36px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ov-26);
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-track {
+  border: 0;
+  background: transparent;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}

@@ -1,0 +1,133 @@
+html[data-visual-system="v2"] .activity-bar {
+  width: var(--shell-activity-width);
+  gap: 3px;
+  padding-inline: 6px;
+  background: var(--shell-chrome);
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .ab-btn {
+  width: var(--control-size);
+  height: var(--control-size);
+  border-radius: var(--shell-control-radius);
+  color: var(--shell-text-muted);
+}
+
+html[data-visual-system="v2"] .ab-btn:hover {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+}
+
+html[data-visual-system="v2"] .ab-modes {
+  gap: 3px;
+  margin-top: 5px;
+  padding-top: 7px;
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .ab-mode.active {
+  color: var(--shell-text);
+  background: var(--shell-interaction-selected);
+  box-shadow: inset 0 0 0 1px var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .ab-org-avatar {
+  color: var(--shell-text-secondary);
+  background: var(--shell-interaction-subtle);
+  border-color: var(--shell-divider);
+  border-radius: var(--shell-control-radius);
+}
+
+html[data-visual-system="v2"] .ab-org-btn:hover .ab-org-avatar,
+html[data-visual-system="v2"] .ab-org-btn.active .ab-org-avatar {
+  color: var(--shell-text);
+  border-color: var(--shell-divider-strong);
+}
+
+html[data-visual-system="v2"] .ab-org-pop {
+  background: var(--shell-elevated);
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .ab-org-item:hover {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+}
+
+html[data-visual-system="v2"] .rail {
+  padding: 0 var(--shell-sidebar-padding) 10px;
+  background: var(--shell-chrome);
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .rail-grip:hover,
+html[data-visual-system="v2"] .rail-grip:active {
+  background: var(--shell-focus-soft);
+  box-shadow: inset -1px 0 0 var(--shell-focus);
+}
+
+html[data-visual-system="v2"] .rail-top {
+  height: 40px;
+  padding: 0 4px 0 6px;
+}
+
+html[data-visual-system="v2"][data-os="mac"] .rail-top {
+  padding-left: max(0px, calc(var(--window-controls-inline-end) - var(--shell-sidebar-padding)));
+}
+
+html[data-visual-system="v2"] .rail-card {
+  border-top: 1px solid var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .rail-action.primary {
+  height: 34px;
+  color: var(--shell-text);
+  background: var(--shell-elevated);
+  border-color: var(--shell-divider-strong);
+  border-radius: var(--shell-control-radius);
+  box-shadow: none;
+}
+
+html[data-visual-system="v2"] .rail-action.primary:hover {
+  color: var(--shell-text);
+  background: var(--shell-interaction-hover);
+  border-color: var(--shell-divider-strong);
+  transform: none;
+}
+
+html[data-visual-system="v2"] .projects-head {
+  color: var(--shell-text-muted);
+}
+
+html[data-visual-system="v2"] .project-row,
+html[data-visual-system="v2"] .project-session,
+html[data-visual-system="v2"] .session {
+  border-radius: var(--shell-row-radius);
+}
+
+html[data-visual-system="v2"] .project-row:hover,
+html[data-visual-system="v2"] .project-session:hover,
+html[data-visual-system="v2"] .session:hover {
+  background: var(--shell-interaction-hover);
+}
+
+html[data-visual-system="v2"] .project-row.active,
+html[data-visual-system="v2"] .project-session.active,
+html[data-visual-system="v2"] .session.active {
+  background: var(--shell-interaction-selected);
+}
+
+html[data-visual-system="v2"] .account-row {
+  color: var(--shell-text);
+  border-color: var(--shell-divider);
+}
+
+html[data-visual-system="v2"] .account-row:hover {
+  background: var(--shell-interaction-hover);
+}
+
+html[data-visual-system="v2"] .avatar {
+  color: var(--shell-text);
+  background: var(--shell-elevated);
+  border-color: var(--shell-divider-strong);
+}

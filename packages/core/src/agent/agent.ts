@@ -324,7 +324,17 @@ export interface RunTurnCallbacks {
    * so the REPL can render a live ✓ / ⏳ / ☐ checklist instead of leaving the
    * plan invisible until the user runs `/plan`.
    */
-  onPlanUpdate?: (items: Array<{ step: string; status: 'pending' | 'in_progress' | 'completed' }>, explanation?: string) => void;
+  onPlanUpdate?: (
+    items: Array<{
+      id?: string;
+      step: string;
+      status: 'pending' | 'in_progress' | 'completed';
+      acceptance?: string;
+      evidence?: string[];
+    }>,
+    explanation?: string,
+    state?: PlanState,
+  ) => void;
   /**
    * Optional: publishes the resolved profile strategy and every stage
    * transition with its plan provenance. Presentation heads use this instead

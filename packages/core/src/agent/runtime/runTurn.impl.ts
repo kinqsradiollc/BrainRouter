@@ -80,6 +80,7 @@ import { prepareTurnContextPhase } from './contextPreparationPhase.js';
 import { repairAndRecordToolCalls } from './toolCallRepairPhase.js';
 import { authorizeToolCall } from './toolAuthorizationPhase.js';
 import { invokeAuthorizedToolAdapter } from './toolAdapterInvocationPhase.js';
+import { preflightRequiredSkills } from './requiredSkillPreflight.js';
 import {
   executeToolBatch,
   publishToolBatch,
@@ -151,15 +152,28 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     this.activeTurnOrchestration = activeTurnOrchestration;
     const workspaceManifestForTurn = loadWorkspaceManifest(this.workspaceRoot);
     const goalForSkillActivation = readGoal(this.workspaceRoot, this.sessionKey);
+    const planForSkillActivation = readPlan(this.workspaceRoot, this.sessionKey);
+    const activePlanPhase = planForSkillActivation.phases?.find((phase) =>
+      phase.status === 'in_progress');
     const requiredSkillActivation = resolveRequiredSkillActivation({
       prompt,
       activeGoal: goalForSkillActivation?.status === 'active',
       manifest: workspaceManifestForTurn,
+      phaseRequiredSkillIds: activePlanPhase?.requiredSkillIds,
     });
-    const loadedRequiredSkills = new Set([
+    const initiallyLoadedRequiredSkills = new Set([
       ...this.activeSkills,
       ...(this.activeSkill ? [this.activeSkill] : []),
     ]);
+    const requiredSkillPreflight = await preflightRequiredSkills({
+      workspaceRoot: this.workspaceRoot,
+      mcpClient: this.mcpClient,
+      signal: this.turnAbort.signal,
+      activation: requiredSkillActivation,
+      alreadyLoadedSkillIds: initiallyLoadedRequiredSkills,
+      callbacks,
+    });
+    const loadedRequiredSkills = requiredSkillPreflight.loadedSkillIds;
     // MAR-4 — snapshot children carried over from the previous turn BEFORE the reset,
     // so a "is it done?" question this turn can resolve those exact ids.
     const carriedPendingChildIds = [...this.lastTurnPendingChildIds];
@@ -300,6 +314,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     const effectiveDisallowed = (): string[] => [
       ...this.disallowedTools,
       ...this.activeSkillDisallowedTools,
+      ...requiredSkillPreflight.skills.disallowedTools,
     ];
     const toolDisallowed = (name: string): boolean =>
       name !== 'profile_stage' && toolNameMatchesAny(name, effectiveDisallowed());
@@ -308,8 +323,19 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // preserves legacy behavior; a declared empty list intentionally hides all.
     const skillAllowsTool = (name: string): boolean =>
       name === 'profile_stage'
-      || this.activeSkillAllowedTools === undefined
-      || toolNameMatchesAny(name, this.activeSkillAllowedTools);
+      || (
+        (
+          this.activeSkillAllowedTools === undefined
+          || toolNameMatchesAny(name, this.activeSkillAllowedTools)
+        )
+        && (
+          requiredSkillPreflight.skills.allowedTools === undefined
+          || toolNameMatchesAny(
+            name,
+            requiredSkillPreflight.skills.allowedTools,
+          )
+        )
+      );
     let filteredLocalTools = localToolSpecsFromExecutors({
       resultExpansionAvailable: this.resultCache.size() > 0,
       workflowActive: Boolean(getCurrentWorkflow(this.workspaceRoot, this.sessionKey)),
@@ -500,6 +526,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       callbacks,
       mcpTools,
       requiredSkillActivation,
+      requiredSkillPreflight,
       carriedPendingChildIds,
       ...(opts?.images ? { images: opts.images } : {}),
     });
@@ -1141,6 +1168,8 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
             workspaceAllowsMcpTool,
             requiredSkillActivation,
             loadedRequiredSkills,
+            attemptedRequiredSkills:
+              requiredSkillPreflight.attemptedSkillIds,
             trace: { traceId: turnSpan.traceId, spanId: turnSpan.spanId },
           });
           // 0.4.x-4 (`/context`) — count each tool that actually dispatches.

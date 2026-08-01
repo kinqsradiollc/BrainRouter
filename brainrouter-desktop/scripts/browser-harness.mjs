@@ -6,6 +6,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 
+import {
+  createElectronHarnessEnvironment,
+  prepareElectronHarnessLayout,
+} from './electron-harness-layout.mjs';
+
 const START_TIMEOUT_MS = 30_000;
 const COMMAND_TIMEOUT_MS = 20_000;
 
@@ -225,9 +230,8 @@ export async function launchElectron({ desktopRoot, electronApp = '' }) {
   const launch = resolveElectronLaunch(desktopRoot, electronApp);
   const port = await reservePort();
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-browser-e2e-'));
-  const profile = path.join(temporaryRoot, 'profile');
-  const workspace = path.join(temporaryRoot, 'workspace');
-  fs.mkdirSync(workspace, { recursive: true });
+  const layout = prepareElectronHarnessLayout(temporaryRoot);
+  const { profile, workspace } = layout;
   const args = [
     `--remote-debugging-port=${port}`,
     `--user-data-dir=${profile}`,
@@ -235,7 +239,7 @@ export async function launchElectron({ desktopRoot, electronApp = '' }) {
     '--disable-background-networking',
     ...launch.args,
   ];
-  const environment = { ...process.env, BRAINROUTER_DESKTOP_WORKSPACE: workspace };
+  const environment = createElectronHarnessEnvironment(layout);
   delete environment.ELECTRON_RUN_AS_NODE;
   delete environment.VITE_DEV_SERVER_URL;
   delete environment.BRAINROUTER_UPDATE_CHANNEL;

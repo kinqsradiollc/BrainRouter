@@ -282,12 +282,52 @@ async function measureRetentionAndSwitches({ switches, retainedValue }) {
   // Re-assert a concrete native surface immediately before the input/scroll
   // retention test so this measures a visible WebContentsView, not a detached
   // background page with a zero-sized viewport.
-  api.setSurface({ x: 300, y: 170, width: 900, height: 620, visible: true });
+  const benchmarkSurface = { x: 300, y: 170, width: 900, height: 620, visible: true };
+  const surfaceReady = (candidate) => (
+    candidate?.visible === true
+    && candidate.width > 1
+    && candidate.height > 1
+  );
+  api.setSurface(benchmarkSurface);
   await new Promise((resolve) => setTimeout(resolve, 50));
   let state = await api.getState();
   const first = state.tabs[0], second = state.tabs[1];
   if (!first || !second) throw new Error('retention test requires two tabs');
   await call({ op: 'select-tab', tabId: first.id });
+  const selectionDeadline = Date.now() + 10_000;
+  let selectedSnapshot;
+  let lastSurfaceAttempt = 0;
+  do {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    state = await api.getState();
+    if (!surfaceReady(state.surface) && Date.now() - lastSurfaceAttempt >= 250) {
+      api.setSurface(benchmarkSurface);
+      lastSurfaceAttempt = Date.now();
+      state = await api.getState();
+    }
+    selectedSnapshot = await call({ op: 'snapshot', mode: 'testids' });
+  } while (
+    Date.now() < selectionDeadline
+    && (
+      state.activeTabId !== first.id
+      || !surfaceReady(state.surface)
+      || !selectedSnapshot.value?.nodes?.some((node) => node.testid === 'fixture-heading')
+    )
+  );
+  if (
+    state.activeTabId !== first.id
+    || !surfaceReady(state.surface)
+    || !selectedSnapshot.value?.nodes?.some((node) => node.testid === 'fixture-heading')
+  ) {
+    const testids = selectedSnapshot.value?.nodes
+      ?.map((node) => node.testid)
+      .filter(Boolean)
+      .slice(0, 10)
+      .join(',') || 'none';
+    throw new Error(
+      `retention tab did not become active and snapshot-ready (active=${String(state.activeTabId)}, expected=${first.id}, visible=${String(state.surface?.visible)}, testids=${testids})`,
+    );
+  }
   const originalUrl = first.url;
   await call({ op: 'type', target: 'retained-input', text: retainedValue, replace: true });
   await call({ op: 'scroll', x: 450, y: 310, deltaY: 1_200 });
@@ -297,15 +337,51 @@ async function measureRetentionAndSwitches({ switches, retainedValue }) {
   // AND a non-zero scroll registered before capturing the baseline — otherwise
   // we'd measure a premature read (scroll:0) rather than true state retention.
   // If retention were genuinely broken this simply times out and the gate fails.
-  const parseScrollY = (node) => Number(/scroll:(\d+)/.exec(String(node?.name || ''))?.[1] || 0);
+  const parseScrollY = (value) => Number(
+    /scroll:(\d+)/.exec(String(typeof value === 'string' ? value : value?.name || ''))?.[1] || 0,
+  );
   let before, beforeInput, beforeScroll;
-  const baselineDeadline = Date.now() + 3_000;
+  let beforeScrollYObserved = 0;
+  let previousBaselineScrollY = 0;
+  let stableBaselineReads = 0;
+  const baselineDeadline = Date.now() + 10_000;
+  let lastScrollAttempt = 0;
+  let lastTypeAttempt = 0;
   do {
     await new Promise((resolve) => setTimeout(resolve, 50));
+    state = await api.getState();
+    if (!surfaceReady(state.surface) && Date.now() - lastSurfaceAttempt >= 250) {
+      api.setSurface(benchmarkSurface);
+      lastSurfaceAttempt = Date.now();
+    }
     before = await call({ op: 'snapshot', mode: 'testids' });
     beforeInput = before.value?.nodes?.find((node) => node.testid === 'retained-input');
     beforeScroll = before.value?.nodes?.find((node) => node.testid === 'scroll-state');
-  } while (Date.now() < baselineDeadline && !(beforeInput?.value === retainedValue && parseScrollY(beforeScroll) > 0));
+    const activeTitle = state.tabs.find((tab) => tab.id === first.id)?.title;
+    beforeScrollYObserved = Math.max(parseScrollY(beforeScroll), parseScrollY(activeTitle));
+    if (beforeInput?.value === retainedValue && beforeScrollYObserved > 0) {
+      stableBaselineReads = beforeScrollYObserved === previousBaselineScrollY
+        ? stableBaselineReads + 1
+        : 1;
+      previousBaselineScrollY = beforeScrollYObserved;
+    } else {
+      stableBaselineReads = 0;
+    }
+    if (beforeInput?.value !== retainedValue && Date.now() - lastTypeAttempt >= 250) {
+      await call({ op: 'type', target: 'retained-input', text: retainedValue, replace: true });
+      lastTypeAttempt = Date.now();
+    }
+    if (beforeScrollYObserved === 0 && Date.now() - lastScrollAttempt >= 250) {
+      await call({ op: 'scroll', x: 450, y: 310, deltaY: 1_200 });
+      lastScrollAttempt = Date.now();
+    }
+  } while (Date.now() < baselineDeadline && stableBaselineReads < 3);
+  if (beforeInput?.value !== retainedValue || beforeScrollYObserved === 0 || stableBaselineReads < 3) {
+    const activeTitle = state.tabs.find((tab) => tab.id === first.id)?.title;
+    throw new Error(
+      `retention baseline did not settle (input=${String(beforeInput?.value ?? '')}, snapshotScroll=${parseScrollY(beforeScroll)}, stableReads=${stableBaselineReads}, title=${String(activeTitle ?? '')})`,
+    );
+  }
   const switchMs = [];
   for (let index = 0; index < switches; index += 1) {
     const id = index % 2 === 0 ? second.id : first.id;
@@ -314,16 +390,34 @@ async function measureRetentionAndSwitches({ switches, retainedValue }) {
     switchMs.push(performance.now() - started);
   }
   await call({ op: 'select-tab', tabId: first.id });
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  const after = await call({ op: 'snapshot', mode: 'testids' });
-  state = await api.getState();
-  const afterInput = after.value?.nodes?.find((node) => node.testid === 'retained-input');
-  const afterScroll = after.value?.nodes?.find((node) => node.testid === 'scroll-state');
-  const active = state.tabs.find((tab) => tab.id === state.activeTabId);
-  const beforeScrollText = String(beforeScroll?.name || '');
-  const afterScrollText = String(afterScroll?.name || active?.title || '');
-  const beforeScrollY = Number(/scroll:(\d+)/.exec(beforeScrollText)?.[1] || 0);
-  const afterScrollY = Number(/scroll:(\d+)/.exec(afterScrollText)?.[1] || 0);
+  const beforeScrollY = beforeScrollYObserved;
+  const finalDeadline = Date.now() + 10_000;
+  let afterInput, afterScroll, active;
+  let afterScrollY = 0;
+  let finalStateReady = false;
+  do {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    state = await api.getState();
+    if (state.activeTabId !== first.id) {
+      await call({ op: 'select-tab', tabId: first.id });
+      continue;
+    }
+    if (!surfaceReady(state.surface) && Date.now() - lastSurfaceAttempt >= 250) {
+      api.setSurface(benchmarkSurface);
+      lastSurfaceAttempt = Date.now();
+      continue;
+    }
+    const after = await call({ op: 'snapshot', mode: 'testids' });
+    afterInput = after.value?.nodes?.find((node) => node.testid === 'retained-input');
+    afterScroll = after.value?.nodes?.find((node) => node.testid === 'scroll-state');
+    active = state.tabs.find((tab) => tab.id === state.activeTabId);
+    afterScrollY = Math.max(parseScrollY(afterScroll), parseScrollY(active?.title));
+    finalStateReady = (
+      afterInput?.value === retainedValue
+      && active?.url === originalUrl
+      && Math.abs(beforeScrollY - afterScrollY) <= 2
+    );
+  } while (Date.now() < finalDeadline && !finalStateReady);
   return {
     switchMs,
     switchCount: switches,

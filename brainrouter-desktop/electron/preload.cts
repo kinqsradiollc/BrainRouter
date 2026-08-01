@@ -3,6 +3,9 @@
  * channel; workspace management (main-process dialogs) on invoke channels.
  */
 const { contextBridge, ipcRenderer, webFrame } = require('electron');
+const { createIpcListenerHub } = require('./ipcListenerHub.cjs');
+
+const agentEvents = createIpcListenerHub(ipcRenderer, 'agent-event');
 
 // Credential-free, local-only identity captured before the utility host boots.
 // sendSync is deliberate here: one small config read removes the signed-out
@@ -10,17 +13,36 @@ const { contextBridge, ipcRenderer, webFrame } = require('electron');
 let desktopBootstrapState: unknown = null;
 try { desktopBootstrapState = ipcRenderer.sendSync('desktop-bootstrap-state'); } catch { /* older main process */ }
 
+// D26-1 — cached synchronously so the renderer can resolve System appearance
+// before React paints. Future OS changes arrive on the bounded event below.
+let desktopAppearanceState: unknown = null;
+try { desktopAppearanceState = ipcRenderer.sendSync('appearance:get-state'); } catch { /* older main process */ }
+
 contextBridge.exposeInMainWorld('brainrouter', {
   getBootstrapState(): unknown {
     return desktopBootstrapState;
+  },
+  appearance: {
+    getState(): unknown {
+      return desktopAppearanceState;
+    },
+    setPreference(preference: unknown): Promise<unknown> {
+      return ipcRenderer.invoke('appearance:set-preference', preference);
+    },
+    onChanged(listener: (state: unknown) => void): () => void {
+      const wrapped = (_event: unknown, state: unknown) => {
+        desktopAppearanceState = state;
+        listener(state);
+      };
+      ipcRenderer.on('appearance:changed', wrapped);
+      return () => ipcRenderer.removeListener('appearance:changed', wrapped);
+    },
   },
   send(command: unknown): void {
     ipcRenderer.send('agent-command', command);
   },
   onEvent(listener: (msg: unknown) => void): () => void {
-    const wrapped = (_e: unknown, msg: unknown) => listener(msg);
-    ipcRenderer.on('agent-event', wrapped);
-    return () => ipcRenderer.removeListener('agent-event', wrapped);
+    return agentEvents.subscribe(listener);
   },
   // User-controlled project ordering: main pushes updated recents for activity
   // membership changes and explicit drag/drop reorders.

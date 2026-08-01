@@ -6,6 +6,10 @@ import type {
   BrowserState,
   BrowserSurface,
 } from '../electron/browser/protocol.js';
+import type {
+  AppearancePreference,
+  DesktopAppearanceState,
+} from './lib/theme/appearance.js';
 
 declare global {
   interface Window {
@@ -18,6 +22,12 @@ declare global {
           account: { url: string; userId: string; displayName: string; email: string } | null;
         };
       } | null;
+      /** D26-1 — native appearance signals and the persisted app preference. */
+      appearance?: {
+        getState(): DesktopAppearanceState | null;
+        setPreference(preference: AppearancePreference): Promise<DesktopAppearanceState>;
+        onChanged(listener: (state: DesktopAppearanceState) => void): () => void;
+      };
       send(command: AgentCommand): void;
       onEvent(listener: (msg: AgentEventMessage) => void): () => void;
       /** Project order/membership updates from main. May be absent on older preloads. */

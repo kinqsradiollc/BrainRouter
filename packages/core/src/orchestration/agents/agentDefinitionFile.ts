@@ -9,6 +9,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { prepareAsarRead, verifyAsarRead } from '../../fs/boundedFileIdentity.js';
 
 export type Tier = 'chat' | 'reasoning' | 'worker';
 export type AccessMode = 'read' | 'write' | 'shell';
@@ -230,6 +231,8 @@ export function parseAgentDefinition(raw: string, expectedId: string): AgentDefi
 function readBoundedRegularFile(filePath: string, boundaryRoot: string, containmentRoot: string): string {
   let fd: number | undefined;
   try {
+    const asarGuard = prepareAsarRead(filePath, boundaryRoot, containmentRoot);
+
     const noFollow = fs.constants.O_NOFOLLOW ?? 0;
     fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow);
     const stat = fs.fstatSync(fd);
@@ -237,24 +240,34 @@ function readBoundedRegularFile(filePath: string, boundaryRoot: string, containm
       throw new Error(`Agent definition must be 1-${AGENT_DEFINITION_MAX_BYTES} bytes.`);
     }
 
-    // Re-bind the opened descriptor to its current real path. The earlier
-    // directory walk rejects links during discovery; this inode comparison
-    // also closes an ancestor-swap race between discovery and open.
-    const realBoundary = fs.realpathSync.native(boundaryRoot);
-    const realContainment = fs.realpathSync.native(containmentRoot);
-    const realFile = fs.realpathSync.native(filePath);
-    const relativeBoundary = path.relative(realBoundary, realFile);
-    const relativeContainment = path.relative(realContainment, realFile);
-    const pathStat = fs.statSync(realFile);
-    if (
-      relativeBoundary.startsWith('..') ||
-      path.isAbsolute(relativeBoundary) ||
-      relativeContainment.startsWith('..') ||
-      path.isAbsolute(relativeContainment) ||
-      pathStat.dev !== stat.dev ||
-      pathStat.ino !== stat.ino
-    ) {
-      throw new Error('Agent definition escaped its declared agents directory.');
+    if (asarGuard) {
+      // ASAR entries are immutable virtual files. Electron does not preserve
+      // entry inode identity between open/fstat/stat, so bind the read to the
+      // containing archive snapshot instead. Lexical containment was checked
+      // above, discovery rejected entry links, and an archive swap fails closed.
+      if (!verifyAsarRead(asarGuard, filePath, stat)) {
+        throw new Error('Agent definition escaped its declared agents directory.');
+      }
+    } else {
+      // Re-bind the opened descriptor to its current real path. The earlier
+      // directory walk rejects links during discovery; this inode comparison
+      // also closes an ancestor-swap race between discovery and open.
+      const realBoundary = fs.realpathSync.native(boundaryRoot);
+      const realContainment = fs.realpathSync.native(containmentRoot);
+      const realFile = fs.realpathSync.native(filePath);
+      const relativeBoundary = path.relative(realBoundary, realFile);
+      const relativeContainment = path.relative(realContainment, realFile);
+      const pathStat = fs.statSync(realFile);
+      if (
+        relativeBoundary.startsWith('..') ||
+        path.isAbsolute(relativeBoundary) ||
+        relativeContainment.startsWith('..') ||
+        path.isAbsolute(relativeContainment) ||
+        pathStat.dev !== stat.dev ||
+        pathStat.ino !== stat.ino
+      ) {
+        throw new Error('Agent definition escaped its declared agents directory.');
+      }
     }
 
     // Do not trust the pre-read stat size: a concurrently modified file must
