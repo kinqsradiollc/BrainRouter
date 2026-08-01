@@ -18,6 +18,7 @@ function activation(availability: 'available' | 'disabled'): RequiredSkillActiva
 function harness(input: {
   activation: RequiredSkillActivation;
   warned?: Set<string>;
+  attempted?: Set<string>;
 }): { run: () => void; notices: Array<{ level: string; message: string }> } {
   const notices: Array<{ level: string; message: string }> = [];
   const agent: any = {
@@ -44,7 +45,7 @@ function harness(input: {
       workspaceAllowsMcpTool: () => true,
       requiredSkillActivation: input.activation,
       loadedRequiredSkills: new Set<string>(),
-      attemptedRequiredSkills: new Set<string>(['adr-skill']),
+      attemptedRequiredSkills: input.attempted ?? new Set<string>(['adr-skill']),
       ...(input.warned ? { warnedRequiredSkills: input.warned } : {}),
       trace: { traceId: 't', spanId: 's' },
     } as any);
@@ -52,7 +53,17 @@ function harness(input: {
   return { run, notices };
 }
 
-test('an unresolvable required skill warns once and does NOT block the mutation', () => {
+test('a required skill the host NEVER ATTEMPTED still blocks — no evidence it is unloadable', () => {
+  // The preflight-race / precondition case. Degrading here would relax the gate
+  // without any evidence that loading actually failed.
+  const { run } = harness({
+    activation: activation('available'),
+    attempted: new Set<string>(),
+  });
+  assert.throws(run, /are not ready/);
+});
+
+test('a required skill the host ATTEMPTED and failed to load warns once and does NOT block', () => {
   const warned = new Set<string>();
   const { run, notices } = harness({ activation: activation('available'), warned });
 
