@@ -59,7 +59,10 @@ function extractPhases(body: string): string {
   let inPhase = false;
 
   for (const line of lines) {
-    if (/^###\s+phase/i.test(line)) {
+    // ADR-027 D3 — accept phases written at H2 or H3. Skills that use `##` for
+    // their top level (a reasonable choice under our `##`-only section split)
+    // previously produced an empty phase extraction.
+    if (/^#{2,3}\s+phase/i.test(line)) {
       inPhase = true;
     } else if (/^##\s/.test(line)) {
       inPhase = false;
@@ -134,6 +137,27 @@ export function loadSection(
     const preamble = sections.find(s => s.heading === '__preamble__');
     if (preamble && preamble.content.length > 20) {
       match = { heading: 'Overview', content: preamble.content };
+    }
+  }
+
+  // ADR-027 D3 — FALLBACK for Workflow. `workflow` is the DEFAULT section served
+  // to agents, so a prose-first skill with no `## Workflow` heading previously
+  // served a "not found" comment and nothing else. Prefer the body after the
+  // preamble; fall back to the preamble itself.
+  if (!match && sectionKey === 'workflow') {
+    const body = sections.filter((s) => s.heading !== '__preamble__');
+    if (body.length > 0) {
+      const joined = body
+        .map((s) => `## ${s.heading}\n\n${s.content}`)
+        .join('\n\n')
+        .trim();
+      if (joined.length > 20) match = { heading: 'Workflow', content: joined };
+    }
+    if (!match) {
+      const preamble = sections.find((s) => s.heading === '__preamble__');
+      if (preamble && preamble.content.length > 20) {
+        match = { heading: 'Workflow', content: preamble.content };
+      }
     }
   }
 

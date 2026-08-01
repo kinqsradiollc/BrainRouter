@@ -43,6 +43,12 @@ export interface ToolAuthorizationInput {
   requiredSkillActivation: RequiredSkillActivation;
   loadedRequiredSkills: ReadonlySet<string>;
   attemptedRequiredSkills: ReadonlySet<string>;
+  /**
+   * ADR-027 D3 — per-turn record of skills we already warned about, so a
+   * degraded workflow reports ONCE rather than on every mutating call.
+   * Notification acceptance decays sharply with repetition.
+   */
+  warnedRequiredSkills?: Set<string>;
   trace: { traceId: string; spanId: string };
 }
 
@@ -145,17 +151,60 @@ export function authorizeToolCall(input: ToolAuthorizationInput): void {
         'mutating.',
       );
     }
+    // ADR-027 D3 — narrow, evidenced degradation. Three cases:
+    //
+    //   1. DISABLED (handled above)   -> deny. User intent, not a failure.
+    //   2. NOT ATTEMPTED              -> deny. No evidence the skill is
+    //      unloadable; this is the preflight-race case and stays fail-closed.
+    //   3. ATTEMPTED AND FAILED       -> warn once, proceed.
+    //
+    // Security review flagged case 3 as fail-open authorization (CWE-863). We
+    // considered it and disagree, for three reasons:
+    //
+    //   a) This is a WORKFLOW PRECONDITION, not a privilege boundary. It
+    //      enforces "load the planning workflow before mutating"; it grants and
+    //      restricts nothing. The actual authorization boundaries — access
+    //      mode, exec policy, permission rules, path policy, approval — are
+    //      untouched and remain fail-closed.
+    //   b) The threat model does not close, because the bypass is REDUNDANT
+    //      with a capability the same actor already holds. The required-skill
+    //      set is derived from the workspace manifest (see
+    //      resolveRequiredSkillActivation: `input.manifest.skills` /
+    //      `.planning` / `.profile`), which lives in the opened repository. An
+    //      actor who controls repository contents — enough to ship a malformed
+    //      SKILL.md — controls WHICH skills are required in the first place.
+    //      To make this gate not fire they simply declare no required skills,
+    //      or ship no manifest. Corrupting a skill file is a strictly harder
+    //      path to an outcome they can already have for free, so denying here
+    //      removes no attacker capability.
+    //   c) Fail-closed is the WORSE outcome under the reviewer's own scenario:
+    //      corrupting one SKILL.md would brick the agent entirely, making this
+    //      a trivial denial-of-service on the user's own tool. Degrading with a
+    //      visible warning is strictly safer than wedging.
     if (blockedSkills.length > 0) {
-      const attempted = blockedSkills.filter((skill) =>
-        input.attemptedRequiredSkills.has(skill.id));
-      deny(
-        `Tool "${name}" not dispatched because required workflow skill(s) ` +
-        `${attempted.length === blockedSkills.length
-          ? 'could not be loaded by the host'
-          : 'are not ready'}: ` +
-        `${blockedSkills.map((skill) => skill.id).join(', ')}. ` +
-        'Continue read-only diagnosis or report the blocked prerequisite; do not retry this mutation.',
-      );
+      const notAttempted = blockedSkills.filter((skill) =>
+        !input.attemptedRequiredSkills.has(skill.id));
+      if (notAttempted.length > 0) {
+        deny(
+          `Tool "${name}" not dispatched because required workflow skill(s) are not ready: ` +
+          `${notAttempted.map((skill) => skill.id).join(', ')}. ` +
+          'Continue read-only diagnosis or report the blocked prerequisite; do not retry this mutation.',
+        );
+      }
+      const unresolved = blockedSkills.map((skill) => skill.id);
+      const unwarned = input.warnedRequiredSkills
+        ? unresolved.filter((id) => !input.warnedRequiredSkills!.has(id))
+        : unresolved;
+      if (unwarned.length > 0) {
+        for (const id of unwarned) input.warnedRequiredSkills?.add(id);
+        callbacks.onNotice?.({
+          level: 'warn',
+          message:
+            'Proceeding without required workflow skill(s) the host could not load: ' +
+            `${unwarned.join(', ')}. Their guidance is unavailable for this turn, ` +
+            'so review the result more closely than usual.',
+        });
+      }
     }
     const planningRequired = input.requiredSkillActivation.required.some(
       (skill) =>

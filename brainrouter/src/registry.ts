@@ -69,15 +69,23 @@ function deriveCategory(filePath: string, skillsRoot: string): string {
 /**
  * Parse frontmatter from a SKILL.md. Returns name + description.
  */
-function parseSkillFrontmatter(filePath: string): { name: string; description: string; category?: string } | null {
+function parseSkillFrontmatter(filePath: string): { name: string; description: string; category?: string; disableModelInvocation?: boolean } | null {
   try {
     const raw = readFileSync(filePath, 'utf-8');
     const { data } = matter(raw);
     if (data.name && data.description) {
+      // ADR-027 D3 — `disable-model-invocation` marks a skill as human-only.
+      // It was previously dropped, which both exposed the skill to the model and
+      // pushed its description into every turn's catalog.
+      const rawHumanOnly = data['disable-model-invocation'] ?? data.disableModelInvocation;
+      const humanOnly = typeof rawHumanOnly === 'string'
+        ? ['true', 'yes', 'on', 'y'].includes(rawHumanOnly.trim().toLowerCase())
+        : rawHumanOnly === true;
       return { 
         name: String(data.name), 
         description: String(data.description),
-        category: data.category ? String(data.category) : undefined
+        category: data.category ? String(data.category) : undefined,
+        ...(humanOnly ? { disableModelInvocation: true } : {})
       };
     }
   } catch {
