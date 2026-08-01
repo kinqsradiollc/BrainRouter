@@ -28,6 +28,24 @@
  * recall query-embed behind a slow background generation, so `memory_recall`
  * blew past the client's MCP timeout → "client disconnected before reply". The
  * embedder is its own (often local) backend; it gets its own pool.
+ *
+ * ADR-027 D12 (P1-5) — THE WAIT QUEUE IS BOUNDED AND AGE-AWARE. A cap without a
+ * bounded queue only moves the overload: callers pile up without limit, and each
+ * one still eventually gets a slot long after its own deadline passed. Two
+ * bounds now apply to every pool:
+ *
+ *   - BRAINROUTER_LLM_MAX_QUEUE   (default 256) — how many callers may wait.
+ *       A new arrival beyond this is REJECTED with `SemaphoreOverloadError`
+ *       rather than queued, so overload surfaces as fast backpressure.
+ *   - BRAINROUTER_LLM_MAX_WAIT_MS (default 120_000) — how long a caller may
+ *       wait before we assume nobody is listening. Aged-out waiters are shed
+ *       before every hand-off, so a freed slot never goes to an abandoned
+ *       caller while a fresh one waits behind it.
+ *
+ * `acquire()` can therefore THROW where it previously could only block. That is
+ * deliberate and the call sites are shaped for it: the reranker path sheds to
+ * RRF (outside its try, so the circuit breaker never sees it), and a background
+ * job fails into its normal backoff-and-retry rather than piling up.
  */
 
 import { readEmbedConcurrency } from "../util/concurrency.js";
@@ -48,14 +66,78 @@ function resolveRerankerCap(): number {
   return parsed;
 }
 
+/**
+ * ADR-027 D12 (P1-5) — thrown when the wait queue is full.
+ *
+ * The queue used to be unbounded, which turns overload into unbounded memory
+ * growth and unbounded latency: callers pile up, every one of them eventually
+ * gets a slot, and by the time they do their own deadline has long passed. A
+ * bounded queue converts that into fast, explicit backpressure the caller can
+ * act on (shed to a cheaper path, or surface a clear "busy" to the user).
+ */
+export class SemaphoreOverloadError extends Error {
+  constructor(public readonly pool: string, public readonly queued: number) {
+    super(`${pool} pool is saturated (${queued} already waiting); shed this work instead of queuing.`);
+    this.name = "SemaphoreOverloadError";
+  }
+}
+
+/** How many callers may wait for a slot before new arrivals are rejected. */
+function resolveMaxQueue(): number {
+  const raw = process.env.BRAINROUTER_LLM_MAX_QUEUE;
+  const parsed = raw ? parseInt(raw, 10) : NaN;
+  if (!Number.isFinite(parsed) || parsed < 1) return 256;
+  return parsed;
+}
+
+/**
+ * How long a caller may sit in the queue before we assume nobody is listening.
+ * Serving a waiter whose client already gave up burns a slot producing a result
+ * no one reads, which is exactly the wrong thing to do while saturated.
+ */
+function resolveMaxWaitMs(): number {
+  const raw = process.env.BRAINROUTER_LLM_MAX_WAIT_MS;
+  const parsed = raw ? parseInt(raw, 10) : NaN;
+  if (!Number.isFinite(parsed) || parsed < 1) return 120_000;
+  return parsed;
+}
+
+interface Waiter {
+  grant(): void;
+  shed(): void;
+  enqueuedAt: number;
+}
+
 /** A simple promise-queue semaphore with a re-resolvable cap. */
 class Semaphore {
   private cap: number;
   private inFlight = 0;
-  private readonly waiters: Array<() => void> = [];
+  private readonly waiters: Waiter[] = [];
+  private shedCount = 0;
 
-  constructor(private readonly capResolver: () => number) {
+  constructor(
+    private readonly capResolver: () => number,
+    private readonly poolName = "llm",
+    private readonly now: () => number = () => Date.now(),
+  ) {
     this.cap = capResolver();
+  }
+
+  /**
+   * Drop waiters that have been queued longer than the age limit. Called before
+   * every enqueue and every hand-off so stale entries neither occupy queue
+   * capacity nor receive a slot ahead of a caller that is still waiting.
+   */
+  private shedStale(): void {
+    const limit = resolveMaxWaitMs();
+    const cutoff = this.now() - limit;
+    for (let i = this.waiters.length - 1; i >= 0; i--) {
+      if (this.waiters[i]!.enqueuedAt <= cutoff) {
+        const [stale] = this.waiters.splice(i, 1);
+        this.shedCount++;
+        stale!.shed();
+      }
+    }
   }
 
   async acquire(): Promise<() => void> {
@@ -67,7 +149,18 @@ class Semaphore {
       this.inFlight++;
       return this.makeRelease();
     }
-    await new Promise<void>((resolve) => this.waiters.push(resolve));
+    this.shedStale();
+    const maxQueue = resolveMaxQueue();
+    if (this.waiters.length >= maxQueue) {
+      throw new SemaphoreOverloadError(this.poolName, this.waiters.length);
+    }
+    await new Promise<void>((resolve, reject) => {
+      this.waiters.push({
+        grant: resolve,
+        shed: () => reject(new SemaphoreOverloadError(this.poolName, this.waiters.length)),
+        enqueuedAt: this.now(),
+      });
+    });
     this.inFlight++;
     return this.makeRelease();
   }
@@ -86,24 +179,37 @@ class Semaphore {
       this.inFlight++;
       return this.makeRelease();
     }
+    // This caller already carries its own deadline, so the queue bound applies
+    // but the age limit does not — the timeout below is its shedding policy.
+    this.shedStale();
+    if (this.waiters.length >= resolveMaxQueue()) return null;
     return new Promise<(() => void) | null>((resolve) => {
       let settled = false;
-      const grant = () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        this.inFlight++;
-        resolve(this.makeRelease());
+      const waiter: Waiter = {
+        grant: () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          this.inFlight++;
+          resolve(this.makeRelease());
+        },
+        shed: () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(null);
+        },
+        enqueuedAt: this.now(),
       };
       const timer = setTimeout(() => {
         if (settled) return;
         settled = true;
         // Drop our waiter so a later release doesn't hand us a phantom slot.
-        const i = this.waiters.indexOf(grant);
+        const i = this.waiters.indexOf(waiter);
         if (i >= 0) this.waiters.splice(i, 1);
         resolve(null);
       }, timeoutMs);
-      this.waiters.push(grant);
+      this.waiters.push(waiter);
     });
   }
 
@@ -113,25 +219,31 @@ class Semaphore {
       if (released) return;
       released = true;
       this.inFlight = Math.max(0, this.inFlight - 1);
+      // Shed before handing off: a slot must never go to a caller that has
+      // already aged out while a fresher one waits behind it.
+      this.shedStale();
       const next = this.waiters.shift();
-      if (next) next();
+      if (next) next.grant();
     };
   }
 
-  state(): { cap: number; inFlight: number; queued: number } {
-    return { cap: this.cap, inFlight: this.inFlight, queued: this.waiters.length };
+  state(): { cap: number; inFlight: number; queued: number; shed: number } {
+    return { cap: this.cap, inFlight: this.inFlight, queued: this.waiters.length, shed: this.shedCount };
   }
 
   reset(): void {
     this.cap = this.capResolver();
     this.inFlight = 0;
-    this.waiters.length = 0;
+    // Reject rather than abandon: a pending acquire() that is silently dropped
+    // never settles, and its caller hangs forever.
+    for (const waiter of this.waiters.splice(0)) waiter.shed();
+    this.shedCount = 0;
   }
 }
 
-const generativeSemaphore = new Semaphore(resolveGenerativeCap);
-const embeddingSemaphore = new Semaphore(() => readEmbedConcurrency());
-const rerankerSemaphore = new Semaphore(resolveRerankerCap);
+const generativeSemaphore = new Semaphore(resolveGenerativeCap, "generative LLM");
+const embeddingSemaphore = new Semaphore(() => readEmbedConcurrency(), "embedding");
+const rerankerSemaphore = new Semaphore(resolveRerankerCap, "reranker");
 
 /**
  * Acquire one GENERATIVE LLM slot (chat / extraction / synthesis / judge).
@@ -173,17 +285,17 @@ export async function acquireRerankerSlotOrNull(timeoutMs: number): Promise<(() 
 }
 
 /** Exposed for tests / diagnostics. */
-export function getSemaphoreState(): { cap: number; inFlight: number; queued: number } {
+export function getSemaphoreState(): { cap: number; inFlight: number; queued: number; shed: number } {
   return generativeSemaphore.state();
 }
 
 /** Exposed for tests / diagnostics. */
-export function getEmbeddingSemaphoreState(): { cap: number; inFlight: number; queued: number } {
+export function getEmbeddingSemaphoreState(): { cap: number; inFlight: number; queued: number; shed: number } {
   return embeddingSemaphore.state();
 }
 
 /** Exposed for tests / diagnostics. */
-export function getRerankerSemaphoreState(): { cap: number; inFlight: number; queued: number } {
+export function getRerankerSemaphoreState(): { cap: number; inFlight: number; queued: number; shed: number } {
   return rerankerSemaphore.state();
 }
 
