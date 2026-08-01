@@ -95,14 +95,17 @@ export async function runAsJob<T>(
     maxAttempts: 1,
     priority: options?.priority,
   });
-  await store.startMemoryJob(job.id);
+  // ADR-027 D12 — carry the lease epoch issued by the start transition so a
+  // sweep that reclaims this job mid-flight fences our write-back.
+  const started = await store.startMemoryJob(job.id);
+  const leaseEpoch = started?.leaseEpoch;
   try {
     const result = await fn();
     const summary = options?.summarize ? options.summarize(result) : { ok: true };
-    const done = await store.completeMemoryJob(job.id, summary);
-    return { result, job: done ?? job };
+    const done = await store.completeMemoryJob(job.id, summary, { leaseEpoch });
+    return { result, job: done ?? started ?? job };
   } catch (err: any) {
-    await store.failMemoryJob(job.id, err?.message ?? String(err));
+    await store.failMemoryJob(job.id, err?.message ?? String(err), { leaseEpoch });
     throw err;
   }
 }
@@ -263,14 +266,14 @@ export class MemoryJobRunner {
     }
     try {
       const output = await executor(job.input, { ...this.ctx, jobId: job.id });
-      await this.store.completeMemoryJob(job.id, output ?? { ok: true });
+      await this.store.completeMemoryJob(job.id, output ?? { ok: true }, { leaseEpoch: job.leaseEpoch });
     } catch (err: any) {
       // Keep a terminal timeline event even for executors that throw before they
       // can emit their own progress (best effort; never mask the job failure).
-      void this.store.appendJobProgress(job.id, { ts: new Date().toISOString(), kind: "error", msg: err?.message ?? String(err) }).catch(() => {});
+      void this.store.appendJobProgress(job.id, { ts: new Date().toISOString(), kind: "error", msg: err?.message ?? String(err) }, job.leaseEpoch).catch(() => {});
       // failAgentJob applies backoff and re-arms while attempts remain,
       // else marks terminal failed.
-      await failAgentJob(this.store, job.id, err?.message ?? String(err));
+      await failAgentJob(this.store, job.id, err?.message ?? String(err), { leaseEpoch: job.leaseEpoch });
     }
   }
 }

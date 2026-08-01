@@ -15,6 +15,7 @@
  * later slice (BRAIN-P1-T3); this module is what the MCP tools call.
  */
 
+import { randomUUID } from "node:crypto";
 import type { IMemoryStore, MemoryJobRecord, MemoryJobStatus } from "@kinqs/brainrouter-types";
 import { findBrainAgentById } from "../agents/registry.js";
 import { backoffDelayMs } from "./backoff.js";
@@ -49,26 +50,26 @@ export async function enqueueAgentJob(
   const agent = findBrainAgentById(agentId);
   if (!agent) throw new UnknownBrainAgentError(agentId);
 
+  // ADR-027 D12 — dedup is enforced by a partial unique index on
+  // (kind, idempotency_key) over in-flight rows, not by listing first. The old
+  // list-then-insert was a read-then-write race: two concurrent redeliveries of
+  // the same webhook could both observe an empty queue and both enqueue.
+  //
+  // We mint the id here so `deduped` needs no extra query: the store returns
+  // OUR id when this call won the insert, and the winner's id when it lost.
   const key = agent.idempotencyKey(input);
-  if (key) {
-    const inFlight = await store.listMemoryJobs({ kind: agentId, status: ["pending", "running"] });
-    for (const job of inFlight) {
-      if (agent.idempotencyKey(job.input) === key) {
-        return { job, deduped: true };
-      }
-    }
-  }
-
+  const intendedId = (options?.idGenerator ?? (() => randomUUID()))();
   const job = await store.enqueueMemoryJob(
     {
       kind: agentId,
       input,
       priority: options?.priority,
       maxAttempts: agent.maxAttempts,
+      ...(key ? { idempotencyKey: key } : {}),
     },
-    { now: options?.now, idGenerator: options?.idGenerator },
+    { now: options?.now, idGenerator: () => intendedId },
   );
-  return { job, deduped: false };
+  return { job, deduped: job.id !== intendedId };
 }
 
 /**
@@ -80,12 +81,15 @@ export async function failAgentJob(
   store: IMemoryStore,
   jobId: string,
   error: string,
-  options?: { now?: string; random?: () => number },
+  options?: { now?: string; random?: () => number; leaseEpoch?: number },
 ): Promise<MemoryJobRecord | null> {
   const current = await store.getMemoryJob(jobId);
   if (!current) return null;
   const backoffMs = backoffDelayMs(current.attempts + 1, options?.random);
-  return store.failMemoryJob(jobId, error, { now: options?.now, backoffMs });
+  // The attempts/maxAttempts decision itself is made atomically inside
+  // `failMemoryJob`; this read only sizes the backoff, so a stale value here
+  // costs a slightly wrong delay, never a wrong terminal state.
+  return store.failMemoryJob(jobId, error, { now: options?.now, backoffMs, leaseEpoch: options?.leaseEpoch });
 }
 
 /** Re-arm a failed/cancelled job (delegates to the store). */

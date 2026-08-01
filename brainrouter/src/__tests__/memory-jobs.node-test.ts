@@ -132,14 +132,25 @@ test("memory_jobs: cancel + sweepStuckMemoryJobs", async () => {
     const cancelled = await store.cancelMemoryJob(pending.id);
     assert.equal(cancelled!.status, "cancelled");
 
-    // A running job whose lock has aged past the cutoff gets swept.
-    const stuck = await store.enqueueMemoryJob({ kind: "k", input: {} });
-    await store.claimNextMemoryJob({ now: iso() }); // locked "now"
-    // Sweep from 10 min in the future with a 5 min stuck window → cutoff
-    // is +5 min, and the lock (taken "now") is older than that.
-    const swept = await store.sweepStuckMemoryJobs(5 * 60_000, { now: iso(10 * 60_000) });
+    // A running job whose lease has aged past the threshold gets reclaimed.
+    //
+    // ADR-027 D12 — expiry is now measured against the DATABASE clock, so the
+    // lock has to genuinely age rather than being compared to a `now` the
+    // caller invents. Backdating `locked_at` is the honest way to express
+    // "this worker went away a long time ago".
+    const stuck = await store.enqueueMemoryJob({ kind: "k", input: {}, maxAttempts: 3 });
+    await store.claimNextMemoryJob({ now: iso() });
+    const exec = (store as unknown as { exec: { run(sql: string, params: unknown[]): Promise<number> } }).exec;
+    await exec.run("UPDATE memory_jobs SET locked_at = $1 WHERE id = $2", [iso(-10 * 60_000), stuck.id]);
+
+    const swept = await store.sweepStuckMemoryJobs(5 * 60_000);
     assert.equal(swept, 1);
-    assert.equal((await store.getMemoryJob(stuck.id))!.status, "cancelled");
+    // ADR-027 D12 — a crashed worker is a RETRYABLE fault: the job re-arms to
+    // pending (attempts incremented) rather than being cancelled outright.
+    const reclaimed = (await store.getMemoryJob(stuck.id))!;
+    assert.equal(reclaimed.status, "pending");
+    assert.equal(reclaimed.attempts, 1);
+    assert.equal(reclaimed.lockedAt, null);
   } finally {
     await cleanup();
   }

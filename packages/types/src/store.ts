@@ -253,15 +253,31 @@ export interface IMemoryStore {
    * - `retryMemoryJob` re-arms a `failed`/`cancelled` job (attempts→0,
    *   status→pending, runAfter→now). No-op for pending/running/done.
    * - `cancelMemoryJob` forces a job to `cancelled`.
-   * - `sweepStuckMemoryJobs` cancels `running` jobs whose `lockedAt`
-   *   is older than the cutoff (orphaned by a crashed runner).
+   * - `sweepStuckMemoryJobs` reclaims `running` jobs whose lease has
+   *   expired (orphaned by a crashed runner). ADR-027 D12: the lease is
+   *   RE-ARMED to `pending` with backoff — a crashed worker is a retryable
+   *   fault, not a cancellation — and only becomes `failed` once
+   *   `maxAttempts` is exhausted. Expiry is measured against the DATABASE
+   *   clock so a skewed worker cannot reclaim a healthy peer's lease.
    * - `getMemoryJobKindAggregates` rolls jobs up per `kind` for the
    *   `memory_agent_status` tool.
+   *
+   * ADR-027 D12 — `leaseEpoch` fencing. `claimNextMemoryJob` /
+   * `startMemoryJob` return the epoch the caller now holds. Pass it back to
+   * `completeMemoryJob` / `failMemoryJob` / `heartbeatMemoryJob`; a call
+   * naming an older epoch is rejected (returns null / false) rather than
+   * clobbering the run that superseded it. Omitting it preserves the old
+   * unfenced behavior for callers that own the job start-to-finish.
    */
   enqueueMemoryJob(input: MemoryJobEnqueueInput, options?: { idGenerator?: () => string; now?: string }): Promise<MemoryJobRecord>;
   getMemoryJob(id: string): Promise<MemoryJobRecord | null>;
   listMemoryJobs(filters?: MemoryJobListFilters): Promise<MemoryJobRecord[]>;
-  appendJobProgress(id: string, event: MemoryJobProgressEvent): Promise<void>;
+  /**
+   * Append a timeline event. Progress is observability, never control flow —
+   * but emitting it also RENEWS the worker lease, so pass `leaseEpoch` to keep
+   * a fenced worker from holding a lease that was already reissued.
+   */
+  appendJobProgress(id: string, event: MemoryJobProgressEvent, leaseEpoch?: number): Promise<void>;
   claimNextMemoryJob(options?: { now?: string }): Promise<MemoryJobRecord | null>;
   /**
    * Transition a specific `pending` job to `running` (stamps
@@ -271,8 +287,8 @@ export interface IMemoryStore {
    * job is missing or not `pending`.
    */
   startMemoryJob(id: string, options?: { now?: string }): Promise<MemoryJobRecord | null>;
-  completeMemoryJob(id: string, output: unknown, options?: { now?: string }): Promise<MemoryJobRecord | null>;
-  failMemoryJob(id: string, error: string, options?: { now?: string; backoffMs?: number }): Promise<MemoryJobRecord | null>;
+  completeMemoryJob(id: string, output: unknown, options?: { now?: string; leaseEpoch?: number }): Promise<MemoryJobRecord | null>;
+  failMemoryJob(id: string, error: string, options?: { now?: string; backoffMs?: number; leaseEpoch?: number }): Promise<MemoryJobRecord | null>;
   retryMemoryJob(id: string, options?: { now?: string }): Promise<MemoryJobRecord | null>;
   cancelMemoryJob(id: string, options?: { now?: string; reason?: string }): Promise<MemoryJobRecord | null>;
   sweepStuckMemoryJobs(stuckMs: number, options?: { now?: string }): Promise<number>;

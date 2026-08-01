@@ -153,6 +153,14 @@ export interface MemoryJobRecord {
   runAfter: string;
   /** ISO timestamp of the most recent `pending → running` transition. NULL when not running. */
   lockedAt: string | null;
+  /**
+   * ADR-027 D12 — fencing token for the worker lease. Bumped on every claim and
+   * on every sweep that reclaims an expired lease. A worker passes the epoch it
+   * was handed back to `completeMemoryJob` / `failMemoryJob` / `heartbeatMemoryJob`;
+   * a write-back naming an older epoch is REJECTED, so a stalled worker that
+   * wakes after its lease was reclaimed cannot overwrite the newer run.
+   */
+  leaseEpoch: number;
   /** Parent job id when this was spawned by another job's chain. NULL for top-level. */
   parentJobId: string | null;
   input: unknown;
@@ -231,6 +239,14 @@ export interface MemoryJobEnqueueInput {
   runAfter?: string;
   /** Parent job id when spawned by another job's chain. */
   parentJobId?: string | null;
+  /**
+   * ADR-027 D12 — deduplication key enforced by the DATABASE, not by a
+   * read-then-insert in the caller. At most one job per (kind, key) may be
+   * in-flight (`pending` or `running`); a duplicate enqueue returns the
+   * existing job instead of inserting a second one. Omit for work that should
+   * always produce a new job.
+   */
+  idempotencyKey?: string;
 }
 
 /** Filters for `listMemoryJobs`. */
