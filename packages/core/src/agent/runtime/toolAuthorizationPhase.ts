@@ -43,13 +43,6 @@ export interface ToolAuthorizationInput {
   requiredSkillActivation: RequiredSkillActivation;
   loadedRequiredSkills: ReadonlySet<string>;
   attemptedRequiredSkills: ReadonlySet<string>;
-  /**
-   * ADR-027 D3 — per-turn record of unresolvable required skills we have already
-   * warned about, so a degraded workflow reports ONCE instead of re-warning on
-   * every mutating call. Notification acceptance decays with repetition, so a
-   * per-call warning would train the user to ignore it.
-   */
-  warnedRequiredSkills?: Set<string>;
   trace: { traceId: string; spanId: string };
 }
 
@@ -152,43 +145,30 @@ export function authorizeToolCall(input: ToolAuthorizationInput): void {
         'mutating.',
       );
     }
-    // ADR-027 D3 — narrow, evidenced degradation. Three distinct cases:
+    // ADR-027 D3 — this gate stays FAIL-CLOSED.
     //
-    //   1. DISABLED (handled above)      -> deny. User intent, not a failure.
-    //   2. NOT ATTEMPTED                 -> deny. The host never tried to load
-    //      this skill, so we have no evidence it is unloadable — this is the
-    //      preflight-race/precondition case and must stay fail-closed.
-    //   3. ATTEMPTED AND FAILED          -> warn once, proceed. The host did
-    //      try and could not load it: a genuine infrastructure failure, and the
-    //      only case where denying would wedge the agent with no recovery.
+    // The ADR proposed degrading an unresolvable required skill to a warning so
+    // a missing workflow could never deadlock the agent. Two rounds of security
+    // review pushed back (CWE-863): a load failure is attacker-influenceable
+    // (delete or corrupt a SKILL.md) and turning a fail-closed gate into a
+    // fail-open one buys little now that 0.4.18's auto-loading preflight
+    // already resolves the common case. The deadlock this was meant to prevent
+    // is therefore rare, while the bypass would be permanent.
     //
-    // Only case 3 relaxes the gate, and only on positive evidence that loading
-    // was attempted. The real authorization boundaries (access mode, exec
-    // policy, permission rules, path policy, approval) are untouched.
+    // Left as-is pending an explicit owner decision. If degradation is wanted,
+    // it should require an explicit user confirmation rather than proceeding
+    // silently — see ADR-027 §5.
     if (blockedSkills.length > 0) {
-      const notAttempted = blockedSkills.filter((skill) =>
-        !input.attemptedRequiredSkills.has(skill.id));
-      if (notAttempted.length > 0) {
-        deny(
-          `Tool "${name}" not dispatched because required workflow skill(s) are not ready: ` +
-          `${notAttempted.map((skill) => skill.id).join(', ')}. ` +
-          'Continue read-only diagnosis or report the blocked prerequisite; do not retry this mutation.',
-        );
-      }
-      const unresolved = blockedSkills.map((skill) => skill.id);
-      const unwarned = input.warnedRequiredSkills
-        ? unresolved.filter((id) => !input.warnedRequiredSkills!.has(id))
-        : unresolved;
-      if (unwarned.length > 0) {
-        for (const id of unwarned) input.warnedRequiredSkills?.add(id);
-        callbacks.onNotice?.({
-          level: 'warn',
-          message:
-            'Proceeding without required workflow skill(s) the host could not load: ' +
-            `${unwarned.join(', ')}. Their guidance is unavailable for this turn, ` +
-            'so review the result more closely than usual.',
-        });
-      }
+      const attempted = blockedSkills.filter((skill) =>
+        input.attemptedRequiredSkills.has(skill.id));
+      deny(
+        `Tool "${name}" not dispatched because required workflow skill(s) ` +
+        `${attempted.length === blockedSkills.length
+          ? 'could not be loaded by the host'
+          : 'are not ready'}: ` +
+        `${blockedSkills.map((skill) => skill.id).join(', ')}. ` +
+        'Continue read-only diagnosis or report the blocked prerequisite; do not retry this mutation.',
+      );
     }
     const planningRequired = input.requiredSkillActivation.required.some(
       (skill) =>
