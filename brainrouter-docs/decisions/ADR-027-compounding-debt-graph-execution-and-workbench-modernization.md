@@ -194,6 +194,53 @@ verifiable source. Where those systems only record character offsets, we will re
 region** for PDFs, because a citation the human cannot visually verify does not discharge
 cognitive debt.
 
+#### D4.1 — Input modality must be a declared model capability
+
+Everything above depends on sending an image to a model, and **we currently have no way to know
+whether the selected model can receive one.**
+
+The transport is already built. `llmTransport.ts:520` turns a user turn carrying pasted images into
+multi-part content, `nativeProviders.ts:29` defines the `image_url` part, and the native Anthropic
+and Gemini adapters translate that data-URL into their own wire shapes. Attachments already model
+images: `AttachmentKind` includes `"image"` with pixel dimensions, and the desktop composer retains
+`mediaType` + `dataBase64` for exactly this purpose. The pipe works.
+
+What is missing is the switch. `ModelCapabilities` is `{ streaming, tools, responses, reasoning }` —
+there is no vision member, so no surface can gate on it. Attach a screenshot while a text-only model
+is selected and one of two things happens: the provider rejects the request, or — far worse — it
+accepts the request and ignores the image. In the second case the agent answers confidently about a
+picture it never saw, and the human has no signal that it didn't. That is a knowledge-debt failure
+of precisely the kind D1 exists to prevent: a confident answer with an invisible missing input.
+
+**Model input modality becomes a first-class capability, carried everywhere a model is defined.**
+
+The capability record is already the right home and already has provenance —
+`provider_models.capabilities_json` with `capability_source ∈ (verified, discovered, manual)`,
+`source_url`, and `verified_at` (migration `020_provider_models.sql`). It gains an input-modality
+set rather than a `vision: boolean`, because the same question is about to be asked for PDFs: some
+providers accept a document natively and would let us skip extraction entirely for those models,
+which is a direct input into the substrate above. A boolean would need replacing within one release.
+
+Provenance rules follow the existing three-value ladder rather than inventing a new one:
+`discovered` when the provider's own catalog reports modalities, `manual` when an operator sets it
+while adding the model, `verified` only after a real probe has round-tripped an image successfully.
+Unknown is a distinct state from unsupported, and must not be silently coerced to either.
+
+Both provisioning surfaces carry it: the **managed** path in the dashboard model editor (org
+admins), and the **BYOK** path in desktop provider setup. A BYOK model whose modality is unset
+is `unknown`, not `text-only` — we must not silently disable vision on a capable model the operator
+simply never annotated.
+
+**Degradation is explicit, never silent.** When an image is present and the active model cannot
+accept it, in order: (1) route that turn to a vision-capable model if the org has one — the router
+already supports per-turn selection with fallbacks — and carry the derived description forward; (2)
+if none is available, surface it **at attach time in the composer**, not at send time, so the human
+learns before they have written the prompt; (3) under no circumstance drop the image and answer
+anyway. The composer must also stop offering image attachment as though it always works.
+
+This unblocks D4's page-classification routing, which cannot choose "send this scanned page to
+vision" without knowing whether a vision model is reachable at all.
+
 ### D5 — Desktop: one visual system, and performance by structure
 
 We adopt a single semantic token system (surface/border/text/accent scales with a global radius
