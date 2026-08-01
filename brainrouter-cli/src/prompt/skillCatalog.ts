@@ -370,8 +370,17 @@ function isYamlTrue(value: string | undefined): boolean {
 
 function readYamlScalar(block: string, key: string): string | undefined {
   const match = block.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'));
-  if (!match?.[1]) return undefined;
-  return match[1].trim().replace(/^['"]|['"]$/g, '');
+  const raw = match?.[1]?.trim();
+  if (!raw) return undefined;
+  // Read the scalar the way a real YAML parser does, because the brain uses one
+  // and the two surfaces must agree. A QUOTED scalar keeps its contents verbatim
+  // (a `#` inside quotes is data, not a comment); an UNQUOTED scalar ends at the
+  // first whitespace-preceded `#`. Without the comment rule,
+  // `disable-model-invocation: true # note` reads as human-only on the brain and
+  // model-invocable here, leaking the description into the model's catalog.
+  const quoted = raw.match(/^(['"])([\s\S]*?)\1\s*(?:#.*)?$/);
+  if (quoted) return quoted[2];
+  return raw.replace(/\s+#.*$/, '').trim();
 }
 
 /** Extract the raw YAML frontmatter block (between the `---` fences), or ''. */

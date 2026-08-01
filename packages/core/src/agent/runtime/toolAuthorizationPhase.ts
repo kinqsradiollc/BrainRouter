@@ -166,11 +166,17 @@ export function authorizeToolCall(input: ToolAuthorizationInput): void {
     //      restricts nothing. The actual authorization boundaries — access
     //      mode, exec policy, permission rules, path policy, approval — are
     //      untouched and remain fail-closed.
-    //   b) The threat model does not close. Triggering this path requires
-    //      deleting or corrupting a SKILL.md, i.e. workspace WRITE access —
-    //      strictly more capability than the bypass grants. An attacker who can
-    //      write workspace files does not need to defeat a process gate; they
-    //      can write the code directly.
+    //   b) The threat model does not close, because the bypass is REDUNDANT
+    //      with a capability the same actor already holds. The required-skill
+    //      set is derived from the workspace manifest (see
+    //      resolveRequiredSkillActivation: `input.manifest.skills` /
+    //      `.planning` / `.profile`), which lives in the opened repository. An
+    //      actor who controls repository contents — enough to ship a malformed
+    //      SKILL.md — controls WHICH skills are required in the first place.
+    //      To make this gate not fire they simply declare no required skills,
+    //      or ship no manifest. Corrupting a skill file is a strictly harder
+    //      path to an outcome they can already have for free, so denying here
+    //      removes no attacker capability.
     //   c) Fail-closed is the WORSE outcome under the reviewer's own scenario:
     //      corrupting one SKILL.md would brick the agent entirely, making this
     //      a trivial denial-of-service on the user's own tool. Degrading with a
