@@ -7,13 +7,13 @@ lives in [`CHANGELOG.md`](CHANGELOG.md) and
 
 ## Release status
 
-The latest tagged release is **0.4.17** (2026-07-30). A capability present on a
+The latest tagged release is **0.4.18** (2026-08-01). A capability present on a
 development branch is not considered shipped until its release gate passes and
 a version is tagged.
 
 | Version               | State                  | Theme                                                                                           |
 | --------------------- | ---------------------- | ----------------------------------------------------------------------------------------------- |
-| **0.4.18**            | Qualified, unpublished | Native Desktop visual system, platform-adaptive shell, accessibility, and workbench performance |
+| **0.4.18**            | Shipped                | Native Desktop visual system, platform-adaptive shell, accessibility, and workbench performance |
 | **0.4.17**            | Shipped                | Runtime plane, automations, connectors, review operations, and cross-surface product completion |
 | **0.4.16**            | Shipped                | Autonomous fleet, unified desktop, Track maturation, PostgreSQL brain, remote brain, and Atlas  |
 | **0.4.15**            | Shipped                | Requirement-first workflow and the first unified Chat · Track · Code workspace                  |
@@ -114,8 +114,9 @@ Implementation checkmarks in this section describe the shipped release.
 - [x] Complete live macOS and Windows review before removing the reversible
       compatibility setting.
 
-0.4.17 remains the latest published release. Qualification does not authorize
-tagging, package publication, release creation, or a merge to `main`.
+0.4.18 is the latest published release: qualification passed, the owner
+authorized publication, and it was tagged `v0.4.18` and merged to `main` on
+2026-08-01.
 
 Detailed decision and taskboard:
 [ADR-026](brainrouter-docs/decisions/ADR-026-desktop-native-visual-system.md)

@@ -183,14 +183,13 @@ flowchart LR
 
 ## Current status
 
-**0.4.16 is the latest tagged release.** It shipped the unified desktop,
-autonomous fleet, mature Track surface, PostgreSQL brain, remote-brain support,
-and Atlas codebase knowledge.
+**0.4.18 is the latest tagged release.** It shipped a platform-adaptive Desktop
+visual system, native window behavior, persistent panel state, faster
+Files/Editor navigation, and phase-aware plan execution.
 
-**0.4.17 is in development.** It extends the runtime plane, automations,
-connectors, review operations, scoped dashboard chat and knowledge, and the
-shared dashboard/desktop interface system. Development-branch behavior remains
-unreleased until the full acceptance gate passes.
+**0.4.17** shipped conversational workspace setup, a profile-aware agent
+runtime, revisioned work identity, scoped specialist packs, and Project
+knowledge from bounded ingest through citation-backed workflows.
 
 See [`ROADMAP.md`](ROADMAP.md) for planned work and
 [`CHANGELOG.md`](CHANGELOG.md) for shipped behavior.
