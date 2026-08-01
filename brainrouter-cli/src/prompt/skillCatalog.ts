@@ -350,13 +350,22 @@ function parseSkillFile(filePath: string): { name: string; description?: string;
   if (!name) return undefined;
   // ADR-027 D3 — honor `disable-model-invocation`: a human-only skill must not be
   // model-invocable, and its description must stay out of the model's catalog.
-  const humanOnly = readYamlScalar(block, 'disable-model-invocation');
+  // The brain parses frontmatter with a real YAML parser, so it accepts every
+  // YAML-truthy spelling; this regex reader must agree or the same file would be
+  // human-only on one surface and model-invocable on the other.
+  const humanOnly = isYamlTrue(readYamlScalar(block, 'disable-model-invocation'));
   return {
     name,
     description,
     triggers: parseSkillTriggersFrontmatter(raw),
-    ...(humanOnly?.toLowerCase() === 'true' ? { disableModelInvocation: true } : {}),
+    ...(humanOnly ? { disableModelInvocation: true } : {}),
   };
+}
+
+/** YAML-truthy scalars, matching what a real YAML parser accepts. */
+function isYamlTrue(value: string | undefined): boolean {
+  if (value === undefined) return false;
+  return ['true', 'yes', 'on', 'y'].includes(value.trim().toLowerCase());
 }
 
 function readYamlScalar(block: string, key: string): string | undefined {

@@ -77,12 +77,15 @@ function parseSkillFrontmatter(filePath: string): { name: string; description: s
       // ADR-027 D3 — `disable-model-invocation` marks a skill as human-only.
       // It was previously dropped, which both exposed the skill to the model and
       // pushed its description into every turn's catalog.
-      const humanOnly = data['disable-model-invocation'] ?? data.disableModelInvocation;
+      const rawHumanOnly = data['disable-model-invocation'] ?? data.disableModelInvocation;
+      const humanOnly = typeof rawHumanOnly === 'string'
+        ? ['true', 'yes', 'on', 'y'].includes(rawHumanOnly.trim().toLowerCase())
+        : rawHumanOnly === true;
       return { 
         name: String(data.name), 
         description: String(data.description),
         category: data.category ? String(data.category) : undefined,
-        ...(humanOnly === true || humanOnly === 'true' ? { disableModelInvocation: true } : {})
+        ...(humanOnly ? { disableModelInvocation: true } : {})
       };
     }
   } catch {
