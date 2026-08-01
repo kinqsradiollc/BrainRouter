@@ -78,7 +78,7 @@ velocity**.
 
 | Reported symptom | Root cause (verified) | Debt |
 |---|---|---|
-| `delegate_explorer paused until required workflow skill(s) are loaded: adr-skill` | The stage/preflight resolver reads workspace-managed skills, then the brain over MCP — the **bundled on-disk skills are invisible to it**. A packaged desktop build ships no skills at all. | Knowledge |
+| `delegate_explorer paused until required workflow skill(s) are loaded: adr-skill` | **Already fixed in 0.4.18 — the reporter was running 0.4.17.** That exact string exists only in v0.4.17; 0.4.18 replaced it with an auto-loading preflight. Bundled on-disk resolution has existed since 0.4.17 and was verified working offline. What remains is hardening, not a defect. | Knowledge |
 | Agent cannot read uploaded PDFs/images | A complete attachment subsystem exists (detection, PDF extraction, ingest, store) and is consumed by the desktop host, CLI and brain — but **there is no agent tool**. | Knowledge |
 | Worktrees open a new window and become projects | Agent *execution root* and window *workspace* are the same concept; opening a worktree swaps the window and adds a recent. | Cognitive |
 | Parallel agent candidates do not work | Candidate UI exists; production path unverified. | Technical |
@@ -145,10 +145,16 @@ value.
 
 ### D3 — Skills: fix resolution, then bundle a curated library
 
-**The fix (blocking everything else).** The stage/preflight resolver gains the **bundled on-disk
-catalog as a first-choice source**, so built-in workflows resolve offline; the desktop build ships
-`skills/`; and an unresolvable required skill degrades to a **warning, not a denial** — a missing
-workflow must never be able to deadlock the agent.
+**Correction of record.** An earlier draft of this ADR claimed the bundled on-disk skills were
+invisible to the stage resolver and that a packaged desktop shipped none. **Both claims were
+wrong.** `resolveStageSkillActivation` already falls back to the bundled catalog, that fallback has
+existed since 0.4.17, and running it directly resolves `adr-skill` and `planning-skill` from disk
+with no brain and no workspace. The reported error string exists **only in v0.4.17** and was
+replaced in 0.4.18 by the auto-loading preflight. The reporter was running the older build.
+
+**What actually remains, and it is hardening rather than a fix.** An unresolvable required skill
+should degrade to a **warning, not a denial** — a missing workflow must never be able to deadlock
+the agent, regardless of why it is missing. This is a robustness decision, not a bug.
 
 **Loader gaps to close first**, all small and all verified: `## Workflow` has no preamble fallback
 (unlike `## Overview`), so a prose-first skill serves nothing — most candidate skills are
@@ -335,8 +341,8 @@ To fix, in priority order:
 
 Ordered so that blockers land first and each phase is independently shippable.
 
-- **P0 — Unblock.** Skill resolution + loader gaps (D3 fix). Restores the agent's ability to work
-  at all when the brain is unreachable.
+- **P0 — Harden.** Warn-instead-of-deny on an unresolvable required skill, plus the loader gaps
+  (D3). Smaller than originally scoped: the reported failure is already fixed in 0.4.18.
 - **P1 — Correctness.** The distributed-systems defects (D12 items 1–4) and the retention half of
   D11. These are bugs, not features.
 - **P2 — Attachments.** Storage, dedup, retention, cascade delete, agent tools (D4 first half).
