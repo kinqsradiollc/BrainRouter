@@ -98,7 +98,7 @@ test("a non-linear chain is rejected by validation", async () => {
     ],
   }));
   assert.equal(result.stack, null);
-  assert.match(result.reason!, /failed validation/);
+  assert.match(result.reason!, /could not be read/);
 });
 
 test("a stack that does not contain this pull request is rejected", async () => {
@@ -197,4 +197,31 @@ test("an unparseable size still counts as stacked rather than silently hiding it
   // not evidence that the stack is not real.
   const { pullRequestIsStacked } = await import("../integrations/githubStack.js");
   assert.equal(pullRequestIsStacked({ stack: { number: 4 } }), true);
+});
+
+test("a null or non-object layer entry degrades instead of throwing", async () => {
+  // Found by the security review on #1298, and it was the sharpest kind of
+  // finding: the crash escaped fetchPullRequestStack, aborted runPrReview, and
+  // stopped the SECURITY COMMENT ITSELF from being posted. A stack banner must
+  // never be able to suppress the findings it sits next to.
+  //
+  // The earlier tests covered `"nope"` and `[]` but not `[null]` — the gap in
+  // the test was the gap in the code.
+  for (const bad of [[null], [undefined], ["a string"], [42], [{ number: 1, head: "a", base: "main" }, null]]) {
+    const result = await call(responder(200, { trunk: "main", pull_requests: bad }));
+    assert.equal(result.stack, null, `for ${JSON.stringify(bad)}`);
+    assert.ok(result.reason, "a reason is always given");
+  }
+});
+
+test("a payload that throws while being read degrades rather than escaping", async () => {
+  // Defence in depth for shapes nobody predicted: the whole parse is wrapped,
+  // so any future preview-era surprise still cannot abort the review.
+  const hostile = {
+    trunk: "main",
+    get pull_requests() { throw new Error("exploding getter"); },
+  };
+  const result = await call(responder(200, hostile));
+  assert.equal(result.stack, null);
+  assert.ok(result.reason);
 });

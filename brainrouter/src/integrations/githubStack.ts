@@ -112,47 +112,61 @@ export async function fetchPullRequestStack(input: {
     };
   }
 
-  const body = (payload ?? {}) as { trunk?: unknown; base_ref?: unknown; pull_requests?: unknown; layers?: unknown };
-  const rawLayers = Array.isArray(body.pull_requests)
-    ? body.pull_requests
-    : Array.isArray(body.layers) ? body.layers : [];
-  if (rawLayers.length === 0) return { stack: null, reason: "the stack has no layers" };
-
-  const layers: StackLayer[] = [];
-  for (const raw of rawLayers as RawStackEntry[]) {
-    const number = Number(raw.number);
-    const head = branchRef(raw.head);
-    const base = branchRef(raw.base);
-    if (!Number.isInteger(number) || number <= 0 || !head || !base) {
-      // A layer we cannot identify makes the whole chain unverifiable, and a
-      // chain we cannot verify must not be used to decide merge order.
-      return { stack: null, reason: "a stack layer was missing its number or branch refs" };
-    }
-    layers.push({
-      number,
-      head,
-      base,
-      ready: layerReady(raw),
-      ...(raw.merged === true ? { merged: true } : {}),
-    });
-  }
-
-  const trunk = typeof body.trunk === "string"
-    ? body.trunk
-    : typeof body.base_ref === "string"
-      ? body.base_ref
-      : layers[0]!.base;
-
-  const stack: PullRequestStack = { trunk, layers };
+  // The whole parse runs inside a try. The fetch was already guarded, but the
+  // PARSE is where an untrusted preview-era payload actually bites: a `null`
+  // element in the array made `raw.number` throw, and that exception escaped
+  // this function, aborted the review, and stopped the security comment from
+  // being posted at all. A stack banner must never be able to suppress the
+  // findings it sits next to.
+  let stack: PullRequestStack;
   try {
+    // Reading the body happens in here too: a property access on an untrusted
+    // payload can itself throw, and an exception escaping this function stops
+    // the security comment being posted at all.
+    const body = (payload ?? {}) as { trunk?: unknown; base_ref?: unknown; pull_requests?: unknown; layers?: unknown };
+    const rawLayers = Array.isArray(body.pull_requests)
+      ? body.pull_requests
+      : Array.isArray(body.layers) ? body.layers : [];
+    if (rawLayers.length === 0) return { stack: null, reason: "the stack has no layers" };
+
+    const layers: StackLayer[] = [];
+    for (const raw of rawLayers) {
+      if (!raw || typeof raw !== "object") {
+        return { stack: null, reason: "a stack layer was not an object" };
+      }
+      const entry = raw as RawStackEntry;
+      const number = Number(entry.number);
+      const head = branchRef(entry.head);
+      const base = branchRef(entry.base);
+      if (!Number.isInteger(number) || number <= 0 || !head || !base) {
+        // A layer we cannot identify makes the whole chain unverifiable, and a
+        // chain we cannot verify must not be used to decide merge order.
+        return { stack: null, reason: "a stack layer was missing its number or branch refs" };
+      }
+      layers.push({
+        number,
+        head,
+        base,
+        ready: layerReady(entry),
+        ...(entry.merged === true ? { merged: true } : {}),
+      });
+    }
+
+    const trunk = typeof body.trunk === "string"
+      ? body.trunk
+      : typeof body.base_ref === "string"
+        ? body.base_ref
+        : layers[0]!.base;
+
+    stack = { trunk, layers };
     validateStack(stack);
   } catch (error) {
     return {
       stack: null,
-      reason: `stack failed validation (${error instanceof Error ? error.message : "unknown"})`,
+      reason: `stack could not be read (${error instanceof Error ? error.message : "unknown"})`,
     };
   }
-  if (!layers.some((layer) => layer.number === prNumber)) {
+  if (!stack.layers.some((layer) => layer.number === prNumber)) {
     return { stack: null, reason: "the returned stack does not contain this pull request" };
   }
   return { stack };
