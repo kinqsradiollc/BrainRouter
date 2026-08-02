@@ -81,6 +81,22 @@ export function planAttachmentMigration(
   records: readonly LegacyAttachment[],
   options: { blobRoot?: string } = {},
 ): MigrationPlan {
+  // `present` is the CALLER's stat result, not something this module can infer.
+  // A caller that forgets it — JSON deserialized straight from the store, a
+  // JavaScript caller with no type checking — passes `undefined`, which reads
+  // as "broken" and turns the entire migration into a silent no-op that still
+  // reports success. That failure is total and invisible, so it is rejected
+  // rather than tolerated. This was found by a dry run against real records.
+  const unstated = records.filter((record) => typeof record.present !== 'boolean');
+  if (unstated.length > 0) {
+    throw new Error(
+      `planAttachmentMigration: ${unstated.length} record(s) have no \`present\` flag ` +
+      `(${unstated.slice(0, 3).map((record) => record.id).join(', ')}${unstated.length > 3 ? ', …' : ''}). ` +
+      'Stat each file and set present=true/false before planning; an absent flag ' +
+      'would silently classify every record as broken and migrate nothing.',
+    );
+  }
+
   const broken = records.filter((record) => !record.present);
   const usable = records.filter((record) => record.present);
 

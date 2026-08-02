@@ -139,3 +139,27 @@ test('an empty set plans nothing and verifies clean', () => {
   assert.equal(plan.recordCount, 0);
   assert.deepEqual(verifyMigrationPlan(plan, []), []);
 });
+
+test('a record with no `present` flag is rejected, not silently treated as broken', () => {
+  // Found by dry-running against real records: the attachment store's JSON has
+  // no `present` field, so a caller that deserializes it straight into the
+  // planner passes undefined for every record. Read as falsy that means "all
+  // broken", and the migration becomes a no-op that still reports success —
+  // total, invisible failure. It must be loud instead.
+  const withoutFlag = [
+    { id: 'att_a', storedPath: '/w/a', sha256: 'aa', byteSize: 1 },
+  ] as unknown as Parameters<typeof planAttachmentMigration>[0];
+  assert.throws(() => planAttachmentMigration(withoutFlag), /no `present` flag/);
+});
+
+test('an explicit present:false is still honoured as a broken record', () => {
+  // The guard must reject ABSENCE of the flag without breaking the legitimate
+  // "I checked and the file is gone" case the planner exists to report.
+  const plan = planAttachmentMigration([
+    { id: 'att_a', storedPath: '/w/a', sha256: 'aa', byteSize: 1, present: false },
+    { id: 'att_b', storedPath: '/w/b', sha256: 'bb', byteSize: 2, present: true },
+  ]);
+  assert.deepEqual(plan.brokenRecords, ['att_a']);
+  assert.equal(plan.recordCount, 1);
+  assert.equal(plan.blobCount, 1);
+});
