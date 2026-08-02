@@ -1131,7 +1131,7 @@ async function postCheckRun(
     : undefined;
   const title = publication
     ? publication.blocked
-      ? `Assurance blocked · ${blocking} supported finding(s)`
+      ? `Assurance blocked · ${publication.blockingFindingIds.length || blocking} supported finding(s)`
       : publication.cleanEligible
         ? 'Repository assurance complete'
         : `Assurance ${publication.label}`
