@@ -35,6 +35,9 @@ function handlers(): WorkbenchHandlers & { calls: string[] } {
     listAttachments: record('listAttachments'),
     readAttachment: record('readAttachment'),
     runLocalReview: record('runLocalReview'),
+    describeStack: record('describeStack'),
+    adviseStacking: record('adviseStacking'),
+    createStackLayer: record('createStackLayer'),
     openPanel: record('openPanel'),
     setTheme: record('setTheme'),
   };
@@ -78,7 +81,10 @@ test('every read action is genuinely read-only', () => {
   // session, which is the one place the label is load-bearing.
   const registry = workbenchRegistry(handlers());
   const reads = [...registry.actions.values()].filter((a) => a.effect === 'read').map((a) => a.id);
-  assert.deepEqual(reads.sort(), ['attachment.list', 'attachment.read', 'review.runlocal', 'session.list', 'workspace.list']);
+  assert.deepEqual(reads.sort(), [
+    'attachment.list', 'attachment.read', 'review.runlocal',
+    'session.list', 'stack.advise', 'stack.describe', 'workspace.list',
+  ]);
 });
 
 test('a read-only session can inspect but cannot delete or switch', async () => {
@@ -125,4 +131,14 @@ test('the worktree pin is exposed, so P5-1 is reachable by the agent', () => {
   const pin = registry.actions.get('session.pintoworktree')!;
   assert.equal(pin.effect, 'mutate');
   assert.deepEqual(Object.keys(pin.params).sort(), ['sessionId', 'worktreePath']);
+});
+
+test('stack actions are agent-reachable, and adding a layer is not destructive', () => {
+  // Opening a pull request is reversible by closing it; nothing existing is
+  // rewritten. Classifying it destructive would put a confirmation prompt in
+  // front of the safe action while the genuinely destructive ones look alike.
+  const registry = workbenchRegistry(handlers());
+  assert.equal(registry.actions.get('stack.describe')!.effect, 'read');
+  assert.equal(registry.actions.get('stack.advise')!.effect, 'read');
+  assert.equal(registry.actions.get('stack.addlayer')!.effect, 'mutate');
 });

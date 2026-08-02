@@ -37,6 +37,9 @@ export interface WorkbenchHandlers {
   listAttachments(args: Record<string, unknown>): unknown;
   readAttachment(args: Record<string, unknown>): unknown;
   runLocalReview(args: Record<string, unknown>): unknown;
+  describeStack(args: Record<string, unknown>): unknown;
+  adviseStacking(args: Record<string, unknown>): unknown;
+  createStackLayer(args: Record<string, unknown>): unknown;
   openPanel(args: Record<string, unknown>): unknown;
   setTheme(args: Record<string, unknown>): unknown;
 }
@@ -116,6 +119,30 @@ const SPECS: readonly Spec[] = [
   {
     id: 'review.runlocal', title: 'Run the local pre-commit review over uncommitted changes',
     effect: 'read', params: {}, handler: 'runLocalReview',
+  },
+  {
+    id: 'stack.describe',
+    title: 'Show a stacked pull request: its layers, what can merge, and what is waiting',
+    effect: 'read', params: { pullNumber: str('Any pull request number in the stack') },
+    handler: 'describeStack',
+  },
+  {
+    id: 'stack.advise',
+    title: 'Advise whether the current change should be split into a stack, and where to cut it',
+    effect: 'read', params: {}, handler: 'adviseStacking',
+  },
+  {
+    id: 'stack.addlayer',
+    title: 'Add a layer on top of a stacked pull request',
+    // `mutate`, not `destructive`: it opens a pull request, which is reversible
+    // by closing it. Nothing existing is rewritten.
+    effect: 'mutate',
+    params: {
+      onPullNumber: str('The pull request this layer stacks on top of'),
+      head: str('Branch name for the new layer'),
+      title: str('Title for the new pull request'),
+    },
+    handler: 'createStackLayer',
   },
   {
     id: 'panel.open', title: 'Open a workbench panel',
