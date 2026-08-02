@@ -37,6 +37,7 @@ export {
   attributeFindingsToLayers,
   adviseStacking,
   describeStack,
+  displayRef,
   REVIEWABLE_LAYER_LINES,
   StackError,
   type StackLayer,
