@@ -705,6 +705,9 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     enforceVersionRange: c.enforceVersionRange === true,
     // CC-CONFIG-A1 — env override wins (opt-in troubleshooting from any shell).
     safeMode: resolveBoolWithEnv(c.safeMode, 'BRAINROUTER_SAFE_MODE'),
+    // ADR-027 D2 — anything other than an explicit 'graph' stays on the loop.
+    // A typo must not silently switch the engine that runs every turn.
+    executionEngine: c.executionEngine === 'graph' ? 'graph' : 'loop',
     attribution: { sessionUrl: c.attribution?.sessionUrl !== false },
     // CC-CONFIG-A6 — env override wins.
     skillsHideBundled: resolveBoolWithEnv(c.skillsHideBundled, 'BRAINROUTER_HIDE_BUNDLED_SKILLS'),
