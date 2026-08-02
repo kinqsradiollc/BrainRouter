@@ -61,6 +61,19 @@ type TenantAwareClaim = {
   claimNextMemoryJob(options?: { now?: string; perTenantLimit?: number }): Promise<MemoryJobRecord | null>;
 };
 
+/**
+ * ADR-027 D11 / P1-6 — retention lives on the concrete Postgres store, not on
+ * the shared `IMemoryStore` contract, for the same reason as the claim above:
+ * it is a capability of the real database, and the runner probes for it rather
+ * than forcing every store (including test doubles) to implement it.
+ */
+type RetentionCapableStore = {
+  runRetentionPass?(options?: { retentionDays?: number; batchSize?: number }): Promise<{
+    usageEventsFolded: number;
+    jobsCompacted: number;
+  }>;
+};
+
 export interface RunAsJobOptions<T> {
   /** Higher runs sooner if ever queued. Defaults to the store default (50). */
   priority?: number;
@@ -178,6 +191,14 @@ export interface MemoryJobRunnerOptions {
    * proceeds. The hook owns its own cadence throttle.
    */
   onTick?: () => void | Promise<void>;
+  /**
+   * ADR-027 D11 / P1-6 — how often a retention pass runs, in ms. Retention is
+   * slow, bounded work that must NOT run every drain tick; the default is
+   * hourly. Set 0 to disable (tests, or a deployment that prunes externally).
+   */
+  retentionIntervalMs?: number;
+  /** Days of full detail kept before compaction. Owner default: 90. */
+  retentionDays?: number;
 }
 
 /**
@@ -201,6 +222,9 @@ export class MemoryJobRunner {
   private readonly stuckMs: number;
   private readonly resolveExecutor: (agentId: string) => JobExecutor | undefined;
   private readonly onTick?: () => void | Promise<void>;
+  private readonly retentionIntervalMs: number;
+  private readonly retentionDays?: number;
+  private lastRetentionAt = 0;
 
   constructor(
     private readonly store: IMemoryStore,
@@ -213,6 +237,38 @@ export class MemoryJobRunner {
     this.stuckMs = options?.stuckMs ?? 5 * 60_000;
     this.resolveExecutor = options?.resolveExecutor ?? getJobExecutor;
     this.onTick = options?.onTick;
+    this.retentionIntervalMs = options?.retentionIntervalMs ?? 60 * 60_000;
+    this.retentionDays = options?.retentionDays;
+  }
+
+  /**
+   * Fold expired usage events and compact old job-progress timelines, at most
+   * once per `retentionIntervalMs`. Best-effort and fully isolated: retention
+   * must never be able to stall or break the drain it rides along with, and a
+   * store that predates this capability simply has nothing to call.
+   */
+  private async maybeRunRetention(): Promise<void> {
+    if (this.retentionIntervalMs <= 0) return;
+    const now = Date.now();
+    if (now - this.lastRetentionAt < this.retentionIntervalMs) return;
+    // Stamp BEFORE awaiting: a slow pass must not let the next tick start a
+    // second one alongside it.
+    this.lastRetentionAt = now;
+    const capable = this.store as unknown as RetentionCapableStore;
+    if (typeof capable.runRetentionPass !== "function") return;
+    try {
+      const result = await capable.runRetentionPass(
+        this.retentionDays === undefined ? undefined : { retentionDays: this.retentionDays },
+      );
+      if (result.usageEventsFolded > 0 || result.jobsCompacted > 0) {
+        console.error(
+          `[BrainRouter] retention: folded ${result.usageEventsFolded} usage event(s), ` +
+          `compacted ${result.jobsCompacted} job timeline(s)`,
+        );
+      }
+    } catch (err: any) {
+      console.error("[BrainRouter] retention pass failed:", err?.message ?? err);
+    }
   }
 
   start(): void {
@@ -251,6 +307,7 @@ export class MemoryJobRunner {
         }
       }
       await this.store.sweepStuckMemoryJobs(this.stuckMs);
+      await this.maybeRunRetention();
       const claim = this.store as unknown as TenantAwareClaim;
       const perTenantLimit = this.perTenantLimit > 0 ? this.perTenantLimit : undefined;
       const claimed: MemoryJobRecord[] = [];

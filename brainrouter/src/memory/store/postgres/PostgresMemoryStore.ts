@@ -144,6 +144,7 @@ import * as contradiction from "./queries/contradictionQueries.js";
 import * as skillFocus from "./queries/skillFocusQueries.js";
 import * as session from "./queries/sessionQueries.js";
 import * as job from "./queries/jobQueries.js";
+import * as retention from "./queries/retentionQueries.js";
 import * as assurance from "./queries/assuranceQueries.js";
 import * as assessmentEvidence from "./queries/assessmentEvidenceQueries.js";
 import * as compression from "./queries/compressionQueries.js";
@@ -1180,6 +1181,16 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
 
   public sweepStuckMemoryJobs(stuckMs: number, options?: { now?: string; backoffMs?: number }): Promise<number> {
     return job.sweepStuckMemoryJobs(this.exec, stuckMs, options);
+  }
+
+  /**
+   * ADR-027 D11 / P1-6 — one bounded retention pass: fold expired usage events
+   * into their daily rollup and compact old job-progress timelines.
+   */
+  public runRetentionPass(
+    options?: retention.RetentionOptions,
+  ): Promise<retention.RetentionPassResult> {
+    return retention.runRetentionPass(this.exec, options);
   }
 
   public expireAuthorizedAssessmentEvidence(
