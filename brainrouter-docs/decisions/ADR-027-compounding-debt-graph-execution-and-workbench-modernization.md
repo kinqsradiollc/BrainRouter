@@ -440,6 +440,51 @@ To fix, in priority order:
 
 ---
 
+### D13 — Stacked pull requests as decision granularity
+
+GitHub put **stacked pull requests** into public preview on 2026-07-30. A stack is an ordered
+chain: the bottom layer targets the trunk, each layer above targets the branch below it, merging is
+bottom-up, and merging a middle layer lands everything beneath it while the layers above are rebased
+and re-targeted automatically.
+
+**This is not an integration for its own sake — it is the missing mechanism for D1.** §1 records
+that on agent-authored work, PR size and files-per-PR are up, time-in-review is up several-fold,
+PRs merged with no review are up sharply, and reviewer comments are markedly less substantive. D1's
+answer to cognitive debt is to keep the human deciding at a **decision granularity** rather than an
+action granularity. A stack is exactly that: it turns one 2,000-line "approve or don't" into an
+ordered series of reviewable decisions, without asking the author to invent artificial commits or
+the reviewer to hold the whole change in their head at once. GitHub's published figure — PRs under
+200 lines review roughly three times faster with about 40% fewer production defects — is the same
+claim from the other direction.
+
+We take the platform's chain and merge semantics as given. What must be **ours** is the part our
+review gate needs in order to say something true:
+
+**Merge readiness distinguishes "your problem" from "someone else's floor."** A layer blocked by its
+own checks and a layer blocked only because something below it is open are different situations. A
+gate that collapses them is what makes a stack feel like it is fighting you: you fix a layer,
+nothing changes, and nothing ever says the reason is one floor down. `evaluateStackMerge` names the
+blocking layer.
+
+**A finding is attributed to the LOWEST layer it appears in.** A lower layer's issue is visible from
+every layer above it, so a naive per-layer review reports one problem N times and the author
+dismisses it N times. That is precisely the notification-fatigue failure §1 documents — except
+manufactured by our own tooling rather than inherited.
+
+**Stacking advice can say no.** A large but genuinely indivisible change — one mechanical rename
+across forty files — should stay one honest PR. Splitting it produces layers that cannot be reviewed
+or merged independently, and a tool that insists otherwise gets ignored, after which it advises
+nothing at all. The advice is therefore threshold *and* separability, never size alone.
+
+Stack operations are exposed through the D6 control layer (`stack.describe`, `stack.advise`,
+`stack.addlayer`), so the agent can propose and operate a stack rather than only a human. Adding a
+layer is classified `mutate` rather than `destructive`: opening a pull request is reversible by
+closing it, and putting a confirmation prompt in front of the safe action while the genuinely
+destructive ones look identical is how confirmation stops meaning anything.
+
+Two platform constraints inherited as-is: stacks require all branches in the same repository (no
+cross-fork), and merge-queue support was still rolling out at preview.
+
 ## 3. Phases
 
 Ordered so that blockers land first and each phase is independently shippable.
