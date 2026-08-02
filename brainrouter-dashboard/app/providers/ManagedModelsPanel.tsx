@@ -367,6 +367,10 @@ export function ManagedModelsPanel({ providers, orgId }: { providers: ProviderCo
               */}
               <div className="settings-field managed-model-modality">
                 <div className="settings-label-text" style={{ width: "100%", marginBottom: "0.35rem" }}>Non-text input</div>
+                <div className="settings-hint" style={{ width: "100%", marginBottom: "0.5rem" }}>
+                  PDFs are read locally for every model. `pdf (native)` only means this model can
+                  take the file directly, letting us skip our own extraction.
+                </div>
                 <label className="settings-check" style={{ width: "100%" }}>
                   <input
                     type="radio"
@@ -418,13 +422,14 @@ export function ManagedModelsPanel({ providers, orgId }: { providers: ProviderCo
                                 },
                               };
                             })}
-                          /> {kind}
+                          /> {kind === "pdf" ? "pdf (native)" : kind}
                         </label>
                       );
                     })}
                     {draft.capabilities.input.accepts.length === 0 && (
                       <div className="settings-hint managed-model-modality-hint" style={{ flexBasis: "100%" }}>
-                        None selected — recorded as text-only. Attachments will be refused before sending.
+                        None selected — recorded as text-only. Images will be refused before sending;
+                        PDFs still work, via local extraction.
                       </div>
                     )}
                   </div>
