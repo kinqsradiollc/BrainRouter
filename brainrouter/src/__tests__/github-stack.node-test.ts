@@ -170,3 +170,31 @@ test("a merged bottom layer is carried through", async () => {
   assert.equal(stack!.layers[0]!.merged, true);
   assert.equal(stack!.layers[1]!.merged, undefined);
 });
+
+test("the free stacked hint reads the pull request payload we already fetch", async () => {
+  // Calling the Stacks API on every review would add a round-trip per review to
+  // be told "no" for the large majority of pull requests, which are unstacked.
+  // The PR payload already carries a `stack` object when it is in one.
+  const { pullRequestIsStacked } = await import("../integrations/githubStack.js");
+  assert.equal(pullRequestIsStacked({ stack: { number: 4, size: 3, position: 2 } }), true);
+  assert.equal(pullRequestIsStacked({}), false);
+  assert.equal(pullRequestIsStacked(null), false);
+  assert.equal(pullRequestIsStacked(undefined), false);
+  assert.equal(pullRequestIsStacked({ stack: null }), false);
+});
+
+test("a stack of one is not treated as a stack", async () => {
+  // GitHub can report a degenerate single-layer stack. Rendering a "layer 1 of
+  // 1" banner on an ordinary pull request is noise, and noise is what makes
+  // people stop reading the comment that also carries the findings.
+  const { pullRequestIsStacked } = await import("../integrations/githubStack.js");
+  assert.equal(pullRequestIsStacked({ stack: { size: 1 } }), false);
+  assert.equal(pullRequestIsStacked({ stack: { size: 2 } }), true);
+});
+
+test("an unparseable size still counts as stacked rather than silently hiding it", async () => {
+  // Erring toward showing the banner: a missing size is an API-shape question,
+  // not evidence that the stack is not real.
+  const { pullRequestIsStacked } = await import("../integrations/githubStack.js");
+  assert.equal(pullRequestIsStacked({ stack: { number: 4 } }), true);
+});

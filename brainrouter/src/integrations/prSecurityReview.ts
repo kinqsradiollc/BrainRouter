@@ -40,7 +40,7 @@ import {
   splitDiffForReview,
 } from './reviewDiffChunks.js';
 import { resolveReviewPolicy, type ReviewPolicy } from './githubWebhook.js';
-import { fetchPullRequestStack } from './githubStack.js';
+import { fetchPullRequestStack, pullRequestIsStacked } from './githubStack.js';
 import { describeStack, evaluateStackMerge } from '@kinqs/brainrouter-core/review';
 
 export interface PrReviewInput {
@@ -517,6 +517,7 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
   // Resolve the head SHA if the caller didn't supply it (a `/review` comment re-run comes
   // from an issue_comment webhook, which carries no head sha). Needed for the check-run's
   // head_sha and the "Reviewed <sha>" staleness footer.
+  let prIsStacked = false;
   let headSha = String(input.headSha ?? '');
   let prAuthor = cleanIdentity(input.prAuthor);
   let headContributor: string | undefined;
@@ -551,6 +552,10 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
       const pr = await deps.fetchImpl(`${apiBase}/repos/${repo}/pulls/${prNumber}`, { headers: ghHeaders(token) });
       if (pr.ok) {
         const payload = (await pr.json()) as { head?: { sha?: string }; user?: { login?: string; avatar_url?: string } };
+        // ADR-027 D13 — the pull request carries a `stack` object when it is in
+        // one, so we learn this for free rather than paying a Stacks API
+        // round-trip per review to be told "no".
+        prIsStacked = pullRequestIsStacked(payload);
         // A webhook's head SHA identifies the exact commit that queued this job.
         // Do not silently retarget an already-queued review if the PR advances
         // again before this metadata request runs.
@@ -858,7 +863,7 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
   // below it is not the author's problem, and a review that does not
   // distinguish the two sends people to fix code that is already fine.
   let stackNote = '';
-  if (forge === 'github') {
+  if (forge === 'github' && prIsStacked) {
     const found = await fetchPullRequestStack({
       fetchImpl: deps.fetchImpl, apiBase, repo, prNumber, token, headers: ghHeaders,
     });

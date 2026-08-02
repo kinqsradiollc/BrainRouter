@@ -50,6 +50,22 @@ function layerReady(entry: RawStackEntry): boolean {
   return state === "clean" || state === "unstable";
 }
 
+/**
+ * Does this pull request belong to a stack at all?
+ *
+ * Every pull request the API returns carries a `stack` object when it is in
+ * one. The review path already fetches the pull request for its head SHA and
+ * author, so reading this costs NOTHING — whereas calling the Stacks API for
+ * every review would add a round-trip per review to learn "no" for the large
+ * majority of pull requests, which are not stacked.
+ */
+export function pullRequestIsStacked(prPayload: unknown): boolean {
+  const stack = (prPayload as { stack?: unknown } | null | undefined)?.stack;
+  if (!stack || typeof stack !== "object") return false;
+  const size = Number((stack as { size?: unknown }).size);
+  return Number.isFinite(size) ? size > 1 : true;
+}
+
 export interface StackFetchResult {
   stack: PullRequestStack | null;
   /** Why there is no stack, for the activity log. Never surfaced as an error. */
@@ -75,8 +91,11 @@ export async function fetchPullRequestStack(input: {
   const { fetchImpl, apiBase, repo, prNumber, token, headers } = input;
   let payload: unknown;
   try {
+    // The Stacks API, not a per-pull-request sub-resource. Merging a stacked
+    // pull request also requires this API — the legacy merge endpoints cannot
+    // merge a stack — so this is the surface to build on.
     const response = await fetchImpl(
-      `${apiBase}/repos/${repo}/pulls/${prNumber}/stack`,
+      `${apiBase}/repos/${repo}/stacks?pull_request=${prNumber}`,
       { headers: headers(token) },
     );
     if (response.status === 404) {
