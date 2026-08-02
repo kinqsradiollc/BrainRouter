@@ -40,6 +40,8 @@ import {
   splitDiffForReview,
 } from './reviewDiffChunks.js';
 import { resolveReviewPolicy, type ReviewPolicy } from './githubWebhook.js';
+import { fetchPullRequestStack } from './githubStack.js';
+import { describeStack, evaluateStackMerge } from '@kinqs/brainrouter-core/review';
 
 export interface PrReviewInput {
   orgId?: string;
@@ -851,7 +853,36 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
 
   // 4. Post/update ONE idempotent PINNED SUMMARY comment (keyed by the lens marker) with
   //    the full tally — the single place to read this lens's status for the whole PR.
-  const body = `${formatReviewSummaryComment(lens, { findings, headSha })}${gateSummary(assuranceGate)}`;
+  // ADR-027 D13 — when this pull request is a layer in a stack, say so, and say
+  // what is actually blocking a merge. A layer held up only by an open layer
+  // below it is not the author's problem, and a review that does not
+  // distinguish the two sends people to fix code that is already fine.
+  let stackNote = '';
+  if (forge === 'github') {
+    const found = await fetchPullRequestStack({
+      fetchImpl: deps.fetchImpl, apiBase, repo, prNumber, token, headers: ghHeaders,
+    });
+    if (found.stack) {
+      const verdict = evaluateStackMerge(found.stack)
+        .find((entry) => entry.number === prNumber);
+      const position = found.stack.layers.findIndex((l) => l.number === prNumber) + 1;
+      const blocked = verdict && !verdict.mergeable && verdict.reason.kind === 'blocked_below'
+        ? `\n\nThis layer cannot merge yet because **#${verdict.reason.by}** below it is still open. ` +
+          'That is not a problem with this layer.'
+        : '';
+      stackNote =
+        `\n\n---\n**Stacked pull request** — layer ${position} of ${found.stack.layers.length}.` +
+        `\n\n\`\`\`\n${describeStack(found.stack)}\n\`\`\`${blocked}`;
+      progress('stack-detected', 'Stacked pull request context resolved', {
+        layers: found.stack.layers.length, position,
+      });
+    } else if (found.reason && found.reason !== 'not part of a stack') {
+      // Never an error: an unstacked PR and a preview-era API shift look the
+      // same from here, and neither should stop a review being published.
+      progress('stack-unavailable', `Stack context unavailable: ${found.reason}`);
+    }
+  }
+  const body = `${formatReviewSummaryComment(lens, { findings, headSha })}${gateSummary(assuranceGate)}${stackNote}`;
   const posted = forge === 'gitlab'
     ? await upsertGitlabReviewNote(deps.fetchImpl, apiBase, gitlabProject, prNumber, body, token, lens.summaryMarker)
     : await upsertReviewComment(deps.fetchImpl, apiBase, repo, prNumber, body, token, lens.summaryMarker);
