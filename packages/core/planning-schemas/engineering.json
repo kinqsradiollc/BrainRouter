@@ -4,8 +4,15 @@
   "id": "engineering-delivery",
   "label": "Engineering delivery",
   "description": "Requirements, architecture decisions, implementation tasks, and verification evidence.",
-  "profileIds": ["engineering"],
-  "planningSkillIds": ["planning-skill"],
+  "profileIds": [
+    "engineering",
+    "product-management",
+    "design",
+    "operations"
+  ],
+  "planningSkillIds": [
+    "planning-skill"
+  ],
   "sections": [
     {
       "id": "requirements",

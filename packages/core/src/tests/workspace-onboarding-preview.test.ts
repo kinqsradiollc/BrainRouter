@@ -8,6 +8,7 @@ import {
   WORKSPACE_MANIFEST_EXPLICIT_TOOL_SELECTION_VERSION,
 } from '../workspace/manifest.js';
 import {
+  ORCHESTRATION_PLAN_ALIASES,
   resolveWorkspaceProfileOrchestrationDefaults,
   workspaceProfilesForOnboarding,
 } from '../workspace/profileOrchestrationDefaults.js';
@@ -19,7 +20,12 @@ test('P23-8 every onboarding profile derives orchestration defaults from its bun
     const defaults = resolveWorkspaceProfileOrchestrationDefaults(profileId);
     const manifest = createWorkspaceManifest({ name: 'preview', profile: profileId, by: 'wizard' });
     assert.equal(defaults.source, 'orchestration-profile');
-    assert.equal(defaults.planId, profileId);
+    // A domain profile may SHARE the plan of the profile whose work shape it
+    // matches (see ORCHESTRATION_PLAN_ALIASES). What must hold is that a real
+    // bundled plan resolved — never the TypeScript compatibility fallback —
+    // and that the plan is either its own or its declared alias, so an
+    // accidental alias to some unrelated profile still fails.
+    assert.equal(defaults.planId, ORCHESTRATION_PLAN_ALIASES[profileId] ?? profileId);
     assert.deepEqual(manifest.orchestration, {
       mode: defaults.mode,
       availableRoles: defaults.availableRoles,

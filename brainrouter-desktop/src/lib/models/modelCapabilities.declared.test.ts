@@ -5,39 +5,38 @@
  * EITHER direction: it must add vision the id failed to suggest, and remove
  * vision the id wrongly suggested.
  */
-import { describe, expect, it } from "vitest";
-import { modelCapabilities, reconcileVision } from "./modelCapabilities";
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { modelCapabilities, reconcileVision } from './modelCapabilities.js';
 
-describe("declared input modality overrides the id heuristic", () => {
-  it("removes vision the id wrongly suggested", () => {
+test("declared modality: removes vision the id wrongly suggested", () => {
     const guess = modelCapabilities("gpt-4o");
-    expect(guess.vision).toBe(true); // the heuristic's own verdict
+    assert.equal(guess.vision, true); // the heuristic's own verdict
     const reconciled = reconcileVision(guess, { status: "known", accepts: [] });
-    expect(reconciled.vision).toBe(false);
-  });
+    assert.equal(reconciled.vision, false);
+});
 
-  it("adds vision the id failed to suggest", () => {
+test("declared modality: adds vision the id failed to suggest", () => {
     const guess = modelCapabilities("internal-model-v3");
-    expect(guess.vision).toBe(false);
+    assert.equal(guess.vision, false);
     const reconciled = reconcileVision(guess, { status: "known", accepts: ["image"] });
-    expect(reconciled.vision).toBe(true);
-  });
+    assert.equal(reconciled.vision, true);
+});
 
-  it("keeps the heuristic when nothing was declared", () => {
+test("declared modality: keeps the heuristic when nothing was declared", () => {
     const guess = modelCapabilities("gpt-4o");
-    expect(reconcileVision(guess, { status: "unknown" }).vision).toBe(true);
-    expect(reconcileVision(guess, null).vision).toBe(true);
-    expect(reconcileVision(guess, undefined).vision).toBe(true);
-  });
+    assert.equal(reconcileVision(guess, { status: "unknown" }).vision, true);
+    assert.equal(reconcileVision(guess, null).vision, true);
+    assert.equal(reconcileVision(guess, undefined).vision, true);
+});
 
-  it("a pdf-only declaration does not imply image input", () => {
+test("declared modality: a pdf-only declaration does not imply image input", () => {
     const guess = modelCapabilities("gpt-4o");
-    expect(reconcileVision(guess, { status: "known", accepts: ["pdf"] }).vision).toBe(false);
-  });
+    assert.equal(reconcileVision(guess, { status: "known", accepts: ["pdf"] }).vision, false);
+});
 
-  it("leaves every other flag untouched", () => {
+test("declared modality: leaves every other flag untouched", () => {
     const guess = modelCapabilities("gpt-4o");
     const reconciled = reconcileVision(guess, { status: "known", accepts: ["image"] });
-    expect({ ...reconciled, vision: null }).toEqual({ ...guess, vision: null });
-  });
+    assert.deepEqual({ ...reconciled, vision: null }, { ...guess, vision: null });
 });

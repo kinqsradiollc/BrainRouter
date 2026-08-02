@@ -503,10 +503,38 @@ gain. Encoded as semantic scales in `lib/design/tokens.ts`, with completeness, c
 ordering enforced by tests rather than convention — a design system that is only a convention decays
 the first time someone is in a hurry. (D5, P4-1)
 
-**Q3 — more profiles for document understanding? → NO.** `frontend-builder` stays inside
-engineering, per ADR-021. Document understanding is a shared substrate with per-profile derivations
-(D4), so it adds *derivations*, not profiles; a new profile would duplicate the engineering
-toolchain to change one view.
+**Q3 — more profiles? → YES, ELEVEN MORE — BUT ENGINEERING STAYS ONE.** *(Reverses an earlier
+recommendation of mine, on the owner's decision.)*
+
+I argued against more profiles on the grounds that document understanding adds derivations rather
+than profiles. That reasoning was sound for the question I asked and wrong for the question that
+mattered. The real gap is not document views — it is that someone doing legal, finance, or
+marketing work had to pick `engineering` and edit everything, which makes onboarding a chore
+performed against the tool rather than with it.
+
+Sixteen profiles now exist: engineering, product-management, design, research, data-science, study,
+education, writing, marketing, sales, operations, finance, legal, people, healthcare, consulting,
+plus `custom`.
+
+**The distinction that keeps this from sprawling** is between *domain* and *specialism*. A profile
+answers "what kind of work is this workspace for?" — legal or marketing. A capability answers "what
+specialism does this task need?" — frontend or backend. So **engineering stays a single profile**
+with frontend and backend as capabilities inside it: splitting them would force a lane choice at
+workspace-creation time and re-onboarding whenever a task crosses the line, which is most tasks.
+A test asserts no `frontend`/`backend`/`devops`/`mobile` profile is ever added, because adding one
+looks locally reasonable every single time it is proposed.
+
+Two things are deliberately shared rather than duplicated eleven times. **Planning schemas** and
+**orchestration plans** are aliased by *work shape*, not by industry: legal and research both
+decompose into evidence collection then citation audit; marketing and writing both plan editorially.
+Eleven near-identical plan files differing only in vocabulary would be eleven files nobody reads,
+each drifting independently. A domain that genuinely needs a different shape gets its own file, and
+*that* is the signal to add one — not the mere existence of a new profile.
+
+**`finance`, `legal`, and `healthcare` describe work adjacent to regulated professions.** Their
+personas state plainly that they do not give professional advice and that a licensed professional is
+required. That belongs in the persona rather than a UI disclaimer, because the persona is what
+actually reaches the model.
 
 **Q5 — both execution engines, or replace one? → BOTH, SELECTED IN SETTINGS.** `cli.executionEngine`
 chooses. The two are good at different things: the loop suits open-ended conversational work where
