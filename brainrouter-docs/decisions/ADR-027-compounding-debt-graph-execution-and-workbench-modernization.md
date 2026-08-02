@@ -1,7 +1,7 @@
 # ADR-027 — Compounding Debt, Graph Execution, and Workbench Modernization
 
-**Status:** PROPOSED — awaiting owner approval. No implementation may begin until this ADR is
-approved. · **Target:** `release/0.4.19` ·
+**Status:** ACCEPTED — approved by the owner and implemented. All 39 roadmap rows have modules
+with tests. Owner decisions are recorded in §5. · **Target:** `release/0.4.19` ·
 **Builds on:** ADR-020 (memory self-improvement), ADR-021 (typed workspace profiles),
 ADR-022/023 (persona, orchestration, context contracts), ADR-024/025 (work contracts,
 repository assurance, runtime boundaries), ADR-026 (desktop visual system) ·
@@ -496,13 +496,33 @@ which it is summarized into compact records and the raw rows are dropped. Long e
 quarterly audit and for incident forensics; short enough to bound growth predictably. This is the
 first rung of the D11 ladder and the trigger for everything above it. (D11, P1-6, P2-1)
 
+**Q1 — which design language? → THE MONOCHROME DIRECTION ALREADY SHIPPED.** The reference carries
+two systems at once; adopting the one already live in the desktop makes P4-1 a *unification* rather
+than a redesign, whereas choosing the other would mean re-skinning shipped UI for no user-visible
+gain. Encoded as semantic scales in `lib/design/tokens.ts`, with completeness, contrast, and layer
+ordering enforced by tests rather than convention — a design system that is only a convention decays
+the first time someone is in a hurry. (D5, P4-1)
+
+**Q3 — more profiles for document understanding? → NO.** `frontend-builder` stays inside
+engineering, per ADR-021. Document understanding is a shared substrate with per-profile derivations
+(D4), so it adds *derivations*, not profiles; a new profile would duplicate the engineering
+toolchain to change one view.
+
+**Q5 — both execution engines, or replace one? → BOTH, SELECTED IN SETTINGS.** `cli.executionEngine`
+chooses. The two are good at different things: the loop suits open-ended conversational work where
+the next step depends on what the model just said, the graph suits work with a known shape that must
+survive interruption. Replacing either trades one real strength for another; carrying both costs a
+branch at dispatch. Anything other than an explicit `graph` resolves to `loop`, so a typo cannot
+change how every turn runs. (D2, P3-1)
+
 ### Still open
 
-1. **Which design language?** The reference carries two simultaneously. We must pick one for the
-   whole app. (D5)
-2. **Is the graph engine (D2) in scope for 0.4.19**, or does it want its own release? It is the
-   largest single item here.
-3. **Does the frontend-builder persona stay inside engineering** (as decided in ADR-021), or does
-   the document-understanding work argue for more profiles?
-4. **Comprehension measurement is the most speculative part of D1.** Is measuring it worth the
-   risk of it feeling like surveillance of the user's own attention?
+1. **Comprehension measurement is the most speculative part of D1.** Is measuring it worth the
+   risk of it feeling like surveillance of the user's own attention? The mechanism is built and
+   reports as a balance rather than a nag (P9-3), but whether to surface it at all is a product
+   call, not an engineering one.
+2. **When to run the attachment storage migration.** The planner, an independent verifier, and a
+   dry-run-default executor all exist and were dry-run against real records (11 records → 8 blobs,
+   0.23 MB reclaimed, verifier clean). It is the one irreversible action in the release, and the
+   recommendation is to run it *after* this release's PRs are reviewed rather than stacked on top
+   of them.
