@@ -16,6 +16,9 @@ import {
   isPinnedAwayFromWindow,
   authorizationRoot,
   describeExecutionRoot,
+  isWithinExecutionRoot,
+  resolveForExecution,
+  planRootCleanup,
   ExecutionRootError,
 } from '../session/executionRoot.js';
 
@@ -119,4 +122,44 @@ test('roots are normalized so equality comparisons are meaningful', () => {
   assert.equal(s.executionRoot, '/Users/x/repo/');
   const t = worktreeRootedSession({ windowWorkspace: '/a/b/../b', worktreePath: '/a/b' });
   assert.equal(isPinnedAwayFromWindow(t), false, 'normalized equal paths are the same root');
+});
+
+test('containment requires a separator boundary, not a string prefix', () => {
+  // `/repo-evil` must NOT count as inside `/repo`. A bare startsWith is the
+  // classic path-containment bypass.
+  const s = windowRootedSession('/Users/x/repo');
+  assert.equal(isWithinExecutionRoot(s, '/Users/x/repo'), true);
+  assert.equal(isWithinExecutionRoot(s, '/Users/x/repo/src/a.ts'), true);
+  assert.equal(isWithinExecutionRoot(s, '/Users/x/repo-evil/a.ts'), false);
+  assert.equal(isWithinExecutionRoot(s, '/Users/x/other'), false);
+});
+
+test('containment is judged against the EXECUTION root, not the window', () => {
+  const pinned = worktreeRootedSession({ windowWorkspace: WS, worktreePath: WT });
+  assert.equal(isWithinExecutionRoot(pinned, `${WT}/src/a.ts`), true);
+  assert.equal(isWithinExecutionRoot(pinned, `${WS}/src/a.ts`), false);
+});
+
+test('an escaping path is refused, never clamped', () => {
+  // Silently rewriting ../../etc/passwd into something inside the root turns an
+  // obvious attack into a confusing successful write.
+  const s = windowRootedSession(WS);
+  assert.throws(() => resolveForExecution(s, '../../etc/passwd'), /outside/);
+  assert.equal(resolveForExecution(s, 'src/a.ts'), `${WS}/src/a.ts`);
+});
+
+test('teardown never proposes removing the window workspace', () => {
+  // That is the user's actual project.
+  const plain = windowRootedSession(WS);
+  const plan = planRootCleanup(plain);
+  assert.equal(plan.removesWorktree, false);
+  assert.equal(plan.worktreePath, undefined);
+});
+
+test('teardown removes a worktree the session was pinned to', () => {
+  const pinned = worktreeRootedSession({ windowWorkspace: WS, worktreePath: WT });
+  const plan = planRootCleanup(pinned);
+  assert.equal(plan.removesWorktree, true);
+  assert.equal(plan.worktreePath, WT);
+  assert.match(plan.reason, /worktree of/);
 });
