@@ -10,14 +10,39 @@
  * Domain personas named here sit ABOVE the orchestration harness roles
  * (architect/explorer/reviewer/verifier/worker): they shape briefing, default
  * skills, and tool posture, never the orchestration tiers.
+ *
+ * ENGINEERING IS DELIBERATELY ONE PROFILE. Frontend, backend, and technical
+ * writing are task-time CAPABILITIES inside it, not separate profiles. Splitting
+ * them would force someone to choose a lane at workspace-creation time and then
+ * re-onboard when a task crosses it — which is most tasks. Breadth of DOMAIN
+ * (is this a legal workspace or a marketing one?) is what a profile answers;
+ * breadth of SPECIALISM within a domain is what capabilities answer. There is a
+ * test asserting no `frontend`/`backend` profile is ever added.
+ *
+ * The domain-facing profiles below carry an important asymmetry: `finance`,
+ * `legal`, and `healthcare` describe work ADJACENT to regulated professions.
+ * Their personas state plainly that they do not give professional advice. That
+ * belongs in the persona rather than in a UI disclaimer, because the persona is
+ * what actually reaches the model.
  */
 
 export type WorkspaceProfileId =
   | 'engineering'
+  | 'product-management'
+  | 'design'
   | 'research'
   | 'data-science'
   | 'study'
+  | 'education'
   | 'writing'
+  | 'marketing'
+  | 'sales'
+  | 'operations'
+  | 'finance'
+  | 'legal'
+  | 'people'
+  | 'healthcare'
+  | 'consulting'
   | 'custom';
 
 export interface WorkspaceProfilePreset {
@@ -205,6 +230,435 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
       ],
     },
     memory: { tags: ['writing'], captureHint: 'drafts' },
+  },
+  {
+    id: 'product-management',
+    label: 'Product management',
+    description: 'Scoping problems, writing specs, and deciding what ships — outcomes over feature lists.',
+    persona: { default: 'product-manager', enabled: ['product-manager'] },
+    orchestration: {
+      mode: 'adaptive',
+      availableRoles: ['explorer', 'architect', 'reviewer'],
+      disabledRoles: ['fleet'],
+      maxParallel: 3,
+    },
+    agents: { default: 'product-manager', enabled: ['product-manager'] },
+    capabilities: {
+      available: ['technical-documentation'],
+      recommended: [],
+      enabled: [],
+    },
+    skills: {
+      packs: ['product'],
+      enabled: [
+        'planning-skill',
+        'handover-skill',
+        'spec-driven-skill',
+        'idea-refine-skill',
+        'concerns-skill',
+        'output-skill',
+      ],
+    },
+    tools: {
+      profiles: [
+        'workspace-files',
+        'project-knowledge',
+        'memory-context',
+        'artifacts',
+        'planning-session',
+        'browser',
+        'orchestration',
+      ],
+    },
+    memory: { tags: ['product'], captureHint: 'decisions' },
+  },
+  {
+    id: 'design',
+    label: 'Design',
+    description: 'Interface and experience work — user tasks, constraints, and accessible outcomes.',
+    persona: { default: 'designer', enabled: ['designer'] },
+    orchestration: {
+      mode: 'adaptive',
+      availableRoles: ['explorer', 'reviewer'],
+      disabledRoles: ['fleet'],
+      maxParallel: 3,
+    },
+    agents: { default: 'designer', enabled: ['designer'] },
+    capabilities: {
+      available: ['frontend'],
+      recommended: [],
+      enabled: [],
+    },
+    skills: {
+      packs: ['design'],
+      enabled: [
+        'planning-skill',
+        'handover-skill',
+        'a11y-skill',
+        'taste-skill',
+        'concept-diagrams',
+        'redesign-skill',
+        'output-skill',
+      ],
+    },
+    tools: {
+      profiles: [
+        'workspace-files',
+        'project-knowledge',
+        'memory-context',
+        'artifacts',
+        'planning-session',
+        'browser',
+        'artifacts',
+      ],
+    },
+    memory: { tags: ['design'], captureHint: 'artifacts' },
+  },
+  {
+    id: 'education',
+    label: 'Education',
+    description: 'Teaching others — curriculum, explanation, and assessment design. For studying yourself, use Study.',
+    persona: { default: 'educator', enabled: ['educator'] },
+    orchestration: {
+      mode: 'adaptive',
+      availableRoles: ['explorer', 'reviewer'],
+      disabledRoles: ['fleet'],
+      maxParallel: 3,
+    },
+    agents: { default: 'educator', enabled: ['educator'] },
+    capabilities: {
+      available: [],
+      recommended: [],
+      enabled: [],
+    },
+    skills: {
+      packs: ['education'],
+      enabled: [
+        'planning-skill',
+        'handover-skill',
+        'interview-skill',
+        'concept-diagrams',
+        'output-skill',
+      ],
+    },
+    tools: {
+      profiles: [
+        'workspace-files',
+        'project-knowledge',
+        'memory-context',
+        'artifacts',
+        'planning-session',
+        'browser',
+      ],
+    },
+    memory: { tags: ['education'], captureHint: 'explanations' },
+  },
+  {
+    id: 'marketing',
+    label: 'Marketing',
+    description: 'Positioning, campaigns, and content grounded in a specific audience and substantiated claims.',
+    persona: { default: 'marketer', enabled: ['marketer'] },
+    orchestration: {
+      mode: 'adaptive',
+      availableRoles: ['explorer', 'reviewer'],
+      disabledRoles: ['fleet'],
+      maxParallel: 3,
+    },
+    agents: { default: 'marketer', enabled: ['marketer'] },
+    capabilities: {
+      available: [],
+      recommended: [],
+      enabled: [],
+    },
+    skills: {
+      packs: ['marketing'],
+      enabled: [
+        'planning-skill',
+        'handover-skill',
+        'output-skill',
+        'idea-refine-skill',
+      ],
+    },
+    tools: {
+      profiles: [
+        'workspace-files',
+        'project-knowledge',
+        'memory-context',
+        'artifacts',
+        'planning-session',
+        'browser',
+      ],
+    },
+    memory: { tags: ['marketing'], captureHint: 'decisions' },
+  },
+  {
+    id: 'sales',
+    label: 'Sales',
+    description: 'Pipeline and deals worked from the buyer decision process rather than seller stages.',
+    persona: { default: 'sales-strategist', enabled: ['sales-strategist'] },
+    orchestration: {
+      mode: 'adaptive',
+      availableRoles: ['explorer'],
+      disabledRoles: ['fleet'],
+      maxParallel: 2,
+    },
+    agents: { default: 'sales-strategist', enabled: ['sales-strategist'] },
+    capabilities: {
+      available: [],
+      recommended: [],
+      enabled: [],
+    },
+    skills: {
+      packs: ['sales'],
+      enabled: [
+        'planning-skill',
+        'handover-skill',
+        'output-skill',
+      ],
+    },
+    tools: {
+      profiles: [
+        'workspace-files',
+        'project-knowledge',
+        'memory-context',
+        'artifacts',
+        'planning-session',
+        'browser',
+      ],
+    },
+    memory: { tags: ['sales'], captureHint: 'decisions' },
+  },
+  {
+    id: 'operations',
+    label: 'Operations',
+    description: 'Process design and improvement — how work actually runs, and where it breaks.',
+    persona: { default: 'operations-lead', enabled: ['operations-lead'] },
+    orchestration: {
+      mode: 'adaptive',
+      availableRoles: ['explorer', 'architect', 'reviewer'],
+      disabledRoles: ['fleet'],
+      maxParallel: 3,
+    },
+    agents: { default: 'operations-lead', enabled: ['operations-lead'] },
+    capabilities: {
+      available: [],
+      recommended: [],
+      enabled: [],
+    },
+    skills: {
+      packs: ['operations'],
+      enabled: [
+        'planning-skill',
+        'handover-skill',
+        'concerns-skill',
+        'incremental-skill',
+        'output-skill',
+      ],
+    },
+    tools: {
+      profiles: [
+        'workspace-files',
+        'project-knowledge',
+        'memory-context',
+        'artifacts',
+        'planning-session',
+        'browser',
+        'orchestration',
+      ],
+    },
+    memory: { tags: ['operations'], captureHint: 'decisions' },
+  },
+  {
+    id: 'finance',
+    label: 'Finance',
+    description: 'Financial modelling and analysis with stated assumptions. Not licensed financial advice.',
+    persona: { default: 'financial-analyst', enabled: ['financial-analyst'] },
+    orchestration: {
+      mode: 'adaptive',
+      availableRoles: ['explorer', 'verifier'],
+      disabledRoles: ['fleet'],
+      maxParallel: 2,
+    },
+    agents: { default: 'financial-analyst', enabled: ['financial-analyst'] },
+    capabilities: {
+      available: ['computational-research'],
+      recommended: [],
+      enabled: [],
+    },
+    skills: {
+      packs: ['finance'],
+      enabled: [
+        'planning-skill',
+        'handover-skill',
+        'verify-loop',
+        'output-skill',
+      ],
+    },
+    tools: {
+      profiles: [
+        'workspace-files',
+        'project-knowledge',
+        'memory-context',
+        'artifacts',
+        'planning-session',
+        'browser',
+      ],
+    },
+    memory: { tags: ['finance'], captureHint: 'evidence' },
+  },
+  {
+    id: 'legal',
+    label: 'Legal',
+    description: 'Contracts, obligations, and legal material. Organises and summarises; not legal advice.',
+    persona: { default: 'legal-analyst', enabled: ['legal-analyst'] },
+    orchestration: {
+      mode: 'adaptive',
+      availableRoles: ['explorer', 'reviewer'],
+      disabledRoles: ['fleet'],
+      maxParallel: 2,
+    },
+    agents: { default: 'legal-analyst', enabled: ['legal-analyst'] },
+    capabilities: {
+      available: [],
+      recommended: [],
+      enabled: [],
+    },
+    skills: {
+      packs: ['legal'],
+      enabled: [
+        'planning-skill',
+        'handover-skill',
+        'source-driven-skill',
+        'concerns-skill',
+      ],
+    },
+    tools: {
+      profiles: [
+        'workspace-files',
+        'project-knowledge',
+        'memory-context',
+        'artifacts',
+        'planning-session',
+        'browser',
+      ],
+    },
+    memory: { tags: ['legal'], captureHint: 'evidence' },
+  },
+  {
+    id: 'people',
+    label: 'People',
+    description: 'Hiring, performance, and workplace matters — fairness and confidentiality first.',
+    persona: { default: 'people-partner', enabled: ['people-partner'] },
+    orchestration: {
+      mode: 'adaptive',
+      availableRoles: ['explorer', 'reviewer'],
+      disabledRoles: ['fleet'],
+      maxParallel: 2,
+    },
+    agents: { default: 'people-partner', enabled: ['people-partner'] },
+    capabilities: {
+      available: [],
+      recommended: [],
+      enabled: [],
+    },
+    skills: {
+      packs: ['people'],
+      enabled: [
+        'planning-skill',
+        'handover-skill',
+        'interview-skill',
+        'output-skill',
+      ],
+    },
+    tools: {
+      profiles: [
+        'workspace-files',
+        'project-knowledge',
+        'memory-context',
+        'artifacts',
+        'planning-session',
+        'browser',
+      ],
+    },
+    memory: { tags: ['people'], captureHint: 'decisions' },
+  },
+  {
+    id: 'healthcare',
+    label: 'Healthcare',
+    description: 'Health information and literature. Evidence-first; not medical advice or diagnosis.',
+    persona: { default: 'clinical-analyst', enabled: ['clinical-analyst'] },
+    orchestration: {
+      mode: 'adaptive',
+      availableRoles: ['explorer', 'verifier'],
+      disabledRoles: ['fleet'],
+      maxParallel: 2,
+    },
+    agents: { default: 'clinical-analyst', enabled: ['clinical-analyst'] },
+    capabilities: {
+      available: ['computational-research'],
+      recommended: [],
+      enabled: [],
+    },
+    skills: {
+      packs: ['healthcare'],
+      enabled: [
+        'planning-skill',
+        'handover-skill',
+        'source-driven-skill',
+        'verify-loop',
+      ],
+    },
+    tools: {
+      profiles: [
+        'workspace-files',
+        'project-knowledge',
+        'memory-context',
+        'artifacts',
+        'planning-session',
+        'browser',
+      ],
+    },
+    memory: { tags: ['healthcare'], captureHint: 'evidence' },
+  },
+  {
+    id: 'consulting',
+    label: 'Consulting',
+    description: 'Client problem diagnosis and structured recommendation, keeping findings separate from advice.',
+    persona: { default: 'consultant', enabled: ['consultant'] },
+    orchestration: {
+      mode: 'adaptive',
+      availableRoles: ['explorer', 'architect', 'reviewer'],
+      disabledRoles: ['fleet'],
+      maxParallel: 3,
+    },
+    agents: { default: 'consultant', enabled: ['consultant'] },
+    capabilities: {
+      available: ['technical-documentation'],
+      recommended: [],
+      enabled: [],
+    },
+    skills: {
+      packs: ['consulting'],
+      enabled: [
+        'planning-skill',
+        'handover-skill',
+        'doubt-driven-skill',
+        'concerns-skill',
+        'output-skill',
+      ],
+    },
+    tools: {
+      profiles: [
+        'workspace-files',
+        'project-knowledge',
+        'memory-context',
+        'artifacts',
+        'planning-session',
+        'browser',
+        'orchestration',
+      ],
+    },
+    memory: { tags: ['consulting'], captureHint: 'decisions' },
   },
   {
     id: 'custom',

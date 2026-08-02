@@ -4,8 +4,16 @@
   "id": "writing-editorial",
   "label": "Editorial workflow",
   "description": "Audience and intent, outline, source or continuity evidence, drafting, and revision.",
-  "profileIds": ["writing"],
-  "planningSkillIds": ["planning-skill", "structured-writing-skill"],
+  "profileIds": [
+    "writing",
+    "marketing",
+    "sales",
+    "people"
+  ],
+  "planningSkillIds": [
+    "planning-skill",
+    "structured-writing-skill"
+  ],
   "sections": [
     {
       "id": "brief",

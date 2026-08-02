@@ -95,6 +95,39 @@ test('every built-in profile has an explicit folder, workflow, and production to
       'workspace-files', 'browser', 'project-knowledge', 'memory-context',
       'research-notes', 'artifacts', 'planning-session', 'orchestration',
     ],
+    'product-management': [
+      'workspace-files', 'project-knowledge', 'memory-context', 'artifacts', 'planning-session', 'browser', 'orchestration',
+    ],
+    design: [
+      'workspace-files', 'project-knowledge', 'memory-context', 'artifacts', 'planning-session', 'browser', 'artifacts',
+    ],
+    education: [
+      'workspace-files', 'project-knowledge', 'memory-context', 'artifacts', 'planning-session', 'browser',
+    ],
+    marketing: [
+      'workspace-files', 'project-knowledge', 'memory-context', 'artifacts', 'planning-session', 'browser',
+    ],
+    sales: [
+      'workspace-files', 'project-knowledge', 'memory-context', 'artifacts', 'planning-session', 'browser',
+    ],
+    operations: [
+      'workspace-files', 'project-knowledge', 'memory-context', 'artifacts', 'planning-session', 'browser', 'orchestration',
+    ],
+    finance: [
+      'workspace-files', 'project-knowledge', 'memory-context', 'artifacts', 'planning-session', 'browser',
+    ],
+    legal: [
+      'workspace-files', 'project-knowledge', 'memory-context', 'artifacts', 'planning-session', 'browser',
+    ],
+    people: [
+      'workspace-files', 'project-knowledge', 'memory-context', 'artifacts', 'planning-session', 'browser',
+    ],
+    healthcare: [
+      'workspace-files', 'project-knowledge', 'memory-context', 'artifacts', 'planning-session', 'browser',
+    ],
+    consulting: [
+      'workspace-files', 'project-knowledge', 'memory-context', 'artifacts', 'planning-session', 'browser', 'orchestration',
+    ],
     custom: [],
   } as const;
 

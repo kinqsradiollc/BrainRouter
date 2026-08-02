@@ -355,6 +355,87 @@ export function ManagedModelsPanel({ providers, orgId }: { providers: ProviderCo
                 ))}
               </div>
 
+              {/*
+                ADR-027 D4.1 — non-text input.
+
+                "Not recorded" is a REAL choice and the default, not an empty
+                state. It means unknown, which is different from text-only: an
+                unannotated model must not have image input silently disabled,
+                and a model someone checked and found text-only is a useful
+                fact worth storing. Collapsing the two is the bug this control
+                exists to prevent, so the operator picks explicitly.
+              */}
+              <div className="settings-field managed-model-modality">
+                <div className="settings-label-text" style={{ width: "100%", marginBottom: "0.35rem" }}>Non-text input</div>
+                <div className="settings-hint" style={{ width: "100%", marginBottom: "0.5rem" }}>
+                  PDFs are read locally for every model. `pdf (native)` only means this model can
+                  take the file directly, letting us skip our own extraction.
+                </div>
+                <label className="settings-check" style={{ width: "100%" }}>
+                  <input
+                    type="radio"
+                    name="input-modality"
+                    checked={draft.capabilities.input === undefined || draft.capabilities.input.status === "unknown"}
+                    onChange={() => setDraft((current) => ({
+                      ...current,
+                      capabilities: { ...current.capabilities, input: { status: "unknown" } },
+                    }))}
+                  /> Not recorded
+                </label>
+                <div className="settings-hint managed-model-modality-hint" style={{ marginLeft: "1.5rem" }}>
+                  The agent will still try, and will say it could not verify.
+                </div>
+                <label className="settings-check" style={{ width: "100%" }}>
+                  <input
+                    type="radio"
+                    name="input-modality"
+                    checked={draft.capabilities.input?.status === "known"}
+                    onChange={() => setDraft((current) => ({
+                      ...current,
+                      capabilities: { ...current.capabilities, input: { status: "known", accepts: [] } },
+                    }))}
+                  /> I have checked this model
+                </label>
+                {draft.capabilities.input?.status === "known" && (
+                  <div className="settings-checks managed-model-modality-kinds" style={{ marginLeft: "1.5rem" }}>
+                    {(["image", "pdf"] as const).map((kind) => {
+                      const accepts = draft.capabilities.input?.status === "known"
+                        ? draft.capabilities.input.accepts
+                        : [];
+                      return (
+                        <label key={kind} className="settings-check">
+                          <input
+                            type="checkbox"
+                            checked={accepts.includes(kind)}
+                            onChange={(event) => setDraft((current) => {
+                              const currentAccepts = current.capabilities.input?.status === "known"
+                                ? current.capabilities.input.accepts
+                                : [];
+                              const next = event.target.checked
+                                ? [...currentAccepts, kind]
+                                : currentAccepts.filter((entry) => entry !== kind);
+                              return {
+                                ...current,
+                                capabilities: {
+                                  ...current.capabilities,
+                                  input: { status: "known", accepts: next },
+                                },
+                              };
+                            })}
+                          /> {kind === "pdf" ? "pdf (native)" : kind}
+                        </label>
+                      );
+                    })}
+                    {draft.capabilities.input.accepts.length === 0 && (
+                      <div className="settings-hint managed-model-modality-hint" style={{ flexBasis: "100%" }}>
+                        None selected — recorded as text-only. Images will be refused before sending;
+                        PDFs still work, via local extraction.
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
               {draft.capabilities.reasoning && <>
                 <label className="settings-label">Upstream effort mapping
                   <select className="settings-select" value={preset} onChange={(event) => changePreset(event.target.value as EffortWirePreset)}>

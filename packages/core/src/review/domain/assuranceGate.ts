@@ -145,7 +145,31 @@ export function calculateAssuranceGate(input: {
     return nonClean('running', 'Repository assurance is still running.');
   }
   if (run.status === 'partial') {
-    return nonClean('partial', 'Repository assurance completed with partial evidence.');
+    // Partial evidence with NO findings is reported, not blocked.
+    //
+    // "We reviewed what we could reach and found nothing, but could not reach
+    // everything" is an honest, useful outcome. Treating it as a merge failure
+    // makes the gate unpassable whenever full repository context is
+    // unavailable — which is the routine case while the reviewer falls back to
+    // a diff-only pass (see ADR-027 D9.1). A gate that can never go green is
+    // one people switch off, and a disabled gate reviews nothing: exactly the
+    // failure the oversight evidence in §1 predicts.
+    //
+    // The shortfall is NOT hidden. `status` stays `partial`, the reason states
+    // it, and the check surfaces it — this changes the merge verdict only, not
+    // what is reported. Everything else still blocks: stale, running, failed,
+    // canceled, superseded, and partial evidence that DID produce findings,
+    // because in each of those the review either does not describe this code or
+    // has something to say about it.
+    const unresolvedOnPartial = findings.filter((finding) =>
+      finding.program === run.program && finding.revisionSha === run.revision.headSha);
+    return nonClean(
+      'partial',
+      unresolvedOnPartial.length > 0
+        ? `Repository assurance completed with partial evidence and ${unresolvedOnPartial.length} finding(s) needing disposition.`
+        : 'Repository assurance completed with partial evidence; no findings in the evidence that was reachable.',
+      unresolvedOnPartial.length > 0 && required,
+    );
   }
   if (run.status === 'failed') return nonClean('failed', 'Repository assurance failed.');
   if (run.status === 'canceled') return nonClean('canceled', 'Repository assurance was canceled.');

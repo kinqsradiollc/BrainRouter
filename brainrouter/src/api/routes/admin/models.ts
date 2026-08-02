@@ -25,6 +25,22 @@ const modelIdSchema = z.string().trim().min(1).max(160).regex(
 );
 const effortTargetsSchema = z.record(z.string().trim().min(1), z.string().trim().min(1));
 const effortWireMapSchema = z.record(effortSchema, effortTargetsSchema);
+/**
+ * ADR-027 D4.1 — declared non-text input support.
+ *
+ * Omitting the field is meaningful and must stay allowed: it means UNKNOWN, not
+ * "text only". An operator who has not classified a model should not thereby
+ * have vision disabled on it. `{ status: 'known', accepts: [] }` is how an
+ * operator says "I checked — this one really is text only".
+ */
+const inputModalitySchema = z.union([
+  z.object({ status: z.literal("unknown") }).strict(),
+  z.object({
+    status: z.literal("known"),
+    accepts: z.array(z.enum(["image", "pdf"])).max(4),
+  }).strict(),
+]);
+
 const capabilitiesSchema = z.object({
   streaming: z.boolean(),
   tools: z.boolean(),
@@ -32,6 +48,7 @@ const capabilitiesSchema = z.object({
   reasoning: z.boolean(),
   reasoningMode: z.enum(["selectable", "adaptive"]).optional(),
   manualBudgetTokens: z.enum(["supported", "unsupported"]).optional(),
+  input: inputModalitySchema.optional(),
 }).strict();
 
 const createModelSchema = z.object({

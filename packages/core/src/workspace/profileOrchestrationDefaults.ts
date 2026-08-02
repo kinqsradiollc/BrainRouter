@@ -28,12 +28,45 @@ export interface ResolveWorkspaceProfileOrchestrationDefaultsOptions {
   findPlan?: (profileId: WorkspaceProfileId) => OrchestrationProfileDefinition | undefined;
 }
 
+/**
+ * Domain profiles added in 0.4.19 share an orchestration plan with the profile
+ * whose WORK SHAPE they match, rather than shipping eleven near-identical plans.
+ *
+ * An orchestration plan describes how work decomposes — bounded question then
+ * fan-out then audit, or spec then build then verify. That shape is a property
+ * of the work, not of the industry doing it: a legal obligation review and a
+ * research question both decompose into evidence collection and citation audit.
+ * Eleven plans differing only in vocabulary would be eleven files nobody reads,
+ * and each would drift independently.
+ *
+ * A domain that genuinely needs a different shape gets its own plan file, and
+ * that is the signal to add one — not the mere existence of a new profile.
+ */
+export const ORCHESTRATION_PLAN_ALIASES: Readonly<Partial<Record<WorkspaceProfileId, WorkspaceProfileId>>> = {
+  'product-management': 'engineering',
+  design: 'engineering',
+  operations: 'engineering',
+  consulting: 'research',
+  legal: 'research',
+  healthcare: 'research',
+  finance: 'data-science',
+  education: 'study',
+  marketing: 'writing',
+  sales: 'writing',
+  people: 'writing',
+};
+
 export function resolveWorkspaceProfileOrchestrationDefaults(
   profileId: WorkspaceProfileId,
   options: ResolveWorkspaceProfileOrchestrationDefaultsOptions = {},
 ): WorkspaceProfileOrchestrationDefaults {
   try {
-    const plan = (options.findPlan ?? findBundledOrchestrationProfile)(profileId);
+    const find = options.findPlan ?? findBundledOrchestrationProfile;
+    // Resolve the profile's own plan first; an alias is only a fallback, so a
+    // domain that later gains a bespoke plan starts using it automatically.
+    const plan = find(profileId) ?? (
+      ORCHESTRATION_PLAN_ALIASES[profileId] ? find(ORCHESTRATION_PLAN_ALIASES[profileId]!) : undefined
+    );
     if (plan) {
       return {
         mode: plan.defaultMode,

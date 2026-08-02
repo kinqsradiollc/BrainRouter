@@ -47,13 +47,28 @@ function writeJsonPersona(
   return file;
 }
 
-test('bundled catalog defines the five domain identities and no frontend or backend persona', () => {
+test('bundled catalog defines the domain identities and no per-specialism engineering persona', () => {
+  // 0.4.19 widened the set from five to sixteen so a workspace can be legal or
+  // marketing rather than "engineering, heavily edited". The assertions that
+  // matter did NOT change: engineering stays a single identity, and frontend /
+  // backend remain capabilities inside it rather than personas of their own.
   withWorkspace((workspace) => {
     const personas = listDomainPersonas(workspace, { pluginAgentFiles: [] });
     assert.deepEqual(personas.map((persona) => persona.id), [
+      'clinical-analyst',
+      'consultant',
       'data-scientist',
+      'designer',
+      'educator',
       'engineer',
+      'financial-analyst',
+      'legal-analyst',
+      'marketer',
+      'operations-lead',
+      'people-partner',
+      'product-manager',
       'researcher',
+      'sales-strategist',
       'tutor',
       'writer',
     ]);
@@ -69,9 +84,20 @@ test('bundled persona and executable-agent assets are physically separated', () 
   const agentFiles = fs.readdirSync(path.join(packageRoot, 'agents')).sort();
 
   assert.deepEqual(personaFiles, [
+    'clinical-analyst.json',
+    'consultant.json',
     'data-scientist.json',
+    'designer.json',
+    'educator.json',
     'engineer.json',
+    'financial-analyst.json',
+    'legal-analyst.json',
+    'marketer.json',
+    'operations-lead.json',
+    'people-partner.json',
+    'product-manager.json',
     'researcher.json',
+    'sales-strategist.json',
     'tutor.json',
     'writer.json',
   ]);

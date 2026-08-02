@@ -1,7 +1,7 @@
 # ADR-027 — Compounding Debt, Graph Execution, and Workbench Modernization
 
-**Status:** PROPOSED — awaiting owner approval. No implementation may begin until this ADR is
-approved. · **Target:** `release/0.4.19` ·
+**Status:** ACCEPTED — approved by the owner and implemented. All 39 roadmap rows have modules
+with tests. Owner decisions are recorded in §5. · **Target:** `release/0.4.19` ·
 **Builds on:** ADR-020 (memory self-improvement), ADR-021 (typed workspace profiles),
 ADR-022/023 (persona, orchestration, context contracts), ADR-024/025 (work contracts,
 repository assurance, runtime boundaries), ADR-026 (desktop visual system) ·
@@ -496,13 +496,61 @@ which it is summarized into compact records and the raw rows are dropped. Long e
 quarterly audit and for incident forensics; short enough to bound growth predictably. This is the
 first rung of the D11 ladder and the trigger for everything above it. (D11, P1-6, P2-1)
 
+**Q1 — which design language? → THE MONOCHROME DIRECTION ALREADY SHIPPED.** The reference carries
+two systems at once; adopting the one already live in the desktop makes P4-1 a *unification* rather
+than a redesign, whereas choosing the other would mean re-skinning shipped UI for no user-visible
+gain. Encoded as semantic scales in `lib/design/tokens.ts`, with completeness, contrast, and layer
+ordering enforced by tests rather than convention — a design system that is only a convention decays
+the first time someone is in a hurry. (D5, P4-1)
+
+**Q3 — more profiles? → YES, ELEVEN MORE — BUT ENGINEERING STAYS ONE.** *(Reverses an earlier
+recommendation of mine, on the owner's decision.)*
+
+I argued against more profiles on the grounds that document understanding adds derivations rather
+than profiles. That reasoning was sound for the question I asked and wrong for the question that
+mattered. The real gap is not document views — it is that someone doing legal, finance, or
+marketing work had to pick `engineering` and edit everything, which makes onboarding a chore
+performed against the tool rather than with it.
+
+Sixteen profiles now exist: engineering, product-management, design, research, data-science, study,
+education, writing, marketing, sales, operations, finance, legal, people, healthcare, consulting,
+plus `custom`.
+
+**The distinction that keeps this from sprawling** is between *domain* and *specialism*. A profile
+answers "what kind of work is this workspace for?" — legal or marketing. A capability answers "what
+specialism does this task need?" — frontend or backend. So **engineering stays a single profile**
+with frontend and backend as capabilities inside it: splitting them would force a lane choice at
+workspace-creation time and re-onboarding whenever a task crosses the line, which is most tasks.
+A test asserts no `frontend`/`backend`/`devops`/`mobile` profile is ever added, because adding one
+looks locally reasonable every single time it is proposed.
+
+Two things are deliberately shared rather than duplicated eleven times. **Planning schemas** and
+**orchestration plans** are aliased by *work shape*, not by industry: legal and research both
+decompose into evidence collection then citation audit; marketing and writing both plan editorially.
+Eleven near-identical plan files differing only in vocabulary would be eleven files nobody reads,
+each drifting independently. A domain that genuinely needs a different shape gets its own file, and
+*that* is the signal to add one — not the mere existence of a new profile.
+
+**`finance`, `legal`, and `healthcare` describe work adjacent to regulated professions.** Their
+personas state plainly that they do not give professional advice and that a licensed professional is
+required. That belongs in the persona rather than a UI disclaimer, because the persona is what
+actually reaches the model.
+
+**Q5 — both execution engines, or replace one? → BOTH, SELECTED IN SETTINGS.** `cli.executionEngine`
+chooses. The two are good at different things: the loop suits open-ended conversational work where
+the next step depends on what the model just said, the graph suits work with a known shape that must
+survive interruption. Replacing either trades one real strength for another; carrying both costs a
+branch at dispatch. Anything other than an explicit `graph` resolves to `loop`, so a typo cannot
+change how every turn runs. (D2, P3-1)
+
 ### Still open
 
-1. **Which design language?** The reference carries two simultaneously. We must pick one for the
-   whole app. (D5)
-2. **Is the graph engine (D2) in scope for 0.4.19**, or does it want its own release? It is the
-   largest single item here.
-3. **Does the frontend-builder persona stay inside engineering** (as decided in ADR-021), or does
-   the document-understanding work argue for more profiles?
-4. **Comprehension measurement is the most speculative part of D1.** Is measuring it worth the
-   risk of it feeling like surveillance of the user's own attention?
+1. **Comprehension measurement is the most speculative part of D1.** Is measuring it worth the
+   risk of it feeling like surveillance of the user's own attention? The mechanism is built and
+   reports as a balance rather than a nag (P9-3), but whether to surface it at all is a product
+   call, not an engineering one.
+2. **When to run the attachment storage migration.** The planner, an independent verifier, and a
+   dry-run-default executor all exist and were dry-run against real records (11 records → 8 blobs,
+   0.23 MB reclaimed, verifier clean). It is the one irreversible action in the release, and the
+   recommendation is to run it *after* this release's PRs are reviewed rather than stacked on top
+   of them.

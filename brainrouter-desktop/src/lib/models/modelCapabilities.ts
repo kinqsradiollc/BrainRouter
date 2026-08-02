@@ -69,3 +69,24 @@ export function capabilityBadges(cap: ModelCapabilities): Array<{ key: string; l
   if (cap.costNote) out.push({ key: "cost", label: cap.costNote, title: "Approximate cost tier" });
   return out;
 }
+
+/**
+ * ADR-027 D4.1 — reconcile the id heuristic above with a DECLARED capability.
+ *
+ * The heuristic guesses vision from the model id. That was the only signal
+ * available when it was written, and it stays useful for a BYOK model nobody
+ * has annotated. But it is a guess, and a guess must never outrank a fact: once
+ * an operator records what a model accepts, that record wins — in both
+ * directions. A model whose id says `-4o` but which was checked and found
+ * text-only must stop advertising vision, or the badge lies about the very
+ * thing someone took the trouble to verify.
+ *
+ * `unknown` keeps the heuristic, because a hint beats nothing.
+ */
+export function reconcileVision(
+  heuristic: ModelCapabilities,
+  declared: { status: "unknown" } | { status: "known"; accepts: readonly string[] } | null | undefined,
+): ModelCapabilities {
+  if (!declared || declared.status !== "known") return heuristic;
+  return { ...heuristic, vision: declared.accepts.includes("image") };
+}

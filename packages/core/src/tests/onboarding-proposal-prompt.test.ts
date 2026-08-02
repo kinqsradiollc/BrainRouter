@@ -4,6 +4,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { WORKSPACE_PROFILES } from '../workspace/profiles.js';
 import {
   buildWorkspaceOnboardingPrompt,
   ONBOARDING_DESCRIPTION_MAX_BYTES,
@@ -69,9 +70,14 @@ test('onboarding prompt marks repository text untrusted and constrains instructi
   assert.match(prompt.system, /docs\/AGENT\.md/);
   assert.match(prompt.user, /<repository_evidence>/);
   assert.equal(WORKSPACE_ONBOARDING_PROPOSAL_TOOL.parameters.additionalProperties, false);
+  // Derived from WORKSPACE_PROFILES rather than hardcoded: the contract is
+  // that onboarding offers EVERY profile. A hardcoded list silently stops
+  // offering new ones and has to be re-edited each time the set grows, which
+  // is how a profile ends up unreachable from the wizard that exists to
+  // reach it.
   assert.deepEqual(
     WORKSPACE_ONBOARDING_PROPOSAL_TOOL.parameters.properties.profile.enum,
-    ['engineering', 'research', 'data-science', 'study', 'writing', 'custom'],
+    WORKSPACE_PROFILES.map((profile) => profile.id),
   );
   assert.deepEqual(
     WORKSPACE_ONBOARDING_PROPOSAL_TOOL.parameters.properties.orchestration.properties.mode.enum,
