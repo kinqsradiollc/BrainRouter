@@ -31,8 +31,15 @@ export interface ModelCapabilityProvenance {
  * exactly the same question and would otherwise force a breaking change one
  * release later: some providers accept a PDF directly, which lets us skip
  * extraction entirely for those models.
+ *
+ * AUDIO IS DELIBERATELY ABSENT. Speech is not a chat-model input in this
+ * product: BrainRouter serves transcription itself at
+ * `POST /v1/audio/transcriptions`, backed by a local speech-to-text sidecar, so
+ * audio becomes text before any chat model sees it. Listing `audio` here would
+ * invite an operator to tick a box that changes nothing, and would imply a
+ * second, competing audio path that does not exist.
  */
-export const MODEL_INPUT_MODALITIES = ['image', 'pdf', 'audio'] as const;
+export const MODEL_INPUT_MODALITIES = ['image', 'pdf'] as const;
 
 export type ModelInputModality = (typeof MODEL_INPUT_MODALITIES)[number];
 

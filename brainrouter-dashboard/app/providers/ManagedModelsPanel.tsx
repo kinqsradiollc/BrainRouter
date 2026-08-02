@@ -394,7 +394,7 @@ export function ManagedModelsPanel({ providers, orgId }: { providers: ProviderCo
                 </label>
                 {draft.capabilities.input?.status === "known" && (
                   <div className="settings-checks managed-model-modality-kinds" style={{ marginLeft: "1.5rem" }}>
-                    {(["image", "pdf", "audio"] as const).map((kind) => {
+                    {(["image", "pdf"] as const).map((kind) => {
                       const accepts = draft.capabilities.input?.status === "known"
                         ? draft.capabilities.input.accepts
                         : [];

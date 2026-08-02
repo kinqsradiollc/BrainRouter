@@ -36,7 +36,6 @@ test('a known accept-list answers per modality', () => {
   const vision = caps({ status: 'known', accepts: ['image'] });
   assert.equal(modelAcceptsModality(vision, 'image'), 'accepted');
   assert.equal(modelAcceptsModality(vision, 'pdf'), 'unsupported');
-  assert.equal(modelAcceptsModality(vision, 'audio'), 'unsupported');
 });
 
 test('an explicitly empty accept-list means text-only, which is NOT unknown', () => {
@@ -52,7 +51,6 @@ test('native document input is expressible alongside image', () => {
   const multi = caps({ status: 'known', accepts: ['image', 'pdf'] });
   assert.equal(modelAcceptsModality(multi, 'image'), 'accepted');
   assert.equal(modelAcceptsModality(multi, 'pdf'), 'accepted');
-  assert.equal(modelAcceptsModality(multi, 'audio'), 'unsupported');
 });
 
 test('a malformed stored blob degrades to unknown, not to an empty accept-list', () => {
@@ -65,7 +63,7 @@ test('a malformed stored blob degrades to unknown, not to an empty accept-list',
 
 test('parsing keeps recognised modalities, drops junk, and de-duplicates', () => {
   assert.deepEqual(
-    parseModelInputModalities({ accepts: ['image', 'video', 'image', 'pdf', 7, null] }),
+    parseModelInputModalities({ accepts: ['image', 'audio', 'image', 'pdf', 7, null] }),
     { status: 'known', accepts: ['image', 'pdf'] },
   );
   // An explicit empty array survives as a known text-only answer.
@@ -75,7 +73,9 @@ test('parsing keeps recognised modalities, drops junk, and de-duplicates', () =>
 test('modality narrowing accepts only the declared set', () => {
   assert.ok(isModelInputModality('image'));
   assert.ok(isModelInputModality('pdf'));
-  assert.ok(isModelInputModality('audio'));
+  // Audio is NOT a chat-model input here — speech is transcribed to text by
+  // our own STT service before any model sees it, so it must not narrow.
+  assert.equal(isModelInputModality('audio'), false);
   for (const bad of ['video', 'Image', '', 0, null, undefined, {}]) {
     assert.equal(isModelInputModality(bad), false, `for ${JSON.stringify(bad)}`);
   }
@@ -84,5 +84,5 @@ test('modality narrowing accepts only the declared set', () => {
 test('a round trip through the parser preserves the verdict', () => {
   const parsed = parseModelInputModalities({ accepts: ['image'] });
   assert.equal(modelAcceptsModality(caps(parsed), 'image'), 'accepted');
-  assert.equal(modelAcceptsModality(caps(parsed), 'audio'), 'unsupported');
+  assert.equal(modelAcceptsModality(caps(parsed), 'pdf'), 'unsupported');
 });

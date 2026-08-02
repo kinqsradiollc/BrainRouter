@@ -37,7 +37,7 @@ const inputModalitySchema = z.union([
   z.object({ status: z.literal("unknown") }).strict(),
   z.object({
     status: z.literal("known"),
-    accepts: z.array(z.enum(["image", "pdf", "audio"])).max(8),
+    accepts: z.array(z.enum(["image", "pdf"])).max(4),
   }).strict(),
 ]);
 
