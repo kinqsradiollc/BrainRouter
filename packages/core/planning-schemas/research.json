@@ -4,8 +4,16 @@
   "id": "research-evidence",
   "label": "Evidence research",
   "description": "Research questions, source strategy, claim evidence, contradictions, and synthesis.",
-  "profileIds": ["research"],
-  "planningSkillIds": ["planning-skill", "research-question-skill"],
+  "profileIds": [
+    "research",
+    "consulting",
+    "legal",
+    "healthcare"
+  ],
+  "planningSkillIds": [
+    "planning-skill",
+    "research-question-skill"
+  ],
   "sections": [
     {
       "id": "brief",

@@ -43,17 +43,30 @@ export const SECURITY_VULN_CLASSES: readonly string[] = [
 export const SECURITY_REVIEW_MARKER = '<!-- brainrouter-security-review -->';
 
 /**
- * The security-lens review prompt, appended AFTER the unified diff. This bot runs a
- * single LLM turn with NO tools and NO checkout, so the contract is deliberately
- * self-contained and diff-focused: it must NOT tell the model to "open other files"
- * or "verify with read-only tools" (it has none) — a model that follows such an
- * instruction concludes it "could not verify" and suppresses every finding. The JSON
- * tail matches {@link parseReviewFindings} so the same parser + renderer are reused.
+ * The security-lens review prompt, appended AFTER the unified diff.
+ *
+ * ADR-027 D9.1 — this contract is now CONDITIONAL on whether exact-revision
+ * repository context was attached above.
+ *
+ * It used to assert unconditionally that the reviewer had no tools and must
+ * base every finding on the diff alone. That was true when written, but the
+ * scheduler has since gained a real checkout and a `prepareRepositoryContext`
+ * hook — so the prompt was contradicting the evidence sitting directly above
+ * it. Handed both, a model follows the stronger, more specific instruction and
+ * reasons from the diff only, which is exactly how a guard twenty lines below a
+ * hunk goes unseen and a false positive gets filed.
+ *
+ * The no-tools framing is still correct when NO context was resolved, and must
+ * stay: told to "verify with read-only tools" it does not have, the model
+ * concludes it could not verify and suppresses every finding.
  */
-export function buildSecurityReviewContract(): string {
+export function buildSecurityReviewContract(options?: { repositoryContext?: boolean }): string {
+  const grounded = options?.repositoryContext === true;
   return (
     'You are a SECURITY reviewer for a pull request. The unified diff is provided ABOVE — review it DIRECTLY. The added (`+`) lines are the new code; scrutinise them for vulnerabilities the change introduces or exposes.\n' +
-    'You are a single-shot reviewer with NO tools: do not ask to open other files or run commands. Base every finding on evidence visible in the diff itself — a hunk header like `@@ -0,0 +1,18 @@` gives you the real line numbers.\n' +
+    (grounded
+      ? 'Exact-revision repository context for the changed files and their neighbours is provided ABOVE, as untrusted evidence. USE IT: a hunk shows what changed, not what already guards it. Before reporting that a check is missing, look for it in the surrounding function and in the context blocks — and treat unchanged code that follows the same pattern as a NEGATIVE CONTROL, since a convention repeated across many call sites is usually the house style rather than a new defect. You still cannot request more files; reason from the diff plus the context you were given, and say so if the decisive evidence is in neither.\n'
+      : 'You are a single-shot reviewer with NO tools: do not ask to open other files or run commands. Base every finding on evidence visible in the diff itself — a hunk header like `@@ -0,0 +1,18 @@` gives you the real line numbers.\n') +
     '\n' +
     'Sweep for these vulnerability classes:\n' +
     SECURITY_VULN_CLASSES.map((c) => `  - ${c}`).join('\n') + '\n' +

@@ -44,10 +44,22 @@ describe("review dashboard job projections", () => {
   it("renews only a running job lease without appending progress", async () => {
     const { exec, runs } = writeExecutor();
     await expect(heartbeatMemoryJob(exec, "job-1", "N")).resolves.toBe(true);
-    expect(runs).toEqual([{
-      sql: "UPDATE memory_jobs SET locked_at = $1, updated_at = $1 WHERE id = $2 AND status = 'running'",
-      params: ["N", "job-1"],
-    }]);
+    expect(runs).toHaveLength(1);
+    const sql = runs[0]!.sql.replace(/\s+/g, " ").trim();
+    expect(sql).toBe(
+      "UPDATE memory_jobs SET locked_at = $1, updated_at = $1"
+      + " WHERE id = $2 AND status = 'running'"
+      // ADR-027 D12 — the lease guard: a NULL epoch is unfenced, a stale one
+      // renews nothing, so a reclaimed worker cannot keep a dead lease alive.
+      + " AND ($3::bigint IS NULL OR lease_epoch = $3::bigint)",
+    );
+    expect(runs[0]!.params).toEqual(["N", "job-1", null]);
+  });
+
+  it("a heartbeat carrying a lease epoch fences on it", async () => {
+    const { exec, runs } = writeExecutor();
+    await expect(heartbeatMemoryJob(exec, "job-1", "N", 7)).resolves.toBe(true);
+    expect(runs[0]!.params).toEqual(["N", "job-1", 7]);
   });
 
   it("loads latest PR states without progress or finding-detail payloads", async () => {

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { parseModelInputModalities } from "@kinqs/brainrouter-types";
 import type {
   ModelEffortWireMap,
   ProviderModelInput,
@@ -81,6 +82,16 @@ function parseCapabilities(value: unknown): StoredModelCapabilities {
       : {}),
     ...(raw.manualBudgetTokens === "supported" || raw.manualBudgetTokens === "unsupported"
       ? { manualBudgetTokens: raw.manualBudgetTokens }
+      : {}),
+    // ADR-027 D4.1 — input modality. NOTE the deliberate asymmetry with the
+    // booleans above: those read a missing key as `false`, which is right for a
+    // feature flag but WRONG here. An unannotated model is `unknown`, not
+    // text-only, so an absent key omits the field entirely rather than
+    // recording an empty accept-list. `modelAcceptsModality` then reports
+    // `unknown` and the caller decides, instead of vision being silently
+    // switched off on a model that supports it.
+    ...(raw.input !== undefined
+      ? { input: parseModelInputModalities(raw.input) }
       : {}),
   };
 }

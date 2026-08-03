@@ -4,8 +4,14 @@
   "id": "data-science-experiment",
   "label": "Data science experiment",
   "description": "Hypothesis, data contract, experiment design, evaluation, and reproducibility.",
-  "profileIds": ["data-science"],
-  "planningSkillIds": ["planning-skill", "experiment-validation-skill"],
+  "profileIds": [
+    "data-science",
+    "finance"
+  ],
+  "planningSkillIds": [
+    "planning-skill",
+    "experiment-validation-skill"
+  ],
   "sections": [
     {
       "id": "hypothesis",

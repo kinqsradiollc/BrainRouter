@@ -28,3 +28,21 @@ export * from './services/index.js';
 // interface (UI review-model vs multi-reviewer synthesis). No consumer imports
 // the synthesis one by name, so the public `ReviewFinding` is reviewModel's.
 export type { ReviewFinding } from './reviewModel.js';
+
+// ADR-027 D13 — stacked pull requests.
+export {
+  validateStack,
+  evaluateStackMerge,
+  highestMergeableLayer,
+  attributeFindingsToLayers,
+  adviseStacking,
+  describeStack,
+  displayRef,
+  REVIEWABLE_LAYER_LINES,
+  StackError,
+  type StackLayer,
+  type PullRequestStack,
+  type LayerMergeVerdict,
+  type LayerBlockReason,
+  type StackAdvice,
+} from './stackedPr.js';

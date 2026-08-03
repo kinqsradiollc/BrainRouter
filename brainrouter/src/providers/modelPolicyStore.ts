@@ -177,6 +177,11 @@ export function toModelPolicy(record: ProviderModelRecord): ModelPolicy {
       tools: record.capabilities.tools,
       responses: record.capabilities.responses,
       reasoning: record.capabilities.reasoning,
+      // ADR-027 D4.1 — members need this to decide whether an attachment can be
+      // sent. Omitted when the model is unclassified, which reads as `unknown`
+      // downstream rather than as "text only": the composer must be able to
+      // tell "we know it can't" from "nobody told us".
+      ...(record.capabilities.input ? { input: record.capabilities.input } : {}),
     },
     reasoning,
     provenance: {

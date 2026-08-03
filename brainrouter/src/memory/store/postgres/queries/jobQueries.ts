@@ -19,7 +19,20 @@ import { reconcileFindingLifecycle, type LifecycleCurrentFinding, type Lifecycle
 import type { PoolClient } from "pg";
 
 const JOB_COLUMNS =
-  "id, kind, status, priority, attempts, max_attempts, run_after, locked_at, parent_job_id, input_json, output_json, progress_json, error, created_at, updated_at";
+  "id, kind, status, priority, attempts, max_attempts, run_after, locked_at, lease_epoch, parent_job_id, input_json, output_json, progress_json, error, created_at, updated_at";
+
+/**
+ * ADR-027 D12 — SQL fragment guarding a lease-holding write-back.
+ *
+ * `$${n}` is the epoch the caller believes it holds. NULL means "unfenced" —
+ * the caller owns this job start to finish (the synchronous capture fast path)
+ * and there is no second worker to race. A non-NULL epoch that no longer
+ * matches the row means the lease was reclaimed and re-issued while this worker
+ * was stalled, so its write must be dropped rather than applied.
+ */
+function leaseGuard(paramIndex: number): string {
+  return `AND ($${paramIndex}::bigint IS NULL OR lease_epoch = $${paramIndex}::bigint)`;
+}
 
 const REVIEW_JOB_KINDS = "'pr-security-review','pr-code-review','pr-pentest'";
 const REVIEW_ALL_KINDS = `${REVIEW_JOB_KINDS},'domain-pentest'`;
@@ -391,15 +404,61 @@ export function tenantForJobInput(input: unknown): string | null {
   return null;
 }
 
+/**
+ * Insert a `pending` job.
+ *
+ * ADR-027 D12 — when `idempotencyKey` is set the DATABASE arbitrates
+ * duplicates via `uq_memory_jobs_inflight_idempotency`. The previous design
+ * listed in-flight jobs and then inserted, which is a read-then-write race:
+ * two concurrent webhook redeliveries could both observe an empty queue and
+ * both insert. `ON CONFLICT DO NOTHING` closes it — the loser inserts nothing
+ * and receives the winner's job.
+ */
 export async function enqueueMemoryJob(exec: Executor, input: MemoryJobEnqueueInput, options?: { idGenerator?: () => string; now?: string }): Promise<MemoryJobRecord> {
   const now = options?.now ?? new Date().toISOString();
   const id = (options?.idGenerator ?? (() => randomUUID()))();
-  await exec.run(
-    `INSERT INTO memory_jobs (id, kind, status, priority, attempts, max_attempts, run_after, locked_at, parent_job_id, tenant, input_json, output_json, error, created_at, updated_at)
-     VALUES ($1,$2,'pending',$3,0,$4,$5,NULL,$6,$7,$8,NULL,NULL,$9,$10)`,
-    [id, input.kind, input.priority ?? 50, input.maxAttempts ?? 3, input.runAfter ?? now, input.parentJobId ?? null, tenantForJobInput(input.input), JSON.stringify(input.input ?? {}), now, now],
+  const key = input.idempotencyKey?.trim() ? input.idempotencyKey.trim() : null;
+  const tenant = tenantForJobInput(input.input);
+
+  const attemptInsert = (): Promise<number> => exec.run(
+    `INSERT INTO memory_jobs (id, kind, status, priority, attempts, max_attempts, run_after, locked_at, lease_epoch, parent_job_id, tenant, idempotency_key, input_json, output_json, error, created_at, updated_at)
+     VALUES ($1,$2,'pending',$3,0,$4,$5,NULL,0,$6,$7,$8,$9,NULL,NULL,$10,$11)
+     ON CONFLICT DO NOTHING`,
+    [id, input.kind, input.priority ?? 50, input.maxAttempts ?? 3, input.runAfter ?? now, input.parentJobId ?? null, tenant, key, JSON.stringify(input.input ?? {}), now, now],
   );
-  return (await getMemoryJob(exec, id))!;
+
+  // The in-flight winner for this key, scoped to the SAME tenant. Migration 049
+  // scopes the index the same way: without the tenant predicate this read could
+  // hand one tenant another tenant's full job record.
+  const inFlightWinner = async (): Promise<MemoryJobRecord | null> => {
+    if (!key) return null;
+    const row = await exec.one(
+      `SELECT ${JOB_COLUMNS} FROM memory_jobs
+        WHERE kind = $1 AND idempotency_key = $2
+          AND COALESCE(tenant, '') = COALESCE($3, '')
+          AND status IN ('pending','running')
+        ORDER BY created_at ASC, id ASC LIMIT 1`,
+      [input.kind, key, tenant],
+    );
+    return row ? jobRowToRecord(row as any) : null;
+  };
+
+  if (await attemptInsert() > 0) return (await getMemoryJob(exec, id))!;
+
+  const existing = await inFlightWinner();
+  if (existing) return existing;
+
+  // The conflict was real but the winner reached a terminal state before we
+  // could read it, so the partial index no longer covers that row. Our own id
+  // was never inserted, so a single retry is safe and now succeeds — throwing
+  // here would turn an ordinary burst of duplicate webhooks into an error.
+  if (await attemptInsert() > 0) return (await getMemoryJob(exec, id))!;
+
+  // Lost the retry to yet another concurrent enqueue: that job is the answer.
+  const raced = await inFlightWinner();
+  if (raced) return raced;
+
+  throw new Error(`enqueueMemoryJob: could not insert or resolve an in-flight job for kind "${input.kind}".`);
 }
 
 export async function getMemoryJob(exec: Executor, id: string): Promise<MemoryJobRecord | null> {
@@ -408,16 +467,21 @@ export async function getMemoryJob(exec: Executor, id: string): Promise<MemoryJo
 }
 
 /** Append an activity event atomically; progress is observability, never control flow. */
-export async function appendJobProgress(exec: Executor, id: string, event: MemoryJobProgressEvent): Promise<void> {
+export async function appendJobProgress(exec: Executor, id: string, event: MemoryJobProgressEvent, epoch?: number): Promise<void> {
   // Heartbeat the lock while the job is running: emitting progress proves the
   // worker is alive, so renew `locked_at` to keep the sweeper from reclaiming a
   // long but healthy job (e.g. a multi-minute pentest). A dead process emits no
   // progress, so its lock still ages out and gets swept as intended. Terminal
   // rows keep their `locked_at` (the CASE guard) so we never resurrect a lease.
+  // ADR-027 D12 — the lease guard covers the `locked_at` RENEWAL, which is the
+  // part that affects control flow. A fenced worker must not be able to keep a
+  // lease alive that has already been reissued to someone else.
   const now = new Date().toISOString();
   await exec.run(
-    "UPDATE memory_jobs SET progress_json = ((progress_json::jsonb || $1::jsonb)::text), updated_at = $2, locked_at = CASE WHEN status = 'running' THEN $2 ELSE locked_at END WHERE id = $3",
-    [JSON.stringify([event]), now, id],
+    `UPDATE memory_jobs SET progress_json = ((progress_json::jsonb || $1::jsonb)::text), updated_at = $2,
+       locked_at = CASE WHEN status = 'running' AND ($4::bigint IS NULL OR lease_epoch = $4::bigint) THEN $2 ELSE locked_at END
+     WHERE id = $3`,
+    [JSON.stringify([event]), now, id, epoch ?? null],
   );
 }
 
@@ -426,10 +490,12 @@ export async function heartbeatMemoryJob(
   exec: Executor,
   id: string,
   now = new Date().toISOString(),
+  epoch?: number,
 ): Promise<boolean> {
   return (await exec.run(
-    "UPDATE memory_jobs SET locked_at = $1, updated_at = $1 WHERE id = $2 AND status = 'running'",
-    [now, id],
+    `UPDATE memory_jobs SET locked_at = $1, updated_at = $1
+      WHERE id = $2 AND status = 'running' ${leaseGuard(3)}`,
+    [now, id, epoch ?? null],
   )) > 0;
 }
 
@@ -819,8 +885,10 @@ export async function claimNextMemoryJob(exec: Executor, options?: { now?: strin
     );
     const candidate = sel.rows[0];
     if (!candidate) return null;
+    // ADR-027 D12 — taking the lease issues a NEW epoch. Any worker still
+    // holding the previous epoch is fenced out from this point on.
     await client.query(
-      "UPDATE memory_jobs SET status = 'running', locked_at = $1, updated_at = $2 WHERE id = $3 AND status = 'pending'",
+      "UPDATE memory_jobs SET status = 'running', locked_at = $1, lease_epoch = lease_epoch + 1, updated_at = $2 WHERE id = $3 AND status = 'pending'",
       [now, now, candidate.id],
     );
     const row = (await client.query(`SELECT ${JOB_COLUMNS} FROM memory_jobs WHERE id = $1`, [candidate.id])).rows[0];
@@ -831,18 +899,22 @@ export async function claimNextMemoryJob(exec: Executor, options?: { now?: strin
 export async function startMemoryJob(exec: Executor, id: string, options?: { now?: string }): Promise<MemoryJobRecord | null> {
   const now = options?.now ?? new Date().toISOString();
   const changed = await exec.run(
-    "UPDATE memory_jobs SET status = 'running', locked_at = $1, updated_at = $2 WHERE id = $3 AND status = 'pending'",
+    "UPDATE memory_jobs SET status = 'running', locked_at = $1, lease_epoch = lease_epoch + 1, updated_at = $2 WHERE id = $3 AND status = 'pending'",
     [now, now, id],
   );
   if (changed === 0) return null;
   return getMemoryJob(exec, id);
 }
 
-export async function completeMemoryJob(exec: Executor, id: string, output: unknown, options?: { now?: string }): Promise<MemoryJobRecord | null> {
+export async function completeMemoryJob(exec: Executor, id: string, output: unknown, options?: { now?: string; leaseEpoch?: number }): Promise<MemoryJobRecord | null> {
   const now = options?.now ?? new Date().toISOString();
+  const epoch = options?.leaseEpoch ?? null;
   return exec.tx(async (client) => {
     const current = (await client.query(`SELECT ${JOB_COLUMNS} FROM memory_jobs WHERE id = $1 FOR UPDATE`, [id])).rows[0];
     if (!current || current.status !== "running") return null;
+    // ADR-027 D12 — a stalled worker whose lease was reclaimed must not publish
+    // its result over the run that replaced it. Reject rather than overwrite.
+    if (epoch !== null && Number(current.lease_epoch) !== epoch) return null;
     await client.query(
       "UPDATE memory_jobs SET status = 'done', output_json = $1, error = NULL, locked_at = NULL, updated_at = $2 WHERE id = $3",
       [JSON.stringify(output ?? null), now, id],
@@ -862,24 +934,39 @@ export async function completeMemoryJob(exec: Executor, id: string, output: unkn
   });
 }
 
-export async function failMemoryJob(exec: Executor, id: string, error: string, options?: { now?: string; backoffMs?: number }): Promise<MemoryJobRecord | null> {
+/**
+ * Fail a `running` job: re-arm with backoff while attempts remain, else move to
+ * `failed`.
+ *
+ * ADR-027 D12 — this was a read-then-write (`getMemoryJob`, then an UPDATE with
+ * no status predicate), so a concurrent sweep or a second failure could clobber
+ * the row and drive `attempts` past `maxAttempts`. The decision and the write
+ * now happen in one transaction under `FOR UPDATE`, and every UPDATE carries
+ * both the status and the lease guard.
+ */
+export async function failMemoryJob(exec: Executor, id: string, error: string, options?: { now?: string; backoffMs?: number; leaseEpoch?: number }): Promise<MemoryJobRecord | null> {
   const now = options?.now ?? new Date().toISOString();
-  const job = await getMemoryJob(exec, id);
-  if (!job || job.status !== "running") return null;
-  const attempts = job.attempts + 1;
-  if (attempts < job.maxAttempts) {
-    const runAfter = new Date(Date.parse(now) + (options?.backoffMs ?? 0)).toISOString();
-    await exec.run(
-      "UPDATE memory_jobs SET status = 'pending', attempts = $1, error = $2, run_after = $3, locked_at = NULL, updated_at = $4 WHERE id = $5",
-      [attempts, error, runAfter, now, id],
-    );
-  } else {
-    await exec.run(
-      "UPDATE memory_jobs SET status = 'failed', attempts = $1, error = $2, locked_at = NULL, updated_at = $3 WHERE id = $4",
-      [attempts, error, now, id],
-    );
-  }
-  return getMemoryJob(exec, id);
+  const epoch = options?.leaseEpoch ?? null;
+  return exec.tx(async (client) => {
+    const current = (await client.query(`SELECT ${JOB_COLUMNS} FROM memory_jobs WHERE id = $1 FOR UPDATE`, [id])).rows[0];
+    if (!current || current.status !== "running") return null;
+    if (epoch !== null && Number(current.lease_epoch) !== epoch) return null;
+    const attempts = Number(current.attempts) + 1;
+    if (attempts < Number(current.max_attempts)) {
+      const runAfter = new Date(Date.parse(now) + (options?.backoffMs ?? 0)).toISOString();
+      await client.query(
+        "UPDATE memory_jobs SET status = 'pending', attempts = $1, error = $2, run_after = $3, locked_at = NULL, updated_at = $4 WHERE id = $5",
+        [attempts, error, runAfter, now, id],
+      );
+    } else {
+      await client.query(
+        "UPDATE memory_jobs SET status = 'failed', attempts = $1, error = $2, locked_at = NULL, updated_at = $3 WHERE id = $4",
+        [attempts, error, now, id],
+      );
+    }
+    const updated = (await client.query(`SELECT ${JOB_COLUMNS} FROM memory_jobs WHERE id = $1`, [id])).rows[0];
+    return updated ? jobRowToRecord(updated as any) : null;
+  });
 }
 
 export async function retryMemoryJob(exec: Executor, id: string, options?: { now?: string }): Promise<MemoryJobRecord | null> {
@@ -925,12 +1012,40 @@ export async function cancelSupersededReviewJobs(
   );
 }
 
-export async function sweepStuckMemoryJobs(exec: Executor, stuckMs: number, options?: { now?: string }): Promise<number> {
+/**
+ * Reclaim jobs whose worker lease has expired.
+ *
+ * ADR-027 D12 — two changes.
+ *
+ * 1. THE DATABASE CLOCK decides expiry. The cutoff used to be computed in Node
+ *    and compared against a `locked_at` written by a DIFFERENT Node process, so
+ *    clock skew between workers translated directly into stolen leases (sweeper
+ *    ahead) or zombie jobs never reclaimed (sweeper behind). `now()` is one
+ *    clock every worker shares.
+ * 2. A CRASHED WORKER IS A RETRYABLE FAULT, not a cancellation. Swept jobs
+ *    re-arm to `pending` with backoff and only become `failed` once
+ *    `maxAttempts` is exhausted. `cancelled` now means what it says — someone
+ *    cancelled it — rather than doubling as "the worker died".
+ *
+ * The epoch bump fences the old worker: if it wakes up it can no longer
+ * complete or fail the job it thinks it still owns.
+ */
+export async function sweepStuckMemoryJobs(exec: Executor, stuckMs: number, options?: { now?: string; backoffMs?: number }): Promise<number> {
   const now = options?.now ?? new Date().toISOString();
-  const cutoff = new Date(Date.parse(now) - stuckMs).toISOString();
+  const runAfter = new Date(Date.parse(now) + (options?.backoffMs ?? 0)).toISOString();
   return exec.run(
-    "UPDATE memory_jobs SET status = 'cancelled', error = 'swept: lock expired', locked_at = NULL, updated_at = $1 WHERE status = 'running' AND locked_at IS NOT NULL AND locked_at < $2",
-    [now, cutoff],
+    `UPDATE memory_jobs SET
+       status = CASE WHEN attempts + 1 < max_attempts THEN 'pending' ELSE 'failed' END,
+       attempts = attempts + 1,
+       error = 'swept: worker lease expired',
+       run_after = CASE WHEN attempts + 1 < max_attempts THEN $2 ELSE run_after END,
+       locked_at = NULL,
+       lease_epoch = lease_epoch + 1,
+       updated_at = $1
+     WHERE status = 'running'
+       AND locked_at IS NOT NULL
+       AND locked_at::timestamptz < now() - make_interval(secs => $3::double precision)`,
+    [now, runAfter, stuckMs / 1000],
   );
 }
 

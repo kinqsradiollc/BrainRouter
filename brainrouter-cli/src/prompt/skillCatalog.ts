@@ -43,6 +43,12 @@ export interface SkillListItem {
    * invocation. Absent/empty when the skill declares no triggers.
    */
   triggers?: string[];
+  /**
+   * ADR-027 D3 — the skill declared `disable-model-invocation`. It stays
+   * explicitly invokable by a human but is kept out of the ambient catalog the
+   * model sees, so its description never enters the turn window.
+   */
+  disableModelInvocation?: boolean;
 }
 
 const WORKSPACE_SKILL_ROOTS = ['skills', '.brainrouter/skills'];
@@ -152,6 +158,7 @@ export function listFilesystemSkills(
           // MC-E2 — surface declared keyword triggers so the dispatch path
           // can arm dormant skills without re-reading every SKILL.md.
           ...(parsed.triggers.length ? { triggers: parsed.triggers } : {}),
+          ...(parsed.disableModelInvocation ? { disableModelInvocation: true } : {}),
         });
       } else {
         // A same-named skill in a LOWER-precedence root — record it as shadowed
@@ -177,6 +184,9 @@ export function applyWorkspaceSkillCatalogPolicy(
   skills: SkillListItem[],
   policy: WorkspaceSkillCatalogPolicy,
 ): SkillListItem[] {
+  // ADR-027 D3 — a human-only skill is never ambient, regardless of manifest
+  // state. It remains resolvable by explicit name.
+  skills = skills.filter((skill) => !skill.disableModelInvocation);
   if (!policy.managed) return skills.sort(sortSkills);
   const disabled = new Set(policy.disabledSkillIds);
   const managed = new Set(policy.managedSkillIds);
@@ -329,7 +339,7 @@ function findSkillFiles(root: string): string[] {
   return results;
 }
 
-function parseSkillFile(filePath: string): { name: string; description?: string; triggers: string[] } | undefined {
+function parseSkillFile(filePath: string): { name: string; description?: string; triggers: string[]; disableModelInvocation?: boolean } | undefined {
   let raw: string;
   try { raw = fs.readFileSync(filePath, 'utf8'); } catch { return undefined; }
 
@@ -338,13 +348,39 @@ function parseSkillFile(filePath: string): { name: string; description?: string;
   const name = readYamlScalar(block, 'name') ?? path.basename(path.dirname(filePath));
   const description = readYamlScalar(block, 'description') ?? firstParagraph(raw);
   if (!name) return undefined;
-  return { name, description, triggers: parseSkillTriggersFrontmatter(raw) };
+  // ADR-027 D3 — honor `disable-model-invocation`: a human-only skill must not be
+  // model-invocable, and its description must stay out of the model's catalog.
+  // The brain parses frontmatter with a real YAML parser, so it accepts every
+  // YAML-truthy spelling; this regex reader must agree or the same file would be
+  // human-only on one surface and model-invocable on the other.
+  const humanOnly = isYamlTrue(readYamlScalar(block, 'disable-model-invocation'));
+  return {
+    name,
+    description,
+    triggers: parseSkillTriggersFrontmatter(raw),
+    ...(humanOnly ? { disableModelInvocation: true } : {}),
+  };
+}
+
+/** YAML-truthy scalars, matching what a real YAML parser accepts. */
+function isYamlTrue(value: string | undefined): boolean {
+  if (value === undefined) return false;
+  return ['true', 'yes', 'on', 'y'].includes(value.trim().toLowerCase());
 }
 
 function readYamlScalar(block: string, key: string): string | undefined {
   const match = block.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'));
-  if (!match?.[1]) return undefined;
-  return match[1].trim().replace(/^['"]|['"]$/g, '');
+  const raw = match?.[1]?.trim();
+  if (!raw) return undefined;
+  // Read the scalar the way a real YAML parser does, because the brain uses one
+  // and the two surfaces must agree. A QUOTED scalar keeps its contents verbatim
+  // (a `#` inside quotes is data, not a comment); an UNQUOTED scalar ends at the
+  // first whitespace-preceded `#`. Without the comment rule,
+  // `disable-model-invocation: true # note` reads as human-only on the brain and
+  // model-invocable here, leaking the description into the model's catalog.
+  const quoted = raw.match(/^(['"])([\s\S]*?)\1\s*(?:#.*)?$/);
+  if (quoted) return quoted[2];
+  return raw.replace(/\s+#.*$/, '').trim();
 }
 
 /** Extract the raw YAML frontmatter block (between the `---` fences), or ''. */

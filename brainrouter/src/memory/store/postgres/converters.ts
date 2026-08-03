@@ -163,6 +163,9 @@ export function jobRowToRecord(row: {
   max_attempts: number;
   run_after: string;
   locked_at: string | null;
+  /** ADR-027 D12 — bigint arrives from `pg` as a string; projections that omit
+   *  it (the compact review summaries) fall back to epoch 0. */
+  lease_epoch?: string | number | null;
   parent_job_id: string | null;
   input_json: string;
   output_json: string | null;
@@ -188,6 +191,7 @@ export function jobRowToRecord(row: {
     maxAttempts: row.max_attempts,
     runAfter: row.run_after,
     lockedAt: row.locked_at,
+    leaseEpoch: Number(row.lease_epoch ?? 0),
     parentJobId: row.parent_job_id,
     input: parse(row.input_json),
     output: parse(row.output_json),

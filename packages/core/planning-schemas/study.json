@@ -4,8 +4,14 @@
   "id": "study-learning",
   "label": "Learning progression",
   "description": "Learning objective, learner diagnostic, lesson sequence, practice, and mastery checks.",
-  "profileIds": ["study"],
-  "planningSkillIds": ["planning-skill", "learning-plan-skill"],
+  "profileIds": [
+    "study",
+    "education"
+  ],
+  "planningSkillIds": [
+    "planning-skill",
+    "learning-plan-skill"
+  ],
   "sections": [
     {
       "id": "objective",

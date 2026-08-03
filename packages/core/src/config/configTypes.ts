@@ -624,6 +624,24 @@ export interface CliKnobs {
    */
   safeMode?: boolean;
   /**
+   * ADR-027 D2 — which execution engine drives a turn.
+   *
+   * `loop` (default) is the established turn loop. `graph` runs the typed
+   * graph executor: conditional routing, checkpoints folded after each node,
+   * and human-in-the-loop interrupts that resume at the SUCCESSOR of the
+   * interrupting node.
+   *
+   * Both ship, and the choice is a setting rather than a migration, because
+   * the two are good at different things. The loop is better for open-ended
+   * conversational work where the next step genuinely depends on what the
+   * model just said. The graph is better for work with a known shape that
+   * must survive interruption — review pipelines, migrations, anything where
+   * "resume exactly once, after the effect that already happened" matters.
+   * Replacing one with the other would trade a real strength for a different
+   * real strength; carrying both costs a branch at dispatch.
+   */
+  executionEngine?: 'loop' | 'graph';
+  /**
    * CC-CONFIG-A5 — provenance/attribution controls for generated commit + PR bodies.
    * `sessionUrl` (default true): include the BrainRouter provenance/session footer.
    * Set false to omit it (private repos / clean history).
@@ -1188,6 +1206,8 @@ export interface ResolvedCliKnobs {
   enforceVersionRange: boolean;
   /** CC-CONFIG-A1 — safe/troubleshooting mode. */
   safeMode: boolean;
+  /** ADR-027 D2 — turn loop or typed graph executor. Both ship; this selects. */
+  executionEngine: 'loop' | 'graph';
   /** CC-CONFIG-A5 — provenance footer controls for commit/PR bodies. */
   attribution: { sessionUrl: boolean };
   /** CC-CONFIG-A6 — hide bundled skills from listings. */
