@@ -250,3 +250,18 @@ test('ordinary branch names are left readable', () => {
   assert.equal(displayRef('release/0.4.19'), 'release/0.4.19');
   assert.equal(displayRef('fix/bug-123'), 'fix/bug-123');
 });
+
+test('bidirectional overrides cannot reorder the rendered stack line', () => {
+  // Trojan Source (CVE-2021-42574) in the one comment a reader is most
+  // inclined to believe. Git forbids ASCII controls in refs but these are
+  // Unicode format characters, so they pass ref validation.
+  for (const attack of ['‮', '‭', '⁦', '⁩', '‪']) {
+    assert.ok(!displayRef(`feat/a${attack}kcatta`).includes(attack), `U+${attack.codePointAt(0)!.toString(16)}`);
+  }
+});
+
+test('invisible characters are stripped, since two refs must not look identical', () => {
+  assert.equal(displayRef('feat/a​b'), 'feat/ab');
+  assert.equal(displayRef('feat/a­b'), 'feat/ab');
+  assert.equal(displayRef('﻿feat/a'), 'feat/a');
+});
