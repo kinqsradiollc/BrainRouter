@@ -141,3 +141,26 @@ test('a missing branch or title is refused before any call', async () => {
   }
   assert.equal(called, false);
 });
+
+test('field values are passed as RAW strings, never as gh typed fields', async () => {
+  // `-f` (--raw-field) sends a literal string. `-F` (--field) reads the value
+  // from a file when it starts with `@`, and branch names are
+  // attacker-influenceable: a collaborator can open a PR from a branch named
+  // `@/etc/passwd`. Using `-F` here would read that file off this machine and
+  // send it to GitHub.
+  //
+  // A security review suggested exactly that swap, with the flags reversed.
+  // This test exists so the swap fails loudly rather than passing review twice.
+  const calls: string[][] = [];
+  const gh: GhJson = async (args) => {
+    calls.push(args);
+    if (args[1]?.includes('/pulls/7')) return { data: { head: { ref: '@/etc/passwd' } } } as never;
+    return { data: { html_url: 'u' } } as never;
+  };
+  await createStackLayerAction(deps({ gh }), { onPullNumber: 7, head: 'h', title: 't' });
+  const create = calls[1]!;
+  assert.ok(!create.includes('-F'), 'must never use gh --field, which reads @paths from disk');
+  assert.equal(create.filter((a) => a === '-f').length, 3, 'title, head and base are all raw fields');
+  // The hostile branch name travels as a literal value, not a file read.
+  assert.ok(create.includes('base=@/etc/passwd'));
+});

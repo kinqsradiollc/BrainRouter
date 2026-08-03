@@ -175,6 +175,18 @@ export async function createStackLayerAction(
     return { created: false, reason: `could not resolve the head branch of #${onPullNumber} to stack on` };
   }
 
+  // `-f` is --raw-field: a plain STRING parameter. Do not "upgrade" it to `-F`.
+  //
+  // `-F` is --field, which applies magic type conversion AND reads the value
+  // from a file when it starts with `@`. Branch names are attacker-influenceable
+  // — a collaborator can open a pull request from a branch called `@/etc/passwd`
+  // — so with `-F` that value would be read off this machine and sent to GitHub.
+  // With `-f` it is sent literally, which is what we want.
+  //
+  // A security review on #1299 flagged this line and had the two flags the wrong
+  // way round; applying its suggested fix would have INTRODUCED the file read it
+  // described. Verified against `gh api --help`. The test below pins the flag so
+  // nobody reverses it later on the same advice.
   const created = await deps.ghJson<{ html_url?: unknown }>(
     ['api', `repos/${repo}/pulls`, '-f', `title=${title}`, '-f', `head=${head}`, '-f', `base=${baseRef}`],
     { timeout: 15_000 },
