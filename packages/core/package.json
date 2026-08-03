@@ -286,7 +286,7 @@
   "dependencies": {
     "@kinqs/brainrouter-agent-protocol": "^0.4.19",
     "@kinqs/brainrouter-types": "^0.4.19",
-    "@modelcontextprotocol/sdk": "^1.11.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "chalk": "^5.3.0",
     "cheerio": "^1.2.0",
     "yaml": "^2.0.0",
