@@ -15,6 +15,7 @@ import {
   attributeFindingsToLayers,
   adviseStacking,
   describeStack,
+  displayRef,
   REVIEWABLE_LAYER_LINES,
   StackError,
   type PullRequestStack,
@@ -215,4 +216,52 @@ test('the description names the blocking layer rather than just failing', () => 
   assert.match(text, /#1 a — merged/);
   assert.match(text, /#2 b — not ready/);
   assert.match(text, /#3 c — waiting on #2/);
+});
+
+test('branch names are rendered inert in the review comment', () => {
+  // Refs come from the forge API, which this pipeline treats as untrusted
+  // everywhere else. Relying on git's ref rules and GitHub's Markdown
+  // sanitizer would be depending on someone else's invariants to protect the
+  // bot's highest-trust output — the comment that sits beside real findings.
+  const text = describeStack({
+    trunk: 'main`x`',
+    layers: [{ number: 1, head: 'feat/**bold**<img src=x>', base: 'main`x`', ready: true }],
+  });
+  for (const metachar of ['`', '*', '<', '>', '[', ']', '|', '\\']) {
+    assert.ok(!text.includes(metachar), `"${metachar}" must not survive into the comment`);
+  }
+  assert.match(text, /feat\/boldimg src=x/);
+});
+
+test('a ref cannot close the fenced block it is rendered inside', () => {
+  // A newline is what a fence-escape needs. Git forbids it in refs, but that
+  // is git's guarantee, not ours.
+  const text = describeStack({
+    trunk: 'main',
+    layers: [{ number: 1, head: 'a\n```\n# spoofed heading', base: 'main', ready: true }],
+  });
+  assert.ok(!text.includes('```'));
+  assert.equal(text.split('\n').length, 2, 'the layer stays on one line');
+});
+
+test('ordinary branch names are left readable', () => {
+  // Sanitising must not mangle the common case into unreadability.
+  assert.equal(displayRef('feat/adr027-stacked-prs'), 'feat/adr027-stacked-prs');
+  assert.equal(displayRef('release/0.4.19'), 'release/0.4.19');
+  assert.equal(displayRef('fix/bug-123'), 'fix/bug-123');
+});
+
+test('bidirectional overrides cannot reorder the rendered stack line', () => {
+  // Trojan Source (CVE-2021-42574) in the one comment a reader is most
+  // inclined to believe. Git forbids ASCII controls in refs but these are
+  // Unicode format characters, so they pass ref validation.
+  for (const attack of ['‮', '‭', '⁦', '⁩', '‪']) {
+    assert.ok(!displayRef(`feat/a${attack}kcatta`).includes(attack), `U+${attack.codePointAt(0)!.toString(16)}`);
+  }
+});
+
+test('invisible characters are stripped, since two refs must not look identical', () => {
+  assert.equal(displayRef('feat/a​b'), 'feat/ab');
+  assert.equal(displayRef('feat/a­b'), 'feat/ab');
+  assert.equal(displayRef('﻿feat/a'), 'feat/a');
 });

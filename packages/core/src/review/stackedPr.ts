@@ -268,6 +268,37 @@ export function adviseStacking(input: {
   };
 }
 
+/**
+ * Render a branch name as inert display text.
+ *
+ * Refs come from the forge API, which this pipeline treats as untrusted
+ * everywhere else, so it is treated as untrusted here too rather than relying
+ * on git's ref-name rules and the host's Markdown sanitizer to save us. Both
+ * are someone else's invariants, and this string lands in the bot's
+ * high-trust security comment — the one place a spoofed line does the most
+ * damage, because it sits directly beside real findings.
+ *
+ * Control characters are dropped (a newline would let a ref close the fenced
+ * block it sits in) and Markdown/HTML metacharacters are neutralised.
+ */
+export function displayRef(ref: string): string {
+  // ASCII controls, then Unicode format characters. The second group matters
+  // for the same reason as the first and is easier to miss: bidirectional
+  // overrides and isolates (U+202A–202E, U+2066–2069) visually REORDER the
+  // text around them, so a ref could make a stack line render as something
+  // other than what it says — the Trojan Source class, in the one comment a
+  // reader is most inclined to believe. Zero-width and soft-hyphen characters
+  // go too, since an invisible character in a branch name is only ever there
+  // to make two different refs look identical.
+  // eslint-disable-next-line no-control-regex
+  const withoutControls = ref.replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
+  const withoutFormatChars = withoutControls.replace(
+    /[\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff]/g,
+    '',
+  );
+  return withoutFormatChars.replace(/[`*_~<>[\]()|\\]/g, '');
+}
+
 /** Human-readable stack status for a comment or panel. */
 export function describeStack(stack: PullRequestStack): string {
   const verdicts = evaluateStackMerge(stack);
@@ -281,7 +312,7 @@ export function describeStack(stack: PullRequestStack): string {
         : verdict.reason.kind === 'own_checks'
           ? 'not ready'
           : `waiting on #${(verdict.reason as { by: number }).by}`;
-    return `${mark} #${layer.number} ${layer.head} — ${note}`;
+    return `${mark} #${layer.number} ${displayRef(layer.head)} — ${note}`;
   });
-  return [`Stack on ${stack.trunk} (bottom first):`, ...lines].join('\n');
+  return [`Stack on ${displayRef(stack.trunk)} (bottom first):`, ...lines].join('\n');
 }
