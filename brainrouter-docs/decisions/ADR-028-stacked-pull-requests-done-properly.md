@@ -258,6 +258,35 @@ with the option to resend, and it is never silently discarded.
 implementation, it would look right in a demo, and it would be a lie in exactly the situation where
 the human most needs the truth.
 
+### D11 — The artifacts panel shows the session you are in, and can show more than one
+
+*(Owner-reported. Grouped with D10 for the same reason: a surface displaying a state that is no
+longer true.)*
+
+**The defect.** Switching sessions leaves the artifacts panel showing the previous session's
+artifacts. Closing and reopening the panel fixes it. That is a missing re-fetch on session change —
+the panel loads on mount and nothing re-runs it when the active session changes underneath.
+
+It matters more than a stale list usually would, because artifacts are *session-scoped by design*
+(`recall.applyFilters` drops rows whose `session_key` does not match). So the panel is not showing a
+slightly-out-of-date list; it is showing **another session's** work while claiming to show yours.
+Acting on it means acting on the wrong session's outputs.
+
+The fix is the re-fetch. The lesson is the same one D10 encodes: a surface must not present data
+whose scope has changed out from under it.
+
+**The improvement.** Session filtering is currently all-or-nothing: this session only. Real use
+crosses sessions — you split work across three sessions this morning and want the artifacts from
+all of them.
+
+So the filter becomes **multi-select over sessions, defaulting to the current one**. The default
+matters: opening the panel and seeing every artifact you have ever produced is not a feature, it is
+a search problem you did not ask for. Start scoped, let the human widen deliberately.
+
+When more than one session is selected, **each artifact shows which session produced it.** An
+aggregated list without provenance is how you attribute one session's output to another — the same
+failure the panel currently has by accident, reintroduced on purpose.
+
 ### D9 — Explicitly out of scope
 
 - **Reimplementing restack in TypeScript.** GitHub maintains cascading rebase; we would maintain a
