@@ -189,31 +189,83 @@ The behavioural facts below were learned from studying a third-party queue but d
 That last pair is worth building **now** even without a queue, because both are properties of the
 merge itself.
 
-### D7 — The agent AUTO-PROPOSES a stack for its own large, separable changes *(owner-decided)*
+### D7 — Stacks are the NATIVE OUTPUT SHAPE of agent work, not a post-hoc split
 
-This is the payoff and the part that connects to ADR-027 D1: a 2,000-line "approve or don't" becomes
-an ordered series of decisions. The owner's call is that the agent raises this **unprompted** when
-its own change qualifies, rather than waiting to be asked.
+*(Refined after the owner surfaced GitHub's "fit for high-volume development" framing. The earlier
+version of this decision was about splitting a large change after the fact. That is the weaker
+reading and it is now the fallback, not the design.)*
 
-It never *silently splits* work. Auto-propose means: state that the change looks stackable, name the
-proposed layers and why they are the seams, and wait. Cutting happens only on confirmation.
+GitHub's framing:
 
-**The tension to respect, because ADR-027 §1 is explicit about it.** Notification acceptance falls
-roughly 30% per additional notification in a session; a proposal that fires often becomes one that
-is dismissed reflexively, and then it is worth nothing when the change genuinely needs splitting. So
-auto-propose is gated hard:
+> *"An agent completes one task, then starts the next task that builds on it. That sequence maps
+> directly onto a stack: one pull request per task, each based on the one below. Stacks let you
+> record those dependencies explicitly instead of combining unrelated changes into a single branch."*
 
-- It fires only when `adviseStacking` returns `shouldStack: true` — over the ~200-line band **and**
-  genuinely separable. A large indivisible change stays one honest pull request and produces no
-  proposal at all.
-- It fires **once per change**, not per turn. Declining is remembered for that change; the agent
-  does not re-raise it after the next commit.
-- The proposal is a single sentence plus the layer list, not a panel.
+**We already have the structure this describes.** `planPhases.ts` produces ordered phases with ids,
+declared order, and a `current` pointer. The agent commits to that plan before it writes code. A
+plan of five executable phases *is* a five-layer stack — the dependency information a stack needs is
+information the agent has already produced and currently throws away by collapsing everything onto
+one branch.
 
-`adviseStacking` already refuses to split an indivisible change; that stands, and it is now the
-gate rather than merely advice.
+So the design is not "notice the diff got big, then cut it up". It is:
 
-### D8 — Desktop surface follows the model, not the other way round
+**One plan phase → one layer → one pull request, authored as the work happens.**
+
+Splitting a monolith afterwards stays as the fallback for work that was not planned in phases. It is
+strictly worse: the seams have to be *inferred* from a finished diff rather than *recorded* as the
+work is done, and inferred seams are guesses about intent.
+
+#### Why this matters more than it looks
+
+The dependency is recorded rather than reconstructed. Reviewing layer 3 you can see that it builds on
+2 and 1 — because that is how it was written. Today that ordering exists only in the agent's plan and
+is lost the moment the branch is pushed.
+
+It also fixes an asymmetry: the agent already works in ordered, dependent steps. The pull request is
+the only place that structure gets flattened.
+
+#### The guards, because this can fail badly
+
+An agent emitting a layer per task will produce deep stacks unless constrained, and a fifteen-layer
+stack is not more reviewable than one large pull request — it is *less*, with fifteen CI runs
+attached. The failure mode is real and this decision must not create it.
+
+- **Depth is capped, and the cap is low.** Beyond roughly five layers a stack stops being an ordered
+  series of decisions and becomes a queue. Past the cap the agent stops and asks whether the
+  remaining phases belong in a second stack after this one lands. The cap is a default, not a law,
+  but exceeding it is a deliberate choice rather than a drift.
+- **Never stack on a broken base.** If layer *N* fails its checks, layer *N+1* is not created. This
+  follows from D5's merge ordering — anything above a blocked layer cannot land anyway — but it must
+  be enforced at *authoring* time, not discovered at merge time, or the agent cheerfully builds four
+  layers on a foundation that will never merge.
+- **Every layer stands alone.** A layer must be independently reviewable and independently
+  revertible. A plan phase that produces "half a refactor" is not a layer; phases that only make
+  sense together get folded into one before submitting. `gh stack modify` exists for exactly this
+  and the fold happens *before* the human sees it.
+- **Rebase cost grows with depth.** A conflict in layer 2 of a six-layer stack cascades through four
+  restacks. That is a second reason for the cap, independent of reviewability.
+- **Each layer's PR body states what it depends on and why**, in prose. "Layer 3 of 5" is
+  navigation; "this needs the schema from #41 before the API can read it" is the dependency, and
+  that sentence is what makes the layer reviewable on its own.
+
+#### Auto-propose still applies, and is still gated
+
+For unplanned work the agent raises stacking unprompted when `adviseStacking` returns
+`shouldStack: true` — over the reviewable band *and* genuinely separable. It fires **once per
+change**, is suppressed after a decline, and never fires for an indivisible change.
+
+The ADR-027 §1 reasoning is unchanged: notification acceptance falls roughly 30% per additional
+notification, so a proposal that fires often is one that gets dismissed reflexively and is then
+worth nothing when the change genuinely needs splitting.
+
+#### Connection to the build loop
+
+`cli.buildLoopEmitPr` already exists as a knob for delivering a passing build as a draft pull
+request — and, checked while writing this, it is **another config-only value with no consumer**, the
+fifth instance of that shape. When it is wired it emits a *layer* into the current stack rather than
+an isolated pull request, or the two features produce competing branches for the same work.
+
+### D8 — Desktop surface### D8 — Desktop surface follows the model, not the other way round
 
 A stack panel showing the layer chain, each layer's readiness, the named blocker, and the highest
 mergeable layer. Read-only first; mutation buttons only for operations already reachable through
