@@ -46,3 +46,36 @@ export {
   type LayerBlockReason,
   type StackAdvice,
 } from './stackedPr.js';
+
+// ADR-028 A3 — gh stack exit-code contract.
+export {
+  classifyStackExit,
+  blocksFurtherMutation,
+  KNOWN_STACK_EXIT_CODES,
+  type StackOutcome,
+  type StackOutcomeKind,
+} from './stackExitCodes.js';
+
+// ADR-028 A1 — gh stack capability detection.
+export {
+  detectStackCapability,
+  stackCapabilityFor,
+  resetStackCapabilityCache,
+  parseVersion,
+  meetsMinimum,
+  MIN_GH,
+  MIN_GIT,
+  type StackCapability,
+  type CapabilityProbe,
+} from './stackCapability.js';
+
+// ADR-028 S2-1 — gh stack runner.
+export {
+  StackRunner,
+  StackUnavailableError,
+  StackHaltedError,
+  stackActionsAvailable,
+  type StackExec,
+  type StackRunResult,
+  type StackRunnerOptions,
+} from './stackRunner.js';

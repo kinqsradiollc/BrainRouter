@@ -340,6 +340,17 @@ export function App(): React.ReactElement {
     ensurePanel, closeSideTab, reorderSideTab, togglePanel, openSideView, openBottomDock, addBottomTab, closeBottomTab, resizeTerminal, resetTermDock,
   } = usePanels(q);
 
+  // ADR-028 B2 — artifacts are session-scoped, so switching sessions has to
+  // re-fetch them. `ensurePanel` only lists on OPEN, which is why the panel
+  // used to need closing and reopening: it kept showing the previous session's
+  // artifacts, which is worse than showing none — a stale list is
+  // indistinguishable from a correct one.
+  useEffect(() => {
+    if (!sideTabs.includes('artifacts')) return;
+    q('q-art', 'artifact-list');
+    q('q-annot', 'annotation-list');
+  }, [viewKey, sideTabs, q]);
+
   // Agent browser commands target a main-owned native view even when its React
   // panel is unmounted. Expose the Browser first so it can report bounds and the
   // user sees the exact tab the agent is about to operate.
@@ -644,6 +655,13 @@ export function App(): React.ReactElement {
     window.dispatchEvent(new CustomEvent('br-browser-uimap'));
   }, [atlasUiMap]);
 
+  // ADR-028 B2 — session key → a human label for artifact scope chips.
+  const sessionTitles = useMemo(() => {
+    const map: Record<string, string | undefined> = {};
+    for (const s of sessions) map[s.sessionKey] = s.firstUserMessage;
+    return map;
+  }, [sessions]);
+
   const renderPanelBody = buildRenderPanelBody({
     q, hostUp, running, info, gitInfo, branches, tokens, liveTurn, contextUsage, efficiency, runningTasks,
     allFiles, statuses, openFile, grepHits, filesLoading, filesTruncated, filesError, fileView, editor,
@@ -656,6 +674,9 @@ export function App(): React.ReactElement {
     review, reviewRunning, setReviewRunningByWs, setReviewByWs, setDraft, atlasGraph, atlasBuilding, atlasEnriching,
     atlasAssessments, atlasAssessing, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, requirements,
     annotations, artifacts,
+    // ADR-028 B2 — the Artifacts panel opens scoped to this session and labels
+    // rows by origin once more than one session is in view.
+    viewKey, sessionTitles,
     atlasUiMap, atlasStories, runStory,
   });
   const tabTitle = (id: PanelId): string =>

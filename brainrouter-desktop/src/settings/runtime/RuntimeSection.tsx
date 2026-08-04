@@ -19,6 +19,9 @@ type ArchiveRow = { id: string; branch: string; baseCommit: string; bytes: numbe
 type PreviewRow = { runtimeId: string; name: string; url: string; port: number };
 
 const BACKENDS = ['process', 'worktree', 'container', 'hosted'];
+// ADR-028 C1 — described by what each engine is good at; the bare words "loop"
+// and "graph" mean nothing to anyone who has not read the runtime ADR.
+const ENGINES = ['loop', 'graph'];
 
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -44,6 +47,7 @@ export function RuntimeSection({ knobs, setPath, runtimes = [], archives = [], p
   const previewPorts = (runtime.previewPorts ?? {}) as Record<string, number>;
 
   const backend = String(runtime.backend ?? 'process');
+  const engine = knobs.executionEngine === 'graph' ? 'graph' : 'loop';
   const serveOn = runtime.serve === true;
   const jitOn = runtime.jitSecrets === true;
 
@@ -55,6 +59,28 @@ export function RuntimeSection({ knobs, setPath, runtimes = [], archives = [], p
         self-review. Everything here is <b>off / in-process by default</b>; shared with the
         CLI (<code>cli.runtime</code> / <code>cli.budget</code> / <code>cli.critic</code>).
       </div>
+
+      <SetGroup title="Execution engine">
+        <Row
+          title="Engine"
+          desc={<>
+            How a turn is executed. <b>loop</b> runs tools in sequence and is what everything is
+            built against today — interrupts, tool authorization and steer receipts all work.
+            <b> graph</b> runs a checkpointed node graph that can stop and resume without repeating
+            side effects, which matters for long interrupted work; it does not yet have the loop's
+            interrupts or tool authorization, so selecting it currently falls back to the loop and
+            says so in the session. (cli.executionEngine)
+          </>}
+        >
+          <Select value={engine} options={ENGINES} onChange={(v) => setPath('executionEngine', v)} />
+        </Row>
+        {engine === 'graph' ? (
+          <div className="set-desc" style={{ margin: '0 0 8px 2px' }}>
+            The graph engine is incomplete — turns run on the loop until it reaches parity. This
+            setting is remembered, so it takes effect as soon as it does.
+          </div>
+        ) : null}
+      </SetGroup>
 
       <SetGroup title="Backend">
         <Row title="Backend" desc={<>Where agent conversations run. <b>process</b> = in-process (today's behavior); <b>worktree</b> = git-isolated; <b>container</b> = Docker (needs an image); <b>hosted</b> = a declared external CLI. (cli.runtime.backend)</>}>

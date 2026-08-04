@@ -37,7 +37,6 @@ function handlers(): WorkbenchHandlers & { calls: string[] } {
     runLocalReview: record('runLocalReview'),
     describeStack: record('describeStack'),
     adviseStacking: record('adviseStacking'),
-    createStackLayer: record('createStackLayer'),
     openPanel: record('openPanel'),
     setTheme: record('setTheme'),
   };
@@ -140,5 +139,8 @@ test('stack actions are agent-reachable, and adding a layer is not destructive',
   const registry = workbenchRegistry(handlers());
   assert.equal(registry.actions.get('stack.describe')!.effect, 'read');
   assert.equal(registry.actions.get('stack.advise')!.effect, 'read');
-  assert.equal(registry.actions.get('stack.addlayer')!.effect, 'mutate');
+  // stack.addlayer is REMOVED (ADR-028 A2) — it reported success for a pull
+  // request that was never registered as a stack. Asserted absent so it cannot
+  // return without the replacement that actually creates one.
+  assert.equal(registry.actions.has('stack.addlayer'), false);
 });

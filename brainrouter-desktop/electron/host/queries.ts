@@ -369,7 +369,6 @@ import type { QueryHandler } from '../hostCore.js';
 import {
   describeStackAction,
   adviseStackingAction,
-  createStackLayerAction,
   type StackActionDeps,
 } from './stackActions.js';
 
@@ -637,7 +636,6 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // first shipped.
       'stack-describe': async (args) => describeStackAction(stackDeps(), args ?? {}),
       'stack-advise': async () => adviseStackingAction(stackDeps()),
-      'stack-add-layer': async (args) => createStackLayerAction(stackDeps(), args ?? {}),
       'connectors-list': (args) => {
         const source = typeof args.source === 'string' ? args.source as ConnectorSource : undefined;
         const status = typeof args.status === 'string' ? args.status as never : undefined;

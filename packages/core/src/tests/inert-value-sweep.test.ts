@@ -1,0 +1,186 @@
+/**
+ * ADR-028 E1 — the sweep for values nobody reads.
+ *
+ * Five instances of one shape shipped in a single release: a knob resolved,
+ * validated and unit-tested with nothing consuming it, or a module written and
+ * unit-tested with no non-test importer. Each was fixed as it surfaced, which
+ * is precisely how the sixth ships.
+ *
+ *   A module or setting is not done until something calls it, and the test
+ *   proving the caller exists is a DIFFERENT test from the one proving the
+ *   unit works.
+ *
+ * That second test is this file. It is mechanical on purpose — a review habit
+ * is exactly what failed five times.
+ *
+ * Two policies, deliberately different:
+ *
+ *  - **Knobs fail the build.** A `cli.*` setting with no reader is always a
+ *    defect: a person can set it and watch nothing happen.
+ *  - **Modules are a reviewed baseline.** Some exported modules are legitimately
+ *    public SDK surface with no in-repo caller, so an automatic failure would
+ *    be wrong. The count is pinned instead; a RISE fails, which turns "nobody
+ *    noticed" into "this PR added one".
+ */
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src');
+
+function walk(dir: string, out: string[] = []): string[] {
+  for (const entry of readdirSync(dir)) {
+    const full = path.join(dir, entry);
+    if (statSync(full).isDirectory()) walk(full, out);
+    else if (full.endsWith('.ts')) out.push(full);
+  }
+  return out;
+}
+
+const ALL_FILES = walk(SRC);
+const isTest = (f: string) => f.includes(`${path.sep}tests${path.sep}`) || f.endsWith('.test.ts');
+const NON_TEST = ALL_FILES.filter((f) => !isTest(f));
+const SOURCE_TEXT = new Map(NON_TEST.map((f) => [f, readFileSync(f, 'utf8')]));
+
+/* --------------------------------------------------------------- knobs */
+
+/**
+ * The resolved-knob surface: every key on the object `resolveCliKnobs` returns.
+ *
+ * Read from the resolver rather than from a hand-kept list, because a
+ * hand-kept list is the thing that goes stale and lets the next one through.
+ */
+function resolvedKnobNames(): string[] {
+  const text = SOURCE_TEXT.get(path.join(SRC, 'config', 'config.ts')) ?? '';
+  const start = text.indexOf('export function resolveCliKnobs');
+  assert.ok(start > 0, 'resolveCliKnobs must exist for this sweep to mean anything');
+  const body = text.slice(start, start + 20_000);
+  const names = new Set<string>();
+  for (const m of body.matchAll(/^\s{4}(\w+):/gm)) names.add(m[1]!);
+  return [...names];
+}
+
+/**
+ * Knobs whose only reader is the resolver itself are, by definition, inert.
+ *
+ * A knob "has a consumer" when some non-config, non-test file mentions it.
+ * Crude, and deliberately so: a precise reachability analysis would be a
+ * project of its own, and this catches the shape that actually shipped five
+ * times — a name that appears nowhere but where it is defined.
+ */
+function knobConsumers(knob: string): string[] {
+  const pattern = new RegExp(`\\b${knob}\\b`);
+  return NON_TEST.filter((f) => {
+    if (f.includes(`${path.sep}config${path.sep}`)) return false;
+    return pattern.test(SOURCE_TEXT.get(f) ?? '');
+  });
+}
+
+/**
+ * Knobs whose consumer lives outside this package.
+ *
+ * This sweep only sees `packages/core`, and the CLI reads many knobs directly,
+ * so an allowlist is unavoidable. Every entry names the FILE that reads it —
+ * verified, not assumed. That is the difference between an allowlist and a
+ * place to hide things: adding a line here means going and finding the caller,
+ * and if you cannot find one, the knob is inert and belongs in the failure.
+ */
+const CONSUMED_ELSEWHERE = new Map<string, string>([
+  ['skillsStackMax', 'brainrouter-cli/src/prompt/skillRunner.ts — stack cap'],
+  ['skillsKeywordTriggers', 'brainrouter-cli/src/cli/ink/runChat/dispatch.ts — kill-switch'],
+  ['markdownCheckboxes', 'brainrouter-cli/src/cli/ink/text/markdownRender.ts'],
+  ['notifyBell', 'brainrouter-cli/src/cli/ink/runChat/completions.ts'],
+  ['fleetMaxConcurrentJobs', 'brainrouter-cli/src/entry/fleetCommand.ts'],
+  ['scheduleTickMs', 'brainrouter-cli/src/runtime/background/scheduleTicker.ts'],
+  ['updateCheck', 'brainrouter-cli/src/runtime/update/updateApply.ts'],
+  ['autoExtractSkills', 'brainrouter-cli/src/cli/ink/runChat/turnRunner.ts'],
+  ['autoReplayOffline', 'brainrouter-cli/src/cli/ink/runChat.tsx'],
+  ['browserSmoke', 'brainrouter-cli/src/runtime/verify/browserVerify.ts'],
+  ['debugExit', 'brainrouter-cli/src/index.ts'],
+  ['altScreen', 'brainrouter-cli/src/cli/ink/terminal/renderWithResizeClear.ts'],
+  ['hideCursor', 'brainrouter-cli/src/cli/ink/terminal/renderWithResizeClear.ts'],
+  ['skillsHideBundled', 'brainrouter-cli/src/prompt/skillCatalog.ts + desktop settings'],
+]);
+
+test('E1 — every resolved cli.* knob has a consumer', () => {
+  const knobs = resolvedKnobNames();
+  assert.ok(knobs.length > 20, `expected a substantial knob surface, found ${knobs.length}`);
+
+  const inert = knobs.filter(
+    (k) => !CONSUMED_ELSEWHERE.has(k) && knobConsumers(k).length === 0,
+  );
+
+  assert.deepEqual(
+    inert,
+    [],
+    `These cli.* knobs are resolved and validated but nothing reads them:\n` +
+      inert.map((k) => `  - ${k}`).join('\n') +
+      '\n\nWire it, delete it, or — if the consumer lives in the CLI or desktop — ' +
+      'add it to CONSUMED_ELSEWHERE with the reason. A setting a person can change ' +
+      'and watch do nothing is the defect this sweep exists to catch.',
+  );
+});
+
+/* -------------------------------------------------------------- modules */
+
+/** Modules with no importer outside their own tests. */
+function modulesWithoutImporters(): string[] {
+  const orphans: string[] = [];
+  for (const file of NON_TEST) {
+    const rel = path.relative(SRC, file);
+    if (rel === 'index.ts' || rel.endsWith(`${path.sep}index.ts`)) continue;
+    const base = path.basename(file, '.ts');
+    // Match `from '.../<base>.js'` in any other non-test source file.
+    const pattern = new RegExp(`from\\s+['"][^'"]*\\b${base}\\.js['"]`);
+    const imported = NON_TEST.some((other) => other !== file && pattern.test(SOURCE_TEXT.get(other) ?? ''));
+    if (!imported) orphans.push(rel);
+  }
+  return orphans.sort();
+}
+
+/**
+ * The baseline.
+ *
+ * Not zero, and not aiming to be: some of these are genuine public SDK surface
+ * re-exported through package entry points, and failing on them would push
+ * people to add fake callers. What matters is the direction — a rise means a
+ * PR added a module nothing calls, which is the moment to ask whether it is
+ * finished.
+ *
+ * Set to the exact count at the time of writing, not to a round number with
+ * headroom. Headroom is how a sweep passes while the thing it watches for keeps
+ * happening — the first version of this test used 400 against an actual 34, and
+ * would have absorbed a decade of orphans without ever failing.
+ *
+ * Lower this when you remove one. Raising it should feel like a decision.
+ */
+const ORPHAN_MODULE_BASELINE = 34;
+
+test('E1 — the count of modules with no importer does not RISE', () => {
+  const orphans = modulesWithoutImporters();
+  assert.ok(
+    orphans.length <= ORPHAN_MODULE_BASELINE,
+    `Modules with no non-test importer rose to ${orphans.length} ` +
+      `(baseline ${ORPHAN_MODULE_BASELINE}).\n` +
+      'Something was added that nothing calls. Either wire it up, or — if it is ' +
+      'genuinely public SDK surface — raise the baseline deliberately and say why ' +
+      'in the commit.\n\nCurrent list starts:\n' +
+      orphans.slice(0, 15).map((o) => `  - ${o}`).join('\n'),
+  );
+});
+
+test('E1 — the modules this ADR wired are no longer orphans', () => {
+  // The five instances from §1.6, plus what Part A/C added. If any of these
+  // reappears here, a wiring was reverted.
+  const orphans = new Set(modulesWithoutImporters());
+  for (const wired of [
+    path.join('agent', 'runtime', 'engineSelection.ts'),
+    path.join('review', 'stackExitCodes.ts'),
+    path.join('review', 'stackCapability.ts'),
+    path.join('review', 'stackRunner.ts'),
+  ]) {
+    assert.equal(orphans.has(wired), false, `${wired} lost its caller`);
+  }
+});
