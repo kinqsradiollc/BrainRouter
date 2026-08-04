@@ -11,6 +11,7 @@ import {
   buildRootContextEnvelope,
 } from '../../context/contextEnvelope.js';
 import { recordDenial } from '../../exec/runtime/recentDenials.js';
+import { selectEngine, describeRunningEngine } from './engineSelection.js';
 import { readGoal } from '../../goal/store/goalStore.js';
 import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../../hooks/hookifyStore.js';
 import { runHooks, parseHookDecision } from '../../hooks/hooksStore.js';
@@ -272,6 +273,17 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // workers; a child owns none) — hide the surface from everyone else.
     const hideWorkerTools = hideWorkerToolsFor(this.agentDepth, this.tier);
     const cliKnobs = getCliKnobs();
+    // ADR-028 C1 — the execution-engine knob is READ here. It was resolved and
+    // validated for two releases while nothing consumed it, so a person could
+    // flip the setting and watch it do nothing. Requesting an engine that is
+    // missing features the loop has falls back and says so, rather than
+    // silently removing interrupts or tool authorization from the turn.
+    const engineSelection = selectEngine(cliKnobs.executionEngine);
+    // Requirement 4 — name the engine where the WORK happens, not only where
+    // the switch is. A setting whose effect is invisible is one nobody trusts
+    // they changed.
+    callbacks.onStatusUpdate(describeRunningEngine(engineSelection));
+    if (engineSelection.notice) callbacks.onStatusUpdate(engineSelection.notice);
     const hideComputerUse =
       !cliKnobs.computerUse.enabled ||
       !this.computerUsePort ||
