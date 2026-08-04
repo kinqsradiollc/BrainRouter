@@ -472,6 +472,50 @@ Completed items keep full detail for 90 days, then compact to a summary row. The
 working surface, not an archive, and unbounded growth of a per-user table across every device is the
 D11 problem in a new place.
 
+### D20 — The execution engine is a setting that currently does nothing
+
+*(Owner-reported: "I don't see where we utilise loop engineering or graph engineering in settings".)*
+
+Correct, and the answer is worse than "there is no UI for it".
+
+**`cli.executionEngine` is inert.** It appears in exactly two places: the type declaration in
+`configTypes.ts` and the resolver in `config.ts`. `runTurn` never reads it. The graph executor,
+its typed state, its checkpoints and its compensation ordering all exist and are tested — and
+nothing routes a turn into them. Setting `executionEngine: "graph"` today changes nothing at all;
+the loop runs regardless.
+
+So ADR-027 D2 claimed "both engines ship and a setting selects" and shipped: both engines, a setting,
+and no wire between them. This is the same defect class as everything else in this ADR — and it is
+the fourth instance of one specific shape in a single release: **a module with no caller.** The
+stack model was unreachable until it was exported. The `stack.*` actions were declarations with no
+host. `stack.addlayer` called an endpoint that does not do what its name says. Now a setting
+resolves a value nobody reads.
+
+Every one of those passed its tests. Tests prove a unit behaves; they say nothing about whether
+anything invokes it. That gap is worth naming as a standing check rather than a one-off fix: **a new
+module or setting is not done until something calls it, and the test that proves the caller exists
+is a different test from the one that proves the unit works.**
+
+**What this decision requires:**
+
+1. **Wire it.** `runTurn` dispatches on the resolved knob. This is the actual work — the branch is
+   small, but the graph path needs the same interrupt, tool-authorization and receipt behaviour the
+   loop has, or "selectable" means "selectable if you do not mind losing features".
+2. **Surface it** in desktop settings under agent runtime, per workspace, with plain descriptions
+   of what each engine is good at rather than the words *loop* and *graph* alone. The choice is
+   meaningless to anyone who has not read D2.
+3. **Show which engine is running**, in the session, at the point work happens. A setting whose
+   effect is invisible is one nobody trusts they changed — and this is the ADR's whole theme: a
+   surface that does not report its own state.
+4. **Parity is asserted, not assumed.** A test matrix runs the same scenarios through both engines
+   and fails when one supports something the other does not. Without that, "both ship" decays into
+   "one ships and one exists".
+
+**The honest option that is NOT chosen.** Deleting the knob and shipping only the loop would also
+resolve the contradiction, and is less work. It is rejected because the graph executor's value is
+real for interrupted, resumable work — but that value is currently zero, and would stay zero
+indefinitely if this were left as it is. A capability nobody can reach is not a capability.
+
 ### D9 — Explicitly out of scope
 
 - **Reimplementing restack in TypeScript.** GitHub maintains cascading rebase; we would maintain a
