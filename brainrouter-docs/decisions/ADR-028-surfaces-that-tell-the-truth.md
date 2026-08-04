@@ -1,6 +1,6 @@
 # ADR-028 — Surfaces that tell the truth about their own state
 
-**Status:** PROPOSED — planning only. No implementation until approved. · **Target:** `release/0.4.20`
+**Status:** ACCEPTED — approved by the owner 2026-08-04. · **Target:** `release/0.4.20`
 **Supersedes:** ADR-027 D13 (stacked PRs), which shipped partial and in one respect incorrect.
 **Builds on:** ADR-027 D1 (debt ledgers, oversight evidence), D2 (execution engines), D6 (control
 layer), D11 (retention), D12 (idempotency, fencing, database clock).
@@ -108,7 +108,7 @@ Five of the above are **the same failure**: something declared, tested, and neve
 | 5 | `cli.buildLoopEmitPr` | Same |
 
 **Every one passed its tests.** Tests prove a unit behaves; they say nothing about whether anything
-invokes it. That is the root cause, and D21 addresses it as a class rather than five bugs.
+invokes it. That is the root cause, and E1 addresses it as a class rather than five bugs.
 
 ---
 
