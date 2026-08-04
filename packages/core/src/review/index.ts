@@ -68,3 +68,14 @@ export {
   type StackCapability,
   type CapabilityProbe,
 } from './stackCapability.js';
+
+// ADR-028 S2-1 — gh stack runner.
+export {
+  StackRunner,
+  StackUnavailableError,
+  StackHaltedError,
+  stackActionsAvailable,
+  type StackExec,
+  type StackRunResult,
+  type StackRunnerOptions,
+} from './stackRunner.js';
