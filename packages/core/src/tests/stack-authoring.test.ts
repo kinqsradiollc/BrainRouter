@@ -15,6 +15,7 @@ import {
   validateLayerRequest,
   canAddLayer,
   DEFAULT_MAX_STACK_DEPTH,
+  isSafeArgument,
 } from '../review/stackAuthoring.js';
 import { StackRunner, type StackExec } from '../review/stackRunner.js';
 import type { StackCapability } from '../review/stackCapability.js';
@@ -46,7 +47,7 @@ test('creating a layer runs `stack add` THEN `stack submit` — not a plain PR c
   const e = exec(0);
   const result = await addStackLayer(new StackRunner({ exec: e, capability: AVAILABLE }), REQUEST);
   assert.equal(result.created, true);
-  assert.deepEqual(e.calls[0], ['stack', 'add', 'feat/api-layer']);
+  assert.deepEqual(e.calls[0], ['stack', 'add', '--', 'feat/api-layer']);
   assert.equal(e.calls[1]![1], 'submit');
 });
 
@@ -103,7 +104,7 @@ test('linking passes every ref through in order', async () => {
     'main',
   );
   assert.equal(r.linked, true);
-  assert.deepEqual(e.calls[0], ['stack', 'link', '--base', 'main', '#1', '#2', '#3']);
+  assert.deepEqual(e.calls[0], ['stack', 'link', '--base', 'main', '--', '#1', '#2', '#3']);
 });
 
 test('a layer is never added on top of a base that failed its checks', () => {
@@ -121,4 +122,56 @@ test('depth is capped, and the cap explains itself', () => {
   assert.match(deep.reason!, /becomes a queue/);
   // The cap is a default, not a law — a team that wants deeper stacks can say so.
   assert.equal(canAddLayer({ currentDepth: 6, baseLayerReady: true, maxDepth: 10 }).allowed, true);
+});
+
+/* ----------------------------------------- argument-injection boundary */
+
+test('a hyphen-leading branch name is REFUSED — gh would read it as an option', () => {
+  // The original regex looked restrictive but matched `--force` and `-h`, which
+  // `gh stack add` parses as options rather than as the branch they were meant
+  // to be. Branch names come from agent-produced plan data, so this is a real
+  // boundary.
+  for (const bad of ['--force', '-h', '-c']) {
+    assert.match(validateLayerRequest({ ...REQUEST, branch: bad })!, /not a usable branch/);
+  }
+});
+
+test('git-invalid branch shapes are refused too', () => {
+  for (const bad of ['feat/a..b', 'feat/x.lock', 'has space', '']) {
+    assert.equal(isSafeArgument(bad), false, `${bad} must be refused`);
+  }
+  for (const good of ['feat/api-layer', 'release/0.4.20', '#41', 'main']) {
+    assert.equal(isSafeArgument(good), true, `${good} must be allowed`);
+  }
+});
+
+test('the create path passes `--` so a positional can never be read as an option', () => {
+  // Defence in depth: even if the guard is loosened later, `gh` stops parsing
+  // options at `--`.
+  const e = exec(0);
+  return addStackLayer(new StackRunner({ exec: e, capability: AVAILABLE }), REQUEST).then(() => {
+    assert.deepEqual(e.calls[0], ['stack', 'add', '--', 'feat/api-layer']);
+  });
+});
+
+test('linking refuses option-shaped refs before running anything', async () => {
+  const e = exec(0);
+  const r = await linkExistingIntoStack(
+    new StackRunner({ exec: e, capability: AVAILABLE }),
+    ['#1', '--version'],
+  );
+  assert.equal(r.linked, false);
+  assert.match(r.reason!, /read as a command-line option/);
+  assert.equal(e.calls.length, 0, 'nothing may run with an unsafe ref');
+});
+
+test('linking refuses an option-shaped base', async () => {
+  const e = exec(0);
+  const r = await linkExistingIntoStack(
+    new StackRunner({ exec: e, capability: AVAILABLE }),
+    ['#1', '#2'],
+    '--exec=whoami',
+  );
+  assert.equal(r.linked, false);
+  assert.equal(e.calls.length, 0);
 });

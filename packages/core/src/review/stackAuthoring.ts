@@ -35,6 +35,24 @@ export type LayerCreationResult =
   | { created: false; reason: string; outcome?: StackOutcome };
 
 /**
+ * A value safe to pass as a positional argument to `gh`.
+ *
+ * The leading-hyphen check is the point. `^[A-Za-z0-9._\-\/]+$` looks
+ * restrictive but matches `--force` and `-h`, and `gh` parses those as OPTIONS
+ * rather than as the branch or ref they were meant to be. Branch names and refs
+ * reach here from plan data the agent produced, so this is a real boundary, not
+ * a theoretical one.
+ *
+ * `..` and a trailing `.lock` are rejected too — git refuses them, so a value
+ * containing one is either a mistake or an attempt.
+ */
+export function isSafeArgument(value: string): boolean {
+  if (!value || value.startsWith('-')) return false;
+  if (value.includes('..') || value.endsWith('.lock')) return false;
+  return /^[A-Za-z0-9._#\/-]+$/.test(value);
+}
+
+/**
  * Reject a request that would produce a layer nobody can review.
  *
  * A7 requires each layer's body to state what it depends on, in prose. "Layer 3
@@ -48,7 +66,7 @@ export function validateLayerRequest(request: LayerCreationRequest): string | nu
   const title = request.title?.trim() ?? '';
   const body = request.body?.trim() ?? '';
   if (!branch) return 'A branch name is required.';
-  if (!/^[A-Za-z0-9._\-\/]+$/.test(branch)) {
+  if (!isSafeArgument(branch)) {
     return `"${branch}" is not a usable branch name.`;
   }
   if (!title) return 'A title is required.';
@@ -77,7 +95,9 @@ export async function addStackLayer(
   const invalid = validateLayerRequest(request);
   if (invalid) return { created: false, reason: invalid };
 
-  const added = await runner.run(['add', request.branch]);
+  // `--` stops option parsing, so even if the guard above is ever loosened a
+  // hyphen-leading value is treated as the positional it was meant to be.
+  const added = await runner.run(['add', '--', request.branch]);
   if (!added.outcome.ok) {
     return {
       created: false,
@@ -125,9 +145,20 @@ export async function linkExistingIntoStack(
       outcome: { kind: 'invalid_arguments', exitCode: 5, ok: false, halts: false, unavailable: false, retryable: false, guidance: 'Fewer than two refs.' },
     };
   }
+  const unsafe = [...refs, ...(base ? [base] : [])].filter((r) => !isSafeArgument(r));
+  if (unsafe.length > 0) {
+    return {
+      linked: false,
+      reason:
+        `${unsafe.map((r) => `"${r}"`).join(', ')} ${unsafe.length === 1 ? 'is' : 'are'} not a usable pull-request reference. ` +
+        'A value starting with "-" would be read as a command-line option rather than a reference.',
+      outcome: { kind: 'invalid_arguments', exitCode: 5, ok: false, halts: false, unavailable: false, retryable: false, guidance: 'Unsafe ref.' },
+    };
+  }
   const result: StackRunResult = await runner.run([
     'link',
     ...(base ? ['--base', base] : []),
+    '--',
     ...refs,
   ]);
   return result.outcome.ok
