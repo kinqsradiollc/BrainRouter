@@ -2,7 +2,7 @@
  * DESK-5f — pure panel identity and presentation catalog. Kept free of React
  * and panel implementations so layout/recommendation models are Node-testable.
  */
-export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'task-detail' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'review' | 'requirements' | 'annotations' | 'artifacts' | 'attachments' | 'ci' | 'atlas' | 'workflows' | 'memory' | 'knowledge' | 'prototype' | 'servers' | 'browser';
+export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'task-detail' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'stack' | 'review' | 'requirements' | 'annotations' | 'artifacts' | 'attachments' | 'ci' | 'atlas' | 'workflows' | 'memory' | 'knowledge' | 'prototype' | 'servers' | 'browser';
 
 export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'context', title: 'Context', icon: 'layout-right' },
@@ -18,6 +18,7 @@ export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'search', title: 'Search session', icon: 'search' },
   { id: 'schedule', title: 'Schedules', icon: 'clock' },
   { id: 'worktrees', title: 'Worktrees', icon: 'branch' },
+  { id: 'stack', title: 'Stack', icon: 'branch' },
   { id: 'review', title: 'Review', icon: 'review' },
   { id: 'requirements', title: 'Requirements', icon: 'tasks' },
   { id: 'annotations', title: 'Annotations', icon: 'review' },

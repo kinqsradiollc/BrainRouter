@@ -7,10 +7,11 @@
 import React, { Suspense, lazy } from 'react';
 import {
   DiffPanel, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel, WorktreesPanel, ReviewPanel,
-  RequirementsPanel, AnnotationsPanel, ArtifactsPanel, AttachmentsPanel, MemoryPanel, KnowledgePanel, PrototypePanel, TasksPanel, TaskDetailPanel, TerminalPanel, ToolsPanel, ServersPanel, ContextPanel, type PanelId, type SearchHit, type ReviewFindingView, type GrepHit, type FinishedTask,
+  RequirementsPanel, AnnotationsPanel, ArtifactsPanel, StackPanel, AttachmentsPanel, MemoryPanel, KnowledgePanel, PrototypePanel, TasksPanel, TaskDetailPanel, TerminalPanel, ToolsPanel, ServersPanel, ContextPanel, type PanelId, type SearchHit, type ReviewFindingView, type GrepHit, type FinishedTask,
 } from '../../panels/index.js';
 import type { RequirementRecord, AnnotationRecord, ArtifactRecord, AtlasGraph } from '@kinqs/brainrouter-types';
 import type { TrackPrStatus } from '../../track/TrackView.js';
+import type { StackLayerView, StackAvailability } from '../../lib/stack/stackPanelView.js';
 import type { ScheduleRecordView } from '../../lib/schedule/scheduleView.js';
 import { setEntry } from '../../lib/review/reviewWorkspace.js';
 import type { PlanItem, PlanView, FleetRow, TaskViewState, ChatRow } from '../../types.js';
@@ -43,6 +44,9 @@ type Query = (id: string, name: string, args?: Record<string, unknown>) => void;
 export interface RenderPanelBodyCtx {
   /** ADR-028 B2 — the session the Artifacts panel opens scoped to. */
   viewKey?: string | null;
+  /** ADR-028 A8 — the stack on this branch, and whether gh stack is usable. */
+  stackLayers?: StackLayerView[];
+  stackAvailability?: StackAvailability;
   /** Session key → title, for artifact scope chips and provenance labels. */
   sessionTitles?: Record<string, string | undefined>;
   q: Query;
@@ -145,7 +149,7 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
     lastPlan, planHistory, planFeedbackRef, searchHits, schedules, worktrees, worktreeDiffs, openWorktree,
     review, reviewRunning, setReviewRunningByWs, setReviewByWs, setDraft, atlasGraph, atlasBuilding, atlasEnriching,
     atlasAssessments, atlasAssessing, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, requirements,
-    annotations, artifacts, atlasUiMap, atlasStories, runStory, viewKey, sessionTitles,
+    annotations, artifacts, atlasUiMap, atlasStories, runStory, viewKey, sessionTitles, stackLayers, stackAvailability,
   } = ctx;
 
   // DESK-5f — tab CONTENT only; the tab strip owns titles and closing.
@@ -358,6 +362,18 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
           onExport={(filter) => { q('q-annot-export', 'annotation-export', filter); }}
           onAddComment={(id, body) => { q('q-annot-comment', 'annotation-add-comment', { id, body }); refresh(); }}
           onSelectTarget={(a) => { if (a.anchor?.filePath) { setDiffTarget({ path: a.anchor.filePath, line: a.anchor.startLine }); ensurePanel('diff'); q('q-diff', 'file-diff', { path: a.anchor.filePath }); } }} />;
+      }
+      case 'stack': {
+        // ADR-028 A8 — read-only first. The panel decides nothing; every
+        // judgement comes from stackPanelView, and the host runs the commands.
+        return <StackPanel
+          layers={stackLayers ?? []}
+          availability={stackAvailability ?? { capable: false, halted: false }}
+          onView={() => q('q-stack', 'stack-read')}
+          onSync={(rewrites) => { q('q-stack-sync', 'stack-sync', { branches: rewrites.map((l) => l.branch) }); setToast('Syncing the stack…'); }}
+          onMerge={(target) => { q('q-stack-merge', 'stack-merge', { number: target.number }); setToast('Merging — a stack merge can take a minute.'); }}
+          onOpenPr={(number) => openUrl(`https://github.com/pulls/${number}`)}
+        />;
       }
       case 'artifacts': {
         // ARTIFACT-RECORDS — create/status-set re-fetch the list; Preview resolves

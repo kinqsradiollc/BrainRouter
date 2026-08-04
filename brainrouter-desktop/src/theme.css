@@ -1681,6 +1681,25 @@ select.toolbar-input { cursor: pointer; }
 .art-provenance { flex: none; font-size: 10px; color: var(--text-faint); font-family: var(--mono);
   border: 1px solid var(--border); border-radius: 3px; padding: 0 5px; max-width: 140px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ADR-028 A8 — stack panel. Rows read bottom-up; the blocker is the sentence
+   that makes a row useful, so it gets room rather than a tooltip. */
+.stack-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.stack-summary { font-size: 12px; color: var(--text-faint); font-family: var(--mono); }
+.stack-notice { font-size: 12px; line-height: 1.5; color: var(--text-faint); border: 1px solid var(--border);
+  border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; }
+/* The blocker gets its OWN line. Without wrapping it competes with the title
+   and squeezes it out entirely, which loses the one thing the row is for. */
+.stack-row { align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.stack-row .req-title { flex: 1 1 auto; min-width: 0; }
+.stack-pos { flex: none; width: 16px; font-size: 10px; color: var(--text-faint); font-family: var(--mono); text-align: right; }
+.stack-blocker { flex: 1 1 100%; font-size: 11px; color: var(--text-faint); line-height: 1.45; padding-left: 24px; }
+.stack-row.st-merged .req-title { opacity: .55; }
+.stack-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 10px 2px; }
+.stack-confirm { border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin: 4px 2px 12px; }
+.stack-confirm-title { font-size: 13px; margin-bottom: 8px; }
+.stack-confirm-list { margin: 0 0 8px; padding-left: 18px; font-size: 12px; line-height: 1.6; font-family: var(--mono); color: var(--text-faint); }
+.stack-confirm-note { font-size: 11px; color: var(--text-faint); line-height: 1.5; }
 /* Artifact lifecycle status pills. */
 .req-status.st-draft { background: rgba(56, 139, 253, 0.08); border-color: rgba(56, 139, 253, 0.35); color: #58a6ff; }
 .req-status.st-final { color: #6cc04a; }
