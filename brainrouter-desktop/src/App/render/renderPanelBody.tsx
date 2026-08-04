@@ -11,6 +11,7 @@ import {
 } from '../../panels/index.js';
 import type { RequirementRecord, AnnotationRecord, ArtifactRecord, AtlasGraph } from '@kinqs/brainrouter-types';
 import type { TrackPrStatus } from '../../track/TrackView.js';
+import { partitionBranches } from '../../lib/stack/stackPanelView.js';
 import type { StackLayerView, StackAvailability } from '../../lib/stack/stackPanelView.js';
 import type { ScheduleRecordView } from '../../lib/schedule/scheduleView.js';
 import { setEntry } from '../../lib/review/reviewWorkspace.js';
@@ -370,7 +371,18 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
           layers={stackLayers ?? []}
           availability={stackAvailability ?? { capable: false, halted: false }}
           onView={() => q('q-stack', 'stack-read')}
-          onSync={(rewrites) => { q('q-stack-sync', 'stack-sync', { branches: rewrites.map((l) => l.branch) }); setToast('Syncing the stack…'); }}
+          onSync={(rewrites) => {
+            // Branch names are chosen by whoever pushed them. One shaped like
+            // `--upload-pack=…` is read by git as an option, not a ref, so it
+            // is refused before it reaches the host rather than after.
+            const { safe, refused } = partitionBranches(rewrites);
+            if (refused.length > 0) {
+              setToast(`Refused ${refused.length} branch name(s) that could be read as command options.`);
+              return;
+            }
+            q('q-stack-sync', 'stack-sync', { branches: safe.map((l) => l.branch) });
+            setToast('Syncing the stack…');
+          }}
           onMerge={(target) => { q('q-stack-merge', 'stack-merge', { number: target.number }); setToast('Merging — a stack merge can take a minute.'); }}
           onOpenPr={(number) => openUrl(`https://github.com/pulls/${number}`)}
         />;

@@ -9,6 +9,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   layerStatus, highestMergeable, mergeButtonLabel, showsAction, unavailableNotice, stackSummary,
+  isSafeBranchName, partitionBranches,
   type StackLayerView,
 } from './stackPanelView.js';
 
@@ -133,4 +134,31 @@ test('the header is COUNTS, not a verdict', () => {
   assert.match(text, /1 blocked/);
   assert.doesNotMatch(text, /healthy|good|fine|ok/i);
   assert.equal(stackSummary([]), 'No stack on this branch.');
+});
+
+/* ---------------------------------------- untrusted branch names (CWE-88) */
+
+test('a branch name shaped like an OPTION is refused', () => {
+  // Branch names come from GitHub, so a collaborator picks them. `--upload-pack`
+  // is read by git as an option, not as the ref it pretends to be — and the
+  // character class alone would pass it, which is why the hyphen check exists.
+  for (const bad of ['--upload-pack=touch /tmp/x', '-f', '-c', '', 'a..b', 'x.lock', 'has space']) {
+    assert.equal(isSafeBranchName(bad), false, `${bad} must be refused`);
+  }
+});
+
+test('ordinary branch names pass', () => {
+  for (const good of ['feat/api', 'release/0.4.20', 'main', 'fix_1']) {
+    assert.equal(isSafeBranchName(good), true, `${good} must be allowed`);
+  }
+});
+
+test('the partition keeps safe and refused separate so the UI can explain', () => {
+  // Silently dropping one would sync a partial stack while reporting success.
+  const { safe, refused } = partitionBranches([
+    layer({ number: 1, position: 1, branch: 'feat/ok' }),
+    layer({ number: 2, position: 2, branch: '--exec=whoami' }),
+  ]);
+  assert.deepEqual(safe.map((l) => l.number), [1]);
+  assert.deepEqual(refused.map((l) => l.number), [2]);
 });

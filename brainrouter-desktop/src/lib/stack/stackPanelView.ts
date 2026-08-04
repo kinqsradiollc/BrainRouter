@@ -197,3 +197,33 @@ export function stackSummary(layers: readonly StackLayerView[]): string {
   if (blocked > 0) parts.push(`${blocked} blocked`);
   return parts.join(' · ');
 }
+
+/* ------------------------------------------------- untrusted branch names */
+
+/**
+ * A branch name safe to hand to the host as a command argument.
+ *
+ * Branch names come from GitHub, which means a collaborator chooses them. A
+ * branch called `--upload-pack=...` or `-f` is parsed by git and gh as an
+ * OPTION rather than as the ref it is pretending to be, so the leading-hyphen
+ * check is the one that matters — the character class alone would pass both.
+ *
+ * Checked here, on the way out of the renderer, as well as in the host: the
+ * renderer is where the untrusted value is first held, and a boundary is worth
+ * having at each side of the wire.
+ */
+export function isSafeBranchName(branch: string): boolean {
+  if (!branch || branch.startsWith('-')) return false;
+  if (branch.includes('..') || branch.endsWith('.lock')) return false;
+  return /^[A-Za-z0-9._\/-]+$/.test(branch);
+}
+
+/** The branches safe to sync, and the ones refused, so the caller can say so. */
+export function partitionBranches(
+  layers: readonly StackLayerView[],
+): { safe: StackLayerView[]; refused: StackLayerView[] } {
+  return {
+    safe: layers.filter((l) => isSafeBranchName(l.branch)),
+    refused: layers.filter((l) => !isSafeBranchName(l.branch)),
+  };
+}
