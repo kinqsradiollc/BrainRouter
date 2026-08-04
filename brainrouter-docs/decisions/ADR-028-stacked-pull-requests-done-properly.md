@@ -1,8 +1,27 @@
-# ADR-028 — Stacked pull requests, done properly
+# ADR-028 — Surfaces that tell the truth about their own state
 
 **Status:** PROPOSED — planning only, awaiting owner approval. No implementation begins until this
 ADR is approved. · **Target:** `release/0.4.20` ·
 **Supersedes:** ADR-027 D13, which shipped a partial and in one respect *incorrect* implementation.
+**Builds on:** ADR-027 D1 (debt ledgers, notification evidence), D11 (retention), D12 (idempotency,
+fencing, database clock).
+
+## 0. The single idea
+
+Four apparently unrelated pieces of work sit in this ADR: stacked pull requests, message receipts,
+the artifacts panel, and a unified planner. They are one ADR because they are one defect class.
+
+**Every part of this release is about a surface claiming a state it has not established.**
+
+- `stack.addlayer` reports it created a stack layer. It created an ordinary pull request.
+- A steer shows as sent. Nothing knows whether the model received it.
+- The artifacts panel shows the previous session's work while claiming to show yours.
+- A planner would show ten sources as one list, with no indication that three of them are hours
+  stale and one failed to load.
+
+The fix in each case is the same shape, and it is not "be more careful". It is: **report what is
+known, name what is not, and refuse to let a comfortable default stand in for a fact.** That is
+ADR-027 D4.1's `unknown` ≠ `unsupported` generalised into a design rule.
 
 ## Date
 
@@ -286,6 +305,122 @@ a search problem you did not ask for. Start scoped, let the human widen delibera
 When more than one session is selected, **each artifact shows which session produced it.** An
 aggregated list without provenance is how you attribute one session's output to another — the same
 failure the panel currently has by accident, reintroduced on purpose.
+
+### D12 — Planner: the central split: MIRRORED items versus OWNED items
+
+This is the decision everything else depends on, and it is what makes the hard problem small.
+
+**Mirrored items** are projections of something whose truth lives elsewhere: a GitHub issue, a Track
+item, a review finding, a meeting action. **We never merge these.** We re-read them. If a GitHub
+issue changes while you were offline, there is no conflict to resolve — the issue is what GitHub
+says it is. Local state for a mirrored item is a *cache with a fetch time*, nothing more.
+
+**Owned items** are created in the planner and exist nowhere else: a personal todo, a time block, a
+note against the day. These are the only things we own, and therefore the only things that can
+genuinely conflict.
+
+The consequence: a planner aggregating ten sources has a conflict surface of *one* — its own items.
+Most of the apparent difficulty of "sync everything" dissolves once mirrored data stops pretending
+to be editable local state.
+
+**What you may do to a mirrored item locally** is limited to planner metadata: schedule it into
+today, put it in a time block, order it, snooze it. Those are *ours*. Changing an issue's title is
+not — that is an action against GitHub, queued as an outbound operation, and it fails visibly if it
+fails.
+
+### D13 — Planner: local-first with an outbox; the network is never on the critical path
+
+Every mutation writes to the local store first and returns immediately. It also appends an entry to
+an **outbox**: an ordered, durable log of operations to send.
+
+This is the ADR-027 D12 pattern applied to a new surface, and the same rules hold:
+
+- Each outbox entry carries an **idempotency key**, so a redelivery after a flaky reconnect does not
+  double-apply.
+- The outbox drains **in order per item** — reordering two edits to the same todo would produce a
+  state neither device ever had.
+- **Bounded with age-based shedding.** A device offline for three months should not replay a
+  thousand stale operations on reconnect; past the retention horizon the local state is refreshed
+  from the server instead, and the user is told that happened rather than left to notice.
+
+The UI never spins on the network. Offline is not a degraded mode with a banner; it is the normal
+mode that happens to be syncing.
+
+### D14 — Planner: hybrid logical clocks, because device wall clocks lie
+
+Ordering edits by `Date.now()` on the device is the mistake this decision exists to prevent. Laptop
+clocks drift, phones cross timezones, and a device with a clock five minutes fast wins every
+conflict it participates in — silently, and forever, until someone notices their phone always beats
+their laptop.
+
+Every mutation carries a **hybrid logical clock** stamp: `(physical, logical, deviceId)`. It
+advances monotonically per device, absorbs the highest clock seen from any peer, and breaks ties on
+`deviceId`. This gives a total order that no clock skew can invert.
+
+ADR-027 D12 moved lease expiry onto the *database* clock for the same reason. This is that decision
+extended to a case where the device is genuinely offline and the database clock is unavailable.
+
+### D15 — Planner: field-level last-writer-wins, EXCEPT where that would lose work
+
+For owned items, each field resolves independently by HLC. Two devices setting `dueDate` and
+`priority` on the same todo both win — there is no reason for one to clobber the other.
+
+**Where last-writer-wins is wrong, we do not use it.** Specifically:
+
+- **Free text edited on both devices.** LWW here silently discards someone's writing. The item is
+  marked *conflicted*, both versions are kept, and the human picks. A planner is not important
+  enough to lose a paragraph over, and it is exactly important enough that quietly losing one
+  destroys trust in the whole thing.
+- **Deletion versus edit.** Deletion is a tombstone with its own HLC stamp. An edit that post-dates
+  the tombstone **resurrects the item as conflicted** rather than either losing the edit or silently
+  undeleting. Both silent outcomes are worse than asking.
+- **Completion.** Complete wins over incomplete at equal clocks. Un-completing something you already
+  finished is more annoying than the reverse, and the asymmetry is deliberate rather than emergent.
+
+**We are not adopting CRDTs**, consistent with ADR-027, which ruled them out for plan and task state
+on the grounds that convergence is not correctness. The narrower reason here: CRDT text merge
+produces a document neither person wrote. For a shared todo that is worse than a conflict marker,
+because it looks like agreement.
+
+### D16 — Planner: the timetable is honest about estimates
+
+The timetable shows **planned** blocks against **actual** time, because the gap is the useful
+information. A planner that only shows intent teaches nothing; one that shows a two-hour task
+routinely taking five is how you learn to plan.
+
+- Blocks may be **unscheduled** (a today list) or **scheduled** (a time). Both are first-class;
+  forcing every todo onto a clock is how planners get abandoned.
+- **Carry-over is normal, not failure.** An item rolling to tomorrow is recorded, not scolded.
+- **Drift is reported as a ratio, not a scoreboard.** "Tasks here typically take 1.8× their estimate"
+  is useful; a red overdue count is the notification-fatigue failure from ADR-027 §1 in planner form.
+
+### D17 — Planner: the agent reads the planner; it schedules only on instruction
+
+The agent may read the planner for context — knowing what you are working on today makes it
+materially better at everything else. It may **propose** a plan for the day.
+
+It does not silently create, complete, reschedule, or delete items. The failure mode is specific and
+bad: an agent that quietly reorganises your day produces a plan you do not recognise, and you stop
+trusting the planner as a record of your own intent. Every mutation is proposed and confirmed, and
+agent-originated items are visibly marked as such.
+
+### D18 — Planner: sources are adapters behind one interface
+
+Each source implements the same small contract: list candidate items, map to a planner item, report
+its own freshness. Adding a source is writing an adapter, not touching the planner.
+
+First set: Track, GitHub issues, GitHub pull requests (review-requested and authored), review
+findings, meeting actions, and manual entry. Calendar is deliberately deferred — see §5.
+
+**A stale source says so.** If GitHub has not been reachable for six hours, the view says the GitHub
+items are six hours old rather than presenting them as current. An aggregated view whose freshness
+is invisible is one that quietly lies about what is outstanding.
+
+### D19 — Planner: retention follows ADR-027 D11
+
+Completed items keep full detail for 90 days, then compact to a summary row. The planner is a
+working surface, not an archive, and unbounded growth of a per-user table across every device is the
+D11 problem in a new place.
 
 ### D9 — Explicitly out of scope
 
