@@ -394,15 +394,65 @@ routinely taking five is how you learn to plan.
 - **Drift is reported as a ratio, not a scoreboard.** "Tasks here typically take 1.8× their estimate"
   is useful; a red overdue count is the notification-fatigue failure from ADR-027 §1 in planner form.
 
-### D17 — Planner: the agent reads the planner; it schedules only on instruction
+### D17 — Planner: the agent is context-aware of it, and can operate it
 
-The agent may read the planner for context — knowing what you are working on today makes it
-materially better at everything else. It may **propose** a plan for the day.
+*(Owner: the planner and timetable must be wired to the agent, not merely visible to a human.)*
 
-It does not silently create, complete, reschedule, or delete items. The failure mode is specific and
-bad: an agent that quietly reorganises your day produces a plan you do not recognise, and you stop
-trusting the planner as a record of your own intent. Every mutation is proposed and confirmed, and
-agent-originated items are visibly marked as such.
+A planner the agent cannot see is a second place your intentions live, and the agent works against
+the version in its head. Knowing what you committed to today, what is scheduled in the next hour,
+and what has been carried over three times makes it materially better at everything else it does —
+it stops proposing a two-hour refactor twenty minutes before a meeting, and it stops suggesting work
+you already decided against this morning.
+
+**Context injection is BOUNDED and SUMMARISED, never the whole list.**
+
+Injecting every open item into every turn is the obvious implementation and the wrong one. It burns
+context that belongs to the actual task, and — per the ADR-027 §1 attention evidence — diluting a
+prompt with fifty low-signal lines makes the model worse at the five that matter. What goes in is a
+compact block:
+
+- today's committed items (bounded; the rest are a count, not a list),
+- the current or next time block,
+- anything carried over more than twice, because that is a signal rather than noise,
+- **per-source freshness**, so the agent knows the GitHub half is six hours old.
+
+That last point is D18's rule applied to the agent rather than the human. Context that hides its own
+staleness produces confident answers about work that has already changed.
+
+**The agent reads freely and mutates only on confirmation.** Reading is `read`-classified in the D6
+control layer. Every mutation — create, complete, reschedule, delete — is proposed and confirmed,
+and agent-originated items are visibly marked as such.
+
+The failure this prevents is specific: an agent that quietly reorganises your day produces a plan
+you do not recognise, and then the planner stops being a record of your own intent. Once that trust
+goes, the thing is worse than useless, because you now have two plans and believe in neither.
+
+**Agent-callable actions** (D6 control layer, ADR-027):
+
+| Action | Effect | Notes |
+|---|---|---|
+| `planner.today` | `read` | Today's items with per-source freshness |
+| `planner.timetable` | `read` | Scheduled blocks, planned vs actual |
+| `planner.find` | `read` | Search across sources |
+| `planner.add` | `mutate` | Marked agent-originated |
+| `planner.schedule` | `mutate` | Into a time block |
+| `planner.complete` | `mutate` | Never inferred from a commit or a merged PR |
+| `planner.reschedule` | `mutate` | Carry-over is recorded, not hidden |
+| `planner.delete` | `destructive` | Confirmation token; a tombstone, recoverable |
+
+**`planner.complete` is never inferred.** It would be easy to mark a todo done because its linked
+pull request merged. Sometimes that is right; often the todo was broader than the PR. Guessing
+converts the planner from a record of what you decided into a record of what the tooling assumed,
+which is the same substitution D10 refuses for message receipts.
+
+**Memory and the debt ledgers.** Completed items and their planned-versus-actual drift feed
+ADR-027 D1's ledgers: what took longer than expected is technical-debt evidence, and what was
+carried over repeatedly is a knowledge-debt signal — usually something nobody knows how to start.
+The planner becomes an input to the debt program rather than a parallel system beside it.
+
+**Knowing you are behind does not license mentioning it.** The agent has this context on every turn;
+it raises it when relevant to what you asked, and otherwise stays quiet. An agent that opens each
+turn with your overdue count is the notification-fatigue failure wearing a planner costume.
 
 ### D18 — Planner: sources are adapters behind one interface
 
