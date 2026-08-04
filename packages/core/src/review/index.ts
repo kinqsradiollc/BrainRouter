@@ -55,3 +55,16 @@ export {
   type StackOutcome,
   type StackOutcomeKind,
 } from './stackExitCodes.js';
+
+// ADR-028 A1 — gh stack capability detection.
+export {
+  detectStackCapability,
+  stackCapabilityFor,
+  resetStackCapabilityCache,
+  parseVersion,
+  meetsMinimum,
+  MIN_GH,
+  MIN_GIT,
+  type StackCapability,
+  type CapabilityProbe,
+} from './stackCapability.js';
