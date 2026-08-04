@@ -46,3 +46,12 @@ export {
   type LayerBlockReason,
   type StackAdvice,
 } from './stackedPr.js';
+
+// ADR-028 A3 — gh stack exit-code contract.
+export {
+  classifyStackExit,
+  blocksFurtherMutation,
+  KNOWN_STACK_EXIT_CODES,
+  type StackOutcome,
+  type StackOutcomeKind,
+} from './stackExitCodes.js';
