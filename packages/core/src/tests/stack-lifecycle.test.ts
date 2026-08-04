@@ -14,9 +14,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   syncStack,
+  describeSyncRewrite,
   selectMergeableLayer,
-  validateMergeTarget,
-  mergeBottomLayer,
+  planMergeCascade,
+  describeMergeCascade,
+  staleAfterMerge,
+  mergeStackThrough,
+  MERGE_TIMEOUT_MS,
   type LayerState,
 } from '../review/stackLifecycle.js';
 import { StackRunner, type StackExec } from '../review/stackRunner.js';
@@ -126,53 +130,114 @@ test('a fully merged stack is done, not waiting', () => {
   assert.equal((d as { waiting: boolean }).waiting, false);
 });
 
-test('merging a MIDDLE layer is refused, and the reason names what is lost', () => {
-  // The invisible failure: the commits land, so it looks like it worked. What
-  // is lost is the review record on the layers below.
-  const layers = [layer({ number: 1, position: 1 }), layer({ number: 2, position: 2 })];
-  const v = validateMergeTarget(layers, 2);
-  assert.equal(v.allowed, false);
-  assert.match(v.reason!, /#1/);
-  assert.match(v.reason!, /bottom-up/);
-  assert.match(v.reason!, /review record/);
+/* --------------------------------------------------- merge, as a cascade */
+
+test('merging a middle layer lands EVERYTHING beneath it — the cascade is returned', () => {
+  // `gh stack merge #3` is not "merge #3". It is "merge #1, #2 and #3". A
+  // confirmation that says the former has not obtained consent for the latter.
+  const layers = [
+    layer({ number: 1, position: 1 }),
+    layer({ number: 2, position: 2 }),
+    layer({ number: 3, position: 3 }),
+  ];
+  const c = planMergeCascade(layers, 3);
+  assert.equal(c.allowed, true);
+  assert.deepEqual(c.landing.map((l) => l.number), [1, 2, 3]);
 });
 
-test('the bottom layer passes target validation', () => {
-  const layers = [layer({ number: 1, position: 1 }), layer({ number: 2, position: 2 })];
-  assert.equal(validateMergeTarget(layers, 1).allowed, true);
+test('the cascade description names every pull request that lands', () => {
+  const layers = [layer({ number: 9, position: 1 }), layer({ number: 12, position: 2 })];
+  const text = describeMergeCascade(planMergeCascade(layers, 12));
+  assert.match(text, /#9/);
+  assert.match(text, /#12/);
+  assert.match(text, /one operation/);
 });
 
-test('a layer whose predecessors all merged may go, even mid-stack', () => {
+test('already-merged layers are excluded from the cascade', () => {
   const layers = [
     layer({ number: 1, position: 1, merged: true }),
     layer({ number: 2, position: 2 }),
   ];
-  assert.equal(validateMergeTarget(layers, 2).allowed, true);
+  assert.deepEqual(planMergeCascade(layers, 2).landing.map((l) => l.number), [2]);
+});
+
+test('one unready layer anywhere in the cascade blocks the whole merge', () => {
+  // All-or-nothing: there is no partial outcome where the ready ones land.
+  const layers = [
+    layer({ number: 1, position: 1, checksPassed: false }),
+    layer({ number: 2, position: 2 }),
+  ];
+  const c = planMergeCascade(layers, 2);
+  assert.equal(c.allowed, false);
+  assert.equal(c.waiting, true);
+  assert.match(c.reason!, /#1 \(checks not passed\)/);
+  assert.match(c.reason!, /all-or-nothing/);
+});
+
+test('a queued layer in the cascade is waiting, not refused', () => {
+  const layers = [layer({ number: 1, position: 1, inMergeQueue: true })];
+  const c = planMergeCascade(layers, 1);
+  assert.equal(c.waiting, true);
+  assert.match(c.reason!, /merge queue/);
 });
 
 test('an unknown or already-merged target is refused distinctly', () => {
   const layers = [layer({ number: 1, position: 1, merged: true })];
-  assert.match(validateMergeTarget(layers, 99).reason!, /not part of this stack/);
-  assert.match(validateMergeTarget(layers, 1).reason!, /already merged/);
+  assert.match(planMergeCascade(layers, 99).reason!, /not part of this stack/);
+  assert.match(planMergeCascade(layers, 1).reason!, /already merged/);
 });
 
 test('merging uses `gh stack merge` — not `gh pr merge`', async () => {
   // `gh pr merge` does not retarget the layers above as part of landing.
   const e = exec(0);
-  const r = await mergeBottomLayer(runner(e), [layer({ number: 41, position: 1 })]);
+  const r = await mergeStackThrough(runner(e), [layer({ number: 41, position: 1 })], 41);
   assert.equal(r.merged, true);
+  assert.deepEqual(r.landed, [41]);
   assert.deepEqual(e.calls[0], ['stack', 'merge', '41']);
 });
 
-test('a locked stack is a race we lost, reported as retryable', async () => {
-  const r = await mergeBottomLayer(runner(exec(8)), [layer({ number: 41, position: 1 })]);
+test('layers left above a partial merge are reported, not silently left', () => {
+  // A later `submit` on a stale branch pushes commits that already merged.
+  const layers = [
+    layer({ number: 1, position: 1 }),
+    layer({ number: 2, position: 2 }),
+    layer({ number: 3, position: 3 }),
+  ];
+  assert.deepEqual(staleAfterMerge(layers, [1, 2]).map((l) => l.number), [3]);
+});
+
+test('a retryable failure is PENDING — a slow merge may still have landed', async () => {
+  // Stack merges take 90s+. Reporting failure invites a retry against a
+  // partially-applied merge, which is the worst available outcome.
+  const r = await mergeStackThrough(runner(exec(8)), [layer({ number: 41, position: 1 })], 41);
   assert.equal(r.merged, false);
-  assert.equal(r.queued, true);
-  assert.match(r.reason!, /try again/);
+  assert.equal(r.pending, true);
+  assert.match(r.reason!, /may still have landed/);
+});
+
+test('the merge timeout is generous enough for a real stack merge', () => {
+  assert.ok(MERGE_TIMEOUT_MS >= 90_000, 'a 90s merge must not time out');
 });
 
 test('an unmergeable stack never runs the command', async () => {
   const e = exec(0);
-  await mergeBottomLayer(runner(e), [layer({ number: 41, position: 1, checksPassed: false })]);
+  await mergeStackThrough(runner(e), [layer({ number: 41, position: 1, checksPassed: false })], 41);
   assert.equal(e.calls.length, 0);
+});
+
+/* ------------------------------------------------------- sync disclosure */
+
+test('sync preserves author dates, so review comments stay legible', async () => {
+  const e = exec(0);
+  await syncStack(runner(e));
+  assert.ok(e.calls[0]!.includes('--committer-date-is-author-date'));
+});
+
+test('the sync confirmation names every branch whose history is rewritten', () => {
+  // Consent to "sync the stack" is not consent to rewrite six branches you had
+  // forgotten were in it.
+  const text = describeSyncRewrite([layer({ number: 4, position: 2 }), layer({ number: 7, position: 3 })]);
+  assert.match(text, /#4/);
+  assert.match(text, /#7/);
+  assert.match(describeSyncRewrite([]), /No branch history/);
 });

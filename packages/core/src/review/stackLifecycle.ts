@@ -18,6 +18,25 @@ export interface SyncResult {
   needsHuman: boolean;
   reason?: string;
   outcome: StackOutcome;
+  /** The layers whose history was rewritten, for the activity record. */
+  rewrote?: readonly LayerState[];
+}
+
+/**
+ * The list a sync confirmation must show.
+ *
+ * Syncing rewrites the history of every layer above the one that changed, and
+ * those branches already carry review comments. Consent to "sync the stack" is
+ * not consent to rewrite six branches you had forgotten were in it — so the
+ * confirmation names them, rather than being a dialog to click past.
+ */
+export function describeSyncRewrite(rewrites: readonly LayerState[]): string {
+  if (rewrites.length === 0) return 'No branch history will be rewritten.';
+  const list = rewrites.map((l) => `#${l.number}`).join(', ');
+  return (
+    `This rewrites the history of ${rewrites.length} branch${rewrites.length === 1 ? '' : 'es'}: ${list}. ` +
+    'Review comments on rewritten commits may become detached.'
+  );
 }
 
 /**
@@ -33,12 +52,24 @@ export interface SyncResult {
  * work is genuinely hard to recover. The runner latches; this reports the latch
  * in words that say what to do.
  */
-export async function syncStack(runner: StackRunner): Promise<SyncResult> {
-  const result = await runner.run(['sync'], { timeoutMs: 120_000 });
+export async function syncStack(
+  runner: StackRunner,
+  opts: { rewrites?: readonly LayerState[] } = {},
+): Promise<SyncResult> {
+  const result = await runner.run(
+    [
+      'sync',
+      // Rebasing rewrites commit dates, which makes review comments appear to
+      // predate the code they are about. Preserving the author date keeps the
+      // review record legible.
+      '--committer-date-is-author-date',
+    ],
+    { timeoutMs: 120_000 },
+  );
   const { outcome } = result;
 
   if (outcome.ok) {
-    return { synced: true, needsHuman: false, outcome };
+    return { synced: true, needsHuman: false, outcome, rewrote: opts.rewrites ?? [] };
   }
 
   if (outcome.kind === 'rebase_conflict' || outcome.kind === 'rebase_in_progress') {
@@ -137,76 +168,185 @@ export function selectMergeableLayer(layers: readonly LayerState[]): MergeDecisi
 }
 
 /**
- * Is a layer above the bottom being asked to merge on its own?
+ * What actually lands when someone asks to merge a given layer?
  *
- * Separate from `selectMergeableLayer` because this answers a different
- * question: not "what is next" but "is this specific request legal". The desktop
- * merge button on a middle layer takes this path, and it needs to say why, not
- * merely refuse.
+ * `gh stack merge <layer>` merges that layer **and everything beneath it**. The
+ * operation is all-or-nothing, and that is the thing a confirmation has to say:
+ * "Merge #12" which silently lands #9, #10 and #11 has not obtained consent for
+ * what happens. So this returns the full cascade rather than a bare yes, and
+ * the caller is expected to name every number in it.
+ *
+ * Every layer in the cascade must be ready, not just the target. One unready
+ * layer below makes the whole merge illegal — there is no partial outcome to
+ * fall back to.
  */
-export function validateMergeTarget(
+export interface MergeCascade {
+  allowed: boolean;
+  /** Every PR that lands, bottom-first. Name all of these in the confirmation. */
+  landing: readonly LayerState[];
+  reason?: string;
+  /** True when the blocker is expected to clear on its own. */
+  waiting?: boolean;
+}
+
+export function planMergeCascade(
   layers: readonly LayerState[],
   targetNumber: number,
-): { allowed: boolean; reason?: string } {
+): MergeCascade {
   const target = layers.find((l) => l.number === targetNumber);
   if (!target) {
-    return { allowed: false, reason: `#${targetNumber} is not part of this stack.` };
+    return { allowed: false, landing: [], reason: `#${targetNumber} is not part of this stack.` };
   }
   if (target.merged) {
-    return { allowed: false, reason: `#${targetNumber} has already merged.` };
+    return { allowed: false, landing: [], reason: `#${targetNumber} has already merged.` };
   }
-  const below = layers.filter((l) => l.position < target.position && !l.merged);
-  if (below.length > 0) {
-    const list = below.map((l) => `#${l.number}`).join(', ');
+
+  const landing = layers
+    .filter((l) => l.position <= target.position && !l.merged)
+    .sort((a, b) => a.position - b.position);
+
+  const queued = landing.filter((l) => l.inMergeQueue);
+  if (queued.length > 0) {
     return {
       allowed: false,
+      landing,
+      waiting: true,
       reason:
-        `${list} ${below.length === 1 ? 'is' : 'are'} below #${targetNumber} and ${below.length === 1 ? 'has' : 'have'} not merged. ` +
-        'Stacks merge bottom-up: landing this one first would put its commits on trunk while the ' +
-        `pull request${below.length === 1 ? '' : 's'} below still claim${below.length === 1 ? 's' : ''} to contain them, and the review record for that work is what gets lost.`,
+        `${queued.map((l) => `#${l.number}`).join(', ')} ${queued.length === 1 ? 'is' : 'are'} in GitHub's merge queue. ` +
+        'The queue decides when they land; merging around it would skip the checks it exists to run.',
     };
   }
-  return { allowed: true };
+
+  const notReady = landing.filter((l) => !l.checksPassed || !l.approved);
+  if (notReady.length > 0) {
+    const detail = notReady
+      .map((l) => `#${l.number} (${!l.checksPassed ? 'checks not passed' : 'not approved'})`)
+      .join(', ');
+    return {
+      allowed: false,
+      landing,
+      waiting: true,
+      reason:
+        `Merging #${targetNumber} lands ${landing.map((l) => `#${l.number}`).join(', ')} together, and ` +
+        `${detail} ${notReady.length === 1 ? 'is' : 'are'} not ready. The merge is all-or-nothing — ` +
+        'there is no partial outcome where the ready ones land and the rest wait.',
+    };
+  }
+
+  return { allowed: true, landing };
+}
+
+/**
+ * The sentence a confirmation must show.
+ *
+ * Kept next to the cascade so no caller can display a confirmation that names
+ * fewer pull requests than the operation lands.
+ */
+export function describeMergeCascade(cascade: MergeCascade): string {
+  const list = cascade.landing.map((l) => `#${l.number}`).join(', ');
+  if (cascade.landing.length <= 1) return `This merges ${list || 'nothing'}.`;
+  return `This merges ${cascade.landing.length} pull requests together, bottom-first: ${list}. They land as one operation.`;
+}
+
+/**
+ * Which layers are left stranded by a merge that did not reach the top?
+ *
+ * After a mid-stack merge the layers above are rebased onto the new trunk by
+ * GitHub, but our local branches are not. Reporting them is the difference
+ * between "your stack now has three layers" and a later `submit` pushing
+ * commits that already merged.
+ */
+export function staleAfterMerge(
+  layers: readonly LayerState[],
+  landed: readonly number[],
+): readonly LayerState[] {
+  const set = new Set(landed);
+  return layers.filter((l) => !set.has(l.number) && !l.merged);
 }
 
 export interface MergeResult {
   merged: boolean;
-  queued: boolean;
+  /** Still in flight or expected to clear — NOT a failure. */
+  pending: boolean;
+  /** Every PR that landed, when it landed. */
+  landed: readonly number[];
+  /** Local layers left behind by a merge that did not reach the top. */
+  stale: readonly LayerState[];
   reason?: string;
   outcome?: StackOutcome;
 }
 
 /**
- * Merge the bottom layer.
+ * Stack merges routinely take 90 seconds or more through GitHub's API.
  *
- * Delegates the ordering decision rather than re-deriving it, then delegates the
- * merge itself to `gh stack merge` — which retargets the layers above as part of
- * landing, something a plain `gh pr merge` does not do.
+ * A short timeout produces a spurious failure on an operation that is
+ * succeeding, and the natural response to a spurious failure — retry — runs
+ * against a partially-applied merge. That is the worst available outcome, so
+ * the timeout is generous and a timeout is reported as pending, never failed.
  */
-export async function mergeBottomLayer(
+export const MERGE_TIMEOUT_MS = 300_000;
+
+/**
+ * Merge a layer and everything beneath it.
+ *
+ * Takes the cascade rather than re-deriving it, so what runs is exactly what
+ * the confirmation described. `gh stack merge` retargets the layers above as
+ * part of landing; a plain `gh pr merge` does not.
+ */
+export async function mergeStackThrough(
   runner: StackRunner,
   layers: readonly LayerState[],
+  targetNumber: number,
 ): Promise<MergeResult> {
-  const decision = selectMergeableLayer(layers);
-  if (!decision.allowed) {
-    return { merged: false, queued: decision.waiting, reason: decision.reason };
+  const cascade = planMergeCascade(layers, targetNumber);
+  if (!cascade.allowed) {
+    return {
+      merged: false,
+      pending: cascade.waiting ?? false,
+      landed: [],
+      stale: [],
+      reason: cascade.reason,
+    };
   }
 
-  const result = await runner.run(['merge', String(decision.layer.number)], {
-    timeoutMs: 120_000,
+  const result = await runner.run(['merge', String(targetNumber)], {
+    timeoutMs: MERGE_TIMEOUT_MS,
   });
 
   if (result.outcome.ok) {
-    return { merged: true, queued: false, outcome: result.outcome };
-  }
-  if (result.outcome.kind === 'stack_locked') {
-    // Someone else is mutating the stack. Not an error — a race we lost.
+    const landed = cascade.landing.map((l) => l.number);
     return {
-      merged: false,
-      queued: true,
-      reason: 'Another operation holds this stack. It is safe to try again shortly.',
+      merged: true,
+      pending: false,
+      landed,
+      // Detected and reported rather than silently left: a later `submit` on a
+      // stale branch pushes commits that already merged.
+      stale: staleAfterMerge(layers, landed),
       outcome: result.outcome,
     };
   }
-  return { merged: false, queued: false, reason: result.outcome.guidance, outcome: result.outcome };
+
+  if (result.outcome.kind === 'stack_locked' || result.outcome.retryable) {
+    // A race we lost, or a transient API failure. Neither means the merge is
+    // wrong — and both are safe to observe before acting.
+    return {
+      merged: false,
+      pending: true,
+      landed: [],
+      stale: [],
+      reason:
+        `${result.outcome.guidance} Check the stack before retrying — a merge that took longer ` +
+        'than expected may still have landed.',
+      outcome: result.outcome,
+    };
+  }
+
+  return {
+    merged: false,
+    pending: false,
+    landed: [],
+    stale: [],
+    reason: result.outcome.guidance,
+    outcome: result.outcome,
+  };
 }
