@@ -200,6 +200,64 @@ A stack panel showing the layer chain, each layer's readiness, the named blocker
 mergeable layer. Read-only first; mutation buttons only for operations already reachable through
 D2/D5 with their confirmations.
 
+### D10 — Message receipts: did the agent actually get what I sent?
+
+*(Raised by the owner as important. Not a stacked-PR concern, but it belongs in the same release
+because it is the same class of problem: an interface reporting a state it has not established.)*
+
+**The gap.** `InputQueue` and `publishExternalSteering` already deliver messages in `queue` and
+`steer` modes. Nothing reports what happened to one. You type a correction mid-turn and then face
+three indistinguishable outcomes:
+
+1. It reached the model and changed course.
+2. It reached the model and was ignored.
+3. It never reached the model at all — the turn ended first, or the steer was dropped.
+
+Not being able to tell these apart is expensive in both directions. Assume it landed and you carry
+on from a false premise. Assume it did not and you repeat yourself, which wastes a turn and — worse
+— can double-apply an instruction that *did* land.
+
+**The honest constraint, which shapes the whole design: "read" is not observable for a model.**
+
+We can prove a message entered the turn's context. We cannot prove the model attended to it.
+Attention is not instrumentable from outside, and a token appearing in a prompt is not evidence it
+influenced the output. So a "✓✓ Read" receipt on a chat message to an agent would be a claim we
+cannot substantiate — and a false receipt is worse than none, because it is precisely what stops the
+human from repeating themselves.
+
+This is the same distinction as D4.1's `unknown` ≠ `unsupported`: report what is known, and do not
+let a comfortable-looking default stand in for a fact.
+
+**So the receipt has four states, three of them observable and one inferred:**
+
+| State | Meaning | How we know |
+|---|---|---|
+| `queued` | Accepted, not yet handed to a turn | Ours — the queue holds it |
+| `delivered` | Entered the model's context for a specific turn | Ours — we constructed that context |
+| `acknowledged` | The agent demonstrably consumed it | **Evidence required** (below) |
+| `dropped` | Never reached a model, and never will | Ours — turn ended, session closed, error |
+
+**`acknowledged` requires evidence, not assumption.** It is set when the agent references the
+message (an explicit ack, a plan revision citing it, or a `reconcile_steer` call carrying its id) —
+never merely because the message was in the window. Where there is no such evidence the receipt
+stays at `delivered`, and the UI says *delivered*, not *read*.
+
+**`dropped` must be loud.** A steer that arrives after the turn ends is the case most likely to
+cause real harm, because the human has every reason to believe it landed. It surfaces immediately
+with the option to resend, and it is never silently discarded.
+
+**Where this shows up:**
+
+- Per-message state in the composer/transcript — `queued` → `delivered` → `acknowledged`, and
+  `dropped` in an unmissable form.
+- A count of pending steers, so "I sent three corrections" is checkable rather than remembered.
+- The agent-facing side: a steer carries an id, and `reconcile_steer` reports which ids it
+  reconciled. That is what makes `acknowledged` a fact rather than a guess.
+
+**Deliberately not built:** a read-receipt that turns green on context inclusion. It is the obvious
+implementation, it would look right in a demo, and it would be a lie in exactly the situation where
+the human most needs the truth.
+
 ### D9 — Explicitly out of scope
 
 - **Reimplementing restack in TypeScript.** GitHub maintains cascading rebase; we would maintain a
