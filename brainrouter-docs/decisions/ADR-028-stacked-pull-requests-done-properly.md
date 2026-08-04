@@ -119,14 +119,23 @@ human or agent should do next. The three that must never be collapsed:
 - **10 — recovery needed.** Refuse all further stack mutation and require explicit human action.
   This is the one where guessing can destroy work.
 
-### D4 — Sync and rebase are the hard part, and are human-initiated by default
+### D4 — Sync and rebase are the hard part; the agent may run them ON INSTRUCTION *(owner-decided)*
 
 `gh stack sync` and `gh stack rebase` perform *cascading rebases across every layer*. A conflict can
 surface in any layer, and resolving it rewrites branches that already have review comments attached.
 
-Rebase is therefore **never automatic**. The agent may propose it, show which layers would move, and
-run it only on explicit instruction. Agent-initiated history rewriting of branches under review is
-the kind of irreversible-feeling action ADR-027 D1 gates on blast radius rather than event count.
+Rebase is therefore **never automatic, but the agent may run it when told to** — the owner's call.
+The distinction that makes this safe is *instruction*, not *inference*: the agent may propose a
+restack and show which layers would move, and it executes only when the human says so. It may never
+decide on its own that a stack looks stale and fix it.
+
+Two consequences that follow from allowing it at all:
+
+- **A preview of what moves is shown before execution, every time.** Not a confirmation dialog to
+  click past — the actual list of layers whose history will be rewritten. Consent to "sync the
+  stack" is not consent to rewrite six branches the human has forgotten are in it.
+- **A conflict mid-restack stops everything.** Exit codes 3 and 7 mean the working tree holds a
+  half-finished operation; the agent surfaces it and does not attempt a second stack command on top.
 
 `--committer-date-is-author-date` is used on our restacks so review timestamps stay meaningful.
 
@@ -140,27 +149,50 @@ The confirmation message must state **every PR number that will land**, not just
 "Merge #12" that silently lands #9, #10 and #11 is a confirmation dialog that has not obtained
 consent for what actually happens.
 
-### D6 — Merge-queue interaction is modelled, not assumed
+### D6 — Wait for GitHub's native merge queue; no third-party integration *(owner-decided)*
 
-Where a merge queue is present (Trunk, or GitHub's own once stack support finishes rolling out):
+**We do not build a Trunk-specific integration.** GitHub's own merge-queue support for stacks was
+still rolling out at preview; we wait for it rather than taking a dependency on another vendor's
+queue semantics for a feature that will get first-party support.
+
+The behavioural facts below were learned from studying a third-party queue but describe the
+*underlying GitHub API*, so they apply regardless of which queue eventually sits in front:
 
 - A stack may be enqueued **from any point**, and several segments may be enqueued at once.
-- The queue tests the stack **as a unit**, which is the real CI saving.
+- A queue tests the stack **as a unit**, which is the real CI saving.
 - **Stack merges can take 90+ seconds** through GitHub's API. Our timeouts assume seconds; a 10s
   timeout on a 90s operation produces a spurious failure on an action that is actually succeeding —
-  and a retry on a partially-applied merge is exactly the wrong response. Stack merge gets its own
-  long timeout and is treated as *pending* rather than failed when it exceeds it.
+  and a retry against a partially-applied merge is exactly the wrong response. Stack merge gets its
+  own long timeout and is *pending*, never *failed*, when it exceeds it.
 - After a mid-stack merge, remaining layers may need a manual rebase. We detect and report that
   rather than silently leaving a stale stack.
 
-### D7 — The agent proposes stacks; it does not silently split work
+That last pair is worth building **now** even without a queue, because both are properties of the
+merge itself.
 
-This is the payoff, and the part that connects to ADR-027 D1. When the agent's own change is large
-and separable, it proposes a stack with named layers and asks once. It never silently decides how to
-cut a change into pull requests.
+### D7 — The agent AUTO-PROPOSES a stack for its own large, separable changes *(owner-decided)*
 
-`adviseStacking` already refuses to split an indivisible change; that stands. What is added is the
-*authoring* path: propose → confirm → `gh stack init/add/submit`.
+This is the payoff and the part that connects to ADR-027 D1: a 2,000-line "approve or don't" becomes
+an ordered series of decisions. The owner's call is that the agent raises this **unprompted** when
+its own change qualifies, rather than waiting to be asked.
+
+It never *silently splits* work. Auto-propose means: state that the change looks stackable, name the
+proposed layers and why they are the seams, and wait. Cutting happens only on confirmation.
+
+**The tension to respect, because ADR-027 §1 is explicit about it.** Notification acceptance falls
+roughly 30% per additional notification in a session; a proposal that fires often becomes one that
+is dismissed reflexively, and then it is worth nothing when the change genuinely needs splitting. So
+auto-propose is gated hard:
+
+- It fires only when `adviseStacking` returns `shouldStack: true` — over the ~200-line band **and**
+  genuinely separable. A large indivisible change stays one honest pull request and produces no
+  proposal at all.
+- It fires **once per change**, not per turn. Declining is remembered for that change; the agent
+  does not re-raise it after the next commit.
+- The proposal is a single sentence plus the layer list, not a panel.
+
+`adviseStacking` already refuses to split an indivisible change; that stands, and it is now the
+gate rather than merely advice.
 
 ### D8 — Desktop surface follows the model, not the other way round
 
@@ -212,12 +244,27 @@ rewriting the history of branches that already carry review comments.
 
 ---
 
-## 5. Open questions for the owner
+## 5. Owner decisions
 
-1. **Should the agent be able to run `gh stack sync` on explicit instruction, or never?** D4 says
-   "on instruction". The stricter alternative is that all history rewriting is human-only, and the
-   agent may only ever show the command.
-2. **Do we auto-propose stacks (D7) for the agent's own large changes, or only on request?**
-   Auto-proposing is the D1 payoff; it is also one more thing that speaks unprompted.
-3. **Merge queue: do we integrate with Trunk specifically**, or only with GitHub's native queue once
-   its stack support finishes rolling out?
+All three resolved.
+
+**Q1 — may the agent run `gh stack sync`? → YES, ON EXPLICIT INSTRUCTION.** Never on its own
+inference that a stack looks stale. Every run shows the list of layers whose history will be
+rewritten before it executes, and a conflict mid-restack stops all further stack operations. (D4)
+
+**Q2 — auto-propose stacks, or only on request? → AUTO-PROPOSE.** The agent raises it unprompted
+when its own change is over the reviewable band *and* genuinely separable. Gated to once per change
+and suppressed entirely for indivisible changes, because a proposal that fires often is one that
+gets dismissed reflexively — and then it is worth nothing when it matters. (D7)
+
+**Q3 — third-party merge queue, or wait? → WAIT FOR GITHUB'S NATIVE QUEUE.** No Trunk-specific
+integration. The timeout and staleness work (S4-2, S4-3) is built now regardless, because both are
+properties of the stack merge itself rather than of any queue. (D6)
+
+### Still open
+
+Nothing blocking. Two things to decide during implementation rather than now:
+
+- Whether the auto-propose gate should also require a minimum number of *files* rather than lines
+  alone — a 400-line change in two files may not be worth a stack.
+- Whether declining a proposal should suppress it for the session or only for that change.
