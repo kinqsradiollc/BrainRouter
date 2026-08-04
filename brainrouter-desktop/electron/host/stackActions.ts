@@ -147,53 +147,21 @@ export async function adviseStackingAction(
   };
 }
 
-/**
- * `stack.addlayer` — open a pull request stacked on top of another.
+/*
+ * `createStackLayerAction` was REMOVED here — ADR-028 A2.
  *
- * Refused when the target is not itself in a stack and is not a plausible
- * bottom: `gh` would happily open an ordinary pull request, which is NOT what
- * was asked for, and silently doing something adjacent to the request is how an
- * agent action becomes untrustworthy.
+ * It called `gh api repos/{repo}/pulls` with `base` set to the branch below.
+ * That opens a pull request which TARGETS the right branch and is not
+ * registered as a stack: no stack object, no bottom-up merge, no auto-retarget.
+ * It returned `created: true` and a URL, so the caller believed they had a
+ * stack they did not have.
+ *
+ * It is removed rather than deprecated because a tool that reports success for
+ * work it did not do is worse than a missing tool — the human stops checking.
+ * There is no deprecation window for a wrong answer.
+ *
+ * The replacement (A2) builds on `gh stack add` + `gh stack submit`, or
+ * `gh stack link` where the branches and pull requests already exist, and needs
+ * the exit-code contract from A3 to report failures honestly. Until then this
+ * capability is absent, and absent is the truthful state.
  */
-export async function createStackLayerAction(
-  deps: StackActionDeps,
-  args: Record<string, unknown>,
-): Promise<{ created: boolean; url?: string; reason?: string }> {
-  const onPullNumber = Number(args.onPullNumber);
-  const head = String(args.head ?? '').trim();
-  const title = String(args.title ?? '').trim();
-  const repo = deps.repo();
-  if (!repo) return { created: false, reason: 'no GitHub repository is associated with this workspace' };
-  if (!head || !title) return { created: false, reason: 'a branch name and a title are both required' };
-
-  const base = await deps.ghJson<{ head?: { ref?: unknown } }>(
-    ['api', `repos/${repo}/pulls/${onPullNumber}`],
-    { timeout: 10_000 },
-  );
-  const baseRef = ref(base.data?.head);
-  if (!baseRef) {
-    return { created: false, reason: `could not resolve the head branch of #${onPullNumber} to stack on` };
-  }
-
-  // `-f` is --raw-field: a plain STRING parameter. Do not "upgrade" it to `-F`.
-  //
-  // `-F` is --field, which applies magic type conversion AND reads the value
-  // from a file when it starts with `@`. Branch names are attacker-influenceable
-  // — a collaborator can open a pull request from a branch called `@/etc/passwd`
-  // — so with `-F` that value would be read off this machine and sent to GitHub.
-  // With `-f` it is sent literally, which is what we want.
-  //
-  // A security review on #1299 flagged this line and had the two flags the wrong
-  // way round; applying its suggested fix would have INTRODUCED the file read it
-  // described. Verified against `gh api --help`. The test below pins the flag so
-  // nobody reverses it later on the same advice.
-  const created = await deps.ghJson<{ html_url?: unknown }>(
-    ['api', `repos/${repo}/pulls`, '-f', `title=${title}`, '-f', `head=${head}`, '-f', `base=${baseRef}`],
-    { timeout: 15_000 },
-  );
-  if (created.error || !created.data) {
-    return { created: false, reason: created.error ?? 'the pull request could not be created' };
-  }
-  const url = typeof created.data.html_url === 'string' ? created.data.html_url : undefined;
-  return { created: true, ...(url ? { url } : {}) };
-}

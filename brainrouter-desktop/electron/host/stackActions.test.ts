@@ -11,7 +11,6 @@ import {
   readStack,
   describeStackAction,
   adviseStackingAction,
-  createStackLayerAction,
   type StackActionDeps,
   type GhJson,
 } from './stackActions.js';
@@ -100,67 +99,13 @@ test('advice passes the working tree through and can say no', async () => {
   assert.deepEqual(big.layers.map((l) => l.label), ['schema', 'api']);
 });
 
-test('adding a layer targets the branch of the pull request it stacks on', async () => {
-  // The whole point of a stack: the new layer's base is the layer below's HEAD,
-  // not the trunk. Getting this wrong silently produces an ordinary PR.
-  const calls: string[][] = [];
-  const gh: GhJson = async (args) => {
-    calls.push(args);
-    if (args[1]?.includes('/pulls/7')) return { data: { head: { ref: 'feature-below' } } } as never;
-    return { data: { html_url: 'https://github.com/o/r/pull/8' } } as never;
-  };
-  const result = await createStackLayerAction(deps({ gh }), {
-    onPullNumber: 7, head: 'feature-above', title: 'Layer 2',
-  });
-  assert.equal(result.created, true);
-  assert.equal(result.url, 'https://github.com/o/r/pull/8');
-  const create = calls[1]!;
-  assert.ok(create.includes('base=feature-below'), 'base must be the branch below, not the trunk');
-  assert.ok(create.includes('head=feature-above'));
-});
-
-test('a layer is not created when the branch below cannot be resolved', async () => {
-  // Falling back to an ordinary pull request would do something adjacent to
-  // what was asked, which is how an agent action stops being trustworthy.
-  const calls: string[][] = [];
-  const gh: GhJson = async (args) => { calls.push(args); return { error: 'not found' }; };
-  const result = await createStackLayerAction(deps({ gh }), {
-    onPullNumber: 7, head: 'x', title: 'y',
-  });
-  assert.equal(result.created, false);
-  assert.match(result.reason!, /could not resolve the head branch/);
-  assert.equal(calls.length, 1, 'it must not attempt the create');
-});
-
-test('a missing branch or title is refused before any call', async () => {
-  let called = false;
-  const gh: GhJson = async () => { called = true; return { data: {} } as never; };
-  for (const args of [{ onPullNumber: 7, head: '', title: 'y' }, { onPullNumber: 7, head: 'x', title: '  ' }]) {
-    const result = await createStackLayerAction(deps({ gh }), args);
-    assert.equal(result.created, false);
+test('createStackLayerAction is GONE, not merely unused — ADR-028 A2', async () => {
+  // It reported created:true for a pull request that was never registered as a
+  // stack. Removed rather than deprecated: a tool that reports success for work
+  // it did not do is worse than a missing tool, because the human stops
+  // checking. This test exists so it cannot quietly return.
+  const mod = await import('./stackActions.js') as Record<string, unknown>;
+  for (const gone of ['createStackLayerAction', 'addStackLayer', 'createLayer']) {
+    assert.equal(mod[gone], undefined, `${gone} must not exist until A2's replacement lands`);
   }
-  assert.equal(called, false);
-});
-
-test('field values are passed as RAW strings, never as gh typed fields', async () => {
-  // `-f` (--raw-field) sends a literal string. `-F` (--field) reads the value
-  // from a file when it starts with `@`, and branch names are
-  // attacker-influenceable: a collaborator can open a PR from a branch named
-  // `@/etc/passwd`. Using `-F` here would read that file off this machine and
-  // send it to GitHub.
-  //
-  // A security review suggested exactly that swap, with the flags reversed.
-  // This test exists so the swap fails loudly rather than passing review twice.
-  const calls: string[][] = [];
-  const gh: GhJson = async (args) => {
-    calls.push(args);
-    if (args[1]?.includes('/pulls/7')) return { data: { head: { ref: '@/etc/passwd' } } } as never;
-    return { data: { html_url: 'u' } } as never;
-  };
-  await createStackLayerAction(deps({ gh }), { onPullNumber: 7, head: 'h', title: 't' });
-  const create = calls[1]!;
-  assert.ok(!create.includes('-F'), 'must never use gh --field, which reads @paths from disk');
-  assert.equal(create.filter((a) => a === '-f').length, 3, 'title, head and base are all raw fields');
-  // The hostile branch name travels as a literal value, not a file read.
-  assert.ok(create.includes('base=@/etc/passwd'));
 });
