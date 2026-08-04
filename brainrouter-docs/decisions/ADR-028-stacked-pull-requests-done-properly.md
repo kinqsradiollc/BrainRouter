@@ -265,7 +265,8 @@ request — and, checked while writing this, it is **another config-only value w
 fifth instance of that shape. When it is wired it emits a *layer* into the current stack rather than
 an isolated pull request, or the two features produce competing branches for the same work.
 
-### D8 — Desktop surface### D8 — Desktop surface follows the model, not the other way round
+
+### D8 — Desktop surface follows the model, not the other way round
 
 A stack panel showing the layer chain, each layer's readiness, the named blocker, and the highest
 mergeable layer. Read-only first; mutation buttons only for operations already reachable through
@@ -568,7 +569,32 @@ resolve the contradiction, and is less work. It is rejected because the graph ex
 real for interrupted, resumable work — but that value is currently zero, and would stay zero
 indefinitely if this were left as it is. A capability nobody can reach is not a capability.
 
-### D9 — Explicitly out of scope
+### D21 — Sweep for values nobody reads
+
+D20 found `cli.executionEngine` resolving into nothing. Writing D7 found
+`cli.buildLoopEmitPr` doing the same. Counting the stack model, the `stack.*` actions and
+`stack.addlayer`, that is **five instances of one shape in a single release**: something declared,
+tested, and never invoked.
+
+Fixing them one at a time as they surface is how the sixth gets shipped. So this release includes a
+deliberate sweep:
+
+- **Enumerate every `cli.*` knob and assert a consumer exists.** A knob resolved by `config.ts` and
+  read by nothing is a defect, and the assertion is mechanical enough to be a test rather than a
+  review habit.
+- **Same for exported modules in `packages/core` with no importer outside their own tests.** Not all
+  are defects — some are genuinely public API for the SDK — so the output is a reviewed list, not an
+  automatic failure.
+- **Record the count.** If it is five today, the number after the sweep is the baseline, and a rise
+  is a signal.
+
+The general lesson is already in D20 and is worth repeating here because it is the reason all five
+survived review: **tests prove a unit behaves; they say nothing about whether anything invokes it.**
+Every one of these had passing tests.
+
+---
+
+## 3. Explicitly out of scope
 
 - **Reimplementing restack in TypeScript.** GitHub maintains cascading rebase; we would maintain a
   worse copy.
@@ -578,28 +604,24 @@ indefinitely if this were left as it is. A capability nobody can reach is not a 
 
 ---
 
-## 3. Phases
+---
 
-| ID | Deliverable | Depends on |
-|---|---|---|
-| S0-1 | Remove `stack.addlayer` — it reports success for work it does not do | — |
-| S0-2 | Capability detection: gh version, git version, extension present; cached per workspace | — |
-| S1-1 | Typed exit-code outcomes for every `gh stack` invocation | S0-2 |
-| S1-2 | Hard stops on codes 3 / 7 / 10; feature-disabled (9) hides the actions | S1-1 |
-| S2-1 | `gh stack` runner: init / add / push / submit / link | S1-1 |
-| S2-2 | Rewrite the create path onto it; a layer is genuinely registered as a stack | S2-1 |
-| S3-1 | Navigation: view / checkout / switch / up / down / top / bottom / trunk | S2-1 |
-| S3-2 | `sync` / `rebase`, human-initiated only, with a preview of what moves | S2-1 |
-| S4-1 | `stack.merge` — top layer plus everything beneath, destructive, lists every PR | S2-1 |
-| S4-2 | Long timeout + pending-not-failed for 90s+ stack merges | S4-1 |
-| S4-3 | Post-mid-stack-merge staleness detection and report | S4-1 |
-| S5-1 | Agent authoring: propose a stack, confirm once, then create | S2-2, S4-1 |
-| S6-1 | Desktop stack panel, read-only | S3-1 |
-| S6-2 | Mutation controls for confirmed operations | S6-1, S4-1 |
+## 4. Phases
+
+The full phase list — S rows (stacked PRs, receipts, artifacts), E rows (execution engine), and
+P rows (planner) — lives in
+[`brainrouter-roadmap/0.4.20.md`](../../brainrouter-roadmap/0.4.20.md) together with the twelve-week
+delivery timetable. It is kept in one place rather than duplicated here, because two copies of a
+phase list diverge and then nobody knows which is current.
+
+Shape of it: **weeks 1–3 repairs** (the action that reports success for work it did not do, exit
+codes, merge, receipts, artifacts panel), **week 4 the execution engine**, **weeks 5–11 the planner**
+(clock and schema, local-first store, sync, conflicts, adapters, timetable, agent wiring), **week 12
+multi-device soak**.
 
 ---
 
-## 4. Consequences
+## 5. Consequences
 
 **We take a dependency on a preview feature and an optional CLI extension.** Capability detection
 and the fail-hidden posture are what keep that from degrading the product for anyone who has neither.
@@ -610,11 +632,31 @@ the action currently lies about what it did.
 **Rebase stays manual, which some will find slow.** That is deliberate — the alternative is an agent
 rewriting the history of branches that already carry review comments.
 
+**Wiring the execution engine may expose that the graph path is not at parity.** D20 requires the
+same interrupts, tool authorization and receipts the loop has. If that turns out to be more than a
+week's work, the honest response is to say so and reconsider whether the knob should exist at all —
+not to ship a `graph` option that silently loses features.
+
+**The planner adds a persistence and sync layer we have never had.** No offline queue, no logical
+clock, no conflict resolution exists anywhere in the codebase today. That is why weeks 7–8 carry the
+risk and week 12 is a soak: sync bugs are found by use, not by unit tests, and the cost of finding
+them late is measured in someone's lost data rather than in rework.
+
+**Twelve weeks is a long single-track release.** The alternative — running repairs and the planner in
+parallel — would finish sooner on paper and produce two half-verified subsystems. The repairs are
+correcting behaviour that currently lies to the user; they should not share attention with greenfield
+work.
+
+**This ADR is large.** Twenty-one decisions across four subsystems is more than one ADR usually
+carries, and the justification is §0: they are one defect class, not four features. If that framing
+stops holding as implementation proceeds, splitting it is the right response rather than defending
+the structure.
+
 ---
 
-## 5. Owner decisions
+## 6. Owner decisions
 
-All three resolved.
+Three resolved on the stacked-PR half.
 
 **Q1 — may the agent run `gh stack sync`? → YES, ON EXPLICIT INSTRUCTION.** Never on its own
 inference that a stack looks stale. Every run shows the list of layers whose history will be
@@ -629,10 +671,25 @@ gets dismissed reflexively — and then it is worth nothing when it matters. (D7
 integration. The timeout and staleness work (S4-2, S4-3) is built now regardless, because both are
 properties of the stack merge itself rather than of any queue. (D6)
 
-### Still open
+### Still open — planner
 
-Nothing blocking. Two things to decide during implementation rather than now:
+Carried over when the planner was folded into this ADR. None blocks starting, because all three
+affect weeks 5 onward and the answers can land before then.
+
+1. **Which sources matter most?** The phase list assumes Track, GitHub issues, then GitHub pull
+   requests. If meeting actions or review findings matter more to your actual day, the order changes
+   and the adapter week shortens.
+2. **May the agent propose a day plan unprompted?** Same tension as D7's auto-propose: genuinely
+   useful, and one more thing that speaks without being asked. D17 currently says it may propose;
+   whether it may do so *unprompted* is the open part.
+3. **How long may an offline device diverge before its outbox is shed and it refreshes from the
+   server?** The proposal is D19's 90-day horizon. A shorter one — 30 days — bounds conflict
+   complexity at the cost of a rarely-used device losing offline edits.
+
+### Deferred to implementation
 
 - Whether the auto-propose gate should also require a minimum number of *files* rather than lines
   alone — a 400-line change in two files may not be worth a stack.
-- Whether declining a proposal should suppress it for the session or only for that change.
+- Whether declining a proposal suppresses it for the session or only for that change.
+- The exact stack depth cap. D7 proposes about five; the right number is the one where a reviewer
+  stops holding the chain in their head, and that is worth measuring rather than asserting.
