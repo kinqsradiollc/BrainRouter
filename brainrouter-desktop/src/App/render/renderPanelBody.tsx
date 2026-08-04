@@ -41,6 +41,10 @@ const WorkflowsPanel = lazy(() => import('../../panels/planning/WorkflowsPanel.j
 type Query = (id: string, name: string, args?: Record<string, unknown>) => void;
 
 export interface RenderPanelBodyCtx {
+  /** ADR-028 B2 — the session the Artifacts panel opens scoped to. */
+  viewKey?: string | null;
+  /** Session key → title, for artifact scope chips and provenance labels. */
+  sessionTitles?: Record<string, string | undefined>;
   q: Query;
   hostUp: boolean;
   running: boolean;
@@ -141,7 +145,7 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
     lastPlan, planHistory, planFeedbackRef, searchHits, schedules, worktrees, worktreeDiffs, openWorktree,
     review, reviewRunning, setReviewRunningByWs, setReviewByWs, setDraft, atlasGraph, atlasBuilding, atlasEnriching,
     atlasAssessments, atlasAssessing, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, requirements,
-    annotations, artifacts, atlasUiMap, atlasStories, runStory,
+    annotations, artifacts, atlasUiMap, atlasStories, runStory, viewKey, sessionTitles,
   } = ctx;
 
   // DESK-5f — tab CONTENT only; the tab strip owns titles and closing.
@@ -364,6 +368,7 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
         // annotation kind (markdown/html), else the generic 'artifact' target.
         const annTypeFor = (fmt: string): 'markdown' | 'html' | 'artifact' => fmt === 'markdown' ? 'markdown' : fmt === 'html' ? 'html' : 'artifact';
         return <ArtifactsPanel artifacts={artifacts} annotations={annotations}
+          currentSessionKey={viewKey} sessionTitles={sessionTitles}
           onCreate={(title) => { q('q-art-create', 'artifact-create', { kind: 'markdown-report', title }); refresh(); }}
           onSetStatus={(id, status) => { q('q-art-update', 'artifact-update', { id, status }); refresh(); }}
           onPreview={(a) => { q('q-art-read', 'artifact-read', { id: a.id }); }}

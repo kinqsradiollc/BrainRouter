@@ -1667,6 +1667,20 @@ select.toolbar-input { cursor: pointer; }
 /* ARTIFACT-RECORDS — Artifacts panel (reuses req-row / annot-* chrome). */
 .art-panel { padding: 4px 2px; }
 .art-format { flex: none; font-size: 10px; color: var(--text-faint); font-family: var(--mono); text-transform: uppercase; letter-spacing: .04em; }
+
+/* ADR-028 B2 — session scope + provenance. The scope chips widen the panel
+   beyond the current session; the row chip says which session produced an
+   artifact, which is required as soon as more than one is in view. */
+.art-scope { align-items: center; gap: 6px; flex-wrap: wrap; }
+.art-scope-label { font-size: 10px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .06em; }
+.art-scope-chip { border: 1px solid var(--border); background: transparent; color: var(--text-faint);
+  border-radius: 999px; padding: 2px 9px; font-size: 11px; cursor: pointer; max-width: 160px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.art-scope-chip:hover { color: var(--text); border-color: var(--border-strong, var(--border)); }
+.art-scope-chip.on { color: var(--text); border-color: var(--accent, var(--border)); background: var(--surface-2, transparent); }
+.art-provenance { flex: none; font-size: 10px; color: var(--text-faint); font-family: var(--mono);
+  border: 1px solid var(--border); border-radius: 3px; padding: 0 5px; max-width: 140px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Artifact lifecycle status pills. */
 .req-status.st-draft { background: rgba(56, 139, 253, 0.08); border-color: rgba(56, 139, 253, 0.35); color: #58a6ff; }
 .req-status.st-final { color: #6cc04a; }
