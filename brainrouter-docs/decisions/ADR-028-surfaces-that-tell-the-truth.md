@@ -815,6 +815,79 @@ Reachability is a graph walk from the entry points rather than a lookup, so it
 is more work — but it is the check that would have caught Part A the day it
 landed, instead of the owner catching it in the product weeks later.
 
+---
+
+## 2.9 · Summary — what shipped, what is proposed
+
+For a fast read-over. **Shipped** means implemented, tested, and reachable from
+something a person can do. **Proposed** means the decision is written and the
+code is not.
+
+### Shipped
+
+| # | Decision | The claim it removes |
+|---|---|---|
+| A1 | Capability detection | "stacks work here" — now probed, with the missing piece named |
+| A2 | Removed `stack.addlayer` | a PR that merely *targeted* the branch below |
+| A3 | Exit-code contract | callers re-interpreting numbers |
+| A4 | Sync | "failed, retry" on a mid-rebase tree |
+| A5 | Merge cascade | "Merge #12" that silently lands #9–#11 |
+| A7 | Plan → stack | dependency information the agent produced and discarded |
+| A8 | Stack panel | a blocker you cannot act on |
+| B1 | Receipts | `✓✓ Read`, which is not observable for a model |
+| B2 | Artifacts panel | a stale list, indistinguishable from a correct one |
+| C1 | Execution engine | a setting you can flip that does nothing |
+| D1–D8 | Planner core | — |
+| D9 | User-scoped, backend truth | a planner whose "today" changed per repository |
+| D10 | Dashboard is a device | an unstamped writer whose merges are undefined |
+| D11 | Pull → merge → push | a stale client winning by speaking last |
+| E1 | Inert-value sweep | "declared but never wired", as a test |
+| G1 | `offerPanel` vs `ensurePanel` | the agent claiming your attention |
+| G2 | Closed at launch | last hour's tabs presented as this hour's intent |
+| G6 | Planner is a mode | — |
+| H1 | One PR create path | four call sites that could not stack |
+
+Surfaces: desktop planner mode (Today · Calendar · Notes), dashboard `/planner`,
+CLI `/plan`, five `planner_*` tools, migration 051 and `/api/planner`.
+
+### Proposed — not built
+
+| # | Decision | Why it is worth reviewing before building |
+|---|---|---|
+| F1–F6 | Comprehension | Changes what the agent produces per turn; F5's tutor profile may be a different product |
+| G3 | Panel grouping | Trades one click against the scanning cost it removes |
+| G4 | "Understand" group | Depends on F |
+| G5 | Stack + checks + review as ONE panel | Retires three panel ids; `layerStatus` grows inputs |
+| H2–H4 | Call-site convergence, stacking modes, reachability check | H4 changes what E1 enforces repo-wide |
+
+### The five things worth arguing with
+
+1. **Complete wins ties (D4).** Un-completing something you finished is worse
+   than re-completing something that bounced back. That asymmetry is a taste
+   judgement, not a derivation.
+2. **`planner.complete` is never inferred (D6).** Costs a real convenience —
+   the agent watching a PR merge and ticking the box — on the argument that the
+   todo was usually broader than the PR.
+3. **Overdue has no badge (D5).** Deliberately less legible than a red count,
+   on the argument that a red count is why planners get abandoned.
+4. **Closed at launch (G2).** Removes a restore some people will miss. The
+   "reopen last session" affordance may be a fig leaf over a decision that
+   should stand on its own.
+5. **Stacking defaults to `auto`, not `always` (H3).** The cautious choice, and
+   it means the feature stays invisible to anyone who does not go looking.
+
+### What I got wrong, on the record
+
+- Built the planner as six libraries with no caller — the exact pattern E1
+  exists to catch.
+- Set E1's baseline *after* those orphans landed, so the sweep certified two of
+  its own author's violations as the floor.
+- Scoped the planner store per workspace, making the multi-device conflict
+  machinery unreachable.
+- Added a Stack panel beside one already titled "PR / Checks".
+- Refused mid-stack merges in the first pass of A5, forbidding the operation
+  the feature exists for.
+
 ## 3. Out of scope
 
 - Reimplementing cascading rebase — GitHub maintains it.

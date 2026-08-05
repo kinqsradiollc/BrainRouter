@@ -47,6 +47,8 @@ export interface AppHandlersCtx {
   workspaces: { current: string | null };
   refreshSession: () => void;
   ensurePanel: (id: PanelId) => void;
+  /** ADR-028 G1 — make a panel available without taking focus. */
+  offerPanel: (id: PanelId) => void;
   viewKey: string;
   componentTags: ComponentTag[];
   setComponentTags: React.Dispatch<React.SetStateAction<ComponentTag[]>>;
@@ -67,7 +69,7 @@ export function useAppHandlers(ctx: AppHandlersCtx): AppHandlers {
     running, stopping, setToast, commands, cmdCtx, runBridge, sessionKeyRef, setRows, lastPromptRef,
     goalContPendingRef, setRunning, setSessionRunning, info, setTurnStart, turnFailsRef, branches,
     pendingSessionsRef, setSessions, sessionsRef, setProjSessions, activeWsRef, workspaces, refreshSession,
-    ensurePanel, viewKey, componentTags, setComponentTags,
+    ensurePanel, offerPanel, viewKey, componentTags, setComponentTags,
   } = ctx;
 
   function submitWithDelivery(override: string | undefined, delivery: 'immediate' | 'queue' | 'steer'): void {
@@ -277,7 +279,9 @@ export function useAppHandlers(ctx: AppHandlersCtx): AppHandlers {
     });
     if (batch.length) {
       setToast(batch.length === 1 ? `Attaching ${batch[0].name}…` : `Attaching ${batch.length} files…`);
-      ensurePanel('tasks');
+      // ADR-028 G1 — dropping a file is not a request to look at Tasks. The
+      // tab appears with an unread dot; where you were looking is yours.
+      offerPanel('tasks');
     }
   };
 

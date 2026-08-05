@@ -31,6 +31,9 @@
  *    secret redactor before they leave the machine or surface to the user.
  */
 import { spawnSync } from 'node:child_process';
+import { routePullRequest, resolveStackingMode, type PrRoute } from '../review/prRouter.js';
+import type { PlanPhaseLike } from '../review/planToStack.js';
+import type { StackCapability } from '../review/stackCapability.js';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -104,6 +107,18 @@ export interface EmitPrInput {
   title: string;
   /** PR body (caller-derived; redacted again here as defense-in-depth). */
   body: string;
+  /* ADR-028 H1/H3 — stacking inputs. All optional: absent means the emit
+     behaves exactly as it did before, opening one pull request. */
+  /** `auto` (advise) · `always` · `never`. Defaults to `auto`. */
+  stackingMode?: string;
+  /** Whether `gh stack` is usable here (A1). Absent means no. */
+  stackCapability?: StackCapability;
+  /** The committed plan, when the work was planned (A7). */
+  phases?: readonly PlanPhaseLike[];
+  /** Diff size, for the unplanned-work fallback. */
+  totalChangedLines?: number;
+  /** Files grouped by unit of work, in dependency order. */
+  groups?: ReadonlyArray<{ label: string; files: readonly string[]; changedLines: number }>;
   /** Base branch override; when absent the repo's current branch is used. */
   baseBranch?: string;
   /** Open the PR as a draft (default true — a human reviews before merge). */
@@ -281,8 +296,23 @@ export function emitPrFromPatch(input: EmitPrInput, run: CmdRunner = defaultCmdR
   const push = run('git', ['push', '-u', 'origin', branch], wt);
   if (!push.ok) { cleanup(); return { ok: false, branch, pushed: false, error: `git push failed: ${redactErr(push.stderr)}` }; }
 
+  // ADR-028 H1/H2 — the create path asks whether this should be a stack BEFORE
+  // opening anything. Previously this went straight to `gh pr create`, which is
+  // why the stack machinery was unreachable from the product.
+  const route = routePullRequest({
+    mode: resolveStackingMode(input.stackingMode),
+    capability: input.stackCapability ?? { available: false, reason: 'Stack support was not probed for this emit.' },
+    ...(input.phases ? { phases: input.phases } : {}),
+    ...(typeof input.totalChangedLines === 'number' ? { totalChangedLines: input.totalChangedLines } : {}),
+    ...(input.groups ? { groups: input.groups } : {}),
+  });
+
   const pr = forge.createChangeRequest({ remote: remoteUrl, cwd: wt, run }, {
     base, head: branch, title, body, draft: input.draft !== false,
+    // The route is passed through rather than acted on here: this function owns
+    // the worktree lifecycle, and a stack submit needs the branch pushed first
+    // exactly as a single PR does. The forge adapter picks the command.
+    route,
   });
   cleanup();
   if (!pr.ok) {

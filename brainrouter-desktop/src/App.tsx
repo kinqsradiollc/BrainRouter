@@ -337,7 +337,8 @@ export function App(): React.ReactElement {
   const {
     sideTabs, activeSideTab, sidePanelOpen, sideWidth, sideFullScreen, sidePinned, termDockOpen, termDockHeight, termTabs, activeTerm,
     setSideTabs, setActiveSideTab, setSidePanelOpen, setSideWidth, setSideFullScreen, setSidePinned, setTermDockOpen, setTermDockHeight, setTermTabs, setActiveTerm,
-    ensurePanel, closeSideTab, reorderSideTab, togglePanel, openSideView, openBottomDock, addBottomTab, closeBottomTab, resizeTerminal, resetTermDock,
+    ensurePanel, offerPanel, markPanelRead, unreadPanels, restoreLastSessionPanels,
+    closeSideTab, reorderSideTab, togglePanel, openSideView, openBottomDock, addBottomTab, closeBottomTab, resizeTerminal, resetTermDock,
   } = usePanels(q);
 
   // ADR-028 B2 — artifacts are session-scoped, so switching sessions has to
@@ -507,7 +508,7 @@ export function App(): React.ReactElement {
     running, stopping, setToast, commands, cmdCtx, runBridge, sessionKeyRef, setRows, lastPromptRef,
     goalContPendingRef, setRunning, setSessionRunning, info, setTurnStart, turnFailsRef, branches,
     pendingSessionsRef, setSessions, sessionsRef, setProjSessions, activeWsRef, workspaces, refreshSession,
-    ensurePanel, viewKey, componentTags, setComponentTags,
+    ensurePanel, offerPanel, viewKey, componentTags, setComponentTags,
   });
 
   // T-dashtasks — the background/dashboard task derivations (Running list, boards,

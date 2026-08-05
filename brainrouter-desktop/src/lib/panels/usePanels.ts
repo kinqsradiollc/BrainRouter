@@ -49,7 +49,14 @@ export interface PanelsApi {
   setTermDockHeight: Dispatch<SetStateAction<number>>;
   setTermTabs: Dispatch<SetStateAction<TermTab[]>>;
   setActiveTerm: Dispatch<SetStateAction<number>>;
+  /** HUMAN intent: add, activate, open. */
   ensurePanel: (id: PanelId) => void;
+  /** ADR-028 G1 — AGENT intent: make available, mark unread, do not take focus. */
+  offerPanel: (id: PanelId) => void;
+  markPanelRead: (id: PanelId) => void;
+  unreadPanels: Set<PanelId>;
+  /** ADR-028 G2 — bring back the previous session's panels, on request. */
+  restoreLastSessionPanels: () => void;
   closeSideTab: (id: PanelId) => void;
   reorderSideTab: (dragged: PanelId, target: PanelId) => void;
   togglePanel: (id: PanelId) => void;
@@ -63,28 +70,24 @@ export interface PanelsApi {
 }
 
 export function usePanels(q: (id: string, name: string, args?: Record<string, unknown>) => void): PanelsApi {
-  const [sideTabs, setSideTabs] = useState<PanelId[]>(() => {
-    const saved = localStorage.getItem('br-side-tabs');
-    if (saved !== null) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return migratePanelIds(parsed);
-      } catch (e) {
-        // ignore
-      }
-    }
-    return devPanels();
-  });
-  const [activeSideTab, setActiveSideTab] = useState<PanelId | null>(() => {
-    const saved = localStorage.getItem('br-active-side-tab');
-    if (saved !== null && saved !== 'null') return migratePanelId(saved);
-    return devPanels()[0] ?? null;
-  });
-  const [sidePanelOpen, setSidePanelOpen] = useState(() => {
-    const saved = localStorage.getItem('br-side-open');
-    if (saved !== null) return saved === '1';
-    return devFlag('side') || devPanels().length > 0;
-  });
+  /**
+   * ADR-028 G2 — the app starts with the panel CLOSED and no tabs open.
+   *
+   * These used to restore from localStorage, so a session that ended with six
+   * tabs open started with six tabs open. Panel state is SESSION state, not
+   * preference state: it reflects what you were doing an hour ago, not how you
+   * want to work, and nobody ever prunes it. Width, the pinned flag and the
+   * dock height ARE preferences and are still persisted below.
+   *
+   * The previous session's tabs are kept under a separate key so "reopen last
+   * session's panels" can restore them — this removes an assumption, not a
+   * capability.
+   */
+  const [sideTabs, setSideTabs] = useState<PanelId[]>(() => devPanels());
+  const [activeSideTab, setActiveSideTab] = useState<PanelId | null>(() => devPanels()[0] ?? null);
+  const [sidePanelOpen, setSidePanelOpen] = useState(() => devFlag('side') || devPanels().length > 0);
+  // ADR-028 G1 — panels the agent made available that you have not looked at.
+  const [unreadPanels, setUnreadPanels] = useState<Set<PanelId>>(() => new Set());
   // On launch, it starts at its minimum size (SIDE_RAIL_MIN).
   const [sideWidth, setSideWidth] = useState(SIDE_RAIL_MIN);
   const [sideFullScreen, setSideFullScreen] = useState(() => localStorage.getItem('br-side-fullscreen') === '1');
@@ -118,11 +121,13 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
   }, [sidePinned]);
 
   useEffect(() => {
-    localStorage.setItem('br-side-open', sidePanelOpen ? '1' : '0');
+    // Recorded for the explicit "reopen last session's panels" action, NOT
+    // read at startup — see G2.
+    localStorage.setItem('br-side-open-last', sidePanelOpen ? '1' : '0');
   }, [sidePanelOpen]);
 
   useEffect(() => {
-    localStorage.setItem('br-side-tabs', JSON.stringify(sideTabs));
+    localStorage.setItem('br-side-tabs-last', JSON.stringify(sideTabs));
   }, [sideTabs]);
 
   useEffect(() => {
@@ -164,9 +169,13 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
       return next;
     });
   }
-  /** Show a view as the side panel's active tab (terminal lives in the dock). */
-  function ensurePanel(id: PanelId): void {
-    if (id === 'terminal') { openBottomDock(); return; }
+  /**
+   * ADR-028 G1 — the panel's data refresh, without any claim on your attention.
+   *
+   * Split out of `ensurePanel` so a caller can load a panel's data without also
+   * deciding what you are looking at.
+   */
+  function refreshPanelData(id: PanelId): void {
     if (id === 'files') { q('q-list', 'list-files'); q('q-files', 'changed-files'); }
     if (id === 'worktrees') q('q-worktrees', 'git-worktrees'); // T13 — refresh on open
     if (id === 'review') q('q-review-current', 'review-current'); // Wave 5 — show gate + findings on open
@@ -175,6 +184,17 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
     if (id === 'artifacts') { q('q-art', 'artifact-list'); q('q-annot', 'annotation-list'); } // ARTIFACT-RECORDS — list on open (+ annotations so §8 artifact annotations show)
     if (id === 'plan') q('q-annot', 'annotation-list'); // §plan-comments — load per-step comments on open
     if (id === 'diff') q('q-review-current', 'review-current'); // Wave 7 — show the review gate in the Changes area
+  }
+
+  /**
+   * HUMAN intent: add the tab, make it active, open the panel.
+   *
+   * Called when a person asked for this panel — a click, a command, a keyboard
+   * shortcut, or an interaction request that blocks the turn until they answer.
+   */
+  function ensurePanel(id: PanelId): void {
+    if (id === 'terminal') { openBottomDock(); return; }
+    refreshPanelData(id);
     setSideTabs((t) => (t.includes(id) ? t : [...t, id]));
     setActiveSideTab(id);
     setSidePanelOpen(true);
@@ -182,6 +202,36 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
     // width; widen-only, so a manual resize is never overridden, and a no-op
     // returns the same number so React skips the re-render.
     setSideWidth((w) => openWidthFor(id, w));
+  }
+
+  /**
+   * ADR-028 G1 — AGENT intent: make a panel available without taking focus.
+   *
+   * The bug this fixes: `ensurePanel` did three things at once, and 21 call
+   * sites used it — many fired by agent activity. So the agent editing a file
+   * yanked you off whatever you were reading. That is a claim about your
+   * attention that nothing established, which is the thing this ADR objects to
+   * everywhere else.
+   *
+   * The tab appears and is marked unread. Nothing else changes: not the active
+   * tab, not whether the panel is open, not its width. The dot is how you learn
+   * a diff is waiting without being moved to it.
+   */
+  function offerPanel(id: PanelId): void {
+    if (id === 'terminal') return;
+    refreshPanelData(id);
+    setSideTabs((t) => (t.includes(id) ? t : [...t, id]));
+    setUnreadPanels((u) => (u.has(id) || activeSideTab === id ? u : new Set([...u, id])));
+  }
+
+  /** Clear the dot once the person actually looks at the panel. */
+  function markPanelRead(id: PanelId): void {
+    setUnreadPanels((u) => {
+      if (!u.has(id)) return u;
+      const next = new Set(u);
+      next.delete(id);
+      return next;
+    });
   }
   function closeSideTab(id: PanelId): void {
     setSideTabs((tabs) => {
@@ -223,9 +273,33 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
     setActiveTerm(termSeq.current);
   }
 
+  /**
+   * ADR-028 G2 — bring back the previous session's panels, on request.
+   *
+   * The escape hatch for the case where restoring was actually wanted. Offered
+   * rather than assumed, which is the whole difference.
+   */
+  function restoreLastSessionPanels(): void {
+    try {
+      const saved = localStorage.getItem('br-side-tabs-last');
+      if (!saved) return;
+      const parsed = JSON.parse(saved) as unknown;
+      if (!Array.isArray(parsed)) return;
+      const tabs = migratePanelIds(parsed as PanelId[]);
+      if (tabs.length === 0) return;
+      setSideTabs(tabs);
+      setActiveSideTab(tabs[0] ?? null);
+      setSidePanelOpen(true);
+    } catch {
+      // A malformed record means there is nothing to restore, which is a
+      // no-op rather than an error worth showing.
+    }
+  }
+
   return {
     sideTabs, activeSideTab, sidePanelOpen, sideWidth, sideFullScreen, sidePinned, termDockOpen, termDockHeight, termTabs, activeTerm,
     setSideTabs, setActiveSideTab, setSidePanelOpen, setSideWidth, setSideFullScreen, setSidePinned, setTermDockOpen, setTermDockHeight, setTermTabs, setActiveTerm,
-    ensurePanel, closeSideTab, reorderSideTab, togglePanel, openSideView, openBottomDock, addBottomTab, closeBottomTab, resizeTerminal, resetTermDock,
+    ensurePanel, offerPanel, markPanelRead, unreadPanels, restoreLastSessionPanels,
+    closeSideTab, reorderSideTab, togglePanel, openSideView, openBottomDock, addBottomTab, closeBottomTab, resizeTerminal, resetTermDock,
   };
 }

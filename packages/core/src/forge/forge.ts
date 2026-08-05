@@ -1,3 +1,4 @@
+import type { PrRoute } from '../review/prRouter.js';
 import type { CmdRunner } from '../git/prEmit.js';
 
 export type ForgeId = 'github' | 'gitlab' | 'bitbucket' | 'azure-devops' | 'gitea';
@@ -9,7 +10,11 @@ export interface ForgeProvider {
   cli?: string;
   capabilities: Record<ForgeCapability, boolean>;
   matches(remote: string): boolean;
-  createChangeRequest?(ctx: ForgeContext, input: { base: string; head: string; title: string; body: string; draft: boolean }): { ok: boolean; stdout: string; stderr: string };
+  createChangeRequest?(ctx: ForgeContext, input: {
+    base: string; head: string; title: string; body: string; draft: boolean;
+    /** ADR-028 H1 — decided upstream so every caller lands on the same answer. */
+    route?: PrRoute;
+  }): { ok: boolean; stdout: string; stderr: string };
   listChecks?(ctx: ForgeContext, number: number): { ok: boolean; stdout: string; stderr: string };
   submitReview?(ctx: ForgeContext, number: number, action: 'approve' | 'comment' | 'request-changes', body: string): { ok: boolean; stdout: string; stderr: string };
   listTrack?(ctx: ForgeContext): { ok: boolean; stdout: string; stderr: string };
@@ -21,7 +26,14 @@ const gated: Record<ForgeCapability, boolean> = { 'change-request:create': false
 const github: ForgeProvider = {
   id: 'github', cli: 'gh', capabilities: full,
   matches: (remote) => /github\.com[/:]/i.test(remote),
-  createChangeRequest: (ctx, input) => ctx.run('gh', ['pr', 'create', '--base', input.base, '--head', input.head, '--title', input.title, '--body', input.body, ...(input.draft ? ['--draft'] : [])], ctx.cwd),
+  // ADR-028 H2 — the chokepoint. A stack route submits through `gh stack`,
+  // which registers the pull requests as a stack; anything else opens a plain
+  // one, which stays correct and common.
+  createChangeRequest: (ctx, input) => (
+    input.route?.kind === 'stack'
+      ? ctx.run('gh', ['stack', 'submit', '--auto', ...(input.draft ? [] : ['--open'])], ctx.cwd)
+      : ctx.run('gh', ['pr', 'create', '--base', input.base, '--head', input.head, '--title', input.title, '--body', input.body, ...(input.draft ? ['--draft'] : [])], ctx.cwd)
+  ),
   listChecks: (ctx, number) => ctx.run('gh', ['pr', 'checks', String(number), '--json', 'name,state,bucket,link'], ctx.cwd),
   submitReview: (ctx, number, action, body) => ctx.run('gh', ['pr', 'review', String(number), action === 'approve' ? '--approve' : action === 'request-changes' ? '--request-changes' : '--comment', '--body', body], ctx.cwd),
   listTrack: (ctx) => ctx.run('gh', ['issue', 'list', '--json', 'number,title,state,url,labels,assignees'], ctx.cwd),
