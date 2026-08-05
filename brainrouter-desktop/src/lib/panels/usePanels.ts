@@ -15,7 +15,14 @@ import { clampSideRailWidth, openWidthFor, reorderByValue, SIDE_RAIL_MIN } from 
 // The Browser panel's internal id was renamed 'uitest' → 'browser', so a persisted
 // open-tab layout survives the rename. Unknown ids are dropped, and duplicates are
 // collapsed, so an upgrade never leaves a dead or doubled tab.
-const PANEL_ID_ALIASES: Record<string, PanelId> = { write: 'editor', docs: 'editor', uitest: 'browser' };
+// ADR-028 G5 — `review` and `ci` fold into the one Pull request panel. They
+// answered facets of a single question — can this land, and if not what is
+// stopping it — and `ci` was already titled "PR / Checks", so four tabs meant
+// assembling the real answer yourself from three of them.
+const PANEL_ID_ALIASES: Record<string, PanelId> = {
+  write: 'editor', docs: 'editor', uitest: 'browser',
+  review: 'stack', ci: 'stack',
+};
 const migratePanelId = (id: string): PanelId => (PANEL_ID_ALIASES[id] ?? id) as PanelId;
 const migratePanelIds = (ids: unknown[]): PanelId[] => {
   const seen = new Set<PanelId>();
@@ -192,9 +199,13 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
    * Called when a person asked for this panel — a click, a command, a keyboard
    * shortcut, or an interaction request that blocks the turn until they answer.
    */
-  function ensurePanel(id: PanelId): void {
-    if (id === 'terminal') { openBottomDock(); return; }
-    refreshPanelData(id);
+  function ensurePanel(rawId: PanelId): void {
+    if (rawId === 'terminal') { openBottomDock(); return; }
+    // Aliased HERE rather than only on restore, so `ensurePanel('review')` from
+    // any of its ten call sites opens the consolidated panel instead of a tab
+    // that no longer exists.
+    const id = migratePanelId(rawId);
+    refreshPanelData(rawId);
     setSideTabs((t) => (t.includes(id) ? t : [...t, id]));
     setActiveSideTab(id);
     setSidePanelOpen(true);
@@ -217,9 +228,10 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
    * tab, not whether the panel is open, not its width. The dot is how you learn
    * a diff is waiting without being moved to it.
    */
-  function offerPanel(id: PanelId): void {
-    if (id === 'terminal') return;
-    refreshPanelData(id);
+  function offerPanel(rawId: PanelId): void {
+    if (rawId === 'terminal') return;
+    const id = migratePanelId(rawId);
+    refreshPanelData(rawId);
     setSideTabs((t) => (t.includes(id) ? t : [...t, id]));
     setUnreadPanels((u) => (u.has(id) || activeSideTab === id ? u : new Set([...u, id])));
   }

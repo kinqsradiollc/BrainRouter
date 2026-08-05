@@ -162,3 +162,42 @@ test('the partition keeps safe and refused separate so the UI can explain', () =
   assert.deepEqual(safe.map((l) => l.number), [1]);
   assert.deepEqual(refused.map((l) => l.number), [2]);
 });
+
+/* --------------------------------------- G5 · one panel, one answer */
+
+test('a failing check is NAMED — that is what the consolidation buys', () => {
+  // "Checks have not passed" sends you to another tab to find out which. The
+  // whole reason stack/checks/review were merged is so the answer is here.
+  const l = layer({
+    number: 1, position: 1, checksPassed: false,
+    failingChecks: ['Build & Test (Node 22.x)', 'Lint & Typecheck'],
+  });
+  const blocker = layerStatus(l, [l]).blocker!;
+  assert.match(blocker, /Build & Test/);
+  assert.match(blocker, /Lint & Typecheck/);
+});
+
+test('many failing checks are summarised rather than listed forever', () => {
+  const l = layer({
+    number: 1, position: 1, checksPassed: false,
+    failingChecks: ['a', 'b', 'c', 'd', 'e'],
+  });
+  assert.match(layerStatus(l, [l]).blocker!, /and 2 more/);
+});
+
+test('review findings are COUNTED on the layer', () => {
+  const l = layer({ number: 1, position: 1, changesRequested: true, openFindings: 3 });
+  assert.match(layerStatus(l, [l]).blocker!, /3 open findings/);
+});
+
+test('one finding reads as one, not "1 findings"', () => {
+  const l = layer({ number: 1, position: 1, changesRequested: true, openFindings: 1 });
+  assert.match(layerStatus(l, [l]).blocker!, /1 open finding\./);
+});
+
+test('without the extra inputs the blocker still works — they are optional', () => {
+  // Existing callers keep working; the consolidation adds information rather
+  // than requiring it.
+  const l = layer({ number: 1, position: 1, checksPassed: false });
+  assert.match(layerStatus(l, [l]).blocker!, /Checks have not passed/);
+});

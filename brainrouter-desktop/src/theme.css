@@ -5941,3 +5941,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 
 .comp-outcome { margin-top: 14px; padding: 10px 12px; border: 1px solid var(--border);
   border-radius: 8px; font-size: 12px; line-height: 1.6; }
+
+
+/* ADR-028 G5 — the consolidated Pull request panel. The chain, the checks and
+   the review findings are sections of one answer rather than three tabs. */
+.pr-panel { display: flex; flex-direction: column; }
+.pr-section { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 12px; }
+.pr-section-head { font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-faint); padding: 0 14px 8px; }

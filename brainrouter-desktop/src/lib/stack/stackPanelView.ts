@@ -26,6 +26,14 @@ export interface StackLayerView {
   inMergeQueue: boolean;
   /** True when the branch is behind what it is stacked on. */
   needsSync: boolean;
+  /* ADR-028 G5 — checks and review findings live on the LAYER now.
+     `layerStatus` claimed to report "the blocker you can act on first" while
+     being unable to see either, so it returned a confident partial answer.
+     Consolidating is what makes that function truthful, not merely tidier. */
+  /** Named failing checks, so the blocker can say WHICH one. */
+  failingChecks?: string[];
+  /** Unresolved review findings on this layer. */
+  openFindings?: number;
 }
 
 export type LayerReadiness =
@@ -70,15 +78,31 @@ export function layerStatus(
     return { readiness: 'queued', blocker: 'In GitHub’s merge queue.' };
   }
   if (layer.changesRequested) {
-    return { readiness: 'changes_requested', blocker: 'A review is requesting changes.' };
+    const n = layer.openFindings ?? 0;
+    return {
+      readiness: 'changes_requested',
+      // Naming the count is the difference between "go look somewhere" and
+      // "there are three things to read".
+      blocker: n > 0
+        ? `A review is requesting changes — ${n} open finding${n === 1 ? '' : 's'}.`
+        : 'A review is requesting changes.',
+    };
   }
   if (layer.needsSync) {
     return { readiness: 'needs_sync', blocker: 'Behind the layer below — needs a sync.' };
   }
   if (!layer.checksPassed) {
+    if (layer.checksPending) {
+      return { readiness: 'waiting_on_checks', blocker: 'Checks are still running.' };
+    }
+    const failing = layer.failingChecks ?? [];
     return {
       readiness: 'waiting_on_checks',
-      blocker: layer.checksPending ? 'Checks are still running.' : 'Checks have not passed.',
+      // The whole point of G5: "checks have not passed" sends you to another
+      // tab to find out which. Naming them answers the question here.
+      blocker: failing.length > 0
+        ? `Failing: ${failing.slice(0, 3).join(', ')}${failing.length > 3 ? ` and ${failing.length - 3} more` : ''}.`
+        : 'Checks have not passed.',
     };
   }
   if (!layer.approved) {

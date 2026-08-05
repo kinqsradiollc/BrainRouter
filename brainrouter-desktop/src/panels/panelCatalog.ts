@@ -18,16 +18,20 @@ export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'search', title: 'Search session', icon: 'search' },
   { id: 'schedule', title: 'Schedules', icon: 'clock' },
   { id: 'worktrees', title: 'Worktrees', icon: 'branch' },
-  { id: 'stack', title: 'Stack', icon: 'branch' },
+  // ADR-028 G5 — ONE panel for the pull request. `stack`, `review` and `ci`
+  // answered facets of a single question — can this land, and if not what is
+  // stopping it — and `ci` was already titled "PR / Checks". Four tabs meant
+  // assembling the real answer yourself from three of them.
+  { id: 'stack', title: 'Pull request', icon: 'branch' },
   // ADR-028 F7/G4 — the Understand group. Kept OUT of the crowded default set:
   // opened when you invoke a comprehension review, never sitting there.
   { id: 'comprehension', title: 'Understand', icon: 'brain' },
-  { id: 'review', title: 'Review', icon: 'review' },
+
   { id: 'requirements', title: 'Requirements', icon: 'tasks' },
   { id: 'annotations', title: 'Annotations', icon: 'review' },
   { id: 'artifacts', title: 'Artifacts', icon: 'file' },
   { id: 'attachments', title: 'Attachments', icon: 'file' },
-  { id: 'ci', title: 'PR / Checks', icon: 'check-circle' },
+
   { id: 'atlas', title: 'Atlas', icon: 'atlas' },
   { id: 'workflows', title: 'Workflows', icon: 'bolt' },
   { id: 'memory', title: 'Saved knowledge', icon: 'pin' },

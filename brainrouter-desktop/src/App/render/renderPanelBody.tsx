@@ -365,9 +365,16 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
           onSelectTarget={(a) => { if (a.anchor?.filePath) { setDiffTarget({ path: a.anchor.filePath, line: a.anchor.startLine }); ensurePanel('diff'); q('q-diff', 'file-diff', { path: a.anchor.filePath }); } }} />;
       }
       case 'stack': {
+        // ADR-028 G5 — one panel, one question: can this land, and if not what
+        // is stopping it. The chain, the checks and the review findings are
+        // sections of the same answer rather than three tabs to assemble it
+        // from. `diff` stays separate: reading a change and deciding to land it
+        // are different activities.
+
         // ADR-028 A8 — read-only first. The panel decides nothing; every
         // judgement comes from stackPanelView, and the host runs the commands.
-        return <StackPanel
+        return <div className="scroll pr-panel">
+          <StackPanel
           layers={stackLayers ?? []}
           availability={stackAvailability ?? { capable: false, halted: false }}
           onView={() => q('q-stack', 'stack-read')}
@@ -385,7 +392,17 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
           }}
           onMerge={(target) => { q('q-stack-merge', 'stack-merge', { number: target.number }); setToast('Merging — a stack merge can take a minute.'); }}
           onOpenPr={(number) => openUrl(`https://github.com/pulls/${number}`)}
-        />;
+          />
+          {/* Checks and review findings, in the same scroll. Previously two
+              other tabs, which is why `layerStatus` could not name a failing
+              check as the blocker. */}
+          <div className="pr-section">
+            <div className="pr-section-head">Checks</div>
+            <Suspense fallback={<div className="row status"><span className="spinner" /> Loading…</div>}>
+              <CIPanel ci={ci} onOpenExternal={openUrl} onReviewPr={reviewPrWithAi} trackPr={track.pr} trackOps={trackOps} />
+            </Suspense>
+          </div>
+        </div>;
       }
       case 'artifacts': {
         // ARTIFACT-RECORDS — create/status-set re-fetch the list; Preview resolves
