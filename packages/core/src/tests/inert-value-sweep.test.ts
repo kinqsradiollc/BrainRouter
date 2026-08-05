@@ -149,14 +149,19 @@ function modulesWithoutImporters(): string[] {
  * PR added a module nothing calls, which is the moment to ask whether it is
  * finished.
  *
- * Set to the exact count at the time of writing, not to a round number with
- * headroom. Headroom is how a sweep passes while the thing it watches for keeps
- * happening — the first version of this test used 400 against an actual 34, and
- * would have absorbed a decade of orphans without ever failing.
+ * Counts UNDOCUMENTED orphans only — anything in `KNOWN_UNWIRED` is excluded.
+ * That makes writing a module down the thing that lowers the number, rather
+ * than a separate bookkeeping step somebody forgets, and it means the baseline
+ * cannot quietly absorb new orphans by being bumped alongside them.
  *
- * Lower this when you remove one. Raising it should feel like a decision.
+ * Set to the exact count, not a round number with headroom. Headroom is how a
+ * sweep passes while the thing it watches for keeps happening — the first
+ * version of this test used 400 against an actual 34, and would have absorbed a
+ * decade of orphans without ever failing.
+ *
+ * Lower this when you wire one up. Raising it should feel like a decision.
  */
-const ORPHAN_MODULE_BASELINE = 34;
+const ORPHAN_MODULE_BASELINE = 32;
 
 /**
  * Modules that ARE orphans and are known to be, with the reason.
@@ -175,6 +180,7 @@ const KNOWN_UNWIRED = new Map<string, string>([
   ['planner/agentContext.ts', 'ADR-028 D6 — awaits the planner tool registration'],
   ['planner/outbox.ts', 'ADR-028 D2 — awaits the sync client (D11)'],
   ['planner/plannerService.ts', 'ADR-028 D9 — awaits the desktop/dashboard/CLI surfaces'],
+  ['planner/plannerSync.ts', 'ADR-028 D11 — awaits the backend transport (G6 planner mode)'],
 ]);
 
 test('E1 — known-unwired modules are NAMED, not absorbed by the baseline', () => {
@@ -194,8 +200,8 @@ test('E1 — known-unwired modules are NAMED, not absorbed by the baseline', () 
   );
 });
 
-test('E1 — the count of modules with no importer does not RISE', () => {
-  const orphans = modulesWithoutImporters();
+test('E1 — the count of UNDOCUMENTED orphan modules does not RISE', () => {
+  const orphans = modulesWithoutImporters().filter((o) => !KNOWN_UNWIRED.has(o));
   assert.ok(
     orphans.length <= ORPHAN_MODULE_BASELINE,
     `Modules with no non-test importer rose to ${orphans.length} ` +

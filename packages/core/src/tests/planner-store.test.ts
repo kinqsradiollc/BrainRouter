@@ -17,14 +17,25 @@ import {
   scheduleBlock, recordActual, listConflicts, resolveConflict, deviceIdFor,
 } from '../planner/plannerStore.js';
 import { todayView, findItems, timetableView } from '../planner/plannerService.js';
-import { getStateFile } from '../storage/store.js';
+import { plannerFile } from '../planner/plannerStore.js';
 
 const T = Date.parse('2026-08-04T09:00:00.000Z');
 
+/**
+ * An isolated planner home per test.
+ *
+ * The store is USER-scoped now (D9), so it writes under the brainrouter home
+ * rather than a workspace — which means a test that does not redirect the home
+ * writes into the developer's real planner. `BRAINROUTER_HOME` is the supported
+ * override and exists for exactly this.
+ */
 function workspace(): string {
-  return mkdtempSync(path.join(tmpdir(), 'br-planner-'));
+  const dir = mkdtempSync(path.join(tmpdir(), 'br-planner-'));
+  process.env.BRAINROUTER_HOME = dir;
+  return dir;
 }
 function cleanup(ws: string): void {
+  delete process.env.BRAINROUTER_HOME;
   rmSync(ws, { recursive: true, force: true });
 }
 
@@ -201,7 +212,7 @@ test('a conflicted field is listed and resolvable, keeping either side', () => {
     };
     // Written directly because this state is what a SYNC merge would produce,
     // and the store has no local path that creates a conflict.
-    writeFileSync(getStateFile(ws, 'planner.json'), JSON.stringify(state));
+    writeFileSync(plannerFile(ws), JSON.stringify(state));
     assert.equal(listConflicts(ws).length, 1);
     const resolved = resolveConflict(ws, item.id, 'title', 'theirs', T + 5000);
     assert.equal(resolved?.title.value, 'theirs');

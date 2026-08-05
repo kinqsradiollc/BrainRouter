@@ -699,6 +699,42 @@ I am recording this as my error rather than as a discovered improvement. A8 said
 built a stack panel, and neither the ADR nor I asked whether a repository that already had a panel
 called "PR / Checks" needed a second one next to it.
 
+### G6 · The planner is a MODE, not a panel — Calendar, Today and Notes
+
+Part D specifies the planner's clocks, merge rules, outbox, retention and agent contract in detail,
+and **never says what surface it is**. That omission is why it shipped as six libraries: there was no
+place for it to appear, so it did not appear.
+
+The right panel is the wrong home, and D9 already implies why. Panels are bound to the **current
+workspace and session** — that is what makes them useful for Files, Diff and Stack. The planner is
+**user-scoped and spans every project you have**. Putting a cross-workspace surface inside a
+workspace-scoped container is the same category error as scoping the store per repository, one layer
+up.
+
+> **A fifth workspace mode, beside Chat · Code · Track · Meetings.** Modes are the app-level surface;
+> that is exactly what a personal planner is.
+
+Three views inside it:
+
+| View | What it answers |
+|---|---|
+| **Today** | What am I doing now — the committed list, the current block, what carried over |
+| **Calendar** | What does the week look like — scheduled blocks against actual time (D5) |
+| **Notes** | The things that are not tasks — captured fast, findable later |
+
+All three read the same user-scoped store, so an item scheduled in Calendar is the same record Today
+shows and the agent sees, rather than three stores that drift.
+
+**Why this is not Track.** Track is project management: work items, sprints, boards, owned by a
+project and shared with a team. The planner is *personal* and *cross-project* — your day, assembled
+from every source including Track. A Track item appears in the planner as a **mirrored** item (D1),
+which is precisely the distinction D1 exists to draw. They are not the same product and neither
+replaces the other; building the planner inside Track would make your day belong to a project.
+
+**Notes belong here rather than in Knowledge** for the same reason: Knowledge is workspace-scoped
+reference material, notes are personal and cross-workspace. The test is whether the thing follows you
+between projects — if it does, it is planner; if it belongs to the repo, it is not.
+
 ### Open questions for review
 
 1. **Does G2's clean start need the "reopen last session" affordance at all**, or is it a feature
@@ -706,7 +742,9 @@ called "PR / Checks" needed a second one next to it.
 2. **Is G3's grouping worth the navigation cost** — one more click to reach a panel — against the
    scanning cost it removes?
 3. **Should `offerPanel`'s unread dot decay?** A dot that has been there for two days is furniture.
-4. **Does G5's consolidation go far enough?** `diff` is kept separate on the argument that reading a
+4. **Should Notes be a planner view at all**, or does personal note-taking deserve its own mode?
+   The cross-workspace test says planner; the amount of surface it needs says otherwise.
+5. **Does G5's consolidation go far enough?** `diff` is kept separate on the argument that reading a
    change and deciding to land it are different activities — but that argument would also have
    justified keeping `stack` separate, so it deserves a second look.
 
