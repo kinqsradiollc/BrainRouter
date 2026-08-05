@@ -175,3 +175,35 @@ test('linking refuses an option-shaped base', async () => {
   assert.equal(r.linked, false);
   assert.equal(e.calls.length, 0);
 });
+
+
+/* ------------------------------- the real `gh stack` command surface */
+
+/**
+ * These pin the SUBCOMMANDS against what `gh stack --help` actually lists.
+ *
+ * Written after `gh stack link` turned out not to exist. A3's exit codes tell
+ * you a command failed; they cannot tell you the verb was invented, because an
+ * unknown subcommand exits 1 exactly like a real command that went wrong. The
+ * only guard is asserting the argv we build.
+ */
+const REAL_SUBCOMMANDS = new Set(['init', 'add', 'submit', 'view', 'sync', 'merge', 'rebase']);
+
+test('every command we build is a real `gh stack` subcommand', async () => {
+  const e = exec(0);
+  const runner = new StackRunner({ exec: e, capability: AVAILABLE });
+
+  await addStackLayer(runner, REQUEST);
+  await linkExistingIntoStack(runner, ['feat/a', 'feat/b'], 'main');
+
+  const verbs = e.calls.map((argv) => argv[1]);
+  for (const verb of verbs) {
+    assert.ok(
+      REAL_SUBCOMMANDS.has(verb!),
+      `"gh stack ${verb}" is not a real subcommand — check \`gh stack --help\``,
+    );
+  }
+  assert.ok(verbs.includes('init'), 'linking existing branches uses init');
+  assert.ok(verbs.includes('add'), 'creating a layer uses add');
+  assert.ok(verbs.includes('submit'), 'publishing uses submit');
+});
