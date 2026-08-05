@@ -226,3 +226,142 @@ test('E1 — the modules this ADR wired are no longer orphans', () => {
     assert.equal(orphans.has(wired), false, `${wired} lost its caller`);
   }
 });
+
+
+/* ------------------------------------------------- H4 · reachability */
+
+/**
+ * Entry points — the places a USER can reach code from.
+ *
+ * The importer check is too weak, and Part A proved it: `stackAuthoring`
+ * imports `stackRunner`, which imports `stackCapability`. A cluster that only
+ * calls itself passes an importer-existence check while being exactly as inert
+ * as a lone orphan. Five modules and eleven decisions sat unreachable for weeks
+ * because each had an importer.
+ *
+ *   A module is not done until something a USER can reach calls it.
+ */
+const ENTRY_POINTS = [
+  'extension/builtin/runtime.ts',   // agent tools
+  'extension/builtin/toolCatalog.ts',
+  'agent/runtime/runTurn.impl.ts',  // the turn loop
+  'config/config.ts',               // knob resolution
+];
+
+/**
+ * The package's own `exports` map, which is the honest definition of what an
+ * external consumer can reach. Read from package.json rather than hand-listed,
+ * because a hand-listed set goes stale exactly like the knob list would have.
+ */
+function exportedEntryPoints(): string[] {
+  const pkgPath = path.resolve(SRC, '..', 'package.json');
+  const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as {
+    exports?: Record<string, { default?: string } | string>;
+  };
+  const targets: string[] = [];
+  for (const value of Object.values(pkg.exports ?? {})) {
+    const dist = typeof value === 'string' ? value : value?.default;
+    if (!dist) continue;
+    // ./dist/agent/index.js → agent/index.ts
+    const rel = dist.replace(/^\.\/dist\//, '').replace(/\.js$/, '.ts');
+    if (SOURCE_TEXT.has(path.join(SRC, rel))) targets.push(rel);
+  }
+  return targets;
+}
+
+/**
+ * Every module reachable by following imports from the entry points.
+ *
+ * Imports are resolved RELATIVE TO THE IMPORTING FILE, not by basename. The
+ * first version of this keyed a basename→path map, so every `index.ts` in the
+ * tree collided into one entry and 74% of the package looked unreachable —
+ * a number that measured the bug, not the codebase. A check whose failure mode
+ * is a wrong number nobody can act on is worse than no check.
+ */
+function reachableFromEntryPoints(): Set<string> {
+  const exists = (rel: string): boolean => SOURCE_TEXT.has(path.join(SRC, rel));
+
+  /** `./foo.js` from `a/b.ts` → `a/foo.ts`; also tries `<spec>/index.ts`. */
+  function resolveSpec(fromRel: string, spec: string): string | null {
+    if (!spec.startsWith('.')) return null;
+    const base = path.posix.join(path.posix.dirname(fromRel.split(path.sep).join('/')), spec);
+    const asFile = `${base.replace(/\.js$/, '')}.ts`.split('/').join(path.sep);
+    if (exists(asFile)) return asFile;
+    const asIndex = path.join(base.replace(/\.js$/, ''), 'index.ts');
+    return exists(asIndex) ? asIndex : null;
+  }
+
+  const seen = new Set<string>();
+  const queue: string[] = [];
+  for (const entry of [...ENTRY_POINTS, ...exportedEntryPoints()]) {
+    if (exists(entry)) queue.push(entry);
+  }
+
+  while (queue.length > 0) {
+    const rel = queue.pop()!;
+    if (seen.has(rel)) continue;
+    seen.add(rel);
+    const text = SOURCE_TEXT.get(path.join(SRC, rel));
+    if (!text) continue;
+    for (const m of text.matchAll(/from\s+['"]([^'"]+)['"]/g)) {
+      const target = resolveSpec(rel, m[1]!);
+      if (target && !seen.has(target)) queue.push(target);
+    }
+  }
+  return seen;
+}
+
+/**
+ * Modules that are imported by something, yet reachable by nobody.
+ *
+ * This is the shape the importer check misses and Part A shipped.
+ */
+function unreachableButImported(): string[] {
+  const reachable = reachableFromEntryPoints();
+  const orphans = new Set(modulesWithoutImporters());
+  return NON_TEST
+    .map((f) => path.relative(SRC, f))
+    .filter((rel) => !reachable.has(rel) && !orphans.has(rel))
+    .sort();
+}
+
+/**
+ * The baseline for unreachable-but-imported clusters.
+ *
+ * Pinned to today's exact count: 86 of 782 modules. A RISE means a PR added
+ * code that other code calls while nothing a user can do reaches any of it —
+ * the Part A shape, caught the day it lands instead of weeks later in the
+ * product.
+ *
+ * Most of the 86 are sub-barrels (`agent/fs/index.ts` and friends) re-exported
+ * by a parent, which the walk does not credit. That is a known imprecision, and
+ * it is fine for a rise-detector: the number only has to be STABLE to be
+ * useful, not minimal.
+ */
+const UNREACHABLE_CLUSTER_BASELINE = 86;
+
+test('E1/H4 — the count of imported-but-UNREACHABLE modules does not rise', () => {
+  const unreachable = unreachableButImported();
+  assert.ok(
+    unreachable.length <= UNREACHABLE_CLUSTER_BASELINE,
+    `Imported-but-unreachable modules rose to ${unreachable.length} ` +
+      `(baseline ${UNREACHABLE_CLUSTER_BASELINE}).\n` +
+      'Something was added that other code calls, but that nothing a USER can reach ' +
+      'calls. That is how Part A shipped five modules nobody could get to.\n\n' +
+      unreachable.slice(0, 12).map((o) => `  - ${o}`).join('\n'),
+  );
+});
+
+test('E1/H4 — the stack modules ARE reachable now that the PR router wires them', () => {
+  // The regression test for the thing H1 fixed. If `prRouter` stops being
+  // reached from an entry point, stacked PRs are unreachable from the product
+  // again and this fails.
+  const reachable = reachableFromEntryPoints();
+  for (const wired of [
+    path.join('review', 'prRouter.ts'),
+    path.join('review', 'planToStack.ts'),
+    path.join('review', 'stackedPr.ts'),
+  ]) {
+    assert.ok(reachable.has(wired), `${wired} is not reachable from any entry point`);
+  }
+});

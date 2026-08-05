@@ -642,6 +642,15 @@ export interface CliKnobs {
    */
   executionEngine?: 'loop' | 'graph';
   /**
+   * ADR-028 H3 — how eagerly a change becomes a stacked pull request.
+   *
+   * `auto` advises (plan shape, or diff size + separability); `always` stacks
+   * whenever the plan permits it; `never` opts out. Defaults to `auto`, because
+   * someone who has never used stacks should not have their first pull request
+   * silently become one.
+   */
+  stackingMode?: 'auto' | 'always' | 'never';
+  /**
    * CC-CONFIG-A5 — provenance/attribution controls for generated commit + PR bodies.
    * `sessionUrl` (default true): include the BrainRouter provenance/session footer.
    * Set false to omit it (private repos / clean history).
@@ -1208,6 +1217,7 @@ export interface ResolvedCliKnobs {
   safeMode: boolean;
   /** ADR-027 D2 — turn loop or typed graph executor. Both ship; this selects. */
   executionEngine: 'loop' | 'graph';
+  stackingMode: 'auto' | 'always' | 'never';
   /** CC-CONFIG-A5 — provenance footer controls for commit/PR bodies. */
   attribution: { sessionUrl: boolean };
   /** CC-CONFIG-A6 — hide bundled skills from listings. */

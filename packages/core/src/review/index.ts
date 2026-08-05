@@ -47,6 +47,25 @@ export {
   type StackAdvice,
 } from './stackedPr.js';
 
+// ADR-028 H1/H2 — the PR create path. Exported so the decision is reachable
+// from the public surface rather than only from inside this folder: a cluster
+// that imports only itself is exactly as inert as an orphan, which is how Part
+// A shipped five modules nobody could get to.
+export {
+  routePullRequest,
+  describeRoute,
+  resolveStackingMode,
+  type PrRoute,
+  type StackingMode,
+} from './prRouter.js';
+export {
+  proposeStackFromPlan,
+  mayProposeStack,
+  type PlanPhaseLike,
+  type StackProposal,
+} from './planToStack.js';
+
+
 // ADR-028 A3 — gh stack exit-code contract.
 export {
   classifyStackExit,
