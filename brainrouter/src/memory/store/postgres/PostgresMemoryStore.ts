@@ -133,6 +133,7 @@ import {
 import * as sensory from "./queries/sensoryQueries.js";
 import * as meetings from "./queries/meetingsQueries.js";
 import * as track from "./queries/trackQueries.js";
+import * as planner from "./queries/plannerQueries.js";
 import * as teams from "./queries/teamsQueries.js";
 import * as chatThreads from "./queries/chatThreadsQueries.js";
 import * as vulnerability from "./queries/vulnerabilityQueries.js";
@@ -557,6 +558,18 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   // ── Track (migration 034) — org-scoped, collaborative work items ──
   public createTrackItem(input: track.CreateTrackItemInput): Promise<track.TrackItemRow> { return track.createTrackItem(this.exec, input); }
   public listTrackItems(orgId: string, opts?: { includeArchived?: boolean; limit?: number }): Promise<track.TrackItemRow[]> { return track.listTrackItems(this.exec, orgId, opts); }
+
+  // ADR-028 Part D — planner (migration 051). Keyed by (org, USER): a planner is
+  // personal, so the user is part of the key rather than an author column.
+  public listPlannerItemsSince(orgId: string, userId: string, since?: string): Promise<planner.PlannerItemRow[]> { return planner.listPlannerItemsSince(this.exec, orgId, userId, since); }
+  public getPlannerItem(orgId: string, userId: string, id: string): Promise<planner.PlannerItemRow | null> { return planner.getPlannerItem(this.exec, orgId, userId, id); }
+  public upsertPlannerItem(orgId: string, userId: string, item: Parameters<typeof planner.upsertPlannerItem>[3]): Promise<planner.PlannerItemRow> { return planner.upsertPlannerItem(this.exec, orgId, userId, item); }
+  public latestPlannerRevision(orgId: string, userId: string): Promise<string> { return planner.latestPlannerRevision(this.exec, orgId, userId); }
+  public wasOperationApplied(orgId: string, userId: string, key: string): Promise<boolean> { return planner.wasOperationApplied(this.exec, orgId, userId, key); }
+  public recordOperationApplied(orgId: string, userId: string, key: string, itemId: string): Promise<void> { return planner.recordOperationApplied(this.exec, orgId, userId, key, itemId); }
+  public listPlannerBlocks(orgId: string, userId: string): Promise<planner.PlannerBlockRow[]> { return planner.listPlannerBlocks(this.exec, orgId, userId); }
+  public upsertPlannerBlock(orgId: string, userId: string, block: planner.PlannerBlockRow): Promise<planner.PlannerBlockRow> { return planner.upsertPlannerBlock(this.exec, orgId, userId, block); }
+  public compactCompletedPlannerItems(orgId: string, userId: string, retentionDays: number): Promise<number> { return planner.compactCompletedPlannerItems(this.exec, orgId, userId, retentionDays); }
   public getTrackItem(orgId: string, id: string): Promise<track.TrackItemRow | null> { return track.getTrackItem(this.exec, orgId, id); }
   public getTrackItemBySourceRef(orgId: string, sourceRef: string): Promise<track.TrackItemRow | null> { return track.getTrackItemBySourceRef(this.exec, orgId, sourceRef); }
   public transitionTrackItem(orgId: string, id: string, status: string, statusCategory: track.TrackStatusCategory): Promise<track.TrackItemRow | null> { return track.transitionTrackItem(this.exec, orgId, id, status, statusCategory); }

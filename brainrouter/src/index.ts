@@ -52,6 +52,7 @@ import { decideMcpAcceptPromotion } from './api/mcpAcceptHeader.js';
 import { authRouter, usersRouter, sessionsRouter } from './api/routes/identity/index.js';
 import { meetingsRouter, publicMeetingsRouter } from './api/routes/meetings.js';
 import { trackRouter } from './api/routes/track.js';
+import { plannerRouter } from './api/routes/planner.js';
 import { teamsRouter } from './api/routes/teams.js';
 import { chatThreadsRouter } from './api/routes/chatThreads.js';
 import { publicSharePageRouter } from './api/routes/publicShare.js';
@@ -304,6 +305,8 @@ if (USE_HTTP) {
   app.use("/api/meetings", meetingsRouter);
   app.use("/api/public/meetings", publicMeetingsRouter);
   app.use("/api/track", trackRouter);
+  // ADR-028 Part D — per-user planner sync (migration 051).
+  app.use("/api/planner", plannerRouter);
   app.use("/api/teams", teamsRouter);
   app.use("/api/chat/threads", chatThreadsRouter);
   // Human-facing public share page — the /m/<token> link minted for a public meeting.
