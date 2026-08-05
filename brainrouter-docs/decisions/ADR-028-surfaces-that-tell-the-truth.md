@@ -400,6 +400,58 @@ Completed items keep detail 90 days, then compact. The planner is a working surf
 
 ---
 
+#### D9 · The planner is user-scoped, and the backend holds the truth
+
+The first implementation got this wrong and it is worth recording why, because the mistake is
+attractive: the planner was written to a workspace-local JSON file, following the artifact and
+requirement stores.
+
+That is wrong twice over. A planner is **personal**, not per-repository — scoped to a workspace,
+"today" changes depending on which repo you happen to have open, which is nonsense. And a
+device-local file means two devices never see each other, so the entire D3/D4 conflict apparatus
+can never fire. We built machinery for a problem the topology made impossible.
+
+**Truth lives in Postgres, scoped `(org_id, user_id, id)`**, following the tenancy convention every
+other table uses. Each device keeps a local cache plus its outbox — the cache is what makes the
+surface instant and the outbox is what makes offline real rather than a banner.
+
+**The planner works with no backend at all.** Solo local mode is not a degraded tier: the cache is
+authoritative until a server is configured, at which point the outbox drains and the merge rules
+decide. This is the same solo↔team↔org partitioning the rest of the product uses, and the local-first
+design in D2 already assumes it.
+
+#### D10 · The dashboard is a device, not a privileged writer
+
+The gap D1–D8 did not cover, and it would have produced silent data loss.
+
+The dashboard is online-only, so the obvious implementation writes straight to the server: no local
+cache, no outbox, no HLC stamp. Then a desktop edit made offline arrives **stamped** and meets a
+server value that is **unstamped**, and the merge is undefined. Whichever way it resolved would be
+arbitrary — which is exactly the quiet loss D4 exists to refuse.
+
+> **The dashboard carries its own `deviceId` and stamps through the same path as every other client.
+> There is no writer that skips the merge rules.**
+
+One merge path, exercised by every surface, so the rarely-taken branch is not the one that decides
+your data. A privileged writer would also mean the conflict UI could never be reached from the
+dashboard, which is where a multi-device user is most likely to encounter one.
+
+#### D11 · Sync is pull-then-push, and never destructive on either side
+
+- **Pull `changed-since`**, merge locally by HLC, then **push the outbox.** Pulling first means a push
+  never overwrites something it has not seen.
+- **The server merges too, with the same rules.** A client that is behind must not be able to win by
+  pushing last; the server applies D4 against its own state rather than accepting a payload.
+- **A rejected operation is returned, not dropped.** The client keeps it in the outbox and surfaces it
+  after `ATTEMPTS_BEFORE_SURFACING` rather than retrying invisibly.
+- **A first sync never deletes.** An empty local cache meeting a populated server is a new device, not
+  a mass deletion — and the reverse, an empty server meeting a populated client, is a fresh account,
+  not a signal to clear the device. Deletions travel only as tombstones with stamps.
+
+**Three edge cases the tests must cover**, because each destroys data if it is wrong: same field
+edited on two devices while both are offline; an item deleted on one device and edited on another;
+and a device returning after longer than the outbox retention, which must refresh rather than replay.
+
 ### Part E — The systemic fix
 
 #### E1 · Sweep for values nobody reads
@@ -417,6 +469,208 @@ ships. So:
 > is a different test from the one proving the unit works.**
 
 ---
+
+---
+
+## Part F — Comprehension *(PROPOSED — not implemented, awaiting review)*
+
+### The problem this part exists for
+
+Every decision so far makes a surface stop lying about **state**. Part F is about a different
+failure, which the rest of the ADR does not touch and which is arguably worse:
+
+> **A surface can be entirely truthful and still leave you not understanding your own system.**
+
+An agent that produces correct work faster than a person can absorb it produces a codebase its owner
+did not write, cannot explain, and will eventually be unable to change. Nothing has lied. Every
+receipt was accurate. And the person is still worse off than if they had written less, slower.
+
+This is not hypothetical for this repository. This release alone added roughly seventy modules across
+five workspaces, and the owner's most useful question about it was *"why don't I see anything for
+calendar, todo"* — a gap that existed for hours because the summary said "complete" and the person
+had no way to check that claim short of opening the app.
+
+**Comprehension is not documentation.** Docs describe what exists. What is missing is the ability to
+know, at the moment of accepting work, whether you actually understand what you just accepted.
+
+### F1 · Comprehension is profile-shaped, not a single feature
+
+Different work fails comprehension in different ways, so the same mechanism cannot serve all three.
+
+| Profile | What they must not lose | What the agent owes them |
+|---|---|---|
+| **Engineer** | The ability to change this later without archaeology | Blast radius, what breaks if the assumption is wrong, which decision would be expensive to reverse |
+| **Researcher** | Calibration — knowing how much to believe | Sources with what each actually supports, confidence, **and what would falsify the conclusion** |
+| **Tutor / learner** | The skill itself | The reasoning, at the depth asked for, and the parts they should try before being told |
+
+Profiles already exist (ADR-021 workspace manifests). This is a comprehension mode attached to one,
+not a new axis.
+
+### F2 · Explain-back, at a depth the human chooses
+
+After substantial work, the agent can explain what it produced — but the **depth is chosen by the
+person, not the agent**, because an agent that decides how much you need is guessing at the one thing
+only you know.
+
+Three depths, and the names matter more than the mechanism:
+
+- **`what`** — what changed and where. What a good diff summary already gives.
+- **`why`** — the decisions and what was rejected. *The diff cannot show the road not taken, and that
+  is usually the part worth knowing.*
+- **`teach`** — the reasoning from first principles, assuming you will maintain this alone.
+
+**Never volunteered on a schedule.** Offered once when the work is genuinely large, and then only if
+asked. An agent that explains itself after every turn is ADR-027 §1's notification failure again,
+and it trains the reflex that makes the important explanation get skipped.
+
+### F3 · The decision log is a by-product, not a chore
+
+The agent already commits to a plan (A7), records phases, and produces reasoning it currently throws
+away. What is missing is the **rejected** alternative — "we did X" is recoverable from the diff;
+*"we considered Y and rejected it because Z"* is not, and it is what the next person needs when Z
+stops being true.
+
+> **One line per non-obvious decision, written when it is made, never reconstructed afterwards.**
+
+Reconstruction is the failure mode: a decision log written at the end is a rationalisation of what
+happened, not a record of what was decided.
+
+### F4 · Verification hand-off — the agent says what it could NOT check
+
+The most useful comprehension artifact is not a summary. It is the honest boundary of the agent's own
+confidence:
+
+- what was verified, and *how* (test, run, screenshot — with the evidence)
+- what was **not** verified and why
+- **the specific thing a human should look at**, chosen because the agent cannot check it
+
+This is the direct extension of B1's principle to work product. B1 refuses to claim a message was
+read; F4 refuses to claim work was validated when what happened was that it compiled.
+
+### F5 · The tutor profile teaches instead of answering
+
+For a learner, a correct answer delivered instantly is the *worst* outcome — it looks like help and
+removes the thing they came for.
+
+- Asks what the learner thinks first, on genuinely instructional questions.
+- Gives the smallest hint that unblocks, not the solution.
+- **Never for a blocked professional under time pressure.** Socratic method aimed at someone
+  debugging production at 2am is obstruction wearing a teacher's costume. The profile is opt-in and
+  the escape hatch — *"just tell me"* — is always one word away and never questioned.
+
+### F6 · Research output carries its own falsifiability
+
+For the researcher profile, a claim ships with what would overturn it. A conclusion nobody could
+disprove is not a finding, it is a position — and the difference is invisible in prose written
+confidently.
+
+Sources are cited **for what they actually support**, not appended as a bibliography. A link that
+supports one sentence of five, listed at the bottom, reads as though it supports all five.
+
+### What Part F must NOT become
+
+Every one of these has a plausible version that makes the product worse, so they are refused by name:
+
+- **Quizzing the person on their own codebase.** Patronising, and it makes the surface something to
+  avoid.
+- **Gating anything on comprehension.** A merge blocked until you prove you understood is
+  paternalistic, and the reliable response is to click through it.
+- **Summaries that restate the diff in prose.** Longer, not clearer, and they crowd out the parts
+  that could not be read off the diff.
+- **Comprehension theatre** — a confident explanation of work the agent did not actually verify is a
+  *worse* failure than no explanation, because it transfers unearned confidence. F4 exists precisely
+  to prevent this, and if F2 ever conflicts with F4, F4 wins.
+
+### Open questions for review
+
+1. **Does F5's tutor profile belong in this product at all**, or is it a different product wearing
+   the same shell?
+2. **Is F3's decision log worth the friction** if nobody reads it? It costs the agent little and the
+   human nothing — but an artifact nobody opens is its own kind of lie.
+3. **Should F4 be mandatory rather than offered?** It is the one here with no plausible downside, and
+   the argument for making it a default is strong.
+
+---
+
+## Part G — The side panel *(PROPOSED — not implemented, awaiting review)*
+
+Part F needs somewhere to live, and the honest answer is that **there is no room**. The panel has
+twenty-six registered ids and a tab strip that already overflows. Adding comprehension surfaces to it
+would make the crowding worse and bury the thing they exist to make visible.
+
+So G comes first, and it also fixes two behaviours that are wrong today independent of F.
+
+### G1 · The agent may make a panel AVAILABLE; only the human makes one ACTIVE
+
+**The bug:** `ensurePanel` does three things at once — adds the tab, makes it the active tab, and
+opens the panel (`usePanels.ts:167`). Twenty-one call sites use it, and many fire from agent
+activity: `diff` ×6, `tasks` ×3, `review` ×3, `browser` ×3. So the agent editing a file yanks you off
+whatever you were reading.
+
+This is the same category as everything else in this ADR. The panel is claiming *"this is what you
+want to look at now"* — a claim about your attention that nothing established.
+
+> **Split the verb.** `revealPanel` (human intent: add, activate, open) versus `offerPanel` (agent
+> intent: ensure the tab exists, mark it with an unread dot, change nothing about focus).
+
+Every agent-triggered call becomes `offerPanel`. The dot is how you learn a diff is waiting without
+being moved to it. **The one exception is an interaction request** — a permission prompt is not the
+agent deciding what interests you, it is the agent blocked until you answer.
+
+### G2 · Closed at launch, and closed means closed
+
+**The bug:** `sidePanelOpen` and `sideTabs` both restore from `localStorage`
+(`usePanels.ts:66–86`), so a session that ended with six tabs open starts with six tabs open. That is
+defensible as a general principle and wrong here, because panel state accumulates across a long
+session and nobody ever prunes it.
+
+> **The app starts with the panel closed and no tabs open.** Every launch begins from the same clean
+> state.
+
+Panel state is *session* state, not preference state — it reflects what you were doing an hour ago,
+not how you want to work. The width, the pinned flag and the dock height are genuine preferences and
+are still persisted; the open/closed state and the tab list are not.
+
+A **"reopen last session's panels"** affordance is available for the case where the restore was
+actually wanted, so this removes an assumption rather than a capability.
+
+### G3 · Group the panels, because twenty-six is not a tab strip
+
+Twenty-six flat ids is a list you scan, not a strip you navigate. Grouped by what you are doing:
+
+| Group | Panels |
+|---|---|
+| **Code** | Files, Editor, Diff, Search, Terminal |
+| **Work** | Plan, Tasks, Review, CI, Worktrees, **Stack** |
+| **Knowledge** | Memory, Knowledge, Artifacts, Annotations, Requirements |
+| **Understand** *(new — Part F)* | Explain, Decisions, Verification |
+| **Environment** | Tools, Servers, Browser, Context |
+
+Only the active group's tabs are in the strip. The grouping is not new information — it is the
+structure the panel list already has implicitly, made visible.
+
+### G4 · Comprehension lives in "Understand", never inline
+
+Part F's surfaces go in their own group, for a reason that is not just space:
+
+- **Explain** (F2) — the explain-back, at the depth you picked.
+- **Decisions** (F3) — the decision log, newest first.
+- **Verification** (F4) — what was checked, what was not, and the specific thing to look at.
+
+Putting these inline in chat would make them scroll away, which is the opposite of what they are for:
+you want them when you are *deciding whether to accept work*, which is minutes-to-days after the
+message that produced them. A panel persists; a message is gone by the next turn.
+
+**The Verification panel is the one that should carry an unread dot** by default, because F4 is the
+mechanism that stops "it compiled" being reported as "it works".
+
+### Open questions for review
+
+1. **Does G2's clean start need the "reopen last session" affordance at all**, or is it a feature
+   nobody uses that exists to soften a decision that is simply correct?
+2. **Is G3's grouping worth the navigation cost** — one more click to reach a panel — against the
+   scanning cost it removes?
+3. **Should `offerPanel`'s unread dot decay?** A dot that has been there for two days is furniture.
 
 ## 3. Out of scope
 

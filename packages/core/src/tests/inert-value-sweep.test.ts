@@ -158,6 +158,42 @@ function modulesWithoutImporters(): string[] {
  */
 const ORPHAN_MODULE_BASELINE = 34;
 
+/**
+ * Modules that ARE orphans and are known to be, with the reason.
+ *
+ * The baseline alone was not enough, and the failure is instructive: it was
+ * measured AFTER the planner modules landed, so the sweep built to catch
+ * "declared but never wired" certified two instances of exactly that as the
+ * floor. A number cannot tell you whether the tree it was measured against was
+ * already wrong.
+ *
+ * So orphans that are known and intended get NAMED here. Anything orphaned and
+ * not on this list is an accident; anything on this list is a debt someone
+ * wrote down.
+ */
+const KNOWN_UNWIRED = new Map<string, string>([
+  ['planner/agentContext.ts', 'ADR-028 D6 — awaits the planner tool registration'],
+  ['planner/outbox.ts', 'ADR-028 D2 — awaits the sync client (D11)'],
+  ['planner/plannerService.ts', 'ADR-028 D9 — awaits the desktop/dashboard/CLI surfaces'],
+]);
+
+test('E1 — known-unwired modules are NAMED, not absorbed by the baseline', () => {
+  // The sweep must not launder its own author's orphans.
+  const orphans = new Set(modulesWithoutImporters());
+  for (const [rel, reason] of KNOWN_UNWIRED) {
+    assert.ok(reason.length > 10, `${rel} needs a real reason, not a placeholder`);
+  }
+  const undocumented = [...orphans].filter(
+    (o) => o.startsWith('planner/') && !KNOWN_UNWIRED.has(o),
+  );
+  assert.deepEqual(
+    undocumented,
+    [],
+    'A planner module became an orphan without being written down:\n' +
+      undocumented.map((o) => `  - ${o}`).join('\n'),
+  );
+});
+
 test('E1 — the count of modules with no importer does not RISE', () => {
   const orphans = modulesWithoutImporters();
   assert.ok(
