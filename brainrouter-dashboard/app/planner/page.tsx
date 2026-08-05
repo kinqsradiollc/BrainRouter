@@ -102,6 +102,22 @@ function Planner() {
   useEffect(() => { void load(); }, [load]);
 
   /**
+   * ADR-028 D2 — the planner reconciles on its own.
+   *
+   * No Sync button here either. A button asking you to press it makes staying
+   * in sync YOUR job, and the moment you forget once the planner is quietly
+   * wrong — worse than being visibly behind. Interval plus focus, because
+   * coming back to the tab after an hour elsewhere is exactly when the interval
+   * is too slow.
+   */
+  useEffect(() => {
+    const tick = (): void => { if (!document.hidden) void load(); };
+    const timer = window.setInterval(tick, 30_000);
+    window.addEventListener("focus", tick);
+    return () => { window.clearInterval(timer); window.removeEventListener("focus", tick); };
+  }, [load]);
+
+  /**
    * Push one operation, stamped.
    *
    * Goes through `/push` rather than a REST write, so the SERVER merges it
@@ -164,6 +180,7 @@ function Planner() {
     () => items.filter((i) => !i.deletedAt && i.completed?.value),
     [items],
   );
+  const blocks = useMemo(() => scheduledBlocksFrom(items), [items]);
   const conflicted = useMemo(
     () => items.filter((i) => i.conflicts && Object.keys(i.conflicts).length > 0),
     [items],
@@ -209,6 +226,8 @@ function Planner() {
               </span>
             </div>
           ) : null}
+
+          {blocks.length > 0 ? <WeekStrip blocks={blocks} /> : null}
 
           {open.map((item) => (
             <Row key={item.id} item={item} onToggle={() => void toggle(item)} />
@@ -277,6 +296,83 @@ function Row({ item, onToggle }: { item: PlannerItem; onToggle: () => void }) {
         // for, matching the desktop mode.
         <span className={styles.due}>{overdue ? `carried over · ${due.slice(0, 10)}` : due.slice(0, 10)}</span>
       ) : null}
+    </div>
+  );
+}
+
+
+/* ------------------------------------------------------------ the week strip */
+
+interface DayBlock { date: string; title: string; hour: number; minutes: number }
+
+/**
+ * Scheduled work, derived from the items the API returns.
+ *
+ * The dashboard reads `/api/planner/items`, which carries planner items rather
+ * than time blocks — so this shows what is DUE across the week rather than
+ * inventing block data it does not have. Showing a week that pretends to be the
+ * desktop's time grid, populated from a different shape, would be the kind of
+ * surface this ADR is about.
+ */
+function scheduledBlocksFrom(items: PlannerItem[]): DayBlock[] {
+  return items
+    .filter((i) => !i.deletedAt && !i.completed?.value && typeof i.dueDate?.value === "string")
+    .map((i) => {
+      const due = new Date(i.dueDate!.value as string);
+      return {
+        date: `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, "0")}-${String(due.getDate()).padStart(2, "0")}`,
+        title: i.title.value,
+        hour: due.getHours(),
+        minutes: 60,
+      };
+    });
+}
+
+const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+/** Monday of this week, so the strip starts where the desktop calendar does. */
+function mondayOf(date: Date): Date {
+  const d = new Date(date);
+  const day = d.getDay();
+  d.setDate(d.getDate() + (day === 0 ? -6 : 1 - day));
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+/**
+ * A seven-day strip of what is due.
+ *
+ * Deliberately NOT a copy of the desktop's hour grid. A web planner you check
+ * between meetings answers "what is coming" — the hour-by-hour view is for the
+ * machine where you actually do the work, and building a second one here would
+ * mean two layouts to keep honest.
+ */
+function WeekStrip({ blocks }: { blocks: DayBlock[] }) {
+  const start = mondayOf(new Date());
+  const todayKey = (() => {
+    const t = new Date();
+    return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+  })();
+
+  const days = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(start.getTime() + i * 86_400_000);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    return { key, weekday: WEEKDAYS[i]!, num: d.getDate(), items: blocks.filter((b) => b.date === key) };
+  });
+
+  return (
+    <div className={styles.week}>
+      {days.map((day) => (
+        <div key={day.key} className={`${styles.weekDay}${day.key === todayKey ? ` ${styles.weekToday}` : ""}`}>
+          <div className={styles.weekHead}>
+            <span>{day.weekday}</span>
+            <strong>{day.num}</strong>
+          </div>
+          {day.items.map((b) => (
+            <div key={`${b.title}-${b.hour}`} className={styles.weekItem}>{b.title}</div>
+          ))}
+        </div>
+      ))}
     </div>
   );
 }

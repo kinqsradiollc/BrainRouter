@@ -10,7 +10,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   groupFor, sortForToday, GROUP_LABEL, canEdit, whyReadOnly,
-  weekStart, weekView, unscheduledBlocks, isNote, noteList,
+  weekStart, weekView, unscheduledBlocks, isNote, noteList, localDateOf,
   emptyMessage, conflictBanner,
   type PlannerItemView, type PlannerBlockView,
 } from './plannerView.js';
@@ -81,10 +81,13 @@ test('the week starts on Monday, whatever day you open it', () => {
   assert.equal(weekStart('2026-08-09'), '2026-08-03', 'Sunday → the Monday BEFORE it');
 });
 
+/** A local wall-clock time on 4 Aug 2026 — what a person means by "9am". */
+const localOn4th = (hour: number): string => new Date(2026, 7, 4, hour, 0).toISOString();
+
 test('a week is seven days, each carrying its own blocks and total', () => {
   const days = weekView([
-    block({ id: 'b1', scheduledFor: '2026-08-04T09:00:00.000Z', estimateMinutes: 60 }),
-    block({ id: 'b2', scheduledFor: '2026-08-04T11:00:00.000Z', estimateMinutes: 30 }),
+    block({ id: 'b1', scheduledFor: localOn4th(9), estimateMinutes: 60 }),
+    block({ id: 'b2', scheduledFor: localOn4th(11), estimateMinutes: 30 }),
   ], '2026-08-03', TODAY);
   assert.equal(days.length, 7);
   const tuesday = days.find((d) => d.date === '2026-08-04')!;
@@ -96,8 +99,8 @@ test('a week is seven days, each carrying its own blocks and total', () => {
 
 test('blocks within a day are in clock order', () => {
   const days = weekView([
-    block({ id: 'late', scheduledFor: '2026-08-04T16:00:00.000Z' }),
-    block({ id: 'early', scheduledFor: '2026-08-04T08:00:00.000Z' }),
+    block({ id: 'late', scheduledFor: localOn4th(16) }),
+    block({ id: 'early', scheduledFor: localOn4th(8) }),
   ], '2026-08-03', TODAY);
   const tuesday = days.find((d) => d.date === '2026-08-04')!;
   assert.deepEqual(tuesday.blocks.map((b) => b.id), ['early', 'late']);
@@ -108,7 +111,7 @@ test('unscheduled blocks are kept, not hidden by the calendar', () => {
   // planners get abandoned by the people who most need one.
   const loose = unscheduledBlocks([
     block({ id: 'loose' }),
-    block({ id: 'timed', scheduledFor: '2026-08-04T09:00:00.000Z' }),
+    block({ id: 'timed', scheduledFor: localOn4th(9) }),
     block({ id: 'done', completedAt: '2026-08-04T10:00:00.000Z' }),
   ]);
   assert.deepEqual(loose.map((b) => b.id), ['loose']);
@@ -149,4 +152,26 @@ test('conflicts get a banner; a clean planner gets none', () => {
   assert.match(text, /changed in two places/);
   assert.match(text, /Both versions were kept/);
   assert.match(text, /pick which/);
+});
+
+/* -------------------------------------- the local-date bucketing bug */
+
+test('a block is bucketed by LOCAL date, not the UTC prefix', () => {
+  // Blocks are POSITIONED by local hours, so bucketing by UTC date puts a
+  // 9:30am Wednesday meeting in Tuesday's column for anyone east of Greenwich.
+  // The event renders in the right place on the wrong day, which reads as a
+  // data problem rather than a rendering one.
+  const local = new Date(2026, 7, 5, 9, 30);       // 5 Aug 2026, 09:30 local
+  assert.equal(localDateOf(local.toISOString()), '2026-08-05');
+});
+
+test('the week groups blocks by the day you would say they are on', () => {
+  const nine = new Date(2026, 7, 5, 9, 0).toISOString();
+  const late = new Date(2026, 7, 5, 20, 0).toISOString();
+  const days = weekView(
+    [block({ id: 'a', scheduledFor: nine }), block({ id: 'b', scheduledFor: late })],
+    '2026-08-03', '2026-08-05',
+  );
+  const wed = days.find((d) => d.date === '2026-08-05')!;
+  assert.deepEqual(wed.blocks.map((b) => b.id).sort(), ['a', 'b']);
 });

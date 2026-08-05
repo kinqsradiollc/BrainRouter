@@ -109,6 +109,23 @@ export interface CalendarDay {
   isToday: boolean;
 }
 
+/**
+ * The LOCAL calendar date a block falls on.
+ *
+ * Not `iso.slice(0, 10)`, which is the UTC date. Blocks are positioned by local
+ * hours (`getHours`), so bucketing them by UTC date puts a 9:30am Wednesday
+ * meeting in Tuesday's column for anyone east of Greenwich — the event renders
+ * in the right place on the wrong day, which looks like a data problem rather
+ * than a rendering one.
+ */
+export function localDateOf(iso: string): string {
+  const d = new Date(iso);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 /** Seven days from `startDate`, each with its blocks. */
 export function weekView(
   blocks: readonly PlannerBlockView[],
@@ -119,7 +136,7 @@ export function weekView(
   const start = new Date(`${startDate}T00:00:00.000Z`);
   for (let i = 0; i < 7; i += 1) {
     const date = new Date(start.getTime() + i * 86_400_000).toISOString().slice(0, 10);
-    const forDay = blocks.filter((b) => b.scheduledFor?.slice(0, 10) === date);
+    const forDay = blocks.filter((b) => b.scheduledFor && localDateOf(b.scheduledFor) === date);
     days.push({
       date,
       blocks: forDay.sort((a, b) => (a.scheduledFor ?? '').localeCompare(b.scheduledFor ?? '')),
@@ -205,4 +222,133 @@ export function conflictBanner(items: readonly PlannerItemView[]): string | null
   if (conflicted.length === 0) return null;
   const n = conflicted.length;
   return `${n} item${n === 1 ? '' : 's'} changed in two places. Both versions were kept — pick which to keep.`;
+}
+
+/* ------------------------------------------------ the time grid (calendar) */
+
+/**
+ * A block positioned on a day column.
+ *
+ * Percentages rather than pixels so the grid scales with the panel — a
+ * calendar that only looks right at one width is a calendar people stop
+ * resizing.
+ */
+export interface PositionedBlock {
+  block: PlannerBlockView;
+  /** Distance from the top of the day column, 0–100. */
+  topPct: number;
+  /** Height as a share of the day, 0–100. */
+  heightPct: number;
+  /** Which overlap lane this sits in, and how many lanes the cluster needs. */
+  lane: number;
+  lanes: number;
+}
+
+/** The hours a day column shows. Outside these, blocks clamp to the edge. */
+export const DAY_START_HOUR = 7;
+export const DAY_END_HOUR = 21;
+const DAY_MINUTES = (DAY_END_HOUR - DAY_START_HOUR) * 60;
+
+/** Shortest block that still shows its title. Below this, blocks are unreadable. */
+const MIN_HEIGHT_PCT = 2.2;
+
+function minutesFromDayStart(iso: string): number {
+  const d = new Date(iso);
+  return (d.getHours() - DAY_START_HOUR) * 60 + d.getMinutes();
+}
+
+/**
+ * Lay out one day's blocks, side by side where they overlap.
+ *
+ * Overlapping events stacked on top of each other hide one entirely, which is
+ * the single most common way a naive calendar loses information. Clustering
+ * them into lanes is what Google Calendar does and it is not optional.
+ */
+export function layOutDay(blocks: readonly PlannerBlockView[]): PositionedBlock[] {
+  const timed = blocks
+    .filter((b) => b.scheduledFor)
+    .map((b) => ({
+      block: b,
+      start: minutesFromDayStart(b.scheduledFor!),
+      end: minutesFromDayStart(b.scheduledFor!) + Math.max(15, b.estimateMinutes),
+    }))
+    .sort((a, b) => a.start - b.start || b.end - a.end);
+
+  // Cluster: any run of blocks that transitively overlap shares a lane count,
+  // so two adjacent meetings do not each shrink to half the column width when
+  // only one pair actually collides.
+  const out: PositionedBlock[] = [];
+  let cluster: typeof timed = [];
+  let clusterEnd = -1;
+
+  const flush = (): void => {
+    if (cluster.length === 0) return;
+    const laneEnds: number[] = [];
+    const laneOf = new Map<typeof cluster[number], number>();
+    for (const item of cluster) {
+      let lane = laneEnds.findIndex((end) => end <= item.start);
+      if (lane === -1) { lane = laneEnds.length; laneEnds.push(item.end); }
+      else laneEnds[lane] = item.end;
+      laneOf.set(item, lane);
+    }
+    for (const item of cluster) {
+      const top = Math.max(0, Math.min(DAY_MINUTES, item.start));
+      const height = Math.max(0, Math.min(DAY_MINUTES, item.end) - top);
+      out.push({
+        block: item.block,
+        topPct: (top / DAY_MINUTES) * 100,
+        heightPct: Math.max(MIN_HEIGHT_PCT, (height / DAY_MINUTES) * 100),
+        lane: laneOf.get(item) ?? 0,
+        lanes: laneEnds.length,
+      });
+    }
+    cluster = [];
+    clusterEnd = -1;
+  };
+
+  for (const item of timed) {
+    if (cluster.length > 0 && item.start >= clusterEnd) flush();
+    cluster.push(item);
+    clusterEnd = Math.max(clusterEnd, item.end);
+  }
+  flush();
+  return out;
+}
+
+/** Hour labels down the gutter. */
+export function hourLabels(): Array<{ hour: number; label: string }> {
+  const out: Array<{ hour: number; label: string }> = [];
+  for (let h = DAY_START_HOUR; h <= DAY_END_HOUR; h += 1) {
+    const suffix = h < 12 ? 'am' : 'pm';
+    const display = h % 12 === 0 ? 12 : h % 12;
+    out.push({ hour: h, label: `${display} ${suffix}` });
+  }
+  return out;
+}
+
+/**
+ * Where "now" sits in the day column, or null when outside the visible hours.
+ *
+ * The line that tells you where you are. A calendar without it makes you read
+ * the clock and do arithmetic — which is precisely the work it exists to save.
+ */
+export function nowMarkerPct(now: Date): number | null {
+  const minutes = (now.getHours() - DAY_START_HOUR) * 60 + now.getMinutes();
+  if (minutes < 0 || minutes > DAY_MINUTES) return null;
+  return (minutes / DAY_MINUTES) * 100;
+}
+
+/** Shift a week start by whole weeks, for the prev/next controls. */
+export function shiftWeek(startDate: string, weeks: number): string {
+  const d = new Date(`${startDate}T00:00:00.000Z`);
+  return new Date(d.getTime() + weeks * 7 * 86_400_000).toISOString().slice(0, 10);
+}
+
+/** `Mon 4` — short enough for a column head, unambiguous across months. */
+export function dayHeading(date: string): { weekday: string; day: string } {
+  const d = new Date(`${date}T00:00:00.000Z`);
+  return {
+    weekday: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getUTCDay()]!,
+    day: String(d.getUTCDate()),
+  };
 }

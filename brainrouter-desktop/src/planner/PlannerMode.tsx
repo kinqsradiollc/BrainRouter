@@ -16,9 +16,10 @@
 import React, { useMemo, useState } from 'react';
 import { Icon } from '../icons.js';
 import { Button } from '../components/primitives/Button.js';
+import { CalendarView } from './CalendarView.js';
 import {
   sortForToday, groupFor, GROUP_LABEL, canEdit, whyReadOnly,
-  weekView, weekStart, unscheduledBlocks, noteList, emptyMessage, conflictBanner,
+  weekStart, noteList, emptyMessage, conflictBanner,
   type PlannerItemView, type PlannerBlockView, type PlannerView, type TodayGroup,
 } from '../lib/planner/plannerView.js';
 
@@ -29,7 +30,9 @@ export interface PlannerOps {
   deleteItem: (id: string) => void;
   scheduleBlock: (itemId: string, minutes: number, at?: string) => void;
   resolveConflict: (id: string, field: string, keep: 'ours' | 'theirs') => void;
-  sync: () => void;
+  /** Click an empty calendar slot — the primary gesture of every calendar. */
+  blockTimeAt: (iso: string) => void;
+  openBlock: (blockId: string) => void;
 }
 
 const VIEWS: ReadonlyArray<readonly [PlannerView, string, string]> = [
@@ -53,6 +56,7 @@ export function PlannerMode({
 }): React.ReactElement {
   const [view, setView] = useState<PlannerView>('today');
   const [draft, setDraft] = useState('');
+  const [weekOf, setWeekOf] = useState<string>(() => weekStart(today));
 
   const scheduledIds = useMemo(
     () => new Set(blocks.filter((b) => !b.completedAt).map((b) => b.itemId)),
@@ -87,12 +91,12 @@ export function PlannerMode({
           ))}
         </div>
         <div className="planner-status">
-          {/* Sync state is a fact, never an error. Offline is the normal mode
-              that happens to be syncing (D2). */}
+          {/* ADR-028 D2 — sync runs on its own. A button asking you to press
+              it is the network on the critical path wearing a different
+              costume: it makes staying in sync YOUR job, and the moment you
+              forget once, the planner is quietly wrong. The line reports state
+              as a fact; offline is the normal mode that happens to be syncing. */}
           <span className="planner-sync">{syncState}</span>
-          <Button variant="default" onClick={ops.sync}>
-            <Icon name="refresh" size={11} /> Sync
-          </Button>
         </div>
       </header>
 
@@ -114,7 +118,11 @@ export function PlannerMode({
           driftNote={driftNote} ops={ops}
         />
       ) : view === 'calendar' ? (
-        <CalendarView blocks={blocks} today={today} titleFor={titleFor} />
+        <CalendarView
+          blocks={blocks} today={today} titleFor={titleFor}
+          weekOf={weekOf} onWeek={setWeekOf}
+          onCreateAt={ops.blockTimeAt} onOpenBlock={ops.openBlock}
+        />
       ) : (
         <NotesView items={items} />
       )}
@@ -204,78 +212,6 @@ function ItemRow({ item, ops }: { item: PlannerItemView; ops: PlannerOps }): Rea
           onClick={() => ops.deleteItem(item.id)}>
           <Icon name="close" size={11} />
         </button>
-      ) : null}
-    </div>
-  );
-}
-
-function CalendarView({
-  blocks, today, titleFor,
-}: {
-  blocks: PlannerBlockView[];
-  today: string;
-  titleFor: Record<string, string>;
-}): React.ReactElement {
-  const days = weekView(blocks, weekStart(today), today);
-  const loose = unscheduledBlocks(blocks);
-  const empty = emptyMessage('calendar');
-  const anything = days.some((d) => d.blocks.length > 0) || loose.length > 0;
-
-  if (!anything) {
-    return (
-      <div className="planner-body scroll">
-        <div className="empty">
-          <span className="empty-title">{empty.title}</span>
-          <span className="empty-note">{empty.note}</span>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="planner-body scroll">
-      <div className="planner-week">
-        {days.map((day) => (
-          <div key={day.date} className={`planner-day${day.isToday ? ' today' : ''}`}>
-            <div className="planner-day-head">
-              <span>{day.date.slice(5)}</span>
-              {day.plannedMinutes > 0 ? (
-                <span className="planner-day-total">{Math.round(day.plannedMinutes / 60 * 10) / 10}h</span>
-              ) : null}
-            </div>
-            {day.blocks.map((b) => (
-              <div key={b.id} className="planner-block">
-                <span className="planner-block-title">{titleFor[b.itemId] ?? b.itemId}</span>
-                <span className="planner-block-est">
-                  {b.estimateMinutes}m
-                  {/* Planned against actual — the gap is the useful information. */}
-                  {b.actualMinutes ? ` → ${b.actualMinutes}m` : ''}
-                </span>
-              </div>
-            ))}
-          </div>
-        ))}
-      </div>
-
-      {loose.length > 0 ? (
-        <div className="planner-unscheduled">
-          {/* A today list is a real plan. Forcing everything onto a clock is
-              how planners get abandoned. */}
-          <div className="planner-group">Not scheduled</div>
-          {loose.map((b) => (
-            <div key={b.id} className="planner-block">
-              <span className="planner-block-title">{titleFor[b.itemId] ?? b.itemId}</span>
-              <span className="planner-block-est">{b.estimateMinutes}m</span>
-              {b.carriedOver > 2 ? (
-                // Raised as a question about the task, not a comment about the
-                // person: "moved four times" invites a defence.
-                <span className="planner-carried">
-                  moved {b.carriedOver}× — waiting on something?
-                </span>
-              ) : null}
-            </div>
-          ))}
-        </div>
       ) : null}
     </div>
   );

@@ -5949,3 +5949,94 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .pr-section { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 12px; }
 .pr-section-head { font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
   color: var(--text-faint); padding: 0 14px 8px; }
+
+
+/* ADR-028 G6 — the calendar, as a real time grid.
+   Hours down the gutter, days across, blocks positioned and sized by time.
+   The first version was seven boxes with text in them, which is a list wearing
+   a calendar's layout: it could not show when something starts, how long it
+   runs, or that two things collide. */
+.cal { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+
+.cal-bar { display: flex; align-items: center; gap: 14px; padding: 10px 16px 12px; }
+.cal-nav { display: flex; align-items: center; gap: 4px; }
+.cal-nav-btn { width: 26px; height: 26px; border: 1px solid var(--border); border-radius: 6px;
+  background: transparent; color: var(--text-faint); cursor: pointer; font-size: 15px; line-height: 1; }
+.cal-nav-btn:hover { color: var(--text); border-color: var(--text-faint); }
+.cal-today { border: 1px solid var(--border); border-radius: 6px; background: transparent;
+  color: var(--text); padding: 4px 12px; font-size: 12px; cursor: pointer; }
+.cal-today:disabled { opacity: .4; cursor: default; }
+.cal-range { font-size: 13px; color: var(--text); }
+
+/* Work committed to without a time. Above the grid, never hidden by it (D5). */
+.cal-unscheduled { display: flex; align-items: flex-start; gap: 8px; padding: 0 16px 10px;
+  border-bottom: 1px solid var(--border); }
+.cal-unscheduled-items { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; }
+.cal-chip { display: inline-flex; align-items: baseline; gap: 6px; border: 1px solid var(--border);
+  border-radius: 999px; background: var(--surface-2, transparent); color: var(--text);
+  padding: 3px 11px; font-size: 11px; cursor: pointer; }
+.cal-chip:hover { border-color: var(--text-faint); }
+.cal-chip-est, .cal-chip-moved { color: var(--text-faint); font-size: 10px; font-family: var(--mono); }
+
+.cal-gutter-label { width: 52px; flex: none; font-size: 10px; color: var(--text-faint);
+  text-align: right; padding-top: 4px; font-family: var(--mono); }
+
+.cal-head { display: flex; padding: 0 16px; border-bottom: 1px solid var(--border); }
+.cal-head .cal-gutter { width: 52px; flex: none; }
+.cal-head-day { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 5px;
+  padding: 8px 6px; border-left: 1px solid var(--border); }
+.cal-weekday { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-faint); }
+.cal-daynum { font-size: 15px; }
+.cal-head-day.today .cal-daynum { color: var(--accent, var(--text)); font-weight: 600; }
+.cal-head-day.today .cal-weekday { color: var(--accent, var(--text-faint)); }
+.cal-day-total { margin-left: auto; font-size: 10px; color: var(--text-faint); font-family: var(--mono); }
+
+.cal-grid { flex: 1; min-height: 0; display: flex; overflow-y: auto; padding: 0 16px 20px;
+  position: relative; }
+.cal-grid .cal-gutter { width: 52px; flex: none; position: relative; }
+/* Hour rows are a fixed height so a 30-minute block is visibly half of an hour;
+   percentage heights inside the column then land on the right lines. */
+.cal-hour-label { height: 52px; position: relative; }
+.cal-hour-label span { position: absolute; top: -6px; right: 8px; font-size: 10px;
+  color: var(--text-faint); font-family: var(--mono); }
+
+.cal-col { flex: 1; min-width: 0; position: relative; border-left: 1px solid var(--border);
+  box-sizing: border-box;
+  height: 728px; /* 14 hours × 52px — keeps the column and gutter in lockstep */ }
+.cal-col.today { background: color-mix(in srgb, var(--accent, #888) 4%, transparent); }
+
+/* Hour lines double as click targets: clicking 2pm on Wednesday blocks time at
+   2pm on Wednesday, the gesture people already have from every other calendar. */
+.cal-slot { position: absolute; left: 0; right: 0; height: 52px; border: 0; padding: 0;
+  box-sizing: border-box;
+  background: transparent; border-top: 1px solid var(--border); cursor: pointer; }
+.cal-slot:hover { background: color-mix(in srgb, var(--accent, #888) 8%, transparent); }
+
+.cal-event { position: absolute; overflow: hidden; text-align: left; cursor: pointer;
+  /* border-box, or the border and padding are ADDED to the lane width and every
+     overlapping event bleeds into the next day's column. */
+  box-sizing: border-box;
+  border: 1px solid var(--border); border-left: 2px solid var(--accent, var(--text-faint));
+  border-radius: 5px; background: var(--surface); color: var(--text);
+  padding: 2px 5px; display: flex; flex-direction: column; gap: 0;
+  /* A hair of separation so two adjacent lanes read as two events. */
+  margin-right: 2px; }
+/* A 30-minute block has room for one line. Showing a clipped second line reads
+   as a rendering fault rather than as a short meeting. */
+.cal-event[style*="height: 2"] .cal-event-time,
+.cal-event[style*="height: 3."] .cal-event-time { display: none; }
+.cal-event:hover { border-color: var(--text-faint); z-index: 2; }
+.cal-event.done { opacity: .55; }
+.cal-event-title { font-size: 11px; line-height: 1.25; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.cal-event-time { font-size: 9px; color: var(--text-faint); font-family: var(--mono); white-space: nowrap; }
+
+/* The line that says where you are. Without it you read the clock and do
+   arithmetic — the work a calendar exists to save. */
+.cal-now { position: absolute; left: 0; right: 0; height: 0;
+  border-top: 1px solid var(--danger, #e5534b); z-index: 3; pointer-events: none; }
+.cal-now-dot { position: absolute; left: -3px; top: -3px; width: 6px; height: 6px;
+  border-radius: 50%; background: var(--danger, #e5534b); }
+
+.cal-empty { display: flex; align-items: center; gap: 8px; padding: 16px;
+  font-size: 12px; color: var(--text-faint); }

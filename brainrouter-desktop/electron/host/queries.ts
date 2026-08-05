@@ -2087,6 +2087,21 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           ...(typeof a.scheduledFor === 'string' ? { scheduledFor: a.scheduledFor } : {}),
         }, Date.now());
       },
+      // ADR-028 G6 — the calendar's primary gesture: click an hour, block it.
+      'planner-schedule-at': (a) => {
+        const at = typeof a.scheduledFor === 'string' ? a.scheduledFor : '';
+        if (!at) return { error: 'A time is required.' };
+        // Blocking time needs something to block it FOR. Creating the item and
+        // the block together is what makes the gesture one click rather than a
+        // form — you can rename it after.
+        const item = plannerAdd(undefined, { title: 'Focus block' }, Date.now());
+        return plannerSchedule(undefined, {
+          itemId: item.id,
+          estimateMinutes: Number(a.estimateMinutes) || 60,
+          scheduledFor: at,
+        }, Date.now());
+      },
+      'planner-open-block': (a) => ({ blockId: String(a.blockId ?? '') }),
       'planner-resolve': (a) => {
         const keep = a.keep === 'theirs' ? 'theirs' : 'ours';
         return plannerResolveConflict(undefined, String(a.id ?? ''), String(a.field ?? ''), keep, Date.now());

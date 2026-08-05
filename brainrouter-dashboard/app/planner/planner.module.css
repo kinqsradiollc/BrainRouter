@@ -41,3 +41,27 @@
 .empty strong { color: var(--text); font-size: 15px; font-weight: 600; }
 
 .note { margin-top: 28px; font-size: 12px; color: var(--text-faint); line-height: 1.6; }
+
+/* ADR-028 G6 — the week strip. Deliberately not a copy of the desktop's hour
+   grid: a web planner you check between meetings answers "what is coming", and
+   a second hour-by-hour layout would be two things to keep honest. */
+.week {
+  display: grid; grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px; margin: 4px 0 22px;
+}
+.weekDay {
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px;
+  min-height: 84px; display: flex; flex-direction: column; gap: 5px;
+}
+.weekToday { border-color: var(--accent, var(--text-faint)); }
+.weekHead {
+  display: flex; align-items: baseline; gap: 5px; font-size: 11px; color: var(--text-faint);
+}
+.weekHead strong { font-size: 14px; color: var(--text); font-weight: 600; }
+.weekItem {
+  font-size: 11px; line-height: 1.35; padding: 3px 6px; border-radius: 4px;
+  background: var(--surface-2, rgba(255, 255, 255, 0.05));
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+@media (max-width: 720px) { .week { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
