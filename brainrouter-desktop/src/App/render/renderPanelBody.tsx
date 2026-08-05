@@ -7,7 +7,7 @@
 import React, { Suspense, lazy } from 'react';
 import {
   DiffPanel, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel, WorktreesPanel, ReviewPanel,
-  RequirementsPanel, AnnotationsPanel, ArtifactsPanel, StackPanel, AttachmentsPanel, MemoryPanel, KnowledgePanel, PrototypePanel, TasksPanel, TaskDetailPanel, TerminalPanel, ToolsPanel, ServersPanel, ContextPanel, type PanelId, type SearchHit, type ReviewFindingView, type GrepHit, type FinishedTask,
+  RequirementsPanel, AnnotationsPanel, ArtifactsPanel, StackPanel, ComprehensionContainer, AttachmentsPanel, MemoryPanel, KnowledgePanel, PrototypePanel, TasksPanel, TaskDetailPanel, TerminalPanel, ToolsPanel, ServersPanel, ContextPanel, type PanelId, type SearchHit, type ReviewFindingView, type GrepHit, type FinishedTask,
 } from '../../panels/index.js';
 import type { RequirementRecord, AnnotationRecord, ArtifactRecord, AtlasGraph } from '@kinqs/brainrouter-types';
 import type { TrackPrStatus } from '../../track/TrackView.js';
@@ -364,6 +364,8 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
           onAddComment={(id, body) => { q('q-annot-comment', 'annotation-add-comment', { id, body }); refresh(); }}
           onSelectTarget={(a) => { if (a.anchor?.filePath) { setDiffTarget({ path: a.anchor.filePath, line: a.anchor.startLine }); ensurePanel('diff'); q('q-diff', 'file-diff', { path: a.anchor.filePath }); } }} />;
       }
+      // ADR-028 F7/G4 — the Understand group. Invoked, never unsolicited.
+      case 'comprehension': return <ComprehensionContainer />;
       case 'stack': {
         // ADR-028 G5 — one panel, one question: can this land, and if not what
         // is stopping it. The chain, the checks and the review findings are

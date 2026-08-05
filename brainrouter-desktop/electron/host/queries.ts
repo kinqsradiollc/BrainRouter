@@ -2005,6 +2005,32 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // ADR-028 G6 — the planner mode. User-scoped and cross-workspace, so the
       // handlers pass `undefined` for the user until account identity is
       // threaded: one planner per install today, per person once it is.
+      // ADR-028 F7 — the comprehension review. Invoked from the Understand
+      // panel; never produced unprompted, which is the difference between this
+      // and the pop quiz Part F originally refused.
+      'comprehension-start': async () => {
+        // The QUESTIONS come from the agent — generating good ones needs its
+        // view of what it just built and why. Until a turn has produced work
+        // worth reviewing there is nothing to ask about, and saying so is
+        // better than inventing questions from a diff.
+        const porcelain = (await git(['status', '--porcelain', '--', '.'], workspaceRoot)).trim();
+        const changed = porcelain ? porcelain.split('\n').filter(Boolean) : [];
+        if (changed.length === 0) {
+          return { subject: '', questions: [], reason: 'No uncommitted work to review yet.' };
+        }
+        return {
+          subject: `${changed.length} changed file(s) in this workspace`,
+          questions: [],
+          reason: 'Ask the agent for a comprehension review — it needs its own reasoning to write the questions.',
+        };
+      },
+      'comprehension-answer': (a) => ({
+        // Multiple choice is decidable here; free text is not, and pretending
+        // otherwise would tell someone who understands the code that they are
+        // wrong (F7).
+        verdict: typeof a.answer === 'string' && a.answer.trim() ? 'needs_model_judgement' : 'skipped',
+      }),
+      'comprehension-dispute': (a) => ({ questionId: String(a.questionId ?? ''), noted: true }),
       'planner-read': () => {
         const items = plannerListItems(undefined, { includeCompleted: true });
         const blocks = plannerListBlocks(undefined);

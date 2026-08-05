@@ -17,6 +17,7 @@ export { ToolsPanel } from './workspace/ToolsPanel.js';
 export { WorktreesPanel } from './workspace/WorktreesPanel.js';
 export { StackPanel } from './workspace/StackPanel.js';
 export { ComprehensionPanel } from './memory/ComprehensionPanel.js';
+export { ComprehensionContainer } from './memory/ComprehensionContainer.js';
 export { AttachmentsPanel } from './workspace/AttachmentsPanel.js';
 export { ServersPanel } from './workspace/ServersPanel.js';
 export { TasksPanel, type FinishedTask } from './planning/TasksPanel.js';
