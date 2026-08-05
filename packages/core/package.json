@@ -266,6 +266,10 @@
     "./planner": {
       "types": "./dist/planner/index.d.ts",
       "default": "./dist/planner/index.js"
+    },
+    "./comprehension": {
+      "types": "./dist/comprehension/index.d.ts",
+      "default": "./dist/comprehension/index.js"
     }
   },
   "files": [

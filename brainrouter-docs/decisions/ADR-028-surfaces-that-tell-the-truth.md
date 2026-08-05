@@ -923,15 +923,29 @@ code is not.
 Surfaces: desktop planner mode (Today · Calendar · Notes), dashboard `/planner`,
 CLI `/plan`, five `planner_*` tools, migration 051 and `/api/planner`.
 
-### Proposed — not built
+### Shipped after review
 
-| # | Decision | Why it is worth reviewing before building |
+| # | Decision | The claim it removes |
 |---|---|---|
-| F1–F6 | Comprehension | Changes what the agent produces per turn; F5's tutor profile may be a different product |
-| G3 | Panel grouping | Trades one click against the scanning cost it removes |
-| G4 | "Understand" group | Depends on F |
-| G5 | Stack + checks + review as ONE panel | Retires three panel ids; `layerStatus` grows inputs |
-| H2–H4 | Call-site convergence, stacking modes, reachability check | H4 changes what E1 enforces repo-wide |
+| F2 | Explain-back, depth chosen by you | an agent deciding how much you need to know |
+| F3 | Decision log with the REJECTED alternative | a log written at the end, which rationalises rather than records |
+| F4 | Verification hand-off | "it works" when what happened is "it compiled" |
+| F7 | Comprehension review | — *(reverses this Part's own earlier refusal)* |
+| G3 | Panel grouping | a 26-item strip you scan rather than navigate |
+| G4 | "Understand" group | comprehension buried in the crowded default set |
+| G5 | One Pull request panel | `layerStatus` naming a blocker it could not see |
+| H1 | One PR create path | four call sites that could not stack |
+| H3 | `cli.stackingMode` | stacking with no way to ask for it |
+| H4 | Reachability check | a cluster that imports only itself passing an importer check |
+
+### Still proposed
+
+| # | Decision | Why it is not built |
+|---|---|---|
+| F1 | Profile-shaped comprehension | Depends on which profiles exist; the mechanisms (F2–F4, F7) work profile-agnostically today |
+| F5 | Tutor profile | May be a different product wearing the same shell — the open question below stands |
+| F6 | Research falsifiability | Belongs with the research profile, not before it |
+| H2 | Full call-site convergence | `prEmit` and the forge route through H1; the Track path and plugin publish still call `gh` directly |
 
 ### The five things worth arguing with
 

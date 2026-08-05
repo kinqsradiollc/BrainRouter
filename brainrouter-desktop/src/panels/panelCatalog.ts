@@ -47,3 +47,58 @@ const HIDDEN_MANUAL_PANEL_IDS = new Set<PanelId>([
 ]);
 
 export const MANUAL_PANEL_DEFS = PANEL_DEFS.filter((panel) => !HIDDEN_MANUAL_PANEL_IDS.has(panel.id));
+
+
+/**
+ * ADR-028 G3 — panel groups.
+ *
+ * Twenty-six flat ids is a list you scan, not a strip you navigate. The
+ * grouping is not new information: it is the structure the panel list already
+ * had implicitly, made visible.
+ *
+ * `diff` sits in Code rather than Work deliberately — reading a change is a
+ * different activity from deciding whether to land it. That argument is
+ * recorded in the ADR as one deserving a second look, since it would also have
+ * justified keeping the stack panel separate, which G5 says was wrong.
+ */
+export type PanelGroup = 'code' | 'work' | 'knowledge' | 'understand' | 'environment';
+
+export const PANEL_GROUPS: ReadonlyArray<readonly [PanelGroup, string]> = [
+  ['code', 'Code'],
+  ['work', 'Work'],
+  ['knowledge', 'Knowledge'],
+  ['understand', 'Understand'],
+  ['environment', 'Environment'],
+];
+
+const GROUP_OF: Partial<Record<PanelId, PanelGroup>> = {
+  files: 'code', file: 'code', editor: 'code', diff: 'code', search: 'code', terminal: 'code',
+  plan: 'work', tasks: 'work', 'task-detail': 'work', stack: 'work', worktrees: 'work',
+  schedule: 'work', workflows: 'work',
+  memory: 'knowledge', knowledge: 'knowledge', artifacts: 'knowledge',
+  annotations: 'knowledge', requirements: 'knowledge', attachments: 'knowledge',
+  comprehension: 'understand',
+  tools: 'environment', servers: 'environment', browser: 'environment',
+  context: 'environment', atlas: 'environment', prototype: 'environment',
+};
+
+/** Which group a panel belongs to. Unmapped ids fall to Environment. */
+export function groupOf(id: PanelId): PanelGroup {
+  return GROUP_OF[id] ?? 'environment';
+}
+
+/** The panels in a group, in catalog order. */
+export function panelsInGroup(group: PanelGroup, ids: readonly PanelId[]): PanelId[] {
+  return ids.filter((id) => groupOf(id) === group);
+}
+
+/**
+ * Groups that currently have an open tab.
+ *
+ * Only these are shown, so the strip never offers a group with nothing in it —
+ * an empty group is a click that leads to a blank panel.
+ */
+export function activeGroups(ids: readonly PanelId[]): PanelGroup[] {
+  const present = new Set(ids.map(groupOf));
+  return PANEL_GROUPS.filter(([g]) => present.has(g)).map(([g]) => g);
+}
