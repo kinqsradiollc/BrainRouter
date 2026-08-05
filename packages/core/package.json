@@ -270,6 +270,10 @@
     "./comprehension": {
       "types": "./dist/comprehension/index.d.ts",
       "default": "./dist/comprehension/index.js"
+    },
+    "./tooling": {
+      "types": "./dist/tooling/index.d.ts",
+      "default": "./dist/tooling/index.js"
     }
   },
   "files": [
