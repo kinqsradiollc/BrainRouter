@@ -8,8 +8,9 @@
  * the panel, and then neither is trusted.
  *
  * Everything here is a projection over `plannerStore` plus the D5–D7 helpers.
- * No I/O beyond the store, so it is testable without a filesystem fixture per
- * assertion.
+ * Takes a `userId`, never a workspace root — the planner is user-scoped and
+ * cross-workspace (D9), so a workspace parameter appearing here would mean the
+ * scoping had regressed.
  */
 import {
   listItems, listBlocks, listConflicts, readPlanner,
@@ -54,9 +55,9 @@ export interface TodayOptions {
  * separate overdue tally is the red badge D5 rejects: it makes the surface feel
  * like an accusation, and the response is to stop opening it.
  */
-export function todayView(workspaceRoot: string, opts: TodayOptions): TodayView {
-  const allItems = listItems(workspaceRoot);
-  const blocks = listBlocks(workspaceRoot);
+export function todayView(userId: string | undefined, opts: TodayOptions): TodayView {
+  const allItems = listItems(userId);
+  const blocks = listBlocks(userId);
   const day = dayView(blocks, opts.date);
   const scheduledItemIds = new Set([...day.scheduled, ...day.unscheduled].map((b) => b.itemId));
 
@@ -75,8 +76,8 @@ export function todayView(workspaceRoot: string, opts: TodayOptions): TodayView 
     stalled: needsAttention(blocks),
     commitment: commitmentFor([...day.scheduled, ...day.unscheduled], opts.availableMinutes ?? 480),
     drift: summarizeDrift(blocks),
-    conflicts: listConflicts(workspaceRoot),
-    syncState: describeSyncState(readPlanner(workspaceRoot).outbox),
+    conflicts: listConflicts(userId),
+    syncState: describeSyncState(readPlanner(userId).outbox),
     staleSources: (opts.freshness ?? [])
       .filter((f) => isStale(f, opts.nowMs))
       .map((f) => describeFreshness(f, opts.nowMs)),
@@ -90,10 +91,10 @@ export function todayView(workspaceRoot: string, opts: TodayOptions): TodayView 
  * cleverly hides the item you know exists, and the list is small enough that
  * finding it by eye works.
  */
-export function findItems(workspaceRoot: string, query: string): PlannerItem[] {
+export function findItems(userId: string | undefined, query: string): PlannerItem[] {
   const needle = query.trim().toLowerCase();
   if (!needle) return [];
-  return listItems(workspaceRoot, { includeCompleted: true }).filter((i) =>
+  return listItems(userId, { includeCompleted: true }).filter((i) =>
     i.title.value.toLowerCase().includes(needle) ||
     (i.notes?.value ?? '').toLowerCase().includes(needle),
   );
@@ -106,12 +107,12 @@ export function findItems(workspaceRoot: string, query: string): PlannerItem[] {
  * does the shape of this day look like, rather than what should I be doing.
  */
 export function timetableView(
-  workspaceRoot: string,
+  userId: string | undefined,
   date: string,
 ): { blocks: TimeBlock[]; titles: Record<string, string> } {
-  const blocks = listBlocks(workspaceRoot);
+  const blocks = listBlocks(userId);
   const day = dayView(blocks, date);
-  const items = listItems(workspaceRoot, { includeCompleted: true });
+  const items = listItems(userId, { includeCompleted: true });
   const titles: Record<string, string> = {};
   for (const item of items) titles[item.id] = item.title.value;
   return { blocks: [...day.scheduled, ...day.unscheduled], titles };

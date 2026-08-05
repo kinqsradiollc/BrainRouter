@@ -4,6 +4,7 @@
  * Extracted verbatim from App.tsx; the App owns the state and passes it through.
  * See the placement comment at the call site for why this must be the LAST child of .main.
  */
+import type { WorkspaceMode } from './ActivityBar.js';
 import React, { type Dispatch, type SetStateAction } from 'react';
 import { Icon } from '../../icons.js';
 import type { PopId } from '../../types.js';
@@ -17,7 +18,7 @@ import {
 
 export interface TopbarRightProps {
   /** Workspace mode — Environment/terminal are Code-only; side views also apply to Track. */
-  mode: 'chat' | 'track' | 'code' | 'meetings';
+  mode: WorkspaceMode;
   homeMode: boolean;
   envRoom: boolean;
   envOpen: boolean;

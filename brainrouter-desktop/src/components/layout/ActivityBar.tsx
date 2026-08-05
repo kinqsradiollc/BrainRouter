@@ -12,13 +12,16 @@ import React, { useEffect, useRef, useState, type Dispatch, type SetStateAction 
 import { Icon } from '../../icons.js';
 import { useActiveOrg } from '../../lib/orgContext.js';
 
-export type WorkspaceMode = 'chat' | 'track' | 'code' | 'meetings';
+export type WorkspaceMode = 'chat' | 'track' | 'code' | 'meetings' | 'planner';
 
 const MODES: ReadonlyArray<readonly [WorkspaceMode, string, string]> = [
   ['chat', 'bubble', 'Chat'],
   ['code', 'code', 'Code'],
   ['track', 'tasks', 'Track'],
   ['meetings', 'mic', 'Meetings'],
+  // ADR-028 G6 — the planner is a MODE, not a panel: it is user-scoped and
+  // spans every project, and panels are bound to one workspace and session.
+  ['planner', 'plan', 'Planner'],
 ];
 
 export interface ActivityBarProps {

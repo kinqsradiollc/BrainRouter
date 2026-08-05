@@ -5833,3 +5833,64 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .home::before, .home::after, .home-kicker-row, .home-greet, .home-mode-grid, .home-context-strip, .home-lower-grid, .settings-content > .set-body, .track-more-menu { animation: none !important; }
   .home-mode-grid > button:hover, .home-context-strip button:hover, .home-view-links button:hover { transform: none; }
 }
+
+
+/* ADR-028 G6 — the planner mode. A full-width surface, not a panel: it is
+   user-scoped and spans every project, so it has no per-workspace tab strip. */
+.planner-mode { display: flex; flex-direction: column; height: 100%; min-width: 0; }
+.planner-head { display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
+.planner-views { display: flex; gap: 4px; }
+.planner-view-btn { display: inline-flex; align-items: center; gap: 6px; border: 0;
+  background: transparent; color: var(--text-faint); font-size: 12px; padding: 5px 10px;
+  border-radius: 6px; cursor: pointer; }
+.planner-view-btn:hover { color: var(--text); }
+.planner-view-btn.active { color: var(--text); background: var(--surface-2, rgba(255,255,255,.05)); }
+.planner-status { display: flex; align-items: center; gap: 10px; }
+.planner-sync { font-size: 11px; color: var(--text-faint); font-family: var(--mono); }
+
+.planner-body { flex: 1; overflow-y: auto; padding: 12px 16px 24px; }
+.planner-add { display: flex; gap: 8px; margin-bottom: 12px; }
+.planner-add .filter { flex: 1; }
+
+/* Conflicts are the only planner state that cannot resolve itself, so they are
+   the only one that gets a banner. */
+.planner-conflict-banner { margin: 10px 16px 0; padding: 9px 12px; font-size: 12px;
+  border: 1px solid var(--border); border-radius: 6px; color: var(--text); }
+.planner-stale { margin: 6px 16px 0; font-size: 11px; color: var(--text-faint); }
+/* A ratio that teaches, not a scoreboard — same weight in both directions. */
+.planner-drift { font-size: 11px; color: var(--text-faint); margin-bottom: 10px; }
+
+.planner-group { font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-faint); margin: 14px 0 6px; }
+.planner-row { display: flex; align-items: baseline; gap: 9px; padding: 7px 8px;
+  border-radius: 6px; }
+.planner-row:hover { background: var(--surface-2, rgba(255,255,255,.03)); }
+.planner-row.conflicted { border: 1px solid var(--border); }
+.planner-title { flex: 1; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
+.planner-source, .planner-due { flex: none; font-size: 10px; color: var(--text-faint);
+  font-family: var(--mono); border: 1px solid var(--border); border-radius: 3px; padding: 0 5px; }
+.planner-conflict { display: inline-flex; gap: 6px; align-items: center; font-size: 11px; color: var(--text-faint); }
+.planner-conflict button { border: 1px solid var(--border); background: transparent;
+  color: var(--text-faint); border-radius: 4px; padding: 1px 6px; font-size: 10px; cursor: pointer; }
+.planner-conflict button:hover { color: var(--text); }
+.planner-del { border: 0; background: transparent; color: var(--text-faint); cursor: pointer; opacity: 0; }
+.planner-row:hover .planner-del { opacity: 1; }
+
+.planner-week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; }
+.planner-day { border: 1px solid var(--border); border-radius: 8px; padding: 8px; min-height: 130px; }
+.planner-day.today { border-color: var(--accent, var(--border)); }
+.planner-day-head { display: flex; justify-content: space-between; font-size: 10px;
+  color: var(--text-faint); font-family: var(--mono); margin-bottom: 6px; }
+.planner-block { font-size: 11px; padding: 4px 6px; border-radius: 4px;
+  background: var(--surface-2, rgba(255,255,255,.04)); margin-bottom: 4px; }
+.planner-block-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.planner-block-est { color: var(--text-faint); font-family: var(--mono); font-size: 10px; }
+.planner-carried { display: block; font-size: 10px; color: var(--text-faint); margin-top: 2px; }
+.planner-unscheduled { margin-top: 18px; max-width: 420px; }
+
+.planner-note { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+.planner-note-title { font-size: 13px; margin-bottom: 4px; }
+.planner-note-body { font-size: 12px; color: var(--text-faint); line-height: 1.55; white-space: pre-wrap; }
+
+@media (max-width: 900px) { .planner-week { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

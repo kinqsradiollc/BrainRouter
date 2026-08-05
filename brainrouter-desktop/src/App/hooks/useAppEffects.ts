@@ -6,6 +6,7 @@
  * and small document-level bindings. Extracted from App.tsx verbatim; each
  * effect keeps its original deps and body, so behavior is unchanged.
  */
+import type { WorkspaceMode } from '../../components/layout/ActivityBar.js';
 import { useEffect, useRef } from 'react';
 import type React from 'react';
 import { hostQuery } from '../../lib/hostQuery.js';
@@ -23,7 +24,7 @@ type Query = (id: string, name: string, args?: Record<string, unknown>) => void;
 export interface AppEffectsCtx {
   q: Query;
   settingsOpen: boolean;
-  mode: 'chat' | 'track' | 'code' | 'meetings';
+  mode: WorkspaceMode;
   info: { workspaceRoot?: string; sessionKey?: string };
   hostUp: boolean;
   refreshGit: () => void;

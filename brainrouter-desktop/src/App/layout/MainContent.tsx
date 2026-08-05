@@ -5,9 +5,11 @@
  * verbatim; every value flows through props so the rendered layout, DOM order
  * (load-bearing for Electron drag regions), and behavior are unchanged.
  */
+import type { WorkspaceMode } from '../../components/layout/ActivityBar.js';
 import React from 'react';
 import { Icon } from '../../icons.js';
 import { TrackView } from '../../track/TrackView.js';
+import { PlannerModeContainer } from '../../planner/PlannerModeContainer.js';
 import { MeetingsView } from '../../components/meetings/MeetingsView.js';
 import { createMeetingsOps } from '../../components/meetings/meetingsOps.js';
 import { ChatThread } from '../../components/chat/ChatThread.js';
@@ -29,8 +31,8 @@ type TR = React.ComponentProps<typeof TopbarRight>;
 type TV = React.ComponentProps<typeof TrackView>;
 
 export interface MainContentProps {
-  mode: 'chat' | 'track' | 'code' | 'meetings';
-  setMode: (m: 'chat' | 'track' | 'code' | 'meetings') => void;
+  mode: WorkspaceMode;
+  setMode: (m: WorkspaceMode) => void;
   workrowRef: React.RefObject<HTMLDivElement>;
   // Track view
   track: { project: TV['project']; items: TV['items']; sprints: TV['sprints']; modules: TV['modules']; views: TV['views']; automations: TV['automations']; members: TV['members']; sync: TV['sync']; git: TV['git']; pr: TV['pr'] };
@@ -207,7 +209,13 @@ export function MainContent(p: MainContentProps): React.ReactElement {
 
   return (
     <div className="main">
-      {mode === 'meetings' ? (
+      {mode === 'planner' ? (
+        // ADR-028 G6 — cross-workspace, so it renders WITHOUT the side panel
+        // rail: a personal planner has no per-workspace tabs to carry.
+        <div className="workrow" ref={workrowRef}>
+          <PlannerModeContainer />
+        </div>
+      ) : mode === 'meetings' ? (
         <div className="workrow" ref={workrowRef}>
           <MeetingsView ops={meetingsOps} />
         </div>

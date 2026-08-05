@@ -69,6 +69,14 @@ import {
 // Deep imports into the CLI's built runtime (no "exports" field = allowed).
 // Extracting a proper @kinqs/brainrouter-agent package is tracked for 0.4.16.
 import { callOpenAI } from '@kinqs/brainrouter-core/agent';
+// ADR-028 Part D — the planner is USER-scoped, so none of these take a
+// workspace root. If one ever needs one, the scoping has regressed (D9).
+import {
+  addItem as plannerAdd, updateItem as plannerUpdate, deleteItem as plannerDelete,
+  scheduleBlock as plannerSchedule, resolveConflict as plannerResolveConflict,
+  listItems as plannerListItems, listBlocks as plannerListBlocks,
+  readPlanner, todayView, summarizeDrift,
+} from '@kinqs/brainrouter-core/planner';
 // BROWSER — story prompt/validation helpers + the driver step types the
 // browser:* handlers below use. The host instance itself arrives via ctx.browser.
 import { buildStoryPrompt, validateStories, FlowStepSchema, DeviceSchema, type Story } from '@kinqs/brainrouter-core/browser';
@@ -1994,6 +2002,72 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // CLI's artifactStore (already unit-tested) so the desktop panel and the
       // terminal CLI share the same artifacts.json. Enum inputs are guard-validated
       // here so a bad kind/status/format is rejected, not silently written.
+      // ADR-028 G6 — the planner mode. User-scoped and cross-workspace, so the
+      // handlers pass `undefined` for the user until account identity is
+      // threaded: one planner per install today, per person once it is.
+      'planner-read': () => {
+        const items = plannerListItems(undefined, { includeCompleted: true });
+        const blocks = plannerListBlocks(undefined);
+        const today = new Date().toISOString().slice(0, 10);
+        const view = todayView(undefined, { date: today, nowMs: Date.now() });
+        const drift = summarizeDrift(blocks);
+        return {
+          items: items.map((i) => ({
+            id: i.id,
+            title: i.title.value,
+            notes: i.notes?.value,
+            dueDate: i.dueDate?.value ?? undefined,
+            priority: i.priority?.value,
+            completed: i.completed?.value === true,
+            origin: i.origin,
+            source: i.source,
+            conflictFields: Object.keys(i.conflicts ?? {}),
+          })),
+          blocks: blocks.map((b) => ({
+            id: b.id, itemId: b.itemId, scheduledFor: b.scheduledFor,
+            estimateMinutes: b.estimateMinutes, actualMinutes: b.actualMinutes,
+            carriedOver: b.carriedOver, completedAt: b.completedAt,
+          })),
+          syncState: view.syncState,
+          staleSources: view.staleSources,
+          driftNote: drift.description,
+        };
+      },
+      'planner-add': (a) => {
+        const title = String(a.title ?? '').trim();
+        if (!title) return { error: 'A title is required.' };
+        return plannerAdd(undefined, { title }, Date.now());
+      },
+      'planner-update': (a) => {
+        const id = String(a.id ?? '');
+        if (!id) return { error: 'An item id is required.' };
+        return plannerUpdate(undefined, id, {
+          ...(typeof a.title === 'string' ? { title: a.title } : {}),
+          ...(typeof a.notes === 'string' ? { notes: a.notes } : {}),
+          ...(a.dueDate !== undefined ? { dueDate: a.dueDate as string | null } : {}),
+          ...(typeof a.priority === 'number' ? { priority: a.priority } : {}),
+          ...(typeof a.completed === 'boolean' ? { completed: a.completed } : {}),
+        }, Date.now());
+      },
+      'planner-delete': (a) => plannerDelete(undefined, String(a.id ?? ''), Date.now()),
+      'planner-schedule': (a) => {
+        const itemId = String(a.itemId ?? '');
+        const minutes = Number(a.estimateMinutes ?? 0);
+        if (!itemId || !Number.isFinite(minutes) || minutes <= 0) {
+          return { error: 'A block needs an item and a positive estimate.' };
+        }
+        return plannerSchedule(undefined, {
+          itemId, estimateMinutes: minutes,
+          ...(typeof a.scheduledFor === 'string' ? { scheduledFor: a.scheduledFor } : {}),
+        }, Date.now());
+      },
+      'planner-resolve': (a) => {
+        const keep = a.keep === 'theirs' ? 'theirs' : 'ours';
+        return plannerResolveConflict(undefined, String(a.id ?? ''), String(a.field ?? ''), keep, Date.now());
+      },
+      // Sync needs a configured server; with none the cache IS the truth (D9),
+      // so this reports state rather than failing.
+      'planner-sync': () => ({ pending: readPlanner(undefined).outbox.operations.length }),
       'artifact-list': (a) => listArtifacts(workspaceRoot, withSessionScope(artifactFilterFromArgs(a), a, getActiveAgent().sessionKey)),
       'artifact-create': async (a) => {
         if (!isArtifactKind(a.kind)) return { error: `Unknown artifact kind "${String(a.kind)}".` };
