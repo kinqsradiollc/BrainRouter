@@ -641,7 +641,7 @@ Twenty-six flat ids is a list you scan, not a strip you navigate. Grouped by wha
 | Group | Panels |
 |---|---|
 | **Code** | Files, Editor, Diff, Search, Terminal |
-| **Work** | Plan, Tasks, Review, CI, Worktrees, **Stack** |
+| **Work** | Plan, Tasks, **Pull request** (see G5), Worktrees |
 | **Knowledge** | Memory, Knowledge, Artifacts, Annotations, Requirements |
 | **Understand** *(new — Part F)* | Explain, Decisions, Verification |
 | **Environment** | Tools, Servers, Browser, Context |
@@ -664,6 +664,41 @@ message that produced them. A panel persists; a message is gone by the next turn
 **The Verification panel is the one that should carry an unread dot** by default, because F4 is the
 mechanism that stops "it compiled" being reported as "it works".
 
+### G5 · Stack, checks and review are ONE panel, because they answer one question
+
+A8 specified a stack panel and I built one. That was wrong, and the evidence was already on screen:
+
+| Panel | Title | Answers |
+|---|---|---|
+| `diff` | Changes | What is in this change |
+| `stack` | Stack | Which layers, and what blocks them |
+| `review` | Review | What the reviewer found |
+| `ci` | **PR / Checks** | Whether the checks passed |
+
+Four panels — one of them *already named "PR"* — for facets of a single question:
+
+> **Can this land, and if not, what is stopping it?**
+
+Nobody asks "what is my stack doing" in isolation from "did checks pass". A stack layer is blocked by
+a failing check or a requested change at least as often as by its position, and today those live in
+different tabs, so answering the actual question means assembling it yourself from three places.
+
+This is worse than crowding — it is the same fragmentation `layerStatus` was written to remove. That
+function reports *"the blocker you can act on first"*, and it currently cannot see review findings or
+CI results at all, so it reports a confident partial answer. **The consolidation is what makes it
+truthful**, not merely tidier.
+
+> **One `pull-request` panel: the stack chain, each layer's checks and review state inline, and the
+> changes.** `stack`, `review` and `ci` are retired as separate ids; `diff` stays, because reading a
+> diff is a different activity from deciding whether to land it.
+
+**`layerStatus` gains the review and CI inputs it should have had**, so its blocker ordering covers
+every real cause rather than the subset one panel happened to know about.
+
+I am recording this as my error rather than as a discovered improvement. A8 said "stack panel", I
+built a stack panel, and neither the ADR nor I asked whether a repository that already had a panel
+called "PR / Checks" needed a second one next to it.
+
 ### Open questions for review
 
 1. **Does G2's clean start need the "reopen last session" affordance at all**, or is it a feature
@@ -671,6 +706,9 @@ mechanism that stops "it compiled" being reported as "it works".
 2. **Is G3's grouping worth the navigation cost** — one more click to reach a panel — against the
    scanning cost it removes?
 3. **Should `offerPanel`'s unread dot decay?** A dot that has been there for two days is furniture.
+4. **Does G5's consolidation go far enough?** `diff` is kept separate on the argument that reading a
+   change and deciding to land it are different activities — but that argument would also have
+   justified keeping `stack` separate, so it deserves a second look.
 
 ## 3. Out of scope
 
