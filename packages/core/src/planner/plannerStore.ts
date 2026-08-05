@@ -95,7 +95,14 @@ export function readPlanner(userId: string | undefined): PlannerState {
   };
 }
 
-function write(userId: string | undefined, state: PlannerState): void {
+/**
+ * Persist the planner state.
+ *
+ * Exported because the sync client mutates the state it is given (advancing the
+ * clock, draining the outbox) and the caller has to write the result — a sync
+ * whose outcome is not persisted repeats the same push next tick.
+ */
+export function writePlanner(userId: string | undefined, state: PlannerState): void {
   writeJsonFile(plannerFile(userId), state);
 }
 
@@ -151,7 +158,7 @@ export function addItem(
     idempotencyKey: `${id}:create:${at.physical}.${at.logical}`,
     itemId: id, kind: 'create', at, payload: input, attempts: 0,
   });
-  write(userId, state);
+  writePlanner(userId, state);
   return item;
 }
 
@@ -196,7 +203,7 @@ export function updateItem(
     idempotencyKey: `${id}:update:${at.physical}.${at.logical}`,
     itemId: id, kind: 'update', at, payload: input, attempts: 0,
   });
-  write(userId, state);
+  writePlanner(userId, state);
   return merged;
 }
 
@@ -217,7 +224,7 @@ export function deleteItem(userId: string | undefined, id: string, nowMs: number
     idempotencyKey: `${id}:delete:${at.physical}.${at.logical}`,
     itemId: id, kind: 'delete', at, payload: {}, attempts: 0,
   });
-  write(userId, state);
+  writePlanner(userId, state);
   return true;
 }
 
@@ -243,7 +250,7 @@ export function scheduleBlock(
     idempotencyKey: `${id}:create:${at.physical}.${at.logical}`,
     itemId: input.itemId, kind: 'update', at, payload: block, attempts: 0,
   });
-  write(userId, state);
+  writePlanner(userId, state);
   return block;
 }
 
@@ -262,7 +269,7 @@ export function recordActual(
     actualMinutes,
     completedAt: new Date(nowMs).toISOString(),
   };
-  write(userId, state);
+  writePlanner(userId, state);
   return state.blocks[blockId]!;
 }
 
@@ -324,6 +331,6 @@ export function resolveConflict(
     ...(field === 'notes' ? { notes: value(String(chosen), at) } : {}),
     ...(Object.keys(rest).length > 0 ? { conflicts: rest } : { conflicts: undefined }),
   };
-  write(userId, state);
+  writePlanner(userId, state);
   return state.items[id]!;
 }

@@ -17,6 +17,8 @@ import {
   TOOL_REQUIREMENTS, planProvisioning, checkIdentity, bindWorkspace,
   type ForgeOperation,
 } from '@kinqs/brainrouter-core/tooling';
+import { syncOnce, writePlanner } from '@kinqs/brainrouter-core/planner';
+import { createPlannerTransport } from './plannerTransport.js';
 import {
   readDeclinedTools, writeDeclinedTool, readWorkspaceBinding, writeWorkspaceBinding,
 } from './toolingState.js';
@@ -2159,7 +2161,33 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       },
       // Sync needs a configured server; with none the cache IS the truth (D9),
       // so this reports state rather than failing.
-      'planner-sync': () => ({ pending: readPlanner(undefined).outbox.operations.length }),
+      // ADR-028 D11 — actually reconcile with the server. This counted pending
+      // operations and returned the number, which looks like syncing and is
+      // not: the store, the merge rules, the outbox and the backend all
+      // existed, and nothing carried operations between them.
+      'planner-sync': async () => {
+        const brainUrl = getCliKnobs().brainUrl;
+        if (!brainUrl) {
+          // Local-only is a supported mode, not a failure (D9). The planner is
+          // authoritative until a server is configured.
+          return { pending: readPlanner(undefined).outbox.operations.length, localOnly: true };
+        }
+        const state = readPlanner(undefined);
+        const result = await syncOnce(
+          state,
+          createPlannerTransport({ baseUrl: brainUrl, }),
+          Date.now(),
+        );
+        writePlanner(undefined, state);
+        return {
+          pending: state.outbox.operations.length,
+          pulled: result.pulled,
+          pushed: result.pushed,
+          offline: result.offline,
+          conflicted: result.conflicted,
+          ...(result.shedNotice ? { shedNotice: result.shedNotice } : {}),
+        };
+      },
       'artifact-list': (a) => listArtifacts(workspaceRoot, withSessionScope(artifactFilterFromArgs(a), a, getActiveAgent().sessionKey)),
       'artifact-create': async (a) => {
         if (!isArtifactKind(a.kind)) return { error: `Unknown artifact kind "${String(a.kind)}".` };
