@@ -24,6 +24,20 @@ export interface ToolRequirement {
   installCommand: string;
   /** True when the app genuinely cannot run without it. */
   essential: boolean;
+  /**
+   * May this be installed automatically on startup?
+   *
+   * True only where the command changes nothing outside the tool's own
+   * extension directory. `gh extension install` adds a plugin to a CLI the user
+   * already chose to install; `brew install` and `xcode-select` change the
+   * system and need sudo or a full toolchain download, so those stay an offer
+   * however the setting is configured.
+   *
+   * The distinction is not about trust in the command — it is about blast
+   * radius. Something that only touches `~/.local/share/gh` can be undone by
+   * deleting a folder.
+   */
+  autoInstallable: boolean;
 }
 
 /**
@@ -42,6 +56,7 @@ export const TOOL_REQUIREMENTS: readonly ToolRequirement[] = [
     unlocks: 'everything that reads or writes a repository',
     installCommand: 'xcode-select --install',
     essential: true,
+    autoInstallable: false,
   },
   {
     id: 'gh',
@@ -49,6 +64,7 @@ export const TOOL_REQUIREMENTS: readonly ToolRequirement[] = [
     unlocks: 'opening pull requests, reading checks, and reviewing from the app',
     installCommand: 'brew install gh',
     essential: false,
+    autoInstallable: false,
   },
   {
     id: 'gh-stack',
@@ -56,6 +72,9 @@ export const TOOL_REQUIREMENTS: readonly ToolRequirement[] = [
     unlocks: 'stacked pull requests — one chain of layers instead of one large change',
     installCommand: 'gh extension install github/gh-stack',
     essential: false,
+    // Scoped to gh's own extension directory — no sudo, no system change,
+    // undone by deleting a folder.
+    autoInstallable: true,
   },
 ];
 
@@ -66,17 +85,37 @@ export interface ToolStatus {
   version?: string;
 }
 
+/**
+ * What the app may do without being asked, per `cli.autoInstallTools`.
+ *
+ * `off` — detect and offer only.
+ * `safe` — install the low-blast-radius tools (gh extensions), offer the rest.
+ * The default, because it is what makes a feature that was shipped and unused
+ * actually reach people.
+ */
+export type AutoInstallMode = 'off' | 'safe';
+
 export type ProvisionAction =
   /** Everything needed is here. */
   | { kind: 'ready' }
   /** Something is missing and installing it is one command. */
   | { kind: 'offer'; missing: ToolRequirement[]; message: string }
+  /**
+   * Install these now, and say so.
+   *
+   * Reported as an action rather than done silently: the person sees what ran,
+   * on the launch it ran, and can turn the whole behaviour off. Silent is the
+   * part that would be wrong, not automatic.
+   */
+  | { kind: 'auto_install'; install: ToolRequirement[]; offer: ToolRequirement[]; message: string }
   /** Something ESSENTIAL is missing — stated, still not auto-installed. */
   | { kind: 'blocked'; missing: ToolRequirement[]; message: string };
 
 export interface ProvisionState {
   /** Requirement ids the person has already declined. */
   declined: ReadonlySet<string>;
+  /** Defaults to `safe` — see AutoInstallMode. */
+  autoInstall?: AutoInstallMode;
 }
 
 /**
@@ -88,7 +127,7 @@ export interface ProvisionState {
  */
 export function planProvisioning(
   statuses: readonly ToolStatus[],
-  state: ProvisionState = { declined: new Set() },
+  state: ProvisionState = { declined: new Set(), autoInstall: 'safe' },
   requirements: readonly ToolRequirement[] = TOOL_REQUIREMENTS,
 ): ProvisionAction {
   const byId = new Map(statuses.map((s) => [s.id, s]));
@@ -107,6 +146,20 @@ export function planProvisioning(
 
   const offerable = missing.filter((r) => !state.declined.has(r.id));
   if (offerable.length === 0) return { kind: 'ready' };
+
+  if (state.autoInstall === 'safe') {
+    const auto = offerable.filter((r) => r.autoInstallable);
+    if (auto.length > 0) {
+      return {
+        kind: 'auto_install',
+        install: auto,
+        offer: offerable.filter((r) => !r.autoInstallable),
+        message:
+          `Installing ${listOf(auto.map((r) => r.label))} so ${listOf(auto.map((r) => r.unlocks))} ` +
+          'works. This runs in the background and can be turned off in settings.',
+      };
+    }
+  }
 
   return {
     kind: 'offer',

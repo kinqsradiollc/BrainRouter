@@ -2033,7 +2033,23 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           return { id: r.id, present: v.ok, version: v.stdout?.split('\n')[0] };
         }));
         const declined = readDeclinedTools();
-        return { plan: planProvisioning(statuses, { declined }), statuses };
+        const plan = planProvisioning(statuses, {
+          declined,
+          autoInstall: getCliKnobs().autoInstallTools,
+        });
+        // ADR-028 I1 — actually run it. Only the low-blast-radius commands
+        // reach here: `planProvisioning` never puts a system package manager in
+        // `install`, so this cannot invoke brew or xcode-select however the
+        // setting is configured.
+        if (plan.kind === 'auto_install') {
+          const installed: string[] = [];
+          for (const req of plan.install) {
+            const res = await ghText(['extension', 'install', 'github/gh-stack'], { timeout: 90_000 });
+            if (res.ok) installed.push(req.label);
+          }
+          return { plan, statuses, installed };
+        }
+        return { plan, statuses };
       },
       'tooling-decline': (a) => {
         // Remembered, so the same offer is never made twice. Asking again next

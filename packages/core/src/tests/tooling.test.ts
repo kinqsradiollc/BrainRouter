@@ -28,7 +28,7 @@ test('a missing optional tool leads with what it UNLOCKS', () => {
   // "gh-stack is not installed" is a fact about your machine; "stacked pull
   // requests are unavailable" is a fact about what you can do, and only the
   // second tells you whether to care.
-  const plan = planProvisioning(present(['git', 'gh']));
+  const plan = planProvisioning(present(['git', 'gh']), { declined: new Set(), autoInstall: 'off' });
   assert.equal(plan.kind, 'offer');
   assert.match((plan as { message: string }).message, /[Ss]tacked pull requests/);
 });
@@ -139,4 +139,59 @@ test('binding records the account and when', () => {
   const b = bindWorkspace('/ws', acct('work'), '2026-08-04T12:00:00.000Z');
   assert.equal(b.expectedLogin, 'work');
   assert.equal(b.boundAt, '2026-08-04T12:00:00.000Z');
+});
+
+/* -------------------------------- I1 · auto-install, scoped by blast radius */
+
+test('a gh EXTENSION installs itself; a system package never does', () => {
+  // Not about trusting the command — about blast radius. Something that only
+  // touches gh's extension directory is undone by deleting a folder;
+  // `brew install` and `xcode-select` change the system and need sudo.
+  const byId = new Map(TOOL_REQUIREMENTS.map((r) => [r.id, r]));
+  assert.equal(byId.get('gh-stack')!.autoInstallable, true);
+  assert.equal(byId.get('gh')!.autoInstallable, false);
+  assert.equal(byId.get('git')!.autoInstallable, false);
+});
+
+test('by default a missing extension is INSTALLED, not merely offered', () => {
+  // The whole point: stacked PRs shipped and sat unused because gh-stack was
+  // absent, and a correct-but-silent capability check is still a feature
+  // nobody gets.
+  const plan = planProvisioning(present(['git', 'gh']));
+  assert.equal(plan.kind, 'auto_install');
+  assert.deepEqual((plan as { install: { id: string }[] }).install.map((r) => r.id), ['gh-stack']);
+});
+
+test('auto-install SAYS what it is doing and how to stop it', () => {
+  // Silent is the part that would be wrong, not automatic.
+  const plan = planProvisioning(present(['git', 'gh']));
+  const msg = (plan as { message: string }).message;
+  assert.match(msg, /Installing/);
+  assert.match(msg, /turned off in settings/);
+});
+
+test('turning it off returns to detect-and-offer', () => {
+  const plan = planProvisioning(present(['git', 'gh']), { declined: new Set(), autoInstall: 'off' });
+  assert.equal(plan.kind, 'offer');
+});
+
+test('a system package is still only OFFERED, even with auto-install on', () => {
+  const plan = planProvisioning(present(['git']), { declined: new Set(), autoInstall: 'safe' });
+  // gh is not auto-installable, so it lands in `offer` alongside the auto one.
+  const ids = [
+    ...((plan as { install?: { id: string }[] }).install ?? []),
+    ...((plan as { offer?: { id: string }[] }).offer ?? []),
+  ].map((r) => r.id);
+  assert.ok(ids.includes('gh'));
+  assert.equal(
+    ((plan as { install?: { id: string }[] }).install ?? []).some((r) => r.id === 'gh'),
+    false,
+    'gh needs a package manager — never automatic',
+  );
+});
+
+test('a DECLINED tool is not auto-installed either', () => {
+  // Declining is a decision about the tool, not about the prompt.
+  const plan = planProvisioning(present(['git', 'gh']), { declined: new Set(['gh-stack']) });
+  assert.equal(plan.kind, 'ready');
 });
