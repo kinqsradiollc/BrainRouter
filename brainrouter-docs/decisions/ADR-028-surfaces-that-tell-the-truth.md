@@ -748,6 +748,73 @@ between projects — if it does, it is planner; if it belongs to the repo, it is
    change and deciding to land it are different activities — but that argument would also have
    justified keeping `stack` separate, so it deserves a second look.
 
+---
+
+## Part H — Stacks are not reaching the products *(PROPOSED — not implemented)*
+
+Reported by the owner: the desktop app and the CLI agent still open ordinary
+pull requests. Verified — and it is the ADR's own pattern again, at the largest
+scale yet.
+
+Part A built capability detection, an exit-code contract, a latching runner, a
+create path, sync, merge and a plan→stack mapping. **Nothing routes through
+any of it.** There are four independent `gh pr create` call sites, and not one
+knows the stack machinery exists:
+
+| Call site | What opens the PR |
+|---|---|
+| `brainrouter-desktop/electron/host/github-track-services.ts:610` | Track item → draft PR |
+| `packages/core/src/forge/forge.ts:24` | the forge adapter's `createChangeRequest` |
+| `packages/core/src/git/prEmit.ts` | the build-loop PR emit |
+| `packages/core/src/plugin/publish.ts:154` | plugin registry publish |
+
+> **This is the sixth instance of "declared but never wired", and the biggest.**
+> Five modules and eleven decisions of stack support, reachable by nothing a
+> user can do.
+
+E1's sweep did not catch it, and the reason matters: those modules **do** have
+importers — each other. `stackAuthoring` imports `stackRunner`, which imports
+`stackCapability`. A cluster that only calls itself passes an
+importer-existence check while being exactly as inert as a lone orphan.
+
+### H1 · One create path, and it decides
+
+Every PR creation goes through a single function that asks whether this change
+should be a stack — `adviseStacking` for unplanned work, `proposeStackFromPlan`
+when a plan exists (A7) — and then routes to `gh stack add`/`submit` or to a
+plain `gh pr create`.
+
+**Plain PRs remain correct and common.** A one-file fix is not a stack, and a
+router that stacks everything is worse than one that stacks nothing. The point
+is that the DECISION happens once, in a place that has both options, rather
+than four places that have only one.
+
+### H2 · The four call sites converge
+
+`forge.createChangeRequest` becomes the chokepoint the others call, rather than
+one of four peers. The Track path, the build-loop emit and the agent all reach
+GitHub through it. Plugin publish is the exception and stays direct — it opens
+a PR against a *different* repository, where a local stack has no meaning.
+
+### H3 · The agent is told, not left to infer
+
+`cli.buildLoopEmitPr` and the desktop PR actions get an explicit stacking mode:
+`auto` (advise), `always`, `never`. Default `auto`, because a person who has
+never used stacks should not have their first PR silently become one.
+
+### H4 · E1 gains a reachability check, not just an importer check
+
+The sweep asks whether a module has an importer. That is too weak: a cluster
+importing only itself passes. The stronger question is whether a module is
+reachable from an **entry point** — a registered tool, a route, a command, a
+panel, a host handler.
+
+> **A module is not done until something a USER can reach calls it.**
+
+Reachability is a graph walk from the entry points rather than a lookup, so it
+is more work — but it is the check that would have caught Part A the day it
+landed, instead of the owner catching it in the product weeks later.
+
 ## 3. Out of scope
 
 - Reimplementing cascading rebase — GitHub maintains it.

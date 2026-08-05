@@ -24,6 +24,77 @@ import {
 } from '../../orchestration/tools.js';
 
 export const BUILTIN_TOOL_SPECS = [
+  // ADR-028 D6 — the planner. A planner the agent cannot see is a second place
+  // your intentions live, which is how you end up telling it something you
+  // already wrote down. User-scoped, so none of these take a workspace.
+  {
+    name: 'planner_today',
+    description:
+      "Read the user's planner for today: committed items, the current or next time block, " +
+      'anything carried over, and how fresh each source is. Read-only. Use this before ' +
+      'suggesting what to work on, so the suggestion accounts for what they already decided.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        date: { type: 'string', description: 'ISO date (YYYY-MM-DD). Defaults to today.' }
+      }
+    }
+  },
+  {
+    name: 'planner_find',
+    description:
+      'Search the planner by text across titles and notes. Read-only. Use it to check whether ' +
+      'something is already captured before adding a duplicate.',
+    inputSchema: {
+      type: 'object',
+      properties: { query: { type: 'string', description: 'Text to search for.' } },
+      required: ['query']
+    }
+  },
+  {
+    name: 'planner_add',
+    description:
+      'Capture an item in the planner. Use when the user says they need to do something later, ' +
+      'or asks you to remember a task. Not for things you merely think they should do.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'What the item is, in the user\'s words where possible.' },
+        notes: { type: 'string', description: 'Optional detail.' },
+        dueDate: { type: 'string', description: 'Optional ISO date (YYYY-MM-DD).' }
+      },
+      required: ['title']
+    }
+  },
+  {
+    name: 'planner_schedule',
+    description:
+      'Set aside time for a planner item. Leave scheduledFor empty for an unscheduled block — a ' +
+      'today list is a real plan and does not need a clock time.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        itemId: { type: 'string', description: 'The planner item id.' },
+        estimateMinutes: { type: 'integer', description: 'How long you expect it to take.' },
+        scheduledFor: { type: 'string', description: 'Optional ISO datetime.' }
+      },
+      required: ['itemId', 'estimateMinutes']
+    }
+  },
+  {
+    name: 'planner_complete',
+    description:
+      'Mark a planner item done. ONLY when the user says it is done. NEVER infer completion from ' +
+      'a merged pull request, a passing test, or a finished tool call: those are evidence about ' +
+      'the work, not about the intention that was written down, and the item is usually broader ' +
+      'than the thing that looks like it finished it. If you believe something is finished, say ' +
+      'so and let them confirm.',
+    inputSchema: {
+      type: 'object',
+      properties: { itemId: { type: 'string', description: 'The planner item id.' } },
+      required: ['itemId']
+    }
+  },
   {
     name: 'read_file',
     description: 'Read the contents of a file from the workspace. Optional line ranges can be provided.',

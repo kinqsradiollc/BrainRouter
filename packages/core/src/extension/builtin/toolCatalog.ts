@@ -79,6 +79,17 @@ export const REQUIRED_CORE_TOOL_CATALOG: LocalToolEntry[] = [
   // (connectors.json); running one is shell-tier (network I/O + memory writes),
   // registered further below with the command-execution surface.
   { name: 'connector_list', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  // ADR-028 D6 — the planner. Reads are read-tier and parallel-safe; writes are
+  // not parallel-safe because two concurrent writes to the same user-scoped
+  // file would each read-modify-write and one would lose.
+  { name: 'planner_today', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  { name: 'planner_find', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  // Writes are `file_edit`: the planner cache IS a file, and classifying them
+  // as read-only would exempt them from the write policy that governs every
+  // other durable mutation.
+  { name: 'planner_add', accessTier: 'read', actionKind: 'file_edit', parallelSafe: false },
+  { name: 'planner_schedule', accessTier: 'read', actionKind: 'file_edit', parallelSafe: false },
+  { name: 'planner_complete', accessTier: 'read', actionKind: 'file_edit', parallelSafe: false },
   // Pentest findings and finalization write only to the isolated review state;
   // the pentest runtime's allowlist is the security boundary around them.
   { name: 'file_vulnerability', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },

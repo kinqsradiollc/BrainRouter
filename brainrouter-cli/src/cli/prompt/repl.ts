@@ -28,6 +28,8 @@ import { tryHandleRequirementCommand } from '../commands/requirement/index.js';
 import { tryHandleTrackCommand } from '../commands/track/index.js';
 import { tryHandleAnnotationCommand } from '../commands/annotation/index.js';
 import { tryHandleArtifactCommand } from '../commands/artifact/index.js';
+// ADR-028 Part D — the planner is USER-scoped, so /plan takes no workspace.
+import { tryHandlePlannerCommand } from '../commands/planner/index.js';
 import { tryHandleAtlasCommand } from '../commands/atlas/index.js';
 import { tryHandleAttachmentCommand } from '../commands/attachment/index.js';
 import { tryHandleReviewsCommand } from '../commands/reviews/index.js';
@@ -141,6 +143,7 @@ export async function handleSlashCommand(
   if (await tryHandleTrackCommand(cmdCtx)) return;
   if (await tryHandleAnnotationCommand(cmdCtx)) return;
   if (await tryHandleArtifactCommand(cmdCtx)) return;
+  if (await tryHandlePlannerCommand(cmdCtx)) return;
   if (await tryHandleAtlasCommand(cmdCtx)) return;
   if (await tryHandleAttachmentCommand(cmdCtx)) return;
   if (await tryHandleReviewsCommand(cmdCtx)) return;

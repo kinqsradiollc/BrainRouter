@@ -50,6 +50,10 @@ export const PRODUCT_NAV_GROUPS: DashboardNavGroup[] = [
       { href: "/meetings", label: "Meetings", keywords: "record transcript summary notes", icon: <svg {...iconProps}><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3" /></svg> },
       { href: "/teams", label: "Teams", keywords: "team members group share collaborators people", icon: <svg {...iconProps}><path d="M16 19v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="3" /><path d="M22 19v-2a4 4 0 0 0-3-3.87M16 4.13A4 4 0 0 1 16 11.9" /></svg> },
       { href: "/track", label: "Track", keywords: "board tasks work items sprint kanban todo", icon: <svg {...iconProps}><rect x="3" y="4" width="5" height="16" rx="1" /><rect x="10" y="4" width="5" height="10" rx="1" /><rect x="17" y="4" width="4" height="13" rx="1" /></svg> },
+      // ADR-028 G6 — the planner is PERSONAL and cross-project, unlike Track,
+      // which is org-collaborative and per-project. A Track item appears in the
+      // planner as a mirrored item; neither replaces the other.
+      { href: "/planner", label: "Planner", keywords: "today calendar notes plan day schedule todo personal", icon: <svg {...iconProps}><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M3 10h18M8 3v4M16 3v4" /></svg> },
     ],
   },
   {
