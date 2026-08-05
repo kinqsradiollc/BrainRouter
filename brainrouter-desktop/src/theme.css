@@ -5894,3 +5894,50 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .planner-note-body { font-size: 12px; color: var(--text-faint); line-height: 1.55; white-space: pre-wrap; }
 
 @media (max-width: 900px) { .planner-week { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+
+/* ADR-028 F7 — the comprehension review panel. Reads as a review, not a test:
+   no score, no marks, and the disagree affordance is as prominent as the
+   explanation it disagrees with. */
+.comp-panel { padding: 12px 14px 24px; }
+.comp-head { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin-bottom: 14px; }
+.comp-subject { font-size: 12px; color: var(--text-faint); }
+
+.comp-card { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }
+.comp-card.answered { opacity: .92; }
+.comp-q-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.comp-q-num { font-size: 10px; font-family: var(--mono); color: var(--text-faint); }
+.comp-q-focus { font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-faint); border: 1px solid var(--border); border-radius: 3px; padding: 0 5px; }
+.comp-q-prompt { font-size: 13px; line-height: 1.55; margin-bottom: 10px; }
+
+.comp-options { display: flex; flex-direction: column; gap: 6px; }
+.comp-option { text-align: left; border: 1px solid var(--border); background: transparent;
+  color: var(--text); border-radius: 6px; padding: 8px 10px; font-size: 12px; cursor: pointer; line-height: 1.5; }
+.comp-option:hover { border-color: var(--text-faint); }
+
+.comp-free { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.comp-free textarea { width: 100%; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface); color: var(--text); padding: 8px 10px; font-size: 12px;
+  line-height: 1.55; font-family: inherit; resize: vertical; }
+
+/* Free and unpenalised — it identifies the gap more precisely than a guess. */
+.comp-skip { margin-top: 8px; border: 0; background: transparent; color: var(--text-faint);
+  font-size: 11px; cursor: pointer; padding: 0; }
+.comp-skip:hover { color: var(--text); }
+
+.comp-result { display: flex; flex-direction: column; gap: 8px; }
+.comp-your-answer { font-size: 12px; color: var(--text-faint); }
+.comp-pending { font-size: 11px; color: var(--text-faint); }
+.comp-explanation { font-size: 12px; line-height: 1.6; }
+.comp-differs { border-top: 1px solid var(--border); padding-top: 8px; }
+.comp-mine { font-size: 12px; line-height: 1.6; margin-bottom: 8px; }
+/* As prominent as the explanation: the agent can be the one who is wrong. */
+.comp-dispute { border: 1px solid var(--border); background: transparent; color: var(--text);
+  border-radius: 6px; padding: 5px 10px; font-size: 11px; cursor: pointer; }
+.comp-dispute:hover { border-color: var(--text-faint); }
+.comp-ref { font-size: 10px; font-family: var(--mono); color: var(--text-faint); }
+
+.comp-outcome { margin-top: 14px; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: 8px; font-size: 12px; line-height: 1.6; }

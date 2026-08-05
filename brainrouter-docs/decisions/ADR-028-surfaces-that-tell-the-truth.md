@@ -571,8 +571,9 @@ supports one sentence of five, listed at the bottom, reads as though it supports
 
 Every one of these has a plausible version that makes the product worse, so they are refused by name:
 
-- **Quizzing the person on their own codebase.** Patronising, and it makes the surface something to
-  avoid.
+- **UNPROMPTED quizzing.** A pop quiz nobody asked for is patronising and makes the surface something
+  to avoid. *(An invoked one is a different thing entirely — see F7, which reverses an earlier
+  refusal here.)*
 - **Gating anything on comprehension.** A merge blocked until you prove you understood is
   paternalistic, and the reliable response is to click through it.
 - **Summaries that restate the diff in prose.** Longer, not clearer, and they crowd out the parts
@@ -580,6 +581,78 @@ Every one of these has a plausible version that makes the product worse, so they
 - **Comprehension theatre** — a confident explanation of work the agent did not actually verify is a
   *worse* failure than no explanation, because it transfers unearned confidence. F4 exists precisely
   to prevent this, and if F2 ever conflicts with F4, F4 wins.
+
+### F7 · Comprehension review — the agent asks, you answer, it validates
+
+**This reverses a refusal.** An earlier draft of this Part listed "quizzing the person on their own
+codebase" as something F must never become. That was wrong, and the owner's framing is what makes it
+wrong: *"same with how we review code."*
+
+A code review is **invoked, structured, and produces findings.** Nobody calls a code review
+patronising, because you asked for it and it tells you something. The thing I was refusing — a pop
+quiz sprung on you mid-task — is a different artifact that happens to share a shape. **The
+difference is entirely in who starts it.**
+
+> **A comprehension review is a code review pointed at your understanding instead of the code.**
+
+#### How it works
+
+The agent generates a set of questions about work it just produced, you answer, and it validates
+each answer with an explanation. Same lifecycle as a code review: requested → produced → answered →
+findings.
+
+Question forms, because one is not enough:
+
+- **Multiple choice** — fast, and good for "what happens if" where the wrong answers are the
+  plausible mistakes rather than filler.
+- **Free text** — for "why was it done this way", where recognising the right answer is much easier
+  than producing it, and only producing it demonstrates understanding.
+- **Predict-the-failure** — "this breaks when ___". The single most useful form, because it is the
+  question you will actually face at 3am.
+
+#### What a question must be about
+
+**Consequences and decisions, never trivia.** "Which file is `mergeOwnedItem` in" tests nothing —
+you can grep. The questions that matter are the ones whose answers you would need before changing
+this code:
+
+- what breaks if this assumption is wrong
+- why the rejected alternative was rejected
+- which part would be expensive to reverse
+- what this does NOT handle
+
+A question whose answer is in the diff is a bad question. The value is in what the diff cannot show.
+
+#### The rule that makes it honest
+
+> **A wrong answer is not always the human's.**
+
+If you answer confidently and the agent marks it wrong, one of two things is true: you
+misunderstood, or **the agent did**. The second is not rare — the agent wrote the code from its own
+model of what you wanted, and that model can be wrong in ways the tests do not catch.
+
+So a disagreement produces a **finding**, not a mark. The agent states its reasoning, you state
+yours, and if yours holds the output is a defect report about the code rather than a score about
+you. A comprehension review that can only ever find the human wanting is a grading tool, and grading
+tools get closed.
+
+#### What it must not be
+
+- **Never unprompted.** Invoked by `/understand`, a panel button, or an explicit ask. The moment it
+  fires on its own it becomes the pop quiz this Part originally refused.
+- **Never a gate.** Nothing is blocked on answering. A merge held until you pass is paternalism, and
+  the reliable response is to click through it.
+- **No score, no streak, no history of your mistakes.** The output is *which parts of this change you
+  do not yet have a model of* — actionable — rather than *how you did* — a judgement nobody asked
+  for. A stored record of wrong answers turns one honest tool into a performance file.
+- **Skippable per question,** with no penalty and no follow-up. "I don't know" is a legitimate answer
+  and is more useful than a guess, because it identifies the gap precisely.
+
+#### Where it lives
+
+Its own **Comprehension** panel in the Understand group (G4), not in chat. You want it when deciding
+whether to accept work, which is minutes to days after the message that produced it — a panel
+persists, a message is gone by the next turn.
 
 ### Open questions for review
 
