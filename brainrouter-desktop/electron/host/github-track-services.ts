@@ -14,6 +14,7 @@
  */
 import { execFile } from 'node:child_process';
 import { routePullRequest, resolveStackingMode, probeStackCapability } from '@kinqs/brainrouter-core/review';
+import { checkWorkspaceIdentity } from './workspaceIdentity.js';
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 import type { Agent } from '@kinqs/brainrouter-core/agent';
 import { loadConfig } from '@kinqs/brainrouter-core/config';
@@ -609,6 +610,17 @@ export function buildGithubTrackServices(deps: GithubTrackDeps) {
       issue?.number ? `Fixes #${issue.number}` : undefined,
       `Branch: ${branch}`,
     ].filter(Boolean).join('\n\n');
+    // ADR-028 I3 — an operation that can DISCLOSE checks the account first.
+    // Pushing a work branch from a personal account is silent, attributed to
+    // the person, and found by someone else.
+    const identity = await checkWorkspaceIdentity(workspaceRoot, 'create_pr', ghText);
+    if (identity.kind === 'mismatch' || identity.kind === 'signed_out') {
+      return {
+        ok: false, items: listWorkItems(workspaceRoot), branch, itemKey: item.key,
+        error: identity.message,
+      };
+    }
+
     // ADR-028 H1/H2 — the Track path was the last `gh pr create` that bypassed
     // the router, which is why stacked pull requests never reached this button.
     // A single Track item is almost always one pull request, so `auto` will

@@ -13,6 +13,13 @@
  * the `createHostCore({ queries })` map.
  */
 import { createBrokerPort, createHostCore, type AgentLike } from '../hostCore.js';
+import {
+  TOOL_REQUIREMENTS, planProvisioning, checkIdentity, bindWorkspace,
+  type ForgeOperation,
+} from '@kinqs/brainrouter-core/tooling';
+import {
+  readDeclinedTools, writeDeclinedTool, readWorkspaceBinding, writeWorkspaceBinding,
+} from './toolingState.js';
 import { mergeGithubCliEnv, normalizeGithubCliError } from '../ghCli.js';
 import { shellQuoteArg } from '../shellQuote.js';
 import {
@@ -2008,6 +2015,50 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // ADR-028 F7 — the comprehension review. Invoked from the Understand
       // panel; never produced unprompted, which is the difference between this
       // and the pop quiz Part F originally refused.
+      // ADR-028 I1 — what is missing and what it unlocks. Detects only; the
+      // install happens on an explicit click, never here.
+      'tooling-check': async () => {
+        const statuses = await Promise.all(TOOL_REQUIREMENTS.map(async (r) => {
+          if (r.id === 'gh-stack') {
+            const list = await ghText(['extension', 'list'], { timeout: 8_000 });
+            return { id: r.id, present: list.ok && /gh-stack/.test(list.stdout) };
+          }
+          if (r.id === 'git') {
+            const v = await git(['--version'], workspaceRoot).catch(() => '');
+            return { id: r.id, present: /git version/.test(v), version: v.trim() || undefined };
+          }
+          const v = await ghText(['--version'], { timeout: 8_000 });
+          return { id: r.id, present: v.ok, version: v.stdout?.split('\n')[0] };
+        }));
+        const declined = readDeclinedTools();
+        return { plan: planProvisioning(statuses, { declined }), statuses };
+      },
+      'tooling-decline': (a) => {
+        // Remembered, so the same offer is never made twice. Asking again next
+        // launch is how a prompt becomes noise.
+        writeDeclinedTool(String(a.id ?? ''));
+        return { declined: true };
+      },
+
+      // ADR-028 I3 — which account is this workspace pushing as? Reads never
+      // reach here (I4); only operations that can disclose do.
+      'git-identity-check': async (a) => {
+        const raw = await ghText(['auth', 'status', '--active'], { timeout: 8_000 });
+        const login = /account (\S+)/.exec(raw.stdout ?? '')?.[1] ?? null;
+        const host = /Logged in to (\S+)/.exec(raw.stdout ?? '')?.[1] ?? 'github.com';
+        const active = login ? { login, host, active: true } : null;
+        const binding = readWorkspaceBinding(workspaceRoot);
+        const verdict = checkIdentity({
+          operation: (a.operation as ForgeOperation) ?? 'push',
+          active,
+          binding,
+        });
+        // The first push BINDS rather than interrogating.
+        if (verdict.kind === 'bind' && active) {
+          writeWorkspaceBinding(bindWorkspace(workspaceRoot, active, new Date().toISOString()));
+        }
+        return verdict;
+      },
       'comprehension-start': async () => {
         // The QUESTIONS come from the agent — generating good ones needs its
         // view of what it just built and why. Until a turn has produced work
