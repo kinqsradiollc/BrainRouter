@@ -104,7 +104,7 @@ test('linking passes every ref through in order', async () => {
     'main',
   );
   assert.equal(r.linked, true);
-  assert.deepEqual(e.calls[0], ['stack', 'link', '--base', 'main', '--', '#1', '#2', '#3']);
+  assert.deepEqual(e.calls[0], ['stack', 'init', '--base', 'main', '--', '#1', '#2', '#3']);
 });
 
 test('a layer is never added on top of a base that failed its checks', () => {

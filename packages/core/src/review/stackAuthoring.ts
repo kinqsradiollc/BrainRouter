@@ -9,9 +9,9 @@
  *
  * Two real paths, matching the CLI:
  *
+ *   `gh stack init`   — start a stack, or turn existing branches into one
  *   `gh stack add`    — create the next branch on top of the current stack
  *   `gh stack submit` — push branches and create/update the PRs, already linked
- *   `gh stack link`   — register pull requests that already exist
  *
  * A3's outcomes decide what happened; S2-1's runner enforces capability and the
  * halt latch. Nothing here re-interprets an exit code.
@@ -128,10 +128,16 @@ export async function addStackLayer(
 }
 
 /**
- * Register pull requests that already exist as a stack.
+ * Register branches that already exist as a stack.
  *
- * The path for work that was branched and opened by hand before anyone thought
- * of it as a stack.
+ * The path for work that was branched by hand before anyone thought of it as a
+ * stack.
+ *
+ * The command is `gh stack init <branches...>`, NOT `gh stack link` — which is
+ * what this called until someone ran it. The ADR was written from the feature
+ * announcement rather than from `gh stack --help`, and a wrong subcommand fails
+ * with a generic exit 1 that A3 classifies as `generic_error`, so nothing in
+ * the design would have caught it. Reading the actual CLI did.
  */
 export async function linkExistingIntoStack(
   runner: StackRunner,
@@ -156,7 +162,7 @@ export async function linkExistingIntoStack(
     };
   }
   const result: StackRunResult = await runner.run([
-    'link',
+    'init',
     ...(base ? ['--base', base] : []),
     '--',
     ...refs,
