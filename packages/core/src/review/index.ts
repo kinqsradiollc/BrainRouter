@@ -58,6 +58,7 @@ export {
   type PrRoute,
   type StackingMode,
 } from './prRouter.js';
+export { probeStackCapability } from './stackProbe.js';
 export {
   proposeStackFromPlan,
   mayProposeStack,

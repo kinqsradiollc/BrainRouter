@@ -938,14 +938,25 @@ CLI `/plan`, five `planner_*` tools, migration 051 and `/api/planner`.
 | H3 | `cli.stackingMode` | stacking with no way to ask for it |
 | H4 | Reachability check | a cluster that imports only itself passing an importer check |
 
-### Still proposed
+### Shipped — the final wave
 
-| # | Decision | Why it is not built |
+| # | Decision | The claim it removes |
 |---|---|---|
-| F1 | Profile-shaped comprehension | Depends on which profiles exist; the mechanisms (F2–F4, F7) work profile-agnostically today |
-| F5 | Tutor profile | May be a different product wearing the same shell — the open question below stands |
-| F6 | Research falsifiability | Belongs with the research profile, not before it |
-| H2 | Full call-site convergence | `prEmit` and the forge route through H1; the Track path and plugin publish still call `gh` directly |
+| F1 | Profile-shaped comprehension | one comprehension mechanism pretending to serve every kind of work |
+| F5 | Tutor profile | teaching someone who is blocked at 2am |
+| F6 | Research falsifiability | a position presented as a finding |
+| H2 | Track path converged | the last `gh pr create` that could not stack |
+
+**Every decision in this ADR is implemented.** The one deliberate exception is
+plugin publish, which still calls `gh pr create` directly: it opens a pull
+request against a *different* repository, where a local stack has no meaning.
+That is a decision, not an omission.
+
+**F5's open question is answered by its guards rather than by argument.** The
+tutor never fires for a blocked professional, never fires twice, and is opt-in
+by profile — so the failure mode that made it questionable ("is this a different
+product?") cannot occur in this one. `detectUrgency` treats "just tell me",
+"production", "stuck" and six other phrases as a full stop.
 
 ### The five things worth arguing with
 

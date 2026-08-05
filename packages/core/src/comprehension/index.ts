@@ -7,3 +7,4 @@
  */
 export * from './comprehensionReview.js';
 export * from './workRecord.js';
+export * from './profileComprehension.js';
