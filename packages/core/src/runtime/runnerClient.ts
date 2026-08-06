@@ -6,6 +6,7 @@ import { RuntimeManager } from './manager.js';
 import type { RuntimeStatus, RuntimeTurnExecutor } from './runtimeTypes.js';
 import { assertRuntimeServerCompatible, type RuntimeFetch } from './client.js';
 import { RUNTIME_SESSION_HEADER } from './server.js';
+import { stripTrailingSlashes } from '../util/trimEdges.js';
 
 export interface RuntimeRunnerStartInput {
   sessionKey: string;
@@ -100,7 +101,7 @@ export interface CreateRuntimeRunnerClientOptions {
 }
 
 function trimBaseUrl(baseUrl: string): string {
-  return baseUrl.trim().replace(/\/+$/, '');
+  return stripTrailingSlashes(baseUrl.trim());
 }
 
 function resolveInside(root: string, rel: string): string {

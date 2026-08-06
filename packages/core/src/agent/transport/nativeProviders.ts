@@ -1,3 +1,4 @@
+import { stripTrailingSlashes } from '../../util/trimEdges.js';
 /**
  * Native (non-OpenAI-compatible) provider wire adapters.
  *
@@ -473,7 +474,7 @@ export function nativeRequestSpec(
   model: string,
   apiKey: string,
 ): { url: string; headers: Record<string, string> } {
-  const base = endpoint.replace(/\/+$/, '');
+  const base = stripTrailingSlashes(endpoint);
   if (format === 'anthropic-messages') {
     return {
       url: `${base}/messages`,

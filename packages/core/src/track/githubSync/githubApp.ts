@@ -23,6 +23,7 @@ import { getRawCliKnobs } from '../../config/config.js';
 import { ghHeaders } from './client.js';
 import type { FetchLike } from './types.js';
 import type { GithubAppCliKnobs } from '../../config/configTypes.js';
+import { stripTrailingSlashes } from '../../util/trimEdges.js';
 
 const DEFAULT_API_BASE = 'https://api.github.com';
 /** Refresh the installation token when it is within this window of expiry. */
@@ -55,7 +56,7 @@ export function validateGithubApiBase(raw?: string | null): string | null {
   if (!host || host === 'localhost' || host.endsWith('.localhost')) return null;
   if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':')) return null; // no IP literals
   if (!host.includes('.')) return null; // require a real domain, not a bare internal name
-  return s.replace(/\/+$/, '');
+  return stripTrailingSlashes(s);
 }
 
 function b64url(input: Buffer | string): string {
