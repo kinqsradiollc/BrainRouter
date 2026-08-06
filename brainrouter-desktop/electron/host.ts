@@ -923,7 +923,20 @@ async function main(): Promise<void> {
     // review policy — it overrides the default contract (severity calibration,
     // skip rules, nit caps, repo-specific checks). Empty string when absent.
     const reviewInstr = buildReviewInstructionBlock(workspaceRoot);
-    const prompt = `${reviewInstr}You are reviewing the uncommitted changes in this workspace before a commit/PR. Focus on real bugs, security issues, and performance problems introduced by the diff. Be concise.\n\n${changeCtx ? `${changeCtx}\n\n` : ''}Diff:\n${diff.slice(0, 60_000)}\n\n${REVIEW_OUTPUT_CONTRACT}`;
+    // ADR-028 — the same grounding rule the backend bot and the CLI reviewer
+    // carry. This reviewer is read-only, not blind: it can open files. Without
+    // being told to, it reasons from the hunk alone and reports guards missing
+    // that sit just outside it, which is the most common false positive the
+    // GitHub bot produces when it runs ungrounded.
+    const GROUNDING = [
+      'A hunk shows what changed, not what already guards it. Before reporting that a check,',
+      'guard, or error path is missing, read the surrounding function and confirm it is absent.',
+      'Unchanged code following the same pattern is a NEGATIVE CONTROL — a convention repeated',
+      'across call sites is house style, not a defect this change introduced.',
+      'If the decisive evidence is in neither the diff nor what you read, say so rather than',
+      'inferring it: an unverified claim stated confidently is worse than a gap reported honestly.',
+    ].join(' ');
+    const prompt = `${reviewInstr}You are reviewing the uncommitted changes in this workspace before a commit/PR. Focus on real bugs, security issues, and performance problems introduced by the diff. Be concise.\n\n${GROUNDING}\n\n${changeCtx ? `${changeCtx}\n\n` : ''}Diff:\n${diff.slice(0, 60_000)}\n\n${REVIEW_OUTPUT_CONTRACT}`;
     // §6 — isolated, read-only, non-prompting reviewer (review: session filtered).
     // It runs under a `:raw` sub-key so its turn (a 60KB diff prompt + raw JSON
     // findings) does NOT pollute the task's CURATED transcript — runReviewTask
