@@ -65,6 +65,28 @@ const CWE_RE = /\[(CWE-\d+)\]/i;
  * runs both) + where to manage the bot (BrainRouter's own app/dashboard, not a
  * third party). The command names match the webhook parser (ADR-017 review console).
  */
+
+/**
+ * How the review was grounded — stated, because the two modes reach different
+ * conclusions and the comment used to look identical either way.
+ *
+ * The bot reviews a diff. When an assurance run has resolved repository context
+ * it also sees the changed files and their neighbours at the exact revision,
+ * and the prompt tells it to check whether a guard already exists before
+ * reporting one missing. When that context is absent it reasons from the diff
+ * alone, which is strictly weaker: a check twenty lines below the hunk is
+ * invisible, so a false positive is much more likely.
+ *
+ * A reader deciding whether to trust a finding needs to know which one they
+ * got. Omitting it is the same failure this whole ADR is about — a surface
+ * that does not say which state produced it.
+ */
+export function groundingNote(grounded: boolean): string {
+  return grounded
+    ? 'read with surrounding code at this revision'
+    : 'diff only — a guard outside the hunk was not visible';
+}
+
 export function reviewActionFooter(lens: ReviewLens): string {
   const cmd = lens.id === 'security' ? '/security-review' : lens.id === 'pentest' ? '/pentest' : '/code-review';
   return `🔁 **Re-run:** comment \`${cmd}\` (or \`/review\` for both) · ⚙️ **Manage:** BrainRouter app → Reviews or the dashboard`;
@@ -140,6 +162,14 @@ export function buildReviewIntro(lens: ReviewLens, newCount: number): string {
 }
 
 export interface ReviewSummaryInput {
+  /**
+   * True when exact-revision repository context was attached to the review.
+   *
+   * Threaded into the footer so a reader can weigh a finding: diff-only cannot
+   * see a guard outside the hunk, so a "missing check" from that mode is much
+   * more likely to be wrong.
+   */
+  repositoryContext?: boolean;
   findings: ParsedReviewFinding[];
   /** The PR head commit the review ran against (shown + used for staleness). */
   headSha: string;
@@ -154,12 +184,16 @@ export interface ReviewSummaryInput {
  */
 export function formatReviewSummaryComment(lens: ReviewLens, input: ReviewSummaryInput): string {
   const cap = input.maxListed ?? 20;
+  // Defaults to FALSE: an unstated grounding is the weaker one, and claiming
+  // the stronger by omission is exactly the overstatement this note exists to
+  // prevent.
+  const grounded = input.repositoryContext === true;
   const head = input.headSha ? input.headSha.slice(0, 7) : 'HEAD';
   const findings = [...input.findings].sort((a, b) => (SEV_ORDER[a.severity] ?? 5) - (SEV_ORDER[b.severity] ?? 5));
   const out: string[] = [lens.summaryMarker, `## ${lens.emoji} ${lens.name}`, ''];
 
   if (findings.length === 0) {
-    out.push(lens.noFindingsLine, '', reviewActionFooter(lens), '', `<sub>Reviewed \`${head}\` — read-only ${lens.sweepLabel}.</sub>`);
+    out.push(lens.noFindingsLine, '', reviewActionFooter(lens), '', `<sub>Reviewed \`${head}\` — read-only ${lens.sweepLabel}, ${groundingNote(grounded)}.</sub>`);
     return out.join('\n');
   }
 
@@ -178,6 +212,6 @@ export function formatReviewSummaryComment(lens: ReviewLens, input: ReviewSummar
   }
   if (findings.length > cap) out.push(`…plus ${findings.length - cap} more finding(s) not shown.`, '');
   out.push(reviewActionFooter(lens), '');
-  out.push(`<sub>Reviewed \`${head}\` — read-only ${lens.sweepLabel}; verify before acting.</sub>`);
+  out.push(`<sub>Reviewed \`${head}\` — read-only ${lens.sweepLabel}, ${groundingNote(grounded)}; verify before acting.</sub>`);
   return out.join('\n');
 }
