@@ -141,8 +141,11 @@ devices** — where the conflict is nearly always accidental (a stale tab, a pho
 than genuine simultaneous authorship. Preventing it is better than merging it. D4 stays as the
 floor for the case locking cannot cover: both devices offline.
 
-**The lock is advisory and expires.** A held lock from a device that never came back must not make a
-block permanently uneditable, so it releases on a timeout and the timeout is short.
+**The lock is a LEASE WITH A FENCING EPOCH, not a flag** — see Q1. A held lock from a device that
+never came back must not make a block permanently uneditable, so it expires; and an expired lock
+must not let that device's delayed write land on top of an edit made while it was gone, so every
+write carries the epoch it believes it holds and a stale epoch is rejected. Migration 048 exists
+because we already shipped the version without the epoch.
 
 #### B3 · Offline is the same offline
 
@@ -264,20 +267,104 @@ storage grows with how often people paste rather than with what they have.
 
 ---
 
-## 4. Open questions for review
+## 4. Open questions — answered
 
-1. **Is B2's soft locking worth its complexity**, or should notes simply take D4's conflict markers
-   and accept the roughness? Locking adds a lease, a timeout, and a "who holds it" surface — all of
-   which can themselves break.
-2. **Should `create` be synchronous?** "Make this a task" that returns a reference immediately is
-   better UX, but it means one mode writing into another's store, which weakens the ownership model
-   that keeps merges sane.
-3. **How much of a note goes into the agent's context** when a reference is followed? A whole page
-   can be long, and C3's bounded-context rule needs a concrete answer here rather than a principle.
-4. **Does Code need `create`?** Everything else can make new things; "create a file from a note" is
-   plausible but sits uncomfortably close to the agent's normal editing path.
-5. **Is the URI scheme over-engineered** for six modes that all live in one process today? The
-   argument for it is modes written later; the argument against is that we do not have those yet.
+Each of these was left open in the first draft and is now answered against the code. Where the
+evidence changed my mind, that is recorded rather than quietly corrected.
+
+### Q1 · Is B2's soft locking worth its complexity?
+
+**Yes — and the complexity is smaller than I estimated, because the pattern already exists and we
+have already got it wrong once.**
+
+`brainrouter/src/memory/store/postgres/migrations/048_job_lease_fencing.sql` is a lease
+implementation with a `lease_epoch` fencing token, written after a real defect: a worker held a
+lease, a sweeper released it, a second worker claimed the job, and the first wrote its stale result
+over the new run. The migration's own comment states the rule — *a lease without a fencing token is
+not a lock.*
+
+That changes the answer. Soft locking is not new machinery to design and get wrong; it is an
+existing pattern to reuse, whose specific failure mode is already documented in this repository.
+
+**Decision:** block locks are leases with an epoch, following 048. A write carries the epoch it
+believes it holds; the server rejects a write whose epoch is stale. Without that, a device that
+went to sleep holding a lock wakes and overwrites an edit made while it was gone — the exact defect
+048 exists to prevent, reproduced one layer up.
+
+**Lease duration: 30 seconds, renewed while typing.** Long enough that a pause does not drop the
+lock mid-sentence, short enough that a closed laptop frees the block before anyone notices.
+
+### Q2 · Should `create` be synchronous?
+
+**Yes, and the concern that made me hesitate does not apply here.**
+
+I worried that one mode writing into another's store weakens the ownership model. Inspecting the
+code, that is not what happens: every mode already writes through its own host handler — the
+planner through `'planner-add'` (`queries.ts:2136`), meetings and Track through theirs. A
+cross-mode `create` **calls the owning mode's handler**; it does not reach into its tables.
+
+Ownership is preserved by construction, because the handler is the only writer either way.
+
+**Decision:** `create` is synchronous and returns the new URI. The caller writes that reference into
+its own content — which is the half that must not be split, since an async create that fails after
+the note was saved leaves a note claiming a task that does not exist.
+
+**The one asynchronous case, named so it is not discovered later:** creating something that requires
+a network round trip the owning mode does not control — a Track item that must exist on GitHub
+first. Those return a *pending* reference that resolves to a tombstone-with-reason until it lands,
+rather than blocking the editor.
+
+### Q3 · How much of a note goes into the agent's context?
+
+**The referenced block, plus its heading ancestry, plus a count. Never the page.**
+
+ADR-028 D6 already set this precedent and it should not be re-litigated per mode:
+`agentContext.ts:64` caps listed items at seven and renders the remainder as a count, on the
+evidence that fifty low-signal lines make a model worse at the five that matter.
+
+A page is unbounded — someone's meeting notes can be thousands of words — so "include the page"
+has no upper bound and would silently consume the context belonging to the actual task.
+
+**Decision:** resolving a note reference yields the block itself, the chain of headings above it
+(so the block has a place), and `"+N more blocks on this page"`. The agent can ask for more by
+resolving a specific child; it never gets a page by accident.
+
+Heading ancestry rather than neighbouring blocks, because a heading tells you what the block is
+*about* while an adjacent paragraph only tells you what happens to sit next to it.
+
+### Q4 · Does Code need `create`?
+
+**No, and adding it would be actively harmful.**
+
+The agent already writes files through its normal tool path. A `create` verb for Code would be a
+second way to write a file with different validation, different permissions, and a different audit
+trail — and the two would drift, which is the failure this whole ADR is organised against.
+
+**Decision:** Code implements `resolve` and `describe` only. It is fully linkable and not creatable.
+"Turn this note into a file" is a normal agent turn that happens to cite a note, not a new writer.
+
+This is the same reasoning that keeps plugin publish out of the stacked-PR router in ADR-028 H2: a
+path that genuinely differs should stay separate rather than be forced through a shared seam it
+does not fit.
+
+### Q5 · Is the URI scheme over-engineered for six modes in one process?
+
+**They are not in one process, and that is the answer.**
+
+`WorkspaceMode` is a five-value union in the desktop renderer
+(`ActivityBar.tsx:15`) — but the dashboard is a separate Next.js application reading the same
+backend, and the CLI is a third process. A note referencing a planner item has to resolve in all
+three.
+
+An in-process object reference cannot cross that boundary; a string can. The URI is not
+future-proofing for modes we have not written — it is the minimum that works for the three clients
+that exist today.
+
+**Decision:** keep it. One refinement from the inspection: the scheme must be resolvable
+**server-side**, because the dashboard has no local store to resolve against. That makes
+`resolve(uri)` a backend capability with client caches in front of it, rather than a client-side
+lookup — a constraint worth fixing now, since discovering it after the desktop implementation
+would mean writing resolution twice.
 
 ---
 
