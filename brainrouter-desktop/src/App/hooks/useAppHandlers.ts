@@ -58,6 +58,8 @@ export interface AppHandlers {
   submit: (override?: string) => void;
   submitDelivery: (mode: 'queue' | 'steer') => void;
   reviewPrWithAi: (pr: { number: number; title?: string; headRefName?: string; baseRefName?: string }) => void;
+  /** ADR-028 F7 — ask the agent for a comprehension review of its own work. */
+  reviewMyUnderstanding: () => void;
   attachFiles: (files: File[]) => void;
   addPastedImages: (files: File[]) => void;
   renameCurrentSession: (title: string) => void;
@@ -217,6 +219,46 @@ export function useAppHandlers(ctx: AppHandlersCtx): AppHandlers {
   // the user's working tree stays untouched. The agent creates the worktree with
   // its own shell, reads the diff, works the code-review checklist, gives a
   // verdict, and cleans up. Reuses the normal turn flow via submit(override).
+  /**
+   * ADR-028 F7 — the comprehension review, as a turn.
+   *
+   * The button was dead. `comprehension-start` in the host always returned an
+   * empty question list, and the panel only renders when there ARE questions —
+   * so clicking it did nothing, forever, which is exactly the failure this ADR
+   * is about and I shipped it.
+   *
+   * The host cannot fix it: writing questions about consequences and rejected
+   * alternatives needs the model that just did the work, and the host has no
+   * model. So this mirrors `reviewPrWithAi` — the agent already has the
+   * reasoning, the context and the tools. What was missing was the ask.
+   */
+  const reviewMyUnderstanding = (): void => {
+    if (running || stopping) {
+      setToast('Finish the current turn first.');
+      return;
+    }
+    // The count comes from cli.comprehension.questions; five is the default the
+    // resolver clamps to, and the agent is told the number rather than left to
+    // pick one.
+    const n = 5;
+    const prompt = [
+      `Write me a comprehension review of the work you just did — ${n} questions.`,
+      '',
+      'This is a code review pointed at MY understanding, not at the code. Rules:',
+      '- Ask about CONSEQUENCES, RATIONALE, REVERSIBILITY and BOUNDARIES — what breaks if an assumption is wrong, why you rejected the alternative, which decision would be expensive to undo, what this deliberately does not handle.',
+      '- Never ask trivia. "Which file is X in" tests nothing — I can grep. The value is entirely in what the diff cannot show.',
+      '- Mix the forms: multiple choice where the wrong answers are plausible MISTAKES rather than filler, free text where recognising the answer is much easier than producing it, and at least one "this breaks when ___".',
+      '- Every question carries an explanation, shown whether I am right or wrong. A wrong answer that teaches nothing is just a score.',
+      '',
+      'Then wait for my answers and judge them. Two rules on judging:',
+      '- Different wording is FINE. You are judging whether I have the right model, not whether I phrased it your way.',
+      '- **A wrong answer is not always mine.** You wrote this from your own reading of what I wanted, and that reading can be wrong in ways the tests do not catch. If my answer contradicts yours and my reasoning holds, say so and treat it as a defect report about the code rather than a mark against me.',
+      '',
+      'No score, no tally. Close by naming which parts I do not yet have a model of.',
+    ].join('\n');
+    submit(prompt);
+  };
+
   const reviewPrWithAi = (pr: { number: number; title?: string; headRefName?: string; baseRefName?: string }): void => {
     if (running || stopping) {
       setToast('Finish the current turn before starting an AI review.');
@@ -314,5 +356,5 @@ export function useAppHandlers(ctx: AppHandlersCtx): AppHandlers {
     if (viewKey && t) q('q-session-meta', 'action:session-meta', { sessionKey: viewKey, patch: { title: t } });
   };
 
-  return { submit, submitDelivery, reviewPrWithAi, attachFiles, addPastedImages, renameCurrentSession };
+  return { submit, submitDelivery, reviewPrWithAi, reviewMyUnderstanding, attachFiles, addPastedImages, renameCurrentSession };
 }

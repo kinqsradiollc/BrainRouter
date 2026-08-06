@@ -18,14 +18,23 @@ interface ReviewPayload {
   questions: QuestionView[];
 }
 
-export function ComprehensionContainer(): React.ReactElement {
+export function ComprehensionContainer({ onStart }: { onStart?: () => void } = {}): React.ReactElement {
   const [subject, setSubject] = useState<string | null>(null);
   const [questions, setQuestions] = useState<QuestionView[]>([]);
   const [answers, setAnswers] = useState<Record<string, AnswerState>>({});
   const [outcome, setOutcome] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  /**
+   * Ask the AGENT for a review.
+   *
+   * The host cannot produce one — writing questions about consequences and
+   * rejected alternatives needs the model that did the work. `onStart` submits
+   * a turn; the questions arrive in the conversation, which is also where you
+   * answer them and where the disagreement path lives.
+   */
   const start = useCallback(async () => {
+    if (onStart) { onStart(); return; }
     setBusy(true);
     try {
       const review = await bridgeQuery<ReviewPayload>('comprehension-start', {});
@@ -42,7 +51,7 @@ export function ComprehensionContainer(): React.ReactElement {
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [onStart]);
 
   const answer = useCallback(async (questionId: string, given: string) => {
     // Optimistic, then judged. Free text needs the model (F7), so the row shows
