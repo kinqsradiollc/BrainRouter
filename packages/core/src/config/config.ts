@@ -711,6 +711,15 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     // ADR-028 H3 — anything unrecognised falls back to `auto`, so a typo in
     // config cannot silently change how pull requests are opened.
     stackingMode: c.stackingMode === 'always' || c.stackingMode === 'never' ? c.stackingMode : 'auto',
+    comprehension: {
+      // On by default: it is invoked, never unprompted, so the cost of having
+      // it available is a panel nobody opens.
+      enabled: c.comprehension?.enabled !== false,
+      model: typeof c.comprehension?.model === 'string' ? c.comprehension.model : '',
+      // Clamped rather than validated-and-rejected: a config typo should not
+      // stop a review, and the ADR's bounds are the point of the number.
+      questions: Math.min(7, Math.max(3, Number(c.comprehension?.questions) || 5)),
+    },
     // Defaults to 'safe': a feature that shipped and sat unused because an
     // extension was missing is the problem this exists to solve.
     autoInstallTools: c.autoInstallTools === 'off' ? 'off' : 'safe',

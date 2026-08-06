@@ -651,6 +651,21 @@ export interface CliKnobs {
    */
   stackingMode?: 'auto' | 'always' | 'never';
   /**
+   * ADR-028 F7 — the comprehension review, which runs as a SUBAGENT.
+   *
+   * Writing questions about consequences and rejected alternatives needs a
+   * model reasoning over what it just built; a renderer heuristic would produce
+   * the trivia F7 refuses by name. `off` hides the panel entirely, because a
+   * surface that cannot do its job is worse than no surface.
+   */
+  comprehension?: {
+    enabled?: boolean;
+    /** Blank uses the session model. */
+    model?: string;
+    /** 3–7. Above that it is homework, not a review. */
+    questions?: number;
+  };
+  /**
    * ADR-028 I1 — whether missing tooling installs itself on startup.
    *
    * `safe` (default) installs only what changes nothing outside the tool's own
@@ -1225,6 +1240,7 @@ export interface ResolvedCliKnobs {
   /** ADR-027 D2 — turn loop or typed graph executor. Both ship; this selects. */
   executionEngine: 'loop' | 'graph';
   stackingMode: 'auto' | 'always' | 'never';
+  comprehension: { enabled: boolean; model: string; questions: number };
   autoInstallTools: 'off' | 'safe';
   /** CC-CONFIG-A5 — provenance footer controls for commit/PR bodies. */
   attribution: { sessionUrl: boolean };

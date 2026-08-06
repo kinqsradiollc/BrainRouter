@@ -6081,48 +6081,38 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 
    The screenshot showed the problem: nine phase rows, then EVERY step from
    every phase in one flat list below them. Ninety-odd rows of equal weight, so
-   finding the one in progress meant reading all of them — and the steps were
-   detached from the phase they belong to, which is the only thing that makes a
-   step meaningful.
+   finding the one in progress meant reading all of them.
 
-   Three changes, in order of how much they help:
-   1. Steps are grouped under their phase and COLLAPSED unless the phase is in
-      progress. You are working on one phase; the other eight are history or
-      not yet started.
-   2. The active phase is the anchor — a left rule and full contrast, with
-      everything else stepped back.
-   3. Completed rows lose weight rather than gaining a colour. A finished list
-      that shouts green competes with the one row you need. */
+   These target the classes PlanPanel actually emits — `.plan-phase` carries the
+   phase STATUS as its second class (`completed`, `in_progress`, `pending`), so
+   the states are styled from data rather than from names I invented. My first
+   pass used `.done`/`.active` and would have styled nothing at all. */
 
-.plan-phase { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px;
-  overflow: hidden; }
-.plan-phase-head { display: flex; align-items: baseline; gap: 10px; padding: 9px 12px;
-  width: 100%; background: transparent; border: 0; color: var(--text); cursor: pointer;
-  text-align: left; }
-.plan-phase-head:hover { background: var(--surface-2, rgba(255,255,255,.03)); }
-.plan-phase-n { font-size: 10px; font-family: var(--mono); color: var(--text-faint); flex: none; }
-.plan-phase-title { flex: 1; min-width: 0; font-size: 13px; overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap; }
-.plan-phase-state { font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
+.plan-phase { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 5px;
+  padding: 8px 12px; }
+.plan-phase-title { display: flex; align-items: baseline; gap: 10px; }
+.plan-phase-title > span:first-child { font-size: 10px; font-family: var(--mono);
   color: var(--text-faint); flex: none; }
+.plan-phase-title > strong { flex: 1; min-width: 0; font-size: 13px; font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-phase-title > span:last-child { font-size: 10px; text-transform: uppercase;
+  letter-spacing: .05em; color: var(--text-faint); flex: none; }
 
-/* Completed phases step back — done work should not compete with live work. */
-.plan-phase.done { opacity: .58; }
-.plan-phase.done .plan-phase-title { font-weight: 400; }
+/* Finished work steps BACK rather than shouting a colour. A completed list in
+   green competes with the one row you actually need. */
+.plan-phase.completed { opacity: .5; }
+.plan-phase.skipped { opacity: .38; }
 
-/* The active phase is the anchor: a rule you can find without reading. */
-.plan-phase.active { border-color: var(--accent, var(--text-faint)); }
-.plan-phase.active .plan-phase-head { border-left: 2px solid var(--accent, var(--text-faint)); }
-.plan-phase.active .plan-phase-title { font-weight: 600; }
-.plan-phase-progress { font-size: 10px; font-family: var(--mono); color: var(--text-faint); }
+/* The in-progress phase is the anchor — findable without reading. */
+.plan-phase.in_progress { border-color: var(--accent, var(--text-faint));
+  border-left-width: 2px; }
+.plan-phase.in_progress .plan-phase-title > strong { font-weight: 650; }
+.plan-phase-progress { margin-top: 4px; font-size: 11px; font-family: var(--mono);
+  color: var(--text-faint); }
+.plan-phase-blocked { margin-top: 4px; font-size: 11px; line-height: 1.5;
+  color: var(--danger, var(--text-faint)); }
 
-/* Steps live INSIDE their phase, and only the open one is expanded. */
-.plan-steps { border-top: 1px solid var(--border); padding: 6px 12px 10px; }
-.plan-step { display: flex; gap: 9px; padding: 6px 0; font-size: 12px; line-height: 1.5; }
-.plan-step-mark { flex: none; width: 13px; color: var(--text-faint); font-size: 11px; }
-.plan-step.done { opacity: .55; }
-.plan-step.doing .plan-step-mark { color: var(--accent, var(--text)); }
-.plan-step-body { flex: 1; min-width: 0; }
-/* The acceptance line is evidence, not prose — quieter, and never wrapped into
-   the step text where it reads as part of the instruction. */
-.plan-step-check { display: block; margin-top: 3px; font-size: 11px; color: var(--text-faint); }
+/* The step list below the phases: the acceptance line is evidence, not part of
+   the instruction, so it reads as a separate quieter line. */
+.plan-acceptance { display: block; margin-top: 2px; font-size: 11px; line-height: 1.45;
+  color: var(--text-faint); }

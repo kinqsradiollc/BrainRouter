@@ -48,6 +48,7 @@ export function RuntimeSection({ knobs, setPath, runtimes = [], archives = [], p
 
   const backend = String(runtime.backend ?? 'process');
   const engine = knobs.executionEngine === 'graph' ? 'graph' : 'loop';
+  const comprehension = (knobs.comprehension ?? {}) as Dict;
   const serveOn = runtime.serve === true;
   const jitOn = runtime.jitSecrets === true;
 
@@ -80,6 +81,26 @@ export function RuntimeSection({ knobs, setPath, runtimes = [], archives = [], p
             setting is remembered, so it takes effect as soon as it does.
           </div>
         ) : null}
+      </SetGroup>
+
+      <SetGroup title="Comprehension review">
+        <Row
+          title="Offer comprehension reviews"
+          desc={<>
+            The Understand panel asks about consequences and rejected decisions — the parts a diff
+            cannot show — and you can disagree with its answers. It runs as a <b>subagent</b>: writing
+            good questions needs a model reasoning over what it just built, and a heuristic would
+            produce trivia. Never fires unprompted. (cli.comprehension.enabled)
+          </>}
+        >
+          <Toggle on={comprehension.enabled !== false} onChange={(v) => setPath('comprehension.enabled', v)} />
+        </Row>
+        <Row title="Model" desc="Which model writes and judges the questions. Blank uses the session model. (cli.comprehension.model)">
+          <KnobText value={comprehension.model} placeholder="session model" onSave={(v) => setPath('comprehension.model', v)} />
+        </Row>
+        <Row title="Questions" desc="How many per review. Fewer than three is not worth invoking; more than seven is homework. (cli.comprehension.questions)">
+          <KnobNumber value={comprehension.questions} placeholder="5" onSave={(v) => setPath('comprehension.questions', v)} />
+        </Row>
       </SetGroup>
 
       <SetGroup title="Backend">

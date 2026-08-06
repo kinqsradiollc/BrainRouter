@@ -2078,6 +2078,12 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         return verdict;
       },
       'comprehension-start': async () => {
+        // ADR-028 F7 — off means OFF. A surface that cannot do its job is worse
+        // than no surface: it takes a click and returns nothing.
+        const settings = getCliKnobs().comprehension;
+        if (settings && settings.enabled === false) {
+          return { subject: '', questions: [], reason: 'Comprehension reviews are turned off in settings.' };
+        }
         // The QUESTIONS come from the agent — generating good ones needs its
         // view of what it just built and why. Until a turn has produced work
         // worth reviewing there is nothing to ask about, and saying so is
