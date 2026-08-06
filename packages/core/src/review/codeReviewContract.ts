@@ -9,6 +9,7 @@
  * the shared parser + inline-suggestion renderer are reused unchanged.
  */
 import type { ParsedReviewFinding } from './reviewFindings.js';
+import { buildGroundingClause } from './reviewGrounding.js';
 import { type ReviewLens, isBlockingBySeverity } from './reviewLens.js';
 
 /** The quality axes the code-review lens sweeps (security is handled by the security lens). */
@@ -36,12 +37,13 @@ export const CODE_REVIEW_MARKER = '<!-- brainrouter-code-review -->';
  * The no-tools framing remains correct, and required, when no context resolved.
  */
 export function buildCodeReviewContract(options?: { repositoryContext?: boolean }): string {
-  const grounded = options?.repositoryContext === true;
+  const mode = options?.repositoryContext === true ? 'attached-context' : 'diff-only';
   return (
     'You are a senior software engineer reviewing a pull request for QUALITY (NOT security — a separate reviewer covers vulnerabilities; do not report injection / secrets / auth issues here). The unified diff is provided ABOVE — review it DIRECTLY. The added (`+`) lines are the new code.\n' +
-    (grounded
-      ? 'Exact-revision repository context for the changed files and their neighbours is provided ABOVE, as untrusted evidence. USE IT: whether a change fits the codebase cannot be judged from a hunk. Check how neighbouring code solves the same problem before calling something inconsistent, and treat a pattern repeated across unchanged call sites as the house convention rather than a defect. You still cannot request more files. Approve silently (empty array) when the change is clean; a good review is not a long one.\n'
-      : 'You are a single-shot reviewer with NO tools: do not ask to open other files or run commands. Base every finding on evidence visible in the diff itself — a hunk header like `@@ -0,0 +1,18 @@` gives you the real line numbers. Approve silently (empty array) when the change is clean; a good review is not a long one.\n') +
+    buildGroundingClause(mode) + '\n' +
+    // Brevity is a property of the reviewer, not of how it was grounded: both
+    // branches carried this sentence, so it belongs outside the conditional.
+    'Approve silently (empty array) when the change is clean; a good review is not a long one.\n' +
     '\n' +
     'Evaluate the change across these axes and report only REAL, specific problems the diff introduces:\n' +
     CODE_REVIEW_AXES.map((a) => `  - ${a}`).join('\n') + '\n' +

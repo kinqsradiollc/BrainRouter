@@ -1,3 +1,4 @@
+import { buildGroundingClause } from '@kinqs/brainrouter-core/review';
 import type { AccessMode } from '@kinqs/brainrouter-core/exec';
 
 /**
@@ -64,21 +65,12 @@ export function buildReviewPrompt(opts: BuildReviewPromptOptions): string {
     '## The diff under review',
     'The diff is provided below — do NOT spawn a child just to read it.',
     '',
-    // The backend bot reviews diff-only when no repository context resolved, and
-    // its most common false positive is reporting a guard missing that sits
-    // twenty lines below the hunk. This reviewer HAS read-only tools, so that
-    // failure is avoidable here — but the prompt used to license reading files
-    // only when the diff was TRUNCATED, which is a different problem. A
-    // complete diff can still be missing the context that decides a finding.
-    '**A hunk shows what changed, not what already guards it.** Before reporting that a',
-    'check, guard, or error path is missing, `read_file` the surrounding function and',
-    'confirm it is genuinely absent. Unchanged code following the same pattern is a',
-    'NEGATIVE CONTROL: a convention repeated across call sites is house style, not a',
-    'defect this change introduced.',
-    '',
-    'If the decisive evidence is in neither the diff nor what you read, say so rather',
-    'than inferring it. An unverified claim stated confidently is worse than a gap',
-    'reported honestly — the reader cannot tell them apart.',
+    // The grounding rule comes from core so this reviewer cannot drift from the
+    // bot's and the desktop's. `read-only-tools` is the honest description of
+    // this surface: children run with access=read, so they CAN open files —
+    // the diff-only phrasing the bot uses would forbid the very check that
+    // kills the "guard missing twenty lines below the hunk" false positive.
+    buildGroundingClause('read-only-tools'),
     '',
     '```diff',
     diff.trim().length > 0 ? diff.trimEnd() : '(no diff content)',

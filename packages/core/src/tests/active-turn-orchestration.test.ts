@@ -7,6 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { detectOrchestrationTaskSignals } from '../orchestration/profiles/taskSignals.js';
+import { buildWorkingTreeReviewPrompt } from '../review/workingTreeReview.js';
 import { resolveActiveTurnOrchestration } from '../workspace/activeTurnOrchestration.js';
 import {
   createWorkspaceManifest,
@@ -148,6 +149,77 @@ test('Agent.runTurn publishes the saved profile resolution on the live turn stat
       assert.equal(agent.activeTurnOrchestration?.plan.orchestrationProfileId, 'research');
       assert.equal(agent.activeTurnOrchestration?.plan.strategyId, 'parallel-evidence');
       assert.equal(agent.activeTurnOrchestration?.plan.activation, 'preview');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('a review workflow the caller already assembled is not re-planned as a delivery run', () => {
+  withTempWorkspace((workspace) => {
+    const manifest = createWorkspaceManifest({
+      name: 'engineering',
+      profile: 'engineering',
+      by: 'wizard',
+    });
+    saveWorkspaceManifest(workspace, adaptive(manifest));
+    const task = buildWorkingTreeReviewPrompt({
+      diff: 'diff --git a/src/auth.ts b/src/auth.ts\n@@ -3,6 +3,7 @@\n+  if (!token) return null;\n',
+    });
+    assert.equal(
+      resolveActiveTurnOrchestration({ workspaceRoot: workspace, task }).plan.strategyId,
+      'delivery',
+      'precondition: routed by its own text, a review prompt becomes an implement-and-verify plan',
+    );
+
+    const resolved = resolveActiveTurnOrchestration({
+      workspaceRoot: workspace,
+      task,
+      preplanned: true,
+    });
+    assert.equal(resolved.source, 'preplanned');
+    assert.equal(resolved.plan.strategyId, null);
+    assert.deepEqual(resolved.taskSignalIds, []);
+  });
+});
+
+test('Agent.runTurn keeps a pre-planned review turn unplanned, so the reviewer is never told to implement', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const manifest = createWorkspaceManifest({
+      name: 'engineering',
+      profile: 'engineering',
+      by: 'wizard',
+    });
+    saveWorkspaceManifest(workspace, adaptive(manifest));
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      choices: [{ message: { content: '[]' } }],
+      usage: { prompt_tokens: 10, completion_tokens: 2 },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
+    const callbacks = {
+      onStatusUpdate: () => {},
+      onToolStart: () => {},
+      onToolEnd: () => {},
+    };
+    try {
+      // The desktop Review panel: an isolated reviewer handed the assembled
+      // working-tree prompt.
+      const desktop = makeAgent(workspace);
+      await desktop.runTurn(
+        buildWorkingTreeReviewPrompt({ diff: 'diff --git a/a.ts b/a.ts\n@@ -1 +1 @@\n-x\n+y\n' }),
+        callbacks,
+        { preplanned: true },
+      );
+      assert.equal(desktop.activeTurnOrchestration?.source, 'preplanned');
+      assert.equal(desktop.activeTurnOrchestration?.plan.strategyId, null);
+
+      // The CLI `/review`: the slash command latches its skill before the turn,
+      // which is the same statement — the workflow is already chosen.
+      const cli = makeAgent(workspace);
+      cli.activeSkill = 'code-review-and-quality';
+      await cli.runTurn('Review the changes and fix the broken auth guard.', callbacks);
+      assert.equal(cli.activeTurnOrchestration?.source, 'preplanned');
+      assert.equal(cli.activeTurnOrchestration?.plan.strategyId, null);
     } finally {
       globalThis.fetch = originalFetch;
     }

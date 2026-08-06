@@ -108,7 +108,7 @@ function sameLlmRoute(
     && (route.llm.apiKey ?? '') === (llm.apiKey ?? '');
 }
 
-export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCallbacks, opts?: { hiddenPrompt?: boolean; images?: Array<{ mediaType: string; dataBase64: string }> }): Promise<string> {
+export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCallbacks, opts?: { hiddenPrompt?: boolean; images?: Array<{ mediaType: string; dataBase64: string }>; preplanned?: boolean }): Promise<string> {
     if (!this.initialized) {
       await this.bootstrapSession(callbacks);
     }
@@ -149,6 +149,11 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       task: prompt,
       activeCapabilitySkillIds: this.activeWorkspaceCapabilities.skills,
       parentDepth: this.agentDepth,
+      // A latched skill already disqualifies the stage controller below, so
+      // resolving a plan here only produced a strategy nothing could run — and
+      // named it in the turn's telemetry as if it had. Both ends now read the
+      // same fact.
+      preplanned: opts?.preplanned === true || this.activeSkill !== undefined,
     });
     this.activeTurnOrchestration = activeTurnOrchestration;
     const workspaceManifestForTurn = loadWorkspaceManifest(this.workspaceRoot);

@@ -49,7 +49,7 @@ import { buildChildResumePrompt } from '@kinqs/brainrouter-core/util';
 export interface AgentLike {
   sessionKey: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  runTurn(prompt: string, callbacks: any, opts?: { hiddenPrompt?: boolean; images?: AgentImage[] }): Promise<string>;
+  runTurn(prompt: string, callbacks: any, opts?: { hiddenPrompt?: boolean; images?: AgentImage[]; preplanned?: boolean }): Promise<string>;
   /** DESK-2 — cooperative stop; the turn unwinds at the next boundary. */
   requestInterrupt?(): void;
   requestSteer?(text: string, options?: { id?: string; source?: SteeringInput['source'] }): SteeringInput;

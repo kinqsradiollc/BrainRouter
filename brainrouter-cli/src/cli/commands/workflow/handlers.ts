@@ -542,7 +542,11 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       console.log(chalk.gray(`Workflow folder: ${path.dirname(reportPath)}${modeNote}`));
       // REVIEW-FIX — one authoritative prompt (no generic-skill double-path):
       // the diff-injected, access-aware fan-out workflow, run directly. The
-      // skill is latched only so memory recall/capture see the review context.
+      // skill is latched so memory recall/capture see the review context — and
+      // that latch also tells the workspace router this turn's workflow is
+      // already chosen. Unlatched, signal detection reads the whole assembled
+      // prompt, matches "bug"/"fix"/"implement", and re-plans the review as a
+      // delivery run.
       const reviewPrompt = buildReviewPrompt({
         scope,
         slug: meta.slug,

@@ -307,6 +307,53 @@
       ]
     },
     {
+      "id": "security-review-only",
+      "description": "Sweep an existing engineering change for vulnerabilities without implementing fixes.",
+      "activation": {
+        "signals": [
+          "security-review"
+        ],
+        "explicitOnly": false
+      },
+      "stages": [
+        {
+          "id": "security-review",
+          "executor": {
+            "kind": "role",
+            "roleId": "reviewer"
+          },
+          "after": [],
+          "objective": "Sweep the supplied change for vulnerabilities. Report a finding only where an untrusted source reaches a dangerous sink; prefix each summary with the most specific CWE; calibrate severity on exploitability rather than theory; leave code-quality nits to the code-review pass.",
+          "skillIds": [
+            "code-review-and-quality"
+          ],
+          "fanOut": {
+            "min": 1,
+            "max": 1
+          },
+          "optional": false,
+          "expectedOutput": {
+            "contractId": "reviewer",
+            "requiredSections": [
+              "findings"
+            ]
+          }
+        },
+        {
+          "id": "deliver",
+          "executor": {
+            "kind": "primary"
+          },
+          "after": [
+            "security-review"
+          ],
+          "objective": "Separate blocking vulnerabilities from hardening advice and deliver the verdict.",
+          "skillIds": [],
+          "optional": false
+        }
+      ]
+    },
+    {
       "id": "review-only",
       "description": "Review an existing engineering artifact without implementing changes.",
       "activation": {

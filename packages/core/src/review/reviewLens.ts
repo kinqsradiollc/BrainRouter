@@ -49,6 +49,10 @@ export interface ReviewLens {
    * scheduler had already attached. Given both, a model follows the stronger,
    * more specific instruction and reasons from the diff alone — which is how a
    * guard twenty lines below a hunk goes unseen.
+   *
+   * The grounding paragraph itself is NOT written here: `reviewGrounding.ts`
+   * owns it for every reviewing surface, and a lens only picks the evidence
+   * mode its caller actually assembled.
    */
   buildContract(options?: { repositoryContext?: boolean }): string;
   /** Whether a finding should BLOCK the merge (drives the check-run conclusion). */
@@ -80,6 +84,10 @@ const CWE_RE = /\[(CWE-\d+)\]/i;
  * A reader deciding whether to trust a finding needs to know which one they
  * got. Omitting it is the same failure this whole ADR is about — a surface
  * that does not say which state produced it.
+ *
+ * Deliberately a boolean, not a `ReviewEvidenceMode`: this renders a published
+ * PR footer, and only the bot publishes one. The local surfaces have no footer,
+ * so a third value would have no renderer to reach.
  */
 export function groundingNote(grounded: boolean): string {
   return grounded

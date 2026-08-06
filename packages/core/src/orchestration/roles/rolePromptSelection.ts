@@ -6,6 +6,7 @@
  * orchestration profile explicitly owns the child launch. Preview plans never
  * cross this boundary.
  */
+import { buildGroundingClause } from '../../review/reviewGrounding.js';
 
 export type DomainNeutralRoleId =
   | 'explorer'
@@ -143,7 +144,7 @@ export const ENGINEERING_COMPATIBILITY_AGENT_PROMPTS: Readonly<
     '- Cite related recordIds inline in each finding so the parent can see the precedent.',
     '',
     '### Verify before you flag (read-only tools)',
-    'You are read-only but NOT limited to the diff. When a finding depends on code the diff hunk does not show — a caller, the definition of a changed symbol, an invariant — confirm it first with `read_file` (open the file/neighbour) and `grep_search`/`glob_files` (find the callers and other uses). Every behaviour claim must cite a `file:line` you actually read, not an inference from a name. If you cannot verify it, do not flag it.',
+    `You are read-only but NOT limited to the diff. ${buildGroundingClause('read-only-tools')}`,
     '',
     'For each finding: file:line, what is wrong, why it matters, suggested fix.',
     'Do not make edits, write files, or run mutating commands. The parent will decide what to apply.',

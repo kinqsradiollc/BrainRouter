@@ -29,7 +29,23 @@ export function resolveActiveTurnOrchestration(input: {
   task: string;
   activeCapabilitySkillIds?: readonly string[];
   parentDepth?: number;
+  /**
+   * The caller already chose this turn's workflow — a slash command that
+   * assembled a review/commit prompt, or a latched skill. Signal detection reads
+   * the whole assembled task, so a 60KB review prompt full of the words "bug",
+   * "fix" and "implement" out-matches every narrow review pattern and the turn
+   * gets planned as a delivery run. A pre-planned turn is the executor, not the
+   * task to be planned.
+   */
+  preplanned?: boolean;
 }): ActiveTurnOrchestrationResolution {
+  if (input.preplanned === true) {
+    return {
+      plan: resolveWorkspaceOrchestrationPlan(emptyInput()),
+      taskSignalIds: [],
+      source: 'preplanned',
+    };
+  }
   if ((input.parentDepth ?? 0) > 0) {
     return {
       plan: resolveWorkspaceOrchestrationPlan(emptyInput()),

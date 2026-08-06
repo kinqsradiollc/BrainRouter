@@ -6,6 +6,8 @@ export * from './critic.js';
 export * from './reviewFindings.js';
 export * from './reviewInstructions.js';
 export * from './reviewModel.js';
+export * from './reviewGrounding.js';
+export * from './workingTreeReview.js';
 export * from './reviewLens.js';
 export * from './securityReview.js';
 export * from './codeReviewContract.js';
