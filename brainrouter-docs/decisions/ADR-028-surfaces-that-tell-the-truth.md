@@ -995,18 +995,31 @@ correctly reporting it unavailable the whole time. **A capability check that is 
 still a feature nobody gets**, and that is a different failure from the ones this ADR has been
 fixing: not a false claim, but a true one nobody acted on.
 
-### I1 · Detect at startup, offer once, never install silently
+### I1 · Detect at startup; install by blast radius, never silently *(owner-decided)*
 
-The obvious fix — install what is missing on first launch — is one I am refusing.
+The first draft of this refused to install anything without a click. The owner asked twice for
+check-and-install, which is their decision to make; what survives from the objection is the part
+that was actually right — **silent is wrong, not automatic.**
 
-> **Installing software on someone's machine without asking is not a convenience, it is a
-> compromise.** A developer tool that quietly runs a package manager has taken a decision that
-> belongs to the person whose machine it is, and "it was only a CLI extension" is the reasoning
-> behind every supply-chain incident worth naming.
+The line is drawn on **blast radius**, not on trust:
 
-So: **detect on startup, report what is missing and what it unlocks, and install only on an explicit
-click.** The install command is shown in full before it runs, because a person who wants to run it
-themselves — in their own shell, having read it — must be able to.
+| | Installs on startup | Why |
+|---|---|---|
+| `gh extension install github/gh-stack` | **yes** | touches only gh's own extension directory; no sudo, no system change; undone by deleting a folder |
+| `brew install gh` | no | a package manager, with a system-wide install root |
+| `xcode-select --install` | no | a multi-gigabyte toolchain and a system dialog |
+
+`planProvisioning` never places a system package in `install`, so the host cannot invoke a package
+manager however the setting is configured. `cli.autoInstallTools` defaults to `safe`; setting it to
+`off` returns to detect-and-offer for everything.
+
+**The residual risk is real and worth naming**: `gh extension install` fetches and can run code from
+the extension's repository. It is pinned to `github/gh-stack` — a GitHub-published extension, not an
+arbitrary one — but a compromise of that repository would reach machines that never clicked
+anything. That is the trade being made, deliberately, against a feature that shipped and sat unused
+because the extension was missing.
+
+The install command is still shown in full, and a declined tool is never installed.
 
 - **Checked once per launch**, cached per workspace. Probing three binaries on every turn taxes every
   session for an answer that changes when someone installs software.
