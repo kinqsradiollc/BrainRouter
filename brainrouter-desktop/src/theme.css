@@ -5837,7 +5837,26 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 
 /* ADR-028 G6 — the planner mode. A full-width surface, not a panel: it is
    user-scoped and spans every project, so it has no per-workspace tab strip. */
-.planner-mode { display: flex; flex-direction: column; height: 100%; min-width: 0; }
+/* `.workrow` is a flex ROW. Without `flex: 1` a mode child sizes to its
+   CONTENT, so the planner rendered in a column about half the window wide with
+   the rest dead black — the calendar's day columns were being clipped by a
+   container that had no reason to be narrow. */
+/* `.workrow` is a flex ROW. Without `flex: 1` a mode child sizes to its
+   CONTENT, so the planner rendered in a column about half the window wide with
+   the rest dead black — the calendar's day columns were being clipped by a
+   container that had no reason to be narrow. */
+.planner-mode { display: flex; flex-direction: column; height: 100%; flex: 1; min-width: 0; }
+
+/* The empty state is a stack, not a sentence. Without this the title and the
+   note render inline and read as one run-on line. */
+.planner-mode .empty { display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+  padding: 22px 2px; }
+
+/* A reading column for the LIST views. Today and Notes are prose and controls,
+   and a text input spanning 1600px is unusable — you lose the start of the line
+   looking at the end of it. The calendar is exempt: a week grid genuinely wants
+   every pixel, which is why the rule targets the body rather than the mode. */
+.planner-body { width: 100%; max-width: 860px; }
 .planner-head { display: flex; align-items: center; justify-content: space-between;
   gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
 .planner-views { display: flex; gap: 4px; }
