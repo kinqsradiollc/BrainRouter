@@ -29,17 +29,39 @@ const groq: LLMConfig = {
   free: true,
 };
 
-test('buildModelRegistry pass-through uses cached /models and curated models as a limit', () => {
+test('a model YOU configured is offered even when /models never listed it', () => {
+  // The reported bug, and this test used to pin it: the configured list was
+  // INTERSECTED with the fetched catalog, so anything the endpoint did not
+  // advertise vanished — every fine-tune, every self-hosted deployment, every
+  // model newer than the last catalog fetch. The symptom was "only models
+  // added on the backend work".
+  //
+  // A discovery list is not an allowlist. Typing a name into your own config is
+  // an assertion that it exists, and a wrong one fails at the provider with a
+  // clear error — far better than the model quietly not being there.
   const registry = buildModelRegistry({
     openai,
-    limited: { ...openai, provider: 'openai', models: ['gpt-5.3-mini'], cachedModels: ['gpt-5.3', 'gpt-5.3-mini'] },
+    mine: {
+      ...openai, provider: 'openai',
+      models: ['my-finetune-v3'],
+      cachedModels: ['gpt-5.3', 'gpt-5.3-mini'],
+    },
   });
-  assert.ok(registry.bySlug.has('openai/gpt-5.3'));
-  assert.ok(registry.bySlug.has('openai/gpt-5.3-mini'));
-  assert.deepEqual(
-    registry.entries.filter((entry) => entry.provider === 'limited').map((entry) => entry.model),
-    ['gpt-5.3-mini'],
-  );
+  const mine = registry.entries.filter((e) => e.provider === 'mine').map((e) => e.model);
+  assert.ok(mine.includes('my-finetune-v3'), 'the model you added must be there');
+  // Discovered models stay available too — adding one is not a filter.
+  assert.ok(mine.includes('gpt-5.3'));
+  // Configured first: chosen deliberately, where the discovered ones merely exist.
+  assert.equal(mine[0], 'my-finetune-v3');
+  assert.equal(new Set(mine).size, mine.length, 'no duplicates when both lists overlap');
+});
+
+test('a configured model that IS in the catalog appears once', () => {
+  const registry = buildModelRegistry({
+    both: { ...openai, provider: 'openai', models: ['gpt-5.3'], cachedModels: ['gpt-5.3', 'gpt-5.3-mini'] },
+  });
+  const models = registry.entries.filter((e) => e.provider === 'both').map((e) => e.model);
+  assert.deepEqual(models, ['gpt-5.3', 'gpt-5.3-mini']);
 });
 
 test('buildModelRegistry enforces availableModels against catalog entries', () => {

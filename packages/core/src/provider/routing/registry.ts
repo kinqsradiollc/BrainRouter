@@ -50,15 +50,30 @@ function providerDefFor(name: string, llm: LLMConfig): ProviderDefinition | unde
   return findProviderByEndpoint(llm.endpoint) ?? PROVIDER_REGISTRY.get((llm.provider || name).toLowerCase());
 }
 
+/**
+ * Every model this provider can be asked for.
+ *
+ * `cachedModels` is what the provider's `/models` endpoint advertised.
+ * `models` is what the PERSON configured. The two used to be INTERSECTED, so a
+ * model you added by hand and the endpoint did not list was silently dropped —
+ * which is every fine-tune, every self-hosted deployment, every model newer
+ * than the last catalog fetch, and anything behind a gateway that does not
+ * enumerate. The symptom was "only models added on the backend work".
+ *
+ * A discovery list is not an allowlist. If you typed a model name into your own
+ * config, you are asserting it exists, and we are not better placed to know
+ * than you are — a wrong name fails at the provider with a clear error, which
+ * is a far better outcome than the model quietly not being there.
+ *
+ * So: union, with the configured names first, because they were chosen
+ * deliberately and the discovered ones merely exist.
+ */
 function modelListFor(llm: LLMConfig, passThrough: boolean): string[] {
   const curated = cleanStringList(llm.models);
   const cached = cleanStringList(llm.cachedModels);
   if (passThrough && cached.length > 0) {
-    if (curated.length > 0) {
-      const limit = new Set(curated);
-      return cached.filter((model) => limit.has(model));
-    }
-    return cached;
+    const seen = new Set(curated);
+    return [...curated, ...cached.filter((model) => !seen.has(model))];
   }
   if (curated.length > 0) return curated;
   return cleanStringList([llm.model]);
