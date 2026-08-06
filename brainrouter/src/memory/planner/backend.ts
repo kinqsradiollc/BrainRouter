@@ -55,7 +55,22 @@ export interface PushOutcome {
 interface PlannerStore {
   listPlannerItemsSince(orgId: string, userId: string, since?: string): Promise<PlannerRow[]>;
   getPlannerItem(orgId: string, userId: string, id: string): Promise<PlannerRow | null>;
-  upsertPlannerItem(orgId: string, userId: string, item: PlannerItem): Promise<PlannerRow>;
+  /**
+   * Takes a ROW, not a PlannerItem.
+   *
+   * The interface said `PlannerItem` and the query has always taken a row —
+   * which is why the merged item landed with a null `payload_json`. The types
+   * agreed with each other all the way down and disagreed with the database.
+   */
+  upsertPlannerItem(orgId: string, userId: string, row: {
+    id: string;
+    origin: string;
+    source: string | null;
+    payload: PlannerItem;
+    dueDate: string | null;
+    completed: boolean;
+    deletedAtHlc: string | null;
+  }): Promise<PlannerRow>;
   listPlannerBlocks(orgId: string, userId: string): Promise<PlannerBlockRow[]>;
   upsertPlannerBlock(orgId: string, userId: string, block: PlannerBlockRow): Promise<PlannerBlockRow>;
   wasOperationApplied(orgId: string, userId: string, key: string): Promise<boolean>;
@@ -107,11 +122,36 @@ export async function pushOperations(
       continue;
     }
 
-    const incoming = op.payload as PlannerItem | undefined;
-    if (!incoming || typeof incoming !== "object" || !incoming.title) {
+    // The payload is a PATCH, not a whole item: the client sends the fields it
+    // changed and the operation carries the id and the stamp. Treating it as a
+    // complete PlannerItem meant every insert arrived with a null `id` — caught
+    // only by running a real push against a real database, because the type
+    // assertion made it look correct all the way down.
+    const patch = op.payload as Record<string, unknown> | undefined;
+    if (!patch || typeof patch !== "object") {
       outcome.rejected.push({
         idempotencyKey: op.idempotencyKey,
         reason: "The operation carried no usable item.",
+      });
+      continue;
+    }
+    const stamped = <T>(value: T) => ({ value, at: op.at });
+    const incoming: PlannerItem = {
+      id: op.itemId,
+      origin: "owned",
+      title: stamped(typeof patch.title === "string" ? patch.title : ""),
+      ...(typeof patch.notes === "string" ? { notes: stamped(patch.notes) } : {}),
+      ...(patch.dueDate !== undefined ? { dueDate: stamped(patch.dueDate as string | null) } : {}),
+      ...(typeof patch.priority === "number" ? { priority: stamped(patch.priority) } : {}),
+      ...(typeof patch.completed === "boolean" ? { completed: stamped(patch.completed) } : {}),
+      // A delete is a tombstone stamped with the operation's clock (D4), so a
+      // later edit from another device can resurrect it as conflicted.
+      ...(op.kind === "delete" ? { deletedAt: op.at } : {}),
+    };
+    if (!incoming.title.value && op.kind === "create") {
+      outcome.rejected.push({
+        idempotencyKey: op.idempotencyKey,
+        reason: "A created item needs a title.",
       });
       continue;
     }
@@ -133,7 +173,22 @@ export async function pushOperations(
         next = mergeOwnedItem(existing.payload, incoming);
       }
 
-      await store().upsertPlannerItem(orgId, userId, next);
+      // The query layer takes a ROW, not a PlannerItem: the merged item travels
+      // in `payload` and the indexed columns are projected out of it. Passing
+      // the item straight through left `payload_json` null — the second half of
+      // the same mistake as the id, and equally invisible to the type system
+      // because the adapter's parameter type is inferred from the query.
+      await store().upsertPlannerItem(orgId, userId, {
+        id: next.id,
+        origin: next.origin,
+        source: next.source ?? null,
+        payload: next,
+        dueDate: (next.dueDate?.value as string | null) ?? null,
+        completed: next.completed?.value ?? false,
+        deletedAtHlc: next.deletedAt
+          ? `${next.deletedAt.physical}.${next.deletedAt.logical}.${next.deletedAt.deviceId}`
+          : null,
+      });
       await store().recordOperationApplied(orgId, userId, op.idempotencyKey, op.itemId);
       outcome.accepted.push(op.idempotencyKey);
     } catch (error) {

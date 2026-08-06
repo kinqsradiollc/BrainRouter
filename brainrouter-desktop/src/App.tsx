@@ -44,6 +44,7 @@ import { sessionRowsCacheKey } from './lib/session/list/sessionCache.js';
 import { nextBrowserOpenGeneration } from './lib/browser/browserPanelModel.js';
 import { useSessionActions } from './lib/session/hooks/useSessionActions.js';
 import { Sidebar } from './components/layout/Sidebar.js';
+import { ToolingNotice } from './components/ToolingNotice.js';
 import { ActivityBar, type WorkspaceMode } from './components/layout/ActivityBar.js';
 import { WorkspaceOrgProvider } from './lib/orgContext.js';
 import type { GoalRecord } from './components/chat/GoalBanner.js';
@@ -719,6 +720,8 @@ export function App(): React.ReactElement {
         }}
         openAccountSettings={() => openSettings('account')} />
 
+      {/* ADR-028 I1 — once per launch, dismissible, never blocking. */}
+      <ToolingNotice />
       <MainContent
         mode={mode} setMode={setMode} workrowRef={workrowRef} track={track} trackOps={trackOps}
         railOpen={railOpen} setRailOpen={setRailOpen} sidePanelOpen={sidePanelOpen} sidePinned={sidePinned}

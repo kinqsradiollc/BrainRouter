@@ -986,6 +986,85 @@ product?") cannot occur in this one. `detectUrgency` treats "just tell me",
 - Refused mid-stack merges in the first pass of A5, forbidding the operation
   the feature exists for.
 
+---
+
+## Part I — Tooling and identity
+
+The stack feature shipped, and then sat unused because `gh-stack` was not installed. A1 was
+correctly reporting it unavailable the whole time. **A capability check that is right and silent is
+still a feature nobody gets**, and that is a different failure from the ones this ADR has been
+fixing: not a false claim, but a true one nobody acted on.
+
+### I1 · Detect at startup; install by blast radius, never silently *(owner-decided)*
+
+The first draft of this refused to install anything without a click. The owner asked twice for
+check-and-install, which is their decision to make; what survives from the objection is the part
+that was actually right — **silent is wrong, not automatic.**
+
+The line is drawn on **blast radius**, not on trust:
+
+| | Installs on startup | Why |
+|---|---|---|
+| `gh extension install github/gh-stack` | **yes** | touches only gh's own extension directory; no sudo, no system change; undone by deleting a folder |
+| `brew install gh` | no | a package manager, with a system-wide install root |
+| `xcode-select --install` | no | a multi-gigabyte toolchain and a system dialog |
+
+`planProvisioning` never places a system package in `install`, so the host cannot invoke a package
+manager however the setting is configured. `cli.autoInstallTools` defaults to `safe`; setting it to
+`off` returns to detect-and-offer for everything.
+
+**The residual risk is real and worth naming**: `gh extension install` fetches and can run code from
+the extension's repository. It is pinned to `github/gh-stack` — a GitHub-published extension, not an
+arbitrary one — but a compromise of that repository would reach machines that never clicked
+anything. That is the trade being made, deliberately, against a feature that shipped and sat unused
+because the extension was missing.
+
+The install command is still shown in full, and a declined tool is never installed.
+
+- **Checked once per launch**, cached per workspace. Probing three binaries on every turn taxes every
+  session for an answer that changes when someone installs software.
+- **Never blocking.** A missing tool disables one feature; it does not gate the app.
+- **Declined is remembered.** Asking again next launch is how a prompt becomes noise, and then the
+  one that matters is dismissed reflexively (ADR-027 §1).
+
+### I2 · Bundling is rejected, and it is not close
+
+Shipping `gh` inside the app would remove the install step. It would also mean shipping a binary we
+do not maintain, on three platforms, that talks to GitHub with the user's credentials — and owning
+its CVEs on our release cadence rather than its own.
+
+**A tool that authenticates to a forge should be updated by whoever writes it.** The install step is
+the smaller cost.
+
+### I3 · Git identity is per workspace, because the wrong account is a real harm
+
+`gh` holds one active account. A person with a work account and a personal one has an active account
+that is right for whichever repository they last thought about.
+
+The failure is not cosmetic: **pushing a work branch from a personal account, or company code to a
+personal fork, is a disclosure**. It is silent, it is attributed to the person, and it is discovered
+by someone else.
+
+> **Each workspace records the account it expects. Before any push, create, or merge, the active
+> account is compared against it — and a mismatch stops the operation and names both accounts.**
+
+- **Bound on first push**, not by a settings page nobody visits. The first time a workspace pushes,
+  the account in use is what it expects from then on.
+- **A mismatch is a question, not an error**: *"This workspace has pushed as `work-acct`; you are
+  signed in as `personal`. Switch, or update what this workspace expects?"* Both are one click,
+  because both are legitimate — people do change which account owns a project.
+- **Switching is `gh auth switch`**, not a second credential store. A second store would drift from
+  the one `git` and `gh` actually use, and the drift would show up as a push that used an account the
+  UI said was inactive.
+
+### I4 · Read-only operations never prompt
+
+Fetching a stack's state, reading checks, listing PRs — none of these can disclose anything, so none
+of them ask. Only operations that **write to the forge** consult the binding.
+
+An identity check on every read would make the guard something people learn to click through, which
+is exactly how it would fail on the push that mattered.
+
 ## 3. Out of scope
 
 - Reimplementing cascading rebase — GitHub maintains it.

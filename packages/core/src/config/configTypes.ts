@@ -651,6 +651,13 @@ export interface CliKnobs {
    */
   stackingMode?: 'auto' | 'always' | 'never';
   /**
+   * ADR-028 I1 — whether missing tooling installs itself on startup.
+   *
+   * `safe` (default) installs only what changes nothing outside the tool's own
+   * extension directory; `off` detects and offers without installing.
+   */
+  autoInstallTools?: 'off' | 'safe';
+  /**
    * CC-CONFIG-A5 — provenance/attribution controls for generated commit + PR bodies.
    * `sessionUrl` (default true): include the BrainRouter provenance/session footer.
    * Set false to omit it (private repos / clean history).
@@ -1218,6 +1225,7 @@ export interface ResolvedCliKnobs {
   /** ADR-027 D2 — turn loop or typed graph executor. Both ship; this selects. */
   executionEngine: 'loop' | 'graph';
   stackingMode: 'auto' | 'always' | 'never';
+  autoInstallTools: 'off' | 'safe';
   /** CC-CONFIG-A5 — provenance footer controls for commit/PR bodies. */
   attribution: { sessionUrl: boolean };
   /** CC-CONFIG-A6 — hide bundled skills from listings. */

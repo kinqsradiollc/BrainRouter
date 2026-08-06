@@ -711,6 +711,9 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     // ADR-028 H3 — anything unrecognised falls back to `auto`, so a typo in
     // config cannot silently change how pull requests are opened.
     stackingMode: c.stackingMode === 'always' || c.stackingMode === 'never' ? c.stackingMode : 'auto',
+    // Defaults to 'safe': a feature that shipped and sat unused because an
+    // extension was missing is the problem this exists to solve.
+    autoInstallTools: c.autoInstallTools === 'off' ? 'off' : 'safe',
     attribution: { sessionUrl: c.attribution?.sessionUrl !== false },
     // CC-CONFIG-A6 — env override wins.
     skillsHideBundled: resolveBoolWithEnv(c.skillsHideBundled, 'BRAINROUTER_HIDE_BUNDLED_SKILLS'),
