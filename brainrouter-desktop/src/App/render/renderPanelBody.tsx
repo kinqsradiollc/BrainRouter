@@ -242,7 +242,18 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
         }} />;
       case 'task-detail': return <TaskDetailPanel task={taskView} renderRow={renderRow}
         onBack={() => { setTaskView(null); closeSideTab('task-detail'); }}
-        onInterrupt={() => { requestStop(); setToast('Interrupt sent.'); }} />;
+        onInterrupt={(t) => {
+          // Scope the stop to the TASK. A background shell is killed by id; only
+          // a task that IS the current turn falls back to the session-wide
+          // interrupt, because for that one they are genuinely the same thing.
+          if (t.kind === 'shell' || t.kind === 'bgshell' || t.kind === 'command') {
+            q('a-kill-bg', 'action:kill-bgshell', { id: t.id });
+            setToast(`Stopped "${t.title || t.id}".`);
+            return;
+          }
+          requestStop();
+          setToast('Interrupt sent to the current turn.');
+        }} />;
       case 'plan': {
         // §7 — record an approval/changes-requested decision, then re-fetch the
         // history so the new version appears in the panel.

@@ -6075,3 +6075,54 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-notice-skip { border: 0; background: transparent; color: var(--text-faint);
   font-size: 11px; cursor: pointer; padding: 0; }
 .tool-notice-skip:hover { color: var(--text); }
+
+
+/* ADR-028 G3 — the plan, made scannable.
+
+   The screenshot showed the problem: nine phase rows, then EVERY step from
+   every phase in one flat list below them. Ninety-odd rows of equal weight, so
+   finding the one in progress meant reading all of them — and the steps were
+   detached from the phase they belong to, which is the only thing that makes a
+   step meaningful.
+
+   Three changes, in order of how much they help:
+   1. Steps are grouped under their phase and COLLAPSED unless the phase is in
+      progress. You are working on one phase; the other eight are history or
+      not yet started.
+   2. The active phase is the anchor — a left rule and full contrast, with
+      everything else stepped back.
+   3. Completed rows lose weight rather than gaining a colour. A finished list
+      that shouts green competes with the one row you need. */
+
+.plan-phase { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px;
+  overflow: hidden; }
+.plan-phase-head { display: flex; align-items: baseline; gap: 10px; padding: 9px 12px;
+  width: 100%; background: transparent; border: 0; color: var(--text); cursor: pointer;
+  text-align: left; }
+.plan-phase-head:hover { background: var(--surface-2, rgba(255,255,255,.03)); }
+.plan-phase-n { font-size: 10px; font-family: var(--mono); color: var(--text-faint); flex: none; }
+.plan-phase-title { flex: 1; min-width: 0; font-size: 13px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.plan-phase-state { font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--text-faint); flex: none; }
+
+/* Completed phases step back — done work should not compete with live work. */
+.plan-phase.done { opacity: .58; }
+.plan-phase.done .plan-phase-title { font-weight: 400; }
+
+/* The active phase is the anchor: a rule you can find without reading. */
+.plan-phase.active { border-color: var(--accent, var(--text-faint)); }
+.plan-phase.active .plan-phase-head { border-left: 2px solid var(--accent, var(--text-faint)); }
+.plan-phase.active .plan-phase-title { font-weight: 600; }
+.plan-phase-progress { font-size: 10px; font-family: var(--mono); color: var(--text-faint); }
+
+/* Steps live INSIDE their phase, and only the open one is expanded. */
+.plan-steps { border-top: 1px solid var(--border); padding: 6px 12px 10px; }
+.plan-step { display: flex; gap: 9px; padding: 6px 0; font-size: 12px; line-height: 1.5; }
+.plan-step-mark { flex: none; width: 13px; color: var(--text-faint); font-size: 11px; }
+.plan-step.done { opacity: .55; }
+.plan-step.doing .plan-step-mark { color: var(--accent, var(--text)); }
+.plan-step-body { flex: 1; min-width: 0; }
+/* The acceptance line is evidence, not prose — quieter, and never wrapped into
+   the step text where it reads as part of the instruction. */
+.plan-step-check { display: block; margin-top: 3px; font-size: 11px; color: var(--text-faint); }
