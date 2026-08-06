@@ -338,7 +338,7 @@ export function App(): React.ReactElement {
   const {
     sideTabs, activeSideTab, sidePanelOpen, sideWidth, sideFullScreen, sidePinned, termDockOpen, termDockHeight, termTabs, activeTerm,
     setSideTabs, setActiveSideTab, setSidePanelOpen, setSideWidth, setSideFullScreen, setSidePinned, setTermDockOpen, setTermDockHeight, setTermTabs, setActiveTerm,
-    ensurePanel, offerPanel, markPanelRead, unreadPanels, restoreLastSessionPanels,
+    ensurePanel, offerPanel, markPanelRead, unreadPanels, restoreLastSessionPanels, lastSessionPanels,
     closeSideTab, reorderSideTab, togglePanel, openSideView, openBottomDock, addBottomTab, closeBottomTab, resizeTerminal, resetTermDock,
   } = usePanels(q);
 
@@ -728,7 +728,8 @@ export function App(): React.ReactElement {
         sideFullScreen={sideFullScreen} setSidePanelOpen={setSidePanelOpen} setSidePinned={setSidePinned}
         sideAnim={sideAnim} sideWidth={sideWidth} setSideWidth={setSideWidth} activeSideTab={activeSideTab}
         sideTabs={sideTabs} setActiveSideTab={setActiveSideTab} closeSideTab={closeSideTab} reorderSideTab={reorderSideTab}
-        tabTitle={tabTitle} renderPanelBody={renderPanelBody} openSideView={openSideView} lastPlan={lastPlan}
+        tabTitle={tabTitle} renderPanelBody={renderPanelBody} openSideView={openSideView}
+        restoreLastSessionPanels={restoreLastSessionPanels} lastSessionPanels={lastSessionPanels} lastPlan={lastPlan}
         changedFiles={changedFiles} backgroundTasks={backgroundTasks} fleet={fleet} toolLog={toolLog} schedules={schedules}
         worktrees={worktrees} review={review} requirements={requirements} annotations={annotations} artifacts={artifacts}
         ci={ci} envRoom={envRoom} envDrawer={envLayout.drawer} homeMode={homeMode} gitInfo={gitInfo} info={info} sessionTitle={sessionTitle}

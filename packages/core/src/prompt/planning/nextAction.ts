@@ -15,6 +15,7 @@
  */
 
 import { normalizePhasePlan, type PhasePlan } from '../../orchestration/workflow/phasePlan.js';
+import { adversarialLens } from '../../orchestration/lenses.js';
 
 export type NextActionStrategy = 'answer-direct' | 'investigate' | 'fan-out' | 'workflow' | 'build';
 
@@ -214,6 +215,7 @@ export function nextActionDirective(plan: NextActionPlan): string {
     'Subtasks (one child each):',
     ...plan.subtasks.map((s, i) => `${i + 1}. ${s}`),
     '',
+    `Give each child a \`label\` naming its distinct angle and tell it to ignore findings outside that angle, then add one more child briefed to ${adversarialLens()}. Your synthesis must say what that child failed to break.`,
     'Do NOT answer single-threaded and do NOT merely offer to "go deeper if you want" — execute the fan-out and deliver the merged result this turn.',
   ];
   return lines.join('\n');

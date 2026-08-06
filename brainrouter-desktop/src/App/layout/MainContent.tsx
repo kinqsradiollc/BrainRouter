@@ -56,6 +56,8 @@ export interface MainContentProps {
   tabTitle: (id: PanelId) => string;
   renderPanelBody: VR['renderPanelBody'];
   openSideView: VR['openSideView'];
+  restoreLastSessionPanels: VR['restoreLastSessionPanels'];
+  lastSessionPanels: VR['lastSessionPanels'];
   lastPlan: VR['lastPlan'];
   changedFiles: CT['changedFiles'];
   backgroundTasks: FleetRow[];
@@ -180,7 +182,8 @@ export function MainContent(p: MainContentProps): React.ReactElement {
   const {
     mode, setMode, workrowRef, track, trackOps, railOpen, setRailOpen, sidePanelOpen, sidePinned, sideFullScreen,
     setSidePanelOpen, setSidePinned, sideAnim, sideWidth, setSideWidth, activeSideTab, sideTabs, setActiveSideTab,
-    closeSideTab, reorderSideTab, tabTitle, renderPanelBody, openSideView, lastPlan, changedFiles, backgroundTasks,
+    closeSideTab, reorderSideTab, tabTitle, renderPanelBody, openSideView, restoreLastSessionPanels, lastSessionPanels,
+    lastPlan, changedFiles, backgroundTasks,
     fleet, toolLog, schedules, worktrees, review, requirements, annotations, artifacts, ci, envRoom, envDrawer, homeMode,
     gitInfo, info, sessionTitle, taskView, setTaskView, chatRef, atBottomRef, setAtBottom, workflowView,
     setWorkflowView, renderRow, homeStats, statsTab, setStatsTab, statsRange, setStatsRange, snapshot, sessions,
@@ -229,7 +232,9 @@ export function MainContent(p: MainContentProps): React.ReactElement {
             setSidePanelOpen={setSidePanelOpen} sidePinned={sidePinned} setSidePinned={setSidePinned}
             activeSideTab={activeSideTab} sideTabs={sideTabs} setActiveSideTab={setActiveSideTab} closeSideTab={closeSideTab} reorderSideTab={reorderSideTab}
             tabTitle={tabTitle}
-            renderPanelBody={renderPanelBody} openSideView={openSideView} lastPlan={lastPlan} changedFiles={changedFiles}
+            renderPanelBody={renderPanelBody} openSideView={openSideView}
+            restoreLastSessionPanels={restoreLastSessionPanels} lastSessionPanels={lastSessionPanels}
+            lastPlan={lastPlan} changedFiles={changedFiles}
             backgroundTasks={backgroundTasks} fleet={fleet} toolLog={toolLog} schedules={schedules}
             worktrees={worktrees} review={review} requirements={requirements} annotations={annotations} artifacts={artifacts} ci={ci}
             envRoom={false} />
@@ -311,7 +316,9 @@ export function MainContent(p: MainContentProps): React.ReactElement {
           setSidePanelOpen={setSidePanelOpen} sidePinned={sidePinned} setSidePinned={setSidePinned}
           activeSideTab={activeSideTab} sideTabs={sideTabs} setActiveSideTab={setActiveSideTab} closeSideTab={closeSideTab} reorderSideTab={reorderSideTab}
           tabTitle={tabTitle}
-          renderPanelBody={renderPanelBody} openSideView={openSideView} lastPlan={lastPlan} changedFiles={changedFiles}
+          renderPanelBody={renderPanelBody} openSideView={openSideView}
+            restoreLastSessionPanels={restoreLastSessionPanels} lastSessionPanels={lastSessionPanels}
+            lastPlan={lastPlan} changedFiles={changedFiles}
           backgroundTasks={backgroundTasks} fleet={fleet} toolLog={toolLog} schedules={schedules}
           worktrees={worktrees} review={review} requirements={requirements} annotations={annotations} artifacts={artifacts} ci={ci}
           envRoom={envRoom} />

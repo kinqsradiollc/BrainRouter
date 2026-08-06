@@ -62,11 +62,22 @@ test('P23-3a direct stays primary-only while investigate admits only its explore
   const investigate = new EphemeralOrchestrationPlanLifecycle(owner, resolved('investigate'));
   investigate.beginDelegation('inspect', 'explorer', owner);
   investigate.finishStage('inspect', 'succeeded');
+  // The primary cannot conclude while the adversary is still outstanding — that
+  // gate is the whole value of the challenge stage. Running it (or explicitly
+  // skipping it, since it is optional) is what unblocks the synthesis.
+  assert.throws(
+    () => investigate.beginPrimary('synthesize', owner),
+    (error) =>
+      error instanceof OrchestrationStageLaunchRejectedError &&
+      /waiting for "challenge"/.test(error.message),
+  );
+  investigate.beginDelegation('challenge', 'reviewer', owner);
+  investigate.finishStage('challenge', 'succeeded');
   investigate.beginPrimary('synthesize', owner);
   investigate.finishStage('synthesize', 'succeeded');
   assert.deepEqual(
     investigate.snapshot().map((stage) => [stage.id, stage.state]),
-    [['inspect', 'succeeded'], ['synthesize', 'succeeded']],
+    [['inspect', 'succeeded'], ['challenge', 'succeeded'], ['synthesize', 'succeeded']],
   );
 });
 
@@ -78,6 +89,7 @@ test('P23-3a interruption cancels unstarted ephemeral stages without replay data
     lifecycle.snapshot().map((stage) => [stage.id, stage.state, stage.terminalReason]),
     [
       ['inspect', 'cancelled', 'turn-interrupted'],
+      ['challenge', 'cancelled', 'turn-interrupted'],
       ['synthesize', 'cancelled', 'turn-interrupted'],
     ],
   );
@@ -122,6 +134,7 @@ test('P23-3a missing runtime is one terminal non-retryable diagnostic', () => {
     lifecycle.snapshot().map((stage) => [stage.id, stage.state, stage.terminalReason]),
     [
       ['inspect', 'failed', 'runtime-unavailable'],
+      ['challenge', 'cancelled', 'runtime-unavailable'],
       ['synthesize', 'cancelled', 'runtime-unavailable'],
     ],
   );

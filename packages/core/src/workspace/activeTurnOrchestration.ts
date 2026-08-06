@@ -14,14 +14,28 @@ import {
 } from '../orchestration/profiles/orchestrationProfileResolver.js';
 import { detectOrchestrationTaskSignals } from '../orchestration/profiles/taskSignals.js';
 import { readPreferences } from '../session/preferences/preferencesStore.js';
-import { loadWorkspaceManifest } from './manifest.js';
+import { loadWorkspaceManifest, type WorkspaceManifest } from './manifest.js';
 import { buildWorkspaceOnboardingSources } from './onboardingSources.js';
+import { resolveWorkspaceProfileOrchestrationDefaults } from './profileOrchestrationDefaults.js';
+import { suggestWorkspaceProfile } from './profileSuggest.js';
+import { getWorkspaceProfile, type WorkspaceProfileId } from './profiles.js';
 import { resolveWorkspaceSkillSelection } from './skillSelection.js';
 
 export interface ActiveTurnOrchestrationResolution {
   plan: ResolvedWorkspaceOrchestrationPlan;
   taskSignalIds: string[];
   source: string;
+}
+
+/**
+ * The profile choice a never-onboarded workspace would have been offered, used
+ * only to route this turn. Nothing is written to disk and no synthetic manifest
+ * escapes this module — every other consumer still sees "no manifest".
+ */
+export interface InferredWorkspaceOrchestrationDefault {
+  profile: WorkspaceProfileId;
+  orchestration: WorkspaceManifest['orchestration'];
+  skillIds: readonly string[];
 }
 
 export function resolveActiveTurnOrchestration(input: {
@@ -54,7 +68,13 @@ export function resolveActiveTurnOrchestration(input: {
     };
   }
   const manifest = loadWorkspaceManifest(input.workspaceRoot);
-  if (!manifest) {
+  const inferred = manifest ? null : inferWorkspaceOrchestrationDefault(input.workspaceRoot);
+  // A saved manifest is always the authority; inference is only reachable when
+  // there is none. `source: 'none'` now means "unrecognized repository", which
+  // is narrower than "not onboarded".
+  const selection: Pick<WorkspaceManifest, 'profile' | 'orchestration'> | null = manifest
+    ?? (inferred ? { profile: inferred.profile, orchestration: inferred.orchestration } : null);
+  if (!selection) {
     return {
       plan: resolveWorkspaceOrchestrationPlan(emptyInput()),
       taskSignalIds: [],
@@ -63,7 +83,7 @@ export function resolveActiveTurnOrchestration(input: {
   }
 
   const sources = buildWorkspaceOnboardingSources(input.workspaceRoot);
-  const profile = sources.orchestrationProfiles.entries.get(manifest.profile);
+  const profile = sources.orchestrationProfiles.entries.get(selection.profile);
   const roleCatalog = new Map(
     loadRegistry(input.workspaceRoot).flatMap((loaded) => {
       try {
@@ -78,18 +98,20 @@ export function resolveActiveTurnOrchestration(input: {
       .filter((entry) => entry.kind === 'skill' && entry.selectable)
       .map((entry) => entry.id),
   );
-  const selectedSkills = resolveWorkspaceSkillSelection({
-    manifest,
-    activeCapabilities: [],
-  });
+  // Inferred skills feed the resolver's stage-eligibility check only. They are
+  // deliberately not routed through `resolveWorkspaceSkillSelection`, so
+  // ambient skill loading and the skill tool policy stay unmanaged.
+  const workspaceSkillIds = manifest
+    ? resolveWorkspaceSkillSelection({ manifest, activeCapabilities: [] }).ambientSkillIds
+    : inferred?.skillIds ?? [];
   const taskSignalIds = [...detectOrchestrationTaskSignals(input.task)];
   const plan = resolveWorkspaceOrchestrationPlan({
     definition: profile?.definition,
-    manifest,
+    manifest: selection,
     taskSignalIds: new Set(taskSignalIds),
     roleCatalog,
     installedSkillIds,
-    workspaceSkillIds: new Set(selectedSkills.ambientSkillIds),
+    workspaceSkillIds: new Set(workspaceSkillIds),
     capabilitySkillIds: new Set(input.activeCapabilitySkillIds ?? []),
     delegationPolicy: resolveDelegationPolicy(readPreferences(input.workspaceRoot)),
     runtimeLimits: {
@@ -98,10 +120,63 @@ export function resolveActiveTurnOrchestration(input: {
     parentDepth: input.parentDepth ?? 0,
   });
 
+  if (!profile) {
+    return { plan, taskSignalIds, source: 'unavailable' };
+  }
   return {
     plan,
     taskSignalIds,
-    source: profile?.source.provenance ?? 'unavailable',
+    // Telemetry must never present an inferred default as a reviewed workspace
+    // choice the user actually made.
+    source: manifest ? profile.source.provenance : 'inferred-default',
+  };
+}
+
+const inferredDefaults = new Map<string, InferredWorkspaceOrchestrationDefault | null>();
+
+/**
+ * Guess how a workspace that has never been onboarded should route, using the
+ * same deterministic suggester `/init` and desktop onboarding use — so an
+ * inferred workspace and an onboarded one land on the same profile.
+ *
+ * Returns null for `custom`: that plan is `mode: 'off'` with no roles, so
+ * synthesizing it would be strictly worse than inferring nothing. An
+ * unrecognized repository gets no plan because nothing about it was established.
+ *
+ * Memoized per root because the suggester scans the filesystem, and a
+ * repository does not change shape mid-session.
+ */
+export function inferWorkspaceOrchestrationDefault(
+  workspaceRoot: string,
+): InferredWorkspaceOrchestrationDefault | null {
+  const cached = inferredDefaults.get(workspaceRoot);
+  if (cached !== undefined) return cached;
+  const suggestion = suggestWorkspaceProfile(workspaceRoot);
+  const inferred = suggestion.profile === 'custom'
+    ? null
+    : buildInferredDefault(suggestion.profile);
+  inferredDefaults.set(workspaceRoot, inferred);
+  return inferred;
+}
+
+/** Test seam: the memo is process-wide and temp workspaces reuse this module. */
+export function resetInferredWorkspaceOrchestrationDefaults(): void {
+  inferredDefaults.clear();
+}
+
+function buildInferredDefault(
+  profileId: WorkspaceProfileId,
+): InferredWorkspaceOrchestrationDefault {
+  const defaults = resolveWorkspaceProfileOrchestrationDefaults(profileId);
+  return {
+    profile: profileId,
+    orchestration: {
+      mode: defaults.mode,
+      availableRoles: [...defaults.availableRoles],
+      disabledRoles: [...defaults.disabledRoles],
+      maxParallel: defaults.maxParallel,
+    },
+    skillIds: [...(getWorkspaceProfile(profileId)?.skills.enabled ?? [])],
   };
 }
 

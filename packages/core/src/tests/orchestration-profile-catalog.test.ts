@@ -132,9 +132,16 @@ test('P23-2 Engineering plan preserves profile ceilings and expected strategy su
       ['implement', 'role'],
       ['review', 'role'],
       ['verify', 'role'],
+      ['challenge', 'role'],
       ['deliver', 'primary'],
     ],
   );
+  // The adversary must stay OPTIONAL: a workspace missing the reviewer role or
+  // the review skill would otherwise take the whole delivery strategy down to
+  // the `direct` fallback rather than losing one stage.
+  const challenge = delivery?.stages.find((stage) => stage.id === 'challenge');
+  assert.equal(challenge?.optional, true);
+  assert.equal(challenge?.executor.kind === 'role' ? challenge.executor.roleId : null, 'reviewer');
   const mismatchedContracts = plan.strategies.flatMap((strategy) =>
     strategy.stages.flatMap((stage) =>
       stage.executor.kind === 'role' && stage.expectedOutput?.contractId !== stage.executor.roleId

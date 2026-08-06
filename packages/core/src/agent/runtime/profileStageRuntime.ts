@@ -60,11 +60,21 @@ export function describeProfileStageTool(
   baseDescription: string,
   plan: ResolvedWorkspaceOrchestrationPlan,
 ): string {
-  const stageSummary = plan.stages.map((stage) => (
-    `${stage.id} (${stage.executor.kind}${stage.executor.kind === 'role' ? `:${stage.executor.roleId}` : ''}; ` +
-    `after: ${stage.after.join(', ') || 'none'}; skills: ${stage.skillIds.join(', ') || 'none'}; ` +
-    `${stage.optional ? 'optional' : 'required'}) — ${stage.objective}`
-  )).join('\n');
+  // `fanOut` is rendered because buildRequiredDelegatedStageCorrection tells the
+  // model to use multiple children "only when the stage description permits
+  // fan-out" — a permission it could not act on while the description omitted the
+  // per-stage min/max. A stage that allows >1 child says so here, in children.
+  const stageSummary = plan.stages.map((stage) => {
+    const fanOut = stage.fanOut && stage.fanOut.max > 1
+      ? `; fan-out: ${stage.fanOut.min}-${stage.fanOut.max} children on DISTINCT angles`
+      : '; fan-out: 1 child';
+    return (
+      `${stage.id} (${stage.executor.kind}${stage.executor.kind === 'role' ? `:${stage.executor.roleId}` : ''}; ` +
+      `after: ${stage.after.join(', ') || 'none'}; skills: ${stage.skillIds.join(', ') || 'none'}` +
+      `${stage.executor.kind === 'role' ? fanOut : ''}; ` +
+      `${stage.optional ? 'optional' : 'required'}) — ${stage.objective}`
+    );
+  }).join('\n');
   return `${baseDescription}\n\nActive strategy: ${plan.strategyId}\nOrdered compiled stages:\n${stageSummary}`;
 }
 

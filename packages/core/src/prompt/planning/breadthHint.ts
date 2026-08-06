@@ -16,6 +16,8 @@
  *   - Multi-tool breadth:    mention of ≥3 tool names or "tools" (plural intent)
  */
 
+import { adversarialLens, investigationLenses, reviewLenses } from '../../orchestration/lenses.js';
+
 export interface BreadthIntent {
   /** Total weighted signal score. The agent prompt threshold is ~2. */
   score: number;
@@ -159,12 +161,14 @@ export function buildFanOutHint(prompt: string, intent: BreadthIntent): string {
     '## Fan-out hint (auto-detected)',
     '',
     `The user's request looks broad — matched signals: ${intent.signals.join(', ')} (score ${intent.score.toFixed(1)}).`,
-    'Instead of doing one tool call and stopping, **default to `spawn_agents` with 3–5 parallel children** covering distinct angles, then synthesize their outputs in a final answer.',
+    'Instead of doing one tool call and stopping, **default to `spawn_agents` with 3–5 parallel children**, then synthesize their outputs in a final answer.',
     '',
-    '## Recommended fan-out template',
-    '- `spawn_agents({ agents: [...] })` — pick 3-5 angles relevant to the request.',
-    '- After spawning, `wait_agents({ ids: [...] })` to drain the batch.',
-    '- Then synthesize: combine each child\'s preview/output into a single response.',
+    '## What makes this a real fan-out',
+    `- **Distinct lenses, not distinct folders.** Give each child a \`label\` naming its angle and tell it to ignore findings outside that angle. Investigation angles: ${investigationLenses().join(' / ')}. Review angles: ${reviewLenses().join(' / ')}. Adapt them to this request — three children asking the same question in three directories cost 3x and return one angle.`,
+    `- **Add one adversarial child**, briefed to ${adversarialLens()}. You answer it; you do not merge it.`,
+    '- **Write/shell children need an `ownership` glob**; read-only lenses do not.',
+    '- Drain with `wait_agents({ ids: [...] })`, then synthesize into ONE response that says what the adversary failed to break.',
+    '- If the phases feed forward instead (plan → implement → verify → review), use `run_workflow` — the runtime sequences and synthesizes it for you.',
     '',
     '## Anti-patterns to avoid',
     '- Do NOT call a single tool, write a paragraph, then ask "which should we test next?". The user already said to do everything — execute, do not consult.',

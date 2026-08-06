@@ -71,7 +71,7 @@
           ],
           "fanOut": {
             "min": 1,
-            "max": 2
+            "max": 3
           },
           "optional": false,
           "expectedOutput": {
@@ -84,12 +84,38 @@
           }
         },
         {
+          "id": "challenge",
+          "executor": {
+            "kind": "role",
+            "roleId": "reviewer"
+          },
+          "after": [
+            "inspect"
+          ],
+          "objective": "Argue the emerging conclusion is wrong: name claims the evidence does not support, contradicting evidence, and what was never checked.",
+          "skillIds": [
+            "code-review-and-quality"
+          ],
+          "fanOut": {
+            "min": 1,
+            "max": 1
+          },
+          "optional": true,
+          "expectedOutput": {
+            "contractId": "reviewer",
+            "requiredSections": [
+              "findings"
+            ]
+          }
+        },
+        {
           "id": "synthesize",
           "executor": {
             "kind": "primary"
           },
           "after": [
-            "inspect"
+            "inspect",
+            "challenge"
           ],
           "objective": "Synthesize the investigation into a direct engineering conclusion.",
           "skillIds": [],
@@ -199,7 +225,7 @@
           ],
           "fanOut": {
             "min": 1,
-            "max": 2
+            "max": 3
           },
           "optional": true,
           "expectedOutput": {
@@ -290,13 +316,39 @@
           }
         },
         {
+          "id": "challenge",
+          "executor": {
+            "kind": "role",
+            "roleId": "reviewer"
+          },
+          "after": [
+            "implement"
+          ],
+          "objective": "Argue the emerging conclusion is wrong: name claims the evidence does not support, contradicting evidence, and what was never checked.",
+          "skillIds": [
+            "code-review-and-quality"
+          ],
+          "fanOut": {
+            "min": 1,
+            "max": 1
+          },
+          "optional": true,
+          "expectedOutput": {
+            "contractId": "reviewer",
+            "requiredSections": [
+              "findings"
+            ]
+          }
+        },
+        {
           "id": "deliver",
           "executor": {
             "kind": "primary"
           },
           "after": [
             "review",
-            "verify"
+            "verify",
+            "challenge"
           ],
           "objective": "Resolve blocking findings and deliver the verified result.",
           "skillIds": [

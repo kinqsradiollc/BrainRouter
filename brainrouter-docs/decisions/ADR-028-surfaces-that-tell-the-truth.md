@@ -1,6 +1,7 @@
 # ADR-028 — Surfaces that tell the truth about their own state
 
 **Status:** ACCEPTED — approved by the owner 2026-08-04. · **Target:** `release/0.4.20`
+**Implementation:** PARTIAL — audited against the code 2026-08-06; per-decision state in [§2.9](#29--audit--what-is-built-what-is-half-built-what-is-not).
 **Supersedes:** ADR-027 D13 (stacked PRs), which shipped partial and in one respect incorrect.
 **Builds on:** ADR-027 D1 (debt ledgers, oversight evidence), D2 (execution engines), D6 (control
 layer), D11 (retention), D12 (idempotency, fencing, database clock).
@@ -129,6 +130,13 @@ where a `gh` extension may not exist. The brain never mutates a stack.
 absent stack actions are **hidden rather than offered-and-failing** — an action that always errors is
 worse than one not offered, because the agent retries it.
 
+> **Built in part.** The detector that actually runs is `packages/core/src/review/stackProbe.ts:26`,
+> called from `packages/core/src/orchestration/workflow/buildLoop.ts:428` and
+> `brainrouter-desktop/electron/host/github-track-services.ts:629`. It checks `gh` and the extension
+> — **not git 2.20+** — and it caches nothing. The cached, git-aware detector
+> (`packages/core/src/review/stackCapability.ts:65,130`) and the fail-hidden gate
+> (`packages/core/src/review/stackRunner.ts:137`) have no caller outside their own tests.
+
 #### A2 · Remove the create path before replacing it
 
 `stack.addlayer` is rewritten onto `gh stack add` + `gh stack submit`, or `gh stack link` where the
@@ -137,6 +145,15 @@ branches and PRs already exist.
 **Until that lands the action is removed.** A tool reporting success for work it did not do is worse
 than a missing tool, because the human stops checking. There is no deprecation window for a wrong
 answer.
+
+> **The removal shipped; the replacement did not.** `stack.addlayer` is gone
+> (`packages/core/src/workbench/workbenchActions.ts:123-132`, absence pinned by
+> `packages/core/src/tests/workbench-actions.test.ts:142-145`). But `addStackLayer` and
+> `linkExistingIntoStack` (`packages/core/src/review/stackAuthoring.ts:91,142`) have no caller
+> outside their own test and are not exported from `packages/core/src/review/index.ts`. **There is
+> no create path today.** A change routed to `stack` reaches GitHub as a single
+> `gh stack submit --auto` over one pushed branch (`packages/core/src/forge/forge.ts:33`), which
+> registers one pull request, not a chain of layers.
 
 #### A3 · Exit codes are the contract
 
@@ -164,6 +181,11 @@ Because it is allowed at all, two guards:
 
 `--committer-date-is-author-date` keeps review timestamps meaningful.
 
+> **Not built as anything a person can run.** `syncStack` and the rewrite preview
+> `describeSyncRewrite` (`packages/core/src/review/stackLifecycle.ts:55,33`) have no caller anywhere
+> in the repo outside `packages/core/src/tests/stack-lifecycle.test.ts`. No control action, no host
+> handler and no command runs a stack sync, so neither guard is reachable to be tested by use.
+
 #### A5 · Merge is all-or-nothing, and names every PR that lands
 
 `stack.merge` takes a top layer and merges it plus everything beneath, matching `gh stack merge`. It
@@ -177,6 +199,12 @@ API; a short timeout produces a spurious failure on an action that is succeeding
 a partially-applied merge is the worst possible response.
 
 **Stale layers after a mid-stack merge are detected and reported**, not silently left.
+
+> **Not built as anything a person can run.** `mergeStackThrough`, `planMergeCascade`,
+> `describeMergeCascade` and `staleAfterMerge` (`packages/core/src/review/stackLifecycle.ts:296,192,259`)
+> have no caller outside `packages/core/src/tests/stack-lifecycle.test.ts`, and no destructive
+> `stack.merge` action exists — `packages/core/src/workbench/workbenchActions.ts:123-132` registers
+> only the two read actions. The confirmation token this decision turns on has nothing to guard.
 
 #### A6 · Wait for GitHub's native merge queue *(owner-decided)*
 
@@ -220,11 +248,32 @@ notification — a proposal that fires often is dismissed reflexively and worth 
 
 **`cli.buildLoopEmitPr`, when wired, emits into the current stack**, not a competing branch.
 
+> **The mapping is built; the authoring is not.** `proposeStackFromPlan` is wired into the router
+> (`packages/core/src/review/prRouter.ts:75-83`) and the router is reached from the build loop and
+> the Track path, so a plan genuinely decides the route. What does not exist is *one layer per
+> phase*: `packages/core/src/git/prEmit.ts:296-316` pushes one branch and hands one submit to the
+> forge, so a five-phase plan still produces one pull request. The guards are unenforced too —
+> `mayProposeStack` (`packages/core/src/review/planToStack.ts:197`) and `canAddLayer`
+> (`packages/core/src/review/stackAuthoring.ts:190`) have no caller, so "once per change, suppressed
+> after a decline" and the depth cap are decisions with no code path.
+
 #### A8 · Desktop surface follows the model
 
 Stack panel showing the chain, per-layer readiness, the named blocker, and the highest mergeable
 layer. Read-only first; mutation controls only for operations already reachable with their
 confirmations.
+
+> **Not built end-to-end. The panel renders and nothing reaches it — this ADR's own defect, in the
+> surface written to fix it.** `brainrouter-desktop/src/App/render/renderPanelBody.tsx:393-394` reads
+> `stackLayers` and `stackAvailability`; the one call site,
+> `brainrouter-desktop/src/App.tsx:667`, passes neither, so the chain is permanently empty and
+> availability is permanently `{capable:false}`. `refreshPanelData`
+> (`brainrouter-desktop/src/lib/panels/usePanels.ts:185-194`) has no `stack` branch, so opening the
+> panel fetches nothing. Its View / Sync / Merge buttons dispatch `stack-read`, `stack-sync` and
+> `stack-merge` (`renderPanelBody.tsx:395,405,408`); the host registers only `stack-describe` and
+> `stack-advise` (`brainrouter-desktop/electron/host/queries.ts:653-654`). The two host actions that
+> do exist are also unreachable from the agent — nothing constructs `workbenchRegistry`
+> (`packages/core/src/workbench/workbenchActions.ts:150`).
 
 ---
 
@@ -253,6 +302,12 @@ the UI says *delivered*.
 **`dropped` is loud.** A steer arriving after the turn ends is the most harmful case, precisely
 because you have every reason to believe it landed. It surfaces with a resend, never silently
 discarded.
+
+> **Not built.** The full lifecycle exists in `packages/core/src/task/messageReceipts.ts` and its
+> only importer in the repo is `packages/core/src/tests/message-receipts.test.ts`. The delivery path
+> it was written for holds no receipt state (`packages/core/src/session/input/inputDelivery.ts:20,142`),
+> nothing is re-exported from `packages/core/src/task/index.ts`, and no desktop or CLI surface
+> renders queued / delivered / dropped. §1.2 describes today's behaviour exactly as it still is.
 
 #### B2 · Artifacts panel: current session, and optionally more
 
@@ -290,6 +345,27 @@ ships and one exists".
 **The rejected alternative:** delete the knob and ship only the loop. Honest and cheaper. Rejected
 because the graph's value for interrupted, resumable work is real — but it is currently zero and
 would stay zero.
+
+> **Requirements 1, 3 and 4 are built. Requirement 2 is not, and the consequence is that `graph`
+> can never actually run.** `runTurn` reads the knob and names the running engine in the session
+> (`packages/core/src/agent/runtime/runTurn.impl.ts:286-291`). The control is
+> `brainrouter-desktop/src/settings/runtime/RuntimeSection.tsx:64`, mounted unconditionally from
+> `brainrouter-desktop/src/settings.tsx:443-453` — under **Automation → Runtime**, rather than the
+> "agent runtime" this decision names. Its nav keywords carried none of "engine", "loop" or "graph"
+> at audit time, so settings search returned nothing for the control's own name; they now do
+> (`brainrouter-desktop/src/settings/shared/types.ts:185`).
+>
+> Parity is absent and declared absent: `ENGINE_CAPABILITIES` gives graph no interrupts, no tool
+> authorization, no receipts and no delegation
+> (`packages/core/src/agent/runtime/engineSelection.ts:72-79`), so `selectEngine` always falls back
+> to the loop with a notice, and the `allowIncomplete` escape is passed by nothing outside
+> `packages/core/src/tests/engine-selection.test.ts:80`. `packages/core/src/graph/graphExecutor.ts`
+> has exactly one importer in the repo: its own test. **There is no parity matrix** —
+> `engine-selection.test.ts` exercises the selector, not the same scenarios through both engines.
+>
+> This is the honest version of the failure §1.4 describes, not a repeat of it: the knob is read and
+> the fallback says why. But §5 anticipated exactly this, and its instruction now applies — say so,
+> and reconsider whether the option should exist.
 
 ---
 
@@ -386,6 +462,14 @@ evidence, repeated carry-over is usually something nobody knows how to start.
 **Knowing you are behind does not license mentioning it.** Raised when relevant, otherwise quiet. An
 agent opening each turn with your overdue count is notification fatigue in a planner costume.
 
+> **"Can operate it" is built; "is context-aware" is not.** Five `planner_*` tools are registered
+> and advertised (`packages/core/src/extension/builtin/toolCatalog.ts:85-92`, handlers at
+> `packages/core/src/extension/builtin/runtime.ts:250-298`). `buildPlannerContext` — the bounded,
+> summarised injection with per-source freshness that this decision specifies — has no caller
+> outside `packages/core/src/tests/planner-surface.test.ts`. Nothing puts today's committed items,
+> the current block or the carried-over items in front of the model, so the planner is still the
+> second place your intentions live unless the agent goes looking with a tool.
+
 #### D7 · Sources are adapters behind one interface
 
 List candidates, map to a planner item, report freshness. First set: Track, GitHub issues, GitHub
@@ -394,9 +478,21 @@ PRs, review findings, meeting actions, manual entry.
 **A stale source says so.** If GitHub has been unreachable six hours, the view says the GitHub items
 are six hours old rather than presenting them as current.
 
+> **Not built. There are zero adapters.** The interface is
+> `packages/core/src/planner/sourceAdapter.ts:26` and **no file in the repository implements it**;
+> `collectFromSources` (`:80`) is never called. No mirrored item can enter the planner from Track,
+> GitHub, review findings or meetings, which means D1's mirrored/owned split — the distinction the
+> whole design rests on — has only the owned half in use. Only `isStale` and `describeFreshness` are
+> consumed (`packages/core/src/planner/plannerService.ts:20`): the staleness vocabulary exists with
+> nothing to describe.
+
 #### D8 · Retention follows ADR-027 D11
 
 Completed items keep detail 90 days, then compact. The planner is a working surface, not an archive.
+
+> **Not built.** `partitionForRetention` and `DETAIL_RETENTION_DAYS`
+> (`packages/core/src/planner/sourceAdapter.ts:137,119`) are referenced only by
+> `packages/core/src/tests/planner-surface.test.ts`. Nothing compacts anything, on any schedule.
 
 ---
 
@@ -468,11 +564,35 @@ ships. So:
 > **A module or setting is not done until something calls it, and the test proving the caller exists
 > is a different test from the one proving the unit works.**
 
----
+> **Built, and it is still absorbing this ADR's own violations.** The sweep exists with all four
+> parts — knob consumers, a named-orphan list, an orphan baseline of 32 and H4's reachability walk
+> (`packages/core/src/tests/inert-value-sweep.test.ts:107,164,179-184,244-249,341`). But the
+> "undocumented orphan" assertion only inspects modules under `planner/`
+> (`inert-value-sweep.test.ts:190-200`), and `KNOWN_UNWIRED` names four planner modules that are no
+> longer orphans while omitting the ones that are: `task/messageReceipts.ts` (B1),
+> `review/stackLifecycle.ts` (A4/A5), `graph/graphExecutor.ts` (C1) and
+> `workbench/workbenchActions.ts` (A8). They pass because the numeric baseline has room for them.
+>
+> That is the mistake recorded at the end of §2.9 — the baseline set after the orphans landed —
+> happening a second time, to four different decisions. Closing it means widening the assertion
+> beyond `planner/` and naming every orphan with a reason, which is deliberately not done here
+> because a document reconciliation should not quietly change what a test enforces.
+>
+> The sweep is also structurally blind to Part F: `packages/core/src/comprehension/*` counts as
+> reachable because `packages/core/package.json`'s `exports` map credits anything re-exported from
+> the package, so six modules with no consumer anywhere read as wired.
 
 ---
 
-## Part F — Comprehension *(PROPOSED — not implemented, awaiting review)*
+---
+
+## Part F — Comprehension *(BUILT IN PART — audited 2026-08-06, see §2.9)*
+
+> **Status.** This header said "not implemented" while §2.9 listed every F
+> decision as shipped. Both were wrong. What is true: the decision logic for
+> F1–F6 exists in `packages/core/src/comprehension/` and **no file outside its
+> own tests imports any of it**. F7's panel and its invoke path are real and
+> reachable. Per-decision detail with file:line is in §2.9.
 
 ### The problem this part exists for
 
@@ -654,6 +774,40 @@ Its own **Comprehension** panel in the Understand group (G4), not in chat. You w
 whether to accept work, which is minutes to days after the message that produced it — a panel
 persists, a message is gone by the next turn.
 
+### What Part F actually is, as of 2026-08-06
+
+| # | State | Evidence |
+|---|---|---|
+| F1 | **Not built** | `packages/core/src/comprehension/profileComprehension.ts:28,50` — only importer is its own test |
+| F2 | **Not built** | `packages/core/src/comprehension/workRecord.ts:25,46` — only importer is its own test |
+| F3 | **Not built** | `packages/core/src/comprehension/workRecord.ts:81,96` — nothing records a decision anywhere |
+| F4 | **Not built** | `packages/core/src/comprehension/workRecord.ts:117` `VerificationHandoff` — no consumer, no panel |
+| F5 | **Not built** | `packages/core/src/comprehension/profileComprehension.ts:82,100,110` — no caller |
+| F6 | **Not built** | `packages/core/src/comprehension/profileComprehension.ts:121-158` — no caller |
+| F7 | **Built in part** | see below |
+
+Not one file outside `packages/core/src/comprehension/` and its own tests imports any of it. The
+sweep does not catch this because the package `exports` map credits the whole directory as reachable
+(see E1's note above), which is the second time a reachability check has certified this ADR's own
+inert code.
+
+**What F7 does have.** The panel is real and a person can reach it:
+`brainrouter-desktop/src/panels/memory/ComprehensionPanel.tsx` with its container at
+`ComprehensionContainer.tsx:40`, wired at
+`brainrouter-desktop/src/App/render/renderPanelBody.tsx:381` to `reviewMyUnderstanding`
+(`brainrouter-desktop/src/App/hooks/useAppHandlers.ts:235-245`), which submits a turn carrying the
+question rules and the "a wrong answer is not always yours" instruction. That is the honest design:
+only the model that did the work can write the questions, and the handler says so rather than
+faking them (`brainrouter-desktop/electron/host/queries.ts:2079-2099`).
+
+**What F7 does not have.** The judging logic in
+`packages/core/src/comprehension/comprehensionReview.ts:125-261` — `validateQuestion`,
+`validateReview`, `judgeAnswer`, `buildJudgePrompt`, `toFinding`, `summarizeReview` — has no
+caller, so nothing validates that a question is about consequences rather than trivia, and a
+disagreement produces no finding: `'comprehension-dispute'`
+(`brainrouter-desktop/electron/host/queries.ts:2107`) returns `{noted:true}` and records nothing.
+The `/understand` invocation this decision names does not exist as a command.
+
 ### Open questions for review
 
 1. **Does F5's tutor profile belong in this product at all**, or is it a different product wearing
@@ -665,7 +819,7 @@ persists, a message is gone by the next turn.
 
 ---
 
-## Part G — The side panel *(PROPOSED — not implemented, awaiting review)*
+## Part G — The side panel *(BUILT except G4 — audited 2026-08-06, see §2.9)*
 
 Part F needs somewhere to live, and the honest answer is that **there is no room**. The panel has
 twenty-six registered ids and a tab strip that already overflows. Adding comprehension surfaces to it
@@ -705,7 +859,9 @@ not how you want to work. The width, the pinned flag and the dock height are gen
 are still persisted; the open/closed state and the tab list are not.
 
 A **"reopen last session's panels"** affordance is available for the case where the restore was
-actually wanted, so this removes an assumption rather than a capability.
+actually wanted, so this removes an assumption rather than a capability. It sits at the top of the
+views chooser — the list you are looking at the moment you open the panel and find it empty — and
+appears only when there is something to bring back.
 
 ### G3 · Group the panels, because twenty-six is not a tab strip
 
@@ -736,6 +892,12 @@ message that produced them. A panel persists; a message is gone by the next turn
 
 **The Verification panel is the one that should carry an unread dot** by default, because F4 is the
 mechanism that stops "it compiled" being reported as "it works".
+
+> **Built in part — the group exists with one panel in it, not three.**
+> `brainrouter-desktop/src/panels/panelCatalog.ts:28` registers `comprehension` (title "Understand")
+> and `:80` puts it in the group. Explain, Decisions and Verification are not panel ids, so the
+> unread-dot rule above has nothing to attach to and F2/F3/F4 have nowhere to appear even if their
+> core logic were wired.
 
 ### G5 · Stack, checks and review are ONE panel, because they answer one question
 
@@ -823,7 +985,7 @@ between projects — if it does, it is planner; if it belongs to the repo, it is
 
 ---
 
-## Part H — Stacks are not reaching the products *(PROPOSED — not implemented)*
+## Part H — Stacks are not reaching the products *(H1/H3/H4 BUILT, H2 built in part — audited 2026-08-06)*
 
 Reported by the owner: the desktop app and the CLI agent still open ordinary
 pull requests. Verified — and it is the ADR's own pattern again, at the largest
@@ -869,6 +1031,16 @@ one of four peers. The Track path, the build-loop emit and the agent all reach
 GitHub through it. Plugin publish is the exception and stays direct — it opens
 a PR against a *different* repository, where a local stack has no meaning.
 
+> **Audited 2026-08-06 — this is stated more strongly than it is built.** What
+> converged is the ROUTE (H1): `routePullRequest` decides stack-vs-plain in one
+> place and both the build-loop emit and the Track path consult it.
+> `createChangeRequest` did not converge — `git/prEmit.ts:310` is its only
+> non-test caller, and the Track path at
+> `brainrouter-desktop/electron/host/github-track-services.ts:635-636` still
+> invokes `gh stack submit` / `gh pr create` itself. The duplication H2 exists to
+> remove is still there, one layer down from where the decision claims it was
+> removed. Tracked in "Built in part".
+
 ### H3 · The agent is told, not left to infer
 
 `cli.buildLoopEmitPr` and the desktop PR actions get an explicit stacking mode:
@@ -890,73 +1062,98 @@ landed, instead of the owner catching it in the product weeks later.
 
 ---
 
-## 2.9 · Summary — what shipped, what is proposed
+## 2.9 · Audit — what is built, what is half-built, what is not
 
-For a fast read-over. **Shipped** means implemented, tested, and reachable from
-something a person can do. **Proposed** means the decision is written and the
-code is not.
+**Audited against the code on 2026-08-06.** What stood here before was three
+tables of "shipped" and the sentence *"Every decision in this ADR is
+implemented."* **Twelve of those decisions are not built at all and nine more
+are built in part** — and the error was in this ADR's own defect class: a
+surface claiming a state it had not established. The document was the last place
+the pattern was still running.
 
-### Shipped
+The three tiers below use one definition, taken from E1 and H4 rather than
+invented here:
 
-| # | Decision | The claim it removes |
+- **Built** — implemented, and something a person can reach calls it.
+- **Built in part** — the named half is reachable; the rest is written down here
+  with what is missing.
+- **Not built** — the module exists and compiles and passes its own tests, and
+  **nothing outside those tests imports it**. This is not a softer word for
+  shipped. It is the §1.6 failure, and naming it is the only thing that makes
+  the count go down.
+
+### Built
+
+| # | Decision | Reached from |
 |---|---|---|
-| A1 | Capability detection | "stacks work here" — now probed, with the missing piece named |
-| A2 | Removed `stack.addlayer` | a PR that merely *targeted* the branch below |
-| A3 | Exit-code contract | callers re-interpreting numbers |
-| A4 | Sync | "failed, retry" on a mid-rebase tree |
-| A5 | Merge cascade | "Merge #12" that silently lands #9–#11 |
-| A7 | Plan → stack | dependency information the agent produced and discarded |
-| A8 | Stack panel | a blocker you cannot act on |
-| B1 | Receipts | `✓✓ Read`, which is not observable for a model |
-| B2 | Artifacts panel | a stale list, indistinguishable from a correct one |
-| C1 | Execution engine | a setting you can flip that does nothing |
-| D1–D8 | Planner core | — |
-| D9 | User-scoped, backend truth | a planner whose "today" changed per repository |
-| D10 | Dashboard is a device | an unstamped writer whose merges are undefined |
-| D11 | Pull → merge → push | a stale client winning by speaking last |
-| E1 | Inert-value sweep | "declared but never wired", as a test |
-| G1 | `offerPanel` vs `ensurePanel` | the agent claiming your attention |
-| G2 | Closed at launch | last hour's tabs presented as this hour's intent |
-| G6 | Planner is a mode | — |
-| H1 | One PR create path | four call sites that could not stack |
+| A3 | Exit-code contract | `packages/core/src/review/stackRunner.ts:21,118` — every `gh stack` call classifies its exit |
+| B2 | Artifacts panel re-fetch + scoping | `brainrouter-desktop/src/App.tsx:350-354`, `src/panels/memory/ArtifactsPanel.tsx:32,55` |
+| D1 | Mirrored vs owned | `packages/core/src/planner/itemMerge.ts:27,199,229`; `plannerStore.ts:131,148` |
+| D2 | Outbox, local-first | `packages/core/src/planner/outbox.ts` ← `plannerStore.ts:27`, `plannerSync.ts:28` |
+| D3 | Hybrid logical clocks | `packages/core/src/planner/hybridClock.ts` ← `plannerSync.ts:131` |
+| D4 | Field-level LWW + retained conflicts | `itemMerge.ts` ← `plannerSync.ts`, `brainrouter/src/memory/planner/backend.ts:18,173` |
+| D5 | Timetable and drift ratio | `packages/core/src/planner/timetable.ts` ← `plannerService.ts:18`; `brainrouter-desktop/src/planner/PlannerMode.tsx:157-161` |
+| D9 | User-scoped, backend truth | migration `051_planner.sql`; `brainrouter/src/index.ts:309` mounts `/api/planner` |
+| D10 | Dashboard is a device | `brainrouter-dashboard/app/planner/page.tsx:25,49,121-131` |
+| D11 | Pull → merge → push | `packages/core/src/planner/plannerSync.ts:117-150`; server merge at `brainrouter/src/memory/planner/backend.ts:109,173` |
+| G1 | `offerPanel` vs `revealPanel` | `brainrouter-desktop/src/lib/panels/usePanels.ts:62,231`; callers at `App.tsx:341`, `useAppHandlers.ts:326` |
+| G2 | Closed at launch, restore offered | `usePanels.ts:106-108`; the restore is pressable in the views chooser (`ViewsRail.tsx:209-217`), threaded through `MainContent.tsx` and `App.tsx:731` |
+| G3 | Panel grouping | `brainrouter-desktop/src/panels/panelCatalog.ts:66-103` |
+| G5 | One Pull request panel | `panelCatalog.ts:21-25` — `review` and `ci` gone from `PANEL_DEFS`; checks and findings inline at `renderPanelBody.tsx:411-419` |
+| G6 | Planner is a mode | `brainrouter-desktop/src/components/layout/ActivityBar.tsx:15,24`; `App/layout/MainContent.tsx:212-216` |
+| H1 | One PR create path | `packages/core/src/review/prRouter.ts:59`, called from `git/prEmit.ts:302-308` and `github-track-services.ts:630-633` |
+| H3 | `cli.stackingMode` | `packages/core/src/config/config.ts:714`, read at `buildLoop.ts:426` and `github-track-services.ts:631` — **config file only, no settings UI** |
+| H4 | Reachability walk | `packages/core/src/tests/inert-value-sweep.test.ts:244-249,281,341` |
+| I1 | Startup detection, blast-radius install, and the report | `packages/core/src/tooling/provisioning.ts:52,128`; host `queries.ts:2021-2058`; UI `ToolingNotice.tsx` mounted at `App.tsx:724`, `auto_install` arm at `:47-75` |
+| I2 | Bundling rejected | a decision not to build; nothing to verify |
+| I4 | Reads never prompt | `github-track-services.ts:616` is the only identity call site, and it passes `create_pr` |
 
-Surfaces: desktop planner mode (Today · Calendar · Notes), dashboard `/planner`,
-CLI `/plan`, five `planner_*` tools, migration 051 and `/api/planner`.
+Surfaces genuinely reachable: desktop planner mode (Today · Calendar · Notes),
+dashboard `/planner`, CLI `/plan`, five `planner_*` tools, migration 051 and
+`/api/planner`.
 
-### Shipped after review
+### Built in part
 
-| # | Decision | The claim it removes |
+| # | What works | What does not |
 |---|---|---|
-| F2 | Explain-back, depth chosen by you | an agent deciding how much you need to know |
-| F3 | Decision log with the REJECTED alternative | a log written at the end, which rationalises rather than records |
-| F4 | Verification hand-off | "it works" when what happened is "it compiled" |
-| F7 | Comprehension review | — *(reverses this Part's own earlier refusal)* |
-| G3 | Panel grouping | a 26-item strip you scan rather than navigate |
-| G4 | "Understand" group | comprehension buried in the crowded default set |
-| G5 | One Pull request panel | `layerStatus` naming a blocker it could not see |
-| H1 | One PR create path | four call sites that could not stack |
-| H3 | `cli.stackingMode` | stacking with no way to ask for it |
-| H4 | Reachability check | a cluster that imports only itself passing an importer check |
+| A1 | `stackProbe.ts:26` probes `gh` + extension, reached from the build loop and Track | no git-2.20 check, no cache — `stackCapability.ts:65,130` and `stackRunner.ts:137` have no caller |
+| A2 | the lying action is gone (`workbenchActions.ts:123-132`) | no replacement create path — `stackAuthoring.ts:91,142` has no caller |
+| A7 | plan → route (`prRouter.ts:75-83`) | no layer-per-phase authoring; `mayProposeStack`/`canAddLayer` unconsulted |
+| C1 | knob read and engine named (`runTurn.impl.ts:286-291`); control at `RuntimeSection.tsx:64` | no parity, so `graph` always falls back (`engineSelection.ts:72-79`); no parity matrix |
+| D6 | five `planner_*` tools registered | `buildPlannerContext` has no caller — no planner context reaches the model |
+| E1 | the sweep exists with all four parts | its orphan assertion inspects only `planner/`, so four of this ADR's own orphans pass |
+| F7 | panel, invoke path and honest host stubs | `comprehensionReview.ts:125-261` unused; dispute records nothing; no `/understand` command |
+| G4 | the Understand group exists | one panel in it, not Explain + Decisions + Verification |
+| H2 | the ROUTE is decided once — `prRouter.routePullRequest` (H1) | `forge.createChangeRequest` is not the chokepoint the decision claims: `prEmit.ts:310` is its only non-test caller, and the Track path still shells out itself at `github-track-services.ts:635-636`, duplicating both the routing decision and the `gh` invocation |
+| I3 | identity checked on the Track create-PR path | not on the build-loop push; the "question, both one click" UI has no renderer caller |
 
-### Shipped — the final wave
+### Not built
 
-| # | Decision | The claim it removes |
+| # | Decision | Where the code sits, uncalled |
 |---|---|---|
-| F1 | Profile-shaped comprehension | one comprehension mechanism pretending to serve every kind of work |
-| F5 | Tutor profile | teaching someone who is blocked at 2am |
-| F6 | Research falsifiability | a position presented as a finding |
-| H2 | Track path converged | the last `gh pr create` that could not stack |
+| A4 | Sync with a rewrite preview | `packages/core/src/review/stackLifecycle.ts:33,55` |
+| A5 | Merge cascade with confirmation | `packages/core/src/review/stackLifecycle.ts:192,259,296` |
+| A8 | Stack/PR panel | renders, receives no props, and its three buttons dispatch queries with no host handler |
+| B1 | Message receipts | `packages/core/src/task/messageReceipts.ts` — sole importer is its own test |
+| D7 | Source adapters | `packages/core/src/planner/sourceAdapter.ts:26,80` — **zero implementations exist** |
+| D8 | Retention | `packages/core/src/planner/sourceAdapter.ts:119,137` |
+| F1 | Profile-shaped comprehension | `packages/core/src/comprehension/profileComprehension.ts:28,50` |
+| F2 | Explain-back | `packages/core/src/comprehension/workRecord.ts:25,46` |
+| F3 | Decision log | `packages/core/src/comprehension/workRecord.ts:81,96` |
+| F4 | Verification hand-off | `packages/core/src/comprehension/workRecord.ts:117,135` |
+| F5 | Tutor profile | `packages/core/src/comprehension/profileComprehension.ts:82,100,110` |
+| F6 | Research falsifiability | `packages/core/src/comprehension/profileComprehension.ts:121-158` |
 
-**Every decision in this ADR is implemented.** The one deliberate exception is
-plugin publish, which still calls `gh pr create` directly: it opens a pull
-request against a *different* repository, where a local stack has no meaning.
-That is a decision, not an omission.
+A6 is a decision *not* to build, and no merge-queue integration exists, which is
+consistent with it. Plugin publish still calling `gh pr create` directly
+(`packages/core/src/plugin/publish.ts`) remains the deliberate exception H2
+names: it opens a pull request against a *different* repository, where a local
+stack has no meaning.
 
-**F5's open question is answered by its guards rather than by argument.** The
-tutor never fires for a blocked professional, never fires twice, and is opt-in
-by profile — so the failure mode that made it questionable ("is this a different
-product?") cannot occur in this one. `detectUrgency` treats "just tell me",
-"production", "stuck" and six other phrases as a full stop.
+**F5's open question is therefore still open.** The previous version of this
+section answered it by citing `detectUrgency`'s guards — but `detectUrgency` has
+no caller, so the guards that were supposed to settle the argument have never
+run. An open question cannot be closed by code nothing executes.
 
 ### The five things worth arguing with
 
@@ -986,9 +1183,33 @@ product?") cannot occur in this one. `detectUrgency` treats "just tell me",
 - Refused mid-stack merges in the first pass of A5, forbidding the operation
   the feature exists for.
 
+Added by the 2026-08-06 audit, because the list was itself out of date:
+
+- **Wrote "Every decision in this ADR is implemented" while twelve were not
+  built at all.**
+  The document became the last surface running this ADR's defect, and it is the
+  one that had least excuse: the code at least declared its own gaps in
+  `engineSelection.ts` and in the comprehension host stubs.
+- **Left three Part headers reading "PROPOSED — not implemented" underneath a
+  summary calling the same decisions shipped.** Both statements were wrong, and
+  a document that contradicts itself is read as neither.
+- **Rebuilt the Stack panel after G5 without connecting it.** A8 was recorded as
+  an error and then re-made: the consolidated Pull request panel renders, and
+  `App.tsx` passes it no data while its buttons call three host queries that do
+  not exist. This is the fourth surface in this release to be reachable and
+  inert.
+- **Repeated the E1 baseline mistake with four new orphans.** The KNOWN_UNWIRED
+  list names four planner modules that are no longer orphans and omits
+  `task/messageReceipts.ts`, `review/stackLifecycle.ts`, `graph/graphExecutor.ts`
+  and `workbench/workbenchActions.ts`, which are.
+- **Answered F5's open question by citing a guard with no caller.**
+
 ---
 
-## Part I — Tooling and identity
+## Part I — Tooling and identity *(I1/I2/I4 BUILT, I3 built in part — audited 2026-08-06)*
+
+Part I carried no status marker at all and appeared in no summary table, so
+§2.9's "every decision is implemented" never covered it either way. It does now.
 
 The stack feature shipped, and then sat unused because `gh-stack` was not installed. A1 was
 correctly reporting it unavailable the whole time. **A capability check that is right and silent is
@@ -1057,6 +1278,18 @@ by someone else.
   the one `git` and `gh` actually use, and the drift would show up as a push that used an account the
   UI said was inactive.
 
+> **Built in part.** `checkIdentity` and `bindWorkspace` exist
+> (`packages/core/src/tooling/gitIdentity.ts:75,127`) and are enforced on exactly **one** write
+> path, the Track create-PR button
+> (`brainrouter-desktop/electron/host/github-track-services.ts:616-622` via
+> `brainrouter-desktop/electron/host/workspaceIdentity.ts:33-47`). This decision says *any* push,
+> create or merge; the build-loop push runs `git push` with no check
+> (`packages/core/src/git/prEmit.ts:296`). The "mismatch is a question, both one click" affordance
+> does not exist either: the `'git-identity-check'` handler
+> (`brainrouter-desktop/electron/host/queries.ts:2062`) has no caller in the renderer, so a mismatch
+> reaches the person as a refusal with an error string — which is the shape this decision names as
+> wrong, because an error is not a choice between two legitimate answers.
+
 ### I4 · Read-only operations never prompt
 
 Fetching a stack's state, reading checks, listing PRs — none of these can disclose anything, so none
@@ -1108,6 +1341,14 @@ history of branches under review.
 **Wiring the engine may expose that the graph path is not at parity.** If that is more than a week,
 the honest response is to say so and reconsider whether the knob should exist — not to ship a
 `graph` option that silently loses features.
+
+> **It did, and this is the saying-so.** Graph lacks interrupts, tool
+> authorization, receipts and delegation
+> (`packages/core/src/agent/runtime/engineSelection.ts:72-79`), so selecting it
+> runs the loop and explains why. The knob is now honest rather than inert,
+> which is better — but the decision this paragraph reserved is live: either the
+> parity work is scheduled, or C1's rejected alternative (delete the knob, ship
+> only the loop) becomes the right answer after all.
 
 **The planner adds persistence and sync we have never had.** Sync bugs are found by use, not unit
 tests, and found late they cost someone's data. Hence weeks 7–8 and the week-12 soak.

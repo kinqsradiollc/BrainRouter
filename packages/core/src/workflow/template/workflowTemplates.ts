@@ -5,6 +5,8 @@
  *   - `compare`      — analyze each option in parallel → recommend.
  *   - `review-wide`  — review each target in parallel → merge findings → summarize.
  *   - `research`     — research each angle in parallel → synthesize an answer.
+ *   - `build`        — plan → implement → verify → multi-lens review.
+ *   - `investigate`  — multi-lens inspection → synthesis → adversarial challenge.
  *
  * Pure: each builder returns a `PhasePlan` (or validation errors); `run_workflow`
  * (workflowTool.ts) accepts `{ template, templateArgs }` and runs the built plan
@@ -13,22 +15,21 @@
  */
 
 import type { PhasePlan } from '../../orchestration/workflow/phasePlan.js';
+import { adversarialLens, investigationLenses, reviewLenses } from '../../orchestration/lenses.js';
 
 export interface TemplateResult {
   plan: PhasePlan | null;
   errors: string[];
 }
 
-export const WORKFLOW_TEMPLATES = ['compare', 'review-wide', 'research', 'build'] as const;
+export const WORKFLOW_TEMPLATES = ['compare', 'review-wide', 'research', 'build', 'investigate'] as const;
 export type WorkflowTemplateName = (typeof WORKFLOW_TEMPLATES)[number];
 
 /** Distinct review lenses the single-slice `build` fans out over (parallel,
- *  read-only) so one task gets multi-angle review instead of one generalist. */
-const BUILD_REVIEW_LENSES = [
-  'correctness & logic',
-  'security & input handling',
-  'regressions & missed requirements',
-];
+ *  read-only) so one task gets multi-angle review instead of one generalist.
+ *  Now sourced from the shared lens vocabulary so the tool descriptions, the
+ *  turn guards and this template cannot drift into naming different angles. */
+const BUILD_REVIEW_LENSES: string[] = [...reviewLenses()];
 
 function stringArray(v: unknown): string[] {
   if (!Array.isArray(v)) return [];
@@ -156,6 +157,71 @@ function researchTemplate(args: Record<string, unknown>): TemplateResult {
           ],
           inputFrom: ['gather'],
           dependsOn: ['gather'],
+        },
+      ],
+    },
+    errors: [],
+  };
+}
+
+/**
+ * `investigate` — the read-only high-effort shape: N distinct lenses in parallel
+ * → architect synthesis → ONE adversary briefed to break that synthesis.
+ *
+ * The adversary is the point. `research` already fans out and synthesizes, and
+ * stops there — nothing ever attacks the answer, so a confidently-wrong
+ * synthesis reaches the user with the authority of N children behind it. Here
+ * the challenge phase consumes the synthesis via `inputFrom` and is briefed to
+ * falsify it; the parent answers the challenge rather than merging it.
+ */
+function investigateTemplate(args: Record<string, unknown>): TemplateResult {
+  const question = str(args.question);
+  if (!question) return { plan: null, errors: ['investigate: `question` (non-empty string) is required'] };
+  const requested = stringArray(args.lenses);
+  const over = requested.length > 0 ? requested : [...investigationLenses()];
+  if (over.length < 2) return { plan: null, errors: ['investigate: `lenses` must name ≥2 distinct angles — one lens is not an investigation'] };
+  return {
+    plan: {
+      title: `investigate: ${question.slice(0, 40)}`,
+      phases: [
+        {
+          id: 'inspect',
+          title: 'Inspect through each lens',
+          fanOut: {
+            over,
+            agent: {
+              role: 'explorer',
+              access: 'read',
+              prompt: `Question: "${question}"\n\nInvestigate ONLY through the "{{target}}" lens — ignore anything outside it, and say "nothing for this lens" rather than padding. Cite concrete evidence (file paths, line numbers, command output) for every claim; mark anything you inferred but did not verify as UNVERIFIED.`,
+            },
+          },
+          synthesize: 'role-rollup',
+        },
+        {
+          id: 'synthesize',
+          title: 'Synthesize a conclusion',
+          agents: [
+            {
+              role: 'architect',
+              access: 'read',
+              prompt: `Synthesize one evidence-backed conclusion for: "${question}".\n\nState what is established, what is still unknown, and which claims rest on UNVERIFIED evidence.\n\nFindings by lens:\n\n{{input}}`,
+            },
+          ],
+          inputFrom: ['inspect'],
+          dependsOn: ['inspect'],
+        },
+        {
+          id: 'challenge',
+          title: 'Adversarial challenge',
+          agents: [
+            {
+              role: 'reviewer',
+              access: 'read',
+              prompt: `Question under investigation: "${question}"\n\nYour job is to ${adversarialLens()}. Do NOT review style or restate agreement. Verify the cited evidence yourself — read the files, run the greps — and report: (a) claims the evidence does not support, (b) contradicting evidence, (c) what was never checked. If it survives, say so and name the strongest remaining risk.\n\nSynthesis to attack:\n\n{{input}}`,
+            },
+          ],
+          inputFrom: ['synthesize'],
+          dependsOn: ['synthesize'],
         },
       ],
     },
@@ -306,6 +372,8 @@ export function buildTemplatePlan(name: string, args: unknown): TemplateResult {
       return researchTemplate(a);
     case 'build':
       return buildTemplate(a);
+    case 'investigate':
+      return investigateTemplate(a);
     default:
       return { plan: null, errors: [`unknown template "${name}". Known: ${WORKFLOW_TEMPLATES.join(', ')}`] };
   }

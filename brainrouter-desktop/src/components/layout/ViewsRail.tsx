@@ -36,6 +36,9 @@ export interface ViewsRailProps {
   tabTitle: (id: PanelId) => string;
   renderPanelBody: (id: PanelId, active?: boolean) => React.ReactElement | null;
   openSideView: (id: PanelId) => void;
+  /** ADR-028 G2 — the escape hatch for a launch where the clean start was not wanted. */
+  restoreLastSessionPanels: () => void;
+  lastSessionPanels: PanelId[];
   lastPlan: { items: Array<{ status: string }> } | null;
   changedFiles: unknown[];
   backgroundTasks: unknown[];
@@ -54,7 +57,7 @@ export interface ViewsRailProps {
 export function ViewsRail(p: ViewsRailProps): React.ReactElement | null {
   const {
     sideAnim, sideWidth, setSideWidth, sideFullScreen, setSidePanelOpen, sidePinned, setSidePinned, activeSideTab, sideTabs, setActiveSideTab, closeSideTab, reorderSideTab,
-    tabTitle, renderPanelBody, openSideView,
+    tabTitle, renderPanelBody, openSideView, restoreLastSessionPanels, lastSessionPanels,
     lastPlan, changedFiles, backgroundTasks, fleet, toolLog, schedules, worktrees, review, requirements, annotations, artifacts, ci,
     envRoom,
   } = p;
@@ -206,6 +209,17 @@ export function ViewsRail(p: ViewsRailProps): React.ReactElement | null {
               else if (e.key === 'Enter') { e.preventDefault(); const l = shownLaunchers[launchSel]; if (l) { setChooserQuery(''); setChooserSel(0); openSideView(l.id); } }
               else if (e.key === 'Escape') { e.preventDefault(); if (chooserQuery) { setChooserQuery(''); setChooserSel(0); } else setSidePanelOpen(false); }
             }} />
+          {/* ADR-028 G2 — offered here because this chooser IS the launch state:
+              the panel opens with no tabs, so the moment someone notices their
+              layout is gone is the moment they are looking at this list. Shown
+              only when there is something to bring back. */}
+          {lastSessionPanels.length > 0 && !chooserQuery ? (
+            <button type="button" className="side-restore-last" onClick={restoreLastSessionPanels}>
+              <Icon name="clock" size={14} />
+              <span>Reopen last session’s panels</span>
+              <span className="launcher-meta">{lastSessionPanels.length}</span>
+            </button>
+          ) : null}
           <div id="side-view-options" className="side-chooser-options" role="listbox" aria-label="Available views">
             {shownLaunchers.length === 0 ? <div className="chooser-empty" role="status">No views match “{chooserQuery}”.</div> : LAUNCHER_GROUPS.map((group) => {
               const groupLaunchers = shownLaunchers.filter((launcher) => launcher.group === group);

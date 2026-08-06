@@ -4,18 +4,37 @@
  * These exercise the same saved manifest and bundled catalog path used by live
  * Agent turns; no child launch or model call is involved in this first slice.
  */
+import fs from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { loadRegistry } from '../orchestration/agents/agentRegistry.js';
 import { detectOrchestrationTaskSignals } from '../orchestration/profiles/taskSignals.js';
+import { ProfileStageController } from '../orchestration/runtime/profileStageController.js';
 import { buildWorkingTreeReviewPrompt } from '../review/workingTreeReview.js';
-import { resolveActiveTurnOrchestration } from '../workspace/activeTurnOrchestration.js';
+import {
+  inferWorkspaceOrchestrationDefault,
+  resetInferredWorkspaceOrchestrationDefaults,
+  resolveActiveTurnOrchestration,
+} from '../workspace/activeTurnOrchestration.js';
 import {
   createWorkspaceManifest,
+  loadWorkspaceManifest,
   saveWorkspaceManifest,
   type WorkspaceManifest,
 } from '../workspace/manifest.js';
 import type { WorkspaceProfileId } from '../workspace/profiles.js';
+import { resolveWorkspaceToolSelection } from '../workspace/toolProfiles.js';
 import { makeAgent, withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
+
+/** A repository that has never been through `/init`: code markers, no `.brainrouter/`. */
+function stockRepository(workspace: string): string {
+  fs.writeFileSync(path.join(workspace, 'package.json'), '{"name":"stock"}\n');
+  fs.mkdirSync(path.join(workspace, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(workspace, 'src', 'index.ts'), 'export const a = 1;\n');
+  resetInferredWorkspaceOrchestrationDefaults();
+  return workspace;
+}
 
 test('registered task signals are bounded and ambiguous chat remains primary-only', () => {
   assert.deepEqual(
@@ -38,18 +57,231 @@ test('P23-21 workspace initialization is not misclassified as evidence collectio
   );
 });
 
-test('missing workspace manifests preserve the legacy direct-primary path', () => {
+test('an unrecognizable workspace gets no inferred plan, because nothing about it was established', () => {
   withTempWorkspace((workspace) => {
+    resetInferredWorkspaceOrchestrationDefaults();
     const resolved = resolveActiveTurnOrchestration({
       workspaceRoot: workspace,
       task: 'Research this question.',
     });
+    assert.equal(resolved.source, 'none');
     assert.equal(resolved.plan.orchestrationProfileId, null);
     assert.equal(resolved.plan.strategyId, null);
     assert.deepEqual(resolved.plan.diagnostics, [
       { code: 'no-plan' },
       { code: 'fallback-selected' },
     ]);
+    assert.equal(
+      inferWorkspaceOrchestrationDefault(workspace),
+      null,
+      'the custom plan is mode-off with no roles, so inferring it is worse than inferring nothing',
+    );
+  });
+});
+
+test('a stock repository routes to the default profile, because onboarding is not a precondition for delegation', () => {
+  withTempWorkspace((workspace) => {
+    stockRepository(workspace);
+    const resolved = resolveActiveTurnOrchestration({
+      workspaceRoot: workspace,
+      task: 'Implement the retry backoff and fix the bug in the uploader.',
+    });
+    assert.equal(loadWorkspaceManifest(workspace), null, 'precondition: never onboarded');
+    assert.equal(resolved.plan.orchestrationProfileId, 'engineering');
+    assert.equal(resolved.plan.strategyId, 'delivery');
+    assert.equal(resolved.plan.selectionSource, 'deterministic');
+    assert.deepEqual(resolved.taskSignalIds, ['bug-fix', 'implementation']);
+    assert.deepEqual(
+      resolved.plan.stages.map((stage) => stage.id),
+      ['inspect', 'implement', 'review', 'verify', 'challenge', 'deliver'],
+    );
+    assert.deepEqual(resolved.plan.skippedStages, [], 'every stage survives on a stock repo');
+    assert.equal(resolved.plan.effectiveParallel, 4);
+  });
+});
+
+test('an inferred plan is labelled distinctly, so the trace never claims a reviewed workspace choice', () => {
+  withTempWorkspace((workspace) => {
+    stockRepository(workspace);
+    assert.equal(
+      resolveActiveTurnOrchestration({
+        workspaceRoot: workspace,
+        task: 'Investigate the root cause.',
+      }).source,
+      'inferred-default',
+    );
+  });
+});
+
+test('a saved manifest wins over what the repository looks like, so a default cannot override a reviewed choice', () => {
+  withTempWorkspace((workspace) => {
+    stockRepository(workspace);
+    const inferred = resolveActiveTurnOrchestration({
+      workspaceRoot: workspace,
+      task: 'Collect evidence and find sources.',
+    });
+    assert.equal(inferred.plan.orchestrationProfileId, 'engineering');
+
+    // The same directory the suggester reads as engineering, explicitly onboarded
+    // as research: the manifest must decide, not the filesystem.
+    saveWorkspaceManifest(workspace, adaptive(createWorkspaceManifest({
+      name: 'research',
+      profile: 'research',
+      by: 'wizard',
+    })));
+    const onboarded = resolveActiveTurnOrchestration({
+      workspaceRoot: workspace,
+      task: 'Collect evidence and find sources.',
+    });
+    assert.equal(onboarded.plan.orchestrationProfileId, 'research');
+    assert.equal(onboarded.plan.strategyId, 'parallel-evidence');
+    assert.notEqual(onboarded.source, 'inferred-default');
+  });
+});
+
+test('an onboarded workspace resolves the identical plan it did before inference existed', () => {
+  withTempWorkspace((workspace) => {
+    stockRepository(workspace);
+    saveWorkspaceManifest(workspace, adaptive(createWorkspaceManifest({
+      name: 'engineering',
+      profile: 'engineering',
+      by: 'wizard',
+    })));
+    const resolved = resolveActiveTurnOrchestration({
+      workspaceRoot: workspace,
+      task: 'Implement the retry backoff and fix the bug in the uploader.',
+    });
+    assert.equal(resolved.source, 'bundled');
+    assert.deepEqual(
+      {
+        profile: resolved.plan.orchestrationProfileId,
+        strategy: resolved.plan.strategyId,
+        selectionSource: resolved.plan.selectionSource,
+        stages: resolved.plan.stages.map((stage) => [stage.id, stage.skillIds.join('|')]),
+        parallel: resolved.plan.effectiveParallel,
+        diagnostics: resolved.plan.diagnostics,
+      },
+      {
+        profile: 'engineering',
+        strategy: 'delivery',
+        selectionSource: 'deterministic',
+        stages: [
+          ['inspect', 'planning-skill'],
+          ['implement', 'incremental-skill|testing-skill'],
+          ['review', 'code-review-and-quality'],
+          ['verify', 'verify-loop'],
+          ['challenge', 'code-review-and-quality'],
+          ['deliver', 'shipping-skill'],
+        ],
+        parallel: 4,
+        diagnostics: [],
+      },
+    );
+  });
+});
+
+test('a manifest that turned orchestration off is never helpfully re-inferred', () => {
+  withTempWorkspace((workspace) => {
+    stockRepository(workspace);
+    const manifest = createWorkspaceManifest({
+      name: 'engineering',
+      profile: 'engineering',
+      by: 'wizard',
+    });
+    saveWorkspaceManifest(workspace, {
+      ...manifest,
+      orchestration: { ...manifest.orchestration, mode: 'off' },
+    });
+    const resolved = resolveActiveTurnOrchestration({
+      workspaceRoot: workspace,
+      task: 'Implement the retry backoff and fix the bug in the uploader.',
+    });
+    assert.equal(resolved.plan.strategyId, 'direct');
+    assert.equal(resolved.plan.selectionSource, 'fallback');
+    assert.ok(resolved.plan.diagnostics.some((entry) => entry.code === 'mode-off'));
+  });
+});
+
+test('inference never outranks the two turn-ownership escapes on a stock repository', () => {
+  withTempWorkspace((workspace) => {
+    stockRepository(workspace);
+    const task = 'Implement the retry backoff and fix the bug in the uploader.';
+    const preplanned = resolveActiveTurnOrchestration({
+      workspaceRoot: workspace,
+      task,
+      preplanned: true,
+    });
+    assert.equal(preplanned.source, 'preplanned');
+    assert.equal(preplanned.plan.strategyId, null);
+
+    const nested = resolveActiveTurnOrchestration({
+      workspaceRoot: workspace,
+      task,
+      parentDepth: 1,
+    });
+    assert.equal(nested.source, 'nested-agent');
+    assert.equal(nested.plan.strategyId, null);
+  });
+});
+
+test('the repository scan behind an inferred default runs once, not once per turn', () => {
+  withTempWorkspace((workspace) => {
+    stockRepository(workspace);
+    const first = inferWorkspaceOrchestrationDefault(workspace);
+    assert.ok(first);
+    assert.equal(first.profile, 'engineering');
+    for (let turn = 0; turn < 5; turn += 1) {
+      assert.equal(
+        inferWorkspaceOrchestrationDefault(workspace),
+        first,
+        'a recomputed suggestion would allocate a new object and put a filesystem scan on the hot path',
+      );
+    }
+  });
+});
+
+test('an unsignalled turn on an inferred plan cannot be terminated by the profile-stage guard', () => {
+  withTempWorkspace((workspace) => {
+    stockRepository(workspace);
+    const resolved = resolveActiveTurnOrchestration({
+      workspaceRoot: workspace,
+      task: 'Hello, how are you?',
+    });
+    assert.equal(resolved.plan.strategyId, 'direct');
+    assert.deepEqual(resolved.taskSignalIds, []);
+    const controller = new ProfileStageController(
+      { turnId: 'turn-1', sessionKey: 'session-1' },
+      resolved.plan,
+      {
+        loadSkill: async () => { throw new Error('an unsignalled plan must not activate a skill'); },
+        setActiveSkill: () => {},
+      },
+    );
+    assert.equal(controller.nextRequiredAction(), undefined);
+    assert.equal(controller.nextRequiredDelegation(), undefined);
+    assert.equal(controller.failedRequiredStage(), undefined);
+  });
+});
+
+test('an inferred default stays inside turn routing and grants no workspace management', () => {
+  withTempWorkspace((workspace) => {
+    stockRepository(workspace);
+    resolveActiveTurnOrchestration({
+      workspaceRoot: workspace,
+      task: 'Implement the retry backoff and fix the bug in the uploader.',
+    });
+    assert.equal(loadWorkspaceManifest(workspace), null, 'nothing was written to disk');
+    assert.equal(
+      resolveWorkspaceToolSelection({ manifest: loadWorkspaceManifest(workspace) }).managed,
+      false,
+      'an inferred profile must not switch on manifest tool allowlisting',
+    );
+    const roles = loadRegistry(workspace).map((loaded) => loaded.def.id).sort();
+    assert.deepEqual(
+      roles,
+      ['architect', 'explorer', 'fleet', 'intake', 'reviewer', 'verifier', 'worker'],
+      'role availability must not narrow to the inferred profile',
+    );
   });
 });
 
