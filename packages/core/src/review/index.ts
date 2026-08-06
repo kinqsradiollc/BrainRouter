@@ -58,6 +58,9 @@ export {
   describeRoute,
   resolveStackingMode,
   type PrRoute,
+  changeRequestArgv,
+  changeRequestTimeoutMs,
+  type ChangeRequestArgs,
   type StackingMode,
 } from './prRouter.js';
 export { probeStackCapability } from './stackProbe.js';

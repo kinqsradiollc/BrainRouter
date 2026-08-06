@@ -13,7 +13,7 @@
  * functions into its HostContext (and clears the scheduler timers on shutdown).
  */
 import { execFile } from 'node:child_process';
-import { routePullRequest, resolveStackingMode, probeStackCapability } from '@kinqs/brainrouter-core/review';
+import { routePullRequest, resolveStackingMode, probeStackCapability, changeRequestArgv, changeRequestTimeoutMs } from '@kinqs/brainrouter-core/review';
 import { checkWorkspaceIdentity } from './workspaceIdentity.js';
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 import type { Agent } from '@kinqs/brainrouter-core/agent';
@@ -631,9 +631,14 @@ export function buildGithubTrackServices(deps: GithubTrackDeps) {
       mode: resolveStackingMode(getCliKnobs().stackingMode),
       capability,
     });
-    const created = route.kind === 'stack'
-      ? await ghText(['stack', 'submit', '--auto'], { timeout: 60_000, maxBuffer: 500_000 })
-      : await ghText(['pr', 'create', '--draft', '--title', `${item.key}: ${item.title}`, '--body', body], { timeout: 20_000, maxBuffer: 500_000 });
+    // H2 — the argv comes from core, not from here. The route was already
+    // decided once; the COMMAND was still being assembled per call site, and the
+    // argv is what drifts: `gh stack link` shipped because an unknown subcommand
+    // exits 1 exactly like a real command that failed.
+    const created = await ghText(
+      changeRequestArgv(route, { title: `${item.key}: ${item.title}`, body }),
+      { timeout: changeRequestTimeoutMs(route), maxBuffer: 500_000 },
+    );
     if (!created.ok) return { ok: false, items: listWorkItems(workspaceRoot), branch, itemKey: item.key, error: created.error ?? 'GitHub CLI could not create the PR.' };
     const url = created.stdout.split(/\s+/).find((part) => /^https?:\/\//.test(part)) ?? created.stdout.trim();
     if (url) linkWorkItem(workspaceRoot, item.id, { codeLinks: [{ kind: 'pull-request', ref: url, label: 'GitHub PR' }] });

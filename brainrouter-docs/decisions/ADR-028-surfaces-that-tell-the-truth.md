@@ -985,7 +985,7 @@ between projects — if it does, it is planner; if it belongs to the repo, it is
 
 ---
 
-## Part H — Stacks are not reaching the products *(H1/H3/H4 BUILT, H2 built in part — audited 2026-08-06)*
+## Part H — Stacks are not reaching the products *(H1–H4 BUILT — audited 2026-08-06, H2 closed 2026-08-07)*
 
 Reported by the owner: the desktop app and the CLI agent still open ordinary
 pull requests. Verified — and it is the ADR's own pattern again, at the largest
@@ -1124,7 +1124,7 @@ dashboard `/planner`, CLI `/plan`, five `planner_*` tools, migration 051 and
 | E1 | the sweep exists with all four parts | its orphan assertion inspects only `planner/`, so four of this ADR's own orphans pass |
 | F7 | panel, invoke path and honest host stubs | `comprehensionReview.ts:125-261` unused; dispute records nothing; no `/understand` command |
 | G4 | the Understand group exists | one panel in it, not Explain + Decisions + Verification |
-| H2 | the ROUTE is decided once — `prRouter.routePullRequest` (H1) | `forge.createChangeRequest` is not the chokepoint the decision claims: `prEmit.ts:310` is its only non-test caller, and the Track path still shells out itself at `github-track-services.ts:635-636`, duplicating both the routing decision and the `gh` invocation |
+| H2 | the ROUTE is decided once (`prRouter.routePullRequest`) AND the ARGV is built once (`prRouter.changeRequestArgv`) | closed. The audit was right that a shared decision was not enough: each site still assembled its own command, and the argv is what drifts — `gh stack link` shipped and survived a ten-code exit contract because an unknown subcommand exits 1 exactly like a real failure. Track now builds its command from core (`github-track-services.ts:637-641`). The argv builder returns argv rather than spawning, because the surfaces genuinely differ in how they run commands and forcing one runner would be a worse coupling than the duplication it removes |
 | I3 | identity checked on the Track create-PR path | not on the build-loop push; the "question, both one click" UI has no renderer caller |
 
 ### Not built
