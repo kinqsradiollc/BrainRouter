@@ -134,6 +134,7 @@ import * as sensory from "./queries/sensoryQueries.js";
 import * as meetings from "./queries/meetingsQueries.js";
 import * as track from "./queries/trackQueries.js";
 import * as planner from "./queries/plannerQueries.js";
+import * as notes from "./queries/notesQueries.js";
 import * as teams from "./queries/teamsQueries.js";
 import * as chatThreads from "./queries/chatThreadsQueries.js";
 import * as vulnerability from "./queries/vulnerabilityQueries.js";
@@ -570,6 +571,37 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public listPlannerBlocks(orgId: string, userId: string): Promise<planner.PlannerBlockRow[]> { return planner.listPlannerBlocks(this.exec, orgId, userId); }
   public upsertPlannerBlock(orgId: string, userId: string, block: planner.PlannerBlockRow): Promise<planner.PlannerBlockRow> { return planner.upsertPlannerBlock(this.exec, orgId, userId, block); }
   public compactCompletedPlannerItems(orgId: string, userId: string, retentionDays: number): Promise<number> { return planner.compactCompletedPlannerItems(this.exec, orgId, userId, retentionDays); }
+
+  // ADR-029 Part D — notes (migration 052). Same (org, USER, id) partition as
+  // the planner (D1). `notes_refs`/`notes_index` are derived from block content
+  // alone (A2), which is why the only writers here take a block id and a text.
+  public databaseNowMs(): Promise<number> { return notes.databaseNowMs(this.exec); }
+  public listNoteBlocksSince(orgId: string, userId: string, since?: string): Promise<notes.NoteBlockRow[]> { return notes.listNoteBlocksSince(this.exec, orgId, userId, since); }
+  public listAllNoteBlocks(orgId: string, userId: string): Promise<notes.NoteBlockRow[]> { return notes.listAllNoteBlocks(this.exec, orgId, userId); }
+  public getNoteBlock(orgId: string, userId: string, id: string): Promise<notes.NoteBlockRow | null> { return notes.getNoteBlock(this.exec, orgId, userId, id); }
+  public findNoteBlockInOrg(orgId: string, id: string): Promise<notes.NoteBlockOwnerRow | null> { return notes.findNoteBlockInOrg(this.exec, orgId, id); }
+  public upsertNoteBlock(orgId: string, userId: string, block: Parameters<typeof notes.upsertNoteBlock>[3]): Promise<notes.NoteBlockRow> { return notes.upsertNoteBlock(this.exec, orgId, userId, block); }
+  public setNoteBlockVisibility(orgId: string, userId: string, id: string, visibility: string): Promise<number> { return notes.setNoteBlockVisibility(this.exec, orgId, userId, id, visibility); }
+  public latestNoteRevision(orgId: string, userId: string): Promise<string> { return notes.latestNoteRevision(this.exec, orgId, userId); }
+  public wasNoteOperationApplied(orgId: string, userId: string, key: string): Promise<boolean> { return notes.wasNoteOperationApplied(this.exec, orgId, userId, key); }
+  public recordNoteOperationApplied(orgId: string, userId: string, key: string, blockId: string): Promise<void> { return notes.recordNoteOperationApplied(this.exec, orgId, userId, key, blockId); }
+  public replaceNoteRefs(orgId: string, userId: string, blockId: string, refs: Parameters<typeof notes.replaceNoteRefs>[4]): Promise<void> { return notes.replaceNoteRefs(this.exec, orgId, userId, blockId, refs); }
+  public listNoteRefsFrom(orgId: string, userId: string, blockId: string): Promise<notes.NoteRefRow[]> { return notes.listNoteRefsFrom(this.exec, orgId, userId, blockId); }
+  public listNoteBacklinks(orgId: string, viewerUserId: string, targetKey: string, limit?: number): Promise<notes.NoteBacklinkRow[]> { return notes.listNoteBacklinks(this.exec, orgId, viewerUserId, targetKey, limit); }
+  public upsertNoteIndex(orgId: string, userId: string, blockId: string, entry: Parameters<typeof notes.upsertNoteIndex>[4]): Promise<void> { return notes.upsertNoteIndex(this.exec, orgId, userId, blockId, entry); }
+  public deleteNoteIndexEntry(orgId: string, userId: string, blockId: string): Promise<void> { return notes.deleteNoteIndexEntry(this.exec, orgId, userId, blockId); }
+  public clearNoteDerived(orgId: string, userId: string): Promise<void> { return notes.clearNoteDerived(this.exec, orgId, userId); }
+  public listNoteIndexEntries(orgId: string, userId: string): ReturnType<typeof notes.listNoteIndexEntries> { return notes.listNoteIndexEntries(this.exec, orgId, userId); }
+  public searchNoteIndex(orgId: string, userId: string, query: string, limit?: number): Promise<notes.NoteSearchRow[]> { return notes.searchNoteIndex(this.exec, orgId, userId, query, limit); }
+  public readNoteBlockLease(orgId: string, userId: string, blockId: string): ReturnType<typeof notes.readNoteBlockLease> { return notes.readNoteBlockLease(this.exec, orgId, userId, blockId); }
+  public upsertNoteBlockLease(orgId: string, userId: string, lease: notes.NoteBlockLeaseRow): Promise<void> { return notes.upsertNoteBlockLease(this.exec, orgId, userId, lease); }
+  public sweepNoteBlockLeases(orgId: string, maxAgeMs: number): Promise<number> { return notes.sweepNoteBlockLeases(this.exec, orgId, maxAgeMs); }
+  public registerNoteAttachment(orgId: string, object: Parameters<typeof notes.registerNoteAttachment>[2]): Promise<notes.NoteAttachmentRow> { return notes.registerNoteAttachment(this.exec, orgId, object); }
+  public linkNoteAttachment(orgId: string, userId: string, link: Parameters<typeof notes.linkNoteAttachment>[3]): Promise<void> { return notes.linkNoteAttachment(this.exec, orgId, userId, link); }
+  public unlinkNoteAttachment(orgId: string, userId: string, blockId: string, contentHash: string): Promise<number> { return notes.unlinkNoteAttachment(this.exec, orgId, userId, blockId, contentHash); }
+  public listNoteAttachments(orgId: string, userId: string, blockId: string): Promise<notes.NoteAttachmentUseRow[]> { return notes.listNoteAttachments(this.exec, orgId, userId, blockId); }
+  public countNoteAttachmentUses(orgId: string, contentHash: string): Promise<number> { return notes.countNoteAttachmentUses(this.exec, orgId, contentHash); }
+  public listUnreferencedNoteAttachments(orgId: string, olderThanMs: number, limit?: number): Promise<notes.NoteAttachmentRow[]> { return notes.listUnreferencedNoteAttachments(this.exec, orgId, olderThanMs, limit); }
   public getTrackItem(orgId: string, id: string): Promise<track.TrackItemRow | null> { return track.getTrackItem(this.exec, orgId, id); }
   public getTrackItemBySourceRef(orgId: string, sourceRef: string): Promise<track.TrackItemRow | null> { return track.getTrackItemBySourceRef(this.exec, orgId, sourceRef); }
   public transitionTrackItem(orgId: string, id: string, status: string, statusCategory: track.TrackStatusCategory): Promise<track.TrackItemRow | null> { return track.transitionTrackItem(this.exec, orgId, id, status, statusCategory); }
