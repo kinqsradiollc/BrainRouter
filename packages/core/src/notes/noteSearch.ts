@@ -23,7 +23,7 @@ import {
   extractWorkspaceRefs, formatWorkspaceRef, workspaceRefKey,
   type WorkspaceReferenceSource,
 } from '../workspace/references/index.js';
-import { noteBlockRef, type NoteBlock, type NoteBlockKind } from './block.js';
+import { isLiveBlock, noteBlockRef, type NoteBlock, type NoteBlockKind } from './block.js';
 
 /** Same shape the extractor scans for, so the two cannot disagree about a URI. */
 const REF_IN_TEXT = /brainrouter:\/\/[^\s<>"'`]+/gi;
@@ -66,7 +66,7 @@ export function contentWithoutRefs(text: string): string {
 export function noteReferenceSources(blocks: Iterable<NoteBlock>): WorkspaceReferenceSource[] {
   const sources: WorkspaceReferenceSource[] = [];
   for (const block of blocks) {
-    if (block.deletedAt) continue;
+    if (!isLiveBlock(block)) continue;
     sources.push({ from: noteBlockRef(block.id), text: block.text.value });
   }
   return sources;
@@ -105,7 +105,7 @@ export function searchNotes(
 
   const hits: NoteSearchHit[] = [];
   for (const block of blocks) {
-    if (block.deletedAt && !opts.includeDeleted) continue;
+    if (!isLiveBlock(block) && !opts.includeDeleted) continue;
 
     const prose = contentWithoutRefs(block.text.value);
     const textIndex = prose.toLowerCase().indexOf(needle);
@@ -151,7 +151,7 @@ export function blocksReferencing(blocks: Iterable<NoteBlock>, targetUri: string
 
   const out: string[] = [];
   for (const block of blocks) {
-    if (block.deletedAt) continue;
+    if (!isLiveBlock(block)) continue;
     const cites = extractWorkspaceRefs(block.text.value).some((ref) => workspaceRefKey(ref) === key);
     if (cites) out.push(block.id);
   }

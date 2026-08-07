@@ -14,6 +14,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { PlannerMode, type PlannerOps } from './PlannerMode.js';
 import type { PlannerItemView, PlannerBlockView } from '../lib/planner/plannerView.js';
 import { bridgeQuery } from '../lib/bridgeQuery.js';
+import { splitTextByWorkspaceRefs } from '@kinqs/brainrouter-core/workspace/references';
 import { createAndCite, plannerItemUri } from '../lib/workspace/crossMode.js';
 
 interface PlannerSnapshot {
@@ -40,11 +41,15 @@ const EMPTY: PlannerSnapshot = {
 
 export function PlannerModeContainer({
   onOpenNotes,
+  onOpenRef,
 }: {
   /** Leaving for the Notes mode is the shell's to do, not this container's. */
   onOpenNotes?: () => void;
+  /** Following a reference leaves this mode, which only the shell can do. */
+  onOpenRef?: (uri: string) => void;
 } = {}): React.ReactElement {
   const [snapshot, setSnapshot] = useState<PlannerSnapshot>(EMPTY);
+  const [refLabels, setRefLabels] = useState<Record<string, string>>({});
   const today = new Date().toISOString().slice(0, 10);
 
   const refresh = useCallback(async () => {
@@ -59,6 +64,36 @@ export function PlannerModeContainer({
   }, []);
 
   useEffect(() => { void refresh(); }, [refresh]);
+
+  /**
+   * ADR-029 A3 — the labels are RESOLVED, never stored beside the link.
+   *
+   * Same read the Notes mode does, and deliberately the same verb: a task whose
+   * notes cite a file that has since moved shows where it moved to, and one
+   * citing a deleted meeting shows a tombstone, rather than either surface
+   * inventing its own wording for the same reference.
+   */
+  const refKey = snapshot.items.map((item) => item.notes ?? '').join('|');
+  useEffect(() => {
+    // Keyed by the spelling that appears IN the text, because that is the key
+    // the chip looks up. Canonicalising here would silently miss any reference
+    // whose written form differs from its canonical one.
+    const uris = [...new Set(
+      snapshot.items.flatMap((item) => splitTextByWorkspaceRefs(item.notes ?? '')
+        .flatMap((segment) => (segment.kind === 'ref' ? [segment.uri] : []))),
+    )];
+    if (uris.length === 0) { setRefLabels({}); return; }
+    let cancelled = false;
+    void Promise.all(uris.map(async (uri) => {
+      const res = await bridgeQuery<{ line?: string }>('workspace-describe', { uri }).catch(() => null);
+      return [uri, res?.line ?? ''] as const;
+    })).then((pairs) => {
+      if (cancelled) return;
+      setRefLabels(Object.fromEntries(pairs.filter(([, line]) => line)));
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refKey]);
 
   /**
    * ADR-028 D2 — sync runs on its own.
@@ -152,6 +187,8 @@ export function PlannerModeContainer({
         onOpenNotes?.();
       })();
     },
+
+    openRef: (uri) => onOpenRef?.(uri),
   };
 
   return (
@@ -162,6 +199,7 @@ export function PlannerModeContainer({
       syncState={snapshot.syncState}
       staleSources={snapshot.staleSources}
       driftNote={snapshot.driftNote}
+      refLabels={refLabels}
       ops={ops}
     />
   );

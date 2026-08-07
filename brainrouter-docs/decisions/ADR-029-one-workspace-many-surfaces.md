@@ -446,5 +446,11 @@ would mean writing resolution twice.
 Not by whether the mode exists. ADR-028's whole lesson was that a surface can exist, compile, pass
 tests, and still be unreachable.
 
-**The test is C2's table.** Each row is a flow a person performs end to end. A row that needs
+**The first test is C2's table.** Each row is a flow a person performs end to end. A row that needs
 copy-paste has not been implemented, however much code was written for it.
+
+**The second test is E1's sentence**, and it is the harder one: *a person who uses Notion can type a
+page here without being taught anything.* Judged by typing, not by counting features — a slash menu
+that exists but does not open on `/`, or a heading you can only reach through a dropdown, fails the
+test while satisfying the table. Each row of E4 is judged as built or not built, and "the model
+supports it" is not built.

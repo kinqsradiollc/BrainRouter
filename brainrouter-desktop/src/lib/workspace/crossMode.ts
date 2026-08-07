@@ -70,6 +70,19 @@ export function codeFileUri(relPath: string): string {
   return `brainrouter://code/file/${relPath}`;
 }
 
+/**
+ * A declaration inside a file, which is the reference that survives an EDIT.
+ *
+ * `code/file/parser.ts#L59` means a different line the moment someone adds an
+ * import above it — the reference still resolves and now points at the wrong
+ * thing, which is A3's quietly-wrong failure with the file still in place. A
+ * name is what the reader was actually pointing at, and resolution finds it
+ * wherever it has moved to in the file.
+ */
+export function codeSymbolUri(relPath: string, symbol: string): string {
+  return `brainrouter://code/symbol/${relPath}#${symbol}`;
+}
+
 export function meetingUri(meetingId: string): string {
   return `brainrouter://meetings/meeting/${meetingId}`;
 }

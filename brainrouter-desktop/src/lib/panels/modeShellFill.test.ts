@@ -27,6 +27,23 @@ const read = (rel: string): string => readFileSync(path.join(root, rel), 'utf8')
 const MODE_SHELLS: ReadonlyArray<readonly [string, string]> = [
   ['.planner-mode', 'theme.css'],
   ['.mv-shell', 'components/meetings/meetings.css'],
+  // ADR-029 — Notes. Its shell is a flex ROW rather than a column, which makes
+  // the rule matter twice: see the inner-column test below.
+  ['.notes-mode', 'theme.css'],
+];
+
+/**
+ * Shells that are THEMSELVES a flex row, and the column inside them that has to
+ * take the remaining width.
+ *
+ * The bug above, one level in. Notes puts a fixed-width sidebar beside the
+ * page, so the page column is a flex child of a row for exactly the same
+ * reason `.planner-mode` is — and without `flex: 1` it sizes to the longest
+ * line on the page while the sidebar is pushed off the left edge, which looks
+ * like a layout that broke rather than one that was never told to fill.
+ */
+const INNER_COLUMNS: ReadonlyArray<readonly [string, string, string]> = [
+  ['.notes-mode', '.notes-page', 'theme.css'],
 ];
 
 function ruleFor(css: string, selector: string): string {
@@ -64,6 +81,29 @@ test('.workrow is still a flex row — the premise these rules depend on', () =>
   const rule = ruleFor(read('theme.css'), '.workrow');
   assert.match(rule, /display\s*:\s*flex/);
   assert.doesNotMatch(rule, /flex-direction\s*:\s*column/);
+});
+
+test('a shell that is itself a flex row gives its content column the same rules', () => {
+  for (const [shell, column, file] of INNER_COLUMNS) {
+    const css = read(file);
+    const shellRule = ruleFor(css, shell);
+    // The premise: if this shell ever becomes a column, `flex: 1` on the child
+    // means something different and the assertion below stops protecting it.
+    assert.match(shellRule, /flex-direction\s*:\s*row/, `${shell} is no longer a row`);
+
+    const columnRule = ruleFor(css, column);
+    assert.match(columnRule, /flex\s*:\s*1/, `${column} must set flex:1 or it sizes to its content`);
+    assert.match(columnRule, /min-width\s*:\s*0/, `${column} must set min-width: 0 or a long line widens the row`);
+  }
+});
+
+test('the notes sidebar is a fixed rail, not a flex child that fights the page', () => {
+  // `flex: none` is what keeps the tree from shrinking to nothing when a page
+  // holds a long unbroken line — the failure is that the sidebar's titles
+  // collapse to ellipses one at a time as you type.
+  const rule = ruleFor(read('theme.css'), '.notes-sidebar');
+  assert.match(rule, /flex\s*:\s*none/);
+  assert.match(rule, /width\s*:/);
 });
 
 test('the planner list views keep a reading column', () => {

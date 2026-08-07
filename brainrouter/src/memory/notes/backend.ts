@@ -27,9 +27,11 @@ import { randomUUID } from "node:crypto";
 import { memoryEngine } from "../engine.js";
 import {
   acquireBlockLease, blockReferences, contentWithoutRefs, fenceBlockWrite,
-  FIRST_RANK, mergeNoteBlock, NOTE_BLOCK_KINDS, rankBetween, releaseBlockLease,
+  FIRST_RANK, isLiveBlock, MAX_HEADING_LEVEL, mergeNoteBlock, NOTE_BLOCK_KINDS,
+  rankBetween, releaseBlockLease,
   renewBlockLease, resolveBlockConflict, BLOCK_LEASE_MS,
-  type BlockLease, type Hlc, type LeaseClaim, type LeaseOutcome,
+  type BlockFence, type BlockLease, type BlockWritePath, type Hlc,
+  type LeaseClaim, type LeaseOutcome,
   type NoteBlock, type NoteBlockKind, type Stamped,
 } from "@kinqs/brainrouter-core/notes";
 import {
@@ -46,6 +48,15 @@ import type {
  * runaway write cannot become the whole of someone's sync payload.
  */
 export const MAX_BLOCK_TEXT = 100_000;
+
+/**
+ * The metadata fields — a language name, an emoji, a cover URL.
+ *
+ * Bounded far tighter than the body because they are rendered as chrome: a
+ * page's icon appears in every sidebar row, and an unbounded one is a way to
+ * make somebody else's navigation unusable.
+ */
+export const MAX_META_TEXT = 2048;
 
 /** How long an unreferenced attachment object waits before a sweep may reclaim it. */
 export const ATTACHMENT_GRACE_MS = 24 * 60 * 60 * 1000;
@@ -190,7 +201,12 @@ async function persistBlock(orgId: string, userId: string, block: NoteBlock, vis
     kind: block.kind?.value ?? "paragraph",
     ...(visibility ? { visibility } : {}),
     payload: block as unknown as Record<string, unknown>,
-    deletedAtHlc: block.deletedAt ? hlcText(block.deletedAt) : null,
+    // The COLUMN says whether the block is currently there, which is not the
+    // same as whether it carries a tombstone: a restored block keeps its
+    // tombstone and is outvoted by a newer `restoredAt` (E4). Writing the field
+    // directly would leave every restored block invisible to `listBlocks`,
+    // making a restore look like it did nothing.
+    deletedAtHlc: isLiveBlock(block) ? null : hlcText(block.deletedAt!),
   });
   await reindexBlock(orgId, userId, block);
   return block;
@@ -205,7 +221,7 @@ async function persistBlock(orgId: string, userId: string, block: NoteBlock, vis
  */
 async function reindexBlock(orgId: string, userId: string, block: NoteBlock): Promise<void> {
   const text = block.text?.value ?? "";
-  if (block.deletedAt) {
+  if (!isLiveBlock(block)) {
     await store().replaceNoteRefs(orgId, userId, block.id, []);
     await store().deleteNoteIndexEntry(orgId, userId, block.id);
     return;
@@ -372,7 +388,19 @@ function validatePatch(patch: Record<string, unknown>): string | null {
   }
   if (patch.level !== undefined) {
     const level = Number(patch.level);
-    if (!Number.isInteger(level) || level < 1 || level > 6) return "A heading level is 1 to 6.";
+    if (!Number.isInteger(level) || level < 1 || level > MAX_HEADING_LEVEL) {
+      return `A heading level is 1 to ${MAX_HEADING_LEVEL}.`;
+    }
+  }
+  // The short metadata fields are bounded here rather than trusted, because
+  // they reach a page's chrome and an agent's context. Nothing legitimate is
+  // near these; the limits exist so one pathological push cannot become the
+  // label on every surface that renders the page.
+  for (const field of ["language", "icon", "cover"] as const) {
+    const value = patch[field];
+    if (value !== undefined && (typeof value !== "string" || value.length > MAX_META_TEXT)) {
+      return `"${field}" is a string of at most ${MAX_META_TEXT} characters.`;
+    }
   }
   return null;
 }
@@ -380,18 +408,25 @@ function validatePatch(patch: Record<string, unknown>): string | null {
 /**
  * Merge one operation into the block the server currently holds.
  *
- * The lease decides HOW, not WHETHER. A writer holding a live, correctly-fenced
- * lease is the only writer, so its fields are taken directly and no conflict
- * marker can appear where nobody was competing. Every other case — no lease, a
- * lease reissued since the edit was typed, an expired one — goes through D4,
- * which keeps both versions rather than choosing.
+ * **Every write merges. The lease decides what the merge is allowed to do.**
+ * Taking a leaseholder's payload wholesale was the shape this had first, and it
+ * inverted D11 on the one path D11 is about: a device holding a valid lock
+ * could push text stamped an hour ago over text stamped a minute ago and win,
+ * because nothing compared them. A lock is permission to write, never evidence
+ * of having read.
  *
- * `blocked` is deliberately treated as a merge as well. That path is a
- * PRE-typing answer: the editor refuses to let you start writing in a block
- * another device holds. By the time an operation reaches here the sentence has
- * already been typed — offline, or before the lock was taken — and refusing it
- * would discard a person's work to enforce a lock whose entire purpose is to
- * protect it.
+ * So a correct epoch buys exactly one thing — the absence of a fencing penalty.
+ * The three refusals (`stale_epoch`, `lease_expired`, `blocked`) buy the
+ * penalty: the write cannot take the text it did not see, and if it would have,
+ * both versions are kept and marked with WHICH refusal (B2's third departure —
+ * a refused write is not a dropped write, it is a person's sentence).
+ *
+ * `blocked` counts here for the same reason it counts as a refusal at all. That
+ * path is normally a PRE-typing answer — the editor will not let you start
+ * writing in a block another device holds — but by the time an operation
+ * reaches this function the sentence exists, typed offline or before the lock
+ * was taken. Discarding it would enforce a lock by destroying the work the lock
+ * protects; letting it land clean would make the lock decorative.
  */
 async function mergeIncoming(
   orgId: string,
@@ -415,7 +450,21 @@ async function mergeIncoming(
     { deviceId: op.at.deviceId, ...(claimed === undefined ? {} : { epoch: claimed }) },
     dbNowMs,
   );
-  return fence.path === "leased" ? incoming : mergeNoteBlock(existing, incoming);
+  return mergeNoteBlock(existing, incoming, penaltyOf(fence));
+}
+
+/**
+ * The fencing penalty a write earns, or none.
+ *
+ * `no_lease` earns none: B2 chose SOFT locking, so a block nobody holds is
+ * freely editable and D4 is the floor. Requiring a lease to type would turn
+ * every offline edit into a refusal, which is the opposite of ADR-028 D2's
+ * position on offline.
+ */
+function penaltyOf(fence: BlockWritePath): BlockFence | undefined {
+  if (fence.path === "blocked") return "blocked";
+  if (fence.path === "merge" && fence.reason !== "no_lease") return fence.reason;
+  return undefined;
 }
 
 /**
@@ -456,9 +505,19 @@ function incomingBlock(
     ...(typeof patch.text === "string" ? { text: stampedWith(patch.text, at) } : {}),
     ...(patch.level !== undefined ? { level: stampedWith(Number(patch.level), at) } : {}),
     ...(typeof patch.checked === "boolean" ? { checked: stampedWith(patch.checked, at) } : {}),
+    ...(typeof patch.language === "string" ? { language: stampedWith(patch.language, at) } : {}),
+    ...(typeof patch.collapsed === "boolean" ? { collapsed: stampedWith(patch.collapsed, at) } : {}),
+    ...(typeof patch.icon === "string" ? { icon: stampedWith(patch.icon, at) } : {}),
+    ...(typeof patch.cover === "string" ? { cover: stampedWith(patch.cover, at) } : {}),
+    ...(typeof patch.favourite === "boolean" ? { favourite: stampedWith(patch.favourite, at) } : {}),
     // A delete is a tombstone stamped with the operation's clock (C5), so a
     // later edit from another device can resurrect it as conflicted.
     ...(op.kind === "delete" ? { deletedAt: at } : {}),
+    // A restore is the tombstone's opposite number, and it is an operation
+    // rather than a field write: clearing `deletedAt` would leave the server
+    // unable to tell a peer's arriving delete apart from a new one, and the
+    // block would go back in the trash a few seconds after coming out.
+    ...(patch.restore === true ? { restoredAt: at } : {}),
   };
 
   // A block cannot be its own parent. Refused rather than repaired: the tree

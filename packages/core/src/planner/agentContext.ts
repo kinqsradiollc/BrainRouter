@@ -36,6 +36,33 @@ import { describeFreshness, isStale } from './sourceAdapter.js';
 /* ------------------------------------------------- untrusted item content */
 
 /**
+ * The one matcher that recognises a fence marker, for every fence in the tree.
+ *
+ * There are two fences — `planner_data` here and `workspace_data` in
+ * `workspace/participants/agentContext.ts` — and two copies of an injection
+ * pattern is one copy that gets a fix and one that does not. So the pattern is
+ * written once and the tag is the parameter.
+ *
+ * **It tolerates the whitespace variants**, because `</planner_data >` and
+ * `< /planner_data>` read to a model as the same marker while an exact-match
+ * pattern let them through untouched — which is the fence closed from inside it
+ * by a spelling nobody tested.
+ *
+ * It can afford that tolerance with **no repetition at all** because every
+ * caller collapses whitespace runs to a single space before applying it: each
+ * gap below is one optional space, so the matcher is linear in the length of
+ * its input. That is deliberate and load-bearing. Adjacent unbounded `\s*`s are
+ * exactly the shape that makes a regex polynomial, and this defence runs over
+ * fetched pages and file bytes — it is the last thing that may become a way to
+ * hang the turn.
+ */
+export function fenceMarkerPattern(tag: string): RegExp {
+  return new RegExp(`< ?/? ?${tag} ?>`, 'gi');
+}
+
+const PLANNER_FENCE = fenceMarkerPattern('planner_data');
+
+/**
  * Planner content is DATA, and a mirrored item's text is attacker-influenced.
  *
  * A GitHub issue title is written by whoever opened the issue. Interpolating it
@@ -52,10 +79,12 @@ import { describeFreshness, isStale } from './sourceAdapter.js';
 export function asUntrustedText(value: string, maxLength = 120): string {
   return value
     .replace(/[\r\n\t]+/g, ' ')
-    // Closing our own fence from inside it would put the rest back into the
-    // instruction stream, so the sequence is broken rather than dropped.
-    .replace(/<\/?planner_data>/gi, '[fence]')
     .replace(/\s+/g, ' ')
+    // Closing our own fence from inside it would put the rest back into the
+    // instruction stream, so the sequence is broken rather than dropped. It runs
+    // AFTER the collapse above, which is what lets the matcher stay linear —
+    // see `fenceMarkerPattern`.
+    .replace(PLANNER_FENCE, '[fence]')
     .trim()
     .slice(0, maxLength);
 }

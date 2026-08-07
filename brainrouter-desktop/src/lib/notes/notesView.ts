@@ -20,12 +20,39 @@ export interface NoteBlockView {
   checked: boolean;
   level: number | null;
   hasChildren: boolean;
+  /**
+   * B4/E4 — a page's title, which is the page block's OWN `text` rendered by
+   * the host through core's `pageTitleOrDefault`.
+   *
+   * Null for every other kind rather than the same string: "Untitled" on an
+   * empty paragraph reads as a name someone gave it, not as an absence.
+   */
+  title: string | null;
+  /** The glyph in front — a page's icon, a callout's emoji. Never a placeholder. */
+  icon: string | null;
+  /** A page's cover image, as a URL or an attachment reference (D3). */
+  cover: string | null;
+  /** Pinned into the sidebar's favourites. */
+  favourite: boolean;
   /** References this block currently makes, canonically spelled (A2). */
   refs: string[];
   /** Fields whose merge could not be decided — the human picks (D4). */
-  conflictFields: string[];
+  conflicts: NoteConflictView[];
   /** B2's attribution when another device holds the lease, else null. */
   lockedBy: string | null;
+}
+
+/**
+ * A kept-both field, and WHY it was kept.
+ *
+ * The reason travels as a plain string rather than core's union because the
+ * renderer must not pull the notes barrel into a browser bundle — it reaches
+ * the filesystem. The cost is that an unrecognised reason has to render
+ * something honest instead of failing to compile, which `conflictLine` does.
+ */
+export interface NoteConflictView {
+  field: string;
+  reason: string;
 }
 
 export interface NoteTreeRepairView {
@@ -88,11 +115,39 @@ export function canEdit(block: NoteBlockView): boolean {
  * shown is the same as having discarded it.
  */
 export function conflictBanner(blocks: readonly NoteBlockView[]): string | null {
-  const count = blocks.filter((b) => b.conflictFields.length > 0).length;
+  const count = blocks.filter((b) => b.conflicts.length > 0).length;
   if (count === 0) return null;
   return count === 1
-    ? 'One block was edited in two places. Pick which version to keep.'
-    : `${count} blocks were edited in two places. Pick which version to keep.`;
+    ? 'One block has two versions kept. Pick which one to keep.'
+    : `${count} blocks have two versions kept. Pick which one to keep.`;
+}
+
+/**
+ * The line beside a kept-both field, which is not the same sentence every time.
+ *
+ * "Two people typed at once" asks a person to choose between two intentions.
+ * "Your device wrote under a lock it no longer held" explains why the sentence
+ * on screen is not the one they typed — and without that explanation the app
+ * looks like it lost their work rather than like it kept both copies.
+ *
+ * An unknown reason falls back to naming the field. A renderer that threw on a
+ * reason a newer server sent would take the whole page down over a label.
+ */
+export function conflictLine(conflict: NoteConflictView): string {
+  switch (conflict.reason) {
+    case 'fenced_stale_epoch':
+      return 'Typed under a lock that had already been reissued — both versions are kept.';
+    case 'fenced_lease_expired':
+      return 'Typed after the lock on this block had expired — both versions are kept.';
+    case 'fenced_blocked':
+      return 'Another device was editing this block when this arrived — both versions are kept.';
+    case 'delete_vs_edit':
+      return 'Deleted on one device and edited on another. It is back, undecided.';
+    case 'concurrent_text':
+      return 'Written in two places at once. Both versions are kept.';
+    default:
+      return `“${conflict.field}” was changed in two places.`;
+  }
 }
 
 /** A repair explained, so a block that moved says why rather than looking dragged. */

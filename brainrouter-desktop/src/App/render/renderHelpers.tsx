@@ -10,7 +10,8 @@ import { MessageRow } from '../../chat/MessageRow.js';
 import { SessionStatus, PrStatusIcon } from '../../components/status/SessionStatus.js';
 import { prStatusFor } from '../../lib/ci/prStatus.js';
 import { fmtAge } from '../../lib/format.js';
-import { captureToNotes, captureToPlanner, chatSessionUri } from '../../lib/workspace/crossMode.js';
+import { captureToNotes, captureToPlanner, chatSessionUri, type CrossModeResult } from '../../lib/workspace/crossMode.js';
+import { rid } from '../../lib/rid.js';
 import type { ChatRow, SessionRow } from '../../types.js';
 import type { PanelId } from '../../panels/index.js';
 import type { useCi } from '../../lib/ci/useCi.js';
@@ -92,6 +93,33 @@ export interface RenderRowCtx {
 
 export function buildRenderRow(ctx: RenderRowCtx): (r: ChatRow, liveLast: boolean) => React.ReactElement {
   const { q, inlineDiffs, openFile, setDiffTarget, ensurePanel, setRows, errorsBySession, forkSessionAction, sessionKeyRef } = ctx;
+
+  /**
+   * ADR-029 C2 — a capture out of a turn, with its OUTCOME said out loud.
+   *
+   * The two buttons used to be `void captureToNotes(…)`: the promise was
+   * discarded, so a refusal — most reliably, clicking before the conversation
+   * had a key, which makes the citation unparseable — created nothing and
+   * looked exactly like creating something. Every other row of C2's table
+   * reports its failure in the surface that owns the gesture, and for a chat
+   * turn that surface is the transcript.
+   */
+  const capture = (
+    what: string,
+    run: (text: string, from?: string) => Promise<CrossModeResult>,
+  ) => (text: string): void => {
+    const sessionKey = sessionKeyRef.current?.trim();
+    // A conversation with no key yet has no citable identity. Saving without
+    // the citation is honest; claiming one that cannot resolve is not.
+    void run(text, sessionKey ? chatSessionUri(sessionKey) : undefined).then((outcome) => {
+      const line = outcome.ok
+        ? sessionKey
+          ? `Saved to ${what}.`
+          : `Saved to ${what}, without citing this conversation — it does not have a key yet.`
+        : `Could not save to ${what}. ${outcome.error}`;
+      setRows((rows) => [...rows, { id: rid(), kind: outcome.ok ? 'status' : 'error', text: line, ts: Date.now() }]);
+    });
+  };
   // DESK-5w (#4 lag) — render ONE transcript row. Extracted + memoized (in the
   // shell) so streaming deltas / the per-second tick don't re-render the whole
   // history (every <Markdown> was re-parsing on every ~18ms delta — the lag).
@@ -121,8 +149,8 @@ export function buildRenderRow(ctx: RenderRowCtx): (r: ChatRow, liveLast: boolea
       onRewind={(ts) => q('a-rewind', 'action:rewind-to', { ts })}
       // ADR-029 C2 — the two moves out of a chat turn. Both cite the
       // CONVERSATION, which is the only chat identity that survives a rewind.
-      onSaveToNotes={(text) => void captureToNotes(text, chatSessionUri(sessionKeyRef.current ?? ''))}
-      onAddToPlanner={(text) => void captureToPlanner(text, chatSessionUri(sessionKeyRef.current ?? ''))}
+      onSaveToNotes={capture('notes', captureToNotes)}
+      onAddToPlanner={capture('your planner', captureToPlanner)}
     />
   );
 }

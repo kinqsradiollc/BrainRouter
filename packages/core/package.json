@@ -275,6 +275,10 @@
       "types": "./dist/notes/index.d.ts",
       "default": "./dist/notes/index.js"
     },
+    "./notes/editing": {
+      "types": "./dist/notes/editing.d.ts",
+      "default": "./dist/notes/editing.js"
+    },
     "./planner": {
       "types": "./dist/planner/index.d.ts",
       "default": "./dist/planner/index.js"

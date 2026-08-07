@@ -24,13 +24,40 @@ export interface Stamped<T> {
   at: Hlc;
 }
 
+/**
+ * Why both versions were kept — the CAUSE, not the symptom.
+ *
+ * The first two are races nobody could have prevented: two edits that never saw
+ * each other, or an edit and a delete. The `fenced_*` three are the opposite —
+ * something DID hold the block and this write did not have it, so the write is
+ * kept beside the text it did not see rather than on top of it (ADR-029 B2's
+ * third departure: a refused write is not a dropped write).
+ *
+ * They are separate values rather than one `fenced` because the sentence a
+ * person reads has to name which refusal: "your lock had been reissued" and
+ * "another device is editing this" lead to different next actions. Collapsing
+ * them is the same mistake migration 048's complete/fail paths make when they
+ * return `null` for both "not running" and "wrong epoch".
+ */
+export type ConflictReason =
+  /** Neither stamp saw the other. */
+  | 'concurrent_text'
+  /** Deleted on one device, edited on another. */
+  | 'delete_vs_edit'
+  /** The write named an epoch the lease had already moved past. */
+  | 'fenced_stale_epoch'
+  /** The lock this write was made under had run out before it landed. */
+  | 'fenced_lease_expired'
+  /** Another device held the block when this write arrived. */
+  | 'fenced_blocked';
+
 export interface ConflictRecord {
   /** Both versions, kept. The human picks; nothing is discarded to decide. */
   ours: unknown;
   theirs: unknown;
   oursAt: Hlc;
   theirsAt: Hlc;
-  reason: 'concurrent_text' | 'delete_vs_edit';
+  reason: ConflictReason;
 }
 
 /**

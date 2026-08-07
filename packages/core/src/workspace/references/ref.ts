@@ -173,17 +173,26 @@ export function isWorkspaceRefString(value: unknown): boolean {
 /* --------------------------------------------------------------- escaping */
 
 /**
- * Percent-encode only what would otherwise change the parse.
+ * Percent-encode what would otherwise change the parse — or change the reader.
  *
  * `/` is left literal because ids legitimately contain it and encoding it would
  * make every file reference unreadable to the person who has to eyeball it in a
  * note.
+ *
+ * `<` and `>` are encoded for a different reason than the rest, and it is the
+ * important one. They do not affect this parser at all; they affect everything
+ * downstream that treats angle brackets as markup. A formatted URI is echoed
+ * into the agent's fenced context, into HTML, and into a person's document, and
+ * an id containing `</workspace_data>` round-tripped through parse and format
+ * would emit a REAL closing marker inside that fence — putting whatever follows
+ * back into the instruction stream. Nothing legitimate carries them, and the
+ * canonical spelling is the right place to make sure nothing does.
  */
 function encodeId(id: string): string {
   let out = '';
   for (const ch of id) {
     const code = ch.codePointAt(0)!;
-    if (ch === '%' || ch === '#' || ch === '?' || code <= 0x20 || code === 0x7f) {
+    if (ch === '%' || ch === '#' || ch === '?' || ch === '<' || ch === '>' || code <= 0x20 || code === 0x7f) {
       for (const byte of new TextEncoder().encode(ch)) {
         out += `%${byte.toString(16).toUpperCase().padStart(2, '0')}`;
       }

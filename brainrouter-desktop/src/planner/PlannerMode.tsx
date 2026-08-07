@@ -16,6 +16,7 @@
 import React, { useMemo, useState } from 'react';
 import { Icon } from '../icons.js';
 import { Button } from '../components/primitives/Button.js';
+import { RefText } from '../components/workspace/RefChip.js';
 import { CalendarView } from './CalendarView.js';
 import {
   sortForToday, groupFor, GROUP_LABEL, canEdit, whyReadOnly,
@@ -35,6 +36,8 @@ export interface PlannerOps {
   openBlock: (blockId: string) => void;
   /** ADR-029 C2 — Planner → Notes: the item's notes field becomes a real page. */
   openNotesPage: (itemId: string, title: string, notes: string) => void;
+  /** ADR-029 A1 — follow a reference to whatever mode owns it. */
+  openRef: (uri: string) => void;
 }
 
 const VIEWS: ReadonlyArray<readonly [PlannerView, string, string]> = [
@@ -44,13 +47,20 @@ const VIEWS: ReadonlyArray<readonly [PlannerView, string, string]> = [
 ];
 
 export function PlannerMode({
-  items, blocks, today, syncState, staleSources, driftNote, ops,
+  items, blocks, today, syncState, staleSources, driftNote, refLabels, ops,
 }: {
   items: PlannerItemView[];
   blocks: PlannerBlockView[];
   /** ISO date, `YYYY-MM-DD`. Passed in so the view is deterministic in tests. */
   today: string;
   syncState: string;
+  /**
+   * ADR-029 A3 — resolved labels for the references an item's notes contain,
+   * read now rather than stored on the link. Notes rendered these as live chips
+   * while this surface left the raw URI in the prose, which is two surfaces
+   * disagreeing about one object.
+   */
+  refLabels: Record<string, string>;
   staleSources: string[];
   /** D5's ratio, when there is enough sample to say anything. */
   driftNote: string | null;
@@ -126,7 +136,7 @@ export function PlannerMode({
           onCreateAt={ops.blockTimeAt} onOpenBlock={ops.openBlock}
         />
       ) : (
-        <NotesView items={items} ops={ops} />
+        <NotesView items={items} refLabels={refLabels} ops={ops} />
       )}
     </div>
   );
@@ -219,7 +229,11 @@ function ItemRow({ item, ops }: { item: PlannerItemView; ops: PlannerOps }): Rea
   );
 }
 
-function NotesView({ items, ops }: { items: PlannerItemView[]; ops: PlannerOps }): React.ReactElement {
+function NotesView({ items, refLabels, ops }: {
+  items: PlannerItemView[];
+  refLabels: Record<string, string>;
+  ops: PlannerOps;
+}): React.ReactElement {
   const notes = noteList(items);
   const empty = emptyMessage('notes');
   return (
@@ -232,7 +246,13 @@ function NotesView({ items, ops }: { items: PlannerItemView[]; ops: PlannerOps }
       ) : notes.map((n) => (
         <div key={n.id} className="planner-note">
           <div className="planner-note-title">{n.title}</div>
-          <div className="planner-note-body">{n.notes}</div>
+          {/* A2 — a cross-mode link lives in this text, because the referring
+              content is where a reference lives. Rendering it as the raw URI
+              made the one place the planner records provenance look like a
+              paste accident. */}
+          <div className="planner-note-body">
+            <RefText text={n.notes ?? ''} labels={refLabels} onOpen={ops.openRef} />
+          </div>
           {n.source ? <span className="planner-source">{n.source}</span> : null}
           {/* ADR-029 C2 — Planner → Notes. A notes field is a paragraph with no
               structure and nowhere to link from; promoting it to a page is what

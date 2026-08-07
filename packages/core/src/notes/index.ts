@@ -25,3 +25,12 @@ export * from './noteTree.js';
 export * from './noteSearch.js';
 export * from './noteStore.js';
 export * from './notesSync.js';
+// ADR-029 Part E — the editing model. Pure except for `blockOps`, which
+// composes the store's mutations rather than writing beside them.
+export * from './inputRules.js';
+export * from './slashCatalog.js';
+export * from './inlineMarks.js';
+export * from './blockOps.js';
+export * from './listNumbering.js';
+export * from './tableBlock.js';
+export * from './trash.js';
