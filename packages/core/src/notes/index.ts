@@ -34,3 +34,10 @@ export * from './blockOps.js';
 export * from './listNumbering.js';
 export * from './tableBlock.js';
 export * from './trash.js';
+// ADR-029 E3 — databases. `properties`, `databaseView` and `database` are pure;
+// `databaseOps` composes the store's mutations rather than writing beside them,
+// which is what keeps a row on the block model instead of in a second store.
+export * from './properties.js';
+export * from './databaseView.js';
+export * from './database.js';
+export * from './databaseOps.js';

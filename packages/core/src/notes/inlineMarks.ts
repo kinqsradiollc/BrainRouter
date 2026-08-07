@@ -48,6 +48,26 @@ export interface InlineSpan {
   mention?: string;
   /** `[[Some page]]` — a page addressed by title, resolved by the caller. */
   page?: string;
+  /**
+   * Where in the SOURCE this span came from, delimiters included.
+   *
+   * E2 stores the marks in the string, which means an editor showing the
+   * rendered form has to be able to answer "the caret is here on screen — where
+   * is that in the string?" for every keystroke. Without ranges the only way to
+   * answer it is a second scanner in the renderer, and two parsers disagreeing
+   * about where a `*` ends is a caret that lands one character off in exactly
+   * the documents that use marks.
+   */
+  start: number;
+  end: number;
+  /**
+   * Where `text` begins in the source, when `text` is a VERBATIM slice of it.
+   *
+   * Absent when the span is atomic — a link, a page link, an escaped character —
+   * because a caret cannot meaningfully sit three characters into something
+   * whose visible form is not the source's. A caller maps those to an edge.
+   */
+  textStart?: number;
 }
 
 /**
@@ -117,17 +137,41 @@ interface Run {
 export function parseInlineMarks(text: string): InlineSpan[] {
   if (typeof text !== 'string' || text.length === 0) return [];
   const source = text.length > MAX_INLINE_LENGTH ? text.slice(0, MAX_INLINE_LENGTH) : text;
-  return parseRun(source, 0, null, []).spans;
+  return parseRun(source, 0, null, [], 0).spans;
 }
 
-function parseRun(text: string, start: number, stop: string | null, marks: readonly InlineMark[]): Run {
+/**
+ * `base` is where `text` itself starts in the whole source.
+ *
+ * A link's label is parsed as its own run over the label substring, so without
+ * a base the spans inside `[**bold** label](…)` would report offsets relative to
+ * the label rather than to the block — which is a caret that jumps to the start
+ * of the line the moment someone edits inside a link.
+ */
+function parseRun(
+  text: string,
+  start: number,
+  stop: string | null,
+  marks: readonly InlineMark[],
+  base: number,
+): Run {
   const spans: InlineSpan[] = [];
   let buffer = '';
+  let bufferAt = start;
   let i = start;
 
+  const add = (chars: string): void => {
+    if (buffer.length === 0) bufferAt = i;
+    buffer += chars;
+  };
   const flush = (): void => {
     if (buffer.length === 0) return;
-    spans.push({ text: buffer, marks: [...marks] });
+    // A literal run is verbatim by construction — escapes are pushed as their
+    // own spans below — so its visible text maps to the source one for one.
+    spans.push({
+      text: buffer, marks: [...marks],
+      start: base + bufferAt, end: base + i, textStart: base + bufferAt,
+    });
     buffer = '';
   };
 
@@ -142,11 +186,16 @@ function parseRun(text: string, start: number, stop: string | null, marks: reado
     if (ch === '\\') {
       const next = text[i + 1];
       if (next !== undefined && ESCAPABLE.has(next)) {
-        buffer += next;
+        // An escaped character becomes its own span so that every other literal
+        // run stays a verbatim slice. One two-character span whose caret snaps
+        // to an edge costs nothing; a run that is one character shorter than its
+        // source costs every caret after it in the line.
+        flush();
+        spans.push({ text: next, marks: [...marks], start: base + i, end: base + i + 2 });
         i += 2;
         continue;
       }
-      buffer += ch;
+      add(ch);
       i += 1;
       continue;
     }
@@ -157,7 +206,10 @@ function parseRun(text: string, start: number, stop: string | null, marks: reado
       const close = text.indexOf('`', i + 1);
       if (close > i) {
         flush();
-        spans.push({ text: text.slice(i + 1, close), marks: withMark(marks, 'code') });
+        spans.push({
+          text: text.slice(i + 1, close), marks: withMark(marks, 'code'),
+          start: base + i, end: base + close + 1, textStart: base + i + 1,
+        });
         i = close + 1;
         continue;
       }
@@ -169,7 +221,10 @@ function parseRun(text: string, start: number, stop: string | null, marks: reado
         const title = unescapeInline(text.slice(i + 2, close)).trim();
         if (title.length > 0) {
           flush();
-          spans.push({ text: title, marks: [...marks], page: title });
+          spans.push({
+            text: title, marks: [...marks], page: title,
+            start: base + i, end: base + close + 2,
+          });
           i = close + 2;
           continue;
         }
@@ -182,7 +237,9 @@ function parseRun(text: string, start: number, stop: string | null, marks: reado
       const link = readBracketLink(text, i + 1);
       if (link) {
         flush();
-        spans.push(...labelSpans(link.label, marks, { mention: link.target }));
+        spans.push(...labelSpans(link.label, marks, { mention: link.target }, base + i + 2, {
+          start: base + i, end: base + link.end,
+        }));
         i = link.end;
         continue;
       }
@@ -198,7 +255,9 @@ function parseRun(text: string, start: number, stop: string | null, marks: reado
           // a dead-looking address for something the app can resolve.
           ? { mention: link.target }
           : { href: link.target };
-        spans.push(...labelSpans(link.label, marks, attrs));
+        spans.push(...labelSpans(link.label, marks, attrs, base + i + 1, {
+          start: base + i, end: base + link.end,
+        }));
         i = link.end;
         continue;
       }
@@ -211,7 +270,10 @@ function parseRun(text: string, start: number, stop: string | null, marks: reado
       const uri = readBareUri(text, i);
       if (uri) {
         flush();
-        spans.push({ text: uri, marks: [...marks], mention: uri });
+        spans.push({
+          text: uri, marks: [...marks], mention: uri,
+          start: base + i, end: base + i + uri.length,
+        });
         i += uri.length;
         continue;
       }
@@ -219,7 +281,10 @@ function parseRun(text: string, start: number, stop: string | null, marks: reado
 
     const opened = openEmphasis(text, i, marks);
     if (opened) {
-      const inner = parseRun(text, i + opened.delimiter.length, opened.delimiter, withMark(marks, opened.mark));
+      const inner = parseRun(
+        text, i + opened.delimiter.length, opened.delimiter,
+        withMark(marks, opened.mark), base,
+      );
       if (inner.closed) {
         flush();
         spans.push(...inner.spans);
@@ -228,7 +293,7 @@ function parseRun(text: string, start: number, stop: string | null, marks: reado
       }
     }
 
-    buffer += ch;
+    add(ch);
     i += 1;
   }
 
@@ -252,15 +317,32 @@ function withMark(marks: readonly InlineMark[], mark: InlineMark): InlineMark[] 
   return marks.includes(mark) ? [...marks] : [...marks, mark];
 }
 
-/** A link's label carries marks of its own, so it is parsed rather than taken flat. */
+/**
+ * A link's label carries marks of its own, so it is parsed rather than taken flat.
+ *
+ * Every span it produces reports the range of the WHOLE construct, not of the
+ * label inside it: a link is atomic to a caret, and a Backspace beside one
+ * removes the link rather than the closing bracket of its target — which would
+ * leave `[label](https://…` rendering as prose the person did not type.
+ */
 function labelSpans(
   label: string,
   marks: readonly InlineMark[],
   attrs: { href?: string; mention?: string },
+  labelBase: number,
+  construct: { start: number; end: number },
 ): InlineSpan[] {
-  const inner = parseRun(label, 0, null, marks).spans;
-  const spans = inner.length > 0 ? inner : [{ text: label, marks: [...marks] }];
-  return spans.map((span) => ({ ...span, ...attrs }));
+  const inner = parseRun(label, 0, null, marks, labelBase).spans;
+  const spans = inner.length > 0
+    ? inner
+    : [{ text: label, marks: [...marks], start: construct.start, end: construct.end }];
+  return spans.map((span) => ({
+    text: span.text,
+    marks: span.marks,
+    ...attrs,
+    start: construct.start,
+    end: construct.end,
+  }));
 }
 
 interface BracketLink {
