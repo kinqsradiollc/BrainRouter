@@ -14,6 +14,8 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { PlannerMode, type PlannerOps } from './PlannerMode.js';
 import type { PlannerItemView, PlannerBlockView } from '../lib/planner/plannerView.js';
 import { bridgeQuery } from '../lib/bridgeQuery.js';
+import { splitTextByWorkspaceRefs } from '@kinqs/brainrouter-core/workspace/references';
+import { createAndCite, plannerItemUri } from '../lib/workspace/crossMode.js';
 
 interface PlannerSnapshot {
   items: PlannerItemView[];
@@ -37,8 +39,17 @@ const EMPTY: PlannerSnapshot = {
   items: [], blocks: [], syncState: 'Everything is synced.', staleSources: [], driftNote: null,
 };
 
-export function PlannerModeContainer(): React.ReactElement {
+export function PlannerModeContainer({
+  onOpenNotes,
+  onOpenRef,
+}: {
+  /** Leaving for the Notes mode is the shell's to do, not this container's. */
+  onOpenNotes?: () => void;
+  /** Following a reference leaves this mode, which only the shell can do. */
+  onOpenRef?: (uri: string) => void;
+} = {}): React.ReactElement {
   const [snapshot, setSnapshot] = useState<PlannerSnapshot>(EMPTY);
+  const [refLabels, setRefLabels] = useState<Record<string, string>>({});
   const today = new Date().toISOString().slice(0, 10);
 
   const refresh = useCallback(async () => {
@@ -53,6 +64,36 @@ export function PlannerModeContainer(): React.ReactElement {
   }, []);
 
   useEffect(() => { void refresh(); }, [refresh]);
+
+  /**
+   * ADR-029 A3 — the labels are RESOLVED, never stored beside the link.
+   *
+   * Same read the Notes mode does, and deliberately the same verb: a task whose
+   * notes cite a file that has since moved shows where it moved to, and one
+   * citing a deleted meeting shows a tombstone, rather than either surface
+   * inventing its own wording for the same reference.
+   */
+  const refKey = snapshot.items.map((item) => item.notes ?? '').join('|');
+  useEffect(() => {
+    // Keyed by the spelling that appears IN the text, because that is the key
+    // the chip looks up. Canonicalising here would silently miss any reference
+    // whose written form differs from its canonical one.
+    const uris = [...new Set(
+      snapshot.items.flatMap((item) => splitTextByWorkspaceRefs(item.notes ?? '')
+        .flatMap((segment) => (segment.kind === 'ref' ? [segment.uri] : []))),
+    )];
+    if (uris.length === 0) { setRefLabels({}); return; }
+    let cancelled = false;
+    void Promise.all(uris.map(async (uri) => {
+      const res = await bridgeQuery<{ line?: string }>('workspace-describe', { uri }).catch(() => null);
+      return [uri, res?.line ?? ''] as const;
+    })).then((pairs) => {
+      if (cancelled) return;
+      setRefLabels(Object.fromEntries(pairs.filter(([, line]) => line)));
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refKey]);
 
   /**
    * ADR-028 D2 — sync runs on its own.
@@ -121,6 +162,33 @@ export function PlannerModeContainer(): React.ReactElement {
     // gesture into a form.
     blockTimeAt: (iso) => void mutate('planner-schedule-at', { scheduledFor: iso, estimateMinutes: 60 }),
     openBlock: (blockId) => void mutate('planner-open-block', { blockId }),
+
+    /**
+     * ADR-029 C2 — Planner → Notes: the notes field opens as a real page.
+     *
+     * The page is created with the item's own words and cites the item back, so
+     * the two are the same thought in two places rather than two copies: A3
+     * makes the reference live, so completing the task shows on the page.
+     */
+    openNotesPage: (itemId, title, notes) => {
+      void (async () => {
+        const page = await createAndCite({
+          mode: 'notes', kind: 'block', title, from: plannerItemUri(itemId),
+          fields: { kind: 'page' },
+        });
+        if (!page.ok) return;
+        const parentId = page.uri.replace('brainrouter://notes/block/', '');
+        // The prose becomes a child block rather than the page's own text,
+        // because a page's text is its title and a paragraph in a title is not
+        // a page — it is a very long heading.
+        if (notes.trim()) {
+          await bridgeQuery('notes-create', { parentId, text: notes, kind: 'paragraph' }).catch(() => {});
+        }
+        onOpenNotes?.();
+      })();
+    },
+
+    openRef: (uri) => onOpenRef?.(uri),
   };
 
   return (
@@ -131,6 +199,7 @@ export function PlannerModeContainer(): React.ReactElement {
       syncState={snapshot.syncState}
       staleSources={snapshot.staleSources}
       driftNote={snapshot.driftNote}
+      refLabels={refLabels}
       ops={ops}
     />
   );

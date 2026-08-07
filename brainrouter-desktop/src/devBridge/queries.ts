@@ -2,6 +2,21 @@
 // installDevBridge(); each handler closes over the shared dev state (./state) via the
 // destructured helpers below and S.<scalar> for reassignable scalars. Behavior-identical.
 import type { ConnectorRecord } from '@kinqs/brainrouter-types';
+// The browser-safe half of core's notes model. The `notes` barrel reaches the
+// filesystem; `notes/editing` is pure by construction, which is what lets the
+// harness answer with the same sentences the host does instead of its own.
+import {
+  applyInputRule, describeTrashEntry, searchSlashCatalog, UNTITLED_PAGE,
+  // ADR-029 E3 — the database projection is CORE's, and it is pure, so the
+  // harness runs the same one the host does. A second filter/sort/group here
+  // would hide different rows for the same saved view, which is the drift the
+  // whole decision is organised against.
+  coercePropertyValue, defaultDatabaseSchema, defaultDatabaseViews, operatorsFor,
+  projectDatabase, readDatabase, DATABASE_BLOCK_KIND, NOTE_PROPERTY_TYPES, NOTE_VIEW_KINDS,
+  TITLE_PROPERTY_ID,
+  type NoteBlock, type NoteBlockKind, type NoteDatabaseView, type NotePropertyDef,
+  type NotePropertyValue, type NoteViewKind,
+} from '@kinqs/brainrouter-core/notes/editing';
 import { devAtlasEnriched, devAtlasGraph } from './atlas.js';
 import type { DevState } from './state.js';
 import {
@@ -43,6 +58,161 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     { role: 'explorer', provider: 'groq', model: null },
     { role: 'reviewer', provider: null, model: 'gpt-5.3-codex' },
   ];
+  // ADR-029 — enough notes state for the browser harness to be interactive:
+  // one page, one locked block (B2's attribution), and one block that both
+  // references a planner item and carries a FENCED conflict, so the live-label
+  // path and the "kept beside the version it did not see" line both render
+  // without a server to produce them.
+  type DevNote = {
+    id: string; parentId: string | null; kind: string; text: string; checked: boolean;
+    level: number | null; refs: string[]; conflicts: Array<{ field: string; reason: string }>;
+    // E4's page metadata. The harness carries it because the sidebar tree, the
+    // icon picker and the favourites section read it — without these fields the
+    // shell renders here as an untitled, iconless list and looks broken in the
+    // one place a person checks it fastest.
+    icon: string | null; cover: string | null; favourite: boolean;
+    // E3 — a row's cell values, and a database block's schema and views. Carried
+    // here because the projection reads them: without them the harness renders
+    // an empty table and the five views cannot be looked at at all.
+    props?: Record<string, NotePropertyValue>;
+    schema?: NotePropertyDef[];
+    views?: NoteDatabaseView[];
+  };
+  /** The one block the harness pretends another device is holding (B2). */
+  const LEASED_DEMO_BLOCK = 'blk_2';
+  const devNotes: DevNote[] = [
+    { id: 'blk_1', parentId: null, kind: 'page', text: 'Release notes', checked: false, level: null, refs: [], conflicts: [], icon: '📝', cover: null, favourite: true },
+    { id: 'blk_2', parentId: 'blk_1', kind: 'paragraph', text: 'The parser is unbounded on hostile input.', checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false },
+    { id: 'blk_3', parentId: 'blk_1', kind: 'todo', text: 'Ship the parser fix', checked: false, level: null, refs: ['brainrouter://planner/item/itm_dev1'], conflicts: [{ field: 'text', reason: 'fenced_stale_epoch' }], icon: null, cover: null, favourite: false },
+    { id: 'blk_4', parentId: 'blk_1', kind: 'page', text: 'Parser rewrite', checked: false, level: null, refs: [], conflicts: [], icon: '🧪', cover: null, favourite: false },
+    // E3 — a database with every view kind stored, so the switcher, the board's
+    // no-value column and the calendar's unscheduled strip all render here.
+    {
+      id: 'blk_db', parentId: 'blk_1', kind: DATABASE_BLOCK_KIND, text: 'Reading list',
+      checked: false, level: null, refs: [], conflicts: [], icon: '📚', cover: null, favourite: false,
+      schema: [
+        { id: TITLE_PROPERTY_ID, name: 'Name', type: 'title' },
+        {
+          id: 'status', name: 'Status', type: 'select',
+          options: [{ id: 'to-read', label: 'To read' }, { id: 'reading', label: 'Reading' }, { id: 'done', label: 'Done' }],
+        },
+        { id: 'due', name: 'Due', type: 'date' },
+        { id: 'tags', name: 'Tags', type: 'multi-select', options: [{ id: 'parser', label: 'Parser' }, { id: 'sync', label: 'Sync' }] },
+        { id: 'starred', name: 'Starred', type: 'checkbox' },
+        { id: 'about', name: 'About', type: 'relation' },
+      ],
+      views: [
+        { id: 'table', name: 'Table', kind: 'table', visible: ['title', 'status', 'due', 'tags', 'starred', 'about'] },
+        { id: 'board', name: 'Board', kind: 'board', visible: ['title', 'due', 'tags'], groupBy: 'status' },
+        { id: 'list', name: 'List', kind: 'list', visible: ['title', 'status', 'due'] },
+        { id: 'calendar', name: 'Calendar', kind: 'calendar', visible: ['title', 'status'], groupBy: 'due' },
+        { id: 'gallery', name: 'Gallery', kind: 'gallery', visible: ['title', 'status', 'tags'] },
+      ],
+    },
+    {
+      id: 'blk_row1', parentId: 'blk_db', kind: 'page', text: 'Hybrid logical clocks',
+      checked: false, level: null, refs: [], conflicts: [], icon: '⏱', cover: null, favourite: false,
+      props: { status: 'reading', due: '2026-08-14', tags: ['sync'], starred: true, about: ['brainrouter://planner/item/itm_dev1'] },
+    },
+    {
+      id: 'blk_row2', parentId: 'blk_db', kind: 'page', text: 'Parsing without backtracking',
+      checked: false, level: null, refs: [], conflicts: [], icon: '🧩', cover: null, favourite: false,
+      props: { status: 'to-read', due: '2026-08-21', tags: ['parser'], starred: false },
+    },
+    // No status and no date, so the board's no-value column and the calendar's
+    // unscheduled strip are populated in the harness rather than empty — the two
+    // places a row would silently vanish if either stopped being rendered.
+    {
+      id: 'blk_row3', parentId: 'blk_db', kind: 'page', text: 'Untriaged: CRDT survey',
+      checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false,
+    },
+    { id: 'blk_row1_body', parentId: 'blk_row1', kind: 'paragraph', text: 'A row is a page, so this line lives on it.', checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false },
+  ];
+  // C5 — a delete is a tombstone, so the harness keeps what it removed rather
+  // than dropping it: a trash that is always empty here cannot be looked at.
+  const devNotesTrash: DevNote[] = [];
+  /** Ancestry depth, so the shell's page-relative indent gets real inputs. */
+  const devDepth = (block: DevNote): number => {
+    let depth = 0;
+    const seen = new Set<string>([block.id]);
+    let cursor = block.parentId;
+    while (cursor !== null && !seen.has(cursor)) {
+      seen.add(cursor);
+      depth += 1;
+      cursor = devNotes.find((b) => b.id === cursor)?.parentId ?? null;
+    }
+    return depth;
+  };
+  /** A block and everything under it, root first — what a delete takes. */
+  const devSubtree = (rootId: string): string[] => {
+    const out: string[] = [];
+    const walk = (id: string): void => {
+      if (out.includes(id)) return;
+      if (!devNotes.some((b) => b.id === id)) return;
+      out.push(id);
+      for (const child of devNotes.filter((b) => b.parentId === id)) walk(child.id);
+    };
+    walk(rootId);
+    return out;
+  };
+  /** E1's move up/down, over siblings only — core stops at the ends too. */
+  const devMoveBy = (id: string, direction: -1 | 1): Record<string, unknown> => {
+    const index = devNotes.findIndex((b) => b.id === id);
+    const block = devNotes[index];
+    if (!block) return { ok: false, reason: 'not_found', detail: 'That block is gone.' };
+    const siblings = devNotes.filter((b) => b.parentId === block.parentId);
+    const at = siblings.indexOf(block);
+    const target = siblings[at + direction];
+    if (!target) return { ok: true, action: 'noop', focusId: id, caret: 0 };
+    const targetIndex = devNotes.indexOf(target);
+    devNotes.splice(index, 1);
+    devNotes.splice(targetIndex, 0, block);
+    return { ok: true, action: 'move', focusId: id, caret: 0 };
+  };
+
+  /**
+   * ADR-029 E3 — a harness note as the `NoteBlock` core's projection reads.
+   *
+   * The stamps are constant and the ranks come from list order: the harness has
+   * no clock and no outbox, and nothing in `projectDatabase` reads a stamp for
+   * anything but liveness. What matters is that the SHAPE is real, so the
+   * filtering, sorting and grouping the browser shows are the ones the desktop
+   * shows rather than a second implementation written to look similar.
+   */
+  const DEV_HLC = { physical: 0, logical: 0, deviceId: 'dev' };
+  const devAsNoteBlock = (block: DevNote, index: number): NoteBlock => ({
+    id: block.id,
+    parentId: { value: block.parentId, at: DEV_HLC },
+    rank: { value: String(index).padStart(6, '0'), at: DEV_HLC },
+    kind: { value: block.kind as NoteBlockKind, at: DEV_HLC },
+    text: { value: block.text, at: DEV_HLC },
+    ...(block.icon ? { icon: { value: block.icon, at: DEV_HLC } } : {}),
+    ...(block.cover ? { cover: { value: block.cover, at: DEV_HLC } } : {}),
+    ...(block.props
+      ? {
+        props: Object.fromEntries(Object.entries(block.props).map(
+          ([key, value]) => [key, { value, at: DEV_HLC }] as const,
+        )),
+      }
+      : {}),
+    ...(block.schema ? { schema: { value: block.schema, at: DEV_HLC } } : {}),
+    ...(block.views ? { views: { value: block.views, at: DEV_HLC } } : {}),
+  });
+  const devNoteBlocks = (): NoteBlock[] => devNotes.map(devAsNoteBlock);
+  const devDatabase = (id: string): DevNote | undefined =>
+    devNotes.find((block) => block.id === id && block.kind === DATABASE_BLOCK_KIND);
+  /** The schema a database actually has, repaired the way `readDatabase` does. */
+  const devSchemaOf = (block: DevNote): NotePropertyDef[] =>
+    readDatabase(devAsNoteBlock(block, 0)).schema;
+
+  const devWorkspaceLabels = new Map<string, string>([
+    ['brainrouter://planner/item/itm_dev1', 'Ship the parser fix'],
+  ]);
+  const devWorkspaceLabel = (uri: string): string =>
+    devWorkspaceLabels.get(uri) ?? (uri.startsWith('brainrouter://code/file/')
+      ? uri.replace('brainrouter://code/file/', '')
+      : 'a reference (not available in this app)');
+
   const devFanoutRuns: Array<Record<string, unknown>> = [];
   const devSshHosts: Array<Record<string, unknown>> = [];
   const devAutomationRules = [
@@ -1666,6 +1836,432 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     'servers:stop': () => ({ ok: true }),
     'servers:add': () => ({ ok: true }),
     'servers:logs': () => ({ lines: [] as string[] }),
+
+    // ADR-029 — Notes and the workspace reference verbs.
+    //
+    // The dev bridge is a SECOND handler map, not a superset of the host's: a
+    // name registered only in `electron/host/queries.ts` compiles, passes tests
+    // and leaves this surface rendering nothing, because an unknown query is
+    // rejected by name. The planner learned that the hard way — it has no
+    // handlers here and its mode is blank in the browser harness — so Notes
+    // gets a working mock rather than the same gap.
+    'notes-read': () => ({
+      blocks: devNotes.map((b, i) => ({
+        ...b,
+        // E4 — the ordinal is a function of tree position, and the harness
+        // computes it for the same reason the host does: a renderer that
+        // counted rows would number a filtered page differently from the
+        // document.
+        ordinal: b.kind === 'numbered'
+          ? devNotes.filter((o) => o.parentId === b.parentId && o.kind === 'numbered')
+            .indexOf(b) + 1
+          : null,
+        // Depth by ancestry rather than "has a parent": a sub-page's blocks are
+        // two down, and a flat 0/1 would put the shell's relative-indent maths
+        // on inputs the real host never produces.
+        depth: devDepth(b),
+        hasChildren: devNotes.some((c) => c.parentId === b.id),
+        title: b.kind === 'page' ? (b.text.trim() || UNTITLED_PAGE) : null,
+        // B2's attribution, pinned to an ID rather than to a POSITION. Keyed by
+        // index it followed whatever happened to be second in the array, so a
+        // block you had just created came back read-only and attributed to
+        // another device — the harness inventing the one state the lease exists
+        // to make legible. A demo that lies about a lock is worse than no demo.
+        lockedBy: b.id === LEASED_DEMO_BLOCK ? 'Being edited on another device' : null,
+      })),
+      repairs: [] as Array<Record<string, unknown>>,
+      pending: 0,
+      syncState: 'Everything is synced.',
+      conflictCount: devNotes.filter((b) => b.conflicts.length > 0).length,
+    }),
+    'notes-create': (a) => {
+      const block: DevNote = { id: `blk_${S.devNotesN++}`, parentId: typeof a.parentId === 'string' ? a.parentId : null, kind: String(a.kind ?? 'paragraph'), text: String(a.text ?? ''), checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false };
+      const after = typeof a.after === 'string' ? devNotes.findIndex((b) => b.id === a.after) : -1;
+      if (after >= 0) block.parentId = devNotes[after]?.parentId ?? null;
+      devNotes.splice(after >= 0 ? after + 1 : devNotes.length, 0, block);
+      return block;
+    },
+    'notes-create-page': (a) => {
+      const block: DevNote = { id: `blk_${S.devNotesN++}`, parentId: typeof a.parentId === 'string' ? a.parentId : null, kind: 'page', text: String(a.title ?? ''), checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false };
+      devNotes.push(block);
+      return block;
+    },
+    'notes-update': (a) => {
+      const block = devNotes.find((b) => b.id === a.id);
+      if (!block) return { ok: false, reason: 'not_found' };
+      if (typeof a.text === 'string') block.text = a.text;
+      if (typeof a.kind === 'string') block.kind = a.kind;
+      if (typeof a.checked === 'boolean') block.checked = a.checked;
+      if (typeof a.icon === 'string') block.icon = a.icon || null;
+      if (typeof a.cover === 'string') block.cover = a.cover || null;
+      if (typeof a.favourite === 'boolean') block.favourite = a.favourite;
+      return { ok: true, block, path: 'leased', conflicted: false };
+    },
+    'notes-delete': (a) => {
+      // The subtree goes with it, exactly as `deleteBlock` does: a child left
+      // behind under a deleted page is present in the data and absent from
+      // every page, which is the state C5 exists to prevent.
+      const ids = devSubtree(String(a.id ?? ''));
+      for (const id of ids) {
+        const index = devNotes.findIndex((b) => b.id === id);
+        if (index >= 0) devNotesTrash.unshift(...devNotes.splice(index, 1));
+      }
+      return { deleted: ids };
+    },
+    'notes-restore': (a) => {
+      const id = String(a.id ?? '');
+      const restored: string[] = [];
+      for (const block of [...devNotesTrash]) {
+        if (block.id !== id && block.parentId !== id) continue;
+        devNotesTrash.splice(devNotesTrash.indexOf(block), 1);
+        devNotes.push(block);
+        restored.push(block.id);
+      }
+      return { restored };
+    },
+    'notes-trash': () => ({
+      entries: devNotesTrash
+        // An entry is the ROOT of a deletion, matching core's projection: a
+        // listing that showed every tombstone would offer to restore a
+        // paragraph into a page that is still deleted.
+        .filter((b) => !devNotesTrash.some((other) => other.id === b.parentId))
+        .map((b) => {
+          const descendants = devNotesTrash.filter((other) => other.parentId === b.id).length;
+          const title = b.text.trim() || UNTITLED_PAGE;
+          // Core's sentence, not a second one: the harness is where a
+          // divergence would be least visible and most misleading.
+          return { id: b.id, kind: b.kind, title, descendants, line: describeTrashEntry({ descendants }, title) };
+        }),
+    }),
+    'notes-favourites': () => ({
+      blocks: devNotes.filter((b) => b.favourite).map((b) => ({
+        id: b.id, kind: b.kind, title: b.text.trim() || UNTITLED_PAGE, icon: b.icon,
+      })),
+    }),
+    'notes-move': (a) => {
+      const block = devNotes.find((b) => b.id === a.id);
+      if (block) block.parentId = typeof a.parentId === 'string' ? a.parentId : null;
+      return { ok: true };
+    },
+    // ADR-029 E1 — the gestures. The RULES come from core even here
+    // (`applyInputRule`, `searchSlashCatalog` are pure), because the harness is
+    // where a divergence would be least visible and most misleading: a `# ` that
+    // behaved differently in the browser would be debugged as a renderer bug.
+    // Only the structural half is a mock, and it is deliberately the simplest
+    // thing that keeps the caret answers shaped like core's.
+    'notes-input-rule': (a) => ({
+      transform: applyInputRule({
+        kind: (typeof a.kind === 'string' ? a.kind : 'paragraph') as NoteBlockKind,
+        text: String(a.text ?? ''),
+        caret: Number(a.caret ?? 0),
+        ...(typeof a.level === 'number' ? { level: a.level } : {}),
+      }),
+    }),
+    'notes-slash-menu': (a) => ({
+      commands: searchSlashCatalog(String(a.query ?? ''), Number(a.limit ?? 12)),
+    }),
+    'notes-split': (a) => {
+      const id = String(a.id ?? '');
+      const index = devNotes.findIndex((b) => b.id === id);
+      const block = devNotes[index];
+      if (!block) return { ok: false, reason: 'not_found', detail: 'That block is gone.' };
+      const caret = Math.min(Math.max(Number(a.caret ?? 0), 0), block.text.length);
+      const tail = block.text.slice(caret);
+      block.text = block.text.slice(0, caret);
+      const created: DevNote = {
+        id: `blk_${S.devNotesN++}`, parentId: block.parentId,
+        kind: ['bullet', 'numbered', 'todo', 'quote'].includes(block.kind) ? block.kind : 'paragraph',
+        text: tail, checked: false, level: null, refs: [], conflicts: [],
+        icon: null, cover: null, favourite: false,
+      };
+      devNotes.splice(index + 1, 0, created);
+      return { ok: true, action: 'split', focusId: created.id, caret: 0, createdId: created.id };
+    },
+    'notes-merge-back': (a) => {
+      const id = String(a.id ?? '');
+      const index = devNotes.findIndex((b) => b.id === id);
+      const block = devNotes[index];
+      const previous = index > 0 ? devNotes[index - 1] : undefined;
+      if (!block) return { ok: false, reason: 'not_found', detail: 'That block is gone.' };
+      if (!previous) return { ok: true, action: 'noop', focusId: id, caret: 0 };
+      const joinAt = previous.text.length;
+      previous.text += block.text;
+      devNotes.splice(index, 1);
+      return { ok: true, action: 'merge', focusId: previous.id, caret: joinAt, removedIds: [id] };
+    },
+    'notes-duplicate': (a) => {
+      const id = String(a.id ?? '');
+      const index = devNotes.findIndex((b) => b.id === id);
+      const block = devNotes[index];
+      if (!block) return { ok: false, reason: 'not_found', detail: 'That block is gone.' };
+      const copy: DevNote = { ...block, id: `blk_${S.devNotesN++}`, refs: [...block.refs], conflicts: [], favourite: false };
+      devNotes.splice(index + 1, 0, copy);
+      return { ok: true, action: 'duplicate', focusId: copy.id, caret: 0, createdId: copy.id };
+    },
+    'notes-move-up': (a) => devMoveBy(String(a.id ?? ''), -1),
+    'notes-move-down': (a) => devMoveBy(String(a.id ?? ''), 1),
+    'notes-indent': (a) => {
+      const id = String(a.id ?? '');
+      const index = devNotes.findIndex((b) => b.id === id);
+      const block = devNotes[index];
+      if (!block) return { ok: false, reason: 'not_found', detail: 'That block is gone.' };
+      const previous = [...devNotes.slice(0, index)].reverse().find((b) => b.parentId === block.parentId);
+      if (!previous) return { ok: true, action: 'noop', focusId: id, caret: 0 };
+      block.parentId = previous.id;
+      return { ok: true, action: 'indent', focusId: id, caret: 0 };
+    },
+    'notes-outdent': (a) => {
+      const id = String(a.id ?? '');
+      const block = devNotes.find((b) => b.id === id);
+      if (!block) return { ok: false, reason: 'not_found', detail: 'That block is gone.' };
+      if (block.parentId === null) return { ok: true, action: 'noop', focusId: id, caret: 0 };
+      block.parentId = devNotes.find((b) => b.id === block.parentId)?.parentId ?? null;
+      return { ok: true, action: 'outdent', focusId: id, caret: 0 };
+    },
+    'notes-begin-edit': (a) => ({ ok: true, lease: { blockId: String(a.id ?? ''), deviceId: 'dev', epoch: 1, expiresAt: Date.now() + 30_000 } }),
+    'notes-keep-edit': (a) => ({ ok: true, lease: { blockId: String(a.id ?? ''), deviceId: 'dev', epoch: Number(a.epoch ?? 1), expiresAt: Date.now() + 30_000 } }),
+    'notes-end-edit': () => ({ ok: true }),
+    'notes-resolve': (a) => {
+      const block = devNotes.find((b) => b.id === a.id);
+      if (block) block.conflicts = block.conflicts.filter((c) => c.field !== a.field);
+      return block ?? null;
+    },
+    'notes-search': (a) => {
+      const needle = String(a.query ?? '').toLowerCase();
+      return { hits: devNotes.filter((b) => b.text.toLowerCase().includes(needle) || b.refs.some((r) => r.toLowerCase().includes(needle))).map((b) => ({ blockId: b.id, kind: b.kind, matched: ['text'], snippet: b.text, matchedRefs: [], score: 100 })) };
+    },
+    'notes-backlinks': (a) => ({ blockIds: devNotes.filter((b) => b.refs.some((r) => r.split('#')[0] === String(a.uri ?? '').split('#')[0])).map((b) => b.id) }),
+    'notes-sync': () => ({ pending: 0, pulled: 0, pushed: 0, offline: false, conflicted: [] as string[], syncState: 'Everything is synced.' }),
+
+    // ADR-029 E3 — databases. Registered HERE as well as in the electron host
+    // because an unknown query is rejected by name: without these the five
+    // views render "unknown query" in the browser harness, which is the gap the
+    // planner shipped and this comment block already warns about.
+    //
+    // The projection is core's `projectDatabase`, unchanged. Only the WRITES
+    // are faked, and each one does what the corresponding core op does to a
+    // block — a row is created as a page under the database, a cell is written
+    // through the same coercion, and a delete is a tombstone in the trash.
+    'notes-database-list': () => ({
+      databases: devNotes.filter((block) => block.kind === DATABASE_BLOCK_KIND).map((block) => ({
+        id: block.id,
+        title: block.text || UNTITLED_PAGE,
+        icon: block.icon,
+        properties: devSchemaOf(block).length,
+        views: (block.views ?? []).map((view) => ({ id: view.id, name: view.name, kind: view.kind })),
+      })),
+    }),
+    'notes-database-read': (a) => {
+      const projection = projectDatabase(
+        devNoteBlocks(), String(a.id ?? ''), typeof a.viewId === 'string' ? a.viewId : undefined,
+      );
+      if (!projection) return { found: false };
+      const database = readDatabase(projection.database);
+      return {
+        found: true,
+        id: projection.database.id,
+        title: projection.title,
+        views: database.views.map((view) => ({ id: view.id, name: view.name, kind: view.kind })),
+        view: projection.view,
+        kind: projection.kind,
+        properties: database.schema.map((def) => ({
+          ...def,
+          unsupported: database.unsupported.includes(def.id),
+          operators: operatorsFor(def),
+        })),
+        columns: projection.columns.map((def) => def.id),
+        rows: projection.rows.map((row) => ({
+          id: row.id,
+          title: row.title,
+          icon: row.icon,
+          cover: row.cover,
+          cells: row.cells.map((cell) => ({
+            property: cell.property.id, value: cell.value, display: cell.display, unsupported: cell.unsupported,
+          })),
+        })),
+        groups: projection.groups.map((group) => ({
+          key: group.key, label: group.label, empty: group.empty, rowIds: group.rows.map((row) => row.id),
+        })),
+        total: projection.total,
+        filteredOut: projection.filteredOut,
+        skipped: projection.skipped,
+        notices: projection.notices,
+      };
+    },
+    'notes-database-create': (a) => {
+      const schema = defaultDatabaseSchema();
+      const block: DevNote = {
+        id: `blk_${S.devNotesN++}`,
+        parentId: typeof a.parentId === 'string' ? a.parentId : null,
+        kind: DATABASE_BLOCK_KIND, text: String(a.title ?? ''), checked: false, level: null,
+        refs: [], conflicts: [], icon: null, cover: null, favourite: false,
+        schema, views: defaultDatabaseViews(schema),
+      };
+      const after = typeof a.after === 'string' ? devNotes.findIndex((b) => b.id === a.after) : -1;
+      if (after >= 0) block.parentId = devNotes[after]?.parentId ?? null;
+      devNotes.splice(after >= 0 ? after + 1 : devNotes.length, 0, block);
+      return { id: block.id };
+    },
+    'notes-database-add-property': (a) => {
+      const database = devDatabase(String(a.id ?? ''));
+      if (!database) return { ok: false, reason: 'not_found', detail: 'No such database.' };
+      const schema = devSchemaOf(database);
+      const name = String(a.name ?? 'Property');
+      const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'property';
+      let id = base;
+      for (let n = 2; schema.some((def) => def.id === id); n += 1) id = `${base}-${n}`;
+      const def: NotePropertyDef = {
+        id, name, type: String(a.type ?? 'text'),
+        ...(Array.isArray(a.options) ? { options: a.options as NotePropertyDef['options'] } : {}),
+      };
+      database.schema = [...schema, def];
+      // New columns are visible, for the same reason core makes them visible: a
+      // column added and then not shown is a column the person concludes was
+      // not added.
+      database.views = (database.views ?? []).map((view) => ({ ...view, visible: [...view.visible, id] }));
+      return { ok: true, value: def };
+    },
+    'notes-database-update-property': (a) => {
+      const database = devDatabase(String(a.id ?? ''));
+      if (!database) return { ok: false, reason: 'not_found', detail: 'No such database.' };
+      database.schema = devSchemaOf(database).map((def) => (def.id === a.propertyId ? {
+        ...def,
+        ...(typeof a.name === 'string' && a.name.trim() ? { name: a.name.trim() } : {}),
+        ...(Array.isArray(a.options) ? { options: a.options as NotePropertyDef['options'] } : {}),
+      } : def));
+      return { ok: true };
+    },
+    'notes-database-remove-property': (a) => {
+      const database = devDatabase(String(a.id ?? ''));
+      if (!database) return { ok: false, reason: 'not_found', detail: 'No such database.' };
+      const schema = devSchemaOf(database);
+      const target = schema.find((def) => def.id === a.propertyId);
+      if (target?.type === 'title') {
+        return { ok: false, reason: 'refused', detail: 'The title column is the row’s own title.' };
+      }
+      // The VALUES stay on the rows, exactly as core leaves them: re-adding the
+      // column with the same id brings the data straight back.
+      database.schema = schema.filter((def) => def.id !== a.propertyId);
+      database.views = (database.views ?? []).map((view) => ({
+        ...view,
+        visible: view.visible.filter((id) => id !== a.propertyId),
+        ...(view.groupBy === a.propertyId ? { groupBy: undefined } : {}),
+      }));
+      return { ok: true };
+    },
+    'notes-database-reorder-properties': (a) => {
+      const database = devDatabase(String(a.id ?? ''));
+      if (!database) return { ok: false, reason: 'not_found', detail: 'No such database.' };
+      const schema = devSchemaOf(database);
+      const order = Array.isArray(a.order) ? (a.order as string[]) : [];
+      const moved = order.map((id) => schema.find((def) => def.id === id)).filter((def): def is NotePropertyDef => !!def);
+      database.schema = [...moved, ...schema.filter((def) => !moved.includes(def))];
+      return { ok: true };
+    },
+    'notes-database-add-row': (a) => {
+      const database = devDatabase(String(a.id ?? ''));
+      if (!database) return { ok: false, reason: 'not_found', detail: 'No such database.' };
+      // E3 — a row IS a page, so this creates one under the database.
+      const row: DevNote = {
+        id: `blk_${S.devNotesN++}`, parentId: database.id, kind: 'page',
+        text: String(a.title ?? ''), checked: false, level: null,
+        refs: [], conflicts: [], icon: null, cover: null, favourite: false,
+      };
+      const after = typeof a.after === 'string' ? devNotes.findIndex((b) => b.id === a.after) : -1;
+      devNotes.splice(after >= 0 ? after + 1 : devNotes.length, 0, row);
+      return { ok: true, id: row.id };
+    },
+    'notes-database-set-value': (a) => {
+      const row = devNotes.find((block) => block.id === a.rowId);
+      const database = row ? devDatabase(row.parentId ?? '') : undefined;
+      if (!row || !database) return { ok: false, reason: 'not_found', detail: 'That row is gone.' };
+      const def = devSchemaOf(database).find((candidate) => candidate.id === a.propertyId);
+      if (!def) return { ok: false, reason: 'refused', detail: 'No such property.' };
+      // Through core's coercion, not the harness's: a number typed as text and a
+      // half-URI in a relation have to become what they become in one place.
+      const value = coercePropertyValue(def, a.value);
+      if (def.type === 'title') row.text = typeof value === 'string' ? value : '';
+      else row.props = { ...(row.props ?? {}), [def.id]: value };
+      return { ok: true, id: row.id };
+    },
+    'notes-database-remove-row': (a) => {
+      const ids = devSubtree(String(a.rowId ?? ''));
+      for (const id of ids) {
+        const index = devNotes.findIndex((b) => b.id === id);
+        if (index >= 0) devNotesTrash.push(...devNotes.splice(index, 1));
+      }
+      return { ok: true, removed: ids };
+    },
+    'notes-database-save-view': (a) => {
+      const database = devDatabase(String(a.id ?? ''));
+      if (!database) return { ok: false, reason: 'not_found', detail: 'No such database.' };
+      const views = database.views ?? defaultDatabaseViews(devSchemaOf(database));
+      const existing = typeof a.viewId === 'string' ? views.find((view) => view.id === a.viewId) : undefined;
+      const kind = (typeof a.kind === 'string' ? a.kind : existing?.kind ?? 'table') as NoteViewKind;
+      const known = new Set(devSchemaOf(database).map((def) => def.id));
+      const view: NoteDatabaseView = {
+        id: existing?.id ?? `view-${S.devNotesN++}`,
+        name: (typeof a.name === 'string' && a.name.trim()) || existing?.name || kind,
+        kind,
+        visible: (Array.isArray(a.visible) ? (a.visible as string[]) : existing?.visible ?? [...known])
+          .filter((id) => known.has(id)),
+        ...(a.filter === undefined
+          ? (existing?.filter ? { filter: existing.filter } : {})
+          : (a.filter === null ? {} : { filter: a.filter as NoteDatabaseView['filter'] })),
+        ...(a.sort === undefined
+          ? (existing?.sort ? { sort: existing.sort } : {})
+          : { sort: a.sort as NoteDatabaseView['sort'] }),
+        ...(a.groupBy === undefined
+          ? (existing?.groupBy ? { groupBy: existing.groupBy } : {})
+          : (typeof a.groupBy === 'string' && known.has(a.groupBy) ? { groupBy: a.groupBy } : {})),
+      };
+      database.views = existing
+        ? views.map((candidate) => (candidate.id === view.id ? view : candidate))
+        : [...views, view];
+      return { ok: true, value: view };
+    },
+    'notes-database-remove-view': (a) => {
+      const database = devDatabase(String(a.id ?? ''));
+      if (!database) return { ok: false, reason: 'not_found', detail: 'No such database.' };
+      const views = database.views ?? [];
+      // Core keeps the last one, because a database with no views renders
+      // nothing and looks like a database with no data.
+      if (views.length <= 1) return { ok: false, reason: 'refused', detail: 'A database keeps at least one view.' };
+      database.views = views.filter((view) => view.id !== a.viewId);
+      return { ok: true, value: database.views };
+    },
+    'notes-property-catalog': () => ({
+      types: NOTE_PROPERTY_TYPES.map((type) => ({
+        type, operators: operatorsFor({ id: type, name: type, type }),
+      })),
+      viewKinds: NOTE_VIEW_KINDS,
+    }),
+
+    'workspace-modes': () => ({ modes: ['chat', 'code', 'notes', 'planner', 'track'], creatable: ['notes', 'planner', 'track'] }),
+    // ADR-029 C2 row 6 — the browser harness has no checkout, so it answers
+    // with a plausible declaration list rather than nothing: a picker that is
+    // always empty here would look like the feature being broken.
+    'code-symbols': (a) => ({
+      path: String(a.path ?? ''),
+      symbols: [
+        { name: 'parseHeader', line: 12, kind: 'function' },
+        { name: 'Reader', line: 40, kind: 'class' },
+      ],
+    }),
+    'workspace-describe': (a) => ({ line: devWorkspaceLabel(String(a.uri ?? '')) }),
+    'workspace-resolve': (a) => ({ resolution: { status: 'found', ref: null, target: { label: devWorkspaceLabel(String(a.uri ?? '')) } }, line: devWorkspaceLabel(String(a.uri ?? '')) }),
+    'workspace-create': (a) => {
+      const uri = `brainrouter://${String(a.mode ?? 'planner')}/${String(a.kind ?? 'item')}/dev_${S.devNotesN++}`;
+      devWorkspaceLabels.set(uri, String(a.title ?? 'Untitled'));
+      return { status: 'created', uri };
+    },
+    'workspace-link': (a) => {
+      const from = String(a.from ?? '').replace('brainrouter://notes/block/', '');
+      const block = devNotes.find((b) => b.id === from);
+      const to = String(a.to ?? '');
+      if (block && !block.refs.includes(to)) block.refs.push(to);
+      return { linked: true, alreadyLinked: false, to };
+    },
   };
   return queries;
 }

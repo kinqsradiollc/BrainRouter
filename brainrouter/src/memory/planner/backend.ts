@@ -13,6 +13,7 @@
  * call them — one implementation, so the two sides cannot drift into disagreeing
  * about who won.
  */
+import { randomUUID } from "node:crypto";
 import { memoryEngine } from "../engine.js";
 import {
   mergeOwnedItem, refreshMirrored, compareHlc,
@@ -219,6 +220,56 @@ export function serverClock(nowMs: number): Hlc {
  */
 export function isNewer(a: PlannerItem, b: PlannerItem): boolean {
   return compareHlc(a.title.at, b.title.at) > 0;
+}
+
+/**
+ * One item, by id — ADR-029 C1's `resolve` for `brainrouter://planner/item/…`.
+ *
+ * Q5 makes resolution a server capability, because the dashboard has no local
+ * store to look in. This is the read that answers it; before it existed the only
+ * way to see one item from the server was to pull the whole list.
+ */
+export async function getItem(orgId: string, userId: string, id: string): Promise<PlannerItem | null> {
+  const row = await store().getPlannerItem(orgId, userId, id);
+  return row ? row.payload : null;
+}
+
+/**
+ * Make a task — ADR-029 C1's `create` for the planner.
+ *
+ * Q2: the cross-mode create calls the OWNING mode's writer rather than reaching
+ * into its tables, so "a chat turn becomes a task" lands here and ownership is
+ * preserved by construction. It is synchronous and returns the item, because the
+ * caller has to write the resulting reference into its own content — an async
+ * create that fails afterwards leaves a note claiming a task that does not exist.
+ */
+export async function createItem(
+  orgId: string,
+  userId: string,
+  input: { title: string; notes?: string; dueDate?: string | null },
+  nowMs: number,
+): Promise<PlannerItem> {
+  const title = input.title.trim();
+  if (!title) throw new Error("A created item needs a title.");
+
+  const at = serverClock(nowMs);
+  const item: PlannerItem = {
+    id: `itm_${randomUUID().slice(0, 8)}`,
+    origin: "owned",
+    title: { value: title, at },
+    ...(input.notes ? { notes: { value: input.notes, at } } : {}),
+    ...(input.dueDate !== undefined ? { dueDate: { value: input.dueDate, at } } : {}),
+  };
+  await store().upsertPlannerItem(orgId, userId, {
+    id: item.id,
+    origin: item.origin,
+    source: null,
+    payload: item,
+    dueDate: (item.dueDate?.value as string | null) ?? null,
+    completed: false,
+    deletedAtHlc: null,
+  });
+  return item;
 }
 
 export async function listBlocks(orgId: string, userId: string): Promise<PlannerBlockRow[]> {

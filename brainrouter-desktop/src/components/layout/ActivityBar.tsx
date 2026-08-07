@@ -1,6 +1,7 @@
 /**
  * The far-left activity bar — icon-only workspace-mode switching (Chat · Code ·
- * Track · Meetings) plus the app-wide workspace/organization switcher.
+ * Track · Meetings · Planner · Notes) plus the app-wide workspace/organization
+ * switcher.
  *
  * Replaces the four labeled segments that were crammed into the top of the
  * (min 220px) sidebar: modes are now one icon each with a tooltip, and they
@@ -12,7 +13,7 @@ import React, { useEffect, useRef, useState, type Dispatch, type SetStateAction 
 import { Icon } from '../../icons.js';
 import { useActiveOrg } from '../../lib/orgContext.js';
 
-export type WorkspaceMode = 'chat' | 'track' | 'code' | 'meetings' | 'planner';
+export type WorkspaceMode = 'chat' | 'track' | 'code' | 'meetings' | 'planner' | 'notes';
 
 const MODES: ReadonlyArray<readonly [WorkspaceMode, string, string]> = [
   ['chat', 'bubble', 'Chat'],
@@ -22,6 +23,8 @@ const MODES: ReadonlyArray<readonly [WorkspaceMode, string, string]> = [
   // ADR-028 G6 — the planner is a MODE, not a panel: it is user-scoped and
   // spans every project, and panels are bound to one workspace and session.
   ['planner', 'plan', 'Planner'],
+  // ADR-029 — Notes, for the same reason: user-scoped and cross-project (D1).
+  ['notes', 'note', 'Notes'],
 ];
 
 export interface ActivityBarProps {

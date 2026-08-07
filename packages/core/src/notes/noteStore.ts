@@ -26,14 +26,18 @@ import { stableDeviceId } from '../sync/deviceId.js';
 import { hlcNow, hlcZero, type Hlc } from '../sync/hybridClock.js';
 import { emptyOutbox, enqueue, MAX_OUTBOX_AGE_MS, type OutboxState } from '../sync/outbox.js';
 import type { Stamped } from '../sync/stamped.js';
-import { isTextlessKind, type NoteBlock, type NoteBlockKind } from './block.js';
+import { isLiveBlock, isTextlessKind, type NoteBlock, type NoteBlockKind } from './block.js';
 import {
   acquireBlockLease, fenceBlockWrite, releaseBlockLease, renewBlockLease,
   sweepBlockLeases, type BlockLease, type LeaseClaim, type LeaseOutcome,
 } from './blockLease.js';
 import { mergeNoteBlock, resolveBlockConflict } from './blockMerge.js';
+import { DATABASE_BLOCK_KIND, defaultDatabaseSchema, defaultDatabaseViews } from './database.js';
+import type { NoteDatabaseView } from './databaseView.js';
+import type { NotePropertyDef, NotePropertyValue } from './properties.js';
 import { buildNoteTree, subtreeBlockIds } from './noteTree.js';
 import { compareRank, FIRST_RANK, rankBetween } from './rank.js';
+import { deletedSubtreeIds, favouriteBlocks, listTrashEntries, type TrashEntry } from './trash.js';
 
 export interface NotesState {
   schemaVersion: 1;
@@ -105,7 +109,7 @@ function newBlockId(deviceId: string, nowMs: number): string {
 const value = <T>(v: T, at: Hlc): Stamped<T> => ({ value: v, at });
 
 function liveBlocks(state: NotesState): NoteBlock[] {
-  return Object.values(state.blocks).filter((b) => !b.deletedAt);
+  return Object.values(state.blocks).filter(isLiveBlock);
 }
 
 function siblingsOf(state: NotesState, parentId: string | null): NoteBlock[] {
@@ -150,6 +154,28 @@ export interface CreateBlockInput extends BlockPosition {
   text?: string;
   level?: number;
   checked?: boolean;
+  language?: string;
+  collapsed?: boolean;
+  icon?: string;
+  cover?: string;
+  favourite?: boolean;
+  /** E3 — a row's property values, keyed by property id. */
+  props?: Record<string, NotePropertyValue>;
+  /** E3 — a database block's property definitions. */
+  schema?: readonly NotePropertyDef[];
+  /** E3 — a database block's stored projections. */
+  views?: readonly NoteDatabaseView[];
+}
+
+/** Stamp every written property value with this edit's clock, keeping the rest. */
+function stampProps(
+  current: NoteBlock['props'],
+  written: Record<string, NotePropertyValue>,
+  at: Hlc,
+): NoteBlock['props'] {
+  const next: NonNullable<NoteBlock['props']> = { ...(current ?? {}) };
+  for (const [key, value] of Object.entries(written)) next[key] = { value, at };
+  return next;
 }
 
 export function createBlock(
@@ -163,14 +189,31 @@ export function createBlock(
 
   const parentId = input.parentId ?? null;
   const kind = input.kind ?? 'paragraph';
+  // E3 — a database arrives with a schema and a table view, whichever path made
+  // it. Seeding here rather than in `createDatabase` is what keeps the slash
+  // menu's `/database` and the explicit call producing the same block: a
+  // database created without a schema would render as a container with no
+  // columns, and the person would conclude the feature is broken.
+  const seeded = kind === DATABASE_BLOCK_KIND && !input.schema
+    ? { schema: defaultDatabaseSchema(), views: input.views ?? defaultDatabaseViews(defaultDatabaseSchema()) }
+    : { ...(input.schema ? { schema: input.schema } : {}), ...(input.views ? { views: input.views } : {}) };
+
   const block: NoteBlock = {
     id,
     parentId: value(parentId, at),
     rank: value(rankFor(state, parentId, input), at),
     kind: value(kind, at),
     text: value(isTextlessKind(kind) && !input.text ? '' : (input.text ?? ''), at),
+    ...(input.props ? { props: stampProps(undefined, input.props, at) } : {}),
+    ...(seeded.schema ? { schema: value(seeded.schema, at) } : {}),
+    ...(seeded.views ? { views: value(seeded.views, at) } : {}),
     ...(input.level !== undefined ? { level: value(input.level, at) } : {}),
     ...(input.checked !== undefined ? { checked: value(input.checked, at) } : {}),
+    ...(input.language !== undefined ? { language: value(input.language, at) } : {}),
+    ...(input.collapsed !== undefined ? { collapsed: value(input.collapsed, at) } : {}),
+    ...(input.icon !== undefined ? { icon: value(input.icon, at) } : {}),
+    ...(input.cover !== undefined ? { cover: value(input.cover, at) } : {}),
+    ...(input.favourite !== undefined ? { favourite: value(input.favourite, at) } : {}),
   };
 
   state.blocks[id] = block;
@@ -185,7 +228,15 @@ export function createBlock(
     // different string under the same stamp, and the two never reconcile
     // because neither edit is newer. The placing device decides; everyone else
     // merges the value.
-    payload: { ...input, id, rank: block.rank.value },
+    //
+    // The SEEDED schema travels too, for the same reason: a server that received
+    // a database with no columns would hand a schema-less one to the dashboard,
+    // which has no local store to repair it from.
+    payload: {
+      ...input, id, rank: block.rank.value,
+      ...(block.schema ? { schema: block.schema.value } : {}),
+      ...(block.views ? { views: block.views.value } : {}),
+    },
     attempts: 0,
   });
   writeNotes(userId, state);
@@ -206,6 +257,23 @@ export interface UpdateBlockInput {
   kind?: NoteBlockKind;
   level?: number;
   checked?: boolean;
+  language?: string;
+  collapsed?: boolean;
+  /** A page's icon or a callout's glyph — see `NoteBlock.icon` for why one field. */
+  icon?: string;
+  cover?: string;
+  favourite?: boolean;
+  /**
+   * E3 — property values to write on a row, keyed by property id.
+   *
+   * A PARTIAL map: only the keys present are written, and each is stamped
+   * separately, so setting one cell never re-stamps the others. Writing the
+   * whole map would make one device's status change outrank every other cell it
+   * happened to be holding a stale copy of.
+   */
+  props?: Record<string, NotePropertyValue>;
+  schema?: readonly NotePropertyDef[];
+  views?: readonly NoteDatabaseView[];
 }
 
 export type BlockWriteResult =
@@ -236,6 +304,15 @@ export type BlockWriteResult =
  * mid-edit and wakes up holding a reissued lock would otherwise re-stamp its
  * stale edit as fresh and land it on top of what happened while it was gone —
  * which is migration 048's defect exactly, moved up a layer.
+ *
+ * It carries that epoch whether or not the lease is still good. Sending it only
+ * on the owner's path is the same leak in reverse: a device whose lease lapsed
+ * would send NOTHING, and no epoch means "not claiming ownership" — a fresh
+ * edit on a block nothing holds. The server cannot tell that apart from a
+ * device that never claimed the block, so the one write that most needs fencing
+ * arrives as the one write that cannot be fenced. What the server needs is not
+ * whether the lock is still valid — it is the only side that can decide that —
+ * but which lock this sentence was written under.
  */
 export function updateBlock(
   userId: string | undefined,
@@ -248,19 +325,41 @@ export function updateBlock(
   if (!current) return { ok: false, reason: 'not_found' };
 
   const lease = state.leases[id];
-  const held = lease && lease.deviceId === state.deviceId ? lease.epoch : undefined;
-  const fence = fenceBlockWrite(lease, { deviceId: state.deviceId, epoch: held }, nowMs);
+  // Every lease record this device has ever taken on this block counts, live or
+  // lapsed — `releaseBlockLease` ends the term without dropping the record for
+  // exactly this reason. The epoch is what the edit was written under, not a
+  // claim that it is still good.
+  const authoredUnder = lease && lease.deviceId === state.deviceId ? lease.epoch : undefined;
+  const fence = fenceBlockWrite(lease, { deviceId: state.deviceId, epoch: authoredUnder }, nowMs);
   if (fence.path === 'blocked') {
     return { ok: false, reason: 'locked', holder: fence.holder, detail: fence.detail };
   }
 
   const at = stamp(state, nowMs);
+  // E3 — a line CONVERTED into a database gets the same seed a created one does.
+  // The slash menu turns an empty paragraph into a database through this path,
+  // and a database with no schema would render as a container with no columns —
+  // a different outcome from the same gesture depending on which code path made
+  // the block.
+  const seed = input.kind === DATABASE_BLOCK_KIND && !current.schema && !input.schema
+    ? { schema: defaultDatabaseSchema(), views: defaultDatabaseViews(defaultDatabaseSchema()) }
+    : null;
+
   const edit: NoteBlock = {
     ...current,
     ...(input.text !== undefined ? { text: value(input.text, at) } : {}),
     ...(input.kind !== undefined ? { kind: value(input.kind, at) } : {}),
     ...(input.level !== undefined ? { level: value(input.level, at) } : {}),
     ...(input.checked !== undefined ? { checked: value(input.checked, at) } : {}),
+    ...(input.language !== undefined ? { language: value(input.language, at) } : {}),
+    ...(input.collapsed !== undefined ? { collapsed: value(input.collapsed, at) } : {}),
+    ...(input.icon !== undefined ? { icon: value(input.icon, at) } : {}),
+    ...(input.cover !== undefined ? { cover: value(input.cover, at) } : {}),
+    ...(input.favourite !== undefined ? { favourite: value(input.favourite, at) } : {}),
+    ...(input.props ? { props: stampProps(current.props, input.props, at) } : {}),
+    ...(input.schema ? { schema: value(input.schema, at) } : {}),
+    ...(input.views ? { views: value(input.views, at) } : {}),
+    ...(seed ? { schema: value(seed.schema, at), views: value(seed.views, at) } : {}),
   };
 
   const merged = mergeNoteBlock(current, edit);
@@ -270,7 +369,13 @@ export function updateBlock(
     itemId: id,
     kind: 'update',
     at,
-    payload: { ...input, leaseEpoch: fence.path === 'leased' ? fence.lease.epoch : undefined },
+    payload: {
+      ...input,
+      // The seed travels, or the server would hold a database with no columns
+      // and the dashboard has no local store to repair it from.
+      ...(seed ?? {}),
+      ...(authoredUnder === undefined ? {} : { leaseEpoch: authoredUnder }),
+    },
     attempts: 0,
   });
   writeNotes(userId, state);
@@ -349,12 +454,45 @@ export function deleteBlock(userId: string | undefined, id: string, nowMs: numbe
   const ids = subtreeBlockIds(Object.values(state.blocks), id);
   for (const blockId of ids) {
     const block = state.blocks[blockId];
-    if (!block || block.deletedAt) continue;
+    if (!block || !isLiveBlock(block)) continue;
     const at = stamp(state, nowMs);
     state.blocks[blockId] = { ...block, deletedAt: at };
     state.outbox = enqueue(state.outbox, {
       idempotencyKey: `${blockId}:delete:${at.physical}.${at.logical}`,
       itemId: blockId, kind: 'delete', at, payload: {}, attempts: 0,
+    });
+  }
+  writeNotes(userId, state);
+  return ids;
+}
+
+/**
+ * Take a delete back — E4's "trash with restore", and the whole of it.
+ *
+ * The subtree comes back because the subtree went: `deleteBlock` tombstoned
+ * every descendant, so restoring only the root would put an empty page back and
+ * leave its contents in the trash as forty separate entries nobody can
+ * reassemble.
+ *
+ * A restore is its own stamped event rather than a delete of the tombstone.
+ * Clearing the field would leave this device with no way to tell a peer still
+ * holding the delete that the deletion was already decided about — its next
+ * push would simply re-delete the block, and the person would watch the page
+ * they restored vanish again a few seconds later.
+ */
+export function restoreBlock(userId: string | undefined, id: string, nowMs: number): string[] {
+  const state = readNotes(userId);
+  const ids = deletedSubtreeIds(Object.values(state.blocks), id);
+  if (ids.length === 0) return [];
+
+  for (const blockId of ids) {
+    const block = state.blocks[blockId];
+    if (!block || isLiveBlock(block)) continue;
+    const at = stamp(state, nowMs);
+    state.blocks[blockId] = { ...block, restoredAt: at };
+    state.outbox = enqueue(state.outbox, {
+      idempotencyKey: `${blockId}:restore:${at.physical}.${at.logical}`,
+      itemId: blockId, kind: 'update', at, payload: { restore: true }, attempts: 0,
     });
   }
   writeNotes(userId, state);
@@ -418,7 +556,21 @@ export function endEditing(
 /* -------------------------------------------------------------------- reads */
 
 export function listBlocks(userId: string | undefined): NoteBlock[] {
-  return Object.values(readNotes(userId).blocks).filter((b) => !b.deletedAt);
+  return Object.values(readNotes(userId).blocks).filter(isLiveBlock);
+}
+
+/** Every block including tombstones — what the trash and a restore need. */
+export function listAllBlocks(userId: string | undefined): NoteBlock[] {
+  return Object.values(readNotes(userId).blocks);
+}
+
+/** C5's tombstones, read as a trash. A projection, never a second table. */
+export function listTrash(userId: string | undefined): TrashEntry[] {
+  return listTrashEntries(Object.values(readNotes(userId).blocks));
+}
+
+export function listFavourites(userId: string | undefined): NoteBlock[] {
+  return favouriteBlocks(Object.values(readNotes(userId).blocks));
 }
 
 export function getBlock(userId: string | undefined, id: string): NoteBlock | null {

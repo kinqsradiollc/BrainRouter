@@ -1,0 +1,280 @@
+/**
+ * ADR-029 E1/E4 — one line of a page: the handle, the text, and what hangs off it.
+ *
+ * Split out of `NotesMode` when the block became an editing surface rather than
+ * a textarea. The mode owns the page — which block has the caret, which blocks
+ * are selected, what a drag is currently over — because those are properties of
+ * the page and not of any one line; the row owns nothing and renders what it is
+ * given.
+ *
+ * B2's lease is the one piece of state a row reads for itself, through
+ * `canEdit`: a block another device holds is read-only WITH the attribution
+ * under it. That was true of the textarea and it stays true here, because it is
+ * the decision the whole lease exists for.
+ */
+import React, { useMemo, useState } from 'react';
+import { Icon } from '../icons.js';
+import { RefChip } from '../components/workspace/RefChip.js';
+import { BlockEditor } from './BlockEditor.js';
+import { BlockHandle } from './BlockHandle.js';
+import {
+  backlinkNote, canEdit, conflictLine, indentFor, placeholderFor, readOnlyReason,
+  sendTargetsFor, type NoteBlockView,
+} from '../lib/notes/notesView.js';
+import { dropPositionInRow, moveToTargets, type MoveToTarget, type PageDropPosition } from '../lib/notes/blockSelection.js';
+import { TOP_LEVEL_LABEL } from '../lib/notes/pageTree.js';
+import type { BlockIntent } from '../lib/notes/blockKeymap.js';
+import type { SlashCommandDto, SlashPlan } from '../lib/notes/slashMenu.js';
+import type { BlockAction } from '../lib/notes/blockSelection.js';
+import type { NotesOps, CodeSymbolPick } from './NotesMode.js';
+
+export interface BlockRowProps {
+  block: NoteBlockView;
+  /** Every block on the device, for the moves that need the whole tree. */
+  blocks: readonly NoteBlockView[];
+  pageId: string | null;
+  refLabels: Record<string, string>;
+  ops: NotesOps;
+  /** Core's slash catalog, loaded once by the mode. */
+  commands: readonly SlashCommandDto[];
+  backlinkCount: number;
+  menuOpen: boolean;
+  onMenu: () => void;
+  linkOpen: boolean;
+  onLink: () => void;
+  files: string[];
+  symbols: Record<string, CodeSymbolPick[]>;
+  /** E4 — part of a multi-block selection, so one action applies to all. */
+  selected: boolean;
+  selectedCount: number;
+  focusRequest: { caret: number; token: number } | null;
+  onIntent: (block: NoteBlockView, intent: BlockIntent, at: { text: string; caret: number }) => void;
+  onSlashPlan: (block: NoteBlockView, plan: SlashPlan, at: { text: string; caret: number }) => void;
+  onAction: (block: NoteBlockView, action: BlockAction) => void;
+  onTurnInto: (block: NoteBlockView, command: SlashCommandDto) => void;
+  onSelectFrom: (block: NoteBlockView, extend: boolean) => void;
+  drag: {
+    dragging: boolean;
+    hint: PageDropPosition | null;
+    onStart: (block: NoteBlockView) => void;
+    onEnd: () => void;
+    onOver: (block: NoteBlockView, position: PageDropPosition) => void;
+    onDrop: (block: NoteBlockView, position: PageDropPosition) => void;
+  };
+}
+
+export function BlockRow(props: BlockRowProps): React.ReactElement {
+  const {
+    block, blocks, pageId, refLabels, ops, commands, backlinkCount, menuOpen, onMenu,
+    linkOpen, onLink, files, symbols, selected, selectedCount, focusRequest, drag,
+  } = props;
+
+  const locked = readOnlyReason(block);
+  const editable = canEdit(block);
+  const targets = sendTargetsFor(block);
+  const moveTargets: MoveToTarget[] = useMemo(
+    () => moveToTargets(blocks, block.id, pageId, TOP_LEVEL_LABEL),
+    [blocks, block.id, pageId],
+  );
+
+  const className = [
+    'notes-block',
+    selected ? 'is-selected' : '',
+    drag.dragging ? 'is-dragging' : '',
+    drag.hint ? `drop-${drag.hint}` : '',
+  ].filter(Boolean).join(' ');
+
+  return (
+    <div
+      className={className}
+      data-kind={block.kind}
+      style={{ paddingLeft: indentFor(block.depth) }}
+      onDragOver={(event) => {
+        if (!drag.dragging && !event.dataTransfer.types.includes('text/plain')) return;
+        event.preventDefault();
+        // The page behind this row is a drop target too (it lifts a block out to
+        // the page). Letting the event reach it would immediately replace this
+        // row's hint with the page's, so the line never appears where the
+        // pointer is.
+        event.stopPropagation();
+        const rect = event.currentTarget.getBoundingClientRect();
+        drag.onOver(block, dropPositionInRow(event.clientY - rect.top, rect.height));
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const rect = event.currentTarget.getBoundingClientRect();
+        drag.onDrop(block, dropPositionInRow(event.clientY - rect.top, rect.height));
+      }}
+      // Shift-click extends the selection across blocks; a plain click starts a
+      // new one. Mouse DOWN rather than click, so the selection is set before
+      // the browser moves the caret into the text.
+      onMouseDown={(event) => props.onSelectFrom(block, event.shiftKey)}
+    >
+      <div className="notes-block-main">
+        <BlockHandle
+          open={menuOpen}
+          onOpen={onMenu}
+          onAddBelow={() => void ops.addBlock(block.id)}
+          onDragStart={(event) => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', block.id); drag.onStart(block); }}
+          onDragEnd={drag.onEnd}
+          commands={commands}
+          currentKind={block.kind}
+          moveTargets={moveTargets}
+          onTurnInto={(command) => props.onTurnInto(block, command)}
+          onAction={(action) => props.onAction(block, action)}
+          onMoveTo={(target) => { ops.moveBlock({ id: block.id, parentId: target.id }); onMenu(); }}
+          backlinkNote={backlinkNote(backlinkCount)}
+          sendTargets={targets}
+          onSendTo={(id) => {
+            const target = targets.find((entry) => entry.id === id);
+            if (target) ops.sendTo(block.id, target);
+            onMenu();
+          }}
+          selectedCount={selectedCount}
+        />
+
+        {block.kind === 'todo' ? (
+          <input type="checkbox" checked={block.checked} disabled={!editable}
+            aria-label="Done" onChange={(e) => ops.toggleChecked(block.id, e.target.checked)} />
+        ) : null}
+
+        {/* E4 — a list looks like a list. The NUMBER comes from core with the
+            block (it is a function of tree position), never from counting the
+            rows on screen: a filtered page would then number 1, 2, 3 while the
+            document says 4, 7, 9. */}
+        {block.kind === 'bullet' || block.kind === 'numbered' ? (
+          <span className="notes-marker" aria-hidden="true">
+            {block.kind === 'bullet' ? '•' : `${block.ordinal ?? 1}.`}
+          </span>
+        ) : null}
+
+        {block.kind === 'divider' ? (
+          <hr className="notes-divider" />
+        ) : (
+          <BlockEditor
+            blockId={block.id}
+            text={block.text}
+            kind={block.kind}
+            level={block.level}
+            readOnly={!editable}
+            placeholder={placeholderFor(block.kind)}
+            refLabels={refLabels}
+            onOpenRef={ops.openRef}
+            onText={(text) => ops.setText(block.id, text)}
+            onIntent={(intent, at) => props.onIntent(block, intent, at)}
+            onFocus={() => ops.beginEdit(block.id)}
+            onBlur={() => ops.endEdit(block.id)}
+            onInputRule={ops.inputRule}
+            onRuleTransform={(transform) => ops.applyRule(block.id, transform)}
+            searchSlash={ops.searchSlash}
+            searchMentions={ops.searchMentions}
+            onSlashPlan={(plan, at) => props.onSlashPlan(block, plan, at)}
+            focusRequest={focusRequest}
+          />
+        )}
+
+        <div className="notes-block-tools">
+          <button className="notes-icon-btn" title="Link a file" aria-label="Link a file" onClick={onLink}>
+            <Icon name="link" size={12} />
+          </button>
+        </div>
+      </div>
+
+      {/* B2 — read-only WITH an attribution. A silently disabled field reads as
+          the app being broken; naming the other device is what makes the block
+          being locked information rather than a fault. */}
+      {locked ? <div className="notes-locked">{locked}</div> : null}
+
+      {block.refs.length > 0 ? (
+        <div className="notes-refs">
+          {block.refs.map((uri) => (
+            // A3 — the chip shows the target's CURRENT state, including
+            // "(deleted 4 Aug)". Snapshotting the label at insert time is what
+            // produces documents that are quietly wrong. The chip itself is the
+            // shared one, so the planner cannot render the same reference
+            // differently.
+            <RefChip key={uri} uri={uri} label={refLabels[uri]} onOpen={ops.openRef} />
+          ))}
+        </div>
+      ) : null}
+
+      {block.conflicts.map((conflict) => (
+        <div key={conflict.field} className="notes-conflict">
+          <span>{conflictLine(conflict)}</span>
+          <button onClick={() => ops.resolveConflict(block.id, conflict.field, 'ours')}>Keep mine</button>
+          <button onClick={() => ops.resolveConflict(block.id, conflict.field, 'theirs')}>Keep theirs</button>
+        </div>
+      ))}
+
+      {linkOpen ? (
+        <FilePicker
+          files={files} symbols={symbols} onLoadSymbols={(p) => ops.loadSymbols(p)}
+          onPick={(p, symbol) => { ops.linkFile(block.id, p, symbol); onLink(); }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * C2's Notes → Code row, in two steps: which file, then which part of it.
+ *
+ * A path picked from the workspace rather than typed, because a reference to a
+ * file that does not exist resolves as a tombstone and the person who typed the
+ * typo has no way to tell that apart from a file someone deleted. The SYMBOL is
+ * picked for the same reason and from the same evidence: the list is the
+ * declarations the resolver itself recognises, so the picker cannot offer a
+ * name that resolution will then fail to find.
+ */
+function FilePicker({ files, symbols, onLoadSymbols, onPick }: {
+  files: string[];
+  symbols: Record<string, CodeSymbolPick[]>;
+  onLoadSymbols: (path: string) => void;
+  onPick: (path: string, symbol?: string) => void;
+}): React.ReactElement {
+  const [query, setQuery] = useState('');
+  const [chosen, setChosen] = useState<string | null>(null);
+  const matches = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return (needle ? files.filter((f) => f.toLowerCase().includes(needle)) : files).slice(0, 8);
+  }, [files, query]);
+
+  if (chosen) {
+    // Absent means "not read yet"; an empty array means "read, and it declares
+    // nothing this recognises". Collapsing the two would make a slow read look
+    // like a file with no functions in it.
+    const declared = symbols[chosen];
+    return (
+      <div className="notes-linkpicker">
+        <div className="notes-linkpicker-head">
+          <button className="notes-linkpicker-back" onClick={() => setChosen(null)}>← Files</button>
+          <span className="notes-linkpicker-path" title={chosen}>{chosen}</span>
+        </div>
+        <button className="notes-linkpicker-item" onClick={() => onPick(chosen)}>Link the whole file</button>
+        {(declared ?? []).map((symbol) => (
+          <button key={`${symbol.name}:${symbol.line}`} className="notes-linkpicker-item"
+            onClick={() => onPick(chosen, symbol.name)}>
+            {symbol.name} <small>{symbol.kind} · line {symbol.line}</small>
+          </button>
+        ))}
+        {declared === undefined ? <span className="notes-linkpicker-empty">Reading its declarations…</span> : null}
+        {declared?.length === 0
+          ? <span className="notes-linkpicker-empty">Nothing declared here to point at.</span>
+          : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="notes-linkpicker">
+      <input className="filter" autoFocus placeholder="Which file?" value={query}
+        onChange={(e) => setQuery(e.target.value)} />
+      {matches.map((file) => (
+        <button key={file} className="notes-linkpicker-item"
+          onClick={() => { setChosen(file); onLoadSymbols(file); }}>{file}</button>
+      ))}
+      {matches.length === 0 ? <span className="notes-linkpicker-empty">No file matches.</span> : null}
+    </div>
+  );
+}

@@ -5,11 +5,15 @@ import path from 'node:path';
 import test from 'node:test';
 import { inspectVisualReleaseBuild } from './verify-visual-release.mjs';
 
+// Mirrors REQUIRED_LAZY_CHUNKS in the gate. Kept as its own list rather than
+// imported from it, so a chunk quietly dropped from the requirement fails a
+// test here instead of silently agreeing with itself.
 const lazyPrefixes = [
   'AtlasPanel-',
   'BrowserPanel-',
   'CIPanel-',
   'EditorPanel-',
+  'NotesModeContainer-',
   'WorkflowsPanel-',
 ];
 

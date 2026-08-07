@@ -90,6 +90,16 @@ export const REQUIRED_CORE_TOOL_CATALOG: LocalToolEntry[] = [
   { name: 'planner_add', accessTier: 'read', actionKind: 'file_edit', parallelSafe: false },
   { name: 'planner_schedule', accessTier: 'read', actionKind: 'file_edit', parallelSafe: false },
   { name: 'planner_complete', accessTier: 'read', actionKind: 'file_edit', parallelSafe: false },
+  // ADR-029 C3 — the workspace reference verbs, classified the same way the
+  // planner's are: resolving is a read, and the writers touch user-scoped
+  // store files, so they are `file_edit` and serialized. `workspace_link`
+  // read-modify-writes the referring record's text, which is precisely the
+  // shape two concurrent calls would lose an edit in — and `workspace_update`
+  // does the same to whatever record it is given.
+  { name: 'workspace_resolve', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  { name: 'workspace_create', accessTier: 'read', actionKind: 'file_edit', parallelSafe: false },
+  { name: 'workspace_update', accessTier: 'read', actionKind: 'file_edit', parallelSafe: false },
+  { name: 'workspace_link', accessTier: 'read', actionKind: 'file_edit', parallelSafe: false },
   // Pentest findings and finalization write only to the isolated review state;
   // the pentest runtime's allowlist is the security boundary around them.
   { name: 'file_vulnerability', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },

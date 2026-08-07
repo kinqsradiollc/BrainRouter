@@ -44,6 +44,9 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 /** Labels are rendered inline, on one line, next to a person's own prose. */
 const MAX_LABEL_LENGTH = 120;
 
+/** A tombstone's own sentence comes first; the mode's addition rides behind it. */
+const MAX_TOMBSTONE_DETAIL = 80;
+
 export interface ResolvedWorkspaceTarget {
   /**
    * The one-line label C1's `describe` exists to produce. Already collapsed to
@@ -78,10 +81,18 @@ export interface WorkspaceTombstone {
 
 /**
  * `no_resolver_here` is structural — this client cannot answer, another can.
- * `resolver_failed` is transient — ask again. They render differently because a
- * person's next action differs: switch surface, versus wait.
+ * `resolver_failed` is transient — ask again. `no_history_here` is neither: the
+ * surface that owns the target is right here and still cannot say what became
+ * of it, because the record that would have said is missing (a code reference
+ * in a folder that is not a repository). They render differently because a
+ * person's next action differs: switch surface, wait, or accept that nothing
+ * here knows.
  */
-export type WorkspaceUnavailableReason = 'no_resolver_here' | 'resolver_failed' | 'malformed_ref';
+export type WorkspaceUnavailableReason =
+  | 'no_resolver_here'
+  | 'resolver_failed'
+  | 'malformed_ref'
+  | 'no_history_here';
 
 export type WorkspaceResolution =
   | { readonly status: 'found'; readonly ref: WorkspaceRef; readonly target: ResolvedWorkspaceTarget }
@@ -153,17 +164,31 @@ export function renderWorkspaceResolution(
       const noun = resolution.ref ? fallbackLabel(resolution.ref) : 'a reference';
       if (resolution.reason === 'malformed_ref') return 'a link that is not a valid reference';
       if (resolution.reason === 'no_resolver_here') return `${noun} (not available in this app)`;
+      // Deliberately not "deleted": nothing here knows that, and claiming it
+      // would be the accusation A3 rules out one status up.
+      if (resolution.reason === 'no_history_here') return `${noun} (missing — nothing here records where it went)`;
       return `${noun} (could not be loaded)`;
     }
   }
 }
 
+/**
+ * The tombstone's own sentence, plus whatever the mode had to add.
+ *
+ * `detail` is appended rather than dropped because the generic noun is thin
+ * where the modes differ most: "code symbol (deleted 7 Aug)" does not say which
+ * symbol, or from which file, and the reader's next action depends on both. It
+ * goes through `asInlineLabel` for the same reason a found label does — the
+ * text can name content somebody else wrote.
+ */
 function renderTombstone(ref: WorkspaceRef, tombstone: WorkspaceTombstone, nowMs: number): string {
   const noun = fallbackLabel(ref);
-  if (tombstone.reason === 'pending') return `${noun} (being created…)`;
-  if (tombstone.reason === 'never_existed') return `${noun} (no longer exists)`;
+  const detail = tombstone.detail ? asInlineLabel(tombstone.detail, MAX_TOMBSTONE_DETAIL) : '';
+  const suffix = detail ? ` — ${detail}` : '';
+  if (tombstone.reason === 'pending') return `${noun} (being created…)${suffix}`;
+  if (tombstone.reason === 'never_existed') return `${noun} (no longer exists)${suffix}`;
   const when = tombstone.at ? formatShortDate(tombstone.at, nowMs) : null;
-  return when ? `${noun} (deleted ${when})` : `${noun} (deleted)`;
+  return when ? `${noun} (deleted ${when})${suffix}` : `${noun} (deleted)${suffix}`;
 }
 
 /** `planner item`, `note block`, `track work item`. */

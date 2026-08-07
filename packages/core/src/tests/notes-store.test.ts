@@ -18,7 +18,7 @@ import {
   keepEditing, listBlocks, listConflicts, moveBlock, noteTree, readNotes,
   resolveConflict, updateBlock, writeNotes,
 } from '../notes/noteStore.js';
-import { BLOCK_LEASE_MS } from '../notes/blockLease.js';
+import { BLOCK_LEASE_MS, fenceBlockWrite } from '../notes/blockLease.js';
 
 const T = Date.parse('2026-08-07T09:00:00.000Z');
 
@@ -209,6 +209,60 @@ test('a write made after the lease expired is demoted to a merge instead of writ
     assert.equal(write.ok && write.path, 'merge', 'an expired lock must not write as the owner');
     assert.equal(getBlock(undefined, created.id)?.text.value, 'typed after waking', 'and the edit must survive');
   } finally { cleanup(dir); }
+});
+
+test('a write made under a LAPSED lease still names the epoch it was made under', () => {
+  // Sending the epoch only on the owner's path is the same leak inverted. No
+  // epoch means "not claiming ownership" — a fresh edit on a block nothing
+  // holds — so a device whose lease expired would arrive looking exactly like
+  // one that never held the block, and the single write that most needs fencing
+  // would be the one write the server cannot fence.
+  const dir = home();
+  try {
+    const created = createBlock(undefined, { text: 'a' }, T);
+    const lease = beginEditing(undefined, created.id, T);
+    assert.ok(lease.ok);
+
+    updateBlock(undefined, created.id, { text: 'typed after waking' }, T + BLOCK_LEASE_MS + 1);
+
+    const queued = readNotes(undefined).outbox.operations.filter((op) => op.kind === 'update').at(-1);
+    assert.ok(queued);
+    assert.equal(
+      (queued!.payload as { leaseEpoch?: number }).leaseEpoch,
+      lease.lease.epoch,
+      'the server can only tell staleness from "never claimed it" if the epoch travels',
+    );
+  } finally { cleanup(dir); }
+});
+
+test('the fence reads the EPOCH, not just the device: a reissued lock refuses its own holder', () => {
+  // The one comparison migration 048 exists for, isolated. Same device, live
+  // lease, right block — only the token is old, which is exactly the state of a
+  // write that was queued before the holder slept and re-acquired. Delete the
+  // epoch clause and this write is waved through as the owner's.
+  const lease = { blockId: 'blk_1', deviceId: 'd-laptop', epoch: 3, expiresAt: T + BLOCK_LEASE_MS };
+
+  const stale = fenceBlockWrite(lease, { deviceId: 'd-laptop', epoch: 1 }, T);
+  assert.equal(stale.path, 'merge');
+  assert.equal(stale.path === 'merge' && stale.reason, 'stale_epoch');
+
+  const current = fenceBlockWrite(lease, { deviceId: 'd-laptop', epoch: 3 }, T);
+  assert.equal(current.path, 'leased', 'and the current epoch must still be the owner’s');
+});
+
+test('no epoch gets an OWNER’s write past a live holder — not even the holder’s own number', () => {
+  // The epoch is tied to a peer, not just to a number, so quoting the current
+  // one does not make another device the owner. Only the writer that took the
+  // lease writes as its owner; everything else is fenced, and a claimless writer
+  // is refused outright because nothing has been typed yet.
+  const lease = { blockId: 'blk_1', deviceId: 'd-phone', epoch: 2, expiresAt: T + BLOCK_LEASE_MS };
+
+  assert.equal(fenceBlockWrite(lease, { deviceId: 'd-laptop' }, T).path, 'blocked');
+  for (const epoch of [1, 2, 99]) {
+    const path = fenceBlockWrite(lease, { deviceId: 'd-laptop', epoch }, T);
+    assert.notEqual(path.path, 'leased', `epoch ${epoch} must not write as the owner`);
+    assert.equal(path.path === 'merge' && path.reason, 'stale_epoch');
+  }
 });
 
 test('a block another device holds is refused with the holder named, not silently overwritten', () => {

@@ -5,6 +5,8 @@ import { SharePopover } from "./SharePopover.js";
 import { TeamsView } from "./TeamsView.js";
 import { createTeamsOps } from "./teamsOps.js";
 import { useActiveOrg } from "../../lib/orgContext.js";
+import { bridgeQuery } from "../../lib/bridgeQuery.js";
+import { captureToPlanner, createAndCite, meetingUri } from "../../lib/workspace/crossMode.js";
 import {
   MEETING_SCOPES,
   SCOPE_LABEL,
@@ -218,6 +220,33 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
     finally { setBusy(""); }
   }, [scopedOrgId, busy, detail, draftSummary, ops]);
 
+  /**
+   * ADR-029 C2 — Meetings → Notes: the summary becomes a page, TRANSCRIPT
+   * REFERENCED RATHER THAN COPIED.
+   *
+   * The page carries the summary and a reference back to the meeting, so the
+   * transcript stays where it is and stays the one copy. Copying it would
+   * produce a second version that drifts the moment the summary is regenerated
+   * — the quietly-wrong document A3 argues against.
+   */
+  const summaryToNotes = useCallback(async () => {
+    if (!detail || busy) return;
+    setBusy("to-notes");
+    setError("");
+    try {
+      const page = await createAndCite({
+        mode: "notes", kind: "block", title: detail.title,
+        from: meetingUri(detail.id), fields: { kind: "page" },
+      });
+      if (!page.ok) { setError(page.error); return; }
+      const parentId = page.uri.replace("brainrouter://notes/block/", "");
+      if (detail.summaryMarkdown.trim()) {
+        await bridgeQuery("notes-create", { parentId, text: detail.summaryMarkdown, kind: "paragraph" });
+      }
+    } catch (caught) { setError(errorText(caught, "Could not save this summary to notes.")); }
+    finally { setBusy(""); }
+  }, [busy, detail]);
+
   // Owner-only hard delete — the server also removes the transcript source and
   // the recallable summary record, so the meeting doesn't linger in recall.
   const deleteMeeting = useCallback(async () => {
@@ -270,8 +299,8 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
               <div className="mv-dbody">
                 <div className="mv-colL">
                   {detail.summaryStatus === "failed" ? <div className="mv-summary-failed"><strong>Summary generation failed</strong><span>{detail.summaryError || (detail.canEdit ? "The transcript is preserved. Try generating the summary again." : "The transcript is preserved. The owner can generate the summary again.")}</span>{detail.canEdit ? <button type="button" className="mv-secondary" onClick={() => void regenerate()}>Try again</button> : null}</div> : null}
-                  <section className="mv-card"><div className="mv-card-lab"><span>Summary</span><div className="mv-cardacts">{editing ? <><button type="button" className="mv-ghost" onClick={() => { setEditing(false); setDraftSummary(detail.summaryMarkdown); }}>Cancel</button><button type="button" className="mv-ghost mv-ghost-strong" disabled={busy === "save-summary"} onClick={() => void saveSummary()}>{busy === "save-summary" ? "Saving…" : "Save"}</button></> : <>{detail.canEdit ? <><button type="button" className="mv-ghost" disabled={busy === "regenerate"} onClick={() => void regenerate()}>{busy === "regenerate" ? "Generating…" : "Regenerate"}</button><button type="button" className="mv-ghost" onClick={() => { setDraftSummary(detail.summaryMarkdown); setEditing(true); }}>Edit</button></> : null}<button type="button" className="mv-ghost" onClick={() => { void navigator.clipboard?.writeText(detail.summaryMarkdown); setCopied(true); globalThis.setTimeout(() => setCopied(false), 1400); }}>{copied ? "Copied" : "Copy"}</button></>}</div></div>{editing ? <textarea className="mv-summary-editor" value={draftSummary} onChange={(event) => setDraftSummary(event.target.value)} aria-label="Meeting summary" /> : detail.summaryStatus === "queued" || detail.summaryStatus === "processing" ? <div className="mv-processing"><span />Generating a recallable summary. You can leave this page.</div> : detail.summaryMarkdown ? <SummaryBody markdown={detail.summaryMarkdown} /> : <div className="mv-state">No summary is available yet.</div>}</section>
-                  <section className="mv-card"><div className="mv-card-lab"><span>Action items</span><span>{detail.actionItems.length}</span></div>{detail.actionItems.length ? detail.actionItems.map((action) => <div className="mv-ai" key={action.id}><button type="button" className={`mv-cbox${action.done ? " mv-done" : ""}`} disabled={!detail.canEdit || busy === `action:${action.id}`} aria-label={action.done ? "Mark not done" : "Mark done"} onClick={() => void toggleAction(action)}>✓</button><div className="mv-txt"><span className={action.done ? "mv-action-done" : ""}>{action.title}</span>{action.assignee ? <small>→ {action.assignee}</small> : null}</div>{detail.canEdit ? <button type="button" className={`mv-totrack${action.trackItemId ? " mv-linked" : ""}`} disabled={busy === `track:${action.id}`} onClick={() => void toggleTrack(action)}>{busy === `track:${action.id}` ? "Updating…" : action.trackItemId ? "In Track ✓" : "Track ↗"}</button> : null}</div>) : <div className="mv-state mv-state-compact">No action items were detected.</div>}</section>
+                  <section className="mv-card"><div className="mv-card-lab"><span>Summary</span><div className="mv-cardacts">{editing ? <><button type="button" className="mv-ghost" onClick={() => { setEditing(false); setDraftSummary(detail.summaryMarkdown); }}>Cancel</button><button type="button" className="mv-ghost mv-ghost-strong" disabled={busy === "save-summary"} onClick={() => void saveSummary()}>{busy === "save-summary" ? "Saving…" : "Save"}</button></> : <>{detail.canEdit ? <><button type="button" className="mv-ghost" disabled={busy === "regenerate"} onClick={() => void regenerate()}>{busy === "regenerate" ? "Generating…" : "Regenerate"}</button><button type="button" className="mv-ghost" onClick={() => { setDraftSummary(detail.summaryMarkdown); setEditing(true); }}>Edit</button></> : null}<button type="button" className="mv-ghost" onClick={() => { void navigator.clipboard?.writeText(detail.summaryMarkdown); setCopied(true); globalThis.setTimeout(() => setCopied(false), 1400); }}>{copied ? "Copied" : "Copy"}</button><button type="button" className="mv-ghost" title="Open the summary as a note page that references this meeting" disabled={busy === "to-notes"} onClick={() => void summaryToNotes()}>{busy === "to-notes" ? "Saving…" : "To notes"}</button></>}</div></div>{editing ? <textarea className="mv-summary-editor" value={draftSummary} onChange={(event) => setDraftSummary(event.target.value)} aria-label="Meeting summary" /> : detail.summaryStatus === "queued" || detail.summaryStatus === "processing" ? <div className="mv-processing"><span />Generating a recallable summary. You can leave this page.</div> : detail.summaryMarkdown ? <SummaryBody markdown={detail.summaryMarkdown} /> : <div className="mv-state">No summary is available yet.</div>}</section>
+                  <section className="mv-card"><div className="mv-card-lab"><span>Action items</span><span>{detail.actionItems.length}</span></div>{detail.actionItems.length ? detail.actionItems.map((action) => <div className="mv-ai" key={action.id}><button type="button" className={`mv-cbox${action.done ? " mv-done" : ""}`} disabled={!detail.canEdit || busy === `action:${action.id}`} aria-label={action.done ? "Mark not done" : "Mark done"} onClick={() => void toggleAction(action)}>✓</button><div className="mv-txt"><span className={action.done ? "mv-action-done" : ""}>{action.title}</span>{action.assignee ? <small>→ {action.assignee}</small> : null}</div>{detail.canEdit ? <button type="button" className={`mv-totrack${action.trackItemId ? " mv-linked" : ""}`} disabled={busy === `track:${action.id}`} onClick={() => void toggleTrack(action)}>{busy === `track:${action.id}` ? "Updating…" : action.trackItemId ? "In Track ✓" : "Track ↗"}</button> : null}{detail.canEdit ? <button type="button" className="mv-totrack" title="Add to your planner, citing this meeting" onClick={() => void captureToPlanner(action.title, meetingUri(detail.id))}>Plan ↗</button> : null}</div>) : <div className="mv-state mv-state-compact">No action items were detected.</div>}</section>
                 </div>
                 <section className="mv-tpanel"><div className="mv-card-lab"><span>Transcript</span><span>{transcript.length}{transcriptTotal > transcript.length ? ` of ${transcriptTotal}` : ""}</span></div>{transcriptLoading && transcript.length === 0 ? <div className="mv-state">Loading transcript…</div> : transcript.length ? <TranscriptLines segments={transcript} /> : <div className="mv-state">No transcript segments are available.</div>}{transcriptNext ? <button type="button" className="mv-load-more" disabled={transcriptLoading} onClick={() => void loadMoreTranscript()}>{transcriptLoading ? "Loading…" : "Load more transcript"}</button> : null}</section>
               </div>

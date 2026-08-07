@@ -54,6 +54,10 @@ export const PRODUCT_NAV_GROUPS: DashboardNavGroup[] = [
       // which is org-collaborative and per-project. A Track item appears in the
       // planner as a mirrored item; neither replaces the other.
       { href: "/planner", label: "Planner", keywords: "today calendar notes plan day schedule todo personal", icon: <svg {...iconProps}><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M3 10h18M8 3v4M16 3v4" /></svg> },
+      // ADR-029 — Notes is a READER here. The editor lives on the desktop (E1's
+      // parity test is about the typing gesture); what only this surface can do
+      // is read and follow the workspace from a machine with nothing checked out.
+      { href: "/notes", label: "Notes", keywords: "pages wiki documents database backlinks writing", icon: <svg {...iconProps}><path d="M6 3h9l4 4v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" /><path d="M14 3v5h5M9 12h6M9 16h4" /></svg> },
     ],
   },
   {

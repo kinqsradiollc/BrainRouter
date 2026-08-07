@@ -1,6 +1,6 @@
 # ADR-029 — One workspace, many surfaces
 
-**Status:** PROPOSED — awaiting review. Nothing here is built.
+**Status:** ACCEPTED — approved by the owner. Parts A–D are built; Part E is the approved extension.
 **Supersedes nothing. Depends on:** ADR-028 (planner sync, panel model), ADR-021 (workspace profiles).
 
 ---
@@ -255,15 +255,141 @@ storage grows with how often people paste rather than with what they have.
 
 ---
 
+### Part E — Parity with the app people are comparing this to
+
+Parts A–D describe a correct block store. They do not describe a notes app anyone would choose.
+The owner's instruction after seeing it working was exact: **the note should be exactly the same as
+Notion — everything.** That is a scope decision, and this Part records it rather than letting the
+gap be discovered later.
+
+#### E1 · The benchmark is the editing gesture, not the feature list
+
+A features table can be satisfied without the product becoming usable. What makes Notion Notion is
+that **you never leave the keyboard to change what a line is**: `/` opens a command menu, `# ` turns
+the line into a heading as you type it, Enter splits a block at the caret, Backspace at column zero
+merges it into the one above, Tab nests it.
+
+> **The parity test is that a person who uses Notion can type a page here without being taught
+> anything.**
+
+So the ordering is deliberate: input rules and the slash menu come before any new block kind, because
+a block kind you can only reach through a dropdown is a block kind nobody uses.
+
+#### E2 · Rich text is stored in the text, not beside it
+
+Notion stores rich text as an array of styled segments. We store a block's body as one
+`Stamped<string>` because B1's merge granularity is the block and D4 merges per field.
+
+> **Inline marks are encoded IN the string as a restricted markdown subset, and parsed for
+> rendering.**
+
+A parallel `Stamped<InlineMark[]>` holding offsets into a separately-stamped string is two fields
+that must agree about lengths and merge independently — and the first concurrent edit desynchronises
+them, producing bold that starts mid-word in a sentence neither person wrote. One field cannot
+disagree with itself. The cost is that a `*` someone typed literally needs escaping, which is a
+known, visible, local problem rather than a silent corruption.
+
+#### E3 · Databases are real, and this reverses §3
+
+The first draft ruled out "a formula/database view over notes" on the grounds that Track already
+models structured records. That reasoning was about avoiding two models of one thing — and it was
+wrong about which thing. Track models **work**: items with an assignee, a status, a sprint. A Notion
+database models **anything a page can be a row of** — a reading list, a CRM, a recipe index. They are
+not the same noun, and refusing the second does not prevent duplication, it prevents the feature.
+
+> **A database row IS a page.** Not a record that links to one — the same block, with properties.
+
+That is the decision that keeps this from becoming a second store: a database is a *view over pages
+with a shared property schema*, so everything in Part A–D (sync, merge, references, permissions)
+applies to rows for free. Views (table, board, list, calendar, gallery), filters, sorts and grouping
+are projections computed from the same blocks.
+
+Formulas and rollups are **not** in this pass — they need an expression language and a dependency
+graph, and shipping half of one produces a column that is wrong rather than absent (§B1's argument,
+applied to cells).
+
+#### E4 · What "everything" explicitly includes
+
+Judged as built or not built, per row, by the table in §5:
+
+| | |
+|---|---|
+| **Editor** | slash menu, markdown input rules, inline marks (bold/italic/strike/code/link), `@`-mention, `[[`page link, split/merge on Enter/Backspace, Tab nesting, duplicate, move up/down, multi-block selection |
+| **Blocks** | heading 1–3, paragraph, bullet, numbered, todo, toggle, quote, callout, code with language, divider, image, bookmark, embed, table, sub-page |
+| **Pages** | icon, cover, title as its own field, breadcrumbs, sidebar tree with drag-to-reparent, favourites, trash with restore |
+| **Databases** | property types (title, text, number, select, multi-select, date, checkbox, URL, person, relation), table/board/list/calendar/gallery views, filter, sort, group |
+| **Finding things** | ⌘K quick find across pages and blocks, backlinks panel, in-page search |
+
+#### E5 · Notion's own missing half is our A-part, and we keep it
+
+Notion has no addressing scheme that reaches outside Notion. Parity is the floor here, not the
+ceiling: every one of the above keeps working with Part A references, so a database row can cite a
+pull request, a callout can embed a planner item, and a `@`-mention can address a meeting. Dropping
+that to match Notion exactly would be copying a limitation.
+
+#### E6 · Part E needed a fourth verb, and C1 is amended rather than quietly exceeded
+
+C1 wrote three verbs when a note was a paragraph and the only cross-mode move was
+*"make this a task"*. Part E gives a page an icon, a cover, a title and a trash; it gives a database
+a schema and a row a cell. A vocabulary with `create` and no `update` can express every one of those
+**once and none of them again** — so a person renames a page and the agent, offered the same
+vocabulary, makes a second one.
+
+> **`update(intent)` joins `resolve` / `describe` / `create`.**
+
+It sits on the SAME creatable/linkable discriminant rather than a third one: every mode Q4 refuses
+`create` to is refused `update` for the identical reason — a second writer with different validation
+and a different audit trail — and a mode that owns a record enough to mint one owns it enough to
+change one. Code stays linkable and is refused both.
+
+Two consequences worth stating rather than discovering:
+
+- **A refused `update` names which refusal.** B2's lock produces `locked`, which is a different
+  situation from `not_found` and leads somewhere else; a caller given one status for both retries
+  forever against a lock that is doing its job.
+- **Fields a mode has no meaning for are reported, never dropped.** An update that succeeds for the
+  four fields it understood teaches its caller the fifth landed too.
+
+`create` gains the same `fields` the intent already carried, for the reason a database row makes
+obvious: a row created without its cells needs a second call to become what was asked for, and the
+window between the two is a row whose every column is empty.
+
+#### E7 · Part E's state is stored where D2 put it, and PROJECTED where it can be asked about
+
+Migration 052 already stores everything Part E added — an icon, a cover, a schema, a view, a cell —
+inside `payload_json`, because D4 merges per field and the merge functions speak the stamped object
+shape. That does not change, and a `notes_properties` table a client could write would be the second
+store E3 exists to refuse: a schema held twice needs a rule for which copy wins, and the first
+concurrent edit finds out nobody wrote one.
+
+What 052 does not give Part E is a way to **ask**. "What pages do I have", "what are this database's
+columns", "these rows, sorted by due date" were each a full read of one person's corpus followed by a
+JSON walk in Node — survivable on a desktop holding its own cache, and wrong for the dashboard, which
+Q5 says must resolve server-side and has no cache at all.
+
+> **Migration 053 adds projections with `notes_index`'s status, not tables with `notes_blocks`'.**
+
+`notes_page_meta` and `notes_row_values` are written only by the one function that re-derives a block
+after it is persisted, dropped by `clearNoteDerived`, and recomputed by `rebuildDerived` from
+`notes_blocks` alone. A2's rule extends to them by construction: if a rebuild changed an answer, the
+cache had become the source of truth.
+
+The database view is the case that shows where the line is. **The SQL narrows; core decides.** The
+read is bounded and pre-ordered on one column through the projection; the filters, the multi-key
+sorts and the grouping stay in `databaseView.ts`, because a view language expressed twice drifts and
+the symptom is one board showing different cards on two screens with nothing to say which is right.
+The bound is reported against the true row count, so a prefix is never mistaken for the whole.
+
+---
+
 ## 3. Out of scope
 
 - Real-time collaborative cursors. B2's soft locking covers the multi-device case; live
   co-authoring is a different product with different infrastructure.
 - Public publishing of notes.
 - Importing from other note apps. Worth doing, not worth blocking this on.
-- A formula/database view over notes. The Track mode already covers structured records; duplicating
-  it inside Notes would create two places to model the same thing, which is the failure this ADR
-  exists to fix.
+- Formulas and rollups inside database properties — see E3 for why the rest of databases is now in
+  scope and these two are not.
 
 ---
 
@@ -373,5 +499,11 @@ would mean writing resolution twice.
 Not by whether the mode exists. ADR-028's whole lesson was that a surface can exist, compile, pass
 tests, and still be unreachable.
 
-**The test is C2's table.** Each row is a flow a person performs end to end. A row that needs
+**The first test is C2's table.** Each row is a flow a person performs end to end. A row that needs
 copy-paste has not been implemented, however much code was written for it.
+
+**The second test is E1's sentence**, and it is the harder one: *a person who uses Notion can type a
+page here without being taught anything.* Judged by typing, not by counting features — a slash menu
+that exists but does not open on `/`, or a heading you can only reach through a dropdown, fails the
+test while satisfying the table. Each row of E4 is judged as built or not built, and "the model
+supports it" is not built.

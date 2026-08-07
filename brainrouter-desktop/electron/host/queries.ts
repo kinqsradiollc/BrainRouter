@@ -19,6 +19,44 @@ import {
 } from '@kinqs/brainrouter-core/tooling';
 import { syncOnce, writePlanner } from '@kinqs/brainrouter-core/planner';
 import { createPlannerTransport } from './plannerTransport.js';
+// ADR-029 Part B — Notes is USER-scoped for the same reason the planner is
+// (D1), so none of these take a workspace root either.
+import {
+  createBlock as notesCreate, createPage as notesCreatePage, updateBlock as notesUpdate,
+  deleteBlock as notesDelete, moveBlock as notesMove,
+  buildNoteTree, readNotes, writeNotes, resolveConflict as notesResolveConflict,
+  beginEditing as notesBeginEditing, keepEditing as notesKeepEditing, endEditing as notesEndEditing,
+  describeBlockLease, describeNotesSync, syncNotesOnce, blockReferences,
+  listBlocks as notesList, searchNotes, blocksReferencing, type NoteBlockKind,
+  // ADR-029 Part E — the editing model. Every judgement below lives in core so
+  // the desktop, the dashboard and the CLI cannot disagree about what Enter
+  // does; the host only routes.
+  splitBlock as notesSplit, mergeIntoPrevious as notesMergeBack,
+  duplicateBlock as notesDuplicate, moveBlockUp as notesMoveUp,
+  moveBlockDown as notesMoveDown, indentBlock as notesIndent,
+  outdentBlock as notesOutdent, restoreBlock as notesRestore,
+  listTrash as notesTrash, listFavourites as notesFavourites,
+  applyInputRule, searchSlashCatalog, numberedOrdinals, pageTitleOrDefault,
+  describeTrashEntry,
+  // ADR-029 E3 — databases. A row is a page, so every one of these composes the
+  // block mutations above rather than reaching a second store; the host routes.
+  createDatabase as notesCreateDatabase, listDatabases as notesListDatabases,
+  addProperty as notesAddProperty, updateProperty as notesUpdateProperty,
+  removeProperty as notesRemoveProperty, reorderProperties as notesReorderProperties,
+  addRow as notesAddRow, setRowValue as notesSetRowValue, removeRow as notesRemoveRow,
+  saveView as notesSaveView, removeView as notesRemoveView,
+  readDatabaseView as notesReadDatabaseView, readDatabase,
+  DATABASE_BLOCK_KIND, NOTE_PROPERTY_TYPES, NOTE_VIEW_KINDS, operatorsFor,
+  type NotePropertyType, type NoteViewKind, type NoteDatabaseView,
+} from '@kinqs/brainrouter-core/notes';
+import { createNotesTransport } from './notesTransport.js';
+import {
+  formatWorkspaceRef, parseWorkspaceRef, renderWorkspaceResolution,
+} from '@kinqs/brainrouter-core/workspace/references';
+import {
+  buildLocalWorkspaceRegistry, linkWorkspaceRef, listCodeSymbols, locateCodeFile,
+  localWorkspaceViewer, readSourceForSymbols,
+} from '@kinqs/brainrouter-core/workspace/participants';
 import {
   readDeclinedTools, writeDeclinedTool, readWorkspaceBinding, writeWorkspaceBinding,
 } from './toolingState.js';
@@ -506,6 +544,60 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
     setPrStatusMapCache,
     resetGhEnvCache,
   } = ctx;
+  /**
+   * ADR-029 C1 — the registry the UI verbs resolve through.
+   *
+   * Rebuilt per call rather than cached, because `workspaceRoot` is captured
+   * from the host context at construction and a registry holding a stale one
+   * would resolve `code/file/...` against a checkout nobody is looking at — a
+   * wrong answer that is indistinguishable from a right one.
+   */
+  const localWorkspaceRegistry = () => buildLocalWorkspaceRegistry({ workspaceRoot });
+
+  /**
+   * Is this a reference SOMEONE ELSE can answer, rather than one that is gone?
+   *
+   * `no_resolver_here` is the structural case — a meeting lives only on the
+   * server, so this process has nothing to read. That is precisely the case Q5
+   * calls a backend capability with a client cache in front of it, so it is
+   * worth a round trip. Every other outcome, tombstones included, is an ANSWER
+   * and asking again would replace a correct one with a slower one.
+   */
+  const isAnsweredElsewhere = (resolution: { status: string; reason?: string }): boolean =>
+    resolution.status === 'unavailable' && resolution.reason === 'no_resolver_here';
+
+  /**
+   * Ask the brain to resolve what this client cannot.
+   *
+   * Returns null on any failure — no account, no network, a non-200 — because
+   * the local answer is already correct-if-coarse ("not available in this
+   * app"), and replacing it with an error would turn a reference that merely
+   * lives elsewhere into one that looks broken.
+   */
+  const askBrainToResolve = async (
+    verb: 'resolve' | 'describe',
+    uri: string,
+  ): Promise<{ resolution?: unknown; line: string } | null> => {
+    try {
+      const account = await resolveBrainRouterAccountContext(loadConfig());
+      if (!account) return null;
+      const url = new URL(`/api/workspace/${verb}`, account.baseUrl);
+      url.searchParams.set('uri', uri);
+      const res = await fetch(url, {
+        headers: brainRouterAccountHeaders(account),
+        // `manual` so a redirect cannot move an authenticated request to a host
+        // the configured base URL did not name.
+        redirect: 'manual',
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) return null;
+      const body = await res.json() as { resolution?: unknown; line?: unknown };
+      return typeof body.line === 'string' ? { resolution: body.resolution, line: body.line } : null;
+    } catch {
+      return null;
+    }
+  };
+
   let runtimeRunnerClient: RuntimeRunnerClient | null = null;
   let runtimeRunnerRemoteUrl = '';
   const getRuntimeRunnerClient = () => {
@@ -2209,6 +2301,443 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           ...(result.shedNotice ? { shedNotice: result.shedNotice } : {}),
         };
       },
+
+      // ADR-029 Part B — the Notes mode. User-scoped like the planner (D1), so
+      // no workspace is threaded: the same note has to be readable from a
+      // different checkout of the same work.
+      'notes-read': () => {
+        // ONE read of the store, not one per block: `readNotes` parses the whole
+        // user-scoped file, and calling it inside the walk made rendering a page
+        // O(blocks) file parses — invisible at three blocks and a stall at three
+        // hundred.
+        const state = readNotes(undefined);
+        const tree = buildNoteTree(Object.values(state.blocks));
+        const now = Date.now();
+        // E4 — the ordinal is a function of tree position and is computed here,
+        // once, rather than counted in the renderer. A stored one goes wrong the
+        // moment a sibling is deleted on another device.
+        const ordinals = numberedOrdinals(tree.roots);
+        const flat: Array<Record<string, unknown>> = [];
+        const walk = (nodes: ReturnType<typeof buildNoteTree>['roots']): void => {
+          for (const node of nodes) {
+            const block = node.block;
+            flat.push({
+              id: block.id,
+              parentId: block.parentId.value,
+              depth: node.depth,
+              kind: block.kind.value,
+              text: block.text.value,
+              checked: block.checked?.value === true,
+              level: block.level?.value ?? null,
+              language: block.language?.value ?? null,
+              collapsed: block.collapsed?.value === true,
+              icon: block.icon?.value ?? null,
+              cover: block.cover?.value ?? null,
+              favourite: block.favourite?.value === true,
+              ordinal: ordinals.get(block.id) ?? null,
+              // Only a CONTAINER has a title — a page, and E3's database, whose
+              // name is the heading over its rows. Sending one for every block
+              // would put "Untitled" on empty paragraphs, which reads as a name
+              // rather than as an absence.
+              title: block.kind.value === 'page' || block.kind.value === DATABASE_BLOCK_KIND
+                ? pageTitleOrDefault(block)
+                : null,
+              hasChildren: node.children.length > 0,
+              refs: blockReferences(block),
+              // The REASON travels with the field, not just the field name: a
+              // paragraph kept beside a version this device never saw needs a
+              // different sentence from two people typing at once, and the
+              // renderer cannot re-derive which happened from a field name.
+              conflicts: Object.entries(block.conflicts ?? {})
+                .map(([field, conflict]) => ({ field, reason: conflict.reason })),
+              lockedBy: describeBlockLease(state.leases[block.id], state.deviceId, now),
+            });
+            walk(node.children);
+          }
+        };
+        walk(tree.roots);
+        return {
+          blocks: flat,
+          // A repair is REPORTED rather than inferred: a block that moved to the
+          // top level because its parent vanished should say so, not look like
+          // someone dragged it there.
+          repairs: tree.repairs,
+          pending: state.outbox.operations.length,
+          // A read reports the QUEUE, not a sync that did not happen: pulled and
+          // pushed are zero here because nothing was sent, and claiming
+          // otherwise would show "synced" to someone who is offline.
+          syncState: describeNotesSync(
+            { pulled: 0, pushed: 0, offline: false, conflicted: [], rejected: [] },
+            state.outbox,
+          ),
+          // Counted over the rendered tree, so a conflict on a block nobody can
+          // see does not put a banner on a page with nothing to resolve.
+          conflictCount: flat.filter((b) => (b.conflicts as unknown[]).length > 0).length,
+        };
+      },
+      'notes-create': (a) => notesCreate(undefined, {
+        ...(typeof a.parentId === 'string' ? { parentId: a.parentId } : {}),
+        ...(typeof a.after === 'string' ? { after: a.after } : {}),
+        ...(typeof a.kind === 'string' ? { kind: a.kind as NoteBlockKind } : {}),
+        ...(typeof a.text === 'string' ? { text: a.text } : {}),
+        ...(typeof a.level === 'number' ? { level: a.level } : {}),
+      }, Date.now()),
+      'notes-create-page': (a) => notesCreatePage(undefined, {
+        title: String(a.title ?? 'Untitled'),
+        ...(typeof a.parentId === 'string' ? { parentId: a.parentId } : {}),
+      }, Date.now()),
+      'notes-update': (a) => notesUpdate(undefined, String(a.id ?? ''), {
+        ...(typeof a.text === 'string' ? { text: a.text } : {}),
+        ...(typeof a.kind === 'string' ? { kind: a.kind as NoteBlockKind } : {}),
+        ...(typeof a.checked === 'boolean' ? { checked: a.checked } : {}),
+        ...(typeof a.level === 'number' ? { level: a.level } : {}),
+        ...(typeof a.language === 'string' ? { language: a.language } : {}),
+        ...(typeof a.collapsed === 'boolean' ? { collapsed: a.collapsed } : {}),
+        ...(typeof a.icon === 'string' ? { icon: a.icon } : {}),
+        ...(typeof a.cover === 'string' ? { cover: a.cover } : {}),
+        ...(typeof a.favourite === 'boolean' ? { favourite: a.favourite } : {}),
+      }, Date.now()),
+      'notes-delete': (a) => ({ deleted: notesDelete(undefined, String(a.id ?? ''), Date.now()) }),
+
+      // ADR-029 E1 — the gestures. Each one is a call into core, because the
+      // judgements they encode (does Backspace unstyle, outdent or merge; where
+      // does a split's tail go) are the ones that make two surfaces disagree
+      // when they live in a keydown handler.
+      'notes-split': (a) => notesSplit(undefined, String(a.id ?? ''), Number(a.caret ?? 0), Date.now()),
+      'notes-merge-back': (a) => notesMergeBack(undefined, String(a.id ?? ''), Date.now()),
+      'notes-duplicate': (a) => notesDuplicate(undefined, String(a.id ?? ''), Date.now()),
+      'notes-move-up': (a) => notesMoveUp(undefined, String(a.id ?? ''), Date.now()),
+      'notes-move-down': (a) => notesMoveDown(undefined, String(a.id ?? ''), Date.now()),
+      'notes-indent': (a) => notesIndent(undefined, String(a.id ?? ''), Date.now()),
+      'notes-outdent': (a) => notesOutdent(undefined, String(a.id ?? ''), Date.now()),
+
+      // E1 — the line becoming something else as it is typed. The renderer asks
+      // after each keystroke and applies whatever comes back through
+      // `notes-update`; it never decides what `# ` means.
+      'notes-input-rule': (a) => ({
+        transform: applyInputRule({
+          kind: (typeof a.kind === 'string' ? a.kind : 'paragraph') as NoteBlockKind,
+          text: String(a.text ?? ''),
+          caret: Number(a.caret ?? 0),
+          // The current level travels, or `# ` typed inside a level-1 heading
+          // looks like a change and eats the character.
+          ...(typeof a.level === 'number' ? { level: a.level } : {}),
+        }),
+      }),
+      'notes-slash-menu': (a) => ({
+        commands: searchSlashCatalog(String(a.query ?? ''), Number(a.limit ?? 12)),
+      }),
+
+      // E4 — trash and favourites, both projections over what is already stored
+      // (C5's tombstone and a stamped field). Neither is a second table.
+      'notes-trash': () => ({
+        entries: notesTrash(undefined).map((entry) => ({
+          id: entry.block.id,
+          kind: entry.block.kind.value,
+          title: pageTitleOrDefault(entry.block),
+          descendants: entry.descendants,
+          deletedAt: entry.deletedAt,
+          // The LINE comes from core, because "restoring this brings 12 blocks
+          // back with it" is the rule `deleteBlock` implements and re-deriving
+          // the sentence in a renderer would let one surface promise something
+          // the store does not do.
+          line: describeTrashEntry(entry, pageTitleOrDefault(entry.block)),
+        })),
+      }),
+      'notes-restore': (a) => ({ restored: notesRestore(undefined, String(a.id ?? ''), Date.now()) }),
+      'notes-favourites': () => ({
+        blocks: notesFavourites(undefined).map((block) => ({
+          id: block.id,
+          kind: block.kind.value,
+          title: pageTitleOrDefault(block),
+          icon: block.icon?.value ?? null,
+        })),
+      }),
+      'notes-move': (a) => notesMove(undefined, String(a.id ?? ''), {
+        ...(a.parentId !== undefined ? { parentId: a.parentId as string | null } : {}),
+        ...(typeof a.after === 'string' ? { after: a.after } : {}),
+        ...(typeof a.before === 'string' ? { before: a.before } : {}),
+      }, Date.now()),
+      // B2's prevention half. The renderer takes the lock when a block gains
+      // focus and drops it on blur, so a block another device is typing in is
+      // read-only with an attribution rather than a conflict marker later.
+      'notes-begin-edit': (a) => notesBeginEditing(undefined, String(a.id ?? ''), Date.now()),
+      'notes-keep-edit': (a) => {
+        const state = readNotes(undefined);
+        return notesKeepEditing(undefined, String(a.id ?? ''), {
+          deviceId: state.deviceId, epoch: Number(a.epoch ?? 0),
+        }, Date.now());
+      },
+      'notes-end-edit': (a) => {
+        const state = readNotes(undefined);
+        return notesEndEditing(undefined, String(a.id ?? ''), {
+          deviceId: state.deviceId, epoch: Number(a.epoch ?? 0),
+        }, Date.now());
+      },
+      'notes-resolve': (a) => notesResolveConflict(
+        undefined, String(a.id ?? ''), String(a.field ?? ''),
+        a.keep === 'theirs' ? 'theirs' : 'ours', Date.now(),
+      ),
+      // B5 — content AND references, because "the note where I wrote about
+      // BR-114" is as normal a question as "the note that says parser". Ranked
+      // in core so the desktop and any other client agree on what a match is;
+      // a second scoring implementation in the renderer would rank the same
+      // notes differently on two surfaces.
+      'notes-search': (a) => ({
+        hits: searchNotes(notesList(undefined), String(a.query ?? ''), { limit: 200 }),
+      }),
+      // A2 — what links here, computed from content. The renderer asks for one
+      // target at a time (when a block's menu opens) rather than for every
+      // block, because the all-blocks form is quadratic and answers a question
+      // nobody asked until they open the menu.
+      'notes-backlinks': (a) => ({ blockIds: blocksReferencing(notesList(undefined), String(a.uri ?? '')) }),
+
+      // ADR-029 E3 — databases. A database is a VIEW over pages that share a
+      // property schema, so there is no database store to talk to: every handler
+      // below reads the same blocks `notes-read` reads and writes through the
+      // same `updateBlock`. The filtering, sorting and grouping are computed in
+      // core rather than here for E1's reason — a saved view that hid different
+      // rows on two surfaces is indistinguishable from data having gone missing.
+      'notes-database-list': () => ({
+        databases: notesListDatabases(undefined).map((block) => {
+          const database = readDatabase(block);
+          return {
+            id: block.id,
+            title: database.title,
+            icon: block.icon?.value ?? null,
+            properties: database.schema.length,
+            views: database.views.map((view) => ({ id: view.id, name: view.name, kind: view.kind })),
+          };
+        }),
+      }),
+      'notes-database-read': (a) => {
+        const projection = notesReadDatabaseView(
+          undefined,
+          String(a.id ?? ''),
+          typeof a.viewId === 'string' ? a.viewId : undefined,
+        );
+        if (!projection) return { found: false };
+        const database = readDatabase(projection.database);
+        return {
+          found: true,
+          id: projection.database.id,
+          title: projection.title,
+          // Every view, so the renderer can offer the tabs without a second call.
+          views: database.views.map((view) => ({ id: view.id, name: view.name, kind: view.kind })),
+          view: projection.view,
+          kind: projection.kind,
+          properties: database.schema.map((def) => ({
+            ...def,
+            // §3 keeps formulas and rollups out, and a newer client's column
+            // arrives the same way: named, kept, and reported as one this build
+            // cannot compute rather than approximated.
+            unsupported: database.unsupported.includes(def.id),
+            operators: operatorsFor(def),
+          })),
+          columns: projection.columns.map((def) => def.id),
+          rows: projection.rows.map((row) => ({
+            id: row.id,
+            title: row.title,
+            icon: row.icon,
+            cover: row.cover,
+            cells: row.cells.map((cell) => ({
+              property: cell.property.id,
+              value: cell.value,
+              display: cell.display,
+              unsupported: cell.unsupported,
+            })),
+          })),
+          // Row IDS, not rows: a multi-value grouping puts one row in several
+          // buckets on purpose (see `propertyGroupKeys`), and repeating the whole
+          // row per bucket would multiply the payload for no information.
+          groups: projection.groups.map((group) => ({
+            key: group.key,
+            label: group.label,
+            empty: group.empty,
+            rowIds: group.rows.map((row) => row.id),
+          })),
+          total: projection.total,
+          filteredOut: projection.filteredOut,
+          // Rules core could not apply, and the sentences for them. Reported
+          // rather than silently treated as matching everything or nothing —
+          // both of those lie about whether a filter ran.
+          skipped: projection.skipped,
+          notices: projection.notices,
+        };
+      },
+      'notes-database-create': (a) => {
+        const created = notesCreateDatabase(undefined, {
+          ...(typeof a.title === 'string' ? { title: a.title } : {}),
+          ...(a.parentId !== undefined ? { parentId: a.parentId as string | null } : {}),
+          ...(typeof a.after === 'string' ? { after: a.after } : {}),
+        }, Date.now());
+        return { id: created.id };
+      },
+      'notes-database-add-property': (a) => notesAddProperty(undefined, String(a.id ?? ''), {
+        name: String(a.name ?? 'Property'),
+        type: String(a.type ?? 'text') as NotePropertyType,
+        ...(Array.isArray(a.options) ? { options: a.options as { id: string; label: string }[] } : {}),
+      }, Date.now()),
+      'notes-database-update-property': (a) => notesUpdateProperty(
+        undefined, String(a.id ?? ''), String(a.propertyId ?? ''),
+        {
+          ...(typeof a.name === 'string' ? { name: a.name } : {}),
+          ...(Array.isArray(a.options) ? { options: a.options as { id: string; label: string }[] } : {}),
+        },
+        Date.now(),
+      ),
+      'notes-database-remove-property': (a) => notesRemoveProperty(
+        undefined, String(a.id ?? ''), String(a.propertyId ?? ''), Date.now(),
+      ),
+      'notes-database-reorder-properties': (a) => notesReorderProperties(
+        undefined, String(a.id ?? ''),
+        Array.isArray(a.order) ? (a.order as string[]) : [],
+        Date.now(),
+      ),
+      'notes-database-add-row': (a) => {
+        const added = notesAddRow(undefined, String(a.id ?? ''), {
+          ...(typeof a.title === 'string' ? { title: a.title } : {}),
+          ...(a.values && typeof a.values === 'object'
+            ? { values: a.values as Record<string, unknown> }
+            : {}),
+          ...(typeof a.after === 'string' ? { after: a.after } : {}),
+        }, Date.now());
+        return added.ok ? { ok: true, id: added.value.id } : added;
+      },
+      // One cell, through `updateBlock` — so the lease refuses it while another
+      // device is editing the row, and the outbox carries it in order.
+      'notes-database-set-value': (a) => {
+        const written = notesSetRowValue(
+          undefined, String(a.rowId ?? ''), String(a.propertyId ?? ''), a.value, Date.now(),
+        );
+        return written.ok ? { ok: true, id: written.value.id } : written;
+      },
+      'notes-database-remove-row': (a) => {
+        const removed = notesRemoveRow(undefined, String(a.rowId ?? ''), Date.now());
+        return removed.ok ? { ok: true, removed: removed.value } : removed;
+      },
+      'notes-database-save-view': (a) => notesSaveView(undefined, String(a.id ?? ''), {
+        ...(typeof a.viewId === 'string' ? { id: a.viewId } : {}),
+        ...(typeof a.name === 'string' ? { name: a.name } : {}),
+        ...(typeof a.kind === 'string' ? { kind: a.kind as NoteViewKind } : {}),
+        ...(Array.isArray(a.visible) ? { visible: a.visible as string[] } : {}),
+        ...(a.filter !== undefined ? { filter: a.filter as NoteDatabaseView['filter'] } : {}),
+        ...(a.sort !== undefined ? { sort: a.sort as NoteDatabaseView['sort'] } : {}),
+        ...(a.groupBy !== undefined ? { groupBy: a.groupBy as string | null } : {}),
+      }, Date.now()),
+      'notes-database-remove-view': (a) => notesRemoveView(
+        undefined, String(a.id ?? ''), String(a.viewId ?? ''), Date.now(),
+      ),
+      // What a property picker and a filter builder render from. Served rather
+      // than hardcoded in the renderer, so a surface can never offer an operator
+      // core would then report as skipped.
+      'notes-property-catalog': () => ({
+        types: NOTE_PROPERTY_TYPES.map((type) => ({
+          type,
+          operators: operatorsFor({ id: type, name: type, type }),
+        })),
+        viewKinds: NOTE_VIEW_KINDS,
+      }),
+      'notes-sync': async () => {
+        const brainUrl = getCliKnobs().brainUrl;
+        if (!brainUrl) {
+          // Local-only is a supported mode, not a failure: with no server the
+          // cache IS the truth, and solo is the normal mode rather than a
+          // degraded one.
+          return { pending: readNotes(undefined).outbox.operations.length, localOnly: true };
+        }
+        const state = readNotes(undefined);
+        const result = await syncNotesOnce(state, createNotesTransport({ baseUrl: brainUrl }), Date.now());
+        writeNotes(undefined, state);
+        return {
+          pending: state.outbox.operations.length,
+          pulled: result.pulled,
+          pushed: result.pushed,
+          offline: result.offline,
+          conflicted: result.conflicted,
+          syncState: describeNotesSync(result, state.outbox),
+          ...(result.shedNotice ? { shedNotice: result.shedNotice } : {}),
+        };
+      },
+
+      // ADR-029 C1 — the three verbs, over the SAME registry the agent's
+      // workspace_* tools call. A second path for the UI would drift from the
+      // agent's, and the drift shows up as one of them creating records the
+      // other's surface renders wrongly.
+      'workspace-resolve': async (a) => {
+        const uri = String(a.uri ?? '');
+        const resolution = await localWorkspaceRegistry().resolveUri(uri, localWorkspaceViewer({ workspaceRoot }));
+        if (isAnsweredElsewhere(resolution)) {
+          const remote = await askBrainToResolve('resolve', uri);
+          if (remote) return remote;
+        }
+        return { resolution, line: renderWorkspaceResolution(resolution) };
+      },
+      'workspace-describe': async (a) => {
+        const parsed = parseWorkspaceRef(a.uri);
+        // Parsed here rather than through `resolveUri`, because that would run
+        // the full resolve and the whole point of describe is the cheaper read.
+        if (!parsed.ok) return { line: 'a link that is not a valid reference' };
+        const viewer = localWorkspaceViewer({ workspaceRoot });
+        const registry = localWorkspaceRegistry();
+        const local = await registry.describe(parsed.ref, viewer);
+        if (isAnsweredElsewhere(local)) {
+          const remote = await askBrainToResolve('describe', String(a.uri));
+          if (remote) return { line: remote.line };
+        }
+        return { line: renderWorkspaceResolution(local) };
+      },
+      'workspace-modes': () => {
+        const registry = localWorkspaceRegistry();
+        return { modes: registry.modes(), creatable: registry.creatableModes() };
+      },
+      /**
+       * ADR-029 C2 row 6 — what a file declares, so a symbol can be PICKED.
+       *
+       * Typing the name would let someone cite a symbol that is not there, and
+       * that reference resolves as a tombstone which the person who typed the
+       * typo cannot tell apart from a function somebody removed. Offering the
+       * declarations the resolver itself recognises means the two agree by
+       * construction.
+       */
+      'code-symbols': (a) => {
+        const relPath = String(a.path ?? '').trim();
+        if (!relPath) return { symbols: [], error: 'No file was named.' };
+        const located = locateCodeFile(workspaceRoot, relPath);
+        if (located.status !== 'found' && located.status !== 'moved') {
+          return { symbols: [], path: relPath, error: `${relPath} could not be read here.` };
+        }
+        const read = readSourceForSymbols(located.absolute);
+        if (!read.ok) return { symbols: [], path: located.path, error: read.reason };
+        return { symbols: listCodeSymbols(read.source), path: located.path };
+      },
+      'workspace-create': async (a) => {
+        const from = typeof a.from === 'string' ? parseWorkspaceRef(a.from) : null;
+        if (from && !from.ok) return { error: `"from" is not a reference: ${from.detail}` };
+        const outcome = await localWorkspaceRegistry().create({
+          mode: String(a.mode ?? ''),
+          kind: String(a.kind ?? ''),
+          title: String(a.title ?? '').trim(),
+          ...(from?.ok ? { from: from.ref } : {}),
+          ...(a.fields && typeof a.fields === 'object' ? { fields: a.fields as Record<string, unknown> } : {}),
+        }, localWorkspaceViewer({ workspaceRoot }));
+        // A refusal comes back as data, not as a rejected promise: the caller is
+        // deciding whether to write a reference into a document and needs an
+        // answer it can branch on.
+        if (outcome.status === 'refused') return { error: outcome.detail, reason: outcome.reason };
+        return { status: outcome.status, uri: formatWorkspaceRef(outcome.ref), ref: outcome.ref };
+      },
+      'workspace-link': (a) => {
+        const from = parseWorkspaceRef(a.from);
+        const to = parseWorkspaceRef(a.to);
+        if (!from.ok) return { error: `"from" is not a reference: ${from.detail}` };
+        if (!to.ok) return { error: `"to" is not a reference: ${to.detail}` };
+        const outcome = linkWorkspaceRef({ workspaceRoot }, from.ref, to.ref);
+        return outcome.ok
+          ? { linked: true, alreadyLinked: outcome.alreadyLinked, to: formatWorkspaceRef(outcome.to) }
+          : { error: outcome.detail, reason: outcome.reason };
+      },
+
       'artifact-list': (a) => listArtifacts(workspaceRoot, withSessionScope(artifactFilterFromArgs(a), a, getActiveAgent().sessionKey)),
       'artifact-create': async (a) => {
         if (!isArtifactKind(a.kind)) return { error: `Unknown artifact kind "${String(a.kind)}".` };

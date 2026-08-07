@@ -20,7 +20,7 @@
  *    Orphans surface at the top level instead, and the repair is REPORTED so it
  *    can be shown rather than inferred.
  */
-import type { NoteBlock } from './block.js';
+import { isLiveBlock, type NoteBlock } from './block.js';
 import { compareRank } from './rank.js';
 
 export interface NoteTreeNode {
@@ -57,10 +57,10 @@ function resolveParents(blocks: Iterable<NoteBlock>): {
   repairs: NoteTreeRepair[];
 } {
   const live = new Map<string, NoteBlock>();
-  for (const block of blocks) if (!block.deletedAt) live.set(block.id, block);
+  for (const block of blocks) if (isLiveBlock(block)) live.set(block.id, block);
 
   const deleted = new Set<string>();
-  for (const block of blocks) if (block.deletedAt) deleted.add(block.id);
+  for (const block of blocks) if (!isLiveBlock(block)) deleted.add(block.id);
 
   const parentOf = new Map<string, string | null>();
   const repairs: NoteTreeRepair[] = [];
@@ -248,7 +248,7 @@ export interface NoteBlockContext {
  */
 export function blockContext(blocks: Iterable<NoteBlock>, blockId: string): NoteBlockContext | null {
   const all = [...blocks];
-  const block = all.find((b) => b.id === blockId && !b.deletedAt);
+  const block = all.find((b) => b.id === blockId && isLiveBlock(b));
   if (!block) return null;
 
   const headings = headingAncestry(all, blockId)
@@ -256,7 +256,7 @@ export function blockContext(blocks: Iterable<NoteBlock>, blockId: string): Note
     .filter((t) => t.length > 0);
 
   const page = pageOf(all, blockId);
-  const pageSize = page ? subtreeBlockIds(all, page.id).length : all.filter((b) => !b.deletedAt).length;
+  const pageSize = page ? subtreeBlockIds(all, page.id).length : all.filter(isLiveBlock).length;
   const omitted = Math.max(0, pageSize - 1);
 
   const raw = block.text.value;
