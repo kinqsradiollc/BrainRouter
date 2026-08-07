@@ -53,6 +53,8 @@ import { authRouter, usersRouter, sessionsRouter } from './api/routes/identity/i
 import { meetingsRouter, publicMeetingsRouter } from './api/routes/meetings.js';
 import { trackRouter } from './api/routes/track.js';
 import { plannerRouter } from './api/routes/planner.js';
+import { notesRouter } from './api/routes/notes.js';
+import { workspaceRouter } from './api/routes/workspace.js';
 import { teamsRouter } from './api/routes/teams.js';
 import { chatThreadsRouter } from './api/routes/chatThreads.js';
 import { publicSharePageRouter } from './api/routes/publicShare.js';
@@ -307,6 +309,11 @@ if (USE_HTTP) {
   app.use("/api/track", trackRouter);
   // ADR-028 Part D — per-user planner sync (migration 051).
   app.use("/api/planner", plannerRouter);
+  // ADR-029 Part D — per-user notes sync (migration 052).
+  app.use("/api/notes", notesRouter);
+  // ADR-029 Q5 — resolution is server-side, because the dashboard has no local
+  // store to resolve a reference against.
+  app.use("/api/workspace", workspaceRouter);
   app.use("/api/teams", teamsRouter);
   app.use("/api/chat/threads", chatThreadsRouter);
   // Human-facing public share page — the /m/<token> link minted for a public meeting.
