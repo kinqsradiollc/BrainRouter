@@ -9,3 +9,4 @@
  */
 export * from './localModes.js';
 export * from './agentContext.js';
+export * from './codeReference.js';

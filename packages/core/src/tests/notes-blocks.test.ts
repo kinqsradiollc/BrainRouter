@@ -194,6 +194,82 @@ test('a checklist tie resolves toward done, matching the planner rather than div
   assert.equal(mergeNoteBlock(ours, theirs).checked?.value, true);
 });
 
+/* ------------------------------------------------- B2 · the fencing penalty */
+
+test('a fenced write cannot take the text even when its stamp is strictly later', () => {
+  // The defect this exists to prevent, at the merge layer: a device that slept
+  // holding epoch 1 keeps typing on its own clock, so its edit is genuinely
+  // LATER than the one made while it was gone — and last-writer-wins reads
+  // "later" as "saw it first". It did not. Without the fence argument the
+  // assertions below invert entirely.
+  const ours = block('blk_1', 'typed by the device that held the lock', at(300, 0, B));
+  const theirs = block('blk_1', 'typed by the device that had lost it', at(900, 0, A));
+
+  const merged = mergeNoteBlock(ours, theirs, 'stale_epoch');
+
+  assert.equal(merged.text.value, 'typed by the device that held the lock');
+  assert.equal(merged.conflicts?.text?.reason, 'fenced_stale_epoch');
+  assert.equal(merged.conflicts!.text!.theirs, 'typed by the device that had lost it',
+    'the fenced sentence is kept, not dropped — a refused write is a person’s work');
+});
+
+test('the same write without the fence lands clean, so the epoch is what changed the outcome', () => {
+  const ours = block('blk_1', 'typed by the device that held the lock', at(300, 0, B));
+  const theirs = block('blk_1', 'typed by the device that had lost it', at(900, 0, A));
+
+  const merged = mergeNoteBlock(ours, theirs);
+
+  assert.equal(merged.text.value, 'typed by the device that had lost it');
+  assert.equal(merged.conflicts, undefined);
+});
+
+test('each refusal marks WHICH refusal, because they lead a person to do different things', () => {
+  const ours = block('blk_1', 'the version on the server', at(300, 0, B));
+  const theirs = block('blk_1', 'the version that arrived late', at(900, 0, A));
+
+  assert.equal(mergeNoteBlock(ours, theirs, 'lease_expired').conflicts?.text?.reason, 'fenced_lease_expired');
+  assert.equal(mergeNoteBlock(ours, theirs, 'blocked').conflicts?.text?.reason, 'fenced_blocked');
+  assert.match(
+    describeBlockConflict(mergeNoteBlock(ours, theirs, 'blocked')) ?? '',
+    /Another device was editing/,
+  );
+  assert.match(
+    describeBlockConflict(mergeNoteBlock(ours, theirs, 'lease_expired')) ?? '',
+    /after the lock on the block had expired/,
+  );
+});
+
+test('a fenced write that changed no text is not marked, so a lock is not a conflict generator', () => {
+  // Nothing was in doubt: both sides hold the same sentence. Marking it would
+  // put a banner on a page where nobody lost anything, and a banner that fires
+  // on nothing is one people stop reading.
+  const ours = block('blk_1', 'one sentence', at(300, 0, B));
+  const theirs = block('blk_1', 'one sentence', at(900, 0, A));
+
+  assert.equal(mergeNoteBlock(ours, theirs, 'stale_epoch').conflicts, undefined);
+});
+
+test('a fenced write that was going to lose anyway is not marked twice for it', () => {
+  const ours = block('blk_1', 'the newer version', at(900, 0, B));
+  const theirs = block('blk_1', 'the older version', at(300, 0, A));
+
+  const merged = mergeNoteBlock(ours, theirs, 'stale_epoch');
+  assert.equal(merged.text.value, 'the newer version');
+  assert.equal(merged.conflicts, undefined);
+});
+
+test('a fenced write still moves the block, because a lost placement is not a lost sentence', () => {
+  // The penalty is deliberately narrow. Someone whose block moved can drag it
+  // back and can SEE that it moved; someone whose paragraph was overwritten has
+  // neither. Marking placement would put a conflict banner on a drag.
+  const ours: NoteBlock = { ...block('blk_1', 'p', at(300, 0, B)), parentId: s<string | null>('page_a', at(300, 0, B)) };
+  const theirs: NoteBlock = { ...block('blk_1', 'p', at(900, 0, A)), parentId: s<string | null>('page_b', at(900, 0, A)) };
+
+  const merged = mergeNoteBlock(ours, theirs, 'blocked');
+  assert.equal(merged.parentId.value, 'page_b');
+  assert.equal(merged.conflicts, undefined);
+});
+
 test('resolving a conflict stamps a NEW edit, so the next sync cannot undo the choice', () => {
   // Writing the winner back under the losing side's original stamp would let
   // the merge re-decide it, and the person would watch their choice revert.

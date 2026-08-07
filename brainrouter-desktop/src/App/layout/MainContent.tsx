@@ -243,7 +243,7 @@ export function MainContent(p: MainContentProps): React.ReactElement {
         // ADR-028 G6 — cross-workspace, so it renders WITHOUT the side panel
         // rail: a personal planner has no per-workspace tabs to carry.
         <div className="workrow" ref={workrowRef}>
-          <PlannerModeContainer onOpenNotes={() => setMode('notes')} />
+          <PlannerModeContainer onOpenNotes={() => setMode('notes')} onOpenRef={openWorkspaceRef} />
         </div>
       ) : mode === 'meetings' ? (
         <div className="workrow" ref={workrowRef}>

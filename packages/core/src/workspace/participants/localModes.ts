@@ -29,7 +29,6 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { resolveWorkspacePath } from '../../agent/fs/workspaceFs.js';
 import {
   createBlock as notesCreateBlock,
   getBlock as notesGetBlock,
@@ -52,6 +51,10 @@ import {
   type WorkspaceCreateOutcome, type WorkspaceModeParticipant, type WorkspaceRef,
   type WorkspaceRefViewer, type WorkspaceResolution,
 } from '../references/index.js';
+import {
+  findCodeSymbol, isCodeSymbolName, locateCodeFile, readSourceForSymbols, traceRemovedSymbol,
+  type CodeFileLocation,
+} from './codeReference.js';
 
 /** What a local process needs in order to answer for its own modes. */
 export interface LocalWorkspaceContext {
@@ -235,32 +238,144 @@ function trackParticipant(ctx: LocalWorkspaceContext): WorkspaceModeParticipant 
  * whatever resolved it is the unbounded-context failure Q3 rules out one mode
  * over. The agent already has `read_file` for the bounded case, and it is the
  * one path with the validation and the audit trail.
+ *
+ * **Two kinds, because C2 row 6 names two.** `code/file/<path>` and
+ * `code/symbol/<path>#<name>`. The symbol resolves AFTER the rename following,
+ * so the two compose: a function that is still called what it was called, in a
+ * file somebody moved, resolves — which is the ordinary case this row exists
+ * for and the one a bare path gets wrong.
  */
 function codeParticipant(ctx: LocalWorkspaceContext): WorkspaceModeParticipant {
   return linkableWorkspaceMode({
     mode: 'code',
-    kinds: ['file'],
+    kinds: ['file', 'symbol'],
 
     resolve(ref): WorkspaceResolution {
-      let resolved: string;
-      try {
-        resolved = resolveWorkspacePath(ctx.workspaceRoot, ref.id);
-      } catch (err) {
-        // A path that escapes the workspace is not "deleted" — it is a
-        // reference this process must refuse to follow, and saying so is more
-        // useful than a tombstone that invites someone to restore it.
-        return resolvedUnavailable(ref, 'no_resolver_here', err instanceof Error ? err.message : String(err));
+      const located = locateCodeFile(ctx.workspaceRoot, ref.id);
+      switch (located.status) {
+        case 'refused':
+          // A path that escapes the workspace is not "deleted" — it is a
+          // reference this process must refuse to follow, and saying so is more
+          // useful than a tombstone that invites someone to restore it.
+          return resolvedUnavailable(ref, 'no_resolver_here', located.detail);
+        case 'unknown':
+          // No repository, or one git could not read. A3's argument in its
+          // sharpest form: this process does not know, and a guess here is a
+          // sentence in someone's document that is confidently wrong.
+          return resolvedUnavailable(ref, 'no_history_here', located.detail);
+        case 'deleted':
+          return resolvedGone(ref, {
+            reason: 'deleted',
+            ...(located.at ? { at: located.at } : {}),
+            detail: ref.id,
+          });
+        case 'never_existed':
+          // Now TRUE when it is reported: git has no record of this path under
+          // any name, so the likeliest explanation really is a mistyped link.
+          return resolvedGone(ref, { reason: 'never_existed', detail: ref.id });
+        case 'found':
+        case 'moved':
+          return ref.kind === 'symbol'
+            ? resolveCodeSymbol(ctx, ref, located)
+            : resolveCodeFile(ref, located);
       }
-      if (!fs.existsSync(resolved)) return resolvedGone(ref, { reason: 'never_existed' });
-      const stat = fs.statSync(resolved);
-      const where = ref.fragment ? `${path.basename(ref.id)} ${ref.fragment}` : path.basename(ref.id);
-      return resolvedFound(ref, {
-        label: `${where} — ${ref.id}`,
-        state: { path: ref.id, bytes: stat.size, directory: stat.isDirectory() },
-        updatedAt: new Date(stat.mtimeMs).toISOString(),
-      });
     },
   });
+}
+
+/** `— moved from lib/parser.ts`, or nothing. A3: following the rename is right, hiding it is not. */
+function movedSuffix(located: CodeFileLocation): string {
+  return located.status === 'moved' ? ` (moved from ${located.from})` : '';
+}
+
+/** The reference now addresses where the file IS, so that is the ref the resolution carries. */
+function locatedRef(ref: WorkspaceRef, located: CodeFileLocation): WorkspaceRef {
+  return located.status === 'moved' ? { ...ref, id: located.path } : ref;
+}
+
+function resolveCodeFile(ref: WorkspaceRef, located: CodeFileLocation): WorkspaceResolution {
+  if (located.status !== 'found' && located.status !== 'moved') return resolvedGone(ref, { reason: 'never_existed' });
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(located.absolute);
+  } catch (err) {
+    // It was there a moment ago. Transient, so `unavailable` rather than a
+    // tombstone somebody would act on.
+    return resolvedUnavailable(ref, 'resolver_failed', err instanceof Error ? err.message : String(err));
+  }
+  const where = ref.fragment ? `${path.basename(located.path)} ${ref.fragment}` : path.basename(located.path);
+  return resolvedFound(locatedRef(ref, located), {
+    label: `${where} — ${located.path}${movedSuffix(located)}`,
+    state: {
+      path: located.path,
+      bytes: stat.size,
+      directory: stat.isDirectory(),
+      ...(located.status === 'moved' ? { movedFrom: located.from } : {}),
+    },
+    updatedAt: new Date(stat.mtimeMs).toISOString(),
+  });
+}
+
+/**
+ * The symbol half of C2 row 6.
+ *
+ * A file that is present and a name that is not is a different sentence from a
+ * file that is gone, and it leads somewhere else: you go and find what the
+ * function is called now. So the two are never collapsed — and the pickaxe
+ * decides between "it was removed" and "it was never here" rather than the
+ * resolver assuming either.
+ */
+function resolveCodeSymbol(
+  ctx: LocalWorkspaceContext,
+  ref: WorkspaceRef,
+  located: CodeFileLocation,
+): WorkspaceResolution {
+  if (located.status !== 'found' && located.status !== 'moved') return resolvedGone(ref, { reason: 'never_existed' });
+  const name = ref.fragment ?? '';
+  if (!isCodeSymbolName(name)) {
+    return resolvedUnavailable(
+      ref,
+      'malformed_ref',
+      'a symbol is addressed as code/symbol/<path>#<name>, and the name is missing or is not an identifier',
+    );
+  }
+
+  const read = readSourceForSymbols(located.absolute);
+  if (!read.ok) return resolvedUnavailable(ref, 'resolver_failed', read.reason);
+
+  const symbol = findCodeSymbol(read.source, name);
+  if (symbol) {
+    return resolvedFound(locatedRef(ref, located), {
+      label: `${name} — ${located.path}:${symbol.line}${movedSuffix(located)}`,
+      state: {
+        path: located.path,
+        symbol: name,
+        line: symbol.line,
+        declaredAs: symbol.kind,
+        ...(located.status === 'moved' ? { movedFrom: located.from } : {}),
+      },
+    });
+  }
+
+  const history = traceRemovedSymbol(ctx.workspaceRoot, located.path, name);
+  if (history.status === 'deleted') {
+    return resolvedGone(ref, {
+      reason: 'deleted',
+      ...(history.at ? { at: history.at } : {}),
+      detail: `${name} is no longer in ${located.path}`,
+    });
+  }
+  if (history.status === 'never_existed') {
+    return resolvedGone(ref, {
+      reason: 'never_existed',
+      detail: `${located.path} is here and has never declared ${name}`,
+    });
+  }
+  return resolvedUnavailable(
+    ref,
+    'no_history_here',
+    `${name} is not in ${located.path}, and there is no history here to say whether it was renamed`,
+  );
 }
 
 /* --------------------------------------------------------------------- chat */

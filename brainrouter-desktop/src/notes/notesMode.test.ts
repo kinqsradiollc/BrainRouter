@@ -24,8 +24,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  backlinkNote, canEdit, conflictBanner, indentFor, MAX_VISUAL_DEPTH, pendingRefLabel,
-  readOnlyReason, repairNote, sendTargetsFor, visibleBlocks, type NoteBlockView,
+  backlinkNote, canEdit, conflictBanner, conflictLine, indentFor, MAX_VISUAL_DEPTH,
+  pendingRefLabel, readOnlyReason, repairNote, sendTargetsFor, visibleBlocks,
+  type NoteBlockView,
 } from '../lib/notes/notesView.js';
 
 const source = (relative: string): string => readFileSync(new URL(relative, import.meta.url), 'utf8');
@@ -33,8 +34,8 @@ const source = (relative: string): string => readFileSync(new URL(relative, impo
 function block(over: Partial<NoteBlockView> = {}): NoteBlockView {
   return {
     id: 'blk_1', parentId: null, depth: 0, kind: 'paragraph', text: 'a line',
-    checked: false, level: null, hasChildren: false, refs: [], conflictFields: [],
-    lockedBy: null, ...over,
+    checked: false, level: null, hasChildren: false, refs: [], conflicts: [],
+    lockedBy: null, title: null, icon: null, cover: null, favourite: false, ...over,
   };
 }
 
@@ -67,6 +68,9 @@ test('both handler maps answer for Notes — a query in only one is unreachable 
     'notes-read', 'notes-create', 'notes-update', 'notes-delete', 'notes-move', 'notes-sync',
     'notes-begin-edit', 'notes-keep-edit', 'notes-end-edit', 'notes-resolve',
     'workspace-create', 'workspace-link', 'workspace-describe', 'workspace-resolve',
+    // C2 row 6 — the picker's symbol list. Registered on one surface only, the
+    // symbol step is an empty list in the harness and looks like a broken read.
+    'code-symbols',
   ]) {
     assert.match(host, new RegExp(`'${name}'`), `the electron host has no ${name} handler`);
     assert.match(dev, new RegExp(`'${name}'`), `the dev bridge has no ${name} handler`);
@@ -82,12 +86,18 @@ test('C2: every cross-mode move is wired to something a person can press', () =>
   const renderHelpers = source('../App/render/renderHelpers.tsx');
   // The button existing is not the same as it being connected: this is the
   // layer where ADR-028's six unreachable definitions were lost.
-  assert.match(renderHelpers, /onSaveToNotes=\{\(text\) => void captureToNotes\(/);
-  assert.match(renderHelpers, /onAddToPlanner=\{\(text\) => void captureToPlanner\(/);
+  assert.match(renderHelpers, /onSaveToNotes=\{capture\('notes', captureToNotes\)\}/);
+  assert.match(renderHelpers, /onAddToPlanner=\{capture\('your planner', captureToPlanner\)\}/);
+  // …and connected is not the same as ANSWERED: the result used to be
+  // discarded, so a refusal created nothing and looked like success.
+  assert.match(renderHelpers, /kind: outcome\.ok \? 'status' : 'error'/, 'a failed capture says nothing');
 
   const notesMode = source('./NotesMode.tsx');
   assert.match(notesMode, /ops\.sendTo\(block\.id, target\)/, 'Notes → Track/Planner has no control');
-  assert.match(notesMode, /ops\.linkFile\(block\.id, p\)/, 'Notes → Code has no control');
+  assert.match(notesMode, /ops\.linkFile\(block\.id, p, symbol\)/, 'Notes → Code has no control');
+  // C2 row 6 names a file OR a symbol; a kind with no writer is unreachable.
+  assert.match(notesMode, /ops\.loadSymbols\(p\)/, 'the picker cannot offer a symbol');
+  assert.match(source('./NotesModeContainer.tsx'), /codeSymbolUri\(relPath, symbol\)/, 'no symbol reference is ever written');
 
   const notesContainer = source('./NotesModeContainer.tsx');
   assert.match(notesContainer, /'workspace-create'/, 'the notes menu creates nothing');
@@ -96,6 +106,15 @@ test('C2: every cross-mode move is wired to something a person can press', () =>
   const planner = source('../planner/PlannerMode.tsx');
   assert.match(planner, /ops\.openNotesPage\(/, 'Planner → Notes has no control');
   assert.match(source('../planner/PlannerModeContainer.tsx'), /openNotesPage: \(itemId, title, notes\)/);
+  // A1 — one rendering of a reference, or two surfaces disagree about what a
+  // link looks like: the planner used to leave the raw URI in its prose.
+  assert.match(planner, /<RefText text=\{n\.notes/, 'the planner renders a reference as plain text');
+  assert.match(source('./NotesMode.tsx'), /<RefChip key=\{uri\}/, 'notes stopped using the shared chip');
+  assert.match(
+    source('../App/layout/MainContent.tsx'),
+    /<PlannerModeContainer[^\n]*onOpenRef=\{openWorkspaceRef\}/,
+    'a planner chip has nowhere to open to',
+  );
 
   const meetings = source('../components/meetings/MeetingsView.tsx');
   assert.match(meetings, /captureToPlanner\(action\.title/, 'Meetings → Planner has no control');
@@ -121,12 +140,32 @@ test('a divider refuses text rather than accepting it and discarding it', () => 
 });
 
 test('conflicts get a banner because they are the one state that cannot resolve itself', () => {
+  const conflicted = (id: string) => block({ id, conflicts: [{ field: 'text', reason: 'concurrent_text' }] });
   assert.equal(conflictBanner([block()]), null);
-  assert.match(String(conflictBanner([block({ conflictFields: ['text'] })])), /^One block/);
-  assert.match(
-    String(conflictBanner([block({ conflictFields: ['text'] }), block({ id: 'b2', conflictFields: ['kind'] })])),
-    /^2 blocks/,
-  );
+  assert.match(String(conflictBanner([conflicted('b1')])), /^One block/);
+  assert.match(String(conflictBanner([conflicted('b1'), conflicted('b2')])), /^2 blocks/);
+});
+
+test('a fenced conflict reads differently from a concurrent one, because the causes differ', () => {
+  // B2's second departure from migration 048: a refusal has to say WHICH
+  // refusal. "Two people typed at once" asks someone to choose between two
+  // intentions; "your device wrote under a lock it no longer held" explains why
+  // the sentence on screen is not the one they typed — and without that the app
+  // looks like it lost their work rather than like it kept both copies.
+  const concurrent = conflictLine({ field: 'text', reason: 'concurrent_text' });
+  const stale = conflictLine({ field: 'text', reason: 'fenced_stale_epoch' });
+
+  assert.match(concurrent, /two places at once/);
+  assert.match(stale, /reissued/);
+  assert.notEqual(concurrent, stale);
+  assert.match(conflictLine({ field: 'text', reason: 'fenced_blocked' }), /Another device was editing/);
+  assert.match(conflictLine({ field: 'text', reason: 'fenced_lease_expired' }), /had expired/);
+});
+
+test('a reason this build does not know still renders a line rather than taking the page down', () => {
+  // The renderer cannot import core's union — the notes barrel reaches the
+  // filesystem — so a newer server can send a reason this build has never seen.
+  assert.match(conflictLine({ field: 'level', reason: 'something_new' }), /“level”/);
 });
 
 test('an empty line offers no cross-mode move — a work item called "" is one someone has to delete', () => {

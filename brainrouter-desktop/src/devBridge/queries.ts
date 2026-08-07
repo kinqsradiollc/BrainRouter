@@ -2,6 +2,10 @@
 // installDevBridge(); each handler closes over the shared dev state (./state) via the
 // destructured helpers below and S.<scalar> for reassignable scalars. Behavior-identical.
 import type { ConnectorRecord } from '@kinqs/brainrouter-types';
+// The browser-safe half of core's notes model. The `notes` barrel reaches the
+// filesystem; `notes/editing` is pure by construction, which is what lets the
+// harness answer with the same sentences the host does instead of its own.
+import { describeTrashEntry, UNTITLED_PAGE } from '@kinqs/brainrouter-core/notes/editing';
 import { devAtlasEnriched, devAtlasGraph } from './atlas.js';
 import type { DevState } from './state.js';
 import {
@@ -44,16 +48,52 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     { role: 'reviewer', provider: null, model: 'gpt-5.3-codex' },
   ];
   // ADR-029 — enough notes state for the browser harness to be interactive:
-  // one page, one locked block (B2's attribution), one block that already
-  // references a planner item so the live-label path renders.
-  const devNotes: Array<{
+  // one page, one locked block (B2's attribution), and one block that both
+  // references a planner item and carries a FENCED conflict, so the live-label
+  // path and the "kept beside the version it did not see" line both render
+  // without a server to produce them.
+  type DevNote = {
     id: string; parentId: string | null; kind: string; text: string; checked: boolean;
-    level: number | null; refs: string[]; conflictFields: string[];
-  }> = [
-    { id: 'blk_1', parentId: null, kind: 'page', text: 'Release notes', checked: false, level: null, refs: [], conflictFields: [] },
-    { id: 'blk_2', parentId: 'blk_1', kind: 'paragraph', text: 'The parser is unbounded on hostile input.', checked: false, level: null, refs: [], conflictFields: [] },
-    { id: 'blk_3', parentId: 'blk_1', kind: 'todo', text: 'Ship the parser fix', checked: false, level: null, refs: ['brainrouter://planner/item/itm_dev1'], conflictFields: [] },
+    level: number | null; refs: string[]; conflicts: Array<{ field: string; reason: string }>;
+    // E4's page metadata. The harness carries it because the sidebar tree, the
+    // icon picker and the favourites section read it — without these fields the
+    // shell renders here as an untitled, iconless list and looks broken in the
+    // one place a person checks it fastest.
+    icon: string | null; cover: string | null; favourite: boolean;
+  };
+  const devNotes: DevNote[] = [
+    { id: 'blk_1', parentId: null, kind: 'page', text: 'Release notes', checked: false, level: null, refs: [], conflicts: [], icon: '📝', cover: null, favourite: true },
+    { id: 'blk_2', parentId: 'blk_1', kind: 'paragraph', text: 'The parser is unbounded on hostile input.', checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false },
+    { id: 'blk_3', parentId: 'blk_1', kind: 'todo', text: 'Ship the parser fix', checked: false, level: null, refs: ['brainrouter://planner/item/itm_dev1'], conflicts: [{ field: 'text', reason: 'fenced_stale_epoch' }], icon: null, cover: null, favourite: false },
+    { id: 'blk_4', parentId: 'blk_1', kind: 'page', text: 'Parser rewrite', checked: false, level: null, refs: [], conflicts: [], icon: '🧪', cover: null, favourite: false },
   ];
+  // C5 — a delete is a tombstone, so the harness keeps what it removed rather
+  // than dropping it: a trash that is always empty here cannot be looked at.
+  const devNotesTrash: DevNote[] = [];
+  /** Ancestry depth, so the shell's page-relative indent gets real inputs. */
+  const devDepth = (block: DevNote): number => {
+    let depth = 0;
+    const seen = new Set<string>([block.id]);
+    let cursor = block.parentId;
+    while (cursor !== null && !seen.has(cursor)) {
+      seen.add(cursor);
+      depth += 1;
+      cursor = devNotes.find((b) => b.id === cursor)?.parentId ?? null;
+    }
+    return depth;
+  };
+  /** A block and everything under it, root first — what a delete takes. */
+  const devSubtree = (rootId: string): string[] => {
+    const out: string[] = [];
+    const walk = (id: string): void => {
+      if (out.includes(id)) return;
+      if (!devNotes.some((b) => b.id === id)) return;
+      out.push(id);
+      for (const child of devNotes.filter((b) => b.parentId === id)) walk(child.id);
+    };
+    walk(rootId);
+    return out;
+  };
   const devWorkspaceLabels = new Map<string, string>([
     ['brainrouter://planner/item/itm_dev1', 'Ship the parser fix'],
   ]);
@@ -1695,20 +1735,30 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     // handlers here and its mode is blank in the browser harness — so Notes
     // gets a working mock rather than the same gap.
     'notes-read': () => ({
-      blocks: devNotes.map((b, i) => ({ ...b, depth: b.parentId ? 1 : 0, hasChildren: devNotes.some((c) => c.parentId === b.id), lockedBy: i === 1 ? 'Being edited on another device' : null })),
+      blocks: devNotes.map((b, i) => ({
+        ...b,
+        // Depth by ancestry rather than "has a parent": a sub-page's blocks are
+        // two down, and a flat 0/1 would put the shell's relative-indent maths
+        // on inputs the real host never produces.
+        depth: devDepth(b),
+        hasChildren: devNotes.some((c) => c.parentId === b.id),
+        title: b.kind === 'page' ? (b.text.trim() || UNTITLED_PAGE) : null,
+        lockedBy: i === 1 ? 'Being edited on another device' : null,
+      })),
       repairs: [] as Array<Record<string, unknown>>,
       pending: 0,
       syncState: 'Everything is synced.',
-      conflictCount: devNotes.filter((b) => b.conflictFields.length > 0).length,
+      conflictCount: devNotes.filter((b) => b.conflicts.length > 0).length,
     }),
     'notes-create': (a) => {
-      const block = { id: `blk_${S.devNotesN++}`, parentId: null as string | null, kind: String(a.kind ?? 'paragraph'), text: String(a.text ?? ''), checked: false, level: null, refs: [] as string[], conflictFields: [] as string[] };
+      const block: DevNote = { id: `blk_${S.devNotesN++}`, parentId: typeof a.parentId === 'string' ? a.parentId : null, kind: String(a.kind ?? 'paragraph'), text: String(a.text ?? ''), checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false };
       const after = typeof a.after === 'string' ? devNotes.findIndex((b) => b.id === a.after) : -1;
+      if (after >= 0) block.parentId = devNotes[after]?.parentId ?? null;
       devNotes.splice(after >= 0 ? after + 1 : devNotes.length, 0, block);
       return block;
     },
     'notes-create-page': (a) => {
-      const block = { id: `blk_${S.devNotesN++}`, parentId: null as string | null, kind: 'page', text: String(a.title ?? 'Untitled page'), checked: false, level: null, refs: [] as string[], conflictFields: [] as string[] };
+      const block: DevNote = { id: `blk_${S.devNotesN++}`, parentId: typeof a.parentId === 'string' ? a.parentId : null, kind: 'page', text: String(a.title ?? ''), checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false };
       devNotes.push(block);
       return block;
     },
@@ -1718,13 +1768,52 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       if (typeof a.text === 'string') block.text = a.text;
       if (typeof a.kind === 'string') block.kind = a.kind;
       if (typeof a.checked === 'boolean') block.checked = a.checked;
+      if (typeof a.icon === 'string') block.icon = a.icon || null;
+      if (typeof a.cover === 'string') block.cover = a.cover || null;
+      if (typeof a.favourite === 'boolean') block.favourite = a.favourite;
       return { ok: true, block, path: 'leased', conflicted: false };
     },
     'notes-delete': (a) => {
-      const index = devNotes.findIndex((b) => b.id === a.id);
-      if (index >= 0) devNotes.splice(index, 1);
-      return { deleted: [String(a.id ?? '')] };
+      // The subtree goes with it, exactly as `deleteBlock` does: a child left
+      // behind under a deleted page is present in the data and absent from
+      // every page, which is the state C5 exists to prevent.
+      const ids = devSubtree(String(a.id ?? ''));
+      for (const id of ids) {
+        const index = devNotes.findIndex((b) => b.id === id);
+        if (index >= 0) devNotesTrash.unshift(...devNotes.splice(index, 1));
+      }
+      return { deleted: ids };
     },
+    'notes-restore': (a) => {
+      const id = String(a.id ?? '');
+      const restored: string[] = [];
+      for (const block of [...devNotesTrash]) {
+        if (block.id !== id && block.parentId !== id) continue;
+        devNotesTrash.splice(devNotesTrash.indexOf(block), 1);
+        devNotes.push(block);
+        restored.push(block.id);
+      }
+      return { restored };
+    },
+    'notes-trash': () => ({
+      entries: devNotesTrash
+        // An entry is the ROOT of a deletion, matching core's projection: a
+        // listing that showed every tombstone would offer to restore a
+        // paragraph into a page that is still deleted.
+        .filter((b) => !devNotesTrash.some((other) => other.id === b.parentId))
+        .map((b) => {
+          const descendants = devNotesTrash.filter((other) => other.parentId === b.id).length;
+          const title = b.text.trim() || UNTITLED_PAGE;
+          // Core's sentence, not a second one: the harness is where a
+          // divergence would be least visible and most misleading.
+          return { id: b.id, kind: b.kind, title, descendants, line: describeTrashEntry({ descendants }, title) };
+        }),
+    }),
+    'notes-favourites': () => ({
+      blocks: devNotes.filter((b) => b.favourite).map((b) => ({
+        id: b.id, kind: b.kind, title: b.text.trim() || UNTITLED_PAGE, icon: b.icon,
+      })),
+    }),
     'notes-move': (a) => {
       const block = devNotes.find((b) => b.id === a.id);
       if (block) block.parentId = typeof a.parentId === 'string' ? a.parentId : null;
@@ -1735,7 +1824,7 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     'notes-end-edit': () => ({ ok: true }),
     'notes-resolve': (a) => {
       const block = devNotes.find((b) => b.id === a.id);
-      if (block) block.conflictFields = block.conflictFields.filter((f) => f !== a.field);
+      if (block) block.conflicts = block.conflicts.filter((c) => c.field !== a.field);
       return block ?? null;
     },
     'notes-search': (a) => {
@@ -1746,6 +1835,16 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     'notes-sync': () => ({ pending: 0, pulled: 0, pushed: 0, offline: false, conflicted: [] as string[], syncState: 'Everything is synced.' }),
 
     'workspace-modes': () => ({ modes: ['chat', 'code', 'notes', 'planner', 'track'], creatable: ['notes', 'planner', 'track'] }),
+    // ADR-029 C2 row 6 — the browser harness has no checkout, so it answers
+    // with a plausible declaration list rather than nothing: a picker that is
+    // always empty here would look like the feature being broken.
+    'code-symbols': (a) => ({
+      path: String(a.path ?? ''),
+      symbols: [
+        { name: 'parseHeader', line: 12, kind: 'function' },
+        { name: 'Reader', line: 40, kind: 'class' },
+      ],
+    }),
     'workspace-describe': (a) => ({ line: devWorkspaceLabel(String(a.uri ?? '')) }),
     'workspace-resolve': (a) => ({ resolution: { status: 'found', ref: null, target: { label: devWorkspaceLabel(String(a.uri ?? '')) } }, line: devWorkspaceLabel(String(a.uri ?? '')) }),
     'workspace-create': (a) => {

@@ -11,10 +11,15 @@
  * concern that never blocks a keystroke — a notes app that stalls mid-sentence
  * is one people stop writing in.
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { NotesMode, type NotesOps } from './NotesMode.js';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { NotesMode, type CodeSymbolPick, type NotesOps, type NotesShellState } from './NotesMode.js';
 import type { NoteBlockView, NoteSendTarget, NoteTreeRepairView } from '../lib/notes/notesView.js';
 import { bridgeQuery } from '../lib/bridgeQuery.js';
+import { codeFileUri, codeSymbolUri, noteBlockUri } from '../lib/workspace/crossMode.js';
+import { selectedPageOrTop, withAncestorsExpanded } from '../lib/notes/pageTree.js';
+import { isQuickFindShortcut, type QuickFindHit } from '../lib/notes/quickFind.js';
+import { newPageIntent } from '../lib/notes/pageHeader.js';
+import type { FavouriteRow, TrashEntryDto } from '../lib/notes/sidebar.js';
 
 interface NotesSnapshot {
   blocks: NoteBlockView[];
@@ -46,12 +51,43 @@ export function NotesModeContainer({
   const [snapshot, setSnapshot] = useState<NotesSnapshot>(EMPTY);
   const [refLabels, setRefLabels] = useState<Record<string, string>>({});
   const [files, setFiles] = useState<string[]>([]);
+  /** Declarations by path, filled in when a file is picked — never on load. */
+  const [symbols, setSymbols] = useState<Record<string, CodeSymbolPick[]>>({});
   /** B5's hits, or null when nothing has been searched for — see `visibleBlocks`. */
   const [matchIds, setMatchIds] = useState<ReadonlySet<string> | null>(null);
   const [backlinkCounts, setBacklinkCounts] = useState<Record<string, number>>({});
   const searchTimer = useRef<number | undefined>(undefined);
   /** blockId -> the epoch this device believes it holds (B2's fencing token). */
   const held = useRef(new Map<string, number>());
+
+  /* ------------------------------------------------------------- the shell */
+
+  const [pageId, setPageId] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set<string>());
+  const [favourites, setFavourites] = useState<FavouriteRow[]>([]);
+  const [trash, setTrash] = useState<TrashEntryDto[]>([]);
+  const [quickFindOpen, setQuickFindOpen] = useState(false);
+  const [quickFindQuery, setQuickFindQuery] = useState('');
+  const [quickFindHits, setQuickFindHits] = useState<QuickFindHit[]>([]);
+  const quickFindTimer = useRef<number | undefined>(undefined);
+
+  /**
+   * Favourites and the trash are core's projections, asked for rather than
+   * derived from the flat list.
+   *
+   * The predicate is trivial either way, but the ORDER is not: core sorts
+   * favourites by rank and the trash by when it was deleted, and a renderer
+   * that filtered the rendered tree would show both in document order — the
+   * trash newest-last, which is the wrong end for the thing people use it for.
+   */
+  const refreshSections = useCallback(async () => {
+    const [favs, bin] = await Promise.all([
+      bridgeQuery<{ blocks?: FavouriteRow[] }>('notes-favourites', {}).catch(() => null),
+      bridgeQuery<{ entries?: TrashEntryDto[] }>('notes-trash', {}).catch(() => null),
+    ]);
+    if (favs) setFavourites(favs.blocks ?? []);
+    if (bin) setTrash(bin.entries ?? []);
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -61,9 +97,42 @@ export function NotesModeContainer({
       // A failed read leaves the last good snapshot on screen. Blanking what
       // someone is reading because one refresh failed loses more than it says.
     }
-  }, []);
+    await refreshSections();
+  }, [refreshSections]);
 
   useEffect(() => { void refresh(); }, [refresh]);
+
+  /**
+   * The open page, checked against what actually arrived.
+   *
+   * A selected page can vanish — deleted here, or a tombstone arriving from
+   * another device — and a shell that kept the id would render a header for
+   * something that is not there. Falling back to the top level shows a surface
+   * that is still true.
+   */
+  const openPageId = useMemo(
+    () => selectedPageOrTop(snapshot.blocks, pageId),
+    [snapshot.blocks, pageId],
+  );
+
+  const openPage = useCallback((next: string | null) => {
+    setPageId(next);
+    // Opening a page from anywhere — a breadcrumb, a favourite, ⌘K — reveals it
+    // in the tree. Otherwise the sidebar shows a collapsed branch beside a page
+    // it does not appear to contain.
+    setExpanded((current) => withAncestorsExpanded(snapshot.blocks, next, current));
+  }, [snapshot.blocks]);
+
+  /** E4 — ⌘K from anywhere in the mode, including while a block has focus. */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (!isQuickFindShortcut(e)) return;
+      e.preventDefault();
+      setQuickFindOpen((open) => !open);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   useEffect(() => {
     void bridgeQuery<{ files?: string[] }>('list-files', { limit: 3000 })
@@ -153,10 +222,58 @@ export function NotesModeContainer({
   }, [refresh]);
 
   const ops: NotesOps = {
+    // A new line belongs to the page being read, or it lands at the top level
+    // and the person watches it appear on a page they are not looking at.
     addBlock: (afterId, kind) => void mutate('notes-create', {
-      ...(afterId ? { after: afterId } : {}), ...(kind ? { kind } : {}),
+      ...(afterId ? { after: afterId } : openPageId ? { parentId: openPageId } : {}),
+      ...(kind ? { kind } : {}),
     }),
-    addPage: () => void mutate('notes-create-page', { title: 'Untitled page' }),
+    /**
+     * E4 — a page at any level, and inside any page.
+     *
+     * The new page is OPENED, because the gesture is "start writing here" and
+     * a page created into a collapsed branch with the reader left where they
+     * were looks like the button did nothing.
+     */
+    addPage: (parentId) => {
+      void (async () => {
+        const created = await bridgeQuery<{ id?: string }>('notes-create-page', newPageIntent(parentId))
+          .catch(() => null);
+        await refresh();
+        if (created?.id) openPage(created.id);
+      })();
+    },
+    openPage,
+    toggleExpanded: (id) => setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    }),
+    movePage: (intent) => void mutate('notes-move', { ...intent }),
+    // B4/E2 — the title IS the page block's text. One field, one write.
+    setPageTitle: (id, title) => void mutate('notes-update', { id, text: title }),
+    setIcon: (id, icon) => void mutate('notes-update', { id, icon }),
+    setCover: (id, cover) => void mutate('notes-update', { id, cover }),
+    setFavourite: (id, favourite) => void mutate('notes-update', { id, favourite }),
+    restore: (id) => void mutate('notes-restore', { id }),
+    openQuickFind: () => setQuickFindOpen(true),
+    closeQuickFind: () => setQuickFindOpen(false),
+    /**
+     * ⌘K searches everything, through the SAME ranked search the in-page filter
+     * uses — core's `searchNotes`, asked for by query. Debounced for the same
+     * reason: a request per character arrives out of order often enough that
+     * the list settles on the results for a prefix already typed past.
+     */
+    quickFindQuery: (query) => {
+      setQuickFindQuery(query);
+      window.clearTimeout(quickFindTimer.current);
+      if (!query.trim()) { setQuickFindHits([]); return; }
+      quickFindTimer.current = window.setTimeout(() => {
+        void bridgeQuery<{ hits?: QuickFindHit[] }>('notes-search', { query })
+          .then((res) => setQuickFindHits(res?.hits ?? []))
+          .catch(() => {});
+      }, 150);
+    },
     setText: (id, text) => void mutate('notes-update', { id, text }),
     setKind: (id, kind) => void mutate('notes-update', { id, kind }),
     toggleChecked: (id, checked) => void mutate('notes-update', { id, checked }),
@@ -210,10 +327,24 @@ export function NotesModeContainer({
         await refresh();
       })();
     },
-    linkFile: (id, relPath) => void mutate('workspace-link', {
-      from: `brainrouter://notes/block/${id}`,
-      to: `brainrouter://code/file/${relPath}`,
+    /**
+     * C2 row 6 — cite the file, or one declaration inside it.
+     *
+     * A symbol reference is the one that survives an EDIT rather than only a
+     * move: `#L59` means a different line the moment someone adds an import,
+     * while a function keeps its name while the file is rewritten around it.
+     */
+    linkFile: (id, relPath, symbol) => void mutate('workspace-link', {
+      from: noteBlockUri(id),
+      to: symbol ? codeSymbolUri(relPath, symbol) : codeFileUri(relPath),
     }),
+    loadSymbols: (relPath) => {
+      void bridgeQuery<{ symbols?: CodeSymbolPick[] }>('code-symbols', { path: relPath })
+        .then((res) => setSymbols((current) => ({ ...current, [relPath]: res?.symbols ?? [] })))
+        // An empty list is the honest answer when the file could not be read:
+        // the picker still offers the whole file, which always resolves.
+        .catch(() => setSymbols((current) => ({ ...current, [relPath]: [] })));
+    },
     openRef: (uri) => onOpenRef?.(uri),
 
     /**
@@ -242,6 +373,16 @@ export function NotesModeContainer({
     },
   };
 
+  const shell: NotesShellState = {
+    pageId: openPageId,
+    expanded,
+    favourites,
+    trash,
+    quickFindOpen,
+    quickFindQuery,
+    quickFindHits,
+  };
+
   return (
     <NotesMode
       blocks={snapshot.blocks}
@@ -249,8 +390,10 @@ export function NotesModeContainer({
       syncState={snapshot.syncState}
       refLabels={refLabels}
       files={files}
+      symbols={symbols}
       matchIds={matchIds}
       backlinkCounts={backlinkCounts}
+      shell={shell}
       ops={ops}
     />
   );

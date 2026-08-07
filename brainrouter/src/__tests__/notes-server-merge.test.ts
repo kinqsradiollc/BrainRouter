@@ -160,31 +160,13 @@ describe("notes push — the server merges, it does not accept", () => {
     await notes.acquireLease(ORG, USER, "blk_1", { deviceId: "device-a", holder: "the desktop" });
 
     await push({
-      key: "blk_1:leased", id: "blk_1", at: at(3_000, "device-a"),
+      key: "blk_1:leased", id: "blk_1", at: at(4_000, "device-a"),
       payload: { text: "first half of the sentence, and the second", leaseEpoch: 1 },
     });
 
     const block = blockOf("blk_1");
     expect(block.text.value).toBe("first half of the sentence, and the second");
     expect(block.conflicts).toBeUndefined();
-  });
-
-  it("a device that slept through a lease reissue cannot overwrite the edit made while it was gone", async () => {
-    await seed("blk_1", "typed while the laptop was closed", at(3_000, "device-b"));
-    // device-a held epoch 1; the lease lapsed and device-b took it, minting 2.
-    await notes.acquireLease(ORG, USER, "blk_1", { deviceId: "device-a" });
-    fake.nowMs += 60_000;
-    await notes.acquireLease(ORG, USER, "blk_1", { deviceId: "device-b" });
-
-    await push({
-      key: "blk_1:fenced", id: "blk_1", at: at(3_000, "device-a"),
-      payload: { text: "the sentence device-a was half way through", leaseEpoch: 1 },
-    });
-
-    const block = blockOf("blk_1");
-    // Nothing is discarded for holding a stale epoch — it merges, which is D4's
-    // floor — but it does not get an owner's direct write either.
-    expect(block.conflicts?.text).toBeTruthy();
   });
 
   it("a redelivered push is a no-op rather than a second apply", async () => {
@@ -273,6 +255,169 @@ describe("notes push — the server merges, it does not accept", () => {
     });
     expect(outcome.accepted).toEqual([]);
     expect(outcome.rejected[0]!.reason).toContain(String(notes.MAX_BLOCK_TEXT));
+  });
+});
+
+/**
+ * ADR-029 B2/Q1 — the fencing epoch, tested as a fence rather than as a field.
+ *
+ * Every case below uses DIFFERENT physical stamps on the two sides, and asserts
+ * the surviving VALUE. Both halves are deliberate. With equal stamps `mergeText`
+ * takes its concurrent branch and produces a marker on its own, so the test
+ * passes with the epoch check deleted and proves nothing about the epoch; and
+ * "a conflict exists" is satisfied by a merge that also let the stale text win,
+ * which is the defect. A stale write is the LATER write here — that is what
+ * makes it dangerous, and what last-writer-wins gets wrong on its own.
+ */
+describe("notes push — the fencing epoch decides what a write may take", () => {
+  const reset = (): void => {
+    fake.blocks.clear(); fake.refs.clear(); fake.index.clear();
+    fake.applied.clear(); fake.leases.clear();
+    fake.upserts = 0; fake.nowMs = 1_000_000;
+  };
+  beforeEach(reset);
+
+  /**
+   * Migration 048's defect verbatim, one layer up: the SAME device, a reissued
+   * token. device-a slept mid-edit, its lease lapsed, device-b edited and let
+   * go, device-a woke and started typing again — so it holds a live lease with
+   * a new epoch while a write authored under the old one is still queued.
+   *
+   * The device matches and the lease is live, so the epoch is the only thing
+   * that can tell the two writes apart.
+   */
+  async function replayTheSleepingDevice(claimedEpoch?: number): Promise<void> {
+    await seed("blk_1", "the sentence device-b wrote while device-a slept", at(5_000, "device-b"));
+    await notes.acquireLease(ORG, USER, "blk_1", { deviceId: "device-a" });   // epoch 1
+    fake.nowMs += 60_000;
+    await notes.acquireLease(ORG, USER, "blk_1", { deviceId: "device-b" });   // epoch 2
+    fake.nowMs += 60_000;
+    await notes.acquireLease(ORG, USER, "blk_1", { deviceId: "device-a" });   // epoch 3, live
+
+    await push({
+      key: "blk_1:woke", id: "blk_1", at: at(9_000, "device-a"),
+      payload: {
+        text: "the half-finished sentence device-a was holding",
+        ...(claimedEpoch === undefined ? {} : { leaseEpoch: claimedEpoch }),
+      },
+    });
+  }
+
+  it("a write authored under a reissued epoch cannot take the text, however late its clock", async () => {
+    await replayTheSleepingDevice(1);
+
+    const block = blockOf("blk_1");
+    expect(block.text.value).toBe("the sentence device-b wrote while device-a slept");
+    expect(block.conflicts?.text?.reason).toBe("fenced_stale_epoch");
+    // Refused, not dropped: the sentence is still there for a person to pick.
+    expect(block.conflicts?.text?.theirs).toBe("the half-finished sentence device-a was holding");
+  });
+
+  it("the SAME write under the current epoch does take the text — so the epoch is not inert", async () => {
+    await replayTheSleepingDevice(3);
+
+    const block = blockOf("blk_1");
+    expect(block.text.value).toBe("the half-finished sentence device-a was holding");
+    expect(block.conflicts).toBeUndefined();
+  });
+
+  it("an epoch that was never issued is fenced exactly like a stale one", async () => {
+    await replayTheSleepingDevice(99);
+
+    expect(blockOf("blk_1").text.value).toBe("the sentence device-b wrote while device-a slept");
+    expect(blockOf("blk_1").conflicts?.text?.reason).toBe("fenced_stale_epoch");
+  });
+
+  it("omitting the epoch on a block this device holds is the soft-lock case, and lands", async () => {
+    // B2 chose SOFT locking, so this is the designed answer rather than a gap:
+    // no epoch means "not claiming ownership", and ownership buys nothing but
+    // the absence of a penalty. Where omitting it is NOT free is when someone
+    // else holds the block — the next test.
+    await replayTheSleepingDevice(undefined);
+
+    expect(blockOf("blk_1").text.value).toBe("the half-finished sentence device-a was holding");
+  });
+
+  it("a device that reclaimed the block is not overwritten by the previous holder", async () => {
+    // The other half of the reissue: device-b took over and still holds it. The
+    // epoch is tied to a peer, not just to a number, so device-a is fenced by
+    // the device as well as by the count — and it is fenced as a STALE claim
+    // rather than blocked, because its sentence already exists and a claim that
+    // arrives with an epoch is never refused outright.
+    await seed("blk_1", "typed on the phone while the laptop was closed", at(5_000, "device-b"));
+    await notes.acquireLease(ORG, USER, "blk_1", { deviceId: "device-a" });
+    fake.nowMs += 60_000;
+    await notes.acquireLease(ORG, USER, "blk_1", { deviceId: "device-b", holder: "the phone" });
+
+    await push({
+      key: "blk_1:fenced", id: "blk_1", at: at(9_000, "device-a"),
+      payload: { text: "the sentence device-a was half way through", leaseEpoch: 1 },
+    });
+
+    const block = blockOf("blk_1");
+    expect(block.text.value).toBe("typed on the phone while the laptop was closed");
+    expect(block.conflicts?.text?.reason).toBe("fenced_stale_epoch");
+  });
+
+  it("a write naming no epoch cannot overwrite a block another device is holding", async () => {
+    await seed("blk_1", "the paragraph the phone is in the middle of", at(5_000, "device-b"));
+    await notes.acquireLease(ORG, USER, "blk_1", { deviceId: "device-b", holder: "the phone" });
+
+    await push({
+      key: "blk_1:intruder", id: "blk_1", at: at(9_000, "device-a"),
+      payload: { text: "what the laptop had queued" },
+    });
+
+    const block = blockOf("blk_1");
+    expect(block.text.value).toBe("the paragraph the phone is in the middle of");
+    expect(block.conflicts?.text?.reason).toBe("fenced_blocked");
+    expect(block.conflicts?.text?.theirs).toBe("what the laptop had queued");
+  });
+
+  it("holding the lock does not buy the right to overwrite text this write never saw", async () => {
+    // D11 head on: a client that is behind must not win by pushing last, and a
+    // valid lease does not make it less behind. Taking a leaseholder's payload
+    // wholesale — the shape this had — inverted exactly that.
+    await seed("blk_1", "the paragraph as it now stands", at(9_000, "device-b"));
+    await notes.acquireLease(ORG, USER, "blk_1", { deviceId: "device-a" });
+
+    await push({
+      key: "blk_1:behind", id: "blk_1", at: at(3_000, "device-a"),
+      payload: { text: "what this device had an hour ago", leaseEpoch: 1 },
+    });
+
+    expect(blockOf("blk_1").text.value).toBe("the paragraph as it now stands");
+  });
+
+  it("a fenced write still moves the block, because a lost placement is not a lost sentence", async () => {
+    await seed("blk_1", "a line", at(5_000, "device-b"));
+    await notes.acquireLease(ORG, USER, "blk_1", { deviceId: "device-b", holder: "the phone" });
+
+    await push({
+      key: "blk_1:moved", id: "blk_1", at: at(9_000, "device-a"),
+      payload: { parentId: "blk_page", rank: "z" },
+    });
+
+    const block = blockOf("blk_1");
+    expect(block.parentId.value).toBe("blk_page");
+    // Placement is last-writer-wins even when fenced: it can be dragged back,
+    // and marking it would put a conflict banner on a drag.
+    expect(block.conflicts).toBeUndefined();
+  });
+
+  it("a fenced operation is still ACCEPTED, so the client stops retrying it", async () => {
+    // A rejection would sit in the outbox and be pushed again forever. The write
+    // did land — beside the text it did not see rather than on top of it.
+    await seed("blk_1", "the version on the server", at(5_000, "device-b"));
+    await notes.acquireLease(ORG, USER, "blk_1", { deviceId: "device-b" });
+
+    const outcome = await push({
+      key: "blk_1:fenced-accept", id: "blk_1", at: at(9_000, "device-a"),
+      payload: { text: "the version that was fenced" },
+    });
+
+    expect(outcome.accepted).toEqual(["blk_1:fenced-accept"]);
+    expect(outcome.rejected).toEqual([]);
   });
 });
 

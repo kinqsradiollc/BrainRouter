@@ -1,5 +1,5 @@
 /**
- * ADR-029 Part B — the Notes mode.
+ * ADR-029 Part B + E4 — the Notes mode.
  *
  * A sixth workspace mode beside Chat · Code · Track · Meetings · Planner. Notes
  * are user-scoped and cross-project (D1), so like the planner this is a MODE
@@ -8,24 +8,66 @@
  * scoping error ADR-028 D9 recorded.
  *
  * The unit is a block (B1) and a page is a block with children (B4), so the
- * whole document is one recursion rendered flat with an indent.
+ * sidebar tree, the breadcrumbs and a page's body are all one recursion over
+ * `parentId` — there is no page table any of them could disagree about.
+ *
+ * **A page's body is the blocks whose NEAREST PAGE ANCESTOR is this page**, not
+ * every block. A sub-page appears as one row rather than as its contents:
+ * rendering the subtree inline would put the whole workspace on every page, and
+ * there would be no gesture that opens a sub-page because it would already be
+ * open.
  *
  * This component renders. Every judgement — what is editable and why, what a
- * placeholder says, which cross-mode moves a line offers — comes from
- * `notesView`.
+ * placeholder says, what nests where, what a drag means, what an empty section
+ * offers — comes from `lib/notes/*`.
  */
 import React, { useMemo, useState } from 'react';
 import { Icon } from '../icons.js';
-import { Button } from '../components/primitives/Button.js';
+import { RefChip } from '../components/workspace/RefChip.js';
+import { NotesSidebar } from './NotesSidebar.js';
+import { PageHeader } from './PageHeader.js';
+import { QuickFind } from './QuickFind.js';
 import {
-  backlinkNote, canEdit, conflictBanner, emptyMessage, indentFor, pendingRefLabel,
-  placeholderFor, readOnlyReason, repairNote, sendTargetsFor, visibleBlocks,
+  backlinkNote, canEdit, conflictBanner, conflictLine, emptyMessage, indentFor,
+  placeholderFor, readOnlyReason, repairNote, sendTargetsFor,
+  visibleBlocks,
   type NoteBlockView, type NoteSendTarget, type NoteTreeRepairView,
 } from '../lib/notes/notesView.js';
+import { pageBodyBlocks, type PageMoveIntent } from '../lib/notes/pageTree.js';
+import { pageHeaderView } from '../lib/notes/pageHeader.js';
+import type { FavouriteRow, TrashEntryDto } from '../lib/notes/sidebar.js';
+import type { QuickFindHit, QuickFindRow } from '../lib/notes/quickFind.js';
+
+/** Everything the shell around the editor is currently showing. */
+export interface NotesShellState {
+  /** Which page is open. Null is the top level, which is a real page (B4). */
+  pageId: string | null;
+  expanded: ReadonlySet<string>;
+  favourites: FavouriteRow[];
+  trash: TrashEntryDto[];
+  quickFindOpen: boolean;
+  quickFindQuery: string;
+  quickFindHits: QuickFindHit[];
+}
 
 export interface NotesOps {
   addBlock: (afterId: string | null, kind?: string) => void;
-  addPage: () => void;
+  /** E4 — a page at any level: the sidebar's button, a row's `+`, the header's. */
+  addPage: (parentId: string | null) => void;
+  openPage: (pageId: string | null) => void;
+  toggleExpanded: (pageId: string) => void;
+  /** Drag to reorder and to reparent — the tree's only write. */
+  movePage: (intent: PageMoveIntent) => void;
+  /** B4/E2 — the title IS the page block's text, so this is one field. */
+  setPageTitle: (id: string, title: string) => void;
+  setIcon: (id: string, icon: string) => void;
+  setCover: (id: string, cover: string) => void;
+  setFavourite: (id: string, favourite: boolean) => void;
+  /** C5 — a tombstone taken back, with the subtree that went with it. */
+  restore: (id: string) => void;
+  openQuickFind: () => void;
+  closeQuickFind: () => void;
+  quickFindQuery: (query: string) => void;
   setText: (id: string, text: string) => void;
   setKind: (id: string, kind: string) => void;
   toggleChecked: (id: string, checked: boolean) => void;
@@ -39,8 +81,16 @@ export interface NotesOps {
   resolveConflict: (id: string, field: string, keep: 'ours' | 'theirs') => void;
   /** C2 — a line becomes a work item or a planner task, and cites it back. */
   sendTo: (id: string, target: NoteSendTarget) => void;
-  /** C2 — Notes → Code: cite a file from a note. */
-  linkFile: (id: string, relPath: string) => void;
+  /**
+   * C2 — Notes → Code: cite a file, or one symbol in it.
+   *
+   * The symbol is the half that survives an edit rather than only a move: a
+   * function keeps its name when someone reorders the file around it, and
+   * `#L59` does not.
+   */
+  linkFile: (id: string, relPath: string, symbol?: string) => void;
+  /** The declarations of the file being considered, asked for when it is picked. */
+  loadSymbols: (relPath: string) => void;
   /** Follow a reference to whatever it addresses. */
   openRef: (uri: string) => void;
   /** B5 — the ranked search, which lives in core and is asked for by id. */
@@ -49,8 +99,15 @@ export interface NotesOps {
   loadBacklinks: (id: string) => void;
 }
 
+/** One declaration a file makes, as the picker offers it. */
+export interface CodeSymbolPick {
+  name: string;
+  line: number;
+  kind: string;
+}
+
 export function NotesMode({
-  blocks, repairs, syncState, refLabels, files, matchIds, backlinkCounts, ops,
+  blocks, repairs, syncState, refLabels, files, symbols, matchIds, backlinkCounts, shell, ops,
 }: {
   blocks: NoteBlockView[];
   repairs: NoteTreeRepairView[];
@@ -59,75 +116,119 @@ export function NotesMode({
   refLabels: Record<string, string>;
   /** Workspace-relative paths offered by the file picker. */
   files: string[];
+  /** Declarations by path, absent until that file has been read. */
+  symbols: Record<string, CodeSymbolPick[]>;
   /** B5's hits by block id, or null when nothing has been searched for. */
   matchIds: ReadonlySet<string> | null;
   backlinkCounts: Record<string, number>;
+  shell: NotesShellState;
   ops: NotesOps;
 }): React.ReactElement {
   const [query, setQuery] = useState('');
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [linkFor, setLinkFor] = useState<string | null>(null);
-  const visible = useMemo(() => visibleBlocks(blocks, matchIds), [blocks, matchIds]);
+  const header = useMemo(() => pageHeaderView(blocks, shell.pageId), [blocks, shell.pageId]);
+  const page = shell.pageId === null ? null : blocks.find((b) => b.id === shell.pageId) ?? null;
+  // The in-page search filters the PAGE, not the workspace — ⌘K is the one that
+  // crosses pages. A filter box that quietly removed lines from other pages
+  // would report a page as empty because of a word typed while reading it.
+  const body = useMemo(() => pageBodyBlocks(blocks, shell.pageId), [blocks, shell.pageId]);
+  const visible = useMemo(() => visibleBlocks(body, matchIds), [body, matchIds]);
   const banner = conflictBanner(blocks);
 
   return (
     <div className="notes-mode">
-      <header className="notes-head">
-        <div className="notes-actions">
-          <Button variant="primary" onClick={() => ops.addPage()}>
-            <Icon name="plus" size={12} /> New page
-          </Button>
-          <input className="filter notes-filter" placeholder="Search notes and what they link to"
-            value={query} onChange={(e) => { setQuery(e.target.value); ops.search(e.target.value); }} />
-        </div>
-        {/* Sync runs on its own (B3/D2). The line reports state as a fact;
-            offline is the normal mode that happens to be syncing. */}
-        <span className="notes-sync">{syncState}</span>
-      </header>
+      <NotesSidebar
+        blocks={blocks} favourites={shell.favourites} trash={shell.trash}
+        pageId={shell.pageId} expanded={shell.expanded} ops={ops}
+      />
 
-      {banner ? <div className="notes-conflict-banner">{banner}</div> : null}
+      <div className="notes-page">
+        <header className="notes-head">
+          <div className="notes-actions">
+            <input className="filter notes-filter" placeholder="Search this page and what it links to"
+              value={query} onChange={(e) => { setQuery(e.target.value); ops.search(e.target.value); }} />
+          </div>
+          {/* Sync runs on its own (B3/D2). The line reports state as a fact;
+              offline is the normal mode that happens to be syncing. */}
+          <span className="notes-sync">{syncState}</span>
+        </header>
 
-      {repairs.map((repair) => (
-        <div key={repair.blockId} className="notes-repair">{repairNote(repair)}</div>
-      ))}
+        {banner ? <div className="notes-conflict-banner">{banner}</div> : null}
 
-      <div className="notes-body scroll">
-        {visible.length === 0 ? (
-          <p className="notes-empty">{query ? 'Nothing matches.' : emptyMessage()}</p>
-        ) : null}
-
-        {visible.map((block) => (
-          <BlockRow
-            key={block.id} block={block} refLabels={refLabels} ops={ops}
-            backlinkCount={backlinkCounts[block.id] ?? 0}
-            menuOpen={menuFor === block.id}
-            onMenu={() => {
-              const opening = menuFor !== block.id;
-              setMenuFor(opening ? block.id : null);
-              if (opening) ops.loadBacklinks(block.id);
-            }}
-            linkOpen={linkFor === block.id}
-            onLink={() => { setLinkFor(linkFor === block.id ? null : block.id); setMenuFor(null); }}
-            files={files}
-          />
+        {repairs.map((repair) => (
+          <div key={repair.blockId} className="notes-repair">{repairNote(repair)}</div>
         ))}
 
-        {visible.length > 0 ? (
+        <div className="notes-body scroll">
+          <PageHeader view={header} block={page} ops={ops} />
+
+          {visible.length === 0 ? (
+            <p className="notes-empty">{query ? 'Nothing on this page matches.' : emptyMessage()}</p>
+          ) : null}
+
+          {visible.map((block) => (block.kind === 'page' ? (
+            <SubPageRow key={block.id} block={block} onOpen={() => ops.openPage(block.id)} />
+          ) : (
+            <BlockRow
+              key={block.id} block={block} refLabels={refLabels} ops={ops}
+              backlinkCount={backlinkCounts[block.id] ?? 0}
+              menuOpen={menuFor === block.id}
+              onMenu={() => {
+                const opening = menuFor !== block.id;
+                setMenuFor(opening ? block.id : null);
+                if (opening) ops.loadBacklinks(block.id);
+              }}
+              linkOpen={linkFor === block.id}
+              onLink={() => { setLinkFor(linkFor === block.id ? null : block.id); setMenuFor(null); }}
+              files={files}
+              symbols={symbols}
+            />
+          )))}
+
           <button className="notes-add-line" onClick={() => ops.addBlock(null)}>
-            <Icon name="plus" size={11} /> Add a line
+            <Icon name="plus" size={11} />
+            {visible.length > 0 ? ' Add a line' : ' Write the first line'}
           </button>
-        ) : (
-          <button className="notes-add-line" onClick={() => ops.addBlock(null)}>
-            <Icon name="plus" size={11} /> Write the first line
-          </button>
-        )}
+        </div>
       </div>
+
+      {shell.quickFindOpen ? (
+        <QuickFind
+          blocks={blocks} hits={shell.quickFindHits} query={shell.quickFindQuery}
+          onQuery={ops.quickFindQuery}
+          onOpen={(row: QuickFindRow) => { ops.openPage(row.pageId); ops.closeQuickFind(); }}
+          onClose={ops.closeQuickFind}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * A sub-page inside a page's body — one row, not its contents (B4).
+ *
+ * It is a link rather than a text field even though a page block HAS text,
+ * because that text is the page's title and it is edited in the page's own
+ * header. Two editable copies of one title on one screen is E2's mistake in
+ * miniature: the person edits whichever is nearer and the other looks stale.
+ */
+function SubPageRow({ block, onOpen }: {
+  block: NoteBlockView;
+  onOpen: () => void;
+}): React.ReactElement {
+  return (
+    <div className="notes-block" data-kind="page" style={{ paddingLeft: indentFor(block.depth) }}>
+      <button className="notes-subpage" onClick={onOpen}>
+        <span className="notes-subpage-icon">{block.icon ?? <Icon name="note" size={12} />}</span>
+        <span className="notes-subpage-title">{block.title ?? block.text}</span>
+      </button>
     </div>
   );
 }
 
 function BlockRow({
-  block, refLabels, ops, backlinkCount, menuOpen, onMenu, linkOpen, onLink, files,
+  block, refLabels, ops, backlinkCount, menuOpen, onMenu, linkOpen, onLink, files, symbols,
 }: {
   block: NoteBlockView;
   refLabels: Record<string, string>;
@@ -139,6 +240,7 @@ function BlockRow({
   linkOpen: boolean;
   onLink: () => void;
   files: string[];
+  symbols: Record<string, CodeSymbolPick[]>;
 }): React.ReactElement {
   const locked = readOnlyReason(block);
   const editable = canEdit(block);
@@ -193,23 +295,28 @@ function BlockRow({
           {block.refs.map((uri) => (
             // A3 — the chip shows the target's CURRENT state, including
             // "(deleted 4 Aug)". Snapshotting the label at insert time is what
-            // produces documents that are quietly wrong.
-            <button key={uri} className="notes-ref-chip" title={uri} onClick={() => ops.openRef(uri)}>
-              <Icon name="link" size={10} /> {refLabels[uri] ?? pendingRefLabel(uri)}
-            </button>
+            // produces documents that are quietly wrong. The chip itself is the
+            // shared one, so the planner cannot render the same reference
+            // differently.
+            <RefChip key={uri} uri={uri} label={refLabels[uri]} onOpen={ops.openRef} />
           ))}
         </div>
       ) : null}
 
-      {block.conflictFields.map((field) => (
-        <div key={field} className="notes-conflict">
-          <span>“{field}” was edited in two places.</span>
-          <button onClick={() => ops.resolveConflict(block.id, field, 'ours')}>Keep mine</button>
-          <button onClick={() => ops.resolveConflict(block.id, field, 'theirs')}>Keep theirs</button>
+      {block.conflicts.map((conflict) => (
+        <div key={conflict.field} className="notes-conflict">
+          <span>{conflictLine(conflict)}</span>
+          <button onClick={() => ops.resolveConflict(block.id, conflict.field, 'ours')}>Keep mine</button>
+          <button onClick={() => ops.resolveConflict(block.id, conflict.field, 'theirs')}>Keep theirs</button>
         </div>
       ))}
 
-      {linkOpen ? <FilePicker files={files} onPick={(p) => { ops.linkFile(block.id, p); onLink(); }} /> : null}
+      {linkOpen ? (
+        <FilePicker
+          files={files} symbols={symbols} onLoadSymbols={(p) => ops.loadSymbols(p)}
+          onPick={(p, symbol) => { ops.linkFile(block.id, p, symbol); onLink(); }}
+        />
+      ) : null}
 
       {menuOpen ? (
         <div className="notes-menu" role="menu">
@@ -237,25 +344,61 @@ function BlockRow({
 }
 
 /**
- * C2's Notes → Code row.
+ * C2's Notes → Code row, in two steps: which file, then which part of it.
  *
  * A path picked from the workspace rather than typed, because a reference to a
  * file that does not exist resolves as a tombstone and the person who typed the
- * typo has no way to tell that apart from a file someone deleted.
+ * typo has no way to tell that apart from a file someone deleted. The SYMBOL is
+ * picked for the same reason and from the same evidence: the list is the
+ * declarations the resolver itself recognises, so the picker cannot offer a
+ * name that resolution will then fail to find.
  */
-function FilePicker({ files, onPick }: { files: string[]; onPick: (path: string) => void }): React.ReactElement {
+function FilePicker({ files, symbols, onLoadSymbols, onPick }: {
+  files: string[];
+  symbols: Record<string, CodeSymbolPick[]>;
+  onLoadSymbols: (path: string) => void;
+  onPick: (path: string, symbol?: string) => void;
+}): React.ReactElement {
   const [query, setQuery] = useState('');
+  const [chosen, setChosen] = useState<string | null>(null);
   const matches = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return (needle ? files.filter((f) => f.toLowerCase().includes(needle)) : files).slice(0, 8);
   }, [files, query]);
+
+  if (chosen) {
+    // Absent means "not read yet"; an empty array means "read, and it declares
+    // nothing this recognises". Collapsing the two would make a slow read look
+    // like a file with no functions in it.
+    const declared = symbols[chosen];
+    return (
+      <div className="notes-linkpicker">
+        <div className="notes-linkpicker-head">
+          <button className="notes-linkpicker-back" onClick={() => setChosen(null)}>← Files</button>
+          <span className="notes-linkpicker-path" title={chosen}>{chosen}</span>
+        </div>
+        <button className="notes-linkpicker-item" onClick={() => onPick(chosen)}>Link the whole file</button>
+        {(declared ?? []).map((symbol) => (
+          <button key={`${symbol.name}:${symbol.line}`} className="notes-linkpicker-item"
+            onClick={() => onPick(chosen, symbol.name)}>
+            {symbol.name} <small>{symbol.kind} · line {symbol.line}</small>
+          </button>
+        ))}
+        {declared === undefined ? <span className="notes-linkpicker-empty">Reading its declarations…</span> : null}
+        {declared?.length === 0
+          ? <span className="notes-linkpicker-empty">Nothing declared here to point at.</span>
+          : null}
+      </div>
+    );
+  }
 
   return (
     <div className="notes-linkpicker">
       <input className="filter" autoFocus placeholder="Which file?" value={query}
         onChange={(e) => setQuery(e.target.value)} />
       {matches.map((file) => (
-        <button key={file} className="notes-linkpicker-item" onClick={() => onPick(file)}>{file}</button>
+        <button key={file} className="notes-linkpicker-item"
+          onClick={() => { setChosen(file); onLoadSymbols(file); }}>{file}</button>
       ))}
       {matches.length === 0 ? <span className="notes-linkpicker-empty">No file matches.</span> : null}
     </div>

@@ -28,13 +28,24 @@ import {
   beginEditing as notesBeginEditing, keepEditing as notesKeepEditing, endEditing as notesEndEditing,
   describeBlockLease, describeNotesSync, syncNotesOnce, blockReferences,
   listBlocks as notesList, searchNotes, blocksReferencing, type NoteBlockKind,
+  // ADR-029 Part E — the editing model. Every judgement below lives in core so
+  // the desktop, the dashboard and the CLI cannot disagree about what Enter
+  // does; the host only routes.
+  splitBlock as notesSplit, mergeIntoPrevious as notesMergeBack,
+  duplicateBlock as notesDuplicate, moveBlockUp as notesMoveUp,
+  moveBlockDown as notesMoveDown, indentBlock as notesIndent,
+  outdentBlock as notesOutdent, restoreBlock as notesRestore,
+  listTrash as notesTrash, listFavourites as notesFavourites,
+  applyInputRule, searchSlashCatalog, numberedOrdinals, pageTitleOrDefault,
+  describeTrashEntry,
 } from '@kinqs/brainrouter-core/notes';
 import { createNotesTransport } from './notesTransport.js';
 import {
   formatWorkspaceRef, parseWorkspaceRef, renderWorkspaceResolution,
 } from '@kinqs/brainrouter-core/workspace/references';
 import {
-  buildLocalWorkspaceRegistry, linkWorkspaceRef, localWorkspaceViewer,
+  buildLocalWorkspaceRegistry, linkWorkspaceRef, listCodeSymbols, locateCodeFile,
+  localWorkspaceViewer, readSourceForSymbols,
 } from '@kinqs/brainrouter-core/workspace/participants';
 import {
   readDeclinedTools, writeDeclinedTool, readWorkspaceBinding, writeWorkspaceBinding,
@@ -2290,9 +2301,12 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         // O(blocks) file parses — invisible at three blocks and a stall at three
         // hundred.
         const state = readNotes(undefined);
-        const blocks = Object.values(state.blocks).filter((b) => !b.deletedAt);
         const tree = buildNoteTree(Object.values(state.blocks));
         const now = Date.now();
+        // E4 — the ordinal is a function of tree position and is computed here,
+        // once, rather than counted in the renderer. A stored one goes wrong the
+        // moment a sibling is deleted on another device.
+        const ordinals = numberedOrdinals(tree.roots);
         const flat: Array<Record<string, unknown>> = [];
         const walk = (nodes: ReturnType<typeof buildNoteTree>['roots']): void => {
           for (const node of nodes) {
@@ -2305,9 +2319,24 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
               text: block.text.value,
               checked: block.checked?.value === true,
               level: block.level?.value ?? null,
+              language: block.language?.value ?? null,
+              collapsed: block.collapsed?.value === true,
+              icon: block.icon?.value ?? null,
+              cover: block.cover?.value ?? null,
+              favourite: block.favourite?.value === true,
+              ordinal: ordinals.get(block.id) ?? null,
+              // Only a page has a title. Sending one for every block would put
+              // "Untitled" on empty paragraphs, which reads as a name rather
+              // than as an absence.
+              title: block.kind.value === 'page' ? pageTitleOrDefault(block) : null,
               hasChildren: node.children.length > 0,
               refs: blockReferences(block),
-              conflictFields: Object.keys(block.conflicts ?? {}),
+              // The REASON travels with the field, not just the field name: a
+              // paragraph kept beside a version this device never saw needs a
+              // different sentence from two people typing at once, and the
+              // renderer cannot re-derive which happened from a field name.
+              conflicts: Object.entries(block.conflicts ?? {})
+                .map(([field, conflict]) => ({ field, reason: conflict.reason })),
               lockedBy: describeBlockLease(state.leases[block.id], state.deviceId, now),
             });
             walk(node.children);
@@ -2328,7 +2357,9 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
             { pulled: 0, pushed: 0, offline: false, conflicted: [], rejected: [] },
             state.outbox,
           ),
-          conflictCount: blocks.filter((b) => Object.keys(b.conflicts ?? {}).length > 0).length,
+          // Counted over the rendered tree, so a conflict on a block nobody can
+          // see does not put a banner on a page with nothing to resolve.
+          conflictCount: flat.filter((b) => (b.conflicts as unknown[]).length > 0).length,
         };
       },
       'notes-create': (a) => notesCreate(undefined, {
@@ -2347,8 +2378,68 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         ...(typeof a.kind === 'string' ? { kind: a.kind as NoteBlockKind } : {}),
         ...(typeof a.checked === 'boolean' ? { checked: a.checked } : {}),
         ...(typeof a.level === 'number' ? { level: a.level } : {}),
+        ...(typeof a.language === 'string' ? { language: a.language } : {}),
+        ...(typeof a.collapsed === 'boolean' ? { collapsed: a.collapsed } : {}),
+        ...(typeof a.icon === 'string' ? { icon: a.icon } : {}),
+        ...(typeof a.cover === 'string' ? { cover: a.cover } : {}),
+        ...(typeof a.favourite === 'boolean' ? { favourite: a.favourite } : {}),
       }, Date.now()),
       'notes-delete': (a) => ({ deleted: notesDelete(undefined, String(a.id ?? ''), Date.now()) }),
+
+      // ADR-029 E1 — the gestures. Each one is a call into core, because the
+      // judgements they encode (does Backspace unstyle, outdent or merge; where
+      // does a split's tail go) are the ones that make two surfaces disagree
+      // when they live in a keydown handler.
+      'notes-split': (a) => notesSplit(undefined, String(a.id ?? ''), Number(a.caret ?? 0), Date.now()),
+      'notes-merge-back': (a) => notesMergeBack(undefined, String(a.id ?? ''), Date.now()),
+      'notes-duplicate': (a) => notesDuplicate(undefined, String(a.id ?? ''), Date.now()),
+      'notes-move-up': (a) => notesMoveUp(undefined, String(a.id ?? ''), Date.now()),
+      'notes-move-down': (a) => notesMoveDown(undefined, String(a.id ?? ''), Date.now()),
+      'notes-indent': (a) => notesIndent(undefined, String(a.id ?? ''), Date.now()),
+      'notes-outdent': (a) => notesOutdent(undefined, String(a.id ?? ''), Date.now()),
+
+      // E1 — the line becoming something else as it is typed. The renderer asks
+      // after each keystroke and applies whatever comes back through
+      // `notes-update`; it never decides what `# ` means.
+      'notes-input-rule': (a) => ({
+        transform: applyInputRule({
+          kind: (typeof a.kind === 'string' ? a.kind : 'paragraph') as NoteBlockKind,
+          text: String(a.text ?? ''),
+          caret: Number(a.caret ?? 0),
+          // The current level travels, or `# ` typed inside a level-1 heading
+          // looks like a change and eats the character.
+          ...(typeof a.level === 'number' ? { level: a.level } : {}),
+        }),
+      }),
+      'notes-slash-menu': (a) => ({
+        commands: searchSlashCatalog(String(a.query ?? ''), Number(a.limit ?? 12)),
+      }),
+
+      // E4 — trash and favourites, both projections over what is already stored
+      // (C5's tombstone and a stamped field). Neither is a second table.
+      'notes-trash': () => ({
+        entries: notesTrash(undefined).map((entry) => ({
+          id: entry.block.id,
+          kind: entry.block.kind.value,
+          title: pageTitleOrDefault(entry.block),
+          descendants: entry.descendants,
+          deletedAt: entry.deletedAt,
+          // The LINE comes from core, because "restoring this brings 12 blocks
+          // back with it" is the rule `deleteBlock` implements and re-deriving
+          // the sentence in a renderer would let one surface promise something
+          // the store does not do.
+          line: describeTrashEntry(entry, pageTitleOrDefault(entry.block)),
+        })),
+      }),
+      'notes-restore': (a) => ({ restored: notesRestore(undefined, String(a.id ?? ''), Date.now()) }),
+      'notes-favourites': () => ({
+        blocks: notesFavourites(undefined).map((block) => ({
+          id: block.id,
+          kind: block.kind.value,
+          title: pageTitleOrDefault(block),
+          icon: block.icon?.value ?? null,
+        })),
+      }),
       'notes-move': (a) => notesMove(undefined, String(a.id ?? ''), {
         ...(a.parentId !== undefined ? { parentId: a.parentId as string | null } : {}),
         ...(typeof a.after === 'string' ? { after: a.after } : {}),
@@ -2439,6 +2530,26 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       'workspace-modes': () => {
         const registry = localWorkspaceRegistry();
         return { modes: registry.modes(), creatable: registry.creatableModes() };
+      },
+      /**
+       * ADR-029 C2 row 6 — what a file declares, so a symbol can be PICKED.
+       *
+       * Typing the name would let someone cite a symbol that is not there, and
+       * that reference resolves as a tombstone which the person who typed the
+       * typo cannot tell apart from a function somebody removed. Offering the
+       * declarations the resolver itself recognises means the two agree by
+       * construction.
+       */
+      'code-symbols': (a) => {
+        const relPath = String(a.path ?? '').trim();
+        if (!relPath) return { symbols: [], error: 'No file was named.' };
+        const located = locateCodeFile(workspaceRoot, relPath);
+        if (located.status !== 'found' && located.status !== 'moved') {
+          return { symbols: [], path: relPath, error: `${relPath} could not be read here.` };
+        }
+        const read = readSourceForSymbols(located.absolute);
+        if (!read.ok) return { symbols: [], path: located.path, error: read.reason };
+        return { symbols: listCodeSymbols(read.source), path: located.path };
       },
       'workspace-create': async (a) => {
         const from = typeof a.from === 'string' ? parseWorkspaceRef(a.from) : null;

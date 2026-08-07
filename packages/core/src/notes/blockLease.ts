@@ -44,6 +44,13 @@
  *     routes the write through D4's merge instead — the marker B2 calls the
  *     floor. Nothing a person typed is thrown away for holding the wrong epoch.
  *
+ *     What a refusal DOES cost is the right to supersede: a fenced write cannot
+ *     take the text it never saw, and if last-writer-wins would have handed it
+ *     that text, both versions are kept and marked instead (`mergeNoteBlock`'s
+ *     `fenced` argument). Without that, "merge instead of drop" degrades into
+ *     "no fence at all", because a stale device's clock keeps running and its
+ *     write arrives LATER than the one it is about to bury.
+ *
  * The lease is coordination, not content: it is kept beside the blocks rather
  * than on them, and never merged by last-writer-wins. A lease that merged that
  * way would let the device with the faster clock take a lock it was refused,
@@ -238,6 +245,15 @@ export type BlockWritePath =
  * cannot write as the owner, and its edit merges against what happened while it
  * was gone instead of overwriting it.
  *
+ * Three of the four paths refuse OWNERSHIP, not the write. `blocked`,
+ * `stale_epoch` and `lease_expired` all mean "this write did not hold the
+ * block", and what a caller does with that differs by WHEN it is asking:
+ * before a keystroke the editor refuses (B2's read-only-with-attribution);
+ * after the sentence exists it is merged and marked, because discarding it
+ * would throw away a person's work to enforce a lock whose purpose is to
+ * protect it. What none of them may do is silently supersede the text this
+ * writer never saw — that is the whole point of the token.
+ *
  * Note what is deliberately NOT here: a write with no claim at all is allowed.
  * B2 chose SOFT locking. A block nobody has locked is freely editable and D4 is
  * the floor; requiring a lease to type would turn every offline edit into a
@@ -251,9 +267,11 @@ export function fenceBlockWrite(
   const live = isLeaseLive(current, nowMs);
 
   // No epoch means the writer is not claiming ownership — it is starting a
-  // fresh edit. That is the only case that can be BLOCKED. An edit that already
-  // carries an epoch was already typed by a person, so refusing it outright
-  // would discard their sentence; those merge instead, however stale.
+  // fresh edit. That is the only case that can be BLOCKED, and the asymmetry is
+  // about WHEN, not about entitlement: nothing has been typed yet, so refusing
+  // costs nobody a sentence. An edit that already carries an epoch was typed by
+  // a person before it got here, so it merges instead, however stale — and the
+  // merge it goes to is a FENCED one, which is where the staleness is charged.
   if (writer.epoch === undefined) {
     if (live && current.deviceId !== writer.deviceId) {
       return {

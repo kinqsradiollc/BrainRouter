@@ -102,6 +102,40 @@ export function extractWorkspaceRefs(text: string): WorkspaceRef[] {
   return found;
 }
 
+/** One piece of prose: either the person's own words, or a reference inside them. */
+export type WorkspaceRefSegment =
+  | { readonly kind: 'text'; readonly text: string }
+  | { readonly kind: 'ref'; readonly uri: string; readonly ref: WorkspaceRef };
+
+/**
+ * Prose split into what to render as words and what to render as a chip.
+ *
+ * In core rather than in a surface, because ADR-028's failure is two surfaces
+ * disagreeing about the same thing: a renderer with its own scanner would
+ * decide a different set of characters ends a URI, and the same note would show
+ * a chip in one mode and a raw `brainrouter://…` string in another — which
+ * reads as one of them being broken. The scanning and the trailing-punctuation
+ * rule are the delicate part, and they exist exactly once, here.
+ *
+ * A candidate that does not parse stays TEXT rather than becoming a broken
+ * chip: a mistyped link should look like the mistyped link it is.
+ */
+export function splitTextByWorkspaceRefs(text: string): WorkspaceRefSegment[] {
+  const segments: WorkspaceRefSegment[] = [];
+  let cursor = 0;
+  for (const match of text.matchAll(CANDIDATE)) {
+    const start = match.index ?? 0;
+    const uri = trimTrailingPunctuation(match[0]);
+    const parsed = parseWorkspaceRef(uri);
+    if (!parsed.ok) continue;
+    if (start > cursor) segments.push({ kind: 'text', text: text.slice(cursor, start) });
+    segments.push({ kind: 'ref', uri, ref: parsed.ref });
+    cursor = start + uri.length;
+  }
+  if (cursor < text.length) segments.push({ kind: 'text', text: text.slice(cursor) });
+  return segments;
+}
+
 /**
  * The derived "what links here" cache.
  *

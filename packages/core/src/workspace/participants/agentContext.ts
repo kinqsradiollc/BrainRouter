@@ -19,14 +19,26 @@
  * is to render it without quietly undoing it, which is why every string here
  * goes through a cap and the state is projected rather than serialised whole.
  */
-import { asUntrustedText } from '../../planner/agentContext.js';
+import { asUntrustedText, fenceMarkerPattern } from '../../planner/agentContext.js';
 import type { NoteBlockContext } from '../../notes/noteTree.js';
 import {
-  formatWorkspaceRef, renderWorkspaceResolution, type WorkspaceResolution,
+  formatWorkspaceRef, renderWorkspaceResolution,
+  MAX_WORKSPACE_REF_LENGTH, type WorkspaceResolution,
 } from '../references/index.js';
 
 /** One line of resolved content. Long enough for a paragraph, short of a page. */
 const MAX_LINE = 400;
+
+/**
+ * This module's own fence marker, matched by the shared pattern.
+ *
+ * Built from `fenceMarkerPattern` rather than spelled out here: the planner's
+ * fence and this one are the same defence against the same trick, and a
+ * hand-written second copy is the one that keeps the hole after the first is
+ * fixed. The whitespace tolerance and the linear-time property both live in
+ * that function's contract.
+ */
+const WORKSPACE_FENCE = fenceMarkerPattern('workspace_data');
 
 /**
  * The same neutralisation the planner applies, plus this module's own fence.
@@ -34,10 +46,11 @@ const MAX_LINE = 400;
  * Delegating the shared half to `asUntrustedText` rather than re-implementing
  * it: the planner's version already collapses newlines and breaks
  * `</planner_data>`, and two copies of an injection defence is one copy that
- * gets a fix and one that does not.
+ * gets a fix and one that does not. The collapse it performs is also what makes
+ * the marker pattern below safe to keep repetition-free.
  */
 export function asUntrustedWorkspaceText(value: string, maxLength = MAX_LINE): string {
-  return asUntrustedText(value, maxLength).replace(/<\/?workspace_data>/gi, '[fence]');
+  return asUntrustedText(value, maxLength).replace(WORKSPACE_FENCE, '[fence]');
 }
 
 /** Q3's cap on how many heading levels are worth the tokens to place a block. */
@@ -56,7 +69,18 @@ function isNoteContext(state: unknown): state is NoteBlockContext {
  * is the majority of what the model reads.
  */
 export function untrustedResolutionLines(resolution: WorkspaceResolution, nowMs = Date.now()): string[] {
-  const uri = resolution.ref ? formatWorkspaceRef(resolution.ref) : '(unparseable reference)';
+  // The URI is untrusted too, and was the one string in this block that was
+  // not treated as such. An id is attacker-supplied — a reference is typed into
+  // a note, arrives in fetched page text, or names a path a hostile repository
+  // ships — and the echo happens on EVERY branch, including the ones that
+  // return before any lookup. So it is neutralised like everything else here.
+  // The cap is the parser's own limit rather than `MAX_LINE`: a URI that parsed
+  // is echoed whole, because a truncated link the model cannot resolve is its
+  // own kind of quietly wrong.
+  const uri = asUntrustedWorkspaceText(
+    resolution.ref ? formatWorkspaceRef(resolution.ref) : '(unparseable reference)',
+    MAX_WORKSPACE_REF_LENGTH,
+  );
   const line = asUntrustedWorkspaceText(renderWorkspaceResolution(resolution, { nowMs }));
 
   // Every non-`found` outcome is ONE line and no payload. `denied` in
@@ -74,7 +98,11 @@ export function untrustedResolutionLines(resolution: WorkspaceResolution, nowMs 
     if (text) lines.push(`  ${text}`);
     // The count, not the tail. The rest of the page is not more useful than the
     // tokens it costs, but knowing there IS a rest is.
-    if (state.omittedLabel) lines.push(`  (${state.omittedLabel})`);
+    // Neutralised despite being generated from a count, because the invariant
+    // worth holding is "no string reaches this block un-neutralised" — the
+    // shape-check above is structural, so a mode that grew a `headings`/`text`
+    // state of its own would land here with a label we did not write.
+    if (state.omittedLabel) lines.push(`  (${asUntrustedWorkspaceText(state.omittedLabel, 80)})`);
   }
   return lines;
 }
