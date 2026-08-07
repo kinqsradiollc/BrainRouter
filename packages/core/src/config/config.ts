@@ -21,6 +21,7 @@ import type {
   RouterCliKnobs,
 } from './configTypes.js';
 import { normalizeContainerLimits, normalizeRuntimeBackend } from './configTypes.js';
+import { stripTrailingSlashes } from '../util/trimEdges.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'brainrouter');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
@@ -822,7 +823,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
         ? c.runtime.serveHost.trim()
         : '127.0.0.1',
       servePort: clampInt(c.runtime?.servePort, 0, 65_535, 8791),
-      remoteUrl: typeof c.runtime?.remoteUrl === 'string' ? c.runtime.remoteUrl.trim().replace(/\/+$/, '') : '',
+      remoteUrl: typeof c.runtime?.remoteUrl === 'string' ? stripTrailingSlashes(c.runtime.remoteUrl.trim()) : '',
       previewPorts: resolvePreviewPorts(c.runtime?.previewPorts),
     },
     // MC-B1 — trigger ingress: DEFAULT-DENY across the board. `enabled`

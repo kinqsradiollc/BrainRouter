@@ -106,7 +106,12 @@ export const REQUIRED_CORE_TOOL_CATALOG: LocalToolEntry[] = [
   { name: 'task_agent', accessTier: 'read', actionKind: 'child_write', parallelSafe: true, runtimePort: 'orchestration', childAccessPolicy: 'single' },
   { name: 'delegate_agent', accessTier: 'read', actionKind: 'child_write', parallelSafe: true, runtimePort: 'orchestration', childAccessPolicy: 'single', dynamicNamePrefix: 'delegate_' },
   { name: 'spawn_agent', accessTier: 'read', actionKind: 'child_write', parallelSafe: false, runtimePort: 'orchestration', advertised: false, childAccessPolicy: 'single' },
-  { name: 'spawn_agents', accessTier: 'read', actionKind: 'child_write', parallelSafe: false, runtimePort: 'orchestration', advertised: false, childAccessPolicy: 'batch' },
+  // `spawn_agents` is advertised but `spawn_agent` is not: the batch form is the
+  // only spawn primitive with the per-child ownership-glob gate that makes
+  // parallel WRITERS safe, and four prompt surfaces (systemPrompt, breadthHint,
+  // nextAction, the fan-out guard) instruct the model to call it by name. The
+  // singular adds nothing task_agent/delegate_agent do not already cover.
+  { name: 'spawn_agents', accessTier: 'read', actionKind: 'child_write', parallelSafe: false, runtimePort: 'orchestration', childAccessPolicy: 'batch' },
   { name: 'list_agents', accessTier: 'read', actionKind: 'read_only', parallelSafe: false, runtimePort: 'orchestration' },
   { name: 'wait_agent', accessTier: 'read', actionKind: 'read_only', parallelSafe: false, runtimePort: 'orchestration' },
   { name: 'wait_agents', accessTier: 'read', actionKind: 'read_only', parallelSafe: false, runtimePort: 'orchestration' },

@@ -338,7 +338,7 @@ export function App(): React.ReactElement {
   const {
     sideTabs, activeSideTab, sidePanelOpen, sideWidth, sideFullScreen, sidePinned, termDockOpen, termDockHeight, termTabs, activeTerm,
     setSideTabs, setActiveSideTab, setSidePanelOpen, setSideWidth, setSideFullScreen, setSidePinned, setTermDockOpen, setTermDockHeight, setTermTabs, setActiveTerm,
-    ensurePanel, offerPanel, markPanelRead, unreadPanels, restoreLastSessionPanels,
+    ensurePanel, offerPanel, markPanelRead, unreadPanels, restoreLastSessionPanels, lastSessionPanels,
     closeSideTab, reorderSideTab, togglePanel, openSideView, openBottomDock, addBottomTab, closeBottomTab, resizeTerminal, resetTermDock,
   } = usePanels(q);
 
@@ -504,7 +504,7 @@ export function App(): React.ReactElement {
   // T-handlers — composer + attachment handlers (submit, AI PR review, file
   // attachments, pasted-image staging, header rename) live in a hook now. Every
   // symbol is destructured back so existing references (render JSX) are unchanged.
-  const { submit, submitDelivery, reviewPrWithAi, attachFiles, addPastedImages, renameCurrentSession } = useAppHandlers({
+  const { submit, submitDelivery, reviewPrWithAi, reviewMyUnderstanding, attachFiles, addPastedImages, renameCurrentSession } = useAppHandlers({
     q, draft, setDraft, attachmentUploads, setAttachmentUploads, pastedImages, setPastedImages,
     running, stopping, setToast, commands, cmdCtx, runBridge, sessionKeyRef, setRows, lastPromptRef,
     goalContPendingRef, setRunning, setSessionRunning, info, setTurnStart, turnFailsRef, branches,
@@ -668,7 +668,7 @@ export function App(): React.ReactElement {
     q, hostUp, running, info, gitInfo, branches, tokens, liveTurn, contextUsage, efficiency, runningTasks,
     allFiles, statuses, openFile, grepHits, filesLoading, filesTruncated, filesError, fileView, editor,
     closeEditorTab, openUrl, setToast, ci, reviewPrWithAi, track, trackOps, changedFiles, diffView, diffTarget,
-    setDiffTarget, ensurePanel, setDiffView, runGit, gitBusy, reviewGate, reviewFindingsByFile, toolLog,
+    setDiffTarget, ensurePanel, setDiffView, runGit, gitBusy, reviewGate, reviewMyUnderstanding, reviewFindingsByFile, toolLog,
     backgroundTasks, recentTasks, finishedTasks, setFinishedTasks, openTask, submit, taskView, setTaskView, renderRow,
     requestStop, closeSideTab, dashScope, setDashScope,
     refreshDashboard, dashTab, setDashTab, dashBoards, dashBusy, openDashboardTask, switchToWorkspace, activeRoot,
@@ -728,7 +728,8 @@ export function App(): React.ReactElement {
         sideFullScreen={sideFullScreen} setSidePanelOpen={setSidePanelOpen} setSidePinned={setSidePinned}
         sideAnim={sideAnim} sideWidth={sideWidth} setSideWidth={setSideWidth} activeSideTab={activeSideTab}
         sideTabs={sideTabs} setActiveSideTab={setActiveSideTab} closeSideTab={closeSideTab} reorderSideTab={reorderSideTab}
-        tabTitle={tabTitle} renderPanelBody={renderPanelBody} openSideView={openSideView} lastPlan={lastPlan}
+        tabTitle={tabTitle} renderPanelBody={renderPanelBody} openSideView={openSideView}
+        restoreLastSessionPanels={restoreLastSessionPanels} lastSessionPanels={lastSessionPanels} lastPlan={lastPlan}
         changedFiles={changedFiles} backgroundTasks={backgroundTasks} fleet={fleet} toolLog={toolLog} schedules={schedules}
         worktrees={worktrees} review={review} requirements={requirements} annotations={annotations} artifacts={artifacts}
         ci={ci} envRoom={envRoom} envDrawer={envLayout.drawer} homeMode={homeMode} gitInfo={gitInfo} info={info} sessionTitle={sessionTitle}

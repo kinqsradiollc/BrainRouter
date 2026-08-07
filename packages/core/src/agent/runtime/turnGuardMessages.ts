@@ -1,4 +1,5 @@
 import type { PlanItem } from '../../task/taskStore.js';
+import { adversarialLens, investigationLenses, reviewLenses } from '../../orchestration/lenses.js';
 
 export function emptyAnswerGuardMessage(toolCallCount: number): string {
   return [
@@ -48,10 +49,25 @@ export function fanOutGuardMessage(): string {
     'A fan-out was recommended for this broad/multi-target task, but you are ending the turn having spawned ZERO child agents — that is a shallow single-thread answer, not the parallel coverage the task wanted.',
     '',
     'Do ONE of these now, in THIS response:',
-    '1. **Actually fan out** — emit `spawn_agents` with 3–5 children covering distinct angles/targets (one child per comparison target / subsystem), then `wait_agents` and synthesize. Discover targets yourself (`list_dir`, `glob_files`) — do not ask the user for paths you can find.',
+    `1. **Actually fan out** — emit \`spawn_agents\` with 3–5 children, each \`label\`ed with a DISTINCT angle and told to ignore findings outside it (angles: ${investigationLenses().join(' / ')}, or ${reviewLenses().join(' / ')} for a review — adapt them to this task). Add one child briefed to ${adversarialLens()}. Then \`wait_agents\`, synthesize, and say what the adversary failed to break. Discover targets yourself (\`list_dir\`, \`glob_files\`) — do not ask the user for paths you can find.`,
     '2. **Justify skipping** — if the task genuinely does not benefit from parallel children (it is small, or the targets are not separable), say so in one sentence and deliver the complete answer.',
     '',
     'Do NOT just promise "I\'ll inspect in parallel" and stop, and do NOT hand back a thin summary while offering to "go deeper if you want" — deliver the deep result now.',
+  ].join('\n');
+}
+
+/**
+ * Fired when children WERE spawned but every one carried the same lens — the
+ * fan-out happened by count and not by thinking. Distinct from the guard above,
+ * which catches spawning nothing at all.
+ */
+export function undifferentiatedFanOutGuardMessage(labels: readonly string[]): string {
+  const shown = labels.filter(Boolean);
+  return [
+    'Runtime fan-out differentiation guardrail tripped.',
+    `You spawned ${labels.length} children, but they all carry the same angle${shown.length ? ` ("${shown[0]}")` : ' (none of them were labelled)'}. That is N copies of one investigation: it costs ${labels.length}x and returns a single perspective.`,
+    '',
+    `Before you finish, either give the remaining children distinct lenses (${investigationLenses().join(' / ')}, or ${reviewLenses().join(' / ')} for a review) plus one briefed to ${adversarialLens()} — or say in one sentence why this task really does only have one angle, and deliver the answer.`,
   ].join('\n');
 }
 

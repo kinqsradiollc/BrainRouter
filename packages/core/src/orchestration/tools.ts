@@ -52,10 +52,16 @@ async function handleRouteTask(args: any, ctx: OrchestrationContext): Promise<st
   } catch {
     toolNames = undefined;
   }
+  // The tier the router picks must be one this turn can act on. `parentVisibleLocalTools`
+  // is the post-policy list (workspace catalog, user overrides, skill allowlists),
+  // so a workspace without workflow launch or background workers is routed to a
+  // tier it can actually reach instead of a tool name it cannot emit.
+  const localTools = ctx.parentVisibleLocalTools?.();
   const result = await routeTask({
     task,
     mcpClient: ctx.mcpClient,
     mcpToolNames: toolNames,
+    availableTools: localTools ? new Set(localTools) : undefined,
     sessionKey: ctx.parentSessionKey,
     // HONK-L6 — bias toward bounded inline tasks when the parent runs a local model.
     localModel: localModelProfileActive(ctx.llmConfig?.model, getCliKnobs().localModelProfile),

@@ -35,7 +35,12 @@ const LEGACY_PROMPT_HASHES: Record<DomainNeutralRoleId, string> = {
   explorer: 'fc4a4fd243c394305d707fa31ace1801eb3972b682070b4a6fbed78c28143f7c',
   architect: '98f2bfb2c6aa820d4e1b7b41e23dccdad12f50e3b2a030e5786f2f068dc1d97e',
   worker: '7fb851275f8611e06d5864c1bd92a4a20a235756fab12bf5645942748fdd1f08',
-  reviewer: '9522fac8b8513c863a9c4f52fdb7d1b5cfaf1f67c2abcbfdd763ae54d482d26c',
+  // ADR-028 — the reviewer's "verify before you flag" paragraph is no longer
+  // written here; it comes from `review/reviewGrounding.ts`, which every
+  // reviewing surface shares. This pin therefore moves whenever that one rule
+  // deliberately changes, and MUST NOT be re-pinned to silence an accidental
+  // edit to the rest of the role prompt.
+  reviewer: 'ca96860377c453f02e33af7f6f1c23f7659b6645a168f7c2706c819d5d19a757',
   verifier: '85a8f003b27fa32f98af4ce2974afbc43d561974281763b6d3f3e25b280902a1',
 };
 

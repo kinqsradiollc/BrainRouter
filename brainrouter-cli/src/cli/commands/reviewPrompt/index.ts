@@ -1,3 +1,4 @@
+import { buildGroundingClause } from '@kinqs/brainrouter-core/review';
 import type { AccessMode } from '@kinqs/brainrouter-core/exec';
 
 /**
@@ -62,8 +63,14 @@ export function buildReviewPrompt(opts: BuildReviewPromptOptions): string {
     `Workflow slug: \`${slug}\`. Output file: \`${reportPath}\`.`,
     '',
     '## The diff under review',
-    'The diff is provided below — do NOT spawn a child just to read it. If it is',
-    'truncated, you may read specific files for missing context.',
+    'The diff is provided below — do NOT spawn a child just to read it.',
+    '',
+    // The grounding rule comes from core so this reviewer cannot drift from the
+    // bot's and the desktop's. `read-only-tools` is the honest description of
+    // this surface: children run with access=read, so they CAN open files —
+    // the diff-only phrasing the bot uses would forbid the very check that
+    // kills the "guard missing twenty lines below the hunk" false positive.
+    buildGroundingClause('read-only-tools'),
     '',
     '```diff',
     diff.trim().length > 0 ? diff.trimEnd() : '(no diff content)',

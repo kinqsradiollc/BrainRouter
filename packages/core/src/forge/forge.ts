@@ -1,5 +1,6 @@
 import type { PrRoute } from '../review/prRouter.js';
 import type { CmdRunner } from '../git/prEmit.js';
+import { changeRequestArgv } from '../review/prRouter.js';
 
 export type ForgeId = 'github' | 'gitlab' | 'bitbucket' | 'azure-devops' | 'gitea';
 export type ForgeCapability = 'change-request:create' | 'checks:list' | 'review:submit' | 'track:list';
@@ -29,10 +30,21 @@ const github: ForgeProvider = {
   // ADR-028 H2 — the chokepoint. A stack route submits through `gh stack`,
   // which registers the pull requests as a stack; anything else opens a plain
   // one, which stays correct and common.
-  createChangeRequest: (ctx, input) => (
-    input.route?.kind === 'stack'
-      ? ctx.run('gh', ['stack', 'submit', '--auto', ...(input.draft ? [] : ['--open'])], ctx.cwd)
-      : ctx.run('gh', ['pr', 'create', '--base', input.base, '--head', input.head, '--title', input.title, '--body', input.body, ...(input.draft ? ['--draft'] : [])], ctx.cwd)
+  createChangeRequest: (ctx, input) => ctx.run(
+    'gh',
+    // The argv comes from `changeRequestArgv`, not from here. A shared ROUTE
+    // was not enough: each site still assembled its own command, and the argv
+    // is what drifts — `gh stack link` shipped and survived a ten-code exit
+    // contract because an unknown subcommand exits 1 exactly like a real
+    // command that failed.
+    changeRequestArgv(input.route ?? { kind: 'single', reason: 'no route supplied' }, {
+      title: input.title,
+      body: input.body,
+      ready: !input.draft,
+      baseBranch: input.base,
+      headBranch: input.head,
+    }),
+    ctx.cwd,
   ),
   listChecks: (ctx, number) => ctx.run('gh', ['pr', 'checks', String(number), '--json', 'name,state,bucket,link'], ctx.cwd),
   submitReview: (ctx, number, action, body) => ctx.run('gh', ['pr', 'review', String(number), action === 'approve' ? '--approve' : action === 'request-changes' ? '--request-changes' : '--comment', '--body', body], ctx.cwd),

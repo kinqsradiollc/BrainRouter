@@ -92,11 +92,10 @@ test('P23-7 managed selection is one forced-tool choice over eligible IDs only',
   assert.deepEqual(result.plan.stages[0]?.after, []);
   assert.deepEqual(
     result.plan.skippedStages.filter((stage) => stage.code === 'adaptive-stage-disabled'),
-    [{
-      code: 'adaptive-stage-disabled',
-      strategyId: 'delivery',
-      stageId: 'inspect',
-    }],
+    [
+      { code: 'adaptive-stage-disabled', strategyId: 'delivery', stageId: 'inspect' },
+      { code: 'adaptive-stage-disabled', strategyId: 'delivery', stageId: 'challenge' },
+    ],
   );
   assert.match(result.rationale ?? '', /bounded implementation/);
 });

@@ -20,6 +20,7 @@ import {
   validateReviewedWorkspaceSkillSelection,
   validateReviewedWorkspaceToolSelection,
 } from '../workspace/selectionCatalog.js';
+import { WORKSPACE_TOOL_PROFILES } from '../workspace/toolProfileCatalog.js';
 
 test('P23-3b catalog projects safe personas, roles, capabilities, tool groups, tools, skill packs, and skills', () => {
   const catalog = buildWorkspaceSelectionCatalog({
@@ -221,6 +222,15 @@ test('P23-3b runtime uses the same exact direct-tool eligibility as the catalog'
   assert.equal(isSelectableWorkspaceCatalogToolId('delegate_unreviewed'), false);
   assert.equal(isSelectableWorkspaceCatalogToolId('spawn_agent'), false);
   assert.equal(isSelectableWorkspaceCatalogToolId('<script>'), false);
+  // spawn_agents is advertised, so it must also be selectable AND carried by the
+  // orchestration group — otherwise an explicit-catalog (v3) manifest would deny
+  // the one fan-out primitive the runtime tells the model to call.
+  assert.equal(isSelectableWorkspaceCatalogToolId('spawn_agents'), true);
+  assert.equal(
+    WORKSPACE_TOOL_PROFILES.find((profile) => profile.id === 'orchestration')
+      ?.toolIds.includes('spawn_agents'),
+    true,
+  );
 });
 
 test('P23-3b reviewed migration creates v3 without mutating a v2 workspace', () => {

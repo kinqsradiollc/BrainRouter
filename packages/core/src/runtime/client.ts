@@ -1,4 +1,5 @@
 import { VERSION } from '../version.js';
+import { stripTrailingSlashes } from '../util/trimEdges.js';
 
 export interface RuntimeServerInfo {
   protocol: 'runtime/v1';
@@ -8,7 +9,7 @@ export interface RuntimeServerInfo {
 export type RuntimeFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
 function trimBaseUrl(baseUrl: string): string {
-  return baseUrl.trim().replace(/\/+$/, '');
+  return stripTrailingSlashes(baseUrl.trim());
 }
 
 function majorMinor(version: string): string {

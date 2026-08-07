@@ -9,35 +9,71 @@
  * would rather run it in their own shell must be able to read it first.
  */
 import React, { useCallback, useEffect, useState } from 'react';
+import type { ProvisionAction } from '@kinqs/brainrouter-core/tooling';
 import { Button } from './primitives/Button.js';
 import { bridgeQuery } from '../lib/bridgeQuery.js';
 
-interface Requirement { id: string; label: string; unlocks: string; installCommand: string }
-type Plan =
-  | { kind: 'ready' }
-  | { kind: 'offer' | 'blocked'; missing: Requirement[]; message: string };
+/**
+ * The plan type comes from the module that PRODUCES it. A structural copy lived
+ * here and omitted the `auto_install` arm, so the default configuration — the
+ * one Part I exists for — reached `plan.missing[0]` on an action that has no
+ * `missing`, and the banner threw during render instead of reporting the
+ * install. A notice that crashes reports nothing.
+ */
+type Plan = ProvisionAction;
 
-export function ToolingNotice(): React.ReactElement | null {
-  const [plan, setPlan] = useState<Plan>({ kind: 'ready' });
-  const [showCommand, setShowCommand] = useState<string | null>(null);
+export interface ToolingNoticeBodyProps {
+  plan: Plan;
+  /** Labels the host actually installed — what it TRIED is `plan.install`. */
+  installed: string[];
+  showCommand: string | null;
+  setShowCommand: (command: string | null) => void;
+  decline: (id: string) => void;
+}
 
-  useEffect(() => {
-    // Checked ONCE per launch. Probing three binaries every turn taxes every
-    // session for an answer that changes when someone installs software.
-    void bridgeQuery<{ plan: Plan }>('tooling-check', {})
-      .then((r) => { if (r?.plan) setPlan(r.plan); })
-      .catch(() => { /* a probe that fails is not worth a banner */ });
-  }, []);
-
-  const decline = useCallback((id: string) => {
-    // Remembered, so the same offer is never made twice. Asking again next
-    // launch is how a prompt becomes noise, and then the one that matters gets
-    // dismissed reflexively.
-    void bridgeQuery('tooling-decline', { id }).catch(() => {});
-    setPlan({ kind: 'ready' });
-  }, []);
-
+/**
+ * Split out from the fetching shell so every arm can be rendered and asserted
+ * without a DOM. The arm that crashed was unreachable from any test precisely
+ * because the only way to reach it was an effect nothing could drive.
+ */
+export function ToolingNoticeBody(p: ToolingNoticeBodyProps): React.ReactElement | null {
+  const { plan, installed, showCommand, setShowCommand, decline } = p;
   if (plan.kind === 'ready') return null;
+
+  // The auto-install arm is the REPORT half of I1: it already ran, so there is
+  // nothing to decline — what is owed is what ran and whether it worked. The
+  // command stays inspectable afterwards, since "it installed something" is
+  // only useful if you can see what.
+  if (plan.kind === 'auto_install') {
+    const ran = plan.install[0];
+    // Reporting the attempt as an outcome would be the same class of claim this
+    // whole notice exists to stop.
+    const failed = plan.install.filter((r) => !installed.includes(r.label));
+    return (
+      <div className={`tool-notice${failed.length > 0 ? ' blocked' : ''}`}>
+        <span className="tool-notice-msg">
+          {installed.length > 0 ? `Installed ${installed.join(', ')}. ` : ''}
+          {failed.length > 0
+            ? `Could not install ${failed.map((r) => r.label).join(', ')} — run it yourself, or check that the GitHub CLI is signed in.`
+            : `This unlocks ${plan.install.map((r) => r.unlocks).join(', ')}. Turn it off in settings if you would rather install tools yourself.`}
+        </span>
+
+        {showCommand ? <code className="tool-notice-cmd">{showCommand}</code> : null}
+
+        {ran ? (
+          <div className="tool-notice-actions">
+            <Button
+              variant="default"
+              onClick={() => setShowCommand(showCommand ? null : ran.installCommand)}
+            >
+              {showCommand ? 'Hide command' : 'Show what ran'}
+            </Button>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
   const first = plan.missing[0];
   if (!first) return null;
 
@@ -61,5 +97,41 @@ export function ToolingNotice(): React.ReactElement | null {
         ) : null}
       </div>
     </div>
+  );
+}
+
+export function ToolingNotice(): React.ReactElement | null {
+  const [plan, setPlan] = useState<Plan>({ kind: 'ready' });
+  const [installed, setInstalled] = useState<string[]>([]);
+  const [showCommand, setShowCommand] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Checked ONCE per launch. Probing three binaries every turn taxes every
+    // session for an answer that changes when someone installs software.
+    void bridgeQuery<{ plan: Plan; installed?: string[] }>('tooling-check', {})
+      .then((r) => {
+        if (!r?.plan) return;
+        setPlan(r.plan);
+        setInstalled(r.installed ?? []);
+      })
+      .catch(() => { /* a probe that fails is not worth a banner */ });
+  }, []);
+
+  const decline = useCallback((id: string) => {
+    // Remembered, so the same offer is never made twice. Asking again next
+    // launch is how a prompt becomes noise, and then the one that matters gets
+    // dismissed reflexively.
+    void bridgeQuery('tooling-decline', { id }).catch(() => {});
+    setPlan({ kind: 'ready' });
+  }, []);
+
+  return (
+    <ToolingNoticeBody
+      plan={plan}
+      installed={installed}
+      showCommand={showCommand}
+      setShowCommand={setShowCommand}
+      decline={decline}
+    />
   );
 }

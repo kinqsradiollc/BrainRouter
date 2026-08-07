@@ -28,7 +28,10 @@ test('GitHub provider emits bounded argv for create, checks, review, and Track',
   provider.submitReview!(ctx, 17, 'request-changes', 'Please fix');
   provider.listTrack!(ctx);
   assert.deepEqual(calls, [
-    { cmd: 'gh', args: ['pr', 'create', '--base', 'main', '--head', 'feat/x', '--title', 'Title', '--body', 'Body', '--draft'], cwd: '/repo' },
+    // H2 — argv now comes from `changeRequestArgv`, so `--draft` sits with the
+    // other flags rather than trailing. Order is not semantic to `gh`; the
+    // assertion is pinned because the SUBCOMMAND and flag SET are what drift.
+    { cmd: 'gh', args: ['pr', 'create', '--draft', '--base', 'main', '--head', 'feat/x', '--title', 'Title', '--body', 'Body'], cwd: '/repo' },
     { cmd: 'gh', args: ['pr', 'checks', '17', '--json', 'name,state,bucket,link'], cwd: '/repo' },
     { cmd: 'gh', args: ['pr', 'review', '17', '--request-changes', '--body', 'Please fix'], cwd: '/repo' },
     { cmd: 'gh', args: ['issue', 'list', '--json', 'number,title,state,url,labels,assignees'], cwd: '/repo' },

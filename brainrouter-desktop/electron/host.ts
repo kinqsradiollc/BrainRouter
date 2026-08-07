@@ -88,7 +88,7 @@ import { WorkspaceFileListCache, type WorkspaceFileListResult } from './workspac
 import { startWorkspaceWatcher } from './fileWatch.js';
 import { loadSchedules, addSchedule, removeSchedule, setScheduleEnabled } from '@kinqs/brainrouter-core/schedule';
 import { parseCron, nextCronFire } from '@kinqs/brainrouter-core/schedule';
-import { parseReviewFindings, REVIEW_OUTPUT_CONTRACT, stripReasoning, buildReviewInstructionBlock } from '@kinqs/brainrouter-core/review';
+import { parseReviewFindings, stripReasoning, buildReviewInstructionBlock, buildWorkingTreeReviewPrompt } from '@kinqs/brainrouter-core/review';
 import {
   hashDiff,
   reviewGate,
@@ -923,7 +923,14 @@ async function main(): Promise<void> {
     // review policy — it overrides the default contract (severity calibration,
     // skip rules, nit caps, repo-specific checks). Empty string when absent.
     const reviewInstr = buildReviewInstructionBlock(workspaceRoot);
-    const prompt = `${reviewInstr}You are reviewing the uncommitted changes in this workspace before a commit/PR. Focus on real bugs, security issues, and performance problems introduced by the diff. Be concise.\n\n${changeCtx ? `${changeCtx}\n\n` : ''}Diff:\n${diff.slice(0, 60_000)}\n\n${REVIEW_OUTPUT_CONTRACT}`;
+    // The prompt (grounding rule included) is assembled in core, so this
+    // reviewer cannot drift from the bot's and the CLI's the way its
+    // hand-copied paragraph did — and it is testable without an Electron run.
+    const prompt = buildWorkingTreeReviewPrompt({
+      reviewInstructions: reviewInstr,
+      changeContext: changeCtx,
+      diff: diff.slice(0, 60_000),
+    });
     // §6 — isolated, read-only, non-prompting reviewer (review: session filtered).
     // It runs under a `:raw` sub-key so its turn (a 60KB diff prompt + raw JSON
     // findings) does NOT pollute the task's CURATED transcript — runReviewTask
@@ -932,7 +939,12 @@ async function main(): Promise<void> {
     const noop = (): void => {};
     const cb = { onStatusUpdate: noop, onToolStart: noop, onToolEnd: noop, onAssistantDelta: noop, onAssistantTurnStart: noop, onAssistantTurnEnd: noop, onReasoningDelta: noop, onUsageUpdate: noop, onPlanUpdate: noop } as never;
     let answer = '';
-    try { answer = await (reviewer as { runTurn(p: string, c: unknown): Promise<string> }).runTurn(prompt, cb); }
+    // `preplanned` — this turn IS the review, so the workspace router must not
+    // re-plan it. Signal detection reads the whole task, and a 60KB diff prompt
+    // matches "bug"/"fix"/"implement" far more often than any review pattern, so
+    // this reviewer was being planned as a delivery run (inspect → implement →
+    // verify) and pushed to delegate work it has no write access to do.
+    try { answer = await reviewer.runTurn(prompt, cb, { preplanned: true }); }
     catch (err) { phase('failed', err instanceof Error ? err.message : String(err)); const r: ReviewRun = { ...base, status: 'failed', summary: `Review failed: ${err instanceof Error ? err.message : String(err)}` }; saveReview(workspaceRoot, r); return { ...r, files: files.length }; }
     phase('findings', 'parsing reviewer output');
     const findings: ReviewFinding[] = parseReviewFindings(answer).map((f, i) => ({

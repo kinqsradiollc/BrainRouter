@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { stripTrailingSlashes, stripLeadingSlashes } from '../../util/trimEdges.js';
 import type {
   ConnectorCheckpoint,
   ConnectorDocument,
@@ -185,7 +186,7 @@ const globCache = new Map<string, RegExp>();
 function globToRegExp(glob: string): RegExp {
   const cached = globCache.get(glob);
   if (cached) return cached;
-  const pattern = glob.trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '');
+  const pattern = glob.trim().replace(/\\/g, '/').replace(/^\.\//, '');
   let out = '';
   for (let i = 0; i < pattern.length; i++) {
     const ch = pattern[i];
@@ -238,11 +239,11 @@ function fileDocument(
 }
 
 function joinRootPath(root: string, relPath: string): string {
-  return `${root.replace(/\/+$/, '')}/${relPath}`;
+  return `${stripTrailingSlashes(root)}/${relPath}`;
 }
 
 function normalizeRelPath(value: string): string | undefined {
-  const normalized = value.trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '');
+  const normalized = value.trim().replace(/\\/g, '/').replace(/^\.\//, '');
   if (!normalized) return undefined;
   if (normalized.split('/').some((segment) => segment === '..' || segment === '' || segment === '.')) return undefined;
   return normalized;

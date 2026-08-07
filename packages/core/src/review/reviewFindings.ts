@@ -7,6 +7,7 @@
  * this extracts + validates it, tolerating prose around it and a missing/malformed
  * block (→ []). Pure + unit-tested; the host maps these onto the stored ReviewFinding.
  */
+import { UNVERIFIED_CLAIM } from './reviewGrounding.js';
 
 /** Everything the reviewer can give us about one finding (pre-store: no id/status). */
 export interface ParsedReviewFinding {
@@ -171,7 +172,7 @@ export const REVIEW_OUTPUT_CONTRACT =
   '  - `grep_search` / `glob_files` / `list_dir` — find the callers, the definition, the tests, and other uses of anything the diff changes (a renamed/edited export, a changed signature, a new invariant).\n' +
   '  - `memory_search` — prior reviews on these files; never re-flag something a past review already accepted. `memory_file_history` — known regressions / past fixes on each changed file.\n' +
   'The Atlas "Change impact" block above already gives you the free, deterministic blast radius — use it to decide WHICH callers to open with `read_file`.\n' +
-  'VERIFICATION BAR: every behavior claim ("this races", "returns undefined", "breaks callers") must be backed by a concrete `file:line` you ACTUALLY READ, not inferred from a name. If you could not verify it, do not flag it — false positives waste the author\'s time.\n' +
+  'VERIFICATION BAR: every behavior claim ("this races", "returns undefined", "breaks callers") must be backed by a concrete `file:line` you ACTUALLY READ, not inferred from a name. ' + UNVERIFIED_CLAIM + '\n' +
   '\n' +
   'FIRST, write a short UNDERSTANDING section in plain markdown (NO code fences anywhere in it) so a human can build the mental model:\n' +
   '  "## What changed" — 2-4 sentences: what this change does, why, and what it touches (use the Change impact above + what you read).\n' +

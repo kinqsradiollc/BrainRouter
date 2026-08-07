@@ -16,6 +16,7 @@ import { computePrefixFingerprint } from '../../context/contextRegions.js';
 import { traceEvent } from '../../telemetry/tracing/tracing.js';
 import { acquireLLMSlot } from '../../util/concurrency/llmSemaphore.js';
 import { parseRetryAfterMs } from '../../mcp/reconnect/reconnect.js';
+import { stripTrailingSlashes } from '../../util/trimEdges.js';
 import {
   buildAnthropicMessagesPayload, normalizeAnthropicOutput, ANTHROPIC_DEFAULT_MAX_TOKENS,
   buildGeminiGeneratePayload, normalizeGeminiOutput, nativeRequestSpec,
@@ -949,7 +950,7 @@ export async function callOpenAI(
   // defensively so both shapes (full URL or base URL) work.
   const initialDef = activeProviderDef(config);
   const rawEndpoint = config.endpoint || initialDef?.endpoint || 'https://api.openai.com/v1';
-  const endpoint = rawEndpoint.replace(/\/+$/, '').replace(/\/chat\/completions$/, '');
+  const endpoint = stripTrailingSlashes(rawEndpoint).replace(/\/chat\/completions$/, '');
   const effectiveConfig: LLMConfig = { ...config, endpoint };
   // Key resolution is CONFIG-DRIVEN, not env-driven: BrainRouter reads the key
   // from config.apiKey (the config knob). Standard provider env vars are imported
@@ -1176,7 +1177,7 @@ export async function callOpenAIStream(
 ) {
   const initialDef = activeProviderDef(config);
   const rawEndpoint = config.endpoint || initialDef?.endpoint || 'https://api.openai.com/v1';
-  const endpoint = rawEndpoint.replace(/\/+$/, '').replace(/\/chat\/completions$/, '');
+  const endpoint = stripTrailingSlashes(rawEndpoint).replace(/\/chat\/completions$/, '');
   const effectiveConfig: LLMConfig = { ...config, endpoint };
   // Key resolution is CONFIG-DRIVEN, not env-driven: BrainRouter reads the key
   // from config.apiKey (the config knob). Standard provider env vars are imported

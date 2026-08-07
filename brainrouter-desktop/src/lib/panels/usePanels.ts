@@ -7,29 +7,8 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import type { PanelId } from '../../panels/index.js';
 import { devPanels, devFlag } from '../devFlags.js';
-import { VALID_PANEL_IDS } from '../../constants.js';
 import { clampSideRailWidth, openWidthFor, reorderByValue, SIDE_RAIL_MIN } from './sideRailLayout.js';
-
-// Persisted layouts can carry renamed/retired panel ids. The Markdown writing
-// experience ('write' → 'docs') folded into the Editor, so both map to 'editor'.
-// The Browser panel's internal id was renamed 'uitest' → 'browser', so a persisted
-// open-tab layout survives the rename. Unknown ids are dropped, and duplicates are
-// collapsed, so an upgrade never leaves a dead or doubled tab.
-// ADR-028 G5 — `review` and `ci` fold into the one Pull request panel. They
-// answered facets of a single question — can this land, and if not what is
-// stopping it — and `ci` was already titled "PR / Checks", so four tabs meant
-// assembling the real answer yourself from three of them.
-const PANEL_ID_ALIASES: Record<string, PanelId> = {
-  write: 'editor', docs: 'editor', uitest: 'browser',
-  review: 'stack', ci: 'stack',
-};
-const migratePanelId = (id: string): PanelId => (PANEL_ID_ALIASES[id] ?? id) as PanelId;
-const migratePanelIds = (ids: unknown[]): PanelId[] => {
-  const seen = new Set<PanelId>();
-  return ids
-    .map((p) => migratePanelId(String(p)))
-    .filter((p) => VALID_PANEL_IDS.has(p) && !seen.has(p) && (seen.add(p), true));
-};
+import { LAST_SESSION_PANELS_KEY, migratePanelId, readLastSessionPanels } from './lastSessionPanels.js';
 
 export interface TermTab { id: number; kind: 'shell' | PanelId }
 
@@ -64,6 +43,12 @@ export interface PanelsApi {
   unreadPanels: Set<PanelId>;
   /** ADR-028 G2 — bring back the previous session's panels, on request. */
   restoreLastSessionPanels: () => void;
+  /**
+   * What that action would reopen — empty when there is nothing to bring back.
+   * The affordance has to know this: an always-present "reopen last session"
+   * that silently does nothing is worse than not offering one.
+   */
+  lastSessionPanels: PanelId[];
   closeSideTab: (id: PanelId) => void;
   reorderSideTab: (dragged: PanelId, target: PanelId) => void;
   togglePanel: (id: PanelId) => void;
@@ -90,6 +75,9 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
    * session's panels" can restore them — this removes an assumption, not a
    * capability.
    */
+  // Read BEFORE this session's first write to the same key, which lands on mount
+  // and would otherwise replace the record with the empty list G2 starts from.
+  const [lastSessionPanels, setLastSessionPanels] = useState<PanelId[]>(readLastSessionPanels);
   const [sideTabs, setSideTabs] = useState<PanelId[]>(() => devPanels());
   const [activeSideTab, setActiveSideTab] = useState<PanelId | null>(() => devPanels()[0] ?? null);
   const [sidePanelOpen, setSidePanelOpen] = useState(() => devFlag('side') || devPanels().length > 0);
@@ -133,8 +121,13 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
     localStorage.setItem('br-side-open-last', sidePanelOpen ? '1' : '0');
   }, [sidePanelOpen]);
 
+  const tabsRecorded = useRef(false);
   useEffect(() => {
-    localStorage.setItem('br-side-tabs-last', JSON.stringify(sideTabs));
+    // Skip the mount write. G2 starts from an empty list, so recording it would
+    // erase the previous session's tabs before anyone could ask for them back —
+    // the restore existed but had nothing left to restore.
+    if (!tabsRecorded.current) { tabsRecorded.current = true; return; }
+    localStorage.setItem(LAST_SESSION_PANELS_KEY, JSON.stringify(sideTabs));
   }, [sideTabs]);
 
   useEffect(() => {
@@ -292,23 +285,17 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
    * rather than assumed, which is the whole difference.
    */
   function restoreLastSessionPanels(): void {
-    try {
-      const saved = localStorage.getItem('br-side-tabs-last');
-      if (!saved) return;
-      const parsed = JSON.parse(saved) as unknown;
-      if (!Array.isArray(parsed)) return;
-      const tabs = migratePanelIds(parsed as PanelId[]);
-      if (tabs.length === 0) return;
-      setSideTabs(tabs);
-      setActiveSideTab(tabs[0] ?? null);
-      setSidePanelOpen(true);
-    } catch {
-      // A malformed record means there is nothing to restore, which is a
-      // no-op rather than an error worth showing.
-    }
+    if (lastSessionPanels.length === 0) return;
+    setSideTabs(lastSessionPanels);
+    setActiveSideTab(lastSessionPanels[0] ?? null);
+    setSidePanelOpen(true);
+    // Once restored they are simply the open tabs; offering to restore them
+    // again would be offering the state you are already in.
+    setLastSessionPanels([]);
   }
 
   return {
+    lastSessionPanels,
     sideTabs, activeSideTab, sidePanelOpen, sideWidth, sideFullScreen, sidePinned, termDockOpen, termDockHeight, termTabs, activeTerm,
     setSideTabs, setActiveSideTab, setSidePanelOpen, setSideWidth, setSideFullScreen, setSidePinned, setTermDockOpen, setTermDockHeight, setTermTabs, setActiveTerm,
     ensurePanel, offerPanel, markPanelRead, unreadPanels, restoreLastSessionPanels,

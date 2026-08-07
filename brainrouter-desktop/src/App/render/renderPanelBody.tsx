@@ -74,6 +74,8 @@ export interface RenderPanelBodyCtx {
   openUrl: (url: string) => void;
   setToast: (t: string) => void;
   ci: ReturnType<typeof useCi>;
+  /** ADR-028 F7 — ask the agent for a comprehension review. */
+  reviewMyUnderstanding: () => void;
   reviewPrWithAi: (pr: { number: number; title?: string; headRefName?: string; baseRefName?: string }) => void;
   track: { pr: TrackPrStatus | null };
   trackOps: ReturnType<typeof buildTrackOps>;
@@ -148,7 +150,7 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
     requestStop, closeSideTab, dashScope, setDashScope,
     refreshDashboard, dashTab, setDashTab, dashBoards, dashBusy, openDashboardTask, switchToWorkspace, activeRoot,
     lastPlan, planHistory, planFeedbackRef, searchHits, schedules, worktrees, worktreeDiffs, openWorktree,
-    review, reviewRunning, setReviewRunningByWs, setReviewByWs, setDraft, atlasGraph, atlasBuilding, atlasEnriching,
+    reviewMyUnderstanding, review, reviewRunning, setReviewRunningByWs, setReviewByWs, setDraft, atlasGraph, atlasBuilding, atlasEnriching,
     atlasAssessments, atlasAssessing, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, requirements,
     annotations, artifacts, atlasUiMap, atlasStories, runStory, viewKey, sessionTitles, stackLayers, stackAvailability,
   } = ctx;
@@ -376,7 +378,7 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
           onSelectTarget={(a) => { if (a.anchor?.filePath) { setDiffTarget({ path: a.anchor.filePath, line: a.anchor.startLine }); ensurePanel('diff'); q('q-diff', 'file-diff', { path: a.anchor.filePath }); } }} />;
       }
       // ADR-028 F7/G4 — the Understand group. Invoked, never unsolicited.
-      case 'comprehension': return <ComprehensionContainer />;
+      case 'comprehension': return <ComprehensionContainer onStart={reviewMyUnderstanding} />;
       case 'stack': {
         // ADR-028 G5 — one panel, one question: can this land, and if not what
         // is stopping it. The chain, the checks and the review findings are

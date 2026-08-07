@@ -130,3 +130,57 @@ export function describeRoute(route: PrRoute): string {
 export function resolveStackingMode(raw: unknown): StackingMode {
   return raw === 'always' || raw === 'never' ? raw : 'auto';
 }
+
+/* ------------------------------------------------------------ H2 · the argv */
+
+export interface ChangeRequestArgs {
+  title: string;
+  body: string;
+  /** Open for review immediately rather than as a draft. */
+  ready?: boolean;
+  baseBranch?: string;
+  /** The branch carrying the change, where the caller pushes before creating. */
+  headBranch?: string;
+}
+
+/**
+ * The exact `gh` argv for a routed change request.
+ *
+ * H2's remaining half. The ROUTE was already decided once by
+ * `routePullRequest`, but each call site still assembled its own command — and
+ * the argv is precisely what drifts. `gh stack link` shipped and survived a
+ * ten-code exit contract, a latching runner and fourteen tests, because an
+ * unknown subcommand exits 1 exactly like a real command that failed. Nothing
+ * downstream can tell you that you invented a verb; only building the argv in
+ * one place can.
+ *
+ * Returns argv, not a spawned process: the surfaces genuinely differ in how
+ * they run commands (an Electron helper, a CLI runner, a worktree-scoped
+ * child), and forcing one runner would be a worse coupling than the
+ * duplication it removes.
+ */
+export function changeRequestArgv(route: PrRoute, args: ChangeRequestArgs): string[] {
+  if (route.kind === 'stack') {
+    // `submit` publishes the whole chain; `--auto` links the PRs into the stack
+    // on GitHub rather than leaving branches that merely target each other.
+    return ['stack', 'submit', '--auto', ...(args.ready ? ['--open'] : [])];
+  }
+  return [
+    'pr', 'create',
+    ...(args.ready ? [] : ['--draft']),
+    ...(args.baseBranch ? ['--base', args.baseBranch] : []),
+    // `--head` only where the caller pushed a branch it must name. Passing it
+    // from a checkout that is already on that branch is redundant, and `gh`
+    // rejects it against a base it cannot resolve.
+    ...(args.headBranch ? ['--head', args.headBranch] : []),
+    '--title', args.title,
+    '--body', args.body,
+  ];
+}
+
+/** How long the routed command may take. A stack submit is not a `pr create`. */
+export function changeRequestTimeoutMs(route: PrRoute): number {
+  // Publishing a chain pushes every branch and opens every PR; 20s is a plain
+  // create's budget and would report a working submit as a failure.
+  return route.kind === 'stack' ? 120_000 : 20_000;
+}

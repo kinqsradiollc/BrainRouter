@@ -7,6 +7,7 @@ import type { RuntimeManager } from './manager.js';
 import { readRuntimeRecord } from './state/runtimeStateStore.js';
 import type { RuntimeBackendKind } from '../config/configTypes.js';
 import { VERSION } from '../version.js';
+import { stripTrailingSlashes } from '../util/trimEdges.js';
 
 export const RUNTIME_API_PREFIX = '/runtime/v1';
 export const RUNTIME_SESSION_HEADER = 'x-brainrouter-runtime-key';
@@ -125,7 +126,7 @@ function resolveInside(root: string, rel: string): string {
 function routeName(url: string | undefined): string {
   const pathname = (url ?? '').split('?')[0];
   if (!pathname.startsWith(`${RUNTIME_API_PREFIX}/`)) return '';
-  return pathname.slice(RUNTIME_API_PREFIX.length + 1).replace(/\/+$/, '');
+  return stripTrailingSlashes(pathname.slice(RUNTIME_API_PREFIX.length + 1));
 }
 
 function queryParam(url: string | undefined, name: string): string {

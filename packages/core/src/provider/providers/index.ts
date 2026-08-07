@@ -21,6 +21,7 @@ import { lmstudio } from './lmstudio/index.js';
 import { ollama } from './ollama/index.js';
 import { deepseek } from './deepseek/index.js';
 import { cohere, voyage, jina } from './rerankEmbed/index.js';
+import { stripTrailingSlashes } from '../../util/trimEdges.js';
 
 export type { ProviderDefinition } from './definition.js';
 
@@ -71,10 +72,10 @@ export const PROVIDER_REGISTRY: ReadonlyMap<string, ProviderDefinition> = new Ma
  */
 export function normalizeProviderEndpoint(endpoint: string | undefined | null): string {
   if (!endpoint || typeof endpoint !== 'string') return '';
-  let base = endpoint.trim().replace(/\/+$/, '');
+  let base = stripTrailingSlashes(endpoint.trim());
   if (base.endsWith('/chat/completions')) base = base.slice(0, -'/chat/completions'.length);
   if (base.endsWith('/v1')) base = base.slice(0, -'/v1'.length);
-  return base.replace(/\/+$/, '').toLowerCase();
+  return stripTrailingSlashes(base).toLowerCase();
 }
 
 /**

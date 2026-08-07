@@ -2921,6 +2921,11 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
 /* keyboard-selected card — !important to beat the launchpad's themed border/shadow. */
 .side-chooser .side-launcher.sel { border-color: var(--accent) !important; box-shadow: 0 0 0 1.5px var(--accent-soft), 0 4px 12px rgba(0,0,0,0.22) !important; }
 .side-chooser-actions { display: flex; justify-content: flex-end; margin-bottom: 4px; }
+/* ADR-028 G2 — the escape hatch from the clean start. Quieter than a launcher:
+   it is an undo for a decision the app made, not a view you were looking for. */
+.side-restore-last { display: flex; align-items: center; gap: 8px; width: 100%; margin-bottom: 8px; padding: 8px 11px; border: 1px dashed var(--border-strong); border-radius: 9px; background: transparent; color: var(--text-dim); font: 520 12.5px var(--font); cursor: pointer; text-align: left; }
+.side-restore-last:hover { background: var(--ov-06); color: var(--text); }
+.side-restore-last .launcher-meta { margin-left: auto; color: var(--text-faint); font: 550 10.5px var(--mono); }
 .side-chooser .side-launcher { flex: none; }
 /* DESK-5e — the launcher list is the panel's CONTENT: top-aligned, no void */
 .side-launchers { margin-top: 6px; display: flex; flex-direction: column; gap: 5px; }

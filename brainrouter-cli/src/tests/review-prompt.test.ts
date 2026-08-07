@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildReviewPrompt } from '../cli/commands/reviewPrompt/index.js';
+import { buildGroundingClause } from '@kinqs/brainrouter-core/review';
 import { capText } from '../runtime/platform/gitContext.js';
 
 const base = {
@@ -56,6 +57,16 @@ test('REVIEW-FIX prompt is a single self-contained instruction set (no generic f
   assert.match(p, /You are the lead reviewer\. \*\*Drive every step yourself\*\*|lead reviewer/);
   // ...and the contradicting generic five-axis checklist language is absent.
   assert.doesNotMatch(p, /five-axis|Readability & Simplicity|Performance\n/i);
+});
+
+test('the CLI reviewer carries the same grounding rule as the desktop and the bot', () => {
+  const p = buildReviewPrompt({ ...base, accessMode: 'write' });
+  // Substring, not a paraphrase: a hand-edit here is exactly how the five
+  // copies drifted apart, and this is what makes that a red build.
+  assert.ok(p.includes(buildGroundingClause('read-only-tools')));
+  // This reviewer's children run with access=read, so it must never inherit the
+  // bot's toolless phrasing — that would forbid the file reads the rule requires.
+  assert.doesNotMatch(p, /NO tools/);
 });
 
 test('REVIEW-FIX truncation note appears only when the diff was capped', () => {

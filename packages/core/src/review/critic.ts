@@ -25,6 +25,7 @@ import type { LLMConfig } from '../config/config.js';
 import { getCliKnobs } from '../config/config.js';
 import { PROVIDER_REGISTRY, findProviderByEndpoint, isLoopbackEndpoint, LOCAL_PLACEHOLDER_KEY } from '../provider/providers/index.js';
 import { lastJsonBlock } from './reviewFindings.js';
+import { stripTrailingSlashes } from '../util/trimEdges.js';
 
 /** The closed diagnostic taxonomy the critic must classify its findings into. */
 export const CRITIC_CATEGORIES = [
@@ -193,7 +194,7 @@ export type CriticCompletion = (req: CriticRequest) => Promise<string>;
 export function makeCriticCompletion(llm: LLMConfig): CriticCompletion {
   return async (req) => {
     const rawEndpoint = llm.endpoint || 'https://api.openai.com/v1';
-    const endpoint = rawEndpoint.replace(/\/+$/, '').replace(/\/chat\/completions$/, '');
+    const endpoint = stripTrailingSlashes(rawEndpoint).replace(/\/chat\/completions$/, '');
     const providerDef = findProviderByEndpoint(endpoint) ?? PROVIDER_REGISTRY.get((llm.provider ?? '').toLowerCase());
     let apiKey = llm.apiKey || '';
     const isLocal = (providerDef?.local ?? false) || isLoopbackEndpoint(endpoint);

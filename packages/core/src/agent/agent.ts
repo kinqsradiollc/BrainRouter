@@ -1229,7 +1229,7 @@ export class Agent {
     return registryAllowedTools(this.accessMode);
   }
 
-  async runTurn(prompt: string, callbacks: RunTurnCallbacks, opts?: { hiddenPrompt?: boolean; images?: Array<{ mediaType: string; dataBase64: string }> }): Promise<string> {
+  async runTurn(prompt: string, callbacks: RunTurnCallbacks, opts?: { hiddenPrompt?: boolean; images?: Array<{ mediaType: string; dataBase64: string }>; preplanned?: boolean }): Promise<string> {
     // Body moved to ./runTurn.impl.ts (god-file breakdown); delegate with `this`
     // bound so all instance state resolves exactly as before.
     return runTurnImpl.call(this, prompt, callbacks, opts);

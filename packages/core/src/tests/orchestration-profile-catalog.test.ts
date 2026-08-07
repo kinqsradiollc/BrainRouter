@@ -107,11 +107,17 @@ test('P23-2 Engineering plan preserves profile ceilings and expected strategy su
   assert.deepEqual(plan.rolePolicy.availableRoles, preset.orchestration.availableRoles);
   assert.deepEqual(plan.rolePolicy.disabledRoles, preset.orchestration.disabledRoles);
   assert.equal(plan.limits.maxParallel, preset.orchestration.maxParallel);
+  // The ORDER here is the routing contract, not decoration: deterministic
+  // selection takes the first signal-matched strategy in file order, and a
+  // security review matches both `security-review` and `review`. Sorting these
+  // keys reroutes every security review to the generic lens, so this assertion
+  // is what turns a well-meaning alphabetization into a red build.
   assert.deepEqual(plan.strategies.map((strategy) => strategy.id), [
     'direct',
     'investigate',
     'design',
     'delivery',
+    'security-review-only',
     'review-only',
   ]);
 
@@ -126,9 +132,16 @@ test('P23-2 Engineering plan preserves profile ceilings and expected strategy su
       ['implement', 'role'],
       ['review', 'role'],
       ['verify', 'role'],
+      ['challenge', 'role'],
       ['deliver', 'primary'],
     ],
   );
+  // The adversary must stay OPTIONAL: a workspace missing the reviewer role or
+  // the review skill would otherwise take the whole delivery strategy down to
+  // the `direct` fallback rather than losing one stage.
+  const challenge = delivery?.stages.find((stage) => stage.id === 'challenge');
+  assert.equal(challenge?.optional, true);
+  assert.equal(challenge?.executor.kind === 'role' ? challenge.executor.roleId : null, 'reviewer');
   const mismatchedContracts = plan.strategies.flatMap((strategy) =>
     strategy.stages.flatMap((stage) =>
       stage.executor.kind === 'role' && stage.expectedOutput?.contractId !== stage.executor.roleId

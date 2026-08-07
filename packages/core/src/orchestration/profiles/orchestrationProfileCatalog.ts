@@ -51,6 +51,7 @@ export const ORCHESTRATION_ACTIVATION_SIGNAL_IDS: ReadonlySet<string> = new Set(
   'remediation',
   'reproducibility-check',
   'review',
+  'security-review',
   'small-scope',
   'source-explanation',
   'writing-revision',
