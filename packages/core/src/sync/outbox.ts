@@ -29,7 +29,14 @@ import { compareHlc } from './hybridClock.js';
 export interface OutboxOperation {
   /** Unique per operation. A redelivery with the same key is a no-op. */
   idempotencyKey: string;
-  /** Which item this touches. Operations on one item never reorder. */
+  /**
+   * Which record this touches. Operations on one record never reorder.
+   *
+   * ADR-029 B3 states the consequence for Notes rather than leaving it to be
+   * discovered: the record IS the block, so two blocks of one page sync in
+   * parallel while edits to a single block stay ordered. That granularity falls
+   * out of B1 instead of needing a rule of its own.
+   */
   itemId: string;
   kind: 'create' | 'update' | 'delete' | 'source_action';
   /** The stamp of the local write, for ordering and for the server's merge. */

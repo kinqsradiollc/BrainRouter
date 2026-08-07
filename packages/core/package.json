@@ -235,6 +235,14 @@
       "types": "./dist/workspace/index.d.ts",
       "default": "./dist/workspace/index.js"
     },
+    "./workspace/references": {
+      "types": "./dist/workspace/references/index.d.ts",
+      "default": "./dist/workspace/references/index.js"
+    },
+    "./workspace/participants": {
+      "types": "./dist/workspace/participants/index.d.ts",
+      "default": "./dist/workspace/participants/index.js"
+    },
     "./workspace/capabilities": {
       "types": "./dist/workspace/capabilities.d.ts",
       "default": "./dist/workspace/capabilities.js"
@@ -262,6 +270,10 @@
     "./version": {
       "types": "./dist/version.d.ts",
       "default": "./dist/version.js"
+    },
+    "./notes": {
+      "types": "./dist/notes/index.d.ts",
+      "default": "./dist/notes/index.js"
     },
     "./planner": {
       "types": "./dist/planner/index.d.ts",

@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import {
   hlcNow, hlcReceive, hlcZero, compareHlc, hlcAfter, clockSkewMs, describeSkew,
   formatHlc, parseHlc, NOTABLE_SKEW_MS,
-} from '../planner/hybridClock.js';
+} from '../sync/hybridClock.js';
 import {
   mergeField, mergeText, mergeCompletion, mergeOwnedItem, refreshMirrored, canEditLocally,
   type PlannerItem, type Stamped,
@@ -108,7 +108,7 @@ test('a later stamp wins a single field', () => {
 test('CONCURRENT text edits keep both, and mark the field conflicted', () => {
   // A planner is not important enough to lose a paragraph over, and exactly
   // important enough that quietly losing one destroys trust in all of it.
-  const r = mergeText('notes', s('our version', at(300, 1, A)), s('their version', at(300, 1, B)));
+  const r = mergeText(s('our version', at(300, 1, A)), s('their version', at(300, 1, B)));
   assert.ok(r.conflict, 'concurrent edits must not be resolved silently');
   assert.equal(r.conflict!.ours, 'our version');
   assert.equal(r.conflict!.theirs, 'their version');
@@ -117,13 +117,13 @@ test('CONCURRENT text edits keep both, and mark the field conflicted', () => {
 
 test('a strictly LATER text edit supersedes without a conflict', () => {
   // It saw the earlier one. Marking this conflicted would cry wolf.
-  const r = mergeText('notes', s('first', at(100, 0, A)), s('second', at(500, 0, B)));
+  const r = mergeText(s('first', at(100, 0, A)), s('second', at(500, 0, B)));
   assert.equal(r.conflict, undefined);
   assert.equal(r.value!.value, 'second');
 });
 
 test('identical text is never a conflict, whatever the stamps', () => {
-  const r = mergeText('title', s('Same', at(100, 0, A)), s('Same', at(100, 0, B)));
+  const r = mergeText(s('Same', at(100, 0, A)), s('Same', at(100, 0, B)));
   assert.equal(r.conflict, undefined);
 });
 
