@@ -66,6 +66,17 @@ export function plannerItemUri(itemId: string): string {
   return `brainrouter://planner/item/${itemId}`;
 }
 
+/**
+ * A work item, addressed by its human key (`BR-114`) when it has one.
+ *
+ * The key is what people read and what survives an import: the local board and
+ * the server board both mint `wi_` ids, so an id-addressed reference is the one
+ * that can silently point at a different item after a sync.
+ */
+export function workItemUri(keyOrId: string): string {
+  return `brainrouter://track/work-item/${keyOrId}`;
+}
+
 export function codeFileUri(relPath: string): string {
   return `brainrouter://code/file/${relPath}`;
 }

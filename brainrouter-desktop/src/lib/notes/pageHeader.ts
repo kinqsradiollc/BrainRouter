@@ -36,6 +36,14 @@ export interface PageHeaderView {
   favourite: boolean;
   /** The top level has no block of its own, so there is nothing to rename. */
   editable: boolean;
+  /**
+   * E3 — this page IS a database, so its children are rows.
+   *
+   * The header hides "new page inside" for one: a page created here would be a
+   * row made outside the database's own control, so it would not open and the
+   * person would be left looking at a table with a blank line in it.
+   */
+  database: boolean;
 }
 
 /**
@@ -54,7 +62,7 @@ export function pageHeaderView(
   if (!page) {
     return {
       pageId: null, title: TOP_LEVEL_LABEL, icon: null, cover: null,
-      crumbs: [], favourite: false, editable: false,
+      crumbs: [], favourite: false, editable: false, database: false,
     };
   }
   return {
@@ -65,6 +73,7 @@ export function pageHeaderView(
     crumbs: pageBreadcrumbs(blocks, page.id),
     favourite: page.favourite,
     editable: true,
+    database: page.kind === 'database',
   };
 }
 

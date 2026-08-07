@@ -3,17 +3,21 @@
  *
  * B4 says a page is a block with children, so there is no page table to read:
  * the tree is the same recursion over `parentId` the document already is,
- * filtered to the blocks whose kind is `page`. Everything here is a projection
- * over the flat list `notes-read` already returns, which is why none of it
- * fetches anything.
+ * filtered to the blocks that CONTAIN other blocks. Everything here is a
+ * projection over the flat list `notes-read` already returns, which is why none
+ * of it fetches anything.
  *
  * **The one judgement worth naming is what "inside" means.** A sub-page created
  * inside a toggle on page A has that toggle as its literal parent, and a
  * sidebar that nested it under the toggle would show a tree the document does
- * not have — the person put it on page A. So the tree nests by NEAREST PAGE
+ * not have — the person put it on page A. So the tree nests by NEAREST CONTAINER
  * ANCESTOR rather than by `parentId`, and the same function decides which
  * blocks a page's body renders. Two answers to "which page is this on" is how
  * the sidebar and the editor end up disagreeing about where something lives.
+ *
+ * E3 adds the second container: a database renders its own rows, and a row is a
+ * page. Without that, every row would be on screen twice — once inside the
+ * database and once beside it as a sub-page row of the page holding it.
  *
  * Pure, and takes no workspace root: notes are user-scoped (D1), and a function
  * here that needed one would mean the scoping had regressed.
@@ -43,6 +47,8 @@ export interface PageTreeNode {
   /** The page's glyph, or null when it has none — never a placeholder. */
   icon: string | null;
   favourite: boolean;
+  /** E3 — a database, whose children are its rows. Marked so the row says so. */
+  database: boolean;
   children: PageTreeNode[];
 }
 
@@ -67,17 +73,30 @@ export function pageLabel(block: Pick<NoteBlockView, 'title' | 'text'>): string 
 }
 
 /**
- * Every block's nearest ancestor of kind `page`, or null for the top level.
+ * The kinds that RENDER what is under them.
+ *
+ * A page renders its body. E3 makes a database render its rows — a row is a
+ * page, so without this it would also appear in the containing page's body as a
+ * sub-page row, and every row would be on screen twice: once inside the database
+ * and once beside it. Two containers rather than one because they are the two
+ * blocks that own a list of children instead of being one.
+ */
+export function isContainerKind(kind: string): boolean {
+  return kind === 'page' || kind === 'database';
+}
+
+/**
+ * Every block's nearest CONTAINER ancestor, or null for the top level.
  *
  * Built once per call and shared by the tree, the breadcrumbs and the page
- * body, because three walks that each decide "which page is this on" would
+ * body, because three walks that each decide "what renders this block" would
  * eventually decide it differently.
  *
  * The walk is cycle-guarded even though the host's list arrives already
  * repaired by `buildNoteTree`: the browser dev harness serves its own list, and
  * a loop there would hang the renderer rather than showing a wrong tree.
  */
-export function pageParents(blocks: readonly NoteBlockView[]): Map<string, string | null> {
+export function containerParents(blocks: readonly NoteBlockView[]): Map<string, string | null> {
   const byId = new Map(blocks.map((block) => [block.id, block] as const));
   const out = new Map<string, string | null>();
 
@@ -89,7 +108,7 @@ export function pageParents(blocks: readonly NoteBlockView[]): Map<string, strin
       seen.add(cursor);
       const parent = byId.get(cursor);
       if (!parent) break;
-      if (parent.kind === 'page') { found = parent.id; break; }
+      if (isContainerKind(parent.kind)) { found = parent.id; break; }
       cursor = parent.parentId;
     }
     out.set(block.id, found);
@@ -103,24 +122,31 @@ export function pageParents(blocks: readonly NoteBlockView[]): Map<string, strin
  * Order is NOT recomputed here: the flat list arrives ranked by core, and a
  * second sort in the renderer would put the sidebar in a different order from
  * the page it mirrors.
+ *
+ * Databases are rows in the tree too, and their rows nest under them. That
+ * follows from E3 rather than being a decision taken here: a database is a
+ * container, so a tree that skipped it would have to put its rows under the page
+ * ABOVE it — which is a tree the document does not have — or drop them, which
+ * would make a full-page database unreachable from the sidebar.
  */
 export function buildPageTree(blocks: readonly NoteBlockView[]): PageTreeNode[] {
-  const parents = pageParents(blocks);
+  const parents = containerParents(blocks);
   const nodes = new Map<string, PageTreeNode>();
   const roots: PageTreeNode[] = [];
 
   for (const block of blocks) {
-    if (block.kind !== 'page') continue;
+    if (!isContainerKind(block.kind)) continue;
     nodes.set(block.id, {
       id: block.id,
       title: pageLabel(block),
       icon: block.icon,
       favourite: block.favourite,
+      database: block.kind === 'database',
       children: [],
     });
   }
   for (const block of blocks) {
-    if (block.kind !== 'page') continue;
+    if (!isContainerKind(block.kind)) continue;
     const node = nodes.get(block.id)!;
     const parent = parents.get(block.id) ?? null;
     const parentNode = parent === null ? null : nodes.get(parent);
@@ -152,7 +178,7 @@ export function pageBreadcrumbs(
 ): Array<{ id: string; title: string; icon: string | null }> {
   if (pageId === null) return [];
   const byId = new Map(blocks.map((block) => [block.id, block] as const));
-  const parents = pageParents(blocks);
+  const parents = containerParents(blocks);
 
   const chain: Array<{ id: string; title: string; icon: string | null }> = [];
   const seen = new Set<string>();
@@ -184,7 +210,7 @@ export function blocksOnPage(
   blocks: readonly NoteBlockView[],
   pageId: string | null,
 ): NoteBlockView[] {
-  const parents = pageParents(blocks);
+  const parents = containerParents(blocks);
   return blocks.filter((block) => block.id !== pageId && (parents.get(block.id) ?? null) === pageId);
 }
 
@@ -221,6 +247,10 @@ export function pageBodyBlocks(
  * from another one — and a shell that kept the id would render a page header
  * for something that is not there. Falling back to the top level shows a
  * surface that is still true.
+ *
+ * A DATABASE is a destination too (E3's full-page database): it is a container,
+ * so it has a body to show, and refusing it here would make the only way to see
+ * a database the page it happens to be embedded in.
  */
 export function selectedPageOrTop(
   blocks: readonly NoteBlockView[],
@@ -228,7 +258,7 @@ export function selectedPageOrTop(
 ): string | null {
   if (selectedId === null) return null;
   const block = blocks.find((candidate) => candidate.id === selectedId);
-  return block && block.kind === 'page' ? block.id : null;
+  return block && isContainerKind(block.kind) ? block.id : null;
 }
 
 /** Expanding down to a page, so opening it from anywhere reveals it in the tree. */
@@ -260,7 +290,7 @@ export function isDescendantPage(
   ancestorId: string,
   candidateId: string,
 ): boolean {
-  const parents = pageParents(blocks);
+  const parents = containerParents(blocks);
   const seen = new Set<string>();
   let cursor: string | null = parents.get(candidateId) ?? null;
   while (cursor !== null && !seen.has(cursor)) {
@@ -295,7 +325,7 @@ export function pageDropIntent(
 
   if (position === 'inside') return { id: dragId, parentId: targetId };
 
-  const parents = pageParents(blocks);
+  const parents = containerParents(blocks);
   const parentId = parents.get(targetId) ?? null;
   return position === 'before'
     ? { id: dragId, parentId, before: targetId }

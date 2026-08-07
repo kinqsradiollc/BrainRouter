@@ -112,3 +112,25 @@ test('the planner list views keep a reading column', () => {
   const rule = ruleFor(read('theme.css'), '.planner-body');
   assert.match(rule, /max-width/);
 });
+
+test('a mode header reserves room for the floating control cluster above it', () => {
+  // `.topbar-right` is position:absolute at z-66, so it sits ON TOP of whatever
+  // header the current mode draws. A header whose right-aligned content runs to
+  // the window edge therefore puts that content underneath the buttons — which
+  // is what the planner's status line did, and what the notes header inherited
+  // by copying its shape. Measured live: `.notes-sync` spanned x1125-1264 with
+  // "Export session" at 1206 and "Settings" at 1238 directly over it.
+  //
+  // Asserted as a CSS contract for the same reason as the rules above: a
+  // screenshot in a harness has no floating cluster to collide with, so the
+  // collision is invisible exactly where it would be checked.
+  const css = read('theme.css');
+  assert.match(css, /--topbar-right-clearance\s*:/, 'the clearance is no longer declared once');
+  for (const header of ['.planner-head', '.notes-head']) {
+    assert.match(
+      ruleFor(css, header),
+      /padding-right\s*:\s*calc\([^)]*--topbar-right-clearance/,
+      `${header} does not reserve room, so its right-hand content renders under the toolbar`,
+    );
+  }
+});

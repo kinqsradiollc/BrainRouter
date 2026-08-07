@@ -192,7 +192,12 @@ function TreeRow({
       ) : <span className="notes-tree-twisty" />}
 
       <button className="notes-tree-label" onClick={() => ops.openPage(node.id)}>
-        <span className="notes-tree-icon">{node.icon ?? <Icon name="note" size={11} />}</span>
+        {/* E3 — a database opens as a full page, and its children are its rows.
+            Marked with its own glyph so the twisty expanding into a list of
+            rows is expected rather than surprising. */}
+        <span className="notes-tree-icon">
+          {node.icon ?? <Icon name={node.database ? 'panels' : 'note'} size={11} />}
+        </span>
         <span className="notes-tree-title">{node.title}</span>
       </button>
 
@@ -201,10 +206,15 @@ function TreeRow({
         onClick={() => ops.setFavourite(node.id, !node.favourite)}>
         <Icon name="pin" size={11} />
       </button>
-      <button className="notes-tree-act" title={newPageLabel(node.title)}
-        aria-label={newPageLabel(node.title)} onClick={() => ops.addPage(node.id)}>
-        <Icon name="plus" size={11} />
-      </button>
+      {/* A database's children are ROWS, and a row is made by the database's own
+          control — which also opens it. A "new page inside" here would create a
+          row with no way back to the table that owns it. */}
+      {node.database ? null : (
+        <button className="notes-tree-act" title={newPageLabel(node.title)}
+          aria-label={newPageLabel(node.title)} onClick={() => ops.addPage(node.id)}>
+          <Icon name="plus" size={11} />
+        </button>
+      )}
     </div>
   );
 }

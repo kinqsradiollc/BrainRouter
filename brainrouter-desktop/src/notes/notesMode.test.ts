@@ -71,10 +71,102 @@ test('both handler maps answer for Notes — a query in only one is unreachable 
     // C2 row 6 — the picker's symbol list. Registered on one surface only, the
     // symbol step is an empty list in the harness and looks like a broken read.
     'code-symbols',
+    // E1 — the gestures. The host served these before anything called them;
+    // a name missing from the harness is a keystroke that does nothing in the
+    // browser and gets debugged as a renderer bug.
+    'notes-split', 'notes-merge-back', 'notes-duplicate', 'notes-move-up', 'notes-move-down',
+    'notes-indent', 'notes-outdent', 'notes-input-rule', 'notes-slash-menu',
+    // E3 — the database verbs. The host served all thirteen before anything
+    // called them, and the harness had none: the five views would have rendered
+    // "unknown query" in the browser while working in the app, which is the
+    // failure this whole test exists to catch.
+    'notes-database-read', 'notes-database-create', 'notes-database-list',
+    'notes-database-add-row', 'notes-database-set-value', 'notes-database-remove-row',
+    'notes-database-add-property', 'notes-database-update-property',
+    'notes-database-remove-property', 'notes-database-reorder-properties',
+    'notes-database-save-view', 'notes-database-remove-view', 'notes-property-catalog',
   ]) {
     assert.match(host, new RegExp(`'${name}'`), `the electron host has no ${name} handler`);
     assert.match(dev, new RegExp(`'${name}'`), `the dev bridge has no ${name} handler`);
   }
+});
+
+/* ------------------------------------------------------ E1: the keyboard */
+
+test('E1: every editing gesture has a caller from a real key press, not only a handler', () => {
+  // ADR-029 §5 judges this layer on E1's sentence, and ADR-028 E1 exists to
+  // catch exactly this shape of failure: the host served `notes-input-rule` and
+  // `notes-slash-menu` for a release while nothing in the renderer called
+  // either, so the model supported the gestures and the keyboard did not.
+  const editor = source('./BlockEditor.tsx');
+  const container = source('./NotesModeContainer.tsx');
+  const mode = source('./NotesMode.tsx');
+
+  // The keyboard reaches the judgement…
+  assert.match(editor, /blockKeyIntent\(/, 'no key press is interpreted');
+  assert.match(editor, /slashTrigger\(/, 'typing "/" opens nothing');
+  assert.match(editor, /mentionTrigger\(/, 'typing "@" opens nothing');
+  assert.match(editor, /onInputRule\(/, 'the markdown markers are never asked about');
+  assert.match(editor, /toggleInlineMark\(/, 'the mark shortcuts transform nothing');
+
+  // …and the judgement reaches core, through the host.
+  for (const [op, query] of [
+    ['splitBlock', 'notes-split'], ['mergeBack', 'notes-merge-back'],
+    ['duplicate', 'notes-duplicate'], ['moveUp', 'notes-move-up'],
+    ['indent', 'notes-indent'], ['outdent', 'notes-outdent'],
+  ] as const) {
+    assert.match(container, new RegExp(`${op}: \\(id.*'${query}'`), `${op} does not call ${query}`);
+  }
+  assert.match(container, /'notes-input-rule'/, 'the input rules are decided in the renderer');
+  assert.match(container, /'notes-slash-menu'/, 'the slash menu is a second list in the renderer');
+
+  // The gesture's OUTCOME moves the caret. A split that works and leaves the
+  // caret behind fails the parity test as surely as one that does nothing.
+  assert.match(mode, /focusBlock\(outcome\?\.focusId/, 'the caret is not placed after a gesture');
+  assert.match(mode, /caretForColumn\(/, 'the arrows do not preserve the column');
+});
+
+test('E1: Enter mid-word leaves the head able to recognise its own truncation', () => {
+  // The gesture reached core and the store held ["sec", "ond line"], and the
+  // head still showed "second line" — permanently, because the truncation is
+  // the only change the `text` prop ever makes and it arrives while the block
+  // that was split still has focus. One more keystroke in that line pushed the
+  // pre-split text back and the tail became a duplicate.
+  const editor = source('./BlockEditor.tsx');
+  assert.match(editor, /expected: splitExpectation\.current/, 'the head cannot recognise its own split');
+  assert.match(
+    editor,
+    /splitExpectation\.current = draftRef\.current\.slice\(0, caret\)/,
+    'nothing records what a cut at the caret leaves behind',
+  );
+  // BOTH routes, or the gesture repairs itself when typed one way and corrupts
+  // the block when typed the other: a keydown this editor prevents never
+  // becomes the `insertParagraph` the same file also handles.
+  assert.match(editor, /case 'split':\s*\n\s*event\.preventDefault\(\);\s*\n\s*askForSplit\(/, 'the key route does not');
+  assert.match(editor, /'insertParagraph'\)[\s\S]{0,120}askForSplit\(selection\.start\)/, 'the input route does not');
+});
+
+test('E4: the block editor renders marks, and the textarea that could not is gone', () => {
+  const editor = source('./BlockEditor.tsx');
+  assert.match(editor, /contentEditable=\{!readOnly\}/, 'the surface cannot render inline marks');
+  assert.match(editor, /parseInlineMarks|inlineSegments/, 'nothing parses the marks for rendering');
+  assert.doesNotMatch(source('./BlockRow.tsx'), /<textarea/, 'a textarea shows raw markdown');
+  // B2 — the lease survives the restructuring: read-only WITH the attribution.
+  assert.match(source('./BlockRow.tsx'), /readOnly=\{!editable\}/, 'a leased block became editable');
+  assert.match(source('./BlockRow.tsx'), /\{locked \? <div className="notes-locked">/, 'the attribution is gone');
+});
+
+test('E4/E5: the handle, the selection and the pickers are wired to something a person can press', () => {
+  const row = source('./BlockRow.tsx');
+  assert.match(row, /<BlockHandle/, 'no block handle renders');
+  assert.match(source('./BlockHandle.tsx'), /draggable/, 'the handle cannot be dragged');
+  assert.match(row, /onDragStart=\{\(event\)/, 'a drag from the handle reaches nothing');
+  assert.match(source('./NotesMode.tsx'), /blockDropIntent\(/, 'a drag decides nothing');
+  assert.match(source('./NotesMode.tsx'), /selectedBlockIds\(/, 'multi-block selection is not applied');
+  // E5 — a mention can address a planner item, a work item or a meeting.
+  assert.match(source('./NotesModeContainer.tsx'), /mentionCandidates\(sources, query\)/);
+  assert.match(source('./NotesModeContainer.tsx'), /'planner-read'[\s\S]{0,400}'track-items'/);
+  assert.match(source('./NotesModeContainer.tsx'), /createMeetingsOps\(\)\.list\(\)/, 'a mention cannot address a meeting');
 });
 
 test('C2: every cross-mode move is wired to something a person can press', () => {
@@ -92,11 +184,13 @@ test('C2: every cross-mode move is wired to something a person can press', () =>
   // discarded, so a refusal created nothing and looked like success.
   assert.match(renderHelpers, /kind: outcome\.ok \? 'status' : 'error'/, 'a failed capture says nothing');
 
-  const notesMode = source('./NotesMode.tsx');
-  assert.match(notesMode, /ops\.sendTo\(block\.id, target\)/, 'Notes → Track/Planner has no control');
-  assert.match(notesMode, /ops\.linkFile\(block\.id, p, symbol\)/, 'Notes → Code has no control');
+  // The row moved out of `NotesMode` when a block became an editing surface
+  // rather than a textarea; the gestures it owns are asserted where they live.
+  const blockRow = source('./BlockRow.tsx');
+  assert.match(blockRow, /ops\.sendTo\(block\.id, target\)/, 'Notes → Track/Planner has no control');
+  assert.match(blockRow, /ops\.linkFile\(block\.id, p, symbol\)/, 'Notes → Code has no control');
   // C2 row 6 names a file OR a symbol; a kind with no writer is unreachable.
-  assert.match(notesMode, /ops\.loadSymbols\(p\)/, 'the picker cannot offer a symbol');
+  assert.match(blockRow, /ops\.loadSymbols\(p\)/, 'the picker cannot offer a symbol');
   assert.match(source('./NotesModeContainer.tsx'), /codeSymbolUri\(relPath, symbol\)/, 'no symbol reference is ever written');
 
   const notesContainer = source('./NotesModeContainer.tsx');
@@ -109,7 +203,7 @@ test('C2: every cross-mode move is wired to something a person can press', () =>
   // A1 — one rendering of a reference, or two surfaces disagree about what a
   // link looks like: the planner used to leave the raw URI in its prose.
   assert.match(planner, /<RefText text=\{n\.notes/, 'the planner renders a reference as plain text');
-  assert.match(source('./NotesMode.tsx'), /<RefChip key=\{uri\}/, 'notes stopped using the shared chip');
+  assert.match(blockRow, /<RefChip key=\{uri\}/, 'notes stopped using the shared chip');
   assert.match(
     source('../App/layout/MainContent.tsx'),
     /<PlannerModeContainer[^\n]*onOpenRef=\{openWorkspaceRef\}/,

@@ -35,6 +35,9 @@ const PATHS: Record<string, React.ReactNode> = {
   close: <path d="m3.5 3.5 9 9m0-9-9 9" />,
   'chev-down': <path d="m3.5 6 4.5 4.5L12.5 6" />,
   'chev-right': <path d="m6 3.5 4.5 4.5L6 12.5" />,
+  // ADR-029 E3 — stepping a calendar back a month. The set had every direction
+  // but this one, and a month picker that could only go forward is a picker.
+  'chev-left': <path d="m10 3.5-4.5 4.5L10 12.5" />,
   'chev-up': <path d="m3.5 10 4.5-4.5L12.5 10" />,
   plus: <path d="M8 3v10M3 8h10" />,
   refresh: <path d="M13 5.5A5.5 5.5 0 0 0 3.8 3.3L2.5 4.6M3 10.5a5.5 5.5 0 0 0 9.2 2.2l1.3-1.3M2.5 1.8v2.8h2.8M13.5 14.2v-2.8h-2.8" />,

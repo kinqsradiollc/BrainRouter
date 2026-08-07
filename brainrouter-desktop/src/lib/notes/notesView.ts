@@ -21,11 +21,13 @@ export interface NoteBlockView {
   level: number | null;
   hasChildren: boolean;
   /**
-   * B4/E4 — a page's title, which is the page block's OWN `text` rendered by
+   * B4/E4 — a container's title, which is the block's OWN `text` rendered by
    * the host through core's `pageTitleOrDefault`.
    *
-   * Null for every other kind rather than the same string: "Untitled" on an
-   * empty paragraph reads as a name someone gave it, not as an absence.
+   * A page has one, and E3's database has one — it is the heading over its rows
+   * and the name the sidebar and the breadcrumbs call it. Null for every other
+   * kind rather than the same string: "Untitled" on an empty paragraph reads as
+   * a name someone gave it, not as an absence.
    */
   title: string | null;
   /** The glyph in front — a page's icon, a callout's emoji. Never a placeholder. */
@@ -34,6 +36,14 @@ export interface NoteBlockView {
   cover: string | null;
   /** Pinned into the sidebar's favourites. */
   favourite: boolean;
+  /**
+   * E4 — a numbered item's number, computed by core from tree position.
+   *
+   * Optional because it only exists for `numbered`, and because a surface that
+   * counted the rendered rows itself would number a filtered page 1, 2, 3 while
+   * the document said 4, 7, 9.
+   */
+  ordinal?: number | null;
   /** References this block currently makes, canonically spelled (A2). */
   refs: string[];
   /** Fields whose merge could not be decided — the human picks (D4). */

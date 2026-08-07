@@ -14,7 +14,7 @@
  * end" is a decision, not markup, and a decision in a keydown handler is one
  * nobody can test.
  */
-import { blocksOnPage, pageBreadcrumbs, pageLabel, pageParents, TOP_LEVEL_LABEL } from './pageTree.js';
+import { blocksOnPage, containerParents, pageBreadcrumbs, pageLabel, TOP_LEVEL_LABEL } from './pageTree.js';
 import type { NoteBlockView } from './notesView.js';
 
 /** One hit as `notes-search` returns it — core's `NoteSearchHit`, over the wire. */
@@ -60,7 +60,7 @@ export function quickFindRows(
   blocks: readonly NoteBlockView[],
 ): QuickFindRow[] {
   const byId = new Map(blocks.map((block) => [block.id, block] as const));
-  const parents = pageParents(blocks);
+  const parents = containerParents(blocks);
   const rows: QuickFindRow[] = [];
 
   for (const hit of hits) {
@@ -133,7 +133,7 @@ export function isQuickFindShortcut(event: {
  * that two devices could disagree about.
  */
 export function quickFindDefaultRows(blocks: readonly NoteBlockView[], limit = 12): QuickFindRow[] {
-  const parents = pageParents(blocks);
+  const parents = containerParents(blocks);
   const rows: QuickFindRow[] = [];
   for (const block of blocks) {
     if (block.kind !== 'page') continue;

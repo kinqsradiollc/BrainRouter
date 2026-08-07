@@ -12,14 +12,21 @@
  * is one people stop writing in.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { NotesMode, type CodeSymbolPick, type NotesOps, type NotesShellState } from './NotesMode.js';
+import { NotesMode, type BlockOpOutcome, type CodeSymbolPick, type NotesOps, type NotesShellState } from './NotesMode.js';
 import type { NoteBlockView, NoteSendTarget, NoteTreeRepairView } from '../lib/notes/notesView.js';
 import { bridgeQuery } from '../lib/bridgeQuery.js';
 import { codeFileUri, codeSymbolUri, noteBlockUri } from '../lib/workspace/crossMode.js';
 import { selectedPageOrTop, withAncestorsExpanded } from '../lib/notes/pageTree.js';
 import { isQuickFindShortcut, type QuickFindHit } from '../lib/notes/quickFind.js';
 import { newPageIntent } from '../lib/notes/pageHeader.js';
+import { blockLinkUri } from '../lib/notes/blockSelection.js';
+import { mentionCandidates, type MentionCandidate, type MentionSources } from '../lib/notes/mentionPicker.js';
+import type { InputRuleTransformDto } from '../lib/notes/blockEditing.js';
+import type { SlashCommandDto } from '../lib/notes/slashMenu.js';
+import { createMeetingsOps } from '../components/meetings/meetingsOps.js';
 import type { FavouriteRow, TrashEntryDto } from '../lib/notes/sidebar.js';
+import type { DatabaseHostOps, SaveViewInput } from './databaseOps.js';
+import type { DatabaseReadDto, PropertyCatalogDto } from '../lib/notes/database.js';
 
 interface NotesSnapshot {
   blocks: NoteBlockView[];
@@ -31,6 +38,16 @@ interface NotesSnapshot {
 
 /** The same cadence the planner syncs at, and for the same reasons. */
 const SYNC_INTERVAL_MS = 30_000;
+
+/**
+ * How long the `@` picker's candidates are reused before being read again.
+ *
+ * The planner, the board and the meetings list are three round trips, and the
+ * picker filters as someone types. Reading them per keystroke would put three
+ * requests behind every character; reading them once per opening would offer a
+ * task created a minute ago as though it did not exist.
+ */
+const MENTION_SOURCE_TTL_MS = 15_000;
 
 /**
  * Renew at a third of the 30s term, so one missed renewal does not drop the
@@ -49,6 +66,16 @@ export function NotesModeContainer({
   onOpenRef?: (uri: string) => void;
 }): React.ReactElement {
   const [snapshot, setSnapshot] = useState<NotesSnapshot>(EMPTY);
+  /**
+   * Bumped on every read.
+   *
+   * A database renders a PROJECTION rather than the blocks — core computes which
+   * rows a view shows — so it cannot be re-derived from the snapshot the way a
+   * paragraph can. This counter is what tells an open database that something
+   * changed and its projection is worth asking for again, including a change
+   * another device made that arrived on a sync tick.
+   */
+  const [revision, setRevision] = useState(0);
   const [refLabels, setRefLabels] = useState<Record<string, string>>({});
   const [files, setFiles] = useState<string[]>([]);
   /** Declarations by path, filled in when a file is picked — never on load. */
@@ -97,6 +124,7 @@ export function NotesModeContainer({
       // A failed read leaves the last good snapshot on screen. Blanking what
       // someone is reading because one refresh failed loses more than it says.
     }
+    setRevision((current) => current + 1);
     await refreshSections();
   }, [refreshSections]);
 
@@ -221,13 +249,155 @@ export function NotesModeContainer({
     }
   }, [refresh]);
 
+  /**
+   * A gesture core owns, performed and then re-read.
+   *
+   * The OUTCOME is returned rather than swallowed, because core decides where
+   * the caret belongs after a split, a merge or a duplicate — and a surface
+   * that guessed would put it somewhere else than the dashboard does for the
+   * same keystroke, which is E1's parity test failing on the one thing it is
+   * actually about.
+   */
+  const gesture = useCallback(async (
+    action: string, args: Record<string, unknown>,
+  ): Promise<BlockOpOutcome | null> => {
+    let outcome: BlockOpOutcome | null = null;
+    try {
+      outcome = await bridgeQuery<BlockOpOutcome>(action, args);
+    } catch {
+      // A refused gesture leaves the document as it was; the refresh below
+      // still runs so the surface reflects whatever the store actually holds.
+    }
+    await refresh();
+    void bridgeQuery('notes-sync', {}).catch(() => {});
+    return outcome;
+  }, [refresh]);
+
+  /** The `@` picker's candidates, read at most this often. */
+  const mentionSources = useRef<{ at: number; sources: MentionSources }>({ at: 0, sources: {} });
+
+  const loadMentionSources = useCallback(async (): Promise<MentionSources> => {
+    const now = Date.now();
+    if (now - mentionSources.current.at < MENTION_SOURCE_TTL_MS) return mentionSources.current.sources;
+
+    // E5 — every mode this process can enumerate, so a mention can address a
+    // planner item, a work item or a meeting and not only another page.
+    // Meetings live on the server, so they come through the bridge the meetings
+    // mode already uses rather than through a second client.
+    const [planner, work, meetings, databases] = await Promise.all([
+      bridgeQuery<{ items?: Array<{ id: string; title: string; completed?: boolean }> }>('planner-read', {})
+        .catch(() => null),
+      bridgeQuery<Array<{ id: string; key?: string; title: string }>>('track-items', {}).catch(() => null),
+      createMeetingsOps().list().catch(() => [] as Array<{ id: string; title: string }>),
+      // E3 — a database is not in the page list, and its title is core's
+      // decoded one rather than the block's text, so it is asked for rather
+      // than filtered out of the snapshot.
+      bridgeQuery<{ databases?: Array<{ id: string; title: string }> }>('notes-database-list', {})
+        .catch(() => null),
+    ]);
+
+    const sources: MentionSources = {
+      pages: snapshot.blocks
+        .filter((block) => block.kind === 'page')
+        .map((block) => ({ id: block.id, title: (block.title ?? '').trim() || block.text.trim() })),
+      databases: (databases?.databases ?? []).map((database) => ({
+        id: database.id, title: database.title,
+      })),
+      planner: (planner?.items ?? []).map((item) => ({
+        id: item.id, title: item.title, completed: item.completed === true,
+      })),
+      workItems: Array.isArray(work) ? work.map((item) => ({ id: item.id, key: item.key, title: item.title })) : [],
+      meetings: (meetings ?? []).map((meeting) => ({ id: meeting.id, title: meeting.title })),
+    };
+    mentionSources.current = { at: now, sources };
+    return sources;
+  }, [snapshot.blocks]);
+
+  /**
+   * The handful of callbacks that change on every snapshot, reached through a
+   * ref.
+   *
+   * `database` below has to be REFERENTIALLY STABLE: an open database re-reads
+   * its projection whenever the object identity changes, so rebuilding it each
+   * render would put a round trip behind every keystroke on the page — and a
+   * read that lands in state would rebuild it again.
+   */
+  const live = useRef({ openPage, loadMentionSources, onOpenRef });
+  live.current = { openPage, loadMentionSources, onOpenRef };
+
+  /**
+   * ADR-029 E3 — the database verbs, every one a `notes-database-*` handler.
+   *
+   * There is no database store to talk to: each of these reads the same blocks
+   * `notes-read` reads and writes through the same `updateBlock`, so a cell edit
+   * is refused while another device holds the row's lease and travels the row's
+   * own outbox in order. The filtering, sorting and grouping are core's, asked
+   * for by `read` rather than computed here.
+   */
+  const database: DatabaseHostOps = useMemo(() => ({
+    read: async (databaseId, viewId) => bridgeQuery<DatabaseReadDto>('notes-database-read', {
+      id: databaseId, ...(viewId ? { viewId } : {}),
+    }).catch(() => null),
+    // E3 — this creates a PAGE. The id comes back so the caller can open it,
+    // which is what makes a row a page rather than a record beside one.
+    addRow: async (databaseId, after) => {
+      const created = await bridgeQuery<{ ok?: boolean; id?: string }>('notes-database-add-row', {
+        id: databaseId, ...(after ? { after } : {}),
+      }).catch(() => null);
+      await refresh();
+      void bridgeQuery('notes-sync', {}).catch(() => {});
+      return created?.id ?? null;
+    },
+    setValue: (rowId, propertyId, value) => mutate('notes-database-set-value', { rowId, propertyId, value }),
+    removeRow: (rowId) => mutate('notes-database-remove-row', { rowId }),
+    addProperty: (databaseId, name, type) => mutate('notes-database-add-property', { id: databaseId, name, type }),
+    updateProperty: (databaseId, propertyId, patch) => mutate('notes-database-update-property', {
+      id: databaseId, propertyId, ...patch,
+    }),
+    removeProperty: (databaseId, propertyId) => mutate('notes-database-remove-property', {
+      id: databaseId, propertyId,
+    }),
+    reorderProperties: (databaseId, order) => mutate('notes-database-reorder-properties', {
+      id: databaseId, order: [...order],
+    }),
+    // Constant for the life of the process — the types this build can evaluate
+    // do not change while it runs — so it is read when a picker first needs it
+    // and not on every open.
+    propertyCatalog: () => bridgeQuery<PropertyCatalogDto>('notes-property-catalog', {}).catch(() => null),
+    saveView: (databaseId, input: SaveViewInput) => mutate('notes-database-save-view', {
+      id: databaseId,
+      ...(input.viewId === undefined ? {} : { viewId: input.viewId }),
+      ...(input.name === undefined ? {} : { name: input.name }),
+      ...(input.kind === undefined ? {} : { kind: input.kind }),
+      ...(input.visible === undefined ? {} : { visible: input.visible }),
+      // `null` clears and `undefined` leaves alone — core's `saveView` reads
+      // them that way, and collapsing the two here would make it impossible to
+      // remove a filter or stop grouping.
+      ...(input.filter === undefined ? {} : { filter: input.filter }),
+      ...(input.sort === undefined ? {} : { sort: input.sort }),
+      ...(input.groupBy === undefined ? {} : { groupBy: input.groupBy }),
+    }),
+    removeView: (databaseId, viewId) => mutate('notes-database-remove-view', { id: databaseId, viewId }),
+    openPage: (pageId) => live.current.openPage(pageId),
+    openRef: (uri) => live.current.onOpenRef?.(uri),
+    // E5 — the same candidates the `@` picker offers, so a relation can address
+    // a planner item, a work item or a meeting and not only another page.
+    searchRefs: async (query) => mentionCandidates(await live.current.loadMentionSources(), query),
+  }), [mutate, refresh]);
+
   const ops: NotesOps = {
     // A new line belongs to the page being read, or it lands at the top level
     // and the person watches it appear on a page they are not looking at.
-    addBlock: (afterId, kind) => void mutate('notes-create', {
-      ...(afterId ? { after: afterId } : openPageId ? { parentId: openPageId } : {}),
-      ...(kind ? { kind } : {}),
-    }),
+    addBlock: async (afterId, kind, level) => {
+      const created = await bridgeQuery<{ id?: string }>('notes-create', {
+        ...(afterId ? { after: afterId } : openPageId ? { parentId: openPageId } : {}),
+        ...(kind ? { kind } : {}),
+        ...(level === undefined ? {} : { level }),
+      }).catch(() => null);
+      await refresh();
+      void bridgeQuery('notes-sync', {}).catch(() => {});
+      return created?.id ? { id: created.id } : null;
+    },
     /**
      * E4 — a page at any level, and inside any page.
      *
@@ -250,6 +420,10 @@ export function NotesModeContainer({
       return next;
     }),
     movePage: (intent) => void mutate('notes-move', { ...intent }),
+    // B4 — a page IS a block, so the sidebar's drag and the page body's drag
+    // are one write. Two names, because a call site that said `movePage` while
+    // dragging a paragraph would read as a bug.
+    moveBlock: (intent) => void mutate('notes-move', { ...intent }),
     // B4/E2 — the title IS the page block's text. One field, one write.
     setPageTitle: (id, title) => void mutate('notes-update', { id, text: title }),
     setIcon: (id, icon) => void mutate('notes-update', { id, icon }),
@@ -275,20 +449,73 @@ export function NotesModeContainer({
       }, 150);
     },
     setText: (id, text) => void mutate('notes-update', { id, text }),
-    setKind: (id, kind) => void mutate('notes-update', { id, kind }),
+    setKind: (id, kind, level) => void mutate('notes-update', {
+      id, kind, ...(level === undefined ? {} : { level }),
+    }),
     toggleChecked: (id, checked) => void mutate('notes-update', { id, checked }),
     deleteBlock: (id) => void mutate('notes-delete', { id }),
-    indent: (id) => {
-      // Nest under the previous sibling — the only target an indent can mean.
-      const flat = snapshot.blocks;
-      const index = flat.findIndex((b) => b.id === id);
-      const previous = [...flat.slice(0, index)].reverse().find((b) => b.depth === flat[index]?.depth);
-      if (previous) void mutate('notes-move', { id, parentId: previous.id });
+
+    /**
+     * E1 — the gestures, every one of them core's.
+     *
+     * These used to be re-derived here: `indent` looked for the previous
+     * sibling in the flat list and moved the block under it. That is the
+     * judgement `indentBlock` already makes — and makes differently, because it
+     * walks the REPAIRED tree and refuses inside a table row. Two answers to
+     * "what does Tab do" is exactly the drift ADR-029 is organised against, so
+     * the renderer asks and core decides.
+     */
+    splitBlock: (id, caret) => gesture('notes-split', { id, caret }),
+    mergeBack: (id) => gesture('notes-merge-back', { id }),
+    duplicate: (id) => gesture('notes-duplicate', { id }),
+    moveUp: (id) => gesture('notes-move-up', { id }),
+    moveDown: (id) => gesture('notes-move-down', { id }),
+    indent: (id) => gesture('notes-indent', { id }),
+    outdent: (id) => gesture('notes-outdent', { id }),
+
+    /**
+     * E1 — what `# ` means, answered by core's rule set.
+     *
+     * Asked per marker rather than per keystroke: the rules only fire on the
+     * space (or the newline) that completes one, so that is the only moment
+     * worth a round trip.
+     */
+    inputRule: async (request) => {
+      const answer = await bridgeQuery<{ transform?: InputRuleTransformDto | null }>(
+        'notes-input-rule', { ...request },
+      ).catch(() => null);
+      return answer?.transform ?? null;
     },
-    outdent: (id) => {
-      const block = snapshot.blocks.find((b) => b.id === id);
-      const parent = snapshot.blocks.find((b) => b.id === block?.parentId);
-      void mutate('notes-move', { id, parentId: parent?.parentId ?? null });
+    // The rule changed the block's KIND as well as its text, and both halves go
+    // in one write so a refresh can never show the marker consumed by a
+    // paragraph that is still a paragraph.
+    applyRule: (id, transform) => void mutate('notes-update', {
+      id,
+      text: transform.text,
+      kind: transform.kind,
+      ...(transform.level === undefined ? {} : { level: transform.level }),
+      ...(transform.checked === undefined ? {} : { checked: transform.checked }),
+      ...(transform.language === undefined ? {} : { language: transform.language }),
+    }),
+    searchSlash: async (query) => {
+      const answer = await bridgeQuery<{ commands?: SlashCommandDto[] }>('notes-slash-menu', {
+        query, limit: 12,
+      }).catch(() => null);
+      return answer?.commands ?? [];
+    },
+    searchMentions: async (query): Promise<MentionCandidate[]> => {
+      const sources = await loadMentionSources();
+      // Ranked in `lib/notes/mentionPicker`, not here: the same few characters
+      // are typed at this menu and at the slash menu, and a second ranking
+      // would make one of them behave differently for no reason a person could
+      // see.
+      return mentionCandidates(sources, query);
+    },
+    copyLink: (id) => {
+      // A1 — the same spelling every other surface writes. Best effort: a
+      // clipboard a browser refuses is not something to report as a failure of
+      // the note.
+      void navigator.clipboard?.writeText(blockLinkUri(id)).catch(() => {});
     },
     beginEdit: (id) => {
       void bridgeQuery<{ ok?: boolean; lease?: { epoch: number } }>('notes-begin-edit', { id })
@@ -371,6 +598,21 @@ export function NotesModeContainer({
         .then((res) => setBacklinkCounts((current) => ({ ...current, [id]: res?.blockIds?.length ?? 0 })))
         .catch(() => {});
     },
+
+    database,
+    /**
+     * E3 — `/database` and the page header's button.
+     *
+     * Through `notes-database-create` rather than `notes-create` with a kind, so
+     * the block arrives with the schema and the table view core gives a new
+     * database. It is NOT opened: a database made inside a page belongs in the
+     * page's flow, and navigating away would lose the sentence it was made under.
+     */
+    addDatabase: (parentId, after) => void mutate('notes-database-create', {
+      title: '',
+      parentId,
+      ...(after ? { after } : {}),
+    }),
   };
 
   const shell: NotesShellState = {
@@ -395,6 +637,7 @@ export function NotesModeContainer({
       backlinkCounts={backlinkCounts}
       shell={shell}
       ops={ops}
+      revision={revision}
     />
   );
 }

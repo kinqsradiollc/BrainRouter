@@ -96,9 +96,14 @@ export function PageHeader({
             </button>
           </>
         ) : null}
-        <button className="notes-page-tool" onClick={() => ops.addPage(view.pageId)}>
-          <Icon name="plus" size={11} /> {newPageLabel(view.editable ? view.title : null)}
-        </button>
+        {/* E3 — a database's children are ROWS, and the way to make one is the
+            database's own control, which also opens the page it created. A
+            "new page inside" here would leave a blank row nobody navigated to. */}
+        {view.database ? null : (
+          <button className="notes-page-tool" onClick={() => ops.addPage(view.pageId)}>
+            <Icon name="plus" size={11} /> {newPageLabel(view.editable ? view.title : null)}
+          </button>
+        )}
       </div>
 
       {picker === 'icon' && view.pageId ? (

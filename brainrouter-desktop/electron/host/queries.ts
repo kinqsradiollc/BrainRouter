@@ -38,6 +38,16 @@ import {
   listTrash as notesTrash, listFavourites as notesFavourites,
   applyInputRule, searchSlashCatalog, numberedOrdinals, pageTitleOrDefault,
   describeTrashEntry,
+  // ADR-029 E3 — databases. A row is a page, so every one of these composes the
+  // block mutations above rather than reaching a second store; the host routes.
+  createDatabase as notesCreateDatabase, listDatabases as notesListDatabases,
+  addProperty as notesAddProperty, updateProperty as notesUpdateProperty,
+  removeProperty as notesRemoveProperty, reorderProperties as notesReorderProperties,
+  addRow as notesAddRow, setRowValue as notesSetRowValue, removeRow as notesRemoveRow,
+  saveView as notesSaveView, removeView as notesRemoveView,
+  readDatabaseView as notesReadDatabaseView, readDatabase,
+  DATABASE_BLOCK_KIND, NOTE_PROPERTY_TYPES, NOTE_VIEW_KINDS, operatorsFor,
+  type NotePropertyType, type NoteViewKind, type NoteDatabaseView,
 } from '@kinqs/brainrouter-core/notes';
 import { createNotesTransport } from './notesTransport.js';
 import {
@@ -2325,10 +2335,13 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
               cover: block.cover?.value ?? null,
               favourite: block.favourite?.value === true,
               ordinal: ordinals.get(block.id) ?? null,
-              // Only a page has a title. Sending one for every block would put
-              // "Untitled" on empty paragraphs, which reads as a name rather
-              // than as an absence.
-              title: block.kind.value === 'page' ? pageTitleOrDefault(block) : null,
+              // Only a CONTAINER has a title — a page, and E3's database, whose
+              // name is the heading over its rows. Sending one for every block
+              // would put "Untitled" on empty paragraphs, which reads as a name
+              // rather than as an absence.
+              title: block.kind.value === 'page' || block.kind.value === DATABASE_BLOCK_KIND
+                ? pageTitleOrDefault(block)
+                : null,
               hasChildren: node.children.length > 0,
               refs: blockReferences(block),
               // The REASON travels with the field, not just the field name: a
@@ -2478,6 +2491,153 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // block, because the all-blocks form is quadratic and answers a question
       // nobody asked until they open the menu.
       'notes-backlinks': (a) => ({ blockIds: blocksReferencing(notesList(undefined), String(a.uri ?? '')) }),
+
+      // ADR-029 E3 — databases. A database is a VIEW over pages that share a
+      // property schema, so there is no database store to talk to: every handler
+      // below reads the same blocks `notes-read` reads and writes through the
+      // same `updateBlock`. The filtering, sorting and grouping are computed in
+      // core rather than here for E1's reason — a saved view that hid different
+      // rows on two surfaces is indistinguishable from data having gone missing.
+      'notes-database-list': () => ({
+        databases: notesListDatabases(undefined).map((block) => {
+          const database = readDatabase(block);
+          return {
+            id: block.id,
+            title: database.title,
+            icon: block.icon?.value ?? null,
+            properties: database.schema.length,
+            views: database.views.map((view) => ({ id: view.id, name: view.name, kind: view.kind })),
+          };
+        }),
+      }),
+      'notes-database-read': (a) => {
+        const projection = notesReadDatabaseView(
+          undefined,
+          String(a.id ?? ''),
+          typeof a.viewId === 'string' ? a.viewId : undefined,
+        );
+        if (!projection) return { found: false };
+        const database = readDatabase(projection.database);
+        return {
+          found: true,
+          id: projection.database.id,
+          title: projection.title,
+          // Every view, so the renderer can offer the tabs without a second call.
+          views: database.views.map((view) => ({ id: view.id, name: view.name, kind: view.kind })),
+          view: projection.view,
+          kind: projection.kind,
+          properties: database.schema.map((def) => ({
+            ...def,
+            // §3 keeps formulas and rollups out, and a newer client's column
+            // arrives the same way: named, kept, and reported as one this build
+            // cannot compute rather than approximated.
+            unsupported: database.unsupported.includes(def.id),
+            operators: operatorsFor(def),
+          })),
+          columns: projection.columns.map((def) => def.id),
+          rows: projection.rows.map((row) => ({
+            id: row.id,
+            title: row.title,
+            icon: row.icon,
+            cover: row.cover,
+            cells: row.cells.map((cell) => ({
+              property: cell.property.id,
+              value: cell.value,
+              display: cell.display,
+              unsupported: cell.unsupported,
+            })),
+          })),
+          // Row IDS, not rows: a multi-value grouping puts one row in several
+          // buckets on purpose (see `propertyGroupKeys`), and repeating the whole
+          // row per bucket would multiply the payload for no information.
+          groups: projection.groups.map((group) => ({
+            key: group.key,
+            label: group.label,
+            empty: group.empty,
+            rowIds: group.rows.map((row) => row.id),
+          })),
+          total: projection.total,
+          filteredOut: projection.filteredOut,
+          // Rules core could not apply, and the sentences for them. Reported
+          // rather than silently treated as matching everything or nothing —
+          // both of those lie about whether a filter ran.
+          skipped: projection.skipped,
+          notices: projection.notices,
+        };
+      },
+      'notes-database-create': (a) => {
+        const created = notesCreateDatabase(undefined, {
+          ...(typeof a.title === 'string' ? { title: a.title } : {}),
+          ...(a.parentId !== undefined ? { parentId: a.parentId as string | null } : {}),
+          ...(typeof a.after === 'string' ? { after: a.after } : {}),
+        }, Date.now());
+        return { id: created.id };
+      },
+      'notes-database-add-property': (a) => notesAddProperty(undefined, String(a.id ?? ''), {
+        name: String(a.name ?? 'Property'),
+        type: String(a.type ?? 'text') as NotePropertyType,
+        ...(Array.isArray(a.options) ? { options: a.options as { id: string; label: string }[] } : {}),
+      }, Date.now()),
+      'notes-database-update-property': (a) => notesUpdateProperty(
+        undefined, String(a.id ?? ''), String(a.propertyId ?? ''),
+        {
+          ...(typeof a.name === 'string' ? { name: a.name } : {}),
+          ...(Array.isArray(a.options) ? { options: a.options as { id: string; label: string }[] } : {}),
+        },
+        Date.now(),
+      ),
+      'notes-database-remove-property': (a) => notesRemoveProperty(
+        undefined, String(a.id ?? ''), String(a.propertyId ?? ''), Date.now(),
+      ),
+      'notes-database-reorder-properties': (a) => notesReorderProperties(
+        undefined, String(a.id ?? ''),
+        Array.isArray(a.order) ? (a.order as string[]) : [],
+        Date.now(),
+      ),
+      'notes-database-add-row': (a) => {
+        const added = notesAddRow(undefined, String(a.id ?? ''), {
+          ...(typeof a.title === 'string' ? { title: a.title } : {}),
+          ...(a.values && typeof a.values === 'object'
+            ? { values: a.values as Record<string, unknown> }
+            : {}),
+          ...(typeof a.after === 'string' ? { after: a.after } : {}),
+        }, Date.now());
+        return added.ok ? { ok: true, id: added.value.id } : added;
+      },
+      // One cell, through `updateBlock` — so the lease refuses it while another
+      // device is editing the row, and the outbox carries it in order.
+      'notes-database-set-value': (a) => {
+        const written = notesSetRowValue(
+          undefined, String(a.rowId ?? ''), String(a.propertyId ?? ''), a.value, Date.now(),
+        );
+        return written.ok ? { ok: true, id: written.value.id } : written;
+      },
+      'notes-database-remove-row': (a) => {
+        const removed = notesRemoveRow(undefined, String(a.rowId ?? ''), Date.now());
+        return removed.ok ? { ok: true, removed: removed.value } : removed;
+      },
+      'notes-database-save-view': (a) => notesSaveView(undefined, String(a.id ?? ''), {
+        ...(typeof a.viewId === 'string' ? { id: a.viewId } : {}),
+        ...(typeof a.name === 'string' ? { name: a.name } : {}),
+        ...(typeof a.kind === 'string' ? { kind: a.kind as NoteViewKind } : {}),
+        ...(Array.isArray(a.visible) ? { visible: a.visible as string[] } : {}),
+        ...(a.filter !== undefined ? { filter: a.filter as NoteDatabaseView['filter'] } : {}),
+        ...(a.sort !== undefined ? { sort: a.sort as NoteDatabaseView['sort'] } : {}),
+        ...(a.groupBy !== undefined ? { groupBy: a.groupBy as string | null } : {}),
+      }, Date.now()),
+      'notes-database-remove-view': (a) => notesRemoveView(
+        undefined, String(a.id ?? ''), String(a.viewId ?? ''), Date.now(),
+      ),
+      // What a property picker and a filter builder render from. Served rather
+      // than hardcoded in the renderer, so a surface can never offer an operator
+      // core would then report as skipped.
+      'notes-property-catalog': () => ({
+        types: NOTE_PROPERTY_TYPES.map((type) => ({
+          type,
+          operators: operatorsFor({ id: type, name: type, type }),
+        })),
+        viewKinds: NOTE_VIEW_KINDS,
+      }),
       'notes-sync': async () => {
         const brainUrl = getCliKnobs().brainUrl;
         if (!brainUrl) {
