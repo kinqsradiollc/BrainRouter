@@ -19,6 +19,11 @@ const REQUIRED_LAZY_CHUNKS = Object.freeze([
   'BrowserPanel-',
   'CIPanel-',
   'EditorPanel-',
+  // ADR-029 — the block editor plus five database views. Listed here and not
+  // only trusted to the byte budget because the budget catches the regression
+  // by its SIZE, which is a number someone can be tempted to raise; this
+  // catches it by its cause, which is a static import nobody meant to add.
+  'NotesModeContainer-',
   'WorkflowsPanel-',
 ]);
 

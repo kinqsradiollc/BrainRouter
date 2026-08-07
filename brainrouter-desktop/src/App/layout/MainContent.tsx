@@ -6,11 +6,23 @@
  * (load-bearing for Electron drag regions), and behavior are unchanged.
  */
 import type { WorkspaceMode } from '../../components/layout/ActivityBar.js';
-import React from 'react';
+import React, { Suspense, lazy } from 'react';
 import { Icon } from '../../icons.js';
 import { TrackView } from '../../track/TrackView.js';
 import { PlannerModeContainer } from '../../planner/PlannerModeContainer.js';
-import { NotesModeContainer } from '../../notes/NotesModeContainer.js';
+/**
+ * Notes is lazy for the reason the panels above it are (see renderPanelBody):
+ * a block editor, five database views and their controls are ~60KB of initial
+ * JavaScript that most sessions never execute, because Notes is one mode of six
+ * and the app does not open in it.
+ *
+ * The release budget caught this rather than a reviewer, which is the point of
+ * having one — the bundle went 60KB over on the commit that added the editor,
+ * and the honest fix is to stop shipping it to people who have not asked for
+ * it rather than to raise the number the guard checks against.
+ */
+const NotesModeContainer = lazy(() =>
+  import('../../notes/NotesModeContainer.js').then((m) => ({ default: m.NotesModeContainer })));
 import { parseWorkspaceRef } from '@kinqs/brainrouter-core/workspace/references';
 import { MeetingsView } from '../../components/meetings/MeetingsView.js';
 import { createMeetingsOps } from '../../components/meetings/meetingsOps.js';
@@ -237,7 +249,12 @@ export function MainContent(p: MainContentProps): React.ReactElement {
         // ADR-029 — Notes is user-scoped and cross-project (D1), so like the
         // planner it renders WITHOUT the workspace-bound side panel rail.
         <div className="workrow" ref={workrowRef}>
-          <NotesModeContainer onOpenRef={openWorkspaceRef} />
+          {/* The fallback says nothing rather than "Loading…": the chunk
+              resolves in a frame off local disk, and a spinner that flashes
+              once per mode switch reads as the app stuttering. */}
+          <Suspense fallback={<div className="notes-mode" />}>
+            <NotesModeContainer onOpenRef={openWorkspaceRef} />
+          </Suspense>
         </div>
       ) : mode === 'planner' ? (
         // ADR-028 G6 — cross-workspace, so it renders WITHOUT the side panel
