@@ -5,10 +5,15 @@
  * ones. It also means the merge rules the SERVER applies (D11) are literally
  * the same functions the client applies — one implementation, so the two halves
  * cannot drift into disagreeing about who won a conflict.
+ *
+ * The clock and the outbox now live under `sync/`, shared with Notes per
+ * ADR-029 B3. They are re-exported here unchanged: the backend, the desktop and
+ * the CLI all import them from this path, and moving a file is not a reason to
+ * make three consumers edit their imports.
  */
-export * from './hybridClock.js';
+export * from '../sync/hybridClock.js';
+export * from '../sync/outbox.js';
 export * from './itemMerge.js';
-export * from './outbox.js';
 export * from './timetable.js';
 export * from './sourceAdapter.js';
 export * from './agentContext.js';

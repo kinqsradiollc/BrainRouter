@@ -16,7 +16,7 @@ import {
   listItems, listBlocks, listConflicts, readPlanner,
 } from './plannerStore.js';
 import { dayView, summarizeDrift, needsAttention, commitmentFor, type TimeBlock, type DriftSummary } from './timetable.js';
-import { describeSyncState } from './outbox.js';
+import { describeSyncState } from '../sync/outbox.js';
 import { isStale, describeFreshness, type SourceFreshness } from './sourceAdapter.js';
 import type { PlannerItem } from './itemMerge.js';
 

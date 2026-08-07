@@ -1,5 +1,5 @@
 /**
- * ADR-028 D1 + D4 — what can conflict, and how it resolves.
+ * ADR-028 D1 — what can conflict at all, and the planner's own field list.
  *
  * **D1, the split everything rests on.** A *mirrored* item projects something
  * whose truth lives elsewhere — a GitHub issue, a Track item, a review finding.
@@ -14,23 +14,29 @@
  * the apparent difficulty of "sync everything across devices" dissolves the
  * moment mirrored data stops pretending to be editable local state.
  *
- * **D4, resolution.** Field-level last-writer-wins by HLC, so two devices
- * setting `dueDate` and `priority` both win — except in the three places where
- * LWW destroys something a person cannot get back.
+ * **D4's resolution rules live in `sync/stamped.ts`**, shared with Notes per
+ * ADR-029 B3. They were always generic — field-level last-writer-wins over a
+ * value and its stamp knows nothing about todos — and a second copy of them
+ * would eventually disagree with this one about a tie. What stays here is the
+ * part that is genuinely the planner’s: which fields it has, and which of them
+ * are free text.
  *
- * Not CRDTs, consistent with ADR-027, and for a narrower reason than usual: a
- * CRDT text merge produces a document neither person wrote, which is worse than
- * a conflict marker because it looks like agreement.
+ * The names D4 introduced are re-exported so `@kinqs/brainrouter-core/planner`
+ * still answers for them; the backend imports the merge from that path and must
+ * keep calling the same functions this client does.
  */
-import { compareHlc, hlcAfter, type Hlc } from './hybridClock.js';
+import { hlcAfter, type Hlc } from '../sync/hybridClock.js';
+import {
+  latestStamp, mergeCompletion, mergeField, mergeText, resolveTombstone,
+  type ConflictRecord, type Stamped,
+} from '../sync/stamped.js';
+
+export {
+  mergeCompletion, mergeField, mergeText,
+  type ConflictRecord, type Stamped,
+} from '../sync/stamped.js';
 
 export type ItemOrigin = 'owned' | 'mirrored';
-
-/** A value plus the stamp of the edit that set it. */
-export interface Stamped<T> {
-  value: T;
-  at: Hlc;
-}
 
 export interface PlannerItem {
   id: string;
@@ -51,93 +57,6 @@ export interface PlannerItem {
   conflicts?: Record<string, ConflictRecord>;
 }
 
-export interface ConflictRecord {
-  /** Both versions, kept. The human picks; nothing is discarded to decide. */
-  ours: unknown;
-  theirs: unknown;
-  oursAt: Hlc;
-  theirsAt: Hlc;
-  reason: 'concurrent_text' | 'delete_vs_edit';
-}
-
-/** Fields where a lost value is a lost sentence, not a lost checkbox. */
-const FREE_TEXT_FIELDS = new Set(['title', 'notes']);
-
-/**
- * Merge one field by last-writer-wins.
- *
- * Independent per field: two devices editing different fields of the same item
- * is not a conflict at all, and treating it as one is how naive whole-record
- * LWW loses an edit that nothing was competing with.
- */
-export function mergeField<T>(ours: Stamped<T> | undefined, theirs: Stamped<T> | undefined): Stamped<T> | undefined {
-  if (!ours) return theirs;
-  if (!theirs) return ours;
-  return hlcAfter(theirs.at, ours.at) ? theirs : ours;
-}
-
-/**
- * Merge completion, where the tie is broken deliberately.
- *
- * Complete wins at equal clocks. The asymmetry is intentional: un-completing
- * something you finished is more annoying than re-completing something that
- * bounced back, because the first makes you doubt the record and the second is
- * one click.
- */
-export function mergeCompletion(
-  ours: Stamped<boolean> | undefined,
-  theirs: Stamped<boolean> | undefined,
-): Stamped<boolean> | undefined {
-  if (!ours) return theirs;
-  if (!theirs) return ours;
-  // "Equal clocks" means equal physical AND logical — the deviceId tie-break
-  // must NOT be consulted first, or it decides every tie and the asymmetry
-  // below never applies to anything.
-  const sameClock =
-    ours.at.physical === theirs.at.physical && ours.at.logical === theirs.at.logical;
-  if (!sameClock) return compareHlc(theirs.at, ours.at) > 0 ? theirs : ours;
-  return ours.value ? ours : theirs;
-}
-
-/**
- * Merge free text.
- *
- * Concurrent edits are marked conflicted and BOTH are kept. A planner is not
- * important enough to lose a paragraph over, and exactly important enough that
- * quietly losing one destroys trust in the whole surface — after which people
- * keep a second copy somewhere else, which defeats the point of the planner.
- */
-export function mergeText(
-  field: string,
-  ours: Stamped<string> | undefined,
-  theirs: Stamped<string> | undefined,
-): { value: Stamped<string> | undefined; conflict?: ConflictRecord } {
-  if (!ours) return { value: theirs };
-  if (!theirs) return { value: ours };
-  if (ours.value === theirs.value) {
-    return { value: hlcAfter(theirs.at, ours.at) ? theirs : ours };
-  }
-  const order = compareHlc(theirs.at, ours.at);
-  if (order === 0) {
-    return { value: ours };
-  }
-  // Concurrent = neither stamp saw the other. With an HLC that shows up as
-  // equal physical+logical from different devices; a strictly later stamp did
-  // see it and legitimately supersedes.
-  if (ours.at.physical === theirs.at.physical && ours.at.logical === theirs.at.logical) {
-    return {
-      value: order > 0 ? theirs : ours,
-      conflict: {
-        ours: ours.value, theirs: theirs.value,
-        oursAt: ours.at, theirsAt: theirs.at,
-        reason: 'concurrent_text',
-      },
-    };
-  }
-  void field;
-  return { value: order > 0 ? theirs : ours };
-}
-
 /**
  * Merge two versions of an owned item.
  *
@@ -146,17 +65,10 @@ export function mergeText(
 export function mergeOwnedItem(ours: PlannerItem, theirs: PlannerItem): PlannerItem {
   const conflicts: Record<string, ConflictRecord> = { ...(ours.conflicts ?? {}), ...(theirs.conflicts ?? {}) };
 
-  const title = mergeText('title', ours.title, theirs.title);
+  const title = mergeText(ours.title, theirs.title);
   if (title.conflict) conflicts.title = title.conflict;
-  const notes = mergeText('notes', ours.notes, theirs.notes);
+  const notes = mergeText(ours.notes, theirs.notes);
   if (notes.conflict) conflicts.notes = notes.conflict;
-
-  // Delete versus edit. A tombstone does not simply win: an edit stamped after
-  // it means someone was working on this after someone else removed it, and
-  // both silently undeleting and silently discarding the edit are wrong.
-  const tombstone = ours.deletedAt && theirs.deletedAt
-    ? (hlcAfter(theirs.deletedAt, ours.deletedAt) ? theirs.deletedAt : ours.deletedAt)
-    : (ours.deletedAt ?? theirs.deletedAt);
 
   const latestEdit = latestEditStamp({ ...ours, title: title.value!, notes: notes.value });
   const latestTheirEdit = latestEditStamp(theirs);
@@ -164,16 +76,8 @@ export function mergeOwnedItem(ours: PlannerItem, theirs: PlannerItem): PlannerI
     ? (hlcAfter(latestTheirEdit, latestEdit) ? latestTheirEdit : latestEdit)
     : (latestEdit ?? latestTheirEdit);
 
-  let deletedAt = tombstone;
-  if (tombstone && newestEdit && hlcAfter(newestEdit, tombstone)) {
-    // Resurrect as conflicted rather than choosing for them.
-    deletedAt = undefined;
-    conflicts.deleted = {
-      ours: 'deleted', theirs: 'edited',
-      oursAt: tombstone, theirsAt: newestEdit,
-      reason: 'delete_vs_edit',
-    };
-  }
+  const tombstone = resolveTombstone(ours.deletedAt, theirs.deletedAt, newestEdit);
+  if (tombstone.conflict) conflicts.deleted = tombstone.conflict;
 
   return {
     id: ours.id,
@@ -183,16 +87,13 @@ export function mergeOwnedItem(ours: PlannerItem, theirs: PlannerItem): PlannerI
     ...(mergeField(ours.dueDate, theirs.dueDate) ? { dueDate: mergeField(ours.dueDate, theirs.dueDate)! } : {}),
     ...(mergeField(ours.priority, theirs.priority) ? { priority: mergeField(ours.priority, theirs.priority)! } : {}),
     ...(mergeCompletion(ours.completed, theirs.completed) ? { completed: mergeCompletion(ours.completed, theirs.completed)! } : {}),
-    ...(deletedAt ? { deletedAt } : {}),
+    ...(tombstone.deletedAt ? { deletedAt: tombstone.deletedAt } : {}),
     ...(Object.keys(conflicts).length ? { conflicts } : {}),
   };
 }
 
 function latestEditStamp(item: PlannerItem): Hlc | undefined {
-  const stamps = [item.title?.at, item.notes?.at, item.dueDate?.at, item.priority?.at, item.completed?.at]
-    .filter((s): s is Hlc => !!s);
-  if (stamps.length === 0) return undefined;
-  return stamps.reduce((a, b) => (hlcAfter(b, a) ? b : a));
+  return latestStamp([item.title?.at, item.notes?.at, item.dueDate?.at, item.priority?.at, item.completed?.at]);
 }
 
 /**

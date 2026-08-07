@@ -15,7 +15,12 @@
  *
  * ADR-027 D12 moved lease expiry onto the database clock for this same reason.
  * This is that decision extended to where the database clock is unreachable —
- * which is the entire point of an offline-first planner.
+ * which is the entire point of an offline-first surface.
+ *
+ * It lives under `sync/` rather than under the planner because ADR-029 B3 makes
+ * it shared: Notes reuses this stack rather than growing a second one, and two
+ * sync systems in one product disagree in ways that are indistinguishable from
+ * a bug in whichever surface you happen to be looking at.
  */
 
 export interface Hlc {
