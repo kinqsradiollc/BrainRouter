@@ -1,6 +1,6 @@
 # ADR-029 — One workspace, many surfaces
 
-**Status:** PROPOSED — awaiting review. Nothing here is built.
+**Status:** ACCEPTED — approved by the owner. Parts A–D are built; Part E is the approved extension.
 **Supersedes nothing. Depends on:** ADR-028 (planner sync, panel model), ADR-021 (workspace profiles).
 
 ---
@@ -255,15 +255,88 @@ storage grows with how often people paste rather than with what they have.
 
 ---
 
+### Part E — Parity with the app people are comparing this to
+
+Parts A–D describe a correct block store. They do not describe a notes app anyone would choose.
+The owner's instruction after seeing it working was exact: **the note should be exactly the same as
+Notion — everything.** That is a scope decision, and this Part records it rather than letting the
+gap be discovered later.
+
+#### E1 · The benchmark is the editing gesture, not the feature list
+
+A features table can be satisfied without the product becoming usable. What makes Notion Notion is
+that **you never leave the keyboard to change what a line is**: `/` opens a command menu, `# ` turns
+the line into a heading as you type it, Enter splits a block at the caret, Backspace at column zero
+merges it into the one above, Tab nests it.
+
+> **The parity test is that a person who uses Notion can type a page here without being taught
+> anything.**
+
+So the ordering is deliberate: input rules and the slash menu come before any new block kind, because
+a block kind you can only reach through a dropdown is a block kind nobody uses.
+
+#### E2 · Rich text is stored in the text, not beside it
+
+Notion stores rich text as an array of styled segments. We store a block's body as one
+`Stamped<string>` because B1's merge granularity is the block and D4 merges per field.
+
+> **Inline marks are encoded IN the string as a restricted markdown subset, and parsed for
+> rendering.**
+
+A parallel `Stamped<InlineMark[]>` holding offsets into a separately-stamped string is two fields
+that must agree about lengths and merge independently — and the first concurrent edit desynchronises
+them, producing bold that starts mid-word in a sentence neither person wrote. One field cannot
+disagree with itself. The cost is that a `*` someone typed literally needs escaping, which is a
+known, visible, local problem rather than a silent corruption.
+
+#### E3 · Databases are real, and this reverses §3
+
+The first draft ruled out "a formula/database view over notes" on the grounds that Track already
+models structured records. That reasoning was about avoiding two models of one thing — and it was
+wrong about which thing. Track models **work**: items with an assignee, a status, a sprint. A Notion
+database models **anything a page can be a row of** — a reading list, a CRM, a recipe index. They are
+not the same noun, and refusing the second does not prevent duplication, it prevents the feature.
+
+> **A database row IS a page.** Not a record that links to one — the same block, with properties.
+
+That is the decision that keeps this from becoming a second store: a database is a *view over pages
+with a shared property schema*, so everything in Part A–D (sync, merge, references, permissions)
+applies to rows for free. Views (table, board, list, calendar, gallery), filters, sorts and grouping
+are projections computed from the same blocks.
+
+Formulas and rollups are **not** in this pass — they need an expression language and a dependency
+graph, and shipping half of one produces a column that is wrong rather than absent (§B1's argument,
+applied to cells).
+
+#### E4 · What "everything" explicitly includes
+
+Judged as built or not built, per row, by the table in §5:
+
+| | |
+|---|---|
+| **Editor** | slash menu, markdown input rules, inline marks (bold/italic/strike/code/link), `@`-mention, `[[`page link, split/merge on Enter/Backspace, Tab nesting, duplicate, move up/down, multi-block selection |
+| **Blocks** | heading 1–3, paragraph, bullet, numbered, todo, toggle, quote, callout, code with language, divider, image, bookmark, embed, table, sub-page |
+| **Pages** | icon, cover, title as its own field, breadcrumbs, sidebar tree with drag-to-reparent, favourites, trash with restore |
+| **Databases** | property types (title, text, number, select, multi-select, date, checkbox, URL, person, relation), table/board/list/calendar/gallery views, filter, sort, group |
+| **Finding things** | ⌘K quick find across pages and blocks, backlinks panel, in-page search |
+
+#### E5 · Notion's own missing half is our A-part, and we keep it
+
+Notion has no addressing scheme that reaches outside Notion. Parity is the floor here, not the
+ceiling: every one of the above keeps working with Part A references, so a database row can cite a
+pull request, a callout can embed a planner item, and a `@`-mention can address a meeting. Dropping
+that to match Notion exactly would be copying a limitation.
+
+---
+
 ## 3. Out of scope
 
 - Real-time collaborative cursors. B2's soft locking covers the multi-device case; live
   co-authoring is a different product with different infrastructure.
 - Public publishing of notes.
 - Importing from other note apps. Worth doing, not worth blocking this on.
-- A formula/database view over notes. The Track mode already covers structured records; duplicating
-  it inside Notes would create two places to model the same thing, which is the failure this ADR
-  exists to fix.
+- Formulas and rollups inside database properties — see E3 for why the rest of databases is now in
+  scope and these two are not.
 
 ---
 

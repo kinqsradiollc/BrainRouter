@@ -44,7 +44,7 @@ function deliveryLabel(delivery: Extract<ChatRow, { kind: 'user' }>['delivery'])
   return 'Steer · delivered';
 }
 
-export function MessageRow({ r, liveLast, inlineDiffs, onRequestDiff, onOpenFile, onOpenDiff, onOpenPlan, onOpenArtifact, onDismissError, onFork, onRewind }: {
+export function MessageRow({ r, liveLast, inlineDiffs, onRequestDiff, onOpenFile, onOpenDiff, onOpenPlan, onOpenArtifact, onDismissError, onFork, onRewind, onSaveToNotes, onAddToPlanner }: {
   r: ChatRow;
   liveLast: boolean;
   inlineDiffs: Record<string, string>;
@@ -56,6 +56,10 @@ export function MessageRow({ r, liveLast, inlineDiffs, onRequestDiff, onOpenFile
   onDismissError: (id: number | string) => void;
   onFork: (ts: number) => void;
   onRewind: (ts: number) => void;
+  /** ADR-029 C2 — Chat → Notes: the conclusion becomes a block citing the conversation. */
+  onSaveToNotes: (text: string) => void;
+  /** ADR-029 C2 — Chat → Planner: "remind me to…" becomes a task. */
+  onAddToPlanner: (text: string) => void;
 }): React.ReactElement | null {
   switch (r.kind) {
     case 'user': return (
@@ -66,6 +70,7 @@ export function MessageRow({ r, liveLast, inlineDiffs, onRequestDiff, onOpenFile
         </div>
         <span className="msg-actions">
           <button className="icon-btn" title="Copy" onClick={() => void navigator.clipboard.writeText(r.text)}><Icon name="copy" size={11} /></button>
+          <button className="icon-btn" title="Add to planner" aria-label="Add to planner" onClick={() => onAddToPlanner(r.text)}><Icon name="plan" size={11} /></button>
           <button className="icon-btn" title="Rewind the conversation to here" onClick={() => onRewind(r.ts)}><Icon name="arrow-left" size={11} /></button>
           <span className="msg-time">{fmtRel(r.ts)}</span>
         </span>
@@ -94,6 +99,12 @@ export function MessageRow({ r, liveLast, inlineDiffs, onRequestDiff, onOpenFile
         <Markdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>{visible}</Markdown>
         <span className="msg-actions">
           <button className="icon-btn" title="Copy" onClick={() => void navigator.clipboard.writeText(visible || r.text)}><Icon name="copy" size={11} /></button>
+          {/* ADR-029 C2 — the two moves a chat turn affords. The note cites the
+              CONVERSATION rather than the turn, because a turn has no id that
+              survives a rewind and a citation that quietly points elsewhere is
+              worse than one that is a little coarser. */}
+          <button className="icon-btn" title="Save to notes" aria-label="Save to notes" onClick={() => onSaveToNotes(visible || r.text)}><Icon name="note" size={11} /></button>
+          <button className="icon-btn" title="Add to planner" aria-label="Add to planner" onClick={() => onAddToPlanner(visible || r.text)}><Icon name="plan" size={11} /></button>
           <button className="icon-btn" title="Fork into a new chat from this message" onClick={() => onFork(r.ts)}><Icon name="fork" size={11} /></button>
           <button className="icon-btn" title="Rewind the conversation to here" onClick={() => onRewind(r.ts)}><Icon name="arrow-left" size={11} /></button>
           <span className="msg-time">{fmtRel(r.ts)}</span>

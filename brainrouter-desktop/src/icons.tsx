@@ -10,6 +10,8 @@ const PATHS: Record<string, React.ReactNode> = {
   folder: <path d="M1.5 4.5a1 1 0 0 1 1-1h3.2l1.6 1.8h6.2a1 1 0 0 1 1 1v6.2a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-8Z" />,
   'folder-open': <path d="M1.5 5.5v-1a1 1 0 0 1 1-1h3.2l1.6 1.8h5.2a1 1 0 0 1 1 1v.7m-12 6.5 1.7-5.4a1 1 0 0 1 .95-.7h8.9a1 1 0 0 1 .96 1.3l-1.4 4.1a1 1 0 0 1-.95.7h-9.2a1 1 0 0 1-.96-1Z" />,
   file: <path d="M4 1.5h5l3 3v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-11a1 1 0 0 1 1-1Zm5 0v3h3" />,
+  // ADR-029 — the Notes mode: a page with written lines, one of them a heading.
+  note: <><rect x="3" y="2" width="10" height="12" rx="1.2" /><path d="M5.4 5.2h5.2M5.4 8h5.2M5.4 10.8h3" /></>,
   terminal: <path d="M2 3.5h12v9H2v-9Zm2.5 2.5 2 2-2 2m3.5.5h3" />,
   diff: <path d="M8 1.5v5m-2.5-2.5h5M5.5 11.5h5M2.5 8.5h11" />,
   tasks: <><circle cx="4.5" cy="4.5" r="2" /><circle cx="11.5" cy="4.5" r="2" /><circle cx="4.5" cy="11.5" r="2" /><path d="M9.5 11.5h4" /></>,

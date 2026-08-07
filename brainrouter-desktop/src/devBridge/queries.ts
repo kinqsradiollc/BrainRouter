@@ -43,6 +43,25 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     { role: 'explorer', provider: 'groq', model: null },
     { role: 'reviewer', provider: null, model: 'gpt-5.3-codex' },
   ];
+  // ADR-029 — enough notes state for the browser harness to be interactive:
+  // one page, one locked block (B2's attribution), one block that already
+  // references a planner item so the live-label path renders.
+  const devNotes: Array<{
+    id: string; parentId: string | null; kind: string; text: string; checked: boolean;
+    level: number | null; refs: string[]; conflictFields: string[];
+  }> = [
+    { id: 'blk_1', parentId: null, kind: 'page', text: 'Release notes', checked: false, level: null, refs: [], conflictFields: [] },
+    { id: 'blk_2', parentId: 'blk_1', kind: 'paragraph', text: 'The parser is unbounded on hostile input.', checked: false, level: null, refs: [], conflictFields: [] },
+    { id: 'blk_3', parentId: 'blk_1', kind: 'todo', text: 'Ship the parser fix', checked: false, level: null, refs: ['brainrouter://planner/item/itm_dev1'], conflictFields: [] },
+  ];
+  const devWorkspaceLabels = new Map<string, string>([
+    ['brainrouter://planner/item/itm_dev1', 'Ship the parser fix'],
+  ]);
+  const devWorkspaceLabel = (uri: string): string =>
+    devWorkspaceLabels.get(uri) ?? (uri.startsWith('brainrouter://code/file/')
+      ? uri.replace('brainrouter://code/file/', '')
+      : 'a reference (not available in this app)');
+
   const devFanoutRuns: Array<Record<string, unknown>> = [];
   const devSshHosts: Array<Record<string, unknown>> = [];
   const devAutomationRules = [
@@ -1666,6 +1685,81 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     'servers:stop': () => ({ ok: true }),
     'servers:add': () => ({ ok: true }),
     'servers:logs': () => ({ lines: [] as string[] }),
+
+    // ADR-029 — Notes and the workspace reference verbs.
+    //
+    // The dev bridge is a SECOND handler map, not a superset of the host's: a
+    // name registered only in `electron/host/queries.ts` compiles, passes tests
+    // and leaves this surface rendering nothing, because an unknown query is
+    // rejected by name. The planner learned that the hard way — it has no
+    // handlers here and its mode is blank in the browser harness — so Notes
+    // gets a working mock rather than the same gap.
+    'notes-read': () => ({
+      blocks: devNotes.map((b, i) => ({ ...b, depth: b.parentId ? 1 : 0, hasChildren: devNotes.some((c) => c.parentId === b.id), lockedBy: i === 1 ? 'Being edited on another device' : null })),
+      repairs: [] as Array<Record<string, unknown>>,
+      pending: 0,
+      syncState: 'Everything is synced.',
+      conflictCount: devNotes.filter((b) => b.conflictFields.length > 0).length,
+    }),
+    'notes-create': (a) => {
+      const block = { id: `blk_${S.devNotesN++}`, parentId: null as string | null, kind: String(a.kind ?? 'paragraph'), text: String(a.text ?? ''), checked: false, level: null, refs: [] as string[], conflictFields: [] as string[] };
+      const after = typeof a.after === 'string' ? devNotes.findIndex((b) => b.id === a.after) : -1;
+      devNotes.splice(after >= 0 ? after + 1 : devNotes.length, 0, block);
+      return block;
+    },
+    'notes-create-page': (a) => {
+      const block = { id: `blk_${S.devNotesN++}`, parentId: null as string | null, kind: 'page', text: String(a.title ?? 'Untitled page'), checked: false, level: null, refs: [] as string[], conflictFields: [] as string[] };
+      devNotes.push(block);
+      return block;
+    },
+    'notes-update': (a) => {
+      const block = devNotes.find((b) => b.id === a.id);
+      if (!block) return { ok: false, reason: 'not_found' };
+      if (typeof a.text === 'string') block.text = a.text;
+      if (typeof a.kind === 'string') block.kind = a.kind;
+      if (typeof a.checked === 'boolean') block.checked = a.checked;
+      return { ok: true, block, path: 'leased', conflicted: false };
+    },
+    'notes-delete': (a) => {
+      const index = devNotes.findIndex((b) => b.id === a.id);
+      if (index >= 0) devNotes.splice(index, 1);
+      return { deleted: [String(a.id ?? '')] };
+    },
+    'notes-move': (a) => {
+      const block = devNotes.find((b) => b.id === a.id);
+      if (block) block.parentId = typeof a.parentId === 'string' ? a.parentId : null;
+      return { ok: true };
+    },
+    'notes-begin-edit': (a) => ({ ok: true, lease: { blockId: String(a.id ?? ''), deviceId: 'dev', epoch: 1, expiresAt: Date.now() + 30_000 } }),
+    'notes-keep-edit': (a) => ({ ok: true, lease: { blockId: String(a.id ?? ''), deviceId: 'dev', epoch: Number(a.epoch ?? 1), expiresAt: Date.now() + 30_000 } }),
+    'notes-end-edit': () => ({ ok: true }),
+    'notes-resolve': (a) => {
+      const block = devNotes.find((b) => b.id === a.id);
+      if (block) block.conflictFields = block.conflictFields.filter((f) => f !== a.field);
+      return block ?? null;
+    },
+    'notes-search': (a) => {
+      const needle = String(a.query ?? '').toLowerCase();
+      return { hits: devNotes.filter((b) => b.text.toLowerCase().includes(needle) || b.refs.some((r) => r.toLowerCase().includes(needle))).map((b) => ({ blockId: b.id, kind: b.kind, matched: ['text'], snippet: b.text, matchedRefs: [], score: 100 })) };
+    },
+    'notes-backlinks': (a) => ({ blockIds: devNotes.filter((b) => b.refs.some((r) => r.split('#')[0] === String(a.uri ?? '').split('#')[0])).map((b) => b.id) }),
+    'notes-sync': () => ({ pending: 0, pulled: 0, pushed: 0, offline: false, conflicted: [] as string[], syncState: 'Everything is synced.' }),
+
+    'workspace-modes': () => ({ modes: ['chat', 'code', 'notes', 'planner', 'track'], creatable: ['notes', 'planner', 'track'] }),
+    'workspace-describe': (a) => ({ line: devWorkspaceLabel(String(a.uri ?? '')) }),
+    'workspace-resolve': (a) => ({ resolution: { status: 'found', ref: null, target: { label: devWorkspaceLabel(String(a.uri ?? '')) } }, line: devWorkspaceLabel(String(a.uri ?? '')) }),
+    'workspace-create': (a) => {
+      const uri = `brainrouter://${String(a.mode ?? 'planner')}/${String(a.kind ?? 'item')}/dev_${S.devNotesN++}`;
+      devWorkspaceLabels.set(uri, String(a.title ?? 'Untitled'));
+      return { status: 'created', uri };
+    },
+    'workspace-link': (a) => {
+      const from = String(a.from ?? '').replace('brainrouter://notes/block/', '');
+      const block = devNotes.find((b) => b.id === from);
+      const to = String(a.to ?? '');
+      if (block && !block.refs.includes(to)) block.refs.push(to);
+      return { linked: true, alreadyLinked: false, to };
+    },
   };
   return queries;
 }

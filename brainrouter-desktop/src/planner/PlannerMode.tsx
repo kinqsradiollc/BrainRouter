@@ -33,6 +33,8 @@ export interface PlannerOps {
   /** Click an empty calendar slot — the primary gesture of every calendar. */
   blockTimeAt: (iso: string) => void;
   openBlock: (blockId: string) => void;
+  /** ADR-029 C2 — Planner → Notes: the item's notes field becomes a real page. */
+  openNotesPage: (itemId: string, title: string, notes: string) => void;
 }
 
 const VIEWS: ReadonlyArray<readonly [PlannerView, string, string]> = [
@@ -124,7 +126,7 @@ export function PlannerMode({
           onCreateAt={ops.blockTimeAt} onOpenBlock={ops.openBlock}
         />
       ) : (
-        <NotesView items={items} />
+        <NotesView items={items} ops={ops} />
       )}
     </div>
   );
@@ -217,7 +219,7 @@ function ItemRow({ item, ops }: { item: PlannerItemView; ops: PlannerOps }): Rea
   );
 }
 
-function NotesView({ items }: { items: PlannerItemView[] }): React.ReactElement {
+function NotesView({ items, ops }: { items: PlannerItemView[]; ops: PlannerOps }): React.ReactElement {
   const notes = noteList(items);
   const empty = emptyMessage('notes');
   return (
@@ -232,6 +234,12 @@ function NotesView({ items }: { items: PlannerItemView[] }): React.ReactElement 
           <div className="planner-note-title">{n.title}</div>
           <div className="planner-note-body">{n.notes}</div>
           {n.source ? <span className="planner-source">{n.source}</span> : null}
+          {/* ADR-029 C2 — Planner → Notes. A notes field is a paragraph with no
+              structure and nowhere to link from; promoting it to a page is what
+              turns "somewhere I typed context" into part of the workspace. */}
+          <button className="planner-open-page" onClick={() => ops.openNotesPage(n.id, n.title, n.notes ?? '')}>
+            Open as a page
+          </button>
         </div>
       ))}
     </div>

@@ -10,6 +10,8 @@ import React from 'react';
 import { Icon } from '../../icons.js';
 import { TrackView } from '../../track/TrackView.js';
 import { PlannerModeContainer } from '../../planner/PlannerModeContainer.js';
+import { NotesModeContainer } from '../../notes/NotesModeContainer.js';
+import { parseWorkspaceRef } from '@kinqs/brainrouter-core/workspace/references';
 import { MeetingsView } from '../../components/meetings/MeetingsView.js';
 import { createMeetingsOps } from '../../components/meetings/meetingsOps.js';
 import { ChatThread } from '../../components/chat/ChatThread.js';
@@ -210,13 +212,38 @@ export function MainContent(p: MainContentProps): React.ReactElement {
   // Meetings mode (ADR-018) — data flows through the injected ops bridge.
   const meetingsOps = React.useMemo(() => createMeetingsOps(), []);
 
+  /**
+   * ADR-029 A1 — following a reference goes to the mode that owns the target.
+   *
+   * The shell does this rather than the mode, because a reference is the one
+   * thing that crosses modes and a surface that could switch away from itself
+   * would need to know about every other one. `chat` and `code` land on their
+   * mode; a note stays where it is, which is where it already was.
+   */
+  const openWorkspaceRef = React.useCallback((uri: string): void => {
+    const parsed = parseWorkspaceRef(uri);
+    if (!parsed.ok) return;
+    const target = parsed.ref.mode;
+    if (target === 'planner' || target === 'track' || target === 'meetings' || target === 'chat') {
+      setMode(target === 'chat' ? 'chat' : target);
+      return;
+    }
+    if (target === 'code') setMode('code');
+  }, [setMode]);
+
   return (
     <div className="main">
-      {mode === 'planner' ? (
+      {mode === 'notes' ? (
+        // ADR-029 — Notes is user-scoped and cross-project (D1), so like the
+        // planner it renders WITHOUT the workspace-bound side panel rail.
+        <div className="workrow" ref={workrowRef}>
+          <NotesModeContainer onOpenRef={openWorkspaceRef} />
+        </div>
+      ) : mode === 'planner' ? (
         // ADR-028 G6 — cross-workspace, so it renders WITHOUT the side panel
         // rail: a personal planner has no per-workspace tabs to carry.
         <div className="workrow" ref={workrowRef}>
-          <PlannerModeContainer />
+          <PlannerModeContainer onOpenNotes={() => setMode('notes')} />
         </div>
       ) : mode === 'meetings' ? (
         <div className="workrow" ref={workrowRef}>
