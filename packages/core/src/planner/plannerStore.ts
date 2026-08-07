@@ -22,9 +22,10 @@
  */
 import path from 'node:path';
 import { getBrainrouterHome, readJsonFile, writeJsonFile } from '../storage/store.js';
-import { hlcNow, hlcZero, type Hlc } from './hybridClock.js';
+import { hlcNow, hlcZero, type Hlc } from '../sync/hybridClock.js';
+import { stableDeviceId } from '../sync/deviceId.js';
 import { mergeOwnedItem, type PlannerItem, type Stamped } from './itemMerge.js';
-import { emptyOutbox, enqueue, type OutboxState } from './outbox.js';
+import { emptyOutbox, enqueue, type OutboxState } from '../sync/outbox.js';
 import type { TimeBlock } from './timetable.js';
 
 export interface PlannerState {
@@ -52,23 +53,9 @@ export function plannerFile(userId?: string): string {
   return path.join(getBrainrouterHome(), `planner-${safe}.json`);
 }
 
-/**
- * A stable per-install device id.
- *
- * Part of every HLC stamp and the final tie-break that makes ordering total, so
- * it must not drift: a device that silently changes its id looks like a NEW
- * peer to the merge rules, and its own past edits become concurrent with its
- * present ones. Read from the cache when present, derived deterministically
- * otherwise, and persisted on first write.
- */
+/** This install's device id for the planner's clock. See `sync/deviceId.ts`. */
 export function deviceIdFor(userId: string | undefined): string {
-  const file = plannerFile(userId);
-  const stored = readJsonFile<{ deviceId?: string }>(file, {});
-  if (stored.deviceId) return stored.deviceId;
-  let hash = 0;
-  const seed = `${file}:${process.platform}`;
-  for (let i = 0; i < seed.length; i += 1) hash = (hash * 31 + seed.charCodeAt(i)) | 0;
-  return `d${Math.abs(hash).toString(36)}`;
+  return stableDeviceId(plannerFile(userId));
 }
 
 export function readPlanner(userId: string | undefined): PlannerState {

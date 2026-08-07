@@ -16,7 +16,7 @@ import {
   shed, replayOrder, describeSyncState,
   MAX_OUTBOX_OPERATIONS, ATTEMPTS_BEFORE_SURFACING,
   type OutboxOperation,
-} from '../planner/outbox.js';
+} from '../sync/outbox.js';
 
 const DAY = 86_400_000;
 const op = (over: Partial<OutboxOperation> & { idempotencyKey: string; itemId: string }): OutboxOperation => ({

@@ -178,7 +178,6 @@ const ORPHAN_MODULE_BASELINE = 32;
  */
 const KNOWN_UNWIRED = new Map<string, string>([
   ['planner/agentContext.ts', 'ADR-028 D6 — awaits the planner tool registration'],
-  ['planner/outbox.ts', 'ADR-028 D2 — awaits the sync client (D11)'],
   ['planner/plannerService.ts', 'ADR-028 D9 — awaits the desktop/dashboard/CLI surfaces'],
   ['planner/plannerSync.ts', 'ADR-028 D11 — awaits the backend transport (G6 planner mode)'],
 ]);

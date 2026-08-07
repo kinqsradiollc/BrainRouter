@@ -18,7 +18,7 @@ import {
 } from '../planner/plannerSync.js';
 import type { PlannerState } from '../planner/plannerStore.js';
 import type { PlannerItem, Stamped } from '../planner/itemMerge.js';
-import { emptyOutbox, enqueue, type OutboxOperation } from '../planner/outbox.js';
+import { emptyOutbox, enqueue, type OutboxOperation } from '../sync/outbox.js';
 
 const NOW = Date.parse('2026-08-04T12:00:00.000Z');
 const at = (physical: number, logical = 0, deviceId = 'a') => ({ physical, logical, deviceId });
