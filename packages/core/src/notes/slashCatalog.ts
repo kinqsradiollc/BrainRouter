@@ -123,6 +123,11 @@ export const SLASH_CATALOG: readonly SlashCommand[] = [
     hint: 'Rows and columns. Each row merges on its own.',
   },
   {
+    id: 'database', label: 'Database', kind: 'database', group: 'advanced',
+    aliases: ['database', 'db', 'board', 'kanban', 'calendar', 'gallery', 'collection'],
+    hint: 'Pages with properties — table, board, calendar or gallery.',
+  },
+  {
     id: 'page', label: 'Page', kind: 'page', group: 'advanced',
     aliases: ['page', 'subpage', 'sub-page', 'document', 'doc'],
     hint: 'A page inside this one.',

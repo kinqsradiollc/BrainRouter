@@ -91,6 +91,36 @@ workspaceRouter.post("/create", async (req: AuthedRequest, res) => {
 });
 
 /**
+ * ADR-029 C1's fourth verb, over HTTP.
+ *
+ * The same seam `create` has and for the same reason: a surface with no local
+ * store — the dashboard — can only change another mode's record by asking the
+ * mode that owns it, and the alternative is a per-mode write endpoint per
+ * surface, which is the drift C3 is organised against.
+ */
+workspaceRouter.post("/update", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const parsed = parseWorkspaceRef(typeof body.uri === "string" ? body.uri : "");
+  if (!parsed.ok) {
+    res.status(400).json({ error: `uri is not a reference: ${parsed.detail}` });
+    return;
+  }
+  const outcome = await workspaceRegistry().update(
+    {
+      ref: parsed.ref,
+      ...(typeof body.title === "string" ? { title: body.title } : {}),
+      ...(body.fields && typeof body.fields === "object" ? { fields: body.fields as Record<string, unknown> } : {}),
+    },
+    { userId: req.userId!, orgId: req.orgId! },
+  );
+  // A refusal is a 4xx with the reason named: "another device is editing this"
+  // and "there is no such record" lead somewhere different, and a caller given
+  // one status for both retries forever against a lock that is doing its job.
+  res.status(outcome.status === "refused" ? 400 : 200).json(outcome);
+});
+
+/**
  * What links here (A2), across the workspace.
  *
  * Only notes answer today, because only notes store references in content that

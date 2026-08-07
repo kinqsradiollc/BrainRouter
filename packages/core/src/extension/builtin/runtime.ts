@@ -335,11 +335,45 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
             kind: String(args.kind ?? ''),
             title,
             ...(from?.ok ? { from: from.ref } : {}),
+            // ADR-029 Part E — the fields a created record arrives WITH. A
+            // database row created without its cells needs a second call to
+            // become what was asked for, and the window between the two is a row
+            // whose every column is empty.
+            ...(args.fields && typeof args.fields === 'object' && !Array.isArray(args.fields)
+              ? { fields: args.fields as Record<string, unknown> }
+              : {}),
           },
           viewer,
         );
         if (outcome.status === 'refused') throw new Error(outcome.detail);
         return JSON.stringify({ status: outcome.status, uri: formatWorkspaceRef(outcome.ref) });
+      }
+      case 'workspace_update': {
+        const target = parseWorkspaceRef(args.uri);
+        if (!target.ok) throw new Error(`"uri" is not a reference: ${target.detail}`);
+        const registry = buildLocalWorkspaceRegistry({ workspaceRoot: this.workspaceRoot });
+        const viewer = localWorkspaceViewer({ workspaceRoot: this.workspaceRoot });
+        const outcome = await registry.update(
+          {
+            ref: target.ref,
+            ...(typeof args.title === 'string' ? { title: args.title } : {}),
+            ...(args.fields && typeof args.fields === 'object' && !Array.isArray(args.fields)
+              ? { fields: args.fields as Record<string, unknown> }
+              : {}),
+          },
+          viewer,
+        );
+        if (outcome.status === 'refused') throw new Error(outcome.detail);
+        return JSON.stringify({
+          status: outcome.status,
+          uri: formatWorkspaceRef(outcome.ref),
+          changed: outcome.changed,
+          // Returned rather than dropped: a caller told only about the four
+          // fields that worked concludes the fifth did too, and finds out a long
+          // way from here.
+          ...(outcome.ignored?.length ? { ignored: outcome.ignored } : {}),
+          ...(outcome.label ? { label: outcome.label } : {}),
+        });
       }
       case 'workspace_link': {
         const from = parseWorkspaceRef(args.from);

@@ -107,6 +107,47 @@ test('[[page links]] parse to a title the caller resolves', () => {
   assert.equal(inlinePlainText('see [[Release checklist]]'), 'see Release checklist');
 });
 
+/* -------------------------------------------------------- source ranges */
+
+test('every span says where it came from, so a rendered caret maps back to the string', () => {
+  // E2 keeps the marks IN the text, which means an editor showing the rendered
+  // form has to answer "the caret is here on screen — where is that in the
+  // string?" per keystroke. A second scanner in the renderer would answer it
+  // differently, and one character off is a caret that lands inside a delimiter.
+  const text = 'a **bold** b';
+  for (const span of parseInlineMarks(text)) {
+    assert.ok(span.end > span.start, 'a span with no range cannot be mapped back');
+    if (span.textStart !== undefined) {
+      assert.equal(
+        text.slice(span.textStart, span.textStart + span.text.length),
+        span.text,
+        'textStart promises the visible text is a verbatim slice',
+      );
+    }
+  }
+});
+
+test('a literal run stays verbatim, and an escape is its own span rather than shortening one', () => {
+  // Without the split, `a \* b` would be one span whose visible text is a
+  // character shorter than its source — and every caret after it in the line
+  // would be off by one.
+  const spans = parseInlineMarks('a \\* b');
+  assert.equal(spans.map((s) => s.text).join(''), 'a * b');
+  const escaped = spans.find((s) => s.textStart === undefined)!;
+  assert.equal(escaped.text, '*');
+  assert.equal(escaped.end - escaped.start, 2, 'the escape covers both characters it was written with');
+});
+
+test('a link is atomic: every span of it reports the whole construct, not the label', () => {
+  const text = 'see [the **docs**](https://example.test/x)';
+  const spans = parseInlineMarks(text).filter((s) => s.href);
+  assert.ok(spans.length >= 1);
+  for (const span of spans) {
+    assert.equal(text.slice(span.start, span.end), '[the **docs**](https://example.test/x)');
+    assert.equal(span.textStart, undefined, 'a caret cannot sit inside something whose visible form is not the source');
+  }
+});
+
 /* --------------------------------------------------------------- authoring */
 
 test('toggling a mark twice restores the exact string AND the exact selection', () => {

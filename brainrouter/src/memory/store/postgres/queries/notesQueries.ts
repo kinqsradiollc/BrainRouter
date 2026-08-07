@@ -15,6 +15,13 @@
  * `notes_refs` and `notes_index` are DERIVED (A2). Nothing here writes them from
  * anything but a block's own current text, and `clearNoteDerived` exists so the
  * rebuild-equals-incremental property is testable rather than asserted.
+ *
+ * ADR-029 Part E adds two more derived tables with exactly that status —
+ * `notes_page_meta` and `notes_row_values` (migration 053). They hold nothing
+ * the payload does not; what they add is the ability to ASK, so a page list and
+ * a database view are index scans rather than a read of one person's whole
+ * corpus followed by a JSON walk. `clearNoteDerived` drops them too, which is
+ * what keeps A2's claim true for Part E's state as well as for its text.
  */
 import type { Executor } from "./executor.js";
 
@@ -58,6 +65,38 @@ export interface NoteSearchRow {
   matchedReference: boolean;
   rank: number;
   payload: Record<string, unknown>;
+}
+
+/**
+ * ADR-029 E4 — one sidebar row, without reading the page it names.
+ *
+ * `schema`/`views` are present only for a database block (E3). They are the same
+ * values the payload carries; this row exists so listing the databases somebody
+ * could add a row to does not mean parsing every page they own.
+ */
+export interface NotePageMetaRow {
+  blockId: string;
+  parentId: string | null;
+  kind: string;
+  rank: string;
+  title: string;
+  icon: string | null;
+  cover: string | null;
+  favourite: boolean;
+  schema: unknown[] | null;
+  views: unknown[] | null;
+}
+
+/** One cell, projected out of a row's stamped `props` (E3). */
+export interface NoteRowValueInput {
+  propertyId: string;
+  /** The exact value. The scalar columns beside it are for comparing, not for rendering. */
+  value: unknown;
+  text: string | null;
+  number: number | null;
+  bool: boolean | null;
+  /** `YYYY-MM-DD`; a day stays a day, per `normaliseDateValue`. */
+  date: string | null;
 }
 
 export interface NoteBlockLeaseRow {
@@ -202,6 +241,11 @@ export async function findNoteBlockInOrg(
  * `revision` is bumped explicitly from `nextval` on update: without it the row
  * keeps the revision it was created with, and every device except the writer
  * stays stale forever because their `changed-since` pull never sees it.
+ *
+ * `rank` (migration 053) is written in this same statement from the payload it
+ * was extracted from, so document order and content can never be a version
+ * apart. It is a denormalisation, not a second value — exactly what `parent_id`
+ * and `kind` already are.
  */
 export async function upsertNoteBlock(
   exec: Executor,
@@ -211,6 +255,7 @@ export async function upsertNoteBlock(
     id: string;
     parentId: string | null;
     kind: string;
+    rank?: string;
     visibility?: string;
     payload: Record<string, unknown>;
     deletedAtHlc?: string | null;
@@ -218,11 +263,12 @@ export async function upsertNoteBlock(
 ): Promise<NoteBlockRow> {
   const row = await exec.one<Record<string, unknown>>(
     `INSERT INTO notes_blocks
-       (org_id, user_id, id, parent_id, kind, visibility, payload_json, deleted_at_hlc, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, now())
+       (org_id, user_id, id, parent_id, kind, rank, visibility, payload_json, deleted_at_hlc, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, now())
      ON CONFLICT (org_id, user_id, id) DO UPDATE SET
        parent_id      = EXCLUDED.parent_id,
        kind           = EXCLUDED.kind,
+       rank           = EXCLUDED.rank,
        visibility     = EXCLUDED.visibility,
        payload_json   = EXCLUDED.payload_json,
        deleted_at_hlc = EXCLUDED.deleted_at_hlc,
@@ -231,12 +277,43 @@ export async function upsertNoteBlock(
      RETURNING id, parent_id, kind, visibility, payload_json, deleted_at_hlc, revision, updated_at`,
     [
       orgId, userId, block.id, block.parentId, block.kind,
+      block.rank ?? "",
       block.visibility ?? "private",
       JSON.stringify(block.payload),
       block.deletedAtHlc ?? null,
     ],
   );
   return toBlockRow(row!);
+}
+
+/**
+ * The blocks under one parent, in DOCUMENT order (migration 053).
+ *
+ * Ordered by rank then id, which is `compareRank` in core — a page that read
+ * back in a different order on the web from the desktop would look like the two
+ * surfaces disagreed about the document rather than about the query.
+ *
+ * Bounded, because a page is unbounded: someone's meeting notes run to thousands
+ * of blocks, so "return the page" has no upper limit and the caller finds out by
+ * timing out. The caller asks for one more than it wants so it can say whether
+ * there were more.
+ */
+export async function listNoteChildBlocks(
+  exec: Executor,
+  orgId: string,
+  userId: string,
+  parentId: string,
+  limit = 1000,
+): Promise<NoteBlockRow[]> {
+  const rows = await exec.rows<Record<string, unknown>>(
+    `SELECT id, parent_id, kind, visibility, payload_json, deleted_at_hlc, revision, updated_at
+       FROM notes_blocks
+      WHERE org_id = $1 AND user_id = $2 AND parent_id = $3 AND deleted_at_hlc IS NULL
+      ORDER BY rank ASC, id ASC
+      LIMIT $4`,
+    [orgId, userId, parentId, Math.max(1, Math.min(limit, 5000))],
+  );
+  return rows.map(toBlockRow);
 }
 
 /** Widen or narrow who can see a block. D1: sharing changes this, never the row's owner. */
@@ -437,6 +514,12 @@ export async function deleteNoteIndexEntry(
  *
  * A2 requires the derived tables to be rebuildable from content alone; that is
  * only testable if there is a way to throw them away. This is it.
+ *
+ * Part E's two projections are dropped here as well rather than in a second
+ * function. A rebuild that cleared three tables out of five would leave the two
+ * it skipped holding whatever the last incremental write put there — and the
+ * rebuild-equals-incremental check would pass while comparing a rebuilt half
+ * against a stale one, which is worse than not having the check.
  */
 export async function clearNoteDerived(
   exec: Executor,
@@ -446,7 +529,233 @@ export async function clearNoteDerived(
   await exec.tx(async (client) => {
     await client.query(`DELETE FROM notes_refs WHERE org_id = $1 AND user_id = $2`, [orgId, userId]);
     await client.query(`DELETE FROM notes_index WHERE org_id = $1 AND user_id = $2`, [orgId, userId]);
+    await client.query(`DELETE FROM notes_row_values WHERE org_id = $1 AND user_id = $2`, [orgId, userId]);
+    await client.query(`DELETE FROM notes_page_meta WHERE org_id = $1 AND user_id = $2`, [orgId, userId]);
   });
+}
+
+/* ------------------------------------------- derived: pages and their state */
+
+/**
+ * Record what a navigator needs to know about one block (migration 053).
+ *
+ * Called only from the one function that re-derives a block after it is
+ * persisted, so there is no path that changes a page's icon without this row
+ * following. A2's rule survives refactoring only when updating the cache is not
+ * something a caller can forget.
+ */
+export async function upsertNotePageMeta(
+  exec: Executor,
+  orgId: string,
+  userId: string,
+  meta: NotePageMetaRow,
+): Promise<void> {
+  await exec.run(
+    `INSERT INTO notes_page_meta
+       (org_id, user_id, block_id, parent_id, kind, rank, title, icon, cover, favourite,
+        schema_json, views_json, rebuilt_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, now())
+     ON CONFLICT (org_id, user_id, block_id) DO UPDATE SET
+       parent_id   = EXCLUDED.parent_id,
+       kind        = EXCLUDED.kind,
+       rank        = EXCLUDED.rank,
+       title       = EXCLUDED.title,
+       icon        = EXCLUDED.icon,
+       cover       = EXCLUDED.cover,
+       favourite   = EXCLUDED.favourite,
+       schema_json = EXCLUDED.schema_json,
+       views_json  = EXCLUDED.views_json,
+       rebuilt_at  = now()`,
+    [
+      orgId, userId, meta.blockId, meta.parentId, meta.kind, meta.rank, meta.title,
+      meta.icon, meta.cover, meta.favourite,
+      meta.schema === null ? null : JSON.stringify(meta.schema),
+      meta.views === null ? null : JSON.stringify(meta.views),
+    ],
+  );
+}
+
+/**
+ * Retract a block from the navigator.
+ *
+ * Called when a block stops being page-shaped — deleted, un-pinned, or turned
+ * back into a paragraph. A projection that only ever grows is how a sidebar
+ * starts listing pages that are not there, which is the same failure the refs
+ * index has when it is add-only.
+ */
+export async function deleteNotePageMeta(
+  exec: Executor,
+  orgId: string,
+  userId: string,
+  blockId: string,
+): Promise<void> {
+  await exec.run(
+    `DELETE FROM notes_page_meta WHERE org_id = $1 AND user_id = $2 AND block_id = $3`,
+    [orgId, userId, blockId],
+  );
+}
+
+function toPageMetaRow(r: Record<string, unknown>): NotePageMetaRow {
+  return {
+    blockId: String(r.block_id),
+    parentId: r.parent_id == null ? null : String(r.parent_id),
+    kind: String(r.kind),
+    rank: String(r.rank ?? ""),
+    title: String(r.title ?? ""),
+    icon: r.icon == null ? null : String(r.icon),
+    cover: r.cover == null ? null : String(r.cover),
+    favourite: r.favourite === true,
+    schema: Array.isArray(r.schema_json) ? (r.schema_json as unknown[]) : null,
+    views: Array.isArray(r.views_json) ? (r.views_json as unknown[]) : null,
+  };
+}
+
+/**
+ * The sidebar tree, in one query.
+ *
+ * Ordered by rank then id, matching `compareRank` in core — a list that sorted
+ * differently on the web from the way it sorts in the desktop would look like
+ * the two surfaces disagreed about the document.
+ */
+export async function listNotePageMeta(
+  exec: Executor,
+  orgId: string,
+  userId: string,
+  opts: { kinds?: readonly string[]; favouritesOnly?: boolean; limit?: number } = {},
+): Promise<NotePageMetaRow[]> {
+  const kinds = opts.kinds && opts.kinds.length > 0 ? opts.kinds : null;
+  const rows = await exec.rows<Record<string, unknown>>(
+    `SELECT block_id, parent_id, kind, rank, title, icon, cover, favourite, schema_json, views_json
+       FROM notes_page_meta
+      WHERE org_id = $1 AND user_id = $2
+        AND ($3::text[] IS NULL OR kind = ANY($3::text[]))
+        AND ($4::boolean IS FALSE OR favourite)
+      ORDER BY rank ASC, block_id ASC
+      LIMIT $5`,
+    [orgId, userId, kinds, opts.favouritesOnly === true, Math.max(1, Math.min(opts.limit ?? 500, 2000))],
+  );
+  return rows.map(toPageMetaRow);
+}
+
+export async function getNotePageMeta(
+  exec: Executor,
+  orgId: string,
+  userId: string,
+  blockId: string,
+): Promise<NotePageMetaRow | null> {
+  const row = await exec.one<Record<string, unknown>>(
+    `SELECT block_id, parent_id, kind, rank, title, icon, cover, favourite, schema_json, views_json
+       FROM notes_page_meta
+      WHERE org_id = $1 AND user_id = $2 AND block_id = $3`,
+    [orgId, userId, blockId],
+  );
+  return row ? toPageMetaRow(row) : null;
+}
+
+/**
+ * Replace one block's cells (migration 053).
+ *
+ * Retract-then-add in one transaction, for the reason `replaceNoteRefs` gives:
+ * a property REMOVED from a row has to stop being filterable, and an add-only
+ * projection answers a view with rows whose matching cell no longer exists.
+ */
+export async function replaceNoteRowValues(
+  exec: Executor,
+  orgId: string,
+  userId: string,
+  blockId: string,
+  parentId: string | null,
+  values: readonly NoteRowValueInput[],
+): Promise<void> {
+  await exec.tx(async (client) => {
+    await client.query(
+      `DELETE FROM notes_row_values WHERE org_id = $1 AND user_id = $2 AND block_id = $3`,
+      [orgId, userId, blockId],
+    );
+    for (const cell of values) {
+      await client.query(
+        `INSERT INTO notes_row_values
+           (org_id, user_id, block_id, property_id, parent_id,
+            value_json, value_text, value_number, value_bool, value_date, rebuilt_at)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10::date, now())
+         ON CONFLICT (org_id, user_id, block_id, property_id) DO UPDATE SET
+           parent_id    = EXCLUDED.parent_id,
+           value_json   = EXCLUDED.value_json,
+           value_text   = EXCLUDED.value_text,
+           value_number = EXCLUDED.value_number,
+           value_bool   = EXCLUDED.value_bool,
+           value_date   = EXCLUDED.value_date,
+           rebuilt_at   = now()`,
+        [
+          orgId, userId, blockId, cell.propertyId, parentId,
+          JSON.stringify(cell.value ?? null),
+          cell.text, cell.number, cell.bool, cell.date,
+        ],
+      );
+    }
+  });
+}
+
+/**
+ * The live rows of one database, bounded, with the payloads a projection needs.
+ *
+ * **The SQL narrows; core decides.** The view language — filters, multi-key
+ * sorts, grouping — is `databaseView.ts`, and it stays there: a second
+ * implementation in SQL would drift from the one the desktop runs, and the
+ * symptom is the same board showing different cards in two places. What this
+ * does instead is bound the read and pre-order it on one column through the
+ * derived projection, so a database with ten thousand rows is not ten thousand
+ * payloads parsed to render the first screen.
+ *
+ * The cost of the bound is stated rather than hidden: past `limit`, rows are not
+ * read at all, so a filter that would have matched one of them cannot. The
+ * caller is told how many it read so it can say so.
+ */
+export async function listNoteDatabaseRows(
+  exec: Executor,
+  orgId: string,
+  userId: string,
+  databaseId: string,
+  opts: { orderBy?: string; descending?: boolean; limit?: number } = {},
+): Promise<NoteBlockRow[]> {
+  const limit = Math.max(1, Math.min(opts.limit ?? 500, 2000));
+  const direction = opts.descending ? "DESC" : "ASC";
+  const rows = await exec.rows<Record<string, unknown>>(
+    // The ORDER BY is interpolated only from a fixed direction word; every value
+    // is a bound parameter. The three scalar columns are all listed because the
+    // projection writes whichever one the value's SHAPE fits, and the ordering
+    // column is not known to be of one type here.
+    `SELECT b.id, b.parent_id, b.kind, b.visibility, b.payload_json, b.deleted_at_hlc,
+            b.revision, b.updated_at
+       FROM notes_blocks b
+       LEFT JOIN notes_row_values v
+         ON v.org_id = b.org_id AND v.user_id = b.user_id
+        AND v.block_id = b.id AND v.property_id = $4
+      WHERE b.org_id = $1 AND b.user_id = $2 AND b.parent_id = $3
+        AND b.deleted_at_hlc IS NULL
+      ORDER BY v.value_number ${direction} NULLS LAST,
+               v.value_date ${direction} NULLS LAST,
+               v.value_text ${direction} NULLS LAST,
+               b.rank ASC, b.id ASC
+      LIMIT $5`,
+    [orgId, userId, databaseId, opts.orderBy ?? "", limit],
+  );
+  return rows.map(toBlockRow);
+}
+
+/** How many live rows a database actually has, so a bounded read can say so. */
+export async function countNoteDatabaseRows(
+  exec: Executor,
+  orgId: string,
+  userId: string,
+  databaseId: string,
+): Promise<number> {
+  const row = await exec.one<Record<string, unknown>>(
+    `SELECT count(*)::int AS rows FROM notes_blocks
+      WHERE org_id = $1 AND user_id = $2 AND parent_id = $3 AND deleted_at_hlc IS NULL`,
+    [orgId, userId, databaseId],
+  );
+  return Number(row?.rows ?? 0);
 }
 
 /** Every index row, for comparing a rebuild against what incremental writes produced. */

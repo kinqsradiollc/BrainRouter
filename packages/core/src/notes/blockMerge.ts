@@ -16,6 +16,10 @@
  *    last-writer-wins, for the same reason placement is: none of them is a
  *    sentence, and a conflict banner over a folded toggle teaches people to
  *    dismiss the banner that matters.
+ *  - `props` (E3's property values) merges PER KEY, which is the same per-field
+ *    rule applied one level down — see `mergeProps` for what a concurrent edit
+ *    to one cell does and why. `schema` and `views` are last-writer-wins over
+ *    the whole list, and `databaseOps.ts` states what that costs.
  *  - deletion resolves through the shared tombstone rule, so a block deleted on
  *    one device and typed into on another comes back marked rather than
  *    silently winning either way — EXCEPT when an explicit restore is newer
@@ -57,12 +61,13 @@ const FENCED_REASON: Record<BlockFence, ConflictReason> = {
  * last-writer-wins believes it is; that gap is the whole of migration 048's
  * defect, and the epoch is the only thing that closes it.
  *
- * Placement (`parentId`, `rank`), `kind`, `level` and `checked` stay
- * last-writer-wins even when fenced, deliberately: a lost placement is not a
- * lost sentence. Someone whose block moved drags it back in one gesture and can
- * see that it moved; someone whose paragraph was overwritten has no gesture and
- * no notice. Marking those too would put a conflict banner on a page for a
- * checkbox, which is how people learn to dismiss the banner that matters.
+ * Placement (`parentId`, `rank`), `kind`, `level`, `checked` and E3's property
+ * values stay last-writer-wins even when fenced, deliberately: a lost placement
+ * is not a lost sentence, and neither is a lost cell. Someone whose block moved
+ * drags it back in one gesture and can see that it moved; someone whose
+ * paragraph was overwritten has no gesture and no notice. Marking those too
+ * would put a conflict banner on a page for a checkbox, which is how people
+ * learn to dismiss the banner that matters.
  */
 export function mergeNoteBlock(ours: NoteBlock, theirs: NoteBlock, fenced?: BlockFence): NoteBlock {
   const conflicts: Record<string, ConflictRecord> = {
@@ -83,6 +88,9 @@ export function mergeNoteBlock(ours: NoteBlock, theirs: NoteBlock, fenced?: Bloc
   const collapsed = mergeField(ours.collapsed, theirs.collapsed);
   const favourite = mergeField(ours.favourite, theirs.favourite);
   const checked = mergeCompletion(ours.checked, theirs.checked);
+  const props = mergeProps(ours.props, theirs.props);
+  const schema = mergeField(ours.schema, theirs.schema);
+  const views = mergeField(ours.views, theirs.views);
 
   const newestEdit = latestStamp([
     latestBlockEdit({ ...ours, text: text.value! }),
@@ -118,6 +126,9 @@ export function mergeNoteBlock(ours: NoteBlock, theirs: NoteBlock, fenced?: Bloc
     ...(collapsed ? { collapsed } : {}),
     ...(favourite ? { favourite } : {}),
     ...(checked ? { checked } : {}),
+    ...(props ? { props } : {}),
+    ...(schema ? { schema } : {}),
+    ...(views ? { views } : {}),
     ...(tombstone.deletedAt ? { deletedAt: tombstone.deletedAt } : {}),
     ...(restoredAt ? { restoredAt } : {}),
     ...(Object.keys(conflicts).length ? { conflicts } : {}),
@@ -158,18 +169,71 @@ function fenceText(
 }
 
 /**
+ * Merge a row's property values — E3, and D4's per-field rule one level down.
+ *
+ * **Per KEY.** Two devices setting two different properties of one row are not
+ * in conflict, which is the same sentence B1 makes about two paragraphs of one
+ * page. Merging the map as a single field would make the later write take the
+ * whole map, so a status set on a phone would silently discard a due date typed
+ * on a laptop a second earlier — with nothing marked, because nothing looked
+ * like a conflict.
+ *
+ * **A concurrent edit to ONE property is last-writer-wins, and produces no
+ * conflict marker.** That is the treatment `level`, `icon` and `checked` already
+ * get, for two reasons that are specific to a cell:
+ *
+ *  - This function has ONE BLOCK, never the database, so it cannot know a
+ *    property's type. A rule that varied by type — keeping both versions of a
+ *    text cell the way `mergeText` keeps both versions of a paragraph — would
+ *    need the schema to travel with every merge; and the schema is itself
+ *    merged, so the rule for a value would depend on which version of the schema
+ *    happened to win. A merge whose rules are decided by another merge is not a
+ *    rule.
+ *  - A cell is not a paragraph. B2's lease covers the whole row block, so the
+ *    common multi-device case is prevented before it happens, and prose belongs
+ *    in the row's page body — where the block IS the merge unit and `mergeText`
+ *    does keep both versions.
+ *
+ * A cleared cell is stored as a stamped `null` rather than a removed key, so
+ * clearing is an event that can win: a deleted key would leave a peer's older
+ * "set" arriving later with nothing to lose against, and the value would come
+ * back on its own.
+ */
+function mergeProps(
+  ours: NoteBlock['props'],
+  theirs: NoteBlock['props'],
+): NoteBlock['props'] | undefined {
+  if (!ours) return theirs;
+  if (!theirs) return ours;
+
+  const merged: NonNullable<NoteBlock['props']> = {};
+  for (const key of new Set([...Object.keys(ours), ...Object.keys(theirs)])) {
+    const winner = mergeField(ours[key], theirs[key]);
+    if (winner) merged[key] = winner;
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+/**
  * The newest stamp among the fields that count as WORK on the block.
  *
- * `collapsed` and `favourite` are excluded deliberately. This value is what
- * decides whether an edit outranks a tombstone, and folding a toggle or pinning
- * something to the sidebar is not a reason to resurrect a block someone deleted
- * on another device — it is a view preference that happened to be synced.
+ * `collapsed`, `favourite` and `views` are excluded deliberately. This value is
+ * what decides whether an edit outranks a tombstone, and folding a toggle,
+ * pinning something to the sidebar or re-sorting a database view is not a reason
+ * to resurrect a block someone deleted on another device — those are view
+ * preferences that happened to be synced.
+ *
+ * `props` and `schema` ARE counted: setting a cell or adding a column is
+ * somebody working on the row, and an edit made after a delete is exactly the
+ * case `resolveTombstone` exists to surface rather than silently drop.
  */
 function latestBlockEdit(block: NoteBlock): Hlc | undefined {
   return latestStamp([
     block.text?.at, block.parentId?.at, block.rank?.at,
     block.kind?.at, block.level?.at, block.checked?.at,
     block.language?.at, block.icon?.at, block.cover?.at,
+    block.schema?.at,
+    ...Object.values(block.props ?? {}).map((stamped) => stamped?.at),
   ]);
 }
 

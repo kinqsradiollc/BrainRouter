@@ -1,9 +1,19 @@
 /**
- * ADR-029 C1 — the three verbs, and who is allowed to implement how many.
+ * ADR-029 C1 — the verbs, and who is allowed to implement how many.
  *
  *   resolve(uri)   -> the current state of the thing, or a tombstone
  *   describe(uri)  -> a one-line label for rendering inline
  *   create(intent) -> make a new thing of this mode's kind
+ *   update(intent) -> change one that already exists
+ *
+ * **`update` is here because Part E made its absence a hole rather than a
+ * simplification.** C1 wrote three verbs when a note was a paragraph and the
+ * only cross-mode move was "make this a task". Part E gives a page an icon, a
+ * title, a cover and a trash; it gives a database a schema and a row a cell. A
+ * vocabulary with `create` and no `update` can express every one of those once
+ * and none of them again — so a person can rename a page and the agent can only
+ * make a second one. That is not a smaller vocabulary, it is one that drifts,
+ * which is what C3 exists to prevent.
  *
  * **Creatability is a discriminant, not an optional method.** Q4 decides Code
  * implements `resolve` and `describe` only, and gives a reason that is about
@@ -15,6 +25,12 @@
  * one is a decision to preserve, the other is a gap to close — so they get
  * different types, and `creatableWorkspaceMode` will not compile without the
  * function.
+ *
+ * `update` sits on the SAME discriminant rather than gaining a third one. Every
+ * mode Q4 refuses `create` to is refused `update` for the identical reason — a
+ * second writer with different validation — and a mode that owns a record enough
+ * to mint one owns it enough to change one. Two discriminants would multiply
+ * into four shapes of which two would never be built.
  *
  * **The registry owns every sentence except the label.** A mode returns a
  * `found` label; the wording for denied, gone and unavailable comes from
@@ -112,6 +128,52 @@ export type WorkspaceCreateOutcome =
   | { readonly status: 'pending'; readonly ref: WorkspaceRef }
   | { readonly status: 'refused'; readonly reason: WorkspaceCreateRefusal; readonly detail: string };
 
+/**
+ * What one mode tells another to CHANGE about a record that already exists.
+ *
+ * Described the same way `WorkspaceCreateIntent` is, and for the same reason: the
+ * caller is a menu item or an agent turn holding a reference and a sentence, not
+ * a client of the owning mode's schema. `title` is separated from `fields`
+ * because renaming is the change every mode understands, and a caller should not
+ * have to know that Notes spells it `text` and the planner spells it `title`.
+ */
+export interface WorkspaceUpdateIntent {
+  readonly ref: WorkspaceRef;
+  /** The record's new headline text. Absent means "leave it alone", never "clear it". */
+  readonly title?: string;
+  /**
+   * Mode-specific changes: a todo's `checked`, a page's `icon`, a database row's
+   * `props`. A field a mode does not understand is reported in `ignored` rather
+   * than dropped — an update that silently did four of five things asked of it
+   * is the quietly-wrong outcome A3 rules out, one verb over.
+   */
+  readonly fields?: Readonly<Record<string, unknown>>;
+}
+
+export type WorkspaceUpdateRefusal =
+  | 'no_such_mode'
+  | 'mode_is_not_writable'
+  | 'unsupported_kind'
+  | 'not_found'
+  | 'denied'
+  /** B2's soft lock: another device is holding the block right now. */
+  | 'locked'
+  | 'nothing_to_change'
+  | 'failed';
+
+export type WorkspaceUpdateOutcome =
+  | {
+      readonly status: 'updated';
+      readonly ref: WorkspaceRef;
+      /** What actually changed, so a caller can say so rather than assume. */
+      readonly changed: readonly string[];
+      /** Fields this mode has no meaning for. Never silently discarded. */
+      readonly ignored?: readonly string[];
+      /** The record's label after the change, for writing back into a document. */
+      readonly label?: string;
+    }
+  | { readonly status: 'refused'; readonly reason: WorkspaceUpdateRefusal; readonly detail: string };
+
 export interface LinkableWorkspaceMode extends WorkspaceModeReader {
   readonly creatable: false;
 }
@@ -122,6 +184,10 @@ export interface CreatableWorkspaceMode extends WorkspaceModeReader {
     intent: WorkspaceCreateIntent,
     viewer: WorkspaceRefViewer,
   ): Promise<WorkspaceCreateOutcome> | WorkspaceCreateOutcome;
+  update(
+    intent: WorkspaceUpdateIntent,
+    viewer: WorkspaceRefViewer,
+  ): Promise<WorkspaceUpdateOutcome> | WorkspaceUpdateOutcome;
 }
 
 export type WorkspaceModeParticipant = LinkableWorkspaceMode | CreatableWorkspaceMode;
@@ -131,9 +197,9 @@ export function linkableWorkspaceMode(def: WorkspaceModeReader): LinkableWorkspa
   return { ...def, creatable: false };
 }
 
-/** Creatable — and the `create` function is not optional in this argument. */
+/** Creatable — and neither writer is optional in this argument. */
 export function creatableWorkspaceMode(
-  def: WorkspaceModeReader & Pick<CreatableWorkspaceMode, 'create'>,
+  def: WorkspaceModeReader & Pick<CreatableWorkspaceMode, 'create' | 'update'>,
 ): CreatableWorkspaceMode {
   return { ...def, creatable: true };
 }
@@ -238,6 +304,53 @@ export class WorkspaceReferenceRegistry {
       // A throw must not reach the editor as an exception: the caller is about
       // to decide whether to write a reference into a document, and it needs an
       // answer it can branch on.
+      return { status: 'refused', reason: 'failed', detail: errorText(err) };
+    }
+  }
+
+  /**
+   * Change a record that already exists, through the mode that owns it.
+   *
+   * The refusals mirror `create`'s deliberately. A mode that is linkable and not
+   * creatable is not writable either, and saying "code is linkable but not
+   * writable here" is the same sentence Q4 asks `create` to say — a caller that
+   * got a generic failure would try again with different arguments forever.
+   */
+  async update(
+    intent: WorkspaceUpdateIntent,
+    viewer: WorkspaceRefViewer,
+  ): Promise<WorkspaceUpdateOutcome> {
+    const participant = this.#participants.get(intent.ref.mode);
+    if (!participant) {
+      return { status: 'refused', reason: 'no_such_mode', detail: `no mode "${intent.ref.mode}" is registered here` };
+    }
+    if (!participant.creatable) {
+      return {
+        status: 'refused',
+        reason: 'mode_is_not_writable',
+        detail:
+          `"${intent.ref.mode}" is linkable but not writable. Its records change through its own path, ` +
+          'not through a second writer with different validation.',
+      };
+    }
+    if (!participant.kinds.includes(intent.ref.kind)) {
+      return {
+        status: 'refused',
+        reason: 'unsupported_kind',
+        detail: `"${intent.ref.mode}" holds ${participant.kinds.join(', ')}, not "${intent.ref.kind}"`,
+      };
+    }
+    if (!isIdentified(viewer)) {
+      return { status: 'refused', reason: 'denied', detail: 'changing a record requires an identified viewer' };
+    }
+    if (intent.title === undefined && Object.keys(intent.fields ?? {}).length === 0) {
+      // Refused rather than treated as a no-op: an update that was asked for
+      // nothing is a caller that believes it changed something.
+      return { status: 'refused', reason: 'nothing_to_change', detail: 'an update needs a title or at least one field' };
+    }
+    try {
+      return await participant.update(intent, viewer);
+    } catch (err) {
       return { status: 'refused', reason: 'failed', detail: errorText(err) };
     }
   }

@@ -26,6 +26,14 @@ notesRouter.use(requireAnyAuth);
 /** Beyond this a single push is not a sync, it is a bulk import. */
 const MAX_PUSH_OPERATIONS = 200;
 const MAX_SEARCH_RESULTS = 100;
+/**
+ * Part E's read bounds. A page and a database are both unbounded shapes, and Q3's
+ * argument for the agent's context is the same one here: a response with no upper
+ * limit is one the caller discovers by timing out. Both endpoints report what
+ * they read against what exists, so a prefix is never mistaken for the whole.
+ */
+const MAX_PAGE_BLOCKS = 1000;
+const MAX_DATABASE_ROWS = 500;
 
 function boundedLimit(raw: unknown, fallback: number, max: number): number {
   const n = Number(raw);
@@ -130,6 +138,77 @@ notesRouter.post("/blocks", async (req: AuthedRequest, res) => {
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : "create failed" });
   }
+});
+
+/* --------------------------------------------------- Part E: pages and views */
+
+/**
+ * ADR-029 E4 — the sidebar, and the reason migration 053 exists.
+ *
+ * `/blocks` returns every block a person owns, which is the right answer for a
+ * device building its own cache and the wrong one for a navigator: rendering
+ * forty page titles should not mean shipping every paragraph they have ever
+ * typed. This reads the derived projection instead.
+ */
+notesRouter.get("/pages", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  const favouritesOnly = req.query.favourites === "1" || req.query.favourites === "true";
+  res.json({
+    pages: await notes.listPages(req.orgId!, req.userId!, { favouritesOnly }),
+  });
+});
+
+/** E4's favourites section. Any block, not only a page — people pin lines too. */
+notesRouter.get("/favourites", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  res.json({ favourites: await notes.listFavourites(req.orgId!, req.userId!) });
+});
+
+/**
+ * One page, with its blocks in document order.
+ *
+ * Bounded, and `truncated` says so. A page is unbounded (Q3's argument, applied
+ * to an HTTP response), so a caller that is not told it received a prefix will
+ * render a document that silently stops.
+ */
+notesRouter.get("/pages/:id", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  const page = await notes.readPage(req.orgId!, req.userId!, String(req.params.id), MAX_PAGE_BLOCKS);
+  if (!page) {
+    res.status(404).json({ error: "No such page." });
+    return;
+  }
+  res.json(page);
+});
+
+/** E3's picker: every database, with the columns a row would get. */
+notesRouter.get("/databases", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  res.json({ databases: await notes.listDatabases(req.orgId!, req.userId!) });
+});
+
+/**
+ * E3 — one database, projected through one of its views.
+ *
+ * The projection is core's `projectDatabase`, the same function the desktop
+ * runs. A view language expressed twice would drift, and the symptom is the same
+ * board showing different cards on two screens with nothing to say which is
+ * right.
+ */
+notesRouter.get("/databases/:id", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  const view = await notes.readDatabaseView(req.orgId!, req.userId!, String(req.params.id), {
+    ...(typeof req.query.view === "string" ? { viewId: req.query.view } : {}),
+    limit: boundedLimit(req.query.limit, MAX_DATABASE_ROWS, MAX_DATABASE_ROWS),
+  });
+  if (!view) {
+    // A paragraph is not a database with no rows. Refused rather than projected,
+    // because a caller has no way to tell an empty view from a block that was
+    // never one.
+    res.status(404).json({ error: "No such database." });
+    return;
+  }
+  res.json(view);
 });
 
 notesRouter.get("/search", async (req: AuthedRequest, res) => {

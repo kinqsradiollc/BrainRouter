@@ -466,3 +466,144 @@ test('the agent cannot create a file through the workspace verb — it is refuse
     );
   } finally { cleanup(fx); }
 });
+
+/* ------------------------------------------ ADR-029 Part E · the fourth verb */
+
+test('C1: workspace_update is registered, dispatched and tiered — a spec with no case is unreachable', () => {
+  // The same check the other three get, for the same reason: a tool the model
+  // is told about and the dispatcher rejects as unknown is worse than absent,
+  // because the model keeps trying it.
+  ensureRequiredCoreToolsRegistered();
+  const catalog = new Map(REQUIRED_CORE_TOOL_CATALOG.map((e) => [e.name, e]));
+  const executor = extensionExecutor('workspace_update');
+
+  assert.ok(executor, 'workspace_update is not registered, so calling it answers "unknown tool"');
+  assert.equal(executor!.spec().name, 'workspace_update');
+  assert.ok((executor!.spec().description ?? '').length > 40);
+  assert.equal(extensionToolOwner('workspace_update')?.required, true);
+  // Read-modify-writes a user-scoped store file, exactly like the other writers.
+  assert.equal(catalog.get('workspace_update')!.parallelSafe, false);
+  assert.equal(catalog.get('workspace_update')!.actionKind, 'file_edit');
+});
+
+test('an agent turn renames a page and ticks a todo through the update verb', async () => {
+  const fx = fixture();
+  try {
+    const runtime = { workspaceRoot: fx.workspace };
+    const page = createPage(undefined, { title: 'Runbok' }, T);
+    const todo = createBlock(undefined, { kind: 'todo', text: 'ship the parser' }, T);
+
+    const renamed = JSON.parse(await invokeBuiltinToolRuntime.call(runtime, 'workspace_update', {
+      uri: formatWorkspaceRef({ mode: 'notes', kind: 'block', id: page.id }),
+      title: 'Runbook',
+      fields: { icon: '📕' },
+    })) as { status: string; changed: string[] };
+
+    assert.equal(renamed.status, 'updated');
+    assert.deepEqual(renamed.changed.sort(), ['icon', 'text']);
+    assert.equal(getBlock(undefined, page.id)?.text.value, 'Runbook');
+    assert.equal(getBlock(undefined, page.id)?.icon?.value, '📕');
+
+    await invokeBuiltinToolRuntime.call(runtime, 'workspace_update', {
+      uri: formatWorkspaceRef({ mode: 'notes', kind: 'block', id: todo.id }),
+      fields: { checked: true },
+    });
+    assert.equal(getBlock(undefined, todo.id)?.checked?.value, true);
+  } finally { cleanup(fx); }
+});
+
+test('a field the mode has no meaning for is REPORTED, never silently dropped', async () => {
+  const fx = fixture();
+  try {
+    const block = createBlock(undefined, { kind: 'paragraph', text: 'a line' }, T);
+
+    const outcome = JSON.parse(await invokeBuiltinToolRuntime.call({ workspaceRoot: fx.workspace }, 'workspace_update', {
+      uri: formatWorkspaceRef({ mode: 'notes', kind: 'block', id: block.id }),
+      fields: { favourite: true, sprint: 'Q3' },
+    })) as { changed: string[]; ignored?: string[] };
+
+    assert.deepEqual(outcome.changed, ['favourite']);
+    // An update that reported success for the field it understood would teach
+    // the caller that the other one worked too — found out a long way from here.
+    assert.deepEqual(outcome.ignored, ['sprint']);
+  } finally { cleanup(fx); }
+});
+
+test('E3: a database row is created with its cells and a cell is written by id', async () => {
+  const fx = fixture();
+  try {
+    const runtime = { workspaceRoot: fx.workspace };
+    const database = createBlock(undefined, { kind: 'database', text: 'Reading list' }, T);
+
+    // Resolving the database is how the agent learns the property ids it needs
+    // in order to write a cell at all — a summary of only the human-facing names
+    // would leave it guessing at the key.
+    const seen = await invokeBuiltinToolRuntime.call(runtime, 'workspace_resolve', {
+      uri: formatWorkspaceRef({ mode: 'notes', kind: 'block', id: database.id }),
+    });
+    // The property IDS, because a cell is addressed by id: a listing of only
+    // the human-facing names would leave the key to be guessed.
+    assert.match(seen, /columns: title \(title\)/);
+
+    const row = JSON.parse(await invokeBuiltinToolRuntime.call(runtime, 'workspace_create', {
+      mode: 'notes', kind: 'block', title: 'Thinking in Systems',
+      fields: { kind: 'page', parentId: database.id, props: { title: 'Thinking in Systems' } },
+    })) as { uri: string };
+    const rowId = row.uri.replace('brainrouter://notes/block/', '');
+    assert.equal(getBlock(undefined, rowId)?.parentId.value, database.id);
+    assert.equal(getBlock(undefined, rowId)?.props?.title?.value, 'Thinking in Systems');
+
+    await invokeBuiltinToolRuntime.call(runtime, 'workspace_update', {
+      uri: row.uri, fields: { props: { title: 'Thinking in Systems (2008)' } },
+    });
+    assert.equal(getBlock(undefined, rowId)?.props?.title?.value, 'Thinking in Systems (2008)');
+  } finally { cleanup(fx); }
+});
+
+test('the agent cannot write a file through the update verb either — Q4 holds for both writers', async () => {
+  const fx = fixture();
+  try {
+    writeFileSync(path.join(fx.workspace, 'parser.ts'), 'export const x = 1;\n');
+    await assert.rejects(
+      () => invokeBuiltinToolRuntime.call({ workspaceRoot: fx.workspace }, 'workspace_update', {
+        uri: 'brainrouter://code/file/parser.ts', title: 'export const x = 2;',
+      }),
+      // The same sentence `create` gives, because it is the same decision: a
+      // second writer with different validation and a different audit trail.
+      /linkable but not writable/,
+    );
+  } finally { cleanup(fx); }
+});
+
+test('a planner item and a work item change through the same verb the notes block does', async () => {
+  const fx = fixture();
+  try {
+    const runtime = { workspaceRoot: fx.workspace };
+    const item = plannerAdd(undefined, { title: 'ship the parser' }, T);
+
+    const outcome = JSON.parse(await invokeBuiltinToolRuntime.call(runtime, 'workspace_update', {
+      uri: `brainrouter://planner/item/${item.id}`,
+      fields: { completed: true, dueDate: '2026-08-09' },
+    })) as { status: string; changed: string[]; label: string };
+
+    assert.equal(outcome.status, 'updated');
+    assert.deepEqual(outcome.changed.sort(), ['completed', 'dueDate']);
+    assert.equal(plannerGet(undefined, item.id)?.completed?.value, true);
+    // The label comes back so a caller can write the current state into whatever
+    // cited it, rather than re-resolving to find out what it just did.
+    assert.match(outcome.label, /^✓ /);
+  } finally { cleanup(fx); }
+});
+
+test('an update asked for nothing is refused rather than reported as a change that happened', async () => {
+  const fx = fixture();
+  try {
+    const block = createBlock(undefined, { kind: 'paragraph', text: 'a line' }, T);
+    await assert.rejects(
+      () => invokeBuiltinToolRuntime.call({ workspaceRoot: fx.workspace }, 'workspace_update', {
+        uri: formatWorkspaceRef({ mode: 'notes', kind: 'block', id: block.id }),
+      }),
+      /needs a title or at least one field/,
+    );
+  } finally { cleanup(fx); }
+});

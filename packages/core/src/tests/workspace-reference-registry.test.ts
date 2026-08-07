@@ -48,6 +48,9 @@ function plannerMode(resolve: WorkspaceModeReader['resolve']) {
     kinds: ['item'],
     resolve,
     create: (intent) => ({ status: 'created', ref: ref(`brainrouter://planner/item/itm_${intent.title.length}`) }),
+    // Present because `creatableWorkspaceMode` requires both writers: a mode
+    // that owns a record enough to mint one owns it enough to change one.
+    update: (intent) => ({ status: 'updated' as const, ref: intent.ref, changed: ['title'] }),
   });
 }
 
@@ -83,6 +86,7 @@ test("a target still being created reads as pending, not as one that was deleted
       kinds: ['work-item'],
       resolve: (r) => resolvedGone(r, { reason: 'pending' }),
       create: () => ({ status: 'pending', ref: ref('brainrouter://track/work-item/wi_pending') }),
+      update: (intent) => ({ status: 'updated' as const, ref: intent.ref, changed: ['title'] }),
     }),
   );
   const line = await registry.describeLine(ref('brainrouter://track/work-item/BR-114'), VIEWER);
@@ -219,6 +223,7 @@ test('describe uses the mode\'s cheap read when it has one, and resolve when it 
         return resolvedFound(r, { label: 'Weekly sync' });
       },
       create: () => ({ status: 'created', ref: ref('brainrouter://meetings/meeting/meeting-1') }),
+      update: (intent) => ({ status: 'updated' as const, ref: intent.ref, changed: ['title'] }),
     }),
   );
   registry.register(plannerMode((r) => {
@@ -329,6 +334,7 @@ test('a creator that throws is a refusal the editor can branch on, not an except
       create: (): WorkspaceCreateOutcome => {
         throw new Error('disk full');
       },
+      update: (intent) => ({ status: 'updated' as const, ref: intent.ref, changed: ['title'] }),
     }),
   );
   const outcome = await registry.create({ mode: 'planner', kind: 'item', title: 'x' }, VIEWER);

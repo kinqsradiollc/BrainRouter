@@ -327,3 +327,137 @@ test("a swept lease is one old enough that no queued write can still carry its e
     await cleanup();
   }
 });
+
+/* ---------------------------- ADR-029 Part E · migration 053's projections */
+
+/**
+ * The claims Part E's schema makes rather than its policy does.
+ *
+ * Each is a silent failure if it is wrong: a page list ordered by write order
+ * reads as a document somebody shuffled, a projection that survives its block is
+ * a sidebar row that opens nothing, and a cell nobody can compare makes a
+ * database view a table with no sort.
+ */
+async function putChild(
+  store: Store,
+  userId: string,
+  id: string,
+  parentId: string | null,
+  rank: string,
+  kind = "paragraph",
+): Promise<void> {
+  await store.upsertNoteBlock(ORG, userId, {
+    id, parentId, kind, rank,
+    payload: { id, rank: { value: rank, at: { physical: 1, logical: 0, deviceId: "d" } } },
+    deletedAtHlc: null,
+  });
+}
+
+test("a page's blocks come back in document order, which is what makes a bounded read the first screen", async () => {
+  const { store, cleanup } = await createTestStore();
+  try {
+    await putChild(store, ALICE, "page_1", null, "m", "page");
+    // Written out of order on purpose: ordering by write order would return
+    // these as c, a, b and the page would read as one somebody shuffled.
+    await putChild(store, ALICE, "blk_c", "page_1", "s");
+    await putChild(store, ALICE, "blk_a", "page_1", "g");
+    await putChild(store, ALICE, "blk_b", "page_1", "n");
+
+    const rows = await store.listNoteChildBlocks(ORG, ALICE, "page_1");
+
+    assert.deepEqual(rows.map((r) => r.id), ["blk_a", "blk_b", "blk_c"]);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("the page projection answers the sidebar without reading a single payload", async () => {
+  const { store, cleanup } = await createTestStore();
+  try {
+    await putChild(store, ALICE, "page_1", null, "m", "page");
+    await putChild(store, ALICE, "db_1", "page_1", "n", "database");
+    await store.upsertNotePageMeta(ORG, ALICE, {
+      blockId: "page_1", parentId: null, kind: "page", rank: "m",
+      title: "Runbook", icon: "📕", cover: null, favourite: true, schema: null, views: null,
+    });
+    await store.upsertNotePageMeta(ORG, ALICE, {
+      blockId: "db_1", parentId: "page_1", kind: "database", rank: "n",
+      title: "Reading list", icon: null, cover: null, favourite: false,
+      schema: [{ id: "title", name: "Name", type: "title" }],
+      views: [{ id: "table", name: "Table", kind: "table", visible: ["title"] }],
+    });
+
+    const pages = await store.listNotePageMeta(ORG, ALICE, { kinds: ["page", "database"] });
+    assert.deepEqual(pages.map((p) => p.blockId), ["page_1", "db_1"]);
+    assert.equal(pages[0]!.icon, "📕");
+    // E3's schema rides on the projection so listing every database somebody
+    // could add a row to costs one query rather than one page read each.
+    assert.equal((pages[1]!.schema as Array<{ id: string }>)[0]!.id, "title");
+
+    const favourites = await store.listNotePageMeta(ORG, ALICE, { favouritesOnly: true });
+    assert.deepEqual(favourites.map((p) => p.blockId), ["page_1"]);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("a cell is stored four ways so a view can compare it, and the json stays authoritative", async () => {
+  const { store, cleanup } = await createTestStore();
+  try {
+    await putChild(store, ALICE, "db_1", null, "m", "database");
+    await putChild(store, ALICE, "row_1", "db_1", "m", "page");
+    await store.replaceNoteRowValues(ORG, ALICE, "row_1", "db_1", [
+      { propertyId: "size", value: 12, text: "12", number: 12, bool: null, date: null },
+      { propertyId: "due", value: "2026-08-07", text: "2026-08-07", number: null, bool: null, date: "2026-08-07" },
+      { propertyId: "owner", value: ["sam", "ali"], text: "sam, ali", number: null, bool: null, date: null },
+    ]);
+
+    // The SQL narrows and pre-orders; the view language stays in core. Ordering
+    // on a property is the half that cannot be done after a bounded read.
+    const byNumber = await store.listNoteDatabaseRows(ORG, ALICE, "db_1", { orderBy: "size" });
+    assert.deepEqual(byNumber.map((r) => r.id), ["row_1"]);
+    assert.equal(await store.countNoteDatabaseRows(ORG, ALICE, "db_1"), 1);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("Part E's projections go away with the block, like every other derived row", async () => {
+  const { store, cleanup } = await createTestStore();
+  try {
+    await putChild(store, ALICE, "page_1", null, "m", "page");
+    await store.upsertNotePageMeta(ORG, ALICE, {
+      blockId: "page_1", parentId: null, kind: "page", rank: "m",
+      title: "Runbook", icon: null, cover: null, favourite: false, schema: null, views: null,
+    });
+    await store.replaceNoteRowValues(ORG, ALICE, "page_1", null, [
+      { propertyId: "stage", value: "won", text: "won", number: null, bool: null, date: null },
+    ]);
+
+    const exec = (store as unknown as { exec: { run(sql: string, p: unknown[]): Promise<number> } }).exec;
+    await exec.run("DELETE FROM notes_blocks WHERE org_id = $1 AND user_id = $2 AND id = $3", [ORG, ALICE, "page_1"]);
+
+    assert.equal(await store.getNotePageMeta(ORG, ALICE, "page_1"), null);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("two people's page projections are two rows, because the partition is the same one 052 uses", async () => {
+  const { store, cleanup } = await createTestStore();
+  try {
+    for (const who of [ALICE, BOB]) {
+      await putChild(store, who, "page_1", null, "m", "page");
+      await store.upsertNotePageMeta(ORG, who, {
+        blockId: "page_1", parentId: null, kind: "page", rank: "m",
+        title: who === ALICE ? "Alice's runbook" : "Bob's runbook",
+        icon: null, cover: null, favourite: false, schema: null, views: null,
+      });
+    }
+
+    assert.equal((await store.getNotePageMeta(ORG, ALICE, "page_1"))?.title, "Alice's runbook");
+    assert.equal((await store.getNotePageMeta(ORG, BOB, "page_1"))?.title, "Bob's runbook");
+  } finally {
+    await cleanup();
+  }
+});

@@ -35,13 +35,17 @@ import {
   listBlocks as notesListBlocks,
   updateBlock as notesUpdateBlock,
   blockContext,
+  isDatabaseBlock,
   noteBlockRef,
+  summariseDatabase,
   type NoteBlockKind,
+  type NotePropertyValue,
+  type UpdateBlockInput as NoteUpdateBlockInput,
 } from '../../notes/index.js';
 import {
   addItem as plannerAddItem, getItem as plannerGetItem, updateItem as plannerUpdateItem,
 } from '../../planner/plannerStore.js';
-import { createWorkItem, getWorkItem } from '../../track/store/items.js';
+import { createWorkItem, getWorkItem, updateWorkItem } from '../../track/store/items.js';
 import { readTranscriptTail } from '../../session/transcript/sessionStore.js';
 import { getSessionStateDir } from '../../storage/store.js';
 import {
@@ -49,7 +53,7 @@ import {
   resolvedFound, resolvedGone, resolvedUnavailable,
   WorkspaceReferenceRegistry,
   type WorkspaceCreateOutcome, type WorkspaceModeParticipant, type WorkspaceRef,
-  type WorkspaceRefViewer, type WorkspaceResolution,
+  type WorkspaceRefViewer, type WorkspaceResolution, type WorkspaceUpdateOutcome,
 } from '../references/index.js';
 import {
   findCodeSymbol, isCodeSymbolName, locateCodeFile, readSourceForSymbols, traceRemovedSymbol,
@@ -104,6 +108,7 @@ function noteLabel(text: string, kind: string): string {
   return firstLine(text) || `(empty ${kind})`;
 }
 
+
 function notesParticipant(ctx: LocalWorkspaceContext): WorkspaceModeParticipant {
   return creatableWorkspaceMode({
     mode: 'notes',
@@ -117,7 +122,17 @@ function notesParticipant(ctx: LocalWorkspaceContext): WorkspaceModeParticipant 
       // the page — someone's meeting notes run to thousands of words, so
       // "include the page" has no upper bound and would silently consume the
       // context belonging to the task that cited it.
-      const context = blockContext(notesListBlocks(ctx.userId), block.id);
+      const blocks = notesListBlocks(ctx.userId);
+      // E3 — a database's SHAPE, not its contents. `blockContext` would answer
+      // with the database's own one line of text, which says nothing about the
+      // columns a caller needs in order to write a cell.
+      if (isDatabaseBlock(block)) {
+        const summary = summariseDatabase(blocks, block.id);
+        if (summary) {
+          return resolvedFound(ref, { label: noteLabel(block.text.value, block.kind.value), state: summary });
+        }
+      }
+      const context = blockContext(blocks, block.id);
       return resolvedFound(ref, {
         label: noteLabel(block.text.value, block.kind.value),
         state: context ?? { block },
@@ -144,12 +159,120 @@ function notesParticipant(ctx: LocalWorkspaceContext): WorkspaceModeParticipant 
           // second edge is stored on the source, so there is nothing to diverge.
           text: intent.from ? `${intent.title}\n\n${formatWorkspaceRef(intent.from)}` : intent.title,
           parentId: typeof fields.parentId === 'string' ? fields.parentId : null,
+          // E3/E4 — the fields a created block can arrive WITH. A row created
+          // without its cells, or a page without its icon, would need a second
+          // call to become the thing that was asked for, and the window between
+          // the two is a row in a database with every column empty.
+          ...notePatchFields(fields).patch,
         },
         Date.now(),
       );
       return { status: 'created', ref: noteBlockRef(block.id) };
     },
+
+    /**
+     * ADR-029 C1's fourth verb, for the mode Part E gave the most to change.
+     *
+     * Every write goes through `notesUpdateBlock`, which is the same function the
+     * editor calls — so the lease fence (B2/Q1), the D4 merge and the outbox
+     * entry are the ones the person's own typing gets. A path that wrote the
+     * block directly would be a second writer that skipped all three, and the
+     * first symptom would be an agent edit landing on top of a sentence somebody
+     * was in the middle of.
+     */
+    update(intent): WorkspaceUpdateOutcome {
+      const block = notesGetBlock(ctx.userId, intent.ref.id);
+      if (!block || block.deletedAt) {
+        return { status: 'refused', reason: 'not_found', detail: `no note block ${intent.ref.id}` };
+      }
+      const { patch, changed, ignored } = notePatchFields(intent.fields ?? {});
+      if (intent.title !== undefined) {
+        patch.text = intent.title;
+        changed.push('text');
+      }
+
+      const result = notesUpdateBlock(ctx.userId, intent.ref.id, patch, Date.now());
+      if (!result.ok) {
+        // B2's soft lock reported as itself. "Another device is editing this" and
+        // "there is no such block" lead somewhere different, and collapsing them
+        // is how a caller retries forever against a lock that is doing its job.
+        if (result.reason === 'locked') {
+          return { status: 'refused', reason: 'locked', detail: result.detail };
+        }
+        return { status: 'refused', reason: 'failed', detail: result.reason };
+      }
+      return {
+        status: 'updated',
+        ref: intent.ref,
+        changed,
+        ...(ignored.length > 0 ? { ignored } : {}),
+        label: noteLabel(result.block.text.value, result.block.kind.value),
+      };
+    },
   });
+}
+
+/**
+ * The block fields a caller may name, and the ones it named that mean nothing.
+ *
+ * Unknown fields are RETURNED rather than dropped. A caller that asked to set a
+ * `status` on a paragraph has misunderstood something, and an update that
+ * reports success for the four fields it understood teaches it that the fifth
+ * worked too — which it will find out otherwise a long way from here.
+ */
+function notePatchFields(fields: Readonly<Record<string, unknown>>): {
+  patch: NoteUpdateBlockInput;
+  changed: string[];
+  ignored: string[];
+} {
+  const patch: NoteUpdateBlockInput = {};
+  const changed: string[] = [];
+  const ignored: string[] = [];
+
+  for (const [key, value] of Object.entries(fields)) {
+    // `parentId` and `kind` are creation-time placement, handled by `create`;
+    // moving a block is `moveBlock`, which is a different operation with a
+    // different refusal (it can decline to nest a block inside itself).
+    if (key === 'parentId' || key === 'kind') continue;
+    switch (key) {
+      case 'text':
+        if (typeof value === 'string') { patch.text = value; changed.push('text'); } else ignored.push(key);
+        break;
+      case 'checked':
+        if (typeof value === 'boolean') { patch.checked = value; changed.push(key); } else ignored.push(key);
+        break;
+      case 'collapsed':
+        if (typeof value === 'boolean') { patch.collapsed = value; changed.push(key); } else ignored.push(key);
+        break;
+      case 'favourite':
+        if (typeof value === 'boolean') { patch.favourite = value; changed.push(key); } else ignored.push(key);
+        break;
+      case 'level':
+        if (typeof value === 'number') { patch.level = value; changed.push('level'); } else ignored.push(key);
+        break;
+      case 'icon':
+        if (typeof value === 'string') { patch.icon = value; changed.push(key); } else ignored.push(key);
+        break;
+      case 'cover':
+        if (typeof value === 'string') { patch.cover = value; changed.push(key); } else ignored.push(key);
+        break;
+      case 'language':
+        if (typeof value === 'string') { patch.language = value; changed.push(key); } else ignored.push(key);
+        break;
+      case 'props':
+        // E3 — a row's cells, keyed by property id. A PARTIAL map: the store
+        // stamps only the keys present, so setting one cell never re-stamps the
+        // others (D4's per-field rule, one level down).
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+          patch.props = value as Record<string, NotePropertyValue>;
+          changed.push('props');
+        } else ignored.push(key);
+        break;
+      default:
+        ignored.push(key);
+    }
+  }
+  return { patch, changed, ignored };
 }
 
 /* ------------------------------------------------------------------ planner */
@@ -185,6 +308,45 @@ function plannerParticipant(ctx: LocalWorkspaceContext): WorkspaceModeParticipan
         Date.now(),
       );
       return { status: 'created', ref: { mode: 'planner', kind: 'item', id: item.id } };
+    },
+
+    /**
+     * Change an item through the planner's own writer.
+     *
+     * `completed` is accepted here even though `planner_complete` exists and
+     * tells the model never to infer completion. That refusal is a judgement
+     * about WHEN to call something, and it lives in the tool description where
+     * the model reads it; a verb that silently could not express a state the UI
+     * can set would be a different kind of wrong — the drift C3 is about.
+     */
+    update(intent): WorkspaceUpdateOutcome {
+      const item = plannerGetItem(ctx.userId, intent.ref.id);
+      if (!item || item.deletedAt) {
+        return { status: 'refused', reason: 'not_found', detail: `no planner item ${intent.ref.id}` };
+      }
+      const fields = intent.fields ?? {};
+      const patch: Parameters<typeof plannerUpdateItem>[2] = {};
+      const changed: string[] = [];
+      const ignored: string[] = [];
+
+      if (intent.title !== undefined) { patch.title = intent.title; changed.push('title'); }
+      for (const [key, value] of Object.entries(fields)) {
+        if (key === 'notes' && typeof value === 'string') { patch.notes = value; changed.push('notes'); }
+        else if (key === 'dueDate' && (typeof value === 'string' || value === null)) { patch.dueDate = value; changed.push('dueDate'); }
+        else if (key === 'priority' && typeof value === 'number') { patch.priority = value; changed.push('priority'); }
+        else if (key === 'completed' && typeof value === 'boolean') { patch.completed = value; changed.push('completed'); }
+        else ignored.push(key);
+      }
+
+      const updated = plannerUpdateItem(ctx.userId, intent.ref.id, patch, Date.now());
+      if (!updated) return { status: 'refused', reason: 'not_found', detail: `no planner item ${intent.ref.id}` };
+      return {
+        status: 'updated',
+        ref: intent.ref,
+        changed,
+        ...(ignored.length > 0 ? { ignored } : {}),
+        label: updated.completed?.value ? `✓ ${updated.title.value}` : updated.title.value,
+      };
     },
   });
 }
@@ -224,6 +386,42 @@ function trackParticipant(ctx: LocalWorkspaceContext): WorkspaceModeParticipant 
         ...(intent.from ? { description: `From ${formatWorkspaceRef(intent.from)}` } : {}),
       });
       return { status: 'created', ref: { mode: 'track', kind: 'work-item', id: item.key } };
+    },
+
+    /**
+     * Change a work item through Track's own writer, which is what runs its
+     * automations and its permission check.
+     *
+     * `status` is the field this exists for — C2's "a checklist line becomes a
+     * work item" is only half a flow if nothing can then move it. The actor is
+     * left at `updateWorkItem`'s default so the audit trail records the same
+     * thing a UI edit does rather than a second name nobody recognises.
+     */
+    update(intent): WorkspaceUpdateOutcome {
+      const item = getWorkItem(ctx.workspaceRoot, intent.ref.id);
+      if (!item) return { status: 'refused', reason: 'not_found', detail: `no work item ${intent.ref.id}` };
+
+      const fields = intent.fields ?? {};
+      const patch: Record<string, unknown> = {};
+      const changed: string[] = [];
+      const ignored: string[] = [];
+      if (intent.title !== undefined) { patch.title = intent.title; changed.push('title'); }
+      for (const [key, value] of Object.entries(fields)) {
+        if ((key === 'status' || key === 'description' || key === 'assignee' || key === 'priority')
+          && typeof value === 'string') {
+          patch[key] = value; changed.push(key);
+        } else ignored.push(key);
+      }
+
+      const updated = updateWorkItem(ctx.workspaceRoot, intent.ref.id, patch);
+      if (!updated) return { status: 'refused', reason: 'not_found', detail: `no work item ${intent.ref.id}` };
+      return {
+        status: 'updated',
+        ref: intent.ref,
+        changed,
+        ...(ignored.length > 0 ? { ignored } : {}),
+        label: `${updated.key} ${updated.title}`,
+      };
     },
   });
 }

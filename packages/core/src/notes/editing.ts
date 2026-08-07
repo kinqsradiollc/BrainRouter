@@ -29,3 +29,9 @@ export * from './inputRules.js';
 export * from './slashCatalog.js';
 export * from './listNumbering.js';
 export * from './tableBlock.js';
+// E3's database model, minus `databaseOps` — a surface renders a projection per
+// keystroke and writes through a host handler, which is the same split by PURITY
+// this barrel already makes for the editing gestures.
+export * from './properties.js';
+export * from './databaseView.js';
+export * from './database.js';

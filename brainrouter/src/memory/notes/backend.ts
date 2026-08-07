@@ -22,24 +22,35 @@
  * from anything but a block's own current text. `rebuildDerived` throws them
  * away and recomputes from `notes_blocks` alone, which is what makes A2's claim
  * testable instead of merely stated.
+ *
+ * **Part E's state travels the same path and nothing else (migration 053).** A
+ * page's icon, a database's schema and a row's cells are pushed as fields of the
+ * block, merged by the same functions, and projected into `notes_page_meta` /
+ * `notes_row_values` by the same re-derive call as everything else. There is no
+ * second endpoint that writes a schema and no second table that owns one — B3
+ * exists to prevent exactly that, and a database with its own sync path would
+ * disagree with the page it lives on within a day of shipping.
  */
 import { randomUUID } from "node:crypto";
 import { memoryEngine } from "../engine.js";
 import {
-  acquireBlockLease, blockReferences, contentWithoutRefs, fenceBlockWrite,
+  acquireBlockLease, blockReferences, blockReferenceText, contentWithoutRefs, DATABASE_BLOCK_KIND,
+  datePropertyDay, fenceBlockWrite,
   FIRST_RANK, isLiveBlock, MAX_HEADING_LEVEL, mergeNoteBlock, NOTE_BLOCK_KINDS,
-  rankBetween, releaseBlockLease,
-  renewBlockLease, resolveBlockConflict, BLOCK_LEASE_MS,
-  type BlockFence, type BlockLease, type BlockWritePath, type Hlc,
-  type LeaseClaim, type LeaseOutcome,
-  type NoteBlock, type NoteBlockKind, type Stamped,
+  projectDatabase, rankBetween, readDatabase, releaseBlockLease,
+  renewBlockLease, resolveBlockConflict, validateDatabaseFields, BLOCK_LEASE_MS,
+  type BlockFence, type BlockLease, type BlockWritePath, type DatabaseProjection, type Hlc,
+  type LeaseClaim, type LeaseOutcome, type NoteDatabase, type NoteDatabaseView,
+  type NoteBlock, type NoteBlockKind, type NotePropertyDef, type NotePropertyValue,
+  type Stamped,
 } from "@kinqs/brainrouter-core/notes";
 import {
   extractWorkspaceRefs, parseWorkspaceRef, workspaceRefKey,
 } from "@kinqs/brainrouter-core/workspace/references";
 import type {
   NoteAttachmentRow, NoteAttachmentUseRow, NoteBacklinkRow, NoteBlockLeaseRow,
-  NoteBlockOwnerRow, NoteBlockRow, NoteRefRow, NoteSearchRow,
+  NoteBlockOwnerRow, NoteBlockRow, NotePageMetaRow, NoteRefRow, NoteRowValueInput,
+  NoteSearchRow,
 } from "../store/postgres/queries/notesQueries.js";
 
 /**
@@ -74,10 +85,12 @@ interface NotesStore {
     id: string;
     parentId: string | null;
     kind: string;
+    rank?: string;
     visibility?: string;
     payload: Record<string, unknown>;
     deletedAtHlc?: string | null;
   }): Promise<NoteBlockRow>;
+  listNoteChildBlocks(orgId: string, userId: string, parentId: string, limit?: number): Promise<NoteBlockRow[]>;
   setNoteBlockVisibility(orgId: string, userId: string, id: string, visibility: string): Promise<number>;
   latestNoteRevision(orgId: string, userId: string): Promise<string>;
   wasNoteOperationApplied(orgId: string, userId: string, key: string): Promise<boolean>;
@@ -88,6 +101,13 @@ interface NotesStore {
   upsertNoteIndex(orgId: string, userId: string, blockId: string, entry: { contentText: string; refKeys: readonly string[] }): Promise<void>;
   deleteNoteIndexEntry(orgId: string, userId: string, blockId: string): Promise<void>;
   clearNoteDerived(orgId: string, userId: string): Promise<void>;
+  upsertNotePageMeta(orgId: string, userId: string, meta: NotePageMetaRow): Promise<void>;
+  deleteNotePageMeta(orgId: string, userId: string, blockId: string): Promise<void>;
+  listNotePageMeta(orgId: string, userId: string, opts?: { kinds?: readonly string[]; favouritesOnly?: boolean; limit?: number }): Promise<NotePageMetaRow[]>;
+  getNotePageMeta(orgId: string, userId: string, blockId: string): Promise<NotePageMetaRow | null>;
+  replaceNoteRowValues(orgId: string, userId: string, blockId: string, parentId: string | null, values: readonly NoteRowValueInput[]): Promise<void>;
+  listNoteDatabaseRows(orgId: string, userId: string, databaseId: string, opts?: { orderBy?: string; descending?: boolean; limit?: number }): Promise<NoteBlockRow[]>;
+  countNoteDatabaseRows(orgId: string, userId: string, databaseId: string): Promise<number>;
   listNoteIndexEntries(orgId: string, userId: string): Promise<Array<{ blockId: string; contentText: string; refKeys: string[] }>>;
   searchNoteIndex(orgId: string, userId: string, query: string, limit?: number): Promise<NoteSearchRow[]>;
   readNoteBlockLease(orgId: string, userId: string, blockId: string): Promise<{ lease: NoteBlockLeaseRow | null; dbNowMs: number }>;
@@ -142,6 +162,26 @@ function blockOf(row: NoteBlockRow): NoteBlock {
 
 const stampedWith = <T>(value: T, at: Hlc): Stamped<T> => ({ value, at });
 
+/**
+ * ADR-029 E3 — stamp the property values a patch mentions, keeping the rest.
+ *
+ * Only the keys present are re-stamped. A key the patch did not mention keeps
+ * its existing stamp, for the same reason `incomingBlock` leaves unmentioned
+ * fields alone: an operation that set one cell must not also win the ones it was
+ * not about.
+ */
+function stampedProps(
+  existing: NoteBlock["props"],
+  patch: Record<string, unknown>,
+  at: Hlc,
+): NonNullable<NoteBlock["props"]> {
+  const next: NonNullable<NoteBlock["props"]> = { ...(existing ?? {}) };
+  for (const [key, value] of Object.entries(patch)) {
+    next[key] = stampedWith(value as NotePropertyValue, at);
+  }
+  return next;
+}
+
 /* ---------------------------------------------------------------- reading */
 
 /**
@@ -185,6 +225,121 @@ export async function findBlockOwner(orgId: string, id: string): Promise<NoteBlo
   return store().findNoteBlockInOrg(orgId, id);
 }
 
+/* -------------------------------------------------- Part E: pages and views */
+
+/**
+ * ADR-029 E4 — the sidebar, from the projection rather than from the corpus.
+ *
+ * This is the read the dashboard opens with, and the reason migration 053
+ * exists: answering it from `notes_blocks` means parsing every paragraph
+ * somebody has ever typed to find the forty rows that are pages.
+ */
+export async function listPages(
+  orgId: string,
+  userId: string,
+  opts: { favouritesOnly?: boolean; limit?: number } = {},
+): Promise<NotePageMetaRow[]> {
+  return store().listNotePageMeta(orgId, userId, {
+    kinds: ["page", DATABASE_BLOCK_KIND],
+    ...(opts.favouritesOnly ? { favouritesOnly: true } : {}),
+    ...(opts.limit ? { limit: opts.limit } : {}),
+  });
+}
+
+/** E3's picker: every database a row could be added to, with its columns. */
+export async function listDatabases(orgId: string, userId: string): Promise<NotePageMetaRow[]> {
+  return store().listNotePageMeta(orgId, userId, { kinds: [DATABASE_BLOCK_KIND] });
+}
+
+/** E4's favourites section. Any block, not only a page — people pin lines too. */
+export async function listFavourites(orgId: string, userId: string): Promise<NotePageMetaRow[]> {
+  return store().listNotePageMeta(orgId, userId, { favouritesOnly: true });
+}
+
+/**
+ * One page and the blocks under it, in document order.
+ *
+ * Bounded, and the bound is reported. Q3 makes the argument for the agent's
+ * context and it applies to an HTTP response for the same reason: a page is
+ * unbounded, so "return the page" has no upper limit and the caller finds out
+ * by timing out.
+ */
+export async function readPage(
+  orgId: string,
+  userId: string,
+  pageId: string,
+  limit = 1000,
+): Promise<{ page: NoteBlock; blocks: NoteBlock[]; truncated: boolean } | null> {
+  const page = await getBlock(orgId, userId, pageId);
+  if (!page || !isLiveBlock(page)) return null;
+  const rows = await store().listNoteChildBlocks(orgId, userId, pageId, limit + 1);
+  const blocks = rows.map(blockOf).filter(isLiveBlock);
+  return {
+    page,
+    blocks: blocks.slice(0, limit),
+    truncated: blocks.length > limit,
+  };
+}
+
+export interface DatabaseViewResult {
+  projection: DatabaseProjection;
+  /**
+   * Every view this database has, not just the projected one.
+   *
+   * The projection carries the view it ran; a surface offering a tab strip needs
+   * the others, and asking it to fetch each one to discover its name would make
+   * opening a database cost one request per view.
+   */
+  views: Array<{ id: string; name: string; kind: string }>;
+  /** How many live rows the database has, against how many this read looked at. */
+  rowsInDatabase: number;
+  rowsRead: number;
+}
+
+/**
+ * E3 — a database, projected through one of its views.
+ *
+ * **The projection is `projectDatabase`, in core.** Filters, sorts and grouping
+ * are not re-expressed in SQL here: a second implementation of the view language
+ * would drift from the one the desktop runs, and the symptom is the same board
+ * showing different cards on two screens with nothing to say which is right.
+ * What the database does instead is bound and pre-order the read.
+ *
+ * The bound is reported rather than hidden. A view whose filter would have
+ * matched a row past the cap does not show it, and a caller that is not told how
+ * many rows it actually read has no way to know that happened.
+ */
+export async function readDatabaseView(
+  orgId: string,
+  userId: string,
+  databaseId: string,
+  opts: { viewId?: string; limit?: number } = {},
+): Promise<DatabaseViewResult | null> {
+  const block = await getBlock(orgId, userId, databaseId);
+  if (!block || !isLiveBlock(block)) return null;
+
+  const database: NoteDatabase = readDatabase(block);
+  const view = database.views.find((candidate) => candidate.id === opts.viewId) ?? database.views[0];
+  // The first sort key orders the SQL read, so the bounded window is the window
+  // the view would have wanted rather than an arbitrary one.
+  const primary = view?.sort?.[0];
+
+  const rows = await store().listNoteDatabaseRows(orgId, userId, databaseId, {
+    ...(primary ? { orderBy: primary.property, descending: primary.direction === "desc" } : {}),
+    ...(opts.limit ? { limit: opts.limit } : {}),
+  });
+  const rowBlocks = rows.map(blockOf).filter(isLiveBlock);
+  const projection = projectDatabase([block, ...rowBlocks], databaseId, opts.viewId);
+  if (!projection) return null;
+
+  return {
+    projection,
+    views: database.views.map((candidate) => ({ id: candidate.id, name: candidate.name, kind: candidate.kind })),
+    rowsInDatabase: await store().countNoteDatabaseRows(orgId, userId, databaseId),
+    rowsRead: rowBlocks.length,
+  };
+}
+
 /* ---------------------------------------------------------------- writing */
 
 /**
@@ -199,6 +354,11 @@ async function persistBlock(orgId: string, userId: string, block: NoteBlock, vis
     id: block.id,
     parentId: block.parentId?.value ?? null,
     kind: block.kind?.value ?? "paragraph",
+    // Document order, denormalised in the same statement as the payload it comes
+    // from (053). A page read that had to re-sort in Node could not also be
+    // bounded: the first 200 rows by write order are not the first 200 rows of
+    // the document.
+    rank: block.rank?.value ?? FIRST_RANK,
     ...(visibility ? { visibility } : {}),
     payload: block as unknown as Record<string, unknown>,
     // The COLUMN says whether the block is currently there, which is not the
@@ -221,14 +381,30 @@ async function persistBlock(orgId: string, userId: string, block: NoteBlock, vis
  */
 async function reindexBlock(orgId: string, userId: string, block: NoteBlock): Promise<void> {
   const text = block.text?.value ?? "";
+  // References are extracted from the prose AND the property values (ADR-029
+  // E3/E5); the search TEXT stays the prose alone. A relation cell is referring
+  // content, so indexing only `text` for links would answer "what links here"
+  // correctly for a link typed in a sentence and silently miss the identical
+  // link stored in a column — the split A2 exists to prevent. Its option ids and
+  // person handles are not prose, though, and folding them into the searchable
+  // text would make the client's `searchNotes` and this disagree about what a
+  // text match is.
+  const referring = blockReferenceText(block);
   if (!isLiveBlock(block)) {
     await store().replaceNoteRefs(orgId, userId, block.id, []);
     await store().deleteNoteIndexEntry(orgId, userId, block.id);
+    // Part E's projections retract with everything else. A tombstoned page that
+    // stayed in `notes_page_meta` would be a sidebar row that opens nothing —
+    // C5 says a deleted target renders as a tombstone where it is REFERENCED,
+    // not that it keeps a place in the navigation of the person who deleted it.
+    await store().replaceNoteRowValues(orgId, userId, block.id, null, []);
+    await store().deleteNotePageMeta(orgId, userId, block.id);
     return;
   }
+  await projectPartE(orgId, userId, block);
 
   const perTarget = new Map<string, Omit<NoteRefRow, "fromBlockId"> & { fragmentSet: Set<string> }>();
-  for (const ref of extractWorkspaceRefs(text)) {
+  for (const ref of extractWorkspaceRefs(referring)) {
     const key = workspaceRefKey(ref);
     const entry = perTarget.get(key) ?? {
       targetKey: key,
@@ -254,6 +430,90 @@ async function reindexBlock(orgId: string, userId: string, block: NoteBlock): Pr
     contentText: contentWithoutRefs(text),
     refKeys: refs.map((r) => r.targetKey),
   });
+}
+
+/**
+ * A sidebar row is a line, not a document.
+ *
+ * The title is bounded here rather than trusted because this projection exists
+ * to be read WITHOUT the payload — a page called by its whole first paragraph
+ * would put the cost back that the table removed, in the one query that is run
+ * on every open.
+ */
+const MAX_PROJECTED_TITLE = 200;
+
+/**
+ * ADR-029 Part E — project one block into the two queryable tables (053).
+ *
+ * Which blocks get a `notes_page_meta` row is a decision, not a filter that grew:
+ * a page, a database, or anything somebody pinned. Every block would duplicate
+ * `notes_index` and pay a projection on every paragraph keystroke to answer a
+ * question only ever asked about pages; only pages would lose E4's favourites,
+ * which are explicitly not restricted to pages.
+ *
+ * A block that STOPS qualifying — un-pinned, or turned back into a paragraph —
+ * has its row removed rather than left behind. A projection that only grows is
+ * how a sidebar starts listing things that are not there, which is the same
+ * defect an add-only reference index has.
+ */
+async function projectPartE(orgId: string, userId: string, block: NoteBlock): Promise<void> {
+  const kind = block.kind?.value ?? "paragraph";
+  const favourite = block.favourite?.value === true;
+  const navigable = kind === "page" || kind === DATABASE_BLOCK_KIND || favourite;
+
+  if (navigable) {
+    await store().upsertNotePageMeta(orgId, userId, {
+      blockId: block.id,
+      parentId: block.parentId?.value ?? null,
+      kind,
+      rank: block.rank?.value ?? FIRST_RANK,
+      title: (block.text?.value ?? "").trim().slice(0, MAX_PROJECTED_TITLE),
+      icon: block.icon?.value ?? null,
+      cover: block.cover?.value ?? null,
+      favourite,
+      // E3's schema and views ride on the database block itself. Copied into the
+      // projection so listing "every database I could add a row to" does not mean
+      // reading every page; the block stays the record either version disagrees
+      // with, because only one of them is ever written by a merge.
+      schema: kind === DATABASE_BLOCK_KIND ? [...(block.schema?.value ?? [])] : null,
+      views: kind === DATABASE_BLOCK_KIND ? [...(block.views?.value ?? [])] : null,
+    });
+  } else {
+    await store().deleteNotePageMeta(orgId, userId, block.id);
+  }
+
+  await store().replaceNoteRowValues(
+    orgId, userId, block.id, block.parentId?.value ?? null,
+    Object.entries(block.props ?? {}).map(([propertyId, stamped]) =>
+      projectCell(propertyId, stamped?.value ?? null)),
+  );
+}
+
+/**
+ * One cell, projected by the SHAPE of its value rather than its declared type.
+ *
+ * The type lives on the database block, and a projection that had to read
+ * another row to know how to write this one would be wrong for exactly as long
+ * as the two were out of step — which is every moment between adding a column
+ * and its rows catching up. The shape is enough for the comparison the scalar
+ * columns are for, and `value_json` carries the exact value for everything else.
+ *
+ * A list gets a joined `value_text` and no scalar, because there is no scalar
+ * column that is honest about a multi-select. Rendering always reads the json.
+ */
+function projectCell(propertyId: string, value: NotePropertyValue): NoteRowValueInput {
+  const cell: NoteRowValueInput = {
+    propertyId, value, text: null, number: null, bool: null, date: null,
+  };
+  if (value === null || value === undefined) return cell;
+  if (typeof value === "number") return { ...cell, number: value, text: String(value) };
+  if (typeof value === "boolean") return { ...cell, bool: value, text: String(value) };
+  if (Array.isArray(value)) return { ...cell, text: value.join(", ").slice(0, MAX_META_TEXT) };
+  const text = String(value).slice(0, MAX_META_TEXT);
+  // The day, never an instant — `datePropertyDay` is the same function the view
+  // language groups a calendar by, so a filter and a projection cannot disagree
+  // about which day a due date falls on.
+  return { ...cell, text, date: datePropertyDay(value) };
 }
 
 /**
@@ -402,7 +662,10 @@ function validatePatch(patch: Record<string, unknown>): string | null {
       return `"${field}" is a string of at most ${MAX_META_TEXT} characters.`;
     }
   }
-  return null;
+  // ADR-029 E3 — the database fields, bounded by the SAME function the client
+  // uses. A schema is the header row every viewer of a shared database sees, so
+  // the limit on what one push can make everyone receive belongs on this side.
+  return validateDatabaseFields(patch);
 }
 
 /**
@@ -510,6 +773,20 @@ function incomingBlock(
     ...(typeof patch.icon === "string" ? { icon: stampedWith(patch.icon, at) } : {}),
     ...(typeof patch.cover === "string" ? { cover: stampedWith(patch.cover, at) } : {}),
     ...(typeof patch.favourite === "boolean" ? { favourite: stampedWith(patch.favourite, at) } : {}),
+    // ADR-029 E3 — a row's property values, stamped PER KEY and merged onto what
+    // the block already has. Replacing the map wholesale would make an operation
+    // that set one cell also win every other cell the pushing device happened to
+    // be holding a stale copy of — the field-level rule D4 exists to avoid, lost
+    // one level down.
+    ...(patch.props && typeof patch.props === "object" && !Array.isArray(patch.props)
+      ? { props: stampedProps(base.props, patch.props as Record<string, unknown>, at) }
+      : {}),
+    ...(Array.isArray(patch.schema)
+      ? { schema: stampedWith(patch.schema as readonly NotePropertyDef[], at) }
+      : {}),
+    ...(Array.isArray(patch.views)
+      ? { views: stampedWith(patch.views as readonly NoteDatabaseView[], at) }
+      : {}),
     // A delete is a tombstone stamped with the operation's clock (C5), so a
     // later edit from another device can resurrect it as conflicted.
     ...(op.kind === "delete" ? { deletedAt: at } : {}),

@@ -20,6 +20,7 @@
  * goes through a cap and the state is projected rather than serialised whole.
  */
 import { asUntrustedText, fenceMarkerPattern } from '../../planner/agentContext.js';
+import type { NoteDatabaseSummary } from '../../notes/database.js';
 import type { NoteBlockContext } from '../../notes/noteTree.js';
 import {
   formatWorkspaceRef, renderWorkspaceResolution,
@@ -58,6 +59,46 @@ const MAX_HEADINGS = 4;
 
 function isNoteContext(state: unknown): state is NoteBlockContext {
   return !!state && typeof state === 'object' && 'headings' in state && 'text' in state;
+}
+
+function isDatabaseSummary(state: unknown): state is NoteDatabaseSummary {
+  return !!state && typeof state === 'object' && 'columns' in state && 'totalRows' in state;
+}
+
+/** E3's rows are wide and repetitive; a cell is a value, never a paragraph. */
+const MAX_CELL = 80;
+
+/**
+ * A database, rendered as its shape and a sample.
+ *
+ * Every string goes through `asUntrustedWorkspaceText`, including the ones that
+ * look like our own — a property NAME and a view NAME were typed by whoever made
+ * the database, and a database can arrive from a shared workspace. The one
+ * invariant worth holding in this file is that no string reaches the model from
+ * here un-neutralised, and "this one is structural" is how the exception gets
+ * made.
+ */
+function databaseLines(summary: NoteDatabaseSummary): string[] {
+  const lines: string[] = [];
+  const columns = summary.columns
+    .map((c) => `${asUntrustedWorkspaceText(c.id, MAX_CELL)} (${asUntrustedWorkspaceText(c.type, 40)})`)
+    .join(', ');
+  // The property IDS, because a cell is written by id: a listing of only the
+  // human-facing names would leave the key to be guessed.
+  if (columns) lines.push(`  columns: ${columns}`);
+  if (summary.views.length > 1) {
+    lines.push(`  views: ${summary.views.map((v) => asUntrustedWorkspaceText(v.name, MAX_CELL)).join(', ')}`);
+  }
+  for (const row of summary.rows) {
+    const cells = Object.entries(row.cells)
+      .map(([id, display]) => `${asUntrustedWorkspaceText(id, 40)}: ${asUntrustedWorkspaceText(display, MAX_CELL)}`)
+      .join(' · ');
+    lines.push(`  ${asUntrustedWorkspaceText(row.uri, MAX_WORKSPACE_REF_LENGTH)} — ${cells}`);
+  }
+  // Q3's count. Knowing there IS a rest is what stops a sample being read as the
+  // whole database.
+  if (summary.omittedLabel) lines.push(`  (${asUntrustedWorkspaceText(summary.omittedLabel, 80)})`);
+  return lines;
 }
 
 /**
@@ -103,6 +144,8 @@ export function untrustedResolutionLines(resolution: WorkspaceResolution, nowMs 
     // shape-check above is structural, so a mode that grew a `headings`/`text`
     // state of its own would land here with a label we did not write.
     if (state.omittedLabel) lines.push(`  (${asUntrustedWorkspaceText(state.omittedLabel, 80)})`);
+  } else if (isDatabaseSummary(state)) {
+    lines.push(...databaseLines(state));
   }
   return lines;
 }

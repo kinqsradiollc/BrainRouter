@@ -32,6 +32,9 @@ import {
   sweepBlockLeases, type BlockLease, type LeaseClaim, type LeaseOutcome,
 } from './blockLease.js';
 import { mergeNoteBlock, resolveBlockConflict } from './blockMerge.js';
+import { DATABASE_BLOCK_KIND, defaultDatabaseSchema, defaultDatabaseViews } from './database.js';
+import type { NoteDatabaseView } from './databaseView.js';
+import type { NotePropertyDef, NotePropertyValue } from './properties.js';
 import { buildNoteTree, subtreeBlockIds } from './noteTree.js';
 import { compareRank, FIRST_RANK, rankBetween } from './rank.js';
 import { deletedSubtreeIds, favouriteBlocks, listTrashEntries, type TrashEntry } from './trash.js';
@@ -156,6 +159,23 @@ export interface CreateBlockInput extends BlockPosition {
   icon?: string;
   cover?: string;
   favourite?: boolean;
+  /** E3 — a row's property values, keyed by property id. */
+  props?: Record<string, NotePropertyValue>;
+  /** E3 — a database block's property definitions. */
+  schema?: readonly NotePropertyDef[];
+  /** E3 — a database block's stored projections. */
+  views?: readonly NoteDatabaseView[];
+}
+
+/** Stamp every written property value with this edit's clock, keeping the rest. */
+function stampProps(
+  current: NoteBlock['props'],
+  written: Record<string, NotePropertyValue>,
+  at: Hlc,
+): NoteBlock['props'] {
+  const next: NonNullable<NoteBlock['props']> = { ...(current ?? {}) };
+  for (const [key, value] of Object.entries(written)) next[key] = { value, at };
+  return next;
 }
 
 export function createBlock(
@@ -169,12 +189,24 @@ export function createBlock(
 
   const parentId = input.parentId ?? null;
   const kind = input.kind ?? 'paragraph';
+  // E3 — a database arrives with a schema and a table view, whichever path made
+  // it. Seeding here rather than in `createDatabase` is what keeps the slash
+  // menu's `/database` and the explicit call producing the same block: a
+  // database created without a schema would render as a container with no
+  // columns, and the person would conclude the feature is broken.
+  const seeded = kind === DATABASE_BLOCK_KIND && !input.schema
+    ? { schema: defaultDatabaseSchema(), views: input.views ?? defaultDatabaseViews(defaultDatabaseSchema()) }
+    : { ...(input.schema ? { schema: input.schema } : {}), ...(input.views ? { views: input.views } : {}) };
+
   const block: NoteBlock = {
     id,
     parentId: value(parentId, at),
     rank: value(rankFor(state, parentId, input), at),
     kind: value(kind, at),
     text: value(isTextlessKind(kind) && !input.text ? '' : (input.text ?? ''), at),
+    ...(input.props ? { props: stampProps(undefined, input.props, at) } : {}),
+    ...(seeded.schema ? { schema: value(seeded.schema, at) } : {}),
+    ...(seeded.views ? { views: value(seeded.views, at) } : {}),
     ...(input.level !== undefined ? { level: value(input.level, at) } : {}),
     ...(input.checked !== undefined ? { checked: value(input.checked, at) } : {}),
     ...(input.language !== undefined ? { language: value(input.language, at) } : {}),
@@ -196,7 +228,15 @@ export function createBlock(
     // different string under the same stamp, and the two never reconcile
     // because neither edit is newer. The placing device decides; everyone else
     // merges the value.
-    payload: { ...input, id, rank: block.rank.value },
+    //
+    // The SEEDED schema travels too, for the same reason: a server that received
+    // a database with no columns would hand a schema-less one to the dashboard,
+    // which has no local store to repair it from.
+    payload: {
+      ...input, id, rank: block.rank.value,
+      ...(block.schema ? { schema: block.schema.value } : {}),
+      ...(block.views ? { views: block.views.value } : {}),
+    },
     attempts: 0,
   });
   writeNotes(userId, state);
@@ -223,6 +263,17 @@ export interface UpdateBlockInput {
   icon?: string;
   cover?: string;
   favourite?: boolean;
+  /**
+   * E3 — property values to write on a row, keyed by property id.
+   *
+   * A PARTIAL map: only the keys present are written, and each is stamped
+   * separately, so setting one cell never re-stamps the others. Writing the
+   * whole map would make one device's status change outrank every other cell it
+   * happened to be holding a stale copy of.
+   */
+  props?: Record<string, NotePropertyValue>;
+  schema?: readonly NotePropertyDef[];
+  views?: readonly NoteDatabaseView[];
 }
 
 export type BlockWriteResult =
@@ -285,6 +336,15 @@ export function updateBlock(
   }
 
   const at = stamp(state, nowMs);
+  // E3 — a line CONVERTED into a database gets the same seed a created one does.
+  // The slash menu turns an empty paragraph into a database through this path,
+  // and a database with no schema would render as a container with no columns —
+  // a different outcome from the same gesture depending on which code path made
+  // the block.
+  const seed = input.kind === DATABASE_BLOCK_KIND && !current.schema && !input.schema
+    ? { schema: defaultDatabaseSchema(), views: defaultDatabaseViews(defaultDatabaseSchema()) }
+    : null;
+
   const edit: NoteBlock = {
     ...current,
     ...(input.text !== undefined ? { text: value(input.text, at) } : {}),
@@ -296,6 +356,10 @@ export function updateBlock(
     ...(input.icon !== undefined ? { icon: value(input.icon, at) } : {}),
     ...(input.cover !== undefined ? { cover: value(input.cover, at) } : {}),
     ...(input.favourite !== undefined ? { favourite: value(input.favourite, at) } : {}),
+    ...(input.props ? { props: stampProps(current.props, input.props, at) } : {}),
+    ...(input.schema ? { schema: value(input.schema, at) } : {}),
+    ...(input.views ? { views: value(input.views, at) } : {}),
+    ...(seed ? { schema: value(seed.schema, at), views: value(seed.views, at) } : {}),
   };
 
   const merged = mergeNoteBlock(current, edit);
@@ -305,7 +369,13 @@ export function updateBlock(
     itemId: id,
     kind: 'update',
     at,
-    payload: { ...input, ...(authoredUnder === undefined ? {} : { leaseEpoch: authoredUnder }) },
+    payload: {
+      ...input,
+      // The seed travels, or the server would hold a database with no columns
+      // and the dashboard has no local store to repair it from.
+      ...(seed ?? {}),
+      ...(authoredUnder === undefined ? {} : { leaseEpoch: authoredUnder }),
+    },
     attempts: 0,
   });
   writeNotes(userId, state);

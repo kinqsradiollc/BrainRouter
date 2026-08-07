@@ -29,6 +29,10 @@ const db = {
   index: new Map<string, { contentText: string; refKeys: string[] }>(),
   refs: new Map<string, unknown[]>(),
   leases: new Map<string, { blockId: string; deviceId: string; holder: string | null; epoch: number; expiresAtMs: number }>(),
+  // ADR-029 Part E (migration 053) — the projections the page and database
+  // routes read. Written by the same re-derive call as `index`.
+  pageMeta: new Map<string, Record<string, unknown>>(),
+  rowValues: new Map<string, unknown[]>(),
 };
 const key = (orgId: string, userId: string, id: string) => `${orgId}/${userId}/${id}`;
 
@@ -81,6 +85,39 @@ const fakeStore = {
     db.leases.set(key(orgId, userId, lease.blockId), lease);
   },
   async sweepNoteBlockLeases() { return 0; },
+  async clearNoteDerived(orgId: string, userId: string) {
+    for (const map of [db.index, db.refs, db.pageMeta, db.rowValues] as Array<Map<string, unknown>>) {
+      for (const k of [...map.keys()]) if (k.startsWith(`${orgId}/${userId}/`)) map.delete(k);
+    }
+  },
+  async upsertNotePageMeta(orgId: string, userId: string, meta: { blockId: string }) {
+    db.pageMeta.set(key(orgId, userId, meta.blockId), meta as Record<string, unknown>);
+  },
+  async deleteNotePageMeta(orgId: string, userId: string, blockId: string) {
+    db.pageMeta.delete(key(orgId, userId, blockId));
+  },
+  async listNotePageMeta(orgId: string, userId: string, opts: { kinds?: readonly string[]; favouritesOnly?: boolean } = {}) {
+    return [...db.pageMeta.entries()]
+      .filter(([k]) => k.startsWith(`${orgId}/${userId}/`))
+      .map(([, meta]) => meta)
+      .filter((meta) => (!opts.kinds || opts.kinds.includes(String(meta.kind))))
+      .filter((meta) => (!opts.favouritesOnly || meta.favourite === true));
+  },
+  async getNotePageMeta(orgId: string, userId: string, blockId: string) {
+    return db.pageMeta.get(key(orgId, userId, blockId)) ?? null;
+  },
+  async replaceNoteRowValues(orgId: string, userId: string, blockId: string, _parentId: string | null, values: unknown[]) {
+    db.rowValues.set(key(orgId, userId, blockId), [...values]);
+  },
+  async listNoteChildBlocks(orgId: string, userId: string, parentId: string) {
+    return (await fakeStore.listAllNoteBlocks(orgId, userId)).filter((row) => row.parentId === parentId);
+  },
+  async listNoteDatabaseRows(orgId: string, userId: string, databaseId: string) {
+    return fakeStore.listNoteChildBlocks(orgId, userId, databaseId);
+  },
+  async countNoteDatabaseRows(orgId: string, userId: string, databaseId: string) {
+    return (await fakeStore.listNoteChildBlocks(orgId, userId, databaseId)).length;
+  },
 };
 
 const mocks = vi.hoisted(() => ({
@@ -110,6 +147,7 @@ describe("notes + workspace routes", () => {
 
   beforeEach(async () => {
     db.blocks.clear(); db.applied.clear(); db.index.clear(); db.refs.clear(); db.leases.clear();
+    db.pageMeta.clear(); db.rowValues.clear();
     vi.clearAllMocks();
     mocks.getDefaultOrgId.mockResolvedValue("org-a");
     mocks.getUserById.mockImplementation(async (userId: string) => ({ userId, isAdmin: false, status: "active" }));
@@ -269,10 +307,187 @@ describe("notes + workspace routes", () => {
     expect(body.reason).toBe("no_such_mode");
   });
 
+  /**
+   * ADR-029 Part E over HTTP — the reads the dashboard has and the desktop's
+   * local cache does not need.
+   *
+   * Written as pushes followed by reads rather than as fixtures, because the
+   * claim is that the state travels the ORDINARY sync path: a page's icon
+   * arriving through `/push` is what has to make it into `/pages`, and seeding
+   * the projection directly would prove nothing about the path that fills it.
+   */
+  it("a page pushed as a block is readable as a page, which is what closes the dashboard's gap", async () => {
+    await fetch(`${baseUrl}/api/notes/push`, {
+      method: "POST", headers,
+      body: JSON.stringify({
+        operations: [{
+          idempotencyKey: "op-page", itemId: "page_1", kind: "create",
+          at: { physical: 1000, logical: 0, deviceId: "device-a" },
+          payload: { kind: "page", text: "Runbook", rank: "m", icon: "📕" },
+        }],
+      }),
+    });
+
+    const res = await fetch(`${baseUrl}/api/notes/pages`, { headers });
+    expect(res.status).toBe(200);
+    const { pages } = await res.json();
+    expect(pages).toEqual([expect.objectContaining({ blockId: "page_1", title: "Runbook", icon: "📕" })]);
+  });
+
+  it("a page read carries its blocks and says whether it was truncated", async () => {
+    const at = (physical: number) => ({ physical, logical: 0, deviceId: "device-a" });
+    await fetch(`${baseUrl}/api/notes/push`, {
+      method: "POST", headers,
+      body: JSON.stringify({
+        operations: [
+          { idempotencyKey: "op-page", itemId: "page_1", kind: "create", at: at(1000), payload: { kind: "page", text: "Runbook", rank: "m" } },
+          { idempotencyKey: "op-body", itemId: "blk_1", kind: "create", at: at(1001), payload: { kind: "paragraph", text: "step one", parentId: "page_1", rank: "m" } },
+        ],
+      }),
+    });
+
+    const res = await fetch(`${baseUrl}/api/notes/pages/page_1`, { headers });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.page.text.value).toBe("Runbook");
+    expect(body.blocks.map((b: { id: string }) => b.id)).toEqual(["blk_1"]);
+    // A caller not told it received a prefix renders a document that silently
+    // stops, which is the failure Q3's bound exists to make visible.
+    expect(body.truncated).toBe(false);
+  });
+
+  it("a database projects through the SAME view code the desktop runs, rows and all", async () => {
+    const at = (physical: number) => ({ physical, logical: 0, deviceId: "device-a" });
+    await fetch(`${baseUrl}/api/notes/push`, {
+      method: "POST", headers,
+      body: JSON.stringify({
+        operations: [
+          {
+            idempotencyKey: "op-db", itemId: "db_1", kind: "create", at: at(1000),
+            payload: {
+              kind: "database", text: "Reading list", rank: "m",
+              schema: [{ id: "title", name: "Name", type: "title" }, { id: "stage", name: "Stage", type: "text" }],
+              views: [{ id: "table", name: "Table", kind: "table", visible: ["title", "stage"] }],
+            },
+          },
+          {
+            idempotencyKey: "op-row", itemId: "row_1", kind: "create", at: at(1001),
+            payload: { kind: "page", text: "Acme", parentId: "db_1", rank: "m", props: { stage: "won" } },
+          },
+        ],
+      }),
+    });
+
+    const res = await fetch(`${baseUrl}/api/notes/databases/db_1`, { headers });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.projection.title).toBe("Reading list");
+    expect(body.projection.columns.map((c: { id: string }) => c.id)).toEqual(["title", "stage"]);
+    expect(body.projection.rows[0].title).toBe("Acme");
+    expect(body.projection.rows[0].cells[1].display).toBe("won");
+    // The bound is reported against what exists, so a partial read is never
+    // mistaken for the whole database.
+    expect(body.rowsInDatabase).toBe(1);
+    expect(body.rowsRead).toBe(1);
+  });
+
+  it("a paragraph is not an empty database — the read refuses rather than projecting one", async () => {
+    await fetch(`${baseUrl}/api/notes/push`, {
+      method: "POST", headers,
+      body: JSON.stringify({
+        operations: [{
+          idempotencyKey: "op-1", itemId: "blk_1", kind: "create",
+          at: { physical: 1000, logical: 0, deviceId: "device-a" },
+          payload: { kind: "paragraph", text: "not a database", rank: "m" },
+        }],
+      }),
+    });
+
+    const res = await fetch(`${baseUrl}/api/notes/databases/blk_1`, { headers });
+    expect(res.status).toBe(404);
+  });
+
+  /**
+   * ADR-029 C1's fourth verb over HTTP — the surface with no local store.
+   *
+   * The dashboard cannot change another mode's record except by asking the mode
+   * that owns it, and the alternative is a write endpoint per mode per surface.
+   * That is the drift C3 is organised against, so the seam is pinned here.
+   */
+  it("a page is renamed through the shared update verb, and the change merges like any other push", async () => {
+    await fetch(`${baseUrl}/api/notes/push`, {
+      method: "POST", headers,
+      body: JSON.stringify({
+        operations: [{
+          idempotencyKey: "op-page", itemId: "page_1", kind: "create",
+          at: { physical: 1000, logical: 0, deviceId: "device-a" },
+          payload: { kind: "page", text: "Runbok", rank: "m" },
+        }],
+      }),
+    });
+
+    const res = await fetch(`${baseUrl}/api/workspace/update`, {
+      method: "POST", headers,
+      body: JSON.stringify({
+        uri: "brainrouter://notes/block/page_1",
+        title: "Runbook",
+        fields: { icon: "📕", sprint: "Q3" },
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe("updated");
+    expect(body.changed.sort()).toEqual(["icon", "text"]);
+    // Reported, never dropped: a caller told only about the fields that worked
+    // concludes the other one worked too.
+    expect(body.ignored).toEqual(["sprint"]);
+
+    const read = await fetch(`${baseUrl}/api/notes/blocks/page_1`, { headers });
+    const after = await read.json();
+    expect(after.block.text.value).toBe("Runbook");
+    expect(after.block.icon.value).toBe("📕");
+  });
+
+  it("a reference that is not writable here is refused with the reason, not with a generic failure", async () => {
+    const res = await fetch(`${baseUrl}/api/workspace/update`, {
+      method: "POST", headers,
+      body: JSON.stringify({ uri: "brainrouter://code/file/src/x.ts", title: "nope" }),
+    });
+
+    expect(res.status).toBe(400);
+    // The backend has no checkout, so `code` is not registered at all here —
+    // which is a different sentence from "code is linkable but not writable",
+    // and both are more useful than a 500.
+    expect((await res.json()).reason).toBe("no_such_mode");
+  });
+
   it("the routers are mounted on the app, which is the difference between built and reachable", () => {
     const here = path.dirname(fileURLToPath(import.meta.url));
     const index = fs.readFileSync(path.join(here, "..", "index.ts"), "utf8");
     expect(index).toContain('app.use("/api/notes", notesRouter)');
     expect(index).toContain('app.use("/api/workspace", workspaceRouter)');
+  });
+
+  /**
+   * Mounted is not reached either.
+   *
+   * ADR-028 E1: these three answered correctly for a release with nothing in
+   * any surface asking them. The dashboard is the surface they were built for —
+   * it is the one with no local store — so the claim is checked where it can
+   * actually fail, at its source.
+   */
+  it("the dashboard asks for the favourites, the databases and the shared update verb", () => {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const notesPage = fs.readFileSync(
+      path.join(here, "..", "..", "..", "brainrouter-dashboard", "app", "notes", "page.tsx"),
+      "utf8",
+    );
+    // Ordered by rank on the server, and a favourite is any block — filtering
+    // the page list here would show them in document order and miss the lines.
+    expect(notesPage).toContain('"/api/notes/favourites"');
+    expect(notesPage).toContain('"/api/notes/databases"');
+    expect(notesPage).toContain('"/api/workspace/update"');
+    expect(notesPage).toContain('fields: { favourite }');
   });
 });

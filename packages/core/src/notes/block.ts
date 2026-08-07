@@ -31,6 +31,8 @@
 import { hlcAfter, type Hlc } from '../sync/hybridClock.js';
 import type { ConflictRecord, Stamped } from '../sync/stamped.js';
 import { formatWorkspaceRef, type WorkspaceRef } from '../workspace/references/ref.js';
+import type { NotePropertyDef, NotePropertyValue } from './properties.js';
+import type { NoteDatabaseView } from './databaseView.js';
 
 /** The mode segment every note reference carries. */
 export const NOTES_MODE = 'notes';
@@ -59,6 +61,12 @@ export type NoteBlockKind =
   | 'table'
   /** `text` is the row's cells, encoded by `tableBlock.ts`. */
   | 'table-row'
+  /**
+   * E3 — a view over the pages beneath it. `text` is its title, `schema` its
+   * property definitions, `views` its projections; its CHILDREN are its rows,
+   * because a row is a page and not a record that links to one.
+   */
+  | 'database'
   /** Text is a single workspace reference, rendered live (A3). */
   | 'embed'
   | 'divider';
@@ -66,6 +74,7 @@ export type NoteBlockKind =
 export const NOTE_BLOCK_KINDS: readonly NoteBlockKind[] = [
   'page', 'heading', 'paragraph', 'bullet', 'numbered', 'todo', 'toggle', 'quote',
   'callout', 'code', 'image', 'bookmark', 'table', 'table-row', 'embed', 'divider',
+  'database',
 ];
 
 /**
@@ -136,6 +145,35 @@ export interface NoteBlock {
   cover?: Stamped<string>;
   /** Pinned into the sidebar's favourites. */
   favourite?: Stamped<boolean>;
+  /**
+   * E3 — this block's property VALUES, when it is a row of a database.
+   *
+   * Keyed by property id and stamped PER KEY, which is D4's per-field rule taken
+   * one level down: two devices editing two different properties of one row are
+   * not in conflict, exactly as two people editing two paragraphs of one page
+   * are not (B1). One `Stamped<Record<…>>` for the whole map would have made
+   * every cell edit a whole-record write, so setting a status on a phone would
+   * silently discard a due date typed on a laptop a second earlier.
+   *
+   * A concurrent edit to ONE property is last-writer-wins with no marker — see
+   * `mergeProps` in `blockMerge.ts` for the two reasons.
+   *
+   * It lives on the ROW rather than in a database's own table because E3's
+   * decision is that a row IS a page: giving values their own record would give
+   * rows their own id, their own sync path and their own merge rules, which is
+   * the second store E3 exists to refuse.
+   */
+  props?: Record<string, Stamped<NotePropertyValue>>;
+  /**
+   * E3 — a database block's property definitions.
+   *
+   * Separate from `views` rather than one `Stamped<{schema, views}>`, because
+   * adding a property and renaming a view are different edits and a single field
+   * would make one silently discard the other.
+   */
+  schema?: Stamped<readonly NotePropertyDef[]>;
+  /** E3 — a database block's stored projections: table, board, list, calendar, gallery. */
+  views?: Stamped<readonly NoteDatabaseView[]>;
   /** Set when a delete was recorded. Deletion is a tombstone, not an absence (C5). */
   deletedAt?: Hlc;
   /**
@@ -160,7 +198,7 @@ export interface NoteBlock {
 }
 
 /** Kinds that hold no text, so an empty one is not an empty block to clean up. */
-const TEXTLESS = new Set<NoteBlockKind>(['divider', 'page', 'table']);
+const TEXTLESS = new Set<NoteBlockKind>(['divider', 'page', 'table', 'database']);
 
 export function isTextlessKind(kind: NoteBlockKind): boolean {
   return TEXTLESS.has(kind);

@@ -155,7 +155,78 @@ const notesParticipant = creatableWorkspaceMode({
     );
     return { status: "created", ref: noteBlockRef(block.id) };
   },
+
+  /**
+   * ADR-029 C1's fourth verb, server-side.
+   *
+   * It goes through `pushOperations` rather than a direct write, which is the
+   * whole point: an update from the dashboard or from an agent turn on the
+   * server is a DEVICE's operation like any other, merged against what the
+   * server holds (D11) and fenced by the block lease (B2/Q1). A privileged
+   * server-side write that skipped the merge would be the one path where a
+   * client that is behind wins by being the server, which is the asymmetry D11
+   * exists to refuse.
+   */
+  async update(intent, viewer) {
+    const orgId = orgOf(viewer);
+    if (!orgId) return { status: "refused", reason: "denied", detail: "notes change inside an organization" };
+    const block = await notes.getBlock(orgId, viewer.userId, intent.ref.id);
+    if (!block || block.deletedAt) {
+      return { status: "refused", reason: "not_found", detail: `no note block ${intent.ref.id}` };
+    }
+
+    const { patch, changed, ignored } = notePatch(intent);
+    const at = notes.serverClock(Date.now());
+    const outcome = await notes.pushOperations(orgId, viewer.userId, [{
+      idempotencyKey: `${intent.ref.id}:workspace-update:${at.physical}.${at.logical}`,
+      itemId: intent.ref.id,
+      kind: "update",
+      at,
+      payload: patch,
+    }]);
+    const refusal = outcome.rejected[0];
+    if (refusal) return { status: "refused", reason: "failed", detail: refusal.reason };
+
+    const after = await notes.getBlock(orgId, viewer.userId, intent.ref.id);
+    return {
+      status: "updated",
+      ref: intent.ref,
+      changed,
+      ...(ignored.length > 0 ? { ignored } : {}),
+      ...(after ? { label: noteLabel(after) } : {}),
+    };
+  },
 });
+
+/**
+ * The block fields a caller may name, and the ones it named that mean nothing.
+ *
+ * Deliberately the same list the desktop's participant accepts, because C3's
+ * rule is one vocabulary: a field that worked in the CLI and was silently
+ * dropped by the dashboard is the drift the shared verbs exist to prevent.
+ * Unknown fields are reported rather than discarded.
+ */
+function notePatch(intent: { title?: string; fields?: Readonly<Record<string, unknown>> }): {
+  patch: Record<string, unknown>;
+  changed: string[];
+  ignored: string[];
+} {
+  const patch: Record<string, unknown> = {};
+  const changed: string[] = [];
+  const ignored: string[] = [];
+  if (intent.title !== undefined) { patch.text = intent.title; changed.push("text"); }
+
+  for (const [key, value] of Object.entries(intent.fields ?? {})) {
+    if (key === "parentId" || key === "kind") continue;
+    const kept =
+      ((key === "text" || key === "icon" || key === "cover" || key === "language") && typeof value === "string") ||
+      ((key === "checked" || key === "collapsed" || key === "favourite") && typeof value === "boolean") ||
+      (key === "level" && typeof value === "number") ||
+      (key === "props" && !!value && typeof value === "object" && !Array.isArray(value));
+    if (kept) { patch[key] = value; changed.push(key); } else ignored.push(key);
+  }
+  return { patch, changed, ignored };
+}
 
 /* ------------------------------------------------------------------ planner */
 
@@ -184,6 +255,53 @@ const plannerParticipant = creatableWorkspaceMode({
     if (!orgId) return { status: "refused", reason: "denied", detail: "a planner belongs to an organization account" };
     const item = await planner.createItem(orgId, viewer.userId, { title: intent.title }, Date.now());
     return { status: "created", ref: { mode: "planner", kind: "item", id: item.id } };
+  },
+
+  /**
+   * Through `pushOperations`, for the reason the notes participant gives: an
+   * update made here is a device's operation, merged against server state (D11),
+   * not a privileged write that wins by being the server.
+   */
+  async update(intent, viewer) {
+    const orgId = orgOf(viewer);
+    if (!orgId) return { status: "refused", reason: "denied", detail: "a planner belongs to an organization account" };
+    const item = await planner.getItem(orgId, viewer.userId, intent.ref.id);
+    if (!item || item.deletedAt) {
+      return { status: "refused", reason: "not_found", detail: `no planner item ${intent.ref.id}` };
+    }
+
+    const patch: Record<string, unknown> = {};
+    const changed: string[] = [];
+    const ignored: string[] = [];
+    if (intent.title !== undefined) { patch.title = intent.title; changed.push("title"); }
+    for (const [key, value] of Object.entries(intent.fields ?? {})) {
+      const kept =
+        (key === "notes" && typeof value === "string") ||
+        (key === "dueDate" && (typeof value === "string" || value === null)) ||
+        (key === "priority" && typeof value === "number") ||
+        (key === "completed" && typeof value === "boolean");
+      if (kept) { patch[key] = value; changed.push(key); } else ignored.push(key);
+    }
+
+    const at = planner.serverClock(Date.now());
+    const outcome = await planner.pushOperations(orgId, viewer.userId, [{
+      idempotencyKey: `${intent.ref.id}:workspace-update:${at.physical}.${at.logical}`,
+      itemId: intent.ref.id,
+      kind: "update",
+      at,
+      payload: patch,
+    }], new Date().toISOString());
+    const refusal = outcome.rejected[0];
+    if (refusal) return { status: "refused", reason: "failed", detail: refusal.reason };
+
+    const after = await planner.getItem(orgId, viewer.userId, intent.ref.id);
+    return {
+      status: "updated",
+      ref: intent.ref,
+      changed,
+      ...(ignored.length > 0 ? { ignored } : {}),
+      ...(after ? { label: after.completed?.value ? `✓ ${after.title.value}` : after.title.value } : {}),
+    };
   },
 });
 
@@ -225,6 +343,41 @@ const trackParticipant = creatableWorkspaceMode({
       ...(intent.from ? { sourceRef: formatWorkspaceRef(intent.from) } : {}),
     });
     return { status: "created", ref: { mode: "track", kind: "work-item", id: item.id } };
+  },
+
+  /**
+   * Change a work item through Track's own writer.
+   *
+   * `status` is what this exists for: C2's "a checklist line becomes a work
+   * item" is half a flow if nothing can then move it, and the half that is
+   * missing is the half people notice.
+   */
+  async update(intent, viewer) {
+    const orgId = orgOf(viewer);
+    if (!orgId) return { status: "refused", reason: "denied", detail: "a work item belongs to an organization" };
+    const existing = await track.getTrack(orgId, intent.ref.id);
+    if (!existing) return { status: "refused", reason: "not_found", detail: `no work item ${intent.ref.id}` };
+
+    const patch: Record<string, unknown> = {};
+    const changed: string[] = [];
+    const ignored: string[] = [];
+    if (intent.title !== undefined) { patch.title = intent.title; changed.push("title"); }
+    for (const [key, value] of Object.entries(intent.fields ?? {})) {
+      if ((key === "status" || key === "description" || key === "assignee" || key === "priority")
+        && typeof value === "string") {
+        patch[key] = value; changed.push(key);
+      } else ignored.push(key);
+    }
+
+    const updated = await track.updateTrack(orgId, intent.ref.id, patch);
+    if (!updated) return { status: "refused", reason: "not_found", detail: `no work item ${intent.ref.id}` };
+    return {
+      status: "updated",
+      ref: intent.ref,
+      changed,
+      ...(ignored.length > 0 ? { ignored } : {}),
+      label: `${updated.status}: ${updated.title}`,
+    };
   },
 });
 

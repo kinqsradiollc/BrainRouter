@@ -581,6 +581,7 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public getNoteBlock(orgId: string, userId: string, id: string): Promise<notes.NoteBlockRow | null> { return notes.getNoteBlock(this.exec, orgId, userId, id); }
   public findNoteBlockInOrg(orgId: string, id: string): Promise<notes.NoteBlockOwnerRow | null> { return notes.findNoteBlockInOrg(this.exec, orgId, id); }
   public upsertNoteBlock(orgId: string, userId: string, block: Parameters<typeof notes.upsertNoteBlock>[3]): Promise<notes.NoteBlockRow> { return notes.upsertNoteBlock(this.exec, orgId, userId, block); }
+  public listNoteChildBlocks(orgId: string, userId: string, parentId: string, limit?: number): Promise<notes.NoteBlockRow[]> { return notes.listNoteChildBlocks(this.exec, orgId, userId, parentId, limit); }
   public setNoteBlockVisibility(orgId: string, userId: string, id: string, visibility: string): Promise<number> { return notes.setNoteBlockVisibility(this.exec, orgId, userId, id, visibility); }
   public latestNoteRevision(orgId: string, userId: string): Promise<string> { return notes.latestNoteRevision(this.exec, orgId, userId); }
   public wasNoteOperationApplied(orgId: string, userId: string, key: string): Promise<boolean> { return notes.wasNoteOperationApplied(this.exec, orgId, userId, key); }
@@ -591,6 +592,16 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public upsertNoteIndex(orgId: string, userId: string, blockId: string, entry: Parameters<typeof notes.upsertNoteIndex>[4]): Promise<void> { return notes.upsertNoteIndex(this.exec, orgId, userId, blockId, entry); }
   public deleteNoteIndexEntry(orgId: string, userId: string, blockId: string): Promise<void> { return notes.deleteNoteIndexEntry(this.exec, orgId, userId, blockId); }
   public clearNoteDerived(orgId: string, userId: string): Promise<void> { return notes.clearNoteDerived(this.exec, orgId, userId); }
+  // ADR-029 Part E (migration 053) — the two projections that make a page list
+  // and a database view queries rather than a read of the whole corpus. Derived,
+  // exactly like `notes_refs`/`notes_index`: written only by the re-derive path.
+  public upsertNotePageMeta(orgId: string, userId: string, meta: notes.NotePageMetaRow): Promise<void> { return notes.upsertNotePageMeta(this.exec, orgId, userId, meta); }
+  public deleteNotePageMeta(orgId: string, userId: string, blockId: string): Promise<void> { return notes.deleteNotePageMeta(this.exec, orgId, userId, blockId); }
+  public listNotePageMeta(orgId: string, userId: string, opts?: Parameters<typeof notes.listNotePageMeta>[3]): Promise<notes.NotePageMetaRow[]> { return notes.listNotePageMeta(this.exec, orgId, userId, opts); }
+  public getNotePageMeta(orgId: string, userId: string, blockId: string): Promise<notes.NotePageMetaRow | null> { return notes.getNotePageMeta(this.exec, orgId, userId, blockId); }
+  public replaceNoteRowValues(orgId: string, userId: string, blockId: string, parentId: string | null, values: readonly notes.NoteRowValueInput[]): Promise<void> { return notes.replaceNoteRowValues(this.exec, orgId, userId, blockId, parentId, values); }
+  public listNoteDatabaseRows(orgId: string, userId: string, databaseId: string, opts?: Parameters<typeof notes.listNoteDatabaseRows>[4]): Promise<notes.NoteBlockRow[]> { return notes.listNoteDatabaseRows(this.exec, orgId, userId, databaseId, opts); }
+  public countNoteDatabaseRows(orgId: string, userId: string, databaseId: string): Promise<number> { return notes.countNoteDatabaseRows(this.exec, orgId, userId, databaseId); }
   public listNoteIndexEntries(orgId: string, userId: string): ReturnType<typeof notes.listNoteIndexEntries> { return notes.listNoteIndexEntries(this.exec, orgId, userId); }
   public searchNoteIndex(orgId: string, userId: string, query: string, limit?: number): Promise<notes.NoteSearchRow[]> { return notes.searchNoteIndex(this.exec, orgId, userId, query, limit); }
   public readNoteBlockLease(orgId: string, userId: string, blockId: string): ReturnType<typeof notes.readNoteBlockLease> { return notes.readNoteBlockLease(this.exec, orgId, userId, blockId); }

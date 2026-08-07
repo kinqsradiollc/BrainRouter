@@ -129,9 +129,51 @@ export const BUILTIN_TOOL_SPECS = [
         mode: { type: 'string', description: 'notes, planner or track.' },
         kind: { type: 'string', description: 'block, item or work-item.' },
         title: { type: 'string', description: 'The text of the new record, in the user\'s words where possible.' },
-        from: { type: 'string', description: 'Optional brainrouter:// reference this came from, recorded on the new record.' }
+        from: { type: 'string', description: 'Optional brainrouter:// reference this came from, recorded on the new record.' },
+        fields: {
+          type: 'object',
+          description:
+            'Optional mode-specific fields the new record arrives with. For notes: "kind" (page, ' +
+            'heading, paragraph, bullet, todo, toggle, quote, callout, code, database, divider), ' +
+            '"parentId" to put it inside a page or database, "icon", "cover", and "props" — a map ' +
+            'of property id to value when the new page is a row of a database. Resolve the ' +
+            'database first to learn its property ids.',
+          additionalProperties: true
+        }
       },
       required: ['mode', 'kind', 'title']
+    }
+  },
+  // ADR-029 C1's fourth verb. Part E made a vocabulary that can only ADD into a
+  // vocabulary that drifts: a person can rename a page, tick a box or set a cell,
+  // and an agent with only `create` answers each of those by making a second
+  // record.
+  {
+    name: 'workspace_update',
+    description:
+      'Change something that already exists in the workspace — rename a note or a task, tick a ' +
+      'todo, set a page\'s icon, move a work item to another status, write a value into a ' +
+      'database row\'s column. Takes the thing\'s brainrouter:// reference. Reports which fields ' +
+      'actually changed and which it did not understand, so never assume an unlisted field landed. ' +
+      'Notes and planner items are the user\'s own writing: change what they asked you to change ' +
+      'and leave the rest of the text alone. Code is not writable through this — edit files with ' +
+      'the normal file tools.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        uri: { type: 'string', description: 'The brainrouter:// reference of the record to change.' },
+        title: { type: 'string', description: 'The record\'s new headline text. Omit to leave it as it is.' },
+        fields: {
+          type: 'object',
+          description:
+            'Mode-specific changes. Notes: "text", "checked", "level", "icon", "cover", "language", ' +
+            '"collapsed", "favourite", "props" (a partial map of property id to value for a database ' +
+            'row). Planner: "notes", "dueDate", "priority", "completed". Track: "status", ' +
+            '"description", "assignee", "priority".',
+          additionalProperties: true
+        }
+      },
+      required: ['uri']
     }
   },
   {

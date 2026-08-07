@@ -24,6 +24,7 @@ import {
   type WorkspaceReferenceSource,
 } from '../workspace/references/index.js';
 import { isLiveBlock, noteBlockRef, type NoteBlock, type NoteBlockKind } from './block.js';
+import { blockPropertyText } from './database.js';
 
 /** Same shape the extractor scans for, so the two cannot disagree about a URI. */
 const REF_IN_TEXT = /brainrouter:\/\/[^\s<>"'`]+/gi;
@@ -57,6 +58,31 @@ export function contentWithoutRefs(text: string): string {
 }
 
 /**
+ * All of a block's referring content: its prose, and its property values.
+ *
+ * E3's relation property holds Part A references (E5), and A2 says the reference
+ * lives in the referring content — so a relation cell has to reach the SAME
+ * extractor a paragraph does. Concatenating rather than growing a second
+ * extraction path is the point: one function decides what counts as a reference,
+ * so "what links here" cannot answer correctly for a link typed in a sentence
+ * and silently miss the identical link stored in a column.
+ *
+ * Every property value is scanned, not only the `relation` ones, because the
+ * schema lives on the database block and this function has the row. That is the
+ * right answer anyway — a URI pasted into a text cell is as real a reference as
+ * one inserted deliberately, which is the rule prose already follows.
+ */
+export function blockReferenceText(block: NoteBlock): string {
+  // Optional access on a required field, because the server hands this rows it
+  // cast from stored JSON — a block written by a build that predates a field is
+  // the normal case, not the corrupt one, and a throw here would fail a whole
+  // push batch over one old row.
+  const prose = block.text?.value ?? '';
+  const properties = blockPropertyText(block);
+  return properties.length > 0 ? `${prose}\n${properties}` : prose;
+}
+
+/**
  * The sources layer one's backlink index is built from.
  *
  * A2 says the reference lives in the referring content and backlinks are
@@ -67,7 +93,7 @@ export function noteReferenceSources(blocks: Iterable<NoteBlock>): WorkspaceRefe
   const sources: WorkspaceReferenceSource[] = [];
   for (const block of blocks) {
     if (!isLiveBlock(block)) continue;
-    sources.push({ from: noteBlockRef(block.id), text: block.text.value });
+    sources.push({ from: noteBlockRef(block.id), text: blockReferenceText(block) });
   }
   return sources;
 }
@@ -75,7 +101,7 @@ export function noteReferenceSources(blocks: Iterable<NoteBlock>): WorkspaceRefe
 /** Every reference a block currently makes, canonically spelled and de-duplicated. */
 export function blockReferences(block: NoteBlock): string[] {
   const seen = new Set<string>();
-  for (const ref of extractWorkspaceRefs(block.text.value)) seen.add(formatWorkspaceRef(ref));
+  for (const ref of extractWorkspaceRefs(blockReferenceText(block))) seen.add(formatWorkspaceRef(ref));
   return [...seen].sort();
 }
 
@@ -152,7 +178,7 @@ export function blocksReferencing(blocks: Iterable<NoteBlock>, targetUri: string
   const out: string[] = [];
   for (const block of blocks) {
     if (!isLiveBlock(block)) continue;
-    const cites = extractWorkspaceRefs(block.text.value).some((ref) => workspaceRefKey(ref) === key);
+    const cites = extractWorkspaceRefs(blockReferenceText(block)).some((ref) => workspaceRefKey(ref) === key);
     if (cites) out.push(block.id);
   }
   return out.sort();
