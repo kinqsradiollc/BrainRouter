@@ -18,7 +18,11 @@ const CAPABILITY_TOOLS = {
   'mcp-lsp-connectors': ['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource', 'mcp_search', 'mcp_describe', 'mcp_call', 'mcp_refresh_catalog', 'lsp', 'connector_list', 'connector_run'],
   // ADR-028 D6 — the planner joins planning-state: it is the same capability
   // (what the user has decided to do), not a new surface area.
-  'planning-state': ['reconcile_steer', 'update_plan', 'goal_complete', 'goal_blocked', 'ask_user_choice', 'track_query', 'track_update', 'artifact_write', 'mark_chapter', 'switch_model', 'planner_today', 'planner_find', 'planner_add', 'planner_schedule', 'planner_complete'],
+  'planning-state': ['reconcile_steer', 'update_plan', 'goal_complete', 'goal_blocked', 'ask_user_choice', 'track_query', 'track_update', 'artifact_write', 'mark_chapter', 'switch_model', 'planner_today', 'planner_find', 'planner_add', 'planner_schedule', 'planner_complete',
+    // ADR-029 C3 — the workspace verbs join the same capability for the same
+    // reason the planner did: they are about what the user has decided and
+    // written down, across surfaces, not a new area of authority.
+    'workspace_resolve', 'workspace_create', 'workspace_link'],
   'security-review': ['file_vulnerability', 'finish_scan', 'list_requests', 'view_request', 'repeat_request', 'list_sitemap', 'scope_rules'],
   orchestration: ['profile_stage', 'task_agent', 'delegate_agent', 'spawn_agent', 'spawn_agents', 'list_agents', 'wait_agent', 'wait_agents', 'read_agent_transcript', 'close_agent', 'send_input', 'resume_agent', 'route_task'],
   'workflow-workers': ['run_workflow', 'run_workflow_graph', 'workflow_progress', 'extract_result', 'spawn_worker_thread', 'wait_worker', 'read_worker_summary', 'close_worker'],

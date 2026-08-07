@@ -5920,6 +5920,91 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 @media (max-width: 900px) { .planner-week { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 
+/* ADR-029 — the Notes mode. Same container rule as the planner, and for the
+   same reason: `.workrow` is a flex ROW, so without `flex: 1` a mode child
+   sizes to its CONTENT and renders in a narrow column with the rest of the
+   window dead black. */
+.notes-mode { display: flex; flex-direction: column; height: 100%; flex: 1; min-width: 0; }
+.notes-head { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 16px; border-bottom: 1px solid var(--border); }
+.notes-actions { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+.notes-filter { flex: 1; max-width: 380px; }
+.notes-sync { font-size: 11px; color: var(--text-faint); font-family: var(--mono); }
+
+/* A reading column. Prose spanning 1600px is unusable — you lose the start of
+   the line looking at the end of it. */
+.notes-body { flex: 1; overflow-y: auto; padding: 14px 16px 32px; width: 100%; max-width: 860px; }
+.notes-empty { font-size: 12px; color: var(--text-faint); line-height: 1.6; max-width: 60ch; }
+
+.notes-conflict-banner { margin: 10px 16px 0; padding: 9px 12px; font-size: 12px;
+  border: 1px solid var(--border); border-radius: 6px; color: var(--text); }
+.notes-repair { margin: 6px 16px 0; font-size: 11px; color: var(--text-faint); }
+
+.notes-block { padding: 2px 0; border-radius: 6px; }
+.notes-block:hover { background: var(--surface-2, rgba(255,255,255,.03)); }
+.notes-block-main { display: flex; align-items: flex-start; gap: 8px; }
+.notes-block-tools { display: flex; gap: 2px; opacity: 0; flex: none; }
+.notes-block:hover .notes-block-tools { opacity: 1; }
+.notes-icon-btn { border: 0; background: transparent; color: var(--text-faint);
+  cursor: pointer; padding: 3px; border-radius: 4px; }
+.notes-icon-btn:hover { color: var(--text); }
+
+/* A textarea rather than a div, so a block is typed in with the browser's own
+   caret and selection instead of a re-implementation of them. */
+.notes-text { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--text);
+  font: inherit; font-size: 13px; line-height: 1.6; padding: 3px 4px; resize: none;
+  overflow: hidden; field-sizing: content; }
+.notes-text:focus { outline: 1px solid var(--border); border-radius: 4px; }
+.notes-text[readonly] { color: var(--text-faint); }
+.notes-text-heading { font-size: 16px; font-weight: 600; }
+.notes-text-page { font-size: 18px; font-weight: 600; }
+.notes-text-code { font-family: var(--mono); font-size: 12px; }
+.notes-text-quote { border-left: 2px solid var(--border); padding-left: 10px; color: var(--text-faint); }
+.notes-divider { flex: 1; border: 0; border-top: 1px solid var(--border); margin: 10px 0; }
+
+/* B2 — read-only WITH an attribution. A disabled field that says nothing reads
+   as the app being broken. */
+.notes-locked { font-size: 10px; color: var(--text-faint); font-family: var(--mono); padding-left: 4px; }
+
+.notes-refs { display: flex; flex-wrap: wrap; gap: 5px; padding: 2px 0 4px 4px; }
+.notes-ref-chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--border);
+  background: transparent; color: var(--text-faint); border-radius: 4px; padding: 1px 6px;
+  font-size: 10px; font-family: var(--mono); cursor: pointer; max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notes-ref-chip:hover { color: var(--text); border-color: var(--text-faint); }
+
+.notes-conflict { display: flex; gap: 6px; align-items: center; font-size: 11px;
+  color: var(--text-faint); padding-left: 4px; }
+.notes-conflict button { border: 1px solid var(--border); background: transparent;
+  color: var(--text-faint); border-radius: 4px; padding: 1px 6px; font-size: 10px; cursor: pointer; }
+.notes-conflict button:hover { color: var(--text); }
+
+.notes-menu { display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  border: 1px solid var(--border); border-radius: 6px; padding: 4px; margin: 4px 0 4px 4px;
+  background: var(--surface); max-width: 260px; }
+.notes-menu button { width: 100%; text-align: left; border: 0; background: transparent;
+  color: var(--text); font-size: 12px; padding: 4px 8px; border-radius: 4px; cursor: pointer; }
+.notes-menu button:hover:not(:disabled) { background: var(--surface-2, rgba(255,255,255,.05)); }
+.notes-menu button:disabled { color: var(--text-faint); cursor: default; }
+.notes-menu button.danger:hover { color: var(--danger, #e5484d); }
+
+.notes-linkpicker { display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px; margin: 4px 0 4px 4px; max-width: 420px; background: var(--surface); }
+.notes-linkpicker-item { text-align: left; border: 0; background: transparent; color: var(--text);
+  font-family: var(--mono); font-size: 11px; padding: 3px 6px; border-radius: 4px;
+  cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notes-linkpicker-item:hover { background: var(--surface-2, rgba(255,255,255,.05)); }
+.notes-linkpicker-empty { font-size: 11px; color: var(--text-faint); padding: 3px 6px; }
+
+/* A2 — "what links here", derived from the other blocks' text. */
+.notes-backlinks { font-size: 10px; color: var(--text-faint); font-family: var(--mono);
+  padding: 2px 8px 4px; border-bottom: 1px solid var(--border); width: 100%; }
+
+.notes-add-line { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent;
+  color: var(--text-faint); font-size: 12px; padding: 6px 4px; cursor: pointer; margin-top: 6px; }
+.notes-add-line:hover { color: var(--text); }
+
+
 /* ADR-028 F7 — the comprehension review panel. Reads as a review, not a test:
    no score, no marks, and the disagree affordance is as prominent as the
    explanation it disagrees with. */

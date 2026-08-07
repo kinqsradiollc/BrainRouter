@@ -19,6 +19,23 @@ import {
 } from '@kinqs/brainrouter-core/tooling';
 import { syncOnce, writePlanner } from '@kinqs/brainrouter-core/planner';
 import { createPlannerTransport } from './plannerTransport.js';
+// ADR-029 Part B — Notes is USER-scoped for the same reason the planner is
+// (D1), so none of these take a workspace root either.
+import {
+  createBlock as notesCreate, createPage as notesCreatePage, updateBlock as notesUpdate,
+  deleteBlock as notesDelete, moveBlock as notesMove,
+  buildNoteTree, readNotes, writeNotes, resolveConflict as notesResolveConflict,
+  beginEditing as notesBeginEditing, keepEditing as notesKeepEditing, endEditing as notesEndEditing,
+  describeBlockLease, describeNotesSync, syncNotesOnce, blockReferences,
+  listBlocks as notesList, searchNotes, blocksReferencing, type NoteBlockKind,
+} from '@kinqs/brainrouter-core/notes';
+import { createNotesTransport } from './notesTransport.js';
+import {
+  formatWorkspaceRef, parseWorkspaceRef, renderWorkspaceResolution,
+} from '@kinqs/brainrouter-core/workspace/references';
+import {
+  buildLocalWorkspaceRegistry, linkWorkspaceRef, localWorkspaceViewer,
+} from '@kinqs/brainrouter-core/workspace/participants';
 import {
   readDeclinedTools, writeDeclinedTool, readWorkspaceBinding, writeWorkspaceBinding,
 } from './toolingState.js';
@@ -506,6 +523,60 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
     setPrStatusMapCache,
     resetGhEnvCache,
   } = ctx;
+  /**
+   * ADR-029 C1 — the registry the UI verbs resolve through.
+   *
+   * Rebuilt per call rather than cached, because `workspaceRoot` is captured
+   * from the host context at construction and a registry holding a stale one
+   * would resolve `code/file/...` against a checkout nobody is looking at — a
+   * wrong answer that is indistinguishable from a right one.
+   */
+  const localWorkspaceRegistry = () => buildLocalWorkspaceRegistry({ workspaceRoot });
+
+  /**
+   * Is this a reference SOMEONE ELSE can answer, rather than one that is gone?
+   *
+   * `no_resolver_here` is the structural case — a meeting lives only on the
+   * server, so this process has nothing to read. That is precisely the case Q5
+   * calls a backend capability with a client cache in front of it, so it is
+   * worth a round trip. Every other outcome, tombstones included, is an ANSWER
+   * and asking again would replace a correct one with a slower one.
+   */
+  const isAnsweredElsewhere = (resolution: { status: string; reason?: string }): boolean =>
+    resolution.status === 'unavailable' && resolution.reason === 'no_resolver_here';
+
+  /**
+   * Ask the brain to resolve what this client cannot.
+   *
+   * Returns null on any failure — no account, no network, a non-200 — because
+   * the local answer is already correct-if-coarse ("not available in this
+   * app"), and replacing it with an error would turn a reference that merely
+   * lives elsewhere into one that looks broken.
+   */
+  const askBrainToResolve = async (
+    verb: 'resolve' | 'describe',
+    uri: string,
+  ): Promise<{ resolution?: unknown; line: string } | null> => {
+    try {
+      const account = await resolveBrainRouterAccountContext(loadConfig());
+      if (!account) return null;
+      const url = new URL(`/api/workspace/${verb}`, account.baseUrl);
+      url.searchParams.set('uri', uri);
+      const res = await fetch(url, {
+        headers: brainRouterAccountHeaders(account),
+        // `manual` so a redirect cannot move an authenticated request to a host
+        // the configured base URL did not name.
+        redirect: 'manual',
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) return null;
+      const body = await res.json() as { resolution?: unknown; line?: unknown };
+      return typeof body.line === 'string' ? { resolution: body.resolution, line: body.line } : null;
+    } catch {
+      return null;
+    }
+  };
+
   let runtimeRunnerClient: RuntimeRunnerClient | null = null;
   let runtimeRunnerRemoteUrl = '';
   const getRuntimeRunnerClient = () => {
@@ -2209,6 +2280,193 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           ...(result.shedNotice ? { shedNotice: result.shedNotice } : {}),
         };
       },
+
+      // ADR-029 Part B — the Notes mode. User-scoped like the planner (D1), so
+      // no workspace is threaded: the same note has to be readable from a
+      // different checkout of the same work.
+      'notes-read': () => {
+        // ONE read of the store, not one per block: `readNotes` parses the whole
+        // user-scoped file, and calling it inside the walk made rendering a page
+        // O(blocks) file parses — invisible at three blocks and a stall at three
+        // hundred.
+        const state = readNotes(undefined);
+        const blocks = Object.values(state.blocks).filter((b) => !b.deletedAt);
+        const tree = buildNoteTree(Object.values(state.blocks));
+        const now = Date.now();
+        const flat: Array<Record<string, unknown>> = [];
+        const walk = (nodes: ReturnType<typeof buildNoteTree>['roots']): void => {
+          for (const node of nodes) {
+            const block = node.block;
+            flat.push({
+              id: block.id,
+              parentId: block.parentId.value,
+              depth: node.depth,
+              kind: block.kind.value,
+              text: block.text.value,
+              checked: block.checked?.value === true,
+              level: block.level?.value ?? null,
+              hasChildren: node.children.length > 0,
+              refs: blockReferences(block),
+              conflictFields: Object.keys(block.conflicts ?? {}),
+              lockedBy: describeBlockLease(state.leases[block.id], state.deviceId, now),
+            });
+            walk(node.children);
+          }
+        };
+        walk(tree.roots);
+        return {
+          blocks: flat,
+          // A repair is REPORTED rather than inferred: a block that moved to the
+          // top level because its parent vanished should say so, not look like
+          // someone dragged it there.
+          repairs: tree.repairs,
+          pending: state.outbox.operations.length,
+          // A read reports the QUEUE, not a sync that did not happen: pulled and
+          // pushed are zero here because nothing was sent, and claiming
+          // otherwise would show "synced" to someone who is offline.
+          syncState: describeNotesSync(
+            { pulled: 0, pushed: 0, offline: false, conflicted: [], rejected: [] },
+            state.outbox,
+          ),
+          conflictCount: blocks.filter((b) => Object.keys(b.conflicts ?? {}).length > 0).length,
+        };
+      },
+      'notes-create': (a) => notesCreate(undefined, {
+        ...(typeof a.parentId === 'string' ? { parentId: a.parentId } : {}),
+        ...(typeof a.after === 'string' ? { after: a.after } : {}),
+        ...(typeof a.kind === 'string' ? { kind: a.kind as NoteBlockKind } : {}),
+        ...(typeof a.text === 'string' ? { text: a.text } : {}),
+        ...(typeof a.level === 'number' ? { level: a.level } : {}),
+      }, Date.now()),
+      'notes-create-page': (a) => notesCreatePage(undefined, {
+        title: String(a.title ?? 'Untitled'),
+        ...(typeof a.parentId === 'string' ? { parentId: a.parentId } : {}),
+      }, Date.now()),
+      'notes-update': (a) => notesUpdate(undefined, String(a.id ?? ''), {
+        ...(typeof a.text === 'string' ? { text: a.text } : {}),
+        ...(typeof a.kind === 'string' ? { kind: a.kind as NoteBlockKind } : {}),
+        ...(typeof a.checked === 'boolean' ? { checked: a.checked } : {}),
+        ...(typeof a.level === 'number' ? { level: a.level } : {}),
+      }, Date.now()),
+      'notes-delete': (a) => ({ deleted: notesDelete(undefined, String(a.id ?? ''), Date.now()) }),
+      'notes-move': (a) => notesMove(undefined, String(a.id ?? ''), {
+        ...(a.parentId !== undefined ? { parentId: a.parentId as string | null } : {}),
+        ...(typeof a.after === 'string' ? { after: a.after } : {}),
+        ...(typeof a.before === 'string' ? { before: a.before } : {}),
+      }, Date.now()),
+      // B2's prevention half. The renderer takes the lock when a block gains
+      // focus and drops it on blur, so a block another device is typing in is
+      // read-only with an attribution rather than a conflict marker later.
+      'notes-begin-edit': (a) => notesBeginEditing(undefined, String(a.id ?? ''), Date.now()),
+      'notes-keep-edit': (a) => {
+        const state = readNotes(undefined);
+        return notesKeepEditing(undefined, String(a.id ?? ''), {
+          deviceId: state.deviceId, epoch: Number(a.epoch ?? 0),
+        }, Date.now());
+      },
+      'notes-end-edit': (a) => {
+        const state = readNotes(undefined);
+        return notesEndEditing(undefined, String(a.id ?? ''), {
+          deviceId: state.deviceId, epoch: Number(a.epoch ?? 0),
+        }, Date.now());
+      },
+      'notes-resolve': (a) => notesResolveConflict(
+        undefined, String(a.id ?? ''), String(a.field ?? ''),
+        a.keep === 'theirs' ? 'theirs' : 'ours', Date.now(),
+      ),
+      // B5 — content AND references, because "the note where I wrote about
+      // BR-114" is as normal a question as "the note that says parser". Ranked
+      // in core so the desktop and any other client agree on what a match is;
+      // a second scoring implementation in the renderer would rank the same
+      // notes differently on two surfaces.
+      'notes-search': (a) => ({
+        hits: searchNotes(notesList(undefined), String(a.query ?? ''), { limit: 200 }),
+      }),
+      // A2 — what links here, computed from content. The renderer asks for one
+      // target at a time (when a block's menu opens) rather than for every
+      // block, because the all-blocks form is quadratic and answers a question
+      // nobody asked until they open the menu.
+      'notes-backlinks': (a) => ({ blockIds: blocksReferencing(notesList(undefined), String(a.uri ?? '')) }),
+      'notes-sync': async () => {
+        const brainUrl = getCliKnobs().brainUrl;
+        if (!brainUrl) {
+          // Local-only is a supported mode, not a failure: with no server the
+          // cache IS the truth, and solo is the normal mode rather than a
+          // degraded one.
+          return { pending: readNotes(undefined).outbox.operations.length, localOnly: true };
+        }
+        const state = readNotes(undefined);
+        const result = await syncNotesOnce(state, createNotesTransport({ baseUrl: brainUrl }), Date.now());
+        writeNotes(undefined, state);
+        return {
+          pending: state.outbox.operations.length,
+          pulled: result.pulled,
+          pushed: result.pushed,
+          offline: result.offline,
+          conflicted: result.conflicted,
+          syncState: describeNotesSync(result, state.outbox),
+          ...(result.shedNotice ? { shedNotice: result.shedNotice } : {}),
+        };
+      },
+
+      // ADR-029 C1 — the three verbs, over the SAME registry the agent's
+      // workspace_* tools call. A second path for the UI would drift from the
+      // agent's, and the drift shows up as one of them creating records the
+      // other's surface renders wrongly.
+      'workspace-resolve': async (a) => {
+        const uri = String(a.uri ?? '');
+        const resolution = await localWorkspaceRegistry().resolveUri(uri, localWorkspaceViewer({ workspaceRoot }));
+        if (isAnsweredElsewhere(resolution)) {
+          const remote = await askBrainToResolve('resolve', uri);
+          if (remote) return remote;
+        }
+        return { resolution, line: renderWorkspaceResolution(resolution) };
+      },
+      'workspace-describe': async (a) => {
+        const parsed = parseWorkspaceRef(a.uri);
+        // Parsed here rather than through `resolveUri`, because that would run
+        // the full resolve and the whole point of describe is the cheaper read.
+        if (!parsed.ok) return { line: 'a link that is not a valid reference' };
+        const viewer = localWorkspaceViewer({ workspaceRoot });
+        const registry = localWorkspaceRegistry();
+        const local = await registry.describe(parsed.ref, viewer);
+        if (isAnsweredElsewhere(local)) {
+          const remote = await askBrainToResolve('describe', String(a.uri));
+          if (remote) return { line: remote.line };
+        }
+        return { line: renderWorkspaceResolution(local) };
+      },
+      'workspace-modes': () => {
+        const registry = localWorkspaceRegistry();
+        return { modes: registry.modes(), creatable: registry.creatableModes() };
+      },
+      'workspace-create': async (a) => {
+        const from = typeof a.from === 'string' ? parseWorkspaceRef(a.from) : null;
+        if (from && !from.ok) return { error: `"from" is not a reference: ${from.detail}` };
+        const outcome = await localWorkspaceRegistry().create({
+          mode: String(a.mode ?? ''),
+          kind: String(a.kind ?? ''),
+          title: String(a.title ?? '').trim(),
+          ...(from?.ok ? { from: from.ref } : {}),
+          ...(a.fields && typeof a.fields === 'object' ? { fields: a.fields as Record<string, unknown> } : {}),
+        }, localWorkspaceViewer({ workspaceRoot }));
+        // A refusal comes back as data, not as a rejected promise: the caller is
+        // deciding whether to write a reference into a document and needs an
+        // answer it can branch on.
+        if (outcome.status === 'refused') return { error: outcome.detail, reason: outcome.reason };
+        return { status: outcome.status, uri: formatWorkspaceRef(outcome.ref), ref: outcome.ref };
+      },
+      'workspace-link': (a) => {
+        const from = parseWorkspaceRef(a.from);
+        const to = parseWorkspaceRef(a.to);
+        if (!from.ok) return { error: `"from" is not a reference: ${from.detail}` };
+        if (!to.ok) return { error: `"to" is not a reference: ${to.detail}` };
+        const outcome = linkWorkspaceRef({ workspaceRoot }, from.ref, to.ref);
+        return outcome.ok
+          ? { linked: true, alreadyLinked: outcome.alreadyLinked, to: formatWorkspaceRef(outcome.to) }
+          : { error: outcome.detail, reason: outcome.reason };
+      },
+
       'artifact-list': (a) => listArtifacts(workspaceRoot, withSessionScope(artifactFilterFromArgs(a), a, getActiveAgent().sessionKey)),
       'artifact-create': async (a) => {
         if (!isArtifactKind(a.kind)) return { error: `Unknown artifact kind "${String(a.kind)}".` };

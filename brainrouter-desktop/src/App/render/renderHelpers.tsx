@@ -10,6 +10,7 @@ import { MessageRow } from '../../chat/MessageRow.js';
 import { SessionStatus, PrStatusIcon } from '../../components/status/SessionStatus.js';
 import { prStatusFor } from '../../lib/ci/prStatus.js';
 import { fmtAge } from '../../lib/format.js';
+import { captureToNotes, captureToPlanner, chatSessionUri } from '../../lib/workspace/crossMode.js';
 import type { ChatRow, SessionRow } from '../../types.js';
 import type { PanelId } from '../../panels/index.js';
 import type { useCi } from '../../lib/ci/useCi.js';
@@ -118,6 +119,10 @@ export function buildRenderRow(ctx: RenderRowCtx): (r: ChatRow, liveLast: boolea
       }}
       onFork={(ts) => forkSessionAction(sessionKeyRef.current ?? '', ts)}
       onRewind={(ts) => q('a-rewind', 'action:rewind-to', { ts })}
+      // ADR-029 C2 — the two moves out of a chat turn. Both cite the
+      // CONVERSATION, which is the only chat identity that survives a rewind.
+      onSaveToNotes={(text) => void captureToNotes(text, chatSessionUri(sessionKeyRef.current ?? ''))}
+      onAddToPlanner={(text) => void captureToPlanner(text, chatSessionUri(sessionKeyRef.current ?? ''))}
     />
   );
 }

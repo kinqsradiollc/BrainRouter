@@ -14,6 +14,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { PlannerMode, type PlannerOps } from './PlannerMode.js';
 import type { PlannerItemView, PlannerBlockView } from '../lib/planner/plannerView.js';
 import { bridgeQuery } from '../lib/bridgeQuery.js';
+import { createAndCite, plannerItemUri } from '../lib/workspace/crossMode.js';
 
 interface PlannerSnapshot {
   items: PlannerItemView[];
@@ -37,7 +38,12 @@ const EMPTY: PlannerSnapshot = {
   items: [], blocks: [], syncState: 'Everything is synced.', staleSources: [], driftNote: null,
 };
 
-export function PlannerModeContainer(): React.ReactElement {
+export function PlannerModeContainer({
+  onOpenNotes,
+}: {
+  /** Leaving for the Notes mode is the shell's to do, not this container's. */
+  onOpenNotes?: () => void;
+} = {}): React.ReactElement {
   const [snapshot, setSnapshot] = useState<PlannerSnapshot>(EMPTY);
   const today = new Date().toISOString().slice(0, 10);
 
@@ -121,6 +127,31 @@ export function PlannerModeContainer(): React.ReactElement {
     // gesture into a form.
     blockTimeAt: (iso) => void mutate('planner-schedule-at', { scheduledFor: iso, estimateMinutes: 60 }),
     openBlock: (blockId) => void mutate('planner-open-block', { blockId }),
+
+    /**
+     * ADR-029 C2 — Planner → Notes: the notes field opens as a real page.
+     *
+     * The page is created with the item's own words and cites the item back, so
+     * the two are the same thought in two places rather than two copies: A3
+     * makes the reference live, so completing the task shows on the page.
+     */
+    openNotesPage: (itemId, title, notes) => {
+      void (async () => {
+        const page = await createAndCite({
+          mode: 'notes', kind: 'block', title, from: plannerItemUri(itemId),
+          fields: { kind: 'page' },
+        });
+        if (!page.ok) return;
+        const parentId = page.uri.replace('brainrouter://notes/block/', '');
+        // The prose becomes a child block rather than the page's own text,
+        // because a page's text is its title and a paragraph in a title is not
+        // a page — it is a very long heading.
+        if (notes.trim()) {
+          await bridgeQuery('notes-create', { parentId, text: notes, kind: 'paragraph' }).catch(() => {});
+        }
+        onOpenNotes?.();
+      })();
+    },
   };
 
   return (
