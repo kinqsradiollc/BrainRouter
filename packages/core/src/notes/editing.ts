@@ -20,6 +20,9 @@
  */
 export * from './block.js';
 export * from './rank.js';
+// F3 — a comment's shape and the sentences a thread reads by. Pure: nothing here
+// touches the store, so a renderer can count and order a thread per keystroke.
+export * from './comment.js';
 export * from './noteTree.js';
 export * from './blockMerge.js';
 export * from './blockLease.js';
@@ -29,9 +32,29 @@ export * from './inputRules.js';
 export * from './slashCatalog.js';
 export * from './listNumbering.js';
 export * from './tableBlock.js';
+// Part F — what an image block's text means. Pure by construction; the half
+// that FETCHES a remote picture lives on the `notes` barrel beside the store.
+export * from './noteImageRef.js';
+// F3 — the reference rewrite a copy performs. Pure, and on this barrel because
+// the browser dev harness copies a subtree too: a second implementation of the
+// rule is the one that keeps rewriting after the first stops.
+export * from './noteRefRemap.js';
 // E3's database model, minus `databaseOps` — a surface renders a projection per
 // keystroke and writes through a host handler, which is the same split by PURITY
 // this barrel already makes for the editing gestures.
 export * from './properties.js';
 export * from './databaseView.js';
 export * from './database.js';
+export * from './databaseProjection.js';
+// F2/F3 — the derived columns are pure too, and a renderer needs them for the
+// same reason it needs the rest of this barrel: it draws a cell per keystroke,
+// and it has to know a formula column is read-only without asking the host.
+export * from './formula/index.js';
+export * from './rollup.js';
+export * from './computed.js';
+// F3 — a synced block is an address (pure), and the export writers turn blocks
+// into text (also pure). Neither reaches IO, and the browser dev harness answers
+// the same two queries the host does, which is what keeps the stand-in honest
+// about what the app can do.
+export * from './syncedBlock.js';
+export * from './export/index.js';

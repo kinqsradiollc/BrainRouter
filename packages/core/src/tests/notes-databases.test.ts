@@ -34,8 +34,9 @@ import {
   type NoteFilterGroup,
 } from '../notes/databaseView.js';
 import {
-  projectDatabase, readDatabase, rowPropertyValue, validateDatabaseFields,
+  readDatabase, rowPropertyValue, validateDatabaseFields,
 } from '../notes/database.js';
+import { projectDatabase } from '../notes/databaseProjection.js';
 import {
   addProperty, addRow, createDatabase, listDatabases, readDatabaseView, removeProperty,
   removeRow, removeView, saveView, setRowValue, updateProperty,
@@ -253,10 +254,14 @@ test('a relation cell is a reference the backlink index sees, exactly like prose
 test('a filter rule this build cannot evaluate does NOT hide rows, and is reported', () => {
   // Both alternatives are silent lies: matching nothing empties a view someone
   // relies on, matching everything claims a filter ran when it did not.
-  const defs = new Map<string, NotePropertyDef>([['formula', { id: 'formula', name: 'Total', type: 'formula' }]]);
+  //
+  // The stand-in is a type from a LATER release. It used to be `formula`, which
+  // ADR-029 F2 has since made real — the mechanism under test is unchanged, and
+  // it needs a type this build genuinely cannot evaluate to test it with.
+  const defs = new Map<string, NotePropertyDef>([['guess', { id: 'guess', name: 'Total', type: 'inference' }]]);
   const filter: NoteFilterGroup = {
     combinator: 'and',
-    rules: [{ property: 'formula', operator: 'greater-than', value: 10 }],
+    rules: [{ property: 'guess', operator: 'greater-than', value: 10 }],
   };
 
   const outcome = evaluateFilter(filter, defs, () => null);
@@ -337,10 +342,11 @@ test('a select sorts by the option order someone chose, never alphabetically', (
 });
 
 test('a sort on a type this build cannot order is skipped and reported', () => {
-  const def: NotePropertyDef = { id: 'rollup', name: 'Rollup', type: 'rollup' };
+  // A type from a later release, for the reason the filter test above gives.
+  const def: NotePropertyDef = { id: 'guess', name: 'Inference', type: 'inference' };
   const outcome = sortRows(
     [{ id: 'a' }, { id: 'b' }],
-    [{ property: 'rollup', direction: 'asc' }],
+    [{ property: 'guess', direction: 'asc' }],
     new Map([[def.id, def]]),
     () => null,
     (a, b) => a.id.localeCompare(b.id),
@@ -580,14 +586,14 @@ test('a notes file written BEFORE this layer reads, and reads as an empty databa
 });
 
 test('a schema written by a NEWER client keeps its unknown column and reports it', () => {
-  // §3 keeps formulas and rollups out of this pass. A column of a type this
-  // build cannot compute arrives the same way as one from a future release, and
-  // both must be named rather than approximated.
+  // A column of a type this build cannot compute must be named rather than
+  // approximated. F2 made `formula` real, so the column that stands for "from a
+  // future release" is one whose type this build has genuinely never heard of.
   const block: NoteBlock = {
     id: 'db', parentId: s<string | null>(null), rank: s('A1'), kind: s('database' as const), text: s('Budget'),
     schema: s([
       { id: 'title', name: 'Name', type: 'title' },
-      { id: 'total', name: 'Total', type: 'formula' },
+      { id: 'total', name: 'Total', type: 'inference' },
     ] as NotePropertyDef[]),
     views: s([{ id: 'table', name: 'Table', kind: 'table' as const, visible: ['title', 'total'] }]),
   };

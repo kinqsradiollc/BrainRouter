@@ -380,6 +380,66 @@ sorts and the grouping stay in `databaseView.ts`, because a view language expres
 the symptom is one board showing different cards on two screens with nothing to say which is right.
 The bound is reported against the true row count, so a prefix is never mistaken for the whole.
 
+### Part F — Full, not parity
+
+Part E aimed at parity and hit it: a person who uses Notion can type a page here. The instruction
+after seeing that land was **"full, not just parity"**, and it is the right correction, because
+parity was measured against the wrong thing.
+
+#### F1 · The bar is that nothing promises what it does not do
+
+Parity was judged on E4's table — a list of features, ticked. That let a real defect through and call
+itself done: **`Toggle`, `Callout`, `Image`, `Bookmark` and `Table` are all in the slash menu, and
+every one of them inserts a block that renders as a plain line of text.** The command exists, the
+kind is stored, the merge is correct — and choosing "Image" gives you an empty paragraph.
+
+> **An offer the product cannot honour is worse than an absence.** A feature that is missing costs
+> someone a search. A feature that is *offered* and then does nothing costs them the belief that the
+> rest of the menu works.
+
+So the bar changes from *is it on the list* to **is it real everywhere it is reachable from** —
+the same rule ADR-028 E1 applies to callers, applied to what the UI advertises. A slash-menu entry
+whose block has no renderer is the E1 defect wearing a different hat: declared, stored, tested, and
+inert at the point a person meets it.
+
+#### F2 · Formulas and rollups are in, and this reverses §3
+
+§3 excluded them because "half an expression language produces a column that is wrong rather than
+absent". That argument is sound about *shipping half*, and I used it to justify shipping none —
+which is the same substitution it warns against, made one level up.
+
+A database whose numbers cannot be summed is not a database, it is a styled list. And the honest
+version of the original worry is a **design constraint, not a reason to refuse**:
+
+- the expression language is **total** — every operation returns a value or a typed error, never a
+  wrong number;
+- a cell that cannot be computed says **why**, in the cell, rather than rendering `0` or blank;
+- a cycle is **detected and named**, not iterated to a fixed point.
+
+Those three make "wrong rather than absent" impossible, which was the whole objection.
+
+#### F3 · What full adds beyond the parity list
+
+| | |
+|---|---|
+| **Blocks made real** | toggle that collapses, callout with its icon, image with upload and paste, bookmark with a fetched preview, table with a grid, embed rendering its target |
+| **Properties completed** | multi-select, files, created/edited time and by-whom, **formula**, **rollup** |
+| **Editing** | page-level undo (a split, merge, indent or delete is one ⌘Z), arrow navigation by visual row rather than by newline, duplicate page, templates |
+| **Working with others** | comments on a block, resolved and unresolved |
+| **Getting data out** | export a page or a database to Markdown and to CSV — the answer to "can I leave", which is the question a notes app has to be able to answer honestly |
+| **Reuse** | synced blocks: one block, many places, one truth (A3 applied inside Notes) |
+
+#### F4 · Undo is per PAGE, and that is a correction
+
+Part E shipped undo per block and text-only, because the controlled editor intercepts every
+`beforeinput` and leaves the browser's own history empty. The consequence was not stated plainly
+enough at the time: **a split, a merge, an indent or a delete could not be undone at all.**
+
+That is the failure mode people fear most in a notes app, and "⌘Z did nothing" teaches them not to
+trust the editor with anything they care about. Undo becomes a page-level stack of inverse
+operations, recorded where the mutation is made — in the store, not the component — so it covers
+structural changes and survives a re-render.
+
 ---
 
 ## 3. Out of scope
@@ -388,8 +448,9 @@ The bound is reported against the true row count, so a prefix is never mistaken 
   co-authoring is a different product with different infrastructure.
 - Public publishing of notes.
 - Importing from other note apps. Worth doing, not worth blocking this on.
-- Formulas and rollups inside database properties — see E3 for why the rest of databases is now in
-  scope and these two are not.
+
+*(Formulas and rollups were listed here and are now in scope — see F2 for why that refusal was
+wrong.)*
 
 ---
 

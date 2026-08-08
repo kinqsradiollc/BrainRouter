@@ -27,7 +27,8 @@
  * question to ask about it.
  */
 import {
-  comparePropertyValues, datePropertyMs, isEmptyPropertyValue, normaliseDateValue,
+  comparePropertyValues, datePropertyMs, isDatePropertyType, isEmptyPropertyValue,
+  isSetPropertyType, normaliseDateValue,
   propertyGroupKeys, propertyGroupLabel, propertyValueCites, formatPropertyValue,
   type NotePropertyDef, type NotePropertyValue,
 } from './properties.js';
@@ -91,6 +92,32 @@ export const OPERATORS_FOR_TYPE: Record<string, readonly NoteFilterOperator[]> =
   checkbox: ['is'],
   person: ['contains', 'does-not-contain', 'is-any-of', 'is-none-of', 'is-empty', 'is-not-empty'],
   relation: ['links-to', 'contains', 'does-not-contain', 'is-empty', 'is-not-empty'],
+  // F3 — a files cell is a SET of attachment references, so it is asked the two
+  // questions a person actually has about one: is there anything in it, and is
+  // this particular thing in it. No text operators: the stored value is an id,
+  // and `contains "invoice"` matching an id would be a filter that appeared to
+  // search filenames and did not.
+  files: ['is-empty', 'is-not-empty', 'contains', 'does-not-contain'],
+  'created-time': ['is', 'is-not', 'before', 'after', 'on-or-before', 'on-or-after'],
+  'edited-time': ['is', 'is-not', 'before', 'after', 'on-or-before', 'on-or-after'],
+  'created-by': ['is', 'is-not', 'contains', 'does-not-contain'],
+  'edited-by': ['is', 'is-not', 'contains', 'does-not-contain'],
+  // F2 — a computed column offers every operator, because its TYPE is not known
+  // until a row is evaluated: one formula answers with a number and the next
+  // with text. `matchRule` decides per value instead, which is the only place
+  // that has one. The alternative — offering nothing until the column is
+  // evaluated — is a filter menu that is empty for the column people most want
+  // to filter by.
+  formula: [
+    'is', 'is-not', 'contains', 'does-not-contain', 'starts-with', 'ends-with',
+    'greater-than', 'greater-or-equal', 'less-than', 'less-or-equal',
+    'before', 'after', 'on-or-before', 'on-or-after', 'is-empty', 'is-not-empty',
+  ],
+  rollup: [
+    'is', 'is-not', 'contains', 'does-not-contain',
+    'greater-than', 'greater-or-equal', 'less-than', 'less-or-equal',
+    'before', 'after', 'on-or-before', 'on-or-after', 'is-empty', 'is-not-empty',
+  ],
 };
 
 export function operatorsFor(def: NotePropertyDef): readonly NoteFilterOperator[] {
@@ -239,6 +266,12 @@ function matchRule(
     return parsed.ok && propertyValueCites(value, workspaceRefKey(parsed.ref));
   }
 
+  // F2 — a computed column's type is a property of the ROW, not of the schema,
+  // so it is decided here where the value is in hand.
+  if (def.type === 'formula' || def.type === 'rollup') {
+    return matchComputed(value, rule, empty);
+  }
+
   if (def.type === 'checkbox') {
     return (value === true) === (target === true);
   }
@@ -257,7 +290,7 @@ function matchRule(
     }
   }
 
-  if (def.type === 'date') {
+  if (isDatePropertyType(def.type)) {
     const order = compareDates(value, target);
     if (order === null) return false;
     switch (rule.operator) {
@@ -274,7 +307,7 @@ function matchRule(
   // A multi-value cell is compared as a SET, so `contains` asks about membership
   // rather than about a substring of the joined labels — otherwise a tag called
   // "ops" would match a row tagged only "devops".
-  if (def.type === 'multi-select' || def.type === 'person' || def.type === 'relation') {
+  if (isSetPropertyType(def.type)) {
     const cells = listOf(value);
     const targets = listOf(target);
     switch (rule.operator) {
@@ -303,6 +336,75 @@ function matchRule(
   // above without a branch here.
   if (empty) return false;
   const haystack = textOf(def, value);
+  const needle = String(target ?? '').toLowerCase();
+  switch (rule.operator) {
+    case 'is': return haystack === needle;
+    case 'is-not': return haystack !== needle;
+    case 'contains': return needle.length > 0 && haystack.includes(needle);
+    case 'does-not-contain': return needle.length === 0 || !haystack.includes(needle);
+    case 'starts-with': return needle.length > 0 && haystack.startsWith(needle);
+    case 'ends-with': return needle.length > 0 && haystack.endsWith(needle);
+    default: return false;
+  }
+}
+
+const DATE_OPERATORS: readonly NoteFilterOperator[] = ['before', 'after', 'on-or-before', 'on-or-after'];
+
+/**
+ * A rule against a value whose property has no fixed type — F2's formula and
+ * rollup columns.
+ *
+ * Dispatched on what the row actually computed, because one formula answers
+ * with a number and the next with text, and a schema-level decision would have
+ * to guess. The consequence, stated rather than discovered: `greater-than` on a
+ * formula that answered with text does not match, rather than comparing the
+ * digits of a sentence — a comparison with no meaning is a row filtered out for
+ * a reason nobody could explain from the screen.
+ */
+function matchComputed(value: NotePropertyValue, rule: NoteFilterRule, empty: boolean): boolean {
+  if (empty) return false;
+  const target = rule.value ?? null;
+
+  if (Array.isArray(value)) {
+    const cells = value.map((entry) => String(entry));
+    const targets = listOf(target);
+    if (rule.operator === 'contains') return targets.length > 0 && targets.some((t) => cells.includes(t));
+    if (rule.operator === 'does-not-contain') return targets.length === 0 || !targets.some((t) => cells.includes(t));
+    return false;
+  }
+
+  if (typeof value === 'boolean') {
+    if (rule.operator === 'is') return value === (target === true);
+    if (rule.operator === 'is-not') return value !== (target === true);
+    return false;
+  }
+
+  if (typeof value === 'number') {
+    const order = compareNumbers(value, target);
+    if (order === null) return false;
+    switch (rule.operator) {
+      case 'is': return order === 0;
+      case 'is-not': return order !== 0;
+      case 'greater-than': return order > 0;
+      case 'greater-or-equal': return order >= 0;
+      case 'less-than': return order < 0;
+      case 'less-or-equal': return order <= 0;
+      default: return false;
+    }
+  }
+
+  if (DATE_OPERATORS.includes(rule.operator)) {
+    const order = compareDates(value, target);
+    if (order === null) return false;
+    switch (rule.operator) {
+      case 'before': return order < 0;
+      case 'after': return order > 0;
+      case 'on-or-before': return order <= 0;
+      default: return order >= 0;
+    }
+  }
+
+  const haystack = String(value).toLowerCase();
   const needle = String(target ?? '').toLowerCase();
   switch (rule.operator) {
     case 'is': return haystack === needle;

@@ -177,11 +177,16 @@ function TableView({ dto, ops, refLabels }: {
                       property={property}
                       value={cell.value}
                       display={cell.display}
+                      // F2 — the sentence goes in the cell, where the person
+                      // reading the number is looking.
+                      {...(cell.error ? { error: cell.error } : {})}
                       refLabels={refLabels}
                       searchRefs={ops.searchRefs}
                       onOpenRef={ops.openRef}
                       onWrite={(value) => void ops.setValue(row.id, cell.property, value)}
                       onAddOption={(option) => void ops.addOption(cell.property, option)}
+                      onAttachFile={ops.attachFile}
+                      describeFiles={ops.describeFiles}
                       onOpenRow={property.type === 'title' ? () => ops.openRow(row.id) : undefined}
                     />
                   </td>
@@ -484,11 +489,14 @@ function RowCard({ row, dto, ops, refLabels, draggable, onDragStart, onDragEnd, 
               property={property}
               value={cell.value}
               display={cell.display}
+              {...(cell.error ? { error: cell.error } : {})}
               refLabels={refLabels}
               searchRefs={ops.searchRefs}
               onOpenRef={ops.openRef}
               onWrite={(value) => void ops.setValue(row.id, property.id, value)}
               onAddOption={(option) => void ops.addOption(property.id, option)}
+              onAttachFile={ops.attachFile}
+              describeFiles={ops.describeFiles}
               variant="field"
             />
           </div>

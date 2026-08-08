@@ -23,22 +23,28 @@
  * brings its data straight back. `removeProperty` leaves the values on the rows
  * for exactly the same reason.
  */
-import { isLiveBlock, type NoteBlock } from './block.js';
+import { isLiveBlock, NOTES_MODE, type NoteBlock } from './block.js';
 import {
   coerceRowValue, DATABASE_BLOCK_KIND, defaultDatabaseSchema,
-  isDatabaseBlock, projectDatabase, readDatabase, schemaIndex, TITLE_PROPERTY_ID,
-  type DatabaseProjection, type NoteDatabase,
+  isDatabaseBlock, readDatabase, schemaIndex, TITLE_PROPERTY_ID,
+  type NoteDatabase,
 } from './database.js';
+import {
+  projectDatabase, type ComputeOptions, type DatabaseProjection,
+} from './databaseProjection.js';
+import { parseWorkspaceRef } from '../workspace/references/ref.js';
 import {
   isNoteViewKind, MAX_DATABASE_VIEWS,
   type NoteDatabaseView, type NoteViewKind,
 } from './databaseView.js';
+import { MAX_FORMULA_LENGTH } from './formula/value.js';
 import {
   isNotePropertyType, MAX_DATABASE_PROPERTIES,
-  type NotePropertyDef, type NotePropertyType, type NoteSelectOption, type NotePropertyValue,
+  type NotePropertyDef, type NotePropertyType, type NoteRollupSpec,
+  type NoteSelectOption, type NotePropertyValue,
 } from './properties.js';
 import {
-  createBlock, deleteBlock, getBlock, listAllBlocks, listBlocks, updateBlock,
+  createBlock, deleteBlock, getBlock, listAllBlocks, listBlocks, notesDeviceId, updateBlock,
   type BlockPosition,
 } from './noteStore.js';
 
@@ -159,6 +165,10 @@ export interface AddPropertyInput {
   description?: string;
   /** Give the column a specific id — used when re-adding one whose values remain. */
   id?: string;
+  /** F2 — the expression a `formula` column computes. */
+  formula?: string;
+  /** F2 — what a `rollup` column aggregates. */
+  rollup?: NoteRollupSpec;
 }
 
 /**
@@ -193,6 +203,13 @@ export function addProperty(
     type: input.type,
     ...(input.options && input.options.length > 0 ? { options: input.options } : {}),
     ...(input.description ? { description: input.description } : {}),
+    // F2 — a formula column arrives WITH its expression, and a rollup with its
+    // configuration. A column added empty and configured on a second call is a
+    // column that renders "this has not been set up yet" in every row in
+    // between, which is the same window `create` gaining `fields` closes for a
+    // row (E6).
+    ...(typeof input.formula === 'string' ? { formula: input.formula } : {}),
+    ...(input.rollup ? { rollup: input.rollup } : {}),
   };
 
   const saved = saveSchema(userId, database, [...database.schema, def], nowMs);
@@ -211,7 +228,14 @@ export function updateProperty(
   userId: string | undefined,
   databaseId: string,
   propertyId: string,
-  patch: { name?: string; options?: readonly NoteSelectOption[]; description?: string },
+  patch: {
+    name?: string;
+    options?: readonly NoteSelectOption[];
+    description?: string;
+    /** F2 — the formula IS patchable, unlike the type. See below. */
+    formula?: string;
+    rollup?: NoteRollupSpec;
+  },
   nowMs: number,
 ): DatabaseOpResult<NotePropertyDef> {
   const found = databaseAt(userId, databaseId);
@@ -226,11 +250,18 @@ export function updateProperty(
   // the second leaves cells that no filter on the column can match. Adding a
   // column of the new type and moving the values is visible work with a visible
   // outcome.
+  //
+  // The FORMULA is patchable, and the difference is not arbitrary: nothing is
+  // stored under it. Rewriting an expression recomputes every row from the same
+  // data, so the worst outcome is a column that says why it cannot be worked out
+  // — where rewriting a type would have to reinterpret values somebody typed.
   const next: NotePropertyDef = {
     ...existing,
     ...(patch.name !== undefined && patch.name.trim().length > 0 ? { name: patch.name.trim() } : {}),
     ...(patch.options !== undefined ? { options: patch.options } : {}),
     ...(patch.description !== undefined ? { description: patch.description } : {}),
+    ...(patch.formula !== undefined ? { formula: patch.formula.slice(0, MAX_FORMULA_LENGTH) } : {}),
+    ...(patch.rollup !== undefined ? { rollup: patch.rollup } : {}),
   };
 
   const schema = database.schema.map((def) => (def.id === propertyId ? next : def));
@@ -524,6 +555,60 @@ export function readDatabaseView(
   userId: string | undefined,
   databaseId: string,
   viewId?: string,
+  opts: ComputeOptions = {},
 ): DatabaseProjection | null {
-  return projectDatabase(listAllBlocks(userId), databaseId, viewId);
+  return projectDatabase(listAllBlocks(userId), databaseId, viewId, {
+    // F3 — the reading device, so `created by` says "This device" rather than
+    // printing an id. Defaulted here rather than at every call site: a caller
+    // that forgot would get a column reading "Another device" for its own work.
+    deviceId: notesDeviceId(userId),
+    ...opts,
+  });
+}
+
+/**
+ * F2 — the properties a rollup on this database could summarise.
+ *
+ * Derived from where the relation column actually POINTS rather than from a
+ * fixed list, because a relation can address any row of any database (E5). A
+ * picker built from this offers exactly the columns that exist on the other end;
+ * one built from a guess offers a target that every row reports as unreadable.
+ */
+export function rollupTargetProperties(
+  userId: string | undefined,
+  databaseId: string,
+  relationPropertyId: string,
+): DatabaseOpResult<{ properties: NotePropertyDef[]; databases: Array<{ id: string; title: string }> }> {
+  const found = databaseAt(userId, databaseId);
+  if (!found.ok) return found;
+
+  const blocks = listAllBlocks(userId);
+  const byId = new Map(blocks.map((block) => [block.id, block] as const));
+  const rows = blocks.filter((block) => isLiveBlock(block) && block.parentId.value === databaseId);
+
+  const properties = new Map<string, NotePropertyDef>();
+  const databases = new Map<string, string>();
+  for (const row of rows) {
+    const stored = row.props?.[relationPropertyId]?.value;
+    const uris = Array.isArray(stored) ? stored : typeof stored === 'string' && stored ? [stored] : [];
+    for (const uri of uris) {
+      const parsed = parseWorkspaceRef(String(uri));
+      if (!parsed.ok || parsed.ref.mode !== NOTES_MODE) continue;
+      const target = byId.get(parsed.ref.id);
+      const ownerId = target?.parentId.value;
+      const owner = ownerId ? byId.get(ownerId) : undefined;
+      if (!owner || !isDatabaseBlock(owner)) continue;
+      const schema = readDatabase(owner);
+      databases.set(owner.id, schema.title);
+      for (const def of schema.schema) if (!properties.has(def.id)) properties.set(def.id, def);
+    }
+  }
+
+  return {
+    ok: true,
+    value: {
+      properties: [...properties.values()],
+      databases: [...databases].map(([id, title]) => ({ id, title })),
+    },
+  };
 }

@@ -32,8 +32,8 @@ const source = (relative: string): string => readFileSync(new URL(relative, impo
 function block(over: Partial<NoteBlockView> & { id: string }): NoteBlockView {
   return {
     parentId: null, depth: 0, kind: 'paragraph', text: '', checked: false, level: null,
-    hasChildren: false, refs: [], conflicts: [], lockedBy: null, title: null,
-    icon: null, cover: null, favourite: false, ...over,
+    hasChildren: false, collapsed: false, refs: [], conflicts: [], lockedBy: null, title: null,
+    icon: null, cover: null, favourite: false, template: false, comments: [], ...over,
   };
 }
 
@@ -164,7 +164,11 @@ test('the cell editors are wired per property type, and a relation writes a real
 });
 
 test('a database block sizes to the page instead of widening it', () => {
-  const css = source('../theme.css');
+  // The database rules live in the LAZY notes sheet, not the shared one: they
+  // only ever apply inside the Notes chunk, and while they sat in `theme.css`
+  // every session that never opened Notes paid for them in the initial
+  // stylesheet — which had 260 bytes of budget left when that was found.
+  const css = source('../styles/surfaces/notesBlocks.css');
   // `.notes-body` is a reading column. A table that forced it wider would make
   // every paragraph on the page scroll sideways with the table.
   const rule = /\.db-block \{([^}]*)\}/.exec(css);

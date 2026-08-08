@@ -23,6 +23,7 @@ import {
   type NotesPullResponse, type NotesTransport, type PushResponse,
 } from '../notes/notesSync.js';
 import type { NotesState } from '../notes/noteStore.js';
+import { emptyNoteHistory } from '../notes/noteHistory.js';
 import type { NoteBlock } from '../notes/block.js';
 import { emptyOutbox, enqueue, type OutboxOperation } from '../sync/outbox.js';
 import type { Hlc } from '../sync/hybridClock.js';
@@ -38,6 +39,7 @@ function state(over: Partial<NotesState> = {}): NotesState {
     clock: at(100),
     blocks: {},
     leases: {},
+    history: emptyNoteHistory(),
     outbox: emptyOutbox(),
     ...over,
   };

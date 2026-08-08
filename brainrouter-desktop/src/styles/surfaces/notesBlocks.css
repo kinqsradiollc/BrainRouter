@@ -1,0 +1,520 @@
+/**
+ * ADR-029 Part F — the blocks the slash menu offered and could not draw.
+ *
+ * **Why this is not in `theme.css` with the rest of Notes.** The initial
+ * stylesheet is budgeted by `scripts/verify-visual-release.mjs`, and Parts A–E
+ * had left 875 bytes under that budget. These rules belong to six components
+ * that are only ever reached through `NotesModeContainer`, which is already a
+ * lazy chunk — so the stylesheet loads with the mode instead of with the app,
+ * and the pages that never open Notes never pay for it. That is the same
+ * argument the lazy chunk itself is there for, applied to the styles.
+ *
+ * The cascade still resolves the way it reads: a chunk's stylesheet is appended
+ * after the entry's, so anything here that shares a class with `theme.css` (the
+ * `.notes-block` hover states these hang off) still wins.
+ *
+ * Nothing here is used outside the Notes mode. If a rule in this file is ever
+ * needed by another surface, it belongs back in the shared sheet — a lazily
+ * loaded rule that another surface depends on renders that surface unstyled
+ * until somebody happens to open Notes.
+ */
+
+/* ADR-029 F3 — the blocks the slash menu offered and could not draw. Monochrome
+   throughout: every one of these is a border, a tint from the existing overlay
+   scale, or a weight change. A colour here would be a second vocabulary for
+   "this block is different", and the marks already own that. */
+
+/* A frame around the ordinary editor, not a second editor: the surface stretches
+   so a long callout wraps against the panel rather than against the glyph. */
+.notes-callout { display: flex; flex: 1; min-width: 0; align-items: flex-start; gap: 9px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--ov-04);
+  padding: 7px 10px; }
+.notes-callout-icon { flex: none; border: 0; background: transparent; cursor: pointer;
+  font-size: 15px; line-height: 1.3; padding: 0; border-radius: 4px; }
+.notes-callout-icon:disabled { cursor: default; opacity: .55; }
+.notes-callout-icon:hover:not(:disabled) { background: var(--ov-06); }
+.notes-callout-body { flex: 1; min-width: 0; display: flex; }
+
+/* The twisty sits in the gutter with the list markers, so a toggle and a bullet
+   line their text up at the same column. */
+.notes-twisty { flex: none; width: 16px; height: 20px; display: inline-flex; align-items: center;
+  justify-content: center; border: 0; background: transparent; color: var(--text-faint);
+  cursor: pointer; padding: 0; border-radius: 4px; transform: rotate(90deg);
+  transition: transform .1s ease; }
+.notes-twisty.is-collapsed { transform: rotate(0deg); }
+.notes-twisty:hover:not(:disabled) { color: var(--text); background: var(--ov-06); }
+.notes-twisty:disabled { cursor: default; opacity: .4; }
+
+/* Every block whose text is an ADDRESS renders here instead of in an editor. */
+.notes-block-surface { flex: 1; min-width: 0; }
+
+.notes-image { display: flex; flex-direction: column; gap: 6px; }
+.notes-image-figure { margin: 0; display: flex; flex-direction: column; gap: 4px; }
+.notes-image-img { max-width: 100%; max-height: 480px; border-radius: 6px;
+  border: 1px solid var(--border); object-fit: contain; align-self: flex-start; }
+.notes-image-caption { font-size: 10.5px; color: var(--text-faint); font-family: var(--mono); }
+/* The placeholder is a FRAME with a sentence in it, never a grey square: the
+   whole point of the block is that a reader is told which of four things went
+   wrong and what to do about it. */
+.notes-image-frame { display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  border: 1px dashed var(--border); border-radius: 6px; padding: 12px 14px;
+  color: var(--text-faint); }
+.notes-image-note { font-size: 12px; line-height: 1.55; max-width: 62ch; }
+.notes-image-url { font-family: var(--mono); font-size: 10.5px; color: var(--text-faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.notes-image-tools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; opacity: 0; }
+.notes-block:hover .notes-image-tools, .notes-image:focus-within .notes-image-tools { opacity: 1; }
+.notes-image-btn, .notes-table-btn, .notes-bookmark-btn, .notes-embed-btn {
+  display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border);
+  background: transparent; color: var(--text-dim); border-radius: 4px; padding: 2px 8px;
+  font-size: 11px; cursor: pointer; }
+.notes-image-btn:hover:not(:disabled), .notes-table-btn:hover:not(:disabled),
+.notes-bookmark-btn:hover, .notes-embed-btn:hover { color: var(--text); border-color: var(--accent); }
+.notes-image-btn:disabled, .notes-table-btn:disabled { opacity: .5; cursor: default; }
+.notes-image-hint { font-size: 10.5px; color: var(--text-faint); }
+.notes-image-problem { font-size: 11px; color: var(--text-faint); }
+
+/* A card, and under every failure the address still reads as a link. */
+.notes-bookmark { display: flex; flex-direction: column; gap: 5px; flex: 1; min-width: 0; }
+.notes-bookmark.is-empty { border: 1px dashed var(--border); border-radius: 6px; padding: 10px 12px; }
+.notes-bookmark-card { display: flex; width: 100%; align-items: flex-start; gap: 12px;
+  border: 1px solid var(--border); border-radius: 6px; background: transparent;
+  padding: 9px 11px; text-align: left; cursor: pointer; color: var(--text); }
+.notes-bookmark-card:hover { border-color: var(--accent); background: var(--ov-04); }
+.notes-bookmark-body { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+.notes-bookmark-title { font-size: 12.5px; font-weight: 600; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.notes-bookmark-desc { font-size: 11.5px; color: var(--text-dim); line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.notes-bookmark-host { font-size: 10.5px; color: var(--text-faint); font-family: var(--mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notes-bookmark-icon { flex: none; width: 28px; height: 28px; display: inline-flex;
+  align-items: center; justify-content: center; border: 1px solid var(--border);
+  border-radius: 5px; overflow: hidden; }
+.notes-bookmark-favicon { width: 16px; height: 16px; object-fit: contain; }
+.notes-bookmark-monogram { font-size: 12px; font-weight: 600; color: var(--text-faint); }
+.notes-bookmark-note { font-size: 11px; color: var(--text-faint); line-height: 1.55; max-width: 62ch; }
+.notes-bookmark-tools { display: flex; gap: 6px; opacity: 0; }
+.notes-block:hover .notes-bookmark-tools { opacity: 1; }
+
+/* A real grid. It scrolls inside its own box so a wide table never widens the
+   page column the prose is measured against. */
+.notes-table { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
+.notes-table.is-empty { border: 1px dashed var(--border); border-radius: 6px; padding: 12px 14px;
+  align-items: flex-start; }
+.notes-table-note { font-size: 12px; color: var(--text-faint); line-height: 1.55; }
+.notes-table-scroll { overflow-x: auto; max-width: 100%; }
+.notes-grid { border-collapse: collapse; font-size: 12px; min-width: 100%; }
+.notes-grid-head, .notes-grid-cell { border: 1px solid var(--border); padding: 0;
+  vertical-align: top; position: relative; min-width: 108px; }
+.notes-grid-head { background: var(--ov-04); }
+.notes-grid-input { width: 100%; border: 0; background: transparent; color: var(--text);
+  font: inherit; font-size: 12px; padding: 5px 7px; outline: none; }
+.notes-grid-head .notes-grid-input { font-weight: 600; }
+.notes-grid-input:focus { background: var(--ov-04); }
+.notes-grid-input[readonly] { color: var(--text-faint); }
+.notes-grid-coltools, .notes-grid-rowtools { display: inline-flex; gap: 1px; opacity: 0; }
+.notes-grid-coltools { position: absolute; top: 2px; right: 2px; }
+.notes-grid-rowtools { border: 0; padding: 0 2px; }
+.notes-grid-head:hover .notes-grid-coltools, .notes-grid-cell:hover .notes-grid-coltools,
+.notes-grid tr:hover .notes-grid-rowtools { opacity: 1; }
+.notes-table-icon { border: 0; background: var(--surface); color: var(--text-faint);
+  cursor: pointer; padding: 1px 2px; border-radius: 3px; line-height: 0; }
+.notes-table-icon:hover:not(:disabled) { color: var(--text); background: var(--ov-06); }
+.notes-table-icon:disabled { opacity: .35; cursor: default; }
+.notes-table-tools { display: flex; gap: 6px; flex-wrap: wrap; opacity: 0; }
+.notes-block:hover .notes-table-tools, .notes-table:focus-within .notes-table-tools { opacity: 1; }
+
+/* A3 — the target, live. `data-status` carries the four outcomes; the
+   difference is a dashed border rather than a colour, because "gone" and
+   "denied" are already sentences and a hue would be saying it twice. */
+.notes-embed { display: flex; flex-direction: column; gap: 5px; flex: 1; min-width: 0; }
+.notes-embed.is-empty { border: 1px dashed var(--border); border-radius: 6px; padding: 10px 12px;
+  gap: 8px; }
+.notes-embed-card { display: flex; align-items: baseline; gap: 9px; border: 1px solid var(--border);
+  border-radius: 6px; padding: 8px 11px; }
+.notes-embed[data-status="unresolved"] .notes-embed-card { border-style: dashed; }
+.notes-embed-mode { flex: none; font-size: 9.5px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-faint); font-family: var(--mono); }
+.notes-embed-open { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--text);
+  font-size: 12.5px; text-align: left; cursor: pointer; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.notes-embed-open:hover { text-decoration: underline; text-decoration-color: var(--accent); }
+.notes-embed-line { flex: 1; min-width: 0; font-size: 12px; color: var(--text-faint); line-height: 1.5; }
+.notes-embed-note { font-size: 11px; color: var(--text-faint); line-height: 1.55; max-width: 62ch; }
+.notes-embed-tools { display: flex; gap: 6px; opacity: 0; }
+.notes-block:hover .notes-embed-tools { opacity: 1; }
+.notes-embed-picker { display: flex; flex-direction: column; gap: 2px; max-width: 420px; }
+.notes-embed-row { display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left;
+  border: 0; background: transparent; color: var(--text); font-size: 12px; padding: 3px 6px;
+  border-radius: 4px; cursor: pointer; }
+.notes-embed-row:hover { background: var(--ov-06); }
+.notes-embed-row-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.notes-embed-row small { flex: none; font-size: 10px; color: var(--text-faint); font-family: var(--mono); }
+
+/* ADR-029 F3 — comments on a block, resolved and unresolved.
+   The thread is indented to the text rather than to the row, so it reads as
+   being about the line and not about the page. A resolved comment is dimmed and
+   labelled rather than hidden: hiding it would make people avoid resolving,
+   at which point the open section stops meaning anything. */
+.notes-comment-btn { position: relative; }
+.notes-comment-btn.has-comments { color: var(--text); }
+.notes-comment-badge { position: absolute; top: -3px; right: -4px; min-width: 12px;
+  padding: 0 3px; border-radius: 7px; background: var(--ov-12); color: var(--text);
+  font-size: 9px; line-height: 12px; text-align: center; font-family: var(--mono); }
+.notes-comments { display: flex; flex-direction: column; gap: 7px; margin: 6px 0 4px 26px;
+  padding: 8px 10px; border-left: 2px solid var(--border); }
+.notes-comments-head { font-size: 11px; color: var(--text-faint); letter-spacing: .02em; }
+.notes-comment { display: flex; flex-direction: column; gap: 3px; }
+.notes-comment.is-resolved { opacity: .6; }
+.notes-comment-who { display: flex; align-items: baseline; gap: 7px; }
+.notes-comment-author { font-size: 11.5px; font-weight: 600; color: var(--text); }
+.notes-comment-state { font-size: 9.5px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-faint); font-family: var(--mono); }
+.notes-comment-body { margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--text);
+  white-space: pre-wrap; overflow-wrap: anywhere; }
+.notes-comment-actions { display: flex; gap: 8px; opacity: 0; }
+.notes-comment:hover .notes-comment-actions { opacity: 1; }
+.notes-comment-actions button { border: 0; background: transparent; color: var(--text-faint);
+  font-size: 11px; cursor: pointer; padding: 0; }
+.notes-comment-actions button:hover { color: var(--text); text-decoration: underline; }
+.notes-comment-composer { display: flex; flex-direction: column; gap: 5px; align-items: flex-start; }
+.notes-comment-input { width: 100%; resize: vertical; border: 1px solid var(--border);
+  border-radius: 5px; background: transparent; color: var(--text); font: inherit;
+  font-size: 12.5px; padding: 5px 7px; outline: none; }
+.notes-comment-input:focus { border-color: var(--accent); }
+.notes-comment-post { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border);
+  border-radius: 5px; background: var(--surface); color: var(--text); font-size: 11.5px;
+  padding: 3px 8px; cursor: pointer; }
+.notes-comment-post:disabled { opacity: .4; cursor: default; }
+
+/* C5 — comments whose block is in the trash. Folded by default because they are
+   a record rather than a task, and headed by a sentence so the thread is never
+   read as being about nothing. */
+.notes-orphan-comments { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 10px; }
+.notes-orphan-head { display: inline-flex; align-items: center; gap: 6px; border: 0;
+  background: transparent; color: var(--text-faint); font-size: 11.5px; cursor: pointer;
+  padding: 0; text-align: left; }
+.notes-orphan-head:hover { color: var(--text); }
+.notes-orphan-thread { border: 1px dashed var(--border); border-radius: 6px; padding: 8px 10px; }
+.notes-orphan-note { margin: 0 0 4px; font-size: 12px; color: var(--text-faint); line-height: 1.55; }
+.notes-orphan-restore { border: 0; background: transparent; color: var(--text-faint);
+  font-size: 11px; cursor: pointer; padding: 2px 0 0; }
+.notes-orphan-restore:hover { color: var(--text); text-decoration: underline; }
+
+/* F4 — the sentence a REFUSED undo leaves. Only a refusal draws one: a
+   successful undo is reported by the document changing, and a toast per ⌘Z is
+   noise that trains people to ignore the one that matters. */
+.notes-undo-notice { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; margin: 4px 0 8px;
+  font-size: 12px; color: var(--text); line-height: 1.55; }
+.notes-undo-notice button { border: 0; background: transparent; color: var(--text-faint);
+  font-size: 11px; cursor: pointer; padding: 0; }
+.notes-undo-notice button:hover { color: var(--text); text-decoration: underline; }
+
+/* F3 — templates. One control for both halves, because saving a template and
+   starting a page from one are the same idea and separating them is how a
+   person marks a template and cannot find it again. */
+.notes-templates { position: relative; display: inline-flex; }
+.notes-template-menu { position: absolute; top: 100%; right: 0; z-index: 30; margin-top: 4px;
+  min-width: 260px; max-width: 340px; display: flex; flex-direction: column; gap: 4px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--surface);
+  padding: 6px; box-shadow: 0 8px 24px rgba(0, 0, 0, .28); }
+.notes-template-mark { border: 0; background: transparent; color: var(--text); font-size: 12px;
+  text-align: left; padding: 4px 6px; border-radius: 4px; cursor: pointer; }
+.notes-template-mark:hover { background: var(--ov-06); }
+.notes-template-list { display: flex; flex-direction: column; gap: 1px;
+  border-top: 1px solid var(--border); padding-top: 4px; max-height: 260px; overflow-y: auto; }
+.notes-template-row { display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left;
+  border: 0; background: transparent; color: var(--text); font-size: 12px; padding: 4px 6px;
+  border-radius: 4px; cursor: pointer; }
+.notes-template-row:hover { background: var(--ov-06); }
+.notes-template-icon { flex: none; line-height: 1; }
+.notes-template-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.notes-template-hint { flex: none; font-size: 10px; color: var(--text-faint); font-family: var(--mono); }
+.notes-template-empty { font-size: 11.5px; color: var(--text-faint); line-height: 1.55; padding: 4px 6px; }
+.notes-template-note { position: absolute; top: 100%; right: 0; z-index: 30; margin-top: 4px;
+  max-width: 380px; display: flex; align-items: baseline; gap: 10px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--surface); padding: 7px 10px; font-size: 12px;
+  line-height: 1.55; color: var(--text); }
+.notes-template-note button { border: 0; background: transparent; color: var(--text-faint);
+  font-size: 11px; cursor: pointer; padding: 0; }
+
+/* ADR-029 F3 — the synced block. One block, many places, one truth.
+   A left rule rather than a box: the mirrored rows ARE the document, so framing
+   them like a card would make the page read as though the words were quoted
+   from somewhere else rather than being the same words. The rule is what says
+   "this also lives elsewhere" without changing how the text reads. */
+.notes-synced { display: flex; flex-direction: column; gap: 5px; flex: 1; min-width: 0;
+  border-left: 2px solid var(--border); padding-left: 10px; }
+.notes-synced.is-empty { border-left: 0; border: 1px dashed var(--border); border-radius: 6px;
+  padding: 10px 12px; gap: 8px; }
+.notes-synced[data-status="ready"] { border-left-color: var(--accent); }
+.notes-synced-body { display: flex; flex-direction: column; gap: 1px; }
+.notes-synced-row { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.notes-synced-row .notes-editor { flex: 1; min-width: 0; }
+.notes-synced-icon { flex: none; line-height: 1; }
+.notes-synced-address { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11.5px;
+  color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notes-synced-locked { flex: none; font-size: 10px; color: var(--text-faint); }
+/* Every state that is not `ready` says what happened here, in core's words. */
+.notes-synced-state { font-size: 12px; color: var(--text-faint); line-height: 1.55; max-width: 62ch; }
+.notes-synced-note { font-size: 11px; color: var(--text-faint); line-height: 1.55; max-width: 62ch; }
+.notes-synced-foot { display: flex; align-items: baseline; gap: 10px; }
+.notes-synced-source { display: inline-flex; align-items: center; gap: 5px; border: 0;
+  background: transparent; color: var(--text-faint); font-size: 10.5px; padding: 0; cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notes-synced-source:hover { color: var(--text); }
+.notes-synced-btn { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border);
+  background: transparent; color: var(--text-dim); border-radius: 4px; padding: 2px 8px;
+  font-size: 11px; cursor: pointer; opacity: 0; }
+.notes-block:hover .notes-synced-btn { opacity: 1; }
+.notes-synced-btn:hover { color: var(--text); border-color: var(--accent); }
+.notes-synced-picker { display: flex; flex-direction: column; gap: 2px; max-width: 420px; }
+.notes-synced-row-pick { display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left;
+  border: 0; background: transparent; color: var(--text); font-size: 12px; padding: 3px 6px;
+  border-radius: 4px; cursor: pointer; }
+.notes-synced-row-pick:hover { background: var(--ov-06); }
+.notes-synced-row-pick small { flex: none; font-size: 10px; color: var(--text-faint);
+  font-family: var(--mono); }
+
+/* F3 — the export menu's rows, in the shared portaled popover. */
+.notes-popover-item { border: 0; background: transparent; color: var(--text); font-size: 12px;
+  text-align: left; padding: 5px 8px; border-radius: 4px; cursor: pointer; }
+.notes-popover-item:hover { background: var(--ov-06); }
+
+/* ---- ADR-029 E3/F2 — the database surface.
+   Moved out of the shared sheet: these rules only ever apply inside the
+   lazy Notes chunk, and every session that never opens Notes was paying
+   for them in the initial stylesheet. The CSS budget had 260 bytes left
+   when this was found. */
+/* ADR-029 E3 — databases.
+   A database is a BLOCK, so it sits in the page's flow at the page's width and
+   scrolls its own content sideways rather than widening the column. `min-width:
+   0` is what makes that true: without it the table's natural width pushes
+   `.notes-body` wider and the reading column stops being one. */
+.db-block { display: flex; flex-direction: column; gap: 8px; min-width: 0;
+  margin: 10px 0 14px; padding: 10px 0 0; border-top: 1px solid var(--border); }
+.db-block.is-full { border-top: 0; padding-top: 0; }
+.db-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.db-title { display: inline-flex; align-items: center; gap: 5px; border: 0; background: transparent;
+  color: var(--text); font-size: 13px; font-weight: 600; padding: 2px 4px; border-radius: 5px;
+  cursor: pointer; }
+.db-title:hover { background: var(--ov-04); }
+.db-tools { display: flex; align-items: center; gap: 2px; margin-left: auto; flex-wrap: wrap; }
+.db-view-tabs { display: flex; align-items: center; gap: 1px; flex-wrap: wrap; min-width: 0; }
+.db-view-tab { display: inline-flex; align-items: baseline; gap: 5px; border: 0; background: transparent;
+  color: var(--text-faint); font-size: 11.5px; padding: 3px 7px; border-radius: 5px; cursor: pointer; }
+.db-view-tab:hover { color: var(--text-dim); background: var(--ov-04); }
+.db-view-tab.is-on { color: var(--text); background: var(--raised); }
+.db-view-kind { font-size: 9.5px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .05em; }
+.db-view-add { border: 0; background: transparent; color: var(--text-faint); cursor: pointer;
+  padding: 3px 5px; border-radius: 5px; line-height: 0; }
+.db-view-add:hover { color: var(--text); background: var(--ov-04); }
+.db-tool { display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent;
+  color: var(--text-faint); font-size: 11px; padding: 3px 7px; border-radius: 5px; cursor: pointer; }
+.db-tool:hover { color: var(--text); background: var(--ov-04); }
+.db-tool.is-on { color: var(--text); background: var(--raised); }
+.db-new-row { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border);
+  background: transparent; color: var(--text-dim); font-size: 11px; padding: 3px 8px;
+  border-radius: 5px; cursor: pointer; }
+.db-new-row:hover { color: var(--text); border-color: var(--accent); }
+.db-icon-btn { border: 0; background: transparent; color: var(--text-faint); cursor: pointer;
+  padding: 2px 3px; border-radius: 4px; line-height: 0; }
+.db-icon-btn:hover { color: var(--text); background: var(--ov-06); }
+/* Core's sentences: a rule it could not apply, a column it cannot read, how
+   many rows the filter removed. Never styled as an error — every one of them is
+   a fact about the view rather than a fault. */
+.db-notice { font-size: 11px; color: var(--text-faint); line-height: 1.55; margin: 0; max-width: 70ch; }
+.db-empty-line { font-size: 12px; color: var(--text-faint); line-height: 1.6; margin: 8px 0; max-width: 60ch; }
+.db-foot { display: flex; align-items: center; gap: 10px; }
+.db-count { font-size: 10.5px; color: var(--text-faint); font-family: var(--mono); }
+/* ---- table */
+.db-table-scroll { overflow-x: auto; min-width: 0; border: 1px solid var(--border); border-radius: 7px; }
+.db-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.db-table th { text-align: left; font-weight: 500; border-bottom: 1px solid var(--border);
+  padding: 0; background: var(--surface-2, rgba(255,255,255,.02)); }
+.db-th { display: flex; align-items: center; gap: 5px; width: 100%; border: 0; background: transparent;
+  color: var(--text-faint); font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em;
+  padding: 6px 9px; cursor: pointer; white-space: nowrap; }
+.db-th:hover:not(:disabled) { color: var(--text); }
+.db-th:disabled { cursor: default; }
+.db-th.is-unsupported { font-style: italic; }
+.db-th-sort { color: var(--accent); }
+.db-table td { border-bottom: 1px solid var(--ov-04); padding: 0; vertical-align: top; }
+.db-table tr:last-child td { border-bottom: 0; }
+.db-table tr:hover td { background: var(--ov-04); }
+.db-col-end { width: 30px; }
+.db-table td.db-col-end { text-align: center; padding: 4px 2px; }
+/* ---- cells */
+.db-cell { position: relative; min-width: 90px; padding: 2px 6px; }
+.db-cell.is-field { padding: 0; }
+.db-cell-static { display: inline-block; font-size: 11.5px; color: var(--text-faint);
+  padding: 4px 3px; font-family: var(--mono); }
+.db-input { width: 100%; min-width: 60px; border: 0; background: transparent; color: var(--text);
+  font: inherit; font-size: 12px; padding: 5px 3px; border-radius: 4px; }
+.db-input:focus { outline: 1px solid var(--border); }
+.db-input::placeholder { color: var(--text-faint); }
+.db-check { margin: 6px 3px; }
+.db-title-cell { display: flex; align-items: center; gap: 4px; min-width: 140px; }
+.db-open-row { flex: none; border: 0; background: transparent; color: var(--text-faint);
+  cursor: pointer; padding: 2px; border-radius: 4px; line-height: 0; opacity: 0; }
+.db-title-cell:hover .db-open-row, .db-open-row:focus { opacity: 1; }
+.db-open-row:hover { color: var(--text); background: var(--ov-06); }
+.db-chip-btn { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; width: 100%;
+  border: 0; background: transparent; color: var(--text); font-size: 12px; text-align: left;
+  padding: 5px 3px; border-radius: 4px; cursor: pointer; min-height: 26px; }
+.db-chip-btn:hover { background: var(--ov-06); }
+.db-empty { color: var(--text-faint); font-size: 11.5px; }
+.db-tag { display: inline-flex; align-items: center; border: 1px solid var(--border);
+  border-radius: 4px; padding: 0 6px; font-size: 10.5px; color: var(--text-dim);
+  background: var(--ov-04); white-space: nowrap; }
+.db-relation, .db-files { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; padding: 3px 0; }
+.db-relation-add { width: auto; min-height: 20px; padding: 2px 5px; }
+/* ---- ADR-029 F2/F3 — the derived columns.
+   A computed cell reads as a value someone can trust and cannot type into, so
+   it is the ordinary text colour rather than the faint one an unreadable cell
+   gets; an ERRORED one is the warning colour and carries its whole sentence,
+   because F2's rule is that a cell which cannot be computed says why where the
+   person is looking rather than in a notice above the table. */
+.db-cell-static.is-computed { color: var(--text-dim); font-family: var(--font); }
+.db-cell-static.is-error { color: var(--warn); font-family: var(--font);
+  white-space: normal; line-height: 1.4; }
+.db-tag.is-missing { color: var(--text-faint); border-style: dashed; }
+.db-file-drop { border: 0; background: transparent; color: var(--text-faint); cursor: pointer;
+  font-size: 11px; line-height: 1; padding: 0 0 0 4px; }
+.db-file-drop:hover { color: var(--text); }
+.db-cell-problem, .db-formula-problem { font-size: 10.5px; color: var(--warn); line-height: 1.5; }
+.db-formula-input { width: 100%; resize: vertical; font-family: var(--mono); font-size: 11.5px;
+  line-height: 1.5; }
+.db-formula-fns { max-height: 78px; overflow-y: auto; }
+.db-prop-config { flex: 1 0 100%; padding: 6px 4px 8px; border-bottom: 1px solid var(--ov-04); }
+/* ---- popover. Portaled to <body>, so a scrolling table cannot clip it —
+   the same reason the page header portals its pickers. */
+.db-popover { z-index: 140; display: flex; flex-direction: column; gap: 6px; max-height: 340px;
+  overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--surface);
+  padding: 7px; box-shadow: 0 10px 30px rgba(0, 0, 0, .34); }
+.db-popover-input { width: 100%; }
+.db-option-list { display: flex; flex-direction: column; gap: 1px; }
+.db-option { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left;
+  border: 0; background: transparent; color: var(--text); font-size: 12px; padding: 4px 6px;
+  border-radius: 4px; cursor: pointer; }
+.db-option:hover:not(:disabled) { background: var(--ov-06); }
+.db-option:disabled { color: var(--text-faint); cursor: default; }
+.db-option.is-on { color: var(--text); }
+.db-option-check { flex: none; width: 12px; color: var(--accent); font-size: 10px; }
+.db-option-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-option-mode { flex: none; font-size: 9.5px; color: var(--text-faint); text-transform: uppercase;
+  letter-spacing: .05em; }
+.db-popover-empty, .db-popover-note { font-size: 11px; color: var(--text-faint);
+  line-height: 1.5; padding: 3px 6px; margin: 0; }
+.db-popover-clear, .db-popover-ok { display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid var(--border); background: transparent; color: var(--text-dim);
+  font-size: 11px; padding: 3px 8px; border-radius: 5px; cursor: pointer; align-self: flex-start; }
+.db-popover-clear:hover, .db-popover-ok:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+.db-popover-ok:disabled { color: var(--text-faint); cursor: default; }
+/* The config editor is a full-width row UNDER the column it belongs to, so the
+   wrap has to be allowed here rather than fought with in the component. */
+.db-prop-row { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
+.db-prop-row .db-option { flex: 1; min-width: 0; }
+.db-add-prop, .db-formula, .db-rollup { display: flex; flex-direction: column; gap: 6px; }
+/* ---- filter and sort rules */
+.db-rule { display: flex; flex-direction: column; gap: 4px; padding: 5px 4px;
+  border-bottom: 1px solid var(--ov-04); }
+.db-rule-head { display: flex; align-items: center; gap: 6px; }
+.db-rule-lead { flex: none; font-size: 10px; color: var(--text-faint); text-transform: uppercase;
+  letter-spacing: .05em; }
+.db-rule-join { border: 1px solid var(--border); background: transparent; color: var(--text-dim);
+  font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; border-radius: 3px;
+  padding: 0 4px; cursor: pointer; }
+.db-rule-join:hover { color: var(--text); border-color: var(--accent); }
+.db-rule-name { flex: 1; min-width: 0; font-size: 12px; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-op-row { display: flex; flex-wrap: wrap; gap: 2px; }
+.db-op { border: 1px solid var(--border); background: transparent; color: var(--text-faint);
+  font-size: 10.5px; padding: 1px 6px; border-radius: 4px; cursor: pointer; }
+.db-op:hover { color: var(--text); }
+.db-op.is-on { color: var(--text); border-color: var(--accent); background: var(--ov-06); }
+.db-field { min-width: 0; }
+/* ---- board. Columns scroll sideways inside the block rather than widening the
+   page: a board is the one view whose width is genuinely unbounded. */
+.db-board { display: flex; gap: 8px; overflow-x: auto; min-width: 0; padding-bottom: 4px; align-items: flex-start; }
+.db-board-col { flex: none; width: 214px; display: flex; flex-direction: column; gap: 6px;
+  border: 1px solid var(--border); border-radius: 7px; padding: 7px; background: var(--ov-04); }
+/* The no-value column is a column, not an absence — E3 says a row cannot go
+   missing, so it is marked rather than hidden. */
+.db-board-col.is-none { background: transparent; border-style: dashed; }
+.db-board-head { display: flex; align-items: center; gap: 6px; }
+.db-board-label { flex: 1; min-width: 0; font-size: 11px; color: var(--text-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-board-count { flex: none; font-size: 10px; font-family: var(--mono); color: var(--text-faint); }
+.db-board-cards { display: flex; flex-direction: column; gap: 6px; min-height: 24px; }
+.db-board-empty { font-size: 10.5px; color: var(--text-faint); padding: 2px; }
+.db-card { display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--border);
+  border-radius: 6px; padding: 7px 8px; background: var(--surface); }
+.db-card.is-bare { border: 0; background: transparent; padding: 6px 2px; }
+.db-card.is-draggable { cursor: grab; }
+.db-card-title { display: flex; align-items: center; gap: 6px; border: 0; background: transparent;
+  color: var(--text); font-size: 12px; text-align: left; padding: 0; cursor: pointer; }
+.db-card-title:hover { text-decoration: underline; text-decoration-color: var(--accent); }
+.db-row-icon { flex: none; display: inline-flex; align-items: center; color: var(--text-faint); }
+.db-card-field { display: flex; align-items: center; gap: 6px; }
+.db-card-label { flex: none; width: 62px; font-size: 9.5px; color: var(--text-faint);
+  text-transform: uppercase; letter-spacing: .05em; }
+.db-card-field .db-cell { flex: 1; min-width: 0; }
+/* ---- list */
+.db-list { display: flex; flex-direction: column; }
+.db-list-row { display: flex; align-items: center; gap: 8px; padding: 5px 4px;
+  border-bottom: 1px solid var(--ov-04); }
+.db-list-row:hover { background: var(--ov-04); }
+.db-list-title { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; border: 0;
+  background: transparent; color: var(--text); font-size: 12.5px; text-align: left; padding: 0; cursor: pointer; }
+.db-list-title:hover { text-decoration: underline; text-decoration-color: var(--accent); }
+.db-list-meta { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; flex: none; max-width: 55%; }
+/* ---- calendar */
+.db-calendar { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.db-cal-head { display: flex; align-items: center; gap: 6px; }
+.db-cal-title { font-size: 12px; color: var(--text); min-width: 132px; }
+.db-cal-off { font-size: 10.5px; color: var(--text-faint); margin-left: auto; }
+.db-cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 1px;
+  border: 1px solid var(--border); border-radius: 7px; overflow: hidden; background: var(--border); }
+.db-cal-weekday { font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--text-faint); padding: 4px 6px; background: var(--surface); }
+.db-cal-cell { position: relative; display: flex; flex-direction: column; gap: 2px;
+  min-height: 62px; padding: 4px; background: var(--bg); }
+.db-cal-cell.is-outside { background: var(--surface); }
+.db-cal-cell.is-outside .db-cal-daynum { color: var(--text-faint); opacity: .55; }
+.db-cal-cell.is-today { box-shadow: inset 0 0 0 1px var(--accent); }
+.db-cal-daynum { font-size: 10px; font-family: var(--mono); color: var(--text-faint); }
+.db-cal-pill { border: 1px solid var(--border); background: var(--surface); color: var(--text-dim);
+  border-radius: 4px; font-size: 10.5px; padding: 1px 5px; cursor: pointer; text-align: left;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-cal-pill:hover { color: var(--text); border-color: var(--accent); }
+.db-cal-add { position: absolute; top: 3px; right: 3px; border: 0; background: transparent;
+  color: var(--text-faint); cursor: pointer; padding: 1px; border-radius: 3px; line-height: 0; opacity: 0; }
+.db-cal-cell:hover .db-cal-add { opacity: 1; }
+.db-cal-add:hover { color: var(--text); background: var(--ov-06); }
+/* The undated rows, beside the grid rather than under it — a bucket you have to
+   scroll to find is a bucket people forget can exist. */
+.db-cal-side { display: flex; flex-direction: column; gap: 6px; border: 1px dashed var(--border);
+  border-radius: 7px; padding: 7px; }
+/* The date picker reuses the grid at a smaller size, so a week starts on the
+   same day in both. */
+.db-cal-picker { border: 0; background: transparent; gap: 1px; }
+.db-cal-day { border: 0; background: transparent; color: var(--text-dim); font-size: 11px;
+  padding: 4px 0; border-radius: 4px; cursor: pointer; }
+.db-cal-day:hover { background: var(--ov-06); color: var(--text); }
+.db-cal-day.is-outside { color: var(--text-faint); opacity: .55; }
+.db-cal-day.is-today { box-shadow: inset 0 0 0 1px var(--border); }
+.db-cal-day.is-picked { background: var(--raised); color: var(--text); box-shadow: inset 0 0 0 1px var(--accent); }
+/* ---- gallery */
+.db-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 10px; min-width: 0; }
+.db-gallery-card { display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--border);
+  border-radius: 7px; padding: 6px; }
+.db-gallery-cover { height: 84px; border: 0; border-radius: 5px; background: var(--ov-06);
+  background-size: cover; background-position: center; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; }
+.db-gallery-glyph { font-size: 20px; color: var(--text-faint); }

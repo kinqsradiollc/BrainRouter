@@ -110,6 +110,32 @@ export function getAttachment(workspaceRoot: string, id: string): AttachmentReco
   return readFile(workspaceRoot).attachments.find((a) => a.id === id);
 }
 
+/**
+ * ADR-029 D3 — the record for these exact bytes, if one is already here.
+ *
+ * "An image pasted into three notes is one object with three references" needs a
+ * way to ask whether the object exists, and the hash is already computed and
+ * already stored on every record; this is only the lookup that was missing.
+ *
+ * Scoped by `sessionKey` when one is given, because the two uses want opposite
+ * things: a note's picture should find the copy another note already stored
+ * (they share the notes scope), while a file attached to two different chats is
+ * two attachments as far as each chat is concerned. The blob is still written
+ * once per scope rather than once per workspace — going further would mean a
+ * record whose deletion is not its own, and this store deletes a blob with its
+ * record.
+ */
+export function findAttachmentBySha256(
+  workspaceRoot: string,
+  sha256: string,
+  sessionKey?: string,
+): AttachmentRecord | undefined {
+  if (!sha256) return undefined;
+  return readFile(workspaceRoot).attachments.find((a) => (
+    a.sha256 === sha256 && (sessionKey === undefined || a.sessionKey === sessionKey)
+  ));
+}
+
 export interface AttachmentFilter {
   sessionKey?: string;
   kind?: AttachmentKind;

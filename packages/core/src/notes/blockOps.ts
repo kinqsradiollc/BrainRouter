@@ -28,11 +28,13 @@ import {
   CONTINUING_KINDS, holdsProse, isCollapsed, isLiveBlock, STYLED_TEXT_KINDS,
   type NoteBlock, type NoteBlockKind,
 } from './block.js';
+import { UNDO_LABELS } from './noteHistory.js';
 import {
-  createBlock, deleteBlock, moveBlock, readNotes, updateBlock,
+  asOneUndo, createBlock, deleteBlock, moveBlock, readNotes, updateBlock,
   type BlockWriteResult,
 } from './noteStore.js';
-import { buildNoteTree, subtreeBlockIds, type NoteTreeNode } from './noteTree.js';
+import { buildNoteTree, type NoteTreeNode } from './noteTree.js';
+import { copySubtree } from './templates.js';
 
 export type BlockOpAction =
   | 'split'
@@ -169,6 +171,19 @@ export function splitBlock(
   caret: number,
   nowMs: number,
 ): BlockOpResult {
+  // F4 — Enter is TWO writes (the head is trimmed, the tail is created) and one
+  // ⌘Z. Without the group the person would press undo, watch the tail vanish,
+  // and be left with a truncated paragraph — which is worse than no undo,
+  // because it looks like the editor ate half their sentence.
+  return asOneUndo(userId, UNDO_LABELS.split, () => splitBlockNow(userId, id, caret, nowMs));
+}
+
+function splitBlockNow(
+  userId: string | undefined,
+  id: string,
+  caret: number,
+  nowMs: number,
+): BlockOpResult {
   const { at } = layout(userId);
   const here = at.get(id);
   if (!here) return missing(id);
@@ -276,6 +291,17 @@ export function mergeIntoPrevious(
   id: string,
   nowMs: number,
 ): BlockOpResult {
+  // F4 — a merge is a write, N re-parents and a delete. One ⌘Z, or undo would
+  // restore the deleted block while its text was still appended to the one
+  // above, leaving the sentence in the document twice.
+  return asOneUndo(userId, UNDO_LABELS.merge, () => mergeIntoPreviousNow(userId, id, nowMs));
+}
+
+function mergeIntoPreviousNow(
+  userId: string | undefined,
+  id: string,
+  nowMs: number,
+): BlockOpResult {
   const { order, at } = layout(userId);
   const here = at.get(id);
   if (!here) return missing(id);
@@ -346,6 +372,10 @@ export function mergeIntoPrevious(
  * levels deep in another branch, which is not a movement anyone asked for.
  */
 export function indentBlock(userId: string | undefined, id: string, nowMs: number): BlockOpResult {
+  return asOneUndo(userId, UNDO_LABELS.indent, () => indentBlockNow(userId, id, nowMs));
+}
+
+function indentBlockNow(userId: string | undefined, id: string, nowMs: number): BlockOpResult {
   const { order, at } = layout(userId);
   const here = at.get(id);
   if (!here) return missing(id);
@@ -375,6 +405,10 @@ export function indentBlock(userId: string | undefined, id: string, nowMs: numbe
  * appending would teleport it past every later sibling.
  */
 export function outdentBlock(userId: string | undefined, id: string, nowMs: number): BlockOpResult {
+  return asOneUndo(userId, UNDO_LABELS.outdent, () => outdentBlockNow(userId, id, nowMs));
+}
+
+function outdentBlockNow(userId: string | undefined, id: string, nowMs: number): BlockOpResult {
   const { at } = layout(userId);
   const here = at.get(id);
   if (!here) return missing(id);
@@ -441,50 +475,15 @@ export function moveBlockDown(userId: string | undefined, id: string, nowMs: num
  * would silently make them one.
  */
 export function duplicateBlock(userId: string | undefined, id: string, nowMs: number): BlockOpResult {
-  const state = readNotes(userId);
-  const blocks = Object.values(state.blocks);
-  const source = state.blocks[id];
+  const source = readNotes(userId).blocks[id];
   if (!source || !isLiveBlock(source)) return missing(id);
 
-  const ids = subtreeBlockIds(blocks, id);
-  const byId = new Map(blocks.map((block) => [block.id, block] as const));
-  const copied = new Map<string, string>();
-  let rootCopyId: string | null = null;
-
-  for (const originalId of ids) {
-    const original = byId.get(originalId);
-    if (!original) continue;
-
-    const isRoot = originalId === id;
-    const parentId = isRoot
-      ? (original.parentId.value ?? null)
-      : copied.get(original.parentId.value ?? '') ?? null;
-    // A descendant whose copied parent is missing would land at the top level,
-    // scattering the duplicate across the page. Skipping it keeps the copy a
-    // subtree; it can only happen if the tree changed under us mid-walk.
-    if (!isRoot && parentId === null) continue;
-
-    const copy = createBlock(userId, {
-      kind: original.kind.value,
-      text: original.text.value,
-      parentId,
-      // Only the root is placed relative to its source; descendants append in
-      // walk order, which is already reading order.
-      ...(isRoot ? { after: id } : {}),
-      ...(original.level ? { level: original.level.value } : {}),
-      ...(original.checked ? { checked: original.checked.value } : {}),
-      ...(original.language ? { language: original.language.value } : {}),
-      ...(original.collapsed ? { collapsed: original.collapsed.value } : {}),
-      ...(original.icon ? { icon: original.icon.value } : {}),
-      ...(original.cover ? { cover: original.cover.value } : {}),
-      // `favourite` is deliberately NOT copied: a duplicate is a draft, and
-      // silently adding a second entry to the sidebar for it is a surprise.
-    }, nowMs);
-
-    copied.set(originalId, copy.id);
-    if (isRoot) rootCopyId = copy.id;
-  }
-
-  if (!rootCopyId) return { ok: false, reason: 'refused', detail: 'The block could not be copied.' };
-  return { ok: true, action: 'duplicate', focusId: rootCopyId, caret: 0, createdId: rootCopyId };
+  // F3 — the copy is `copySubtree`, shared with template instantiation. It was
+  // duplicated here first and the two came apart in exactly the way ADR-029 is
+  // organised against: this one dropped a database's schema and its rows' cells,
+  // and neither remapped a reference pointing INSIDE the copy — so duplicating a
+  // page left both copies' internal links aimed at the original's blocks.
+  const copied = copySubtree(userId, id, { after: id, label: UNDO_LABELS.duplicate }, nowMs);
+  if (!copied.rootId) return { ok: false, reason: 'refused', detail: 'The block could not be copied.' };
+  return { ok: true, action: 'duplicate', focusId: copied.rootId, caret: 0, createdId: copied.rootId };
 }

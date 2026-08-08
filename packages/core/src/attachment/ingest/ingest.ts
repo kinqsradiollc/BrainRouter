@@ -11,7 +11,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto, { randomUUID } from 'node:crypto';
-import { attachmentDir, createAttachment, safeAttachmentName } from '../store/attachmentStore.js';
+import {
+  attachmentDir, createAttachment, findAttachmentBySha256, safeAttachmentName,
+} from '../store/attachmentStore.js';
 import { detectKind } from '../format/detect.js';
 import { sniffImage } from '../format/imageMeta.js';
 import { extractPdf } from '../format/pdfText.js';
@@ -34,6 +36,16 @@ export interface IngestAttachmentInput {
   requirementId?: string;
   taskId?: string;
   source: AttachmentSource;
+  /**
+   * ADR-029 D3 — reuse the record for these bytes if this scope already has one.
+   *
+   * Opt-in rather than always-on, because the two callers want opposite things.
+   * A note's picture wants "one object, three references": pasting the same
+   * screenshot into three notes must not triple the storage. A file attached to
+   * two chats wants two records — they have different sessions, different
+   * memory links, and deleting one must not take the other's blob with it.
+   */
+  dedupeBySha256?: boolean;
 }
 
 function resolveBytes(source: AttachmentSource): { name: string; data: Buffer; sourcePath?: string } {
@@ -71,6 +83,15 @@ export async function ingestAttachment(input: IngestAttachmentInput): Promise<At
   }
   const { name, data, sourcePath } = resolved;
   const sha256 = crypto.createHash('sha256').update(data).digest('hex');
+
+  if (input.dedupeBySha256) {
+    const existing = findAttachmentBySha256(workspaceRoot, sha256, sessionKey);
+    // The BLOB is checked, not just the record: a state tree that was pruned by
+    // hand would otherwise hand back an id whose bytes are gone, and the caller
+    // would store a reference to a picture that can never be drawn.
+    if (existing && fs.existsSync(existing.storedPath)) return existing;
+  }
+
   const detected = detectKind({ name, buffer: data });
   let mimeType = detected.mime;
   const kind = detected.kind;

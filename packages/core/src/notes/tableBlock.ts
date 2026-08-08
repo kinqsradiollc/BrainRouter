@@ -102,3 +102,66 @@ export function setTableCell(rowText: string, column: number, value: string): st
   cells[index] = value;
   return formatTableRow(cells);
 }
+
+/* ------------------------------------------------------------ column edits */
+
+/**
+ * ADR-029 F3 — a table you can add a column to.
+ *
+ * A column edit is the one table gesture that is not a single-block write: the
+ * cells of one column live in every row, so adding one is N writes, one per row
+ * block. That is the cost of the decision at the top of this file and it is the
+ * right cost — each of those N writes is an ordinary block update, so it merges,
+ * it queues on that row's own outbox stream, and it is refused while another
+ * device holds that row's lease. A cells-in-one-blob table would have made the
+ * same gesture ONE write that silently discarded whatever any other device had
+ * typed anywhere in the table.
+ *
+ * These functions are per-row and pure so the caller can map them over the rows
+ * it has; nothing here reads or writes a store.
+ */
+export function insertTableColumn(rowText: string, at: number): string {
+  const cells = parseTableRow(rowText);
+  if (cells.length >= MAX_TABLE_COLUMNS) return rowText;
+  const index = Math.max(0, Math.min(Math.trunc(at), cells.length));
+  cells.splice(index, 0, '');
+  return formatTableRow(cells);
+}
+
+/**
+ * Take a column out of one row.
+ *
+ * The last column is never removed: a table with no columns has nowhere to put
+ * the text that was in it, and the row would render as an empty strip that
+ * cannot be typed into. Removing the TABLE is the gesture for that, and it is
+ * the one that leaves a tombstone the trash can restore.
+ */
+export function removeTableColumn(rowText: string, at: number): string {
+  const cells = parseTableRow(rowText);
+  if (cells.length <= 1) return rowText;
+  const index = Math.trunc(at);
+  if (index < 0 || index >= cells.length) return rowText;
+  cells.splice(index, 1);
+  return formatTableRow(cells);
+}
+
+/** A blank row of the table's current width — what "add a row" starts from. */
+export function emptyTableRow(width: number): string {
+  const columns = Math.max(1, Math.min(Math.trunc(width) || 1, MAX_TABLE_COLUMNS));
+  return formatTableRow(new Array(columns).fill(''));
+}
+
+/**
+ * The header row's default labels.
+ *
+ * Named rather than blank because a header of empty cells is indistinguishable
+ * from a data row that happens to be empty, and the whole point of the header
+ * toggle is that the first row reads as labels.
+ */
+export function defaultTableHeader(width: number): string {
+  const columns = Math.max(1, Math.min(Math.trunc(width) || 1, MAX_TABLE_COLUMNS));
+  return formatTableRow(Array.from({ length: columns }, (_, index) => `Column ${index + 1}`));
+}
+
+/** What a new table starts as: a header and one row to type in. */
+export const NEW_TABLE_COLUMNS = 3;

@@ -34,8 +34,8 @@ const source = (relative: string): string => readFileSync(new URL(relative, impo
 function block(over: Partial<NoteBlockView> = {}): NoteBlockView {
   return {
     id: 'blk_1', parentId: null, depth: 0, kind: 'paragraph', text: 'a line',
-    checked: false, level: null, hasChildren: false, refs: [], conflicts: [],
-    lockedBy: null, title: null, icon: null, cover: null, favourite: false, ...over,
+    checked: false, level: null, hasChildren: false, collapsed: false, refs: [], conflicts: [],
+    lockedBy: null, title: null, icon: null, cover: null, favourite: false, template: false, comments: [], ...over,
   };
 }
 

@@ -20,6 +20,7 @@
  */
 import type { InlineMark } from '@kinqs/brainrouter-core/notes/editing';
 import { columnOf, isOnFirstLine, isOnLastLine } from './blockEditing.js';
+import { atFirstVisualRow, atLastVisualRow, type VisualRowGeometry } from './visualRows.js';
 
 export type BlockIntent =
   /** Enter — core splits at the caret. */
@@ -31,9 +32,18 @@ export type BlockIntent =
   | { kind: 'move-up' }
   | { kind: 'move-down' }
   | { kind: 'duplicate' }
-  /** The caret leaves this block, keeping its column as closely as it can. */
-  | { kind: 'caret-up'; column: number }
-  | { kind: 'caret-down'; column: number }
+  /**
+   * The caret leaves this block, keeping its horizontal position.
+   *
+   * `x` is where the caret was on screen and is what the neighbour actually uses
+   * (F3): on a wrapped paragraph a character column names two different places
+   * depending on which row you land in, while the x is the thing the reader's
+   * eye is tracking. `column` stays as the fallback for a surface with no
+   * layout to measure — the browser dev harness before first paint, and the
+   * tests.
+   */
+  | { kind: 'caret-up'; column: number; x?: number }
+  | { kind: 'caret-down'; column: number; x?: number }
   /** Shift-arrow past the edge — the selection becomes several blocks (E4). */
   | { kind: 'select-up' }
   | { kind: 'select-down' }
@@ -75,6 +85,15 @@ export interface BlockKeyContext {
   menuOpen?: boolean;
   /** True while an input method owns the keystrokes (see `reduceComposition`). */
   composing?: boolean;
+  /**
+   * F3 — where the block's rows and the caret actually are.
+   *
+   * Absent when nothing has been laid out yet, in which case the newline rule
+   * below is used. That fallback is Part E's behaviour, kept deliberately: it is
+   * wrong for a wrapped paragraph and right for everything else, which makes it
+   * the correct thing to degrade to rather than refusing to move the caret.
+   */
+  geometry?: VisualRowGeometry;
 }
 
 function mod(event: KeyLike): boolean {
@@ -113,16 +132,24 @@ export function blockKeyIntent(event: KeyLike, ctx: BlockKeyContext): BlockInten
 
   if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
     const up = event.key === 'ArrowUp';
-    const atEdge = up
-      ? isOnFirstLine(ctx.text, ctx.selection.start)
-      : isOnLastLine(ctx.text, ctx.selection.end);
+    // F3 — the LAID-OUT edge when there is one. Not the newline edge, which
+    // reported every row of a wrapped paragraph as the first: the caret left the
+    // block from the middle of it, and climbing a paragraph with the keyboard
+    // was impossible.
+    const atEdge = ctx.geometry
+      ? (up ? atFirstVisualRow(ctx.geometry) : atLastVisualRow(ctx.geometry))
+      : (up ? isOnFirstLine(ctx.text, ctx.selection.start) : isOnLastLine(ctx.text, ctx.selection.end));
     // ⌘⇧↑ moves the BLOCK; the same keys without the modifier move the caret.
     if (mod(event) && event.shiftKey) return up ? { kind: 'move-up' } : { kind: 'move-down' };
+    // Not at an edge: the browser moves the caret within this block, which is
+    // exactly the right behaviour and is why this returns `none` rather than
+    // computing a row of its own.
     if (!atEdge) return { kind: 'none' };
     if (event.shiftKey) return up ? { kind: 'select-up' } : { kind: 'select-down' };
+    const x = ctx.geometry?.caret.left;
     return up
-      ? { kind: 'caret-up', column: columnOf(ctx.text, ctx.selection.start) }
-      : { kind: 'caret-down', column: columnOf(ctx.text, ctx.selection.end) };
+      ? { kind: 'caret-up', column: columnOf(ctx.text, ctx.selection.start), ...(x === undefined ? {} : { x }) }
+      : { kind: 'caret-down', column: columnOf(ctx.text, ctx.selection.end), ...(x === undefined ? {} : { x }) };
   }
 
   if (mod(event)) {

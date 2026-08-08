@@ -25,7 +25,8 @@ import { RefChip } from '../components/workspace/RefChip.js';
 import {
   cellDayKey, cellEditorFor, monthGrid, monthAnchorOf, selectOptionId, shiftMonth,
   todayKey, toggleMultiValue, valueList, monthLabel, WEEKDAY_LABELS,
-  type CellEditor, type DatabasePropertyDto, type NotePropertyValue, type NoteSelectOption,
+  type CellEditor, type DatabasePropertyDto, type NoteFileDto, type NotePropertyValue,
+  type NoteSelectOption,
 } from '../lib/notes/database.js';
 import type { MentionCandidate } from '../lib/notes/mentionPicker.js';
 
@@ -34,6 +35,15 @@ export interface DatabaseCellProps {
   value: NotePropertyValue;
   /** Core's one-line rendering. Shown wherever this file does not draw its own. */
   display: string;
+  /**
+   * F2 — why a computed cell has no value.
+   *
+   * Rendered IN the cell rather than in the notice strip above the view, because
+   * that is where the person reading the number is looking. A formula that
+   * cannot be worked out on three rows out of forty has nothing to say at the
+   * top of the table; it has something to say in those three cells.
+   */
+  error?: string;
   /** A3 — resolved labels for the references a relation cell holds. */
   refLabels: Record<string, string>;
   onWrite: (value: NotePropertyValue) => void;
@@ -46,6 +56,9 @@ export interface DatabaseCellProps {
   onOpenRow?: () => void;
   /** Compact cells sit in a table row; roomy ones sit in a card or a filter. */
   variant?: 'cell' | 'field';
+  /** F3/D3 — a file into the one attachment store, and the names behind the ids. */
+  onAttachFile?: (name: string, dataBase64: string) => Promise<{ ok: boolean; ref?: string; error?: string }>;
+  describeFiles?: (ids: readonly string[]) => Promise<NoteFileDto[]>;
 }
 
 export function DatabaseCell(props: DatabaseCellProps): React.ReactElement {
@@ -74,6 +87,28 @@ export function CellEditorFor(props: DatabaseCellProps & { editor: CellEditor })
       </span>
     );
   }
+
+  // F2/F3 — worked out from the row, so there is nothing to type into. An
+  // editable field over a derived value would let somebody overwrite a
+  // derivation, and core refuses the write anyway: the cell would swallow the
+  // typing on blur and look broken.
+  if (editor === 'computed') {
+    if (props.error) {
+      return (
+        <span className="db-cell-static is-error" title={props.error}>{props.error}</span>
+      );
+    }
+    return (
+      <span
+        className="db-cell-static is-computed"
+        title={`“${property.name}” is worked out from this row.`}
+      >
+        {display || '—'}
+      </span>
+    );
+  }
+
+  if (editor === 'files') return <FilesValue {...props} />;
 
   if (editor === 'checkbox') {
     return (
@@ -131,6 +166,100 @@ export function CellEditorFor(props: DatabaseCellProps & { editor: CellEditor })
   if (editor === 'select' || editor === 'multi-select') return <SelectValue {...props} multi={editor === 'multi-select'} />;
   if (editor === 'person') return <ListValue {...props} />;
   return <RelationValue {...props} />;
+}
+
+/* ------------------------------------------------------------------ files */
+
+/**
+ * F3/D3 — a cell holding attachment references, drawn as the files they name.
+ *
+ * The cell stores `attachment:<id>` and NOT a filename, because D3 says the
+ * object is stored once and shared: a name belongs to the record, so it is
+ * resolved here rather than copied into every cell that points at the object.
+ * The cost is one round trip per cell, and the alternative is a name that goes
+ * stale the moment the file is replaced.
+ *
+ * A reference this workspace does not hold is shown as MISSING with its id
+ * rather than dropped — notes are user-scoped (D1) while attachments are per
+ * workspace, so a note opened from a different checkout legitimately has files
+ * whose bytes are elsewhere, and a shorter list would read as deletion.
+ */
+function FilesValue({ value, onWrite, onAttachFile, describeFiles }: DatabaseCellProps): React.ReactElement {
+  const refs = valueList(value);
+  const [files, setFiles] = useState<NoteFileDto[]>([]);
+  const [problem, setProblem] = useState<string | null>(null);
+  const input = useRef<HTMLInputElement>(null);
+
+  const ids = refs.map((ref) => ref.replace(/^attachment:/, '')).join('\u0000');
+  useEffect(() => {
+    if (!describeFiles || ids.length === 0) { setFiles([]); return; }
+    let cancelled = false;
+    void describeFiles(ids.split('\u0000'))
+      .then((rows) => { if (!cancelled) setFiles(rows); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [ids, describeFiles]);
+
+  const add = async (picked: FileList | null): Promise<void> => {
+    if (!picked || !onAttachFile) return;
+    setProblem(null);
+    const added: string[] = [];
+    for (const file of Array.from(picked).slice(0, 8)) {
+      const buffer = await file.arrayBuffer();
+      // Chunked, because `String.fromCharCode(...bytes)` on a multi-megabyte
+      // file is an argument list long enough to overflow the call stack — the
+      // failure looks like the picker doing nothing at all.
+      let binary = '';
+      const bytes = new Uint8Array(buffer);
+      for (let at = 0; at < bytes.length; at += 8192) {
+        binary += String.fromCharCode(...bytes.subarray(at, at + 8192));
+      }
+      const stored = await onAttachFile(file.name, btoa(binary));
+      if (stored.ok && stored.ref) added.push(stored.ref);
+      else setProblem(stored.error ?? 'That file could not be stored.');
+    }
+    if (added.length > 0) onWrite([...refs, ...added]);
+  };
+
+  return (
+    <div className="db-files">
+      {refs.map((ref, index) => {
+        const record = files[index];
+        return (
+          <span key={ref} className={`db-tag${record?.missing ? ' is-missing' : ''}`}>
+            {record?.missing
+              ? <span title="This file was added from a different workspace, or it has been deleted.">Missing file</span>
+              : record?.name ?? '…'}
+            <button
+              className="db-file-drop"
+              aria-label="Take this file out of the cell"
+              title="Take this file out of the cell. The stored file is not deleted."
+              onClick={() => onWrite(refs.filter((entry) => entry !== ref).length > 0
+                ? refs.filter((entry) => entry !== ref)
+                : null)}
+            >
+              ×
+            </button>
+          </span>
+        );
+      })}
+      {onAttachFile ? (
+        <>
+          <button className="db-chip-btn db-relation-add" onClick={() => input.current?.click()}>
+            {refs.length === 0 ? <span className="db-empty">Add a file</span> : <Icon name="plus" size={10} />}
+          </button>
+          <input
+            ref={input}
+            type="file"
+            multiple
+            style={{ display: 'none' }}
+            onChange={(event) => { void add(event.target.files); event.target.value = ''; }}
+          />
+        </>
+      ) : null}
+      {problem ? <span className="db-cell-problem">{problem}</span> : null}
+    </div>
+  );
 }
 
 /* ------------------------------------------------------------------- text */

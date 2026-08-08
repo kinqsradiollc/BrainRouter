@@ -137,6 +137,11 @@ export const SLASH_CATALOG: readonly SlashCommand[] = [
     aliases: ['embed', 'reference', 'link to', 'task', 'planner', 'meeting', 'pull request'],
     hint: 'Show a task, a file or a meeting here — live, not a copy.',
   },
+  {
+    id: 'synced', label: 'Synced block', kind: 'synced', group: 'advanced',
+    aliases: ['synced', 'sync', 'mirror', 'reuse', 'same block', 'transclude'],
+    hint: 'Show a block from another page here. Editing either place edits the one block.',
+  },
 ];
 
 export function slashCommand(id: string): SlashCommand | null {

@@ -38,6 +38,16 @@ import {
   listTrash as notesTrash, listFavourites as notesFavourites,
   applyInputRule, searchSlashCatalog, numberedOrdinals, pageTitleOrDefault,
   describeTrashEntry,
+  // ADR-029 F4/F3 — page-level undo, comments and templates. The inverses, the
+  // guard, the merge and the reference rewrite are all core's; the host routes
+  // and flattens, which is what keeps the dashboard able to do the same.
+  undoNotes as notesUndo, redoNotes as notesRedo, noteUndoState as notesUndoState,
+  addComment as notesAddComment, setCommentResolved as notesSetCommentResolved,
+  editComment as notesEditComment, removeComment as notesRemoveComment,
+  blockComments, orphanedComments as notesOrphanedComments,
+  isLiveBlock as isLiveNoteBlock, listAllBlocks as notesAllBlocks, subtreeBlockIds,
+  listTemplates as notesListTemplates, instantiateTemplate as notesInstantiateTemplate,
+  describeInstantiation as describeNoteInstantiation,
   // ADR-029 E3 — databases. A row is a page, so every one of these composes the
   // block mutations above rather than reaching a second store; the host routes.
   createDatabase as notesCreateDatabase, listDatabases as notesListDatabases,
@@ -48,6 +58,22 @@ import {
   readDatabaseView as notesReadDatabaseView, readDatabase,
   DATABASE_BLOCK_KIND, NOTE_PROPERTY_TYPES, NOTE_VIEW_KINDS, operatorsFor,
   type NotePropertyType, type NoteViewKind, type NoteDatabaseView,
+  // ADR-029 Part F — the blocks the slash menu offered and could not draw. Both
+  // reach the network through core's ONE guarded fetch, which is also what
+  // `fetch_url` uses: a bookmark preview reaching an internal service is the
+  // same defect as a tool call reaching one.
+  fetchBookmarkPreview, fetchNoteImage, noteImageRef, NOTE_ATTACHMENT_SESSION,
+  // ADR-029 F2/F3 — the derived columns: the function catalogue a formula
+  // editor lists, the aggregates a rollup offers, and the refusal that makes a
+  // metadata column read-only in one place rather than in each surface.
+  FORMULA_FUNCTIONS, isDerivedPropertyType, NOTE_ROLLUP_AGGREGATES,
+  rollupTargetProperties as notesRollupTargets,
+  type NoteRollupSpec,
+  // ADR-029 F3 — a synced block is an ADDRESS, resolved here because the source
+  // is usually on a page the renderer is not holding; and getting data out,
+  // written by core so the desktop and the dashboard produce the same file.
+  readSyncedBlock, describeSyncedState, exportNote, exportFormatsFor,
+  walkSubtree as walkNoteSubtree,
 } from '@kinqs/brainrouter-core/notes';
 import { createNotesTransport } from './notesTransport.js';
 import {
@@ -2334,6 +2360,19 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
               icon: block.icon?.value ?? null,
               cover: block.cover?.value ?? null,
               favourite: block.favourite?.value === true,
+              // F3 — a template is a PAGE with a mark on it (B4), so it travels
+              // as a flag rather than as a kind.
+              template: block.template?.value === true,
+              // F3 — the thread, flattened. The stamps are a sync concern and
+              // the renderer draws a line of text; sending `Stamped<string>`
+              // would make a component know about hybrid logical clocks.
+              comments: blockComments(block).map((comment) => ({
+                id: comment.id,
+                body: comment.body.value,
+                author: comment.author,
+                resolved: comment.resolved.value === true,
+                createdAtMs: comment.createdAt.physical,
+              })),
               ordinal: ordinals.get(block.id) ?? null,
               // Only a CONTAINER has a title — a page, and E3's database, whose
               // name is the heading over its rows. Sending one for every block
@@ -2396,8 +2435,75 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         ...(typeof a.icon === 'string' ? { icon: a.icon } : {}),
         ...(typeof a.cover === 'string' ? { cover: a.cover } : {}),
         ...(typeof a.favourite === 'boolean' ? { favourite: a.favourite } : {}),
+        ...(typeof a.template === 'boolean' ? { template: a.template } : {}),
       }, Date.now()),
       'notes-delete': (a) => ({ deleted: notesDelete(undefined, String(a.id ?? ''), Date.now()) }),
+
+      // ADR-029 F4 — page-level undo. The stack, the inverses and the guard are
+      // core's; this only says which page is being read. A stack per page is the
+      // decision that keeps ⌘Z from taking back something off screen.
+      'notes-undo': (a) => notesUndo(
+        undefined, typeof a.pageId === 'string' ? a.pageId : null, Date.now(),
+      ),
+      'notes-redo': (a) => notesRedo(
+        undefined, typeof a.pageId === 'string' ? a.pageId : null, Date.now(),
+      ),
+      'notes-undo-state': (a) => notesUndoState(
+        undefined, typeof a.pageId === 'string' ? a.pageId : null,
+      ),
+
+      // ADR-029 F3 — comments. Content, so they are stamped and merged like
+      // every other field; C5, so deleting the block never deletes them.
+      'notes-comment-add': (a) => notesAddComment(undefined, String(a.id ?? ''), {
+        body: String(a.body ?? ''),
+        ...(typeof a.author === 'string' ? { author: a.author } : {}),
+      }, Date.now()),
+      'notes-comment-resolve': (a) => notesSetCommentResolved(
+        undefined, String(a.id ?? ''), String(a.commentId ?? ''), a.resolved === true, Date.now(),
+      ),
+      'notes-comment-edit': (a) => notesEditComment(
+        undefined, String(a.id ?? ''), String(a.commentId ?? ''), String(a.body ?? ''), Date.now(),
+      ),
+      'notes-comment-remove': (a) => notesRemoveComment(
+        undefined, String(a.id ?? ''), String(a.commentId ?? ''), Date.now(),
+      ),
+      // C5 — the threads whose block is in the trash. Read as a projection over
+      // what is already stored, never a second table.
+      'notes-comments-orphaned': () => ({
+        threads: notesOrphanedComments(notesAllBlocks(undefined), isLiveNoteBlock).map((entry) => ({
+          blockId: entry.block.id,
+          text: entry.block.text.value,
+          comments: entry.comments.map((comment) => ({
+            id: comment.id,
+            body: comment.body.value,
+            author: comment.author,
+            resolved: comment.resolved.value === true,
+            createdAtMs: comment.createdAt.physical,
+          })),
+        })),
+      }),
+
+      // ADR-029 F3 — templates. A template is a PAGE, so there is no template
+      // store: marking is a field on the block and instantiating is core's copy,
+      // which rewrites the references that point INSIDE the template and leaves
+      // the ones that point outside alone.
+      'notes-templates': () => ({
+        templates: notesListTemplates(undefined).map((block) => ({
+          id: block.id,
+          title: pageTitleOrDefault(block),
+          icon: block.icon?.value ?? null,
+          blocks: subtreeBlockIds(notesAllBlocks(undefined), block.id).length,
+        })),
+      }),
+      'notes-template-instantiate': (a) => {
+        const made = notesInstantiateTemplate(undefined, String(a.id ?? ''), {
+          ...(typeof a.parentId === 'string' ? { parentId: a.parentId } : { parentId: null }),
+        }, Date.now());
+        // The SENTENCE comes from core, because core performed the rewrite and
+        // knows how many links moved. Re-deriving it here would let the desktop
+        // keep describing a rule the store had stopped implementing.
+        return { ...made, line: describeNoteInstantiation(made) };
+      },
 
       // ADR-029 E1 — the gestures. Each one is a call into core, because the
       // judgements they encode (does Backspace unstyle, outdent or merge; where
@@ -2528,9 +2634,11 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           kind: projection.kind,
           properties: database.schema.map((def) => ({
             ...def,
-            // §3 keeps formulas and rollups out, and a newer client's column
-            // arrives the same way: named, kept, and reported as one this build
-            // cannot compute rather than approximated.
+            // A newer client's column arrives named, kept, and reported as one
+            // this build cannot compute rather than approximated. F2's formulas
+            // and rollups are NOT that case any more — they travel with their
+            // source and their configuration so the schema editor can show what
+            // the column actually does.
             unsupported: database.unsupported.includes(def.id),
             operators: operatorsFor(def),
           })),
@@ -2545,6 +2653,11 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
               value: cell.value,
               display: cell.display,
               unsupported: cell.unsupported,
+              // F2/F3 — the value was worked out, so the renderer draws it
+              // read-only; and when it could not be worked out, `error` is the
+              // sentence that goes IN the cell rather than in a notice strip.
+              computed: cell.computed,
+              ...(cell.error ? { error: cell.error } : {}),
             })),
           })),
           // Row IDS, not rows: a multi-value grouping puts one row in several
@@ -2577,15 +2690,37 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         name: String(a.name ?? 'Property'),
         type: String(a.type ?? 'text') as NotePropertyType,
         ...(Array.isArray(a.options) ? { options: a.options as { id: string; label: string }[] } : {}),
+        // F2 — a formula column arrives WITH its expression and a rollup with
+        // its configuration, so it is never briefly a column that says it has
+        // not been set up.
+        ...(typeof a.formula === 'string' ? { formula: a.formula } : {}),
+        ...(a.rollup && typeof a.rollup === 'object' ? { rollup: a.rollup as NoteRollupSpec } : {}),
       }, Date.now()),
       'notes-database-update-property': (a) => notesUpdateProperty(
         undefined, String(a.id ?? ''), String(a.propertyId ?? ''),
         {
           ...(typeof a.name === 'string' ? { name: a.name } : {}),
           ...(Array.isArray(a.options) ? { options: a.options as { id: string; label: string }[] } : {}),
+          // The formula IS patchable where the type is not: nothing is stored
+          // under it, so rewriting it recomputes from the same data.
+          ...(typeof a.formula === 'string' ? { formula: a.formula } : {}),
+          ...(a.rollup && typeof a.rollup === 'object' ? { rollup: a.rollup as NoteRollupSpec } : {}),
         },
         Date.now(),
       ),
+      /**
+       * F2 — the columns a rollup on this database could summarise.
+       *
+       * Derived from where the relation actually points (E5 lets it point at any
+       * mode), so the picker offers columns that exist rather than a guess every
+       * row would then report as unreadable.
+       */
+      'notes-rollup-targets': (a) => {
+        const found = notesRollupTargets(undefined, String(a.id ?? ''), String(a.relation ?? ''));
+        return found.ok
+          ? { ok: true, properties: found.value.properties, databases: found.value.databases }
+          : found;
+      },
       'notes-database-remove-property': (a) => notesRemoveProperty(
         undefined, String(a.id ?? ''), String(a.propertyId ?? ''), Date.now(),
       ),
@@ -2635,9 +2770,257 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         types: NOTE_PROPERTY_TYPES.map((type) => ({
           type,
           operators: operatorsFor({ id: type, name: type, type }),
+          // F3 — a derived column cannot be typed into, and the renderer needs
+          // to know that from core rather than from a list of its own: a surface
+          // that decided for itself would offer an editor over a value core
+          // refuses to store, and the typing would vanish on blur.
+          derived: isDerivedPropertyType(type),
         })),
         viewKinds: NOTE_VIEW_KINDS,
+        // The function catalogue and the aggregates, so a formula editor and a
+        // rollup picker list what the evaluator actually implements.
+        functions: FORMULA_FUNCTIONS,
+        aggregates: NOTE_ROLLUP_AGGREGATES,
       }),
+      /**
+       * ADR-029 D3 — a picture picked or pasted into a note, stored ONCE.
+       *
+       * Through `ingestAttachment`, which is the store this product already has;
+       * D3's "an image pasted into three notes is one object with three
+       * references" is the `dedupeBySha256` flag, and the notes scope is what it
+       * de-duplicates within. A second blob store beside the attachment records
+       * is exactly what D3 refuses.
+       *
+       * The block then holds `attachment:<id>` — see `noteImageRef.ts` for why
+       * that lives in the block's own text rather than in a new stamped field.
+       */
+      'notes-image-attach': async (a) => {
+        const dataBase64 = typeof a.dataBase64 === 'string' ? a.dataBase64 : '';
+        if (!dataBase64) return { ok: false, error: 'No picture was given.' };
+        try {
+          const record = await ingestAttachment({
+            workspaceRoot,
+            sessionKey: NOTE_ATTACHMENT_SESSION,
+            dedupeBySha256: true,
+            source: {
+              kind: 'bytes',
+              name: typeof a.name === 'string' && a.name ? a.name : 'pasted.png',
+              data: Buffer.from(dataBase64, 'base64'),
+            },
+          });
+          if (record.kind !== 'image') {
+            return { ok: false, error: `That file is a ${record.mimeType}, not a picture.` };
+          }
+          return { ok: true, ref: noteImageRef(record.id), id: record.id };
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : 'That picture could not be stored.' };
+        }
+      },
+      /**
+       * D3 — a picture pasted as an ADDRESS, pulled into the store.
+       *
+       * The renderer's content policy is `img-src 'self' data:`, so a remote
+       * address can never be drawn; fetching it here is what turns a link
+       * somebody pasted into a picture the note actually holds. The fetch is
+       * core's guarded one, so the address checks, the redirect cap, the size
+       * cap and the timeout are the same ones `fetch_url` gets.
+       */
+      'notes-image-fetch': async (a) => {
+        const url = typeof a.url === 'string' ? a.url : '';
+        if (!url) return { ok: false, error: 'No address was given.' };
+        const fetched = await fetchNoteImage(url, { userAgent: getCliKnobs().webSearch.crawler.userAgent });
+        if (!fetched.ok) return { ok: false, error: fetched.detail };
+        try {
+          const record = await ingestAttachment({
+            workspaceRoot,
+            sessionKey: NOTE_ATTACHMENT_SESSION,
+            dedupeBySha256: true,
+            source: { kind: 'bytes', name: fetched.name, data: fetched.bytes },
+          });
+          return { ok: true, ref: noteImageRef(record.id), id: record.id };
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : 'That picture could not be stored.' };
+        }
+      },
+      /**
+       * The bytes for one stored picture, as a `data:` URI.
+       *
+       * A missing record answers with a REASON rather than null. Notes are
+       * user-scoped (D1) and attachments are stored per workspace, so a note
+       * opened from a different checkout can legitimately hold a reference whose
+       * object is elsewhere — and the block says so in a sentence instead of
+       * drawing the browser's broken-image glyph.
+       */
+      'notes-image-read': (a) => {
+        const id = typeof a.id === 'string' ? a.id : '';
+        const record = id ? getAttachment(workspaceRoot, id) : undefined;
+        if (!record) {
+          return { id, name: '', error: 'it was added from a different workspace, or it has been deleted.' };
+        }
+        try {
+          const bytes = fs.readFileSync(record.storedPath);
+          return {
+            id: record.id,
+            name: record.name,
+            dataUri: `data:${record.mimeType};base64,${bytes.toString('base64')}`,
+            ...(record.width === undefined ? {} : { width: record.width }),
+            ...(record.height === undefined ? {} : { height: record.height }),
+            byteSize: record.byteSize,
+          };
+        } catch {
+          return { id: record.id, name: record.name, error: 'its file could not be read from disk.' };
+        }
+      },
+      /**
+       * ADR-029 F3 + D3 — a file dropped into a `files` cell, stored ONCE.
+       *
+       * The same `ingestAttachment` call the image block uses, without the
+       * image check: a files column holds anything, and the block and the cell
+       * then name the same object with the same `attachment:<id>` spelling. Two
+       * ingest paths would be the second store D3 refuses, arrived at by
+       * copying rather than by deciding.
+       */
+      'notes-file-attach': async (a) => {
+        const dataBase64 = typeof a.dataBase64 === 'string' ? a.dataBase64 : '';
+        if (!dataBase64) return { ok: false, error: 'No file was given.' };
+        try {
+          const record = await ingestAttachment({
+            workspaceRoot,
+            sessionKey: NOTE_ATTACHMENT_SESSION,
+            dedupeBySha256: true,
+            source: {
+              kind: 'bytes',
+              name: typeof a.name === 'string' && a.name ? a.name : 'file',
+              data: Buffer.from(dataBase64, 'base64'),
+            },
+          });
+          return {
+            ok: true, ref: noteImageRef(record.id), id: record.id,
+            name: record.name, byteSize: record.byteSize, mimeType: record.mimeType,
+          };
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : 'That file could not be stored.' };
+        }
+      },
+      /**
+       * The names behind a files cell's references.
+       *
+       * The cell stores ids, because D3 says the object is shared and a name
+       * belongs to the record rather than to the reference. A record this
+       * workspace does not have comes back MISSING with a reason instead of
+       * being dropped: notes are user-scoped (D1) and attachments are per
+       * workspace, so a note opened from a different checkout legitimately holds
+       * a reference whose bytes are elsewhere, and a silently shorter list would
+       * read as files somebody deleted.
+       */
+      'notes-file-describe': (a) => {
+        const ids = Array.isArray(a.ids) ? a.ids.map((id) => String(id)).slice(0, 64) : [];
+        return {
+          files: ids.map((id) => {
+            const record = getAttachment(workspaceRoot, id);
+            return record
+              ? { id, name: record.name, byteSize: record.byteSize, mimeType: record.mimeType, missing: false }
+              : { id, name: id, byteSize: 0, mimeType: '', missing: true };
+          }),
+        };
+      },
+      /**
+       * ADR-029 F3 — a bookmark's title, description and icon.
+       *
+       * Resolved on every read rather than stored on the block, for A3's reason
+       * applied to a web page: a cached title is a snapshot, and a snapshot goes
+       * quietly wrong when the page is rewritten. A failure comes back as DATA —
+       * the caller is drawing a card, and a link that cannot be previewed is
+       * still a link that works.
+       */
+      'notes-bookmark-preview': async (a) => {
+        const result = await fetchBookmarkPreview(String(a.url ?? ''), {
+          userAgent: getCliKnobs().webSearch.crawler.userAgent,
+        });
+        return result.ok
+          ? { ok: true, preview: result.preview }
+          : {
+            ok: false,
+            failure: {
+              url: result.url, host: result.host, reason: result.reason, detail: result.detail,
+            },
+          };
+      },
+
+      /**
+       * F3 — what a synced block currently shows.
+       *
+       * Resolved HOST-side because a mirror is an address and the thing it
+       * addresses is a block in the store, which the renderer does not hold:
+       * the source is usually on another page. What comes back is the source's
+       * OWN ids, so the editor the row draws writes to the one block — the
+       * mirror never gets a copy to keep in step, which is the whole design.
+       */
+      'notes-synced-read': (a) => {
+        const state = readNotes(undefined);
+        const all = Object.values(state.blocks);
+        const mirror = all.find((block) => block.id === String(a.id ?? ''));
+        if (!mirror) return { status: 'gone', uri: '', note: 'This block is not on this device.', rows: [] };
+
+        const result = readSyncedBlock(all, mirror);
+        const note = describeSyncedState(result);
+        const uri = 'uri' in result ? result.uri : '';
+        if (result.status !== 'ready') return { status: result.status, uri, note, rows: [] };
+
+        const now = Date.now();
+        const walked = walkNoteSubtree(all, result.source.id, result.blockIds.length);
+        const ordinals = numberedOrdinals(buildNoteTree(all).roots);
+        return {
+          status: 'ready',
+          uri,
+          note,
+          sourceId: result.source.id,
+          omittedLabel: result.omittedLabel ?? null,
+          rows: walked.rows.map((row) => ({
+            id: row.block.id,
+            depth: row.depth,
+            kind: row.block.kind.value,
+            text: row.block.text.value,
+            level: row.block.level?.value ?? null,
+            checked: row.block.checked?.value === true,
+            icon: row.block.icon?.value ?? null,
+            ordinal: ordinals.get(row.block.id) ?? null,
+            lockedBy: describeBlockLease(state.leases[row.block.id], state.deviceId, now),
+          })),
+        };
+      },
+
+      /**
+       * F3's "can I leave", answered with a file.
+       *
+       * The writers are core's, so a page exported from the dashboard is the
+       * same file. What comes back is TEXT plus the omissions, and the renderer
+       * saves it — the host does not choose a folder, because the shell's own
+       * download already asks the person where their files go.
+       */
+      'notes-export': (a) => {
+        const state = readNotes(undefined);
+        const format = a.format === 'csv' ? 'csv' : 'markdown';
+        const id = String(a.id ?? '');
+        // Core decides what a block can be written as, so the refusal here and
+        // the entries a menu offers cannot disagree about it.
+        const offered = exportFormatsFor(Object.values(state.blocks).find((block) => block.id === id));
+        if (!offered.includes(format)) {
+          return {
+            ok: false,
+            error: format === 'csv'
+              ? 'Only a database can be written as a spreadsheet. A page goes out as Markdown.'
+              : 'That page is not on this device.',
+          };
+        }
+        const written = exportNote(Object.values(state.blocks), id, format, {
+          nowMs: Date.now(),
+          deviceId: state.deviceId,
+          ...(typeof a.viewId === 'string' && a.viewId ? { viewId: a.viewId } : {}),
+        });
+        return written ? { ok: true, ...written } : { ok: false, error: 'That page could not be written out.' };
+      },
+
       'notes-sync': async () => {
         const brainUrl = getCliKnobs().brainUrl;
         if (!brainUrl) {
