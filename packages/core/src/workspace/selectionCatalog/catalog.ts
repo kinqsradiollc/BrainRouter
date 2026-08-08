@@ -14,6 +14,7 @@ import { localToolExecutors } from '../../tool/registry/executors.js';
 import { WORKSPACE_CAPABILITY_DEFINITIONS } from '../capabilities.js';
 import {
   inspectWorkspaceProfilePlugins,
+  workspaceProfilePluginSkillIds,
 } from '../profilePlugins.js';
 import { BUNDLED_WORKSPACE_SKILL_PACK_IDS } from '../skillSelection.js';
 import { WORKSPACE_TOOL_PROFILES } from '../toolProfiles.js';
@@ -267,8 +268,11 @@ export function buildWorkspaceSelectionCatalog(
       runtimeAvailabilityPrerequisites: plugin.kind === 'capability'
         ? [`capability:${plugin.id}`]
         : [],
-      expandsTo: [...plugin.skillIds],
+      expandsTo: workspaceProfilePluginSkillIds(plugin),
     });
+    // Owned skills only. A pack's library skills were already registered above
+    // from the bundled root with their own description and category; re-reading
+    // them from a pack root they do not live in would drop them entirely.
     for (const id of plugin.skillIds) {
       if (knownSkillIds.has(id)) continue;
       knownSkillIds.add(id);
@@ -311,7 +315,7 @@ export function buildWorkspaceSelectionCatalog(
       blockedReason: reason,
       ...(plugin.kind === 'capability' ? { managedByCapability: plugin.id } : {}),
       runtimeAvailabilityPrerequisites: [],
-      expandsTo: [...plugin.skillIds],
+      expandsTo: workspaceProfilePluginSkillIds(plugin),
     });
     for (const id of plugin.skillIds) {
       pushCatalogEntry(entries, {

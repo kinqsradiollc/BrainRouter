@@ -15,16 +15,18 @@
     "config",
     "dist",
     "README.md",
-    "skills"
+    "skills",
+    "THIRD-PARTY-NOTICES.md"
   ],
   "scripts": {
     "clean": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\"",
-    "build": "npm run clean && tsc",
+    "build": "npm run clean && tsc && node ../scripts/bundle-content.mjs --package .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "test": "npm run build && node --test \"dist/**/*.test.js\"",
     "prepack": "npm run build && node -e \"const fs=require('fs');function w(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=d+'/'+e.name;if(e.isDirectory())w(p);else if(/\\.test\\./.test(e.name))fs.rmSync(p)}}w('dist')\"",
+    "postpack": "node ../scripts/bundle-content.mjs --package . --clean",
     "sync-changelog": "node -e \"fs.rmSync('changelog',{recursive:true,force:true});fs.mkdirSync('changelog',{recursive:true});for(const f of fs.readdirSync('../brainrouter-changelog'))if(f.endsWith('.md'))fs.copyFileSync('../brainrouter-changelog/'+f,'changelog/'+f)\"",
     "prepublishOnly": "npm run sync-changelog"
   },

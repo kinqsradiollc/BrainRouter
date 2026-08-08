@@ -136,6 +136,7 @@ test('W4b unknown and unavailable packs fail closed without hiding valid sibling
       'academic-paper-drafting-skill',
       'academic-paper-review-skill',
     ],
+    librarySkillIds: [],
     personaIds: ['researcher'],
     reason: 'fixture unavailable',
   });

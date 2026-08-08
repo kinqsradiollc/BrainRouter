@@ -67,9 +67,14 @@ export const WORKSPACE_CAPABILITY_DEFINITIONS: readonly WorkspaceCapabilityDefin
   {
     id: 'frontend',
     label: 'Frontend',
-    description: 'Task-time UI, accessibility, design-system, responsive, and browser-visual expertise for the engineer persona.',
+    description: 'Task-time UI, visual design, accessibility, design-system, responsive, and browser-visual expertise for the engineer persona.',
     skillPackId: 'frontend',
-    skillIds: ['a11y-skill', 'browser-testing-skill', 'taste-skill'],
+    // ADR-031 D1 — `hallmark` is the vendored design skill. It rides the frontend
+    // CAPABILITY rather than a profile, so it is on by default in `engineering`
+    // and available-but-off in `design`, and it comes from the shipped skill
+    // library rather than this pack's own files (profilePlugins.ts
+    // `librarySkillIds`). Keep this list and that one in agreement — a test does.
+    skillIds: ['a11y-skill', 'browser-testing-skill', 'taste-skill', 'hallmark'],
     toolProfileIds: ['browser', 'artifacts', 'interactive-browser'],
   },
   {

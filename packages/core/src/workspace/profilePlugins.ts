@@ -40,9 +40,36 @@ export interface WorkspaceProfilePluginDefinition {
   /** Package asset directory; omitted when it matches the public pack id. */
   assetId?: WorkspaceProfilePluginAssetId;
   pluginName: string;
+  /** Skills this pack OWNS as files under its own `skills/` directory. */
   skillIds: readonly string[];
+  /**
+   * Skills this pack ACTIVATES but does not own — they live in the shipped skill
+   * library (`skills/<category>/<id>/SKILL.md`, generated into every package by
+   * `scripts/bundle-content.mjs`) and resolve from the ordinary bundled roots.
+   *
+   * ADR-031 D1/D2c: a vendored skill enters the library once and is placed on a
+   * capability from there. Copying it into a pack as well would give the
+   * repository two editable truths for one document, which is the failure §3 of
+   * that ADR is a record of. Naming it here is enough to make it capability-
+   * scoped: the skill counts as managed (hidden until its capability activates)
+   * and becomes ambient exactly when the pack is selected.
+   */
+  librarySkillIds: readonly string[];
   /** Optional domain identities contributed without execution authority. */
   personaIds: readonly string[];
+}
+
+/**
+ * Every skill a selected pack contributes, owned and library alike.
+ *
+ * One helper because four call sites need this union — bundle selection, the two
+ * catalog adapters, and the onboarding projection. Computing it independently in
+ * each is how a skill ends up visible in one surface and invisible in another.
+ */
+export function workspaceProfilePluginSkillIds(
+  definition: Pick<WorkspaceProfilePluginDefinition, 'skillIds' | 'librarySkillIds'>,
+): string[] {
+  return [...new Set([...definition.skillIds, ...definition.librarySkillIds])];
 }
 
 export interface AvailableWorkspaceProfilePlugin extends WorkspaceProfilePluginDefinition {
@@ -81,6 +108,7 @@ export const WORKSPACE_PROFILE_PLUGIN_DEFINITIONS: readonly WorkspaceProfilePlug
       'retrieval-practice-skill',
       'learning-source-skill',
     ],
+    librarySkillIds: [],
     personaIds: ['tutor'],
   },
   {
@@ -99,6 +127,7 @@ export const WORKSPACE_PROFILE_PLUGIN_DEFINITIONS: readonly WorkspaceProfilePlug
       'academic-paper-drafting-skill',
       'academic-paper-review-skill',
     ],
+    librarySkillIds: [],
     personaIds: ['researcher'],
   },
   {
@@ -106,6 +135,7 @@ export const WORKSPACE_PROFILE_PLUGIN_DEFINITIONS: readonly WorkspaceProfilePlug
     kind: 'profile',
     pluginName: 'profile-data',
     skillIds: ['data-analysis-skill', 'experiment-validation-skill'],
+    librarySkillIds: [],
     personaIds: ['data-scientist'],
   },
   {
@@ -113,6 +143,7 @@ export const WORKSPACE_PROFILE_PLUGIN_DEFINITIONS: readonly WorkspaceProfilePlug
     kind: 'profile',
     pluginName: 'profile-writing',
     skillIds: ['structured-writing-skill', 'revision-skill', 'writing-critique-skill'],
+    librarySkillIds: [],
     personaIds: ['writer'],
   },
   {
@@ -120,6 +151,12 @@ export const WORKSPACE_PROFILE_PLUGIN_DEFINITIONS: readonly WorkspaceProfilePlug
     kind: 'capability',
     pluginName: 'capability-frontend',
     skillIds: ['a11y-skill', 'browser-testing-skill', 'taste-skill'],
+    // ADR-031 D1: the vendored design skill attaches HERE rather than to a
+    // profile. `frontend` is enabled by default in `engineering` and available
+    // in `design`, so it is simply present while building software and turns on
+    // deliberately in a design workspace — which a profile could not do without
+    // forcing the choice at workspace-creation time.
+    librarySkillIds: ['hallmark'],
     personaIds: [],
   },
   {
@@ -134,6 +171,7 @@ export const WORKSPACE_PROFILE_PLUGIN_DEFINITIONS: readonly WorkspaceProfilePlug
       'production-readiness-skill',
       'backend-testing-skill',
     ],
+    librarySkillIds: [],
     personaIds: [],
   },
   {
@@ -147,6 +185,7 @@ export const WORKSPACE_PROFILE_PLUGIN_DEFINITIONS: readonly WorkspaceProfilePlug
       'academic-paper-drafting-skill',
       'academic-paper-review-skill',
     ],
+    librarySkillIds: [],
     personaIds: [],
   },
   {
@@ -155,6 +194,7 @@ export const WORKSPACE_PROFILE_PLUGIN_DEFINITIONS: readonly WorkspaceProfilePlug
     assetId: 'data',
     pluginName: 'profile-data',
     skillIds: ['data-analysis-skill', 'experiment-validation-skill'],
+    librarySkillIds: [],
     personaIds: [],
   },
   {
@@ -163,6 +203,7 @@ export const WORKSPACE_PROFILE_PLUGIN_DEFINITIONS: readonly WorkspaceProfilePlug
     assetId: 'data',
     pluginName: 'profile-data',
     skillIds: ['data-visualization-skill'],
+    librarySkillIds: [],
     personaIds: [],
   },
   {
@@ -171,6 +212,7 @@ export const WORKSPACE_PROFILE_PLUGIN_DEFINITIONS: readonly WorkspaceProfilePlug
     assetId: 'study',
     pluginName: 'profile-study',
     skillIds: ['programming-lab-skill'],
+    librarySkillIds: [],
     personaIds: [],
   },
   {
@@ -179,6 +221,7 @@ export const WORKSPACE_PROFILE_PLUGIN_DEFINITIONS: readonly WorkspaceProfilePlug
     assetId: 'writing',
     pluginName: 'profile-writing',
     skillIds: ['technical-documentation-skill'],
+    librarySkillIds: [],
     personaIds: [],
   },
 ] as const;

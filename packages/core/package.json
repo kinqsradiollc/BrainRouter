@@ -302,14 +302,16 @@
     "packs",
     "profile-plugins",
     "extensions",
-    "skills"
+    "skills",
+    "THIRD-PARTY-NOTICES.md"
   ],
   "scripts": {
     "clean": "node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});for(const entry of fs.readdirSync('dist'))fs.rmSync('dist/'+entry,{recursive:true,force:true})\"",
-    "build": "npm run clean && tsc -p tsconfig.json",
+    "build": "npm run clean && tsc -p tsconfig.json && node ../../scripts/bundle-content.mjs --package .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test \"dist/**/*.test.js\"",
-    "prepack": "npm run build && node -e \"const fs=require('fs');function w(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=d+'/'+e.name;if(e.isDirectory())w(p);else if(/\\.test\\./.test(e.name))fs.rmSync(p)}}w('dist')\""
+    "prepack": "npm run build && node -e \"const fs=require('fs');function w(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=d+'/'+e.name;if(e.isDirectory())w(p);else if(/\\.test\\./.test(e.name))fs.rmSync(p)}}w('dist')\"",
+    "postpack": "node ../../scripts/bundle-content.mjs --package . --clean"
   },
   "dependencies": {
     "@firecrawl/pdf-inspector-wasm": "^0.1.3",

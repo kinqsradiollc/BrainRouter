@@ -22,6 +22,24 @@ import { WORKSPACE_PROFILE_PLUGIN_DEFINITIONS } from '../workspace/profilePlugin
 
 const PACKAGE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const PROFILES_DIR = path.join(PACKAGE_ROOT, 'orchestration-profiles');
+const SKILL_LIBRARY = path.resolve(PACKAGE_ROOT, '..', '..', 'skills');
+
+/**
+ * Skill IDs as the monorepo library defines them (`skills/<category>/<id>/SKILL.md`).
+ * Falls back to the package's generated copy outside the monorepo.
+ */
+function librarySkillIds(): string[] {
+  const root = fs.existsSync(SKILL_LIBRARY) ? SKILL_LIBRARY : path.join(PACKAGE_ROOT, 'skills');
+  const ids: string[] = [];
+  for (const category of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!category.isDirectory()) continue;
+    for (const skill of fs.readdirSync(path.join(root, category.name), { withFileTypes: true })) {
+      if (!skill.isDirectory()) continue;
+      if (fs.existsSync(path.join(root, category.name, skill.name, 'SKILL.md'))) ids.push(skill.name);
+    }
+  }
+  return ids.sort();
+}
 
 test('P23-2 bundled orchestration profile files and parsed ids have exact parity', () => {
   const files = fs.readdirSync(PROFILES_DIR)
@@ -53,27 +71,20 @@ test('P23-2 bundled reference catalog is derived from physical role and skill as
     'verifier',
     'worker',
   ]);
-  const coreSkillIds = [
-    'adr-skill',
-    'bootstrap-skill',
-    'changelog-generator',
-    'code-review-and-quality',
-    'conventions-skill',
-    'debugging-and-error-recovery',
-    'handover-skill',
-    'incremental-skill',
-    'planning-skill',
-    'shipping-skill',
-    'spec-driven-skill',
-    'testing-skill',
-    'verify-loop',
-  ];
+  // ADR-031 D2b: the package carries the WHOLE library, generated from the
+  // monorepo root at build time, so the expectation is read from that library
+  // rather than pinned to a list. Reading the source rather than the generated
+  // copy is the point — this fails if the copy that ships is short of it.
+  const coreSkillIds = librarySkillIds();
   const profileSkillIds = [...new Set(
     WORKSPACE_PROFILE_PLUGIN_DEFINITIONS.flatMap((plugin) => [...plugin.skillIds]),
   )].sort();
+  // Deduped: a capability pack may own a skill the library also has under the
+  // same ID (the frontend pack's a11y/taste/browser-testing), and the package
+  // root wins for a managed workspace while the reference catalog is a set.
   assert.deepEqual(
     [...references.skillIds].sort(),
-    [...coreSkillIds, ...profileSkillIds].sort(),
+    [...new Set([...coreSkillIds, ...profileSkillIds])].sort(),
   );
   assert.deepEqual(
     [...references.roles.values()]
