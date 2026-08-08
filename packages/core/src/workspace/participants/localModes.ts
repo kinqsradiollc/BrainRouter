@@ -47,6 +47,13 @@ import {
 } from '../../planner/plannerStore.js';
 import { createWorkItem, getWorkItem, updateWorkItem } from '../../track/store/items.js';
 import { readTranscriptTail } from '../../session/transcript/sessionStore.js';
+// ADR-030 Q4 — the document mode. The artifact is read here; nothing about how
+// it is split or stored leaves `attachment/document/`.
+import {
+  documentOutlineLabel, documentOutlineState, documentPartLabel, documentPartState,
+  parseDocumentPartId, readDocumentArtifact, type DocumentArtifact,
+} from '../../attachment/document/index.js';
+import { getAttachment } from '../../attachment/store/attachmentStore.js';
 import { getSessionStateDir } from '../../storage/store.js';
 import {
   creatableWorkspaceMode, formatWorkspaceRef, linkableWorkspaceMode,
@@ -615,6 +622,106 @@ function chatParticipant(ctx: LocalWorkspaceContext): WorkspaceModeParticipant {
   });
 }
 
+/* ----------------------------------------------------------------- document */
+
+/**
+ * ADR-030 Q4 — an attached document, with parts that have addresses.
+ *
+ * The turn gets a bounded extract; this is how the rest is reached. Two kinds,
+ * and the split is the same one Q3 makes for notes: `outline` is the cheap read
+ * that says what the document is and what its parts are, `part` is one part's
+ * own text. Resolving the outline never returns the body, because a document is
+ * unbounded for exactly the reason a page is.
+ *
+ * **Linkable, never creatable**, for Q4's reason one mode over: a document
+ * arrives by ingesting a file, which hashes it, preserves the original bytes,
+ * classifies it and writes the artifact. A `create` here would be a second way
+ * to make one that skipped all four.
+ *
+ * The attachment RECORD is looked up before the artifact is read, and that
+ * ordering is the security property rather than a nicety: `ref.id` is
+ * attacker-supplied — a model can invent one, and a reference can arrive in
+ * fetched page text — and this is the only place in the address space where an
+ * id becomes a path segment. An id with no record in this workspace never
+ * reaches the filesystem.
+ */
+function documentParticipant(ctx: LocalWorkspaceContext): WorkspaceModeParticipant {
+  const load = (attachmentId: string): DocumentArtifact | null | 'no_record' => {
+    if (!getAttachment(ctx.workspaceRoot, attachmentId)) return 'no_record';
+    return readDocumentArtifact(ctx.workspaceRoot, attachmentId);
+  };
+
+  /**
+   * An attachment that exists but has no parsed document — an image, or a PDF
+   * ingested before this shipped. `never_existed` rather than `unavailable`
+   * because it is a fact about this document rather than about this app: no
+   * other surface would answer differently, and "not available here" would send
+   * someone to look for it somewhere else.
+   */
+  const noDocument = (ref: WorkspaceRef, kind: string): WorkspaceResolution => resolvedGone(ref, {
+    reason: 'never_existed',
+    detail: kind === 'no_record'
+      ? 'no attachment with that id in this workspace'
+      : 'this attachment has no parsed document',
+  });
+
+  return linkableWorkspaceMode({
+    mode: 'document',
+    kinds: ['outline', 'part'],
+
+    resolve(ref): WorkspaceResolution {
+      if (ref.kind === 'outline') {
+        const artifact = load(ref.id);
+        if (!artifact || artifact === 'no_record') return noDocument(ref, artifact ?? '');
+        return resolvedFound(ref, {
+          label: documentOutlineLabel(artifact),
+          state: documentOutlineState(artifact),
+          ...(artifact.createdAt ? { updatedAt: artifact.createdAt } : {}),
+        });
+      }
+
+      const addressed = parseDocumentPartId(ref.id);
+      if (!addressed) {
+        return resolvedUnavailable(
+          ref,
+          'malformed_ref',
+          'a document part is addressed as document/part/<attachment id>/<part number>',
+        );
+      }
+      const artifact = load(addressed.attachmentId);
+      if (!artifact || artifact === 'no_record') return noDocument(ref, artifact ?? '');
+      const part = artifact.parts.find((candidate) => candidate.index === addressed.part);
+      if (!part) {
+        // The document is here and that part is not, which is a different
+        // sentence from "no such document" and leads somewhere else: ask the
+        // outline how many parts there are.
+        return resolvedGone(ref, {
+          reason: 'never_existed',
+          detail: `this document has ${artifact.parts.length} part${artifact.parts.length === 1 ? '' : 's'}`,
+        });
+      }
+      return resolvedFound(ref, {
+        label: documentPartLabel(artifact, part),
+        state: documentPartState(artifact, part),
+        ...(artifact.createdAt ? { updatedAt: artifact.createdAt } : {}),
+      });
+    },
+
+    /** The label alone — no part text, which is the whole cost of resolving one. */
+    describe(ref): WorkspaceResolution {
+      const addressed = ref.kind === 'part' ? parseDocumentPartId(ref.id) : null;
+      const attachmentId = ref.kind === 'part' ? addressed?.attachmentId : ref.id;
+      if (!attachmentId) return resolvedUnavailable(ref, 'malformed_ref', 'not a document reference');
+      const artifact = load(attachmentId);
+      if (!artifact || artifact === 'no_record') return noDocument(ref, artifact ?? '');
+      if (ref.kind === 'outline') return resolvedFound(ref, { label: documentOutlineLabel(artifact) });
+      const part = artifact.parts.find((candidate) => candidate.index === addressed!.part);
+      if (!part) return resolvedGone(ref, { reason: 'never_existed' });
+      return resolvedFound(ref, { label: documentPartLabel(artifact, part) });
+    },
+  });
+}
+
 /* ----------------------------------------------------------------- registry */
 
 /**
@@ -632,6 +739,7 @@ export function buildLocalWorkspaceRegistry(ctx: LocalWorkspaceContext): Workspa
   registry.register(trackParticipant(ctx));
   registry.register(codeParticipant(ctx));
   registry.register(chatParticipant(ctx));
+  registry.register(documentParticipant(ctx));
   return registry;
 }
 

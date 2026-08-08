@@ -37,6 +37,8 @@ const MODE_NOUN: Readonly<Record<string, string>> = {
   meetings: 'meeting',
   planner: 'planner',
   notes: 'note',
+  // ADR-030 Q4 — an attached document, addressable by outline and by part.
+  document: 'document',
 };
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];

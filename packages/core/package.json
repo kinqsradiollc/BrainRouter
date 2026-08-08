@@ -1,7 +1,7 @@
 {
   "name": "@kinqs/brainrouter-core",
   "version": "0.4.19",
-  "description": "BrainRouter's headless engine \u2014 config, durable stores, runtime, orchestration, telemetry, and the agent \u2014 shared verbatim by the CLI and the Desktop app so neither reaches into the other's build output.",
+  "description": "BrainRouter's headless engine — config, durable stores, runtime, orchestration, telemetry, and the agent — shared verbatim by the CLI and the Desktop app so neither reaches into the other's build output.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -312,6 +312,7 @@
     "prepack": "npm run build && node -e \"const fs=require('fs');function w(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=d+'/'+e.name;if(e.isDirectory())w(p);else if(/\\.test\\./.test(e.name))fs.rmSync(p)}}w('dist')\""
   },
   "dependencies": {
+    "@firecrawl/pdf-inspector-wasm": "^0.1.3",
     "@kinqs/brainrouter-agent-protocol": "^0.4.19",
     "@kinqs/brainrouter-types": "^0.4.19",
     "@modelcontextprotocol/sdk": "^1.11.0",

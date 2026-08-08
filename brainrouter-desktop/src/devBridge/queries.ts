@@ -47,6 +47,36 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
   const {
     DEMO_DIFF, prefs, sessionModes, effectivePrefs, resolvedModel, SESSIONS_BY_ROOT, devMeta, mergeMeta, devGroups, devSchedules, devWorktrees, devRequirements, devAnnotations, devAnnotMarkdown, devArtifacts, devPlanState, trackCat, mkItem, devTrack, devSprints, devModules, devViews, devFindItem, devAutomations, devPlanDecisions, DEV_DIFF_HASH, devRunReview, devGate, devRules, devProviders, devCliKnobs, devExtensions, devGithub, devConnectorCatalog, devSlimDocuments, devConnectorPermissionCounts, devConnectorRuns, devServers, devFiles, devWorkflows, devShortcuts, devFileRead, devAttachments, attachmentKind, attachmentMime, decodePreview, attachmentContext,
   } = S;
+  /**
+   * ADR-030 Q4 — the harness's stand-in for a parsed document.
+   *
+   * Only PDFs have one, which is what the host does too: an image attachment
+   * resolves to `null` and the panel says there is no parsed document rather
+   * than showing an empty one.
+   */
+  const devDocument = (id: string): {
+    attachmentId: string; name: string; classification: string; notice: string;
+    parts: Array<{ index: number; page: number; kind: string; text: string }>;
+  } | null => {
+    const rec = devAttachments.get(id);
+    if (!rec || rec.kind !== 'pdf') return null;
+    const body = (page: number): string => `# ${rec.name} — page ${page}\n\n`
+      + `This is the harness's stand-in for page ${page} of a parsed document. `
+      + 'The host answers this query from the artifact written when the file was attached.';
+    return {
+      attachmentId: rec.id,
+      name: rec.name,
+      classification: 'mixed',
+      notice: 'Page 3 of this 4-page document is a scan with no text layer; its contents '
+        + 'are NOT in the text below and were not read.',
+      parts: [
+        { index: 1, page: 1, kind: 'text', text: body(1) },
+        { index: 2, page: 2, kind: 'text', text: body(2) },
+        { index: 3, page: 3, kind: 'scanned', text: '' },
+        { index: 4, page: 4, kind: 'text', text: body(4) },
+      ],
+    };
+  };
   // MC-DESK Batch 2 — mutable dev fixtures for the runtime/automation monitor
   // cards (browser preview + Preview server). Real data comes from node-fs core
   // APIs host-side; here we mock enough to render + exercise the actions.
@@ -805,6 +835,41 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     'attachment-context': (a) => {
       const rec = devAttachments.get(String(a.id ?? ''));
       return rec ? { id: rec.id, name: rec.name, markdown: attachmentContext(rec) } : null;
+    },
+    // ADR-030 Q4 — registered here as well as in the electron host, because an
+    // unknown query is rejected by NAME: a handler that exists in one map only
+    // renders "unknown query" on the other surface, and the panel that reads it
+    // is the same component in both.
+    //
+    // The harness has no document parser (Q2 — it is 4.6 MB of WebAssembly in
+    // the main process), so it answers from a fixture. The fixture is
+    // deliberately MIXED: a scanned page among text pages is the case D3 exists
+    // for and the one whose rendering is worth being able to look at without a
+    // host.
+    'attachment-document': (a) => {
+      const doc = devDocument(String(a.id ?? ''));
+      if (!doc) return null;
+      return {
+        attachmentId: doc.attachmentId,
+        name: doc.name,
+        classification: doc.classification,
+        pageCount: doc.parts.length,
+        partCount: doc.parts.length,
+        notice: doc.notice,
+        parts: doc.parts.map((part) => ({
+          uri: `brainrouter://document/part/${doc.attachmentId}/${part.index}`,
+          index: part.index,
+          page: part.page,
+          kind: part.kind,
+          chars: part.text.length,
+          preview: part.text.split('\n')[0] ?? '',
+        })),
+      };
+    },
+    'attachment-document-part': (a) => {
+      const doc = devDocument(String(a.id ?? ''));
+      const part = doc?.parts.find((candidate) => candidate.index === Number(a.part));
+      return part && doc ? { attachmentId: doc.attachmentId, partCount: doc.parts.length, ...part } : null;
     },
     // DESK-6w — a workflow run's phase/agent breakdown for the /workflows card.
     'workflow-detail': (a) => {

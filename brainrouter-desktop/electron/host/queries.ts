@@ -293,6 +293,11 @@ import { desktopReviewRunRequest } from '../reviewRunRequest.js';
 // durable attachment records, shared with the CLI `/attach` store.
 import { ingestAttachment, attachmentContextMarkdown } from '@kinqs/brainrouter-core/attachment';
 import { listAttachments, getAttachment, linkAttachmentMemory } from '@kinqs/brainrouter-core/attachment';
+// ADR-030 Q2/Q3 — the document parser is 4.6 MB of WebAssembly and the
+// renderer's initial-JS budget is 1,750,000 bytes, so it runs HERE, in the main
+// process, and the renderer asks. What it asks for is the artifact ingest
+// already wrote (Q4); nothing below re-parses.
+import { readDocumentArtifact, documentOutlineState } from '@kinqs/brainrouter-core/attachment';
 // TELEMETRY (0.4.15 workflow gaps) — local-first task/review/upload lifecycle.
 import { recordTelemetry } from '@kinqs/brainrouter-core/telemetry';
 import { TELEMETRY_EVENTS } from '@kinqs/brainrouter-core/telemetry';
@@ -1191,6 +1196,32 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       'attachment-context': (a) => {
         const rec = getAttachment(workspaceRoot, typeof a.id === 'string' ? a.id : '');
         return rec ? { id: rec.id, name: rec.name, markdown: attachmentContextMarkdown(rec) } : null;
+      },
+      // ADR-030 Q4 — a parsed document, by its parts. The panel shows the whole
+      // document rather than the bounded extract the turn got, and it does it
+      // WITHOUT the parser: the artifact was written at ingest, so this is a
+      // JSON read. `null` when this attachment has no parsed document — an
+      // image, or a PDF ingested before this shipped — which the panel renders
+      // as "no parsed document" rather than as an empty one.
+      'attachment-document': (a) => {
+        const id = typeof a.id === 'string' ? a.id : '';
+        if (!getAttachment(workspaceRoot, id)) return null;
+        const artifact = readDocumentArtifact(workspaceRoot, id);
+        if (!artifact) return null;
+        return { attachmentId: id, ...documentOutlineState(artifact).documentOutline };
+      },
+      // One part's own text. Separate from the outline for the reason resolving
+      // one is separate: the outline is a list and costs a line per part, and a
+      // panel that fetched every part to show one would put a whole document
+      // across the bridge to render a page of it.
+      'attachment-document-part': (a) => {
+        const id = typeof a.id === 'string' ? a.id : '';
+        const index = Number(a.part);
+        if (!getAttachment(workspaceRoot, id)) return null;
+        const artifact = readDocumentArtifact(workspaceRoot, id);
+        if (!artifact) return null;
+        const part = artifact.parts.find((candidate) => candidate.index === index);
+        return part ? { attachmentId: id, partCount: artifact.parts.length, ...part } : null;
       },
       // DESK-5l — live model, not the boot-time snapshot: session-info runs on
       // every sidebar refresh, and returning stale llm.model used to stomp the
