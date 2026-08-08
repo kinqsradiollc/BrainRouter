@@ -63,24 +63,48 @@ The `design` profile enables `a11y-skill`, `taste-skill`, `concept-diagrams`, `r
 `output-skill`, and **`packages/core/skills/` — the set that actually ships — contains none of them.**
 
 They are not missing from the repository. **All five are in the tracked root `skills/` library**
-(`skills/design/…`, `skills/api/a11y-skill`). They are missing from the *bundle*, which is a
-different and more interesting problem:
+(`skills/design/…`, `skills/api/a11y-skill`). They are missing from *two of the three packages that
+carry skills* — and the third already does it correctly.
 
-| Location | Contents | Ships |
+#### 3.1 · `skills/` at the root has two audiences, and that is not a mistake
+
+This is the thing worth writing down, because it looks like an accident and is not:
+
+1. **Contributors.** Claude Code and Codex read it while working on this repository. It is the same
+   role a `.claude/skills` directory plays elsewhere, kept at the root because it is not
+   Claude-specific.
+2. **The MCP server.** `brainrouter/src/registry.ts:161` indexes `join(root, 'skills')` at runtime
+   and serves the catalogue over MCP. `resolver.ts` finds the repo root *by looking for `skills/`*.
+
+One directory, two readers, and no conflict: the library is the product **and** the toolkit we build
+it with. That is a coherent design and it should be stated rather than rediscovered.
+
+#### 3.2 · Three packages carry skills; one of them already does it right
+
+| Package | How it gets skills | Gets |
 |---|---|---|
-| `skills/` — the library, tracked | **54 skills** | **nowhere** |
-| `packages/core/skills/` | **13** copies | in `@kinqs/brainrouter-core`'s npm `files` |
-| `brainrouter-cli/skills/` | **13** copies | in the CLI's npm `files` |
-| `brainrouter/skills/` | **0** — the directory does not exist | yet `"skills"` is in its npm `files` list |
+| `brainrouter` (the MCP server) | **generated** — `scripts/prepack.mjs` copies root `skills/` in before pack, `postpack.mjs` deletes it after, `/skills/` is gitignored | **all 54** |
+| `packages/core` | **13 files committed by hand** | 13 |
+| `brainrouter-cli` | **13 files committed by hand** | 13 |
 
-So:
+> **The mechanism this ADR was going to propose already exists — in one package out of three.**
 
-> **41 of our 54 skills reach nobody, and the 13 that do exist three times, hand-copied.**
+`brainrouter` has exactly the shape the other two need: one source, a copy generated at pack time,
+the copy gitignored so nobody edits it by mistake, and a paired cleanup so the working tree does not
+accumulate. It has been working the whole time.
 
-I checked whether the copies have drifted: they are byte-identical today, in both places. That is
-the good news and the reason to act now — this is a duplication that has not yet cost anything, and
-every one of this codebase's recent bugs of this shape (two merge implementations, two neutralisers,
-two SSRF guards) was byte-identical right up until it was not.
+**I got this wrong on first reading and the correction matters.** I recorded `brainrouter/skills/`
+as an empty directory listed in `files` — a packaging bug. It is not: it is generated, deliberately
+absent from the tree, and `.gitignore:3` says so. The bug is the opposite of where I put it.
+
+So the real statement is narrower and more actionable than "41 skills reach nobody":
+
+> **The MCP server ships all 54. Core and the CLI ship 13 each, hand-copied, committed — and the
+> design profile's five are not among them.**
+
+The copies are byte-identical today, in both places. That is the reason to act now rather than a
+reason not to: every duplication this codebase has been bitten by recently — two merge
+implementations, two neutralisers, two SSRF guards — was byte-identical right up until it was not.
 
 The profile is therefore not lying about skills that were never written. It is naming skills that
 exist, that someone wrote, and that the distribution mechanism never carried. Three of them are what
@@ -107,37 +131,35 @@ change nothing at all.
 Per §1. It then reaches `engineering` by default and `design` when enabled, and nothing about the
 profile system changes.
 
-### D2 · One library, generated copies, and a test that they match
+### D2 · Adopt the mechanism we already have, in the two packages that lack it
 
-The copies are not the problem — **npm needs real files**, a symlink does not survive `npm pack` and
-does not exist on Windows, and both packages genuinely have to carry the skills they offer. The
-problem is that the copies are made *by hand*, so nothing notices when one is edited and the other is
-not.
+Not a new design — **`brainrouter/scripts/prepack.mjs` is the design**, and it has been in production
+the whole time. Core and the CLI adopt it:
 
-> **`skills/` at the root is the single source. Every other copy is generated from it and verified
-> against it.**
+1. **Generate at pack time** from root `skills/`, the way the MCP server already does.
+2. **Gitignore the generated directory**, so the copy cannot be edited by mistake — this is what makes
+   it a copy rather than a fork. It is the half `brainrouter` gets right and the reason its 54 have
+   never drifted.
+3. **Delete after pack**, paired, so the working tree does not accumulate a second truth.
+4. **Declare the selection once** if core and the CLI carry a subset rather than all 54 — the set is
+   a decision, not whatever happens to be in a directory.
 
-Concretely, and in the order that matters:
+Copies stay real files. **npm needs them**: a symlink does not survive `npm pack` and does not exist
+on Windows, and each package genuinely has to carry what it offers.
 
-1. **A build step copies** the selected set into `packages/core/skills/` and `brainrouter-cli/skills/`
-   — same mechanism the repo already uses to place other assets before packing.
-2. **A test asserts the copies are byte-identical to their source**, and fails if they are not. This
-   is the load-bearing half. A generated copy with no check is a hand copy that also has a script.
-3. **The selection is declared once** — which of the 54 each package carries — rather than being
-   implied by whatever happens to be in the directory.
+**The check is the load-bearing half.** Whatever runs the copy, something must fail when a generated
+directory disagrees with its source — gitignoring it is most of that, because a file nobody can
+commit is a file nobody can silently change. Where a committed copy has to remain, a test asserting
+byte-equality is the substitute. A generated copy with no check is a hand copy that also has a
+script.
 
-Doing (1) without (2) would be the same class of mistake this ADR is documenting: a mechanism that
-looks like it guarantees agreement and only actually guarantees it on the day someone runs it.
+### D2b · Which skills each package carries
 
-### D2b · Ship more than thirteen
+The MCP server takes all 54, which is right: it *is* the catalogue.
 
-Separately from the mechanism: **41 skills in the library reach nobody.** Deciding which of them
-belong in the bundle is a product judgement per skill, not something to settle in one line here — but
-the five the design profile already names are not a judgement call. It names them; they should exist.
-
-`brainrouter/package.json` also lists `"skills"` in its `files` while `brainrouter/skills/` does not
-exist. Harmless today, and exactly the kind of entry that quietly ships nothing when someone later
-assumes it works.
+For core and the CLI the set is a product judgement per skill and should not be settled in one line
+here. But **the five the design profile already names are not a judgement call** — the profile names
+them, so either they ship or the profile stops claiming them (§6.2).
 
 ### D2c · The new skill enters the library, not the bundle
 
@@ -205,6 +227,11 @@ bundle does not contain. Either they ship, or the profile stops claiming them �
 cannot honour is worse than an absence (ADR-029 F1), and that rule does not stop at block kinds.
 
 **3 · Editing a skill in one place changes it everywhere, or fails loudly.** Change a line in
-`skills/`, build, and the copies in `packages/core` and `brainrouter-cli` must either follow or break
-the build. Verify it by *breaking* it — edit one copy by hand and confirm the check fails. A sync
-mechanism nobody has watched fail is a sync mechanism nobody knows works.
+`skills/`, pack, and what `packages/core` and `brainrouter-cli` ship must follow. Verify it by
+*breaking* it — hand-edit a generated copy and confirm the build refuses. A sync mechanism nobody has
+watched fail is a sync mechanism nobody knows works.
+
+**4 · The two audiences stay one library.** A contributor's Claude Code session and the MCP server
+must keep reading the same `skills/`. If a change here makes the product's catalogue diverge from the
+toolkit we build with, we have turned one directory into two and should say so deliberately rather
+than discover it.
