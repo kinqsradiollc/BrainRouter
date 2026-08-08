@@ -71,7 +71,15 @@ deep dives.
   [ADR-026 Desktop native visual system and platform-adaptive shell](decisions/ADR-026-desktop-native-visual-system.md) —
   proposed semantic styling layers, native window boundaries, system appearance, state-preserving surface contracts, and a small-PR migration gated by live macOS and Windows review;
   [ADR-027 compounding debt, graph execution, and workbench modernization](decisions/ADR-027-compounding-debt-graph-execution-and-workbench-modernization.md) —
-  proposed knowledge/technical/cognitive debt program grounded in the human-oversight evidence, graph execution replacing the turn loop, offline skill resolution, attachment storage with agent access and profile-aware document understanding, one visual system, an agent-callable control layer, session execution roots, two review gates, citable research artifacts, a database growth ladder, and distributed-systems correctness fixes.
+  proposed knowledge/technical/cognitive debt program grounded in the human-oversight evidence, graph execution replacing the turn loop, offline skill resolution, attachment storage with agent access and profile-aware document understanding, one visual system, an agent-callable control layer, session execution roots, two review gates, citable research artifacts, a database growth ladder, and distributed-systems correctness fixes;
+  [ADR-028 surfaces that tell the truth](decisions/ADR-028-surfaces-that-tell-the-truth.md) —
+  accepted rule that a surface never claims a state it has not established, offline-first planner sync (hybrid clocks, an ordered idempotent outbox, field-level merge that keeps both versions), the comprehension review whose wrong answer may be the agent's, and the reachability sweep that catches a module nothing calls;
+  [ADR-029 one workspace, many surfaces](decisions/ADR-029-one-workspace-many-surfaces.md) —
+  accepted URI address space every mode resolves, backlinks computed rather than stored, a block-based Notes mode on the planner's sync stack with lease-with-fencing-epoch locking, databases whose rows ARE pages, and Part F's rule that an offer the product cannot honour is worse than an absence;
+  [ADR-030 documents the agent can actually read](decisions/ADR-030-documents-the-agent-can-actually-read.md) —
+  accepted PDF understanding: dependency-free inflation as the floor, a WebAssembly parser chosen over a native binding because our desktop ships an architecture it has no build for, per-page classification so a scan says it is a scan, and extracted text fenced as the untrusted input it is;
+  [ADR-031 a design skill, and the capability it belongs to](decisions/ADR-031-a-design-skill-and-the-capability-it-belongs-to.md) —
+  accepted single skill library with generated per-package copies and generated third-party notices, all skills carried everywhere, and a vendored design skill attached to the `frontend` capability rather than a profile.
 
 Published benchmark results: [`../brainrouter-benchmark/reports/`](../brainrouter-benchmark/reports/).
 
