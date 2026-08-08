@@ -9,6 +9,7 @@
 import type { WorkspaceManifest } from './manifest.js';
 import {
   inspectWorkspaceProfilePlugins,
+  workspaceProfilePluginSkillIds,
   WORKSPACE_PROFILE_PLUGIN_DEFINITIONS,
   type WorkspaceProfilePluginCatalog,
 } from './profilePlugins.js';
@@ -151,7 +152,7 @@ function selectPluginBundle(
   bundles.push({
     id,
     source,
-    skillIds: [...plugin.skillIds],
+    skillIds: workspaceProfilePluginSkillIds(plugin),
     version: plugin.version,
     skillsRoot: plugin.skillsRoot,
   });

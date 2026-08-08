@@ -106,6 +106,70 @@ lifecycle, memory, qa, ux). Discovery walks max 5 levels and skips
   path; a mismatched frontmatter name breaks listing and resolution.
 - **Evidence:** `brainrouter/src/registry.ts:61`, `brainrouter-cli/src/prompt/skillCatalog.ts:160`
 
+### 7a. The root `skills/` library is the only editable copy; packages ship generated ones
+
+Root `skills/` has two readers and both are deliberate: contributors (Claude Code
+and Codex read it while working here) and the product (`brainrouter/src/registry.ts`
+indexes `join(root, 'skills')` at runtime, and `resolver.ts` finds the repo root *by
+looking for* `skills/`). **Never move, rename, or shrink it.**
+
+Every package that ships skills carries a **generated** copy of the whole library —
+`brainrouter`, `packages/core`, `brainrouter-cli`. `scripts/bundle-content.mjs` does
+the copy; core and the CLI generate theirs during `npm run build` (their runtime
+resolves a package-local `skills/` relative to `dist/`, so the copy is a build
+output like `dist/` itself) and drop it again in `postpack`. Each generated
+directory is in that package's `.gitignore`, so a hand edit to a copy cannot be
+committed at all. Never add a per-package skill selection: a subset makes a
+workspace profile honest in one package and lying in another (ADR-031 D2b).
+
+Third-party material carries its licence **as a file beside it** —
+`skills/<category>/<name>/LICENSE`. The copy step generates each package's
+`THIRD-PARTY-NOTICES.md` from the licence files that actually landed in it plus the
+package's direct runtime dependencies, and the notice is listed in npm `files`.
+Never hand-write a notice entry: the generator failing loudly is what makes
+shipping licensed content without its notice impossible rather than discouraged.
+
+- **Why:** the hand-committed copies carried 13 of 54, so five skills the `design`
+  profile offers reached nobody, and byte-identical duplicates are byte-identical
+  right up until they are not.
+- **Evidence:** `scripts/bundle-content.mjs`, `brainrouter/scripts/prepack.mjs`,
+  `packages/core/src/tests/skills-bundling.test.ts`,
+  `brainrouter-cli/src/tests/bundledSkills.test.ts`,
+  `brainrouter-docs/decisions/ADR-031-a-design-skill-and-the-capability-it-belongs-to.md`
+
+### 7b. A design skill governs the USER'S project; this handbook governs BrainRouter
+
+`skills/design/hallmark` is a vendored design skill (MIT, from the `hallmark` npm
+package). It tells an agent how to build interfaces, and so does this repository —
+**two documents telling an agent how to write UI is how they drift apart**, so the
+boundary is fixed:
+
+- The skill governs work the agent does **on a user's own project**.
+- `brainrouter-rules/` governs work **on BrainRouter itself** — desktop, dashboard,
+  CLI — and wins wherever the two disagree. Our desktop is monochrome by deliberate
+  decision, so the skill's colour anchor, twenty-one themes, and custom-palette
+  branch do not apply to it.
+
+The boundary is stated in the skill's own frontmatter and its first body section,
+because a rules file the model never loads cannot resolve a conflict at generation
+time; a test asserts it is still there. Any future vendored skill that overlaps our
+own conventions states its boundary the same way.
+
+Placement follows the same rule as the rest: it is attached to the `frontend`
+**capability**, never a profile (`packages/core/src/workspace/capabilities.ts`
+`skillIds`, delivered through `profilePlugins.ts` `librarySkillIds`). A pack's
+`skillIds` are files it owns under `profile-plugins/<pack>/skills/`; its
+`librarySkillIds` are skills it merely activates from the shipped library. Vendored
+skills go in the second list — putting one in a pack would recreate the second
+editable copy this whole section exists to prevent.
+
+- **Why:** engineering is deliberately one profile (`profiles.ts:14-20`, with a test
+  forbidding a `frontend`/`backend` profile), so specialism attaches to capabilities.
+- **Evidence:** `skills/design/hallmark/SKILL.md`,
+  `packages/core/src/workspace/capabilities.ts`,
+  `packages/core/src/workspace/profilePlugins.ts`,
+  `packages/core/src/tests/frontend-design-skill.test.ts`
+
 ### 8. SKILL.md frontmatter must stay regex-parseable — no full YAML
 
 All frontmatter (SKILL.md, agent files, plugin `.local.md`) is parsed by small

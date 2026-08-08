@@ -9,6 +9,7 @@ import {
   loadWorkspaceManifest,
   resolveWorkspaceCapabilities,
   resolveWorkspaceSkillSelection,
+  workspaceProfilePluginSkillIds,
 } from '@kinqs/brainrouter-core/workspace';
 
 const requireFromHere = createRequire(import.meta.url);
@@ -112,7 +113,7 @@ export function resolveWorkspaceSkillCatalogPolicy(
     selectedSkillRoots: selection.skillRoots,
     explicitSkillRoots: catalog.available.map((plugin) => plugin.skillsRoot),
     managedSkillIds: [...catalog.available, ...catalog.unavailable]
-      .flatMap((plugin) => [...plugin.skillIds]),
+      .flatMap(workspaceProfilePluginSkillIds),
     ambientSkillIds: selection.ambientSkillIds,
     disabledSkillIds: selection.disabledSkillIds,
   };
@@ -262,11 +263,12 @@ function buildSkillSearchRoots(
       const monorepoRoot = path.dirname(mcpPkgDir);
       roots.push(path.join(monorepoRoot, 'skills'));
     }
-    // The CLI package's OWN starter skills (synced copies of the monorepo set —
-    // see scripts/sync-bundled-skills.mjs). Lowest bundled precedence: in a
-    // monorepo/mcp install the identical names above win via first-root-wins
-    // dedupe, but a CLI-only or desktop install still gets the starter set so
-    // /init and onboarding ship with their workflow skills.
+    // The CLI package's OWN copy of the skill library (generated from the
+    // monorepo root at build/pack time — see scripts/bundle-content.mjs).
+    // Lowest bundled precedence: in a monorepo/mcp install the identical names
+    // above win via first-root-wins dedupe, but a CLI-only or desktop install
+    // still gets the whole library so /init and onboarding ship with their
+    // workflow skills.
     roots.push(OWN_BUNDLED_SKILLS_DIR);
   }
 

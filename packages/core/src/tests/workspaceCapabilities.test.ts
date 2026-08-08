@@ -18,7 +18,9 @@ const EMPTY_RESOLUTION = {
 
 const FRONTEND_AVAILABILITY = {
   skillPacks: ['frontend'],
-  skills: ['a11y-skill', 'browser-testing-skill', 'taste-skill'],
+  // ADR-031 D1 — `hallmark` is the vendored design skill, carried by the shipped
+  // library rather than the pack, and named by the capability like the rest.
+  skills: ['a11y-skill', 'browser-testing-skill', 'taste-skill', 'hallmark'],
   toolProfiles: ['browser', 'artifacts', 'interactive-browser'],
 };
 
@@ -100,6 +102,7 @@ test('engineering activates frontend contributions from task signals without cha
   assert.deepEqual(resolved.skillPacks, ['frontend']);
   assert.ok(resolved.skills.includes('a11y-skill'));
   assert.ok(resolved.skills.includes('browser-testing-skill'));
+  assert.ok(resolved.skills.includes('hallmark'));
   assert.deepEqual(resolved.toolProfiles, ['browser', 'artifacts', 'interactive-browser']);
   assert.equal(resolved.promptBlocks.length, 1);
   assert.match(resolved.promptBlocks[0]!, /Stay in the engineer persona/);

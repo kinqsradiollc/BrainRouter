@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Removes the content directories copied by prepack.mjs, restoring the
-// package working tree to its pre-pack state.
+// Removes the content directories and generated files created by prepack.mjs,
+// restoring the package working tree to its pre-pack state.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -15,12 +15,19 @@ if (!fs.existsSync(MARKER)) {
   process.exit(0);
 }
 
-const { copied = [] } = JSON.parse(fs.readFileSync(MARKER, 'utf8'));
+const { copied = [], generated = [] } = JSON.parse(fs.readFileSync(MARKER, 'utf8'));
 for (const dir of copied) {
   const target = path.join(packageDir, dir);
   if (fs.existsSync(target)) {
     fs.rmSync(target, { recursive: true, force: true });
     console.log(`[postpack] removed ${dir}/`);
+  }
+}
+for (const file of generated) {
+  const target = path.join(packageDir, file);
+  if (fs.existsSync(target)) {
+    fs.rmSync(target, { force: true });
+    console.log(`[postpack] removed ${file}`);
   }
 }
 fs.rmSync(MARKER, { force: true });

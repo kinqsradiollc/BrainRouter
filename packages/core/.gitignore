@@ -1,0 +1,5 @@
+# Generated at build/pack time by scripts/bundle-content.mjs (ADR-031 D2).
+# The canonical skill library is the monorepo root `skills/` — edit it there.
+# A copy nobody can commit is a copy nobody can silently change.
+/skills/
+/THIRD-PARTY-NOTICES.md

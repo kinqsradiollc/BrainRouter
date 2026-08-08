@@ -16,6 +16,7 @@
     "agents",
     "references",
     "docs",
+    "THIRD-PARTY-NOTICES.md",
     "README.md",
     ".env.example",
     "server.json"

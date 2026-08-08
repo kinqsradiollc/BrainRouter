@@ -39,6 +39,11 @@ COPY packages/types ./packages/types
 COPY packages/agent-protocol ./packages/agent-protocol
 COPY packages/core ./packages/core
 COPY brainrouter ./brainrouter
+# The skill library and the script that copies it into each package (ADR-031 D2).
+# `skills/` is the source the MCP registry indexes at runtime AND the source core's
+# build generates its own copy from, so both have to be in the image.
+COPY skills ./skills
+COPY scripts ./scripts
 RUN npm --prefix packages/types run build \
  && npm --prefix packages/agent-protocol run build \
  && npm --prefix packages/core run build \
@@ -65,6 +70,13 @@ COPY --from=build /app/packages/core/package.json /app/packages/core/package.jso
 COPY --from=build /app/packages/core/dist /app/packages/core/dist
 # Runtime JSON config read from source (NOT dist): providers/models/api-key-prefixes.
 COPY --from=build /app/packages/core/config /app/packages/core/config
+# The generated skill copies, and the library the MCP registry indexes from the
+# repo root it resolves (/app). Without these the hosted brain serves an empty
+# catalogue while the profiles keep naming skills — the failure ADR-031 exists to
+# end. The notices travel with the content they describe (ADR-031 D3).
+COPY --from=build /app/packages/core/skills /app/packages/core/skills
+COPY --from=build /app/packages/core/THIRD-PARTY-NOTICES.md /app/packages/core/THIRD-PARTY-NOTICES.md
+COPY --from=build /app/skills /app/skills
 COPY --from=build /app/brainrouter/package.json /app/brainrouter/package.json
 COPY --from=build /app/brainrouter/dist /app/brainrouter/dist
 
