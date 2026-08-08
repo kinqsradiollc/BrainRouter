@@ -18,7 +18,9 @@ import { Router, type Response } from "express";
 import { requireAnyAuth, type AuthedRequest } from "../middleware/auth.js";
 import { attachOrgContext } from "../middleware/tenancy.js";
 import * as notes from "../../memory/notes/backend.js";
-import type { LeaseOutcome } from "@kinqs/brainrouter-core/notes";
+import {
+  MAX_COMMENT_LENGTH, type LeaseOutcome, type NoteExportFormat,
+} from "@kinqs/brainrouter-core/notes";
 
 export const notesRouter = Router();
 notesRouter.use(requireAnyAuth);
@@ -34,6 +36,21 @@ const MAX_SEARCH_RESULTS = 100;
  */
 const MAX_PAGE_BLOCKS = 1000;
 const MAX_DATABASE_ROWS = 500;
+
+/**
+ * ADR-029 F3's bounds, applied to a FILE rather than to a screen.
+ *
+ * Core's writers have their own ceilings (5,000 blocks / 4,000,000 characters)
+ * and these are deliberately tighter, because an export is the one read that
+ * builds its whole answer in memory and then sends all of it: a page nobody
+ * meant to make can turn one click into a multi-megabyte response. Both halves
+ * of the cap are reported — the file says so in its own text where Markdown can
+ * carry a sentence, and the headers say so for CSV, which cannot hold a note
+ * without becoming a row.
+ */
+const MAX_EXPORT_FILE_BLOCKS = 2000;
+const MAX_EXPORT_FILE_CHARS = 2_000_000;
+
 
 function boundedLimit(raw: unknown, fallback: number, max: number): number {
   const n = Number(raw);
@@ -275,6 +292,170 @@ notesRouter.get("/blocks/:id/refs", async (req: AuthedRequest, res) => {
   if (!(await attachOrgContext(req, res))) return;
   res.json({ refs: await notes.referencesFrom(req.orgId!, req.userId!, String(req.params.id)) });
 });
+
+/* ------------------------------------------------------------------ export */
+
+/**
+ * ADR-029 F3 — "can I leave", as a download.
+ *
+ * One route for both formats rather than one per shape, because that is how
+ * core's door is built: `exportNote` takes a block and a FORMAT and knows that a
+ * page goes to Markdown and a database goes to CSV. A `/pages/:id/export` beside
+ * a `/databases/:id/export` would put that decision on this side as well, and
+ * two places that decide it are two places that can start disagreeing about
+ * whether a database is also a page (B4 says it is).
+ *
+ * **A format this block cannot be written as is a 400 that NAMES the ones it
+ * can.** F1's rule is that an offer the product cannot honour is worse than an
+ * absence, so the refusal is the thing a menu builds itself from rather than a
+ * dead end. (`/pages/:id` and `/databases/:id` carry the same list, so the menu
+ * never has to ask.)
+ *
+ * **The response is a file.** `Content-Disposition: attachment` with core's
+ * filename, which is character-classed down to `[A-Za-z0-9-]` plus the
+ * extension in `exportFilename` — a title carrying a quote or a newline is a
+ * header-injection shape, and the answer there was to keep the alphabet small
+ * rather than to escape a large one correctly. `no-store`, because this is one
+ * person's document and a shared cache is the wrong place for it.
+ */
+notesRouter.get("/blocks/:id/export", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  const requested = typeof req.query.format === "string" ? req.query.format : "markdown";
+  if (requested !== "markdown" && requested !== "csv") {
+    res.status(400).json({ error: "format is markdown or csv" });
+    return;
+  }
+  const format: NoteExportFormat = requested;
+
+  const outcome = await notes.exportBlock(req.orgId!, req.userId!, String(req.params.id), format, {
+    ...(typeof req.query.view === "string" ? { viewId: req.query.view } : {}),
+    maxBlocks: MAX_EXPORT_FILE_BLOCKS,
+    maxChars: MAX_EXPORT_FILE_CHARS,
+  });
+
+  if (!outcome.ok) {
+    if (outcome.reason === "wrong_format") {
+      res.status(400).json({
+        error: outcome.formats.length > 0
+          ? `This cannot be written as ${format}. It can be written as ${outcome.formats.join(" or ")}.`
+          : `This cannot be written as ${format}.`,
+        formats: outcome.formats,
+      });
+      return;
+    }
+    res.status(404).json({ error: "No such block." });
+    return;
+  }
+
+  const { file } = outcome;
+  res.setHeader("Content-Type", file.contentType);
+  res.setHeader("Content-Disposition", `attachment; filename="${file.filename}"`);
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-BrainRouter-Export-Count", String(file.count));
+  // Stated rather than inferred from a length, and stated for CSV especially:
+  // Markdown carries "what this file does not carry" inside the document, and a
+  // spreadsheet has nowhere to put a sentence that is not also a row.
+  res.setHeader("X-BrainRouter-Export-Truncated", file.truncated ? "1" : "0");
+  // The KINDS, never the sentences. These are a fixed enum from core, so nothing
+  // a person typed reaches a response header — which is the only place in this
+  // route where user text could have become a header-injection question.
+  res.setHeader(
+    "X-BrainRouter-Export-Omissions",
+    [...new Set(file.omissions.map((omission) => omission.kind))].join(","),
+  );
+  res.send(file.content);
+});
+
+/* ---------------------------------------------------------------- comments */
+
+/**
+ * ADR-029 F3 — the thread on one block.
+ *
+ * Scoped to `(org_id, user_id, id)` like every other read here, which is what
+ * makes "a comment is never readable by somebody who could not read its block"
+ * true by construction rather than by a check somebody has to remember.
+ *
+ * **A deleted block still answers, with `blockDeleted` set.** C5: deleting the
+ * target of a link never deletes the link, and 404-ing the thread would make a
+ * remark unreachable because the line it was about went away — which is the one
+ * moment somebody goes looking for it.
+ */
+notesRouter.get("/blocks/:id/comments", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  const thread = await notes.readCommentThread(req.orgId!, req.userId!, String(req.params.id));
+  if (!thread) {
+    res.status(404).json({ error: "No such block." });
+    return;
+  }
+  res.json(thread);
+});
+
+/**
+ * Leave a remark. It travels the ordinary push path — see `pushComment`.
+ *
+ * There is no second write path here on purpose (B3): the operation this builds
+ * is the same one the desktop's outbox sends, merged per comment key against
+ * whatever the server already holds.
+ */
+notesRouter.post("/blocks/:id/comments", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const text = typeof body.body === "string" ? body.body.trim() : "";
+  if (!text) {
+    res.status(400).json({ error: "A comment needs something to say." });
+    return;
+  }
+  if (text.length > MAX_COMMENT_LENGTH) {
+    // Refused with the limit named rather than silently truncated: somebody
+    // whose last paragraph vanished has no way to tell that from a sync failure.
+    res.status(400).json({
+      error: `A comment holds at most ${MAX_COMMENT_LENGTH} characters; this one had ${text.length}.`,
+    });
+    return;
+  }
+
+  const outcome = await notes.addComment(
+    req.orgId!, req.userId!, String(req.params.id),
+    { body: text, ...(typeof body.author === "string" ? { author: body.author } : {}) },
+    Date.now(),
+  );
+  sendComment(res, outcome, 201);
+});
+
+/** F3's "resolved and unresolved" — one stamped field, merged like any other. */
+notesRouter.patch("/blocks/:id/comments/:commentId", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  if (typeof body.resolved !== "boolean") {
+    res.status(400).json({ error: "resolved is true or false" });
+    return;
+  }
+  const outcome = await notes.setCommentResolved(
+    req.orgId!, req.userId!, String(req.params.id), String(req.params.commentId),
+    body.resolved, Date.now(),
+  );
+  sendComment(res, outcome, 200);
+});
+
+/**
+ * One refusal per cause, because the causes lead somewhere different.
+ *
+ * "There is no such block" and "the merge would not take this" are the same
+ * status to a caller that collapses them, and one of those is worth retrying.
+ */
+function sendComment(res: Response, outcome: notes.CommentWriteOutcome, okStatus: number): void {
+  if (outcome.ok) {
+    res.status(okStatus).json({ comment: outcome.comment, blockDeleted: outcome.blockDeleted });
+    return;
+  }
+  if (outcome.reason === "refused") {
+    res.status(409).json({ error: outcome.detail ?? "The server could not apply this comment." });
+    return;
+  }
+  res.status(404).json({
+    error: outcome.reason === "no_block" ? "No such block." : "No such comment.",
+  });
+}
 
 /* ------------------------------------------------------------------ leases */
 

@@ -72,6 +72,25 @@ describe("API-HEADERS-CORS — middleware integration", () => {
     expect(res.headers.get("content-security-policy")).toContain("frame-ancestors");
   });
 
+  /**
+   * A download is only honest if the caller can read what it said.
+   *
+   * Without Expose-Headers a browser sees the CORS-safelisted set and nothing
+   * else, so the notes export's filename and its "this file is a prefix" flag
+   * would be sent and then dropped by the browser before the dashboard saw
+   * them — the endpoint telling the truth to nobody.
+   */
+  it("exposes the download headers to an allowed origin, and nothing to a foreign one", async () => {
+    const base = await start();
+    const res = await fetch(`${base}/x`, { headers: { Origin: "https://app.test" } });
+    const exposed = res.headers.get("access-control-expose-headers") ?? "";
+    expect(exposed).toContain("Content-Disposition");
+    expect(exposed).toContain("X-BrainRouter-Export-Truncated");
+
+    const foreign = await fetch(`${base}/x`, { headers: { Origin: "https://evil.test" } });
+    expect(foreign.headers.get("access-control-expose-headers")).toBeNull();
+  });
+
   it("does NOT reflect a foreign Origin", async () => {
     const base = await start();
     const res = await fetch(`${base}/x`, { headers: { Origin: "https://evil.test" } });
