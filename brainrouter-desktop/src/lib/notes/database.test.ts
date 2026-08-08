@@ -63,11 +63,17 @@ function dto(over: Partial<DatabaseReadDto> = {}): DatabaseReadDto {
 /* ------------------------------------------------------------------- cells */
 
 test('a column this build cannot evaluate is read-only, not missing', () => {
-  // §3 keeps formulas out and a newer client's type arrives the same way. An
+  // A newer client's type arrives as one this build has never heard of. An
   // editable field over a value we do not understand lets someone overwrite it
   // with something we do, which is worse than showing it as it is stored.
+  //
+  // The stand-in used to be `formula`, which ADR-029 F2 has since made real. The
+  // rule is unchanged and needs a type this build genuinely cannot evaluate;
+  // that a COMPUTED column is a different cell from an unreadable one is
+  // asserted in `partFProperties.test.ts`.
+  assert.equal(cellEditorFor(property({ type: 'inference', unsupported: true })), 'none');
+  assert.equal(cellEditorFor(property({ type: 'inference', unsupported: false })), 'none');
   assert.equal(cellEditorFor(property({ type: 'formula', unsupported: true })), 'none');
-  assert.equal(cellEditorFor(property({ type: 'formula', unsupported: false })), 'none');
   assert.equal(cellEditorFor(property({ type: 'select' })), 'select');
   assert.equal(cellEditorFor(property({ type: 'relation' })), 'relation');
 });

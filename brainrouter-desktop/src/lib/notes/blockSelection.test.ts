@@ -18,8 +18,8 @@ import type { NoteBlockView } from './notesView.js';
 function block(id: string, over: Partial<NoteBlockView> = {}): NoteBlockView {
   return {
     id, parentId: null, depth: 0, kind: 'paragraph', text: id, checked: false, level: null,
-    hasChildren: false, refs: [], conflicts: [], lockedBy: null, title: null, icon: null,
-    cover: null, favourite: false, ...over,
+    hasChildren: false, collapsed: false, refs: [], conflicts: [], lockedBy: null, title: null, icon: null,
+    cover: null, favourite: false, template: false, comments: [], ...over,
   };
 }
 

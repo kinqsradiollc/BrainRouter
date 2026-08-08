@@ -43,6 +43,10 @@ import {
 } from '../lib/notes/blockEditing.js';
 import { blockKeyIntent, stopsWindowShortcut, type BlockIntent } from '../lib/notes/blockKeymap.js';
 import {
+  caretEntryPoint, mergeRowRects, type RowRect, type VisualRowGeometry,
+} from '../lib/notes/visualRows.js';
+import { redoRoute, undoRoute } from '../lib/notes/pageUndo.js';
+import {
   clearSlashTrigger, moveMenuSelection, slashPlan, slashTrigger,
   type SlashCommandDto, type SlashPlan,
 } from '../lib/notes/slashMenu.js';
@@ -82,8 +86,25 @@ export interface BlockEditorProps {
   searchSlash: (query: string) => Promise<SlashCommandDto[]>;
   onSlashPlan: (plan: SlashPlan, at: { text: string; caret: number }) => void;
   searchMentions: (query: string) => Promise<MentionCandidate[]>;
-  /** The parent asks this block to take the caret, at an offset it chose. */
-  focusRequest: { caret: number; token: number } | null;
+  /**
+   * The parent asks this block to take the caret.
+   *
+   * `x` is F3's visual-row arrival: the caret enters at the same horizontal
+   * position it left the previous block at, on this block's first or last laid
+   * out row, and `caret` is the fallback for when there is no layout to
+   * hit-test against. `adopt` is F4's: a page-level undo rewrote this block, and
+   * a focused block otherwise keeps its own draft (`textToShow`) and would push
+   * the pre-undo text straight back over it.
+   */
+  focusRequest: {
+    caret: number;
+    token: number;
+    x?: number;
+    edge?: 'first' | 'last';
+    adopt?: boolean;
+  } | null;
+  /** F4 — this block's typing history is spent; ⌘Z belongs to the page now. */
+  onPageHistory: (direction: 'undo' | 'redo') => void;
 }
 
 interface MenuState {
@@ -99,6 +120,7 @@ export function BlockEditor(props: BlockEditorProps): React.ReactElement {
   const {
     text, kind, level, readOnly, placeholder, refLabels, onOpenRef, onText, onIntent,
     onInputRule, onRuleTransform, searchSlash, searchMentions, onSlashPlan, focusRequest,
+    onPageHistory,
   } = props;
 
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -204,11 +226,75 @@ export function BlockEditor(props: BlockEditorProps): React.ReactElement {
     );
   }, [draft, caretVersion]);
 
+  /**
+   * F3 — where this block's rows and its caret actually are.
+   *
+   * Measured here because only the DOM knows; judged in `lib/notes/visualRows`
+   * because "is this the first row" is the decision the dashboard has to make
+   * identically. Returns null when there is nothing laid out yet, and the keymap
+   * degrades to Part E's newline rule rather than refusing to move the caret.
+   */
+  const readGeometry = useCallback((): VisualRowGeometry | undefined => {
+    const root = rootRef.current;
+    const selection = window.getSelection();
+    if (!root || !selection || selection.rangeCount === 0) return undefined;
+    if (!root.contains(selection.getRangeAt(0).startContainer)) return undefined;
+
+    const whole = document.createRange();
+    whole.selectNodeContents(root);
+    const rows = mergeRowRects(toRowRects(whole.getClientRects()));
+    if (rows.length === 0) return undefined;
+
+    const here = selection.getRangeAt(0).cloneRange();
+    here.collapse(true);
+    const caretRects = toRowRects(here.getClientRects());
+    // A collapsed range at a boundary between two nodes reports nothing. The
+    // element's own box is the honest fallback: it puts the caret on the first
+    // row, which is where a boundary at offset zero actually is.
+    const caret = caretRects[0] ?? { ...rows[0]!, left: rows[0]!.left };
+    return { rows, caret: { top: caret.top, bottom: caret.bottom, left: caret.left } };
+  }, []);
+
+  /** Turn a viewport point into a source offset, for a caret arriving by x (F3). */
+  const offsetAtPoint = useCallback((x: number, y: number): number | null => {
+    const root = rootRef.current;
+    if (!root) return null;
+    const position = caretPositionAt(x, y);
+    if (!position || !root.contains(position.node)) return null;
+    const visible = visibleOffsetIn(root, position.node, position.offset);
+    return visibleToSource(inlineSegments(draftRef.current), visible);
+  }, []);
+
   useEffect(() => {
     const root = rootRef.current;
     if (!root || !focusRequest || readOnly) return;
     root.focus({ preventScroll: false });
     focusedRef.current = true;
+
+    // F4 — a page-level undo rewrote this block. A focused block keeps its own
+    // draft, so without adopting, the pre-undo text would be pushed straight
+    // back over the undo on the next keystroke. The typing history goes with it:
+    // its entries describe a text that no longer exists.
+    if (focusRequest.adopt) {
+      draftRef.current = text;
+      setDraft(text);
+      lastPushedRef.current = text;
+      splitExpectation.current = null;
+      historyRef.current = EMPTY_HISTORY;
+    }
+
+    // F3 — the caret enters at the x it left the previous block at, which is the
+    // only thing that means the same on a wrapped paragraph as on a short line.
+    // The character offset is the fallback: no layout (the harness before first
+    // paint) and no `caretRangeFromPoint` in a headless run.
+    if (focusRequest.x !== undefined) {
+      const whole = document.createRange();
+      whole.selectNodeContents(root);
+      const rows = mergeRowRects(toRowRects(whole.getClientRects()));
+      const point = caretEntryPoint(rows, focusRequest.edge ?? 'first', focusRequest.x);
+      const landed = point ? offsetAtPoint(point.x, point.y) : null;
+      if (landed !== null) { setCaret({ start: landed, end: landed }); return; }
+    }
     setCaret({ start: focusRequest.caret, end: focusRequest.caret });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusRequest?.token]);
@@ -237,14 +323,30 @@ export function BlockEditor(props: BlockEditorProps): React.ReactElement {
    * people stop trusting with anything they care about.
    */
   const stepHistory = useCallback((direction: 'undo' | 'redo') => {
+    const history = historyRef.current;
+    // F4 — the routing judgement is in `lib/notes/pageUndo`, not here: this
+    // block's typing first, and the PAGE's stack the moment there is none left.
+    // That fall-through is what makes ⌘Z after a split undo the split rather
+    // than doing nothing, which is the whole of F4's complaint.
+    const route = direction === 'undo'
+      ? undoRoute({ blockHasHistory: history.past.length > 0 })
+      : redoRoute({ blockHasFuture: history.future.length > 0 });
+    if (route === 'page') {
+      // Anything typed but not yet pushed goes first, or the page's stack would
+      // undo a state the store has never been told about.
+      flushPush();
+      onPageHistory(direction);
+      return;
+    }
+
     const current: TextEdit = { text: draftRef.current, caret: caretRef.current.start };
     const step = direction === 'undo'
-      ? undoEdit(historyRef.current, current)
-      : redoEdit(historyRef.current, current);
+      ? undoEdit(history, current)
+      : redoEdit(history, current);
     if (!step) return;
     historyRef.current = step.history;
     applyEdit(step.edit, false);
-  }, [applyEdit]);
+  }, [applyEdit, flushPush, onPageHistory]);
 
   /** The menus re-evaluate after every edit — they open and close with the text. */
   const refreshMenus = useCallback((next: string, caret: number) => {
@@ -501,6 +603,12 @@ export function BlockEditor(props: BlockEditorProps): React.ReactElement {
     const intent = blockKeyIntent(event, {
       text: draftRef.current, selection, kind,
       menuOpen: open !== null, composing: composingRef.current !== null,
+      // F3 — measured only for the keys that can use it. `getClientRects` forces
+      // layout, and doing it on every keystroke would put a reflow between a
+      // character and its appearing.
+      ...(event.key === 'ArrowUp' || event.key === 'ArrowDown'
+        ? { geometry: readGeometry() }
+        : {}),
     });
     if (intent.kind === 'none') return;
     // ⌘K is quick find everywhere in the mode; over a selection it is a link.
@@ -550,7 +658,7 @@ export function BlockEditor(props: BlockEditorProps): React.ReactElement {
         flushPush();
         onIntent(intent, { text: draftRef.current, caret: selection.start });
     }
-  }, [askForSplit, closeMenu, flushPush, insert, kind, onIntent, pickMenuRow, readSelection, schedulePush, searchMentions, setCaret, stepHistory]);
+  }, [askForSplit, closeMenu, flushPush, insert, kind, onIntent, pickMenuRow, readGeometry, readSelection, schedulePush, searchMentions, setCaret, stepHistory]);
 
   /* -------------------------------------------------------- the toolbar */
 
@@ -727,6 +835,41 @@ function visibleOffsetIn(root: HTMLElement, node: Node, offset: number): number 
     return (root.textContent ?? '').length;
   }
   return range.toString().length;
+}
+
+/**
+ * A `DOMRectList` as the plain numbers `lib/notes/visualRows` decides on.
+ *
+ * The conversion is the boundary: everything past it is testable without a
+ * browser, which is what stops the arrow keys' behaviour being something only
+ * discoverable by typing.
+ */
+function toRowRects(rects: DOMRectList): RowRect[] {
+  const out: RowRect[] = [];
+  for (let at = 0; at < rects.length; at += 1) {
+    const rect = rects[at]!;
+    out.push({ top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right });
+  }
+  return out;
+}
+
+/**
+ * The DOM position under a viewport point, across both spellings of the API.
+ *
+ * Chromium ships `caretRangeFromPoint`, the standard is
+ * `caretPositionFromPoint`, and a headless runner may have neither. Returning
+ * null rather than throwing is what makes the character-offset fallback in the
+ * focus effect reachable instead of decorative.
+ */
+function caretPositionAt(x: number, y: number): { node: Node; offset: number } | null {
+  const doc = document as Document & {
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+  };
+  const range = doc.caretRangeFromPoint?.(x, y);
+  if (range) return { node: range.startContainer, offset: range.startOffset };
+  const position = doc.caretPositionFromPoint?.(x, y);
+  return position ? { node: position.offsetNode, offset: position.offset } : null;
 }
 
 function textNodesIn(root: HTMLElement): Text[] {

@@ -10,6 +10,7 @@
  * function in this file ever needs one, the scoping has regressed the way
  * ADR-028 D9 recorded for the planner.
  */
+import type { NoteCommentDto } from './commentThread.js';
 
 export interface NoteBlockView {
   id: string;
@@ -20,6 +21,17 @@ export interface NoteBlockView {
   checked: boolean;
   level: number | null;
   hasChildren: boolean;
+  /**
+   * F3 — a toggle's children are folded away.
+   *
+   * The block's OWN stamped field (`NoteBlock.collapsed`), not a set the shell
+   * keeps: a fold is a decision about the document that should still be folded
+   * when you come back to it, and on the other device too. It merges
+   * last-writer-wins with no marker, which `blockMerge.ts` argues for directly —
+   * a conflict banner over a folded toggle teaches people to dismiss the banner
+   * that matters.
+   */
+  collapsed: boolean;
   /**
    * B4/E4 — a container's title, which is the block's OWN `text` rendered by
    * the host through core's `pageTitleOrDefault`.
@@ -36,6 +48,19 @@ export interface NoteBlockView {
   cover: string | null;
   /** Pinned into the sidebar's favourites. */
   favourite: boolean;
+  /**
+   * F3 — this page is a template: something to start from, not something to
+   * read. A page, per B4 — the flag is the whole difference.
+   */
+  template: boolean;
+  /**
+   * F3 — the comments on this block, flattened out of core's stamped records.
+   *
+   * Present on every block rather than fetched per block, because the marker
+   * beside a line has to be there before anyone clicks it: a badge that appears
+   * only after a round trip is one nobody knows to look for.
+   */
+  comments: NoteCommentDto[];
   /**
    * E4 — a numbered item's number, computed by core from tree position.
    *
@@ -94,8 +119,46 @@ export function placeholderFor(kind: string): string {
     case 'code': return 'Code';
     case 'quote': return 'Quoted';
     case 'embed': return 'Paste a brainrouter:// reference';
+    // F3 — the kinds that used to render as a plain line now have a shape, so
+    // their empty state invites the thing that shape is for.
+    case 'toggle': return 'What this hides — indent the detail under it';
+    case 'callout': return 'The thing that should not be skimmed past';
+    case 'bookmark': return 'Paste a web address';
+    case 'synced': return 'Pick a block to show here';
+    case 'table-row': return '';
     default: return 'Write, or paste a link to anything in the workspace';
   }
+}
+
+/**
+ * F3 — a callout's glyph when nobody has chosen one.
+ *
+ * A callout with no icon is a bordered paragraph, which is not what the person
+ * picked from the menu. The default is a fallback for RENDERING only: it is
+ * never written to the block, so choosing one later is the first edit to the
+ * field and there is nothing stored to merge against.
+ */
+export const DEFAULT_CALLOUT_ICON = '💡';
+
+export function calloutIcon(icon: string | null): string {
+  return (icon ?? '').trim() || DEFAULT_CALLOUT_ICON;
+}
+
+/**
+ * The kinds a block's `text` is an ADDRESS rather than prose.
+ *
+ * The distinction decides whether the row gets a text editor or its own surface.
+ * Core's `holdsProse` answers the same question for the keyboard (what Backspace
+ * may merge into what); this answers it for the renderer, and the two agree by
+ * construction because the list is the same one.
+ */
+export function rendersOwnSurface(kind: string): boolean {
+  return kind === 'image' || kind === 'bookmark' || kind === 'embed' || kind === 'table'
+    // F3 — a synced block's text is the ADDRESS of the block it shows. It was
+    // missing from this list, so the row fell through to the prose editor and
+    // the menu entry inserted a paragraph containing a URI — F1's defect, on the
+    // kind Part F added.
+    || kind === 'synced';
 }
 
 /**
@@ -154,7 +217,13 @@ export function conflictLine(conflict: NoteConflictView): string {
     case 'delete_vs_edit':
       return 'Deleted on one device and edited on another. It is back, undecided.';
     case 'concurrent_text':
-      return 'Written in two places at once. Both versions are kept.';
+      // F3 — the same reason arrives for a block's prose and for a COMMENT on
+      // it, and the sentence has to say which: "written in two places at once"
+      // over a paragraph nobody touched is how a person concludes the banner is
+      // wrong and stops reading it.
+      return conflict.field.startsWith('comment:')
+        ? 'A comment on this block was written in two places at once. Both versions are kept.'
+        : 'Written in two places at once. Both versions are kept.';
     default:
       return `“${conflict.field}” was changed in two places.`;
   }

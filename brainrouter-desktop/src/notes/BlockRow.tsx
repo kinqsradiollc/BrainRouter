@@ -11,15 +11,30 @@
  * `canEdit`: a block another device holds is read-only WITH the attribution
  * under it. That was true of the textarea and it stays true here, because it is
  * the decision the whole lease exists for.
+ *
+ * **Part F is the routing below.** Every kind the slash menu offers now reaches
+ * a renderer from here — a toggle its twisty, a callout its frame, and an image,
+ * a bookmark, a table and an embed their own surfaces. F1's whole point is that
+ * this switch is where an offered kind either becomes real or quietly falls
+ * through to a plain line of text, which is what it used to do for five of them.
  */
 import React, { useMemo, useState } from 'react';
 import { Icon } from '../icons.js';
 import { RefChip } from '../components/workspace/RefChip.js';
 import { BlockEditor } from './BlockEditor.js';
 import { BlockHandle } from './BlockHandle.js';
+import { CalloutFrame, ToggleTwisty } from './BlockShells.js';
+import { ImageBlock } from './ImageBlock.js';
+import { BookmarkBlock } from './BookmarkBlock.js';
+import { TableBlock } from './TableBlock.js';
+import { EmbedBlock } from './EmbedBlock.js';
+import { SyncedBlock } from './SyncedBlock.js';
+import { CommentThread } from './CommentThread.js';
+import { collapsedCount } from '../lib/notes/blockVisibility.js';
+import { commentBadge } from '../lib/notes/commentThread.js';
 import {
   backlinkNote, canEdit, conflictLine, indentFor, placeholderFor, readOnlyReason,
-  sendTargetsFor, type NoteBlockView,
+  rendersOwnSurface, sendTargetsFor, type NoteBlockView,
 } from '../lib/notes/notesView.js';
 import { dropPositionInRow, moveToTargets, type MoveToTarget, type PageDropPosition } from '../lib/notes/blockSelection.js';
 import { TOP_LEVEL_LABEL } from '../lib/notes/pageTree.js';
@@ -47,7 +62,14 @@ export interface BlockRowProps {
   /** E4 — part of a multi-block selection, so one action applies to all. */
   selected: boolean;
   selectedCount: number;
-  focusRequest: { caret: number; token: number } | null;
+  focusRequest: {
+    caret: number; token: number; x?: number; edge?: 'first' | 'last'; adopt?: boolean;
+  } | null;
+  /** F3 — this block's comment thread is showing. */
+  commentsOpen: boolean;
+  onComments: () => void;
+  /** F4 — ⌘Z ran out of typing in this block, so the page's stack takes it. */
+  onPageHistory: (direction: 'undo' | 'redo') => void;
   onIntent: (block: NoteBlockView, intent: BlockIntent, at: { text: string; caret: number }) => void;
   onSlashPlan: (block: NoteBlockView, plan: SlashPlan, at: { text: string; caret: number }) => void;
   onAction: (block: NoteBlockView, action: BlockAction) => void;
@@ -67,6 +89,7 @@ export function BlockRow(props: BlockRowProps): React.ReactElement {
   const {
     block, blocks, pageId, refLabels, ops, commands, backlinkCount, menuOpen, onMenu,
     linkOpen, onLink, files, symbols, selected, selectedCount, focusRequest, drag,
+    commentsOpen, onComments, onPageHistory,
   } = props;
 
   const locked = readOnlyReason(block);
@@ -77,12 +100,56 @@ export function BlockRow(props: BlockRowProps): React.ReactElement {
     [blocks, block.id, pageId],
   );
 
+  // F3 — how much a fold is hiding, so the twisty can say so rather than imply
+  // it. Computed from the whole tree because a toggle's subtree can be deeper
+  // than the page's own body list.
+  const childCount = useMemo(
+    () => (block.kind === 'toggle' ? collapsedCount(blocks, block.id) : 0),
+    [blocks, block.id, block.kind],
+  );
+
   const className = [
     'notes-block',
     selected ? 'is-selected' : '',
     drag.dragging ? 'is-dragging' : '',
     drag.hint ? `drop-${drag.hint}` : '',
   ].filter(Boolean).join(' ');
+
+  /**
+   * The ordinary editing surface, built once.
+   *
+   * A callout wraps it in a frame and every other prose kind renders it bare —
+   * two call sites, one element, so a callout's editor cannot be configured
+   * differently from a paragraph's by accident.
+   */
+  const editor = (
+    <BlockEditor
+      blockId={block.id}
+      text={block.text}
+      kind={block.kind}
+      level={block.level}
+      readOnly={!editable}
+      placeholder={placeholderFor(block.kind)}
+      refLabels={refLabels}
+      onOpenRef={ops.openRef}
+      onText={(text) => ops.setText(block.id, text)}
+      onIntent={(intent, at) => props.onIntent(block, intent, at)}
+      onFocus={() => ops.beginEdit(block.id)}
+      onBlur={() => ops.endEdit(block.id)}
+      onInputRule={ops.inputRule}
+      onRuleTransform={(transform) => ops.applyRule(block.id, transform)}
+      searchSlash={ops.searchSlash}
+      searchMentions={ops.searchMentions}
+      onSlashPlan={(plan, at) => props.onSlashPlan(block, plan, at)}
+      focusRequest={focusRequest}
+      onPageHistory={onPageHistory}
+    />
+  );
+
+  // F3 — the marker is drawn from what the block already carries, so it is there
+  // before anyone clicks. A badge that appeared only after a round trip is one
+  // nobody knows to look for.
+  const badge = commentBadge(block.comments);
 
   return (
     <div
@@ -139,6 +206,18 @@ export function BlockRow(props: BlockRowProps): React.ReactElement {
             aria-label="Done" onChange={(e) => ops.toggleChecked(block.id, e.target.checked)} />
         ) : null}
 
+        {/* F3 — the toggle's disclosure triangle. What it folds is decided in
+            `blockVisibility.ts`, and the page applies it; the row only offers
+            the gesture and says how much is under it. */}
+        {block.kind === 'toggle' ? (
+          <ToggleTwisty
+            collapsed={block.collapsed}
+            childCount={childCount}
+            disabled={!editable}
+            onToggle={() => ops.setCollapsed(block.id, !block.collapsed)}
+          />
+        ) : null}
+
         {/* E4 — a list looks like a list. The NUMBER comes from core with the
             block (it is a function of tree position), never from counting the
             rows on screen: a filtered page would then number 1, 2, 3 while the
@@ -149,34 +228,62 @@ export function BlockRow(props: BlockRowProps): React.ReactElement {
           </span>
         ) : null}
 
-        {block.kind === 'divider' ? (
-          <hr className="notes-divider" />
-        ) : (
-          <BlockEditor
-            blockId={block.id}
-            text={block.text}
-            kind={block.kind}
-            level={block.level}
-            readOnly={!editable}
-            placeholder={placeholderFor(block.kind)}
-            refLabels={refLabels}
-            onOpenRef={ops.openRef}
-            onText={(text) => ops.setText(block.id, text)}
-            onIntent={(intent, at) => props.onIntent(block, intent, at)}
-            onFocus={() => ops.beginEdit(block.id)}
-            onBlur={() => ops.endEdit(block.id)}
-            onInputRule={ops.inputRule}
-            onRuleTransform={(transform) => ops.applyRule(block.id, transform)}
-            searchSlash={ops.searchSlash}
-            searchMentions={ops.searchMentions}
-            onSlashPlan={(plan, at) => props.onSlashPlan(block, plan, at)}
-            focusRequest={focusRequest}
-          />
-        )}
+        {block.kind === 'divider' ? <hr className="notes-divider" /> : null}
+
+        {/* F1 — the four kinds whose `text` is an ADDRESS rather than prose. Each
+            draws its own surface, because an editor over a URL would offer
+            marks, a slash menu and a split to a value that has no use for any
+            of them. */}
+        {rendersOwnSurface(block.kind) ? (
+          <div className="notes-block-surface">
+            {block.kind === 'image' ? (
+              <ImageBlock blockId={block.id} text={block.text} readOnly={!editable} ops={ops} />
+            ) : null}
+            {block.kind === 'bookmark' ? (
+              <BookmarkBlock blockId={block.id} text={block.text} readOnly={!editable} ops={ops} />
+            ) : null}
+            {block.kind === 'embed' ? (
+              <EmbedBlock blockId={block.id} text={block.text} readOnly={!editable} ops={ops} />
+            ) : null}
+            {block.kind === 'table' ? (
+              <TableBlock table={block} blocks={blocks} ops={ops} />
+            ) : null}
+            {/* F3 — the mirror. Its rows carry the SOURCE's ids, so the editor
+                over one writes to the one block; nothing here copies content. */}
+            {block.kind === 'synced' ? (
+              <SyncedBlock blockId={block.id} text={block.text} readOnly={!editable} ops={ops} />
+            ) : null}
+          </div>
+        ) : null}
+
+        {block.kind !== 'divider' && !rendersOwnSurface(block.kind) ? (
+          block.kind === 'callout' ? (
+            <CalloutFrame
+              icon={block.icon}
+              readOnly={!editable}
+              onIcon={(glyph) => ops.setIcon(block.id, glyph)}
+            >
+              {editor}
+            </CalloutFrame>
+          ) : editor
+        ) : null}
 
         <div className="notes-block-tools">
           <button className="notes-icon-btn" title="Link a file" aria-label="Link a file" onClick={onLink}>
             <Icon name="link" size={12} />
+          </button>
+          {/* F3 — comments on a block. Always offered, because the gesture is
+              "say something about this line" and a control that appears only
+              once a thread exists cannot start one. */}
+          <button
+            className={`notes-icon-btn notes-comment-btn${badge ? ' has-comments' : ''}`}
+            title={badge ? `Comments — ${badge}` : 'Comment on this line'}
+            aria-label="Comments"
+            aria-expanded={commentsOpen}
+            onClick={onComments}
+          >
+            <Icon name="bubble" size={12} />
+            {badge ? <span className="notes-comment-badge">{badge}</span> : null}
           </button>
         </div>
       </div>
@@ -206,6 +313,10 @@ export function BlockRow(props: BlockRowProps): React.ReactElement {
           <button onClick={() => ops.resolveConflict(block.id, conflict.field, 'theirs')}>Keep theirs</button>
         </div>
       ))}
+
+      {commentsOpen ? (
+        <CommentThread blockId={block.id} comments={block.comments} ops={ops} />
+      ) : null}
 
       {linkOpen ? (
         <FilePicker

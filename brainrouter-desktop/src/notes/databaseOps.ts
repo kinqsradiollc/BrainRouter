@@ -15,9 +15,15 @@
  */
 import type { MentionCandidate } from '../lib/notes/mentionPicker.js';
 import type {
-  DatabaseReadDto, NoteFilterGroup, NotePropertyValue, NoteSelectOption,
-  NoteSortRule, NoteViewKind, PropertyCatalogDto,
+  DatabaseReadDto, NoteFileDto, NoteFilterGroup, NotePropertyValue, NoteRollupSpec,
+  NoteSelectOption, NoteSortRule, NoteViewKind, PropertyCatalogDto, RollupTargetsDto,
 } from '../lib/notes/database.js';
+
+/** F2 — what a formula or rollup column is configured with. */
+export interface PropertyConfig {
+  formula?: string;
+  rollup?: NoteRollupSpec;
+}
 
 /**
  * A view written back.
@@ -43,11 +49,11 @@ export interface DatabaseHostOps {
   addRow: (databaseId: string, after?: string) => Promise<string | null>;
   setValue: (rowId: string, propertyId: string, value: NotePropertyValue) => Promise<void>;
   removeRow: (rowId: string) => Promise<void>;
-  addProperty: (databaseId: string, name: string, type: string) => Promise<void>;
+  addProperty: (databaseId: string, name: string, type: string, config?: PropertyConfig) => Promise<void>;
   updateProperty: (
     databaseId: string,
     propertyId: string,
-    patch: { name?: string; options?: readonly NoteSelectOption[] },
+    patch: { name?: string; options?: readonly NoteSelectOption[] } & PropertyConfig,
   ) => Promise<void>;
   removeProperty: (databaseId: string, propertyId: string) => Promise<void>;
   /** The whole desired order; core keeps anything the caller left out. */
@@ -62,6 +68,18 @@ export interface DatabaseHostOps {
   propertyCatalog: () => Promise<PropertyCatalogDto | null>;
   saveView: (databaseId: string, input: SaveViewInput) => Promise<void>;
   removeView: (databaseId: string, viewId: string) => Promise<void>;
+  /**
+   * F2 — the columns a rollup could summarise, from where the relation POINTS.
+   *
+   * A picker built from a fixed list would offer a target that does not exist on
+   * the other end, and every row would then report it as unreadable — the shape
+   * of defect F1 exists to stop: an offer the product cannot honour.
+   */
+  rollupTargets: (databaseId: string, relationPropertyId: string) => Promise<RollupTargetsDto>;
+  /** F3/D3 — a file into the ONE attachment store, named `attachment:<id>`. */
+  attachFile: (name: string, dataBase64: string) => Promise<{ ok: boolean; ref?: string; error?: string }>;
+  /** The names behind a files cell's references — the record holds them, not the cell. */
+  describeFiles: (ids: readonly string[]) => Promise<NoteFileDto[]>;
   /** Opening a row, a sub-page or a full-page database is the same navigation. */
   openPage: (pageId: string | null) => void;
   openRef: (uri: string) => void;
@@ -74,9 +92,14 @@ export interface DatabaseOps {
   addRow: (after?: string) => Promise<string | null>;
   setValue: (rowId: string, propertyId: string, value: NotePropertyValue) => Promise<void>;
   removeRow: (rowId: string) => Promise<void>;
-  addProperty: (name: string, type: string) => Promise<void>;
+  addProperty: (name: string, type: string, config?: PropertyConfig) => Promise<void>;
   addOption: (propertyId: string, option: NoteSelectOption) => Promise<void>;
+  /** F2 — rewrite a formula or a rollup. The values are untouched; nothing stored one. */
+  configureProperty: (propertyId: string, config: PropertyConfig) => Promise<void>;
   removeProperty: (propertyId: string) => Promise<void>;
+  rollupTargets: (relationPropertyId: string) => Promise<RollupTargetsDto>;
+  attachFile: (name: string, dataBase64: string) => Promise<{ ok: boolean; ref?: string; error?: string }>;
+  describeFiles: (ids: readonly string[]) => Promise<NoteFileDto[]>;
   reorderProperties: (order: readonly string[]) => Promise<void>;
   propertyCatalog: () => Promise<PropertyCatalogDto | null>;
   saveView: (input: SaveViewInput) => Promise<void>;
@@ -101,14 +124,18 @@ export function bindDatabaseOps(
     addRow: (after) => host.addRow(databaseId, after),
     setValue: host.setValue,
     removeRow: host.removeRow,
-    addProperty: (name, type) => host.addProperty(databaseId, name, type),
+    addProperty: (name, type, config) => host.addProperty(databaseId, name, type, config),
     // An option is appended to the list the schema already holds rather than
     // replacing it: `updateProperty` takes the whole `options` array, so sending
     // only the new one would delete every choice the person had made.
     addOption: (propertyId, option) => host.updateProperty(databaseId, propertyId, {
       options: [...optionsOf(propertyId), option],
     }),
+    configureProperty: (propertyId, config) => host.updateProperty(databaseId, propertyId, config),
     removeProperty: (propertyId) => host.removeProperty(databaseId, propertyId),
+    rollupTargets: (relationPropertyId) => host.rollupTargets(databaseId, relationPropertyId),
+    attachFile: host.attachFile,
+    describeFiles: host.describeFiles,
     reorderProperties: (order) => host.reorderProperties(databaseId, order),
     propertyCatalog: host.propertyCatalog,
     saveView: (input) => host.saveView(databaseId, input),

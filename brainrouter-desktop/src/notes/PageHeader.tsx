@@ -10,14 +10,19 @@
  * sits in a scrolling column, so an absolutely-positioned menu is clipped by
  * the first ancestor with `overflow` — which is the same reason a native
  * `<select>` is unusable in this app.
+ *
+ * The icon picker itself moved to `IconPicker.tsx` when Part F gave a callout
+ * one: `NoteBlock.icon` is a single field for both, so a second picker would be
+ * two palettes writing one value.
  */
-import React, { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import React, { useState } from 'react';
 import { Icon } from '../icons.js';
+import { IconPicker, Popover, TextField } from './IconPicker.js';
 import {
   coverActionLabel, coverStyle, favouriteActionLabel, iconActionLabel, newPageLabel,
-  PAGE_ICON_CHOICES, PAGE_TITLE_PLACEHOLDER, titleFieldValue, type PageHeaderView,
+  PAGE_TITLE_PLACEHOLDER, titleFieldValue, type PageHeaderView,
 } from '../lib/notes/pageHeader.js';
+import { exportChoicesFor, type NoteExportFormatId } from '../lib/notes/exportView.js';
 import { TOP_LEVEL_LABEL } from '../lib/notes/pageTree.js';
 
 export interface PageHeaderOps {
@@ -27,6 +32,14 @@ export interface PageHeaderOps {
   setCover: (id: string, cover: string) => void;
   setFavourite: (id: string, favourite: boolean) => void;
   addPage: (parentId: string | null) => void;
+  /**
+   * F3 — "can I leave", as a control on the page it is about.
+   *
+   * Here rather than in a settings screen because that is the question's shape:
+   * somebody wants THIS page out, and a global "export everything" is a
+   * different feature that answers a different worry.
+   */
+  exportPage: (blockId: string, format: NoteExportFormatId) => void;
 }
 
 export function PageHeader({
@@ -37,8 +50,9 @@ export function PageHeader({
   block: { text: string } | null;
   ops: PageHeaderOps;
 }): React.ReactElement {
-  const [picker, setPicker] = useState<'icon' | 'cover' | null>(null);
+  const [picker, setPicker] = useState<'icon' | 'cover' | 'export' | null>(null);
   const cover = coverStyle(view.cover);
+  const exports = exportChoicesFor(view.database);
 
   return (
     <header className="notes-page-header">
@@ -104,28 +118,37 @@ export function PageHeader({
             <Icon name="plus" size={11} /> {newPageLabel(view.editable ? view.title : null)}
           </button>
         )}
+        {/* F3 — the top level is not a block, so there is nothing to write out;
+            every real page is. A control that was always there and sometimes
+            did nothing is the defect F1 is about, in a header. */}
+        {view.pageId ? (
+          <button className="notes-page-tool" onClick={() => setPicker(picker === 'export' ? null : 'export')}>
+            <Icon name="export" size={11} /> Export
+          </button>
+        ) : null}
       </div>
 
-      {picker === 'icon' && view.pageId ? (
+      {picker === 'export' && view.pageId ? (
         <Popover onClose={() => setPicker(null)}>
-          <div className="notes-icon-grid">
-            {PAGE_ICON_CHOICES.map((glyph) => (
-              <button key={glyph} className="notes-icon-choice"
-                onClick={() => { ops.setIcon(view.pageId!, glyph); setPicker(null); }}>{glyph}</button>
-            ))}
-          </div>
-          {/* Any character, not only the palette's — the grid is a shortcut,
-              and a picker that refused a glyph someone pasted would be the
-              only place in the app where their own text was rejected. */}
-          <TextField
-            label="Or paste a character" value={view.icon ?? ''} placeholder="🙂"
-            onSubmit={(value) => { ops.setIcon(view.pageId!, value); setPicker(null); }}
-          />
-          {view.icon ? (
-            <button className="notes-popover-clear"
-              onClick={() => { ops.setIcon(view.pageId!, ''); setPicker(null); }}>Remove icon</button>
-          ) : null}
+          {exports.map((choice) => (
+            <button
+              key={choice.format}
+              className="notes-popover-item"
+              onClick={() => { ops.exportPage(view.pageId!, choice.format); setPicker(null); }}
+            >
+              {choice.label}
+            </button>
+          ))}
         </Popover>
+      ) : null}
+
+      {picker === 'icon' && view.pageId ? (
+        <IconPicker
+          current={view.icon}
+          onPick={(glyph) => { ops.setIcon(view.pageId!, glyph); setPicker(null); }}
+          onClear={() => { ops.setIcon(view.pageId!, ''); setPicker(null); }}
+          onClose={() => setPicker(null)}
+        />
       ) : null}
 
       {picker === 'cover' && view.pageId ? (
@@ -141,62 +164,5 @@ export function PageHeader({
         </Popover>
       ) : null}
     </header>
-  );
-}
-
-/**
- * A field that commits on Enter or on the button, and not on every keystroke.
- *
- * An address typed a character at a time would write "h", "ht", "htt" into the
- * block — each one a stamped edit in the outbox (D2), each one syncing, and
- * every intermediate value a broken image on every other device.
- */
-function TextField({ label, value, placeholder, onSubmit }: {
-  label: string;
-  value: string;
-  placeholder: string;
-  onSubmit: (value: string) => void;
-}): React.ReactElement {
-  const [draft, setDraft] = useState(value);
-  return (
-    <div className="notes-popover-field">
-      <label className="notes-popover-label">{label}</label>
-      <div className="notes-popover-row">
-        <input className="filter" autoFocus value={draft} placeholder={placeholder}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') onSubmit(draft.trim()); }} />
-        <button className="notes-popover-ok" onClick={() => onSubmit(draft.trim())}>Set</button>
-      </div>
-    </div>
-  );
-}
-
-/** Portaled to `<body>` so a scrolling column cannot clip it. */
-function Popover({ children, onClose }: {
-  children: React.ReactNode;
-  onClose: () => void;
-}): React.ReactElement {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const onDown = (e: MouseEvent): void => {
-      if (!ref.current?.contains(e.target as Node)) onClose();
-    };
-    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') onClose(); };
-    // Deferred a tick: the click that OPENED the popover is still propagating,
-    // and a listener added synchronously catches it and closes immediately.
-    const timer = window.setTimeout(() => document.addEventListener('mousedown', onDown), 0);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      window.clearTimeout(timer);
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [onClose]);
-
-  return createPortal(
-    <div className="notes-popover-scrim">
-      <div className="notes-popover" ref={ref}>{children}</div>
-    </div>,
-    document.body,
   );
 }

@@ -20,7 +20,7 @@
  * goes through a cap and the state is projected rather than serialised whole.
  */
 import { asUntrustedText, fenceMarkerPattern } from '../../planner/agentContext.js';
-import type { NoteDatabaseSummary } from '../../notes/database.js';
+import type { NoteDatabaseSummary } from '../../notes/databaseProjection.js';
 import type { NoteBlockContext } from '../../notes/noteTree.js';
 import {
   formatWorkspaceRef, renderWorkspaceResolution,
@@ -137,6 +137,18 @@ export function untrustedResolutionLines(resolution: WorkspaceResolution, nowMs 
     if (headings.length > 0) lines.push(`  under: ${headings.join(' › ')}`);
     const text = asUntrustedWorkspaceText(state.text);
     if (text) lines.push(`  ${text}`);
+    // F3 — a comment is content somebody typed, so it arrives here as data and
+    // is neutralised exactly like the block's own text. A note saying "ignore
+    // previous instructions" is a note about prompt injection (C4); a COMMENT
+    // saying it is the same thing, and it would have been the one string on this
+    // block that reached the model raw.
+    for (const comment of state.comments ?? []) {
+      const line = asUntrustedWorkspaceText(comment);
+      if (line) lines.push(`  · ${line}`);
+    }
+    if (state.commentsOmittedLabel) {
+      lines.push(`  (${asUntrustedWorkspaceText(state.commentsOmittedLabel, 80)})`);
+    }
     // The count, not the tail. The rest of the page is not more useful than the
     // tokens it costs, but knowing there IS a rest is.
     // Neutralised despite being generated from a count, because the invariant

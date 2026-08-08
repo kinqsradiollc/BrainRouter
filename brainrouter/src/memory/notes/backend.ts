@@ -34,13 +34,14 @@
 import { randomUUID } from "node:crypto";
 import { memoryEngine } from "../engine.js";
 import {
-  acquireBlockLease, blockReferences, blockReferenceText, contentWithoutRefs, DATABASE_BLOCK_KIND,
+  acquireBlockLease, blockReferences, blockReferenceText, boundCommentAuthor, boundCommentBody,
+  contentWithoutRefs, DATABASE_BLOCK_KIND,
   datePropertyDay, fenceBlockWrite,
-  FIRST_RANK, isLiveBlock, MAX_HEADING_LEVEL, mergeNoteBlock, NOTE_BLOCK_KINDS,
+  FIRST_RANK, isLiveBlock, MAX_COMMENT_LENGTH, MAX_HEADING_LEVEL, mergeNoteBlock, NOTE_BLOCK_KINDS,
   projectDatabase, rankBetween, readDatabase, releaseBlockLease,
   renewBlockLease, resolveBlockConflict, validateDatabaseFields, BLOCK_LEASE_MS,
   type BlockFence, type BlockLease, type BlockWritePath, type DatabaseProjection, type Hlc,
-  type LeaseClaim, type LeaseOutcome, type NoteDatabase, type NoteDatabaseView,
+  type LeaseClaim, type LeaseOutcome, type NoteComment, type NoteDatabase, type NoteDatabaseView,
   type NoteBlock, type NoteBlockKind, type NotePropertyDef, type NotePropertyValue,
   type Stamped,
 } from "@kinqs/brainrouter-core/notes";
@@ -68,6 +69,16 @@ export const MAX_BLOCK_TEXT = 100_000;
  * make somebody else's navigation unusable.
  */
 export const MAX_META_TEXT = 2048;
+
+/**
+ * ADR-029 F3 — how many comments one push may carry.
+ *
+ * A client writes ONE comment per operation (`writeComment` sends only the
+ * changed key), so anything past a handful is not the editor. The bound is here
+ * rather than trusted because a thread is rendered to everyone a page is shared
+ * with and sampled into an agent's context.
+ */
+export const MAX_COMMENTS_PER_PUSH = 8;
 
 /** How long an unreferenced attachment object waits before a sweep may reclaim it. */
 export const ATTACHMENT_GRACE_MS = 24 * 60 * 60 * 1000;
@@ -178,6 +189,48 @@ function stampedProps(
   const next: NonNullable<NoteBlock["props"]> = { ...(existing ?? {}) };
   for (const [key, value] of Object.entries(patch)) {
     next[key] = stampedWith(value as NotePropertyValue, at);
+  }
+  return next;
+}
+
+/**
+ * ADR-029 F3 — stamp the comments a patch mentions, keeping the rest.
+ *
+ * The same per-key rule `stampedProps` follows, and for the same reason: a push
+ * that added one remark must not win every other remark the pushing device
+ * happened to be holding a stale copy of.
+ *
+ * The stamps are the SERVER's, taken from the operation, not the client's. A
+ * comment arriving with a hand-written future stamp would win every merge on
+ * every device forever, and there is nothing in a comment worth trusting a
+ * client's clock for — the operation already carries the one stamp D11 orders
+ * everything else by.
+ */
+function stampedComments(
+  existing: NoteBlock["comments"],
+  patch: Record<string, unknown>,
+  at: Hlc,
+): NonNullable<NoteBlock["comments"]> {
+  const next: NonNullable<NoteBlock["comments"]> = { ...(existing ?? {}) };
+  for (const [key, raw] of Object.entries(patch)) {
+    if (!raw || typeof raw !== "object") continue;
+    const incoming = raw as Partial<NoteComment> & { body?: { value?: unknown } };
+    const before = next[key];
+    next[key] = {
+      id: key,
+      body: stampedWith(boundCommentBody((incoming.body as { value?: unknown } | undefined)?.value), at),
+      author: boundCommentAuthor(incoming.author ?? before?.author),
+      // The earliest creation survives, which is `mergeCreation`'s rule: a
+      // comment is written once, so a later stamp for it is a re-derivation.
+      createdAt: before?.createdAt ?? at,
+      resolved: stampedWith(
+        (incoming.resolved as { value?: unknown } | undefined)?.value === true,
+        at,
+      ),
+      ...((incoming as { deletedAt?: unknown }).deletedAt || before?.deletedAt
+        ? { deletedAt: at }
+        : {}),
+    };
   }
   return next;
 }
@@ -662,6 +715,24 @@ function validatePatch(patch: Record<string, unknown>): string | null {
       return `"${field}" is a string of at most ${MAX_META_TEXT} characters.`;
     }
   }
+  // ADR-029 F3 — comments reach an agent's context (C4) and every viewer of a
+  // shared page, so the count and the length are bounded on this side too. The
+  // client bounds the body it writes; a push is not the client.
+  if (patch.comments !== undefined) {
+    if (!patch.comments || typeof patch.comments !== "object" || Array.isArray(patch.comments)) {
+      return "Comments are a map keyed by comment id.";
+    }
+    const entries = Object.entries(patch.comments as Record<string, unknown>);
+    if (entries.length > MAX_COMMENTS_PER_PUSH) {
+      return `One operation carries at most ${MAX_COMMENTS_PER_PUSH} comments; this one had ${entries.length}.`;
+    }
+    for (const [, raw] of entries) {
+      const body = (raw as { body?: { value?: unknown } } | null)?.body?.value;
+      if (typeof body === "string" && body.length > MAX_COMMENT_LENGTH) {
+        return `A comment holds at most ${MAX_COMMENT_LENGTH} characters; this one had ${body.length}.`;
+      }
+    }
+  }
   // ADR-029 E3 — the database fields, bounded by the SAME function the client
   // uses. A schema is the header row every viewer of a shared database sees, so
   // the limit on what one push can make everyone receive belongs on this side.
@@ -751,6 +822,11 @@ function incomingBlock(
   const at = op.at;
   const base: NoteBlock = existing ?? {
     id: op.itemId,
+    // ADR-029 F3 — the server records a creation for a block it has never seen,
+    // and `mergeNoteBlock` keeps the EARLIEST of the two. So a client that
+    // recorded its own creation keeps it, and a block whose create was shed from
+    // an offline outbox still gets one rather than an empty "Created" column.
+    createdAt: at,
     parentId: stampedWith<string | null>(null, at),
     rank: stampedWith(FIRST_RANK, at),
     kind: stampedWith<NoteBlockKind>("paragraph", at),
@@ -773,6 +849,15 @@ function incomingBlock(
     ...(typeof patch.icon === "string" ? { icon: stampedWith(patch.icon, at) } : {}),
     ...(typeof patch.cover === "string" ? { cover: stampedWith(patch.cover, at) } : {}),
     ...(typeof patch.favourite === "boolean" ? { favourite: stampedWith(patch.favourite, at) } : {}),
+    // ADR-029 F3 — a page marked as a template. One stamped boolean, because a
+    // template is a page and marking is the whole difference.
+    ...(typeof patch.template === "boolean" ? { template: stampedWith(patch.template, at) } : {}),
+    // F3 — comments, stamped per key and merged onto what the block already has,
+    // for the reason `props` is: a push carrying one remark must not overwrite
+    // the thread it happened to be holding a stale copy of.
+    ...(patch.comments && typeof patch.comments === "object" && !Array.isArray(patch.comments)
+      ? { comments: stampedComments(base.comments, patch.comments as Record<string, unknown>, at) }
+      : {}),
     // ADR-029 E3 — a row's property values, stamped PER KEY and merged onto what
     // the block already has. Replacing the map wholesale would make an operation
     // that set one cell also win every other cell the pushing device happened to

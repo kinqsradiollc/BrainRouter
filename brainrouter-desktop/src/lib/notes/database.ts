@@ -23,11 +23,14 @@
  */
 import { datePropertyDay, NOTE_VIEW_KINDS } from '@kinqs/brainrouter-core/notes/editing';
 import type {
-  NoteFilterGroup, NoteFilterOperator, NoteFilterRule, NotePropertyValue,
-  NoteSelectOption, NoteSortRule, NoteViewKind, SkippedRule,
+  FormulaFunctionSpec, NoteFilterGroup, NoteFilterOperator, NoteFilterRule, NotePropertyValue,
+  NoteRollupAggregate, NoteRollupSpec, NoteSelectOption, NoteSortRule, NoteViewKind, SkippedRule,
 } from '@kinqs/brainrouter-core/notes/editing';
 
-export type { NoteFilterGroup, NoteFilterOperator, NoteFilterRule, NotePropertyValue, NoteSelectOption, NoteSortRule, NoteViewKind, SkippedRule };
+export type {
+  FormulaFunctionSpec, NoteFilterGroup, NoteFilterOperator, NoteFilterRule, NotePropertyValue,
+  NoteRollupAggregate, NoteRollupSpec, NoteSelectOption, NoteSortRule, NoteViewKind, SkippedRule,
+};
 
 /* ------------------------------------------------------------ the wire shape */
 
@@ -45,9 +48,13 @@ export interface DatabasePropertyDto {
   type: string;
   options?: readonly NoteSelectOption[];
   description?: string;
-  /** §3's formulas, and any type a newer client wrote. Kept, never evaluated. */
+  /** A type a newer client wrote. Kept, never evaluated. */
   unsupported: boolean;
   operators: readonly NoteFilterOperator[];
+  /** F2 — a formula column's source, so the schema editor can show what it does. */
+  formula?: string;
+  /** F2 — a rollup column's configuration. */
+  rollup?: NoteRollupSpec;
 }
 
 export interface DatabaseCellDto {
@@ -56,6 +63,16 @@ export interface DatabaseCellDto {
   /** Core's one-line rendering, so every surface shows the same string. */
   display: string;
   unsupported: boolean;
+  /**
+   * F2/F3 — the value was worked out from the row, so nothing may write it.
+   *
+   * Separate from `unsupported` because they lead to different cells: an
+   * unsupported one shows a value this build could not read, and a computed one
+   * shows a value it worked out and will not let you overwrite.
+   */
+  computed?: boolean;
+  /** F2 — why a computed cell has no value. Rendered IN the cell. */
+  error?: string;
 }
 
 export interface DatabaseRowDto {
@@ -104,8 +121,29 @@ export interface DatabaseReadDto {
 
 /** What `notes-property-catalog` answers — the types a picker may offer. */
 export interface PropertyCatalogDto {
-  types: Array<{ type: string; operators: readonly NoteFilterOperator[] }>;
+  types: Array<{ type: string; operators: readonly NoteFilterOperator[]; derived?: boolean }>;
   viewKinds: readonly NoteViewKind[];
+  /** F2 — what a formula editor lists. Core's catalogue, never a second one. */
+  functions?: readonly FormulaFunctionSpec[];
+  /** F2 — the aggregates a rollup offers. */
+  aggregates?: readonly NoteRollupAggregate[];
+}
+
+/** F2 — what `notes-rollup-targets` answers: the columns on the other end. */
+export interface RollupTargetsDto {
+  ok: boolean;
+  properties?: Array<{ id: string; name: string; type: string }>;
+  databases?: Array<{ id: string; title: string }>;
+}
+
+/** F3 — one file behind a `files` cell's reference. */
+export interface NoteFileDto {
+  id: string;
+  name: string;
+  byteSize: number;
+  mimeType: string;
+  /** The record is not in THIS workspace — see the host handler for why that happens. */
+  missing: boolean;
 }
 
 /* ---------------------------------------------------------------- the views */
@@ -152,6 +190,13 @@ export function propertyTypeLabel(type: string): string {
     case 'url': return 'URL';
     case 'person': return 'Person';
     case 'relation': return 'Relation';
+    case 'files': return 'Files';
+    case 'created-time': return 'Created';
+    case 'edited-time': return 'Edited';
+    case 'created-by': return 'Created by';
+    case 'edited-by': return 'Edited by';
+    case 'formula': return 'Formula';
+    case 'rollup': return 'Rollup';
     // A type a newer client wrote. Named as it was stored rather than as
     // "unknown", because the person who made it on another device knows the
     // word and would not recognise ours.
@@ -172,10 +217,28 @@ export function propertyTypeLabel(type: string): string {
  */
 export type CellEditor =
   | 'title' | 'text' | 'number' | 'url' | 'checkbox' | 'date'
-  | 'select' | 'multi-select' | 'person' | 'relation' | 'none';
+  | 'select' | 'multi-select' | 'person' | 'relation' | 'files'
+  /** F2/F3 — worked out from the row. Read-only, and it says WHY when it cannot be. */
+  | 'computed'
+  | 'none';
+
+/**
+ * F3's derived types, named here because the DTO's `derived` flag rides on the
+ * catalogue rather than on each property — and a cell is drawn from a property.
+ * The list is core's `DERIVED_PROPERTY_TYPES`, and the golden test in
+ * `partFProperties.test.ts` fails if the two ever disagree.
+ */
+export const DERIVED_TYPES: readonly string[] = [
+  'created-time', 'edited-time', 'created-by', 'edited-by', 'formula', 'rollup',
+];
+
+export function isDerivedType(type: string): boolean {
+  return DERIVED_TYPES.includes(type);
+}
 
 export function cellEditorFor(property: DatabasePropertyDto): CellEditor {
   if (property.unsupported) return 'none';
+  if (isDerivedType(property.type)) return 'computed';
   switch (property.type) {
     case 'title': return 'title';
     case 'text': return 'text';
@@ -187,6 +250,7 @@ export function cellEditorFor(property: DatabasePropertyDto): CellEditor {
     case 'multi-select': return 'multi-select';
     case 'person': return 'person';
     case 'relation': return 'relation';
+    case 'files': return 'files';
     default: return 'none';
   }
 }
@@ -293,8 +357,8 @@ export function boardColumns(dto: DatabaseReadDto): BoardColumn[] {
  * day, and a drop would discard the time the person stored.
  */
 export function canDragBetweenGroups(property: DatabasePropertyDto | null | undefined): boolean {
-  if (!property || property.unsupported) return false;
-  return property.type === 'select' || property.type === 'checkbox';
+  if (isReadOnlyProperty(property)) return false;
+  return property!.type === 'select' || property!.type === 'checkbox';
 }
 
 /** What a drop on this column writes. `null` clears the cell. */
@@ -698,4 +762,16 @@ export function groupSummary(dto: DatabaseReadDto): string {
  */
 export function groupableProperties(dto: DatabaseReadDto): DatabasePropertyDto[] {
   return dto.properties.filter((property) => !property.unsupported && property.type !== 'title');
+}
+
+/**
+ * F2/F3 — a computed cell is read-only, and a drop would be a write.
+ *
+ * `canDragBetweenGroups` already refuses anything a drop cannot write WHOLE;
+ * this is the same rule for a column nothing can write at all. Without it a
+ * board grouped by a formula would accept a drag and silently do nothing, which
+ * reads as the board being broken rather than as the column being derived.
+ */
+export function isReadOnlyProperty(property: DatabasePropertyDto | null | undefined): boolean {
+  return !property || property.unsupported || isDerivedType(property.type);
 }

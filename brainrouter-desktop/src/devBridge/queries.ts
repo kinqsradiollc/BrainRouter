@@ -12,11 +12,20 @@ import {
   // would hide different rows for the same saved view, which is the drift the
   // whole decision is organised against.
   coercePropertyValue, defaultDatabaseSchema, defaultDatabaseViews, operatorsFor,
-  projectDatabase, readDatabase, DATABASE_BLOCK_KIND, NOTE_PROPERTY_TYPES, NOTE_VIEW_KINDS,
+  readDatabase, DATABASE_BLOCK_KIND, NOTE_PROPERTY_TYPES, NOTE_VIEW_KINDS,
   TITLE_PROPERTY_ID,
+  // ADR-029 F2/F3 — the same catalogue the host serves, so the harness offers
+  // the same columns and the same functions rather than a shorter list of them.
+  FORMULA_FUNCTIONS, isDerivedPropertyType, NOTE_ROLLUP_AGGREGATES,
+  // F3 — the reference rewrite a copy performs, imported rather than
+  // reimplemented: a second copy of the rule is the one that keeps rewriting
+  // after the first stops, and the symptom is a page pointing at the template it
+  // came from.
+  remapNoteRefs,
   type NoteBlock, type NoteBlockKind, type NoteDatabaseView, type NotePropertyDef,
   type NotePropertyValue, type NoteViewKind,
 } from '@kinqs/brainrouter-core/notes/editing';
+import type { NoteCommentDto } from '../lib/notes/commentThread.js';
 import { devAtlasEnriched, devAtlasGraph } from './atlas.js';
 import type { DevState } from './state.js';
 import {
@@ -71,12 +80,21 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     // shell renders here as an untitled, iconless list and looks broken in the
     // one place a person checks it fastest.
     icon: string | null; cover: string | null; favourite: boolean;
+    // F3 — a toggle's fold. Carried here because the harness is where a person
+    // checks the gesture fastest, and a twisty that never folds anything is the
+    // same non-working offer Part F exists to remove.
+    collapsed?: boolean;
     // E3 — a row's cell values, and a database block's schema and views. Carried
     // here because the projection reads them: without them the harness renders
     // an empty table and the five views cannot be looked at at all.
     props?: Record<string, NotePropertyValue>;
     schema?: NotePropertyDef[];
     views?: NoteDatabaseView[];
+    // F3 — comments and the template mark. Carried here because both are
+    // controls a person checks in the harness first, and a button that does
+    // nothing is the offer F1 exists to remove.
+    comments?: NoteCommentDto[];
+    template?: boolean;
   };
   /** The one block the harness pretends another device is holding (B2). */
   const LEASED_DEMO_BLOCK = 'blk_2';
@@ -127,6 +145,21 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false,
     },
     { id: 'blk_row1_body', parentId: 'blk_row1', kind: 'paragraph', text: 'A row is a page, so this line lives on it.', checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false },
+    // ADR-029 Part F — one of every block the slash menu offers, so the harness
+    // shows what the menu promises. Five of these used to render as a plain line
+    // of text, and the browser preview is where that is quickest to see.
+    { id: 'blk_toggle', parentId: 'blk_1', kind: 'toggle', text: 'Why the parser is unbounded', checked: false, collapsed: true, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false },
+    { id: 'blk_toggle_a', parentId: 'blk_toggle', kind: 'paragraph', text: 'Nested quantifiers over the same class.', checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false },
+    { id: 'blk_toggle_b', parentId: 'blk_toggle', kind: 'paragraph', text: 'A fold is a display state — this line is still searchable.', checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false },
+    { id: 'blk_callout', parentId: 'blk_1', kind: 'callout', text: 'The lease epoch decides the merge. Do not remove it.', checked: false, level: null, refs: [], conflicts: [], icon: '🐛', cover: null, favourite: false },
+    { id: 'blk_bookmark', parentId: 'blk_1', kind: 'bookmark', text: 'https://example.com/parsing', checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false },
+    { id: 'blk_image', parentId: 'blk_1', kind: 'image', text: '', checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false },
+    { id: 'blk_embed', parentId: 'blk_1', kind: 'embed', text: 'brainrouter://planner/item/itm_dev1', checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false },
+    // The header flag is the table block's own `checked` field.
+    { id: 'blk_table', parentId: 'blk_1', kind: 'table', text: '', checked: true, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false },
+    { id: 'blk_table_h', parentId: 'blk_table', kind: 'table-row', text: 'Area|Owner|State', checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false },
+    { id: 'blk_table_1', parentId: 'blk_table', kind: 'table-row', text: 'Parser|Ana|In review', checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false },
+    { id: 'blk_table_2', parentId: 'blk_table', kind: 'table-row', text: 'Sync|Bo', checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false },
   ];
   // C5 — a delete is a tombstone, so the harness keeps what it removed rather
   // than dropping it: a trash that is always empty here cannot be looked at.
@@ -155,8 +188,78 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     walk(rootId);
     return out;
   };
+  /**
+   * ADR-029 F4 — the harness's page-level undo.
+   *
+   * A SNAPSHOT of the mock arrays rather than a stack of inverse operations, and
+   * the difference is worth stating: a snapshot is a correct inverse only
+   * because this array is the whole of the harness's world. In the real store
+   * another device can write underneath a recorded step, which is why core
+   * records inverses and guards them — the shortcut here would be a data-loss
+   * bug there.
+   */
+  interface DevUndoEntry { pageId: string | null; label: string; blocks: DevNote[]; trash: DevNote[] }
+  const devUndo: { past: DevUndoEntry[]; future: DevUndoEntry[] } = { past: [], future: [] };
+  /** Deep enough to try the gesture, bounded so a long harness session is flat. */
+  const DEV_UNDO_LIMIT = 40;
+
+  /** Which page's stack a change to this block belongs to — its container ancestor. */
+  const devPageOf = (blockId: string | null): string | null => {
+    const seen = new Set<string>();
+    let cursor = devNotes.find((b) => b.id === blockId)?.parentId ?? null;
+    while (cursor !== null && !seen.has(cursor)) {
+      seen.add(cursor);
+      const parent = devNotes.find((b) => b.id === cursor);
+      if (!parent) return null;
+      if (parent.kind === 'page' || parent.kind === DATABASE_BLOCK_KIND) return parent.id;
+      cursor = parent.parentId;
+    }
+    return null;
+  };
+
+  const devSnapshot = (): { blocks: DevNote[]; trash: DevNote[] } => ({
+    blocks: devNotes.map((b) => ({ ...b, refs: [...b.refs], conflicts: [...b.conflicts], comments: [...(b.comments ?? [])] })),
+    trash: devNotesTrash.map((b) => ({ ...b })),
+  });
+
+  const devRestore = (snapshot: { blocks: DevNote[]; trash: DevNote[] }): void => {
+    devNotes.splice(0, devNotes.length, ...snapshot.blocks);
+    devNotesTrash.splice(0, devNotesTrash.length, ...snapshot.trash);
+  };
+
+  /** Record the state BEFORE a change, on the stack of the page it belongs to. */
+  const devRemember = (blockId: string | null, label: string): void => {
+    const snapshot = devSnapshot();
+    devUndo.past.push({ pageId: devPageOf(blockId), label, ...snapshot });
+    if (devUndo.past.length > DEV_UNDO_LIMIT) devUndo.past.shift();
+    // A fresh change abandons the redo branch, like the real one.
+    devUndo.future.length = 0;
+  };
+
+  const devStepHistory = (pageId: string | null, direction: 'undo' | 'redo'): Record<string, unknown> => {
+    const stack = direction === 'undo' ? devUndo.past : devUndo.future;
+    const index = [...stack].reverse().findIndex((entry) => entry.pageId === pageId);
+    if (index < 0) {
+      return { ok: false, reason: direction === 'undo' ? 'nothing_to_undo' : 'nothing_to_redo' };
+    }
+    const at = stack.length - 1 - index;
+    const entry = stack[at]!;
+    stack.splice(at, 1);
+    const current = devSnapshot();
+    (direction === 'undo' ? devUndo.future : devUndo.past).push({ ...entry, ...current });
+    devRestore({ blocks: entry.blocks, trash: entry.trash });
+    return {
+      ok: true,
+      direction,
+      label: entry.label,
+      focusId: devNotes.find((b) => devPageOf(b.id) === pageId)?.id ?? null,
+      changedIds: [] as string[],
+    };
+  };
+
   /** E1's move up/down, over siblings only — core stops at the ends too. */
   const devMoveBy = (id: string, direction: -1 | 1): Record<string, unknown> => {
+    devRemember(id, 'moving the block');
     const index = devNotes.findIndex((b) => b.id === id);
     const block = devNotes[index];
     if (!block) return { ok: false, reason: 'not_found', detail: 'That block is gone.' };
@@ -1861,6 +1964,14 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
         // on inputs the real host never produces.
         depth: devDepth(b),
         hasChildren: devNotes.some((c) => c.parentId === b.id),
+        // F3 — the fold is a stamped field on the block, so the harness carries
+        // it rather than keeping a set of its own.
+        collapsed: b.collapsed === true,
+        // F3 — the thread and the template mark, flat, exactly as the host sends
+        // them. A field the harness omitted would render as "no comments" on a
+        // block that has them.
+        comments: b.comments ?? [],
+        template: b.template === true,
         title: b.kind === 'page' ? (b.text.trim() || UNTITLED_PAGE) : null,
         // B2's attribution, pinned to an ID rather than to a POSITION. Keyed by
         // index it followed whatever happened to be second in the array, so a
@@ -1889,18 +2000,22 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     'notes-update': (a) => {
       const block = devNotes.find((b) => b.id === a.id);
       if (!block) return { ok: false, reason: 'not_found' };
+      devRemember(block.id, 'the edit');
       if (typeof a.text === 'string') block.text = a.text;
       if (typeof a.kind === 'string') block.kind = a.kind;
       if (typeof a.checked === 'boolean') block.checked = a.checked;
+      if (typeof a.collapsed === 'boolean') block.collapsed = a.collapsed;
       if (typeof a.icon === 'string') block.icon = a.icon || null;
       if (typeof a.cover === 'string') block.cover = a.cover || null;
       if (typeof a.favourite === 'boolean') block.favourite = a.favourite;
+      if (typeof a.template === 'boolean') block.template = a.template;
       return { ok: true, block, path: 'leased', conflicted: false };
     },
     'notes-delete': (a) => {
       // The subtree goes with it, exactly as `deleteBlock` does: a child left
       // behind under a deleted page is present in the data and absent from
       // every page, which is the state C5 exists to prevent.
+      devRemember(String(a.id ?? ''), 'the delete');
       const ids = devSubtree(String(a.id ?? ''));
       for (const id of ids) {
         const index = devNotes.findIndex((b) => b.id === id);
@@ -1965,6 +2080,7 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       const index = devNotes.findIndex((b) => b.id === id);
       const block = devNotes[index];
       if (!block) return { ok: false, reason: 'not_found', detail: 'That block is gone.' };
+      devRemember(id, 'splitting the block');
       const caret = Math.min(Math.max(Number(a.caret ?? 0), 0), block.text.length);
       const tail = block.text.slice(caret);
       block.text = block.text.slice(0, caret);
@@ -1984,6 +2100,7 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       const previous = index > 0 ? devNotes[index - 1] : undefined;
       if (!block) return { ok: false, reason: 'not_found', detail: 'That block is gone.' };
       if (!previous) return { ok: true, action: 'noop', focusId: id, caret: 0 };
+      devRemember(id, 'joining the blocks');
       const joinAt = previous.text.length;
       previous.text += block.text;
       devNotes.splice(index, 1);
@@ -2007,6 +2124,7 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       if (!block) return { ok: false, reason: 'not_found', detail: 'That block is gone.' };
       const previous = [...devNotes.slice(0, index)].reverse().find((b) => b.parentId === block.parentId);
       if (!previous) return { ok: true, action: 'noop', focusId: id, caret: 0 };
+      devRemember(id, 'nesting the block');
       block.parentId = previous.id;
       return { ok: true, action: 'indent', focusId: id, caret: 0 };
     },
@@ -2015,6 +2133,7 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       const block = devNotes.find((b) => b.id === id);
       if (!block) return { ok: false, reason: 'not_found', detail: 'That block is gone.' };
       if (block.parentId === null) return { ok: true, action: 'noop', focusId: id, caret: 0 };
+      devRemember(id, 'un-nesting the block');
       block.parentId = devNotes.find((b) => b.id === block.parentId)?.parentId ?? null;
       return { ok: true, action: 'outdent', focusId: id, caret: 0 };
     },
@@ -2032,6 +2151,110 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     },
     'notes-backlinks': (a) => ({ blockIds: devNotes.filter((b) => b.refs.some((r) => r.split('#')[0] === String(a.uri ?? '').split('#')[0])).map((b) => b.id) }),
     'notes-sync': () => ({ pending: 0, pulled: 0, pushed: 0, offline: false, conflicted: [] as string[], syncState: 'Everything is synced.' }),
+
+    /* ------------------------------------- ADR-029 F4/F3: undo, comments, templates */
+
+    // Registered here as well as in the electron host, because an unknown query
+    // is rejected by NAME: without these, ⌘Z, the comment button and the
+    // template picker are three controls that do nothing in the harness — which
+    // is the same defect F1 is about, moved into the surface people check first.
+    //
+    // The harness has no store, so its undo is a SNAPSHOT of the mock array
+    // rather than a stack of inverses. That is honest here and would not be in
+    // core: a snapshot is a correct inverse only because this array is the whole
+    // of the harness's world, which is exactly what is not true of a synced
+    // store where another device can write underneath.
+    'notes-undo': (a) => devStepHistory(typeof a.pageId === 'string' ? a.pageId : null, 'undo'),
+    'notes-redo': (a) => devStepHistory(typeof a.pageId === 'string' ? a.pageId : null, 'redo'),
+    'notes-undo-state': (a) => {
+      const pageId = typeof a.pageId === 'string' ? a.pageId : null;
+      return {
+        undo: devUndo.past.filter((entry) => entry.pageId === pageId).slice(-1)[0]?.label ?? null,
+        redo: devUndo.future.filter((entry) => entry.pageId === pageId).slice(-1)[0]?.label ?? null,
+      };
+    },
+
+    'notes-comment-add': (a) => {
+      const block = devNotes.find((b) => b.id === a.id);
+      if (!block) return { ok: false, reason: 'not_found' };
+      devRemember(block.parentId ?? block.id, 'the comment');
+      block.comments = [...(block.comments ?? []), {
+        id: `cmt_${S.devNotesN++}`,
+        body: String(a.body ?? ''),
+        author: 'You',
+        resolved: false,
+        createdAtMs: Date.now(),
+      }];
+      return { ok: true };
+    },
+    'notes-comment-edit': (a) => {
+      const block = devNotes.find((b) => b.id === a.id);
+      const comment = block?.comments?.find((c) => c.id === a.commentId);
+      if (comment) comment.body = String(a.body ?? '');
+      return { ok: !!comment };
+    },
+    'notes-comment-resolve': (a) => {
+      const block = devNotes.find((b) => b.id === a.id);
+      const comment = block?.comments?.find((c) => c.id === a.commentId);
+      if (comment) comment.resolved = a.resolved === true;
+      return { ok: !!comment };
+    },
+    'notes-comment-remove': (a) => {
+      const block = devNotes.find((b) => b.id === a.id);
+      if (block) block.comments = (block.comments ?? []).filter((c) => c.id !== a.commentId);
+      return { ok: !!block };
+    },
+    // C5 — the harness deletes by removing from the array, so there is nothing
+    // to orphan. Answering an empty list is the truthful shape rather than a
+    // pretend one: the panel stays absent instead of inventing a thread.
+    'notes-comments-orphaned': () => ({ threads: [] as unknown[] }),
+
+    'notes-templates': () => ({
+      templates: devNotes.filter((b) => b.template === true).map((b) => ({
+        id: b.id,
+        title: b.text || UNTITLED_PAGE,
+        icon: b.icon,
+        blocks: devSubtree(b.id).length,
+      })),
+    }),
+    'notes-template-instantiate': (a) => {
+      const templateId = String(a.id ?? '');
+      const template = devNotes.find((b) => b.id === templateId && b.template === true);
+      if (!template) return { ok: false, pageId: null, blocks: 0, rewritten: 0, line: 'That template is no longer here.' };
+
+      const ids = devSubtree(templateId);
+      const idMap = new Map<string, string>();
+      for (const id of ids) idMap.set(id, `blk_${S.devNotesN++}`);
+
+      let rewritten = 0;
+      for (const id of ids) {
+        const original = devNotes.find((b) => b.id === id)!;
+        // The SAME rewrite core performs, imported rather than reimplemented —
+        // a reference pointing inside the copy follows the copy, one pointing
+        // outside is left alone (A3).
+        const text = remapNoteRefs(original.text, idMap);
+        if (text !== original.text) rewritten += 1;
+        devNotes.push({
+          ...original,
+          id: idMap.get(id)!,
+          text,
+          parentId: id === templateId
+            ? (typeof a.parentId === 'string' ? a.parentId : null)
+            : idMap.get(original.parentId ?? '') ?? null,
+          comments: [],
+          // A page made FROM a template is a page. Keeping the mark would turn
+          // every filled-in copy into another entry in the picker.
+          template: false,
+          favourite: false,
+        });
+      }
+      const blocks = ids.length;
+      const line = rewritten === 0
+        ? `New page from the template — ${blocks} block${blocks === 1 ? '' : 's'}.`
+        : `New page from the template — ${blocks} blocks, and ${rewritten} link${rewritten === 1 ? '' : 's'} `
+          + 'inside it now point at this copy rather than at the template.';
+      return { ok: true, pageId: idMap.get(templateId)!, blocks, rewritten, line };
+    },
 
     // ADR-029 E3 — databases. Registered HERE as well as in the electron host
     // because an unknown query is rejected by name: without these the five
@@ -2051,7 +2274,81 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
         views: (block.views ?? []).map((view) => ({ id: view.id, name: view.name, kind: view.kind })),
       })),
     }),
-    'notes-database-read': (a) => {
+    /**
+     * The projection is imported WHEN IT IS ASKED FOR, not when this module
+     * loads.
+     *
+     * ADR-029 F2 gave a projection a formula engine and a rollup, and this
+     * harness is reachable from the app's entry module — so a static import put
+     * about twenty kilobytes of expression parser into the RELEASE bundle, for
+     * a browser stand-in that never runs in the shipped app. The desktop's
+     * initial-JavaScript budget caught it (`scripts/verify-visual-release.mjs`),
+     * which is the budget doing exactly what its comment says: catching a static
+     * import nobody meant to add.
+     *
+     * The dispatcher already awaits async handlers — `list-models-probe` does a
+     * real fetch — so this is the same shape, not a new one.
+     */
+    /**
+     * F3 — the same resolution the host does, so the stand-in cannot make a
+     * mirror look like a feature that works here and not there.
+     *
+     * Dynamically imported for the reason `notes-database-read` is, one comment
+     * up: this module is reachable from the app's entry, and a static import
+     * would put the writers into the initial bundle for a harness the shipped
+     * app never runs.
+     */
+    'notes-synced-read': async (a) => {
+      const { readSyncedBlock, describeSyncedState, walkSubtree } =
+        await import('@kinqs/brainrouter-core/notes/editing');
+      const all = devNoteBlocks();
+      const mirror = all.find((block) => block.id === String(a.id ?? ''));
+      if (!mirror) return { status: 'gone', uri: '', note: 'This block is not on this device.', rows: [] };
+      const state = readSyncedBlock(all, mirror);
+      const note = describeSyncedState(state);
+      const uri = 'uri' in state ? state.uri : '';
+      if (state.status !== 'ready') return { status: state.status, uri, note, rows: [] };
+      const walked = walkSubtree(all, state.source.id, state.blockIds.length);
+      return {
+        status: 'ready',
+        uri,
+        note,
+        sourceId: state.source.id,
+        omittedLabel: state.omittedLabel ?? null,
+        rows: walked.rows.map((row) => ({
+          id: row.block.id,
+          depth: row.depth,
+          kind: row.block.kind.value,
+          text: row.block.text.value,
+          level: row.block.level?.value ?? null,
+          checked: row.block.checked?.value === true,
+          icon: row.block.icon?.value ?? null,
+          ordinal: null,
+          lockedBy: null,
+        })),
+      };
+    },
+
+    'notes-export': async (a) => {
+      const { exportNote, exportFormatsFor } = await import('@kinqs/brainrouter-core/notes/editing');
+      const all = devNoteBlocks();
+      const id = String(a.id ?? '');
+      const format = a.format === 'csv' ? 'csv' : 'markdown';
+      const offered = exportFormatsFor(all.find((block) => block.id === id));
+      if (!offered.includes(format)) {
+        return {
+          ok: false,
+          error: format === 'csv'
+            ? 'Only a database can be written as a spreadsheet. A page goes out as Markdown.'
+            : 'That page is not on this device.',
+        };
+      }
+      const written = exportNote(all, id, format, { nowMs: Date.now(), deviceId: 'dev' });
+      return written ? { ok: true, ...written } : { ok: false, error: 'That page could not be written out.' };
+    },
+
+    'notes-database-read': async (a) => {
+      const { projectDatabase } = await import('@kinqs/brainrouter-core/notes/editing');
       const projection = projectDatabase(
         devNoteBlocks(), String(a.id ?? ''), typeof a.viewId === 'string' ? a.viewId : undefined,
       );
@@ -2076,7 +2373,9 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
           icon: row.icon,
           cover: row.cover,
           cells: row.cells.map((cell) => ({
-            property: cell.property.id, value: cell.value, display: cell.display, unsupported: cell.unsupported,
+            property: cell.property.id, value: cell.value, display: cell.display,
+            unsupported: cell.unsupported, computed: cell.computed,
+            ...(cell.error ? { error: cell.error } : {}),
           })),
         })),
         groups: projection.groups.map((group) => ({
@@ -2233,9 +2532,16 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     'notes-property-catalog': () => ({
       types: NOTE_PROPERTY_TYPES.map((type) => ({
         type, operators: operatorsFor({ id: type, name: type, type }),
+        derived: isDerivedPropertyType(type),
       })),
       viewKinds: NOTE_VIEW_KINDS,
+      functions: FORMULA_FUNCTIONS,
+      aggregates: NOTE_ROLLUP_AGGREGATES,
     }),
+    // F2 — the harness's databases are flat fixtures with no relations pointing
+    // anywhere, so there is nothing to summarise and it says so rather than
+    // offering columns that do not exist.
+    'notes-rollup-targets': () => ({ ok: true, properties: [], databases: [] }),
 
     'workspace-modes': () => ({ modes: ['chat', 'code', 'notes', 'planner', 'track'], creatable: ['notes', 'planner', 'track'] }),
     // ADR-029 C2 row 6 — the browser harness has no checkout, so it answers
@@ -2247,6 +2553,32 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
         { name: 'parseHeader', line: 12, kind: 'function' },
         { name: 'Reader', line: 40, kind: 'class' },
       ],
+    }),
+    // ADR-029 Part F — the two blocks that reach the network. The harness has no
+    // network and must not pretend otherwise, so both answer with the FAILURE
+    // shape the real handlers use. That is the honest demo: the bookmark still
+    // draws its link and the image still says why there is no picture, which is
+    // exactly the behaviour these blocks were rebuilt for.
+    'notes-bookmark-preview': (a) => {
+      const url = String(a.url ?? '');
+      let host = '';
+      try { host = new URL(url).host; } catch { host = ''; }
+      return {
+        ok: false,
+        failure: { url, host, reason: 'unreachable', detail: 'The browser harness has no network.' },
+      };
+    },
+    'notes-image-attach': () => ({ ok: false, error: 'Pictures are stored by the desktop app, not by the browser harness.' }),
+    'notes-file-attach': () => ({ ok: false, error: 'Files are stored by the desktop app, not by the browser harness.' }),
+    'notes-file-describe': (a) => ({
+      files: (Array.isArray(a.ids) ? a.ids : []).map((id) => ({
+        id: String(id), name: String(id), byteSize: 0, mimeType: '', missing: true,
+      })),
+    }),
+    'notes-image-fetch': () => ({ ok: false, error: 'Pictures are stored by the desktop app, not by the browser harness.' }),
+    'notes-image-read': (a) => ({
+      id: String(a.id ?? ''), name: '',
+      error: 'the browser harness has no attachment store.',
     }),
     'workspace-describe': (a) => ({ line: devWorkspaceLabel(String(a.uri ?? '')) }),
     'workspace-resolve': (a) => ({ resolution: { status: 'found', ref: null, target: { label: devWorkspaceLabel(String(a.uri ?? '')) } }, line: devWorkspaceLabel(String(a.uri ?? '')) }),

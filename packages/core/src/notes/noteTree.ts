@@ -21,6 +21,7 @@
  *    can be shown rather than inferred.
  */
 import { isLiveBlock, type NoteBlock } from './block.js';
+import { unresolvedComments } from './comment.js';
 import { compareRank } from './rank.js';
 
 export interface NoteTreeNode {
@@ -231,7 +232,38 @@ export interface NoteBlockContext {
   omitted: number;
   /** The line that stands in for them, or null when there are none. */
   omittedLabel: string | null;
+  /**
+   * F3 — the UNRESOLVED comments on this block, oldest first and bounded.
+   *
+   * Included because a comment is frequently the most useful sentence attached
+   * to a block — "this number is wrong", "waiting on the API" — and a model
+   * reading the block without them answers a question that has already been
+   * disputed. Resolved comments are left out: they are settled, and Q3's whole
+   * argument is that low-signal lines make a model worse at the ones that
+   * matter.
+   *
+   * Each entry is `author: body`, still RAW. It is neutralised where it is
+   * rendered (`workspace/participants/agentContext.ts`), not here, because C4's
+   * rule is that resolved content is fenced at the boundary — a value that
+   * arrived pre-escaped would be escaped twice for a surface that shows it to a
+   * person.
+   */
+  comments: string[];
+  /** The comments this context left out, said in words, or null. */
+  commentsOmittedLabel: string | null;
 }
+
+/**
+ * Q3's bound applied to comments.
+ *
+ * Small on purpose: a block with forty comments is a conversation, and putting a
+ * conversation in the context for a block someone referenced in passing is the
+ * unbounded-page failure Q3 exists to prevent, one level down.
+ */
+export const MAX_CONTEXT_COMMENTS = 3;
+
+/** A comment is a remark, not a document — the same reasoning as `MAX_CONTEXT_TEXT`. */
+export const MAX_CONTEXT_COMMENT_TEXT = 240;
 
 /**
  * Q3 — what resolving a note reference yields.
@@ -262,6 +294,10 @@ export function blockContext(blocks: Iterable<NoteBlock>, blockId: string): Note
   const raw = block.text.value;
   const truncated = raw.length > MAX_CONTEXT_TEXT;
 
+  const open = unresolvedComments(block);
+  const shown = open.slice(0, MAX_CONTEXT_COMMENTS);
+  const hidden = open.length - shown.length;
+
   return {
     block,
     headings,
@@ -269,5 +305,8 @@ export function blockContext(blocks: Iterable<NoteBlock>, blockId: string): Note
     truncated,
     omitted,
     omittedLabel: omitted > 0 ? `+${omitted} more block${omitted === 1 ? '' : 's'} on this page` : null,
+    comments: shown.map((comment) =>
+      `${comment.author}: ${comment.body.value.slice(0, MAX_CONTEXT_COMMENT_TEXT)}`),
+    commentsOmittedLabel: hidden > 0 ? `+${hidden} more open comment${hidden === 1 ? '' : 's'}` : null,
   };
 }

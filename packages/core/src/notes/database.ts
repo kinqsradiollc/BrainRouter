@@ -23,20 +23,29 @@
  * and a file written by a NEWER client can have property types this build has
  * never heard of. Both must read. `readDatabase` fills in what is missing and
  * keeps what it does not understand, marking it unsupported — which is the same
- * mechanism §3's excluded formulas and rollups arrive through, so a formula
- * column from a future build shows as a column this version cannot compute
- * rather than as an approximation of one.
+ * mechanism a type this build has never heard of arrives through, so a column
+ * from a future release shows as one this version cannot compute rather than as
+ * an approximation of one.
+ *
+ * **What is deliberately NOT here: the projection.** Filtering, sorting,
+ * grouping and F2's derived cells live in `databaseProjection.ts`, because they
+ * pull the formula engine and this module is read by everything — including the
+ * desktop's initial bundle, which has a byte budget. Reading a database costs
+ * what reading a database costs.
  */
-import { isLiveBlock, noteBlockUri, pageTitleOrDefault, type NoteBlock } from './block.js';
+import { isLiveBlock, pageTitleOrDefault, type NoteBlock } from './block.js';
+// F2's parser is NOT imported here — only its length bound is, and it is a
+// number. The model must not carry the engine: see `databaseProjection.ts` for
+// why that split has a budget behind it.
+import { MAX_FORMULA_LENGTH } from './formula/value.js';
 import {
-  coercePropertyValue, isNotePropertyType, MAX_DATABASE_PROPERTIES,
-  MAX_PROPERTY_TEXT, MAX_PROPERTY_VALUES, formatPropertyValue,
-  type NotePropertyDef, type NotePropertyValue,
+  coercePropertyValue, isDerivedPropertyType, isNotePropertyType, isNoteRollupAggregate,
+  MAX_DATABASE_PROPERTIES, MAX_PROPERTY_TEXT, MAX_PROPERTY_VALUES,
+  type NotePropertyDef, type NotePropertyValue, type NoteRollupSpec,
 } from './properties.js';
 import {
-  evaluateFilter, groupRows, isNoteViewKind, sortRows, GROUPED_VIEW_KINDS,
-  MAX_DATABASE_VIEWS, operatorsFor,
-  type NoteDatabaseView, type NoteViewKind, type RowGroup, type SkippedRule,
+  isNoteViewKind, MAX_DATABASE_VIEWS, operatorsFor,
+  type NoteDatabaseView, type NoteViewKind,
 } from './databaseView.js';
 import { compareRank } from './rank.js';
 
@@ -119,6 +128,31 @@ function readPropertyDef(raw: unknown): NotePropertyDef | null {
     type,
     ...(options && options.length > 0 ? { options } : {}),
     ...(typeof value.description === 'string' ? { description: value.description } : {}),
+    // F2 — a formula's source and a rollup's configuration are part of the
+    // column, so they arrive with the schema. Bounded on the way IN as well as
+    // on the way out: a stored source longer than the parser accepts would be
+    // refused once per row, per render, forever.
+    ...(typeof value.formula === 'string' ? { formula: value.formula.slice(0, MAX_FORMULA_LENGTH) } : {}),
+    ...(readRollup(value.rollup) ? { rollup: readRollup(value.rollup)! } : {}),
+  };
+}
+
+/**
+ * A rollup's configuration, repaired or refused.
+ *
+ * A rollup missing its relation is kept as a def with no `rollup` — which is a
+ * column that says "this rollup has not been set up yet" rather than one that
+ * disappears. `readDatabase`'s rule about not dropping what it cannot read
+ * applies to the configuration of a column as much as to its type.
+ */
+function readRollup(raw: unknown): NoteRollupSpec | null {
+  const value = raw as Partial<NoteRollupSpec> | null;
+  if (!value || typeof value !== 'object') return null;
+  if (typeof value.relation !== 'string' || value.relation.length === 0) return null;
+  return {
+    relation: value.relation.slice(0, 128),
+    target: typeof value.target === 'string' ? value.target.slice(0, 128) : '',
+    aggregate: isNoteRollupAggregate(value.aggregate) ? value.aggregate : 'count',
   };
 }
 
@@ -252,199 +286,6 @@ export function blockPropertyText(block: NoteBlock): string {
   return parts.join('\n');
 }
 
-/* ------------------------------------------------------------- projection */
-
-export interface DatabaseCell {
-  property: NotePropertyDef;
-  value: NotePropertyValue;
-  /** One line of text for the cell, so every surface shows the same string. */
-  display: string;
-  /** True when this build cannot evaluate the property's type (§3, or a newer client). */
-  unsupported: boolean;
-}
-
-export interface DatabaseRowView {
-  id: string;
-  block: NoteBlock;
-  title: string;
-  icon: string | null;
-  cover: string | null;
-  /** In the view's visible order. */
-  cells: DatabaseCell[];
-}
-
-export interface DatabaseProjection {
-  database: NoteBlock;
-  title: string;
-  view: NoteDatabaseView;
-  kind: NoteViewKind;
-  /** Visible property defs, in the view's order. */
-  columns: NotePropertyDef[];
-  /** Filtered and sorted. Every row the view shows. */
-  rows: DatabaseRowView[];
-  /**
-   * Buckets, for a grouped view. Always includes the no-value bucket — see
-   * `groupRows` for why it exists even when it is empty.
-   */
-  groups: RowGroup<DatabaseRowView>[];
-  /** Rows in the database before the filter ran. */
-  total: number;
-  /** How many the filter removed. Reported, so "where did my row go" has an answer. */
-  filteredOut: number;
-  /** Filter and sort rules this build could not apply. Never silently resolved. */
-  skipped: SkippedRule[];
-  /** Sentences a surface shows above the view. Empty is the normal case. */
-  notices: string[];
-}
-
-function cellsFor(block: NoteBlock, columns: readonly NotePropertyDef[], unsupported: ReadonlySet<string>): DatabaseCell[] {
-  return columns.map((property) => {
-    const value = rowPropertyValue(block, property);
-    return {
-      property,
-      value,
-      display: formatPropertyValue(property, value),
-      unsupported: unsupported.has(property.id),
-    };
-  });
-}
-
-/**
- * Project a database through one of its views.
- *
- * The order is filter, then sort, then group — and grouping last is what makes
- * the group counts describe the rows the person can actually see. Grouping first
- * would produce columns whose headers count rows the filter then removed.
- */
-export function projectDatabase(
-  blocks: Iterable<NoteBlock>,
-  databaseId: string,
-  viewId?: string,
-): DatabaseProjection | null {
-  const all = [...blocks];
-  const block = all.find((candidate) => candidate.id === databaseId && isLiveBlock(candidate));
-  // Refused rather than repaired. Projecting a paragraph would list its children
-  // as rows and give it a title column, which renders as a database somebody
-  // apparently made by accident — and the caller would have no way to tell that
-  // from a real one that had lost its schema.
-  if (!block || !isDatabaseBlock(block)) return null;
-
-  const database = readDatabase(block);
-  const view = database.views.find((candidate) => candidate.id === viewId) ?? database.views[0]!;
-  const defs = schemaIndex(database.schema);
-  const unsupported = new Set(database.unsupported);
-
-  const columns = view.visible
-    .map((id) => defs.get(id))
-    .filter((def): def is NotePropertyDef => !!def);
-
-  const rowBlocks = databaseRowBlocks(all, databaseId);
-  const skipped: SkippedRule[] = [];
-  const notices: string[] = [];
-
-  const kept: NoteBlock[] = [];
-  for (const row of rowBlocks) {
-    const outcome = evaluateFilter(view.filter, defs, (propertyId) => {
-      const def = defs.get(propertyId);
-      return def ? rowPropertyValue(row, def) : null;
-    });
-    // The skipped rules are the same for every row, so only the first pass's are
-    // kept — repeating them once per row would bury the sentence in a hundred
-    // copies of itself.
-    if (kept.length === 0 && skipped.length === 0) skipped.push(...outcome.skipped);
-    if (outcome.matched) kept.push(row);
-  }
-  if (rowBlocks.length === 0 && view.filter) {
-    const probe = evaluateFilter(view.filter, defs, () => null);
-    skipped.push(...probe.skipped);
-  }
-
-  const sorted = sortRows(
-    kept,
-    view.sort,
-    defs,
-    (row, propertyId) => {
-      const def = defs.get(propertyId);
-      return def ? rowPropertyValue(row, def) : null;
-    },
-    (a, b) => compareRank({ rank: a.rank.value, id: a.id }, { rank: b.rank.value, id: b.id }),
-  );
-  skipped.push(...sorted.skipped);
-
-  const rows: DatabaseRowView[] = sorted.rows.map((row) => ({
-    id: row.id,
-    block: row,
-    title: pageTitleOrDefault(row),
-    icon: row.icon?.value ?? null,
-    cover: row.cover?.value ?? null,
-    cells: cellsFor(row, columns, unsupported),
-  }));
-
-  const groups = groupProjection(view, defs, rows, skipped, notices);
-
-  if (database.unsupported.length > 0) {
-    const names = database.unsupported
-      .map((id) => defs.get(id)?.name ?? id)
-      .join(', ');
-    notices.push(
-      `This version cannot read ${names}. The values are kept and shown as they are stored, ` +
-      'but they cannot be filtered, sorted or grouped here.',
-    );
-  }
-
-  return {
-    database: block,
-    title: database.title,
-    view,
-    kind: view.kind,
-    columns,
-    rows,
-    groups,
-    total: rowBlocks.length,
-    filteredOut: rowBlocks.length - kept.length,
-    skipped,
-    notices,
-  };
-}
-
-/**
- * The buckets a view renders, and what happens when it cannot have any.
- *
- * A board or a calendar with no grouping property still shows every row — in one
- * bucket, with a notice saying what is missing. The alternative, rendering
- * nothing until someone picks a property, hides the rows behind a configuration
- * step and looks exactly like an empty database.
- */
-function groupProjection(
-  view: NoteDatabaseView,
-  defs: ReadonlyMap<string, NotePropertyDef>,
-  rows: DatabaseRowView[],
-  skipped: SkippedRule[],
-  notices: string[],
-): RowGroup<DatabaseRowView>[] {
-  const needsGroup = GROUPED_VIEW_KINDS.includes(view.kind);
-  const def = view.groupBy ? defs.get(view.groupBy) : undefined;
-
-  if (view.groupBy && !def) {
-    skipped.push({
-      kind: 'group',
-      property: view.groupBy,
-      reason: 'unknown_property',
-      detail: `This view groups by "${view.groupBy}", which is not a property of this database.`,
-    });
-  }
-
-  if (!def) {
-    if (!needsGroup) return [];
-    notices.push(
-      `A ${view.kind} needs a property to group by. Every row is in one group until one is chosen.`,
-    );
-    return [{ key: null, label: 'All rows', empty: false, rows }];
-  }
-
-  return groupRows(rows, def, (row) => rowPropertyValue(row.block, def));
-}
-
 /**
  * Bound the database fields of a pushed operation, or say what is wrong.
  *
@@ -490,6 +331,16 @@ export function validateDatabaseFields(patch: Record<string, unknown>): string |
     if (patch.schema.length > MAX_DATABASE_PROPERTIES) {
       return `A database holds at most ${MAX_DATABASE_PROPERTIES} properties.`;
     }
+    for (const raw of patch.schema as unknown[]) {
+      const formula = (raw as { formula?: unknown } | null)?.formula;
+      // F2 — bounded HERE as well as in the parser, because this is the boundary
+      // where somebody else's schema arrives. The parser refusing a long source
+      // would leave the string stored and refused on every render, on every
+      // device that shares the database.
+      if (typeof formula === 'string' && formula.length > MAX_FORMULA_LENGTH) {
+        return `A formula holds at most ${MAX_FORMULA_LENGTH} characters.`;
+      }
+    }
   }
   if (patch.views !== undefined) {
     if (!Array.isArray(patch.views)) return 'Views are a list.';
@@ -510,62 +361,15 @@ export function coerceRowValue(
   if (!def) {
     return { ok: false, detail: `There is no property "${propertyId}" in this database.` };
   }
+  // F3 — a derived column is REFUSED rather than coerced to empty. Both stop the
+  // value being stored; only the refusal tells the caller why, and a write that
+  // silently succeeded-into-nothing is how a person concludes their typing is
+  // being eaten.
+  if (isDerivedPropertyType(def.type)) {
+    return {
+      ok: false,
+      detail: `“${def.name}” is worked out from the row, so it cannot be typed into.`,
+    };
+  }
   return { ok: true, def, value: coercePropertyValue(def, raw) };
-}
-
-/* ------------------------------------------------ the bounded read (Q3/E3) */
-
-/**
- * Q3's bound, applied to a database instead of a page.
- *
- * A database is unbounded in exactly the way a page is — someone's reading list
- * runs to four hundred rows — so a reader that cannot afford the whole thing gets
- * its SHAPE and a sample. That is not a smaller projection: the columns are what
- * a caller needs in order to WRITE a cell, because a cell is addressed by
- * property id and a summary listing only the human-facing names would leave the
- * id to be guessed.
- *
- * `omittedLabel` follows `NoteBlockContext`'s: what was left out is stated, not
- * implied. A reader handed ten rows out of four hundred with nothing to say so
- * answers a question about the database from a sample and presents it as the
- * whole.
- */
-export interface NoteDatabaseSummary {
-  databaseId: string;
-  title: string;
-  view: { id: string; name: string; kind: NoteViewKind };
-  views: Array<{ id: string; name: string; kind: NoteViewKind }>;
-  columns: Array<{ id: string; name: string; type: string }>;
-  rows: Array<{ uri: string; title: string; cells: Record<string, string> }>;
-  totalRows: number;
-  omittedLabel?: string;
-}
-
-/** How many rows are worth the tokens. The rest is a count, per Q3. */
-export const DATABASE_SUMMARY_ROWS = 10;
-
-export function summariseDatabase(
-  blocks: Iterable<NoteBlock>,
-  databaseId: string,
-  sample = DATABASE_SUMMARY_ROWS,
-): NoteDatabaseSummary | null {
-  const projection = projectDatabase(blocks, databaseId);
-  if (!projection) return null;
-  const shown = projection.rows.slice(0, Math.max(0, sample));
-  return {
-    databaseId,
-    title: projection.title,
-    view: { id: projection.view.id, name: projection.view.name, kind: projection.kind },
-    views: (projection.database.views?.value ?? []).map((v) => ({ id: v.id, name: v.name, kind: v.kind })),
-    columns: projection.columns.map((c) => ({ id: c.id, name: c.name, type: c.type })),
-    rows: shown.map((row) => ({
-      uri: noteBlockUri(row.id),
-      title: row.title,
-      cells: Object.fromEntries(row.cells.map((cell) => [cell.property.id, cell.display])),
-    })),
-    totalRows: projection.total,
-    ...(projection.total > shown.length
-      ? { omittedLabel: `+${projection.total - shown.length} more rows in this database` }
-      : {}),
-  };
 }

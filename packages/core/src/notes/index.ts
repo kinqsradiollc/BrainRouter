@@ -19,6 +19,7 @@ export * from '../sync/hybridClock.js';
 export * from '../sync/stamped.js';
 export * from './block.js';
 export * from './rank.js';
+export * from './comment.js';
 export * from './blockLease.js';
 export * from './blockMerge.js';
 export * from './noteTree.js';
@@ -40,4 +41,29 @@ export * from './trash.js';
 export * from './properties.js';
 export * from './databaseView.js';
 export * from './database.js';
+export * from './databaseProjection.js';
 export * from './databaseOps.js';
+// ADR-029 F2/F3 — the derived columns. `formula/` is a bounded parser and a
+// total evaluator, `rollup` is the aggregate and what it says about the rows it
+// could not see, and `computed` is the one place that decides what a derived
+// cell says — so a table, a board and the agent's summary read one answer.
+export * from './formula/index.js';
+export * from './rollup.js';
+export * from './computed.js';
+// ADR-029 Part F — the blocks the slash menu offered and could not draw. Both
+// reach the network through `net/guardedFetch.ts`, which is why they are on this
+// barrel rather than the browser-safe one.
+export * from './bookmarkPreview.js';
+export * from './noteImage.js';
+// ADR-029 F4/F3 — page-level undo and templates. `noteHistory` is the model and
+// is pure; `templates` composes the store's mutations rather than writing beside
+// them, which is what keeps a template a page instead of a second kind of thing.
+export * from './noteHistory.js';
+export * from './noteRefRemap.js';
+export * from './templates.js';
+// ADR-029 F3 — synced blocks (one block, many places) and getting data out.
+// `syncedBlock` is pure and `export/` writes text; both are here rather than on
+// a browser-safe subpath because their callers are the host and the server,
+// which already hold the store.
+export * from './syncedBlock.js';
+export * from './export/index.js';

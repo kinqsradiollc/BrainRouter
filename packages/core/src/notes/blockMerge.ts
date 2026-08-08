@@ -25,12 +25,14 @@
  *    silently winning either way — EXCEPT when an explicit restore is newer
  *    than the tombstone, which is the one case where a person already decided.
  */
-import { hlcAfter, type Hlc } from '../sync/hybridClock.js';
+import { hlcAfter, hlcConcurrent, type Hlc } from '../sync/hybridClock.js';
 import {
   latestStamp, mergeCompletion, mergeField, mergeText, resolveTombstone,
   type ConflictReason, type ConflictRecord, type Stamped,
 } from '../sync/stamped.js';
 import type { NoteBlock } from './block.js';
+import type { NoteComment } from './comment.js';
+import { unionSetValues, type NotePropertyValue } from './properties.js';
 
 /**
  * The three refusals `fenceBlockWrite` can return for an edit that has already
@@ -87,10 +89,13 @@ export function mergeNoteBlock(ours: NoteBlock, theirs: NoteBlock, fenced?: Bloc
   const cover = mergeField(ours.cover, theirs.cover);
   const collapsed = mergeField(ours.collapsed, theirs.collapsed);
   const favourite = mergeField(ours.favourite, theirs.favourite);
+  const template = mergeField(ours.template, theirs.template);
   const checked = mergeCompletion(ours.checked, theirs.checked);
   const props = mergeProps(ours.props, theirs.props);
   const schema = mergeField(ours.schema, theirs.schema);
   const views = mergeField(ours.views, theirs.views);
+  const createdAt = mergeCreation(ours.createdAt, theirs.createdAt);
+  const comments = mergeComments(ours.comments, theirs.comments, conflicts);
 
   const newestEdit = latestStamp([
     latestBlockEdit({ ...ours, text: text.value! }),
@@ -125,10 +130,13 @@ export function mergeNoteBlock(ours: NoteBlock, theirs: NoteBlock, fenced?: Bloc
     ...(cover ? { cover } : {}),
     ...(collapsed ? { collapsed } : {}),
     ...(favourite ? { favourite } : {}),
+    ...(template ? { template } : {}),
     ...(checked ? { checked } : {}),
     ...(props ? { props } : {}),
     ...(schema ? { schema } : {}),
     ...(views ? { views } : {}),
+    ...(createdAt ? { createdAt } : {}),
+    ...(comments ? { comments } : {}),
     ...(tombstone.deletedAt ? { deletedAt: tombstone.deletedAt } : {}),
     ...(restoredAt ? { restoredAt } : {}),
     ...(Object.keys(conflicts).length ? { conflicts } : {}),
@@ -198,6 +206,10 @@ function fenceText(
  * clearing is an event that can win: a deleted key would leave a peer's older
  * "set" arriving later with nothing to lose against, and the value would come
  * back on its own.
+ *
+ * **The one exception is a SET, and it is F3's multi-select.** Two devices whose
+ * writes never saw each other, each of which holds a list, are unioned rather
+ * than decided — see `mergeCellValue`.
  */
 function mergeProps(
   ours: NoteBlock['props'],
@@ -208,10 +220,132 @@ function mergeProps(
 
   const merged: NonNullable<NoteBlock['props']> = {};
   for (const key of new Set([...Object.keys(ours), ...Object.keys(theirs)])) {
-    const winner = mergeField(ours[key], theirs[key]);
+    const winner = mergeCellValue(ours[key], theirs[key]);
     if (winner) merged[key] = winner;
   }
   return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+/**
+ * One cell — last-writer-wins, except that two CONCURRENT set-valued writes
+ * union.
+ *
+ * F3's multi-select is the case that forces this: two people tagging the same
+ * row at the same moment both meant their tag, and last-writer-wins discards one
+ * of them with nothing on either screen to say a tag was ever added. `{a}` and
+ * `{b}` have an answer that loses nothing, and it is `{a, b}`.
+ *
+ * **Concurrent, not always.** A removal is a write of a smaller set, so a merge
+ * that always unioned would make removing a tag impossible while any peer still
+ * held the old list — the removal would come back on the next sync, forever. An
+ * ordered pair therefore stays last-writer-wins and the union is reserved for
+ * the tie, which is precisely the shape `mergeCompletion` already has.
+ *
+ * The rule keys on the value's SHAPE rather than on the property's type, because
+ * this function has one block and never the database (see `mergeProps`). That is
+ * not a compromise here: every set-valued type — multi-select, person, relation,
+ * files — wants the same answer, and a scalar cell is never two arrays.
+ */
+function mergeCellValue(
+  ours: Stamped<NotePropertyValue> | undefined,
+  theirs: Stamped<NotePropertyValue> | undefined,
+): Stamped<NotePropertyValue> | undefined {
+  if (!ours) return theirs;
+  if (!theirs) return ours;
+  if (!Array.isArray(ours.value) || !Array.isArray(theirs.value)) return mergeField(ours, theirs);
+  if (!hlcConcurrent(ours.at, theirs.at)) return mergeField(ours, theirs);
+
+  // The stamp that would have won goes first, so two devices merging the same
+  // pair in opposite directions produce the same array rather than two arrays
+  // that are equal as sets and different as JSON — which would each look like a
+  // fresh edit to the other and never settle.
+  const leading = hlcAfter(theirs.at, ours.at) ? theirs : ours;
+  const trailing = leading === ours ? theirs : ours;
+  return {
+    value: unionSetValues(leading.value as readonly string[], trailing.value as readonly string[]),
+    at: leading.at,
+  };
+}
+
+/**
+ * F3 — the comments on a block, merged per comment and then per field.
+ *
+ * The same shape `mergeProps` has, one level further in, and for the identical
+ * reason: two people resolving one comment and correcting another are not in
+ * conflict, and merging the map as a single field would make the later write
+ * take the whole thread.
+ *
+ * **A comment's BODY is prose, so it gets prose's rule.** `mergeText` keeps both
+ * versions with a marker rather than silently discarding one, which is B1's
+ * argument about paragraphs applied to the one other place in Notes where a
+ * person types sentences. The conflict is filed under `comment:<id>` so a
+ * surface can point at the thread rather than at the block in general — a
+ * banner that says "this block has two versions" over a paragraph nobody touched
+ * is how people learn to dismiss the banner.
+ *
+ * **Resolution ties toward UNRESOLVED, which is the opposite of `checked` and is
+ * deliberate.** `mergeCompletion` ties a todo toward done because un-completing
+ * finished work makes you doubt the record. A comment is the other way round: a
+ * resolved comment disappears from the thread's default reading, so losing an
+ * "I reopened this" hides a remark somebody deliberately brought back, while
+ * losing a "resolved" costs one click on something still visible. The safe
+ * direction is the one that leaves the conversation on screen.
+ *
+ * **A deletion wins over an edit, without a marker.** Unlike a block — where
+ * `resolveTombstone` surfaces delete-versus-edit because a page is expensive to
+ * lose — a comment is one remark whose author took it back, and resurrecting it
+ * as a conflict would ask a person to re-decide something they decided. The
+ * tombstone is kept rather than the key removed, so a peer's later edit has
+ * something to lose against instead of recreating the comment.
+ */
+function mergeComments(
+  ours: NoteBlock['comments'],
+  theirs: NoteBlock['comments'],
+  conflicts: Record<string, ConflictRecord>,
+): NoteBlock['comments'] | undefined {
+  if (!ours) return theirs;
+  if (!theirs) return ours;
+
+  const merged: NonNullable<NoteBlock['comments']> = {};
+  for (const key of new Set([...Object.keys(ours), ...Object.keys(theirs)])) {
+    const mine = ours[key];
+    const yours = theirs[key];
+    if (!mine || !yours) {
+      const only = mine ?? yours;
+      if (only) merged[key] = only;
+      continue;
+    }
+    const body = mergeText(mine.body, yours.body);
+    if (body.conflict) conflicts[commentConflictField(key)] = body.conflict;
+    merged[key] = {
+      id: mine.id,
+      // The author and the creation are decided once, on one device. The
+      // EARLIEST creation survives for `mergeCreation`'s reason, and the author
+      // travels with it so the two cannot come apart.
+      ...(hlcAfter(mine.createdAt, yours.createdAt)
+        ? { author: yours.author, createdAt: yours.createdAt }
+        : { author: mine.author, createdAt: mine.createdAt }),
+      body: body.value ?? mine.body,
+      resolved: mergeResolution(mine.resolved, yours.resolved),
+      ...(latestStamp([mine.deletedAt, yours.deletedAt])
+        ? { deletedAt: latestStamp([mine.deletedAt, yours.deletedAt])! }
+        : {}),
+    };
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+/** The conflict key a comment's kept-both body is filed under. */
+export function commentConflictField(commentId: string): string {
+  return `comment:${commentId}`;
+}
+
+/** `mergeCompletion` with the tie the other way — see `mergeComments`. */
+function mergeResolution(ours: Stamped<boolean>, theirs: Stamped<boolean>): Stamped<boolean> {
+  const sameClock = ours.at.physical === theirs.at.physical && ours.at.logical === theirs.at.logical;
+  if (!sameClock) return hlcAfter(theirs.at, ours.at) ? theirs : ours;
+  // The tie: whichever side says "still open" keeps the conversation visible.
+  return ours.value === false ? ours : theirs;
 }
 
 /**
@@ -226,7 +360,98 @@ function mergeProps(
  * `props` and `schema` ARE counted: setting a cell or adding a column is
  * somebody working on the row, and an edit made after a delete is exactly the
  * case `resolveTombstone` exists to surface rather than silently drop.
+ *
+ * **F3's `comments` are excluded, and that is C5 rather than an oversight.** A
+ * comment is a link to the block, not an edit of it, so commenting must not
+ * resurrect a block someone deleted on another device — the comment survives on
+ * the tombstone and stays findable (`orphanedComments`), which is what "deleting
+ * a target never deletes the link" means when the link is a remark.
  */
+/**
+ * F3 — creation is merged by the EARLIEST claim, which is the opposite of every
+ * other field here and is not an inconsistency.
+ *
+ * A block is created once, on one device. Two stamps for one creation mean one
+ * of them is a re-derivation — a peer that met the block for the first time in a
+ * push and recorded when IT first saw it — and the earlier of the two is the
+ * only one that can be the truth. Last-writer-wins would let a block's recorded
+ * creation move forward every time a new device met it, which is a column
+ * labelled "Created" whose value depends on who opened the app.
+ */
+function mergeCreation(ours: Hlc | undefined, theirs: Hlc | undefined): Hlc | undefined {
+  if (!ours) return theirs;
+  if (!theirs) return ours;
+  return hlcAfter(ours, theirs) ? theirs : ours;
+}
+
+/**
+ * F3 — when the block was last worked on, as the column reads it.
+ *
+ * The same stamp `resolveTombstone` compares against, exported rather than
+ * re-derived: an "Edited" column that disagreed with the field deciding whether
+ * an edit outranks a delete would be two answers to what an edit is.
+ */
+export function blockEditedAt(block: NoteBlock): Hlc | undefined {
+  return latestBlockEdit(block);
+}
+
+/**
+ * F4 — the newest stamp of ANY write to this block, which is not the same
+ * question as "when was it last edited".
+ *
+ * A second function rather than a widening of `blockEditedAt`, because that one
+ * feeds `resolveTombstone` and the Edited column, and both of those mean *work*:
+ * a fold, a favourite or a delete is not work, and counting them there would
+ * report a delete as an edit that outranks it and raise a conflict banner over a
+ * collapsed toggle.
+ *
+ * The undo guard asks the other question — *has anything landed here from
+ * another device since I recorded this step* — and for that a peer's tombstone
+ * and a peer's renamed database view both count, because undoing over either one
+ * destroys it. Undo used to resurrect a block a peer had deleted, and used to
+ * write a peer's view configuration back to the one before it, for exactly the
+ * fields this adds.
+ */
+export function blockWrittenAt(block: NoteBlock): Hlc | undefined {
+  return latestStamp([
+    latestBlockEdit(block),
+    block.deletedAt, block.restoredAt,
+    block.collapsed?.at, block.favourite?.at, block.template?.at, block.views?.at,
+    ...Object.values(block.comments ?? {}).flatMap((comment) => [
+      comment?.body?.at, comment?.resolved?.at, comment?.createdAt, comment?.deletedAt,
+    ]),
+  ]);
+}
+
+/**
+ * F3 — when the block was made, and how sure we are.
+ *
+ * `exact` is false for a block written before `createdAt` existed. The fallback
+ * is the earliest stamp the block still carries, which is a LOWER BOUND on its
+ * creation and not the creation itself — an edit re-stamps the field it touched,
+ * so a long-lived block's oldest surviving stamp drifts forward. It is reported
+ * as approximate rather than shown as a date, because Part F's rule is that a
+ * metadata column must not say something it cannot know, and the difference
+ * between "made on the 4th" and "here by the 4th" is exactly the kind of small
+ * lie a column like this exists to avoid.
+ */
+export function blockCreatedAt(block: NoteBlock): { at: Hlc; exact: boolean } | null {
+  if (block.createdAt) return { at: block.createdAt, exact: true };
+  const earliest = earliestBlockStamp(block);
+  return earliest ? { at: earliest, exact: false } : null;
+}
+
+function earliestBlockStamp(block: NoteBlock): Hlc | undefined {
+  const stamps = [
+    block.parentId?.at, block.rank?.at, block.kind?.at, block.text?.at,
+    block.level?.at, block.checked?.at, block.language?.at,
+    block.icon?.at, block.cover?.at, block.schema?.at, block.views?.at,
+    ...Object.values(block.props ?? {}).map((stamped) => stamped?.at),
+  ].filter((stamp): stamp is Hlc => !!stamp);
+  if (stamps.length === 0) return undefined;
+  return stamps.reduce((a, b) => (hlcAfter(a, b) ? b : a));
+}
+
 function latestBlockEdit(block: NoteBlock): Hlc | undefined {
   return latestStamp([
     block.text?.at, block.parentId?.at, block.rank?.at,
@@ -257,6 +482,14 @@ export function describeBlockConflict(block: NoteBlock): string | null {
   }
   if (fields.includes('text')) {
     return describeConflictReason(block.conflicts!.text!.reason);
+  }
+  // F3 — a comment kept both ways is a fact about the THREAD, and saying
+  // `comment:cmt_9f2` to a person is worse than saying nothing.
+  const comments = fields.filter((field) => field.startsWith('comment:'));
+  if (comments.length === fields.length) {
+    return comments.length === 1
+      ? 'A comment on this block was written in two places at once. Both versions are kept.'
+      : `${comments.length} comments on this block were written in two places at once. Both versions are kept.`;
   }
   return `Changed in two places: ${fields.join(', ')}.`;
 }
@@ -307,6 +540,15 @@ export function resolveBlockConflict(
 
   const next: NoteBlock = { ...block };
   if (field === 'text') next.text = { value: String(chosen), at };
+  // F3 — a comment's kept-both body is resolved into the comment it belongs to,
+  // not into the block's text. A resolution that wrote the chosen remark over
+  // the paragraph would answer a conflict by creating a worse one.
+  if (field.startsWith('comment:')) {
+    const commentId = field.slice('comment:'.length);
+    const comment = block.comments?.[commentId];
+    if (!comment) return null;
+    next.comments = { ...block.comments, [commentId]: { ...comment, body: { value: String(chosen), at } } };
+  }
   if (field === 'deleted') {
     // Keeping the edit is a RESTORE, recorded as one. Deleting the tombstone
     // instead would lose the comparison a peer still holding the delete needs,

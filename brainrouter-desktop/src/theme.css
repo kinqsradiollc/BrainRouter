@@ -6137,8 +6137,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
    second line lines up under the words and not under the bullet. */
 .notes-marker { flex: none; min-width: 16px; text-align: right; color: var(--text-faint);
   font-size: 12.5px; line-height: 1.6; padding-top: 3px; font-variant-numeric: tabular-nums; }
-.notes-text-callout { border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; }
-.notes-text-toggle::before { content: '\25B8'; color: var(--text-faint); margin-right: 6px; }
 
 /* E2 — the marks, rendered. Monochrome: weight, slant and a rule carry them,
    because a colour here would be a second vocabulary for emphasis. */
@@ -6278,227 +6276,20 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   color: var(--text-faint); font-size: 12px; padding: 6px 4px; cursor: pointer; margin-top: 6px; }
 .notes-add-line:hover { color: var(--text); }
 
-/* ADR-029 E3 — databases.
-   A database is a BLOCK, so it sits in the page's flow at the page's width and
-   scrolls its own content sideways rather than widening the column. `min-width:
-   0` is what makes that true: without it the table's natural width pushes
-   `.notes-body` wider and the reading column stops being one. */
-.db-block { display: flex; flex-direction: column; gap: 8px; min-width: 0;
-  margin: 10px 0 14px; padding: 10px 0 0; border-top: 1px solid var(--border); }
-.db-block.is-full { border-top: 0; padding-top: 0; }
-.db-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
-.db-title { display: inline-flex; align-items: center; gap: 5px; border: 0; background: transparent;
-  color: var(--text); font-size: 13px; font-weight: 600; padding: 2px 4px; border-radius: 5px;
-  cursor: pointer; }
-.db-title:hover { background: var(--ov-04); }
-.db-tools { display: flex; align-items: center; gap: 2px; margin-left: auto; flex-wrap: wrap; }
 
-.db-view-tabs { display: flex; align-items: center; gap: 1px; flex-wrap: wrap; min-width: 0; }
-.db-view-tab { display: inline-flex; align-items: baseline; gap: 5px; border: 0; background: transparent;
-  color: var(--text-faint); font-size: 11.5px; padding: 3px 7px; border-radius: 5px; cursor: pointer; }
-.db-view-tab:hover { color: var(--text-dim); background: var(--ov-04); }
-.db-view-tab.is-on { color: var(--text); background: var(--raised); }
-.db-view-kind { font-size: 9.5px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .05em; }
-.db-view-add { border: 0; background: transparent; color: var(--text-faint); cursor: pointer;
-  padding: 3px 5px; border-radius: 5px; line-height: 0; }
-.db-view-add:hover { color: var(--text); background: var(--ov-04); }
 
-.db-tool { display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent;
-  color: var(--text-faint); font-size: 11px; padding: 3px 7px; border-radius: 5px; cursor: pointer; }
-.db-tool:hover { color: var(--text); background: var(--ov-04); }
-.db-tool.is-on { color: var(--text); background: var(--raised); }
-.db-new-row { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border);
-  background: transparent; color: var(--text-dim); font-size: 11px; padding: 3px 8px;
-  border-radius: 5px; cursor: pointer; }
-.db-new-row:hover { color: var(--text); border-color: var(--accent); }
-.db-icon-btn { border: 0; background: transparent; color: var(--text-faint); cursor: pointer;
-  padding: 2px 3px; border-radius: 4px; line-height: 0; }
-.db-icon-btn:hover { color: var(--text); background: var(--ov-06); }
 
-/* Core's sentences: a rule it could not apply, a column it cannot read, how
-   many rows the filter removed. Never styled as an error — every one of them is
-   a fact about the view rather than a fault. */
-.db-notice { font-size: 11px; color: var(--text-faint); line-height: 1.55; margin: 0; max-width: 70ch; }
-.db-empty-line { font-size: 12px; color: var(--text-faint); line-height: 1.6; margin: 8px 0; max-width: 60ch; }
-.db-foot { display: flex; align-items: center; gap: 10px; }
-.db-count { font-size: 10.5px; color: var(--text-faint); font-family: var(--mono); }
 
-/* ---- table */
-.db-table-scroll { overflow-x: auto; min-width: 0; border: 1px solid var(--border); border-radius: 7px; }
-.db-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.db-table th { text-align: left; font-weight: 500; border-bottom: 1px solid var(--border);
-  padding: 0; background: var(--surface-2, rgba(255,255,255,.02)); }
-.db-th { display: flex; align-items: center; gap: 5px; width: 100%; border: 0; background: transparent;
-  color: var(--text-faint); font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em;
-  padding: 6px 9px; cursor: pointer; white-space: nowrap; }
-.db-th:hover:not(:disabled) { color: var(--text); }
-.db-th:disabled { cursor: default; }
-.db-th.is-unsupported { font-style: italic; }
-.db-th-sort { color: var(--accent); }
-.db-table td { border-bottom: 1px solid var(--ov-04); padding: 0; vertical-align: top; }
-.db-table tr:last-child td { border-bottom: 0; }
-.db-table tr:hover td { background: var(--ov-04); }
-.db-col-end { width: 30px; }
-.db-table td.db-col-end { text-align: center; padding: 4px 2px; }
 
-/* ---- cells */
-.db-cell { position: relative; min-width: 90px; padding: 2px 6px; }
-.db-cell.is-field { padding: 0; }
-.db-cell-static { display: inline-block; font-size: 11.5px; color: var(--text-faint);
-  padding: 4px 3px; font-family: var(--mono); }
-.db-input { width: 100%; min-width: 60px; border: 0; background: transparent; color: var(--text);
-  font: inherit; font-size: 12px; padding: 5px 3px; border-radius: 4px; }
-.db-input:focus { outline: 1px solid var(--border); }
-.db-input::placeholder { color: var(--text-faint); }
-.db-check { margin: 6px 3px; }
-.db-title-cell { display: flex; align-items: center; gap: 4px; min-width: 140px; }
-.db-open-row { flex: none; border: 0; background: transparent; color: var(--text-faint);
-  cursor: pointer; padding: 2px; border-radius: 4px; line-height: 0; opacity: 0; }
-.db-title-cell:hover .db-open-row, .db-open-row:focus { opacity: 1; }
-.db-open-row:hover { color: var(--text); background: var(--ov-06); }
-.db-chip-btn { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; width: 100%;
-  border: 0; background: transparent; color: var(--text); font-size: 12px; text-align: left;
-  padding: 5px 3px; border-radius: 4px; cursor: pointer; min-height: 26px; }
-.db-chip-btn:hover { background: var(--ov-06); }
-.db-empty { color: var(--text-faint); font-size: 11.5px; }
-.db-tag { display: inline-flex; align-items: center; border: 1px solid var(--border);
-  border-radius: 4px; padding: 0 6px; font-size: 10.5px; color: var(--text-dim);
-  background: var(--ov-04); white-space: nowrap; }
-.db-relation { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; padding: 3px 0; }
-.db-relation-add { width: auto; min-height: 20px; padding: 2px 5px; }
 
-/* ---- popover. Portaled to <body>, so a scrolling table cannot clip it —
-   the same reason the page header portals its pickers. */
-.db-popover { z-index: 140; display: flex; flex-direction: column; gap: 6px; max-height: 340px;
-  overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--surface);
-  padding: 7px; box-shadow: 0 10px 30px rgba(0, 0, 0, .34); }
-.db-popover-input { width: 100%; }
-.db-option-list { display: flex; flex-direction: column; gap: 1px; }
-.db-option { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left;
-  border: 0; background: transparent; color: var(--text); font-size: 12px; padding: 4px 6px;
-  border-radius: 4px; cursor: pointer; }
-.db-option:hover:not(:disabled) { background: var(--ov-06); }
-.db-option:disabled { color: var(--text-faint); cursor: default; }
-.db-option.is-on { color: var(--text); }
-.db-option-check { flex: none; width: 12px; color: var(--accent); font-size: 10px; }
-.db-option-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.db-option-mode { flex: none; font-size: 9.5px; color: var(--text-faint); text-transform: uppercase;
-  letter-spacing: .05em; }
-.db-popover-empty, .db-popover-note { font-size: 11px; color: var(--text-faint);
-  line-height: 1.5; padding: 3px 6px; margin: 0; }
-.db-popover-clear, .db-popover-ok { display: inline-flex; align-items: center; gap: 5px;
-  border: 1px solid var(--border); background: transparent; color: var(--text-dim);
-  font-size: 11px; padding: 3px 8px; border-radius: 5px; cursor: pointer; align-self: flex-start; }
-.db-popover-clear:hover, .db-popover-ok:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
-.db-popover-ok:disabled { color: var(--text-faint); cursor: default; }
-.db-prop-row { display: flex; align-items: center; gap: 2px; }
-.db-prop-row .db-option { flex: 1; min-width: 0; }
-.db-add-prop { display: flex; flex-direction: column; gap: 6px; }
 
-/* ---- filter and sort rules */
-.db-rule { display: flex; flex-direction: column; gap: 4px; padding: 5px 4px;
-  border-bottom: 1px solid var(--ov-04); }
-.db-rule-head { display: flex; align-items: center; gap: 6px; }
-.db-rule-lead { flex: none; font-size: 10px; color: var(--text-faint); text-transform: uppercase;
-  letter-spacing: .05em; }
-.db-rule-join { border: 1px solid var(--border); background: transparent; color: var(--text-dim);
-  font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; border-radius: 3px;
-  padding: 0 4px; cursor: pointer; }
-.db-rule-join:hover { color: var(--text); border-color: var(--accent); }
-.db-rule-name { flex: 1; min-width: 0; font-size: 12px; color: var(--text);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.db-op-row { display: flex; flex-wrap: wrap; gap: 2px; }
-.db-op { border: 1px solid var(--border); background: transparent; color: var(--text-faint);
-  font-size: 10.5px; padding: 1px 6px; border-radius: 4px; cursor: pointer; }
-.db-op:hover { color: var(--text); }
-.db-op.is-on { color: var(--text); border-color: var(--accent); background: var(--ov-06); }
-.db-field { min-width: 0; }
 
-/* ---- board. Columns scroll sideways inside the block rather than widening the
-   page: a board is the one view whose width is genuinely unbounded. */
-.db-board { display: flex; gap: 8px; overflow-x: auto; min-width: 0; padding-bottom: 4px; align-items: flex-start; }
-.db-board-col { flex: none; width: 214px; display: flex; flex-direction: column; gap: 6px;
-  border: 1px solid var(--border); border-radius: 7px; padding: 7px; background: var(--ov-04); }
-/* The no-value column is a column, not an absence — E3 says a row cannot go
-   missing, so it is marked rather than hidden. */
-.db-board-col.is-none { background: transparent; border-style: dashed; }
-.db-board-head { display: flex; align-items: center; gap: 6px; }
-.db-board-label { flex: 1; min-width: 0; font-size: 11px; color: var(--text-dim);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.db-board-count { flex: none; font-size: 10px; font-family: var(--mono); color: var(--text-faint); }
-.db-board-cards { display: flex; flex-direction: column; gap: 6px; min-height: 24px; }
-.db-board-empty { font-size: 10.5px; color: var(--text-faint); padding: 2px; }
 
-.db-card { display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--border);
-  border-radius: 6px; padding: 7px 8px; background: var(--surface); }
-.db-card.is-bare { border: 0; background: transparent; padding: 6px 2px; }
-.db-card.is-draggable { cursor: grab; }
-.db-card-title { display: flex; align-items: center; gap: 6px; border: 0; background: transparent;
-  color: var(--text); font-size: 12px; text-align: left; padding: 0; cursor: pointer; }
-.db-card-title:hover { text-decoration: underline; text-decoration-color: var(--accent); }
-.db-row-icon { flex: none; display: inline-flex; align-items: center; color: var(--text-faint); }
-.db-card-field { display: flex; align-items: center; gap: 6px; }
-.db-card-label { flex: none; width: 62px; font-size: 9.5px; color: var(--text-faint);
-  text-transform: uppercase; letter-spacing: .05em; }
-.db-card-field .db-cell { flex: 1; min-width: 0; }
 
-/* ---- list */
-.db-list { display: flex; flex-direction: column; }
-.db-list-row { display: flex; align-items: center; gap: 8px; padding: 5px 4px;
-  border-bottom: 1px solid var(--ov-04); }
-.db-list-row:hover { background: var(--ov-04); }
-.db-list-title { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; border: 0;
-  background: transparent; color: var(--text); font-size: 12.5px; text-align: left; padding: 0; cursor: pointer; }
-.db-list-title:hover { text-decoration: underline; text-decoration-color: var(--accent); }
-.db-list-meta { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; flex: none; max-width: 55%; }
 
-/* ---- calendar */
-.db-calendar { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.db-cal-head { display: flex; align-items: center; gap: 6px; }
-.db-cal-title { font-size: 12px; color: var(--text); min-width: 132px; }
-.db-cal-off { font-size: 10.5px; color: var(--text-faint); margin-left: auto; }
-.db-cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 1px;
-  border: 1px solid var(--border); border-radius: 7px; overflow: hidden; background: var(--border); }
-.db-cal-weekday { font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em;
-  color: var(--text-faint); padding: 4px 6px; background: var(--surface); }
-.db-cal-cell { position: relative; display: flex; flex-direction: column; gap: 2px;
-  min-height: 62px; padding: 4px; background: var(--bg); }
-.db-cal-cell.is-outside { background: var(--surface); }
-.db-cal-cell.is-outside .db-cal-daynum { color: var(--text-faint); opacity: .55; }
-.db-cal-cell.is-today { box-shadow: inset 0 0 0 1px var(--accent); }
-.db-cal-daynum { font-size: 10px; font-family: var(--mono); color: var(--text-faint); }
-.db-cal-pill { border: 1px solid var(--border); background: var(--surface); color: var(--text-dim);
-  border-radius: 4px; font-size: 10.5px; padding: 1px 5px; cursor: pointer; text-align: left;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.db-cal-pill:hover { color: var(--text); border-color: var(--accent); }
-.db-cal-add { position: absolute; top: 3px; right: 3px; border: 0; background: transparent;
-  color: var(--text-faint); cursor: pointer; padding: 1px; border-radius: 3px; line-height: 0; opacity: 0; }
-.db-cal-cell:hover .db-cal-add { opacity: 1; }
-.db-cal-add:hover { color: var(--text); background: var(--ov-06); }
-/* The undated rows, beside the grid rather than under it — a bucket you have to
-   scroll to find is a bucket people forget can exist. */
-.db-cal-side { display: flex; flex-direction: column; gap: 6px; border: 1px dashed var(--border);
-  border-radius: 7px; padding: 7px; }
 
-/* The date picker reuses the grid at a smaller size, so a week starts on the
-   same day in both. */
-.db-cal-picker { border: 0; background: transparent; gap: 1px; }
-.db-cal-day { border: 0; background: transparent; color: var(--text-dim); font-size: 11px;
-  padding: 4px 0; border-radius: 4px; cursor: pointer; }
-.db-cal-day:hover { background: var(--ov-06); color: var(--text); }
-.db-cal-day.is-outside { color: var(--text-faint); opacity: .55; }
-.db-cal-day.is-today { box-shadow: inset 0 0 0 1px var(--border); }
-.db-cal-day.is-picked { background: var(--raised); color: var(--text); box-shadow: inset 0 0 0 1px var(--accent); }
 
-/* ---- gallery */
-.db-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
-  gap: 10px; min-width: 0; }
-.db-gallery-card { display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--border);
-  border-radius: 7px; padding: 6px; }
-.db-gallery-cover { height: 84px; border: 0; border-radius: 5px; background: var(--ov-06);
-  background-size: cover; background-position: center; cursor: pointer;
-  display: flex; align-items: center; justify-content: center; }
-.db-gallery-glyph { font-size: 20px; color: var(--text-faint); }
+
 
 
 /* ADR-028 F7 — the comprehension review panel. Reads as a review, not a test:

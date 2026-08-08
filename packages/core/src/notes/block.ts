@@ -31,6 +31,7 @@
 import { hlcAfter, type Hlc } from '../sync/hybridClock.js';
 import type { ConflictRecord, Stamped } from '../sync/stamped.js';
 import { formatWorkspaceRef, type WorkspaceRef } from '../workspace/references/ref.js';
+import type { NoteComment } from './comment.js';
 import type { NotePropertyDef, NotePropertyValue } from './properties.js';
 import type { NoteDatabaseView } from './databaseView.js';
 
@@ -69,11 +70,21 @@ export type NoteBlockKind =
   | 'database'
   /** Text is a single workspace reference, rendered live (A3). */
   | 'embed'
+  /**
+   * F3 — one block, many places, one truth. `text` is the SOURCE block's URI.
+   *
+   * A separate kind from `embed` because they are different gestures with
+   * different rules: an embed shows another mode's record and is read-only where
+   * it sits, while a synced block IS another block of this document and editing
+   * it edits the original. Folding them together would make one of the two
+   * silently do the other's thing — see `syncedBlock.ts`.
+   */
+  | 'synced'
   | 'divider';
 
 export const NOTE_BLOCK_KINDS: readonly NoteBlockKind[] = [
   'page', 'heading', 'paragraph', 'bullet', 'numbered', 'todo', 'toggle', 'quote',
-  'callout', 'code', 'image', 'bookmark', 'table', 'table-row', 'embed', 'divider',
+  'callout', 'code', 'image', 'bookmark', 'table', 'table-row', 'embed', 'synced', 'divider',
   'database',
 ];
 
@@ -174,6 +185,53 @@ export interface NoteBlock {
   schema?: Stamped<readonly NotePropertyDef[]>;
   /** E3 — a database block's stored projections: table, board, list, calendar, gallery. */
   views?: Stamped<readonly NoteDatabaseView[]>;
+  /**
+   * F3 — this page is a TEMPLATE: something to start from, not something to read.
+   *
+   * A stamped boolean on the page rather than a template type, because B4/E3
+   * already settled the shape — a template is a page, so a separate type would
+   * need its own permissions, its own sync path and its own conflict rules, and
+   * the first question ("can a template contain a database") would need them
+   * reconciled anyway. Marking is the entire difference, and it merges
+   * last-writer-wins like every other flag on a page.
+   */
+  template?: Stamped<boolean>;
+  /**
+   * F3 — the comments on this block, resolved and unresolved.
+   *
+   * Keyed by comment id and stamped PER FIELD inside each entry, which is D4's
+   * rule taken one level down exactly as `props` takes it. Living on the block
+   * rather than as child blocks is C5's requirement, not a storage convenience:
+   * `deleteBlock` takes the subtree, so a comment stored as a child would be
+   * deleted along with the block it is about — and C5's rule is that deleting a
+   * target never deletes the link.
+   *
+   * A tombstoned block keeps its comments, which is what makes "a comment on a
+   * deleted block must not vanish silently" true of the record rather than only
+   * of the renderer. See `comment.ts`.
+   */
+  comments?: Record<string, NoteComment>;
+  /**
+   * F3 — when this block was made, and by which device.
+   *
+   * Not `Stamped`, for the reason `deletedAt` is not: the value IS the stamp,
+   * and there is no payload two devices could disagree about. A creation happens
+   * once, on one device, so the merge takes the EARLIEST claim (`mergeCreation`)
+   * — a value that only ever moves backwards toward the truth and can never be
+   * pushed forward by a later edit.
+   *
+   * It is a stored field rather than a derivation because every derivation is a
+   * lie the moment the block is touched. The earliest surviving stamp is the
+   * obvious one, and moving a block re-stamps `parentId` and `rank` while
+   * editing it re-stamps `text` — so a page created in June would report itself
+   * as created in August, in a column labelled "Created". F3's rule about
+   * metadata is that it is not metadata if it can say something untrue.
+   *
+   * Optional because a file written before this layer has none, and Part F's
+   * forward-compatibility rule says such a file READS rather than throws. What
+   * `blockCreatedAt` does about that is stated there.
+   */
+  createdAt?: Hlc;
   /** Set when a delete was recorded. Deletion is a tombstone, not an absence (C5). */
   deletedAt?: Hlc;
   /**
@@ -263,6 +321,17 @@ export function pageTitleOrDefault(block: NoteBlock): string {
 
 export function isFavourite(block: NoteBlock): boolean {
   return block.favourite?.value === true && isLiveBlock(block);
+}
+
+/**
+ * F3 — is this page something to start FROM rather than something to read?
+ *
+ * The liveness check is part of the answer, not a caller's job: a template in
+ * the trash must not stay in the "new page from…" list, or the one gesture that
+ * makes a template useful resurrects a page somebody deliberately deleted.
+ */
+export function isTemplate(block: NoteBlock): boolean {
+  return block.template?.value === true && isLiveBlock(block);
 }
 
 export function isCollapsed(block: NoteBlock): boolean {

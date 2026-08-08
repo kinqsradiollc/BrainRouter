@@ -32,10 +32,25 @@ import { BlockRow } from './BlockRow.js';
 import { DatabaseBlock } from './DatabaseBlock.js';
 import type { DatabaseHostOps } from './databaseOps.js';
 import {
-  conflictBanner, emptyMessage, indentFor, repairNote, visibleBlocks,
+  conflictBanner, emptyMessage, indentFor, rendersOwnSurface, repairNote,
   type NoteBlockView, type NoteSendTarget, type NoteTreeRepairView,
 } from '../lib/notes/notesView.js';
+import { bodyRows } from '../lib/notes/blockVisibility.js';
+import type { NoteImageDto } from '../lib/notes/imageView.js';
+import type { BookmarkAnswer } from '../lib/notes/bookmarkView.js';
+import type { WorkspaceResolutionDto } from '../lib/notes/embedView.js';
+import type { SyncedReadDto } from '../lib/notes/syncedView.js';
+import type { NoteExportFormatId } from '../lib/notes/exportView.js';
 import { caretForColumn } from '../lib/notes/blockEditing.js';
+import {
+  undoHighlightId, undoMenuLabel, undoNotice as undoNoticeLine, type PageUndoDto,
+} from '../lib/notes/pageUndo.js';
+import { CommentThread } from './CommentThread.js';
+import { TemplatePicker } from './TemplatePicker.js';
+import {
+  orphanedSectionTitle, orphanedThreadNote, type OrphanedThreadDto,
+} from '../lib/notes/commentThread.js';
+import type { TemplateRowDto } from '../lib/notes/templates.js';
 import {
   blockDropIntent, extendSelection, selectedBlockIds,
   type BlockAction, type BlockSelection, type PageDropPosition,
@@ -105,8 +120,53 @@ export interface NotesOps {
   quickFindQuery: (query: string) => void;
   setText: (id: string, text: string) => void;
   setKind: (id: string, kind: string, level?: number) => void;
+  /**
+   * `todo`'s tick — and, for a `table`, whether the first row is the heading
+   * row. One stamped boolean per block, so the table gained a header toggle
+   * without a new field, a new merge rule or a migration (see `tableView.ts`).
+   */
   toggleChecked: (id: string, checked: boolean) => void;
   deleteBlock: (id: string) => void;
+
+  /* F3 — the blocks the slash menu offered and could not draw. */
+  /** A toggle folds its children. The block's own stamped field, so it merges. */
+  setCollapsed: (id: string, collapsed: boolean) => void;
+  /** A row INSIDE a table — its parent is the table, not the page. */
+  addTableRow: (tableId: string, text: string, after?: string) => void;
+  /**
+   * Seed a table with a heading row and one row to type in.
+   *
+   * Both ways into a table go through this: `/table`, and the button an empty
+   * table offers. A second seeding path would let the two produce tables of
+   * different widths, which is the drift F1 is about.
+   */
+  startTable: (tableId: string) => void;
+  /** A column edit, as the one-write-per-row it actually is (B1). */
+  writeRows: (writes: readonly { id: string; text: string }[]) => void;
+  /** D3 — store a picked or pasted picture once, and point the block at it. */
+  attachImage: (blockId: string, file: { name: string; dataBase64: string }) => Promise<string | null>;
+  /** D3 — pull a pasted address into the store through the shared guarded fetch. */
+  storeRemoteImage: (blockId: string, url: string) => Promise<string | null>;
+  readImage: (attachmentId: string) => Promise<NoteImageDto | null>;
+  /** A bookmark's preview, fetched host-side. Resolved, never stored (A3). */
+  previewBookmark: (url: string) => Promise<BookmarkAnswer | null>;
+  /** A3 — an embed's live target, through the same verb the agent calls. */
+  resolveRef: (uri: string) => Promise<WorkspaceResolutionDto | null>;
+  /** F3 — a mirror's state and the SOURCE's rows, resolved host-side. */
+  readSynced: (blockId: string) => Promise<SyncedReadDto | null>;
+  /**
+   * F3 — write this page (or this database's view) out as a file.
+   *
+   * Answers with the sentence to show rather than with the bytes: the saving
+   * already happened, and what the person needs next is what the file does not
+   * carry.
+   */
+  exportPage: (blockId: string, format: NoteExportFormatId) => Promise<string | null>;
+  /**
+   * A bookmark leaves the app, which only the shell can do — and answers with
+   * the REASON when the shell refuses, so a press that opened nothing says so.
+   */
+  openExternal: (url: string) => Promise<string | null>;
 
   /* E1 — the gestures. Every one is core's, reached through the host. */
   splitBlock: (id: string, caret: number) => Promise<BlockOpOutcome | null>;
@@ -153,6 +213,42 @@ export interface NotesOps {
   /** A2 — what links to this block. Asked for when the menu opens, not before. */
   loadBacklinks: (id: string) => void;
 
+  /* F4 — page-level undo. The stack is core's, per page, and the inverse of a
+     split, a merge, an indent, a move or a delete is recorded where the
+     mutation happens rather than in this component. */
+  undoPage: () => Promise<PageUndoDto | null>;
+  redoPage: () => Promise<PageUndoDto | null>;
+  /**
+   * What ⌘Z and ⌘⇧Z would take back on this page right now.
+   *
+   * Read so the control can NAME its step. A permanently enabled "Undo" that
+   * sometimes does nothing is the F1 defect in a toolbar instead of a slash
+   * menu, and this is the surface where people already do not trust undo.
+   */
+  undoState: () => Promise<{ undo: string | null; redo: string | null } | null>;
+
+  /* F3 — comments. Content, so they sync and merge; C5, so deleting the block
+     never deletes them. */
+  addComment: (blockId: string, body: string) => void;
+  /**
+   * A correction, rather than a delete and a repost.
+   *
+   * Reposting would move the remark to the end of the thread and strand the
+   * reply underneath it; an edit merges as prose, so two devices correcting the
+   * same comment keep both versions rather than one silently winning.
+   */
+  editComment: (blockId: string, commentId: string, body: string) => void;
+  setCommentResolved: (blockId: string, commentId: string, resolved: boolean) => void;
+  removeComment: (blockId: string, commentId: string) => void;
+  /** C5 — the threads whose block is in the trash, so they are still findable. */
+  orphanedThreads: OrphanedThreadDto[];
+
+  /* F3 — templates. A template is a PAGE (B4), so this is a mark and a copy. */
+  setTemplate: (pageId: string, template: boolean) => void;
+  listTemplates: () => Promise<TemplateRowDto[]>;
+  /** Returns core's sentence about what was copied and which links moved. */
+  instantiateTemplate: (templateId: string, parentId: string | null) => Promise<string | null>;
+
   /**
    * E3 — databases. Every one of these is a `notes-database-*` handler, so the
    * filter, the sort and the grouping are core's and a row is a page.
@@ -194,8 +290,22 @@ export function NotesMode({
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [linkFor, setLinkFor] = useState<string | null>(null);
   const [selection, setSelection] = useState<BlockSelection | null>(null);
-  const [focus, setFocus] = useState<{ blockId: string; caret: number; token: number } | null>(null);
+  const [focus, setFocus] = useState<
+    { blockId: string; caret: number; token: number; x?: number; edge?: 'first' | 'last'; adopt?: boolean } | null
+  >(null);
   const focusToken = useRef(0);
+  /** F3 — which block's comment thread is open, or null. */
+  const [commentsFor, setCommentsFor] = useState<string | null>(null);
+  /** F4 — the sentence a refused ⌘Z leaves behind, and the block it is about. */
+  const [undoNotice, setUndoNotice] = useState<{ line: string; blockId: string | null } | null>(null);
+  // F3 — what an export just did, and what the file left behind. Separate from
+  // the undo notice because the two can be true at once and neither should
+  // replace the other.
+  const [pageNotice, setPageNotice] = useState<string | null>(null);
+  /** F4 — what the visible Undo/Redo controls would take back, named. */
+  const [undoSteps, setUndoSteps] = useState<{ undo: string | null; redo: string | null }>(
+    { undo: null, redo: null },
+  );
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropHint, setDropHint] = useState<{ id: string | null; position: PageDropPosition } | null>(null);
   const [commands, setCommands] = useState<SlashCommandDto[]>([]);
@@ -210,7 +320,13 @@ export function NotesMode({
   // crosses pages. A filter box that quietly removed lines from other pages
   // would report a page as empty because of a word typed while reading it.
   const body = useMemo(() => pageBodyBlocks(blocks, shell.pageId), [blocks, shell.pageId]);
-  const visible = useMemo(() => visibleBlocks(body, matchIds), [body, matchIds]);
+  // F3 — the fold, the table and the search decided together in
+  // `blockVisibility.ts` rather than layered here, because their interactions
+  // are the whole difficulty: a fold must not hide a hit, and a hit inside a
+  // table has to surface as the table. Nothing here shortens what the store
+  // holds — a folded block is still in `blocks`, still searchable, still
+  // resolvable.
+  const visible = useMemo(() => bodyRows(body, matchIds), [body, matchIds]);
   const banner = conflictBanner(blocks);
   const selectedIds = useMemo(() => selectedBlockIds(visible, selection), [visible, selection]);
 
@@ -222,11 +338,51 @@ export function NotesMode({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const focusBlock = useCallback((id: string | null | undefined, caret: number) => {
+  const focusBlock = useCallback((
+    id: string | null | undefined,
+    caret: number,
+    extra?: { x?: number; edge?: 'first' | 'last'; adopt?: boolean },
+  ) => {
     if (!id) return;
     focusToken.current += 1;
-    setFocus({ blockId: id, caret: Math.max(0, caret), token: focusToken.current });
+    setFocus({
+      blockId: id,
+      caret: Math.max(0, caret),
+      token: focusToken.current,
+      ...(extra?.x === undefined ? {} : { x: extra.x }),
+      ...(extra?.edge === undefined ? {} : { edge: extra.edge }),
+      ...(extra?.adopt ? { adopt: true } : {}),
+    });
   }, []);
+
+  /**
+   * F4 — ⌘Z that reached the end of a block's own typing.
+   *
+   * The answer decides where the caret goes AND that the block must adopt the
+   * store's text: a focused block keeps its draft, so an undo that rewrote it
+   * would be pushed straight back on the next keystroke.
+   */
+  const pageHistory = useCallback((direction: 'undo' | 'redo') => {
+    void (async () => {
+      const answer = direction === 'undo' ? await ops.undoPage() : await ops.redoPage();
+      const line = undoNoticeLine(answer);
+      setUndoNotice(line ? { line, blockId: undoHighlightId(answer) } : null);
+      if (answer?.ok && answer.focusId) focusBlock(answer.focusId, 0, { adopt: true });
+      setUndoSteps(await ops.undoState() ?? { undo: null, redo: null });
+    })();
+  }, [focusBlock, ops]);
+
+  // Re-read after every write, because `revision` is what the container bumps
+  // when the store answered — including a change another device pushed, which
+  // can make a step that WAS undoable no longer safe (F4's guard).
+  useEffect(() => {
+    let cancelled = false;
+    void ops.undoState().then((steps) => {
+      if (!cancelled) setUndoSteps(steps ?? { undo: null, redo: null });
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revision, shell.pageId]);
 
   /** The next block a caret can actually enter — a sub-page row has no editor. */
   const nextEditable = useCallback((fromId: string, direction: -1 | 1): NoteBlockView | null => {
@@ -234,9 +390,11 @@ export function NotesMode({
     if (index < 0) return null;
     for (let at = index + direction; at >= 0 && at < visible.length; at += direction) {
       const candidate = visible[at]!;
-      // A sub-page row, a divider and a database have no text field, so a caret
-      // arriving at one would land nowhere and the arrow would look broken.
-      if (candidate.kind !== 'page' && candidate.kind !== 'divider' && candidate.kind !== 'database') {
+      // A sub-page row, a divider, a database — and, since Part F, an image, a
+      // bookmark, an embed and a table — have no text field, so a caret arriving
+      // at one would land nowhere and the arrow would look broken.
+      if (candidate.kind !== 'page' && candidate.kind !== 'divider'
+        && candidate.kind !== 'database' && !rendersOwnSurface(candidate.kind)) {
         return candidate;
       }
     }
@@ -296,9 +454,15 @@ export function NotesMode({
         const neighbour = nextEditable(block.id, direction);
         if (!neighbour) return;
         setSelection(null);
-        // The column is preserved as closely as the neighbour allows: arriving
-        // in the middle of a word two lines down is not "the same column".
-        focusBlock(neighbour.id, caretForColumn(neighbour.text, intent.column, direction < 0 ? 'last' : 'first'));
+        // F3 — the caret enters at the X it left at, on the neighbour's first or
+        // last VISUAL row. The character column travels as the fallback for a
+        // surface with no layout to hit-test: on a wrapped paragraph a column
+        // names two different places depending on which row you land in.
+        focusBlock(
+          neighbour.id,
+          caretForColumn(neighbour.text, intent.column, direction < 0 ? 'last' : 'first'),
+          { ...(intent.x === undefined ? {} : { x: intent.x }), edge: direction < 0 ? 'last' : 'first' },
+        );
         return;
       }
       case 'select-up':
@@ -330,6 +494,16 @@ export function NotesMode({
       // which is what `set-kind` does for every other kind. Its rank is already
       // spent: core reads `after` when it creates, not later.
       if (at.text.trim().length === 0) ops.deleteBlock(block.id);
+      return;
+    }
+
+    // F3 — `/table` arrives as a GRID rather than as an empty container. A table
+    // whose first gesture is "add the first row" is technically honest and
+    // practically the same disappointment the block used to be: the person
+    // picked a table and got a button.
+    if (plan.action !== 'create-page' && plan.kind === 'table') {
+      ops.setKind(block.id, 'table');
+      ops.startTable(block.id);
       return;
     }
 
@@ -391,6 +565,36 @@ export function NotesMode({
           <div className="notes-actions">
             <input className="filter notes-filter" placeholder="Search this page and what it links to"
               value={query} onChange={(e) => { setQuery(e.target.value); ops.search(e.target.value); }} />
+            {/* F4 — undo, offered as well as bound to ⌘Z, and NAMED. Part E's
+                undo was invisible and text-only, so people found out it did
+                nothing by trying it on the thing they most wanted back. */}
+            <button
+              className="notes-icon-btn"
+              disabled={undoSteps.undo === null}
+              title={undoMenuLabel(undoSteps.undo, 'undo')}
+              aria-label={undoMenuLabel(undoSteps.undo, 'undo')}
+              onClick={() => pageHistory('undo')}
+            >
+              <Icon name="arrow-left" size={12} />
+            </button>
+            <button
+              className="notes-icon-btn"
+              disabled={undoSteps.redo === null}
+              title={undoMenuLabel(undoSteps.redo, 'redo')}
+              aria-label={undoMenuLabel(undoSteps.redo, 'redo')}
+              onClick={() => pageHistory('redo')}
+            >
+              <Icon name="arrow-right" size={12} />
+            </button>
+            {/* F3 — a page saved as a template, and a page started from one.
+                Both live here rather than in the block handle: a template is a
+                PAGE (B4), so the gesture belongs to the page, not to a line. */}
+            <TemplatePicker
+              page={page}
+              pageId={shell.pageId}
+              ops={ops}
+              onOpenPage={ops.openPage}
+            />
           </div>
           {/* Sync runs on its own (B3/D2). The line reports state as a fact;
               offline is the normal mode that happens to be syncing. */}
@@ -398,6 +602,38 @@ export function NotesMode({
         </header>
 
         {banner ? <div className="notes-conflict-banner">{banner}</div> : null}
+
+        {/* F3 — what the export saved AND what it could not carry. The omission
+            list is in the file too; showing it here is what stops somebody
+            checking their backup a month later and finding out then. */}
+        {pageNotice ? (
+          <div className="notes-undo-notice" role="status">
+            <span>{pageNotice}</span>
+            <button onClick={() => setPageNotice(null)}>Dismiss</button>
+          </div>
+        ) : null}
+
+        {/* F4 — a REFUSED ⌘Z always says so. A guard that silently declines is
+            indistinguishable from the "⌘Z did nothing" this whole part exists to
+            remove, and the refusal is the one case where undo has to explain
+            itself: somebody else's edit is underneath. */}
+        {undoNotice ? (
+          <div className="notes-undo-notice" role="status">
+            <span>{undoNotice.line}</span>
+            {undoNotice.blockId ? (
+              <button onClick={() => { focusBlock(undoNotice.blockId, 0, { adopt: true }); setUndoNotice(null); }}>
+                Show me
+              </button>
+            ) : null}
+            <button onClick={() => setUndoNotice(null)}>Dismiss</button>
+          </div>
+        ) : null}
+
+        {/* C5 — comments whose block was deleted. They are kept, so the failure
+            to guard against is that they are kept where nobody looks. */}
+        {ops.orphanedThreads.length > 0 ? (
+          <OrphanedComments threads={ops.orphanedThreads} ops={ops} onRestore={ops.restore} />
+        ) : null}
 
         {repairs.map((repair) => (
           <div key={repair.blockId} className="notes-repair">{repairNote(repair)}</div>
@@ -418,7 +654,19 @@ export function NotesMode({
           onDragOver={(event) => { if (dragId) { event.preventDefault(); setDropHint({ id: null, position: 'inside' }); } }}
           onDrop={(event) => { if (dragId) { event.preventDefault(); dropOn(null, 'inside'); } }}
         >
-          <PageHeader view={header} block={page} ops={ops} />
+          <PageHeader
+            view={header}
+            block={page}
+            ops={{
+              ...ops,
+              // F3 — the export answers with the SENTENCE, and the page shows it.
+              // A file saved silently leaves the person with no way to know what
+              // it could not carry, which is what makes the export honest.
+              exportPage: (blockId, format) => {
+                void ops.exportPage(blockId, format).then((line) => setPageNotice(line));
+              },
+            }}
+          />
 
           {/* E3 — a full-page database. Its children are its ROWS, so the body
               list below would render each of them as a sub-page row beside the
@@ -473,7 +721,18 @@ export function NotesMode({
               symbols={symbols}
               selected={selectedIds.length > 1 && selectedIds.includes(block.id)}
               selectedCount={selectedIds.includes(block.id) ? selectedIds.length : 1}
-              focusRequest={focus && focus.blockId === block.id ? { caret: focus.caret, token: focus.token } : null}
+              focusRequest={focus && focus.blockId === block.id
+                ? {
+                  caret: focus.caret,
+                  token: focus.token,
+                  ...(focus.x === undefined ? {} : { x: focus.x }),
+                  ...(focus.edge === undefined ? {} : { edge: focus.edge }),
+                  ...(focus.adopt ? { adopt: true } : {}),
+                }
+                : null}
+              commentsOpen={commentsFor === block.id}
+              onComments={() => setCommentsFor(commentsFor === block.id ? null : block.id)}
+              onPageHistory={pageHistory}
               onIntent={(target, intent, at) => void runIntent(target, intent, at)}
               onSlashPlan={onSlashPlan}
               onAction={onAction}
@@ -513,6 +772,47 @@ export function NotesMode({
           onClose={ops.closeQuickFind}
         />
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * ADR-029 C5 — the comments on blocks that are no longer there.
+ *
+ * Deleting the target of a link never deletes the link, so these exist whatever
+ * the surface does. What the surface decides is whether they are FINDABLE: a
+ * thread kept in the data and shown nowhere is the same outcome as having
+ * discarded it, which is the thing C5 refuses.
+ *
+ * It offers the restore beside them, because "why was this deleted" is usually
+ * answered by putting the block back and reading it.
+ */
+function OrphanedComments({ threads, ops, onRestore }: {
+  threads: readonly OrphanedThreadDto[];
+  ops: NotesOps;
+  onRestore: (id: string) => void;
+}): React.ReactElement {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="notes-orphan-comments">
+      <button className="notes-orphan-head" onClick={() => setOpen(!open)}>
+        <Icon name={open ? 'chev-down' : 'chev-right'} size={11} />
+        {orphanedSectionTitle(threads)}
+      </button>
+      {open ? threads.map((thread) => (
+        <div key={thread.blockId} className="notes-orphan-thread">
+          <p className="notes-orphan-note">{orphanedThreadNote(thread)}</p>
+          <CommentThread
+            blockId={thread.blockId}
+            comments={thread.comments}
+            ops={ops}
+            readOnly
+          />
+          <button className="notes-orphan-restore" onClick={() => onRestore(thread.blockId)}>
+            Restore the block
+          </button>
+        </div>
+      )) : null}
     </div>
   );
 }

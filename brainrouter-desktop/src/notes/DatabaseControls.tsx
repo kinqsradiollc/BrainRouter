@@ -12,18 +12,22 @@
  * combination the evaluator then reports as skipped, and the person would see a
  * filter that appears to be applied and silently is not.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Icon } from '../icons.js';
+// F2 — core's parser, run in the renderer so the editor reports the same
+// sentence the cell would. A second grammar here would accept a formula the
+// evaluator then refuses, one column at a time.
+import { parseFormula } from '@kinqs/brainrouter-core/notes/editing';
 import { CellEditorFor, Popover, usePopoverAnchor } from './DatabaseCell.js';
 import {
   filterSummary, filterValueEditor, flatFilter, groupSummary, groupableProperties,
   isCompleteFilterRule, nestedFilterNote, newFilterRule, operatorLabel, propertyTypeLabel, sortSummary,
   viewKindHint, viewKindLabel, VIEW_KINDS, writeFilter,
   type DatabasePropertyDto, type DatabaseReadDto, type NoteFilterOperator,
-  type NoteFilterRule, type NotePropertyValue, type NoteSortRule, type NoteViewKind,
-  type PropertyCatalogDto,
+  type NoteFilterRule, type NotePropertyValue, type NoteRollupAggregate, type NoteRollupSpec,
+  type NoteSortRule, type NoteViewKind, type PropertyCatalogDto,
 } from '../lib/notes/database.js';
-import type { DatabaseOps } from './databaseOps.js';
+import type { DatabaseOps, PropertyConfig } from './databaseOps.js';
 
 export interface ControlProps {
   dto: DatabaseReadDto;
@@ -354,6 +358,9 @@ export function PropertiesControl({ dto, ops }: ControlProps): React.ReactElemen
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
   const [type, setType] = useState('text');
+  const [config, setConfig] = useState<PropertyConfig>({});
+  /** Which existing column's expression is open for editing. */
+  const [editing, setEditing] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<PropertyCatalogDto | null>(null);
   const visible = new Set(dto.view.visible);
 
@@ -434,6 +441,16 @@ export function PropertiesControl({ dto, ops }: ControlProps): React.ReactElemen
                     <Icon name="chev-up" size={10} />
                   </button>
                 )}
+                {needsConfig(property.type) ? (
+                  <button
+                    className="db-icon-btn"
+                    title="Change what this column works out"
+                    aria-label={`Change what ${property.name} works out`}
+                    onClick={() => setEditing(editing === property.id ? null : property.id)}
+                  >
+                    <Icon name="edit" size={10} />
+                  </button>
+                ) : null}
                 {property.type === 'title' ? null : (
                   <button
                     className="db-icon-btn"
@@ -444,6 +461,26 @@ export function PropertiesControl({ dto, ops }: ControlProps): React.ReactElemen
                     <Icon name="trash" size={10} />
                   </button>
                 )}
+                {/* F2 — rewriting an expression is safe in a way changing a
+                    TYPE is not: nothing is stored under a derived column, so a
+                    rewrite recomputes from the same data and the worst outcome
+                    is a cell that says why it cannot be worked out. */}
+                {editing === property.id ? (
+                  <div className="db-prop-config">
+                    {property.type === 'formula' ? (
+                      <FormulaField
+                        value={property.formula ?? ''}
+                        catalog={catalog}
+                        onChange={(formula) => { void ops.configureProperty(property.id, { formula }); setEditing(null); }}
+                      />
+                    ) : (
+                      <RollupField
+                        dto={dto} ops={ops} catalog={catalog} value={property.rollup}
+                        onChange={(rollup) => { void ops.configureProperty(property.id, { rollup }); setEditing(null); }}
+                      />
+                    )}
+                  </div>
+                ) : null}
               </div>
             ))}
           </div>
@@ -454,7 +491,11 @@ export function PropertiesControl({ dto, ops }: ControlProps): React.ReactElemen
                 className="filter db-popover-input" autoFocus placeholder="Column name" value={name}
                 onChange={(event) => setName(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key !== 'Enter' || !name.trim()) return;
+                  // F2 — a formula or a rollup is NOT finished at Enter: it
+                  // needs its expression or its configuration, and a column
+                  // added without one renders "this has not been set up yet" in
+                  // every row until somebody goes back for it.
+                  if (event.key !== 'Enter' || !name.trim() || needsConfig(type)) return;
                   void ops.addProperty(name.trim(), type);
                   setName(''); setAdding(false);
                 }}
@@ -476,10 +517,23 @@ export function PropertiesControl({ dto, ops }: ControlProps): React.ReactElemen
                   ))}
                 {catalog ? null : <span className="db-popover-empty">Reading the column types…</span>}
               </div>
+              {/* F2 — the expression and the rollup configuration are part of
+                  ADDING the column, for the reason E6 gives about a row created
+                  without its cells: the window in between is a column that says
+                  it does not work. */}
+              {type === 'formula' ? (
+                <FormulaField value={config.formula ?? ''} catalog={catalog} onChange={(formula) => setConfig({ formula })} />
+              ) : null}
+              {type === 'rollup' ? (
+                <RollupField dto={dto} ops={ops} catalog={catalog} value={config.rollup} onChange={(rollup) => setConfig({ rollup })} />
+              ) : null}
               <button
                 className="db-popover-ok"
-                disabled={!name.trim()}
-                onClick={() => { void ops.addProperty(name.trim(), type); setName(''); setAdding(false); }}
+                disabled={!name.trim() || (needsConfig(type) && !isConfigured(type, config))}
+                onClick={() => {
+                  void ops.addProperty(name.trim(), type, needsConfig(type) ? config : undefined);
+                  setName(''); setConfig({}); setAdding(false);
+                }}
               >
                 Add the column
               </button>
@@ -613,6 +667,198 @@ function PropertyMenu({ label, properties, onPick }: {
         </button>
       ))}
       {properties.length === 0 ? <span className="db-popover-empty">Nothing left to add.</span> : null}
+    </div>
+  );
+}
+
+/* ------------------------------------------------- F2 — the derived columns */
+
+/** Types that are not finished until they are configured. */
+function needsConfig(type: string): boolean {
+  return type === 'formula' || type === 'rollup';
+}
+
+function isConfigured(type: string, config: PropertyConfig): boolean {
+  if (type === 'formula') return (config.formula ?? '').trim().length > 0;
+  if (type === 'rollup') return !!config.rollup?.relation && !!config.rollup.aggregate;
+  return true;
+}
+
+/**
+ * The expression, checked AS IT IS TYPED.
+ *
+ * The parser is core's and it is pure, so the renderer runs the same one the
+ * evaluator does — there is no second grammar to disagree with. That is what
+ * lets the editor say "there is an opening bracket with no closing one" while
+ * somebody is still typing, instead of saving a column that then reports the
+ * same sentence in four hundred cells.
+ *
+ * It is checked and never EVALUATED here: a formula's value depends on a row,
+ * and this editor does not have one.
+ */
+function FormulaField({ value, catalog, onChange }: {
+  value: string;
+  catalog: PropertyCatalogDto | null;
+  onChange: (formula: string) => void;
+}): React.ReactElement {
+  const [draft, setDraft] = useState(value);
+  const problem = useMemo(() => {
+    if (draft.trim().length === 0) return null;
+    const parsed = parseFormula(draft);
+    return parsed.ok ? null : parsed.error.message;
+  }, [draft]);
+
+  return (
+    <div className="db-formula">
+      <textarea
+        className="filter db-formula-input"
+        rows={3}
+        placeholder={'Cost * Quantity'}
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+      />
+      {problem
+        ? <span className="db-formula-problem">{problem}</span>
+        : <span className="db-popover-note">Refer to a column by its name, or with prop(&quot;Name&quot;).</span>}
+      <div className="db-op-row db-formula-fns">
+        {(catalog?.functions ?? []).slice(0, 40).map((fn) => (
+          <button
+            key={fn.name}
+            className="db-op"
+            title={fn.summary}
+            onClick={() => setDraft(`${draft}${fn.name}(`)}
+          >
+            {fn.name}
+          </button>
+        ))}
+      </div>
+      <button
+        className="db-popover-ok"
+        disabled={draft.trim().length === 0 || !!problem}
+        onClick={() => onChange(draft.trim())}
+      >
+        Use this formula
+      </button>
+    </div>
+  );
+}
+
+const AGGREGATE_LABELS: Record<string, string> = {
+  count: 'How many',
+  sum: 'Total',
+  average: 'Average',
+  min: 'Smallest',
+  max: 'Largest',
+  earliest: 'Earliest',
+  latest: 'Latest',
+  'show-original': 'Show them',
+};
+
+/**
+ * What a rollup follows, and what it does with what it finds.
+ *
+ * The TARGET list comes from `notes-rollup-targets`, which walks where the
+ * chosen relation actually points. A list of this database's own columns would
+ * be the wrong database entirely, and a fixed list would offer a column the
+ * other end does not have — an offer the product cannot honour, which is the
+ * defect F1 is about.
+ */
+function RollupField({ dto, ops, catalog, value, onChange }: {
+  dto: DatabaseReadDto;
+  ops: DatabaseOps;
+  catalog: PropertyCatalogDto | null;
+  value: NoteRollupSpec | undefined;
+  onChange: (rollup: NoteRollupSpec) => void;
+}): React.ReactElement {
+  const relations = dto.properties.filter((property) => property.type === 'relation');
+  const [spec, setSpec] = useState<NoteRollupSpec>(value ?? {
+    relation: relations[0]?.id ?? '',
+    target: '',
+    aggregate: 'count',
+  });
+  const [targets, setTargets] = useState<Array<{ id: string; name: string; type: string }>>([]);
+  const [looked, setLooked] = useState(false);
+
+  const lookUp = ops.rollupTargets;
+  useEffect(() => {
+    if (!spec.relation) { setTargets([]); setLooked(true); return; }
+    let cancelled = false;
+    setLooked(false);
+    void lookUp(spec.relation)
+      .then((answer) => {
+        if (cancelled) return;
+        setTargets(answer.properties ?? []);
+        setLooked(true);
+      })
+      .catch(() => { if (!cancelled) setLooked(true); });
+    return () => { cancelled = true; };
+  }, [spec.relation, lookUp]);
+
+  if (relations.length === 0) {
+    return (
+      <p className="db-popover-note">
+        A rollup summarises rows a relation points at, and this database has no relation column yet.
+      </p>
+    );
+  }
+
+  return (
+    <div className="db-rollup">
+      <span className="db-popover-note">Follow</span>
+      <div className="db-op-row">
+        {relations.map((relation) => (
+          <button
+            key={relation.id}
+            className={`db-op${relation.id === spec.relation ? ' is-on' : ''}`}
+            onClick={() => setSpec({ ...spec, relation: relation.id, target: '' })}
+          >
+            {relation.name}
+          </button>
+        ))}
+      </div>
+      <span className="db-popover-note">and</span>
+      <div className="db-op-row">
+        {(catalog?.aggregates ?? []).map((aggregate) => (
+          <button
+            key={aggregate}
+            className={`db-op${aggregate === spec.aggregate ? ' is-on' : ''}`}
+            onClick={() => setSpec({ ...spec, aggregate: aggregate as NoteRollupAggregate })}
+          >
+            {AGGREGATE_LABELS[aggregate] ?? aggregate}
+          </button>
+        ))}
+      </div>
+      {spec.aggregate === 'count' ? null : (
+        <>
+          <span className="db-popover-note">of</span>
+          <div className="db-op-row">
+            {targets.map((target) => (
+              <button
+                key={target.id}
+                className={`db-op${target.id === spec.target ? ' is-on' : ''}`}
+                onClick={() => setSpec({ ...spec, target: target.id })}
+              >
+                {target.name}
+              </button>
+            ))}
+            {/* Honest about WHY there is nothing to pick: a relation nobody has
+                filled in yet has no other end to read columns from, which is a
+                different situation from a lookup that failed. */}
+            {looked && targets.length === 0 ? (
+              <span className="db-popover-empty">
+                Nothing is linked through this column yet, so there are no columns to summarise.
+              </span>
+            ) : null}
+          </div>
+        </>
+      )}
+      <button
+        className="db-popover-ok"
+        disabled={!spec.relation || (spec.aggregate !== 'count' && !spec.target)}
+        onClick={() => onChange(spec)}
+      >
+        Use this rollup
+      </button>
     </div>
   );
 }
