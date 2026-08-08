@@ -51,6 +51,27 @@ export interface AttachmentRecord {
   extractedText?: string;
   /** Whether the extracted text was truncated to a cap. */
   textTruncated?: boolean;
+  /**
+   * ADR-030 D3 — what the parse could NOT read, in the product's own voice.
+   *
+   * Separate from `extractedText` because the two have different provenance and
+   * must be presented differently: the extracted body is the file talking and is
+   * fenced as untrusted data, while this sentence is assembled from page counts
+   * and fixed strings and is presented as our own. A scanned document has an
+   * empty `extractedText` and this field is the entire answer — "no text layer
+   * exists" rather than an empty document.
+   */
+  extractionNotice?: string;
+  /**
+   * ADR-030 Q4 — `brainrouter://document/outline/<id>`, when the whole parsed
+   * document was stored beside the original bytes.
+   *
+   * `extractedText` is a BOUNDED extract; this is where the rest is. Present
+   * only when the artifact was actually written, because the turn cites this
+   * reference and a citation to a file that is not there is worse than no
+   * citation at all.
+   */
+  documentRef?: string;
   /** Image pixel width, when known. */
   width?: number;
   /** Image pixel height, when known. */

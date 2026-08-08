@@ -22,6 +22,10 @@
 import { asUntrustedText, fenceMarkerPattern } from '../../planner/agentContext.js';
 import type { NoteDatabaseSummary } from '../../notes/databaseProjection.js';
 import type { NoteBlockContext } from '../../notes/noteTree.js';
+// ADR-030 Q4. Type-only: the shapes come from `attachment/document/`, the
+// rendering decisions stay here with every other decision about what a
+// resolution is allowed to put in front of a model.
+import type { DocumentOutlineState, DocumentPartState } from '../../attachment/document/artifact.js';
 import {
   formatWorkspaceRef, renderWorkspaceResolution,
   MAX_WORKSPACE_REF_LENGTH, type WorkspaceResolution,
@@ -63,6 +67,14 @@ function isNoteContext(state: unknown): state is NoteBlockContext {
 
 function isDatabaseSummary(state: unknown): state is NoteDatabaseSummary {
   return !!state && typeof state === 'object' && 'columns' in state && 'totalRows' in state;
+}
+
+function isDocumentOutline(state: unknown): state is DocumentOutlineState {
+  return !!state && typeof state === 'object' && 'documentOutline' in state;
+}
+
+function isDocumentPart(state: unknown): state is DocumentPartState {
+  return !!state && typeof state === 'object' && 'documentPart' in state;
 }
 
 /** E3's rows are wide and repetitive; a cell is a value, never a paragraph. */
@@ -158,6 +170,68 @@ export function untrustedResolutionLines(resolution: WorkspaceResolution, nowMs 
     if (state.omittedLabel) lines.push(`  (${asUntrustedWorkspaceText(state.omittedLabel, 80)})`);
   } else if (isDatabaseSummary(state)) {
     lines.push(...databaseLines(state));
+  } else if (isDocumentOutline(state)) {
+    lines.push(...documentOutlineLines(state.documentOutline));
+  } else if (isDocumentPart(state)) {
+    lines.push(...documentPartLines(state.documentPart));
+  }
+  return lines;
+}
+
+/** A part's own text is prose, so it gets the same per-line budget a block's does. */
+const MAX_DOCUMENT_LINE = 400;
+
+/**
+ * ADR-030 Q4 — the table of contents, never the contents.
+ *
+ * Exactly Q3's rule for notes applied to a document: the outline says what the
+ * parts ARE and where they are, and costs a line each; asking for one costs its
+ * text. An outline that inlined the parts would put the whole document back into
+ * the turn, which is the thing the artifact exists to avoid.
+ *
+ * D3's notice is repeated here rather than assumed to have been seen at ingest,
+ * because a reference can be resolved in a session that never saw the upload —
+ * and "pages 9-11 are scans" is exactly the fact a model reading part 8 needs.
+ * It is neutralised despite being ours: it arrives through a JSON file on disk,
+ * and the invariant this module holds is that nothing inside the fence reaches
+ * a model un-neutralised.
+ */
+function documentOutlineLines(outline: DocumentOutlineState['documentOutline']): string[] {
+  const lines: string[] = [];
+  const pages = outline.pageCount !== undefined ? `, ${outline.pageCount} pages` : '';
+  lines.push(`  ${asUntrustedWorkspaceText(outline.classification, 40)} document${pages}`
+    + ` · ${outline.parts.length} addressable part${outline.parts.length === 1 ? '' : 's'}`);
+  if (outline.notice) lines.push(`  ${asUntrustedWorkspaceText(outline.notice, MAX_DOCUMENT_LINE)}`);
+  for (const part of outline.parts) {
+    const where = part.page !== undefined ? `page ${part.page}` : `part ${part.index}`;
+    const kind = part.kind && part.kind !== 'text' ? ` [${asUntrustedWorkspaceText(part.kind, 20)}]` : '';
+    lines.push(`  ${asUntrustedWorkspaceText(part.uri, MAX_WORKSPACE_REF_LENGTH)} — ${where}`
+      + `${kind} · ${part.chars} chars · ${asUntrustedWorkspaceText(part.preview, 100)}`);
+  }
+  // The count, for the same reason a page's is given: knowing there IS a rest is
+  // what stops a list being read as the whole document.
+  if (outline.omittedLabel) lines.push(`  (${asUntrustedWorkspaceText(outline.omittedLabel, 120)})`);
+  return lines;
+}
+
+/**
+ * One part, and the way onward.
+ *
+ * The text is fenced per line for the reason the attachment extract is: this is
+ * the document talking, it can say "ignore your instructions", and flattening it
+ * to one line would destroy the structure that made parsing it worth doing.
+ */
+function documentPartLines(part: DocumentPartState['documentPart']): string[] {
+  const lines: string[] = [];
+  const where = part.page !== undefined ? `page ${part.page}` : `part ${part.index}`;
+  lines.push(`  ${where} of ${part.partCount}`
+    + (part.kind && part.kind !== 'text' ? ` — ${asUntrustedWorkspaceText(part.kind, 20)}, no text layer` : ''));
+  for (const line of part.text.split('\n')) {
+    lines.push(`  ${asUntrustedWorkspaceText(line, MAX_DOCUMENT_LINE)}`);
+  }
+  if (part.truncated) lines.push('  (this part was cut at its character budget)');
+  if (part.nextUri) {
+    lines.push(`  next: ${asUntrustedWorkspaceText(part.nextUri, MAX_WORKSPACE_REF_LENGTH)}`);
   }
   return lines;
 }
