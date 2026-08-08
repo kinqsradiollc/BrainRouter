@@ -1,6 +1,6 @@
 # ADR-030 — Documents the agent can actually read
 
-**Status:** PROPOSED — planning only. Nothing here is built, and nothing should be until this is approved.
+**Status:** ACCEPTED — approved by the owner, who delegated the open questions. §5 answers them from a spike rather than from judgement.
 **Depends on:** ADR-027 (attachments, input modality), ADR-029 (notes, the workspace address space).
 
 ---
@@ -68,24 +68,36 @@ characters in roughly the right order*.
 It does **not** give reading order, tables, or headings. It should not be described as solving this
 ADR — it removes the most embarrassing failure while the real decision is made.
 
-### D2 · Build the document model, or adopt one
+### D2 · Adopt a published parser, and take the **WebAssembly** build everywhere
 
-The honest options:
+Measured, not assumed. Both were run against `presentation/BrainRouter-Investor-Deck.pdf` — 433 KB,
+13 pages, one of our own documents:
 
-| | |
+| | Result |
 |---|---|
-| **Build it in TypeScript** | Full control, no native artifacts, and we own every encoding bug. This is a year of other people's accumulated edge cases — CMaps, Type0 fonts, malformed xrefs, column detection — and we would be learning them in production. |
-| **Adopt a published parser** *(recommended)* | A mature Rust implementation with Node and WebAssembly bindings exists under a permissive licence, benchmarked well ahead of the common Python tooling on reading order and table structure. We would get classification, positioned extraction, and Markdown conversion at once. |
+| **What we ship today** | 20,000 characters of binary noise — `2 0 obj bl0$ s eI6 U"k' ;r @\` M_<2% F-x{ t6Qa …` — filling the entire cap |
+| **Reference, native binding** | `TextBased`, **41 ms**, 5,104 characters of clean Markdown with real headings |
+| **Reference, WebAssembly** | `TextBased`, **116 ms**, byte-identical output |
 
-**The cost of adopting is native artifacts**, and that is a real cost for us specifically, because we
-ship four ways: an npm CLI, an Electron desktop app on three platforms, a Docker backend, and a
-Cloudflare-hosted dashboard. A native binding is fine in the first three and impossible in the
-fourth; the WebAssembly build covers the fourth and the browser. **Whatever we choose must degrade to
-D1 when the binary for a platform is absent**, rather than failing the attachment.
+The first row is the ADR. Attach that deck today and ask a question about it, and the agent answers
+from twenty thousand characters of scavenged binary.
 
-> **A document parser that is unavailable on one platform must produce a worse answer there, never an
-> error.** Someone on an unsupported architecture attaching a PDF should get inflated text and a note
-> saying structure was unavailable.
+**The native binding is rejected, and the reason is our own build matrix.** Its prebuilt platforms
+are linux x64/arm64 (gnu and musl), darwin-arm64 and win32-x64 — and
+
+> **there is no `darwin-x64` build, while our desktop ships macOS `x64` dmg and zip.**
+
+Adopting it natively would mean Intel Mac users get the fallback while everyone else gets documents,
+and a `.node` binary inside a notarised hardened-runtime app is signing work on top. WebAssembly is
+one artifact for every target we have, including the Cloudflare-hosted dashboard and the browser.
+
+**116 ms against 41 ms is not a real cost at this size**, and paying it buys the deletion of an entire
+class of problem: no per-platform matrix, no postinstall binary download, no architecture that
+silently degrades.
+
+> **A document parser that is unavailable must produce a worse answer, never an error.** D1 remains
+> the floor beneath it: if the module fails to load for any reason, the attachment still yields
+> inflated text plus a line saying structure was unavailable.
 
 ### D3 · Classification decides routing, and the answer is stated
 
@@ -138,21 +150,47 @@ contract can be linked from a planner item, a Track work item, or a meeting.
 
 ---
 
-## 5. Open questions
+## 5. Open questions — answered by spike
 
-1. **Does the native binding survive our packaging?** The Electron build, the npm publish, and the
-   Docker image all have to carry or fetch a per-platform artifact. This needs a real spike, not an
-   assumption — it is the question most likely to invalidate D2's recommendation.
-2. **What is the size budget?** The dashboard is Cloudflare-hosted and the desktop renderer has a
-   1,750,000-byte initial-JavaScript limit that ADR-029 already had to lazy-load Notes to stay under.
-   A WebAssembly parser must be lazy and must be measured before it is adopted.
-3. **Where does parsing run for the hosted product?** In the backend, per tenant, with the same
-   bounded-queue treatment ADR-027 D12 gave other work — or in the client, which keeps the document
-   off our infrastructure entirely. These have different privacy stories and the answer should be
-   chosen deliberately.
-4. **What happens to the 20,000-character cap?** It exists because context is finite, not because
-   documents are short. With real structure available, the better answer is probably a summary plus
-   addressable sections the agent can ask for — which is ADR-029's reference system doing work.
+The owner delegated these. Each was settled by running the thing, and the first one **did** change
+the recommendation, exactly as predicted.
+
+### Q1 · Does the native binding survive our packaging? · **No — so we do not use it**
+
+Prebuilts exist for linux x64/arm64 (gnu + musl), darwin-arm64 and win32-x64-msvc. **`darwin-x64` is
+absent and our desktop ships it** (`build.mac.target` lists `arch: ["arm64", "x64"]` for both dmg and
+zip). Windows arm64 is missing too.
+
+That is the invalidation §5 was written to look for. WebAssembly moots it: one artifact, every
+target, no matrix.
+
+### Q2 · What is the size budget? · **4.6 MB — so it never enters the renderer**
+
+The `.wasm` is 4,591,331 bytes. The desktop renderer's initial-JavaScript limit is 1,750,000 and
+ADR-029 had to lazy-load Notes to stay under it, so this is not a question of lazy-loading harder:
+
+> **The parser runs in the Electron MAIN process, never the renderer.** The renderer asks the host
+> and gets Markdown back.
+
+Same conclusion for the dashboard from the other direction — 4.6 MB does not belong in an edge
+bundle, so the dashboard asks the backend.
+
+### Q3 · Where does parsing run? · **Where the document already is**
+
+- **Desktop** — in the main process, locally. The document never leaves the machine, which is the
+  strongest privacy answer available and costs nothing because the parser is local anyway.
+- **Hosted** — in the backend, per tenant, bounded the way ADR-027 D12 bounds other work.
+- **Dashboard** — calls the backend. It is a viewer, not a parser.
+
+### Q4 · What happens to the 20,000-character cap? · **It stops being the whole answer**
+
+The cap exists because context is finite, not because documents are short — and today it is filled
+with noise, which is the worst possible use of it.
+
+With real structure the document becomes **an artifact with addressable parts**: the turn gets a
+bounded, structured extract, and the rest stays reachable at a `brainrouter://` reference the agent
+can ask for by section. That is ADR-029's reference system doing the work it exists for, rather than
+a bigger number.
 
 ---
 
