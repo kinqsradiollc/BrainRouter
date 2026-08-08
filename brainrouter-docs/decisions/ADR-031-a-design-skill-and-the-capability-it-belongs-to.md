@@ -59,29 +59,44 @@ handed *before* it starts.
 
 ## 3. The finding this investigation turned up
 
-**The `design` profile enables five skills that do not exist.**
+The `design` profile enables `a11y-skill`, `taste-skill`, `concept-diagrams`, `redesign-skill` and
+`output-skill`, and **`packages/core/skills/` — the set that actually ships — contains none of them.**
 
-`profiles.ts` lists `a11y-skill`, `taste-skill`, `concept-diagrams`, `redesign-skill` and
-`output-skill` as enabled for that profile. `packages/core/skills/` contains five categories —
-`agent`, `api`, `codebase`, `lifecycle`, `qa` — and **none of those five skills is among them**. Only
-`planning-skill` and `handover-skill`, which the design pack borrows from `agent/`, are real.
+They are not missing from the repository. **All five are in the tracked root `skills/` library**
+(`skills/design/…`, `skills/api/a11y-skill`). They are missing from the *bundle*, which is a
+different and more interesting problem:
 
-> Someone choosing the Design preset today gets a profile that names five skills the loader cannot
-> find.
+| Location | Contents | Ships |
+|---|---|---|
+| `skills/` — the library, tracked | **54 skills** | **nowhere** |
+| `packages/core/skills/` | **13** copies | in `@kinqs/brainrouter-core`'s npm `files` |
+| `brainrouter-cli/skills/` | **13** copies | in the CLI's npm `files` |
+| `brainrouter/skills/` | **0** — the directory does not exist | yet `"skills"` is in its npm `files` list |
 
-That is the same defect ADR-029 F1 named for block kinds, in the profile system: a thing offered that
-is not there. It was not introduced by this investigation and it is not the skill's fault — but it
-changes what adopting the skill means, because three of the five gaps are exactly what it covers:
+So:
 
-| Missing skill | Covered by |
-|---|---|
-| `taste-skill` | the default verb and its checks |
-| `redesign-skill` | `redesign` |
-| `output-skill` | `study`, which emits a portable `design.md` |
+> **41 of our 54 skills reach nobody, and the 13 that do exist three times, hand-copied.**
 
-`a11y-skill` and `concept-diagrams` are **not** covered and would remain missing. Accessibility is a
-different discipline from visual craft, and pretending one skill covers both is how a profile ends up
-lying about what it can do.
+I checked whether the copies have drifted: they are byte-identical today, in both places. That is
+the good news and the reason to act now — this is a duplication that has not yet cost anything, and
+every one of this codebase's recent bugs of this shape (two merge implementations, two neutralisers,
+two SSRF guards) was byte-identical right up until it was not.
+
+The profile is therefore not lying about skills that were never written. It is naming skills that
+exist, that someone wrote, and that the distribution mechanism never carried. Three of them are what
+this ADR's skill covers:
+
+| Named by the design profile | In the library | Covered by the new skill |
+|---|---|---|
+| `taste-skill` | yes | the default verb and its checks |
+| `redesign-skill` | yes | `redesign` |
+| `output-skill` | yes | `study`, which emits a portable `design.md` |
+| `concept-diagrams` | yes | no — a different discipline |
+| `a11y-skill` | yes | no — accessibility is not visual craft |
+
+Which means the smaller half of this ADR is adding a skill, and the larger half is **fixing how a
+skill gets from the library to a person.** Adding one more file to a library that ships nothing would
+change nothing at all.
 
 ---
 
@@ -92,16 +107,45 @@ lying about what it can do.
 Per §1. It then reaches `engineering` by default and `design` when enabled, and nothing about the
 profile system changes.
 
-### D2 · Vendor, depend, or write our own
+### D2 · One library, generated copies, and a test that they match
 
-| | |
-|---|---|
-| **Depend on the npm package** | updates arrive for free; a runtime dependency on a third party for a file the agent reads at turn time, and our skills are currently all first-party files on disk |
-| **Vendor a copy** *(recommended)* | a skill is a text file, not a library — it has no API to drift. Copying it in keeps the loader path unchanged and the content reviewable in our own diff. The cost is that we own updating it. |
-| **Write our own, informed by it** | most control, most work, and we would be re-deriving a rule set someone has already tuned against real output |
+The copies are not the problem — **npm needs real files**, a symlink does not survive `npm pack` and
+does not exist on Windows, and both packages genuinely have to carry the skills they offer. The
+problem is that the copies are made *by hand*, so nothing notices when one is edited and the other is
+not.
 
-**Vendoring is recommended because the artifact is prose.** The thing that makes a dependency worth
-its cost — someone else fixing bugs in code you run — does not apply to a document the model reads.
+> **`skills/` at the root is the single source. Every other copy is generated from it and verified
+> against it.**
+
+Concretely, and in the order that matters:
+
+1. **A build step copies** the selected set into `packages/core/skills/` and `brainrouter-cli/skills/`
+   — same mechanism the repo already uses to place other assets before packing.
+2. **A test asserts the copies are byte-identical to their source**, and fails if they are not. This
+   is the load-bearing half. A generated copy with no check is a hand copy that also has a script.
+3. **The selection is declared once** — which of the 54 each package carries — rather than being
+   implied by whatever happens to be in the directory.
+
+Doing (1) without (2) would be the same class of mistake this ADR is documenting: a mechanism that
+looks like it guarantees agreement and only actually guarantees it on the day someone runs it.
+
+### D2b · Ship more than thirteen
+
+Separately from the mechanism: **41 skills in the library reach nobody.** Deciding which of them
+belong in the bundle is a product judgement per skill, not something to settle in one line here — but
+the five the design profile already names are not a judgement call. It names them; they should exist.
+
+`brainrouter/package.json` also lists `"skills"` in its `files` while `brainrouter/skills/` does not
+exist. Harmless today, and exactly the kind of entry that quietly ships nothing when someone later
+assumes it works.
+
+### D2c · The new skill enters the library, not the bundle
+
+Once the above exists, adopting the design skill is unremarkable: it becomes an entry in `skills/`
+like the other 54, selected into whichever packages carry it. **Vendoring rather than depending on
+the npm package is right for the same reason it is right for the rest of the library** — a skill is
+prose, not code. The thing that makes a dependency worth its cost, someone else fixing bugs in code
+you run, does not apply to a document the model reads.
 
 ### D3 · The licence travels, and it needs somewhere to live
 
@@ -149,12 +193,18 @@ than producing two formats for one purpose.
 
 ## 6. How this will be judged
 
-Not by whether the skill is installed. **The test is two different briefs.**
+Three tests, and the first is the one that decides whether any of this mattered.
 
-Ask for a landing page for a sourdough app and a landing page for an extraction API, in a workspace
-with the capability on. If the two come back as recognisably different structures rather than one
-template in two colours, the skill is doing what it exists to do. If they come back as siblings, we
-have added a file and changed nothing.
+**1 · Two different briefs.** Ask for a landing page for a sourdough app and a landing page for an
+extraction API, in a workspace with the capability on. If they come back as recognisably different
+structures rather than one template in two colours, the skill is doing what it exists to do. If they
+come back as siblings, we have added a file and changed nothing.
 
-Second, and easier to forget: **picking the Design preset must stop naming skills that are not
-there** — either because they exist by then, or because the profile stops claiming them.
+**2 · Picking the Design preset offers skills that are there.** Today it names five that the shipped
+bundle does not contain. Either they ship, or the profile stops claiming them — an offer the product
+cannot honour is worse than an absence (ADR-029 F1), and that rule does not stop at block kinds.
+
+**3 · Editing a skill in one place changes it everywhere, or fails loudly.** Change a line in
+`skills/`, build, and the copies in `packages/core` and `brainrouter-cli` must either follow or break
+the build. Verify it by *breaking* it — edit one copy by hand and confirm the check fails. A sync
+mechanism nobody has watched fail is a sync mechanism nobody knows works.
