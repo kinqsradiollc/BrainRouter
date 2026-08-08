@@ -15,6 +15,23 @@ import type { Request, Response, NextFunction } from "express";
 
 const DEFAULT_CORS_ORIGIN = "http://localhost:3000";
 
+/**
+ * Response headers a cross-origin caller is allowed to READ.
+ *
+ * Without this a browser sees only the CORS-safelisted set, so a download's own
+ * filename and the notes export's "this file is a prefix" flag are invisible to
+ * the dashboard — the endpoint would send the truth and the surface would have
+ * no way to receive it. Nothing here carries user text: `Content-Disposition`'s
+ * filename is character-classed by core's `exportFilename`, and the export
+ * headers are counts and a fixed enum.
+ */
+const EXPOSED_HEADERS = [
+  "Content-Disposition",
+  "X-BrainRouter-Export-Count",
+  "X-BrainRouter-Export-Truncated",
+  "X-BrainRouter-Export-Omissions",
+].join(", ");
+
 /** Parse `BRAINROUTER_CORS_ORIGIN` into an allowlist (comma-separated). */
 export function resolveCorsAllowlist(env: NodeJS.ProcessEnv = process.env): string[] {
   const raw = env.BRAINROUTER_CORS_ORIGIN?.trim();
@@ -53,6 +70,7 @@ export function corsMiddleware(allowlist: string[] = resolveCorsAllowlist(), opt
     if (allowed) {
       res.setHeader("Access-Control-Allow-Origin", origin!);
       res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.setHeader("Access-Control-Expose-Headers", EXPOSED_HEADERS);
     }
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, PATCH, DELETE");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, mcp-session-id, X-BrainRouter-Org, X-BrainRouter-Session");

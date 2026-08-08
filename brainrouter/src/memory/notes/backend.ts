@@ -34,16 +34,18 @@
 import { randomUUID } from "node:crypto";
 import { memoryEngine } from "../engine.js";
 import {
-  acquireBlockLease, blockReferences, blockReferenceText, boundCommentAuthor, boundCommentBody,
-  contentWithoutRefs, DATABASE_BLOCK_KIND,
-  datePropertyDay, fenceBlockWrite,
-  FIRST_RANK, isLiveBlock, MAX_COMMENT_LENGTH, MAX_HEADING_LEVEL, mergeNoteBlock, NOTE_BLOCK_KINDS,
+  acquireBlockLease, blockComments, blockReferences, blockReferenceText, boundCommentAuthor,
+  boundCommentBody, contentWithoutRefs, DATABASE_BLOCK_KIND,
+  datePropertyDay, exportFormatsFor, exportNote, fenceBlockWrite,
+  FIRST_RANK, isLiveBlock, isSyncedBlock, MAX_COMMENT_LENGTH, MAX_EXPORT_BLOCKS, MAX_EXPORT_CHARS,
+  MAX_HEADING_LEVEL, mergeNoteBlock, newCommentId, NOTE_BLOCK_KINDS,
   projectDatabase, rankBetween, readDatabase, releaseBlockLease,
-  renewBlockLease, resolveBlockConflict, validateDatabaseFields, BLOCK_LEASE_MS,
+  renewBlockLease, resolveBlockConflict, subtreeBlockIds, syncedSourceId, validateDatabaseFields,
+  BLOCK_LEASE_MS,
   type BlockFence, type BlockLease, type BlockWritePath, type DatabaseProjection, type Hlc,
   type LeaseClaim, type LeaseOutcome, type NoteComment, type NoteDatabase, type NoteDatabaseView,
-  type NoteBlock, type NoteBlockKind, type NotePropertyDef, type NotePropertyValue,
-  type Stamped,
+  type NoteBlock, type NoteBlockKind, type NoteExport, type NoteExportFormat,
+  type NotePropertyDef, type NotePropertyValue, type Stamped,
 } from "@kinqs/brainrouter-core/notes";
 import {
   extractWorkspaceRefs, parseWorkspaceRef, workspaceRefKey,
@@ -322,7 +324,12 @@ export async function readPage(
   userId: string,
   pageId: string,
   limit = 1000,
-): Promise<{ page: NoteBlock; blocks: NoteBlock[]; truncated: boolean } | null> {
+): Promise<{
+  page: NoteBlock;
+  blocks: NoteBlock[];
+  truncated: boolean;
+  exportFormats: NoteExportFormat[];
+} | null> {
   const page = await getBlock(orgId, userId, pageId);
   if (!page || !isLiveBlock(page)) return null;
   const rows = await store().listNoteChildBlocks(orgId, userId, pageId, limit + 1);
@@ -331,6 +338,10 @@ export async function readPage(
     page,
     blocks: blocks.slice(0, limit),
     truncated: blocks.length > limit,
+    // F1 — the menu is told what this block can honestly be written as, rather
+    // than deciding for itself. A surface that guessed would eventually offer
+    // "Export as CSV" on a page of paragraphs, which has no honest answer.
+    exportFormats: exportFormatsFor(page),
   };
 }
 
@@ -347,6 +358,8 @@ export interface DatabaseViewResult {
   /** How many live rows the database has, against how many this read looked at. */
   rowsInDatabase: number;
   rowsRead: number;
+  /** F1 — what a download menu may offer for this block, decided by core. */
+  exportFormats: NoteExportFormat[];
 }
 
 /**
@@ -390,6 +403,7 @@ export async function readDatabaseView(
     views: database.views.map((candidate) => ({ id: candidate.id, name: candidate.name, kind: candidate.kind })),
     rowsInDatabase: await store().countNoteDatabaseRows(orgId, userId, databaseId),
     rowsRead: rowBlocks.length,
+    exportFormats: exportFormatsFor(block),
   };
 }
 
@@ -1055,6 +1069,255 @@ export async function backlinksTo(
 /** Every reference one block currently makes. Derived; never a stored back-edge. */
 export async function referencesFrom(orgId: string, userId: string, blockId: string): Promise<NoteRefRow[]> {
   return store().listNoteRefsFrom(orgId, userId, blockId);
+}
+
+/* ------------------------------------------------------------- F3: export */
+
+/**
+ * How many synced sources one export may look up the owner of.
+ *
+ * A4 needs one `findNoteBlockInOrg` per mirror pointing outside this corpus, and
+ * that is a query per block in the worst case. The bound is generous for a
+ * document and small enough that a page built out of mirrors cannot turn one
+ * download into a query storm; past it the remaining mirrors get the same answer
+ * a mirror of an unknown block gets, which is a sentence rather than a title.
+ */
+const MAX_EXPORT_VISIBILITY_CHECKS = 64;
+
+export type NoteExportOutcome =
+  | { ok: true; file: NoteExport }
+  | { ok: false; reason: "not_found" }
+  /** F1 — the refusal NAMES what this block can be written as, so a menu can stop offering the rest. */
+  | { ok: false; reason: "wrong_format"; formats: NoteExportFormat[] };
+
+/**
+ * A4 over an export — who may see the blocks this document mirrors.
+ *
+ * A synced block whose source is not in this person's own corpus is the one
+ * place an export can reach across the `(org_id, user_id)` partition, and the
+ * three answers are different sentences: a source they own is rendered, a source
+ * somebody else keeps private is *"a block you do not have access to"*, and a
+ * source nothing in the org has ever had is *"not on this device"*.
+ *
+ * **The owner lookup deliberately does not read the block.**
+ * `findNoteBlockInOrg` projects the owner and the visibility and excludes
+ * `payload_json` for exactly this reason — deciding whether you may see
+ * something must not require having read it.
+ *
+ * A shared source belonging to somebody else reads as absent rather than as its
+ * words, because widening the export's read to another partition is the query
+ * A4 refuses. That is a smaller document than it could be and never a leak.
+ */
+async function exportVisibility(
+  orgId: string,
+  userId: string,
+  blocks: readonly NoteBlock[],
+  rootId: string,
+): Promise<(ref: { mode: string; kind: string; id: string }) => boolean> {
+  const mine = new Set(blocks.map((block) => block.id));
+  const byId = new Map(blocks.map((block) => [block.id, block] as const));
+  const denied = new Set<string>();
+
+  let checked = 0;
+  for (const id of subtreeBlockIds(blocks, rootId)) {
+    const block = byId.get(id);
+    if (!block || !isSyncedBlock(block)) continue;
+    const sourceId = syncedSourceId(block);
+    if (!sourceId || mine.has(sourceId)) continue;
+    if (checked >= MAX_EXPORT_VISIBILITY_CHECKS) break;
+    checked += 1;
+    const owner = await findBlockOwner(orgId, sourceId);
+    if (owner && owner.userId !== userId && owner.visibility === "private") denied.add(sourceId);
+  }
+  return (ref) => !denied.has(ref.id);
+}
+
+/**
+ * ADR-029 F3 — one block, as a file, through core's writers.
+ *
+ * Nothing here formats anything. `exportNote` is the door that decides a page
+ * goes to Markdown and a database goes to CSV, and a second decision made on
+ * this side would eventually offer CSV for a page — F1's defect, which is an
+ * offer the product cannot honour.
+ *
+ * **The corpus, not the page.** The read is every block this person owns rather
+ * than the subtree, because three of the things a document contains live outside
+ * it: a table's rows are grandchildren rather than children, a synced block's
+ * source is anywhere, and a rollup reads rows of another database entirely. A
+ * subtree read would produce a file that is missing exactly the parts a person
+ * would check first. It is the same read `rebuildDerived` and `createBlock`
+ * already do, and it is paid once per download rather than once per page open.
+ *
+ * **The output is what is bounded, and the bound is REPORTED.** `truncated` and
+ * the omissions travel with the file so the caller can say a prefix is a prefix;
+ * Markdown carries the same sentences inside the document, where the person who
+ * opens the backup a year from now is the one who needs them.
+ */
+export async function exportBlock(
+  orgId: string,
+  userId: string,
+  blockId: string,
+  format: NoteExportFormat,
+  opts: { viewId?: string; maxBlocks?: number; maxChars?: number; nowMs?: number } = {},
+): Promise<NoteExportOutcome> {
+  // Tombstones included: a mirror of a deleted block has to say WHEN it went
+  // (C5), and it can only do that if the tombstone is in the corpus. The walk
+  // itself only ever visits live blocks.
+  const blocks = await listAllBlocks(orgId, userId);
+  const block = blocks.find((candidate) => candidate.id === blockId);
+  if (!block || !isLiveBlock(block)) return { ok: false, reason: "not_found" };
+
+  const formats = exportFormatsFor(block);
+  if (!formats.includes(format)) return { ok: false, reason: "wrong_format", formats };
+
+  const file = exportNote(blocks, blockId, format, {
+    canSee: await exportVisibility(orgId, userId, blocks, blockId),
+    nowMs: opts.nowMs ?? Date.now(),
+    maxBlocks: Math.min(opts.maxBlocks ?? MAX_EXPORT_BLOCKS, MAX_EXPORT_BLOCKS),
+    maxChars: Math.min(opts.maxChars ?? MAX_EXPORT_CHARS, MAX_EXPORT_CHARS),
+    ...(opts.viewId ? { viewId: opts.viewId } : {}),
+  });
+  return file ? { ok: true, file } : { ok: false, reason: "not_found" };
+}
+
+/* ----------------------------------------------------------- F3: comments */
+
+export interface NoteCommentThread {
+  blockId: string;
+  /** Oldest first, tombstoned remarks dropped — core's order, so every surface reads one thread. */
+  comments: NoteComment[];
+  /** C5 — the block is gone and the remarks are not. Said, rather than 404'd away. */
+  blockDeleted: boolean;
+  blockDeletedAt?: string;
+}
+
+export type CommentWriteOutcome =
+  | { ok: true; comment: NoteComment; blockDeleted: boolean }
+  | { ok: false; reason: "no_block" | "no_comment" | "refused"; detail?: string };
+
+/**
+ * A block's thread, scoped to the partition every other read uses.
+ *
+ * `(org_id, user_id, id)` and nothing wider, so a comment can never be readable
+ * by somebody who could not read the block it is on — the scoping IS the
+ * permission check, which is why there is no second one to forget.
+ *
+ * A tombstoned block still answers (C5): deleting the target of a link never
+ * deletes the link, and a 404 here would make a remark somebody wrote
+ * unreachable because the line it was about went away.
+ */
+export async function readCommentThread(
+  orgId: string,
+  userId: string,
+  blockId: string,
+): Promise<NoteCommentThread | null> {
+  const block = await getBlock(orgId, userId, blockId);
+  if (!block) return null;
+  return {
+    blockId,
+    comments: blockComments(block),
+    blockDeleted: !isLiveBlock(block),
+    ...(block.deletedAt ? { blockDeletedAt: new Date(block.deletedAt.physical).toISOString() } : {}),
+  };
+}
+
+/**
+ * Write one comment — through `pushOperations`, never around it.
+ *
+ * **This is the same push path a block edit takes**, and that is the whole
+ * design rather than a convenience. B3 says notes reuse one sync stack; a
+ * comment endpoint that wrote the block row directly would be a second writer
+ * with its own idea of merging, and the first thing it would get wrong is the
+ * per-key rule — a remark added here would take every remark the server happened
+ * to hold, on a record two devices are both editing.
+ *
+ * Only the CHANGED comment travels in the payload, exactly as the desktop's
+ * outbox sends it, so `stampedComments` and `mergeComments` behave identically
+ * whichever surface the remark came from.
+ *
+ * **The lease is not consulted, and it does not have to be.** Core's client-side
+ * writer says why: refusing a remark because somebody is editing the line is
+ * refusing the one thing you most want to do while they work on it. Going
+ * through the push path means the fence still runs — and it applies to `text`
+ * alone, which a comment operation never carries, so a held lock costs this
+ * nothing.
+ */
+async function pushComment(
+  orgId: string,
+  userId: string,
+  blockId: string,
+  commentId: string,
+  change: (existing: NoteComment | undefined, at: Hlc) => NoteComment | null,
+  nowMs: number,
+): Promise<CommentWriteOutcome> {
+  const block = await getBlock(orgId, userId, blockId);
+  if (!block) return { ok: false, reason: "no_block" };
+
+  const at = serverClock(nowMs);
+  const next = change(block.comments?.[commentId], at);
+  if (!next) return { ok: false, reason: "no_comment" };
+
+  const outcome = await pushOperations(orgId, userId, [{
+    idempotencyKey: `${blockId}:comment:${commentId}:${at.physical}.${at.logical}`,
+    itemId: blockId,
+    kind: "update",
+    at,
+    payload: { comments: { [commentId]: next } },
+  }]);
+  const refusal = outcome.rejected[0];
+  if (refusal) return { ok: false, reason: "refused", detail: refusal.reason };
+
+  const after = await getBlock(orgId, userId, blockId);
+  return {
+    ok: true,
+    // The MERGED comment, not the one that was sent: the server decides what the
+    // thread now says, and a surface echoing its own write would show a remark
+    // that a concurrent resolve had already changed.
+    comment: after?.comments?.[commentId] ?? next,
+    blockDeleted: !!after && !isLiveBlock(after),
+  };
+}
+
+/**
+ * F3 — a remark on a block, including one that has been deleted.
+ *
+ * Commenting on a tombstone is allowed on purpose. C5 keeps the link when the
+ * target goes, and "why did this go?" is a question people ask about a block
+ * precisely after it disappears; `blockEditedAt` excludes comments, so leaving
+ * one cannot resurrect what somebody else deleted.
+ */
+export async function addComment(
+  orgId: string,
+  userId: string,
+  blockId: string,
+  input: { body: string; author?: string },
+  nowMs: number,
+): Promise<CommentWriteOutcome> {
+  const id = newCommentId("server", nowMs);
+  return pushComment(orgId, userId, blockId, id, (_existing, at) => ({
+    id,
+    body: { value: boundCommentBody(input.body), at },
+    author: boundCommentAuthor(input.author),
+    createdAt: at,
+    resolved: { value: false, at },
+  }), nowMs);
+}
+
+/** F3's "resolved and unresolved", as a stamped field that merges like any other. */
+export async function setCommentResolved(
+  orgId: string,
+  userId: string,
+  blockId: string,
+  commentId: string,
+  resolved: boolean,
+  nowMs: number,
+): Promise<CommentWriteOutcome> {
+  return pushComment(orgId, userId, blockId, commentId, (existing, at) => (
+    // A retracted remark is not re-openable: the tombstone is the author taking
+    // it back, and answering "no such comment" leads somewhere, where silently
+    // resolving a comment nobody can see does not.
+    existing && !existing.deletedAt ? { ...existing, resolved: { value: resolved, at } } : null
+  ), nowMs);
 }
 
 /* -------------------------------------------------------------- attachments */

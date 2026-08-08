@@ -462,11 +462,451 @@ describe("notes + workspace routes", () => {
     expect((await res.json()).reason).toBe("no_such_mode");
   });
 
+  /**
+   * ADR-029 F3 — "can I leave", over HTTP.
+   *
+   * Core owns the writers and has its own suite for what they produce; what
+   * these pin is the half only the route can get wrong — that a download is a
+   * download, that the bound is reported, that a format the block cannot be
+   * written as is refused rather than approximated, and that A4 still holds when
+   * the file is being written for somebody to take away.
+   */
+  it("a page downloads as Markdown, as an attachment with a filename from its title", async () => {
+    const at = (physical: number) => ({ physical, logical: 0, deviceId: "device-a" });
+    await fetch(`${baseUrl}/api/notes/push`, {
+      method: "POST", headers,
+      body: JSON.stringify({
+        operations: [
+          { idempotencyKey: "op-page", itemId: "page_1", kind: "create", at: at(1000), payload: { kind: "page", text: "Release Runbook", rank: "m" } },
+          { idempotencyKey: "op-a", itemId: "blk_1", kind: "create", at: at(1001), payload: { kind: "bullet", text: "cut the branch", parentId: "page_1", rank: "m" } },
+          { idempotencyKey: "op-b", itemId: "blk_2", kind: "create", at: at(1002), payload: { kind: "todo", text: "publish", parentId: "page_1", rank: "n", checked: true } },
+        ],
+      }),
+    });
+
+    const res = await fetch(`${baseUrl}/api/notes/blocks/page_1/export?format=markdown`, { headers });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/markdown");
+    // The filename is core's, character-classed down to an alphabet a
+    // `Content-Disposition` header cannot be broken out of.
+    expect(res.headers.get("content-disposition")).toBe('attachment; filename="Release-Runbook.md"');
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("x-brainrouter-export-truncated")).toBe("0");
+
+    const body = await res.text();
+    expect(body).toContain("# Release Runbook");
+    expect(body).toContain("- cut the branch");
+    expect(body).toContain("- [x] publish");
+  });
+
+  it("a database downloads as CSV with its computed columns worked out and its cells disarmed", async () => {
+    const at = (physical: number) => ({ physical, logical: 0, deviceId: "device-a" });
+    await fetch(`${baseUrl}/api/notes/push`, {
+      method: "POST", headers,
+      body: JSON.stringify({
+        operations: [
+          {
+            idempotencyKey: "op-db", itemId: "db_1", kind: "create", at: at(1000),
+            payload: {
+              kind: "database", text: "Orders", rank: "m",
+              schema: [
+                { id: "title", name: "Name", type: "title" },
+                { id: "cost", name: "Cost", type: "number" },
+                { id: "qty", name: "Quantity", type: "number" },
+                { id: "total", name: "Total", type: "formula", formula: "Cost * Quantity" },
+              ],
+              views: [{ id: "table", name: "Table", kind: "table" }],
+            },
+          },
+          {
+            idempotencyKey: "op-r1", itemId: "row_1", kind: "create", at: at(1001),
+            payload: { kind: "page", text: "Widget", parentId: "db_1", rank: "a", props: { title: "Widget", cost: 10, qty: 3 } },
+          },
+          {
+            idempotencyKey: "op-r2", itemId: "row_2", kind: "create", at: at(1002),
+            payload: { kind: "page", text: "=DANGER()", parentId: "db_1", rank: "b", props: { title: "=DANGER()", cost: 2, qty: 2 } },
+          },
+        ],
+      }),
+    });
+
+    const res = await fetch(`${baseUrl}/api/notes/blocks/db_1/export?format=csv`, { headers });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/csv");
+    expect(res.headers.get("content-disposition")).toBe('attachment; filename="Orders.csv"');
+
+    const lines = (await res.text()).split("\r\n");
+    expect(lines[0]).toBe('"Title","Name","Cost","Quantity","Total"');
+    // F2 — the formula's RESULT, which is what the person is looking at. A raw
+    // row read would have exported the two numbers and not the column they came
+    // to the database for.
+    expect(lines[1]).toContain('"30"');
+    // The spreadsheet-injection guard is core's `csvField`, and this is the
+    // assertion that it is still on the path a file actually leaves by.
+    expect(lines[2]!.startsWith('"\'=DANGER()"')).toBe(true);
+  });
+
+  it("a page is not offered CSV, and the refusal names what it CAN be written as", async () => {
+    await fetch(`${baseUrl}/api/notes/push`, {
+      method: "POST", headers,
+      body: JSON.stringify({
+        operations: [{
+          idempotencyKey: "op-page", itemId: "page_1", kind: "create",
+          at: { physical: 1000, logical: 0, deviceId: "device-a" },
+          payload: { kind: "page", text: "Runbook", rank: "m" },
+        }],
+      }),
+    });
+
+    const refused = await fetch(`${baseUrl}/api/notes/blocks/page_1/export?format=csv`, { headers });
+    expect(refused.status).toBe(400);
+    const body = await refused.json();
+    // F1 — an offer the product cannot honour is worse than an absence, so the
+    // refusal is the thing a menu builds itself from.
+    expect(body.formats).toEqual(["markdown"]);
+
+    const nonsense = await fetch(`${baseUrl}/api/notes/blocks/page_1/export?format=pdf`, { headers });
+    expect(nonsense.status).toBe(400);
+
+    const missing = await fetch(`${baseUrl}/api/notes/blocks/blk_nope/export?format=markdown`, { headers });
+    expect(missing.status).toBe(404);
+  });
+
+  it("the page read tells a menu which formats to offer, so the menu never guesses", async () => {
+    await fetch(`${baseUrl}/api/notes/push`, {
+      method: "POST", headers,
+      body: JSON.stringify({
+        operations: [
+          {
+            idempotencyKey: "op-page", itemId: "page_1", kind: "create",
+            at: { physical: 1000, logical: 0, deviceId: "device-a" },
+            payload: { kind: "page", text: "Runbook", rank: "m" },
+          },
+          {
+            idempotencyKey: "op-db", itemId: "db_1", kind: "create",
+            at: { physical: 1001, logical: 0, deviceId: "device-a" },
+            payload: {
+              kind: "database", text: "Orders", rank: "n",
+              schema: [{ id: "title", name: "Name", type: "title" }],
+              views: [{ id: "table", name: "Table", kind: "table" }],
+            },
+          },
+        ],
+      }),
+    });
+
+    const page = await (await fetch(`${baseUrl}/api/notes/pages/page_1`, { headers })).json();
+    expect(page.exportFormats).toEqual(["markdown"]);
+    const database = await (await fetch(`${baseUrl}/api/notes/databases/db_1`, { headers })).json();
+    expect(database.exportFormats).toEqual(["markdown", "csv"]);
+  });
+
+  it("an export longer than the cap stops and SAYS it stopped, in the file and in the headers", async () => {
+    const at = { physical: 1000, logical: 0, deviceId: "device-a" };
+    const seed = (id: string, over: { kind?: string; text?: string; parentId?: string | null; rank?: string }) => {
+      db.blocks.set(key("org-a", "user-1", id), {
+        parentId: over.parentId ?? null,
+        kind: over.kind ?? "paragraph",
+        visibility: "private",
+        deletedAtHlc: null,
+        payload: {
+          id,
+          parentId: { value: over.parentId ?? null, at },
+          rank: { value: over.rank ?? "m", at },
+          kind: { value: over.kind ?? "paragraph", at },
+          text: { value: over.text ?? "", at },
+        },
+      });
+    };
+    // Seeded rather than pushed: a push carries 200 operations, and the point of
+    // this test is the page nobody meant to make.
+    seed("page_big", { kind: "page", text: "Everything" });
+    for (let i = 0; i < 2_100; i += 1) {
+      seed(`blk_${i}`, { text: `line ${i}`, parentId: "page_big", rank: `m${String(i).padStart(5, "0")}` });
+    }
+
+    const res = await fetch(`${baseUrl}/api/notes/blocks/page_big/export?format=markdown`, { headers });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-brainrouter-export-truncated")).toBe("1");
+    expect(res.headers.get("x-brainrouter-export-omissions")).toContain("bounded");
+    // And in the document itself, because the person who opens the backup a year
+    // from now has the file and not the headers.
+    const body = await res.text();
+    expect(body).toContain("longer than an export carries");
+    expect(body).not.toContain("line 2099");
+  });
+
+  /**
+   * A4, in the one place an export can reach past the person doing it.
+   *
+   * A synced block stores an ADDRESS, so exporting a page containing one is the
+   * moment the server decides whether the viewer may read the block on the other
+   * end. Rendering the title would leak it; rendering nothing would make the
+   * same document look different to two people with no indication why.
+   */
+  it("a synced block pointing at someone else's private block exports as the refusal, never as its words", async () => {
+    const stamp = { physical: 1, logical: 0, deviceId: "d" };
+    db.blocks.set("org-a/user-2/blk_private", {
+      parentId: null, kind: "paragraph", visibility: "private", deletedAtHlc: null,
+      payload: {
+        id: "blk_private",
+        parentId: { value: null, at: stamp },
+        rank: { value: "m", at: stamp },
+        kind: { value: "paragraph", at: stamp },
+        text: { value: "the secret roadmap", at: stamp },
+      },
+    });
+
+    const at = (physical: number) => ({ physical, logical: 0, deviceId: "device-a" });
+    await fetch(`${baseUrl}/api/notes/push`, {
+      method: "POST", headers,
+      body: JSON.stringify({
+        operations: [
+          { idempotencyKey: "op-page", itemId: "page_1", kind: "create", at: at(1000), payload: { kind: "page", text: "Plan", rank: "m" } },
+          {
+            idempotencyKey: "op-sync", itemId: "blk_mirror", kind: "create", at: at(1001),
+            payload: { kind: "synced", text: "brainrouter://notes/block/blk_private", parentId: "page_1", rank: "m" },
+          },
+        ],
+      }),
+    });
+
+    const res = await fetch(`${baseUrl}/api/notes/blocks/page_1/export?format=markdown`, { headers });
+    const body = await res.text();
+    expect(body).toContain("do not have access");
+    expect(body).not.toContain("secret roadmap");
+    expect(res.headers.get("x-brainrouter-export-omissions")).toContain("permission");
+  });
+
+  /* -------------------------------------------------------- F3 · comments */
+
+  /**
+   * The claim under every one of these is B3's: a comment is CONTENT, so it
+   * syncs, so it goes through the one push path. The test for that is not that
+   * the endpoint returns 201 — it is that the remark is in the BLOCK's record
+   * afterwards, which is the only place the merge could have put it.
+   */
+  it("a comment written over HTTP lands on the block record, through the same push path a block edit takes", async () => {
+    await fetch(`${baseUrl}/api/notes/push`, {
+      method: "POST", headers,
+      body: JSON.stringify({
+        operations: [{
+          idempotencyKey: "op-1", itemId: "blk_1", kind: "create",
+          at: { physical: 1000, logical: 0, deviceId: "device-a" },
+          payload: { text: "revenue was 4.1m", rank: "m" },
+        }],
+      }),
+    });
+
+    const written = await fetch(`${baseUrl}/api/notes/blocks/blk_1/comments`, {
+      method: "POST", headers, body: JSON.stringify({ body: "is this the gross figure?", author: "Ada" }),
+    });
+    expect(written.status).toBe(201);
+    const { comment } = await written.json();
+    expect(comment.body.value).toBe("is this the gross figure?");
+    expect(comment.author).toBe("Ada");
+    expect(comment.resolved.value).toBe(false);
+
+    const block = (await (await fetch(`${baseUrl}/api/notes/blocks/blk_1`, { headers })).json()).block;
+    expect(Object.keys(block.comments)).toEqual([comment.id]);
+
+    const thread = await (await fetch(`${baseUrl}/api/notes/blocks/blk_1/comments`, { headers })).json();
+    expect(thread.comments.map((c: { id: string }) => c.id)).toEqual([comment.id]);
+    expect(thread.blockDeleted).toBe(false);
+  });
+
+  it("resolving a comment is a stamped field that merges, and an unknown comment is refused by name", async () => {
+    await fetch(`${baseUrl}/api/notes/push`, {
+      method: "POST", headers,
+      body: JSON.stringify({
+        operations: [{
+          idempotencyKey: "op-1", itemId: "blk_1", kind: "create",
+          at: { physical: 1000, logical: 0, deviceId: "device-a" },
+          payload: { text: "waiting on the API", rank: "m" },
+        }],
+      }),
+    });
+    const { comment } = await (await fetch(`${baseUrl}/api/notes/blocks/blk_1/comments`, {
+      method: "POST", headers, body: JSON.stringify({ body: "shipped now" }),
+    })).json();
+
+    const res = await fetch(`${baseUrl}/api/notes/blocks/blk_1/comments/${comment.id}`, {
+      method: "PATCH", headers, body: JSON.stringify({ resolved: true }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).comment.resolved.value).toBe(true);
+
+    const missing = await fetch(`${baseUrl}/api/notes/blocks/blk_1/comments/cmt_nope`, {
+      method: "PATCH", headers, body: JSON.stringify({ resolved: true }),
+    });
+    expect(missing.status).toBe(404);
+    expect((await missing.json()).error).toBe("No such comment.");
+  });
+
+  /**
+   * C5 — deleting the target of a link never deletes the link.
+   *
+   * "Why did this go?" is a question people ask about a block exactly after it
+   * disappears, and a 404 here would make the remark unreachable at the one
+   * moment somebody goes looking for it.
+   */
+  it("a comment on a deleted block is still readable, and the answer says the block is gone", async () => {
+    const at = (physical: number) => ({ physical, logical: 0, deviceId: "device-a" });
+    await fetch(`${baseUrl}/api/notes/push`, {
+      method: "POST", headers,
+      body: JSON.stringify({
+        operations: [{ idempotencyKey: "op-1", itemId: "blk_1", kind: "create", at: at(1000), payload: { text: "the old plan", rank: "m" } }],
+      }),
+    });
+    await fetch(`${baseUrl}/api/notes/blocks/blk_1/comments`, {
+      method: "POST", headers, body: JSON.stringify({ body: "why did this go?" }),
+    });
+    await fetch(`${baseUrl}/api/notes/push`, {
+      method: "POST", headers,
+      body: JSON.stringify({
+        operations: [{ idempotencyKey: "op-del", itemId: "blk_1", kind: "delete", at: at(3000), payload: {} }],
+      }),
+    });
+
+    const res = await fetch(`${baseUrl}/api/notes/blocks/blk_1/comments`, { headers });
+    expect(res.status).toBe(200);
+    const thread = await res.json();
+    expect(thread.blockDeleted).toBe(true);
+    expect(typeof thread.blockDeletedAt).toBe("string");
+    expect(thread.comments).toHaveLength(1);
+  });
+
+  it("a comment with nothing to say, and a comment on a block that is not there, are refused separately", async () => {
+    await fetch(`${baseUrl}/api/notes/push`, {
+      method: "POST", headers,
+      body: JSON.stringify({
+        operations: [{
+          idempotencyKey: "op-1", itemId: "blk_1", kind: "create",
+          at: { physical: 1000, logical: 0, deviceId: "device-a" }, payload: { text: "x", rank: "m" },
+        }],
+      }),
+    });
+
+    const empty = await fetch(`${baseUrl}/api/notes/blocks/blk_1/comments`, {
+      method: "POST", headers, body: JSON.stringify({ body: "   " }),
+    });
+    expect(empty.status).toBe(400);
+
+    const nowhere = await fetch(`${baseUrl}/api/notes/blocks/blk_missing/comments`, {
+      method: "POST", headers, body: JSON.stringify({ body: "hello" }),
+    });
+    expect(nowhere.status).toBe(404);
+    expect((await nowhere.json()).error).toBe("No such block.");
+
+    const unread = await fetch(`${baseUrl}/api/notes/blocks/blk_missing/comments`, { headers });
+    expect(unread.status).toBe(404);
+  });
+
+  it("neither new surface answers without authentication", async () => {
+    const exported = await fetch(`${baseUrl}/api/notes/blocks/blk_1/export?format=markdown`);
+    expect(exported.status).toBe(401);
+    const read = await fetch(`${baseUrl}/api/notes/blocks/blk_1/comments`);
+    expect(read.status).toBe(401);
+  });
+
   it("the routers are mounted on the app, which is the difference between built and reachable", () => {
     const here = path.dirname(fileURLToPath(import.meta.url));
     const index = fs.readFileSync(path.join(here, "..", "index.ts"), "utf8");
     expect(index).toContain('app.use("/api/notes", notesRouter)');
     expect(index).toContain('app.use("/api/workspace", workspaceRouter)');
+  });
+
+  /**
+   * ADR-028 E1 turned from a review habit into a check that runs.
+   *
+   * Part F shipped `exportFormats` here — a second, unreachable answer to a
+   * question the page and database reads already carry a field for — and every
+   * gate stayed green, because nothing about dead code fails a compile or a
+   * suite. It was caught by somebody reading the diff, which is exactly the
+   * mechanism E1 exists because we cannot rely on.
+   *
+   * Only functions are audited. An exported type is consumed by inference at
+   * the call site as often as by name, so requiring one to be spelled out would
+   * fail honest code; a function with no caller is dead by definition.
+   *
+   * The search is deliberately alias-qualified rather than a bare word search.
+   * `exportFormats` is ALSO a field on the read shapes, so grepping the name
+   * across the workspace finds `page.exportFormats` in this very file and calls
+   * the dead function reachable — a check that passes on the defect it exists
+   * for is worse than no check.
+   */
+  it("every function the notes backend exports is reached by something", () => {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const srcDir = path.join(here, "..");
+    const backendPath = path.join(srcDir, "memory", "notes", "backend.ts");
+    const backend = fs.readFileSync(backendPath, "utf8");
+
+    const exported = [...backend.matchAll(/^export (?:async )?function (\w+)/gm)].map((m) => m[1]!);
+    // A guard on the guard: a rename that breaks the pattern would otherwise
+    // make this pass by auditing nothing at all.
+    expect(exported.length, "no exported functions found — this audit has stopped auditing").toBeGreaterThan(5);
+
+    const files: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name.endsWith(".ts") && full !== backendPath) files.push(full);
+      }
+    };
+    walk(srcDir);
+
+    // Whatever each consumer binds the module to — `import * as notes` today,
+    // and a dynamic `const notes = await import(...)` in the merge suite.
+    const callers = new Set<string>();
+    for (const file of files) {
+      const source = fs.readFileSync(file, "utf8");
+      if (!source.includes("notes/backend.js")) continue;
+      const bindings = [
+        ...source.matchAll(/import \* as (\w+) from "[^"]*notes\/backend\.js"/g),
+        ...source.matchAll(/(?:const|let|var) (\w+) = await import\("[^"]*notes\/backend\.js"\)/g),
+      ].map((m) => m[1]!);
+      for (const binding of bindings) {
+        for (const use of source.matchAll(new RegExp(`\\b${binding}\\.(\\w+)`, "g"))) callers.add(use[1]!);
+      }
+    }
+    expect(callers.size, "no consumer of the notes backend was found — the import shape has changed").toBeGreaterThan(5);
+
+    /**
+     * The one gap this audit inherited, named instead of hidden.
+     *
+     * `unreferencedAttachments` (backend.ts) is a thin wrapper over
+     * `listUnreferencedNoteAttachments`, which the store suite drives directly —
+     * so the query is covered and the wrapper is the dead link. It arrived with
+     * the attachments work, not with this audit, and deleting another slice's
+     * symbol is that slice's call to make: either the byte sweep it was written
+     * as the input to gets built, or the wrapper goes and the sweep calls the
+     * store method the store tests already use.
+     *
+     * Asserted in BOTH directions on purpose. An exemption that only ever
+     * suppresses a failure rots into a permanent hole; this one fails the moment
+     * the symbol gains a caller and tells you to delete the exemption. Adding a
+     * name here is not how a new violation gets resolved — it is a visible edit
+     * to a list that says so.
+     */
+    const KNOWN_UNREACHED = new Set<string>(["unreferencedAttachments"]);
+
+    for (const name of exported) {
+      if (KNOWN_UNREACHED.has(name)) {
+        expect(
+          callers.has(name),
+          `\`${name}\` is listed as a known-unreached export and now has a caller. `
+          + "Remove it from KNOWN_UNREACHED so the audit goes back to enforcing it.",
+        ).toBe(false);
+        continue;
+      }
+      expect(
+        callers.has(name),
+        `notes/backend.ts exports \`${name}\` and nothing in this workspace calls it. `
+        + "ADR-028 E1: a module with no caller is not done. Either give it the caller it was "
+        + "written for, or delete it — an unreachable second answer is how two answers drift apart.",
+      ).toBe(true);
+    }
   });
 
   /**
@@ -489,5 +929,30 @@ describe("notes + workspace routes", () => {
     expect(notesPage).toContain('"/api/notes/databases"');
     expect(notesPage).toContain('"/api/workspace/update"');
     expect(notesPage).toContain('fields: { favourite }');
+  });
+
+  /**
+   * The same claim for Part F's two: a route with no caller is not done.
+   *
+   * F3's export and comments answered nothing before this — core had the writers
+   * and the comment model, the dashboard offered neither. These pin the calls at
+   * their source so the pair cannot go back to being reachable only by curl.
+   */
+  it("the dashboard downloads the export and reads and writes the thread", () => {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const notesPage = fs.readFileSync(
+      path.join(here, "..", "..", "..", "brainrouter-dashboard", "app", "notes", "page.tsx"),
+      "utf8",
+    );
+    expect(notesPage).toContain("/export?");
+    // The formats come from the server's read, never from the block's kind —
+    // F1's rule is that the menu must not offer what the writer cannot honour.
+    expect(notesPage).toContain("exportFormats");
+    expect(notesPage).toContain("/comments");
+    // The claim is that the dashboard resolves a thread over the route, not how
+    // the flag reaches the call: both surfaces that leave a remark now go
+    // through one `setCommentResolved`, so the value is a shorthand rather than
+    // an inline literal. `notes-dashboard-renderers.test.ts` pins that helper.
+    expect(notesPage).toMatch(/method: "PATCH", body: \{ resolved/);
   });
 });
