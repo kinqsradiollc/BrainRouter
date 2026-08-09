@@ -24,6 +24,8 @@
  *    a bounded width.
  */
 import { isLiveBlock, type NoteBlock } from '../block.js';
+import { isDatabaseBlock } from '../database.js';
+import { projectDatabase } from '../databaseProjection.js';
 import { formatTableRow, parseTableRow, tableCells } from '../tableBlock.js';
 import { readSyncedBlock, describeSyncedState, SYNCED_BLOCK_KIND } from '../syncedBlock.js';
 import {
@@ -148,6 +150,89 @@ function linesFor(
   }
 }
 
+/** A cell as it goes into a Markdown grid: pipes escaped, newlines flattened. */
+function gridCell(raw: string): string {
+  return raw.slice(0, MAX_EXPORT_CHARS).split('|').join('\\|').split(/\r?\n/).join(' ');
+}
+
+/**
+ * A database as a Markdown grid — F1's "the menu offers what the product does".
+ *
+ * The export menu offers Markdown on a database (`exportFormatsFor`), and
+ * without this the database and its row-pages fell through to the generic page
+ * branch: a heading per row and not one column, so a ledger with an Amount
+ * exported as its own title and nothing else. Every property gone, from a
+ * download the person asked for by name.
+ *
+ * It reads the same `projectDatabase` the CSV writer and the screen read, so
+ * the file, the spreadsheet and the view cannot disagree about which rows are
+ * in the view or what a formula came to. `cell.display` for the same reason CSV
+ * uses it: a computed column carries its result, or the sentence saying why it
+ * has none, rather than a blank that would read as "empty".
+ *
+ * No spreadsheet formula guard here, unlike CSV: Markdown has no reader that
+ * evaluates a leading `=`, and prefixing an apostrophe would corrupt the text
+ * of anyone whose cell legitimately starts with one.
+ */
+function databaseLines(
+  all: readonly NoteBlock[],
+  block: NoteBlock,
+  opts: NoteExportOptions,
+  omissions: NoteExportOmission[],
+  limit: number,
+): string[] {
+  const projection = projectDatabase(all, block.id, opts.viewId, {
+    ...(opts.nowMs === undefined ? {} : { nowMs: opts.nowMs }),
+    ...(opts.deviceId === undefined ? {} : { deviceId: opts.deviceId }),
+    ...(opts.canSee === undefined ? {} : { canSee: opts.canSee }),
+  });
+  // A database whose schema could not be read is still a block with a title.
+  // Writing nothing at all would be the silent drop this exists to remove.
+  if (!projection) return [`${headingHashes(block.level?.value)} ${block.text.value ?? ''}`];
+
+  for (const rule of projection.skipped) omissions.push({ kind: 'view_rule', detail: rule.detail });
+
+  const header = ['Title', ...projection.columns.map((column) => column.name)];
+  const lines = [
+    `${headingHashes(block.level?.value)} ${projection.title}`,
+    '',
+    `| ${header.map(gridCell).join(' | ')} |`,
+    `|${' --- |'.repeat(header.length)}`,
+  ];
+
+  let written = 0;
+  for (const row of projection.rows) {
+    if (written >= limit) {
+      omissions.push({
+        kind: 'bounded',
+        detail: `This view has more rows than an export carries, so it stops after ${written}.`,
+      });
+      break;
+    }
+    lines.push(`| ${[row.title, ...row.cells.map((cell) => cell.display)].map(gridCell).join(' | ')} |`);
+    written += 1;
+    if (row.cells.some((cell) => cell.error)) {
+      omissions.push({
+        kind: 'unsupported',
+        detail: 'A computed column could not be worked out for every row; those cells carry the reason instead of a value.',
+      });
+    }
+    if (row.cells.some((cell) => cell.unsupported)) {
+      omissions.push({
+        kind: 'unsupported',
+        detail: 'A column from a newer version of this app was written out as it was stored.',
+      });
+    }
+  }
+  if (projection.filteredOut > 0) {
+    omissions.push({
+      kind: 'view_rule',
+      detail: `${projection.filteredOut} rows are filtered out of this view and are not in the file.`,
+    });
+  }
+  return lines;
+}
+
 /**
  * A page and everything under it as Markdown.
  *
@@ -229,8 +314,29 @@ export function exportPageMarkdown(
       && byId.get(one.parentId.value ?? '')?.kind.value === 'table').map((one) => one.id),
   );
 
+  // The same rule for a database, whose rows are PAGES. Without it every row
+  // appeared twice — once as a line of the grid and once as a heading below it,
+  // with its properties nowhere.
+  const rowsOfDatabase = (databaseId: string): string[] =>
+    all.filter((one) => one.parentId.value === databaseId).map((one) => one.id);
+  const insideDatabase = new Set(
+    all.filter(isDatabaseBlock).flatMap((one) => rowsOfDatabase(one.id)),
+  );
+
   for (const row of walked.rows) {
-    if (insideTable.has(row.block.id)) continue;
+    if (insideTable.has(row.block.id) || insideDatabase.has(row.block.id)) continue;
+    if (isDatabaseBlock(row.block)) {
+      for (const line of databaseLines(all, row.block, opts, omissions, limit)) {
+        if (chars + line.length + 1 > maxChars) { truncated = true; break; }
+        out.push(line);
+        chars += line.length + 1;
+      }
+      out.push('');
+      chars += 1;
+      count += 1;
+      if (truncated) break;
+      continue;
+    }
     if (row.block.kind.value === SYNCED_BLOCK_KIND) {
       const state = readSyncedBlock(all, row.block, { canSee: opts.canSee, maxBlocks: limit });
       if (state.status === 'ready') {

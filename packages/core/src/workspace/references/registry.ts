@@ -124,7 +124,18 @@ export type WorkspaceCreateRefusal =
  * that URI resolves to a `pending` tombstone until it lands.
  */
 export type WorkspaceCreateOutcome =
-  | { readonly status: 'created'; readonly ref: WorkspaceRef }
+  | {
+      readonly status: 'created';
+      readonly ref: WorkspaceRef;
+      /**
+       * ADR-029 E6 — fields the mode has no meaning for, reported rather than
+       * dropped. `update` has carried this since it was written; `create` did
+       * not, so a caller that asked for a row with three columns and got a row
+       * with none was told only that a block had been created. It learns
+       * otherwise a long way from here.
+       */
+      readonly ignored?: readonly string[];
+    }
   | { readonly status: 'pending'; readonly ref: WorkspaceRef }
   | { readonly status: 'refused'; readonly reason: WorkspaceCreateRefusal; readonly detail: string };
 

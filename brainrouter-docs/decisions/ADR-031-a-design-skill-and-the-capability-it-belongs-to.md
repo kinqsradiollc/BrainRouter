@@ -27,7 +27,7 @@ So the answer is **the `frontend` capability**, and that answer is better than a
 | Profile | `frontend` capability | Effect |
 |---|---|---|
 | `engineering` | available, **recommended, enabled by default** | the skill is simply there while building software — which is what was asked for |
-| `design` | available, not enabled | it turns on when someone is doing design work in a design workspace |
+| `design` | available, not enabled | it turns on when someone is doing design work in a design workspace — the capability activates for the `designer` persona as well as the `engineer` one, or this row would be unreachable |
 
 A profile would have forced a choice at workspace-creation time and a re-onboard the first time a
 task crossed the line. A capability activates for the task. Nothing new needs inventing to place this
@@ -231,6 +231,17 @@ written down or the agent will apply the wrong one.
 The `study` verb emits a portable design document. That is the same artifact the pending
 design-artifact work for the frontend capability needs, so these should be decided together rather
 than producing two formats for one purpose.
+
+**Decided, and built.** The format is the skill's own
+(`skills/design/hallmark/references/design-md.md`) — BrainRouter defines no competing schema. The
+convention is `design.md` at the workspace root, then `.brainrouter/design.md`, then
+`docs/design.md`, first match wins. `readWorkspaceDesignArtifact`
+(`packages/core/src/workspace/designArtifact.ts`) reads and neutralises it; the `frontend`
+capability contributes it as a fenced prompt block when it activates, so a workspace that has a
+design artifact is handed something a workspace without one is not. Before this the capability's
+prompt block said "discover and follow the workspace design artifact" and nothing behind the
+sentence existed — an offer the product could not honour. Recorded as a rule in
+`brainrouter-rules/09-docs-skills-and-plugins.md` §7c.
 
 ---
 

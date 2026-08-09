@@ -16,6 +16,7 @@ import {
 import type { DocumentPageKind, ParsedDocument } from '../attachment/document/types.js';
 import { ingestAttachment, attachmentContextMarkdown } from '../attachment/ingest/ingest.js';
 import { deleteAttachment } from '../attachment/store/attachmentStore.js';
+import { listBlocks } from '../notes/noteStore.js';
 import { buildLocalWorkspaceRegistry, localWorkspaceViewer } from '../workspace/participants/localModes.js';
 import { fenceWorkspaceResolutions } from '../workspace/participants/agentContext.js';
 import { withTempWorkspaceAsync } from './_helpers.js';
@@ -170,6 +171,105 @@ test('D5 end to end: an attached PDF becomes an artifact the address space can r
     assert.equal(missing.status, 'gone');
     const unknown = await registry.resolveUri('brainrouter://document/outline/att_nope', viewer);
     assert.equal(unknown.status, 'gone');
+  });
+});
+
+/**
+ * D5's SECOND landing place, which is the one that was never built:
+ *
+ * > *"a note — an imported document becomes a page of blocks, addressable at
+ * > `brainrouter://notes/block/…` (ADR-029 A1)."*
+ *
+ * The turn and memory shipped and were tested. This bullet had no importer, no
+ * caller, no gesture and no admission anywhere that it was missing. The test
+ * goes through `workspace_create`, which is the agent's own verb, so what is
+ * pinned is a reachable gesture rather than a function that exists.
+ */
+test('D5: an attached document becomes a PAGE OF BLOCKS with a real address', async () => {
+  await withTempWorkspaceAsync(async (ws) => {
+    const rec = await ingestAttachment({
+      workspaceRoot: ws,
+      sessionKey: 's',
+      source: {
+        kind: 'bytes',
+        name: 'paper.pdf',
+        data: xrefPagesPdf([
+          { lines: pageOfProse('Method', 30) },
+          { lines: pageOfProse('Results', 30) },
+        ]),
+      },
+    });
+
+    const registry = buildLocalWorkspaceRegistry({ workspaceRoot: ws });
+    const viewer = localWorkspaceViewer({ workspaceRoot: ws });
+    const created = await registry.create(
+      {
+        mode: 'notes',
+        kind: 'block',
+        title: 'Q3 planning deck',
+        from: { mode: 'document', kind: 'outline', id: rec.id },
+      },
+      viewer,
+    );
+    assert.equal(created.status, 'created', created.status === 'refused' ? created.detail : '');
+    const pageId = created.status === 'created' ? created.ref.id : '';
+
+    // A1's address, and it resolves like any other block.
+    const resolved = await registry.resolveUri(`brainrouter://notes/block/${pageId}`, viewer);
+    assert.equal(resolved.status, 'found');
+    assert.equal(resolved.status === 'found' && resolved.target.label, 'Q3 planning deck');
+
+    const blocks = listBlocks(undefined);
+    const page = blocks.find((block) => block.id === pageId)!;
+    assert.equal(page.kind.value, 'page');
+    const body = blocks.filter((block) => block.parentId.value === pageId);
+    assert.ok(body.length >= 3, `the page has ${body.length} blocks`);
+
+    // BLOCKS, not one wall of text: the pages became headings and the prose
+    // became paragraphs someone can edit, fold, cite and comment on.
+    assert.ok(body.some((block) => block.kind.value === 'heading' && /^Page 1/.test(block.text.value)));
+    assert.ok(body.some((block) => block.kind.value === 'heading' && /^Page 2/.test(block.text.value)));
+    assert.ok(body.some((block) => block.text.value.includes('Method line')));
+    assert.ok(body.some((block) => block.text.value.includes('Results line')));
+
+    // A2 — the document is REFERENCED from the note, not copied into it a
+    // second time, so there is one document and one edge back to it.
+    const provenance = body.find((block) => block.text.value.includes('brainrouter://document/outline/'));
+    assert.ok(provenance, 'the page says where it came from');
+    assert.match(provenance!.text.value, new RegExp(rec.id));
+    const back = await registry.resolveUri(`brainrouter://document/outline/${rec.id}`, viewer);
+    assert.equal(back.status, 'found');
+  });
+});
+
+test('D5: importing something that is not a parsed document is refused with the reason, not half-done', async () => {
+  await withTempWorkspaceAsync(async (ws) => {
+    const registry = buildLocalWorkspaceRegistry({ workspaceRoot: ws });
+    const viewer = localWorkspaceViewer({ workspaceRoot: ws });
+
+    const unknown = await registry.create(
+      { mode: 'notes', kind: 'block', title: 'x', from: { mode: 'document', kind: 'outline', id: 'att_nope' } },
+      viewer,
+    );
+    assert.equal(unknown.status, 'refused');
+    assert.match(unknown.status === 'refused' ? unknown.detail : '', /no attachment with that id/);
+
+    // An attachment that is not a document — an image — reaches a different
+    // sentence, because "we have no such file" and "that file is not a document
+    // we parsed" lead somewhere else.
+    const image = await ingestAttachment({
+      workspaceRoot: ws,
+      sessionKey: 's',
+      source: { kind: 'bytes', name: 'shot.png', data: Buffer.from('89504e470d0a1a0a', 'hex') },
+    });
+    const notADocument = await registry.create(
+      { mode: 'notes', kind: 'block', title: 'x', from: { mode: 'document', kind: 'outline', id: image.id } },
+      viewer,
+    );
+    assert.equal(notADocument.status, 'refused');
+    assert.match(notADocument.status === 'refused' ? notADocument.detail : '', /no parsed document/);
+    // Nothing was created on the way to the refusal.
+    assert.equal(listBlocks(undefined).length, 0);
   });
 });
 

@@ -35,9 +35,12 @@ import {
   listBlocks as notesListBlocks,
   updateBlock as notesUpdateBlock,
   blockContext,
+  blockTombstone,
   isDatabaseBlock,
+  isLiveBlock,
   noteBlockRef,
   summariseDatabase,
+  type NoteBlock,
   type NoteBlockKind,
   type NotePropertyValue,
   type UpdateBlockInput as NoteUpdateBlockInput,
@@ -51,8 +54,9 @@ import { readTranscriptTail } from '../../session/transcript/sessionStore.js';
 // it is split or stored leaves `attachment/document/`.
 import {
   documentOutlineLabel, documentOutlineState, documentPartLabel, documentPartState,
-  parseDocumentPartId, readDocumentArtifact, type DocumentArtifact,
+  DOCUMENT_MODE, parseDocumentPartId, readDocumentArtifact, type DocumentArtifact,
 } from '../../attachment/document/index.js';
+import { importDocumentAsNote } from '../../notes/importDocument.js';
 import { getAttachment } from '../../attachment/store/attachmentStore.js';
 import { getSessionStateDir } from '../../storage/store.js';
 import {
@@ -115,6 +119,21 @@ function noteLabel(text: string, kind: string): string {
   return firstLine(text) || `(empty ${kind})`;
 }
 
+/**
+ * C5's second sentence — "restoring the target restores the reference".
+ *
+ * A restored block KEEPS its `deletedAt` (restore is a newer `restoredAt` that
+ * outvotes it, `notes/noteStore.ts` `restoreBlocks`), so a reference path that
+ * tests the field for truthiness reports a block the person just pulled out of
+ * the trash as gone — for ever, on every surface, with no way back. The
+ * comparison is `isLiveBlock`; the DATE still comes from `deletedAt`, which is
+ * what `blockTombstone` hands back when the tombstone is the one in force.
+ */
+function noteTombstoneOf(block: NoteBlock): { reason: 'deleted'; at?: string } | null {
+  const tombstone = blockTombstone(block);
+  return tombstone ? goneAt('deleted', tombstone.physical) : null;
+}
+
 
 function notesParticipant(ctx: LocalWorkspaceContext): WorkspaceModeParticipant {
   return creatableWorkspaceMode({
@@ -124,7 +143,8 @@ function notesParticipant(ctx: LocalWorkspaceContext): WorkspaceModeParticipant 
     resolve(ref): WorkspaceResolution {
       const block = notesGetBlock(ctx.userId, ref.id);
       if (!block) return resolvedGone(ref, { reason: 'never_existed' });
-      if (block.deletedAt) return resolvedGone(ref, goneAt('deleted', block.deletedAt.physical));
+      const tombstone = noteTombstoneOf(block);
+      if (tombstone) return resolvedGone(ref, tombstone);
       // Q3: the block, the headings above it, and a COUNT of the rest. Never
       // the page — someone's meeting notes run to thousands of words, so
       // "include the page" has no upper bound and would silently consume the
@@ -150,13 +170,23 @@ function notesParticipant(ctx: LocalWorkspaceContext): WorkspaceModeParticipant 
     describe(ref): WorkspaceResolution {
       const block = notesGetBlock(ctx.userId, ref.id);
       if (!block) return resolvedGone(ref, { reason: 'never_existed' });
-      if (block.deletedAt) return resolvedGone(ref, goneAt('deleted', block.deletedAt.physical));
+      const tombstone = noteTombstoneOf(block);
+      if (tombstone) return resolvedGone(ref, tombstone);
       return resolvedFound(ref, { label: noteLabel(block.text.value, block.kind.value) });
     },
 
     create(intent): WorkspaceCreateOutcome {
       const fields = intent.fields ?? {};
+      // ADR-030 D5's second landing place. "Make a note FROM this document" has
+      // exactly one sensible meaning — the document becomes the page — so it is
+      // the `from` reference that says so rather than a flag beside it. The
+      // artifact is already parsed, classified and stored; this reads it and
+      // writes blocks through the same writer a person's typing goes through.
+      if (intent.from?.mode === DOCUMENT_MODE && intent.from.kind === 'outline') {
+        return createNoteFromDocument(ctx, intent);
+      }
       const kind = typeof fields.kind === 'string' ? (fields.kind as NoteBlockKind) : 'paragraph';
+      const { patch, ignored } = notePatchFields(fields);
       const block = notesCreateBlock(
         ctx.userId,
         {
@@ -170,11 +200,18 @@ function notesParticipant(ctx: LocalWorkspaceContext): WorkspaceModeParticipant 
           // without its cells, or a page without its icon, would need a second
           // call to become the thing that was asked for, and the window between
           // the two is a row in a database with every column empty.
-          ...notePatchFields(fields).patch,
+          ...patch,
         },
         Date.now(),
       );
-      return { status: 'created', ref: noteBlockRef(block.id) };
+      // E6 — the same `ignored` channel `update` has. A caller that named a
+      // field this mode has no meaning for is told so here rather than
+      // discovering it when the row it asked for turns out to be empty.
+      return {
+        status: 'created',
+        ref: noteBlockRef(block.id),
+        ...(ignored.length > 0 ? { ignored } : {}),
+      };
     },
 
     /**
@@ -189,7 +226,7 @@ function notesParticipant(ctx: LocalWorkspaceContext): WorkspaceModeParticipant 
      */
     update(intent): WorkspaceUpdateOutcome {
       const block = notesGetBlock(ctx.userId, intent.ref.id);
-      if (!block || block.deletedAt) {
+      if (!block || !isLiveBlock(block)) {
         return { status: 'refused', reason: 'not_found', detail: `no note block ${intent.ref.id}` };
       }
       const { patch, changed, ignored } = notePatchFields(intent.fields ?? {});
@@ -217,6 +254,58 @@ function notesParticipant(ctx: LocalWorkspaceContext): WorkspaceModeParticipant 
       };
     },
   });
+}
+
+/**
+ * ADR-030 D5 — a parsed document becomes a page of blocks with a real address.
+ *
+ * Kept here rather than inside the document participant because Q2's rule is
+ * that a cross-mode create calls the OWNING mode's writer: notes owns blocks, so
+ * notes makes them. The document mode stays `linkable`, which is Q4's point —
+ * there is still exactly one way for a document to come into existence, and it
+ * is ingesting a file.
+ *
+ * Refusals are the document participant's own sentences, so "no attachment with
+ * that id" and "this attachment has no parsed document" read the same however
+ * the caller arrived.
+ */
+function createNoteFromDocument(
+  ctx: LocalWorkspaceContext,
+  intent: { title: string; from?: WorkspaceRef; fields?: Readonly<Record<string, unknown>> },
+): WorkspaceCreateOutcome {
+  const attachmentId = intent.from!.id;
+  if (!getAttachment(ctx.workspaceRoot, attachmentId)) {
+    return {
+      status: 'refused',
+      reason: 'denied',
+      detail: 'no attachment with that id in this workspace',
+    };
+  }
+  const artifact = readDocumentArtifact(ctx.workspaceRoot, attachmentId);
+  if (!artifact) {
+    return {
+      status: 'refused',
+      reason: 'denied',
+      detail: 'this attachment has no parsed document to import',
+    };
+  }
+
+  const fields = intent.fields ?? {};
+  const imported = importDocumentAsNote({
+    // The caller's own words win over the file name when it gave any, because
+    // "Q3 planning deck" is a better page title than `deck-final-v2 (1).pdf`.
+    artifact: intent.title.trim() ? { ...artifact, name: intent.title } : artifact,
+    ...(ctx.userId === undefined ? {} : { userId: ctx.userId }),
+    ...(typeof fields.parentId === 'string' ? { parentId: fields.parentId } : {}),
+  });
+  // Every field but `parentId` is decided by the document. Reported rather than
+  // dropped, so a caller that asked for an icon knows it did not get one.
+  const ignored = Object.keys(fields).filter((key) => key !== 'parentId');
+  return {
+    status: 'created',
+    ref: noteBlockRef(imported.pageId),
+    ...(ignored.length > 0 ? { ignored } : {}),
+  };
 }
 
 /**
@@ -772,7 +861,7 @@ export function linkWorkspaceRef(
 
   if (from.mode === 'notes' && from.kind === 'block') {
     const block = notesGetBlock(ctx.userId, from.id);
-    if (!block || block.deletedAt) {
+    if (!block || !isLiveBlock(block)) {
       return { ok: false, reason: 'source_not_found', detail: `no note block ${from.id}` };
     }
     const text = block.text.value;

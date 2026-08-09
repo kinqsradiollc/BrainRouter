@@ -304,7 +304,13 @@ describe("notes + workspace routes", () => {
 
     expect(res.status).toBe(400);
     const body = await res.json();
-    expect(body.reason).toBe("no_such_mode");
+    // Q4's own sentence, which is what this test's NAME asks for. It used to
+    // assert `no_such_mode` — "BrainRouter has never heard of code" — which is
+    // false: code is a registered mode on every surface that has a checkout,
+    // and it is linkable but not creatable on all of them. The two refusals
+    // lead somewhere completely different for whoever reads one.
+    expect(body.reason).toBe("mode_is_not_creatable");
+    expect(body.detail).toMatch(/linkable but not creatable/);
   });
 
   /**
@@ -456,10 +462,23 @@ describe("notes + workspace routes", () => {
     });
 
     expect(res.status).toBe(400);
-    // The backend has no checkout, so `code` is not registered at all here —
-    // which is a different sentence from "code is linkable but not writable",
-    // and both are more useful than a 500.
-    expect((await res.json()).reason).toBe("no_such_mode");
+    // "Code is linkable but not writable" — the same sentence the desktop and
+    // the CLI give, because it is the same fact. The backend has no checkout,
+    // so it cannot READ a file reference either, and that is reported honestly
+    // as `no_resolver_here` on the resolve path rather than as a deletion. What
+    // it is NOT is an unheard-of mode, which is what this used to answer.
+    expect((await res.json()).reason).toBe("mode_is_not_writable");
+  });
+
+  it("and code still reads as unavailable-here rather than as deleted", async () => {
+    const res = await fetch(
+      `${baseUrl}/api/workspace/resolve?uri=${encodeURIComponent("brainrouter://code/file/src/x.ts")}`,
+      { headers },
+    );
+    const { resolution, line } = await res.json();
+    expect(resolution.status).toBe("unavailable");
+    expect(resolution.reason).toBe("no_resolver_here");
+    expect(line).toMatch(/not available in this app/);
   });
 
   /**

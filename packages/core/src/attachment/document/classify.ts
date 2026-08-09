@@ -232,6 +232,20 @@ export interface NoticeInput {
   scavenged: boolean;
   /** True when there is document text to talk about. */
   hasText: boolean;
+  /**
+   * Why the structured engine did not answer, when it did not.
+   *
+   * Needed here and not only in `diagnostics` because of one case that reads as
+   * a lie: the engine is stopped by a resource wall, the baseline recovers
+   * nothing, and `limits` — correctly narrowed to the walls that shaped the
+   * text we RETURN — carries none of it. The notice then says the document has
+   * "no content", which asserts a fact about the document from a failure of
+   * ours. A 512 KB decompression bomb produced exactly that.
+   *
+   * ADR-028 B1: do not claim a state you have not established. We did not
+   * establish that the document is empty; we established that we stopped.
+   */
+  structureUnavailable?: string;
 }
 
 /**
@@ -287,7 +301,12 @@ export function renderNotice(input: NoticeInput): string {
       + `${one ? 'its' : 'their'} contents are NOT in the text below and were not read.`,
     );
   } else if (!input.hasText) {
-    parts.push(`This document has ${countPages(total)} and no content: no text and no images.`);
+    // "No content" is a claim about the DOCUMENT. Only make it when nothing of
+    // ours got in the way — otherwise report our own failure, which is the
+    // thing we actually established.
+    parts.push(input.structureUnavailable
+      ? `This document could not be read: ${input.structureUnavailable}. Whether it has content is unknown.`
+      : `This document has ${countPages(total)} and no content: no text and no images.`);
   }
 
   if (input.scavenged) {
@@ -320,6 +339,7 @@ function limitSentences(limits: readonly PdfLimit[], total: number): string[] {
   if (limits.includes('pages')) out.push(`Only some of the ${countPages(total)} were read: the page limit was reached.`);
   if (limits.includes('time')) out.push('The parse ran out of its time budget and stopped early, so the text may be incomplete.');
   if (limits.includes('inflated')) out.push('The document expands to more data than this parser accepts, so it was read only in part.');
+  if (limits.includes('memory')) out.push('The document needed more memory than this parser is allowed, so reading it was stopped.');
   return out;
 }
 

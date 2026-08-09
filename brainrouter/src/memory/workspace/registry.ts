@@ -11,10 +11,13 @@
  * **What is registered here is what the backend can actually answer for**, and
  * the omissions are decisions rather than gaps:
  *
- *  - `code` is absent because the backend has no checkout: a file reference
- *    resolves against a workspace, and only a client with one open can read it.
- *    The registry reports `unavailable / no_resolver_here` for those, which is
- *    the honest answer — "not available in this app" rather than "deleted".
+ *  - `code` is registered as LINKABLE and answers `unavailable /
+ *    no_resolver_here` for every read, because the backend has no checkout: a
+ *    file reference resolves against a workspace, and only a client with one
+ *    open can read it. That is the honest answer — "not available in this app"
+ *    rather than "deleted". It is registered rather than omitted so that the
+ *    write verbs give Q4's sentence, "linkable but not creatable", instead of
+ *    "no such mode".
  *  - `chat` is absent because a chat TURN has no stable id to address. The
  *    transcript is an append-only file of unkeyed lines and the server re-mints
  *    message ids on every sync, so `brainrouter://chat/turn/<session>/<n>` would
@@ -35,7 +38,7 @@ import {
   resolvedFound, resolvedGone, resolvedUnavailable, WorkspaceReferenceRegistry,
   type WorkspaceRef, type WorkspaceRefViewer, type WorkspaceResolution,
 } from "@kinqs/brainrouter-core/workspace/references";
-import { blockContext, noteBlockRef, type NoteBlock } from "@kinqs/brainrouter-core/notes";
+import { blockContext, blockTombstone, isLiveBlock, noteBlockRef, type NoteBlock } from "@kinqs/brainrouter-core/notes";
 import * as notes from "../notes/backend.js";
 import * as planner from "../planner/backend.js";
 import * as track from "../track/backend.js";
@@ -63,6 +66,23 @@ function firstLine(text: string): string {
 }
 
 /* -------------------------------------------------------------------- notes */
+
+/**
+ * C5's second sentence — "restoring the target restores the reference".
+ *
+ * Restore is a newer `restoredAt` that outvotes the tombstone rather than a
+ * cleared `deletedAt` (`memory/notes/backend.ts` says so where it writes the
+ * field), so testing `deletedAt` for truthiness makes a restored block resolve
+ * as gone for ever — un-citable AND un-editable through the workspace verbs.
+ * The comparison is `isLiveBlock`; the date still comes from the tombstone in
+ * force, which is what `blockTombstone` returns.
+ */
+function noteTombstoneOf(block: NoteBlock): { reason: "deleted"; at?: string } | null {
+  const tombstone = blockTombstone(block);
+  if (!tombstone) return null;
+  const at = stampIso(tombstone.physical);
+  return at ? { reason: "deleted", at } : { reason: "deleted" };
+}
 
 function noteLabel(block: NoteBlock): string {
   const text = firstLine(block.text?.value ?? "");
@@ -98,9 +118,8 @@ const notesParticipant = creatableWorkspaceMode({
       block = await notes.getBlock(orgId, owner.userId, ref.id);
       if (!block) return resolvedGone(ref, { reason: "never_existed" });
     }
-    if (block.deletedAt) {
-      return resolvedGone(ref, { reason: "deleted", ...(stampIso(block.deletedAt.physical) ? { at: stampIso(block.deletedAt.physical)! } : {}) });
-    }
+    const tombstone = noteTombstoneOf(block);
+    if (tombstone) return resolvedGone(ref, tombstone);
 
     // Q3: the block, the headings above it, and a COUNT of the rest. Never the
     // page — someone's meeting notes run to thousands of words, so "include the
@@ -133,16 +152,26 @@ const notesParticipant = creatableWorkspaceMode({
       if (!shared) return resolvedGone(ref, { reason: "never_existed" });
       return resolvedFound(ref, { label: noteLabel(shared) });
     }
-    if (block.deletedAt) {
-      return resolvedGone(ref, { reason: "deleted", ...(stampIso(block.deletedAt.physical) ? { at: stampIso(block.deletedAt.physical)! } : {}) });
-    }
+    const tombstone = noteTombstoneOf(block);
+    if (tombstone) return resolvedGone(ref, tombstone);
     return resolvedFound(ref, { label: noteLabel(block) });
   },
 
+  /**
+   * E6 — a created block arrives AS the thing that was asked for.
+   *
+   * `kind` and `parentId` alone is the shape this had first, and everything
+   * else the caller named — a row's `props`, a page's `icon` or `cover`, a
+   * database's `schema` — was dropped without a word. A database row created
+   * that way shows up with every column empty, which is the outcome E6 names,
+   * and the caller is not even told: there was no `ignored` channel on create.
+   * The same `notePatch` the update verb uses decides what is understood.
+   */
   async create(intent, viewer) {
     const orgId = orgOf(viewer);
     if (!orgId) return { status: "refused", reason: "denied", detail: "notes are created inside an organization" };
     const fields = intent.fields ?? {};
+    const { patch, ignored } = notePatch({ fields });
     const block = await notes.createBlock(
       orgId,
       viewer.userId,
@@ -150,10 +179,15 @@ const notesParticipant = creatableWorkspaceMode({
         kind: (fields.kind as NoteBlock["kind"]["value"]) ?? "paragraph",
         text: intent.title,
         parentId: typeof fields.parentId === "string" ? fields.parentId : null,
+        fields: patch,
       },
       Date.now(),
     );
-    return { status: "created", ref: noteBlockRef(block.id) };
+    return {
+      status: "created",
+      ref: noteBlockRef(block.id),
+      ...(ignored.length > 0 ? { ignored } : {}),
+    };
   },
 
   /**
@@ -171,7 +205,7 @@ const notesParticipant = creatableWorkspaceMode({
     const orgId = orgOf(viewer);
     if (!orgId) return { status: "refused", reason: "denied", detail: "notes change inside an organization" };
     const block = await notes.getBlock(orgId, viewer.userId, intent.ref.id);
-    if (!block || block.deletedAt) {
+    if (!block || !isLiveBlock(block)) {
       return { status: "refused", reason: "not_found", detail: `no note block ${intent.ref.id}` };
     }
 
@@ -187,16 +221,48 @@ const notesParticipant = creatableWorkspaceMode({
     const refusal = outcome.rejected[0];
     if (refusal) return { status: "refused", reason: "failed", detail: refusal.reason };
 
+    // B2's soft lock, reported as itself. A fenced write is kept as a conflict
+    // rather than applied, so answering `updated` here tells the caller its
+    // sentence landed while the block on screen still says what it said — E6's
+    // own named failure, and the reason a caller retries forever against a lock
+    // that is doing its job.
+    const fenced = outcome.fenced?.find((entry) => entry.itemId === intent.ref.id && entry.reason === "blocked");
+    if (fenced) {
+      return { status: "refused", reason: "locked", detail: "This block is being edited on another device." };
+    }
+
     const after = await notes.getBlock(orgId, viewer.userId, intent.ref.id);
     return {
       status: "updated",
       ref: intent.ref,
-      changed,
+      // What the merge TOOK, not what the patch asked for. A stale stamp or a
+      // fencing penalty can leave a field holding its previous value, and a
+      // `changed` list built from the request would name it anyway.
+      changed: after ? changed.filter((field) => tookField(after, field, patch[field])) : [],
       ...(ignored.length > 0 ? { ignored } : {}),
       ...(after ? { label: noteLabel(after) } : {}),
     };
   },
 });
+
+/**
+ * Did the stored block actually end up holding what the patch asked for?
+ *
+ * Every field `notePatch` accepts is a `Stamped<T>` of a primitive except
+ * `props`, which is a map merged key by key — so the comparison is per key
+ * there, and "the merge took it" means every key the caller named is now the
+ * value it named.
+ */
+function tookField(block: NoteBlock, field: string, asked: unknown): boolean {
+  if (field === "props") {
+    if (!asked || typeof asked !== "object") return false;
+    const props = (block as { props?: Record<string, { value?: unknown }> }).props ?? {};
+    return Object.entries(asked as Record<string, unknown>)
+      .every(([key, value]) => JSON.stringify(props[key]?.value) === JSON.stringify(value));
+  }
+  const stamped = (block as unknown as Record<string, { value?: unknown } | undefined>)[field];
+  return JSON.stringify(stamped?.value) === JSON.stringify(asked);
+}
 
 /**
  * The block fields a caller may name, and the ones it named that mean nothing.
@@ -397,6 +463,34 @@ const meetingsParticipant = linkableWorkspaceMode({
   },
 });
 
+/* -------------------------------------------------------------------- code */
+
+/**
+ * Registered, and deliberately unable to answer — E6's third point.
+ *
+ * The backend has no checkout, so a file reference cannot be READ here; that
+ * has always been reported honestly as `no_resolver_here`, which renders as
+ * "not available in this app" rather than as a deletion. What was wrong was the
+ * WRITE side: with the mode unregistered, a server-side `create` for a code ref
+ * answered `no_such_mode` — "BrainRouter has never heard of code" — instead of
+ * Q4's actual sentence, "code is linkable but not creatable". The two lead
+ * somewhere completely different for whoever reads the refusal.
+ *
+ * `linkableWorkspaceMode` makes that a property of the type: there is no
+ * `create` to call, so the registry refuses it by construction on both halves.
+ */
+const codeParticipant = linkableWorkspaceMode({
+  mode: "code",
+  kinds: ["file", "symbol"],
+  resolve(ref) {
+    return resolvedUnavailable(
+      ref,
+      "no_resolver_here",
+      "a file reference resolves against a checkout, and the server has none",
+    );
+  },
+});
+
 /* ----------------------------------------------------------------- registry */
 
 let registry: WorkspaceReferenceRegistry | undefined;
@@ -415,6 +509,7 @@ export function workspaceRegistry(): WorkspaceReferenceRegistry {
   next.register(plannerParticipant);
   next.register(trackParticipant);
   next.register(meetingsParticipant);
+  next.register(codeParticipant);
   registry = next;
   return next;
 }

@@ -133,7 +133,14 @@ export const BUILTIN_TOOL_SPECS = [
         mode: { type: 'string', description: 'notes, planner or track.' },
         kind: { type: 'string', description: 'block, item or work-item.' },
         title: { type: 'string', description: 'The text of the new record, in the user\'s words where possible.' },
-        from: { type: 'string', description: 'Optional brainrouter:// reference this came from, recorded on the new record.' },
+        from: {
+          type: 'string',
+          description:
+            'Optional brainrouter:// reference this came from, recorded on the new record. '
+            + 'One special case: mode "notes" with a brainrouter://document/outline/... reference '
+            + 'IMPORTS that parsed document as a page of blocks — its pages become headings and its '
+            + 'text becomes paragraphs you can edit, cite and comment on.',
+        },
         fields: {
           type: 'object',
           description:

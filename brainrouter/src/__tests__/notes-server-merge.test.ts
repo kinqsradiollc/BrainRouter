@@ -742,3 +742,144 @@ describe("notes push — Part E's projections travel with the block", () => {
     expect(cells[0]?.text).toBe(null);
   });
 });
+
+/**
+ * ADR-029 C5 + E6 — the SERVER half of the workspace verbs.
+ *
+ * These went unpinned because the suite above tests `pushOperations` directly
+ * and the registry is the layer between it and every caller. Three properties
+ * that were wrong at the same time, all silently:
+ *
+ *   - a restored block resolved as a tombstone for ever, because the reference
+ *     paths tested `deletedAt` for truthiness while restore is a newer
+ *     `restoredAt` that OUTVOTES it (C5's second sentence);
+ *   - a created block kept only `kind` and `parentId`, so a database row
+ *     arrived with every column empty and nothing said so (E6);
+ *   - a write blocked by another device's lease was reported as `updated` with
+ *     the field named in `changed`, while the stored text was unchanged (E6's
+ *     "an update that succeeds for the four fields it understood teaches its
+ *     caller the fifth landed too").
+ */
+const { workspaceRegistry } = await import("../memory/workspace/registry.js");
+
+describe("the workspace verbs, server-side", () => {
+  const VIEWER = { userId: USER, orgId: ORG };
+  const reset = (): void => {
+    fake.blocks.clear(); fake.refs.clear(); fake.index.clear();
+    fake.applied.clear(); fake.leases.clear();
+    fake.pageMeta.clear(); fake.rowValues.clear();
+    fake.upserts = 0; fake.nowMs = 1_000_000;
+  };
+  beforeEach(reset);
+
+  it("C5: restoring a block restores the reference — resolve, describe and update all come back", async () => {
+    const registry = workspaceRegistry();
+    await seed("blk_1", "original sentence", at(1_000, "device-a"));
+    const ref = { mode: "notes", kind: "block", id: "blk_1" } as const;
+
+    await push({ key: "blk_1:del", id: "blk_1", kind: "delete", at: at(2_000, "device-a"), payload: {} });
+    expect((await registry.resolve(ref, VIEWER)).status).toBe("gone");
+
+    await push({ key: "blk_1:restore", id: "blk_1", at: at(3_000, "device-a"), payload: { restore: true } });
+    // The tombstone is still on the record. That is the point: liveness is the
+    // comparison of the two stamps, not the presence of one of them.
+    expect(blockOf("blk_1").deletedAt).toBeTruthy();
+
+    const resolved = await registry.resolve(ref, VIEWER);
+    expect(resolved.status).toBe("found");
+    expect(await registry.describeLine(ref, VIEWER, { nowMs: 3_000 })).toBe("original sentence");
+
+    const updated = await registry.update({ ref, title: "restored and edited" }, VIEWER);
+    expect(updated.status).toBe("updated");
+    expect(blockOf("blk_1").text.value).toBe("restored and edited");
+  });
+
+  it("C5: a block that is still deleted stays refused, so the fix is a comparison and not a removed check", async () => {
+    const registry = workspaceRegistry();
+    await seed("blk_1", "gone for good", at(1_000, "device-a"));
+    await push({ key: "blk_1:del", id: "blk_1", kind: "delete", at: at(2_000, "device-a"), payload: {} });
+
+    const outcome = await registry.update(
+      { ref: { mode: "notes", kind: "block", id: "blk_1" }, title: "nope" },
+      VIEWER,
+    );
+    expect(outcome.status).toBe("refused");
+    expect(outcome.status === "refused" && outcome.reason).toBe("not_found");
+  });
+
+  it("E6: a created row arrives WITH its cells and a page with its icon, not as an empty row", async () => {
+    const registry = workspaceRegistry();
+    const created = await registry.create(
+      {
+        mode: "notes",
+        kind: "block",
+        title: "Invoice 2",
+        fields: { kind: "page", props: { amount: 999, due: "2026-10-01" }, icon: "🧾" },
+      },
+      VIEWER,
+    );
+    expect(created.status).toBe("created");
+    const id = created.status === "created" ? created.ref.id : "";
+    const block = blockOf(id);
+    expect(block.icon?.value).toBe("🧾");
+    expect(block.props?.amount?.value).toBe(999);
+    expect(block.props?.due?.value).toBe("2026-10-01");
+    expect(block.text.value).toBe("Invoice 2");
+  });
+
+  it("E6: a field the mode has no meaning for is REPORTED by create, not dropped in silence", async () => {
+    const registry = workspaceRegistry();
+    const created = await registry.create(
+      { mode: "notes", kind: "block", title: "A note", fields: { nonsense: 1 } },
+      VIEWER,
+    );
+    expect(created.status).toBe("created");
+    expect(created.status === "created" && created.ignored).toEqual(["nonsense"]);
+  });
+
+  it("E6: an update blocked by another device's lease is refused as `locked`, not reported as a change", async () => {
+    const registry = workspaceRegistry();
+    await seed("blk_1", "original sentence", at(1_000, "device-a"));
+    await notes.acquireLease(ORG, USER, "blk_1", { deviceId: "device-b", holder: "the phone" });
+
+    const outcome = await registry.update(
+      { ref: { mode: "notes", kind: "block", id: "blk_1" }, title: "agent rewrote it" },
+      VIEWER,
+    );
+
+    expect(outcome.status).toBe("refused");
+    expect(outcome.status === "refused" && outcome.reason).toBe("locked");
+    // And the block is untouched, which is the thing the old `updated` answer
+    // was contradicting.
+    expect(blockOf("blk_1").text.value).toBe("original sentence");
+  });
+
+  it("E6: `changed` names what the merge took — a field a stale stamp lost is not reported as changed", async () => {
+    const registry = workspaceRegistry();
+    // Stamped an hour into the future, so the server's own `Date.now()` clock
+    // is behind it and the merge keeps the existing text — the ordinary case of
+    // an agent writing against a version it has not seen. A `changed` list
+    // built from the REQUEST would still say "text".
+    await seed("blk_1", "the version everyone else has", at(Date.now() + 3_600_000, "device-z"));
+
+    const outcome = await registry.update(
+      { ref: { mode: "notes", kind: "block", id: "blk_1" }, title: "what the agent believed" },
+      VIEWER,
+    );
+    expect(outcome.status).toBe("updated");
+    expect(outcome.status === "updated" && outcome.changed).toEqual([]);
+    expect(blockOf("blk_1").text.value).toBe("the version everyone else has");
+  });
+
+  it("E6: code is linkable but not creatable here — not an unheard-of mode", async () => {
+    const registry = workspaceRegistry();
+    const created = await registry.create({ mode: "code", kind: "file", title: "src/new.ts" }, VIEWER);
+    expect(created.status).toBe("refused");
+    expect(created.status === "refused" && created.reason).toBe("mode_is_not_creatable");
+
+    // Reading still answers honestly — the server has no checkout.
+    const resolved = await registry.resolve({ mode: "code", kind: "file", id: "src/new.ts" }, VIEWER);
+    expect(resolved.status).toBe("unavailable");
+    expect(resolved.status === "unavailable" && resolved.reason).toBe("no_resolver_here");
+  });
+});

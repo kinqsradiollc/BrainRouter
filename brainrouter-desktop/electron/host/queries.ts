@@ -23,6 +23,8 @@ import { createPlannerTransport } from './plannerTransport.js';
 // (D1), so none of these take a workspace root either.
 import {
   createBlock as notesCreate, createPage as notesCreatePage, updateBlock as notesUpdate,
+  // ADR-030 D5 — a parsed document becomes a page of blocks.
+  importDocumentAsNote,
   deleteBlock as notesDelete, moveBlock as notesMove,
   buildNoteTree, readNotes, writeNotes, resolveConflict as notesResolveConflict,
   beginEditing as notesBeginEditing, keepEditing as notesKeepEditing, endEditing as notesEndEditing,
@@ -1222,6 +1224,32 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         if (!artifact) return null;
         const part = artifact.parts.find((candidate) => candidate.index === index);
         return part ? { attachmentId: id, partCount: artifact.parts.length, ...part } : null;
+      },
+      /**
+       * ADR-030 D5 — the second landing place, as a gesture a person performs.
+       *
+       * "An imported document becomes a page of blocks, addressable at
+       * `brainrouter://notes/block/…`." The judgement is core's
+       * (`importDocumentAsNote`) so the desktop, the CLI and the agent's
+       * `workspace_create` all produce the same page; this reads the artifact
+       * that ingest already wrote and hands it over. It parses nothing.
+       *
+       * Refused with a reason rather than half-done: an attachment that is not
+       * a parsed document — an image, or a PDF ingested before this shipped —
+       * leads somewhere different from one that does not exist.
+       */
+      'notes-import-document': (a) => {
+        const id = typeof a.id === 'string' ? a.id : '';
+        if (!getAttachment(workspaceRoot, id)) {
+          return { ok: false, reason: 'no attachment with that id in this workspace' };
+        }
+        const artifact = readDocumentArtifact(workspaceRoot, id);
+        if (!artifact) return { ok: false, reason: 'this attachment has no parsed document to import' };
+        const imported = importDocumentAsNote({
+          artifact,
+          ...(typeof a.parentId === 'string' ? { parentId: a.parentId } : {}),
+        });
+        return { ok: true, ...imported };
       },
       // DESK-5l — live model, not the boot-time snapshot: session-info runs on
       // every sidebar refresh, and returning stale llm.model used to stomp the

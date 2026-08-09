@@ -6,37 +6,39 @@
  * reason the baseline does not have:
  *
  * > **The engine call is synchronous and cannot be interrupted.** Once
- * > `processPdf` is entered, nothing in this process runs until it returns —
+ * > `processPdf` is entered, nothing on that thread runs until it returns —
  * > there is no yield point to check a clock from. Preempting a running
- * > WebAssembly instance requires a second thread to terminate it, and putting
- * > one behind this seam is a change of shape (a worker script resolved out of a
- * > packaged app archive), not a tweak.
+ * > WebAssembly instance requires a second thread to terminate it.
  *
- * So the deadline is enforced at every boundary BETWEEN calls, and the work
- * inside a call is bounded by construction instead:
+ * That second thread now exists (`structured.ts`), which is what makes the last
+ * two walls below real rather than aspirational. The bounds are:
  *
  *  - `maxBytes` bounds what the engine is handed at all, and it is deliberately
- *    far below the baseline's own byte cap.
- *
- *    It is NOT a memory bound, and this comment used to say it was. Measured:
- *    an 812-byte file of nested Flate streams drives the engine to 933 MB of
- *    resident memory, against 84 MB for the same file with the baseline alone —
- *    because what the parser holds in linear memory is the INFLATED document,
- *    which the compressed size bounds no better here than it does anywhere else
- *    (`format/pdf/limits.ts` exists for that reason on our side of the seam).
- *    The engine returned a reason and did not crash in every hostile case we
- *    have run, so this is a cost rather than a hole; bounding it properly means
- *    a worker thread with a memory cap, which is the change of shape above.
- *    ADR-030 §1.1 is about a comment that claimed a guarantee nobody checked —
- *    stating the measured behaviour is the least this file can do about that.
+ *    far below the baseline's own byte cap. It is NOT a memory bound, and this
+ *    comment used to claim it was. Measured: an 812-byte file of nested Flate
+ *    streams drives the engine to 933 MB of resident memory, against 84 MB for
+ *    the same file with the baseline alone — because what the parser holds in
+ *    linear memory is the INFLATED document, which the compressed size bounds no
+ *    better here than it does anywhere else (`format/pdf/limits.ts` exists for
+ *    that reason on our side of the seam).
  *  - `maxPages` bounds the work inside the one expensive call — the engine takes
  *    an explicit page list, so a 4,000-page document costs what 200 pages cost.
- *  - `canaryFraction` is the part that does real work. The cheap classification
- *    pass walks the same object graph as the expensive extraction pass and costs
- *    a predictable fraction of it (41 ms against 96 ms on our own 13-page deck).
- *    So the cheap pass is a measurement of the expensive one: if classifying ate
- *    more than this share of the remaining budget, extraction would blow it, and
- *    we refuse BEFORE entering the call we could not leave.
+ *  - `canaryFraction` is the cheap measurement of the expensive pass. The
+ *    classification pass walks the same object graph as extraction and costs a
+ *    predictable fraction of it (41 ms against 96 ms on our own 13-page deck).
+ *    If classifying ate more than this share of the remaining budget, extraction
+ *    would blow it, so we refuse before entering the longer call. Kept even
+ *    though the parse can now be terminated: refusing early is cheaper than
+ *    killing a thread, and it costs nothing.
+ *  - `timeBudgetMs` is enforced DURING the engine call, by terminating the
+ *    worker. Before there was a worker it could only be checked between calls,
+ *    which is why a 522 KB decompression bomb ran for as long as it wanted.
+ *  - `maxMemoryBytes` is the memory bound D4 asks for, and it is a watchdog
+ *    rather than an allocator limit — deliberately, because no allocator limit
+ *    exists for the thing that grows. A worker's `resourceLimits` cap its V8
+ *    HEAP; WebAssembly linear memory is not on that budget, and the bomb's
+ *    1.9 GB is `memory.grow` inside the module. So the parse is watched, and a
+ *    parse whose resident growth passes this is stopped and its thread retired.
  */
 
 export interface DocumentBounds {
@@ -52,6 +54,15 @@ export interface DocumentBounds {
    * classification, so a third is the point past which the sum cannot fit.
    */
   canaryFraction: number;
+  /**
+   * Resident growth one parse may cause before its thread is terminated.
+   *
+   * Measured against real work rather than guessed: a 4,000-page document costs
+   * 182 MB and a 50 MB file costs 202 MB, while the decompression bomb this
+   * exists for reached 1,879 MB. The gap is wide enough that the wall sits well
+   * clear of honest documents and well below the number that hurts a host.
+   */
+  maxMemoryBytes: number;
 }
 
 /**
@@ -65,6 +76,7 @@ export const DOCUMENT_BOUNDS: DocumentBounds = {
   maxPages: 200,
   timeBudgetMs: 10_000,
   canaryFraction: 0.35,
+  maxMemoryBytes: 512 * 1024 * 1024,
 };
 
 export function resolveDocumentBounds(overrides?: Partial<DocumentBounds>): DocumentBounds {

@@ -147,6 +147,17 @@ export interface NotePushOperation {
 export interface PushOutcome {
   accepted: string[];
   rejected: Array<{ idempotencyKey: string; reason: string }>;
+  /**
+   * ADR-029 E6 — the operations that landed as a CONFLICT rather than as a write.
+   *
+   * A fenced write is accepted (B2 keeps the sentence rather than destroying it)
+   * but its fields did not replace the ones the block already held. Without this
+   * channel the only signal is a `conflicts` marker on the stored block, which
+   * `accepted` does not mention — so a caller is told its change landed while the
+   * text on screen is unchanged. That is E6's own named failure, and it is why a
+   * `locked` refusal was unreachable on this side.
+   */
+  fenced?: Array<{ idempotencyKey: string; itemId: string; reason: BlockFence }>;
 }
 
 /**
@@ -609,7 +620,24 @@ export async function rebuildDerived(orgId: string, userId: string): Promise<{ b
 export async function createBlock(
   orgId: string,
   userId: string,
-  input: { kind?: NoteBlockKind; text?: string; parentId?: string | null; level?: number; visibility?: string },
+  input: {
+    kind?: NoteBlockKind;
+    text?: string;
+    parentId?: string | null;
+    level?: number;
+    visibility?: string;
+    /**
+     * ADR-029 E6 — the fields a created block may arrive WITH.
+     *
+     * Without this the server's create could express `kind` and `parentId` and
+     * nothing else, so a database row created through the workspace verbs
+     * appeared with every column empty and a page arrived without its icon —
+     * verbatim the outcome E6 says it closes. The values are stamped by the
+     * same `incomingBlock` a pushed operation goes through and validated by the
+     * same `validatePatch`, so create and update cannot drift apart.
+     */
+    fields?: Readonly<Record<string, unknown>>;
+  },
   nowMs: number,
 ): Promise<NoteBlock> {
   const kind = input.kind ?? "paragraph";
@@ -624,14 +652,30 @@ export async function createBlock(
     .map(blockOf);
   const last = siblings.map((b) => b.rank?.value).filter((r): r is string => typeof r === "string").sort().at(-1);
 
-  const block: NoteBlock = {
-    id: `blk_${nowMs.toString(36)}${randomUUID().slice(0, 8)}_server`,
-    parentId: stampedWith(parentId, at),
-    rank: stampedWith(last ? rankBetween(last, null) : FIRST_RANK, at),
-    kind: stampedWith(kind, at),
-    text: stampedWith(text, at),
-    ...(input.level !== undefined ? { level: stampedWith(input.level, at) } : {}),
+  const patch: Record<string, unknown> = {
+    ...(input.fields ?? {}),
+    kind,
+    text,
+    parentId,
+    rank: last ? rankBetween(last, null) : FIRST_RANK,
+    ...(input.level !== undefined ? { level: input.level } : {}),
   };
+  // The same bounds a pushed operation gets. A create is not a privileged path:
+  // an icon or a schema that arrives here reaches every viewer of the page.
+  const invalid = validatePatch(patch);
+  if (invalid) throw new Error(invalid);
+
+  const block = incomingBlock(
+    null,
+    {
+      idempotencyKey: "",
+      itemId: `blk_${nowMs.toString(36)}${randomUUID().slice(0, 8)}_server`,
+      kind: "create",
+      at,
+      payload: patch,
+    },
+    patch,
+  );
   return persistBlock(orgId, userId, block, input.visibility);
 }
 
@@ -689,13 +733,20 @@ export async function pushOperations(
       const existingRow = await store().getNoteBlock(orgId, userId, op.itemId);
       const existing = existingRow ? blockOf(existingRow) : null;
 
-      const next = existing
+      const merged = existing
         ? await mergeIncoming(orgId, userId, existing, op, patch)
-        : incomingBlock(null, op, patch);
+        : { block: incomingBlock(null, op, patch) };
 
-      await persistBlock(orgId, userId, next, existingRow?.visibility);
+      await persistBlock(orgId, userId, merged.block, existingRow?.visibility);
       await store().recordNoteOperationApplied(orgId, userId, op.idempotencyKey, op.itemId);
       outcome.accepted.push(op.idempotencyKey);
+      if (merged.penalty) {
+        (outcome.fenced ??= []).push({
+          idempotencyKey: op.idempotencyKey,
+          itemId: op.itemId,
+          reason: merged.penalty,
+        });
+      }
     } catch (error) {
       outcome.rejected.push({
         idempotencyKey: op.idempotencyKey,
@@ -782,12 +833,12 @@ async function mergeIncoming(
   existing: NoteBlock,
   op: NotePushOperation,
   patch: Record<string, unknown>,
-): Promise<NoteBlock> {
+): Promise<{ block: NoteBlock; penalty?: BlockFence }> {
   // A conflict resolution is not a field write: it picks one of two kept
   // versions. Applying it as a patch would merge the choice against the
   // conflict it was resolving and leave the marker in place.
   if (typeof patch.field === "string" && (patch.keep === "ours" || patch.keep === "theirs")) {
-    return resolveBlockConflict(existing, patch.field, patch.keep, op.at) ?? existing;
+    return { block: resolveBlockConflict(existing, patch.field, patch.keep, op.at) ?? existing };
   }
 
   const incoming = incomingBlock(existing, op, patch);
@@ -798,7 +849,11 @@ async function mergeIncoming(
     { deviceId: op.at.deviceId, ...(claimed === undefined ? {} : { epoch: claimed }) },
     dbNowMs,
   );
-  return mergeNoteBlock(existing, incoming, penaltyOf(fence));
+  const penalty = penaltyOf(fence);
+  return {
+    block: mergeNoteBlock(existing, incoming, penalty),
+    ...(penalty ? { penalty } : {}),
+  };
 }
 
 /**

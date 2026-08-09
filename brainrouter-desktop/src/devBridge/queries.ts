@@ -871,6 +871,23 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       const part = doc?.parts.find((candidate) => candidate.index === Number(a.part));
       return part && doc ? { attachmentId: doc.attachmentId, partCount: doc.parts.length, ...part } : null;
     },
+    // ADR-030 D5 — the import, in the harness. The COUNT is computed from the
+    // same fixture the outline renders, so the sentence the browser shows is
+    // arithmetic on real parts rather than a number typed into a mock. The page
+    // itself is core's job and does not exist here; an unknown query name would
+    // render "unknown query" beside a button that works in the app, which is the
+    // parity trap this bridge exists to close.
+    'notes-import-document': (a) => {
+      const doc = devDocument(String(a.id ?? ''));
+      if (!doc) return { ok: false, reason: 'this attachment has no parsed document to import' };
+      const blocks = 1 + 1 + doc.parts.reduce(
+        (total, part) => total + (part.page === undefined ? 0 : 1)
+          + part.text.split(/\n[ \t]*\n/).filter((chunk) => chunk.trim().length >= 2).length,
+        0,
+      );
+      return { ok: true, pageId: `blk_dev_${doc.attachmentId}`, blocks, omitted: 0,
+        summary: `New page from the document — ${blocks} blocks.` };
+    },
     // DESK-6w — a workflow run's phase/agent breakdown for the /workflows card.
     'workflow-detail': (a) => {
       const slug = String(a.slug ?? 'build');
@@ -2158,6 +2175,12 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       devNotes.splice(index + 1, 0, created);
       return { ok: true, action: 'split', focusId: created.id, caret: 0, createdId: created.id };
     },
+    // Flat and always-merging, unlike core's `mergeIntoPrevious`, which unstyles,
+    // outdents or removes depending on where the block sits. That difference once
+    // MASKED a real defect: core's Backspace outdented every block on a page
+    // instead of merging, and this harness merged anyway, so the browser dev
+    // surface looked correct while the shipping one was not. Judge the gesture in
+    // `packages/core/src/notes/blockOps.ts`, never here.
     'notes-merge-back': (a) => {
       const id = String(a.id ?? '');
       const index = devNotes.findIndex((b) => b.id === id);

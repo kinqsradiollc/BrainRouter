@@ -100,6 +100,7 @@ export async function parsePdfDocument(
       maxBytes: bounds.maxBytes,
       maxPages: bounds.maxPages,
       canaryFraction: bounds.canaryFraction,
+      maxMemoryBytes: bounds.maxMemoryBytes,
     });
     if (outcome.ok) {
       structured = outcome.result;
@@ -149,6 +150,10 @@ export async function parsePdfDocument(
     limits: textLimits,
     scavenged: floorText.scavenged && textFrom === 'baseline',
     hasText: markdown.length > 0,
+    // Only when we recovered NOTHING. With text in hand the structure note
+    // already says the right thing, and repeating it would make every
+    // baseline-answered document lead with a failure it survived.
+    ...(markdown.length === 0 && structureUnavailable ? { structureUnavailable } : {}),
   });
 
   const result: ParsedDocument = {

@@ -61,6 +61,8 @@ export * from './noteImage.js';
 export * from './noteHistory.js';
 export * from './noteRefRemap.js';
 export * from './templates.js';
+// ADR-030 D5 — a parsed document becomes a page of blocks with a real address.
+export * from './importDocument.js';
 // ADR-029 F3 — synced blocks (one block, many places) and getting data out.
 // `syncedBlock` is pure and `export/` writes text; both are here rather than on
 // a browser-safe subpath because their callers are the host and the server,
