@@ -1,6 +1,6 @@
 # ADR-033 — Review that finds things, and says where
 
-**Status:** PROPOSED — planning only. Nothing here is built.
+**Status:** ACCEPTED — approved by the owner for implementation.
 **Depends on:** ADR-025 (assurance programs), ADR-028 (surfaces that tell the truth), ADR-029 F1 (an offer the product cannot honour).
 
 ---

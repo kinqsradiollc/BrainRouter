@@ -1,6 +1,6 @@
 # ADR-032 — An agent that gets better, and cannot get worse
 
-**Status:** PROPOSED — planning only. Nothing here is built, and nothing should be until this is reviewed.
+**Status:** ACCEPTED — approved by the owner for implementation.
 **Depends on:** ADR-020 (memory self-improvement), ADR-021 (profiles, capabilities), ADR-029 (the workspace address space, the untrusted-content fence), ADR-031 (one skill library, generated copies).
 
 ---
