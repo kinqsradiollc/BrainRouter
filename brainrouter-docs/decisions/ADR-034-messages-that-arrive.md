@@ -146,6 +146,40 @@ answers the question a person actually asks:
 send to a session at random — you send to the one that is stuck, or looping, or waiting. A listing
 that cannot distinguish *working* from *waiting for you* fails at the moment of use.
 
+#### The naming module exists and nothing calls it
+
+I said above that naming is "already built". That is true of the *module* and false of the
+*feature*, and the difference is the whole of ADR-028 E1:
+
+> **`packages/core/src/session/sessionTitle.ts` has no non-test importer.** `resolveSessionTitle`,
+> `deriveSessionTitle` and `normalizeAgentTitle` are compiled, tested, and called by nothing.
+
+So what actually names a session today:
+
+- **The desktop truncates.** `lib/composer/useComposerDerived.ts:43` — `firstUser.text.slice(0, 48)`
+  falling back to `'New session'`. The exact behaviour the module was written to replace, still
+  running.
+- **A hook can rename it.** `hooksStore.ts` parses `{"sessionTitle":"…"}` and
+  `cli/ink/runChat.tsx:98` applies it. That is a *user's shell hook* naming the session — useful,
+  and not the agent proposing anything.
+- **The agent is never asked.** No prompt anywhere requests a title. ADR-027 D8's central
+  decision — *"the agent proposes a title on turn 1 and it wins when it is usable"* — was never
+  wired.
+
+**So ADR-034 owns finishing it**, because D4b depends on it and a dependency that does not run is
+not a dependency:
+
+1. **Ask the agent on turn 1.** Cheap, and it is the only step that produces a title worth reading.
+2. **Route it through `resolveSessionTitle`.** The validation is the load-bearing part — a model
+   asked for a title will sometimes return a refusal or an essay, and either pasted into a session
+   list is worse than the honest fallback.
+3. **Delete the independent truncations.** Two surfaces cutting at 48 and 52 characters is two
+   answers to one question, which is the class of duplication this codebase keeps paying for.
+4. **Then publish it to the registry** (D4b).
+
+Steps 1–3 are worth doing even if the rest of this ADR is deferred: they fix a naming inconsistency
+that exists today and cost nothing to the messaging design.
+
 #### Titles are for choosing; keys are for routing
 
 The distinction is D4's, and naming makes it sharper rather than softer:

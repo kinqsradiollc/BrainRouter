@@ -95,6 +95,27 @@ export function parseReviewFindings(text: string): ParsedReviewFinding[] {
 }
 
 /**
+ * Merge findings gathered across review units, dropping duplicates. Two
+ * findings are "the same" when they name the same file, line, and summary — so
+ * a finding on a file that straddled a bundle boundary is reported once.
+ *
+ * ADR-033 D2 moved this next to the parser it feeds: with bundles running
+ * concurrently, every surface that collects findings from more than one unit
+ * needs it, and two copies of "the same finding" would drift apart.
+ */
+export function dedupeReviewFindings(findings: readonly ParsedReviewFinding[]): ParsedReviewFinding[] {
+  const seen = new Set<string>();
+  const out: ParsedReviewFinding[] = [];
+  for (const finding of findings) {
+    const key = `${finding.file}\n${finding.line ?? ''}\n${finding.summary.trim().toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(finding);
+  }
+  return out;
+}
+
+/**
  * Parse a unified diff into the set of NEW-file line numbers that are commentable
  * on the RIGHT side (the added `+` lines), keyed by repo-relative path. GitHub's
  * Reviews API only accepts an inline comment whose `line` is part of the diff for
