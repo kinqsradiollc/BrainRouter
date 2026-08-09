@@ -156,10 +156,12 @@ export async function prepareTurnContextPhase(
 
   agent.lastUserPrompt = prompt;
   agent.lastTurnHitLoopLimit = false;
-  try {
-    agent.autoCaptureRequirement(prompt, input.callbacks);
-  } catch {
-    // Requirement capture is best-effort and cannot fail the user turn.
+  if (!agent.reviewSourceSafety) {
+    try {
+      agent.autoCaptureRequirement(prompt, input.callbacks);
+    } catch {
+      // Requirement capture is best-effort and cannot fail the user turn.
+    }
   }
 
   const fanOutHinted = await preparePlanningHint(

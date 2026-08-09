@@ -69,6 +69,16 @@ export function WorkspaceOrgProvider({ children }: { children: ReactNode }): Rea
 
   useEffect(() => { void refresh(); }, [refresh]);
 
+  // A second Desktop window has its own React tree but shares the same account
+  // config and host fleet. Follow main's app-global selection broadcast so its
+  // org-scoped surfaces cannot keep showing the tenant the Agents just left.
+  useEffect(() => window.brainrouter.onActiveOrgChanged?.(({ orgId }) => {
+    const selected = orgId.trim();
+    if (!selected) return;
+    setActiveOrgId(selected);
+    writeStoredOrgId(selected);
+  }), []);
+
   // ADR-032 D8 — the switcher is the app's answer to "whose workspace is this",
   // and tenant-partitioned stores that live outside the renderer (the learned
   // store reads config.json, not React state) have no other way to hear it.

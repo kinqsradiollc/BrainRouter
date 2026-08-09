@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { memoryEngine } from "../../../memory/engine.js";
+import { hasLearnedMemoryMetadata } from "../../../memory/util/learned-record.js";
 
 const baseUser = { userId: z.string().optional() };
 
@@ -282,16 +283,20 @@ export async function handleMemoryEngineeringTool(name: string, args: unknown, o
       const hasUpdate =
         params.confidence !== undefined || params.status !== undefined ||
         params.verificationStatus !== undefined || params.note !== undefined;
+      const existing = await memoryEngine.getMemoryById(uid, params.recordId);
+      if (hasLearnedMemoryMetadata(existing)) {
+        throw new Error("memory_verify is unavailable for learned memory records");
+      }
       const record = hasUpdate
-        ? memoryEngine.updateMemory(uid, params.recordId, {
+        ? await memoryEngine.updateMemory(uid, params.recordId, {
             confidence: params.confidence,
             status: params.status,
             verificationStatus: params.verificationStatus,
             note: params.note,
           })
-        : memoryEngine.getMemoryById(uid, params.recordId);
+        : existing;
       // MEM-3 — the source chunks this record was distilled from.
-      return toolResult({ record, sources: memoryEngine.getRecordProvenance(uid, params.recordId) });
+      return toolResult({ record, sources: await memoryEngine.getRecordProvenance(uid, params.recordId) });
     }
     default:
       throw new Error(`Unknown engineering memory tool: ${name}`);

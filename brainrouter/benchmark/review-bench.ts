@@ -1,238 +1,490 @@
 /**
- * ADR-033 D7 — run the reviewer over our own merged pull requests and report
- * precision, recall, position accuracy, wall clock and cost.
+ * ADR-033 D7/§6 — execute the only meaningful review benchmark: a paired
+ * legacy-versus-bundled run on one frozen semantic corpus and one provider.
  *
- * Everything is local: the case's diff comes from `git show <sha>` (our PRs are
- * squash-merged, so one commit is one pull request), the served files come from
- * the same checkout at the same revision, and the reviewer is the SAME core
- * orchestration the bot runs — bundles, concurrency, computed positions, the
- * one file request, reflection. The forge is not involved, so this can be run
- * against any checkout of the repository.
+ * There is intentionally no single-arm mode. A lone number cannot prove the
+ * ADR's delta claim. Provider configuration is explicit and secret-indirect:
  *
- *   npx tsx benchmark/review-bench.ts [--cases=8] [--concurrency=4]
- *                                     [--lens=security|code] [--arm=bundled|legacy]
+ *   npm run bench:review -w @kinqs/brainrouter-mcp-server -- \
+ *     --provider-config=/absolute/path/review-provider.json
  *
- * ## Why there are two arms
+ * Provider JSON shape:
+ *   {"endpoint":"https://.../v1/chat/completions","model":"...","apiKeyEnv":"NAME"}
  *
- * "Precision goes up and tokens go down" is a DELTA claim, and a delta needs two
- * measurements. `--arm=legacy` is the reviewer as it was before ADR-033: one
- * size-split chunk per model call, run serially, findings positioned by whatever
- * line the model remembered, no reflection pass. `--arm=bundled` is what ships.
- * Run both on the same frozen set and the difference is the evidence; run one
- * and you have a number with nothing to compare it to, which is how this file
- * started life.
- *
- * Read the output with its bias statement attached; see `reviewBenchmark.ts`.
+ * Missing configuration, a provider error, malformed model output, unavailable
+ * frozen revision, or either arm failing exits non-zero. A completed run writes
+ * one machine-readable artifact containing corpus/model revisions, both arms,
+ * full character/call cost, deltas, and the conjunctive acceptance decision.
+ * Failed live runs also write an explicitly failed artifact; they never become
+ * a zero-finding report.
  */
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  buildEvidenceRequestContract,
-  CODE_REVIEW_LENS,
-  dedupeReviewFindings,
-  formatServedEvidence,
-  orchestrateReview,
-  parseEvidenceRequest,
-  parseReviewFindings,
-  planReviewBundles,
-  reflectOnReviewFindings,
-  relatedPathsFromDiff,
-  SECURITY_LENS,
-  stripReasoning,
-  type ParsedReviewFinding,
-} from "@kinqs/brainrouter-core/review";
-import { splitDiffForReview } from "../src/integrations/reviewDiffChunks.js";
+import { CODE_REVIEW_LENS, type ReviewLens } from "@kinqs/brainrouter-core/review";
 import { ModelLLMRunner } from "../src/memory/llm/modelRunner.js";
-import { createReviewFileAccess } from "../src/reviews/reviewFileAccess.js";
+import { redactSensitiveMemoryText } from "../src/memory/util/redaction.js";
 import {
-  formatReviewBenchmarkReport,
+  assertReviewBenchmarkWorkingTreeClean,
+  evaluateReviewBenchmarkAcceptance,
+  formatReviewBenchmarkComparison,
+  parseReviewBenchmarkDataset,
   scoreReviewCase,
   summarizeReviewBenchmark,
-  type ReviewBenchmarkCase,
+  type ReviewBenchmarkAcceptance,
   type ReviewBenchmarkCaseScore,
   type ReviewBenchmarkDataset,
+  type ReviewBenchmarkModelCall,
+  type ReviewBenchmarkReport,
 } from "../src/reviews/benchmark/reviewBenchmark.js";
+import {
+  resolveReviewBenchmarkProvider,
+  runReviewBenchmarkArm,
+  type ResolvedReviewBenchmarkProvider,
+  type ReviewBenchmarkArmExecution,
+  type ReviewBenchmarkCompletionRequest,
+} from "../src/reviews/benchmark/reviewBenchmarkHarness.js";
+import { prepareReviewBenchmarkEvidence } from "./review-bench-evidence.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..");
-const DATA = join(HERE, "data", "review-cases.json");
-/** The production cap (`prSecurityReview.ts` `maxDiffChars`), so the units match. */
-const MAX_BUNDLE_CHARS = 60_000;
+const DATA_PATH = join(HERE, "data", "review-cases.json");
 
-function argOf(name: string, fallback: string): string {
-  return process.argv.slice(2).find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3) ?? fallback;
+interface BenchmarkOptions {
+  providerConfigPath: string;
+  concurrency: number;
+  timeoutMs: number;
+  outputPath?: string;
 }
 
-/**
- * Serve a file from the reviewed revision, through the SAME access boundary the
- * bot uses. `git show <sha>:<path>` is this harness's checkout: the revision is
- * pinned, so a file that moved after the merge cannot be substituted for the one
- * the reviewer asked about.
- */
-function checkoutReaderFor(sha: string) {
+interface CaseArtifact {
+  id: string;
+  pr: number;
+  sha: string;
+  diffSha256: string;
+  evidence: Awaited<ReturnType<typeof prepareReviewBenchmarkEvidence>>["evidence"]["provenance"];
+  legacy: ReviewBenchmarkArmExecution;
+  bundled: ReviewBenchmarkArmExecution;
+  scores: { legacy: ReviewBenchmarkCaseScore; bundled: ReviewBenchmarkCaseScore };
+}
+
+interface BenchmarkArtifactBase {
+  schemaVersion: 1;
+  runId: string;
+  startedAt: string;
+  repositoryRevision: string;
+  corpus: {
+    path: string;
+    sha256: string;
+    schemaVersion: number;
+    generatedAt: string;
+    observationCutoff: string;
+    selectedCases: number;
+    selectedCaseIds: string[];
+  };
+  provider: {
+    endpoint: string;
+    model: string;
+    wireFormat: string;
+    apiKeyEnv: string;
+    configSha256: string;
+  };
+  options: Omit<BenchmarkOptions, "providerConfigPath" | "outputPath"> & {
+    lens: string;
+    maxOutputTokens: number;
+  };
+  systemPromptSha256: string;
+  workingTree: { clean: boolean; diffSha256?: string };
+}
+
+interface CompleteBenchmarkArtifact extends BenchmarkArtifactBase {
+  status: "complete";
+  completedAt: string;
+  cases: CaseArtifact[];
+  reports: { legacy: ReviewBenchmarkReport; bundled: ReviewBenchmarkReport };
+  deltas: {
+    issuePrecision: number;
+    linePrecision: number;
+    recall: number;
+    totalModelChars: number;
+    modelCalls: number;
+    wallClockMs: number;
+  };
+  acceptance: ReviewBenchmarkAcceptance;
+}
+
+interface FailedBenchmarkArtifact extends BenchmarkArtifactBase {
+  status: "failed";
+  completedAt: string;
+  completedCases: CaseArtifact[];
+  modelCalls: ReviewBenchmarkModelCall[];
+  failure: { message: string };
+}
+
+/** Setup can fail before corpus/provider identity is trustworthy. Even then the
+ * command writes a redacted, mode-0600 failure receipt rather than only stderr. */
+interface BootstrapFailedBenchmarkArtifact {
+  schemaVersion: 1;
+  status: "failed";
+  phase: "bootstrap";
+  runId: string;
+  startedAt: string;
+  completedAt: string;
+  repositoryRevision: string;
+  completedCases: [];
+  modelCalls: [];
+  failure: { message: string };
+}
+
+type BenchmarkArtifact = CompleteBenchmarkArtifact | FailedBenchmarkArtifact | BootstrapFailedBenchmarkArtifact;
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function argumentValue(args: readonly string[], name: string): string | undefined {
+  return args.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
+}
+
+function boundedInteger(value: string | undefined, fallback: number, label: string, max: number): number {
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > max) {
+    throw new Error(`${label} must be an integer between 1 and ${max}.`);
+  }
+  return parsed;
+}
+
+function parseOptions(args: readonly string[]): BenchmarkOptions {
+  if (args.some((arg) => arg === "--arm" || arg.startsWith("--arm="))) {
+    throw new Error("Single-arm review benchmarks are not supported; this command always runs legacy and bundled together.");
+  }
+  if (args.some((arg) => arg === "--cases" || arg.startsWith("--cases="))) {
+    throw new Error("Partial-corpus review benchmarks are not supported; acceptance always uses the entire frozen corpus.");
+  }
+  if (args.some((arg) => arg === "--lens" || arg.startsWith("--lens="))) {
+    throw new Error("The frozen review corpus is evaluated with the code-review lens only.");
+  }
+  const known = ["provider-config", "concurrency", "timeout-ms", "output"];
+  const unknown = args.find((arg) => !known.some((name) => arg.startsWith(`--${name}=`)));
+  if (unknown) throw new Error(`Unknown review benchmark argument: ${unknown}`);
+  const providerConfig = argumentValue(args, "provider-config");
+  if (!providerConfig) {
+    throw new Error("--provider-config=/absolute/path/review-provider.json is required.");
+  }
+  if (!isAbsolute(providerConfig)) throw new Error("Provider config path must be absolute.");
+  const output = argumentValue(args, "output");
   return {
-    async readSourceFile(path: string, maxBytes: number): Promise<string> {
-      const content = execFileSync("git", ["show", `${sha}:${path}`], {
-        cwd: REPO_ROOT,
-        encoding: "utf8",
-        maxBuffer: 64 * 1024 * 1024,
-      });
-      if (content.length > maxBytes) throw new Error("Requested source path exceeds the read limit.");
-      return content;
+    providerConfigPath: providerConfig,
+    concurrency: boundedInteger(argumentValue(args, "concurrency"), 4, "--concurrency", 40),
+    timeoutMs: boundedInteger(argumentValue(args, "timeout-ms"), 120_000, "--timeout-ms", 900_000),
+    ...(output ? { outputPath: resolve(output) } : {}),
+  };
+}
+
+function readDataset(): { raw: string; dataset: ReviewBenchmarkDataset } {
+  const raw = readFileSync(DATA_PATH, "utf8");
+  return { raw, dataset: parseReviewBenchmarkDataset(JSON.parse(raw)) };
+}
+
+function readProvider(options: BenchmarkOptions): { raw: string; provider: ResolvedReviewBenchmarkProvider } {
+  const raw = readFileSync(options.providerConfigPath, "utf8");
+  return { raw, provider: resolveReviewBenchmarkProvider(JSON.parse(raw)) };
+}
+
+function git(args: string[]): string {
+  return execFileSync("git", args, {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    maxBuffer: 128 * 1024 * 1024,
+  });
+}
+
+function diffFor(sha: string): string {
+  const diff = git(["show", "--format=", "--no-color", sha]);
+  if (!diff.trim()) throw new Error(`Frozen revision ${sha} has an empty diff.`);
+  return diff;
+}
+
+function artifactPath(options: BenchmarkOptions, runId: string): string {
+  return options.outputPath ?? join(HERE, "results", "review", `${runId}.json`);
+}
+
+function safeRunId(startedAt: string, repositoryRevision: string): string {
+  return `${startedAt.replace(/[:.]/g, "-")}-${repositoryRevision.slice(0, 12)}`;
+}
+
+function artifactBase(input: {
+  startedAt: string;
+  repositoryRevision: string;
+  datasetRaw: string;
+  dataset: ReviewBenchmarkDataset;
+  providerRaw: string;
+  provider: ResolvedReviewBenchmarkProvider;
+  options: BenchmarkOptions;
+  lens: ReviewLens;
+}): BenchmarkArtifactBase {
+  const runId = safeRunId(input.startedAt, input.repositoryRevision);
+  return {
+    schemaVersion: 1,
+    runId,
+    startedAt: input.startedAt,
+    repositoryRevision: input.repositoryRevision,
+    corpus: {
+      path: relative(REPO_ROOT, DATA_PATH),
+      sha256: sha256(input.datasetRaw),
+      schemaVersion: input.dataset.schemaVersion,
+      generatedAt: input.dataset.generatedAt,
+      observationCutoff: input.dataset.observationCutoff,
+      selectedCases: input.dataset.cases.length,
+      selectedCaseIds: input.dataset.cases.map((entry) => entry.id),
+    },
+    provider: {
+      endpoint: input.provider.endpoint,
+      model: input.provider.model,
+      wireFormat: input.provider.wireFormat ?? "chat-completions",
+      apiKeyEnv: input.provider.apiKeyEnv,
+      configSha256: sha256(input.providerRaw),
+    },
+    options: {
+      concurrency: input.options.concurrency,
+      timeoutMs: input.options.timeoutMs,
+      lens: input.lens.id,
+      maxOutputTokens: 4_096,
+    },
+    systemPromptSha256: sha256(input.lens.systemPrompt),
+    workingTree: (() => {
+      const status = git(["status", "--porcelain", "--untracked-files=normal"]);
+      const diff = git(["diff", "--binary", "--no-ext-diff"]);
+      return status ? { clean: false, diffSha256: sha256(`${status}\n${diff}`) } : { clean: true };
+    })(),
+  };
+}
+
+function writeArtifact(path: string, artifact: BenchmarkArtifact): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(artifact, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  chmodSync(path, 0o600);
+}
+
+function bootstrapOutputPath(args: readonly string[], startedAt: string, repositoryRevision: string): string {
+  const requested = argumentValue(args, "output");
+  return requested
+    ? resolve(requested)
+    : join(HERE, "results", "review", `${safeRunId(startedAt, repositoryRevision)}.json`);
+}
+
+function safeError(error: unknown): string {
+  return redactSensitiveMemoryText(
+    (error instanceof Error ? error.message : String(error)).replace(/\s+/g, " ").trim().slice(0, 4_000),
+  );
+}
+
+function sanitizeCalls(calls: readonly ReviewBenchmarkModelCall[]): ReviewBenchmarkModelCall[] {
+  return calls.map((call) => ({
+    ...call,
+    ...(call.error ? { error: redactSensitiveMemoryText(call.error) } : {}),
+  }));
+}
+
+function sanitizeExecution(execution: ReviewBenchmarkArmExecution): ReviewBenchmarkArmExecution {
+  return {
+    ...execution,
+    run: {
+      ...execution.run,
+      findings: execution.run.findings.map((finding) => ({
+        ...finding,
+        file: redactSensitiveMemoryText(finding.file),
+        severity: redactSensitiveMemoryText(finding.severity),
+        summary: redactSensitiveMemoryText(finding.summary),
+        ...(finding.details ? { details: redactSensitiveMemoryText(finding.details) } : {}),
+        ...(finding.suggestion ? { suggestion: redactSensitiveMemoryText(finding.suggestion) } : {}),
+        ...(finding.codeExcerpt ? { codeExcerpt: redactSensitiveMemoryText(finding.codeExcerpt) } : {}),
+      })),
+      calls: sanitizeCalls(execution.run.calls),
     },
   };
 }
 
-interface ArmCost {
-  promptChars: number;
-  completionChars: number;
-  modelCalls: number;
+function sanitizeEvidence(evidence: CaseArtifact["evidence"]): CaseArtifact["evidence"] {
+  return {
+    ...evidence,
+    source: redactSensitiveMemoryText(evidence.source),
+    revision: redactSensitiveMemoryText(evidence.revision),
+    limitations: evidence.limitations.map((entry) => redactSensitiveMemoryText(entry)),
+  };
 }
 
-type RunModel = (prompt: string) => Promise<string>;
-
-/** The reviewer that ships: bundles, concurrency, one file request, reflection. */
-async function runBundledArm(
-  benchmarkCase: ReviewBenchmarkCase,
-  diff: string,
-  lens: typeof CODE_REVIEW_LENS,
-  concurrency: number,
-  run: RunModel,
-): Promise<ParsedReviewFinding[]> {
-  const plan = planReviewBundles({
-    diff,
-    maxBundleChars: MAX_BUNDLE_CHARS,
-    maxBundles: 40,
-    relatedPaths: relatedPathsFromDiff(diff),
-  });
-  const access = createReviewFileAccess(checkoutReaderFor(benchmarkCase.sha));
-  // `repositoryContext` is FALSE and that is not an oversight: this harness has
-  // no packet assembler, so telling the model it was handed one would benchmark
-  // a prompt the bot never sends. `canRequestFiles` is true because the seam
-  // above genuinely serves — D3 is exercised, the packet claim is not faked.
-  const contract = lens.buildContract({ repositoryContext: false, canRequestFiles: true });
-  const result = await orchestrateReview({
-    diff,
-    bundles: plan.bundles,
-    concurrency,
-    analyzeBundle: async (bundle) => {
-      const head = `You are reviewing pull request #${benchmarkCase.pr}. `
-        + `This unit covers: ${bundle.paths.join(", ")}.\n\n`
-        + `<untrusted_diff_evidence>\n${bundle.diff}\n</untrusted_diff_evidence>\n\n`;
-      try {
-        const first = stripReasoning(await run(`${head}${contract}\n\n${buildEvidenceRequestContract()}`));
-        const requested = parseEvidenceRequest(first);
-        if (!requested) return { bundleId: bundle.id, ok: true, findings: parseReviewFindings(first) };
-        const served = await access.serve(requested);
-        const second = stripReasoning(await run(
-          `${head}<untrusted_repository_context>\n${formatServedEvidence(served)}\n`
-          + `</untrusted_repository_context>\n\n${contract}\n\n`
-          + `You already used your one file request; report your findings now.`,
-        ));
-        return { bundleId: bundle.id, ok: true, findings: parseReviewFindings(second) };
-      } catch (error) {
-        return { bundleId: bundle.id, ok: false, findings: [], error: error instanceof Error ? error.message : "failed" };
-      }
+function comparisonArtifact(
+  base: BenchmarkArtifactBase,
+  cases: CaseArtifact[],
+  legacy: ReviewBenchmarkReport,
+  bundled: ReviewBenchmarkReport,
+  acceptance: ReviewBenchmarkAcceptance,
+): CompleteBenchmarkArtifact {
+  return {
+    ...base,
+    status: "complete",
+    completedAt: new Date().toISOString(),
+    cases,
+    reports: { legacy, bundled },
+    deltas: {
+      issuePrecision: bundled.issuePrecision - legacy.issuePrecision,
+      linePrecision: bundled.linePrecision - legacy.linePrecision,
+      recall: bundled.recall - legacy.recall,
+      totalModelChars: bundled.totalModelChars - legacy.totalModelChars,
+      modelCalls: bundled.totalModelCalls - legacy.totalModelCalls,
+      wallClockMs: bundled.totalWallClockMs - legacy.totalWallClockMs,
     },
-    reflect: (findings) => reflectOnReviewFindings(findings, {
-      complete: (request) => run(`${request.system}\n\n${request.user}`),
-    }),
-  });
-  return result.findings;
+    acceptance,
+  };
 }
 
-/**
- * The reviewer as it was BEFORE this ADR — the baseline the delta is measured
- * against. Size-split chunks, one after another, the model's own line numbers
- * published unchecked, and no pass that reads the findings as a set.
- */
-async function runLegacyArm(
-  benchmarkCase: ReviewBenchmarkCase,
-  diff: string,
-  lens: typeof CODE_REVIEW_LENS,
-  run: RunModel,
-): Promise<ParsedReviewFinding[]> {
-  const contract = lens.buildContract({ repositoryContext: false, canRequestFiles: false });
-  const parts = splitDiffForReview(diff, MAX_BUNDLE_CHARS);
-  const findings: ParsedReviewFinding[] = [];
-  for (let index = 0; index < parts.length; index++) {
-    const label = parts.length > 1 ? ` (part ${index + 1} of ${parts.length})` : "";
-    try {
-      const reply = stripReasoning(await run(
-        `You are reviewing pull request #${benchmarkCase.pr}${label}.\n\n`
-        + `<untrusted_diff_evidence>\n${parts[index]}\n</untrusted_diff_evidence>\n\n${contract}`,
-      ));
-      findings.push(...parseReviewFindings(reply));
-    } catch {
-      // D8's predecessor behaviour: a failed part costs its coverage, not the run.
-    }
-  }
-  return dedupeReviewFindings(findings);
-}
-
-async function main(): Promise<void> {
-  const dataset = JSON.parse(readFileSync(DATA, "utf8")) as ReviewBenchmarkDataset;
-  const limit = Number(argOf("cases", "8"));
-  const concurrency = Number(argOf("concurrency", "4"));
-  const lens = argOf("lens", "code") === "security" ? SECURITY_LENS : CODE_REVIEW_LENS;
-  const arm = argOf("arm", "bundled") === "legacy" ? "legacy" : "bundled";
-  const runner = new ModelLLMRunner();
-  const scores: ReviewBenchmarkCaseScore[] = [];
-
-  for (const benchmarkCase of dataset.cases.slice(0, limit)) {
-    let diff = "";
-    try {
-      diff = execFileSync("git", ["show", "--format=", "--no-color", benchmarkCase.sha], {
-        cwd: REPO_ROOT,
-        encoding: "utf8",
-        maxBuffer: 128 * 1024 * 1024,
-      });
-    } catch {
-      process.stdout.write(`skip ${benchmarkCase.id}: commit not in this checkout\n`);
-      continue;
-    }
-    const cost: ArmCost = { promptChars: 0, completionChars: 0, modelCalls: 0 };
-    const run: RunModel = async (prompt) => {
-      cost.promptChars += prompt.length;
-      cost.modelCalls += 1;
-      const reply = await runner.run({
-        prompt,
-        systemPrompt: lens.systemPrompt,
-        taskId: `bench:${arm}:${benchmarkCase.id}`,
-        timeoutMs: 120_000,
-      });
-      cost.completionChars += reply.length;
-      return reply;
-    };
-    const startedAt = Date.now();
-    const findings = arm === "legacy"
-      ? await runLegacyArm(benchmarkCase, diff, lens, run)
-      : await runBundledArm(benchmarkCase, diff, lens, concurrency, run);
-    const score = scoreReviewCase(benchmarkCase, {
-      caseId: benchmarkCase.id,
-      findings: findings.map((finding) => ({
-        file: finding.file,
-        ...(finding.line !== undefined ? { line: finding.line } : {}),
-        severity: finding.severity,
-        summary: finding.summary,
-      })),
-      wallClockMs: Date.now() - startedAt,
-      promptChars: cost.promptChars,
-      completionChars: cost.completionChars,
-      modelCalls: cost.modelCalls,
+async function executeCases(input: {
+  dataset: ReviewBenchmarkDataset;
+  options: BenchmarkOptions;
+  lens: ReviewLens;
+  runner: ModelLLMRunner;
+  observedCalls: ReviewBenchmarkModelCall[];
+  artifacts: CaseArtifact[];
+}): Promise<void> {
+  for (const benchmarkCase of input.dataset.cases) {
+    process.stderr.write(`[review-benchmark] ${benchmarkCase.id}: preparing exact-revision evidence\n`);
+    const diff = diffFor(benchmarkCase.sha);
+    const prepared = await prepareReviewBenchmarkEvidence({
+      benchmarkCase,
+      diff,
+      repositoryRoot: REPO_ROOT,
+      lensId: input.lens.id,
     });
-    scores.push(score);
-    process.stdout.write(
-      `${benchmarkCase.id}: ${score.truePositives} hit / ${score.falsePositives} false / ${score.missed} missed`
-      + ` · ${score.onTheRightLine} on the right line · ${score.modelCalls} calls · ${(score.wallClockMs / 1000).toFixed(1)}s\n`,
-    );
+    try {
+      const complete = (request: ReviewBenchmarkCompletionRequest) => input.runner.run({
+        prompt: request.prompt,
+        systemPrompt: request.systemPrompt,
+        taskId: request.taskId,
+        timeoutMs: input.options.timeoutMs,
+      });
+      const common = {
+        benchmarkCase,
+        evidence: prepared.evidence,
+        lens: input.lens,
+        concurrency: input.options.concurrency,
+        complete,
+        onModelCall: (call: ReviewBenchmarkModelCall) => input.observedCalls.push(call),
+      };
+      const legacy = await runReviewBenchmarkArm({ ...common, arm: "legacy" });
+      const bundled = await runReviewBenchmarkArm({ ...common, arm: "bundled" });
+      const scores = {
+        legacy: scoreReviewCase(benchmarkCase, legacy.run),
+        bundled: scoreReviewCase(benchmarkCase, bundled.run),
+      };
+      input.artifacts.push({
+        id: benchmarkCase.id,
+        pr: benchmarkCase.pr,
+        sha: benchmarkCase.sha,
+        diffSha256: sha256(diff),
+        evidence: sanitizeEvidence(prepared.evidence.provenance),
+        legacy: sanitizeExecution(legacy),
+        bundled: sanitizeExecution(bundled),
+        scores,
+      });
+      process.stderr.write(
+        `[review-benchmark] ${benchmarkCase.id}: paired complete `
+        + `(legacy ${scores.legacy.truePositives}/${scores.legacy.falsePositives}; `
+        + `bundled ${scores.bundled.truePositives}/${scores.bundled.falsePositives})\n`,
+      );
+    } finally {
+      await prepared.cleanup();
+    }
   }
-
-  process.stdout.write(
-    `\narm: ${arm}\n${formatReviewBenchmarkReport(summarizeReviewBenchmark(scores), dataset.groundTruthBias)}\n`,
-  );
 }
 
-void main();
+async function main(): Promise<number> {
+  const startedAt = new Date().toISOString();
+  const args = process.argv.slice(2);
+  let repositoryRevision = "unavailable";
+  try { repositoryRevision = git(["rev-parse", "HEAD"]).trim() || "unavailable"; } catch { /* receipt below records setup failure */ }
+  let output = bootstrapOutputPath(args, startedAt, repositoryRevision);
+  let base: BenchmarkArtifactBase | undefined;
+  const observedCalls: ReviewBenchmarkModelCall[] = [];
+  const completedCases: CaseArtifact[] = [];
+
+  try {
+    const options = parseOptions(args);
+    const { raw: datasetRaw, dataset } = readDataset();
+    const { raw: providerRaw, provider } = readProvider(options);
+    const lens = CODE_REVIEW_LENS;
+    if (repositoryRevision === "unavailable") throw new Error("Repository revision could not be resolved.");
+    base = artifactBase({
+      startedAt,
+      repositoryRevision,
+      datasetRaw,
+      dataset,
+      providerRaw,
+      provider,
+      options,
+      lens,
+    });
+    output = artifactPath(options, base.runId);
+    // ModelLLMRunner intentionally defaults to no timeout for interactive local
+    // cognition. A benchmark is different: an unavailable provider must finish
+    // as an explicit failed artifact, so pin the requested bound for this process.
+    process.env.BRAINROUTER_LLM_TIMEOUT_MS = String(options.timeoutMs);
+    process.env.BRAINROUTER_LLM_MAX_TOKENS = "4096";
+    const runner = new ModelLLMRunner(provider.model);
+    runner.setProviderOverride({
+      endpoint: provider.endpoint,
+      apiKey: provider.apiKey,
+      model: provider.model,
+      ...(provider.wireFormat ? { wireFormat: provider.wireFormat } : {}),
+    });
+    assertReviewBenchmarkWorkingTreeClean(git(["status", "--porcelain", "--untracked-files=normal"]));
+    await executeCases({ dataset, options, lens, runner, observedCalls, artifacts: completedCases });
+    // A concurrent edit while the provider was running invalidates the same
+    // provenance as a dirty start; never stamp such a run complete.
+    assertReviewBenchmarkWorkingTreeClean(git(["status", "--porcelain", "--untracked-files=normal"]));
+    const legacy = summarizeReviewBenchmark(completedCases.map((entry) => entry.scores.legacy));
+    const bundled = summarizeReviewBenchmark(completedCases.map((entry) => entry.scores.bundled));
+    const acceptance = evaluateReviewBenchmarkAcceptance(legacy, bundled);
+    writeArtifact(output, comparisonArtifact(base, completedCases, legacy, bundled, acceptance));
+    process.stdout.write(`${formatReviewBenchmarkComparison(legacy, bundled, acceptance, dataset.groundTruthBias)}\n`);
+    process.stdout.write(`artifact: ${output}\n`);
+    return acceptance.passed ? 0 : 2;
+  } catch (error) {
+    const message = safeError(error);
+    writeArtifact(output, base
+      ? {
+        ...base,
+        status: "failed",
+        completedAt: new Date().toISOString(),
+        completedCases,
+        modelCalls: sanitizeCalls(observedCalls),
+        failure: { message },
+      }
+      : {
+        schemaVersion: 1,
+        status: "failed",
+        phase: "bootstrap",
+        runId: safeRunId(startedAt, repositoryRevision),
+        startedAt,
+        completedAt: new Date().toISOString(),
+        repositoryRevision,
+        completedCases: [],
+        modelCalls: [],
+        failure: { message },
+      });
+    process.stderr.write(`[review-benchmark] FAILED: ${message}\n`);
+    process.stderr.write(`[review-benchmark] failed artifact: ${output}\n`);
+    return 1;
+  }
+}
+
+main().then(
+  (code) => { process.exitCode = code; },
+  (error) => {
+    process.stderr.write(`[review-benchmark] configuration failed: ${safeError(error)}\n`);
+    process.exitCode = 1;
+  },
+);

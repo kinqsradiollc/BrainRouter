@@ -95,6 +95,13 @@ export interface LearnedProvenance {
    * future session.
    */
   readonly corroboratedByTrustedAction: boolean;
+  /**
+   * Successful, later actions that the reflector identified as relevant to
+   * this particular candidate.  The ids are minted by the runtime and
+   * validated before admission; model supplied ids that were not observed are
+   * discarded.
+   */
+  readonly corroboratingActionIds?: readonly string[];
   /** D7 — whether attacker-influenced content was in the window at all. */
   readonly sawUntrustedContent: boolean;
   /** D2 — the reviewer's stated reasoning, so "why is this here" is answerable. */
@@ -137,12 +144,18 @@ export interface LearnedItem {
   outcome: LearnedOutcome;
   readonly provenance: LearnedProvenance;
   status: LearnedStatus;
+  /** When the current lifecycle status began. Used to require fresh evidence
+   * before a demoted item can be restored. */
+  statusChangedAt?: string;
   /** Why it is in its current status. Set on every transition, never guessed. */
   statusReason?: string;
   createdAt: string;
   updatedAt: string;
   /** D3 — the learned skill this procedure was promoted to, when it was one. */
   skillId?: string;
+  /** Tool ceiling carried by a promoted learned procedure. This can only
+   * subtract from the agent's existing authority. */
+  allowedTools?: readonly string[];
   /**
    * The memory-engine record this fact was ALSO written to.
    *
@@ -152,6 +165,22 @@ export interface LearnedItem {
    * expectation, and the counters that let D6 retire it.
    */
   memoryRecordId?: string;
+  /** The durable-memory half of the lifecycle. A pending state is deliberately
+   * visible to API/dashboard callers and is retried by later checkpoints. */
+  memoryLifecycle?: LearnedMemoryLifecycle;
+}
+
+export type LearnedMemoryStatus =
+  | 'record-pending'
+  | 'active'
+  | 'archive-pending'
+  | 'archived';
+
+export interface LearnedMemoryLifecycle {
+  status: LearnedMemoryStatus;
+  updatedAt: string;
+  attempts: number;
+  lastError?: string;
 }
 
 /** One line of the audit trail. D4: a system that can delete needs one. */
@@ -159,6 +188,7 @@ export interface LearningLogEntry {
   readonly at: string;
   readonly op:
     | 'admitted'
+    | 'reinforced'
     | 'rejected'
     | 'reverted'
     | 'retrieved'
@@ -167,7 +197,13 @@ export interface LearningLogEntry {
     | 'demoted'
     | 'retired'
     | 'skill-written'
-    | 'skill-removed';
+    | 'skill-removed'
+    | 'memory-linked'
+    | 'memory-record-failed'
+    | 'memory-archive-pending'
+    | 'memory-archived'
+    | 'memory-restored'
+    | 'memory-archive-failed';
   readonly itemId?: string;
   readonly detail: string;
 }
@@ -177,4 +213,48 @@ export interface LearningState {
   readonly tenant: LearnedTenant;
   items: Record<string, LearnedItem>;
   log: LearningLogEntry[];
+  /**
+   * D6's durable logical-session ledger, keyed by a tenant-bound hash of the
+   * runtime-owned session key.  Delivery membership is separate from the
+   * retrieval counter: retrievals count prompt placements, while outcomes
+   * count distinct sessions in which an expectation or falsifier was observed.
+   */
+  sessions?: Record<string, LearningSessionObservationState>;
+  /** Durable fairness state for bounded central reconciliation. Dirty entries
+   * rotate instead of letting the first failing rows monopolize every pass;
+   * the cursor separately polls linked rows for hosted human reverts. */
+  reconciliation?: LearningReconciliationState;
+}
+
+export interface LearningSessionObservationState {
+  /** Exact item ids that reached the model at least once in this session. */
+  deliveredItemIds: string[];
+  /** At most one semantic outcome per item and logical session. */
+  outcomes: Record<string, LearningObservedSessionOutcome>;
+}
+
+export interface LearningObservedSessionOutcome {
+  outcome: 'confirmed' | 'contradicted';
+  observedAt: string;
+  /** Delivery state for the hidden host event channel. Older observations are
+   * normalized as already synced so an upgrade cannot double-count aggregates
+   * that may have reached central storage before event identities existed. */
+  centralSync?: LearningOutcomeCentralSyncState;
+}
+
+export interface LearningOutcomeCentralSyncState {
+  status: 'pending' | 'synced';
+  outcome: 'confirmed' | 'contradicted';
+  detail: string;
+  updatedAt: string;
+}
+
+export interface LearningReconciliationState {
+  lifecycleCursor?: string;
+  dirtyQueue: string[];
+  dirtyRevisions: Record<string, number>;
+  nextRevision: number;
+  /** Pending semantic outcome deliveries, rotated fairly and removed only
+   * after the normalized central observation succeeds. */
+  outcomeQueue?: string[];
 }

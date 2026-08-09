@@ -24,10 +24,8 @@ import { ConnectorSettings } from './settings/connectors/ConnectorSettings.js';
 import { MarketplaceSettings, type MarketplaceState } from './settings/marketplace/index.js';
 import { McpServersSection } from './settings/connectors/McpServersSection.js';
 import { ModelsSection } from './settings/models/ModelsSection.js';
-import { ReviewsSettings } from './settings/reviews/ReviewsSettings.js';
 import { RuntimeSection } from './settings/runtime/RuntimeSection.js';
 import { AutomationsSection } from './settings/automations/AutomationsSection.js';
-import { UsageHeatmap } from './settings/usage/UsageHeatmap.js';
 import {
   NAV,
   NAV_GROUPS,
@@ -40,6 +38,18 @@ import {
   type UsageHistory,
 } from './settings/shared/types.js';
 import type { AppearancePreference } from './lib/theme/appearance.js';
+
+const LearnedBehaviorSettings = React.lazy(() =>
+  import('./settings/memory/LearnedBehaviorSettings.js').then((module) => ({
+    default: module.LearnedBehaviorSettings,
+  })),
+);
+const UsageHeatmap = React.lazy(() =>
+  import('./settings/usage/UsageHeatmap.js').then((module) => ({ default: module.UsageHeatmap })),
+);
+const ReviewsSettings = React.lazy(() =>
+  import('./settings/reviews/ReviewsSettings.js').then((module) => ({ default: module.ReviewsSettings })),
+);
 
 // §public-surface — types consumed by App.tsx and the agent/composer hooks are
 // re-exported so importers keep resolving them from `./settings.js` unchanged.
@@ -464,7 +474,9 @@ export function SettingsDialog(props: {
       );
       case 'reviews': return (
         <>
-          <ReviewsSettings />
+          <React.Suspense fallback={<div className="set-desc">Loading review settings…</div>}>
+            <ReviewsSettings />
+          </React.Suspense>
           <SetGroup title="What runs on every reviewed PR">
             <Row title="🛡️ Security review" desc="Vulnerability findings (injection, secrets, auth, SSRF, …), CWE-tagged." />
             <Row title="🔎 Code review" desc="Correctness, clarity, architecture, performance, and test coverage." />
@@ -540,6 +552,17 @@ export function SettingsDialog(props: {
             </Row>
             <Row title="Search, recall & brain ops" desc="/memory, /recall, /briefing, /blackboard, /brain, /forget, /export, /import run against the MCP brain — terminal CLI for now (DESK-5 command bridge)." />
           </SetGroup>
+          <React.Suspense fallback={<div className="set-desc">Loading learned behavior…</div>}>
+            <LearnedBehaviorSettings
+              snapshot={snapshot?.learning}
+              onCorrect={(correction) => {
+                props.onAction('a-learning-correct', 'action:learning-correct', { ...correction });
+              }}
+              onRevert={(id, reason) => {
+                props.onAction('a-learning-revert', 'action:learning-revert', { id, reason });
+              }}
+            />
+          </React.Suspense>
         </>
       );
       case 'hooks': return (
@@ -707,7 +730,9 @@ export function SettingsDialog(props: {
                   title="Activity in range"
                   desc={`${props.usageHistory.total.turns.toLocaleString()} turns · ${props.usageHistory.total.calls.toLocaleString()} requests · ${(props.usageHistory.total.promptTokens + props.usageHistory.total.completionTokens).toLocaleString()} tokens`}
                 />
-                <UsageHeatmap hist={props.usageHistory} />
+                <React.Suspense fallback={<div className="usage-pre">Loading activity…</div>}>
+                  <UsageHeatmap hist={props.usageHistory} />
+                </React.Suspense>
                 <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>Each square is a UTC day; brighter = more tokens. This tally is durable and survives session delete.</div>
               </>
             ) : (

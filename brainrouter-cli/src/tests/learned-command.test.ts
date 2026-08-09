@@ -19,16 +19,16 @@ import assert from 'node:assert/strict';
 import { withTempWorkspaceAsync } from './_helpers.js';
 import { tryHandleLearningCommand } from '../cli/commands/learning/index.js';
 import {
-  attachLearnedSkill, getLearnedItem, listLearnedItems, readLearningLog,
+  attachLearnedMemoryRecord, attachLearnedSkill, getLearnedItem, listLearnedItems, readLearningLog,
   recordHumanCorrection, resolveLearnedSkill, writeLearnedSkill,
 } from '@kinqs/brainrouter-core/learning';
 
 /** The narrow slice of CommandContext `/learned` actually reads. */
-function ctx(command: string, args: string[]) {
+function ctx(command: string, args: string[], agentOverrides: Record<string, unknown> = {}) {
   return {
     command,
     args,
-    agent: { sessionKey: 'session:test' },
+    agent: { sessionKey: 'session:test', learnedTenant: TENANT, ...agentOverrides },
   } as unknown as Parameters<typeof tryHandleLearningCommand>[0];
 }
 
@@ -108,6 +108,7 @@ test('revert stops the item reaching the agent and takes its skill down with it'
       learnedItemId: id,
       sessionKey: 'session:test',
       learnedAt: '2026-08-09T00:00:00.000Z',
+      allowedTools: ['read_file'],
     }));
     attachLearnedSkill(TENANT, id, skillId);
     assert.ok(resolveLearnedSkill(TENANT, skillId), 'the skill must resolve before the revert');
@@ -134,5 +135,40 @@ test('reverting an unknown id changes nothing', async () => {
     await quietly(() => tryHandleLearningCommand(ctx('/learned', ['revert', 'nope'])));
     assert.equal(listLearnedItems(TENANT, { includeInactive: true }).length, 0);
     assert.equal(readLearningLog(TENANT).length, 0);
+  });
+});
+
+test('a linked revert uses the explicit tenant-bound central lifecycle RPC', async () => {
+  await withTempWorkspaceAsync(async () => {
+    const recorded = recordHumanCorrection({
+      tenant: TENANT,
+      sessionKey: 'session:test',
+      statement: 'stop the worker before the migration',
+      falsifier: 'the migration succeeds with the worker still running',
+      expectation: 'migrations stop deadlocking',
+    });
+    assert.equal(recorded.admitted, true);
+    const id = recorded.admitted ? recorded.item.id : '';
+    attachLearnedMemoryRecord(TENANT, id, 'memory-1');
+    const calls: Array<Record<string, unknown>> = [];
+    const mcpClient = {
+      callHostLearning: async (request: Record<string, unknown>) => {
+        calls.push(request);
+        return { content: [{ text: JSON.stringify({ found: true, itemId: id }) }] };
+      },
+    };
+
+    await quietly(() => tryHandleLearningCommand(ctx(
+      '/learned',
+      ['revert', id, 'superseded', 'by', 'the', 'new', 'migration'],
+      { mcpClient },
+    )));
+
+    assert.deepEqual(calls, [{
+      operation: 'revert',
+      input: { itemId: id, reason: 'superseded by the new migration' },
+    }]);
+    assert.equal(getLearnedItem(TENANT, id)?.status, 'reverted');
+    assert.equal(getLearnedItem(TENANT, id)?.memoryLifecycle?.status, 'archived');
   });
 });

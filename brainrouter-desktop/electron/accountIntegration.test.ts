@@ -268,6 +268,30 @@ test('account context and headers always pin account-backed requests to the defa
   });
 });
 
+test('account context honors the recorded active org when it remains a membership', async () => {
+  const context = await resolveBrainRouterAccountContext({
+    ...config,
+    cli: { account: { url: 'https://account.brainrouter.test/', orgId: 'org-secondary' } },
+  }, async () => response(200, {
+    orgs: [
+      { orgId: 'org-secondary', name: 'Secondary' },
+      { orgId: 'org-main', name: 'Main org', isDefault: true },
+    ],
+  }));
+
+  assert.equal(context?.orgId, 'org-secondary');
+  assert.equal(context?.orgName, 'Secondary');
+});
+
+test('account context fails closed when the recorded org is no longer a membership', async () => {
+  await assert.rejects(() => resolveBrainRouterAccountContext({
+    ...config,
+    cli: { account: { url: 'https://account.brainrouter.test/', orgId: 'org-removed' } },
+  }, async () => response(200, {
+    orgs: [{ orgId: 'org-main', name: 'Main org', isDefault: true }],
+  })), /no longer available/i);
+});
+
 test('account connector OAuth start uses the JSON POST contract in the active org', async () => {
   const calls: Array<{ url: string; method?: string; headers?: Record<string, string> }> = [];
   const result = await startAccountConnectorOAuth(
@@ -450,10 +474,26 @@ test('account model catalog revalidates by ETag and fails closed on unsupported 
 // switcher is the only writer of `orgId`. These pin the behaviours that make
 // that partition real rather than declared.
 test('active org is recorded onto the signed-in account for the learned partition', () => {
-  const config = { cli: { account: { url: 'https://api.example.com', userId: 'usr_1' } } };
+  const config = {
+    cli: { account: { url: 'https://api.example.com', userId: 'usr_1' } },
+    servers: {
+      brain: {
+        identity: 'brainrouter',
+        headers: { 'X-Vendor-Trace': 'keep', 'x-brainrouter-org': 'org_stale' },
+      },
+      tools: { identity: 'third-party', headers: { 'X-BrainRouter-Org': 'third-party-value' } },
+    },
+  };
   const first = withAccountOrgId(config, 'org_alpha');
   assert.equal(first.changed, true);
+  assert.equal((config.cli.account as { orgId?: string }).orgId, undefined, 'preparing a switch does not mutate the live cached config');
+  assert.equal(config.servers.brain.headers['x-brainrouter-org'], 'org_stale');
   assert.equal((first.next.cli!.account as { orgId?: string }).orgId, 'org_alpha');
+  assert.deepEqual(first.next.servers!.brain.headers, {
+    'X-Vendor-Trace': 'keep',
+    'X-BrainRouter-Org': 'org_alpha',
+  });
+  assert.equal(first.next.servers!.tools.headers?.['X-BrainRouter-Org'], 'third-party-value');
 
   // Re-recording the same org must not rewrite config.json on every render.
   assert.equal(withAccountOrgId(first.next, 'org_alpha').changed, false);
@@ -463,12 +503,25 @@ test('active org is recorded onto the signed-in account for the learned partitio
   const moved = withAccountOrgId(first.next, 'org_beta');
   assert.equal(moved.changed, true);
   assert.equal((moved.next.cli!.account as { orgId?: string }).orgId, 'org_beta');
+  assert.equal(moved.next.servers!.brain.headers?.['X-BrainRouter-Org'], 'org_beta');
 
   // Leaving org context clears the field — absent means PERSONAL, and an empty
   // string would key a third partition belonging to nobody.
   const cleared = withAccountOrgId(moved.next, '');
   assert.equal(cleared.changed, true);
   assert.equal('orgId' in (cleared.next.cli!.account as object), false);
+  assert.deepEqual(cleared.next.servers!.brain.headers, { 'X-Vendor-Trace': 'keep' });
+});
+
+test('an unchanged account org still repairs a stale BrainRouter MCP header', () => {
+  const repaired = withAccountOrgId({
+    cli: { account: { userId: 'usr_1', orgId: 'org_alpha' } },
+    servers: { brainrouterCloud: { headers: { 'X-BrainRouter-Org': 'org_stale' } } },
+  }, 'org_alpha');
+
+  assert.equal(repaired.changed, true);
+  assert.equal(repaired.next.servers!.brainrouterCloud.headers?.['X-BrainRouter-Org'], 'org_alpha');
+  assert.equal(withAccountOrgId(repaired.next, 'org_alpha').changed, false);
 });
 
 test('an org is never recorded onto an install that is not signed in', () => {
@@ -479,4 +532,3 @@ test('an org is never recorded onto an install that is not signed in', () => {
   assert.equal((signedOut.next.cli as { account?: unknown }).account, undefined);
   assert.equal(withAccountOrgId({}, 'org_alpha').changed, false);
 });
-

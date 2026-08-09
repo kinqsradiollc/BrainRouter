@@ -22,6 +22,7 @@ interface Cmd {
 
 const KNOWLEDGE_DETAIL_ROUTES: Cmd[] = [
   { label: "Saved knowledge", group: "Knowledge details", href: "/memories", keywords: "decisions preferences lessons" },
+  { label: "Learned behavior", group: "Knowledge details", href: "/learned-behaviors", keywords: "learning provenance counters revert retire" },
   { label: "Connected sources", group: "Knowledge details", href: "/sources", keywords: "documents conversations" },
   { label: "Current task context", group: "Knowledge details", href: "/working-memory" },
   { label: "Recall details", group: "Knowledge details", href: "/recall-inspector", keywords: "why recalled" },

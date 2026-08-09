@@ -16,7 +16,12 @@
  * reviewed leaves the others' findings intact and is reported as missing
  * coverage, rather than sinking the run and wedging a required check.
  */
-import { positionReviewFindings, type FindingPositionKind } from './findingPosition.js';
+import {
+  buildDiffLineIndex,
+  positionReviewFindings,
+  resolveFindingPath,
+  type FindingPositionKind,
+} from './findingPosition.js';
 import { dedupeReviewFindings, type ParsedReviewFinding } from './reviewFindings.js';
 import type { ReviewBundle } from './reviewBundles.js';
 import type { ReviewReflectionResult } from './reviewReflection.js';
@@ -41,6 +46,8 @@ export interface ReviewOrchestrationInput {
     context: { index: number; total: number },
   ): Promise<ReviewBundleOutcome>;
   reflect?(findings: readonly ParsedReviewFinding[]): Promise<ReviewReflectionResult>;
+  /** Exact new-revision source for D4; null keeps the safe diff-only fallback. */
+  sourceTextForPath?(path: string): string | null | Promise<string | null>;
   isCancellationRequested?(): boolean | Promise<boolean>;
   onBundleSettled?(outcome: ReviewBundleOutcome): void;
 }
@@ -53,7 +60,14 @@ export interface ReviewOrchestrationResult {
   /** Bundles never dispatched because the run was canceled mid-flight. */
   skippedBundles: number;
   canceled: boolean;
-  reflection: { reflected: boolean; dropped: number; merged: number };
+  reflection: {
+    /** True when at least one surviving candidate required the D5 set pass. */
+    required: boolean;
+    /** True only when the pass successfully judged the entire candidate set. */
+    reflected: boolean;
+    dropped: number;
+    merged: number;
+  };
   /** How the published lines were established — the D4 evidence, counted. */
   positions: Record<FindingPositionKind, number>;
 }
@@ -116,17 +130,42 @@ export async function orchestrateReview(
 
   const outcomes = settled.filter((entry): entry is ReviewBundleOutcome => entry !== null);
   const collected = outcomes.flatMap((outcome) => outcome.findings);
-  const positioned = positionReviewFindings(collected, input.diff);
+  const exactSources = new Map<string, string>();
+  if (input.sourceTextForPath && collected.length > 0) {
+    const diffIndex = buildDiffLineIndex(input.diff);
+    const paths = [...new Set(collected
+      .map((finding) => resolveFindingPath(finding.file, diffIndex))
+      .filter((path): path is string => Boolean(path)))];
+    await Promise.all(paths.map(async (path) => {
+      try {
+        const source = await input.sourceTextForPath?.(path);
+        if (typeof source === 'string') exactSources.set(path, source);
+      } catch {
+        // Exact source is an evidence upgrade. Failure falls back to diff lines.
+      }
+    }));
+  }
+  const positioned = positionReviewFindings(collected, input.diff, exactSources);
   const positions = { ...EMPTY_POSITIONS };
   for (const entry of positioned) positions[entry.position.kind] += 1;
   const deduped = dedupeReviewFindings(positioned.map((entry) => entry.finding));
 
   let findings = deduped;
-  let reflection = { reflected: false, dropped: 0, merged: 0 };
-  if (input.reflect && deduped.length > 0 && !canceled) {
-    const result = await input.reflect(deduped);
-    findings = result.findings;
-    reflection = { reflected: result.reflected, dropped: result.dropped, merged: result.merged };
+  let reflection = { required: deduped.length > 0, reflected: false, dropped: 0, merged: 0 };
+  if (input.reflect && reflection.required && !canceled) {
+    try {
+      const result = await input.reflect(deduped);
+      findings = result.findings;
+      reflection = {
+        required: true,
+        reflected: result.reflected,
+        dropped: result.dropped,
+        merged: result.merged,
+      };
+    } catch {
+      // Preserve every evidence-positioned finding, but leave `reflected=false`
+      // so each publication surface reports incomplete D5 coverage.
+    }
   }
 
   return {

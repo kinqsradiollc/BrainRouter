@@ -63,7 +63,10 @@ import { getCurrentWorkflow } from '../../workflow/run/workflowArtifacts.js';
 import { getToolPreview } from '../support/toolSummary.js';
 import { summarizeWaitedChildOutputs } from '../support/childObservation.js';
 import { explainUnknownToolName } from '../agent.js';
-import { refreshWorkspaceCapabilityState } from '../workspaceCapabilityState.js';
+import {
+  clearWorkspaceCapabilityState,
+  refreshWorkspaceCapabilityState,
+} from '../workspaceCapabilityState.js';
 import { resolveActiveTurnOrchestration } from '../../workspace/activeTurnOrchestration.js';
 import { resolveRequiredSkillActivation } from '../../workspace/requiredSkillActivation.js';
 import { loadWorkspaceManifest } from '../../workspace/manifest.js';
@@ -98,7 +101,9 @@ import {
   describeProfileStageTool,
 } from './profileStageRuntime.js';
 import { runChildProfileGuardPhase } from './childProfileGuardPhase.js';
-import { noteToolProvenance } from './contentProvenance.js';
+import { beginToolProvenanceBatch, noteToolProvenance } from './contentProvenance.js';
+import { getLearnedItem } from '../../learning/index.js';
+import { learnedTenantForAgent } from './learningPhase.js';
 
 function sameLlmRoute(
   route: { llm: { model: string; endpoint?: string; apiKey?: string } },
@@ -141,10 +146,12 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // The model-visible copy is still pushed into chatHistory at its ordered
     // position below (after the goal anchor); only the durable record moves up.
     this.recordTranscript(opts?.hiddenPrompt ? { role: 'user', content: prompt, name: 'goal' } : { role: 'user', content: prompt });
-    // Workspace capabilities are task-scoped and additive. Resolve before tool
-    // construction so later policy slices can consume the same immutable turn
-    // state; this first slice publishes only the tagged prompt contribution.
-    refreshWorkspaceCapabilityState(this, prompt);
+    // Workspace capabilities are task-scoped and additive for ordinary turns.
+    // An isolated reviewer is analysing this checkout, so the checkout cannot
+    // simultaneously provide persona, capability, design-artifact, or tool
+    // authority for that review.
+    if (this.reviewSourceSafety) clearWorkspaceCapabilityState(this);
+    else refreshWorkspaceCapabilityState(this, prompt);
     const activeTurnOrchestration = resolveActiveTurnOrchestration({
       workspaceRoot: this.workspaceRoot,
       task: prompt,
@@ -157,17 +164,32 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       preplanned: opts?.preplanned === true || this.activeSkill !== undefined,
     });
     this.activeTurnOrchestration = activeTurnOrchestration;
-    const workspaceManifestForTurn = loadWorkspaceManifest(this.workspaceRoot);
-    const goalForSkillActivation = readGoal(this.workspaceRoot, this.sessionKey);
-    const planForSkillActivation = readPlan(this.workspaceRoot, this.sessionKey);
+    const workspaceManifestForTurn = this.reviewSourceSafety
+      ? null
+      : loadWorkspaceManifest(this.workspaceRoot);
+    const goalForSkillActivation = this.reviewSourceSafety
+      ? null
+      : readGoal(this.workspaceRoot, this.sessionKey);
+    const planForSkillActivation = this.reviewSourceSafety
+      ? { phases: [] }
+      : readPlan(this.workspaceRoot, this.sessionKey);
     const activePlanPhase = planForSkillActivation.phases?.find((phase) =>
       phase.status === 'in_progress');
-    const requiredSkillActivation = resolveRequiredSkillActivation({
-      prompt,
-      activeGoal: goalForSkillActivation?.status === 'active',
-      manifest: workspaceManifestForTurn,
-      phaseRequiredSkillIds: activePlanPhase?.requiredSkillIds,
-    });
+    const requiredSkillActivation = this.reviewSourceSafety
+      ? {
+        planningSchema: {
+          id: 'isolated-review',
+          label: 'Isolated review',
+          source: 'safe-fallback' as const,
+        },
+        required: [],
+      }
+      : resolveRequiredSkillActivation({
+        prompt,
+        activeGoal: goalForSkillActivation?.status === 'active',
+        manifest: workspaceManifestForTurn,
+        phaseRequiredSkillIds: activePlanPhase?.requiredSkillIds,
+      });
     const initiallyLoadedRequiredSkills = new Set([
       ...this.activeSkills,
       ...(this.activeSkill ? [this.activeSkill] : []),
@@ -341,8 +363,27 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // A skill allowlist can only subtract from the surface that every
     // existing access/role/capability/scope gate already permits. `undefined`
     // preserves legacy behavior; a declared empty list intentionally hides all.
-    const skillAllowsTool = (name: string): boolean =>
-      name === 'profile_stage'
+    const skillAllowsTool = (name: string): boolean => {
+      if (this.activeLearnedSkillItemId) {
+        try {
+          const item = getLearnedItem(
+            learnedTenantForAgent(this),
+            this.activeLearnedSkillItemId,
+          );
+          if (
+            !item
+            || item.status !== 'active'
+            || item.skillId !== this.activeSkill
+            || (item.memoryLifecycle && item.memoryLifecycle.status !== 'active')
+          ) return false;
+        } catch {
+          return false;
+        }
+        // Learned skills cannot activate a profile stage to escape their own
+        // ceiling; promotion to that authority remains a human/library action.
+        if (name === 'profile_stage') return false;
+      }
+      return name === 'profile_stage'
       || (
         (
           this.activeSkillAllowedTools === undefined
@@ -356,6 +397,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           )
         )
       );
+    };
     let filteredLocalTools = localToolSpecsFromExecutors({
       resultExpansionAvailable: this.resultCache.size() > 0,
       workflowActive: Boolean(getCurrentWorkflow(this.workspaceRoot, this.sessionKey)),
@@ -567,7 +609,11 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // bounded harness, not more prompt, is what makes them reliable). Passthrough
     // for strong/unknown models, so this is a no-op for the common case.
     const harnessCaps = resolveLocalModelProfile(this.llmConfig.model, getCliKnobs().localModelProfile, getCliKnobs());
-    const { window: budgetWindow, hardCeiling: maxLoops } = resolveToolBudget(harnessCaps.maxToolLoops);
+    const { window: budgetWindow, hardCeiling } = resolveToolBudget(harnessCaps.maxToolLoops);
+    const maxLoops = Math.min(
+      hardCeiling,
+      this.maxModelCallsPerTurn ?? Number.MAX_SAFE_INTEGER,
+    );
     let finalAnswer = '';
     let profileStageGuardFired = 0;
     const PROFILE_STAGE_GUARD_MAX = Math.min(
@@ -992,13 +1038,10 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         this.workspaceRoot,
         this.sessionKey,
       );
+      const provenanceBatch = beginToolProvenanceBatch(this.sessionProvenance);
 
       const processOneToolCall = async (tc: any, name: string): Promise<{ toolMsg: any; fullResultText: string; systemMsg?: any }> => {
         this.lastTurnToolCalls += 1;
-        // ADR-032 D7 — tally provenance BEFORE the call runs, so the ordering
-        // this records is the order the calls were issued in. Which side of an
-        // untrusted read a trusted action falls on is the whole signal.
-        noteToolProvenance(this.sessionProvenance, name);
         const delegationLaunch = registryDelegationLaunchTool(name);
         // INTERRUPT — skip queued tools once a stop is requested; the loop-top
         // check then ends the turn before the next LLM call.
@@ -1336,6 +1379,18 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           }
           void this.runExtensionHooks('post-tool', { tool: name, args });
         }
+
+        // ADR-032 D7 — provenance records outcomes, not intentions. Failed,
+        // denied, interrupted, and post-hook-rejected calls cannot corroborate
+        // a lesson. All calls from this model response share a batch, so an
+        // action issued in parallel with an untrusted read cannot vouch for it.
+        noteToolProvenance(this.sessionProvenance, name, {
+          success: !isError,
+          batch: provenanceBatch,
+          callId: tc.id,
+          summary: finalSummary,
+          args,
+        });
 
         // Browser observations contain page-controlled text. Frame them before
         // compaction, result handoff, and transcript persistence so restored

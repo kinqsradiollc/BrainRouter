@@ -1,53 +1,60 @@
 /**
- * ADR-033 D7 — build the review benchmark's ground truth from OUR OWN history.
+ * ADR-033 D7 — mine review-corpus CANDIDATES from this repository's history.
  *
- * For every `fix(...)` commit in the window, take the lines it changed, blame
- * their previous state, and keep the ones whose blame lands on a commit that
- * merged a numbered pull request. That pairing — "PR #N introduced this line,
- * and a later fix commit had to change it" — is a defect location we know was
- * real, because we fixed it.
+ * A later fix that changes a line introduced by a merged pull request is useful
+ * evidence, but it is not semantic ground truth by itself: one fix can repair
+ * several concepts and one concept can span several lines. This command writes
+ * a separate candidate file for manual curation. It never overwrites the frozen
+ * benchmark corpus.
  *
- * The result is written to `benchmark/data/review-cases.json` and committed, so
- * the benchmark is a frozen set two reviewer versions can be compared on rather
- * than a moving target. Re-run it to grow the set; the bias statement it writes
- * into the file is part of the data (see `reviewBenchmark.ts`).
+ * Before a candidate enters review-cases.json, a curator must split it into one
+ * conceptual issue per entry, describe the actual failure, add semantic aliases,
+ * verify every location in the reviewed revision, and add independently checked
+ * clean controls.
  *
- *   npx tsx benchmark/review-harvest.ts [--since=<git date>] [--max-cases=40]
+ *   npx tsx benchmark/review-harvest.ts [--since=<git date>] [--max-candidates=40]
  */
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type {
-  ReviewBenchmarkCase,
-  ReviewBenchmarkDataset,
-  ReviewBenchmarkDefect,
-} from "../src/reviews/benchmark/reviewBenchmark.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..");
-const OUTPUT = join(HERE, "data", "review-cases.json");
+const OUTPUT = join(HERE, "data", "review-candidates.json");
 
-const GROUND_TRUTH_BIAS =
-  "Defect locations are lines that a later fix(...) commit changed, blamed back to the merged pull request that introduced them. "
-  + "This covers only defects we noticed, only those fixed as their own commit, and is therefore biased toward what our review and tests already catch. "
-  + "Compare two reviewer versions on this frozen set; do not read the absolute numbers as a bug-finding rate.";
+interface CandidateLocation {
+  file: string;
+  line: number;
+}
+
+interface ReviewBenchmarkCandidate {
+  id: string;
+  pr: number;
+  reviewedSha: string;
+  pullRequestTitle: string;
+  fixedBySha: string;
+  fixTitle: string;
+  locations: CandidateLocation[];
+  needsManualCuration: true;
+}
+
+interface ReviewBenchmarkCandidateDataset {
+  schemaVersion: 1;
+  generatedAt: string;
+  warning: string;
+  requiredCuration: string[];
+  candidates: ReviewBenchmarkCandidate[];
+}
 
 function git(args: string[]): string {
   return execFileSync("git", args, { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 }
 
 const REVIEWABLE = /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rb|java|rs|sql)$/i;
-/**
- * Test files are excluded from DEFECT locations on purpose: a fix commit that
- * edits an assertion is usually recording the behaviour change, not the bug, so
- * counting those lines as defects the reviewer "missed" would depress recall
- * with cases that were never a defect. Tests are still reviewed — they are just
- * not ground truth.
- */
 const TEST_FILE = /(^|\/)(__tests__|__test__|tests?|spec)\/|\.(test|spec)\.[jt]sx?$|_test\.(go|py|rb)$/i;
 
-/** New-side line numbers a commit REPLACED (its `-` lines, in the parent). */
+/** Parent-revision line numbers replaced by a fix commit. */
 function replacedLines(sha: string): Map<string, number[]> {
   const out = new Map<string, number[]>();
   const diff = git(["show", "--unified=0", "--no-color", "--format=", sha]);
@@ -68,48 +75,32 @@ function replacedLines(sha: string): Map<string, number[]> {
     if (raw.startsWith("-") && !raw.startsWith("---")) {
       out.set(path, [...(out.get(path) ?? []), oldLine]);
       oldLine += 1;
+    } else if (!raw.startsWith("+")) {
+      oldLine += 1;
     }
   }
   return out;
 }
 
-/** Where a line came from: the commit that introduced it, and where it sat THERE. */
 interface BlamedOrigin {
   sha: string;
-  /** Line number in `sha`'s own revision — NOT in the revision blame was run on. */
   line: number;
-  /** Path in `sha`'s own revision; differs from the queried path across a rename. */
   path: string;
 }
 
-/**
- * Blame `path:line` as of just before `sha`, in PORCELAIN form.
- *
- * Porcelain is not a stylistic preference — it is the only format that reports
- * the line's number and filename IN THE BLAMED COMMIT. The first version
- * recorded the line number from the fix commit's parent instead, which is a
- * different revision from the pull request being reviewed: every commit that
- * touched the file in between shifted it. Measured over the harvested set, a
- * third of the defects landed more than the scorer's tolerance away from where
- * the same source line actually sits in the reviewed revision — so a perfectly
- * positioned finding scored as "not on the right line", and the number ADR-033
- * §6 says the reviewer is judged on was measuring drift in the ground truth.
- */
+/** Locate the changed source line in the commit that originally introduced it. */
 function blame(sha: string, path: string, line: number): BlamedOrigin | null {
   try {
-    // `-C` follows content across a rename so the recorded path is the one the
-    // reviewed revision actually has — the other source of unfindable defects.
     const output = git(["blame", "--porcelain", "-C", "-L", `${line},${line}`, `${sha}^`, "--", path]);
     const header = /^([0-9a-f]{40})\s+(\d+)\s+(\d+)/.exec(output);
     if (!header) return null;
     const filename = /^filename (.+)$/m.exec(output)?.[1]?.trim();
     return { sha: header[1], line: Number(header[2]), path: filename || path };
   } catch {
-    return null; // the file did not exist in the parent, or blame refused
+    return null;
   }
 }
 
-/** Does `path` exist at `sha`? Ground truth nobody can look at is not truth. */
 function existsAt(sha: string, path: string): boolean {
   try {
     git(["cat-file", "-e", `${sha}:${path}`]);
@@ -127,68 +118,76 @@ function subjectOf(sha: string): string {
   }
 }
 
+function integerArgument(args: readonly string[], name: string, fallback: number): number {
+  const raw = args.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
+  const value = raw === undefined ? fallback : Number(raw);
+  if (!Number.isInteger(value) || value < 1 || value > 500) {
+    throw new Error(`--${name} must be an integer between 1 and 500.`);
+  }
+  return value;
+}
+
 function main(): void {
   const args = process.argv.slice(2);
   const since = args.find((arg) => arg.startsWith("--since="))?.slice(8) ?? "12 months ago";
-  const maxCases = Number(args.find((arg) => arg.startsWith("--max-cases="))?.slice(12) ?? 40);
-
+  const maxCandidates = integerArgument(args, "max-candidates", 40);
   const fixes = git([
     "log", `--since=${since}`, "--format=%H", "--extended-regexp", "--grep=^fix(\\(|:)",
   ]).split("\n").filter(Boolean);
 
-  const byPr = new Map<number, { sha: string; title: string; defects: ReviewBenchmarkDefect[] }>();
+  const candidates = new Map<string, ReviewBenchmarkCandidate>();
   for (const fix of fixes) {
-    const fixSubject = subjectOf(fix);
+    const fixTitle = subjectOf(fix);
     for (const [path, lines] of replacedLines(fix)) {
-      for (const line of [...new Set(lines)].slice(0, 5)) {
+      for (const line of [...new Set(lines)].slice(0, 20)) {
         const origin = blame(fix, path, line);
         if (!origin) continue;
-        const subject = subjectOf(origin.sha);
-        const pr = Number(/\(#(\d+)\)\s*$/.exec(subject)?.[1] ?? 0);
-        if (!pr) continue; // not a merged pull request; nothing to review against
-        // Re-apply the source filter to the BLAMED path: `-C` may have followed
-        // the content back into a file the fix commit's own path never named.
-        if (!REVIEWABLE.test(origin.path) || TEST_FILE.test(origin.path)) continue;
-        // A defect the reviewed revision does not contain can never be found,
-        // and it depresses recall permanently. Drop it rather than ship it.
+        const pullRequestTitle = subjectOf(origin.sha);
+        const pr = Number(/\(#(\d+)\)\s*$/.exec(pullRequestTitle)?.[1] ?? 0);
+        if (!pr || !REVIEWABLE.test(origin.path) || TEST_FILE.test(origin.path)) continue;
         if (!existsAt(origin.sha, origin.path)) continue;
-        const entry = byPr.get(pr) ?? { sha: origin.sha, title: subject, defects: [] };
-        if (entry.defects.some(
-          (defect) => defect.file === origin.path && Math.abs(defect.line - origin.line) <= 3,
-        )) continue;
-        entry.defects.push({
-          file: origin.path,
-          line: origin.line,
-          description: fixSubject,
-          fixedBy: fix.slice(0, 12),
-        });
-        byPr.set(pr, entry);
+
+        const key = `${pr}:${origin.sha}:${fix}`;
+        const candidate = candidates.get(key) ?? {
+          id: `candidate-pr-${pr}-${fix.slice(0, 12)}`,
+          pr,
+          reviewedSha: origin.sha,
+          pullRequestTitle,
+          fixedBySha: fix,
+          fixTitle,
+          locations: [],
+          needsManualCuration: true,
+        };
+        if (!candidate.locations.some(
+          (location) => location.file === origin.path && Math.abs(location.line - origin.line) <= 3,
+        )) {
+          candidate.locations.push({ file: origin.path, line: origin.line });
+        }
+        candidates.set(key, candidate);
       }
     }
-    if (byPr.size >= maxCases) break;
+    if (candidates.size >= maxCandidates) break;
   }
 
-  const cases: ReviewBenchmarkCase[] = [...byPr.entries()]
-    .sort(([left], [right]) => right - left)
-    .slice(0, maxCases)
-    .map(([pr, entry]) => ({
-      id: `pr-${pr}`,
-      pr,
-      sha: entry.sha,
-      title: entry.title,
-      defects: entry.defects.slice(0, 10),
-    }));
-
-  const dataset: ReviewBenchmarkDataset = {
+  const selected = [...candidates.values()]
+    .sort((left, right) => right.pr - left.pr || left.fixedBySha.localeCompare(right.fixedBySha))
+    .slice(0, maxCandidates);
+  const dataset: ReviewBenchmarkCandidateDataset = {
+    schemaVersion: 1,
     generatedAt: new Date().toISOString(),
-    groundTruthBias: GROUND_TRUTH_BIAS,
-    cases,
+    warning: "Candidates are history-mined evidence, not benchmark ground truth. Do not score against this file.",
+    requiredCuration: [
+      "Split each candidate so every issue represents exactly one conceptual defect.",
+      "Verify the failure description and every eligible location in the reviewed revision.",
+      "Add at least two discriminating semantic requirement groups with reviewed aliases.",
+      "Add separately reviewed clean pull requests as negative controls.",
+      "Freeze the curated result in review-cases.json and review it as data.",
+    ],
+    candidates: selected,
   };
   mkdirSync(dirname(OUTPUT), { recursive: true });
   writeFileSync(OUTPUT, `${JSON.stringify(dataset, null, 2)}\n`, "utf8");
-  process.stdout.write(
-    `${cases.length} case(s), ${cases.reduce((sum, item) => sum + item.defects.length, 0)} known defect location(s) → ${OUTPUT}\n`,
-  );
+  process.stdout.write(`${selected.length} uncurated candidate(s) -> ${OUTPUT}\n`);
 }
 
 main();

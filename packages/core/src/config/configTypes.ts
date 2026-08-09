@@ -445,11 +445,11 @@ export interface TriggersCliKnobs {
  *   deliberately not captured at sign-in: the active org is a later choice the
  *   user can change, and a value frozen at sign-in would be wrong from the first
  *   switch onward.
- * - **The CLI writes NEITHER.** `brainrouter login` saves a server profile and an
- *   API key; the brain resolves the user from that key server-side, so the CLI
- *   never learns its own ids. A CLI-only install therefore learns into the
- *   personal partition — which is the safe direction, not an accident, but it is
- *   the reason this comment does not say "both surfaces write it".
+ * - **The CLI does not persist either id.** After connecting, it asks a hidden
+ *   host-only RPC for the user and org already pinned by the authenticated MCP
+ *   session, then pins those values directly on the Agent. If that proof is
+ *   unavailable for an authenticated BrainRouter profile, learning is disabled
+ *   for the launch instead of collapsing several accounts into `local`.
  *
  * Deliberately excludes the credential fields the desktop also stores under this
  * block — secrets are write-only (`scrubCliSecrets`), and a type that names them

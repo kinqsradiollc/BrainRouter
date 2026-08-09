@@ -1,6 +1,6 @@
 /**
- * ADR-033 D7 — the benchmark scores what the ADR says it will be judged on,
- * and the committed dataset is real.
+ * ADR-033 D7 — semantic scoring, clean controls, full cost, and conjunctive
+ * acceptance are deterministic before any live provider is allowed to run.
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -8,16 +8,81 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
-  formatReviewBenchmarkReport,
+  assertReviewBenchmarkWorkingTreeClean,
+  evaluateReviewBenchmarkAcceptance,
+  findingMatchesIssueSemantics,
+  formatReviewBenchmarkComparison,
+  parseReviewBenchmarkDataset,
   scoreReviewCase,
   summarizeReviewBenchmark,
   type ReviewBenchmarkCase,
-  type ReviewBenchmarkDataset,
+  type ReviewBenchmarkModelCall,
+  type ReviewBenchmarkRun,
 } from "./reviewBenchmark.js";
 
-/** Is `path` present at `sha` in this checkout? Used to keep the shipped ground
- *  truth findable — a defect in a file that revision lacks can never be hit. */
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../../..");
+
+const CASE: ReviewBenchmarkCase = {
+  id: "pr-1",
+  pr: 1,
+  sha: "abc123",
+  title: "feat: queue (#1)",
+  issues: [
+    {
+      id: "queue-dedup-race",
+      description: "Concurrent deliveries can enqueue duplicate jobs.",
+      fixedBy: "deadbeef",
+      locations: [{ file: "src/jobs.ts", line: 42, endLine: 45 }],
+      semanticRequirements: [
+        ["dedup", "idempotency"],
+        ["race", "concurrent"],
+        ["duplicate job", "both enqueue"],
+      ],
+    },
+    {
+      id: "stale-lease-write",
+      description: "A stale worker can overwrite the replacement run.",
+      fixedBy: "cafebabe",
+      locations: [{ file: "src/worker.ts", line: 10 }],
+      semanticRequirements: [
+        ["lease", "fencing"],
+        ["stale worker", "old worker"],
+        ["overwrite", "write back"],
+      ],
+    },
+  ],
+};
+
+function call(overrides: Partial<ReviewBenchmarkModelCall> = {}): ReviewBenchmarkModelCall {
+  const promptChars = overrides.promptChars ?? 500;
+  return {
+    id: "legacy:pr-1:1",
+    arm: "legacy",
+    caseId: CASE.id,
+    phase: "review",
+    taskId: "bench",
+    systemChars: 100,
+    promptChars,
+    promptBreakdown: {
+      framingChars: promptChars,
+      diffEvidenceChars: 0,
+      repositoryContextChars: 0,
+      servedEvidenceChars: 0,
+      contractChars: 0,
+      evidenceRequestChars: 0,
+      reflectionEvidenceChars: 0,
+      continuationChars: 0,
+    },
+    completionChars: 80,
+    wallClockMs: 25,
+    status: "ok",
+    ...overrides,
+  };
+}
+
+function run(findings: ReviewBenchmarkRun["findings"], calls = [call()]): ReviewBenchmarkRun {
+  return { caseId: CASE.id, findings, wallClockMs: 40, calls };
+}
 
 function gitSucceeds(args: string[]): boolean {
   try {
@@ -28,156 +93,227 @@ function gitSucceeds(args: string[]): boolean {
   }
 }
 
-/**
- * Is the reviewed commit in THIS clone at all?
- *
- * Separated from the file check because the two failures mean opposite things
- * and one `catch` cannot tell them apart. `actions/checkout` defaults to a
- * depth-1 clone, so on CI none of these historical commits exist — asking
- * whether a file is present at a commit the clone has never seen answers "no"
- * for a dataset that is perfectly sound.
- */
-function revisionPresent(sha: string): boolean {
-  return gitSucceeds(["cat-file", "-e", `${sha}^{commit}`]);
+function gitText(args: string[]): string {
+  return execFileSync("git", args, { cwd: REPO_ROOT, encoding: "utf8" }).trim();
 }
 
-/** Is the file present at that revision? Only meaningful once the revision is. */
-function fileExistsAtRevision(sha: string, path: string): boolean {
-  return gitSucceeds(["cat-file", "-e", `${sha}:${path}`]);
-}
+describe("review benchmark semantic scoring", () => {
+  it("requires conceptual semantics as well as the right file", () => {
+    const unrelated = {
+      file: "src/jobs.ts",
+      line: 42,
+      severity: "high",
+      summary: "This error message could be clearer",
+    };
+    expect(findingMatchesIssueSemantics(unrelated, CASE.issues[0])).toBe(false);
+    const score = scoreReviewCase(CASE, run([unrelated]));
+    expect(score).toMatchObject({ truePositives: 0, falsePositives: 1, missed: 2, onTheRightLine: 0 });
 
-const CASE: ReviewBenchmarkCase = {
-  id: "pr-1",
-  pr: 1,
-  sha: "abc123",
-  title: "feat: something (#1)",
-  defects: [
-    { file: "src/pay.ts", line: 42, description: "fix: rate could be undefined", fixedBy: "deadbeef" },
-    { file: "src/cart.ts", line: 10, description: "fix: off-by-one", fixedBy: "cafebabe" },
-  ],
-};
+    const ambiguousBasename = scoreReviewCase(CASE, run([{
+      file: "jobs.ts",
+      line: 42,
+      severity: "high",
+      summary: "Concurrent idempotency race",
+      details: "Both calls enqueue a duplicate job.",
+    }]));
+    expect(ambiguousBasename).toMatchObject({ truePositives: 0, falsePositives: 1 });
+  });
 
-describe("review benchmark scoring", () => {
-  it("separates finding the bug from putting it on the right line", () => {
-    const score = scoreReviewCase(CASE, {
-      caseId: CASE.id,
-      findings: [
-        { file: "src/pay.ts", line: 43, severity: "high", summary: "rate may be undefined" },
-        { file: "src/cart.ts", line: 400, severity: "high", summary: "loop bound" },
-        { file: "src/other.ts", line: 3, severity: "low", summary: "nit nobody asked for" },
-      ],
-      wallClockMs: 1_000,
-      promptChars: 5_000,
-      completionChars: 900,
-      modelCalls: 3,
-    });
+  it("matches one conceptual issue across its semantic aliases", () => {
+    const score = scoreReviewCase(CASE, run([
+      {
+        file: "src/jobs.ts",
+        line: 43,
+        severity: "high",
+        summary: "Idempotency has a concurrency race",
+        details: "Two requests can both enqueue the same duplicate job.",
+      },
+    ]));
     expect(score).toMatchObject({
-      truePositives: 2,
-      falsePositives: 1,
-      missed: 0,
-      onTheRightLine: 1, // the cart finding found the file but not the place
+      truePositives: 1,
+      falsePositives: 0,
+      missed: 1,
+      onTheRightLine: 1,
+      matchedIssueIds: ["queue-dedup-race"],
+      correctLineIssueIds: ["queue-dedup-race"],
     });
   });
 
-  it("counts a second finding on an already-matched defect as a false positive", () => {
-    const score = scoreReviewCase(CASE, {
-      caseId: CASE.id,
-      findings: [
-        { file: "src/pay.ts", line: 42, severity: "high", summary: "rate may be undefined" },
-        { file: "src/pay.ts", line: 42, severity: "low", summary: "same thing, said twice" },
-      ],
-      wallClockMs: 10,
-      promptChars: 10,
-      completionChars: 4,
-      modelCalls: 1,
-    });
+  it("keeps semantic issue precision separate from correct-line evidence", () => {
+    const score = scoreReviewCase(CASE, run([
+      {
+        file: "src/jobs.ts",
+        line: 400,
+        severity: "high",
+        summary: "Concurrent idempotency race",
+        details: "Both deliveries enqueue a duplicate job.",
+      },
+    ]));
     expect(score.truePositives).toBe(1);
-    expect(score.falsePositives).toBe(1);
-    expect(score.missed).toBe(1);
-  });
-
-  it("reports precision, recall and cost together, with the bias attached", () => {
-    const report = summarizeReviewBenchmark([
-      scoreReviewCase(CASE, {
-        caseId: CASE.id,
-        findings: [{ file: "src/pay.ts", line: 42, severity: "high", summary: "rate" }],
-        wallClockMs: 2_000,
-        promptChars: 1_234,
-        completionChars: 321,
-        modelCalls: 2,
-      }),
-    ]);
-    expect(report.filePrecision).toBe(1);
-    expect(report.linePrecision).toBe(1);
-    expect(report.recall).toBe(0.5); // one of two known defects — the trade D6 names
-    expect(report.positionAccuracy).toBe(1);
-    expect(report.totalModelCalls).toBe(2);
-    expect(report.totalCompletionChars).toBe(321);
-    const rendered = formatReviewBenchmarkReport(report, "harvested from merged pull requests");
-    expect(rendered).toContain("precision (right file): 100.0%");
-    expect(rendered).toContain("precision (right line): 100.0%");
-    expect(rendered).toContain("completion characters: 321");
-    expect(rendered).toContain("Ground truth: harvested from merged pull requests");
-  });
-
-  it("a reviewer that reports nothing scores zero precision, not a perfect one", () => {
-    const report = summarizeReviewBenchmark([
-      scoreReviewCase(CASE, {
-        caseId: CASE.id, findings: [], wallClockMs: 1, promptChars: 1, completionChars: 0, modelCalls: 1,
-      }),
-    ]);
-    expect(report.filePrecision).toBe(0);
-    expect(report.linePrecision).toBe(0);
-    expect(report.recall).toBe(0);
-  });
-
-  it("does not let a finding in the right file but the wrong place inflate line precision", () => {
-    const report = summarizeReviewBenchmark([
-      scoreReviewCase(CASE, {
-        caseId: CASE.id,
-        // Right file, 400 lines away: a person opening this comment sees nothing.
-        findings: [{ file: "src/cart.ts", line: 400, severity: "high", summary: "loop bound" }],
-        wallClockMs: 1, promptChars: 1, completionChars: 1, modelCalls: 1,
-      }),
-    ]);
-    expect(report.filePrecision).toBe(1);
+    expect(score.onTheRightLine).toBe(0);
+    const report = summarizeReviewBenchmark([score]);
+    expect(report.issuePrecision).toBe(1);
     expect(report.linePrecision).toBe(0);
   });
 
-  it("ships a real dataset harvested from our own merged pull requests", () => {
+  it("requires the exact curated line for acceptance while allowing nearby diagnostics explicitly", () => {
+    const nearby = run([{
+      file: "src/worker.ts",
+      line: 11,
+      severity: "high",
+      summary: "A stale worker can overwrite after its lease expires",
+      details: "The old worker has no fencing token before write back.",
+    }]);
+    expect(scoreReviewCase(CASE, nearby).onTheRightLine).toBe(0);
+    expect(scoreReviewCase(CASE, nearby, 5).onTheRightLine).toBe(1);
+  });
+
+  it("rejects a dirty implementation tree as non-qualifying provenance", () => {
+    expect(() => assertReviewBenchmarkWorkingTreeClean(" M src/review.ts\n?? scratch.txt\n"))
+      .toThrow("requires a clean working tree");
+    expect(() => assertReviewBenchmarkWorkingTreeClean("\n")).not.toThrow();
+  });
+
+  it("counts duplicate findings and findings on clean controls as false positives", () => {
+    const duplicate = {
+      file: "src/jobs.ts",
+      line: 42,
+      severity: "high",
+      summary: "Idempotency race",
+      details: "Concurrent calls both enqueue a duplicate job.",
+    };
+    const defectScore = scoreReviewCase(CASE, run([duplicate, duplicate]));
+    const cleanCase: ReviewBenchmarkCase = {
+      id: "pr-2",
+      pr: 2,
+      sha: "def456",
+      title: "fix: clean (#2)",
+      issues: [],
+      cleanEvidence: {
+        kind: "no-linked-fix",
+        observedThrough: "2026-08-09T00:00:00.000Z",
+        note: "No linked fix in the observation window.",
+      },
+    };
+    const cleanScore = scoreReviewCase(cleanCase, {
+      caseId: cleanCase.id,
+      findings: [{ file: "src/anything.ts", line: 1, severity: "low", summary: "Unsupported nit" }],
+      wallClockMs: 1,
+      calls: [call({ caseId: cleanCase.id })],
+    });
+    const report = summarizeReviewBenchmark([defectScore, cleanScore]);
+    expect(defectScore).toMatchObject({ truePositives: 1, falsePositives: 1 });
+    expect(cleanScore).toMatchObject({ cleanCase: true, truePositives: 0, falsePositives: 1, missed: 0 });
+    expect(report.cleanCases).toBe(1);
+    expect(report.cleanCaseFalsePositives).toBe(1);
+  });
+
+  it("accounts for system, prompt, completion, provider failure, and logical failure calls", () => {
+    const score = scoreReviewCase(CASE, run([], [
+      call(),
+      call({ id: "legacy:pr-1:2", status: "provider_failed", completionChars: 0 }),
+      call({ id: "legacy:pr-1:3", status: "logical_failed", completionChars: 30 }),
+    ]));
+    const report = summarizeReviewBenchmark([score]);
+    expect(report.totalSystemChars).toBe(300);
+    expect(report.totalPromptChars).toBe(1_500);
+    expect(report.totalCompletionChars).toBe(110);
+    expect(report.totalModelChars).toBe(1_910);
+    expect(report.totalModelCalls).toBe(3);
+    expect(report.failedModelCalls).toBe(1);
+    expect(report.logicalFailures).toBe(1);
+  });
+
+  it("passes acceptance only when precision rises, full character cost falls, and a real issue lands correctly", () => {
+    const legacy = summarizeReviewBenchmark([
+      scoreReviewCase(CASE, run([
+        { file: "src/jobs.ts", line: 42, severity: "low", summary: "Unrelated style note" },
+      ], [call({ systemChars: 200, promptChars: 1_000, completionChars: 200 })])),
+    ]);
+    const bundled = summarizeReviewBenchmark([
+      scoreReviewCase(CASE, run([
+        {
+          file: "src/jobs.ts",
+          line: 42,
+          severity: "high",
+          summary: "Concurrent idempotency race",
+          details: "Both calls enqueue a duplicate job.",
+        },
+      ], [call({ arm: "bundled", systemChars: 100, promptChars: 600, completionChars: 100 })])),
+    ]);
+    const acceptance = evaluateReviewBenchmarkAcceptance(legacy, bundled);
+    expect(acceptance).toEqual({
+      passed: true,
+      precisionIncreased: true,
+      costDecreased: true,
+      correctLineEvidence: true,
+      executionSucceeded: true,
+      reasons: [],
+    });
+    expect(formatReviewBenchmarkComparison(legacy, bundled, acceptance, "biased corpus")).toContain("acceptance: PASS");
+  });
+
+  it("does not pass when any conjunct is missing", () => {
+    const base = summarizeReviewBenchmark([scoreReviewCase(CASE, run([]))]);
+    const acceptance = evaluateReviewBenchmarkAcceptance(base, base);
+    expect(acceptance.passed).toBe(false);
+    expect(acceptance.reasons).toEqual(expect.arrayContaining([
+      "Bundled semantic issue precision did not increase.",
+      "Bundled total model characters did not decrease.",
+      "Bundled review did not place a known real issue on the correct line.",
+    ]));
+  });
+});
+
+describe("review benchmark corpus", () => {
+  it("fails closed on the old line-list schema", () => {
+    expect(() => parseReviewBenchmarkDataset({
+      generatedAt: "now",
+      groundTruthBias: "old",
+      cases: [{ id: "old", pr: 1, sha: "abc", title: "old", defects: [] }],
+    })).toThrow("schemaVersion must be 2");
+  });
+
+  it("ships curated conceptual issues and clean pull-request controls", () => {
     const path = join(dirname(fileURLToPath(import.meta.url)), "../../../benchmark/data/review-cases.json");
-    const dataset = JSON.parse(readFileSync(path, "utf8")) as ReviewBenchmarkDataset;
+    const dataset = parseReviewBenchmarkDataset(JSON.parse(readFileSync(path, "utf8")));
     expect(dataset.cases.length).toBeGreaterThanOrEqual(10);
-    expect(dataset.groundTruthBias).toMatch(/biased/i);
+    expect(dataset.cases.filter((item) => item.issues.length === 0).length).toBeGreaterThanOrEqual(3);
+    expect(dataset.cases.some((item) => item.issues.length > 0)).toBe(true);
+    expect(dataset.groundTruthBias).toMatch(/not proof/i);
+
     let verifiedRevisions = 0;
     for (const item of dataset.cases) {
-      expect(item.sha).toMatch(/^[0-9a-f]{7,40}$/);
-      expect(item.defects.length).toBeGreaterThan(0);
-      // Shape is checked everywhere; history is checked only where there IS
-      // history. A depth-1 checkout cannot answer the question at all, and a
-      // test that reads "cannot tell" as "wrong" fails on a sound dataset.
-      const canCheckHistory = revisionPresent(item.sha);
-      if (canCheckHistory) verifiedRevisions += 1;
-      for (const defect of item.defects) {
-        expect(defect.line).toBeGreaterThan(0);
-        expect(defect.fixedBy).toMatch(/^[0-9a-f]{7,40}$/);
-        // The reviewer is scored against the REVIEWED revision, so a defect
-        // that names a file the reviewed revision does not contain is
-        // unfindable by construction and depresses recall forever. This is a
-        // property of the harvested data, so it holds wherever it can be read.
-        if (canCheckHistory) {
-          expect(fileExistsAtRevision(item.sha, defect.file)).toBe(true);
+      expect(item.sha).toMatch(/^[0-9a-f]{40}$/);
+      const revisionPresent = gitSucceeds(["cat-file", "-e", `${item.sha}^{commit}`]);
+      if (revisionPresent) verifiedRevisions += 1;
+      if (revisionPresent && item.cleanEvidence) {
+        const committedAt = Date.parse(gitText(["show", "-s", "--format=%cI", item.sha]));
+        const observedThrough = Date.parse(item.cleanEvidence.observedThrough);
+        expect(observedThrough - committedAt).toBeGreaterThan(30 * 24 * 60 * 60 * 1_000);
+      }
+      for (const issue of item.issues) {
+        expect(issue.fixedBy).toMatch(/^[0-9a-f]{40}$/);
+        expect(issue.semanticRequirements.length).toBeGreaterThanOrEqual(2);
+        expect(issue.locations.length).toBeGreaterThan(0);
+        const fixPresent = gitSucceeds(["cat-file", "-e", `${issue.fixedBy}^{commit}`]);
+        if (revisionPresent && fixPresent) {
+          const changedByFix = new Set(gitText([
+            "diff-tree", "--no-commit-id", "--name-only", "-r", issue.fixedBy,
+          ]).split("\n"));
+          expect(issue.locations.some((location) => changedByFix.has(location.file))).toBe(true);
+          expect(Date.parse(gitText(["show", "-s", "--format=%cI", issue.fixedBy])))
+            .toBeGreaterThan(Date.parse(gitText(["show", "-s", "--format=%cI", item.sha])));
+        }
+        for (const location of issue.locations) {
+          if (revisionPresent) {
+            expect(gitSucceeds(["cat-file", "-e", `${item.sha}:${location.file}`])).toBe(true);
+          }
         }
       }
     }
     if (verifiedRevisions === 0) {
-      // Do not let a green tick claim a check that never ran (ADR-028). The
-      // shape assertions above still held; the history ones were unanswerable.
-      console.warn(
-        "[review-benchmark] shallow clone: dataset shape verified, "
-        + "defect-file-at-revision NOT verified for any of "
-        + `${dataset.cases.length} case(s).`,
-      );
+      console.warn("[review-benchmark] shallow clone: semantic corpus shape verified; historical files unavailable.");
     }
   });
 });

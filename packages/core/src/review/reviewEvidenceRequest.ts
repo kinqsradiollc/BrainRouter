@@ -19,6 +19,7 @@
  * "not there" from "not allowed" will guess, which is what the grounding
  * vocabulary exists to prevent.
  */
+import { fenceUntrustedReviewEvidence } from './reviewEvidenceBoundary.js';
 
 /** Ceiling on one round's ask — a reviewer, not a crawler. */
 export const MAX_EVIDENCE_REQUEST_FILES = 6;
@@ -44,32 +45,29 @@ export function buildEvidenceRequestContract(maxFiles = MAX_EVIDENCE_REQUEST_FIL
 export function parseEvidenceRequest(text: string, maxFiles = MAX_EVIDENCE_REQUEST_FILES): string[] | null {
   const raw = String(text ?? '');
   if (!raw.includes('request_files')) return null;
-  const blocks: string[] = [];
-  const fence = /```(?:json)?\s*([\s\S]*?)```/gi;
-  let match: RegExpExecArray | null;
-  while ((match = fence.exec(raw)) !== null) blocks.push(match[1].trim());
-  const start = raw.indexOf('{');
-  const end = raw.lastIndexOf('}');
-  if (start >= 0 && end > start) blocks.push(raw.slice(start, end + 1));
-
-  for (const block of blocks) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(block);
-    } catch {
-      continue;
-    }
-    if (!parsed || typeof parsed !== 'object') continue;
-    const requested = (parsed as { request_files?: unknown }).request_files;
-    if (!Array.isArray(requested)) continue;
-    const paths = requested
-      .filter((value): value is string => typeof value === 'string')
-      .map((value) => value.trim())
-      .filter((value) => value.length > 0 && value.length <= 400)
-      .slice(0, maxFiles);
-    if (paths.length > 0) return [...new Set(paths)];
+  const blocks = [...raw.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)];
+  const last = blocks.at(-1);
+  const block = last?.[1]?.trim();
+  if (!block) return null;
+  if (raw.slice(0, last!.index).trim() || raw.slice(last!.index! + last![0].length).trim()) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(block);
+  } catch {
+    return null;
   }
-  return null;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const record = parsed as Record<string, unknown>;
+  if (Object.keys(record).length !== 1 || !Array.isArray(record.request_files)) return null;
+  if (record.request_files.length < 1 || record.request_files.length > maxFiles) return null;
+  const paths: string[] = [];
+  for (const value of record.request_files) {
+    if (typeof value !== 'string') return null;
+    const path = value.trim();
+    if (!path || path.length > 400 || /[*?{}[\]]/.test(path)) return null;
+    paths.push(path);
+  }
+  return [...new Set(paths)];
 }
 
 /** One answer to a requested path: the content, or why it is not being served. */
@@ -86,8 +84,7 @@ export interface ServedEvidenceFile {
  * numbered listing is cheaper and more accurate than counting.
  */
 export function formatServedEvidence(files: readonly ServedEvidenceFile[]): string {
-  if (files.length === 0) return 'No requested file could be served.';
-  return files
+  const content = files.length === 0 ? 'No requested file could be served.' : files
     .map((file) => {
       if (typeof file.content !== 'string') {
         return `--- ${file.path} — UNAVAILABLE: ${file.unavailableReason ?? 'not served'}`;
@@ -99,4 +96,5 @@ export function formatServedEvidence(files: readonly ServedEvidenceFile[]): stri
       return `--- ${file.path} (exact revision, line-numbered)\n${numbered}`;
     })
     .join('\n\n');
+  return fenceUntrustedReviewEvidence('repository_context', content);
 }

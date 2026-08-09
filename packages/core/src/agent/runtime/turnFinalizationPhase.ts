@@ -132,6 +132,14 @@ export async function finalizeTurnPhase(
   skillUsage.turns += 1;
   agent.usageBySkill.set(skillKey, skillUsage);
 
+  if (agent.activeLearnedSkillItemId) {
+    agent.activeLearnedSkillItemId = undefined;
+    agent.activeSkill = undefined;
+    agent.activeSkills = [];
+    agent.activeSkillAllowedTools = undefined;
+    agent.activeSkillDisallowedTools = [];
+  }
+
   if (!agent.silent && isTelemetryEnabled()) {
     try {
       recordDailyUsage(

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { memoryEngine } from "../../../memory/engine.js";
+import { isLearnedMemoryResult } from "./memory-governance.js";
 
 export const memoryMarkCitedToolSchema = {
   name: "memory_mark_cited",
@@ -45,10 +46,29 @@ export async function handleMemoryMarkCited(args: unknown, options?: { defaultUs
   const effectiveUserId = params.userId ?? options?.defaultUserId ?? "default";
 
   try {
+    // Citation accounting can eventually auto-archive a record. Classify every
+    // supplied id through the owner-scoped record read and fail closed when the
+    // record cannot be classified; learned lifecycle has its own org-scoped
+    // counters and must never be mutated through this model-visible tool.
+    const requestedIds = [...new Set([
+      ...params.citedRecordIds,
+      ...params.allRecalledRecordIds,
+    ])];
+    const allowed = new Set<string>();
+    await Promise.all(requestedIds.map(async (recordId) => {
+      try {
+        const record = await memoryEngine.getMemoryById(effectiveUserId, recordId);
+        if (!isLearnedMemoryResult(record)) allowed.add(recordId);
+      } catch {
+        // Unknown authority is not permission to mutate citation state.
+      }
+    }));
+    const citedRecordIds = params.citedRecordIds.filter((recordId) => allowed.has(recordId));
+    const allRecalledRecordIds = params.allRecalledRecordIds.filter((recordId) => allowed.has(recordId));
     const result = await memoryEngine.markCited(
       effectiveUserId,
-      params.citedRecordIds,
-      params.allRecalledRecordIds
+      citedRecordIds,
+      allRecalledRecordIds,
     );
 
     return {

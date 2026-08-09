@@ -9,8 +9,19 @@ import {
 
 type AccountConfig = {
   cli?: { account?: { url?: string; userId?: string; orgId?: string; displayName?: string; email?: string } };
-  servers?: Record<string, { identity?: string; apiKey?: string; url?: string }>;
+  servers?: Record<string, {
+    identity?: string;
+    apiKey?: string;
+    url?: string;
+    headers?: Record<string, string>;
+  }>;
 };
+
+const BRAINROUTER_ORG_HEADER = 'X-BrainRouter-Org';
+
+function isBrainRouterServer(id: string, server: { identity?: string }): boolean {
+  return server.identity === 'brainrouter' || /^brainrouter/i.test(id);
+}
 
 /**
  * ADR-032 D8 — record which tenant this install is currently working as.
@@ -35,15 +46,60 @@ export function withAccountOrgId(
   config: unknown,
   orgId: unknown,
 ): { changed: boolean; next: AccountConfig } {
-  const next = (config ?? {}) as AccountConfig;
+  const source = (config ?? {}) as AccountConfig;
+  const next: AccountConfig = {
+    ...source,
+    ...(source.cli ? {
+      cli: {
+        ...source.cli,
+        ...(source.cli.account ? { account: { ...source.cli.account } } : {}),
+      },
+    } : {}),
+    ...(source.servers ? {
+      servers: Object.fromEntries(Object.entries(source.servers).map(([id, server]) => [
+        id,
+        { ...server, ...(server.headers ? { headers: { ...server.headers } } : {}) },
+      ])),
+    } : {}),
+  };
   const account = next.cli?.account;
   if (!account) return { changed: false, next };
   const desired = typeof orgId === 'string' ? orgId.trim() : '';
   const current = typeof account.orgId === 'string' ? account.orgId.trim() : '';
-  if (desired === current) return { changed: false, next };
-  if (desired) account.orgId = desired;
-  else delete account.orgId;
-  return { changed: true, next };
+  let changed = desired !== current;
+  if (changed) {
+    if (desired) account.orgId = desired;
+    else delete account.orgId;
+  }
+
+  // The learned ledger and the central memory lifecycle must cross the same
+  // tenant boundary. HTTP MCP transport headers are fixed at connection time,
+  // so persist the selected org on every BrainRouter profile; the host then
+  // reconnects those profiles before constructing a replacement Agent.
+  for (const [id, server] of Object.entries(next.servers ?? {})) {
+    if (!isBrainRouterServer(id, server)) continue;
+    const headers = { ...(server.headers ?? {}) };
+    let foundDesired = false;
+    let headerChanged = false;
+    for (const key of Object.keys(headers)) {
+      if (key.toLowerCase() !== BRAINROUTER_ORG_HEADER.toLowerCase()) continue;
+      if (key === BRAINROUTER_ORG_HEADER && headers[key] === desired && desired && !foundDesired) {
+        foundDesired = true;
+        continue;
+      }
+      delete headers[key];
+      headerChanged = true;
+    }
+    if (desired && !foundDesired) {
+      headers[BRAINROUTER_ORG_HEADER] = desired;
+      headerChanged = true;
+    }
+    if (!headerChanged) continue;
+    if (Object.keys(headers).length) server.headers = headers;
+    else delete server.headers;
+    changed = true;
+  }
+  return { changed, next };
 }
 
 type FetchResponse = {
@@ -433,7 +489,8 @@ export async function resolveBrainRouterAccountContext(
   config: unknown,
   fetchImpl: AccountFetch = timeoutFetch,
 ): Promise<BrainRouterAccountContext | null> {
-  const account = resolveBrainRouterAccountApi(config);
+  const candidate = asRecord(config) as AccountConfig;
+  const account = resolveBrainRouterAccountApi(candidate);
   if (!account) return null;
   const response = await fetchImpl(`${account.baseUrl}/api/orgs`, {
     headers: { Authorization: `Bearer ${account.apiKey}` },
@@ -443,7 +500,12 @@ export async function resolveBrainRouterAccountContext(
   const orgs = Array.isArray(body.orgs)
     ? body.orgs.map(asRecord).filter((org) => typeof org.orgId === 'string')
     : [];
-  const org = orgs.find((entry) => entry.isDefault === true) ?? orgs[0];
+  const selectedOrgId = String(candidate.cli?.account?.orgId ?? '').trim();
+  const selected = orgs.find((entry) => selectedOrgId && String(entry.orgId).trim() === selectedOrgId);
+  if (selectedOrgId && !selected) {
+    throw new Error('The selected BrainRouter organization is no longer available. Choose an active organization.');
+  }
+  const org = selected ?? orgs.find((entry) => entry.isDefault === true) ?? orgs[0];
   if (!org) throw new Error('No active BrainRouter organization is available.');
   const orgId = String(org.orgId).trim();
   if (!orgId) throw new Error('No active BrainRouter organization is available.');

@@ -43,6 +43,7 @@
     "bench:e2e": "npx tsx benchmark/end-to-end-bench.ts",
     "bench:summary": "npx tsx benchmark/bench-summary.ts",
     "bench:review": "npx tsx benchmark/review-bench.ts",
+    "bench:review:input-cost": "npx tsx benchmark/review-input-cost.ts",
     "bench:review:harvest": "npx tsx benchmark/review-harvest.ts",
     "bench:download": "npx tsx benchmark/lib/dataset-loader.ts",
     "bench:overnight": "npx tsx benchmark/run-overnight.ts",

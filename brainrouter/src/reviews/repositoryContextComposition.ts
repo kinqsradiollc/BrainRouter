@@ -6,9 +6,9 @@
  * host-neutral campaign ports consumed by the durable review service.
  */
 
-import { redactSensitiveMemoryText } from "../memory/util/redaction.js";
 import { DeterministicImpactPacketAssembler } from "./impact/impactPacketAssembler.js";
 import { relatedChangedPathsFromGraph } from "./index/relatedChangedPaths.js";
+import { redactReviewSourceText } from "./repository-context/source-safety.js";
 import { TypeScriptAssuranceIndexAdapter } from "./index/typeScriptIndex.js";
 import type { RepositoryContextAnalysisPorts } from "./repositoryContextAssurance.js";
 import { ExactShaCheckoutAdapter } from "./source/exactCheckout.js";
@@ -43,7 +43,7 @@ export function createRepositoryContextAnalysisPorts(
   const impact = new DeterministicImpactPacketAssembler({
     indexes: index,
     checkouts: source,
-    redact: ({ content }) => redactSensitiveMemoryText(content),
+    redact: ({ content }) => redactReviewSourceText(content),
   });
   const contextBudget = Math.max(
     1_024,

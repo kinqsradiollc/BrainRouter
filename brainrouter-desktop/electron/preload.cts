@@ -51,6 +51,14 @@ contextBridge.exposeInMainWorld('brainrouter', {
     ipcRenderer.on('recents-changed', wrapped);
     return () => ipcRenderer.removeListener('recents-changed', wrapped);
   },
+  // Active account organization is global across every Desktop window and
+  // pooled workspace host. Main broadcasts the validated selection so another
+  // open window cannot keep rendering a stale org while its Agent has rebound.
+  onActiveOrgChanged(listener: (data: { orgId: string }) => void): () => void {
+    const wrapped = (_e: unknown, data: { orgId: string }) => listener(data);
+    ipcRenderer.on('active-org-changed', wrapped);
+    return () => ipcRenderer.removeListener('active-org-changed', wrapped);
+  },
   addWorkspace(): Promise<{ opened: boolean; workspaceRoot?: string }> {
     return ipcRenderer.invoke('workspace:add');
   },

@@ -35,6 +35,11 @@ import {
   parserCoverage,
 } from "./coverage.js";
 import { buildRepositoryContextPrompt } from "./prompt.js";
+import {
+  isSensitiveReviewSourcePath,
+  redactReviewSourceText,
+  SENSITIVE_REVIEW_SOURCE_REASON,
+} from "./source-safety.js";
 
 const SOURCE_UNAVAILABLE = "EXACT_SOURCE_UNAVAILABLE";
 const INDEX_UNAVAILABLE = "PARSER_INDEX_UNAVAILABLE";
@@ -83,6 +88,26 @@ export class RepositoryContextAssuranceSession {
     return this.prompt?.text ?? null;
   }
 
+  /**
+   * Project the retained deterministic packets onto one semantic review unit.
+   * A selected packet keeps all of its caller/callee/configuration/test
+   * artifacts; only packets anchored to unrelated changed files are omitted.
+   */
+  contextForChangedPaths(changedPaths: readonly string[]): RepositoryContextPrompt | null {
+    if (!this.assembly || this.cleaned) return null;
+    const paths = [...new Set(
+      changedPaths.filter((path) => isSafeRepositoryRelativePath(path)),
+    )].sort();
+    if (paths.length === 0) return this.prompt;
+    return buildRepositoryContextPrompt({
+      assembly: this.assembly,
+      limitations: [...this.limitations.values()],
+      resolveArtifact: (ref) => this.input.analysis.resolveArtifact(ref),
+      maxBytes: this.input.analysis.maxModelContextBytes,
+      changedPaths: paths,
+    }).prompt;
+  }
+
   get limitationIds(): string[] {
     return [...this.limitations.keys()];
   }
@@ -126,7 +151,11 @@ export class RepositoryContextAssuranceSession {
     if (!isSafeRepositoryRelativePath(relativePath)) {
       throw new Error("Requested review evidence path is not repo-relative.");
     }
-    return this.input.analysis.readSourceFile(this.checkoutRef, relativePath, maxBytes);
+    if (isSensitiveReviewSourcePath(relativePath)) {
+      throw new Error(SENSITIVE_REVIEW_SOURCE_REASON);
+    }
+    const source = await this.input.analysis.readSourceFile(this.checkoutRef, relativePath, maxBytes);
+    return redactReviewSourceText(source);
   }
 
   async enforceDeepReviewPreflight(input: {

@@ -2,6 +2,7 @@
 // installDevBridge(); each handler closes over the shared dev state (./state) via the
 // destructured helpers below and S.<scalar> for reassignable scalars. Behavior-identical.
 import type { ConnectorRecord } from '@kinqs/brainrouter-types';
+import type { LearnedItem, LearnedTenant, LearningLogEntry } from '@kinqs/brainrouter-core/learning';
 // The browser-safe half of core's notes model. The `notes` barrel reaches the
 // filesystem; `notes/editing` is pure by construction, which is what lets the
 // harness answer with the same sentences the host does instead of its own.
@@ -97,6 +98,41 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     { role: 'explorer', provider: 'groq', model: null },
     { role: 'reviewer', provider: null, model: 'gpt-5.3-codex' },
   ];
+  const devLearningTenant: LearnedTenant = { userId: 'dev-user', orgId: 'dev-org' };
+  const devLearnedItems: LearnedItem[] = [{
+    id: 'learn_dev_review',
+    tenant: devLearningTenant,
+    tier: 'evidence',
+    origin: 'model-inferred',
+    form: 'procedure',
+    statement: 'Run the focused review-position test after changing diff parsing.',
+    falsifier: 'The focused test does not exercise the changed positioning path.',
+    outcome: { expectation: 'Diff-position regressions are caught before handoff.', retrievals: 3, confirmations: 2, contradictions: 0 },
+    provenance: {
+      sessionKey: 'dev-session',
+      capturedAt: '2026-08-08T09:00:00.000Z',
+      checkpoint: 'session-end',
+      evidence: ['The same missed position recurred in two review changes.'],
+      corroboratedByTrustedAction: true,
+      corroboratingActionIds: ['tool-dev-test-1'],
+      sawUntrustedContent: false,
+      gateReasoning: 'Repeated local test outcome supported a falsifiable procedure.',
+    },
+    status: 'active',
+    statusReason: undefined as string | undefined,
+    createdAt: '2026-08-08T09:00:00.000Z',
+    updatedAt: '2026-08-08T09:00:00.000Z',
+    skillId: 'learned-review-position',
+    allowedTools: ['read_file', 'grep_search'],
+    memoryRecordId: 'mem_dev_review',
+    memoryLifecycle: { status: 'active', updatedAt: '2026-08-08T09:00:00.000Z', attempts: 1 },
+  }];
+  const devLearningLog: LearningLogEntry[] = [{
+    at: '2026-08-08T09:00:00.000Z',
+    op: 'admitted',
+    itemId: 'learn_dev_review',
+    detail: 'Admitted as evidence after the session-end checkpoint.',
+  }];
   // ADR-029 — enough notes state for the browser harness to be interactive:
   // one page, one locked block (B2's attribution), and one block that both
   // references a planner item and carries a FENCED conflict, so the live-label
@@ -1526,7 +1562,66 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       runtimePreviewsLive: devPreviewsLive.map((p) => ({ ...p })),
       automationRules: devAutomationRules.map((r) => ({ ...r })),
       triggerServe: { ...devTriggerServe, providers: [...devTriggerServe.providers], recentEvents: [...devTriggerServe.recentEvents] },
+      learning: {
+        tenant: { ...devLearningTenant },
+        correctionAllowed: true,
+        items: devLearnedItems.map((item) => ({
+          ...item,
+          tenant: { ...item.tenant },
+          outcome: { ...item.outcome },
+          provenance: { ...item.provenance, evidence: [...item.provenance.evidence], corroboratingActionIds: [...(item.provenance.corroboratingActionIds ?? [])] },
+          allowedTools: [...(item.allowedTools ?? [])],
+          memoryLifecycle: item.memoryLifecycle ? { ...item.memoryLifecycle } : undefined,
+        })),
+        log: devLearningLog.map((entry) => ({ ...entry })),
+      },
     }),
+    'action:learning-correct': (a) => {
+      const statement = typeof a.statement === 'string' ? a.statement.trim() : '';
+      const falsifier = typeof a.falsifier === 'string' ? a.falsifier.trim() : '';
+      const expectation = typeof a.expectation === 'string' ? a.expectation.trim() : '';
+      if (!statement || !falsifier || !expectation) {
+        return { admitted: false, rule: 'malformed', reason: 'all three correction fields are required' };
+      }
+      const at = new Date().toISOString();
+      const item: LearnedItem = {
+        id: `learn_dev_human_${Date.now().toString(36)}`,
+        tenant: { ...devLearningTenant },
+        tier: 'instruction',
+        origin: 'human-correction',
+        form: 'lesson',
+        statement,
+        falsifier,
+        outcome: { expectation, retrievals: 0, confirmations: 0, contradictions: 0 },
+        provenance: {
+          sessionKey: 'dev-session',
+          capturedAt: at,
+          checkpoint: 'session-end',
+          evidence: ['corrected in session dev-session'],
+          corroboratedByTrustedAction: true,
+          sawUntrustedContent: false,
+          gateReasoning: 'Explicit human correction from the browser preview.',
+        },
+        status: 'active',
+        createdAt: at,
+        updatedAt: at,
+      };
+      devLearnedItems.unshift(item);
+      devLearningLog.unshift({ at, op: 'admitted', itemId: item.id, detail: 'Explicit human correction admitted as instruction.' });
+      return { admitted: true, item };
+    },
+    'action:learning-revert': (a) => {
+      const item = devLearnedItems.find((entry) => entry.id === a.id);
+      const reason = String(a.reason ?? '').trim();
+      if (!item || reason.length < 3) return { ok: false, complete: false };
+      const at = new Date().toISOString();
+      item.status = 'reverted';
+      item.statusReason = reason;
+      item.updatedAt = at;
+      item.memoryLifecycle = { status: 'archived', updatedAt: at, attempts: (item.memoryLifecycle?.attempts ?? 0) + 1 };
+      devLearningLog.unshift({ at, op: 'reverted', itemId: item.id, detail: reason });
+      return { ok: true, complete: true, localStatus: 'reverted', memoryStatus: 'archived' };
+    },
     'action:triggers-serve-start': () => {
       const trig = devCliKnobs.triggers as { enabled?: boolean; host?: string; port?: number } | undefined;
       if (trig?.enabled !== true) { devTriggerServe.lastError = 'Trigger ingress is disabled — turn on "Enable trigger ingress" first (cli.triggers.enabled).'; return { ok: false, error: devTriggerServe.lastError }; }

@@ -29,6 +29,7 @@ import type {
 export interface RelatedPathGraph {
   symbols: readonly AssuranceCodeSymbol[];
   relationships: readonly AssuranceCodeRelationshipEdge[];
+  pathRelationships?: ReadonlyArray<readonly [string, string]>;
 }
 
 /**
@@ -54,6 +55,23 @@ export function relatedChangedPathsFromGraph(
   }
   if (changed.size < 2) return []; // nothing to join
 
+  const edges: Array<[string, string]> = [];
+  const seen = new Set<string>();
+  const addPair = (left: string | undefined, right: string | undefined): void => {
+    if (edges.length >= MAX_RELATED_PATH_EDGES || !left || !right || left === right) return;
+    if (!changed.has(left) || !changed.has(right)) return;
+    const pair: [string, string] = left < right ? [left, right] : [right, left];
+    const key = `${pair[0]}\u0000${pair[1]}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    edges.push(pair);
+  };
+
+  for (const [from, to] of graph.pathRelationships ?? []) {
+    addPair(from, to);
+    if (edges.length >= MAX_RELATED_PATH_EDGES) return edges;
+  }
+
   const pathBySymbol = new Map<string, string>();
   for (const symbol of graph.symbols) {
     const path = symbol.location?.path;
@@ -61,20 +79,12 @@ export function relatedChangedPathsFromGraph(
     // proportional to the change rather than to the repository.
     if (path && changed.has(path)) pathBySymbol.set(symbol.id, path);
   }
-  if (pathBySymbol.size === 0) return [];
-
-  const edges: Array<[string, string]> = [];
-  const seen = new Set<string>();
+  if (pathBySymbol.size === 0) return edges;
   for (const relationship of graph.relationships) {
     if (edges.length >= MAX_RELATED_PATH_EDGES) break;
     const from = pathBySymbol.get(relationship.fromSymbolId);
     const to = pathBySymbol.get(relationship.toSymbolId);
-    if (!from || !to || from === to) continue;
-    const pair: [string, string] = from < to ? [from, to] : [to, from];
-    const key = `${pair[0]}\u0000${pair[1]}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    edges.push(pair);
+    addPair(from, to);
   }
   return edges;
 }

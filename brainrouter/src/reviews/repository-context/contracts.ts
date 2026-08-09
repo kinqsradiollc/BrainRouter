@@ -13,6 +13,7 @@ import type {
   RepositoryAssuranceSourcePort,
 } from "@kinqs/brainrouter-core/review";
 import type {
+  AssuranceImpactRelationship,
   AssurancePolicySnapshot,
   AssuranceSourceLocation,
   RepositoryAssuranceProgram,
@@ -49,6 +50,14 @@ export function isSafeOpaqueArtifactRef(value: string): boolean {
 
 export interface RepositoryContextArtifact {
   ref: string;
+  /** Exact revision the retained source bytes came from. */
+  revisionSha: string;
+  /** Changed anchors whose deterministic graph traversal selected this artifact. */
+  anchorLocations: AssuranceSourceLocation[];
+  /** Exact source range serialized in `content`, before any aggregate prompt truncation. */
+  sourceLocation: AssuranceSourceLocation;
+  /** Why the graph retained this source for the anchor, stable and deduplicated. */
+  roles: AssuranceImpactRelationship[];
   content: string;
   byteCount: number;
 }

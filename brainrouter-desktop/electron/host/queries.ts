@@ -127,7 +127,7 @@ import {
   type TrackGithubConfig,
 } from './helpers.js';
 import { exec, execFileSync } from 'node:child_process';
-import { ensureBrainSession, endBrainSession, setBrainSessionRelay } from './brainSession.js';
+import { ensureBrainSession, setBrainSessionRelay } from './brainSession.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -144,7 +144,12 @@ import {
 } from '@kinqs/brainrouter-agent-protocol';
 // Deep imports into the CLI's built runtime (no "exports" field = allowed).
 // Extracting a proper @kinqs/brainrouter-agent package is tracked for 0.4.16.
-import { callOpenAI } from '@kinqs/brainrouter-core/agent';
+import { callOpenAI, learnedTenantForAgent } from '@kinqs/brainrouter-core/agent';
+import {
+  listLearnedItems,
+  readLearningLog,
+  revertLearnedItemLifecycle,
+} from '@kinqs/brainrouter-core/learning';
 // ADR-028 Part D — the planner is USER-scoped, so none of these take a
 // workspace root. If one ever needs one, the scoping has regressed (D9).
 import {
@@ -452,6 +457,7 @@ import { readRun } from '@kinqs/brainrouter-core/workflow';
 import { desktopSessionModePatchFromArgs, mergeSessionModePrefs } from '../sessionModeBridge.js';
 import { buildWorkspaceKnowledgeQueries } from '../knowledgeBridge.js';
 import type { HostContext, TrackPrView } from './context.js';
+import { isBrainRouterLearningProfile } from './learningIdentity.js';
 import type { QueryHandler } from '../hostCore.js';
 
 import {
@@ -535,6 +541,9 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
     refreshAccountModelCatalog,
     peekAccountModelCatalog,
     syncActiveSessionLlm,
+    rebindActiveAccountOrg,
+    activeTenantBindingError,
+    humanCorrectionIngress,
     spawnTaskAgent,
     taskEventView,
     emitTaskEvent,
@@ -1460,12 +1469,16 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
        * leave THIS process reading its boot-time cache — the partition would
        * change on disk and not in the only process that learns.
        */
-      'account-set-active-org': (args) => {
+      'account-set-active-org': async (args) => {
+        const requestedOrgId = typeof args.orgId === 'string' ? args.orgId.trim() : '';
+        // The provider emits an initial empty state while org memberships load.
+        // Treat that as "not selected yet", not a switch to a personal tenant:
+        // an authenticated BrainRouter MCP without an org header would otherwise
+        // fall back centrally while the local ledger pinned `personal`.
+        if (!requestedOrgId) return { ok: true, changed: false };
         const { changed, next } = withAccountOrgId(loadConfig(), args.orgId);
-        if (!changed) return { ok: true, changed: false };
-        saveConfig(next as Parameters<typeof saveConfig>[0]);
-        _resetCliKnobsCache();
-        return { ok: true, changed: true };
+        const rebound = await rebindActiveAccountOrg(next as Parameters<typeof saveConfig>[0]);
+        return { ok: true, changed: changed || rebound };
       },
       'shortcuts-save': (args) => {
         const raw = (args.overrides && typeof args.overrides === 'object') ? (args.overrides as Record<string, unknown>) : {};
@@ -3593,6 +3606,39 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
               blocked: e.source === 'workspace' && !isWorkspaceTrusted(workspaceRoot),
             })),
           },
+          // ADR-032 Q4 — this is the exact partition the active Agent reads,
+          // including inactive rows so a person can see what was retired or
+          // reverted and why. The audit log is already bounded in core.
+          learning: (() => {
+            const tenant = learnedTenantForAgent(getActiveAgent());
+            const tenantError = activeTenantBindingError();
+            const correction = humanCorrectionIngress.availability();
+            if (tenantError) return {
+              tenant,
+              items: [],
+              log: [],
+              error: tenantError,
+              correctionAllowed: false,
+              correctionBlockedReason: correction.reason ?? tenantError,
+            };
+            try {
+              return {
+                tenant,
+                items: listLearnedItems(tenant, { includeInactive: true }),
+                log: readLearningLog(tenant),
+                correctionAllowed: correction.allowed,
+                correctionBlockedReason: correction.reason,
+              };
+            } catch {
+              return {
+                tenant,
+                items: [],
+                log: [],
+                correctionAllowed: correction.allowed,
+                correctionBlockedReason: correction.reason,
+              };
+            }
+          })(),
         };
       },
       'account-model-catalog': () => refreshAccountModelCatalog(true),
@@ -4747,7 +4793,15 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       'servers:logs': (args) => ({ lines: devServers.tail(String(args.name ?? ''), 200) }),
       // Actions — host-side mutations the Settings dialog / palette trigger.
       // They ride the query channel (free-form names, result routing by id).
-      'action:clear': () => { getActiveAgent().clearHistory(); return { ok: true }; },
+      'action:clear': async () => {
+        // Pin the viewed Agent across the await: a concurrent session switch
+        // must not drain one trajectory and clear another. `endSession` owns a
+        // strict timeout and is idempotent for this logical session.
+        const activeAgent = getActiveAgent();
+        await activeAgent.endSession();
+        activeAgent.clearHistory();
+        return { ok: true };
+      },
       // WS8 — rewind the conversation to the message at (epoch) `ts`. Blocked when
       // code was generated after that point (rewindTranscript → canRewindTo); the
       // renderer surfaces the reason as an in-app warning. On success the
@@ -4768,6 +4822,47 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         return { ok: true, kept: r.kept.length };
       },
       'action:compact': async () => getActiveAgent().compactHistory(),
+      'action:learning-correct': (args) => humanCorrectionIngress.record(args),
+      'action:learning-revert': async (args) => {
+        const tenantError = activeTenantBindingError();
+        if (tenantError) throw new Error(tenantError);
+        const tenant = learnedTenantForAgent(getActiveAgent());
+        const id = typeof args.id === 'string' ? args.id.trim() : '';
+        const reason = typeof args.reason === 'string' ? args.reason.trim() : '';
+        const lifecycle = await revertLearnedItemLifecycle({
+          tenant,
+          id,
+          reason,
+          memory: {
+            archive: async ({ itemId, reason: archiveReason }) => {
+              // Protocol-level host capability: the model tool adapter cannot
+              // issue this custom MCP request.
+              const response = await mcpClient.callHostLearning({
+                operation: 'revert',
+                input: {
+                  itemId,
+                  reason: archiveReason,
+                },
+              });
+              const text = String(response.content[0]?.text ?? '');
+              if (response.isError) {
+                throw new Error(text || 'central learned-behaviour revert failed');
+              }
+              let parsed: { found?: boolean } | undefined;
+              try { parsed = text ? JSON.parse(text) as { found?: boolean } : undefined; } catch { /* fail below */ }
+              if (!parsed?.found) throw new Error('central learned-behaviour record was not found');
+            },
+          },
+        });
+        const complete = lifecycle.found && lifecycle.memory.status !== 'archive-pending';
+        return {
+          ok: lifecycle.found,
+          complete,
+          localStatus: lifecycle.localStatus,
+          memoryStatus: lifecycle.memory.status,
+          error: lifecycle.memory.error,
+        };
+      },
       'action:set-pref': (args) => {
         const key = typeof args.key === 'string' ? args.key : '';
         const SETTABLE = new Set(['delegationPolicy', 'autoChain', 'personality', 'personalityMode', 'tier', 'theme', 'quiet', 'memoriesEnabled', 'personaAnchorEnabled', 'experimental', 'rawScrollback', 'editorMode']);
@@ -4801,6 +4896,15 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       },
       'action:reconnect-mcp': async (args) => {
         const id = typeof args.id === 'string' ? args.id : '';
+        const fresh = loadConfig();
+        const server = fresh.servers?.[id];
+        const isBrainRouter = !!server && isBrainRouterLearningProfile(id, server);
+        if (isBrainRouter) {
+          fresh.activeServer = id;
+          saveConfig(fresh);
+          await rebindActiveAccountOrg(fresh, { forceIdentity: true });
+          return { ok: true };
+        }
         await mcpClient.reconnectOne(id);
         return { ok: true };
       },
@@ -4813,6 +4917,11 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const fresh = loadConfig();
         (fresh as { activeServer?: string }).activeServer = id;
         saveConfig(fresh);
+        const server = fresh.servers?.[id];
+        if (server && isBrainRouterLearningProfile(id, server)) {
+          await rebindActiveAccountOrg(fresh, { forceIdentity: true });
+          return { ok: true, activeServer: id };
+        }
         try { await mcpClient.reconnectOne(id); } catch { /* offline brains surface in status */ }
         return { ok: true, activeServer: id };
       },
@@ -4840,20 +4949,31 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
               ...(Object.keys(env).length ? { env } : {}) };
         const required = cfg.type === 'http' ? cfg.url : cfg.command;
         if (!required) return { ok: false, error: `A ${type} server needs a ${type === 'http' ? 'url' : 'command'}.` };
-        const fresh = loadConfig() as { servers?: Record<string, unknown> };
+        const fresh = loadConfig();
         fresh.servers = fresh.servers ?? {};
         if (fresh.servers[id]) return { ok: false, error: `A server named "${id}" already exists.` };
         fresh.servers[id] = cfg;
         saveConfig(fresh as never);
+        if (isBrainRouterLearningProfile(id, cfg)) {
+          await rebindActiveAccountOrg(fresh, { forceIdentity: true });
+          return { ok: true, id };
+        }
         try { await mcpClient.connectOne(id, cfg as never, loadConfig().llm ?? getLlm(), 5_000); } catch { /* offline — config saved, connect on next boot */ }
         return { ok: true, id };
       },
       'action:remove-mcp': async (args) => {
         const id = String(args.id ?? '').trim();
         if (!id) return { ok: false, error: 'No server id.' };
+        const fresh = loadConfig();
+        const removed = fresh.servers?.[id];
+        const isBrainRouter = !!removed && isBrainRouterLearningProfile(id, removed);
         try { await mcpClient.disconnectOne(id); } catch { /* already gone */ }
-        const fresh = loadConfig() as { servers?: Record<string, unknown> };
         if (fresh.servers && fresh.servers[id]) { delete fresh.servers[id]; saveConfig(fresh as never); }
+        if (isBrainRouter) {
+          if (fresh.activeServer === id) fresh.activeServer = '';
+          saveConfig(fresh);
+          await rebindActiveAccountOrg(fresh, { forceIdentity: true });
+        }
         return { ok: true, id };
       },
       // ADR-016 C0 — sign in to a BrainRouter backend and point the active brain
@@ -4902,6 +5022,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const mcpUrl = `${baseUrl}/mcp`;
         const account = { url: baseUrl, mcpUrl, userId: data.userId ?? '', displayName: data.displayName ?? email, email: data.email ?? email };
         fresh.servers[brainId] = { type: 'http', url: mcpUrl, apiKey, identity: 'brainrouter' };
+        (fresh as { activeServer?: string }).activeServer = brainId;
         fresh.cli = fresh.cli ?? {};
         fresh.cli.brainUrl = mcpUrl;
         // Account bearer + refresh credentials live only in Electron safeStorage.
@@ -4911,13 +5032,10 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         // Credential persistence is the sign-in commit point. MCP reconnect and
         // model-catalog hydration are independent background work: neither may
         // keep the Account screen spinning or hide already-usable BYOK models.
-        void (async () => {
-          try { await mcpClient.disconnectOne(brainId); } catch { /* not connected */ }
-          try {
-            await mcpClient.connectOne(brainId, fresh.servers![brainId] as never, loadConfig().llm ?? getLlm(), 5_000);
-            await ensureBrainSession(mcpClient, workspaceRoot); // show this device on the Account page
-          } catch { /* normal offline degradation; reconnect remains best-effort */ }
-        })();
+        void rebindActiveAccountOrg(
+          fresh as Parameters<typeof saveConfig>[0],
+          { forceIdentity: true },
+        ).catch(() => { /* normal offline degradation; learning remains disabled */ });
         void refreshAccountModelCatalog(true);
         return { ok: true, account };
       },
@@ -4932,17 +5050,17 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         }
         if (fresh.cli) { delete fresh.cli.brainUrl; delete fresh.cli.account; }
         saveConfig(fresh as never);
-        void endBrainSession(mcpClient);
         _resetCliKnobsCache();
-        try { if (brainId) await mcpClient.disconnectOne(brainId); } catch { /* already gone */ }
-        try { if (brainId && fresh.servers?.[brainId]) await mcpClient.connectOne(brainId, fresh.servers[brainId] as never, loadConfig().llm ?? getLlm(), 5_000); }
-        catch { /* embedded brain reconnects on next boot */ }
         if (secretBridge) {
           await Promise.allSettled([
             secretBridge.delete('account:access-token'),
             secretBridge.delete('account:refresh-token'),
           ]);
         }
+        await rebindActiveAccountOrg(
+          fresh as Parameters<typeof saveConfig>[0],
+          { forceIdentity: true },
+        );
         await refreshAccountModelCatalog(true);
         return { ok: true };
       },

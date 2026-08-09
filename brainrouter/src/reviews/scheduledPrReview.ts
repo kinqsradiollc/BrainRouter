@@ -137,9 +137,10 @@ async function reviewDependencies(
     candidatesReady(input: Parameters<
       NonNullable<PrReviewDeps["onCandidatesReady"]>
     >[0]): PrReviewPublicationGate | void | Promise<PrReviewPublicationGate | void>;
-    serveRepositoryFiles(paths: string[]): ReturnType<
+    serveRepositoryFiles(paths: string[], bundleId: string): ReturnType<
       NonNullable<PrReviewDeps["serveRepositoryFiles"]>
     >;
+    readRepositoryFileForPosition(path: string): Promise<string | null>;
     relatedPaths(changedPaths: string[]): Array<[string, string]>;
     isCancellationRequested(): boolean | Promise<boolean>;
   },
@@ -147,6 +148,7 @@ async function reviewDependencies(
   const engine = requireReviewEngine(ctx);
   const assignment = await engine.reviewAssignment?.(lens, orgId);
   const reviewRunner = await engine.reviewRunner?.(lens, orgId);
+  const perCallTimeoutMs = assignment?.timeoutMs ?? 120_000;
   return {
     llmRunner: reviewRunner ?? ctx.llmRunner,
     fetchImpl: fetch,
@@ -179,6 +181,7 @@ async function reviewDependencies(
     // ADR-033 D3 — the reviewer can ask for a file; the assurance session owns
     // the checkout it is served from and the budget it is served under.
     serveRepositoryFiles: observe.serveRepositoryFiles,
+    readRepositoryFileForPosition: observe.readRepositoryFileForPosition,
     // ADR-033 D2 — the units are grouped from the exact-revision code graph the
     // assurance session already built for the impact packets.
     relatedPaths: observe.relatedPaths,
@@ -186,12 +189,15 @@ async function reviewDependencies(
     // per-review burst we are willing to spend against a tenant's model budget.
     reviewConcurrency: 4,
     isCancellationRequested: observe.isCancellationRequested,
-    ...(deepReviewPolicy ? {
-      executionBudget: {
-        maxModelCalls: deepReviewPolicy.budgets.maxModelCalls,
-        maxDurationMs: deepReviewPolicy.budgets.maxDurationMs,
-      },
-    } : {}),
+    executionBudget: deepReviewPolicy
+      ? {
+          maxModelCalls: deepReviewPolicy.budgets.maxModelCalls,
+          maxDurationMs: deepReviewPolicy.budgets.maxDurationMs,
+        }
+      : {
+          maxModelCalls: 40,
+          maxDurationMs: perCallTimeoutMs * 40,
+        },
   };
 }
 
@@ -222,9 +228,6 @@ export async function runScheduledPrReview(
       return true;
     }
   };
-  if (await isCancellationRequested()) {
-    throw new Error("Review canceled before execution.");
-  }
   const deps = await reviewDependencies(ctx, lens, input.orgId, deepReviewPolicy, {
     assuranceReady: async ({ policy, headSha, checkout }) => {
       if (!ctx.jobId) return;
@@ -258,11 +261,18 @@ export async function runScheduledPrReview(
     prepareRepositoryContext: async ({ changed }) => {
       const prepared = await (assurance.current?.prepareContext(changed)
         ?? Promise.resolve(null));
-      return prepared && deepReviewPolicy
-        ? { ...prepared, coverageLabel: deepReviewPolicy.coverage.label }
-        : prepared;
+      if (!prepared) return null;
+      return {
+        ...prepared,
+        ...(deepReviewPolicy
+          ? { coverageLabel: deepReviewPolicy.coverage.label }
+          : {
+              contextForPaths: (paths: readonly string[]) =>
+                assurance.current?.contextForPaths(paths)?.text ?? "",
+            }),
+      };
     },
-    serveRepositoryFiles: async (paths) => {
+    serveRepositoryFiles: async (paths, bundleId) => {
       const access = assurance.current?.fileAccess();
       if (!access) {
         return paths.map((path) => ({
@@ -270,8 +280,10 @@ export async function runScheduledPrReview(
           unavailableReason: "no exact-revision checkout is retained for this review",
         }));
       }
-      return access.serve(paths);
+      return access.serve(paths, bundleId);
     },
+    readRepositoryFileForPosition: async (path) =>
+      assurance.current?.fileAccess()?.readForPosition(path) ?? null,
     relatedPaths: (changedPaths) => assurance.current?.relatedChangedPaths(changedPaths) ?? [],
     candidatesReady: ({
       headSha,
@@ -279,6 +291,7 @@ export async function runScheduledPrReview(
       findings,
       coverage,
       changedFiles,
+      execution,
     }) =>
       assurance.current?.recordCandidates(
         headSha,
@@ -286,6 +299,7 @@ export async function runScheduledPrReview(
         coverage,
         changedFiles,
         currentHeadSha,
+        execution,
       ) ?? Promise.resolve(),
     isCancellationRequested,
     progress: (event) => {

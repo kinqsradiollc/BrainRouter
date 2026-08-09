@@ -4,17 +4,18 @@
  * A correct finding on the wrong line is a false positive to the person
  * reading it: they look, see nothing there, and trust the next one less. So the
  * line a finding is published on is derived from evidence — the verbatim
- * excerpt the reviewer quoted, matched against the diff's own new-revision line
- * numbering — and the model's remembered line number is only ever used as a
- * tie-breaker or a confirmation.
+ * excerpt the reviewer quoted, matched uniquely against exact new-revision file
+ * content when available and otherwise against the diff's visible new-side
+ * lines. The model's remembered line number never participates in the decision:
+ * an excerpt with more than one valid location is deliberately summary-only.
  *
  * When nothing can be established, the position degrades to FILE ONLY: the line
  * is removed so the finding renders in the summary instead of anchoring an
  * inline comment somewhere it does not belong. Precision is the target (D6);
  * an unplaceable finding is not worth a wrong anchor.
  *
- * Pure, and deliberately built from the diff alone: positioning must work on
- * the surface that has no checkout as well as the one that does.
+ * Pure. Diff-only remains the safe fallback for a surface with no checkout;
+ * exact/local source is injected by front doors that have a bounded reader.
  */
 import type { ParsedReviewFinding } from './reviewFindings.js';
 import { normalizeReviewPath, splitUnifiedDiffFiles } from './reviewBundles.js';
@@ -29,7 +30,7 @@ export interface DiffLine {
 export type FindingPositionKind =
   /** The quoted excerpt was found at exactly one place — the strongest signal. */
   | 'excerpt_match'
-  /** No excerpt, but the model's line is a real line of this file's diff. */
+  /** @deprecated Retained for API compatibility; evidence-only positioning never emits it. */
   | 'model_line_confirmed'
   /** The excerpt matched somewhere OTHER than the line the model claimed. */
   | 'excerpt_relocated'
@@ -131,12 +132,14 @@ export function resolveFindingPath(
 }
 
 /**
- * Compute where one finding belongs. Never returns a line the diff does not
- * show, and never returns the model's line unchecked.
+ * Compute where one finding belongs. A line comes only from a unique excerpt
+ * match in exact new-revision source, or from the visible diff fallback; the
+ * model's claimed line is never accepted unchecked.
  */
 export function computeFindingPosition(
   finding: ParsedReviewFinding,
   index: ReadonlyMap<string, DiffLine[]>,
+  exactSource?: string,
 ): ComputedFindingPosition {
   const path = resolveFindingPath(finding.file, index);
   if (!path) return { path: null, kind: 'path_unknown' };
@@ -147,50 +150,38 @@ export function computeFindingPosition(
 
   const quoted = excerptLines(finding.codeExcerpt ?? finding.diffHunk);
   if (quoted.length > 0) {
-    const needle = stripDiffMarker(quoted[0]);
-    const candidates = lines.filter((entry) => entry.text.trim() === needle);
-    if (candidates.length > 0) {
-      const chosen = claimed !== undefined
-        ? candidates.reduce((best, entry) =>
-            Math.abs(entry.line - claimed) < Math.abs(best.line - claimed) ? entry : best,
-          )
-        : candidates.find((entry) => entry.added) ?? candidates[0];
-      const endLine = matchedRunEnd(lines, chosen.line, quoted);
+    const evidenceLines = exactSource === undefined
+      ? lines
+      : exactSource.split('\n').map((text, offset) => ({
+          line: offset + 1,
+          text,
+          added: false,
+        }));
+    const candidates = excerptMatches(evidenceLines, quoted);
+    if (candidates.length === 1) {
+      const chosen = candidates[0];
       return {
         path,
         line: chosen.line,
-        ...(endLine > chosen.line ? { endLine } : {}),
+        ...(quoted.length > 1 ? { endLine: chosen.line + quoted.length - 1 } : {}),
         kind: claimed === chosen.line || claimed === undefined ? 'excerpt_match' : 'excerpt_relocated',
       };
     }
   }
 
-  if (claimed !== undefined && lines.some((entry) => entry.line === claimed)) {
-    const end = typeof finding.endLine === 'number' ? Math.trunc(finding.endLine) : undefined;
-    const confirmedEnd = end !== undefined && end > claimed && lines.some((entry) => entry.line === end)
-      ? end
-      : undefined;
-    return {
-      path,
-      line: claimed,
-      ...(confirmedEnd ? { endLine: confirmedEnd } : {}),
-      kind: 'model_line_confirmed',
-    };
-  }
-
   return { path, kind: 'file_only' };
 }
 
-/** How far a multi-line excerpt continues to match from `start`. */
-function matchedRunEnd(lines: readonly DiffLine[], start: number, quoted: readonly string[]): number {
+/** Every location where the complete quoted run occurs in the new revision. */
+function excerptMatches(lines: readonly DiffLine[], quoted: readonly string[]): DiffLine[] {
   const byLine = new Map(lines.map((entry) => [entry.line, entry.text.trim()]));
-  let end = start;
-  for (let offset = 1; offset < quoted.length; offset++) {
-    const expected = stripDiffMarker(quoted[offset]);
-    if (byLine.get(start + offset) !== expected) break;
-    end = start + offset;
-  }
-  return end;
+  const first = stripDiffMarker(quoted[0]);
+  return lines.filter((entry) => {
+    if (entry.text.trim() !== first) return false;
+    return quoted.every(
+      (value, offset) => byLine.get(entry.line + offset) === stripDiffMarker(value),
+    );
+  });
 }
 
 export interface PositionedReviewFinding {
@@ -209,10 +200,16 @@ export interface PositionedReviewFinding {
 export function positionReviewFindings(
   findings: readonly ParsedReviewFinding[],
   diff: string,
+  exactSources: ReadonlyMap<string, string> = new Map(),
 ): PositionedReviewFinding[] {
   const index = buildDiffLineIndex(diff);
   return findings.map((finding) => {
-    const position = computeFindingPosition(finding, index);
+    const resolvedPath = resolveFindingPath(finding.file, index);
+    const position = computeFindingPosition(
+      finding,
+      index,
+      resolvedPath ? exactSources.get(resolvedPath) : undefined,
+    );
     const positioned: ParsedReviewFinding = {
       ...finding,
       ...(position.path ? { file: position.path } : {}),

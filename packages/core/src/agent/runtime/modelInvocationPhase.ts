@@ -30,6 +30,7 @@ import {
   isInterrupt,
 } from '../transport/llmTransport.js';
 import { recoverAgentProviderRoute } from './providerRecovery.js';
+import { ReviewProviderRequestBudgetExceededError } from './modelRequestBudget.js';
 
 export interface ModelPhaseResponse {
   content: string;
@@ -90,6 +91,9 @@ export async function invokeModelPhase(
     const streamRequested = Boolean(
       callbacks.onAssistantDelta || callbacks.onReasoningDelta,
     ) && getCliKnobs().disableStream !== true;
+    const requestBudget = agent.reviewSourceSafety
+      ? { beforeProviderRequest: () => agent.reserveModelProviderRequest() }
+      : {};
     if (streamRequested) {
       let started = false;
       try {
@@ -97,7 +101,7 @@ export async function invokeModelPhase(
           agent.llmConfig,
           requestMessages,
           allTools,
-          { effort, signal: agent.turnAbort?.signal },
+          { effort, signal: agent.turnAbort?.signal, ...requestBudget },
           {
             onTextDelta: (text) => {
               if (!started) {
@@ -118,6 +122,7 @@ export async function invokeModelPhase(
         };
       } catch (streamError: any) {
         if (isInterrupt(streamError) || agent.interruptRequested) throw streamError;
+        if (streamError instanceof ReviewProviderRequestBudgetExceededError) throw streamError;
         if (started) {
           streamError.brainrouterStreamStarted = true;
           callbacks.onAssistantTurnEnd?.('');
@@ -132,11 +137,14 @@ export async function invokeModelPhase(
       agent.llmConfig,
       requestMessages,
       allTools,
-      { effort, signal: agent.turnAbort?.signal },
+      { effort, signal: agent.turnAbort?.signal, ...requestBudget },
     );
   };
 
-  const maxReconnects = Math.max(1, getCliKnobs().llmMaxReconnects);
+  const maxReconnects = Math.max(
+    0,
+    agent.maxLlmReconnectsPerCall ?? getCliKnobs().llmMaxReconnects,
+  );
   const offlineMaxWaits = 120;
   const llmEndpoint = agent.llmConfig?.endpoint ?? '';
   const invokeLlmResilient = async (): Promise<ModelPhaseResponse> => {

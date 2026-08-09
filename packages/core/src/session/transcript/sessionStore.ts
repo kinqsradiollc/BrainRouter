@@ -20,10 +20,32 @@ export interface TranscriptEntry {
   timestamp: string;
 }
 
-const SECRET_TOKEN_PATTERNS: RegExp[] = [
-  /\bbr_[A-Za-z0-9._-]{8,}\b/g,
-  /\bsk-[A-Za-z0-9._-]{8,}\b/g,
+const SENSITIVE_TEXT_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, '[REDACTED]'],
+  [/Basic\s+(?=[A-Za-z0-9+/]*[0-9+/=])[A-Za-z0-9+/]{12,}={0,2}/g, '[REDACTED]'],
+  [/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[REDACTED_JWT]'],
+  // Raw headers end at a real newline. JSON-encoded headers end at an escaped
+  // newline or the enclosing string quote; escaped quotes remain part of the
+  // value. Keeping both forms avoids exposing quoted cookies or invalidating
+  // the JSON representation used by redactTranscriptEntry().
+  [/\b(?:Set-)?Cookie:[ \t]*(?:(?:\\(?![rn]).|[^\\\r\n"])*(?=\\[rn]|"(?=[ \t]*(?:[,}\]]|$)))|[^\r\n]*)/gi, 'Cookie: [REDACTED]'],
+  [/\bbr_[A-Za-z0-9._-]{8,}\b/g, '[REDACTED]'],
+  [/\bsk-[A-Za-z0-9._-]{8,}\b/g, '[REDACTED]'],
+  [/\bsk_(?:live|test)_[A-Za-z0-9]{10,}\b/g, '[REDACTED]'],
+  [/\bgh[posru]_[A-Za-z0-9_]{8,}\b/g, '[REDACTED]'],
+  [/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, '[REDACTED]'],
+  [/\bAKIA[0-9A-Z]{16}\b/g, '[REDACTED]'],
+  [/\bAIza[0-9A-Za-z_-]{20,}/g, '[REDACTED]'],
+  [/\bxox[baprs]-[0-9A-Za-z-]{10,}\b/g, '[REDACTED]'],
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[REDACTED]'],
+  // Exclude quotes and JSON delimiters from the URL tail so structured
+  // transcript redaction cannot consume or invalidate the enclosing JSON.
+  [/\b(?:postgres|postgresql|mongodb|mysql|mongodb\+srv|redis|sqlite):\/\/[^:\s"'\\]+:[^@\s"'\\]+@[^\s"',\]}\\]+/gi, '[REDACTED_CONN_STR]'],
+  [/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, '[REDACTED_IP]'],
+  [/\b(?:[0-9A-Fa-f]{1,4}:){3,7}[0-9A-Fa-f]{1,4}\b/g, '[REDACTED_IP]'],
 ];
+
+const ENV_SECRET_ASSIGNMENT = /(\b[A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*[ \t]*=[ \t]*)("[^"\n]{6,}"|'[^'\n]{6,}'|[^\s,\]}]{6,})/g;
 
 const TRANSCRIPT_FILE = 'transcript.jsonl';
 
@@ -248,9 +270,13 @@ export function redactText(value: string): string {
     /((?:"(?:apiKey|api_key|BRAINROUTER_API_KEY|OPENAI_API_KEY)"|(?:apiKey|api_key|BRAINROUTER_API_KEY|OPENAI_API_KEY))\s*[:=]\s*)("[^"\n]*"|'[^'\n]*'|[^\s,\]}]+)/gi,
     '$1"[REDACTED]"',
   );
-  return SECRET_TOKEN_PATTERNS.reduce(
-    (text, pattern) => text.replace(pattern, '[REDACTED]'),
-    redactedAssignments,
+  const redactedEnvironmentAssignments = redactedAssignments.replace(
+    ENV_SECRET_ASSIGNMENT,
+    '$1"[REDACTED]"',
+  );
+  return SENSITIVE_TEXT_PATTERNS.reduce(
+    (text, [pattern, replacement]) => text.replace(pattern, replacement),
+    redactedEnvironmentAssignments,
   );
 }
 

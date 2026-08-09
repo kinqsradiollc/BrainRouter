@@ -63,6 +63,20 @@ test('a message catalogue reviews with its translations', () => {
   assert.ok(catalogue?.relations.includes('catalogue_siblings'));
 });
 
+test('unrelated files are never size-packed into one review unit', () => {
+  const diff = [
+    fileDiff('src/orders/create.ts', ['export const create = () => 1;']),
+    fileDiff('src/orders/logger.ts', ['export const log = () => 2;']),
+  ].join('\n');
+  const plan = planReviewBundles({ diff, maxBundleChars: 50_000, maxBundles: 10 });
+  assert.equal(plan.bundles.length, 2, 'spare character budget merged unrelated semantic units');
+  assert.deepEqual(
+    plan.bundles.map((bundle) => bundle.paths),
+    [['src/orders/create.ts'], ['src/orders/logger.ts']],
+  );
+  assert.ok(plan.bundles.every((bundle) => !bundle.relations.includes('directory_adjacency')));
+});
+
 test('every changed file lands in exactly one bundle, or is reported deferred', () => {
   const paths = Array.from({ length: 12 }, (_, index) => `src/mod${index}/file${index}.ts`);
   const diff = paths.map((path) => fileDiff(path, ['export const x = 1;'])).join('\n');
@@ -105,6 +119,94 @@ test('an import edge joins two changed files and can never add a third', () => {
   });
   assert.equal(plan.bundles.length, 1);
   assert.ok(plan.bundles[0].relations.includes('import_edge'));
+});
+
+test('changed workflow and package scripts join only the changed files they invoke', () => {
+  const diff = [
+    fileDiff('.github/workflows/release.yml', [
+      'jobs:',
+      '  package:',
+      '    steps:',
+      '      - run: node brainrouter-desktop/build/package-app.mjs',
+      '      - run: node scripts/not-in-this-change.mjs',
+    ]),
+    fileDiff('brainrouter-desktop/build/package-app.mjs', ['export const packageApp = true;']),
+    fileDiff('brainrouter/package.json', [
+      '  "scripts": {',
+      '    "bench:summary": "npx tsx benchmark/bench-summary.ts"',
+      '  }',
+    ]),
+    fileDiff('brainrouter/benchmark/bench-summary.ts', ['export const summarize = true;']),
+    fileDiff('src/unrelated.ts', ['export const unrelated = true;']),
+  ].join('\n');
+
+  const edges = relatedPathsFromDiff(diff);
+  assert.deepEqual(edges, [
+    ['.github/workflows/release.yml', 'brainrouter-desktop/build/package-app.mjs'],
+    ['brainrouter/package.json', 'brainrouter/benchmark/bench-summary.ts'],
+  ]);
+
+  const plan = planReviewBundles({ diff, maxBundleChars: 50_000, maxBundles: 10, relatedPaths: edges });
+  assert.deepEqual(
+    plan.bundles.map((bundle) => bundle.paths),
+    [
+      ['.github/workflows/release.yml', 'brainrouter-desktop/build/package-app.mjs'],
+      ['brainrouter/benchmark/bench-summary.ts', 'brainrouter/package.json'],
+      ['src/unrelated.ts'],
+    ],
+  );
+});
+
+test('changed HTML and CSS assets form bounded semantic review units', () => {
+  const diff = [
+    fileDiff('web/index.html', [
+      '<link rel="stylesheet" href="./styles/app.css">',
+      '<script type="module" src="./src/main.ts"></script>',
+      '<script src="https://example.invalid/not-reviewable.js"></script>',
+    ]),
+    fileDiff('web/styles/app.css', [
+      '@import "./theme.css";',
+      '.logo { background: url("../assets/logo.svg"); }',
+    ]),
+    fileDiff('web/styles/theme.css', [':root { color: black; }']),
+    fileDiff('web/src/main.ts', ['import "../styles/app.css";', 'export const main = true;']),
+    fileDiff('web/assets/logo.svg', ['<svg></svg>']),
+    fileDiff('web/assets/unreferenced.svg', ['<svg></svg>']),
+  ].join('\n');
+
+  const edges = relatedPathsFromDiff(diff);
+  assert.deepEqual(edges, [
+    ['web/index.html', 'web/styles/app.css'],
+    ['web/index.html', 'web/src/main.ts'],
+    ['web/styles/app.css', 'web/styles/theme.css'],
+    ['web/styles/app.css', 'web/assets/logo.svg'],
+    ['web/src/main.ts', 'web/styles/app.css'],
+  ]);
+  const plan = planReviewBundles({ diff, maxBundleChars: 50_000, maxBundles: 10, relatedPaths: edges });
+  assert.deepEqual(plan.bundles[0].paths, [
+    'web/assets/logo.svg',
+    'web/index.html',
+    'web/src/main.ts',
+    'web/styles/app.css',
+    'web/styles/theme.css',
+  ]);
+  assert.deepEqual(plan.bundles[1].paths, ['web/assets/unreferenced.svg']);
+});
+
+test('changed package locks and conventional cross-directory tests join without fuzzy basename packing', () => {
+  const diff = [
+    fileDiff('package-lock.json', ['{"lockfileVersion": 3}']),
+    fileDiff('packages/widget/package.json', ['{"name": "@example/widget"}']),
+    fileDiff('packages/widget/tests/format.test.ts', ['test("format", () => {});']),
+    fileDiff('packages/widget/src/format.ts', ['export const format = true;']),
+    fileDiff('packages/other/src/format.ts', ['export const unrelatedSameName = true;']),
+  ].join('\n');
+
+  const edges = relatedPathsFromDiff(diff);
+  assert.deepEqual(edges, [
+    ['packages/widget/package.json', 'package-lock.json'],
+    ['packages/widget/tests/format.test.ts', 'packages/widget/src/format.ts'],
+  ]);
 });
 
 test('one file bigger than a bundle is split by hunk, not truncated', () => {
@@ -231,6 +333,75 @@ test('family keys pair the test naming conventions we actually use', () => {
   assert.equal(fileFamilyKey('pkg/x.go'), fileFamilyKey('pkg/x_test.go'));
   assert.equal(fileFamilyKey('pkg/x.py'), fileFamilyKey('pkg/test_x.py'));
   assert.notEqual(fileFamilyKey('src/a/b.ts'), fileFamilyKey('src/a/c.ts'));
+});
+
+test('cross-directory test relationships preserve non-TypeScript implementation extensions', () => {
+  const diff = [
+    fileDiff('packages/widget/tests/format.spec.js', ['test("format", () => {});']),
+    fileDiff('packages/widget/src/format.js', ['export const format = true;']),
+    fileDiff('services/jobs/tests/worker_test.go', ['func TestWorker(t *testing.T) {}']),
+    fileDiff('services/jobs/src/worker.go', ['func Worker() {}']),
+  ].join('\n');
+  assert.deepEqual(relatedPathsFromDiff(diff), [
+    ['packages/widget/tests/format.spec.js', 'packages/widget/src/format.js'],
+    ['services/jobs/tests/worker_test.go', 'services/jobs/src/worker.go'],
+  ]);
+});
+
+test('local Markdown links join changed documentation and scripts without widening scope', () => {
+  const diff = [
+    fileDiff('CHANGELOG.md', [
+      '[Release notes](brainrouter-changelog/0.4.1.md)',
+      '[External](https://example.invalid/not-reviewable.md)',
+    ]),
+    fileDiff('brainrouter-changelog/README.md', ['[0.4.1](0.4.1.md)']),
+    fileDiff('brainrouter-changelog/0.4.1.md', ['# 0.4.1']),
+    fileDiff('desktop/build/PACKAGING.md', ['[helper](./dereference-workspace-deps.mjs)']),
+    fileDiff('desktop/build/dereference-workspace-deps.mjs', ['export const dereference = true;']),
+    fileDiff('docs/unrelated.md', ['[Absent](../src/not-in-this-change.ts)']),
+  ].join('\n');
+
+  assert.deepEqual(relatedPathsFromDiff(diff), [
+    ['CHANGELOG.md', 'brainrouter-changelog/0.4.1.md'],
+    ['brainrouter-changelog/README.md', 'brainrouter-changelog/0.4.1.md'],
+    ['desktop/build/PACKAGING.md', 'desktop/build/dereference-workspace-deps.mjs'],
+  ]);
+});
+
+test('exact CSS, dependency, config, entry, and protocol contracts join their changed endpoints', () => {
+  const diff = [
+    fileDiff('desktop/package.json', [
+      '"dependencies": {',
+      '  "@monaco-editor/react": "^4.7.0",',
+      '  "monaco-editor": "^0.55.1"',
+      '}',
+    ]),
+    fileDiff('package-lock.json', ['{"lockfileVersion": 3}']),
+    fileDiff('desktop/vite.config.ts', [
+      '// worker imports live in src/lib/editor/monacoEnv.ts',
+      "export default { optimizeDeps: { include: ['monaco-editor'] } };",
+    ]),
+    fileDiff('desktop/index.html', ['<meta http-equiv="Content-Security-Policy" content="worker-src self">']),
+    fileDiff('desktop/src/lib/editor/monacoEnv.ts', ["import * as monaco from 'monaco-editor';"]),
+    fileDiff('desktop/src/panels/EditorPanel.tsx', [
+      "import Editor from '@monaco-editor/react';",
+      'export const Panel = () => <div className={`editor-tab${true ? \' active\' : \'\'}`} />;',
+    ]),
+    fileDiff('desktop/src/theme.css', ['.editor-tab.active { color: red; }']),
+    fileDiff('desktop/src/App.tsx', ["send({ kind: 'set-model', model });"]),
+    fileDiff('desktop/electron/hostCore.ts', ["case 'set-model': return;", "case 'status': return;"]),
+    fileDiff('desktop/src/unrelated.tsx', ['export const Other = () => <div className="other" />;']),
+  ].join('\n');
+
+  const edges = relatedPathsFromDiff(diff);
+  assert.ok(edges.some(([from, to]) => from === 'desktop/package.json' && to === 'package-lock.json'));
+  assert.ok(edges.some(([from, to]) => from === 'desktop/vite.config.ts' && to === 'desktop/src/lib/editor/monacoEnv.ts'));
+  assert.ok(edges.some(([from, to]) => from === 'desktop/vite.config.ts' && to === 'desktop/index.html'));
+  assert.ok(edges.some(([from, to]) => from === 'desktop/src/theme.css' && to === 'desktop/src/panels/EditorPanel.tsx'));
+  assert.ok(edges.some(([from, to]) => from === 'desktop/src/App.tsx' && to === 'desktop/electron/hostCore.ts'));
+  assert.ok(edges.some(([from, to]) => from === 'desktop/package.json' && to === 'desktop/src/lib/editor/monacoEnv.ts'));
+  assert.ok(edges.some(([from, to]) => from === 'desktop/package.json' && to === 'desktop/src/panels/EditorPanel.tsx'));
+  assert.ok(!edges.some(([from, to]) => from.includes('unrelated') || to.includes('unrelated')));
 });
 
 test('splitting a diff keeps each section with its own path', () => {

@@ -58,8 +58,8 @@ export interface AgentLike {
   // DESK-3 — session lifecycle + model control (all present on the real Agent).
   clearHistory?(): void;
   resetSessionCounters?(): void;
-  /** ADR-032 D5 — the session-end checkpoint. Fire-and-forget by contract. */
-  endSession?(): void;
+  /** ADR-032 D5 — the bounded session-end checkpoint. */
+  endSession?(): Promise<void> | void;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   loadHistory?(entries: any[]): number;
   setModel?(model: string): void;
@@ -67,6 +67,8 @@ export interface AgentLike {
    *  endpoint/key), not just the model string. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   setLLMConfig?(config: any): void;
+  /** ADR-032 D8 — host-authenticated learning identity applied only between turns. */
+  setLearningBinding?(tenant: { userId: string; orgId: string | null }, enabled: boolean): void;
   getModel?(): string;
   /** DESK-4 — cumulative session token usage (mirrors the CLI's /tokens). */
   sessionUsage?: { promptTokens: number; completionTokens: number; calls: number; turns: number; cachedTokens?: number };
@@ -118,6 +120,19 @@ export function createBrokerPort(
 export interface HostCore {
   /** Feed one decoded wire message in; invalid shapes are ignored (logged via status). */
   handle(message: unknown): Promise<void>;
+  /**
+   * ADR-032 D8 — replace every pooled Agent across an authenticated tenant
+   * boundary. The callback runs only after old turns and session checkpoints
+   * have drained; it must reconnect tenant-bound transports before returning
+   * the first Agent for the new tenant.
+   */
+  rebindTenant(createReplacement: (sessionKey: string) => Promise<AgentLike> | AgentLike): Promise<void>;
+  /** Apply a verified learning identity after all active turns settle, without
+   * interrupting them or replacing/clearing their conversation state. */
+  bindLearning(
+    tenant: { userId: string; orgId: string | null },
+    enabled: boolean,
+  ): Promise<void>;
   /** Pending interaction count (exposed for tests + drain-on-shutdown). */
   readonly broker: InteractionBroker;
 }
@@ -189,8 +204,8 @@ export function createHostCore(input: {
   persistProviderModel?: (providerName: string, model: string) => void;
   /** DESK-3 — share the broker with the agent's InteractionPort adapter. */
   broker?: InteractionBroker;
-  /** Called on `shutdown` after pending interactions are dismissed. */
-  onShutdown?: () => void;
+  /** Called on `shutdown` after pooled sessions finish their bounded checkpoints. */
+  onShutdown?: () => Promise<void> | void;
   /** Fail-closed policy check immediately before a turn starts. Returning a
    * message blocks execution and surfaces that recovery prompt to the user. */
   validateTurn?: (sessionKey: string) => Promise<string | null> | string | null;
@@ -208,6 +223,72 @@ export function createHostCore(input: {
   const pool = new Map<string, Runtime>();
   pool.set(input.agent.sessionKey, { agent: input.agent, running: false, queue: new InputQueue() });
   let activeKey = input.agent.sessionKey;
+  let shuttingDown = false;
+  let tenantRebinding = false;
+  let sessionMutationTail: Promise<void> = Promise.resolve();
+  let queuedSessionMutations = 0;
+
+  function runSessionMutation<T>(operation: () => Promise<T>): Promise<T> {
+    queuedSessionMutations += 1;
+    const guarded = async (): Promise<T> => {
+      try {
+        return await operation();
+      } finally {
+        queuedSessionMutations -= 1;
+      }
+    };
+    const run = sessionMutationTail.then(guarded, guarded);
+    sessionMutationTail = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  // ADR-032 D5 — a session checkpoint belongs to the Agent + sessionKey pair
+  // that existed when the drain started. Retargeting the Agent before awaiting
+  // it would let the checkpoint read the next session's key/tenant. Background
+  // evictions are removed from the pool immediately, so their promises live in
+  // this independent registry and shutdown can still await them before MCP close.
+  const drainsByAgent = new WeakMap<AgentLike, Map<string, Promise<void>>>();
+  const pendingDrains = new Set<Promise<void>>();
+  const drainsBySession = new Map<string, Set<Promise<void>>>();
+
+  function trackSessionDrain(agent: AgentLike): Promise<void> {
+    const sessionKey = agent.sessionKey;
+    const bySession = drainsByAgent.get(agent) ?? new Map<string, Promise<void>>();
+    const existing = bySession.get(sessionKey);
+    if (existing) return existing;
+    let work: Promise<void>;
+    try {
+      work = Promise.resolve(agent.endSession?.()).then(() => undefined, () => undefined);
+    } catch {
+      work = Promise.resolve();
+    }
+    let tracked!: Promise<void>;
+    tracked = work.finally(() => {
+      pendingDrains.delete(tracked);
+      const agentDrains = drainsByAgent.get(agent);
+      if (agentDrains?.get(sessionKey) === tracked) agentDrains.delete(sessionKey);
+      if (agentDrains?.size === 0) drainsByAgent.delete(agent);
+      const sessionDrains = drainsBySession.get(sessionKey);
+      sessionDrains?.delete(tracked);
+      if (sessionDrains?.size === 0) drainsBySession.delete(sessionKey);
+    });
+    bySession.set(sessionKey, tracked);
+    drainsByAgent.set(agent, bySession);
+    pendingDrains.add(tracked);
+    const sessionDrains = drainsBySession.get(sessionKey) ?? new Set<Promise<void>>();
+    sessionDrains.add(tracked);
+    drainsBySession.set(sessionKey, sessionDrains);
+    return tracked;
+  }
+
+  async function awaitSessionDrains(sessionKey: string): Promise<void> {
+    const drains = [...(drainsBySession.get(sessionKey) ?? [])];
+    if (drains.length) await Promise.allSettled(drains);
+  }
+
+  async function awaitAllDrains(): Promise<void> {
+    while (pendingDrains.size) await Promise.allSettled([...pendingDrains]);
+  }
 
   // Control/status events (interrupt notices, model changes) belong to whatever
   // session the user is currently looking at.
@@ -221,7 +302,7 @@ export function createHostCore(input: {
 
   // DESK-5q (retained for the single-agent path) — a switch requested while the
   // ONLY agent is busy is queued here and applied once its turn unwinds.
-  let pendingSwitch: (() => void) | null = null;
+  let pendingSwitch: (() => Promise<void>) | null = null;
 
   let deliverySequence = 0;
   const nextDeliveryId = (): string => `delivery-${Date.now().toString(36)}-${++deliverySequence}`;
@@ -233,6 +314,15 @@ export function createHostCore(input: {
     images?: AgentImage[],
     delivery?: { id: string; mode: 'queue' | 'steer'; source: SteeringInput['source'] },
   ): Promise<void> {
+    // Preserve the long-standing synchronous `running` reservation when there
+    // is no session mutation. Queue/Steer commands may arrive in the same tick
+    // as start-turn and must see the latch immediately.
+    if (queuedSessionMutations > 0) await sessionMutationTail;
+    if (shuttingDown) return;
+    if (tenantRebinding) {
+      stamp(key, { kind: 'turn-error', message: 'Wait for the organization switch to finish before sending.' });
+      return;
+    }
     const rt = pool.get(key);
     if (!rt) { stamp(key, { kind: 'turn-error', message: 'No active session to run in.' }); return; }
     if (rt.running) {
@@ -286,6 +376,17 @@ export function createHostCore(input: {
       // A steer accepted during late turn-finalization missed the last model
       // boundary. Convert it into a normal queued follow-up instead of losing it.
       for (const pending of rt.agent.consumePendingSteering?.() ?? []) {
+        if (shuttingDown || tenantRebinding) {
+          turnEmit({
+            kind: 'input-delivery',
+            id: pending.id,
+            mode: 'steer',
+            state: 'canceled',
+            text: pending.text,
+            source: pending.source,
+          });
+          continue;
+        }
         const queued = rt.queue.enqueue(pending.text, {
           deliveryId: pending.id,
           deliveryMode: 'steer',
@@ -301,7 +402,7 @@ export function createHostCore(input: {
           source: pending.source,
         });
       }
-      const next = rt.queue.dequeue();
+      const next = shuttingDown || tenantRebinding ? undefined : rt.queue.dequeue();
       // A finished BACKGROUND agent (not the one on screen) is disposable — its
       // result is persisted to the transcript and re-read on switch-back. Drop
       // it so the pool can't grow without bound. Only spawned agents are dropped;
@@ -311,13 +412,15 @@ export function createHostCore(input: {
         // concerned: its agent is about to be discarded and only its transcript
         // survives. The CLI fires the session-end checkpoint on `/exit`; the
         // desktop had no equivalent, so on this surface D5 simply never ran.
-        // Fire-and-forget by the method's own contract, and never let a
-        // learning failure interfere with dropping the agent.
-        try { rt.agent.endSession?.(); } catch { /* learning is never a liability */ }
+        // The checkpoint owns a bounded timeout. Do not hold this completed
+        // background runtime in the pool while it drains, and swallow rejection
+        // so learning can never interfere with session eviction.
         pool.delete(sk);
+        void trackSessionDrain(rt.agent);
       }
       // Single-agent path: a switch was deferred until this turn ended.
-      if (pendingSwitch) { const fn = pendingSwitch; pendingSwitch = null; fn(); }
+      if (pendingSwitch && !shuttingDown) { const fn = pendingSwitch; pendingSwitch = null; await fn(); }
+      else if (shuttingDown) pendingSwitch = null;
       // WS1 — a detached child/worker may have finished mid-turn; fold its result
       // in now (idle) instead of waiting for the user's next prompt.
       maybeScheduleResume();
@@ -385,6 +488,7 @@ export function createHostCore(input: {
   let resumeTimer: ReturnType<typeof setTimeout> | null = null;
   function cancelResume(): void { if (resumeTimer) { clearTimeout(resumeTimer); resumeTimer = null; } }
   function maybeScheduleResume(): void {
+    if (shuttingDown || tenantRebinding) return;
     const rt = pool.get(activeKey);
     if (!rt || rt.running || resumeTimer) return;
     if (pendingCompletionCount(activeKey) === 0) return;
@@ -410,6 +514,19 @@ export function createHostCore(input: {
     if (!rt) return;
     const events = drainExternalSteering(key);
     if (!events.length) return;
+    if (shuttingDown || tenantRebinding) {
+      for (const event of events) {
+        stamp(key, {
+          kind: 'input-delivery',
+          id: event.id,
+          mode: 'steer',
+          state: 'canceled',
+          text: event.text,
+          source: 'extension',
+        });
+      }
+      return;
+    }
     if (rt.running && rt.agent.requestSteer) {
       for (const event of events) {
         rt.agent.requestSteer(event.text, { id: event.id, source: 'extension' });
@@ -462,16 +579,24 @@ export function createHostCore(input: {
    * null only when the viewed agent is busy AND there's no spawn factory — the
    * single-agent path, which the caller handles by deferring.
    */
-  function acquireRuntime(): Runtime | null {
+  async function acquireRuntime(targetKey: string): Promise<Runtime | null> {
     const cur = pool.get(activeKey);
-    if (cur && !cur.running) { pool.delete(activeKey); return cur; }
-    if (input.spawnAgent) return { agent: input.spawnAgent(activeKey), running: false, queue: new InputQueue() };
+    if (cur && !cur.running) {
+      pool.delete(activeKey);
+      await trackSessionDrain(cur.agent);
+      await awaitSessionDrains(targetKey);
+      return cur;
+    }
+    if (input.spawnAgent) {
+      await awaitSessionDrains(targetKey);
+      return { agent: input.spawnAgent(targetKey), running: false, queue: new InputQueue() };
+    }
     return null;
   }
 
   /** Switch the viewed session to `targetKey`, loading it via `init`. Never
    *  stops a running turn (it keeps going in the pool, in the background). */
-  function focusOrCreate(targetKey: string, init: (rt: Runtime) => number): void {
+  async function focusOrCreate(targetKey: string, init: (rt: Runtime) => number): Promise<void> {
     // Already pooled — i.e. running in the background, or the active one. Just
     // refocus; the renderer reloads the view from the (on-disk) transcript.
     const existing = pool.get(targetKey);
@@ -488,10 +613,10 @@ export function createHostCore(input: {
       deliverExternalSteeringForKey(targetKey);
       return;
     }
-    const rt = acquireRuntime();
+    const rt = await acquireRuntime(targetKey);
     if (!rt) {
       // Single-agent path, agent busy: preserve the safe interrupt-and-defer.
-      pendingSwitch = () => focusOrCreate(targetKey, init);
+      pendingSwitch = () => runSessionMutation(() => focusOrCreate(targetKey, init));
       pool.get(activeKey)?.agent.requestInterrupt?.();
       broker.dismissAll();
       emit({ kind: 'status', text: `Stopping the current turn to switch to ${targetKey}…` });
@@ -524,7 +649,7 @@ export function createHostCore(input: {
     stamp(targetKey, { kind: 'session-changed', sessionKey: targetKey, loadedMessages: loaded, model: rt.agent.getModel?.() ?? '', running: rt.running });
   }
 
-  function applyResume(sessionKey: string): void {
+  async function applyResume(sessionKey: string): Promise<void> {
     // An already-pooled (running) session refocuses without touching history.
     if (!pool.has(sessionKey)) {
       // OOM-safe: cheap existence check, NOT a full transcript read, just to
@@ -538,7 +663,7 @@ export function createHostCore(input: {
         // self-heals: create the empty session here so a turn can then write it,
         // instead of the confusing `No transcript found for "<hash>:new-…"`.
         if (isUnsavedNewSessionKey(sessionKey)) {
-          focusOrCreate(sessionKey, (rt) => { rt.agent.clearHistory?.(); return 0; });
+          await focusOrCreate(sessionKey, (rt) => { rt.agent.clearHistory?.(); return 0; });
           return;
         }
         emit({ kind: 'turn-error', message: `No transcript found for "${sessionKey}".` });
@@ -547,21 +672,138 @@ export function createHostCore(input: {
       // DESK-6t — LAZY: do NOT loadHistory now (the expensive replay). Park the
       // key; the first turn loads it. Resume just renders the (bounded) transcript;
       // loadedMessages=1 is a sentinel — the real rows come from q-transcript.
-      focusOrCreate(sessionKey, (rt) => { rt.pendingHistoryKey = sessionKey; return 1; });
+      await focusOrCreate(sessionKey, (rt) => { rt.pendingHistoryKey = sessionKey; return 1; });
       return;
     }
-    focusOrCreate(sessionKey, () => 0);
+    await focusOrCreate(sessionKey, () => 0);
   }
 
-  function applyNew(label?: string): void {
+  async function applyNew(label?: string): Promise<void> {
     const safe = (label ?? `new-${Date.now().toString(36)}`).replace(/[^A-Za-z0-9._-]+/g, '-');
     const targetKey = `${activeKey.split(':')[0]}:${safe}`;
-    focusOrCreate(targetKey, (rt) => { rt.agent.clearHistory?.(); return 0; });
+    await focusOrCreate(targetKey, (rt) => { rt.agent.clearHistory?.(); return 0; });
+  }
+
+  async function rebindTenant(
+    createReplacement: (sessionKey: string) => Promise<AgentLike> | AgentLike,
+  ): Promise<void> {
+    return runSessionMutation(async () => {
+      if (shuttingDown) throw new Error('The desktop host is shutting down.');
+      if (tenantRebinding) throw new Error('An organization switch is already in progress.');
+      tenantRebinding = true;
+      cancelResume();
+      pendingSwitch = null;
+      broker.dismissAll();
+      const oldActiveKey = activeKey;
+      try {
+        for (const [key, runtime] of pool) {
+          for (const queued of runtime.queue.list()) {
+            if (!queued.deliveryId || !queued.deliveryMode) continue;
+            stamp(key, {
+              kind: 'input-delivery',
+              id: queued.deliveryId,
+              mode: queued.deliveryMode,
+              state: 'canceled',
+              text: queued.text,
+              source: queued.deliverySource ?? 'user',
+            });
+          }
+          runtime.queue.clear();
+          runtime.agent.requestInterrupt?.();
+        }
+        const turnDeadline = Date.now() + 5_000;
+        while ([...pool.values()].some((runtime) => runtime.running) && Date.now() < turnDeadline) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 25));
+        }
+        if ([...pool.values()].some((runtime) => runtime.running)) {
+          throw new Error('Could not switch organizations while an agent turn was still stopping. Try again once it has stopped.');
+        }
+
+        const agents = [...new Set([...pool.values()].map((runtime) => runtime.agent))];
+        await Promise.allSettled(agents.map((pooled) => trackSessionDrain(pooled)));
+        await awaitAllDrains();
+        pool.clear();
+
+        // The host callback owns config + transport rebinding. It returns only
+        // after the BrainRouter MCP connection carries the new org header, so no
+        // replacement Agent can observe the previous central tenant.
+        let replacement: AgentLike;
+        let replacementError: unknown;
+        try {
+          replacement = await createReplacement(oldActiveKey);
+        } catch (error) {
+          // A transport replacement can fail closed (for example, a config
+          // write can fail after the old pool has already drained), but it must
+          // not strand the host with no Agent. The normal host factory reads
+          // whichever config actually survived and creates an offline-capable
+          // Agent pinned to that tenant. Rethrow after installing it so the
+          // initiating query still reports that the switch failed.
+          replacementError = error;
+          const fallback = input.spawnAgent?.(oldActiveKey);
+          if (!fallback) throw error;
+          replacement = fallback;
+        }
+        replacement.sessionKey = oldActiveKey;
+        const hasTranscript = input.transcriptExists
+          ? input.transcriptExists(oldActiveKey)
+          : ((input.loadTranscript?.(oldActiveKey)?.length ?? 0) > 0);
+        const runtime: Runtime = {
+          agent: replacement,
+          running: false,
+          queue: new InputQueue(),
+          ...(hasTranscript ? { pendingHistoryKey: oldActiveKey } : {}),
+        };
+        pool.set(oldActiveKey, runtime);
+        setActive(oldActiveKey);
+        stamp(oldActiveKey, {
+          kind: 'session-changed',
+          sessionKey: oldActiveKey,
+          loadedMessages: hasTranscript ? 1 : 0,
+          model: replacement.getModel?.() ?? '',
+          running: false,
+        });
+        if (replacementError) throw replacementError;
+      } finally {
+        tenantRebinding = false;
+      }
+    });
+  }
+
+  async function bindLearning(
+    tenant: { userId: string; orgId: string | null },
+    enabled: boolean,
+  ): Promise<void> {
+    return runSessionMutation(async () => {
+      if (shuttingDown) return;
+      // Identity discovery is background work. Let an already-running turn and
+      // its finalization finish under the old disabled binding; queued/new turns
+      // wait on this mutation and therefore see the verified binding atomically.
+      while ([...pool.values()].some((runtime) => runtime.running)) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      }
+      const agents = [...new Set([...pool.values()].map((runtime) => runtime.agent))];
+      for (const pooled of agents) {
+        if (!pooled.setLearningBinding) {
+          throw new Error('The active Agent cannot accept a verified learning identity.');
+        }
+        pooled.setLearningBinding(tenant, enabled);
+      }
+      const active = pool.get(activeKey)?.agent;
+      if (active) input.onActiveAgentChange?.(active);
+    });
   }
 
   async function handle(message: unknown): Promise<void> {
     if (!isAgentCommand(message)) return; // tolerate noise on the wire
     const cmd = message as AgentCommand;
+    if (shuttingDown && cmd.kind !== 'interrupt' && cmd.kind !== 'shutdown') return;
+    // Organization/session replacement is a process-wide authority boundary.
+    // Commands that arrive after it starts wait for the replacement Agent and
+    // transport; otherwise a concurrent query could still issue a central
+    // learned-state mutation through the old org while the UI shows the new one.
+    if (queuedSessionMutations > 0 && cmd.kind !== 'interrupt' && cmd.kind !== 'shutdown') {
+      await sessionMutationTail;
+    }
     switch (cmd.kind) {
       case 'start-turn':
         cancelResume(); // a real user prompt preempts any queued auto-resume
@@ -598,11 +840,11 @@ export function createHostCore(input: {
       }
       case 'new-session': {
         const label = (cmd.label ?? '').trim() || undefined;
-        applyNew(label);
+        await runSessionMutation(() => applyNew(label));
         return;
       }
       case 'resume-session': {
-        applyResume(cmd.sessionKey);
+        await runSessionMutation(() => applyResume(cmd.sessionKey));
         return;
       }
       case 'set-model': {
@@ -646,14 +888,29 @@ export function createHostCore(input: {
         return;
       }
       case 'shutdown':
+        if (shuttingDown) return;
+        shuttingDown = true;
+        pendingSwitch = null;
+        await sessionMutationTail;
         cancelResume();
         unsubscribeCompletions();
         unsubscribeExternalSteering();
         broker.dismissAll();
-        input.onShutdown?.();
+        // Stop every foreground/background turn, give cooperative cancellation a
+        // short bounded chance to unwind, then run exactly one session-end drain
+        // for every pooled Agent before the MCP transport disappears.
+        for (const runtime of pool.values()) runtime.agent.requestInterrupt?.();
+        const turnDeadline = Date.now() + 750;
+        while ([...pool.values()].some((runtime) => runtime.running) && Date.now() < turnDeadline) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 25));
+        }
+        const agents = [...new Set([...pool.values()].map((runtime) => runtime.agent))];
+        await Promise.allSettled(agents.map((pooled) => trackSessionDrain(pooled)));
+        await awaitAllDrains();
+        await input.onShutdown?.();
         return;
     }
   }
 
-  return { handle, broker };
+  return { handle, rebindTenant, bindLearning, broker };
 }

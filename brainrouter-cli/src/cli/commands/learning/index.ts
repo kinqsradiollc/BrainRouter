@@ -16,7 +16,7 @@
 import chalk from 'chalk';
 import {
   getLearnedItem, listLearnedItems, readLearningLog, recordHumanCorrection,
-  removeLearnedSkill, revertLearnedItem,
+  revertLearnedItemLifecycle,
   type LearnedItem,
 } from '@kinqs/brainrouter-core/learning';
 import { learnedTenantForAgent } from '@kinqs/brainrouter-core/agent';
@@ -93,13 +93,47 @@ export async function tryHandleLearningCommand(ctx: CommandContext): Promise<boo
   if (sub === 'revert') {
     const id = args[1] ?? '';
     const reason = args.slice(2).join(' ').trim() || 'reverted from the CLI';
-    const item = revertLearnedItem(tenant, id, reason);
-    if (!item) { console.log(chalk.red(`\nNo learned item with id "${id}".\n`)); return true; }
-    // The row survives (D4), but the SKILL must not: a learned skill left on
-    // disk after its item was taken back would still resolve through
-    // `get_skill`, which is the undo silently not applying.
-    if (item.skillId) removeLearnedSkill(tenant, item.skillId);
-    console.log(chalk.yellow(`\nReverted ${item.id}. It no longer reaches the agent; its provenance is kept.\n`));
+    const result = await revertLearnedItemLifecycle({
+      tenant,
+      id,
+      reason,
+      memory: typeof (agent as any).mcpClient?.callHostLearning === 'function'
+        ? {
+          archive: async ({ recordId, itemId, reason: archiveReason }) => {
+            // Human reverts need the explicit learned-status marker, not only
+            // a generic archive: other devices distinguish this irreversible
+            // decision from an automatic, reversible demotion by that marker.
+            const response = await (agent as any).mcpClient.callHostLearning({
+              operation: 'revert',
+              input: {
+                itemId,
+                reason: archiveReason,
+              },
+            });
+            const text = Array.isArray(response?.content)
+              ? String(response.content[0]?.text ?? '')
+              : '';
+            if (!response?.isError) {
+              let parsed: { found?: boolean } | undefined;
+              try { parsed = text ? JSON.parse(text) : undefined; } catch { /* handled below */ }
+              if (parsed?.found) return;
+              throw new Error('central learned-behaviour record was not found');
+            }
+
+            throw new Error(text || `central learned-behaviour revert failed for ${recordId}`);
+          },
+        }
+        : undefined,
+    });
+    if (!result.found || !result.item) {
+      console.log(chalk.red(`\nNo learned item with id "${id}".\n`));
+      return true;
+    }
+    console.log(chalk.yellow(`\nReverted ${result.item.id}. It no longer reaches the agent; its provenance is kept.`));
+    if (result.memory.status === 'archive-pending') {
+      console.log(chalk.yellow('Central memory archive is pending and will be retried by a later checkpoint.'));
+    }
+    console.log();
     return true;
   }
 

@@ -14,8 +14,9 @@
  */
 export type {
   LearnedForm, LearnedItem, LearnedOrigin, LearnedOutcome, LearnedProvenance,
-  LearnedStatus, LearnedTenant, LearnedTier, LearningCheckpointReason,
-  LearningLogEntry, LearningState,
+  LearnedMemoryLifecycle, LearnedMemoryStatus, LearnedStatus, LearnedTenant, LearnedTier, LearningCheckpointReason,
+  LearningLogEntry, LearningObservedSessionOutcome, LearningOutcomeCentralSyncState, LearningReconciliationState,
+  LearningSessionObservationState, LearningState,
 } from './types.js';
 
 export {
@@ -25,12 +26,18 @@ export {
 } from './gate.js';
 
 export {
-  applyLearnedTransition, attachLearnedSkill, getLearnedItem,
+  applyLearnedTransition, attachLearnedMemoryRecord, attachLearnedSkill,
+  claimLearningOutcomeSyncBatch, claimLearningReconciliationBatch,
+  completeLearningOutcomeSync, completeLearningReconciliation, getLearnedItem,
+  hasPendingLearningOutcomeSync,
   learnedFingerprint, learningDir,
-  learningStateFile, listLearnedItems, logLearningRejection, newLearnedItemId,
-  noteLearnedOutcome, noteLearnedRetrieval, readLearningLog, readLearningState,
-  revertLearnedItem, storeLearnedItem, writeLearningState,
+  learningStateFile, listLearnedItems, listLearnedItemsDeliveredInSession,
+  logLearningRejection, newLearnedItemId,
+  learningReconciliationSnapshot, noteLearnedOutcome, noteLearnedRetrieval,
+  pendingLearningOutcomeSyncForSession, readLearningLog, readLearningState,
+  revertLearnedItem, storeLearnedItem, updateLearnedMemoryLifecycle, writeLearningState,
   MAX_ACTIVE_ITEMS, MAX_LOG_ENTRIES,
+  type LearningOutcomeSyncEvent, type LearningReconciliationEntry,
 } from './store.js';
 
 export {
@@ -56,8 +63,17 @@ export {
 } from './reflection.js';
 
 export {
-  recordHumanCorrection, resetLearningBudget, runLearningCheckpoint,
+  buildHumanCorrectionItem, recordHumanCorrection, resetLearningBudget, runLearningCheckpoint,
   shouldRunCheckpoint,
   MAX_CHECKPOINTS_PER_SESSION, MIN_CHECKPOINT_INTERVAL_MS, MIN_TRAJECTORY_CHARS,
-  type CheckpointAdmission, type LearningCheckpointInput, type LearningCheckpointResult,
+  type CheckpointAdmission, type HumanCorrectionInput, type HumanCorrectionResult,
+  type LearningCheckpointInput, type LearningCheckpointResult,
 } from './checkpoint.js';
+
+export {
+  applyCentralLearnedRevert, learnedItemMemoryMetadata,
+  revertLearnedItemLifecycle, synchronizeLearnedItemLifecycle,
+  type LearnedLifecycleResult, type LearnedMemoryLifecyclePort,
+} from './lifecycle.js';
+
+export { learningSessionIdentity } from './sessionIdentity.js';

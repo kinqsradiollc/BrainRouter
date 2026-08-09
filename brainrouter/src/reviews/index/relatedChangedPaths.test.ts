@@ -50,6 +50,21 @@ describe("related changed paths", () => {
     expect(edges).toEqual([]);
   });
 
+  it("uses exact path relationships only when both generated/source endpoints changed", () => {
+    const graph = {
+      symbols: [],
+      relationships: [],
+      pathRelationships: [
+        ["electron/host.ts", "dist-electron/host.js"],
+        ["electron/untouched.ts", "dist-electron/other.js"],
+      ] as Array<[string, string]>,
+    };
+    expect(relatedChangedPathsFromGraph(graph, ["electron/host.ts", "dist-electron/host.js"])).toEqual([
+      ["dist-electron/host.js", "electron/host.ts"],
+    ]);
+    expect(relatedChangedPathsFromGraph(graph, ["electron/host.ts"])).toEqual([]);
+  });
+
   it("reports one edge per pair regardless of how many symbols connect them", () => {
     const edges = relatedChangedPathsFromGraph(
       {

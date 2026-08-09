@@ -34,7 +34,8 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { learningDir } from './store.js';
+import { createHash } from 'node:crypto';
+import { getLearnedItem, learningDir, listLearnedItems } from './store.js';
 import type { LearnedTenant } from './types.js';
 
 /**
@@ -57,6 +58,7 @@ export interface LearnedSkillResult {
     readonly tokenEstimate: number;
     readonly learnedItemId?: string;
     readonly learnedAt?: string;
+    readonly allowedTools: readonly string[];
   };
 }
 
@@ -65,14 +67,19 @@ export interface LearnedSkillSummary {
   readonly description: string;
   readonly learnedItemId?: string;
   readonly learnedAt?: string;
+  readonly allowedTools: readonly string[];
 }
 
 export function learnedSkillsDir(tenant: LearnedTenant): string {
   return path.join(learningDir(tenant), 'skills');
 }
 
-/** `Deploy the worker first` → `learned-deploy-the-worker-first`, bounded. */
-export function learnedSkillId(title: string): string {
+/**
+ * `Deploy the worker first` plus its durable item id becomes a one-owner skill
+ * id. Omitting the item id retains the legacy slug-only form for reading old
+ * state; every production promotion supplies it.
+ */
+export function learnedSkillId(title: string, learnedItemId?: string): string {
   const slug = title
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
@@ -81,7 +88,10 @@ export function learnedSkillId(title: string): string {
     .filter(Boolean)
     .slice(0, 6)
     .join('-');
-  return `${LEARNED_SKILL_PREFIX}${slug || 'procedure'}`;
+  const base = `${LEARNED_SKILL_PREFIX}${slug || 'procedure'}`;
+  if (!learnedItemId) return base;
+  const owner = createHash('sha256').update(learnedItemId).digest('hex').slice(0, 12);
+  return `${base}-${owner}`;
 }
 
 export function isLearnedSkillId(name: string): boolean {
@@ -99,6 +109,7 @@ export interface WriteLearnedSkillInput {
   readonly learnedItemId: string;
   readonly sessionKey: string;
   readonly learnedAt: string;
+  readonly allowedTools: readonly string[];
 }
 
 /**
@@ -114,8 +125,25 @@ export function writeLearnedSkill(input: WriteLearnedSkillInput): string | undef
     .slice(0, 20);
   if (steps.length === 0) return undefined;
 
-  const dir = path.join(learnedSkillsDir(input.tenant), input.id);
-  fs.mkdirSync(dir, { recursive: true });
+  const root = learnedSkillsDir(input.tenant);
+  const dir = path.join(root, input.id);
+  fs.mkdirSync(root, { recursive: true });
+  try {
+    const stat = fs.lstatSync(dir);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return undefined;
+    const owner = readLearnedSkillOwner(path.join(dir, 'SKILL.md'));
+    if (owner !== input.learnedItemId) return undefined;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return undefined;
+    try {
+      fs.mkdirSync(dir);
+    } catch {
+      // Another writer may have won the create. It is safe only when it wrote
+      // the same owner's complete skill.
+      const owner = readLearnedSkillOwner(path.join(dir, 'SKILL.md'));
+      if (owner !== input.learnedItemId) return undefined;
+    }
+  }
   const body = [
     '---',
     `name: ${input.id}`,
@@ -124,6 +152,7 @@ export function writeLearnedSkill(input: WriteLearnedSkillInput): string | undef
     `learned-item: ${input.learnedItemId}`,
     `learned-session: ${yamlScalar(input.sessionKey)}`,
     `learned-at: ${input.learnedAt}`,
+    `allowed-tools: ${JSON.stringify(input.allowedTools.slice(0, 32))}`,
     '---',
     '',
     `# ${input.id}`,
@@ -141,17 +170,70 @@ export function writeLearnedSkill(input: WriteLearnedSkillInput): string | undef
     '',
   ].join('\n');
   const file = path.join(dir, 'SKILL.md');
-  fs.writeFileSync(file, body, 'utf8');
+  const temporary = path.join(dir, `.SKILL.md.${process.pid}.${Date.now()}.tmp`);
+  let descriptor: number | undefined;
+  try {
+    descriptor = fs.openSync(
+      temporary,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL
+        | (fs.constants.O_NOFOLLOW ?? 0),
+      0o600,
+    );
+    fs.writeFileSync(descriptor, body, 'utf8');
+    fs.fsyncSync(descriptor);
+    fs.closeSync(descriptor);
+    descriptor = undefined;
+    fs.renameSync(temporary, file);
+  } catch {
+    try { fs.rmSync(temporary, { force: true }); } catch { /* best effort */ }
+    return undefined;
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+  }
   return file;
 }
 
 /** Remove a learned skill — the file half of D4's undo. */
-export function removeLearnedSkill(tenant: LearnedTenant, id: string): boolean {
+export function removeLearnedSkill(
+  tenant: LearnedTenant,
+  id: string,
+  expectedLearnedItemId: string,
+): boolean {
   if (!isLearnedSkillId(id)) return false;
   const dir = path.join(learnedSkillsDir(tenant), id);
-  if (!fs.existsSync(dir)) return false;
-  fs.rmSync(dir, { recursive: true, force: true });
-  return true;
+  try {
+    const stat = fs.lstatSync(dir);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
+    if (readLearnedSkillOwner(path.join(dir, 'SKILL.md')) !== expectedLearnedItemId) return false;
+    fs.rmSync(dir, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readLearnedSkillOwner(file: string): string | undefined {
+  let descriptor: number | undefined;
+  try {
+    descriptor = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    const stat = fs.fstatSync(descriptor);
+    if (!stat.isFile() || stat.size > MAX_SKILL_BYTES) return undefined;
+    return frontmatter(fs.readFileSync(descriptor, 'utf8'))['learned-item'];
+  } catch {
+    return undefined;
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+  }
+}
+
+function uniqueStoredSkillOwner(
+  tenant: LearnedTenant,
+  skillId: string,
+  learnedItemId: string,
+): ReturnType<typeof getLearnedItem> {
+  const owners = listLearnedItems(tenant).filter((item) => item.skillId === skillId);
+  if (owners.length !== 1 || owners[0]?.id !== learnedItemId) return undefined;
+  return owners[0];
 }
 
 /**
@@ -180,13 +262,23 @@ export function resolveLearnedSkill(
     if (relative.startsWith('..') || path.isAbsolute(relative)) return undefined;
     const text = fs.readFileSync(descriptor, 'utf8');
     const front = frontmatter(text);
+    const learnedItemId = front['learned-item'];
+    if (!learnedItemId) return undefined;
+    const item = uniqueStoredSkillOwner(tenant, name, learnedItemId);
+    // The file is not authority. A demoted, retired, or reverted item must be
+    // unrunnable even if a process crashed before cleaning up its skill file.
+    if (
+      !item || item.status !== 'active' || item.skillId !== name
+      || (item.memoryLifecycle && item.memoryLifecycle.status !== 'active')
+    ) return undefined;
     return {
       content: [{ type: 'text', text }],
       metadata: {
         scope: 'learned',
         tokenEstimate: Math.ceil(text.length / 4),
-        ...(front['learned-item'] ? { learnedItemId: front['learned-item'] } : {}),
+        learnedItemId,
         ...(front['learned-at'] ? { learnedAt: front['learned-at'] } : {}),
+        allowedTools: [...(item.allowedTools ?? [])],
       },
     };
   } catch {
@@ -223,11 +315,19 @@ export function listLearnedSkills(tenant: LearnedTenant): LearnedSkillSummary[] 
       continue;
     }
     if (front.name !== entry.name) continue;
+    const learnedItemId = front['learned-item'];
+    if (!learnedItemId) continue;
+    const item = uniqueStoredSkillOwner(tenant, entry.name, learnedItemId);
+    if (
+      !item || item.status !== 'active' || item.skillId !== entry.name
+      || (item.memoryLifecycle && item.memoryLifecycle.status !== 'active')
+    ) continue;
     out.push({
       name: entry.name,
       description: `(learned by your agent) ${front.description ?? entry.name}`,
-      ...(front['learned-item'] ? { learnedItemId: front['learned-item'] } : {}),
+      learnedItemId,
       ...(front['learned-at'] ? { learnedAt: front['learned-at'] } : {}),
+      allowedTools: [...(item.allowedTools ?? [])],
     });
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));

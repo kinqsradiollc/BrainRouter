@@ -5,3 +5,4 @@
 export * from './mcpUtils.js';
 export * from './mcpClient.js';
 export * from './mcpPool.js';
+export * from './hostLearning.js';

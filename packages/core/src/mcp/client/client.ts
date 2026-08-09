@@ -1,6 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { LLMConfig, ServerConfig } from '../../config/config.js';
 import { getCliKnobs } from '../../config/config.js';
 import { VERSION } from '../../version.js';
@@ -10,6 +11,11 @@ import type { McpIdentity } from '../types.js';
 import { resolveIdentityFromConfig } from './identity.js';
 import { isSessionNotFoundError } from './sessionErrors.js';
 import { buildHttpTransport, buildStdioTransport } from './transport.js';
+import {
+  HOST_LEARNING_REQUEST_METHOD,
+  type HostLearningRequest,
+  type HostLearningResult,
+} from '../hostLearning.js';
 
 export class McpClientWrapper {
   public client: Client;
@@ -270,6 +276,68 @@ export class McpClientWrapper {
         if (reconnects > MCP_MAX_RECONNECTS) throw err;
         console.error(`[BrainRouter] memory call "${name}" — reconnecting ${reconnects}/${MCP_MAX_RECONNECTS}...`);
         try { await this.reinit(); } catch { /* redial best-effort; retry surfaces the real failure */ }
+        await sleep(reconnectBackoffMs(reconnects, { capMs: 4000 }));
+      }
+    }
+  }
+
+  /**
+   * Host-only learned-state lifecycle channel.
+   *
+   * This uses a custom MCP request rather than tools/call, so the Agent's model
+   * tool adapter has no name or argument shape with which to invoke it. It is
+   * additionally pinned to a connection positively identified as BrainRouter;
+   * learned state must never be forwarded to an arbitrary third-party MCP.
+   */
+  async callHostLearning(
+    request: HostLearningRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<HostLearningResult> {
+    const errorResult = (text: string): HostLearningResult => ({
+      isError: true,
+      content: [{ type: 'text', text }],
+    });
+    if (!this.connected) {
+      return errorResult('BrainRouter MCP is not connected; host learning lifecycle is unavailable.');
+    }
+    if (this.identity !== 'brainrouter') {
+      return errorResult('Host learning lifecycle requires a verified BrainRouter MCP connection.');
+    }
+    if (options?.signal?.aborted) {
+      return errorResult('Host learning lifecycle interrupted by user.');
+    }
+
+    const timeoutMs = getCliKnobs().mcpTimeoutMs;
+    const invoke = () => Promise.race([
+      this.client.request(
+        { method: HOST_LEARNING_REQUEST_METHOD, params: request } as any,
+        CallToolResultSchema,
+        { signal: options?.signal, timeout: timeoutMs },
+      ),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`MCP host learning request timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        ),
+      ),
+    ]);
+
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    let reconnects = 0;
+    let sessionRedials = 0;
+    for (;;) {
+      try {
+        return await invoke() as HostLearningResult;
+      } catch (err) {
+        if (err instanceof Error && /\btimed out after \d+ms\b/.test(err.message)) throw err;
+        if (isSessionNotFoundError(err) && this.lastServerConfig && sessionRedials < 2) {
+          sessionRedials += 1;
+          try { await this.reinit(); continue; } catch { /* use bounded reconnect below */ }
+        }
+        if (!isConnectivityError(err)) throw err;
+        reconnects += 1;
+        if (reconnects > 2) throw err;
+        try { await this.reinit(); } catch { /* retry exposes the connection failure */ }
         await sleep(reconnectBackoffMs(reconnects, { capMs: 4000 }));
       }
     }

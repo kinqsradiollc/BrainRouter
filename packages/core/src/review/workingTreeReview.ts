@@ -12,10 +12,14 @@
  * review with nothing on any surface to say so.
  */
 import { REVIEW_OUTPUT_CONTRACT } from './reviewFindings.js';
+import { fenceUntrustedReviewEvidence } from './reviewEvidenceBoundary.js';
 import { buildGroundingClause } from './reviewGrounding.js';
+import { redactReviewSourceText } from './sourceSafety.js';
+
+const MAX_REPOSITORY_CONTEXT_CHARS = 24_000;
 
 export interface WorkingTreeReviewPromptInput {
-  /** REVIEW.md rendered by `buildReviewInstructionBlock`; empty when absent. */
+  /** Fenced REVIEW.md evidence rendered by `buildReviewInstructionBlock`; empty when absent. */
   reviewInstructions?: string;
   /** Deterministic blast-radius block; empty when the graph has nothing to say. */
   changeContext?: string;
@@ -26,16 +30,20 @@ export interface WorkingTreeReviewPromptInput {
 /**
  * Assemble the working-tree review prompt.
  *
- * The repo owner's REVIEW.md leads, ahead of the default contract, because it
- * overrides severity calibration, skip rules and nit caps — a policy that
- * arrives after the rule it is meant to override does not override it.
+ * Any REVIEW.md text leads only as explicitly fenced repository evidence. It
+ * cannot override the trusted contract because ADR-033 keeps all checkout
+ * content untrusted, including prose that describes itself as policy.
  */
 export function buildWorkingTreeReviewPrompt(input: WorkingTreeReviewPromptInput): string {
   const instructions = input.reviewInstructions ?? '';
-  const changeContext = input.changeContext ?? '';
+  const redactedContext = redactReviewSourceText(input.changeContext ?? '');
+  const changeContext = redactedContext.length > MAX_REPOSITORY_CONTEXT_CHARS
+    ? `${redactedContext.slice(0, MAX_REPOSITORY_CONTEXT_CHARS)}\n[repository context truncated]`
+    : redactedContext;
   return `${instructions}You are reviewing the uncommitted changes in this workspace before a commit/PR. `
     + 'Focus on real bugs, security issues, and performance problems introduced by the diff. Be concise.\n'
     + `\n${buildGroundingClause('read-only-tools')}\n`
-    + `\n${changeContext ? `${changeContext}\n\n` : ''}Diff:\n${input.diff}\n`
+    + `\n${changeContext ? fenceUntrustedReviewEvidence('repository_context', changeContext) : ''}`
+    + `Diff evidence:\n${fenceUntrustedReviewEvidence('diff', input.diff)}`
     + `\n${REVIEW_OUTPUT_CONTRACT}`;
 }

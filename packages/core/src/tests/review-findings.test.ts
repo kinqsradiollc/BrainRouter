@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseReviewFindings, lastJsonBlock, REVIEW_OUTPUT_CONTRACT } from '../review/reviewFindings.js';
+import {
+  lastJsonBlock,
+  parseReviewFindings,
+  parseReviewFindingsEnvelope,
+  REVIEW_OUTPUT_CONTRACT,
+} from '../review/reviewFindings.js';
 
 test('parses a fenced json findings array after prose', () => {
   const out = `Here is my review.\n\n\`\`\`json\n[{"file":"src/a.ts","line":12,"severity":"bug","confidence":90,"summary":"off-by-one"}]\n\`\`\``;
@@ -40,6 +45,68 @@ test('accepts a {findings:[...]} wrapper and string line numbers', () => {
 
 test('lastJsonBlock picks the final block when several exist', () => {
   assert.equal(lastJsonBlock('```json\n1\n```\nthen\n```json\n2\n```'), '2');
+});
+
+test('publication envelope requires exact severity, confidence, and line types', () => {
+  const invalid = [
+    { file: 'a.ts', summary: 'missing severity', confidence: 90 },
+    { file: 'a.ts', summary: 'unknown severity', severity: 'important', confidence: 90 },
+    { file: 'a.ts', summary: 'missing confidence', severity: 'high' },
+    { file: 'a.ts', summary: 'clamped confidence', severity: 'high', confidence: 101 },
+    { file: 'a.ts', summary: 'string line', severity: 'high', confidence: 90, line: '7' },
+    { file: 'a.ts', summary: 'backward range', severity: 'high', confidence: 90, line: 8, endLine: 7 },
+  ];
+  for (const finding of invalid) {
+    const result = parseReviewFindingsEnvelope(`\`\`\`json\n${JSON.stringify([finding])}\n\`\`\``);
+    assert.equal(result.ok, false, JSON.stringify(finding));
+  }
+});
+
+test('publication envelope refuses unknown fields and malformed optional values', () => {
+  const base = { file: 'a.ts', summary: 'real issue', severity: 'high', confidence: 90 };
+  for (const finding of [
+    { ...base, message: 'schema drift' },
+    { ...base, preExisting: 'true' },
+    { ...base, details: '' },
+  ]) {
+    const result = parseReviewFindingsEnvelope(`\`\`\`json\n${JSON.stringify([finding])}\n\`\`\``);
+    assert.equal(result.ok, false, JSON.stringify(finding));
+  }
+});
+
+test('publication envelope accepts the documented strict finding shape', () => {
+  const result = parseReviewFindingsEnvelope('```json\n' + JSON.stringify({ findings: [{
+    file: 'src/a.ts',
+    line: 12,
+    endLine: 13,
+    severity: 'critical',
+    preExisting: false,
+    confidence: 97,
+    summary: 'unsafe boundary',
+    details: 'The checked input reaches the sink.',
+    suggestion: 'Validate it first.',
+    replacement: 'safeCall(input);',
+    codeExcerpt: 'unsafeCall(input);',
+    diffHunk: '-unsafeCall(input);\n+safeCall(input);',
+    patch: '--- a/src/a.ts\n+++ b/src/a.ts',
+  }] }) + '\n```');
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.findings[0]?.severity, 'critical');
+    assert.equal(result.findings[0]?.line, 12);
+    assert.equal(result.findings[0]?.preExisting, undefined);
+  }
+});
+
+test('publication envelope accepts documented null lines as a file-only finding', () => {
+  const result = parseReviewFindingsEnvelope(
+    '```json\n[{"file":"src/a.ts","line":null,"endLine":null,"severity":"medium","confidence":80,"summary":"file-level issue"}]\n```',
+  );
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.findings[0]?.line, undefined);
+    assert.equal(result.findings[0]?.endLine, undefined);
+  }
 });
 
 // Review v2 — the parser must preserve the rich fields a PR-style UI needs.

@@ -33,6 +33,31 @@ export interface WorkspaceCapabilityStateHost {
 const WORKSPACE_CAPABILITY_TAG = 'workspace-capabilities';
 const WORKSPACE_PERSONA_TAG = 'workspace-domain-persona';
 
+const EMPTY_WORKSPACE_CAPABILITIES: WorkspaceCapabilityResolution = {
+  active: [],
+  reasons: [],
+  skillPacks: [],
+  skills: [],
+  toolProfiles: [],
+  promptBlocks: [],
+};
+
+/**
+ * Remove every checkout-controlled workspace prompt/tool selection layer.
+ * Isolated reviewers call this instead of resolving the manifest because the
+ * checkout being reviewed cannot also supply higher-priority authority for its
+ * own review.
+ */
+export function clearWorkspaceCapabilityState(
+  host: WorkspaceCapabilityStateHost,
+): WorkspaceCapabilityResolution {
+  host.activeWorkspacePersonaId = undefined;
+  host.activeWorkspaceCapabilities = { ...EMPTY_WORKSPACE_CAPABILITIES };
+  host.removeTaggedSystemMessage(WORKSPACE_PERSONA_TAG);
+  host.removeTaggedSystemMessage(WORKSPACE_CAPABILITY_TAG);
+  return host.activeWorkspaceCapabilities;
+}
+
 /** Resolve and publish the additive prompt overlay for one task. */
 export function refreshWorkspaceCapabilityState(
   host: WorkspaceCapabilityStateHost,

@@ -138,10 +138,15 @@ export async function upsertCognitive(exec: Executor, record: CognitiveRecord, o
 
 export async function invalidateCognitiveRecord(exec: Executor, userId: string, recordId: string, supersededById: string): Promise<void> {
   const now = new Date().toISOString();
-  await exec.run(
-    "UPDATE cognitive_records SET invalid_at = $1, superseded_by = $2, status = 'superseded' WHERE user_id = $3 AND record_id = $4",
+  const updated = await exec.rows<{ record_id: string }>(
+    `UPDATE cognitive_records
+        SET invalid_at = $1, superseded_by = $2, status = 'superseded'
+      WHERE user_id = $3 AND record_id = $4
+        AND metadata_json::jsonb -> 'learned' IS NULL
+      RETURNING record_id`,
     [now, supersededById, userId, recordId],
   );
+  if (updated.length === 0) return;
   await insertOperation(exec, {
     id: randomUUID(), userId, recordId, operation: "cognitive_supersede", actor: "system",
     sessionKey: "", reason: `Superseded by ${supersededById}`, createdAt: now, metadata: { supersededById },
@@ -167,14 +172,20 @@ export async function getMemoriesByFilePath(exec: Executor, userId: string, file
   return rows.map(cognitiveRowToRecord);
 }
 
-export async function findLessonByFingerprint(exec: Executor, userId: string, fingerprint: string): Promise<CognitiveRecord | null> {
+export async function findLessonByFingerprint(
+  exec: Executor,
+  userId: string,
+  fingerprint: string,
+  orgId: string | null = null,
+): Promise<CognitiveRecord | null> {
   const row = await exec.one(
     `SELECT r.* FROM cognitive_records r
       WHERE r.user_id = $1 AND r.type = 'lesson'
         AND r.metadata_json::jsonb ->> 'fingerprint' = $2
+        AND r.org_id IS NOT DISTINCT FROM $3
         AND r.invalid_at IS NULL AND r.archived = 0
       ORDER BY r.created_time DESC LIMIT 1`,
-    [userId, fingerprint],
+    [userId, fingerprint, orgId],
   );
   return row ? cognitiveRowToRecord(row) : null;
 }
@@ -184,6 +195,7 @@ export async function findLessonsByConflictKey(exec: Executor, userId: string, c
     `SELECT r.* FROM cognitive_records r
       WHERE r.user_id = $1 AND r.type = 'lesson'
         AND r.metadata_json::jsonb ->> 'conflictKey' = $2
+        AND r.metadata_json::jsonb -> 'learned' IS NULL
         AND r.invalid_at IS NULL AND r.archived = 0
       ORDER BY r.created_time DESC LIMIT 50`,
     [userId, conflictKey],
@@ -195,6 +207,7 @@ export async function listLessonsForHygiene(exec: Executor, userId: string, limi
   const rows = await exec.rows(
     `SELECT r.* FROM cognitive_records r
       WHERE r.user_id = $1 AND r.type = 'lesson'
+        AND r.metadata_json::jsonb -> 'learned' IS NULL
         AND r.invalid_at IS NULL AND r.archived = 0
       ORDER BY r.created_time ASC LIMIT $2`,
     [userId, Math.max(1, limit)],
@@ -204,10 +217,18 @@ export async function listLessonsForHygiene(exec: Executor, userId: string, limi
 
 export async function updateCognitiveConfidence(exec: Executor, userId: string, recordId: string, confidence: number, status: MemoryStatus): Promise<void> {
   const now = new Date().toISOString();
-  await exec.run(
-    "UPDATE cognitive_records SET confidence = $1, status = $2, archived = CASE WHEN $3 = 'archived' THEN 1 ELSE archived END, updated_time = $4 WHERE user_id = $5 AND record_id = $6",
+  const updated = await exec.rows<{ record_id: string }>(
+    `UPDATE cognitive_records
+        SET confidence = $1,
+            status = $2,
+            archived = CASE WHEN $3 = 'archived' THEN 1 ELSE archived END,
+            updated_time = $4
+      WHERE user_id = $5 AND record_id = $6
+        AND metadata_json::jsonb -> 'learned' IS NULL
+      RETURNING record_id`,
     [confidence, status, status, now, userId, recordId],
   );
+  if (updated.length === 0) return;
   await insertOperation(exec, {
     id: randomUUID(), userId, recordId, operation: "cognitive_status_update", actor: "system",
     sessionKey: "", reason: "", createdAt: now, metadata: { confidence, status },
@@ -221,7 +242,9 @@ export async function markCited(exec: Executor, userId: string, recordIds: strin
   const now = new Date().toISOString();
   await exec.run(
     `UPDATE cognitive_records SET citation_count = citation_count + 1, last_cited_at = $1, never_cited_count = 0, updated_time = $2
-      WHERE user_id = $3 AND record_id = ANY($4::text[])`,
+      WHERE user_id = $3
+        AND record_id = ANY($4::text[])
+        AND metadata_json::jsonb -> 'learned' IS NULL`,
     [now, now, userId, recordIds],
   );
 }
@@ -230,11 +253,19 @@ export async function incrementNeverCited(exec: Executor, userId: string, record
   if (recordIds.length === 0) return [];
   const now = new Date().toISOString();
   await exec.run(
-    "UPDATE cognitive_records SET never_cited_count = never_cited_count + 1, updated_time = $1 WHERE user_id = $2 AND record_id = ANY($3::text[])",
+    `UPDATE cognitive_records
+        SET never_cited_count = never_cited_count + 1, updated_time = $1
+      WHERE user_id = $2
+        AND record_id = ANY($3::text[])
+        AND metadata_json::jsonb -> 'learned' IS NULL`,
     [now, userId, recordIds],
   );
   const rows = await exec.rows<any>(
-    "SELECT record_id, never_cited_count FROM cognitive_records WHERE user_id = $1 AND record_id = ANY($2::text[])",
+    `SELECT record_id, never_cited_count
+       FROM cognitive_records
+      WHERE user_id = $1
+        AND record_id = ANY($2::text[])
+        AND metadata_json::jsonb -> 'learned' IS NULL`,
     [userId, recordIds],
   );
   return rows.map((r) => ({ recordId: r.record_id, neverCitedCount: asNumber(r.never_cited_count) }));
@@ -242,7 +273,15 @@ export async function incrementNeverCited(exec: Executor, userId: string, record
 
 export async function archiveCognitiveRecord(exec: Executor, userId: string, recordId: string): Promise<void> {
   const now = new Date().toISOString();
-  await exec.run("UPDATE cognitive_records SET archived = 1, status = 'archived', updated_time = $1 WHERE user_id = $2 AND record_id = $3", [now, userId, recordId]);
+  const updated = await exec.rows<{ record_id: string }>(
+    `UPDATE cognitive_records SET archived = 1, status = 'archived', updated_time = $1
+      WHERE user_id = $2
+        AND record_id = $3
+        AND metadata_json::jsonb -> 'learned' IS NULL
+      RETURNING record_id`,
+    [now, userId, recordId],
+  );
+  if (updated.length === 0) return;
   await insertOperation(exec, {
     id: randomUUID(), userId, recordId, operation: "archive", actor: "system",
     sessionKey: "", reason: "", createdAt: now, metadata: {},
@@ -258,6 +297,7 @@ export async function promoteDurableMemories(exec: Executor, minConfidence: numb
     `UPDATE cognitive_records
         SET durable = true, half_life_days = NULL, updated_time = $3
       WHERE durable = false AND archived = 0
+        AND metadata_json::jsonb -> 'learned' IS NULL
         AND confidence >= $1 AND citation_count >= $2
       RETURNING record_id`,
     [minConfidence, minCorroborations, now],

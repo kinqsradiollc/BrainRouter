@@ -7,6 +7,7 @@ import type {
 } from '@kinqs/brainrouter-types/review';
 import ts from 'typescript';
 import { isConfigurationSourcePath, isTestSourcePath, resolveRelativeModule } from './pathResolution.js';
+import { resolveWorkspaceModule, type WorkspaceModuleAlias } from './workspaceModuleAliases.js';
 
 interface ParsedSymbol extends AssuranceCodeSymbol {
   exportNames: string[];
@@ -21,6 +22,11 @@ interface ImportBinding {
   externalSymbol?: ParsedSymbol;
 }
 
+interface ReExportBinding {
+  importedName: string;
+  targetPath: string | null;
+}
+
 interface ParsedFile {
   path: string;
   source: ts.SourceFile;
@@ -29,6 +35,9 @@ interface ParsedFile {
   symbolsByLocalName: Map<string, ParsedSymbol[]>;
   exports: Map<string, ParsedSymbol>;
   imports: Map<string, ImportBinding>;
+  reExports: Map<string, ReExportBinding>;
+  starReExportPaths: string[];
+  unresolvedStarReExport: boolean;
 }
 
 export interface TypeScriptGraphResult {
@@ -43,6 +52,7 @@ export interface TypeScriptGraphResult {
 export interface TypeScriptGraphInput {
   files: Array<{ path: string; source: string }>;
   eligiblePaths: ReadonlySet<string>;
+  workspaceAliases?: readonly WorkspaceModuleAlias[];
   maxSymbols: number;
   maxRelationships: number;
 }
@@ -133,6 +143,9 @@ function createParsedFile(path: string, sourceText: string): ParsedFile {
     symbolsByLocalName: new Map(),
     exports: new Map(),
     imports: new Map(),
+    reExports: new Map(),
+    starReExportPaths: [],
+    unresolvedStarReExport: false,
   };
   addToMap(file.symbolsByLocalName, moduleSymbol.name, moduleSymbol);
   return file;
@@ -179,11 +192,34 @@ function indexImports(
   file: ParsedFile,
   eligiblePaths: ReadonlySet<string>,
   externalSymbols: Map<string, ParsedSymbol>,
+  workspaceAliases: readonly WorkspaceModuleAlias[],
 ): void {
   for (const statement of file.source.statements) {
+    if (ts.isExportDeclaration(statement) && statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)) {
+      const specifier = statement.moduleSpecifier.text;
+      const targetPath = resolveRelativeModule(file.path, specifier, eligiblePaths)
+        ?? resolveWorkspaceModule(specifier, eligiblePaths, workspaceAliases);
+      if (!targetPath && !specifier.startsWith('.')) continue;
+      if (statement.exportClause && ts.isNamedExports(statement.exportClause)) {
+        for (const element of statement.exportClause.elements) {
+          file.reExports.set(element.name.text, {
+            importedName: element.propertyName?.text ?? element.name.text,
+            targetPath,
+          });
+        }
+      } else if (statement.exportClause && ts.isNamespaceExport(statement.exportClause)) {
+        file.reExports.set(statement.exportClause.name.text, { importedName: '*', targetPath });
+      } else if (targetPath) {
+        file.starReExportPaths.push(targetPath);
+      } else {
+        file.unresolvedStarReExport = true;
+      }
+      continue;
+    }
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
     const specifier = statement.moduleSpecifier.text;
-    const targetPath = resolveRelativeModule(file.path, specifier, eligiblePaths);
+    const targetPath = resolveRelativeModule(file.path, specifier, eligiblePaths)
+      ?? resolveWorkspaceModule(specifier, eligiblePaths, workspaceAliases);
     let externalSymbol: ParsedSymbol | undefined;
     if (!targetPath && !specifier.startsWith('.')) {
       externalSymbol = externalSymbols.get(specifier);
@@ -228,6 +264,37 @@ function indexImports(
   }
 }
 
+function resolveExportedSymbol(
+  file: ParsedFile,
+  exportName: string,
+  files: ReadonlyMap<string, ParsedFile>,
+  visited = new Set<string>(),
+): ParsedSymbol | null {
+  const direct = file.exports.get(exportName);
+  if (direct) return direct;
+  const visitKey = `${file.path}\u0000${exportName}`;
+  if (visited.has(visitKey)) return null;
+  visited.add(visitKey);
+
+  const named = file.reExports.get(exportName);
+  if (named?.targetPath) {
+    const target = files.get(named.targetPath);
+    if (target) {
+      if (named.importedName === '*') return target.moduleSymbol;
+      const resolved = resolveExportedSymbol(target, named.importedName, files, visited);
+      if (resolved) return resolved;
+    }
+  }
+
+  const wildcardMatches = file.starReExportPaths
+    .map((path) => files.get(path))
+    .filter((target): target is ParsedFile => Boolean(target))
+    .map((target) => resolveExportedSymbol(target, exportName, files, new Set(visited)))
+    .filter((symbol): symbol is ParsedSymbol => Boolean(symbol));
+  const unique = new Map(wildcardMatches.map((symbol) => [symbol.id, symbol]));
+  return unique.size === 1 ? [...unique.values()][0] : null;
+}
+
 function targetForBinding(
   binding: ImportBinding,
   files: Map<string, ParsedFile>,
@@ -237,12 +304,12 @@ function targetForBinding(
   const target = binding.targetPath ? files.get(binding.targetPath) : undefined;
   if (!target) return null;
   if (binding.namespace && propertyName) {
-    return target.exports.get(propertyName) ?? target.symbolsByLocalName.get(propertyName)?.[0] ?? null;
+    return resolveExportedSymbol(target, propertyName, files) ?? target.symbolsByLocalName.get(propertyName)?.[0] ?? null;
   }
-  const imported = target.exports.get(binding.importedName);
+  const imported = resolveExportedSymbol(target, binding.importedName, files);
   if (!propertyName) return imported ?? target.moduleSymbol;
   return (
-    target.exports.get(propertyName) ??
+    resolveExportedSymbol(target, propertyName, files) ??
     target.symbols.find((symbol) => symbol.name.endsWith(`.${propertyName}`)) ??
     imported ??
     null
@@ -304,7 +371,7 @@ export function buildTypeScriptGraph(input: TypeScriptGraphInput): TypeScriptGra
       .parseDiagnostics;
     if (diagnostics?.length) parseFailedPaths.push(item.path);
     indexDeclarations(file);
-    indexImports(file, input.eligiblePaths, externalSymbols);
+    indexImports(file, input.eligiblePaths, externalSymbols, input.workspaceAliases ?? []);
     files.set(item.path, file);
   }
 
@@ -312,9 +379,12 @@ export function buildTypeScriptGraph(input: TypeScriptGraphInput): TypeScriptGra
   const unresolvedImportPaths = [
     ...new Set(
       [...files.values()].flatMap((file) =>
-        [...file.imports.values()]
-          .filter((binding) => !binding.externalSymbol && (!binding.targetPath || !files.has(binding.targetPath)))
-          .map(() => file.path),
+        [
+          ...[...file.imports.values()]
+            .filter((binding) => !binding.externalSymbol && (!binding.targetPath || !files.has(binding.targetPath))),
+          ...[...file.reExports.values()]
+            .filter((binding) => !binding.targetPath || !files.has(binding.targetPath)),
+        ].map(() => file.path).concat(file.unresolvedStarReExport ? [file.path] : []),
       ),
     ),
   ];

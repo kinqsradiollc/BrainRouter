@@ -32,6 +32,8 @@ declare global {
       onEvent(listener: (msg: AgentEventMessage) => void): () => void;
       /** Project order/membership updates from main. May be absent on older preloads. */
       onRecentsChanged?(listener: (data: { recents: string[]; reason: string; workspaceRoot: string }) => void): () => void;
+      /** App-global active organization selected in any Desktop window. */
+      onActiveOrgChanged?(listener: (data: { orgId: string }) => void): () => void;
       /** Folder picker ONLY — returns the picked path; the renderer runs the
        * trust gate and then calls openWorkspace (DESK-5d). */
       addWorkspace(): Promise<{ opened: boolean; workspaceRoot?: string }>;

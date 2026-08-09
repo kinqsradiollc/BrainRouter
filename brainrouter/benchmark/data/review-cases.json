@@ -1,228 +1,48 @@
 {
-  "generatedAt": "2026-08-09T04:33:35.166Z",
-  "groundTruthBias": "Defect locations are lines that a later fix(...) commit changed, blamed back to the merged pull request that introduced them. This covers only defects we noticed, only those fixed as their own commit, and is therefore biased toward what our review and tests already catch. Compare two reviewer versions on this frozen set; do not read the absolute numbers as a bug-finding rate.",
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-09T07:43:30.000Z",
+  "observationCutoff": "2026-08-09T07:43:30.000Z",
+  "groundTruthBias": "Known issues are manually curated from later standalone fixes and each issue represents one conceptual defect with explicit semantic aliases and all eligible reviewed-revision locations. This covers only defects noticed and fixed later. Clean controls mean no later fix was linked to that pull request through the observation cutoff, not proof that the change has no latent defect. Compare paired arms on this frozen corpus; do not treat absolute recall as a repository bug-finding rate.",
   "cases": [
     {
-      "id": "pr-1318",
-      "pr": 1318,
-      "sha": "84919e2a010420059936b4134a4e8803bc313a13",
-      "title": "feat(attachments): documents the agent can actually read (#1318)",
-      "defects": [
+      "id": "pr-743",
+      "pr": 743,
+      "sha": "cad5d79e9bc0ac2a20d84b60c78a767367791606",
+      "title": "fix(desktop): dereference @kinqs workspace symlinks before electron-builder (#743)",
+      "issues": [
         {
-          "file": "brainrouter/src/knowledge/services/documentParseGate.ts",
-          "line": 9,
-          "description": "fix(adr-029/030/031): close eleven gaps a decision-by-decision audit found (#1321)",
-          "fixedBy": "41f6c3d425d5"
+          "id": "pr-743-unbuilt-workspace-aborts-packaging",
+          "description": "The dereference sweep exits when any workspace symlink has no dist directory, including workspaces outside the desktop package dependency closure, so an unrelated unbuilt workspace aborts packaging.",
+          "fixedBy": "a3221035a9c5e2ada8a6a39817b78f96a0b39735",
+          "locations": [
+            {
+              "file": "brainrouter-desktop/build/dereference-workspace-deps.mjs",
+              "line": 31,
+              "endLine": 32
+            }
+          ],
+          "semanticRequirements": [
+            ["unbuilt workspace", "missing dist", "not built"],
+            ["exit", "abort", "fails the build", "process exit"],
+            ["unrelated workspace", "not a packaged dependency", "outside the dependency closure", "all workspace symlinks"]
+          ]
         },
         {
-          "file": "brainrouter/src/knowledge/services/documentParseGate.ts",
-          "line": 40,
-          "description": "fix(adr-029/030/031): close eleven gaps a decision-by-decision audit found (#1321)",
-          "fixedBy": "41f6c3d425d5"
-        },
-        {
-          "file": "packages/core/src/attachment/document/bounds.ts",
-          "line": 9,
-          "description": "fix(adr-029/030/031): close eleven gaps a decision-by-decision audit found (#1321)",
-          "fixedBy": "41f6c3d425d5"
-        },
-        {
-          "file": "packages/core/src/attachment/document/bounds.ts",
-          "line": 13,
-          "description": "fix(adr-029/030/031): close eleven gaps a decision-by-decision audit found (#1321)",
-          "fixedBy": "41f6c3d425d5"
-        },
-        {
-          "file": "packages/core/src/attachment/document/classify.ts",
-          "line": 290,
-          "description": "fix(adr-029/030/031): close eleven gaps a decision-by-decision audit found (#1321)",
-          "fixedBy": "41f6c3d425d5"
-        },
-        {
-          "file": "packages/core/src/attachment/document/structured.ts",
-          "line": 2,
-          "description": "fix(adr-029/030/031): close eleven gaps a decision-by-decision audit found (#1321)",
-          "fixedBy": "41f6c3d425d5"
-        },
-        {
-          "file": "packages/core/src/attachment/document/structured.ts",
-          "line": 6,
-          "description": "fix(adr-029/030/031): close eleven gaps a decision-by-decision audit found (#1321)",
-          "fixedBy": "41f6c3d425d5"
-        },
-        {
-          "file": "packages/core/src/workspace/participants/localModes.ts",
-          "line": 54,
-          "description": "fix(adr-029/030/031): close eleven gaps a decision-by-decision audit found (#1321)",
-          "fixedBy": "41f6c3d425d5"
-        }
-      ]
-    },
-    {
-      "id": "pr-1316",
-      "pr": 1316,
-      "sha": "484d18674c09cc331c8900be42c952de17784dc0",
-      "title": "feat(notes): every block the menu offers is a block, and the numbers are real (#1316)",
-      "defects": [
-        {
-          "file": "packages/core/src/notes/export/markdown.ts",
-          "line": 233,
-          "description": "fix(adr-029/030/031): close eleven gaps a decision-by-decision audit found (#1321)",
-          "fixedBy": "41f6c3d425d5"
-        }
-      ]
-    },
-    {
-      "id": "pr-1315",
-      "pr": 1315,
-      "sha": "fefce0713230af2328d2a29ce4996a3a86135c34",
-      "title": "feat(workspace): one address space, and a block store on the planner's sync stack (#1315)",
-      "defects": [
-        {
-          "file": "packages/core/src/workspace/references/registry.ts",
-          "line": 111,
-          "description": "fix(adr-029/030/031): close eleven gaps a decision-by-decision audit found (#1321)",
-          "fixedBy": "41f6c3d425d5"
-        }
-      ]
-    },
-    {
-      "id": "pr-1312",
-      "pr": 1312,
-      "sha": "b9cecc37f6be3340f44055b483fb5faf8ee73058",
-      "title": "feat(notes): the fencing epoch decides an outcome, and the keyboard reaches the editor (#1312)",
-      "defects": [
-        {
-          "file": "brainrouter/src/memory/notes/backend.ts",
-          "line": 545,
-          "description": "fix(adr-029/030/031): close eleven gaps a decision-by-decision audit found (#1321)",
-          "fixedBy": "41f6c3d425d5"
-        },
-        {
-          "file": "brainrouter/src/memory/notes/backend.ts",
-          "line": 560,
-          "description": "fix(adr-029/030/031): close eleven gaps a decision-by-decision audit found (#1321)",
-          "fixedBy": "41f6c3d425d5"
-        },
-        {
-          "file": "brainrouter/src/memory/workspace/registry.ts",
-          "line": 14,
-          "description": "fix(adr-029/030/031): close eleven gaps a decision-by-decision audit found (#1321)",
-          "fixedBy": "41f6c3d425d5"
-        },
-        {
-          "file": "brainrouter/src/memory/workspace/registry.ts",
-          "line": 38,
-          "description": "fix(adr-029/030/031): close eleven gaps a decision-by-decision audit found (#1321)",
-          "fixedBy": "41f6c3d425d5"
-        },
-        {
-          "file": "packages/core/src/extension/builtin/toolSpecs.ts",
-          "line": 132,
-          "description": "fix(adr-029/030/031): close eleven gaps a decision-by-decision audit found (#1321)",
-          "fixedBy": "41f6c3d425d5"
-        },
-        {
-          "file": "packages/core/src/notes/blockOps.ts",
-          "line": 296,
-          "description": "fix(adr-029/030/031): close eleven gaps a decision-by-decision audit found (#1321)",
-          "fixedBy": "41f6c3d425d5"
-        },
-        {
-          "file": "packages/core/src/notes/blockOps.ts",
-          "line": 301,
-          "description": "fix(adr-029/030/031): close eleven gaps a decision-by-decision audit found (#1321)",
-          "fixedBy": "41f6c3d425d5"
-        },
-        {
-          "file": "packages/core/src/workspace/participants/localModes.ts",
-          "line": 120,
-          "description": "fix(adr-029/030/031): close eleven gaps a decision-by-decision audit found (#1321)",
-          "fixedBy": "41f6c3d425d5"
-        },
-        {
-          "file": "packages/core/src/workspace/participants/localModes.ts",
-          "line": 146,
-          "description": "fix(adr-029/030/031): close eleven gaps a decision-by-decision audit found (#1321)",
-          "fixedBy": "41f6c3d425d5"
-        },
-        {
-          "file": "packages/core/src/workspace/participants/localModes.ts",
-          "line": 166,
-          "description": "fix(adr-029/030/031): close eleven gaps a decision-by-decision audit found (#1321)",
-          "fixedBy": "41f6c3d425d5"
-        }
-      ]
-    },
-    {
-      "id": "pr-1306",
-      "pr": 1306,
-      "sha": "eadf88607e0d8d6885d918f77e7b71a4ab627baa",
-      "title": "feat(tooling): Part I — provisioning and per-workspace GitHub identity (#1306)",
-      "defects": [
-        {
-          "file": "brainrouter-desktop/src/components/ToolingNotice.tsx",
-          "line": 15,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        },
-        {
-          "file": "brainrouter-desktop/src/components/ToolingNotice.tsx",
-          "line": 20,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        }
-      ]
-    },
-    {
-      "id": "pr-1298",
-      "pr": 1298,
-      "sha": "2a7de15ff1f493c2fe92a0625886ce31d32aefa9",
-      "title": "feat(review): ADR-027 D13 — actually read the stack from GitHub and report it (#1298)",
-      "defects": [
-        {
-          "file": "brainrouter/src/integrations/prSecurityReview.ts",
-          "line": 890,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        }
-      ]
-    },
-    {
-      "id": "pr-1276",
-      "pr": 1276,
-      "sha": "d34aa95a35c8afbd37804ff35e158760dfa95920",
-      "title": "fix(review): stop the review contract contradicting its own evidence (#1276)",
-      "defects": [
-        {
-          "file": "brainrouter/src/integrations/prSecurityReview.ts",
-          "line": 714,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        },
-        {
-          "file": "packages/core/src/review/codeReviewContract.ts",
-          "line": 39,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        },
-        {
-          "file": "packages/core/src/review/codeReviewContract.ts",
-          "line": 43,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        },
-        {
-          "file": "packages/core/src/review/securityReview.ts",
-          "line": 64,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        },
-        {
-          "file": "packages/core/src/review/securityReview.ts",
-          "line": 68,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
+          "id": "pr-743-declared-runtime-assets-not-copied",
+          "description": "The dereference helper copies only package.json and dist instead of the package's declared files, so runtime assets such as config or agents disappear from the packaged application.",
+          "fixedBy": "9393a98275b626af95049032793ef164a1f9a5c1",
+          "locations": [
+            {
+              "file": "brainrouter-desktop/build/dereference-workspace-deps.mjs",
+              "line": 36,
+              "endLine": 37
+            }
+          ],
+          "semanticRequirements": [
+            ["runtime assets", "declared files", "package files", "config", "agents"],
+            ["only copies dist", "omits", "missing", "not copied"],
+            ["packaged", "electron builder", "release build"]
+          ]
         }
       ]
     },
@@ -231,12 +51,23 @@
       "pr": 1242,
       "sha": "36ac80ce0d374c15760d812af338f087a39111cf",
       "title": "fix(desktop): verify packaged browser without debugger (#1242)",
-      "defects": [
+      "issues": [
         {
-          "file": "brainrouter-desktop/electron/packagedBrowserSmoke.ts",
-          "line": 35,
-          "description": "fix(desktop): package workspace runtime assets (#1244)",
-          "fixedBy": "9393a98275b6"
+          "id": "pr-1242-smoke-does-not-exercise-runtime-assets",
+          "description": "The packaged smoke verifies only the browser bridge and never invokes the utility host or workspace-manifest path, so a package missing required runtime assets can still pass.",
+          "fixedBy": "9393a98275b626af95049032793ef164a1f9a5c1",
+          "locations": [
+            {
+              "file": "brainrouter-desktop/electron/packagedBrowserSmoke.ts",
+              "line": 34,
+              "endLine": 43
+            }
+          ],
+          "semanticRequirements": [
+            ["smoke test", "self test", "verification"],
+            ["utility host", "host query", "session info", "workspace manifest"],
+            ["not exercised", "does not verify", "can still pass", "blind"]
+          ]
         }
       ]
     },
@@ -245,12 +76,23 @@
       "pr": 1241,
       "sha": "560f89fcdc05d34cf4af5cc985838a0c7d94719c",
       "title": "fix(desktop): isolate packaged smoke profile (#1241)",
-      "defects": [
+      "issues": [
         {
-          "file": "brainrouter-desktop/scripts/verify-packaged.mjs",
-          "line": 165,
-          "description": "fix(desktop): isolate packaged smoke config (#1245)",
-          "fixedBy": "f90018186440"
+          "id": "pr-1241-smoke-inherits-real-user-config",
+          "description": "The packaged smoke isolates Chromium's profile but does not override HOME, USERPROFILE, or BrainRouter state, so it can read a developer's real configuration and produce a non-hermetic result.",
+          "fixedBy": "f900181864403f9cf0672f0dc8dcd5ce92e38af7",
+          "locations": [
+            {
+              "file": "brainrouter-desktop/scripts/verify-packaged.mjs",
+              "line": 158,
+              "endLine": 170
+            }
+          ],
+          "semanticRequirements": [
+            ["home", "userprofile", "brainrouter home", "configuration"],
+            ["real user", "developer config", "host config", "not isolated"],
+            ["packaged smoke", "smoke harness", "verifier"]
+          ]
         }
       ]
     },
@@ -259,640 +101,23 @@
       "pr": 1240,
       "sha": "69c9843a0249bd0a5a1f107a055c6b03d5086258",
       "title": "fix(desktop): enable packaged smoke debugger (#1240)",
-      "defects": [
-        {
-          "file": "brainrouter-desktop/scripts/verify-packaged.mjs",
-          "line": 166,
-          "description": "fix(desktop): isolate packaged smoke config (#1245)",
-          "fixedBy": "f90018186440"
-        },
-        {
-          "file": "brainrouter-desktop/electron/main.ts",
-          "line": 61,
-          "description": "fix(desktop): verify packaged browser without debugger (#1242)",
-          "fixedBy": "36ac80ce0d37"
-        },
-        {
-          "file": "brainrouter-desktop/electron/main.ts",
-          "line": 74,
-          "description": "fix(desktop): verify packaged browser without debugger (#1242)",
-          "fixedBy": "36ac80ce0d37"
-        },
-        {
-          "file": "brainrouter-desktop/electron/packagedSmokeBootstrap.ts",
-          "line": 4,
-          "description": "fix(desktop): verify packaged browser without debugger (#1242)",
-          "fixedBy": "36ac80ce0d37"
-        },
-        {
-          "file": "brainrouter-desktop/electron/packagedSmokeBootstrap.ts",
-          "line": 15,
-          "description": "fix(desktop): verify packaged browser without debugger (#1242)",
-          "fixedBy": "36ac80ce0d37"
-        },
-        {
-          "file": "brainrouter-desktop/electron/packagedSmokeBootstrap.ts",
-          "line": 27,
-          "description": "fix(desktop): isolate packaged smoke profile (#1241)",
-          "fixedBy": "560f89fcdc05"
-        }
-      ]
-    },
-    {
-      "id": "pr-1239",
-      "pr": 1239,
-      "sha": "c05d74d3f96f074d4c588b8d3a8adf805f1b9e61",
-      "title": "fix(desktop): allow packaged app startup budget (#1239)",
-      "defects": [
-        {
-          "file": "brainrouter-desktop/scripts/verify-packaged.mjs",
-          "line": 33,
-          "description": "fix(desktop): verify packaged browser without debugger (#1242)",
-          "fixedBy": "36ac80ce0d37"
-        },
-        {
-          "file": "brainrouter-desktop/scripts/verify-packaged.mjs",
-          "line": 37,
-          "description": "fix(desktop): verify packaged browser without debugger (#1242)",
-          "fixedBy": "36ac80ce0d37"
-        },
-        {
-          "file": "brainrouter-desktop/scripts/verify-packaged.mjs",
-          "line": 175,
-          "description": "fix(desktop): enable packaged smoke debugger (#1240)",
-          "fixedBy": "69c9843a0249"
-        }
-      ]
-    },
-    {
-      "id": "pr-1227",
-      "pr": 1227,
-      "sha": "030bd1851697cf27074d5e52c503631bdd0e0e94",
-      "title": "feat(desktop): finalize visual release gates (#1227)",
-      "defects": [
-        {
-          "file": "brainrouter-desktop/scripts/browser-harness.mjs",
-          "line": 228,
-          "description": "fix(desktop): isolate packaged smoke config (#1245)",
-          "fixedBy": "f90018186440"
-        },
-        {
-          "file": "brainrouter-desktop/scripts/browser-harness.mjs",
-          "line": 236,
-          "description": "fix(desktop): isolate packaged smoke config (#1245)",
-          "fixedBy": "f90018186440"
-        },
-        {
-          "file": "brainrouter-desktop/scripts/browser-harness.test.mjs",
-          "line": 9,
-          "description": "fix(desktop): isolate packaged smoke config (#1245)",
-          "fixedBy": "f90018186440"
-        }
-      ]
-    },
-    {
-      "id": "pr-1209",
-      "pr": 1209,
-      "sha": "9c5d6fa9151b3c3230ebdeac8856b8a11be77db5",
-      "title": "chore(release): ship 0.4.17 (#1209)",
-      "defects": [
-        {
-          "file": "packages/core/src/workspace/capabilities.ts",
-          "line": 332,
-          "description": "fix(adr-029/030/031): close eleven gaps a decision-by-decision audit found (#1321)",
-          "fixedBy": "41f6c3d425d5"
-        },
-        {
-          "file": "brainrouter-desktop/electron/host.ts",
-          "line": 91,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        },
-        {
-          "file": "brainrouter-desktop/electron/host.ts",
-          "line": 926,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        },
-        {
-          "file": "brainrouter-desktop/src/App.tsx",
-          "line": 486,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        },
-        {
-          "file": "brainrouter-desktop/src/App.tsx",
-          "line": 643,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        },
-        {
-          "file": "brainrouter-desktop/src/App.tsx",
-          "line": 698,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        },
-        {
-          "file": "brainrouter-desktop/src/App/hooks/useAppHandlers.ts",
-          "line": 313,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        },
-        {
-          "file": "brainrouter-desktop/src/App/layout/MainContent.tsx",
-          "line": 181,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        },
-        {
-          "file": "brainrouter-desktop/src/App/layout/MainContent.tsx",
-          "line": 306,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        },
-        {
-          "file": "brainrouter-desktop/src/App/render/renderPanelBody.tsx",
-          "line": 142,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        }
-      ]
-    },
-    {
-      "id": "pr-743",
-      "pr": 743,
-      "sha": "cad5d79e9bc0ac2a20d84b60c78a767367791606",
-      "title": "fix(desktop): dereference @kinqs workspace symlinks before electron-builder (#743)",
-      "defects": [
-        {
-          "file": "brainrouter-desktop/build/dereference-workspace-deps.mjs",
-          "line": 4,
-          "description": "fix(desktop): package workspace runtime assets (#1244)",
-          "fixedBy": "9393a98275b6"
-        },
-        {
-          "file": "brainrouter-desktop/build/dereference-workspace-deps.mjs",
-          "line": 37,
-          "description": "fix(desktop): package workspace runtime assets (#1244)",
-          "fixedBy": "9393a98275b6"
-        },
-        {
-          "file": "brainrouter-desktop/build/dereference-workspace-deps.mjs",
-          "line": 31,
-          "description": "fix(desktop): dereference script skips unbuilt workspace packages (#745)",
-          "fixedBy": "a3221035a9c5"
-        }
-      ]
-    },
-    {
-      "id": "pr-726",
-      "pr": 726,
-      "sha": "e916134074d999ba05b39f626c99ab56414b7fb2",
-      "title": "feat(desktop): Track calendar/gantt/spreadsheet layouts + clickable card menu (#726)",
-      "defects": [
-        {
-          "file": "brainrouter-desktop/src/track/TrackView.tsx",
-          "line": 334,
-          "description": "fix(desktop): Track — Calendar today/date placement + Gantt redesign (#732)",
-          "fixedBy": "5a1419957152"
-        },
-        {
-          "file": "brainrouter-desktop/src/track/TrackView.tsx",
-          "line": 380,
-          "description": "fix(desktop): Track — Calendar today/date placement + Gantt redesign (#732)",
-          "fixedBy": "5a1419957152"
-        },
-        {
-          "file": "brainrouter-desktop/src/track/TrackView.tsx",
-          "line": 388,
-          "description": "fix(desktop): Track — Calendar today/date placement + Gantt redesign (#732)",
-          "fixedBy": "5a1419957152"
-        }
-      ]
-    },
-    {
-      "id": "pr-714",
-      "pr": 714,
-      "sha": "adbd27f6d8a75cfecd1180b1d183965527aad46a",
-      "title": "feat(core): local-model verify-loop nudge + router tier bias (Honk L5+L6) (#714)",
-      "defects": [
-        {
-          "file": "packages/core/src/orchestration/router.ts",
-          "line": 83,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        }
-      ]
-    },
-    {
-      "id": "pr-700",
-      "pr": 700,
-      "sha": "216485a782f2ce1e1b5ff00a88b2a5377dfb5af8",
-      "title": "refactor(core): public-API boundary for packages/core — curated entrypoints, no deep-dist imports (#700)",
-      "defects": [
-        {
-          "file": "brainrouter-desktop/electron/host.ts",
-          "line": 38,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        }
-      ]
-    },
-    {
-      "id": "pr-687",
-      "pr": 687,
-      "sha": "e12685d528ee7dfdeaf8f3b57e3c49b781c76eaa",
-      "title": "feat(desktop): fold Docs into a VS Code-grade Editor + unify canvas controls + cap auto-compaction (#687)",
-      "defects": [
-        {
-          "file": "brainrouter-desktop/src/lib/panels/usePanels.ts",
-          "line": 10,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        },
-        {
-          "file": "brainrouter-desktop/src/lib/panels/usePanels.ts",
-          "line": 14,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        }
-      ]
-    },
-    {
-      "id": "pr-685",
-      "pr": 685,
-      "sha": "4aa248c35c0a7e739fa28924b5d27ad38efef634",
-      "title": "feat(desktop): automated signed-build pipeline + packaged-build verification (CP-B) (#685)",
-      "defects": [
-        {
-          "file": "brainrouter-desktop/scripts/verify-packaged.mjs",
-          "line": 50,
-          "description": "fix(desktop): package workspace runtime assets (#1244)",
-          "fixedBy": "9393a98275b6"
-        }
-      ]
-    },
-    {
-      "id": "pr-476",
-      "pr": 476,
-      "sha": "8942dee0a02c3e04ed023c5c19e2883e942e9174",
-      "title": "feat(0.4.15): @kinqs/brainrouter-core extraction, modular providers, Artifacts v2, desktop polish (#476)",
-      "defects": [
-        {
-          "file": "brainrouter-desktop/src/components/ViewsRail.tsx",
-          "line": 51,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        },
-        {
-          "file": "packages/core/src/orchestration/agentTools.ts",
-          "line": 183,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        },
-        {
-          "file": "packages/core/src/orchestration/router.ts",
-          "line": 8,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        },
-        {
-          "file": "packages/core/src/orchestration/router.ts",
-          "line": 63,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        },
-        {
-          "file": "packages/core/src/prompt/breadthHint.ts",
-          "line": 164,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        },
-        {
-          "file": "packages/core/src/provider/providers/index.ts",
-          "line": 44,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        },
-        {
-          "file": "packages/core/src/provider/providers/lmstudio.ts",
-          "line": 146,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        },
-        {
-          "file": "brainrouter-desktop/electron/host.ts",
-          "line": 469,
-          "description": "fix(desktop): per-session model — stop model picks syncing to every chat (#719)",
-          "fixedBy": "d0c3b389b0e5"
-        },
-        {
-          "file": "brainrouter-desktop/src/components/TopbarRight.tsx",
-          "line": 39,
-          "description": "fix(desktop): stop the window pill overlaying the side-rail tabs; separate Environment toggle",
-          "fixedBy": "33b834482358"
-        },
-        {
-          "file": "brainrouter-desktop/src/App.tsx",
-          "line": 281,
-          "description": "fix(desktop): bg-tasks row names, Plan/toolbar overlap, 3-dots flicker, parked rename",
-          "fixedBy": "7d60b6d635d3"
-        }
-      ]
-    },
-    {
-      "id": "pr-453",
-      "pr": 453,
-      "sha": "cd9d067341d0d46f0057bd552293bf3a726ec17a",
-      "title": "refactor(desktop): break up App.tsx into modular hooks + components (<900 lines) — T4 (#453)",
-      "defects": [
-        {
-          "file": "brainrouter-desktop/src/App.tsx",
-          "line": 722,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        },
-        {
-          "file": "brainrouter-desktop/src/components/Composer.tsx",
-          "line": 157,
-          "description": "fix(desktop): five right-panel / picker / connector UX fixes",
-          "fixedBy": "88c478e44f31"
-        },
-        {
-          "file": "brainrouter-desktop/src/App.tsx",
-          "line": 218,
-          "description": "fix(desktop): opening a worktree opens a separate window — stop it wiping projects/chat",
-          "fixedBy": "0b068c5823d6"
-        },
-        {
-          "file": "brainrouter-desktop/src/lib/session/useSessionActions.ts",
-          "line": 356,
-          "description": "fix(desktop): opening a worktree opens a separate window — stop it wiping projects/chat",
-          "fixedBy": "0b068c5823d6"
-        },
-        {
-          "file": "brainrouter-desktop/src/App.tsx",
-          "line": 741,
-          "description": "fix(desktop): stop the window pill overlaying the side-rail tabs; separate Environment toggle",
-          "fixedBy": "33b834482358"
-        },
-        {
-          "file": "brainrouter-desktop/src/components/TopbarRight.tsx",
-          "line": 30,
-          "description": "fix(desktop): stop the window pill overlaying the side-rail tabs; separate Environment toggle",
-          "fixedBy": "33b834482358"
-        },
-        {
-          "file": "brainrouter-desktop/src/App.tsx",
-          "line": 67,
-          "description": "fix(desktop): bg-tasks row names, Plan/toolbar overlap, 3-dots flicker, parked rename",
-          "fixedBy": "7d60b6d635d3"
-        },
-        {
-          "file": "brainrouter-desktop/src/App.tsx",
-          "line": 230,
-          "description": "fix(desktop): bg-tasks row names, Plan/toolbar overlap, 3-dots flicker, parked rename",
-          "fixedBy": "7d60b6d635d3"
-        },
-        {
-          "file": "brainrouter-desktop/src/components/ExportAndMenuDialogs.tsx",
-          "line": 21,
-          "description": "fix(desktop): bg-tasks row names, Plan/toolbar overlap, 3-dots flicker, parked rename",
-          "fixedBy": "7d60b6d635d3"
-        },
-        {
-          "file": "brainrouter-desktop/src/lib/session/useSessionActions.ts",
-          "line": 112,
-          "description": "fix(desktop): bg-tasks row names, Plan/toolbar overlap, 3-dots flicker, parked rename",
-          "fixedBy": "7d60b6d635d3"
-        }
-      ]
-    },
-    {
-      "id": "pr-449",
-      "pr": 449,
-      "sha": "801af69488bc2e507053ed7e93c1c364a63112d4",
-      "title": "refactor(desktop): extract usePanels hook from App.tsx (T4 slice 1) (#449)",
-      "defects": [
-        {
-          "file": "brainrouter-desktop/src/lib/panels/usePanels.ts",
-          "line": 10,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        }
-      ]
-    },
-    {
-      "id": "pr-446",
-      "pr": 446,
-      "sha": "c8ee4adcd972075a47172881b0e57c65e30ecac2",
-      "title": "feat(desktop): in-app Monaco code editor (editable tabs, save, dirty, preview fallback) (#446)",
-      "defects": [
-        {
-          "file": "brainrouter-desktop/src/lib/editor/monacoEnv.ts",
-          "line": 33,
-          "description": "fix(desktop): theme Monaco from a hex-normalized palette + reflow Write/Workflows when narrow (#686)",
-          "fixedBy": "c4cf2d264c93"
-        },
-        {
-          "file": "brainrouter-desktop/src/lib/editor/monacoEnv.ts",
-          "line": 41,
-          "description": "fix(desktop): theme Monaco from a hex-normalized palette + reflow Write/Workflows when narrow (#686)",
-          "fixedBy": "c4cf2d264c93"
-        }
-      ]
-    },
-    {
-      "id": "pr-428",
-      "pr": 428,
-      "sha": "f963c30a00df2affb708ed7be08b73e89b313eaf",
-      "title": "feat(desktop): review v2 host actions + commit/push GATE (Wave 3b+4 / A+C) (#428)",
-      "defects": [
-        {
-          "file": "brainrouter-desktop/electron/host.ts",
-          "line": 394,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        }
-      ]
-    },
-    {
-      "id": "pr-420",
-      "pr": 420,
-      "sha": "4d4b24f80fad0c3531387ca95329585e107f767c",
-      "title": "feat(desktop): Worktrees panel — list/create/open/diff/remove git worktrees (T13) (#420)",
-      "defects": [
-        {
-          "file": "brainrouter-desktop/src/App.tsx",
-          "line": 1732,
-          "description": "fix(desktop): opening a worktree opens a separate window — stop it wiping projects/chat",
-          "fixedBy": "0b068c5823d6"
-        }
-      ]
-    },
-    {
-      "id": "pr-416",
-      "pr": 416,
-      "sha": "f8497517da0de5cb9c2d4e9c2b220c257d3fc966",
-      "title": "feat(desktop): per-session model — each chat keeps its own model (item 10) (#416)",
-      "defects": [
-        {
-          "file": "brainrouter-desktop/electron/hostCore.ts",
-          "line": 248,
-          "description": "fix(desktop): per-session model — stop model picks syncing to every chat (#719)",
-          "fixedBy": "d0c3b389b0e5"
-        },
-        {
-          "file": "brainrouter-desktop/electron/hostCore.ts",
-          "line": 252,
-          "description": "fix(desktop): per-session model — stop model picks syncing to every chat (#719)",
-          "fixedBy": "d0c3b389b0e5"
-        },
-        {
-          "file": "brainrouter-desktop/src/App.tsx",
-          "line": 652,
-          "description": "fix(desktop): per-session model — stop model picks syncing to every chat (#719)",
-          "fixedBy": "d0c3b389b0e5"
-        }
-      ]
-    },
-    {
-      "id": "pr-398",
-      "pr": 398,
-      "sha": "b50f7f1f1ca846c8c54989285a158bcd1e0cab06",
-      "title": "feat(desktop): 0.4.15 renderer — Codex-parity shell, message actions, fork lineage, responsiveness (#398)",
-      "defects": [
-        {
-          "file": "brainrouter-desktop/src/App.tsx",
-          "line": 1408,
-          "description": "fix(desktop): bg-tasks row names, Plan/toolbar overlap, 3-dots flicker, parked rename",
-          "fixedBy": "7d60b6d635d3"
-        }
-      ]
-    },
-    {
-      "id": "pr-397",
-      "pr": 397,
-      "sha": "d70e42d98564d34ae1f6e16fd533ee4e34638327",
-      "title": "feat(desktop): 0.4.15 host — interrupt cascade, lazy history + cache, workflow/session queries (#397)",
-      "defects": [
-        {
-          "file": "brainrouter-desktop/electron/hostCore.ts",
-          "line": 310,
-          "description": "fix(desktop): per-session model — stop model picks syncing to every chat (#719)",
-          "fixedBy": "d0c3b389b0e5"
-        }
-      ]
-    },
-    {
-      "id": "pr-380",
-      "pr": 380,
-      "sha": "f16a5b227e6079403228d73b7d6cb36bba7de30d",
-      "title": "feat(desktop): DESK-3b/4a — approvals UI, new chat, resume, settings, workspaces (#380)",
-      "defects": [
-        {
-          "file": "brainrouter-desktop/electron/main.ts",
-          "line": 44,
-          "description": "fix(desktop): package workspace runtime assets (#1244)",
-          "fixedBy": "9393a98275b6"
-        }
-      ]
-    },
-    {
-      "id": "pr-379",
-      "pr": 379,
-      "sha": "f8935ab99ddb11e141ebdc73b2ea0fd5b1cae5e0",
-      "title": "feat(desktop): DESK-3a — InteractionPort into the agent + session/model commands (#379)",
-      "defects": [
-        {
-          "file": "packages/agent-protocol/src/index.ts",
-          "line": 78,
-          "description": "fix(desktop): per-session model — stop model picks syncing to every chat (#719)",
-          "fixedBy": "d0c3b389b0e5"
-        }
-      ]
-    },
-    {
-      "id": "pr-376",
-      "pr": 376,
-      "sha": "ce1a36ce1db49cb4005a5c292417d2e751aa6789",
-      "title": "feat(desktop): DESK-1 — Electron shell over the unchanged CLI runtime (#376)",
-      "defects": [
-        {
-          "file": "brainrouter-desktop/electron/main.ts",
-          "line": 19,
-          "description": "fix(desktop): package workspace runtime assets (#1244)",
-          "fixedBy": "9393a98275b6"
-        }
-      ]
-    },
-    {
-      "id": "pr-140",
-      "pr": 140,
-      "sha": "0c894ba6cdf54ef0b8ec52b7f8c8f7d3467f9cfc",
-      "title": "feat(0.4.3): read-only vault mirror + memory_vault_export (MEM-7) (#140)",
-      "defects": [
-        {
-          "file": "brainrouter/src/tools/memory_vault_export.ts",
-          "line": 39,
-          "description": "fix(dashboard): await async engine calls in brain API routes + show resolved contradictions (#730)",
-          "fixedBy": "a7ea407942e1"
-        }
-      ]
-    },
-    {
-      "id": "pr-139",
-      "pr": 139,
-      "sha": "cfd8b146b555f6f24d87884fd3f7b367626c7dc0",
-      "title": "feat(0.4.3): durable memory tree + memory_tree_walk (MEM-5, completes MEM-8) (#139)",
-      "defects": [
-        {
-          "file": "brainrouter/src/tools/memory_tree_walk.ts",
-          "line": 74,
-          "description": "fix(dashboard): await async engine calls in brain API routes + show resolved contradictions (#730)",
-          "fixedBy": "a7ea407942e1"
-        }
-      ]
-    },
-    {
-      "id": "pr-92",
-      "pr": 92,
-      "sha": "136246f476e245e4468ce3565cc57092d76b8eea",
-      "title": "chore(0.4.1): scrub internal-planning + vendored-project references; drop AUG-A5 (#92)",
-      "defects": [
-        {
-          "file": "brainrouter-cli/src/prompt/systemPrompt.ts",
-          "line": 209,
-          "description": "fix(agent): stop sending the agent into vendored peer projects",
-          "fixedBy": "5129aed071d4"
-        }
-      ]
-    },
-    {
-      "id": "pr-73",
-      "pr": 73,
-      "sha": "12304b5cd3b9060e8c6e19841dcad7440e18ffc8",
-      "title": "feat(0.4.1): multi-agent ownership boundaries (MAS-P3) (#73)",
-      "defects": [
-        {
-          "file": "brainrouter-cli/src/orchestration/tools.ts",
-          "line": 412,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        }
-      ]
-    },
-    {
-      "id": "pr-71",
-      "pr": 71,
-      "sha": "83953af69677ab515caf79a686cbb049f872eac6",
-      "title": "feat(0.4.1): brain jobs from live capture + /brain CLI (BRAIN-P1 T3/T5) (#71)",
-      "defects": [
-        {
-          "file": "brainrouter/src/memory/scheduler/runner.ts",
-          "line": 65,
-          "description": "fix(brain): ADR-027 P1 — job lease fencing, atomic enqueue dedup, bounded wait queues (#1272)",
-          "fixedBy": "9b262e6d17c4"
+      "issues": [
+        {
+          "id": "pr-1240-packaged-app-opens-debugger",
+          "description": "The release smoke enables a DevTools remote-debugging listener inside the packaged application, adding a debugger attack surface to production qualification instead of using an in-process self-test.",
+          "fixedBy": "36ac80ce0d374c15760d812af338f087a39111cf",
+          "locations": [
+            {
+              "file": "brainrouter-desktop/electron/packagedSmokeBootstrap.ts",
+              "line": 21,
+              "endLine": 29
+            }
+          ],
+          "semanticRequirements": [
+            ["remote debugging", "devtools", "debugger", "debugging port"],
+            ["packaged", "release app", "production build"],
+            ["expose", "attack surface", "security", "listener"]
+          ]
         }
       ]
     },
@@ -901,74 +126,128 @@
       "pr": 70,
       "sha": "7b8267281e60203ba85fc85928bb00305ca26293",
       "title": "feat(0.4.1): brain-side job queue + agent registry (BRAIN-P1) (#70)",
-      "defects": [
+      "issues": [
         {
-          "file": "brainrouter/src/memory/scheduler/jobs.ts",
-          "line": 53,
-          "description": "fix(brain): ADR-027 P1 — job lease fencing, atomic enqueue dedup, bounded wait queues (#1272)",
-          "fixedBy": "9b262e6d17c4"
-        },
-        {
-          "file": "brainrouter/src/memory/scheduler/jobs.ts",
-          "line": 57,
-          "description": "fix(brain): ADR-027 P1 — job lease fencing, atomic enqueue dedup, bounded wait queues (#1272)",
-          "fixedBy": "9b262e6d17c4"
-        },
-        {
-          "file": "packages/types/src/store.ts",
-          "line": 201,
-          "description": "fix(brain): ADR-027 P1 — job lease fencing, atomic enqueue dedup, bounded wait queues (#1272)",
-          "fixedBy": "9b262e6d17c4"
+          "id": "pr-70-job-dedup-read-then-write-race",
+          "description": "Agent-job idempotency lists in-flight rows and then inserts separately, allowing concurrent deliveries to both observe no row and enqueue duplicate work.",
+          "fixedBy": "9b262e6d17c4db51d7c732e5192d2933ea0a09e2",
+          "locations": [
+            {
+              "file": "brainrouter/src/memory/scheduler/jobs.ts",
+              "line": 52,
+              "endLine": 62
+            }
+          ],
+          "semanticRequirements": [
+            ["dedup", "idempotency"],
+            ["read then write", "race", "concurrent"],
+            ["duplicate job", "both enqueue", "duplicate work", "webhook"]
+          ]
         }
       ]
     },
     {
-      "id": "pr-65",
-      "pr": 65,
-      "sha": "595f8e532d44cbdaa92fe18895e76e4ecc1ef944",
-      "title": "feat(0.4.0): CLI Multi-Agent Phase 2 — typed delegation (#65)",
-      "defects": [
+      "id": "pr-446",
+      "pr": 446,
+      "sha": "c8ee4adcd972075a47172881b0e57c65e30ecac2",
+      "title": "feat(desktop): in-app Monaco code editor (editable tabs, save, dirty, preview fallback) (#446)",
+      "issues": [
         {
-          "file": "brainrouter-cli/src/orchestration/router.ts",
-          "line": 33,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
+          "id": "pr-446-monaco-receives-non-hex-theme-colors",
+          "description": "CSS palette values are passed directly into Monaco's theme, but Monaco requires hex colors; hsl/rgb values can throw and leave the editor on its fallback theme.",
+          "fixedBy": "c4cf2d264c931f140a27efb5629fdca6f9c00339",
+          "locations": [
+            {
+              "file": "brainrouter-desktop/src/lib/editor/monacoEnv.ts",
+              "line": 41,
+              "endLine": 51
+            }
+          ],
+          "semanticRequirements": [
+            ["monaco", "editor theme"],
+            ["hsl", "rgb", "css variable", "non hex"],
+            ["illegal color", "throws", "rejects", "crash"]
+          ]
         }
       ]
     },
     {
-      "id": "pr-63",
-      "pr": 63,
-      "sha": "34fb3ee37f3a058d4e2b056f25bc723eebe357e7",
-      "title": "feat(0.4.0): federation Stage 2 — active-session registry + cross-vendor presence (#63)",
-      "defects": [
+      "id": "pr-416",
+      "pr": 416,
+      "sha": "f8497517da0de5cb9c2d4e9c2b220c257d3fc966",
+      "title": "feat(desktop): per-session model — each chat keeps its own model (item 10) (#416)",
+      "issues": [
         {
-          "file": "brainrouter/src/api/routes/sessions.ts",
-          "line": 28,
-          "description": "fix(dashboard): await async engine calls in brain API routes + show resolved contradictions (#730)",
-          "fixedBy": "a7ea407942e1"
-        },
-        {
-          "file": "brainrouter/src/api/routes/sessions.ts",
-          "line": 36,
-          "description": "fix(dashboard): await async engine calls in brain API routes + show resolved contradictions (#730)",
-          "fixedBy": "a7ea407942e1"
+          "id": "pr-416-model-picks-default-to-all-chats",
+          "description": "The model selector defaults to global scope, so an ordinary model pick changes the shared default and synchronizes into other chats despite the per-session feature contract.",
+          "fixedBy": "d0c3b389b0e51eeb5ccc857d3956c2467298ff1f",
+          "locations": [
+            {
+              "file": "brainrouter-desktop/src/App.tsx",
+              "line": 650,
+              "endLine": 652
+            },
+            {
+              "file": "brainrouter-desktop/electron/hostCore.ts",
+              "line": 248,
+              "endLine": 252
+            }
+          ],
+          "semanticRequirements": [
+            ["model selection", "model pick", "model scope"],
+            ["global", "all chats", "other session"],
+            ["sync", "changes", "overwrites", "shared default"]
+          ]
         }
       ]
     },
     {
-      "id": "pr-43",
-      "pr": 43,
-      "sha": "aebcc888b9da01062277ac47ad729aea6d0bc72f",
-      "title": "0.3.7 — Terminal UI redesign, Ink REPL, in-terminal config, multi-agent registry (#43)",
-      "defects": [
-        {
-          "file": "brainrouter-cli/src/agent/agent.ts",
-          "line": 2544,
-          "description": "fix(security): remove the polynomial-ReDoS class CodeQL flagged on #1302 (#1308)",
-          "fixedBy": "d859e259c4d2"
-        }
-      ]
+      "id": "pr-110",
+      "pr": 110,
+      "sha": "b9a4025c632faf3d9ef86eab1c398fa52bc01355",
+      "title": "feat(0.4.2): /effort max as an alias for xhigh (#110)",
+      "issues": [],
+      "cleanEvidence": {
+        "kind": "no-linked-fix",
+        "observedThrough": "2026-08-09T07:43:30.000Z",
+        "note": "Selected after diff inspection and a targeted history scan found no later standalone fix whose replaced production line blames to this pull request through the cutoff. This is a negative control, not proof of defect absence."
+      }
+    },
+    {
+      "id": "pr-127",
+      "pr": 127,
+      "sha": "a0b112a37686005fd36ae22da7f6e30450917b5b",
+      "title": "feat(0.4.3): command-registry taxonomy guard + fix duplicate /model help (CLI-12) (#127)",
+      "issues": [],
+      "cleanEvidence": {
+        "kind": "no-linked-fix",
+        "observedThrough": "2026-08-09T07:43:30.000Z",
+        "note": "Selected after diff inspection and a targeted history scan found no later standalone fix whose replaced production line blames to this pull request through the cutoff. This is a negative control, not proof of defect absence."
+      }
+    },
+    {
+      "id": "pr-130",
+      "pr": 130,
+      "sha": "ce09029e9ed5126f4f9c2bb0ada8e0a1298d778b",
+      "title": "feat(0.4.3): tool-call repair telemetry in /context (CLI-8) (#130)",
+      "issues": [],
+      "cleanEvidence": {
+        "kind": "no-linked-fix",
+        "observedThrough": "2026-08-09T07:43:30.000Z",
+        "note": "Selected after diff inspection and a targeted history scan found no later standalone fix whose replaced production line blames to this pull request through the cutoff. This is a negative control, not proof of defect absence."
+      }
+    },
+    {
+      "id": "pr-147",
+      "pr": 147,
+      "sha": "8bdf8e21dd339d0b1342e08b4934bf9b117379cc",
+      "title": "feat(0.4.3): retrieval benchmark summary + regression gate (MEM-9) (#147)",
+      "issues": [],
+      "cleanEvidence": {
+        "kind": "no-linked-fix",
+        "observedThrough": "2026-08-09T07:43:30.000Z",
+        "note": "Selected after diff inspection and a targeted history scan found no later standalone fix whose replaced production line blames to this pull request through the cutoff. This is a negative control, not proof of defect absence."
+      }
     }
   ]
 }

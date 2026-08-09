@@ -272,6 +272,25 @@ async function invokeMcpAdapter(
     await agent.mcpClient.callTool(name, mcpArgs, {
       signal: agent.turnAbort?.signal,
     });
+  const learnedMetadata = (localSkillResult as any)?.metadata?.scope === 'learned'
+    ? (localSkillResult as any).metadata
+    : undefined;
+  if (learnedMetadata && typeof mcpArgs.name === 'string') {
+    // Loading a learned procedure activates its strictly subtractive tool
+    // ceiling for the rest of this turn. The turn finalizer clears it.
+    agent.activeSkill = mcpArgs.name;
+    agent.activeSkills = [mcpArgs.name];
+    agent.activeLearnedSkillItemId = String(learnedMetadata.learnedItemId ?? '');
+    agent.activeSkillAllowedTools = Array.isArray(learnedMetadata.allowedTools)
+      ? learnedMetadata.allowedTools.filter((tool: unknown): tool is string => typeof tool === 'string')
+      : [];
+    agent.activeSkillDisallowedTools = [];
+    // The turn's schemas were assembled before this get_skill call. Re-filter
+    // them immediately so the next model iteration cannot even see tools above
+    // the learned procedure's ceiling; dispatch-time checks remain the backstop
+    // for a model that guesses a hidden tool name.
+    input.refreshActiveSkillTools();
+  }
   let resultText = extractToolText(response);
   const isError = Boolean(response.isError);
   if (

@@ -13,7 +13,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { MODEL_REASONING_EFFORTS, projectTagFromName } from "@kinqs/brainrouter-types";
 import { memoryEngine } from "../../../memory/engine.js";
-import { requireAnyAuth, type AuthedRequest } from "../../middleware/auth.js";
+import { requireActiveAnyAuth, type AuthedRequest } from "../../middleware/auth.js";
 import { withOrgContext } from "../../middleware/tenancy.js";
 import { buildBrainAgentStatuses } from "../../../memory/agents/status.js";
 import { sendError } from "../../../contracts/http.js";
@@ -24,9 +24,13 @@ import {
   ScopedModelSelectionError,
 } from "../../../services/modelGateway/modelGateway.js";
 import { runBrainChat } from "./brainChatService.js";
+import {
+  enqueueHostedLearningCheckpoint,
+  hostedLearnedItemFromRecord,
+} from "../../../memory/learning/hosted-learning.js";
 
 export const brainRouter = Router();
-brainRouter.use(requireAnyAuth);
+brainRouter.use(requireActiveAnyAuth);
 
 const ChatRequestSchema = z.object({
   messages: z.array(z.object({
@@ -90,6 +94,20 @@ brainRouter.post("/chat", withOrgContext, async (req: AuthedRequest, res) => {
       recall: (input) => memoryEngine.recall(input),
       dispatch: (input) => modelGateway.dispatchScoped(input),
       capture: (input) => memoryEngine.capture(input),
+      retrieveLearned: async ({ userId, orgId, limit }) => {
+        const store = memoryEngine.store as typeof memoryEngine.store & {
+          retrieveHostedLearnedRecords?(user: string, org: string, max?: number): Promise<import("@kinqs/brainrouter-types").CognitiveRecord[]>;
+        };
+        if (typeof store.retrieveHostedLearnedRecords !== "function") return [];
+        return (await store.retrieveHostedLearnedRecords(userId, orgId, limit))
+          .filter((record) => record.userId === userId && record.orgId === orgId)
+          .map(hostedLearnedItemFromRecord)
+          .filter((item): item is NonNullable<typeof item> => Boolean(item));
+      },
+      enqueueLearningCheckpoint: (input) => enqueueHostedLearningCheckpoint(
+        memoryEngine.store as Parameters<typeof enqueueHostedLearningCheckpoint>[0],
+        input,
+      ),
     });
     res.json(result);
   } catch (error) {

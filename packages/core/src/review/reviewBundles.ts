@@ -20,9 +20,12 @@
  * repository, a model, or a network.
  */
 
-/** One file section of a unified diff, with its new-revision path. */
+import { relatedPathsFromChangedFiles } from './reviewPathRelationships.js';
+
+/** One file section of a unified diff, with both sides of a rename/deletion. */
 export interface ReviewDiffFile {
   path: string;
+  oldPath?: string;
   diff: string;
 }
 
@@ -31,6 +34,7 @@ export type ReviewBundleRelation =
   | 'implementation_and_test'
   | 'catalogue_siblings'
   | 'import_edge'
+  /** @deprecated Retained for API compatibility; unrelated components are never packed. */
   | 'directory_adjacency'
   | 'standalone';
 
@@ -163,18 +167,85 @@ export function splitUnifiedDiffFiles(diff: string): ReviewDiffFile[] {
   if (buffer.length) sections.push(buffer.join('\n'));
   return sections
     .filter((section) => section.trim().length > 0)
-    .map((section) => ({ path: diffSectionPath(section), diff: section }));
+    .map((section) => {
+      const paths = diffSectionPaths(section);
+      return {
+        path: paths.path,
+        ...(paths.oldPath ? { oldPath: paths.oldPath } : {}),
+        diff: section,
+      };
+    });
 }
 
-/** The new-revision path a diff section describes ('' when it names none). */
-function diffSectionPath(section: string): string {
-  const header = /^diff --git a\/(.+?) b\/(.+)$/m.exec(section);
-  if (header?.[2]) return stripDiffPathPrefix(header[2]);
-  const target = /^\+\+\+ (.+)$/m.exec(section);
-  if (target?.[1] && target[1].trim() !== '/dev/null') return stripDiffPathPrefix(target[1]);
-  const origin = /^--- (.+)$/m.exec(section);
-  if (origin?.[1] && origin[1].trim() !== '/dev/null') return stripDiffPathPrefix(origin[1]);
-  return header?.[1] ? stripDiffPathPrefix(header[1]) : '';
+/** Decode one Git path token, including C-quoted paths emitted by core.quotePath. */
+function decodeGitPathToken(value: string, hasDiffPrefix = true): string {
+  const trimmed = value.trim().replace(/\t.*$/, '');
+  if (!trimmed.startsWith('"')) return hasDiffPrefix ? stripDiffPathPrefix(trimmed) : trimmed;
+  let decoded = '';
+  for (let index = 1; index < trimmed.length; index += 1) {
+    const character = trimmed[index];
+    if (character === '"') break;
+    if (character !== '\\') {
+      decoded += character;
+      continue;
+    }
+    const escaped = trimmed[++index];
+    if (escaped === undefined) break;
+    const simple: Record<string, string> = {
+      a: '\x07', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\x0b',
+      '\\': '\\', '"': '"',
+    };
+    if (simple[escaped] !== undefined) {
+      decoded += simple[escaped];
+      continue;
+    }
+    if (/[0-7]/.test(escaped)) {
+      let octal = escaped;
+      while (octal.length < 3 && /[0-7]/.test(trimmed[index + 1] ?? '')) octal += trimmed[++index];
+      decoded += String.fromCharCode(Number.parseInt(octal, 8));
+      continue;
+    }
+    decoded += escaped;
+  }
+  return hasDiffPrefix ? stripDiffPathPrefix(decoded) : decoded;
+}
+
+function gitHeaderTokens(value: string): string[] {
+  const tokens: string[] = [];
+  for (let index = 0; index < value.length;) {
+    while (value[index] === ' ') index += 1;
+    if (index >= value.length) break;
+    const start = index;
+    if (value[index] === '"') {
+      index += 1;
+      while (index < value.length) {
+        if (value[index] === '\\') index += 2;
+        else if (value[index++] === '"') break;
+      }
+    } else {
+      while (index < value.length && value[index] !== ' ') index += 1;
+    }
+    tokens.push(value.slice(start, index));
+  }
+  return tokens;
+}
+
+/** Both repo-relative paths a diff section describes (empty for /dev/null). */
+function diffSectionPaths(section: string): { path: string; oldPath: string } {
+  const markerPath = (marker: '---' | '+++'): string => {
+    const match = new RegExp(`^${marker.replaceAll('+', '\\+')} (.+)$`, 'm').exec(section);
+    if (!match?.[1] || match[1].trim() === '/dev/null') return '';
+    return decodeGitPathToken(match[1]);
+  };
+  const renamePath = (side: 'from' | 'to'): string => {
+    const match = new RegExp(`^(?:rename|copy) ${side} (.+)$`, 'm').exec(section);
+    return match?.[1] ? decodeGitPathToken(match[1], false) : '';
+  };
+  const header = /^diff --git (.+)$/m.exec(section);
+  const headerPaths = header?.[1] ? gitHeaderTokens(header[1]).map((token) => decodeGitPathToken(token)) : [];
+  const oldPath = markerPath('---') || renamePath('from') || headerPaths[0] || '';
+  const path = markerPath('+++') || renamePath('to') || headerPaths[1] || oldPath;
+  return { path, oldPath };
 }
 
 /**
@@ -200,11 +271,10 @@ export function splitDiffFileByHunk(section: string): string[] {
   return hunks.map((hunk) => `${header}\n${hunk}`);
 }
 
-const IMPORT_SPECIFIER = /(?:from\s+|require\(\s*|import\s+|import\(\s*)['"]([^'"]+)['"]/g;
-
 /**
- * Import edges derived from the diff itself, restricted to files the diff
- * already changes.
+ * Semantic edges derived from the diff itself, restricted to files the diff
+ * already changes. Besides imports, this recognizes deterministic workflow,
+ * package-script, HTML/CSS, lockfile, and conventional-test relationships.
  *
  * ADR-033 D9: this reads untrusted content, so it is deliberately incapable of
  * widening scope — an unresolvable or unchanged target is dropped, and the only
@@ -213,61 +283,7 @@ const IMPORT_SPECIFIER = /(?:from\s+|require\(\s*|import\s+|import\(\s*)['"]([^'
  * has one; this is the floor for every other case.
  */
 export function relatedPathsFromDiff(diff: string): Array<[string, string]> {
-  const files = splitUnifiedDiffFiles(diff).filter((file) => file.path);
-  const changed = new Set(files.map((file) => file.path));
-  const edges: Array<[string, string]> = [];
-  const seen = new Set<string>();
-  for (const file of files) {
-    const directory = directoryOf(file.path);
-    IMPORT_SPECIFIER.lastIndex = 0;
-    let match: RegExpExecArray | null;
-    while ((match = IMPORT_SPECIFIER.exec(file.diff)) !== null) {
-      const specifier = match[1];
-      if (!specifier.startsWith('.')) continue; // package imports cannot name a changed file
-      const target = resolveRelativeSpecifier(directory, specifier, changed);
-      if (!target || target === file.path) continue;
-      const key = [file.path, target].sort().join('\u0000');
-      if (seen.has(key)) continue;
-      seen.add(key);
-      edges.push([file.path, target]);
-    }
-  }
-  return edges;
-}
-
-/** Resolve `./x.js` against the changed set, honouring ESM `.js` → `.ts`. */
-function resolveRelativeSpecifier(
-  directory: string,
-  specifier: string,
-  changed: ReadonlySet<string>,
-): string | null {
-  const joined = `${directory ? `${directory}/` : ''}${specifier}`;
-  const parts: string[] = [];
-  for (const segment of joined.split('/')) {
-    if (!segment || segment === '.') continue;
-    if (segment === '..') {
-      if (!parts.length) return null; // climbing out of the repository is never a changed file
-      parts.pop();
-      continue;
-    }
-    parts.push(segment);
-  }
-  const base = parts.join('/');
-  if (!base) return null;
-  const withoutExtension = base.replace(/\.(?:js|jsx|mjs|cjs)$/, '');
-  const candidates = [
-    base,
-    ...['ts', 'tsx', 'js', 'jsx', 'mts', 'cts', 'mjs', 'cjs'].flatMap((extension) => [
-      `${withoutExtension}.${extension}`,
-      `${base}.${extension}`,
-      `${withoutExtension}/index.${extension}`,
-      `${base}/index.${extension}`,
-    ]),
-  ];
-  for (const candidate of candidates) {
-    if (changed.has(candidate)) return candidate;
-  }
-  return null;
+  return relatedPathsFromChangedFiles(splitUnifiedDiffFiles(diff));
 }
 
 class DisjointSet {
@@ -297,8 +313,8 @@ interface FileGroup {
 }
 
 /**
- * Group the diff's files into related units, then pack those units into
- * bundles within the per-bundle budget.
+ * Group the diff's files into related units, then bound each unit without ever
+ * mixing it with an unrelated unit merely because both happen to fit.
  *
  * Invariants the tests pin: every changed file lands in exactly one bundle or
  * in `deferredPaths`; the plan is a pure function of its input (same diff, same
@@ -371,8 +387,8 @@ export function planReviewBundles(input: ReviewBundlePlanInput): ReviewBundlePla
     const inherited = relations.get(root);
     if (inherited) for (const relation of inherited) group.relations.add(relation);
     if (group.indexes.length === 1 && group.relations.size === 0) group.relations.add('standalone');
-    // Ordering by directory keeps packed bundles local to one area of the tree,
-    // so a bundle that ends up holding two small groups is still coherent.
+    // Directory ordering makes the independently reviewable semantic units
+    // deterministic without changing which files belong to each unit.
     const paths = group.indexes.map((index) => files[index].path || `\uFFFF${index}`).sort();
     group.sortKey = `${directoryOf(paths[0])}\u0000${paths[0]}`;
   }
@@ -381,11 +397,6 @@ export function planReviewBundles(input: ReviewBundlePlanInput): ReviewBundlePla
   const packed: Array<{ indexes: number[]; relations: Set<ReviewBundleRelation>; part?: { index: number; total: number } }> = [];
   /** Diff text for the split parts of one oversized file, by packed index. */
   const partText = new Map<number, string>();
-  let current: { indexes: number[]; relations: Set<ReviewBundleRelation>; chars: number } | null = null;
-  const flush = (): void => {
-    if (current && current.indexes.length) packed.push({ indexes: current.indexes, relations: current.relations });
-    current = null;
-  };
   for (const group of ordered) {
     if (group.chars > maxBundleChars) {
       // A group larger than a whole bundle is split — however related its files
@@ -395,7 +406,6 @@ export function planReviewBundles(input: ReviewBundlePlanInput): ReviewBundlePla
       // prompt. That is not "fewer tokens", it is a context-limit failure, and
       // the coverage lost to it is invisible. Keeping files together is a
       // preference; fitting in the model's window is a constraint.
-      flush();
       for (const piece of splitOversizedGroup(group, files, maxBundleChars)) {
         packed.push({
           indexes: piece.indexes,
@@ -406,15 +416,14 @@ export function planReviewBundles(input: ReviewBundlePlanInput): ReviewBundlePla
       }
       continue;
     }
-    if (current && current.chars + group.chars > maxBundleChars) flush();
-    if (!current) current = { indexes: [], relations: new Set<ReviewBundleRelation>(), chars: 0 };
-    if (current.indexes.length > 0) current.relations.add('directory_adjacency');
-    current.indexes.push(...group.indexes);
-    for (const relation of group.relations) current.relations.add(relation);
-    current.chars += group.chars;
-    if (current.chars >= maxBundleChars) flush();
+    // ADR-033 D2: the connected component IS the review unit. Packing a second,
+    // unrelated component into its spare character budget destroys isolated
+    // context and makes concurrency depend on file size rather than semantics.
+    packed.push({
+      indexes: [...group.indexes],
+      relations: new Set(group.relations),
+    });
   }
-  flush();
 
   const bundles: ReviewBundle[] = [];
   const deferredPaths: string[] = [];

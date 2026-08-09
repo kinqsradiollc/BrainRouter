@@ -1,6 +1,26 @@
 # ADR-033 — Review that finds things, and says where
 
 **Status:** ACCEPTED — approved by the owner for implementation.
+**Implementation status (2026-08-10):** PARTIAL — the shared orchestration, evidence safety and
+paired fail-closed benchmark harness are implemented, and the deterministic COST conjunct of §6 now
+passes: bundled sends **516,672 characters in 16 calls versus legacy's 545,529 in 12** (−28,857,
+−5.29%), down from +33,537 before.
+
+What closed it was a mis-scoped budget rather than any relaxation of D2/D3/D5/D9. The
+repository-context cap was applied PER UNIT, so a review's evidence budget grew with how many units
+it happened to split into, and two units whose impact packets shared dependencies materialised that
+shared context twice. Measured per case, that single effect was the whole regression: two cases that
+split one call into two accounted for 33,028 of the 33,537 excess, while every case that split into
+genuinely unrelated units was already cheaper (one saved 21,946). The budget now belongs to the
+REVIEW and is divided across its units — bundling changes how evidence is divided, never how much a
+review may spend. Single-unit reviews are byte-identical, and the same rule is applied in production
+so the measured number describes what the bot actually does.
+
+**§6 is still not satisfied.** It is a conjunction, and only the cost half is demonstrated. The
+PRECISION half — strictly higher semantic precision, and the known defect reported on the correct
+reviewed-revision line — requires a real provider run on the frozen corpus and has not been made.
+Nothing here should be read as evidence about review quality; a cheaper review that finds less would
+satisfy this number and fail the ADR.
 **Depends on:** ADR-025 (assurance programs), ADR-028 (surfaces that tell the truth), ADR-029 F1 (an offer the product cannot honour).
 
 ---
@@ -208,15 +228,17 @@ Three constraints, and the first is the one that matters:
 2. **Concurrency is an injected number, not a constant** — four bundles in flight per review, chosen
    by the scheduler that knows whose budget is being spent. Every unit is still charged against the
    same model-call and duration budget, so parallelism changes the shape of the spend, not its size.
-3. **Still open, deliberately.** The local reviewer shares the definition, the parser and the
-   computed position — but it is an agent with real tools over a working-tree diff, and it has no
-   bundles, no concurrency and no reflection pass. That is the honest state: one review *definition*
-   with two orchestrations, not yet one orchestration.
-4. **A later `fix(…)` commit, blamed back to the pull request that introduced the line it changed.**
-   Real, and biased three ways that the dataset states in its own header: only defects we noticed,
-   only those fixed as their own commit, and therefore toward what our tooling already catches. The
-   absolute numbers mean little; the delta between two reviewer versions on the frozen set is what
-   the benchmark is for.
+3. **The local front doors now use the same orchestration.** CLI and Desktop collect the complete
+   working-tree diff, prepare it with the same source-safety policy, plan semantic bundles, run them
+   concurrently within an injected cap, compute positions from diff evidence, deduplicate, and run
+   reflection. Each bundle receives an isolated read-only reviewer Agent; malformed or incomplete
+   output cannot become a clean result.
+4. **Ground truth is conceptual and semantic, with negative controls.** The frozen corpus contains
+   manually curated issues traced from later standalone fixes. Each label is one conceptual defect,
+   with explicit semantic aliases and every eligible location in the reviewed revision; a finding
+   must match the issue meaning as well as its file. Clean controls mean no linked later fix was
+   observed by the cutoff, not proof of no latent defect. The bias remains toward defects that were
+   noticed and fixed, so only the paired delta is an acceptance signal.
 
 ---
 
@@ -240,10 +262,39 @@ person looking where they were told and finding the thing there.
 
 ### How that number gets produced
 
-A delta needs two measurements, so the harness has two arms on the same frozen set:
-`npx tsx brainrouter/benchmark/review-bench.ts --arm=legacy` runs the reviewer as it was before this ADR
-(size-split chunks, serial, the model's own line numbers, no reflection), and `--arm=bundled` runs
-what ships. Neither number means anything alone; the difference between them is the claim.
+A delta needs two measurements, so the command always runs both arms over the entire frozen corpus
+with one explicitly configured provider and the code-review lens. There is no single-arm, partial
+corpus or lens override:
+
+```sh
+npm run bench:review -w @kinqs/brainrouter-mcp-server -- \
+  --provider-config=/absolute/path/review-provider.json
+```
+
+The JSON file names `endpoint`, `model`, `apiKeyEnv`, and optionally `wireFormat`; the secret lives
+only in the named environment variable. Missing configuration, provider errors, malformed logical
+output, unavailable evidence, or a dirty implementation worktree fail non-zero instead of becoming
+an empty finding set. A complete or explicitly failed mode-0600 JSON artifact is written under
+`brainrouter/benchmark/results/review/` by default and records the repository/corpus/model identity,
+every call, both arms, total prompt-plus-completion characters, deltas and the conjunctive
+acceptance decision. A completed run exits zero only when semantic issue precision rises, total
+model characters fall, at least one known defect lands on its correct line, and neither arm has a
+provider or logical failure. No qualifying live artifact is recorded in this ADR yet.
+
+The production-evidence, model-independent input diagnostic is reproducible with:
+
+```sh
+npm run bench:review:input-cost -w @kinqs/brainrouter-mcp-server
+```
+
+It currently records 545,529 characters and 12 calls for legacy versus 579,066 characters and 16
+calls for bundled. Bundled is therefore 33,537 characters (6.15%) larger before completion output is
+counted. Deterministic relationship and artifact-level projection work reduced the bundled baseline
+by 98,914 characters and 12 calls without joining unrelated files, but the remaining result is still
+affirmative evidence that the cost claim has not been earned. This diagnostic is explicitly
+non-qualifying for §6 quality. The paired provider benchmark also requires a clean committed tree so
+its repository identity is reproducible; the intentionally uncommitted implementation under review
+cannot produce a qualifying artifact.
 
 Three things about the report are deliberate, because each of them was wrong once:
 

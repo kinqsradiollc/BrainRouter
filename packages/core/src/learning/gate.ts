@@ -40,8 +40,14 @@ export interface LearningCandidate {
   readonly sawUntrustedContent: boolean;
   /** D7 — did something the agent or the person DID corroborate it? */
   readonly corroboratedByTrustedAction: boolean;
+  /** Runtime-issued ids for successful post-read actions relevant to THIS
+   * candidate. Empty for untrusted content means the global session action
+   * tally cannot accidentally admit it. */
+  readonly corroboratingActionIds?: readonly string[];
   /** What tier the candidate asks for. The gate may refuse or downgrade it. */
   readonly requestedTier: LearnedTier;
+  /** Ordered executable steps. Required for procedure-shaped candidates. */
+  readonly steps?: readonly string[];
 }
 
 export type GateRule =
@@ -51,7 +57,8 @@ export type GateRule =
   | 'unsupported'
   | 'transient'
   | 'one-off'
-  | 'untrusted-only';
+  | 'untrusted-only'
+  | 'non-executable';
 
 export type GateVerdict =
   | {
@@ -69,6 +76,10 @@ export const MIN_STATEMENT_CHARS = 12;
 export const MIN_FALSIFIER_CHARS = 10;
 /** Long enough for a rule, short enough that it is a rule and not a document. */
 export const MAX_STATEMENT_CHARS = 400;
+/** Central learned projections keep each retirement check bounded. */
+export const MAX_FALSIFIER_CHARS = 400;
+/** Expected outcomes share the same bounded projection contract. */
+export const MAX_EXPECTATION_CHARS = 400;
 
 /**
  * Statements that cannot be wrong, and therefore cannot be retired.
@@ -161,6 +172,40 @@ export function reviewLearningCandidate(candidate: LearningCandidate): GateVerdi
       reason: 'no expected outcome — D6 cannot measure what was never predicted',
     };
   }
+  if (falsifier.length > MAX_FALSIFIER_CHARS || expectation.length > MAX_EXPECTATION_CHARS) {
+    return {
+      admitted: false,
+      rule: 'malformed',
+      reason: `falsifier and expectation must each be at most ${MAX_FALSIFIER_CHARS} characters`,
+    };
+  }
+
+  // D3 is an execution claim, not a prose label. Persisting an executable form
+  // without an executable body creates a lesson that says it runs but never
+  // can. Delegation remains closed until a dedicated runtime-owned child port
+  // can prove and re-apply a narrower child authority; ordinary tool
+  // corroboration is not delegation authority.
+  if (candidate.form === 'delegation') {
+    return {
+      admitted: false,
+      rule: 'non-executable',
+      reason: 'delegation learning is unavailable until a constrained runtime delegation port can execute it',
+    };
+  }
+  if (candidate.form === 'procedure') {
+    const steps = candidate.steps ?? [];
+    if (
+      steps.length === 0
+      || steps.length > 20
+      || steps.some((step) => !step.trim() || step.trim().length > 240)
+    ) {
+      return {
+        admitted: false,
+        rule: 'non-executable',
+        reason: 'a procedure requires 1-20 nonblank steps of at most 240 characters each',
+      };
+    }
+  }
 
   // D2's own requirement, checked from both ends: the CLAIM must be the kind of
   // thing that can be wrong, and the FALSIFIER must name how we would find out.
@@ -228,7 +273,13 @@ export function reviewLearningCandidate(candidate: LearningCandidate): GateVerdi
   // page or a mirrored issue title is attacker-influenced; something the agent
   // or the person actually DID has to corroborate it before it becomes
   // something the agent believes in every future session.
-  if (candidate.sawUntrustedContent && !candidate.corroboratedByTrustedAction) {
+  if (
+    candidate.sawUntrustedContent
+    && (
+      !candidate.corroboratedByTrustedAction
+      || (candidate.corroboratingActionIds?.length ?? 0) === 0
+    )
+  ) {
     return {
       admitted: false,
       rule: 'untrusted-only',

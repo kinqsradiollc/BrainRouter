@@ -27,6 +27,8 @@
  * agent, a model, or a network.
  */
 
+import { redactText } from '../../session/transcript/sessionStore.js';
+
 /** What one tool call tells us about the content it produced. */
 export type ToolProvenance =
   /** Content authored outside the workspace and outside the person. */
@@ -101,21 +103,90 @@ export interface SessionProvenance {
   trustedActions: number;
   /** Trusted actions taken after the first untrusted read — D7's real input. */
   trustedActionsAfterUntrusted: number;
+  /** Monotonic model/tool batch. Calls in one parallel batch cannot
+   * corroborate one another because neither could have observed the other. */
+  currentBatch: number;
+  lastSuccessfulUntrustedBatch?: number;
+  successfulActions: CorroboratingAction[];
+}
+
+export interface CorroboratingAction {
+  readonly id: string;
+  readonly toolName: string;
+  readonly batch: number;
+  readonly summary?: string;
+}
+
+function boundedActionSummary(summary: string | undefined, args: unknown): string | undefined {
+  let serializedArgs = '';
+  try {
+    serializedArgs = JSON.stringify(args ?? {}, (key, value) => (
+      /(?:authorization|cookie|password|passwd|secret|token|api.?key|private.?key)/i.test(key)
+        ? '[REDACTED]'
+        : value
+    ));
+  } catch { /* an unserialisable argument contributes no semantic authority */ }
+  const combined = [summary?.trim(), serializedArgs].filter(Boolean).join(' | ');
+  return combined ? redactText(combined).slice(0, 400) : undefined;
 }
 
 export function emptySessionProvenance(): SessionProvenance {
-  return { untrustedReads: 0, trustedActions: 0, trustedActionsAfterUntrusted: 0 };
+  return {
+    untrustedReads: 0,
+    trustedActions: 0,
+    trustedActionsAfterUntrusted: 0,
+    currentBatch: 0,
+    successfulActions: [],
+  };
 }
 
-/** Record one tool call against the session's provenance tally. */
-export function noteToolProvenance(provenance: SessionProvenance, toolName: string): void {
+export function beginToolProvenanceBatch(provenance: SessionProvenance): number {
+  provenance.currentBatch += 1;
+  return provenance.currentBatch;
+}
+
+export function eligibleCorroboratingActions(
+  provenance: SessionProvenance,
+): CorroboratingAction[] {
+  const readBatch = provenance.lastSuccessfulUntrustedBatch;
+  if (readBatch === undefined) return [];
+  return provenance.successfulActions.filter((action) => action.batch > readBatch).slice(-32);
+}
+
+/** Record a completed tool call. Failed, denied and skipped attempts are never
+ * evidence. `batch` makes a parallel read/action batch ineligible. */
+export function noteToolProvenance(
+  provenance: SessionProvenance,
+  toolName: string,
+  result?: { success: boolean; batch?: number; callId?: string; summary?: string; args?: unknown },
+): void {
+  // Compatibility for direct callers: each completed call without an explicit
+  // batch is a new sequential batch. Runtime callers always pass the real one.
+  const batch = result?.batch ?? beginToolProvenanceBatch(provenance);
+  if (result && !result.success) return;
   switch (classifyToolProvenance(toolName)) {
     case 'untrusted-read':
       provenance.untrustedReads += 1;
+      provenance.lastSuccessfulUntrustedBatch = batch;
       return;
     case 'trusted-action':
       provenance.trustedActions += 1;
-      if (provenance.untrustedReads > 0) provenance.trustedActionsAfterUntrusted += 1;
+      if (
+        provenance.lastSuccessfulUntrustedBatch !== undefined
+        && batch > provenance.lastSuccessfulUntrustedBatch
+      ) {
+        provenance.trustedActionsAfterUntrusted += 1;
+      }
+      const summary = boundedActionSummary(result?.summary, result?.args);
+      provenance.successfulActions.push({
+        id: (result?.callId?.trim() || `action-${batch}-${provenance.trustedActions}`).slice(0, 160),
+        toolName: toolName.slice(0, 80),
+        batch,
+        ...(summary ? { summary } : {}),
+      });
+      if (provenance.successfulActions.length > 64) {
+        provenance.successfulActions = provenance.successfulActions.slice(-64);
+      }
       return;
     default:
       return;

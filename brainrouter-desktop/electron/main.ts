@@ -57,6 +57,11 @@ import { isBrowserCommand } from './browser/protocol.js';
 import { concreteRendererBrowserTarget } from './browser/rendererCommandTarget.js';
 import { shouldBypassRendererVisibleQueue } from './browser/visibleQueuePolicy.js';
 import { resolveDesktopBootstrapState } from './accountIntegration.js';
+import {
+  broadcastActiveOrgSelection,
+  isActiveOrgSelectionQuery,
+  isInternalActiveOrgResult,
+} from './activeOrgHostBroadcast.js';
 import { initAutoUpdate } from './updater.js';
 import { configurePackagedSmokeProfile } from './packagedSmokeBootstrap.js';
 import { runPackagedBrowserSmokeIfRequested } from './packagedBrowserSmoke.js';
@@ -96,6 +101,7 @@ interface WinPool {
   agentBrowserControl: BrowserAgentControlManager;
 }
 const wins = new Map<number, WinPool>(); // webContents.id → WinPool
+let activeOrgBroadcastSequence = 0;
 
 // D26-1 — appearance is a small app-level preference rather than renderer-only
 // state. Main resolves the native signals before BrowserWindow creation so the
@@ -411,6 +417,13 @@ function spawnHost(wp: WinPool, workspaceRoot: string): UtilityProcess {
       handleSecretRequest(host, msg);
       return;
     }
+    if (isInternalActiveOrgResult(msg)) {
+      const result = (msg as { event?: { ok?: boolean; error?: string } }).event;
+      if (result?.ok === false) {
+        console.error(`[brainrouter-desktop main] background host org rebind failed: ${result.error ?? 'unknown error'}`);
+      }
+      return;
+    }
     if (msg && typeof msg === 'object') {
       const ev = (msg as { event?: { kind?: string; sessionKey?: string } }).event;
       const kind = ev?.kind;
@@ -454,7 +467,7 @@ function retireHost(wp: WinPool, workspaceRoot: string): void {
   wp.hosts.delete(workspaceRoot);
   wp.lastSession.delete(workspaceRoot);
   try { host.postMessage({ kind: 'shutdown' }); } catch { /* already gone */ }
-  setTimeout(() => { try { host.kill(); } catch { /* already exited */ } }, 1_500);
+  setTimeout(() => { try { host.kill(); } catch { /* already exited */ } }, 5_000);
 }
 
 /**
@@ -586,7 +599,11 @@ function openWorkspaceWindow(workspaceRoot: string): void {
     for (const [id, w] of wins) {
       if (w.win !== win) continue;
       w.agentBrowserControl.dispose();
-      for (const [root, host] of w.hosts) { w.retiring.add(root); try { host.postMessage({ kind: 'shutdown' }); } catch { /* gone */ } }
+      for (const [root, host] of w.hosts) {
+        w.retiring.add(root);
+        try { host.postMessage({ kind: 'shutdown' }); } catch { /* gone */ }
+        setTimeout(() => { try { host.kill(); } catch { /* already exited */ } }, 5_000);
+      }
       w.browser.dispose();
       wins.delete(id);
     }
@@ -649,6 +666,24 @@ app.whenReady().then(() => {
     if (!isAgentCommand(raw)) return;
     // Route to the ACTIVE workspace's host; background hosts keep running untouched.
     const host = wp.pool.activeRoot ? wp.hosts.get(wp.pool.activeRoot) : undefined;
+    if (isActiveOrgSelectionQuery(raw)) {
+      const selectedOrgId = typeof raw.args?.orgId === 'string' ? raw.args.orgId.trim() : '';
+      if (selectedOrgId) {
+        for (const candidate of wins.values()) {
+          if (!candidate.win.isDestroyed()) {
+            candidate.win.webContents.send('active-org-changed', { orgId: selectedOrgId });
+          }
+        }
+      }
+      const liveHosts = [...wins.values()].flatMap((candidate) => [...candidate.hosts.values()]);
+      broadcastActiveOrgSelection(
+        raw,
+        host,
+        liveHosts,
+        `${Date.now().toString(36)}-${++activeOrgBroadcastSequence}`,
+      );
+      return;
+    }
     host?.postMessage(raw);
   });
 

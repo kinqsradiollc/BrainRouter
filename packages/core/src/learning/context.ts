@@ -25,7 +25,7 @@
  * document, and a learned string that could emit `</planner_data>` would put
  * the rest of the turn back into the instruction stream.
  */
-import { asUntrustedText } from '../planner/agentContext.js';
+import { asUntrustedText, fenceMarkerPattern } from '../planner/agentContext.js';
 import type { LearnedItem } from './types.js';
 
 /** One learned line is a rule, not a paragraph. */
@@ -53,7 +53,12 @@ export const LEARNED_CONTEXT_TAG = 'learned-behaviour';
  * the measurement would then justify itself.
  */
 export function selectLearnedForTurn(items: readonly LearnedItem[]): LearnedItem[] {
-  const live = items.filter((item) => item.status === 'active');
+  const live = items.filter((item) => (
+    item.status === 'active'
+    // Legacy/local-only rows have no lifecycle field. New centrally-backed
+    // rows do not reach the model until their reversible pointer is durable.
+    && (!item.memoryLifecycle || item.memoryLifecycle.status === 'active')
+  ));
   const rank = (item: LearnedItem): number => (
     (item.tier === 'instruction' ? 1_000 : 0) + item.outcome.confirmations * 10 - item.outcome.contradictions * 5
   );
@@ -70,6 +75,18 @@ export function selectLearnedForTurn(items: readonly LearnedItem[]): LearnedItem
 
 function day(iso: string): string {
   return iso.slice(0, 10);
+}
+
+const LEARNED_FENCES = ['learned_instructions', 'learned_evidence']
+  .map((tag) => fenceMarkerPattern(tag));
+
+function learnedText(value: string, max: number): string {
+  let safe = asUntrustedText(value, max);
+  for (const fence of LEARNED_FENCES) {
+    fence.lastIndex = 0;
+    safe = safe.replace(fence, '[fence]');
+  }
+  return safe;
 }
 
 /**
@@ -91,7 +108,7 @@ export function buildLearnedContext(items: readonly LearnedItem[]): string | nul
       + 'these are instructions, and they carry the date they were given)',
     );
     for (const item of instructions) {
-      lines.push(`  - [${day(item.provenance.capturedAt)}] ${asUntrustedText(item.statement, MAX_LINE)}`);
+      lines.push(`  - [${day(item.provenance.capturedAt)}] ${learnedText(item.statement, MAX_LINE)}`);
     }
     lines.push('</learned_instructions>');
   }
@@ -103,11 +120,11 @@ export function buildLearnedContext(items: readonly LearnedItem[]): string | nul
     );
     for (const item of evidence) {
       const suffix = item.skillId
-        ? ` — runnable: get_skill("${asUntrustedText(item.skillId, 64)}")`
+        ? ` — runnable: get_skill("${learnedText(item.skillId, 64)}")`
         : '';
       lines.push(
-        `  - [${day(item.provenance.capturedAt)}] ${asUntrustedText(item.statement, MAX_LINE)}`
-        + ` — wrong if: ${asUntrustedText(item.falsifier, MAX_LINE)}${suffix}`,
+        `  - [${day(item.provenance.capturedAt)}] ${learnedText(item.statement, MAX_LINE)}`
+        + ` — wrong if: ${learnedText(item.falsifier, MAX_LINE)}${suffix}`,
       );
     }
     lines.push('</learned_evidence>');

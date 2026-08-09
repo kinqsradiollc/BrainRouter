@@ -91,13 +91,14 @@ export function evaluateRetirement(
   // twice would still be on its way out.
   if (
     item.status === 'demoted'
-    && item.outcome.confirmations > 0
+    && !!item.outcome.lastConfirmedAt
+    && Date.parse(item.outcome.lastConfirmedAt) > Date.parse(item.statusChangedAt ?? item.updatedAt)
     && ageMs(item, nowMs) < policy.unusedWindowMs
   ) {
     return {
       id: item.id,
       status: 'active',
-      reason: `confirmed ${item.outcome.confirmations}× since demotion — restored`,
+      reason: 'an observed outcome confirmed it after demotion — restored',
     };
   }
 

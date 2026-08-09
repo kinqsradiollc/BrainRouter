@@ -30,6 +30,7 @@ class FakeAssuranceStore implements RepositoryAssuranceSupersessionStore {
     ["job-1", { order: 1, prNumber: 42 }],
   ]);
   failCandidateDiscovery = false;
+  candidateSaveDelayMs = 0;
   private id = 0;
 
   readonly nextId = (kind: "run" | "source" | "stage"): string =>
@@ -150,6 +151,9 @@ class FakeAssuranceStore implements RepositoryAssuranceSupersessionStore {
     runId: string;
     finding: AssuranceFinding;
   }): Promise<AssuranceFinding> {
+    if (this.candidateSaveDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, this.candidateSaveDelayMs));
+    }
     const run = this.require(input.orgId, input.runId);
     if (
       input.finding.program !== run.program
@@ -336,9 +340,26 @@ function repositoryContextAnalysis(overrides: {
         return structuredClone(assembly);
       },
     },
-    resolveArtifact: (ref) => ref === "artifact-1"
-      ? { ref, content: "# src/handler.ts\nhandler();", byteCount: 32 }
-      : null,
+    resolveArtifact: (ref) => {
+      const packet = assembly.packets.find((item) => item.artifactRefs.includes(ref));
+      if (!packet) return null;
+      const sourceLocation = packet.context[0]?.evidence.location ?? packet.changed[0];
+      const content = `# ${sourceLocation.path}\n    ${sourceLocation.line ?? 1} | fixture();`;
+      const roles = sourceLocation.path === packet.changed[0]?.path
+        ? ["changed" as const]
+        : [...new Set(packet.context
+            .filter((item) => item.evidence.location?.path === sourceLocation.path)
+            .map((item) => item.relationship))];
+      return {
+        ref,
+        revisionSha: packet.revisionSha,
+        anchorLocations: packet.changed.map((location) => ({ ...location })),
+        sourceLocation: { ...sourceLocation, line: sourceLocation.line ?? 1, endLine: sourceLocation.endLine ?? sourceLocation.line ?? 1 },
+        roles,
+        content,
+        byteCount: Buffer.byteLength(content),
+      };
+    },
     releaseArtifacts: (refs) => { released.push(...refs); },
     selectDeepReviewAnchors: (_indexRef, limit) => ({
       anchors: [
@@ -764,6 +785,7 @@ describe("diff review assurance projection", () => {
       result.coverage!,
       1,
       "head-1",
+      { remainingModelCalls: 1, remainingDurationMs: 60_000, deadlineAt: Date.now() + 60_000 },
     );
     expect(gate).toMatchObject({
       status: "clean",
@@ -905,6 +927,7 @@ describe("diff review assurance projection", () => {
       result.coverage!,
       1,
       "head-1",
+      { remainingModelCalls: 1, remainingDurationMs: 60_000, deadlineAt: Date.now() + 60_000 },
     );
     expect(gate).toMatchObject({
       status: "blocked",
@@ -975,13 +998,55 @@ describe("diff review assurance projection", () => {
     const { result, changedFiles, ...start } = request;
     const session = await startDiffReviewAssurance(start);
     await session!.prepareContext([{ path: "src/source.ts", line: 4 }]);
-    const durableRun = store.runs.get(session!.runId)!;
-    durableRun.policySnapshot.budgets.maxModelCalls = result.coverage!.totalParts;
-
-    await session!.recordCandidates("head-1", [], result.coverage!, changedFiles);
+    await session!.recordCandidates(
+      "head-1",
+      [],
+      result.coverage!,
+      changedFiles,
+      undefined,
+      { remainingModelCalls: 0, remainingDurationMs: 60_000, deadlineAt: Date.now() + 60_000 },
+    );
 
     expect(runModel).not.toHaveBeenCalled();
     expect([...store.findings.values()][0]?.state).toBe("candidate");
+    expect(store.runs.get(session!.runId)?.stages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        stage: "candidate_verification",
+        status: "partial",
+        errorCode: "CANDIDATES_UNRESOLVED",
+      }),
+    ]));
+  });
+
+  it("does not rebase the aggregate deadline after delayed candidate persistence", async () => {
+    const store = new FakeAssuranceStore();
+    store.candidateSaveDelayMs = 20;
+    const runModel = vi.fn(async () => JSON.stringify({
+      state: "verified",
+      rationale: "supported",
+      evidenceRefs: ["evidence-1", "evidence-2"],
+    }));
+    const request = input(store, {
+      repositoryContext: repositoryContextAnalysis({ assembly: sourceToSinkAssembly() }),
+      llmRunner: { run: runModel },
+    });
+    const { result, changedFiles, ...start } = request;
+    const session = await startDiffReviewAssurance(start);
+    await session!.prepareContext([{ path: "src/source.ts", line: 4 }]);
+    await session!.recordCandidates(
+      "head-1",
+      [],
+      result.coverage!,
+      changedFiles,
+      undefined,
+      {
+        remainingModelCalls: 1,
+        remainingDurationMs: 5,
+        deadlineAt: Date.now() + 5,
+      },
+    );
+
+    expect(runModel).not.toHaveBeenCalled();
     expect(store.runs.get(session!.runId)?.stages).toEqual(expect.arrayContaining([
       expect.objectContaining({
         stage: "candidate_verification",

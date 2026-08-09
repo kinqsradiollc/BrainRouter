@@ -2,6 +2,16 @@
 
 **Status:** ACCEPTED — approved by the owner for implementation.
 **Depends on:** ADR-020 (memory self-improvement), ADR-021 (profiles, capabilities), ADR-029 (the workspace address space, the untrusted-content fence), ADR-031 (one skill library, generated copies).
+**Implementation status (2026-08-09):** PARTIAL — local, CLI, Desktop and hosted chat now have
+tenant-pinned learning, explicit human-correction ingress, reversible central/device governance,
+and bounded automatic checkpoints. Hosted reflection is admitted and enqueued atomically through
+Postgres with per-session and per-user-plus-org budgets, then executed by an internal worker. D3 is
+still incomplete: command-based local procedures do not yet carry a separate runtime-owned ledger
+of the exact successful actions they may need, learned delegation remains deliberately fail-closed,
+and raw hosted chat has no learned-skill execution port. Hosted D5 currently fires at turn-end only;
+there is no server-owned session-end or semantic compaction checkpoint. Deterministic and
+real-Postgres tests exercise the lifecycle, but neither a fresh full-Agent repeated-mistake exercise
+nor a qualifying live-model acceptance run has been recorded.
 
 ---
 
@@ -181,6 +191,31 @@ impossible to take back.
    changes behaviour — the thing ADR-028 exists to refuse. Desktop and dashboard surfaces are
    in scope for the work even though this ADR does not design them.
 
+### 5.1 What the implementation settled
+
+1. **Hosted execution uses the durable queue, not a server filesystem.** After a completed hosted
+   chat turn, a bounded/redacted trajectory is atomically admitted with its durable job under
+   per-session and per-user-plus-org daily model-call ceilings. An internal executor resolves the
+   exact active-org reflection model, admits only falsifiable evidence-tier lessons, applies
+   outcomes only to the exact items delivered to that turn, and rotates a persistent bounded cursor
+   across retirement candidates. Hosted chat has no tool/procedure activation port, so procedure
+   and delegation candidates fail closed until that capability exists.
+2. **Retirement has an explicit first policy.** One observed falsifier retires immediately; five
+   retrievals without a confirmed outcome demote an item; an unused item demotes after 30 days and
+   retires on a later sweep if it remains unused. Re-deriving the same statement is not a
+   confirmation. These values are policy constants, not an empirical claim, and should be tuned
+   from outcome data.
+3. **A learned procedure has a tool ceiling.** It begins with a read-only baseline and may add only
+   exact, observed safe edit tools. Shell and terminal execution never carry forward. Activation
+   refreshes the model-visible schema, and every later authorization revalidates the linked learned
+   item so a concurrent revert, demotion or retirement disables it.
+4. **The two truthful views and correction actions are explicit.** Desktop shows and reverts the
+   device ledger; the hosted dashboard shows and reverts only authenticated user-plus-active-org
+   central records. Both provide a structured statement/falsifier/expectation action for a human
+   correction; ordinary conversation cannot mint instruction-tier state. Reason-required reversals
+   are audited, central records are archived, and host lifecycle reconciliation is authorized
+   outside the model-callable tool surface.
+
 ---
 
 ## 6. How this will be judged
@@ -200,3 +235,12 @@ the same wrong command, the same missing step. Then:
 Steps 1 to 3 are table stakes; the reference implementation does them. **Step 4 is the one worth
 building**, because it is the difference between an agent that gets better and one that merely
 accumulates.
+
+The deterministic tests inject checkpoint model output, resolve the resulting procedure
+through the learned-skill loader, inject a later contradiction, and verify that retirement removes
+the procedure from activation. A separate live-turn test verifies that activating a learned skill
+immediately narrows the model-visible tool schema and later authorization. Hosted tests additionally
+exercise durable admission/idempotency, exact-org execution, retrieval/outcome accounting and
+automatic retirement against a real Postgres database. These are repeatable component and
+integration evidence, but they do not instantiate a fresh full Agent that observes and avoids the
+repeated mistake, and they are not a substitute for the live exercise above.

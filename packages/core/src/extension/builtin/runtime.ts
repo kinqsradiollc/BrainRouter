@@ -92,6 +92,7 @@ import type { WebSearchResult } from '../../websearch/types.js';
 import { readWorkerMeta, readWorkerSummary, closeWorker, canSpawnWorker } from '../../worker/workerStore.js';
 import { listWorkers } from '../../worker/workerStore.js';
 import { getLatestReview, saveReview } from '../../review/reviewStore.js';
+import { isSensitiveReviewSourcePath, redactReviewSourceText } from '../../review/sourceSafety.js';
 import { validatePentestFinding } from '../../review/pentestFinding.js';
 import { getCurrentWorkflow } from '../../workflow/run/workflowArtifacts.js';
 import { advanceRunStep, summarizeRun } from '../../workflow/run/workflowRun.js';
@@ -239,6 +240,36 @@ export async function fetchHtmlViaInAppBrowser(port: BrowserFetchPort, url: stri
   } finally {
     // Live mode leaves the reused research tab open for the user to watch.
     if (tabId && !live) { try { await port.request({ kind: 'tabs.close', tabId }); } catch { /* best effort */ } }
+  }
+}
+
+/** Reviewer reads never follow aliases: policy is evaluated on lexical and canonical paths. */
+function isSafeReviewerFilesystemPath(workspaceRoot: string, resolvedPath: string): boolean {
+  const root = fs.realpathSync(workspaceRoot);
+  const lexical = path.resolve(resolvedPath);
+  const lexicalRelative = path.relative(root, lexical).replaceAll('\\', '/');
+  const instructionFile = path.basename(lexicalRelative).toLowerCase();
+  // A changed instruction file is part of the fenced diff being reviewed, not
+  // an authority source that may govern its own review.
+  if (['agent.md', 'agents.md', 'claude.md', '.cursorrules', 'codex.md'].includes(instructionFile)) {
+    return false;
+  }
+  if (isSensitiveReviewSourcePath(lexicalRelative)) return false;
+  try {
+    const canonical = fs.realpathSync(lexical);
+    // Deny both a file symlink and any symlinked directory component. Besides
+    // preventing a benign alias to `.env`, this keeps reviewer scope explainable.
+    if (canonical !== lexical) return false;
+    const canonicalRelative = path.relative(root, canonical).replaceAll('\\', '/');
+    return !isSensitiveReviewSourcePath(canonicalRelative);
+  } catch {
+    return false;
+  }
+}
+
+function assertSafeReviewerFilesystemPath(workspaceRoot: string, resolvedPath: string, requestedPath: unknown): void {
+  if (!isSafeReviewerFilesystemPath(workspaceRoot, resolvedPath)) {
+    throw new Error(`Review source policy denied credential-bearing, mutable-instruction, or symlinked path: ${String(requestedPath)}`);
   }
 }
 
@@ -393,6 +424,9 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         if (!fs.existsSync(resolved)) {
           throw new Error(`File not found: ${args.path}`);
         }
+        if (this.reviewSourceSafety) {
+          assertSafeReviewerFilesystemPath(this.workspaceRoot, resolved, args.path);
+        }
         // Bound the bytes pulled into memory. Previously this read the WHOLE file
         // (truncation only trimmed the RETURNED string), so a multi-GB file would
         // be fully buffered before any cap applied. Read at most READ_FILE_MAX_BYTES;
@@ -412,17 +446,20 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         this.filesReadThisSession.add(resolved); // CC-P6.4 — read-before-edit ledger
         // CLI-REINDEX — keep the code index fresh on read; fire-and-forget so
         // reads stay snappy, and guarded so a rejection never escapes.
-        void this.maybeReindexSource(resolved, content).catch(() => {});
+        if (!this.reviewSourceSafety) {
+          void this.maybeReindexSource(resolved, content).catch(() => {});
+        }
+        const visibleContent = this.reviewSourceSafety ? redactReviewSourceText(content) : content;
         const startLine = args.startLine ? Number(args.startLine) : 1;
         const endLine = args.endLine ? Number(args.endLine) : undefined;
 
         if (startLine === 1 && endLine === undefined) {
           // CC-P7.3 — cap an unbounded full-file read so a huge file can't blow
           // the context window; the model gets an explicit reread affordance.
-          return truncateFullRead(content, String(args.path)).text;
+          return truncateFullRead(visibleContent, String(args.path)).text;
         }
 
-        const lines = content.split('\n');
+        const lines = visibleContent.split('\n');
         const endIdx = endLine !== undefined ? Math.min(endLine, lines.length) : lines.length;
         const startIdx = Math.max(1, Math.min(startLine, lines.length));
         
@@ -531,33 +568,57 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         if (!fs.existsSync(targetDir) || !fs.statSync(targetDir).isDirectory()) {
           throw new Error(`Directory not found: ${args.path || '.'}`);
         }
+        if (this.reviewSourceSafety) {
+          assertSafeReviewerFilesystemPath(this.workspaceRoot, targetDir, args.path || '.');
+        }
         const items = fs.readdirSync(targetDir);
-        const list = items.map(item => {
+        const list = items.flatMap(item => {
           const full = path.join(targetDir, item);
+          if (this.reviewSourceSafety && !isSafeReviewerFilesystemPath(this.workspaceRoot, full)) {
+            return [];
+          }
           const stat = fs.statSync(full);
-          return {
+          return [{
             name: item,
             type: stat.isDirectory() ? 'directory' : 'file',
             size: stat.isFile() ? stat.size : undefined
-          };
+          }];
         });
         return JSON.stringify(list, null, 2);
       }
       case 'grep_search': {
         const wsRoot = fs.realpathSync(this.workspaceRoot);
         const root = resolveHere(args.path || '.');
+        if (this.reviewSourceSafety) {
+          assertSafeReviewerFilesystemPath(wsRoot, root, args.path || '.');
+        }
         const query = String(args.query ?? '');
         if (!query) throw new Error('Missing parameter "query" for grep_search.');
         // grepSearch: regex match (not literal `includes`) + accepts a file OR a
         // directory (the old inline version crashed with ENOTDIR on a file path).
-        return JSON.stringify(grepSearch(query, root, wsRoot), null, 2);
+        const hits = grepSearch(
+          query,
+          root,
+          wsRoot,
+          50,
+          this.reviewSourceSafety
+            ? (candidate) => isSafeReviewerFilesystemPath(wsRoot, path.resolve(wsRoot, candidate))
+            : undefined,
+        );
+        return this.reviewSourceSafety
+          ? redactReviewSourceText(JSON.stringify(hits, null, 2))
+          : JSON.stringify(hits, null, 2);
       }
       case 'glob_files': {
         const pattern = args.pattern;
         if (!pattern) {
           throw new Error('Missing parameter "pattern" for glob_files.');
         }
-        const matches = globFiles(pattern, this.workspaceRoot);
+        const reviewRoot = this.reviewSourceSafety ? fs.realpathSync(this.workspaceRoot) : this.workspaceRoot;
+        const matches = globFiles(pattern, this.workspaceRoot).filter((candidate) => (
+          !this.reviewSourceSafety
+          || isSafeReviewerFilesystemPath(reviewRoot, path.resolve(reviewRoot, candidate))
+        ));
         return JSON.stringify(matches, null, 2);
       }
       case 'run_command': {
@@ -1064,8 +1125,11 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         }
         if (!args.file) throw new Error('lsp requires a `file`.');
         const resolved = resolveHere(String(args.file));
+        if (this.reviewSourceSafety) {
+          assertSafeReviewerFilesystemPath(this.workspaceRoot, resolved, args.file);
+        }
         const { runLspQuery } = await import('../../lsp/manager.js');
-        return await runLspQuery({
+        const result = await runLspQuery({
           action,
           file: resolved,
           line: args.line != null ? Number(args.line) : undefined,
@@ -1073,6 +1137,7 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
           cwd: this.workspaceRoot,
           servers: getCliKnobs().lspServers,
         });
+        return this.reviewSourceSafety ? redactReviewSourceText(result) : result;
       }
       case 'extract_result': {
         const resultRef = String(args.resultRef ?? '').trim();

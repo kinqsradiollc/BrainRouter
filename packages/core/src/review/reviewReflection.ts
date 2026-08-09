@@ -20,6 +20,10 @@
  */
 import type { CriticCompletion, ReviewToolSchema } from './critic.js';
 import { lastJsonBlock, type ParsedReviewFinding } from './reviewFindings.js';
+import {
+  fenceUntrustedReviewEvidence,
+  UNTRUSTED_REVIEW_EVIDENCE_RULE,
+} from './reviewEvidenceBoundary.js';
 
 /** What the reflection may decide about one finding. */
 export type ReflectionVerdictKind = 'keep' | 'drop' | 'duplicate';
@@ -84,6 +88,7 @@ export const REVIEW_REFLECTION_TOOL: ReviewToolSchema = {
  * that quietly optimises for recall should fail a test, not ship.
  */
 export const REVIEW_REFLECTION_SYSTEM_PROMPT = [
+  UNTRUSTED_REVIEW_EVIDENCE_RULE,
   'You are the final gate on a code review that will be published to the pull request author.',
   'You judge the findings as a SET. You do not add findings, you do not soften them, and you do not rewrite them.',
   'We would rather MISS a real issue than publish a false one: a wrong finding costs a person\'s attention and some trust every single time, and a review people stop reading finds nothing at all.',
@@ -112,7 +117,7 @@ export function buildReflectionPrompt(findings: readonly ParsedReviewFinding[]):
     `${findings.length} finding(s) were produced by independent reviewers, each of which saw only part of the change.`,
     'Judge them as one set and report via report_review_reflection.',
     '',
-    ...lines,
+    fenceUntrustedReviewEvidence('findings', lines.join('\n\n')).trimEnd(),
   ].join('\n\n');
 }
 
@@ -128,13 +133,17 @@ function toVerdict(raw: unknown, total: number): ReflectionVerdict | null {
   // an unexplained drop degrades to keep rather than silently removing a finding.
   if ((kind === 'drop' || kind === 'duplicate') && !reason) return null;
   const duplicateOf = Number(record.duplicateOf);
+  if (
+    kind === 'duplicate'
+    && (!Number.isInteger(duplicateOf) || duplicateOf < 1 || duplicateOf >= index)
+  ) {
+    return null;
+  }
   const rank = Number(record.rank);
   return {
     index,
     verdict: kind,
-    ...(kind === 'duplicate' && Number.isInteger(duplicateOf) && duplicateOf >= 1 && duplicateOf <= total
-      ? { duplicateOf }
-      : {}),
+    ...(kind === 'duplicate' ? { duplicateOf } : {}),
     ...(Number.isInteger(rank) ? { rank } : {}),
     ...(reason ? { reason } : {}),
   };
@@ -168,10 +177,14 @@ export function parseReflectionOutput(raw: string, total: number): ReflectionVer
         ? (parsed as { verdicts: unknown[] }).verdicts
         : null;
     if (!list) continue;
-    const verdicts = list
-      .map((entry) => toVerdict(entry, total))
-      .filter((entry): entry is ReflectionVerdict => entry !== null);
-    if (verdicts.length > 0) return verdicts;
+    const verdicts = list.map((entry) => toVerdict(entry, total));
+    // D5 is a pass over the whole set. A partial/malformed verdict list is not
+    // a completed reflection merely because missing entries would fail open to
+    // keep: every supplied finding must be acknowledged exactly once.
+    if (verdicts.some((entry) => entry === null)) continue;
+    const complete = verdicts as ReflectionVerdict[];
+    if (complete.length !== total || new Set(complete.map((entry) => entry.index)).size !== total) continue;
+    return complete;
   }
   return null;
 }
@@ -194,7 +207,7 @@ export function applyReflection(
       dropped += 1;
       return;
     }
-    if (verdict?.verdict === 'duplicate') {
+    if (verdict?.verdict === 'duplicate' && duplicateTargetIsRetained(verdict, byIndex)) {
       merged += 1;
       return;
     }
@@ -208,6 +221,24 @@ export function applyReflection(
   return { findings: kept.map((entry) => entry.finding), dropped, merged, reflected: true };
 }
 
+/** A duplicate may only point backward to a finding that will remain published. */
+function duplicateTargetIsRetained(
+  verdict: ReflectionVerdict,
+  byIndex: ReadonlyMap<number, ReflectionVerdict>,
+): boolean {
+  const targetIndex = verdict.duplicateOf;
+  if (
+    verdict.verdict !== 'duplicate'
+    || targetIndex === undefined
+    || targetIndex < 1
+    || targetIndex >= verdict.index
+  ) {
+    return false;
+  }
+  const target = byIndex.get(targetIndex);
+  return target?.verdict !== 'drop' && target?.verdict !== 'duplicate';
+}
+
 export interface ReflectReviewOptions {
   complete: CriticCompletion;
   /** Below this many findings the pass is skipped: nothing to judge as a set. */
@@ -217,15 +248,16 @@ export interface ReflectReviewOptions {
 }
 
 /**
- * Reflect over a review's findings. FAIL-OPEN: any failure returns the input
- * findings with `reflected: false`, because losing a real finding to a
- * transport error is a worse outcome than publishing an unranked set.
+ * Reflect over a review's findings. Any failure returns the input findings with
+ * `reflected: false`, because losing a real finding to a transport error is a
+ * worse outcome than preserving it. Publication layers must still mark that
+ * result incomplete: fail-open finding retention is not complete D5 coverage.
  */
 export async function reflectOnReviewFindings(
   findings: readonly ParsedReviewFinding[],
   options: ReflectReviewOptions,
 ): Promise<ReviewReflectionResult> {
-  const minFindings = options.minFindings ?? 2;
+  const minFindings = options.minFindings ?? 1;
   const maxFindings = options.maxFindings ?? 60;
   const unreflected: ReviewReflectionResult = {
     findings: [...findings],
@@ -234,8 +266,10 @@ export async function reflectOnReviewFindings(
     reflected: false,
   };
   if (findings.length < minFindings) return unreflected;
+  // The pass must see the whole set. Silently reflecting the first N findings
+  // and appending an unjudged tail produces a plausible but false completion.
+  if (findings.length > maxFindings) return unreflected;
   const considered = findings.slice(0, maxFindings);
-  const remainder = findings.slice(maxFindings);
   try {
     const raw = await options.complete({
       system: REVIEW_REFLECTION_SYSTEM_PROMPT,
@@ -244,8 +278,7 @@ export async function reflectOnReviewFindings(
     });
     const verdicts = parseReflectionOutput(raw, considered.length);
     if (!verdicts) return unreflected;
-    const applied = applyReflection(considered, verdicts);
-    return { ...applied, findings: [...applied.findings, ...remainder] };
+    return applyReflection(considered, verdicts);
   } catch {
     return unreflected;
   }
