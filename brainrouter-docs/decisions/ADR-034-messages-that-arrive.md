@@ -136,6 +136,43 @@ person working in the app is invisible to their own agents.
 Discovery has to answer the question a human actually asks — *which of my sessions are alive, on
 which machine, doing what* — rather than list opaque keys.
 
+### D6b · Two transports, one address space — and the backend is not on the local path
+
+Sessions on **one machine** must reach each other **without a round trip to the brain**. Only
+crossing devices needs the backend.
+
+| | |
+|---|---|
+| **Local** — same machine | direct, no backend. Works with the brain unreachable, and with no network at all. |
+| **Online** — another device | brain-mediated, the registry we already have |
+
+Two reasons this is a decision and not an optimisation:
+
+1. **Latency and dependency.** The common case is two sessions in one workspace on one laptop.
+   Routing that through a server to come back is slower and makes local work depend on a remote
+   being up.
+2. **It still works offline.** A person on a plane with two sessions open should be able to message
+   between them. Requiring the backend for that is a product regression dressed as architecture.
+
+**But the sender must not care.** One address space, one session key, one `session_send`. A router
+picks the transport; a session is reachable by exactly one identity whichever path carries it.
+
+> **A session that appears twice — once locally, once through the brain — is D4's name collision
+> wearing a transport label.** Discovery merges by session key, and if the same key resolves both
+> ways, local wins and the duplicate is not shown.
+
+#### The consequence that matters: where the permission gate lives
+
+D5 holds inbound messages for approval when the recipient runs with elevated permissions. If that
+check lived in the backend, **the local transport would skip it entirely** — and the local path is
+the common one.
+
+> **The gate belongs to the RECIPIENT, not the transport.** A message is evaluated where it is
+> delivered, by the session whose permissions are at stake, on every path.
+
+Same reasoning for D3's honesty and D7's bounds: both are properties of the inbox, so both must hold
+whether the message arrived over a socket or over HTTPS.
+
 ### D7 · Bounded, like every other queue we own
 
 An inbox is a queue and ADR-027 D12 already settled how we treat those: bounded depth, bounded
@@ -156,13 +193,20 @@ someone; a message dropped quietly is worse than never sent, because the sender 
 
 ## 5. Open questions
 
-1. **What is the push transport?** SSE was the original plan and the brain already streams. Whether
-   the desktop and CLI can share one channel or need two is worth answering before committing.
-2. **Where exactly is the interruption point?** D2 needs a boundary the runtime already owns. The
+1. **What is the LOCAL transport?** D6b makes this the primary path, so it decides more than the
+   remote one. A unix socket, the existing Electron IPC, or a watched directory under the
+   BrainRouter home each have different stories for a CLI and a packaged app finding each other.
+   Whatever it is must not require a daemon the person did not ask for.
+2. **What is the remote push transport?** SSE was the original plan and the brain already streams.
+   Whether the desktop and CLI share one channel or need two is worth answering before committing.
+3. **How does a session know which transport applies?** The registry knows the machine; the router
+   needs that plus a way to tell "same machine" reliably — a host id, not a hostname someone can
+   duplicate.
+4. **Where exactly is the interruption point?** D2 needs a boundary the runtime already owns. The
    cancellation path is the obvious candidate and reusing it is probably the whole implementation.
-3. **What does a held message look like while it waits?** D5 creates a state — *delivered, awaiting
+5. **What does a held message look like while it waits?** D5 creates a state — *delivered, awaiting
    your approval* — that has no surface yet in either the CLI or the desktop.
-4. **Does a message survive a restart?** It is in Postgres, so mechanically yes. Whether a message
+6. **Does a message survive a restart?** It is in Postgres, so mechanically yes. Whether a message
    sent to a session that never comes back should expire, and when, is a retention decision D7 only
    half answers.
 
@@ -183,3 +227,11 @@ different one — send it a correction. The test is:
 
 Today, one through five all fail. Step 2 is the one that would embarrass us most: we would report
 success.
+
+**Then run the whole thing twice more**, because D6b says the transport must not change the answer:
+
+6. **both sessions on one machine, with the brain stopped.** Every step above still passes. If
+   messaging needs a server to reach the next window, D6b was not implemented.
+7. **the two sessions on different devices.** Same behaviour, same wording, same approval prompt —
+   and the elevated-permission hold in step 4 still fires, because the gate lives in the recipient
+   rather than in whatever carried the message.
