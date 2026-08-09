@@ -25,7 +25,7 @@
     "bench:cli:behavior": "npm run build --silent && node dist/index.js cli:behavior"
   },
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "^1.11.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@types/node": "^22.0.0",
     "typescript": "^6.0.3"
   },

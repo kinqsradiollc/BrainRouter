@@ -76,10 +76,10 @@
     }
   },
   "dependencies": {
-    "@dagrejs/dagre": "^3.0.0",
+    "@dagrejs/dagre": "^3.1.0",
     "@kinqs/brainrouter-agent-protocol": "^0.4.19",
     "@kinqs/brainrouter-core": "^0.4.19",
-    "@lobehub/icons-static-svg": "^1.91.0",
+    "@lobehub/icons-static-svg": "^1.94.0",
     "@monaco-editor/react": "^4.7.0",
     "@nut-tree-fork/libnut": "^4.2.6",
     "@nut-tree-fork/provider-interfaces": "^4.2.6",
@@ -89,9 +89,9 @@
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-serialize": "^0.14.0",
     "@xterm/xterm": "^6.0.0",
-    "@xyflow/react": "^12.11.1",
+    "@xyflow/react": "^12.11.2",
     "d3-force": "^3.0.0",
-    "monaco-editor": "^0.55.1",
+    "monaco-editor": "^0.56.0",
     "node-pty": "^1.1.0",
     "qrcode": "^1.5.4",
     "react": "^18.3.1",
@@ -101,7 +101,7 @@
     "remark-gfm": "^4.0.1",
     "ssh2": "^1.17.0",
     "tweetnacl": "^1.0.3",
-    "ws": "^8.21.0"
+    "ws": "^8.21.2"
   },
   "devDependencies": {
     "@types/d3-force": "^3.0.10",
