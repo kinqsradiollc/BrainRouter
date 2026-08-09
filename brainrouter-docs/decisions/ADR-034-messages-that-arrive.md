@@ -191,24 +191,89 @@ someone; a message dropped quietly is worse than never sent, because the sender 
 
 ---
 
-## 5. Open questions
+## 5. Open questions — answered against the code
 
-1. **What is the LOCAL transport?** D6b makes this the primary path, so it decides more than the
-   remote one. A unix socket, the existing Electron IPC, or a watched directory under the
-   BrainRouter home each have different stories for a CLI and a packaged app finding each other.
-   Whatever it is must not require a daemon the person did not ask for.
-2. **What is the remote push transport?** SSE was the original plan and the brain already streams.
-   Whether the desktop and CLI share one channel or need two is worth answering before committing.
-3. **How does a session know which transport applies?** The registry knows the machine; the router
-   needs that plus a way to tell "same machine" reliably — a host id, not a hostname someone can
-   duplicate.
-4. **Where exactly is the interruption point?** D2 needs a boundary the runtime already owns. The
-   cancellation path is the obvious candidate and reusing it is probably the whole implementation.
-5. **What does a held message look like while it waits?** D5 creates a state — *delivered, awaiting
-   your approval* — that has no surface yet in either the CLI or the desktop.
-6. **Does a message survive a restart?** It is in Postgres, so mechanically yes. Whether a message
-   sent to a session that never comes back should expire, and when, is a retention decision D7 only
-   half answers.
+Each was investigated in our own repository. In every case the answer was already there, which is
+the useful finding: this needs assembling more than inventing.
+
+### Q1 · The local transport · **a loopback listener per session, a directory as the registry**
+
+We already have the shape. `packages/core/src/runtime/server.ts` is an HTTP listener with a
+versioned prefix (`/runtime/v1`) and a session-key header (`x-brainrouter-runtime-key`), and
+`triggers/server.ts` and the provider gateway use the same pattern.
+
+> **Each session opens a loopback listener on an ephemeral port and writes one small file** —
+> session key, host id, pid, port — **into a directory under the BrainRouter home. That directory
+> IS local discovery.**
+
+Why not the alternatives:
+
+| | |
+|---|---|
+| a per-user broker daemon | a background process nobody asked to run, that has to be started, supervised and killed. §5's own constraint refuses it. |
+| a watched directory of message files | works, and makes every message a filesystem event with no delivery confirmation and no back-pressure — it re-creates D3's dishonesty in a new place. |
+| the existing Electron IPC | desktop-only. A CLI cannot join, so D6 fails by construction. |
+
+Liveness is the port answering, not a heartbeat: a session that died leaves a stale file whose port
+refuses a connection, and the reader reaps it. **That is strictly better than the two-minute
+heartbeat window** the remote path uses, because it is a fact rather than an inference.
+
+### Q2 · The remote transport · **the MCP stream that already exists**
+
+`brainrouter/src/index.ts:335` — *"MCP endpoint — handles POST (requests) and GET (SSE stream)"*.
+The brain already speaks Streamable HTTP with SSE, and every session is already an MCP client of it.
+
+So the remote push is a **server-initiated MCP notification on the channel the session is already
+holding open**. No second channel, no new auth, no new reconnect logic — and it inherits the
+Accept-header promotion already built for naive clients.
+
+### Q3 · Deciding which transport applies · **`stableDeviceId`, not a hostname**
+
+`packages/core/src/sync/deviceId.ts` already provides *"a stable per-install device id, shared by
+every offline-first surface"*, persisted and deliberately non-drifting because HLC ordering depends
+on it — *"a device that silently changes its id looks like a NEW peer to the merge rules."*
+
+Same `deviceId` means same machine, so the router uses local. A hostname would have been the obvious
+choice and the wrong one: hostnames collide, change on network moves, and are attacker-suppliable in
+some setups.
+
+**Reusing it also means the registry gains nothing new to keep correct** — the id is already
+maintained for the sync stack.
+
+### Q4 · The interruption point · **the cooperative turn interrupt, already built**
+
+`agent.ts:796-806` has exactly what D2 needs and it is documented as such:
+
+> *"cooperative turn interrupt … checked at every LLM-call and tool boundary so a long multi-tool
+> turn stops at the next seam instead of running to completion"* — plus `turnAbort`, whose signal is
+> threaded into LLM calls and tools.
+
+**Delivery raises the same cooperative flag the Stop button and Esc raise**, and the message is
+presented at the next seam. It must NOT abort `turnAbort` — that is the *stop* gesture, and a
+message is an interruption, not a cancellation. Getting those two confused would make every incoming
+message kill the work it was trying to correct.
+
+### Q5 · The held-message surface · **the MCP approval path**
+
+`packages/core/src/agent/guards/mcpApproval.ts` already routes approval requests through a typed
+guardian path, with a classifier that treats `send`-shaped verbs as requiring approval.
+
+A held message is the same shape: something arrived, it needs a human yes, and both surfaces already
+know how to draw that. **Adding a second approval concept for messages would give us two places to
+get consent wrong.**
+
+### Q6 · Retention · **age-based shedding with a loud notice, exactly as ADR-028 D2 does it**
+
+`packages/core/src/sync/outbox.ts` already settled this for the planner: `MAX_OUTBOX_AGE_MS` of 30
+days, a `shed()` pass, and — the important part — `shedNotice`, *"set when shedding dropped
+operations, so the UI can say so."*
+
+An inbox gets the same treatment and the same bound. A message that expires unread tells someone; a
+message that vanishes quietly is worse than one never sent, because the sender believes it landed.
+
+**The one thing to decide fresh:** 30 days is right for a planner operation and probably too long
+for a message to a session that never came back. A shorter default belongs here, and the notice
+matters more than the number.
 
 ---
 
