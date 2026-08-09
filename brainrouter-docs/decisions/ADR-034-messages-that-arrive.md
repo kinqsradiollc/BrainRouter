@@ -113,6 +113,56 @@ a label a human chose, and it gets reused the moment a session is re-spawned.
 Where a name matches two live sessions, the tool refuses and lists them. Where it matches a session
 that has since been replaced, it refuses rather than delivering to the impostor.
 
+### D4b · You choose a session by its DESCRIPTION, and we already generate one
+
+D4 says routing is by key. That leaves the question it does not answer: **a key is opaque, so how
+does anyone — a person or an agent — know which session they mean?**
+
+Today `session_register` carries `sessionKey`, `clientKind`, `workspaceRoot` and timestamps. Nothing
+a human would recognise. Discovery can tell you five sessions are alive and nothing about which one
+you want.
+
+**The missing piece is already built.** `packages/core/src/session/sessionTitle.ts` (ADR-027 D8) has
+the agent propose a title on turn 1, with validation that rejects the ways a model gets this wrong —
+refusals, preambles, quoted restatements, essays — and a truncation fallback so a title always
+exists. Its own reasoning is exactly why this matters here:
+
+> *"the first thing someone types is usually the situation, not the task — 'hey, the build is broken
+> again after that merge, can you look' truncates to noise, while the session is really 'Fix
+> post-merge build failure'."*
+
+So: **the title travels to the registry**, on register and on refresh when it changes. Discovery then
+answers the question a person actually asks:
+
+| Field | Answers |
+|---|---|
+| title | *what is it doing* — AI-proposed, human-readable |
+| workspace | *which project* |
+| device | *which machine* (`stableDeviceId`, per Q3) |
+| state | *idle, working, or waiting for you* |
+| last seen | *is it still alive* |
+
+**State is the one to get right, because it is the whole reason you are messaging.** You do not
+send to a session at random — you send to the one that is stuck, or looping, or waiting. A listing
+that cannot distinguish *working* from *waiting for you* fails at the moment of use.
+
+#### Titles are for choosing; keys are for routing
+
+The distinction is D4's, and naming makes it sharper rather than softer:
+
+> **An AI-generated title makes collisions MORE likely, not less** — two sessions debugging the same
+> failure will be titled the same thing, and that is the system working.
+
+So a title never routes. Where a name matches two live sessions, discovery lists both with the fields
+that distinguish them — workspace, device, state — and the send refuses rather than guessing. That is
+D4 unchanged; naming just makes the refusal legible instead of cryptic.
+
+#### Before turn 1 there is no title, and that is said rather than faked
+
+A session registers at startup, before anyone has typed. It appears as its derived fallback and is
+marked as **not yet named** — not given a plausible-looking invented one. The title arrives when the
+agent proposes it, and the registry refreshes.
+
 ### D5 · Inbound is a permission boundary, not just a payload
 
 The most consequential decision here, and it is not obvious until you look at what a message can do.

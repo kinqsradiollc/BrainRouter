@@ -61,12 +61,19 @@ export const SECURITY_REVIEW_MARKER = '<!-- brainrouter-security-review -->';
  * stay: told to "verify with read-only tools" it does not have, the model
  * concludes it could not verify and suppresses every finding.
  *
- * The signature stays a boolean rather than taking a {@link ReviewEvidenceMode}
- * so the backend is structurally incapable of promising itself tools it does
- * not have on this path.
+ * The signature stays a pair of booleans rather than taking a
+ * {@link ReviewEvidenceMode} so the backend is structurally incapable of
+ * promising itself a capability it does not have on this path: `canRequestFiles`
+ * (ADR-033 D3) is only true when the caller actually wired a checkout reader.
  */
-export function buildSecurityReviewContract(options?: { repositoryContext?: boolean }): string {
-  const mode = options?.repositoryContext === true ? 'attached-context' : 'diff-only';
+export function buildSecurityReviewContract(
+  options?: { repositoryContext?: boolean; canRequestFiles?: boolean },
+): string {
+  const mode = options?.canRequestFiles === true
+    ? 'requestable-context'
+    : options?.repositoryContext === true
+      ? 'attached-context'
+      : 'diff-only';
   return (
     'You are a SECURITY reviewer for a pull request. The unified diff is provided ABOVE — review it DIRECTLY. The added (`+`) lines are the new code; scrutinise them for vulnerabilities the change introduces or exposes.\n' +
     buildGroundingClause(mode) + '\n' +

@@ -54,7 +54,7 @@ export interface ReviewLens {
    * owns it for every reviewing surface, and a lens only picks the evidence
    * mode its caller actually assembled.
    */
-  buildContract(options?: { repositoryContext?: boolean }): string;
+  buildContract(options?: { repositoryContext?: boolean; canRequestFiles?: boolean }): string;
   /** Whether a finding should BLOCK the merge (drives the check-run conclusion). */
   isBlocking(f: ParsedReviewFinding): boolean;
 }
