@@ -13,9 +13,18 @@ We have two reviewers and they are not the same kind of thing.
 |---|---|---|
 | Runs | `integrations/prSecurityReview.ts` | `runReview` in the desktop host, `/review` in the CLI |
 | Shape | **single-shot LLM call per diff part** | **an Agent with tools** |
-| Can it open a file it is suspicious of? | **No** | Yes — `read_file`, grep |
+| Sees the repository? | **Yes** — checked out at the exact SHA | Yes — the working tree |
+| Can it *ask* for a file mid-review? | **No** | Yes — `read_file`, grep |
 | Concurrency | none — `for (let partIndex …)` is sequential | n/a |
 | Reflection on its own findings | none | none |
+
+**The bot is not blind — it is non-interactive**, and getting that distinction right changes what
+this ADR should build. `ExactShaCheckoutAdapter` (`reviews/repositoryContextComposition.ts`) clones
+the repository at the exact SHA with a one-shot credential that is cleared as soon as the fetch
+begins, and a deterministic impact-packet assembler decides what of it becomes `repositoryContext`.
+
+So the model is handed a fixed block of evidence someone else chose. If a finding needs one more
+file, it cannot ask.
 
 The file says so itself, and the comment is more honest than most designs:
 
@@ -28,9 +37,10 @@ This ADR is that redesign.
 
 ### 1.1 What the shape costs us
 
-- **The bot cannot verify anything.** It sees a diff and nothing else, so every finding is an
-  inference about code it has not read. ADR-028's rule — do not claim a state you have not
-  established — is structurally unavailable to it.
+- **The bot cannot verify a suspicion it did not anticipate.** The evidence is fixed before the
+  model starts, so a finding that turns on a file the packet did not include is an inference about
+  code the model never saw. ADR-028's rule — do not claim a state you have not established — is
+  reachable only for whatever the assembler happened to include.
 - **Parts are split by SIZE.** A change to `en.json` and its `zh.json` sibling can land in different
   parts and be reviewed by two calls that cannot see each other.
 - **Sequential parts.** A ten-part diff is ten serial model calls, which is why the required check is
@@ -87,13 +97,20 @@ This is the decision that makes everything else possible: bundles are independen
 **Bundling is engineering, not judgement.** A model asked "which files go together" will be
 plausible and unstable; path and import relationships are neither.
 
-### D3 · A finding must be verified before it is published
+### D3 · The bot may ASK for a file, not merely be handed one
 
-Every reviewer gets tools — the bot included. A finding that says *"this can be null"* must have
-been checked against the definition, not inferred from a diff hunk.
+The checkout already exists (§1). What is missing is the ability to request something the packet did
+not anticipate, so this is a smaller change than "give the bot access" — it is a read-only toolset
+over a directory that is already on disk.
 
-Where verification is impossible, the finding says so rather than being dropped or asserted. We
-already built the vocabulary for this in the grounding work; this extends it to the bot.
+A finding that says *"this can be null"* must have been checked against the definition. Where the
+check was not possible, the finding says so rather than being dropped or asserted; the grounding
+vocabulary for that already exists and this extends it to the bot.
+
+> **The deterministic packet stays.** It is the floor — what a review gets without asking. Tools are
+> for the question the assembler could not have predicted, and a reviewer that had to fetch
+> everything itself would be slower and less predictable than one that starts with the right
+> evidence in hand.
 
 ### D4 · Position is computed, not generated
 
@@ -138,11 +155,20 @@ gate. A gate that blocks on our own infrastructure teaches people to bypass the 
 
 ### D9 · Diffs and repository content stay untrusted
 
-Already true in the bot (`UNTRUSTED_REVIEW_EVIDENCE_RULE`) and it must survive the redesign. Giving
-the reviewer **tools** widens this: it will now read files chosen partly on the strength of what the
-diff said, so a hostile diff can steer what gets read.
+Already true in the bot (`UNTRUSTED_REVIEW_EVIDENCE_RULE`) and it must survive the redesign.
 
-Bundles are chosen by engineering (D2), the toolset is read-only, and the fence stays.
+D3 sharpens the risk rather than inventing it: **the checkout is already on disk today**, so the
+question was never whether an attacker could get their code near us — it is whether they can steer
+what we *choose to read* from it. A hostile diff that names a path in a comment is exactly that
+attempt.
+
+Three constraints, and the first is the one that matters:
+
+1. **Reads are confined to the checkout**, path-normalised, no symlink escape. The credential is
+   already one-shot and cleared; the filesystem boundary must be as deliberate.
+2. **The toolset is read-only.** A reviewer that can write is a different trust decision (§4).
+3. **Bundles are chosen by engineering** (D2), so the *scope* of a review is never something the
+   diff can argue its way into — only the detail within it.
 
 ---
 
