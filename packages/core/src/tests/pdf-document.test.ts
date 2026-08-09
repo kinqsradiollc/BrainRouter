@@ -10,7 +10,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import zlib from 'node:zlib';
 import {
-  buildPdfWithXref, flateStream, onePageFlatePdf, pageOfProse, xrefPagesPdf,
+  buildPdfWithXref, flateBombPdf, flateStream, onePageFlatePdf, pageOfProse, xrefPagesPdf,
 } from './_pdfFixtures.js';
 import {
   DOCUMENT_BOUNDS, documentText, parsePdfDocument, _resetStructuredEngineForTests,
@@ -297,7 +297,7 @@ test('ADR-030 D2: the engine is loaded once, and loading it again is safe', asyn
   // The 4.6 MB instance is memoised. Dropping the memo has to leave the module
   // able to build a second one — a process that parses a document, hot-reloads,
   // and parses another must not be worse off than one that never reloaded.
-  _resetStructuredEngineForTests();
+  await _resetStructuredEngineForTests();
   const second = await parsePdfDocument(pdf);
   assert.equal(second.diagnostics.textFrom, 'structured');
   assert.equal(second.markdown, first.markdown, 'and it answers identically');
@@ -310,6 +310,86 @@ test('ADR-030 D4: the shipping bounds are real numbers, not absent ones', () => 
   assert.ok(DOCUMENT_BOUNDS.maxPages > 0 && DOCUMENT_BOUNDS.maxPages <= 1_000);
   assert.ok(DOCUMENT_BOUNDS.timeBudgetMs > 0 && DOCUMENT_BOUNDS.timeBudgetMs <= 60_000);
   assert.ok(DOCUMENT_BOUNDS.canaryFraction > 0 && DOCUMENT_BOUNDS.canaryFraction < 1);
+  // D4's fourth wall. Zero would turn the watchdog off, and a number in the
+  // gigabytes would sit above the 1,879 MB a decompression bomb reached — the
+  // measurement this wall was sized against.
+  assert.ok(DOCUMENT_BOUNDS.maxMemoryBytes > 0 && DOCUMENT_BOUNDS.maxMemoryBytes <= 1024 * 1024 * 1024);
+});
+
+/**
+ * D4's own sentence: *"a byte cap, a page cap, a time budget, and a memory
+ * bound, and it runs where a crash is contained."*
+ *
+ * The first three were enforced in-process and pinned. The last two could not
+ * be — the engine call is synchronous, so nothing could stop it once entered —
+ * and the file that said so named the fix: a second thread. These three tests
+ * are that thread, tested by making it fail.
+ */
+test('ADR-030 D4: a parse that grows without bound is STOPPED, and the process keeps going', async () => {
+  // 522 KB on disk, half a gigabyte inflated. Structurally valid, so the engine
+  // accepts it and starts work — which is the whole point: a file the parser
+  // refuses proves nothing about a bound on a parse that is running.
+  const pdf = flateBombPdf(512);
+  assert.ok(pdf.length < 1024 * 1024, `the bomb is ${pdf.length} bytes on disk`);
+
+  const before = process.memoryUsage.rss();
+  const out = await parsePdfDocument(pdf, {
+    bounds: { timeBudgetMs: 30_000, maxMemoryBytes: 256 * 1024 * 1024 },
+  });
+
+  assert.ok(out.limits.includes('memory'), `limits were ${JSON.stringify(out.limits)}`);
+  assert.match(String(out.diagnostics.structureUnavailable), /more memory than/);
+  // "Too large" would be the wrong sentence for a 522 KB file, which is why
+  // `memory` is its own limit rather than `bytes`.
+  assert.equal(out.limits.includes('bytes'), false);
+
+  // Contained: the thread was retired and this one is still standing, so the
+  // next document parses normally rather than the process being poisoned.
+  const after = await parsePdfDocument(xrefPagesPdf([{ lines: pageOfProse('Method') }]));
+  assert.equal(after.diagnostics.textFrom, 'structured');
+  // And the memory came back, which is the difference between a bound and a
+  // measurement: growth we own can be given up.
+  assert.ok(
+    process.memoryUsage.rss() - before < 1024 * 1024 * 1024,
+    `the parse left ${Math.round((process.memoryUsage.rss() - before) / (1024 * 1024))} MB behind`,
+  );
+});
+
+test('ADR-030 D4: the time budget is enforced DURING the engine call, not only between calls', async () => {
+  const pdf = flateBombPdf(512);
+  const started = Date.now();
+  // The canary is told not to refuse and the memory wall is lifted out of the
+  // way, so the only thing that can end this is terminating a running
+  // WebAssembly instance. Before there was a worker, nothing could.
+  const out = await parsePdfDocument(pdf, {
+    bounds: { timeBudgetMs: 150, canaryFraction: 1, maxMemoryBytes: 8 * 1024 * 1024 * 1024 },
+  });
+  const elapsed = Date.now() - started;
+
+  assert.ok(out.limits.includes('time'), `limits were ${JSON.stringify(out.limits)}`);
+  assert.match(String(out.diagnostics.structureUnavailable), /past its time budget/);
+  assert.ok(elapsed < 5_000, `the parse took ${elapsed} ms against a 150 ms budget`);
+
+  const after = await parsePdfDocument(xrefPagesPdf([{ lines: pageOfProse('Method') }]));
+  assert.equal(after.diagnostics.textFrom, 'structured');
+});
+
+test('ADR-030 D4: the engine thread is reused across documents, so the binary is compiled once', async () => {
+  await _resetStructuredEngineForTests();
+  const pdf = xrefPagesPdf([{ lines: pageOfProse('Method') }]);
+
+  const coldStart = Date.now();
+  assert.equal((await parsePdfDocument(pdf)).diagnostics.textFrom, 'structured');
+  const cold = Date.now() - coldStart;
+
+  const warmStart = Date.now();
+  assert.equal((await parsePdfDocument(pdf)).diagnostics.textFrom, 'structured');
+  const warm = Date.now() - warmStart;
+
+  // A thread per document would pay the 4.6 MB compile every time. Not a
+  // micro-benchmark: the claim is only that the second parse does not repeat
+  // the first one's setup, and the margin is wide.
+  assert.ok(warm <= cold, `cold ${cold} ms, warm ${warm} ms`);
 });
 
 test('ADR-030 D4: 100k of adversarial document text parses in linear time', () => {

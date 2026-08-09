@@ -18,7 +18,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createBlock, createPage, deleteBlock, getBlock } from '../notes/noteStore.js';
+import { createBlock, createPage, deleteBlock, getBlock, restoreBlock } from '../notes/noteStore.js';
+import { isLiveBlock } from '../notes/block.js';
 import { addItem as plannerAdd, deleteItem as plannerDelete, getItem as plannerGet } from '../planner/plannerStore.js';
 import { formatWorkspaceRef, parseWorkspaceRef, resolvedGone } from '../workspace/references/index.js';
 import {
@@ -248,6 +249,78 @@ test('a deleted target resolves to a dated tombstone, so the document says so ra
       { nowMs: T },
     );
     assert.equal(line, 'planner item (deleted 7 Aug)');
+  } finally { cleanup(fx); }
+});
+
+/**
+ * C5's SECOND sentence, which is the half that shipped broken.
+ *
+ * The first sentence — a deleted target leaves the reference readable and dated
+ * — was pinned above. Nothing pinned the return trip, so every reference path
+ * tested `block.deletedAt` for truthiness while restore is modelled as a newer
+ * `restoredAt` that OUTVOTES the tombstone. A block pulled out of the trash was
+ * back in the sidebar, back in search, live by `isLiveBlock` — and permanently
+ * un-citable and un-editable through the workspace verbs, on both surfaces.
+ */
+test('C5: restoring the target restores the reference — resolve, describe and update all come back', async () => {
+  const fx = fixture();
+  try {
+    const block = createBlock(undefined, { text: 'Ship the parser' }, T);
+    const ref = { mode: 'notes', kind: 'block', id: block.id } as const;
+    const registry = registryFor(fx);
+
+    assert.equal(await registry.describeLine(ref, VIEWER, { nowMs: T }), 'Ship the parser');
+
+    deleteBlock(undefined, block.id, T + 1000);
+    assert.equal(await registry.describeLine(ref, VIEWER, { nowMs: T + 1000 }), 'note block (deleted 7 Aug)');
+    assert.equal((await registry.resolve(ref, VIEWER)).status, 'gone');
+
+    restoreBlock(undefined, block.id, T + 2000);
+    // The tombstone is still on the record — restore keeps it deliberately, so
+    // that the outcome is derivable on any device. Liveness is the comparison.
+    assert.equal(getBlock(undefined, block.id)!.deletedAt !== undefined, true);
+    assert.equal(isLiveBlock(getBlock(undefined, block.id)!), true);
+
+    assert.equal(await registry.describeLine(ref, VIEWER, { nowMs: T + 2000 }), 'Ship the parser');
+    const resolution = await registry.resolve(ref, VIEWER);
+    assert.equal(resolution.status, 'found');
+    assert.equal(resolution.status === 'found' && resolution.target.label, 'Ship the parser');
+
+    // And the fourth verb: a restored block is writable again, not `not_found`.
+    const update = await registry.update({ ref, title: 'Ship the parser today' }, VIEWER);
+    assert.equal(update.status, 'updated');
+    assert.equal(getBlock(undefined, block.id)!.text.value, 'Ship the parser today');
+
+    // A block that is STILL deleted stays refused — the fix is a comparison,
+    // not the removal of the check.
+    const dead = createBlock(undefined, { text: 'gone for good' }, T);
+    deleteBlock(undefined, dead.id, T + 3000);
+    const refused = await registry.update(
+      { ref: { mode: 'notes', kind: 'block', id: dead.id }, title: 'nope' },
+      VIEWER,
+    );
+    assert.equal(refused.status, 'refused');
+    assert.equal(refused.status === 'refused' && refused.reason, 'not_found');
+  } finally { cleanup(fx); }
+});
+
+test('C5: a link from a restored block is written, not refused as a missing source', () => {
+  const fx = fixture();
+  try {
+    const source = createBlock(undefined, { text: 'the parser work' }, T);
+    deleteBlock(undefined, source.id, T + 1000);
+    restoreBlock(undefined, source.id, T + 2000);
+
+    const item = plannerAdd(undefined, { title: 'ship the parser' }, T);
+    const target = { mode: 'planner', kind: 'item', id: item.id } as const;
+    const linked = linkWorkspaceRef(
+      { workspaceRoot: fx.workspace },
+      { mode: 'notes', kind: 'block', id: source.id },
+      target,
+      T + 3000,
+    );
+    assert.equal(linked.ok, true, linked.ok ? '' : linked.reason);
+    assert.match(getBlock(undefined, source.id)!.text.value, /brainrouter:\/\/planner\/item\//);
   } finally { cleanup(fx); }
 });
 

@@ -17,6 +17,7 @@ import {
   findDomainPersona,
   renderDomainPersonaBriefing,
 } from '../workspace/domainPersonas.js';
+import { readWorkspaceDesignArtifact } from '../workspace/designArtifact.js';
 import { getWorkspaceProfile } from '../workspace/profiles.js';
 import { workspaceToolProfileIds } from '../workspace/toolProfiles.js';
 
@@ -53,6 +54,11 @@ export function refreshWorkspaceCapabilityState(
     activeAgent,
     task,
     availability: { toolProfiles: workspaceToolProfileIds() },
+    // ADR-031 D5 — read here rather than inside the resolver, which touches no
+    // disk on purpose. Read every turn rather than cached: a design artifact
+    // changes while someone is working on the product it describes, and a
+    // cached copy would be the version they just replaced.
+    designArtifact: readWorkspaceDesignArtifact(host.workspaceRoot),
   });
   host.activeWorkspaceCapabilities = resolution;
 

@@ -95,6 +95,29 @@ export function buildPdfWithXref(objects: ObjectSpec[], rootIndex = 1): Buffer {
   return Buffer.concat(parts);
 }
 
+/**
+ * A small, structurally VALID PDF whose one content stream inflates to `mb` MB.
+ *
+ * ADR-030 D4's adversary, and the shape matters twice over. It has a real cross
+ * reference table, so the structured engine ACCEPTS it and begins work — a file
+ * the parser refuses proves nothing about a bound on a parse that is running.
+ * And it is half a megabyte on disk, so no byte cap can catch it: what a parser
+ * holds is the inflated document, which the compressed size does not bound.
+ */
+export function flateBombPdf(mb: number): Buffer {
+  const inflated = zlib.deflateSync(Buffer.alloc(mb * 1024 * 1024, 0x20), { level: 9 });
+  return buildPdfWithXref([
+    { body: '<</Type/Catalog/Pages 2 0 R>>' },
+    { body: '<</Type/Pages/Kids[3 0 R]/Count 1>>' },
+    {
+      body: '<</Type/Page/Parent 2 0 R/Contents 4 0 R/MediaBox[0 0 612 792]'
+        + '/Resources<</Font<</F1 5 0 R>>>>>>',
+    },
+    { body: `<</Length ${inflated.length}/Filter/FlateDecode>>`, stream: inflated },
+    { body: '<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>' },
+  ]);
+}
+
 /** One page of a multi-page fixture: written text, a drawn image, or both. */
 export interface XrefPageSpec {
   /** Shown with `/F1 12 Tf` at 72,700. Keep it free of `(`, `)` and `\`. */

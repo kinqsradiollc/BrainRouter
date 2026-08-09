@@ -11,6 +11,7 @@
  */
 import type { WorkspaceManifest } from './manifest.js';
 import { getWorkspaceProfile } from './profiles.js';
+import { renderDesignArtifactBlock, type WorkspaceDesignArtifact } from './designArtifact.js';
 
 export interface WorkspaceCapabilityResolutionInput {
   manifest: Pick<WorkspaceManifest, 'profile' | 'persona' | 'capabilities'> | null | undefined;
@@ -22,6 +23,16 @@ export interface WorkspaceCapabilityResolutionInput {
   activeAgent?: string;
   /** Live catalog snapshot; omitted entries cannot be contributed to this turn. */
   availability?: WorkspaceCapabilityAvailability;
+  /**
+   * ADR-031 D5 — the workspace's design artifact, already read and neutralised.
+   *
+   * A VALUE rather than a path, because this function reads no disk and that is
+   * a property worth keeping: it is called per turn from two processes, and a
+   * resolver that opened files would make "what capabilities are active" depend
+   * on the filesystem at the moment somebody asked. `readWorkspaceDesignArtifact`
+   * is the reader; this is where its result becomes something the model sees.
+   */
+  designArtifact?: WorkspaceDesignArtifact | null;
 }
 
 export interface WorkspaceCapabilityAvailability {
@@ -309,6 +320,21 @@ export function resolveWorkspaceCapabilities(input: WorkspaceCapabilityResolutio
 
   const activeAgent = input.activeAgent ?? input.manifest.persona.default;
   const engineerIsActive = activeAgent === 'engineer' && input.manifest.persona.enabled.includes('engineer');
+  /**
+   * ADR-031 §1 — the `design` half of the placement table.
+   *
+   * "`design`: available, not enabled — it turns on when someone is doing design
+   * work in a design workspace." That sentence needs a persona that a design
+   * workspace actually runs as. Gating `frontend` on the engineer alone made the
+   * design row unreachable: the profile's persona is
+   * `{ default: 'designer', enabled: ['designer'] }`, so `engineerIsActive` is
+   * false for every task in it and the capability resolved to nothing however it
+   * was configured — while the onboarding UI still OFFERED it, because
+   * `design.capabilities.available` lists it. An offer the product cannot
+   * honour is ADR-029 F1's defect.
+   */
+  const designerIsActive = activeAgent === 'designer' && input.manifest.persona.enabled.includes('designer');
+  const frontendPersonaIsActive = engineerIsActive || designerIsActive;
   const writerIsActive = activeAgent === 'writer' && input.manifest.persona.enabled.includes('writer');
   const computationalResearchPersonaIsActive =
     (activeAgent === 'researcher' || activeAgent === 'data-scientist')
@@ -334,7 +360,7 @@ export function resolveWorkspaceCapabilities(input: WorkspaceCapabilityResolutio
   const toolProfiles: string[] = [];
   const promptBlocks: string[] = [];
 
-  if (engineerIsActive && enabled.has('frontend')) {
+  if (frontendPersonaIsActive && enabled.has('frontend')) {
     const frontendReasons = detectFrontendReasons(input.task, input.files);
     if (frontendReasons.length > 0) {
       active.push('frontend');
@@ -343,6 +369,11 @@ export function resolveWorkspaceCapabilities(input: WorkspaceCapabilityResolutio
       appendAvailable(skills, FRONTEND_CONTRIBUTION.skills, input.availability?.skills);
       appendAvailable(toolProfiles, FRONTEND_CONTRIBUTION.toolProfiles, input.availability?.toolProfiles);
       appendUnique(promptBlocks, FRONTEND_CONTRIBUTION.promptBlocks);
+      // ADR-031 D5. The block above told the agent to "discover and follow the
+      // workspace design artifact" and there was no artifact, no convention for
+      // where one lives, and no way for a workspace that HAD one to be treated
+      // differently from one that did not. This is the difference.
+      if (input.designArtifact) appendUnique(promptBlocks, [renderDesignArtifactBlock(input.designArtifact)]);
     }
   }
 

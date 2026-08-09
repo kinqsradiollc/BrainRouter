@@ -119,6 +119,14 @@ Two separate risks, and neither is hypothetical.
    fetched. A parser is an attack surface — malformed xref tables, decompression bombs, deeply nested
    object graphs. Any parser we adopt or build gets a byte cap, a page cap, a time budget, and a
    memory bound, and it runs where a crash is contained.
+
+   All five are enforced (`packages/core/src/attachment/document/`). The last two were not at first,
+   and the shape of the miss is worth keeping: the structured engine's call is synchronous, so
+   nothing could stop it once entered — a 522 KB decompression bomb reached 1.9 GB resident and held
+   the process. The engine now runs on a worker thread, which is what makes terminating it possible;
+   the time budget is enforced *during* the call and resident growth past `maxMemoryBytes` retires
+   the thread. `resourceLimits` cap a worker's V8 heap and **not** WebAssembly linear memory, which
+   is why the memory bound is a watchdog rather than an allocator limit — see `bounds.ts`.
 2. **The text goes into the agent's context.** A PDF can contain "ignore your instructions" as easily
    as a web page can, and it can hide it in white-on-white text a human reviewer will not see.
    ADR-029 C4 already built the fence for exactly this class of content — extracted document text
@@ -131,7 +139,9 @@ suggests the natural landing places, and they should be decided together rather 
 
 - an **attachment** the agent reads in a turn (today's path, improved);
 - a **note** — an imported document becomes a page of blocks, addressable at
-  `brainrouter://notes/block/…` like anything else (ADR-029 A1);
+  `brainrouter://notes/block/…` like anything else (ADR-029 A1). Built as
+  `importDocumentAsNote` (`packages/core/src/notes/importDocument.ts`), reachable as the desktop's
+  "Import as note" and as `workspace_create` with a `brainrouter://document/outline/…` reference;
 - **memory** — a document worth remembering is distilled through the existing pipeline rather than a
   new one.
 

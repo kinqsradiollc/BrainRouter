@@ -198,6 +198,94 @@ test('a merged block’s children are re-parented rather than orphaned', () => {
   } finally { cleanup(dir); }
 });
 
+/**
+ * The case every merge test above was missing: blocks that live ON A PAGE.
+ *
+ * All of them created blocks with no `parentId`, so `here.depth` was 0 and the
+ * merge branch was reached. Inside a page every block has depth >= 1 measured
+ * from the DOCUMENT root, so the editor's Backspace never reached that branch
+ * at all — it outdented instead, and the paragraph left the open page and
+ * reappeared beside it in the sidebar. The gesture people perform most often,
+ * on the only kind of document anybody actually writes.
+ */
+test('E1: Backspace at column zero MERGES inside a page, instead of ejecting the block from it', () => {
+  const dir = home();
+  try {
+    const page = createBlock(undefined, { kind: 'page', text: 'Doc' }, T);
+    const first = createBlock(undefined, { text: 'first line', parentId: page.id }, T + 1);
+    const second = createBlock(undefined, { text: 'second line', parentId: page.id }, T + 2);
+
+    const result = mergeIntoPrevious(undefined, second.id, T + 3);
+    assert.ok(result.ok);
+    assert.equal(result.action, 'merge');
+    assert.equal(getBlock(undefined, first.id)?.text.value, 'first linesecond line');
+    assert.equal(result.focusId, first.id);
+    assert.equal(result.caret, 'first line'.length);
+    // And the page still holds its body: nothing was lifted out to the root.
+    assert.deepEqual(order(), ['Doc', 'first linesecond line']);
+  } finally { cleanup(dir); }
+});
+
+test('E1: inside a page, Backspace on a NESTED block still outdents — one indent at a time', () => {
+  const dir = home();
+  try {
+    const page = createBlock(undefined, { kind: 'page', text: 'Doc' }, T);
+    const parent = createBlock(undefined, { text: 'parent', parentId: page.id }, T + 1);
+    const child = createBlock(undefined, { text: 'child', parentId: parent.id }, T + 2);
+
+    const result = mergeIntoPrevious(undefined, child.id, T + 3);
+    assert.ok(result.ok);
+    assert.equal(result.action, 'outdent');
+    // Out one level, onto the page — never out of the page.
+    assert.equal(getBlock(undefined, child.id)?.parentId.value, page.id);
+    assert.deepEqual(order(), ['Doc', 'parent', 'child']);
+  } finally { cleanup(dir); }
+});
+
+test('E1: Shift-Tab stops at the page — it does not lift a line out of the document it is on', () => {
+  const dir = home();
+  try {
+    const page = createBlock(undefined, { kind: 'page', text: 'Doc' }, T);
+    const line = createBlock(undefined, { text: 'a line', parentId: page.id }, T + 1);
+
+    const result = outdentBlock(undefined, line.id, T + 2);
+    assert.ok(result.ok);
+    assert.equal(result.action, 'noop');
+    assert.equal(getBlock(undefined, line.id)?.parentId.value, page.id);
+    assert.deepEqual(order(), ['Doc', 'a line']);
+  } finally { cleanup(dir); }
+});
+
+test('E1: Backspace below a sub-page does nothing — it cannot absorb the document above it', () => {
+  const dir = home();
+  try {
+    const page = createBlock(undefined, { kind: 'page', text: 'Doc' }, T);
+    const sub = createBlock(undefined, { kind: 'page', text: 'Sub', parentId: page.id }, T + 1);
+    createBlock(undefined, { text: 'inside the sub-page', parentId: sub.id }, T + 2);
+    const after = createBlock(undefined, { text: 'after', parentId: page.id }, T + 3);
+
+    const result = mergeIntoPrevious(undefined, after.id, T + 4);
+    assert.ok(result.ok);
+    assert.equal(result.action, 'noop');
+    // The line above in DOCUMENT order is inside the sub-page. Merging into it
+    // would move a line off the open page into one nobody is looking at.
+    assert.deepEqual(order(), ['Doc', 'Sub', 'inside the sub-page', 'after']);
+  } finally { cleanup(dir); }
+});
+
+test('E1: the first block of a page has nowhere above to go, and says so rather than eating the page', () => {
+  const dir = home();
+  try {
+    const page = createBlock(undefined, { kind: 'page', text: 'Doc' }, T);
+    const first = createBlock(undefined, { text: 'first line', parentId: page.id }, T + 1);
+
+    const result = mergeIntoPrevious(undefined, first.id, T + 2);
+    assert.ok(result.ok);
+    assert.equal(result.action, 'noop');
+    assert.deepEqual(order(), ['Doc', 'first line']);
+  } finally { cleanup(dir); }
+});
+
 test('Backspace above a divider removes the divider rather than doing nothing', () => {
   // There is nothing to merge into. Leaving the caret stuck below a line
   // Backspace cannot pass is how an editor feels broken.

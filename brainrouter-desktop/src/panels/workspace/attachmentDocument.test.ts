@@ -21,7 +21,15 @@ import { readFileSync } from 'node:fs';
 
 const source = (relative: string): string => readFileSync(new URL(relative, import.meta.url), 'utf8');
 
-const DOCUMENT_QUERIES = ['attachment-document', 'attachment-document-part'] as const;
+const DOCUMENT_QUERIES = [
+  'attachment-document',
+  'attachment-document-part',
+  // ADR-030 D5's second landing place. The bullet said a document becomes "a
+  // note — a page of blocks, addressable at brainrouter://notes/block/…", and
+  // nothing built it: no importer, no handler, no gesture, and no line anywhere
+  // admitting the omission.
+  'notes-import-document',
+] as const;
 
 test('both handler maps answer for a parsed document', () => {
   const host = source('../../../electron/host/queries.ts');
@@ -50,6 +58,16 @@ test('Q2: the reader is loaded on demand, never in the initial bundle', () => {
     'the reader is statically imported, so every window pays for it before it draws',
   );
   assert.match(panel, /<Suspense/, 'a lazy component with no boundary throws on first render');
+});
+
+test('D5: importing the document is a gesture, and what it produced is said', () => {
+  const reader = source('./DocumentReader.tsx');
+  assert.match(reader, /Import as note/, 'nothing offers the import');
+  assert.match(reader, /name: 'notes-import-document'/, 'the button sends nothing');
+  // The outcome reaches the person either way. A button that silently succeeds
+  // and one that silently fails look identical, which is the whole problem.
+  assert.match(reader, /result\.summary/, 'the page it made is never reported');
+  assert.match(reader, /result\?\.reason/, 'a refusal is swallowed');
 });
 
 test('D3 reaches the person: the panel shows what could not be read', () => {

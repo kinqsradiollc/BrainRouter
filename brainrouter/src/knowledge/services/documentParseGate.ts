@@ -6,8 +6,14 @@
  * ordinary async call is not:
  *
  * > **The parse is a SYNCHRONOUS WebAssembly call.** While `processPdf` runs,
- * > nothing else in this process runs — not another tenant's search, not a
- * > health check. There is no yield point inside it and no way to preempt it.
+ * > nothing else on its thread runs, and there is no yield point inside it.
+ *
+ * That call now happens on a WORKER thread with a time budget and a memory
+ * watchdog behind it (ADR-030 D4, `attachment/document/structured.ts`), so it no
+ * longer stops this process's own event loop and it can be terminated. What it
+ * still does is consume a core and up to `DOCUMENT_BOUNDS.maxMemoryBytes` while
+ * it runs, and there is exactly one such thread — so admission is still the
+ * question, for capacity rather than for liveness.
  *
  * So concurrency here is not a throughput knob, it is an admission decision. Ten
  * simultaneous uploads do not parse in parallel; they parse one after another,
@@ -37,7 +43,11 @@
  * aging because their work has no such ceiling.
  */
 
-/** Parses in flight. One, because one is all the process can actually run. */
+/**
+ * Parses in flight. One, because there is one engine thread and its call is
+ * synchronous: a second admitted parse would queue behind the first inside the
+ * worker, where this gate's bounds and refusals cannot reach it.
+ */
 const MAX_ACTIVE = 1;
 
 /** Queue depth. With a 10 s parse budget the worst wait is bounded and knowable. */

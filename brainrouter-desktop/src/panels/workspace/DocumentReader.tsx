@@ -51,6 +51,9 @@ export function DocumentReader({ attachmentId }: { attachmentId: string }): Reac
   const [outline, setOutline] = useState<DocumentOutline | null>(null);
   const [part, setPart] = useState<DocumentPart | null>(null);
   const [asked, setAsked] = useState(false);
+  /** ADR-030 D5 — what the import said, once it has said it. */
+  const [imported, setImported] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
   const nsRef = useRef(`doc${Math.random().toString(36).slice(2, 8)}`);
 
   useEffect(() => {
@@ -63,11 +66,21 @@ export function DocumentReader({ attachmentId }: { attachmentId: string }): Reac
         setOutline((e.ok && e.result ? e.result : null) as DocumentOutline | null);
         return;
       }
+      if (e.id === `${ns}:import`) {
+        setImporting(false);
+        const result = (e.ok ? e.result : null) as { ok?: boolean; summary?: string; reason?: string } | null;
+        // The host's own sentence either way. "It did not work" with no reason
+        // is the answer this ADR is written against.
+        setImported(result?.ok ? (result.summary ?? 'Imported.') : (result?.reason ?? 'The import did not run.'));
+        return;
+      }
       if (e.id.startsWith(`${ns}:part:`)) setPart((e.ok && e.result ? e.result : null) as DocumentPart | null);
     });
     setOutline(null);
     setPart(null);
     setAsked(false);
+    setImported(null);
+    setImporting(false);
     window.brainrouter.send({
       kind: 'query', id: `${ns}:outline`, name: 'attachment-document', args: { id: attachmentId },
     });
@@ -79,6 +92,22 @@ export function DocumentReader({ attachmentId }: { attachmentId: string }): Reac
     window.brainrouter.send({
       kind: 'query', id: `${nsRef.current}:part:${index}`,
       name: 'attachment-document-part', args: { id: attachmentId, part: index },
+    });
+  }, [attachmentId]);
+
+  /**
+   * ADR-030 D5's second landing place, as one button.
+   *
+   * The judgement is core's, so the page this makes is the same page the CLI
+   * and the agent's `workspace_create` make. Nothing here decides what a
+   * document becomes.
+   */
+  const importAsNote = useCallback(() => {
+    setImporting(true);
+    setImported(null);
+    window.brainrouter.send({
+      kind: 'query', id: `${nsRef.current}:import`,
+      name: 'notes-import-document', args: { id: attachmentId },
     });
   }, [attachmentId]);
 
@@ -97,7 +126,12 @@ export function DocumentReader({ attachmentId }: { attachmentId: string }): Reac
           Parsed document · {outline.classification}
           {outline.pageCount ? ` · ${outline.pageCount} page${outline.pageCount === 1 ? '' : 's'}` : ''}
         </span>
+        {/* D5: the document becomes a page of blocks you can edit and cite. */}
+        <button className="pc-tag" disabled={importing} onClick={importAsNote}>
+          {importing ? 'Importing…' : 'Import as note'}
+        </button>
       </div>
+      {imported ? <div className="sched-note">{imported}</div> : null}
       {/* D3's sentence, in our voice — the one that says a scan is a scan. */}
       {outline.notice ? <div className="req-desc">{outline.notice}</div> : null}
       <div className="req-desc" style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>

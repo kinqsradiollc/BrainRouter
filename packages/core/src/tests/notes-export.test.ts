@@ -236,6 +236,61 @@ test('F3 — a database exports its VIEW, with the computed columns as they read
   assert.match(out.omissions.map((o) => o.detail).join(' '), /could not be worked out/);
 });
 
+/**
+ * F1's rule aimed at the DOWNLOAD MENU: the menu offered Markdown on a database
+ * and the writer had no `database` case, so the database and its row-pages fell
+ * through to the generic page branch. A ledger exported as its title and a
+ * heading per row — every column gone, from a file the person asked for by
+ * name. Nothing pinned it because the suite tested CSV for a database and
+ * Markdown for a page, and never the pairing that was broken.
+ */
+test('F1/F3 — a database exported as Markdown is a GRID, not a list of headings', () => {
+  const schema: NotePropertyDef[] = [
+    { id: 'title', name: 'Name', type: 'title' },
+    { id: 'amount', name: 'Amount', type: 'number' },
+    { id: 'total', name: 'Total', type: 'formula', formula: 'Amount * 2' },
+  ];
+  const blocks = [
+    block({ id: 'db', kind: 'database', text: 'Ledger', schema }),
+    block({ id: 'r1', parent: 'db', rank: 'a', text: 'One', props: { title: 'One', amount: 12 } }),
+    block({ id: 'r2', parent: 'db', rank: 'b', text: 'Two | piped', props: { title: 'Two | piped', amount: 7 } }),
+  ];
+
+  const out = exportNote(blocks, 'db', 'markdown')!;
+  const lines = out.content.split('\n');
+  assert.equal(lines[0], '# Ledger');
+  assert.equal(lines[2], '| Title | Name | Amount | Total |');
+  assert.equal(lines[3], '| --- | --- | --- | --- |');
+  // The VALUES, including the formula worked out — the same `cell.display` the
+  // CSV writer and the screen read, so the three cannot disagree.
+  assert.equal(lines[4], '| One | One | 12 | 24 |');
+  // A pipe inside a cell is escaped, or it would add a column and shear the
+  // grid from that row down.
+  assert.equal(lines[5], '| Two \\| piped | Two \\| piped | 7 | 14 |');
+  // And the rows are NOT also emitted as pages underneath the grid.
+  assert.equal(out.content.split('# One').length - 1, 0);
+});
+
+test('F1/F3 — a database inside a page exports as a grid in place, once', () => {
+  const blocks = [
+    block({ id: 'p', kind: 'page', text: 'Report' }),
+    block({ id: 'intro', parent: 'p', rank: 'a', text: 'Here is the ledger.' }),
+    block({
+      id: 'db', parent: 'p', rank: 'b', kind: 'database', text: 'Ledger',
+      schema: [{ id: 'title', name: 'Name', type: 'title' }, { id: 'amount', name: 'Amount', type: 'number' }],
+    }),
+    block({ id: 'r1', parent: 'db', rank: 'a', text: 'One', props: { title: 'One', amount: 12 } }),
+  ];
+
+  const out = exportNote(blocks, 'p', 'markdown')!;
+  assert.match(out.content, /Here is the ledger\./);
+  assert.match(out.content, /\| Title \| Name \| Amount \|/);
+  assert.match(out.content, /\| One \| One \| 12 \|/);
+  // Exactly one grid header, and the row-page did not also become a heading.
+  assert.equal(out.content.split('\n').filter((line) => line.startsWith('| Title |')).length, 1);
+  assert.equal(out.content.split('# One').length - 1, 0);
+});
+
 test('F3 — a page is not offered CSV, and asking for it is refused', () => {
   const blocks = [
     block({ id: 'p', kind: 'page', text: 'Notes' }),

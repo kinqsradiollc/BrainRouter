@@ -27,6 +27,14 @@ export type PdfLimit =
   | 'objects'
   | 'inflated'
   | 'depth'
+  /**
+   * ADR-030 D4 — the parse was stopped because it was growing without bound.
+   *
+   * Distinct from `bytes`, which is about the file we were handed: a 522 KB
+   * document can inflate to gigabytes, and telling someone their small file was
+   * "too large" would send them looking for the wrong thing.
+   */
+  | 'memory'
   | 'encrypted'
   /**
    * The last-resort printable-run harvest read only part of the file.

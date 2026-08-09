@@ -110,6 +110,64 @@ function layout(userId: string | undefined): { order: string[]; at: Map<string, 
   return { order, at };
 }
 
+/**
+ * The kinds that RENDER what is under them — a page and a database.
+ *
+ * Kept in step with the desktop's `isContainerKind`, and for the same reason:
+ * they are the two blocks that own a list of children instead of being one.
+ */
+function isContainerKind(kind: NoteBlockKind): boolean {
+  return kind === 'page' || kind === 'database';
+}
+
+/**
+ * The page a block is ON, which is what "the root" means to the person typing.
+ *
+ * `layout` measures depth from the DOCUMENT root, and that is right for the
+ * sidebar's tree. It is wrong for a gesture, because the person is inside one
+ * page: every block on a page three levels down has depth >= 3, so a
+ * page-blind `depth > 0` test says "this block is nested" about the first line
+ * of every document — and Backspace at column zero, which should merge the line
+ * into the one above, outdented it out of the page instead. The block left the
+ * open page and reappeared beside it in the sidebar.
+ *
+ * The renderer already rebased exactly this for indentation
+ * (`pageBodyBlocks`, "the page IS the root while you are on it"); the
+ * judgements in this file were not rebased with it. `null` is the top level,
+ * which is a real page with no block of its own.
+ *
+ * Cycle-guarded because a repair may be in flight, and a loop here would hang
+ * the process rather than misdraw a line.
+ */
+function enclosingPage(at: Map<string, Positioned>, id: string): string | null {
+  const seen = new Set<string>([id]);
+  let cursor = at.get(id)?.parentId ?? null;
+  while (cursor !== null) {
+    if (seen.has(cursor)) return null;
+    seen.add(cursor);
+    const parent = at.get(cursor);
+    if (!parent) return null;
+    if (isContainerKind(parent.block.kind.value)) return cursor;
+    cursor = parent.parentId;
+  }
+  return null;
+}
+
+/**
+ * How deeply nested this block is WITHIN its page — zero for a line in the body.
+ *
+ * Clamped at zero for the same reason `pageBodyBlocks` clamps: a block whose
+ * depth disagrees with its ancestry is possible mid-repair, and a negative
+ * value would make a nested block look top-level.
+ */
+function depthOnPage(at: Map<string, Positioned>, id: string): number {
+  const here = at.get(id);
+  if (!here) return 0;
+  const pageId = enclosingPage(at, id);
+  const base = pageId === null ? -1 : (at.get(pageId)?.depth ?? -1);
+  return Math.max(0, here.depth - base - 1);
+}
+
 function siblingsOf(at: Map<string, Positioned>, order: readonly string[], parentId: string | null): Positioned[] {
   return order
     .map((id) => at.get(id))
@@ -319,13 +377,27 @@ function mergeIntoPreviousNow(
 
   const kind = here.block.kind.value;
   if (STYLED_TEXT_KINDS.includes(kind)) return unstyle(userId, id, nowMs);
-  if (here.depth > 0) return outdentBlock(userId, id, nowMs);
+  // Nested WITHIN THE PAGE, not within the document. Measured from the document
+  // root this was true of every block inside any page, so the merge below was
+  // unreachable from the editor and Backspace ejected the line instead.
+  if (depthOnPage(at, id) > 0) return outdentBlock(userId, id, nowMs);
 
+  // The block visibly above ON THIS PAGE. `order` is the whole document, so
+  // `index - 1` can be the last line inside the sub-page above — and merging
+  // into it would pull a line off the open page into a document the person is
+  // not looking at. Blocks belonging to a sub-page are skipped; the sub-page
+  // BLOCK itself is not, and the guard below turns that into a no-op rather
+  // than letting one Backspace absorb a whole document.
+  const page = enclosingPage(at, id);
   const index = order.indexOf(id);
-  const previousId = index > 0 ? order[index - 1] : undefined;
+  let previousId: string | undefined;
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const candidate = order[i]!;
+    if (enclosingPage(at, candidate) === page) { previousId = candidate; break; }
+  }
   if (!previousId) {
-    // The first block of the document. There is nowhere above to go, and that
-    // is a legal keystroke rather than an error.
+    // The first block of the page. There is nowhere above to go, and that is a
+    // legal keystroke rather than an error.
     return { ok: true, action: 'noop', focusId: id, caret: 0 };
   }
 
@@ -414,6 +486,11 @@ function outdentBlockNow(userId: string | undefined, id: string, nowMs: number):
   if (!here) return missing(id);
   if (here.parentId === null) return { ok: true, action: 'noop', focusId: id, caret: 0 };
   if (isTableRow(here.block)) return { ok: true, action: 'noop', focusId: id, caret: 0 };
+  // Shift-Tab stops at the page it is on. Without this, a top-level block on a
+  // page is lifted OUT of the page and lands beside it in the sidebar — a
+  // document reorganised by a keystroke the person meant as "outdent". The
+  // enclosing page has no outer indent to give back.
+  if (depthOnPage(at, id) === 0) return { ok: true, action: 'noop', focusId: id, caret: 0 };
 
   const parent = at.get(here.parentId);
   const grandParentId = parent?.parentId ?? null;

@@ -163,11 +163,49 @@ Placement follows the same rule as the rest: it is attached to the `frontend`
 skills go in the second list — putting one in a pack would recreate the second
 editable copy this whole section exists to prevent.
 
+The capability activates for the **engineer** persona and the **designer** persona.
+Gating it on the engineer alone made ADR-031 §1's `design` row dead code — the design
+profile's persona is `designer`, so the capability could be enabled and never resolve
+while onboarding went on offering it. A test goes through `resolveWorkspaceCapabilities`
+rather than passing `activeCapabilities` in by hand, because passing it in is what hid
+this.
+
 - **Why:** engineering is deliberately one profile (`profiles.ts:14-20`, with a test
   forbidding a `frontend`/`backend` profile), so specialism attaches to capabilities.
 - **Evidence:** `skills/design/hallmark/SKILL.md`,
   `packages/core/src/workspace/capabilities.ts`,
   `packages/core/src/workspace/profilePlugins.ts`,
+  `packages/core/src/tests/frontend-design-skill.test.ts`
+
+### 7c. `design.md` IS BrainRouter's design artifact — there is not a second format
+
+ADR-031 D5 says the skill's `study` verb "produces a `design.md`, and we already have
+a place for it … these should be decided together rather than producing two formats
+for one purpose." **This is that decision, made:**
+
+- The FORMAT is the skill's, defined at
+  `skills/design/hallmark/references/design-md.md`. Nothing in BrainRouter defines a
+  competing schema — the one nobody wrote a generator for is the one that would rot.
+- The LOCATION is `design.md` at the workspace root, then `.brainrouter/design.md`,
+  then `docs/design.md`; first match wins
+  (`packages/core/src/workspace/designArtifact.ts` `DESIGN_ARTIFACT_PATHS`).
+- The SEAM is `readWorkspaceDesignArtifact` → `resolveWorkspaceCapabilities`'s
+  `designArtifact` input → a prompt block the `frontend` capability contributes. The
+  reader touches disk; the resolver never does, so "which capabilities are active"
+  cannot depend on the filesystem at the moment somebody asked.
+- It reaches the model as **data**: neutralised per line, fenced, bounded, and
+  introduced as a description of the product rather than as instructions. A repository
+  can be someone else's — the same position ADR-029 C4 takes about note content.
+
+Do not add a `design.json`, a manifest field holding design tokens, or a second reader.
+If the format needs to change, change the skill's reference and this one convention.
+
+- **Why:** the capability's prompt block told the agent to "discover and follow the
+  workspace design artifact" for a release with nothing behind the sentence — an offer
+  the product could not honour (ADR-029 F1).
+- **Evidence:** `packages/core/src/workspace/designArtifact.ts`,
+  `packages/core/src/workspace/capabilities.ts` (`designArtifact`),
+  `packages/core/src/agent/workspaceCapabilityState.ts`,
   `packages/core/src/tests/frontend-design-skill.test.ts`
 
 ### 8. SKILL.md frontmatter must stay regex-parseable — no full YAML
