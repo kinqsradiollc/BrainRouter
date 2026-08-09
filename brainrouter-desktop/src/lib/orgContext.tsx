@@ -13,6 +13,7 @@
  */
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { createTeamsOps, type TeamContext } from '../components/meetings/teamsOps.js';
+import { hostQuery } from './hostQuery.js';
 
 const ACTIVE_ORG_STORAGE_KEY = 'br-active-org';
 
@@ -71,11 +72,17 @@ export function WorkspaceOrgProvider({ children }: { children: ReactNode }): Rea
   // ADR-032 D8 — the switcher is the app's answer to "whose workspace is this",
   // and tenant-partitioned stores that live outside the renderer (the learned
   // store reads config.json, not React state) have no other way to hear it.
+  //
+  // Addressed to the HOST rather than the meetings ipcMain bridge: the Agent
+  // that does the learning runs in the utility process, and a config write
+  // performed in Electron main would leave that process reading its boot-time
+  // cache. The write and the cache reset have to happen where the Agent is.
+  //
   // Runs on the settled value rather than inside `setActiveOrg` so the initial
   // resolution — stored pin, server default, first context — records itself too.
   useEffect(() => {
-    void teamsOps.setActiveOrg(activeOrgId);
-  }, [teamsOps, activeOrgId]);
+    void hostQuery('account-set-active-org', { orgId: activeOrgId });
+  }, [activeOrgId]);
 
   const setActiveOrg = useCallback((orgId: string) => {
     setContexts((current) => {

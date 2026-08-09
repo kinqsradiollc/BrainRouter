@@ -17,16 +17,33 @@ import {
 
 /** Is `path` present at `sha` in this checkout? Used to keep the shipped ground
  *  truth findable — a defect in a file that revision lacks can never be hit. */
-function fileExistsAtRevision(sha: string, path: string): boolean {
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../../..");
+
+function gitSucceeds(args: string[]): boolean {
   try {
-    execFileSync("git", ["cat-file", "-e", `${sha}:${path}`], {
-      cwd: join(dirname(fileURLToPath(import.meta.url)), "../../../.."),
-      stdio: "ignore",
-    });
+    execFileSync("git", args, { cwd: REPO_ROOT, stdio: "ignore" });
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * Is the reviewed commit in THIS clone at all?
+ *
+ * Separated from the file check because the two failures mean opposite things
+ * and one `catch` cannot tell them apart. `actions/checkout` defaults to a
+ * depth-1 clone, so on CI none of these historical commits exist — asking
+ * whether a file is present at a commit the clone has never seen answers "no"
+ * for a dataset that is perfectly sound.
+ */
+function revisionPresent(sha: string): boolean {
+  return gitSucceeds(["cat-file", "-e", `${sha}^{commit}`]);
+}
+
+/** Is the file present at that revision? Only meaningful once the revision is. */
+function fileExistsAtRevision(sha: string, path: string): boolean {
+  return gitSucceeds(["cat-file", "-e", `${sha}:${path}`]);
 }
 
 const CASE: ReviewBenchmarkCase = {
@@ -132,17 +149,35 @@ describe("review benchmark scoring", () => {
     const dataset = JSON.parse(readFileSync(path, "utf8")) as ReviewBenchmarkDataset;
     expect(dataset.cases.length).toBeGreaterThanOrEqual(10);
     expect(dataset.groundTruthBias).toMatch(/biased/i);
+    let verifiedRevisions = 0;
     for (const item of dataset.cases) {
       expect(item.sha).toMatch(/^[0-9a-f]{7,40}$/);
       expect(item.defects.length).toBeGreaterThan(0);
+      // Shape is checked everywhere; history is checked only where there IS
+      // history. A depth-1 checkout cannot answer the question at all, and a
+      // test that reads "cannot tell" as "wrong" fails on a sound dataset.
+      const canCheckHistory = revisionPresent(item.sha);
+      if (canCheckHistory) verifiedRevisions += 1;
       for (const defect of item.defects) {
         expect(defect.line).toBeGreaterThan(0);
         expect(defect.fixedBy).toMatch(/^[0-9a-f]{7,40}$/);
         // The reviewer is scored against the REVIEWED revision, so a defect
         // that names a file the reviewed revision does not contain is
-        // unfindable by construction and depresses recall forever.
-        expect(fileExistsAtRevision(item.sha, defect.file)).toBe(true);
+        // unfindable by construction and depresses recall forever. This is a
+        // property of the harvested data, so it holds wherever it can be read.
+        if (canCheckHistory) {
+          expect(fileExistsAtRevision(item.sha, defect.file)).toBe(true);
+        }
       }
+    }
+    if (verifiedRevisions === 0) {
+      // Do not let a green tick claim a check that never ran (ADR-028). The
+      // shape assertions above still held; the history ones were unanswerable.
+      console.warn(
+        "[review-benchmark] shallow clone: dataset shape verified, "
+        + "defect-file-at-revision NOT verified for any of "
+        + `${dataset.cases.length} case(s).`,
+      );
     }
   });
 });

@@ -26,12 +26,6 @@ export interface TeamDetail { team: TeamOption; members: TeamMember[]; currentUs
 
 export interface TeamsOps {
   contexts(): Promise<TeamContext[]>;
-  /**
-   * Record the active organization so tenant-partitioned local stores agree
-   * with the switcher (ADR-032 D8). Never throws: this is bookkeeping beside
-   * the user's action, and it must not be able to fail their org switch.
-   */
-  setActiveOrg(orgId: string): Promise<void>;
   list(orgId?: string): Promise<TeamOption[]>;
   get(id: string, orgId?: string): Promise<TeamDetail>;
   create(name: string, kind?: TeamKind, orgId?: string): Promise<TeamOption>;
@@ -42,7 +36,6 @@ export interface TeamsOps {
 
 interface TeamsBridge {
   contexts?(): Promise<unknown>;
-  setActiveOrg?(orgId?: string): Promise<unknown>;
   list(orgId?: string): Promise<unknown>;
   get(id: string, orgId?: string): Promise<unknown>;
   create(name: string, kind: TeamKind, orgId?: string): Promise<unknown>;
@@ -135,13 +128,11 @@ export function createTeamsOps(): TeamsOps {
   const api = bridge();
   const unavailable = (): never => { throw new Error("Teams is unavailable in this desktop build."); };
   if (!api) return {
-    contexts: async () => unavailable(), setActiveOrg: async () => {}, list: async () => unavailable(), get: async () => unavailable(), create: async () => unavailable(),
+    contexts: async () => unavailable(), list: async () => unavailable(), get: async () => unavailable(), create: async () => unavailable(),
     addMember: async () => unavailable(), removeMember: async () => unavailable(), remove: async () => unavailable(),
   };
   return {
     contexts: async () => api.contexts ? toTeamContexts(await api.contexts()) : [],
-    // Older preloads have no such channel; an absent method is not an error.
-    setActiveOrg: async (orgId) => { try { await api.setActiveOrg?.(orgId); } catch { /* bookkeeping */ } },
     list: async (orgId) => toTeamOptions(await api.list(orgId)),
     get: async (id, orgId) => {
       const payload = await api.get(id, orgId) as { team?: unknown; members?: unknown; currentUserId?: unknown } | null;

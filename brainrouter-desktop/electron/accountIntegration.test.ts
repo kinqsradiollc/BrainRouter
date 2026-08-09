@@ -479,3 +479,4 @@ test('an org is never recorded onto an install that is not signed in', () => {
   assert.equal((signedOut.next.cli as { account?: unknown }).account, undefined);
   assert.equal(withAccountOrgId({}, 'org_alpha').changed, false);
 });
+

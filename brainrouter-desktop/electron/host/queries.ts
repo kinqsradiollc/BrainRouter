@@ -102,6 +102,7 @@ import {
   resolveDesktopAccountIdentity,
   startAccountConnectorOAuth,
   timeoutFetch,
+  withAccountOrgId,
 } from '../accountIntegration.js';
 import { fetchAccountReviewAssurance } from '../reviewAccountContract.js';
 // host/helpers — pure, closure-free helpers (config scrubbing, Track↔GitHub
@@ -1446,6 +1447,25 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       'shortcuts-get': () => {
         const cli = (loadConfig() as { cli?: { shortcuts?: Record<string, string> } }).cli;
         return { overrides: (cli?.shortcuts && typeof cli.shortcuts === 'object') ? cli.shortcuts : {} };
+      },
+      /**
+       * ADR-032 D8 — record the active organization for the learned store's
+       * tenant partition.
+       *
+       * This lives in the HOST and not in the meetings ipcMain bridge on
+       * purpose. The bridge runs in Electron main; the Agent, and therefore
+       * `learnedTenantForAgent`, runs here in the utility process. Those are
+       * separate processes with separate module state, so a `saveConfig` plus
+       * `_resetCliKnobsCache()` performed over there would write the file and
+       * leave THIS process reading its boot-time cache — the partition would
+       * change on disk and not in the only process that learns.
+       */
+      'account-set-active-org': (args) => {
+        const { changed, next } = withAccountOrgId(loadConfig(), args.orgId);
+        if (!changed) return { ok: true, changed: false };
+        saveConfig(next as Parameters<typeof saveConfig>[0]);
+        _resetCliKnobsCache();
+        return { ok: true, changed: true };
       },
       'shortcuts-save': (args) => {
         const raw = (args.overrides && typeof args.overrides === 'object') ? (args.overrides as Record<string, unknown>) : {};

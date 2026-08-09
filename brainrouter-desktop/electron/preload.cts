@@ -180,7 +180,6 @@ contextBridge.exposeInMainWorld('brainrouter', {
   // main so the renderer never receives the account bearer.
   teams: {
     contexts(): Promise<unknown> { return ipcRenderer.invoke('teams:contexts'); },
-    setActiveOrg(orgId?: string): Promise<unknown> { return ipcRenderer.invoke('teams:setActiveOrg', orgId); },
     list(orgId?: string): Promise<unknown> { return ipcRenderer.invoke('teams:list', orgId); },
     get(id: string, orgId?: string): Promise<unknown> { return ipcRenderer.invoke('teams:get', id, orgId); },
     create(name: string, kind: string, orgId?: string): Promise<unknown> { return ipcRenderer.invoke('teams:create', name, kind, orgId); },
