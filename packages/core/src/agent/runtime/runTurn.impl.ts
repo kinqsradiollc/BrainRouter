@@ -98,6 +98,7 @@ import {
   describeProfileStageTool,
 } from './profileStageRuntime.js';
 import { runChildProfileGuardPhase } from './childProfileGuardPhase.js';
+import { noteToolProvenance } from './contentProvenance.js';
 
 function sameLlmRoute(
   route: { llm: { model: string; endpoint?: string; apiKey?: string } },
@@ -994,6 +995,10 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
 
       const processOneToolCall = async (tc: any, name: string): Promise<{ toolMsg: any; fullResultText: string; systemMsg?: any }> => {
         this.lastTurnToolCalls += 1;
+        // ADR-032 D7 — tally provenance BEFORE the call runs, so the ordering
+        // this records is the order the calls were issued in. Which side of an
+        // untrusted read a trusted action falls on is the whole signal.
+        noteToolProvenance(this.sessionProvenance, name);
         const delegationLaunch = registryDelegationLaunchTool(name);
         // INTERRUPT — skip queued tools once a stop is requested; the loop-top
         // check then ends the turn before the next LLM call.

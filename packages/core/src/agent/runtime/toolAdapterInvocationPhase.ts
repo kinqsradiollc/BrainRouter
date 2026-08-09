@@ -25,6 +25,8 @@ import {
   adaptWorkspaceSkillCatalogText,
   resolveWorkspaceManagedSkill,
 } from '../../workspace/skillToolAdapter.js';
+import { listLearnedSkills, resolveLearnedSkill } from '../../learning/index.js';
+import { learnedTenantForAgent } from './learningPhase.js';
 import { normalizeToolName } from '../../tool/specs/names.js';
 import { suggestSimilarToolName } from '../guards/toolCallRecovery.js';
 import {
@@ -248,17 +250,23 @@ async function invokeMcpAdapter(
   const isManagedSkillTool =
     ['list_skills', 'get_skill', 'search_skills'].includes(rawName) &&
     (!serverId || status?.identity === 'brainrouter');
-  const localSkillResult =
+  const wantsLocalSkill =
     isManagedSkillTool &&
-      rawName === 'get_skill' &&
-      typeof mcpArgs.name === 'string' &&
-      mcpArgs.file === undefined
-      ? resolveWorkspaceManagedSkill(
-        agent.workspaceRoot,
-        mcpArgs.name,
-        mcpArgs.section ?? 'workflow',
-      )
-      : undefined;
+    rawName === 'get_skill' &&
+    typeof mcpArgs.name === 'string' &&
+    mcpArgs.file === undefined;
+  const localSkillResult = wantsLocalSkill
+    ? resolveWorkspaceManagedSkill(
+      agent.workspaceRoot,
+      mcpArgs.name,
+      mcpArgs.section ?? 'workflow',
+    )
+    // ADR-032 D3 — a procedure the agent learned is served here, from the
+    // user-scoped store, never from the generated library. The `learned-`
+    // prefix means this branch can only ever answer for a name no shipped
+    // skill can have, so ordering is not load-bearing (`learnedSkills.ts`).
+    ?? resolveLearnedSkill(learnedTenantForAgent(agent), mcpArgs.name)
+    : undefined;
   const response =
     localSkillResult ??
     await agent.mcpClient.callTool(name, mcpArgs, {
@@ -286,6 +294,11 @@ async function invokeMcpAdapter(
       tool: rawName,
       args: mcpArgs,
     });
+    // ADR-032 D3 — learned skills are appended to the catalog, labelled, and
+    // never merged into the library's own entries. A procedure the agent
+    // promoted but nobody can find is ADR-029 F1's failure with the sign
+    // flipped: something built that is not there.
+    resultText = appendLearnedSkillsToCatalog(agent, resultText, mcpArgs);
   }
   return {
     resultText,
@@ -293,6 +306,60 @@ async function invokeMcpAdapter(
     summary: `MCP: ${resultText.length} chars returned`,
     runtimeUnavailable: false,
   };
+}
+
+/**
+ * ADR-032 D3 — put learned skills in the catalog without merging them into it.
+ *
+ * Appended after the library's own entries and carrying `scope: 'learned'` plus
+ * a description that says so, because `list_skills` is where a person or a
+ * model decides what to invoke, and that is the moment the difference between a
+ * shipped skill and one the agent wrote has to be visible. A `category` filter
+ * that names something else drops them like any other non-match; a `query` is
+ * matched against the same three fields the library entries are.
+ */
+function appendLearnedSkillsToCatalog(
+  agent: Agent,
+  text: string,
+  args: Record<string, unknown>,
+): string {
+  let learned;
+  try {
+    learned = listLearnedSkills(learnedTenantForAgent(agent));
+  } catch {
+    return text;
+  }
+  if (learned.length === 0) return text;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    // The upstream payload is not the catalog shape we know how to extend.
+    // Returning it untouched beats emitting something the model cannot parse.
+    return text;
+  }
+  if (!Array.isArray(parsed)) return text;
+
+  const category = typeof args.category === 'string' ? args.category : undefined;
+  if (category && category !== 'learned') return text;
+  const query = typeof args.query === 'string' ? args.query.trim().toLowerCase() : '';
+  const scope = typeof args.scope === 'string' ? args.scope : 'all';
+  if (scope !== 'all' && scope !== 'global') return text;
+
+  const entries = learned
+    .filter((skill) => !query
+      || skill.name.toLowerCase().includes(query)
+      || skill.description.toLowerCase().includes(query))
+    .map((skill) => ({
+      name: skill.name,
+      description: skill.description,
+      category: 'learned',
+      scope: 'learned',
+      ...(skill.learnedAt ? { learnedAt: skill.learnedAt } : {}),
+    }));
+  if (entries.length === 0) return text;
+  return JSON.stringify([...parsed, ...entries], null, 2);
 }
 
 function publishSteeringReceipt(

@@ -1,47 +1,21 @@
 /**
- * Chunk a PR's unified diff so the reviewer can cover ALL of it instead of the
- * single-shot review's first N characters. This is what turns a review into a
- * turn-based loop (see "Types of Loops"): a diff within budget is one chunk (one
- * turn — identical to the old single-shot behaviour), a larger diff becomes
- * several turns that together review every file. Splitting follows file (`diff
- * --git`) boundaries first and hunk (`@@`) boundaries only when one file alone
- * exceeds the budget, so a chunk is always a coherent, self-describing diff.
+ * Diff-shaped helpers the PR review path needs on top of what core exposes.
+ *
+ * The SIZE-based split below is no longer how a review is divided — ADR-033 D2
+ * replaced it with bundles of related files, because size is the one property
+ * of a change that carries no meaning. It survives as the last-resort packer
+ * for a diff whose sections carry no attributable path, and it now delegates
+ * the actual splitting to core so there is exactly one implementation of "where
+ * does a diff come apart".
  */
 import type { ParsedReviewFinding } from "@kinqs/brainrouter-core/review";
+import { splitDiffFileByHunk, splitUnifiedDiffFiles } from "@kinqs/brainrouter-core/review";
 import type { AssuranceSourceLocation } from "@kinqs/brainrouter-types/review";
 
-/** Split a unified diff into per-file sections (header line kept with its body). */
-function splitByFile(diff: string): string[] {
-  const files: string[] = [];
-  let buf: string[] = [];
-  for (const line of diff.split("\n")) {
-    if (line.startsWith("diff --git ") && buf.length) { files.push(buf.join("\n")); buf = []; }
-    buf.push(line);
-  }
-  if (buf.length) files.push(buf.join("\n"));
-  return files;
-}
-
-/** Split ONE oversized file section into `<file header>\n<hunk>` pieces. */
-function splitFileByHunk(file: string): string[] {
-  const lines = file.split("\n");
-  const firstHunk = lines.findIndex((l) => l.startsWith("@@"));
-  if (firstHunk < 0) return [file]; // no hunks (binary/rename) → indivisible
-  const header = lines.slice(0, firstHunk).join("\n");
-  const hunks: string[] = [];
-  let buf: string[] = [];
-  for (const line of lines.slice(firstHunk)) {
-    if (line.startsWith("@@") && buf.length) { hunks.push(buf.join("\n")); buf = []; }
-    buf.push(line);
-  }
-  if (buf.length) hunks.push(buf.join("\n"));
-  return hunks.map((h) => `${header}\n${h}`);
-}
-
 /**
- * Split `diff` into review chunks each ≤ `maxChars` where possible. A diff already
- * within budget is returned as a single chunk (unchanged single-pass behaviour).
- * An individual hunk larger than `maxChars` is kept whole rather than mangled.
+ * Pack `diff` into chunks each ≤ `maxChars` where possible. A diff already
+ * within budget is returned as a single chunk. An individual hunk larger than
+ * `maxChars` is kept whole rather than mangled.
  */
 export function splitDiffForReview(diff: string, maxChars: number): string[] {
   if (!diff) return [];
@@ -55,9 +29,9 @@ export function splitDiffForReview(diff: string, maxChars: number): string[] {
     else if (current.length + 1 + piece.length <= maxChars) current += "\n" + piece;
     else { flush(); current = piece; }
   };
-  for (const file of splitByFile(diff)) {
-    if (file.length > maxChars) { for (const piece of splitFileByHunk(file)) add(piece); }
-    else add(file);
+  for (const file of splitUnifiedDiffFiles(diff)) {
+    if (file.diff.length > maxChars) { for (const piece of splitDiffFileByHunk(file.diff)) add(piece); }
+    else add(file.diff);
   }
   flush();
   return chunks.length > 0 ? chunks : [diff];
@@ -143,18 +117,9 @@ export function changedSourceLocations(diff: string): AssuranceSourceLocation[] 
 }
 
 /**
- * Merge findings gathered across chunks, dropping duplicates. Two findings are
- * "the same" when they name the same file, line, and summary — so a finding on a
- * file that straddled a chunk boundary is reported once.
+ * Merging findings across review units now lives in core next to the parser it
+ * feeds (ADR-033 D2): with bundles running concurrently every reviewing surface
+ * needs it, and two copies of "the same finding" would drift apart. Re-exported
+ * so this module's consumers keep one import.
  */
-export function dedupeReviewFindings(findings: ParsedReviewFinding[]): ParsedReviewFinding[] {
-  const seen = new Set<string>();
-  const out: ParsedReviewFinding[] = [];
-  for (const finding of findings) {
-    const key = `${finding.file}\n${finding.line ?? ""}\n${finding.summary.trim().toLowerCase()}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(finding);
-  }
-  return out;
-}
+export { dedupeReviewFindings } from "@kinqs/brainrouter-core/review";

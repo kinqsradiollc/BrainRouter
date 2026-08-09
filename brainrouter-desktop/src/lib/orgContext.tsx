@@ -68,6 +68,15 @@ export function WorkspaceOrgProvider({ children }: { children: ReactNode }): Rea
 
   useEffect(() => { void refresh(); }, [refresh]);
 
+  // ADR-032 D8 — the switcher is the app's answer to "whose workspace is this",
+  // and tenant-partitioned stores that live outside the renderer (the learned
+  // store reads config.json, not React state) have no other way to hear it.
+  // Runs on the settled value rather than inside `setActiveOrg` so the initial
+  // resolution — stored pin, server default, first context — records itself too.
+  useEffect(() => {
+    void teamsOps.setActiveOrg(activeOrgId);
+  }, [teamsOps, activeOrgId]);
+
   const setActiveOrg = useCallback((orgId: string) => {
     setContexts((current) => {
       if (!current.some((row) => row.orgId === orgId)) return current; // guard: unknown id

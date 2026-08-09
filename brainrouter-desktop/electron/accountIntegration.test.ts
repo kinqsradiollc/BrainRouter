@@ -15,6 +15,7 @@ import {
   resolveDesktopBootstrapState,
   resolveDesktopAccountIdentity,
   startAccountConnectorOAuth,
+  withAccountOrgId,
 } from './accountIntegration.js';
 import { scrubCliSecrets } from './host/helpers.js';
 
@@ -443,4 +444,38 @@ test('account model catalog revalidates by ETag and fails closed on unsupported 
   );
   assert.equal(invalid.models.length, 0);
   assert.match(invalid.error ?? '', /unsupported effort/i);
+});
+
+// ADR-032 D8 — the learned store partitions on `cli.account`, and the desktop
+// switcher is the only writer of `orgId`. These pin the behaviours that make
+// that partition real rather than declared.
+test('active org is recorded onto the signed-in account for the learned partition', () => {
+  const config = { cli: { account: { url: 'https://api.example.com', userId: 'usr_1' } } };
+  const first = withAccountOrgId(config, 'org_alpha');
+  assert.equal(first.changed, true);
+  assert.equal((first.next.cli!.account as { orgId?: string }).orgId, 'org_alpha');
+
+  // Re-recording the same org must not rewrite config.json on every render.
+  assert.equal(withAccountOrgId(first.next, 'org_alpha').changed, false);
+  assert.equal(withAccountOrgId(first.next, '  org_alpha  ').changed, false);
+
+  // Switching tenants moves the partition rather than accumulating ids.
+  const moved = withAccountOrgId(first.next, 'org_beta');
+  assert.equal(moved.changed, true);
+  assert.equal((moved.next.cli!.account as { orgId?: string }).orgId, 'org_beta');
+
+  // Leaving org context clears the field — absent means PERSONAL, and an empty
+  // string would key a third partition belonging to nobody.
+  const cleared = withAccountOrgId(moved.next, '');
+  assert.equal(cleared.changed, true);
+  assert.equal('orgId' in (cleared.next.cli!.account as object), false);
+});
+
+test('an org is never recorded onto an install that is not signed in', () => {
+  // No account block: writing an org here would claim a tenancy that nothing
+  // established, and core would then partition on an id with no user behind it.
+  const signedOut = withAccountOrgId({ cli: {} }, 'org_alpha');
+  assert.equal(signedOut.changed, false);
+  assert.equal((signedOut.next.cli as { account?: unknown }).account, undefined);
+  assert.equal(withAccountOrgId({}, 'org_alpha').changed, false);
 });

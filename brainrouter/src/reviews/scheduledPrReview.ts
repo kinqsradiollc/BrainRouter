@@ -137,6 +137,10 @@ async function reviewDependencies(
     candidatesReady(input: Parameters<
       NonNullable<PrReviewDeps["onCandidatesReady"]>
     >[0]): PrReviewPublicationGate | void | Promise<PrReviewPublicationGate | void>;
+    serveRepositoryFiles(paths: string[]): ReturnType<
+      NonNullable<PrReviewDeps["serveRepositoryFiles"]>
+    >;
+    relatedPaths(changedPaths: string[]): Array<[string, string]>;
     isCancellationRequested(): boolean | Promise<boolean>;
   },
 ): Promise<PrReviewDeps> {
@@ -172,6 +176,15 @@ async function reviewDependencies(
     onAssuranceReady: observe.assuranceReady,
     prepareRepositoryContext: observe.prepareRepositoryContext,
     onCandidatesReady: observe.candidatesReady,
+    // ADR-033 D3 — the reviewer can ask for a file; the assurance session owns
+    // the checkout it is served from and the budget it is served under.
+    serveRepositoryFiles: observe.serveRepositoryFiles,
+    // ADR-033 D2 — the units are grouped from the exact-revision code graph the
+    // assurance session already built for the impact packets.
+    relatedPaths: observe.relatedPaths,
+    // ADR-033 D2 — bundles are independent, so they run together. Four is the
+    // per-review burst we are willing to spend against a tenant's model budget.
+    reviewConcurrency: 4,
     isCancellationRequested: observe.isCancellationRequested,
     ...(deepReviewPolicy ? {
       executionBudget: {
@@ -249,6 +262,17 @@ export async function runScheduledPrReview(
         ? { ...prepared, coverageLabel: deepReviewPolicy.coverage.label }
         : prepared;
     },
+    serveRepositoryFiles: async (paths) => {
+      const access = assurance.current?.fileAccess();
+      if (!access) {
+        return paths.map((path) => ({
+          path,
+          unavailableReason: "no exact-revision checkout is retained for this review",
+        }));
+      }
+      return access.serve(paths);
+    },
+    relatedPaths: (changedPaths) => assurance.current?.relatedChangedPaths(changedPaths) ?? [],
     candidatesReady: ({
       headSha,
       currentHeadSha,

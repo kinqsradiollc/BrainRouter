@@ -87,6 +87,10 @@
       "types": "./dist/hooks/index.d.ts",
       "default": "./dist/hooks/index.js"
     },
+    "./learning": {
+      "types": "./dist/learning/index.d.ts",
+      "default": "./dist/learning/index.js"
+    },
     "./mcp": {
       "types": "./dist/mcp/index.d.ts",
       "default": "./dist/mcp/index.js"

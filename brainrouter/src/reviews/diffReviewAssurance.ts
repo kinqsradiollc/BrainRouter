@@ -53,6 +53,7 @@ import {
   normalizeReviewCandidates,
 } from "./reviewCandidateNormalization.js";
 import { createBoundedCandidateVerifier } from "./candidateVerifier.js";
+import { createReviewFileAccess, type ReviewFileAccess } from "./reviewFileAccess.js";
 
 const DIFF_ONLY_LIMITATION_ID = "diff-only-repository-context";
 
@@ -95,6 +96,17 @@ export interface RecordDiffReviewAssuranceInput extends StartDiffReviewAssurance
 export interface DiffReviewAssuranceSession {
   readonly runId: string;
   prepareContext(changed: AssuranceSourceLocation[]): Promise<RepositoryContextPrompt | null>;
+  /**
+   * ADR-033 D3 — the read-only window over the retained checkout, or null when
+   * this run has no checkout to read from (the diff-only fallback).
+   */
+  fileAccess(): ReviewFileAccess | null;
+  /**
+   * ADR-033 D2 — related-file edges among the changed paths, from the
+   * exact-revision code graph. Empty until `prepareContext` has built the
+   * index, and empty for a run that never got a checkout.
+   */
+  relatedChangedPaths(changedPaths: readonly string[]): Array<[string, string]>;
   recordCandidates(
     headSha: string,
     findings: PrReviewCandidateDetail[],
@@ -738,8 +750,21 @@ export async function startDiffReviewAssurance(
     }
   };
 
+  // One access window per run, so its budget is the review's budget rather
+  // than a fresh allowance per bundle (ADR-033 D3/D9).
+  let fileAccess: ReviewFileAccess | null = null;
+
   return {
     runId: started.id,
+    fileAccess: () => {
+      if (!repositoryContext?.canReadSource) return null;
+      fileAccess ??= createReviewFileAccess({
+        readSourceFile: (path, maxBytes) => repositoryContext.readSourceFile(path, maxBytes),
+      });
+      return fileAccess;
+    },
+    relatedChangedPaths: (changedPaths) =>
+      repositoryContext?.relatedChangedPaths(changedPaths) ?? [],
     prepareContext: (changed) =>
       deepReviewPolicy
         ? repositoryContext?.prepareDeepPrompt(deepReviewPolicy.packetLimits.maxPackets)

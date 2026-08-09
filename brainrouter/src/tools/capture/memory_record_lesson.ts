@@ -54,7 +54,12 @@ export async function handleMemoryRecordLesson(args: any, options?: { defaultUse
   try {
     const params = schema.parse(args ?? {});
     const userId = params.userId ?? options?.defaultUserId ?? "default";
-    const result = memoryEngine.recordLesson(userId, params.text, {
+    // `recordLesson` is async (the engine is Postgres-backed). Without the
+    // await this returned `{}` — JSON.stringify of a pending Promise — so every
+    // caller got a result with no `recordId`, `reinforced` or `confidence` and
+    // no error to explain it. ADR-032 relies on that id to link a learned item
+    // to its memory record, which is how the omission was found.
+    const result = await memoryEngine.recordLesson(userId, params.text, {
       evidence: params.evidence,
       sessionKey: params.sessionKey,
       activeSkill: params.activeSkill,

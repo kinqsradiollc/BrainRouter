@@ -90,18 +90,27 @@ const EXHORTATION_PATTERNS: readonly RegExp[] = [
 ];
 
 /**
- * A falsifier has to name something OBSERVABLE. These are the observation
- * verbs and the concrete-anchor shapes that make a check a check; a falsifier
- * with none of them ("if it turns out to be wrong") is a restatement of the
- * requirement rather than an answer to it.
+ * The ways of saying nothing, enumerated — and the reason this is a REJECTION
+ * set rather than an acceptance one.
+ *
+ * The first version of this rule required the falsifier to contain a verb from
+ * a list of "observation words". That is the wrong polarity: the ways to name a
+ * real observation are open-ended ("the release history still matches origin",
+ * "the reviewer approves it unchanged"), so an acceptance list rejects perfectly
+ * good falsifiers and the store learns nothing — which ADR-029 F1 rates worse
+ * than the noise D2 is trying to avoid. The ways to say nothing, by contrast,
+ * are a small closed set of placeholders, and those are what this catches.
  */
-const OBSERVATION_MARKERS: readonly RegExp[] = [
-  /\b(?:fails?|failed|errors?|throws?|exits?|returns?|rejects?|refuses?|crashes?|hangs?|times? out|timed out)\b/i,
-  /\b(?:absent|missing|not installed|unavailable|removed|renamed|deleted|no longer|stops? working|breaks?)\b/i,
-  /\b(?:differs?|disagree|mismatch|contradicts?|slower|faster|empty|non-?zero|zero)\b/i,
-  /`[^`]+`/,
-  /\b[\w.-]+\.(?:ts|tsx|js|json|md|yml|yaml|sh|py|sql|toml)\b/i,
+const VACUOUS_FALSIFIERS: readonly RegExp[] = [
+  /^(?:n\/?a|none|nothing|unknown|unclear|tbd|-+)\.?$/i,
+  /\b(?:something|anything|things?) (?:goes? wrong|breaks?|fails?|happens?)\b/i,
+  /\bit turns out\b/i,
+  /^(?:if )?(?:it|this|that|the (?:claim|lesson|rule|statement))\b[^.]*\b(?:wrong|incorrect|false|not true|does ?n[o']t (?:work|help|apply))\b/i,
+  /^(?:it|this|that) (?:fails?|breaks?|goes? wrong)\.?$/i,
 ];
+
+/** Fewer words than this is a gesture at a check rather than a check. */
+const MIN_FALSIFIER_WORDS = 3;
 
 /**
  * Volatile detail that will not be true tomorrow. A "lesson" carrying a pid, a
@@ -114,7 +123,10 @@ const TRANSIENT_PATTERNS: readonly RegExp[] = [
   /\b(?:127\.0\.0\.1|localhost)[:.]\d{2,5}\b/,
   /\bport\s+\d{2,5}\b/i,
   /\b[0-9a-f]{12,}\b/i,
-  /\b(?:\/tmp|\/private\/var\/folders|\/var\/folders)\//,
+  // No `\b` before the slash: a word boundary needs a word character on one
+  // side, and " /tmp/" has none — the anchor that looks safest is the one that
+  // silently never fires.
+  /(?:^|[\s"'(=:])(?:\/tmp|\/private\/var\/folders|\/var\/folders)\//,
   /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/,
   /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i,
 ];
@@ -173,7 +185,10 @@ export function reviewLearningCandidate(candidate: LearningCandidate): GateVerdi
       reason: 'the falsifier restates the claim instead of naming a contrary observation',
     };
   }
-  if (!matchesAny(falsifier, OBSERVATION_MARKERS)) {
+  if (
+    falsifier.split(/\s+/).filter(Boolean).length < MIN_FALSIFIER_WORDS
+    || matchesAny(falsifier, VACUOUS_FALSIFIERS)
+  ) {
     return {
       admitted: false,
       rule: 'unfalsifiable',

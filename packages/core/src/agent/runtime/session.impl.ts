@@ -37,9 +37,16 @@ import { estimateChatHistoryTokens } from '../../util/tokens/tokenEstimate.js';
 import { traceEvent } from '../../telemetry/tracing/tracing.js';
 import { sanitizeToolCallPairing } from '../guards/toolCallRecovery.js';
 import { appendDeveloperPromptLayer } from '../transport/llmTransport.js';
+import { scheduleLearningCheckpoint } from './learningPhase.js';
 
 export async function compactHistory(this: Agent): Promise<{ summary: string; estimatedTokens: number; durationMs: number; replacedMessages: number } | null> {
     if (this.chatHistory.length < 4) return null;
+    // ADR-032 D5 — the compaction checkpoint, fired BEFORE the history is
+    // replaced. Compaction is the moment the trajectory stops existing: after
+    // this function returns, the turns that would have taught us something are
+    // a summary. Reflection still runs off-turn (the call is dispatched, not
+    // awaited), but it has to read the window while the window is still there.
+    scheduleLearningCheckpoint(this, 'compaction');
     // CC-P4.2 — advisory pre-compact hook (notify/log; cannot block).
     if (this.hookAdvisoryActive()) { try { runHooks(this.workspaceRoot, 'pre-compact', { payload: { messages: this.chatHistory.length } }); } catch { /* advisory */ } }
     const before = this.chatHistory.length;

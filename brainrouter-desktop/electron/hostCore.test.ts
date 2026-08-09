@@ -354,6 +354,47 @@ test('DESK-5v concurrent sessions: a mid-turn switch spawns a second agent and n
   assert.ok(out.some((m) => m.sessionKey === 'sess:B' && m.event.kind === 'assistant-delta'), "B's stream stayed tagged B");
 });
 
+test('ADR-032 D5: a background session fires its session-end checkpoint when its agent is dropped', async () => {
+  // The desktop pool discards a finished BACKGROUND agent; that is where the
+  // session actually ends on this surface. Without this the CLI's `/exit` was
+  // the only place D5 ever ran, so a desktop-only user never learned anything
+  // from a session that ended without a compaction.
+  const { out, send } = collect();
+  let releaseA!: () => void;
+  let releaseB!: () => void;
+  const gateA = new Promise<void>((r) => { releaseA = r; });
+  const gateB = new Promise<void>((r) => { releaseB = r; });
+  let endedB = 0;
+  const agentA: AgentLike = {
+    sessionKey: 'sess:A',
+    runTurn: async () => { await gateA; return 'done-A'; },
+    resetSessionCounters: () => {}, loadHistory: () => 1, getModel: () => 'm', clearHistory: () => {},
+  };
+  const agentB: AgentLike = {
+    sessionKey: 'sess:spawn',
+    runTurn: async () => { await gateB; return 'done-B'; },
+    resetSessionCounters: () => {}, loadHistory: () => 1, getModel: () => 'm',
+    clearHistory: () => {}, endSession: () => { endedB += 1; },
+  };
+  const core = createHostCore({
+    agent: agentA, send, spawnAgent: () => agentB,
+    transcriptExists: (k) => k === 'sess:A' || k === 'sess:B',
+  });
+  // A is busy, so switching spawns a SECOND agent for B rather than reusing A.
+  const turnA = core.handle({ kind: 'start-turn', prompt: 'long A' });
+  await core.handle({ kind: 'resume-session', sessionKey: 'sess:B' });
+  const turnB = core.handle({ kind: 'start-turn', prompt: 'long B' });
+  // Look away: B keeps running, but it is now a BACKGROUND session.
+  await core.handle({ kind: 'resume-session', sessionKey: 'sess:A' });
+  assert.equal(endedB, 0, 'a session still running has not ended');
+  releaseB();
+  await turnB;
+  assert.equal(endedB, 1, 'the dropped background agent never fired its session-end checkpoint');
+  releaseA();
+  await turnA;
+  assert.ok(out.length > 0);
+});
+
 test('session-changed carries the AUTHORITATIVE running flag so the renderer can clear a stale "working…"', async () => {
   const { out, send } = collect();
   let releaseA!: () => void;

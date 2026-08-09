@@ -384,6 +384,10 @@ export async function tryHandleSessionCommand(ctx: CommandContext): Promise<bool
     }
     case '/quit':
     case '/exit': {
+      // ADR-032 D5 — the session-end checkpoint. Fire-and-forget by contract:
+      // the last thing a person does is leave, and a goodbye that waits on a
+      // reflection call is a goodbye they learn to Ctrl-C.
+      agent.endSession();
       rl.close();
       return true;
     }

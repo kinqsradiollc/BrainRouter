@@ -28,16 +28,29 @@ const SAFE_METRICS = new Set([
   "entries", "cacheState", "fetchedAt", "source",
   // Pentest trace metrics
   "findings", "scanMode", "tool", "success", "recorded", "childId",
+  // ADR-033 — how the review was actually run, and how much of it survived.
+  // These were being emitted and dropped here, which is the ADR-028 failure in
+  // miniature: a reviewer that reports numbers nobody can read.
+  "parts", "unreviewedParts", "graphEdges", "packets", "artifacts", "coverageLabel",
+  "reviewed", "failed", "calls", "requested", "served",
+  "reflected", "droppedByReflection", "mergedByReflection",
+  "positionedByEvidence", "summaryOnly",
 ]);
 
 const PHASES = [
   // ── PR review lenses (security / code) ──────────────────────────────────
   { id: "authorization", label: "Authorization", kinds: new Set(["queued", "token-resolved", "token-minted"]) },
-  { id: "context", label: "Pull request context", kinds: new Set(["head-resolved", "diff-fetched"]) },
+  // The context phase covers everything the review is handed before it thinks:
+  // the head, the diff, the exact-revision packet, and the unit plan those
+  // produce. A run whose repository context was unavailable says so here rather
+  // than nowhere (ADR-033 D2/D3).
+  { id: "context", label: "Pull request context", kinds: new Set(["head-resolved", "diff-fetched", "review-units-planned", "repository-context-ready", "repository-context-unavailable"]) },
   { id: "intelligence", label: "Vulnerability intelligence", kinds: new Set(["intelligence-ready", "intelligence-unavailable"]) },
-  { id: "analysis", label: "Model analysis", kinds: new Set(["llm-started", "llm-finished"]) },
+  { id: "analysis", label: "Model analysis", kinds: new Set(["llm-started", "llm-finished", "evidence-served"]) },
   { id: "findings", label: "Finding analysis", kinds: new Set(["findings-parsed"]) },
-  { id: "publishing", label: "GitHub publishing", kinds: new Set(["inline-posted", "summary-posted", "review-posted", "approved", "check-posted"]) },
+  // `review-unavailable` publishes too — a neutral check and a comment saying
+  // why. It belongs where a reader looks for what reached the pull request.
+  { id: "publishing", label: "GitHub publishing", kinds: new Set(["inline-posted", "summary-posted", "review-posted", "approved", "check-posted", "review-unavailable"]) },
   { id: "complete", label: "Complete", kinds: new Set(["done"]) },
   // ── Pentest lens (domain scans) ─────────────────────────────────────────
   // A pentest job emits a different kind vocabulary; it only ever matches

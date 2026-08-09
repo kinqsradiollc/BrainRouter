@@ -23,10 +23,12 @@
 /** Ceiling on one round's ask — a reviewer, not a crawler. */
 export const MAX_EVIDENCE_REQUEST_FILES = 6;
 
-/** How many extra rounds a review may spend asking. One is enough to check. */
-export const MAX_EVIDENCE_REQUEST_ROUNDS = 1;
-
-/** The instruction that licenses the ask, appended after a lens contract. */
+/**
+ * The instruction that licenses the ask, appended after a lens contract. The
+ * "one round" it promises is structural in the executor, not a number this
+ * module enforces — the contract and the loop have to agree, so the sentence
+ * lives next to the parser the loop uses.
+ */
 export function buildEvidenceRequestContract(maxFiles = MAX_EVIDENCE_REQUEST_FILES): string {
   return (
     `If a finding depends on a file you were NOT shown, do not guess it and do not drop it: reply with ONLY a fenced \`\`\`json block of the form {"request_files": ["repo/relative/path.ts"]} — at most ${maxFiles} paths, repo-relative, no globs — and nothing else. ` +

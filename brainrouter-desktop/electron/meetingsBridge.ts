@@ -6,8 +6,8 @@
  * to the configured HTTPS (or loopback HTTP) account endpoint.
  */
 import { ipcMain } from 'electron';
-import { loadConfig } from '@kinqs/brainrouter-core/config';
-import { brainRouterAccountHeaders, resolveBrainRouterAccountApi, resolveBrainRouterAccountContext, type BrainRouterAccountContext } from './accountIntegration.js';
+import { loadConfig, saveConfig, _resetCliKnobsCache } from '@kinqs/brainrouter-core/config';
+import { brainRouterAccountHeaders, resolveBrainRouterAccountApi, resolveBrainRouterAccountContext, withAccountOrgId, type BrainRouterAccountContext } from './accountIntegration.js';
 import {
   meetingRequests,
   teamRequests,
@@ -150,6 +150,23 @@ export function registerMeetingsBridge(): void {
       // Offline/signed-out state is represented by no contexts instead of an
       // unhandled IPC rejection; explicit Teams operations still surface errors.
       return [];
+    }
+  });
+  // ADR-032 D8 — the switcher's choice reaches the learned store's partition.
+  // The renderer keeps the active org in its own storage; core reads config.json,
+  // so without this the partition would be whatever sign-in happened to record.
+  ipcMain.handle('teams:setActiveOrg', async (_event, orgId: unknown) => {
+    try {
+      const { changed, next } = withAccountOrgId(loadConfig(), orgId);
+      if (!changed) return { ok: true };
+      saveConfig(next as never);
+      // The knob cache is what core reads; a stale cache would keep writing
+      // lessons into the previous tenant for the rest of the process's life.
+      _resetCliKnobsCache();
+      return { ok: true };
+    } catch {
+      // Best-effort: a failed partition update must never break org switching.
+      return { ok: false };
     }
   });
   ipcMain.handle('teams:list', async (_event, orgId: unknown) => {

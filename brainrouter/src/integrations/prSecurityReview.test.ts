@@ -426,7 +426,13 @@ describe("PR security review executor (ADR-017 D5)", () => {
     );
   });
 
-  it("fails closed without granting a model finding blocking authority when the durable gate is unavailable", async () => {
+  // ADR-033 D8 reversed the second half of this rule. A model finding still
+  // never earns blocking authority on its own — that part is unchanged and
+  // asserted below. What changed is what an UNAVAILABLE durable gate does: it
+  // used to fail the required check, which held merges hostage to our own
+  // infrastructure and taught people to bypass branch protection. It now says
+  // the review is advisory and gets out of the way.
+  it("never grants a model finding blocking authority, and an unavailable gate does not hold the merge", async () => {
     const routes: Routes = {
       calls: [],
       diff: DIFF_ADDED,
@@ -445,16 +451,21 @@ describe("PR security review executor (ADR-017 D5)", () => {
       approved: false,
       assuranceGate: {
         status: "partial",
-        blocked: true,
+        blocked: false,
         cleanEligible: false,
         blockingFindingIds: [],
       },
     });
-    expect(routes.bodies?.["POST /repos/o/r/check-runs"] ?? "").toContain(
+    // Not a failure — we established nothing, so we have no grounds to fail
+    // anyone's change — and emphatically not a success either.
+    expect(routes.bodies?.["POST /repos/o/r/check-runs"] ?? "").not.toContain(
       '"conclusion":"failure"',
     );
+    expect(routes.bodies?.["POST /repos/o/r/check-runs"] ?? "").toContain(
+      '"conclusion":"neutral"',
+    );
     expect(projectAssurancePublication(result.assuranceGate!).conclusion).toBe(
-      "failure",
+      "neutral",
     );
   });
 
@@ -775,8 +786,11 @@ describe("PR security review executor (ADR-017 D5)", () => {
       { installationId: "42", repo: "o/r", prNumber: 7, headSha: "sha" },
       makeDeps(routes, { llmRunner: runner, maxDiffChars: 150 }),
     );
-    expect(runs).toBe(2);        // the diff was reviewed in two turns, not truncated
-    expect(r.findings).toBe(2);  // findings from BOTH parts merged
+    // ADR-033 D2/D5 — two review UNITS (unrelated files, so two bundles) plus
+    // the one reflection pass over the merged set. The turn count moved because
+    // the reflection is a real call, not because a unit was skipped.
+    expect(runs).toBe(3);
+    expect(r.findings).toBe(2);  // findings from BOTH units merged
     expect(r).toMatchObject({ ok: true });
   });
 
@@ -837,5 +851,268 @@ describe("PR security review executor (ADR-017 D5)", () => {
     );
     expect(r.ok).toBe(true);
     expect(r.coverage).toEqual({ complete: false, totalParts: 2, reviewedParts: 1, failedParts: 1, unreviewedParts: 0, unrecordedFindings: 0 });
+  });
+});
+
+/**
+ * ADR-033 — review that finds things, and says where.
+ *
+ * These assert the four claims the ADR will be judged on: related files are
+ * reviewed together (D2), the units run concurrently (D2), the reviewer can ask
+ * for a file it was not handed (D3), the published line is the line the
+ * evidence is on (D4), the reflection can publish FEWER findings than were
+ * produced (D5), and a review that cannot run resolves the check instead of
+ * wedging the merge (D8).
+ */
+describe("ADR-033 review orchestration", () => {
+  const implementation = [
+    "diff --git a/src/orders/total.ts b/src/orders/total.ts",
+    "--- a/src/orders/total.ts",
+    "+++ b/src/orders/total.ts",
+    "@@ -0,0 +1,2 @@",
+    "+export function total(items) {",
+    "+  return items.reduce((sum, item) => sum + item.price, 0);",
+  ].join("\n");
+  const test = [
+    "diff --git a/src/orders/total.test.ts b/src/orders/total.test.ts",
+    "--- a/src/orders/total.test.ts",
+    "+++ b/src/orders/total.test.ts",
+    "@@ -0,0 +1,1 @@",
+    "+it('adds prices', () => expect(total([])).toBe(0));",
+  ].join("\n");
+  const unrelated = [
+    "diff --git a/docs/readme.md b/docs/readme.md",
+    "--- a/docs/readme.md",
+    "+++ b/docs/readme.md",
+    "@@ -0,0 +1,1 @@",
+    "+# Orders",
+  ].join("\n");
+
+  it("reviews a file and its test in ONE unit, and unrelated files in another", async () => {
+    const prompts: string[] = [];
+    await runPrSecurityReview(
+      { installationId: "42", repo: "o/r", prNumber: 7, headSha: "sha" },
+      makeDeps({ calls: [], diff: [implementation, test, unrelated].join("\n") }, {
+        // Big enough to hold the implementation+test pair (~407 chars) and too
+        // small to also swallow the unrelated doc — both halves of what this
+        // case asserts. The per-bundle budget is a hard constraint now: a group
+        // over it is split however related its files are, so a cap below the
+        // pair's own size would be testing the splitter, not the pairing.
+        maxDiffChars: 450,
+        llmRunner: { run: async ({ prompt }: { prompt: string }) => { prompts.push(prompt); return "```json\n[]\n```"; } },
+      }),
+    );
+    const withImplementation = prompts.find((prompt) => prompt.includes("a/src/orders/total.ts"));
+    expect(withImplementation).toBeDefined();
+    expect(withImplementation).toContain("a/src/orders/total.test.ts");
+    expect(withImplementation).not.toContain("a/docs/readme.md");
+  });
+
+  it("groups a route with the handler it calls when the code graph says so", async () => {
+    // Neither hunk shows an import, and the two paths share no naming
+    // convention — the exact-revision graph is the only thing that knows they
+    // are one change, which is why the plan waits for it.
+    const route = [
+      "diff --git a/src/api/orders.ts b/src/api/orders.ts",
+      "--- a/src/api/orders.ts",
+      "+++ b/src/api/orders.ts",
+      "@@ -20,0 +21,1 @@",
+      "+  return placeOrder(req.body);",
+    ].join("\n");
+    const handler = [
+      "diff --git a/src/domain/placement.ts b/src/domain/placement.ts",
+      "--- a/src/domain/placement.ts",
+      "+++ b/src/domain/placement.ts",
+      "@@ -5,0 +6,1 @@",
+      "+  if (!order.items.length) throw new Error('empty');",
+    ].join("\n");
+    const asked: string[][] = [];
+    const prompts: string[] = [];
+    await runPrSecurityReview(
+      { installationId: "42", repo: "o/r", prNumber: 7, headSha: "sha" },
+      makeDeps({ calls: [], diff: [route, handler].join("\n") }, {
+        // As above: the graph edge is what this measures, not the budget.
+        maxDiffChars: 4_000,
+        relatedPaths: (paths: string[]) => {
+          asked.push(paths);
+          return [["src/api/orders.ts", "src/domain/placement.ts"] as [string, string]];
+        },
+        llmRunner: { run: async ({ prompt }: { prompt: string }) => { prompts.push(prompt); return "```json\n[]\n```"; } },
+      }),
+    );
+    expect(asked[0]).toEqual(expect.arrayContaining(["src/api/orders.ts", "src/domain/placement.ts"]));
+    const together = prompts.find((prompt) => prompt.includes("a/src/api/orders.ts"));
+    expect(together).toContain("a/src/domain/placement.ts");
+  });
+
+  it("still reviews everything when the code graph cannot answer", async () => {
+    const prompts: string[] = [];
+    const result = await runPrSecurityReview(
+      { installationId: "42", repo: "o/r", prNumber: 7, headSha: "sha" },
+      makeDeps({ calls: [], diff: [implementation, unrelated].join("\n") }, {
+        maxDiffChars: 200,
+        relatedPaths: () => { throw new Error("index unavailable"); },
+        llmRunner: { run: async ({ prompt }: { prompt: string }) => { prompts.push(prompt); return "```json\n[]\n```"; } },
+      }),
+    );
+    expect(result.ok).toBe(true);
+    expect(prompts.join("\n")).toContain("a/src/orders/total.ts");
+    expect(prompts.join("\n")).toContain("a/docs/readme.md");
+  });
+
+  it("runs independent units concurrently instead of one after another", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    await runPrSecurityReview(
+      { installationId: "42", repo: "o/r", prNumber: 7, headSha: "sha" },
+      makeDeps({ calls: [], diff: [implementation, unrelated].join("\n") }, {
+        maxDiffChars: 200,
+        llmRunner: { run: async () => {
+          inFlight += 1;
+          peak = Math.max(peak, inFlight);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          inFlight -= 1;
+          return "```json\n[]\n```";
+        } },
+      }),
+    );
+    expect(peak).toBeGreaterThan(1);
+  });
+
+  it("asks for a file it was not handed, and reviews again with what it was served", async () => {
+    const prompts: string[] = [];
+    const served: string[][] = [];
+    const r = await runPrSecurityReview(
+      { installationId: "42", repo: "o/r", prNumber: 7, headSha: "sha" },
+      makeDeps({ calls: [], diff: DIFF_ADDED }, {
+        prepareRepositoryContext: async () => ({ text: "packet: x.ts and its neighbours", packetRefs: [], artifactRefs: [] }),
+        serveRepositoryFiles: async (paths) => {
+          served.push(paths);
+          return paths.map((path) => ({ path, content: "export function sanitize(id) { return Number(id); }" }));
+        },
+        llmRunner: { run: async ({ prompt }: { prompt: string }) => {
+          prompts.push(prompt);
+          if (prompts.length === 1) return '```json\n{"request_files": ["src/db.ts"]}\n```';
+          return REVIEW_INLINE;
+        } },
+      }),
+    );
+    expect(prompts[0]).toContain("request_files");
+    expect(served).toEqual([["src/db.ts"]]);
+    expect(prompts[1]).toContain("export function sanitize");
+    expect(r.findings).toBe(1);
+  });
+
+  it("never offers the ask when there is no checkout to serve it from", async () => {
+    const prompts: string[] = [];
+    await runPrSecurityReview(
+      { installationId: "42", repo: "o/r", prNumber: 7, headSha: "sha" },
+      makeDeps({ calls: [], diff: DIFF_ADDED }, {
+        serveRepositoryFiles: async (paths) => paths.map((path) => ({ path, unavailableReason: "no checkout" })),
+        llmRunner: { run: async ({ prompt }: { prompt: string }) => { prompts.push(prompt); return "```json\n[]\n```"; } },
+      }),
+    );
+    expect(prompts[0]).not.toContain("request_files");
+    expect(prompts[0]).toContain("NO tools");
+  });
+
+  it("publishes the finding on the line its evidence is on, not the line the model claimed", async () => {
+    const routes: Routes = { calls: [], diff: DIFF_ADDED };
+    const wrongLine =
+      '```json\n[{"file":"x.ts","line":1,"severity":"high","confidence":95,' +
+      '"summary":"[CWE-89] SQL injection",' +
+      '"codeExcerpt":"const q = `SELECT * FROM u WHERE id=${req.query.id}`;"}]\n```';
+    const r = await runPrSecurityReview(
+      { installationId: "42", repo: "o/r", prNumber: 7, headSha: "sha" },
+      makeDeps(routes, { llmRunner: llm(wrongLine) }),
+    );
+    expect(r.findingsDetail?.[0]).toMatchObject({ file: "x.ts", line: 2 });
+    const review = JSON.parse(routes.bodies?.["POST /repos/o/r/pulls/7/reviews"] ?? "{}") as {
+      comments?: Array<{ line?: number }>;
+    };
+    expect(review.comments?.[0]?.line).toBe(2);
+  });
+
+  it("does not anchor a finding whose line cannot be established", async () => {
+    const routes: Routes = { calls: [], diff: DIFF_ADDED };
+    const unplaceable =
+      '```json\n[{"file":"x.ts","line":900,"severity":"high","confidence":80,"summary":"something, somewhere"}]\n```';
+    const r = await runPrSecurityReview(
+      { installationId: "42", repo: "o/r", prNumber: 7, headSha: "sha" },
+      makeDeps(routes, { llmRunner: llm(unplaceable) }),
+    );
+    expect(r.findings).toBe(1);
+    expect(r.inlinePosted).toBe(0); // summary-only beats a confidently wrong anchor
+    expect(r.findingsDetail?.[0]?.line).toBeUndefined();
+  });
+
+  it("publishes fewer findings when the reflection drops one", async () => {
+    let call = 0;
+    const r = await runPrSecurityReview(
+      { installationId: "42", repo: "o/r", prNumber: 7, headSha: "sha" },
+      makeDeps({ calls: [], diff: [implementation, unrelated].join("\n") }, {
+        // Two units is what this case needs: big enough that the implementation
+        // file is not split inside its own hunk (the budget binds there too
+        // now), small enough that the unrelated doc does not pack in with it.
+        maxDiffChars: 260,
+        llmRunner: { run: async ({ prompt }: { prompt: string }) => {
+          call += 1;
+          if (prompt.includes("report_review_reflection")) {
+            return '```json\n{"verdicts":[{"index":1,"verdict":"keep","rank":1},{"index":2,"verdict":"drop","reason":"restates what the code does"}]}\n```';
+          }
+          const file = prompt.includes("a/docs/readme.md") ? "docs/readme.md" : "src/orders/total.ts";
+          return `\`\`\`json\n[{"file":"${file}","line":1,"severity":"low","confidence":60,"summary":"finding in ${file}"}]\n\`\`\``;
+        } },
+      }),
+    );
+    expect(call).toBe(3); // two units + one reflection
+    expect(r.findings).toBe(1);
+  });
+
+  it("reports 'review unavailable' without holding the merge when every unit fails", async () => {
+    const routes: Routes = { calls: [], diff: DIFF_ADDED };
+    const r = await runPrSecurityReview(
+      { installationId: "42", repo: "o/r", prNumber: 7, headSha: "head-1" },
+      makeDeps(routes, { llmRunner: { run: async () => { throw new Error("gateway 502"); } } }),
+    );
+    expect(r).toMatchObject({ ok: false, skipped: "review-unavailable", findings: 0 });
+    const check = JSON.parse(routes.bodies?.["POST /repos/o/r/check-runs"] ?? "{}") as {
+      conclusion?: string; output?: { title?: string };
+    };
+    expect(check.conclusion).toBe("neutral");
+    expect(check.output?.title).toBe("Review unavailable");
+    expect(routes.bodies?.["POST /repos/o/r/issues/7/comments"] ?? "").toContain("Review unavailable");
+    expect(routes.bodies?.["POST /repos/o/r/issues/7/comments"] ?? "").toContain("gateway 502");
+  });
+
+  it("resolves the check when the diff itself cannot be fetched", async () => {
+    const bodies: Record<string, string> = {};
+    const failingFetch = (async (url: string, init?: { method?: string; body?: string; headers?: Record<string, string> }) => {
+      const method = (init?.method ?? "GET").toUpperCase();
+      const path = url.replace("https://api.github.com", "");
+      if (init?.body) bodies[`${method} ${path}`] = init.body;
+      if (path.includes("/access_tokens")) {
+        return { ok: true, status: 201, json: async () => ({ token: "ghs_test", expires_at: "2099-01-01T00:00:00Z" }) };
+      }
+      // The PR metadata request succeeds (so we know the head SHA) and the diff
+      // media-type request is the thing that is down.
+      if (/\/pulls\/\d+$/.test(path)) {
+        const accept = init?.headers?.Accept ?? init?.headers?.accept;
+        if (accept === "application/vnd.github.diff") return { ok: false, status: 503, text: async () => "" };
+        return { ok: true, status: 200, json: async () => ({ head: { sha: "head-1" } }) };
+      }
+      if (/\/pulls\/\d+\/commits/.test(path)) return { ok: true, status: 200, json: async () => [] };
+      if (/\/issues\/\d+\/comments/.test(path)) return { ok: true, status: method === "POST" ? 201 : 200, json: async () => [] };
+      if (/\/check-runs$/.test(path)) return { ok: true, status: 201, json: async () => ({ id: 88 }) };
+      return { ok: false, status: 404, text: async () => "", json: async () => ({}) };
+    }) as unknown as typeof fetch;
+    const r = await runPrSecurityReview(
+      { installationId: "42", repo: "o/r", prNumber: 7, headSha: "head-1" },
+      makeDeps({ calls: [] }, { fetchImpl: failingFetch }),
+    );
+    expect(r).toMatchObject({ ok: false, skipped: "review-unavailable", checkPosted: true });
+    const check = JSON.parse(bodies["POST /repos/o/r/check-runs"] ?? "{}") as { conclusion?: string };
+    expect(check.conclusion).toBe("neutral");
+    expect(bodies["POST /repos/o/r/issues/7/comments"] ?? "").toContain("diff HTTP 503");
   });
 });

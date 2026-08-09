@@ -364,6 +364,32 @@ export function applyLearnedTransition(
   return changed;
 }
 
+/**
+ * D3 — link an item to the learned skill its procedure was promoted to.
+ *
+ * A dedicated write rather than a second `storeLearnedItem` call: that path
+ * fingerprints on the statement, so re-storing the same item would find the row
+ * it just created, treat it as a re-derivation, and inflate the confirmation
+ * count with a confirmation that never happened — a measurement corrupting the
+ * signal D6 retires on.
+ */
+export function attachLearnedSkill(
+  tenant: LearnedTenant,
+  itemId: string,
+  skillId: string,
+  now = new Date(),
+): LearnedItem | undefined {
+  const state = readLearningState(tenant);
+  const item = state.items[itemId];
+  if (!item) return undefined;
+  const at = now.toISOString();
+  item.skillId = skillId;
+  item.updatedAt = at;
+  appendLearningLog(state, { at, op: 'skill-written', itemId, detail: skillId });
+  writeLearningState(state);
+  return item;
+}
+
 /** Record a rejection. A gate nobody can audit is a gate nobody trusts (D2). */
 export function logLearningRejection(
   tenant: LearnedTenant,

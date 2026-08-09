@@ -42,6 +42,8 @@
     "bench:real-embeddings": "npx tsx benchmark/real-embeddings-eval.ts",
     "bench:e2e": "npx tsx benchmark/end-to-end-bench.ts",
     "bench:summary": "npx tsx benchmark/bench-summary.ts",
+    "bench:review": "npx tsx benchmark/review-bench.ts",
+    "bench:review:harvest": "npx tsx benchmark/review-harvest.ts",
     "bench:download": "npx tsx benchmark/lib/dataset-loader.ts",
     "bench:overnight": "npx tsx benchmark/run-overnight.ts",
     "setup:admin": "node scripts/setup-admin.js"

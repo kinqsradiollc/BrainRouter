@@ -65,7 +65,11 @@ export function buildDiffLineIndex(diff: string): Map<string, DiffLine[]> {
         continue;
       }
       if (!inHunk) continue;
-      if (raw.startsWith('+++') || raw.startsWith('---')) continue;
+      // Nothing else is skipped here, and the `+++`/`---` file headers are the
+      // reason to say so: they only ever precede the first `@@`, so `!inHunk`
+      // has already dropped them. INSIDE a hunk, `+++ x` is an added line whose
+      // content is `++ x`, and skipping it would leave every following line
+      // number one short — the exact drift this module exists to prevent.
       if (raw.startsWith('\\')) continue; // "\ No newline at end of file"
       if (raw.startsWith('+')) {
         lines.push({ line: newLine, text: raw.slice(1), added: true });
@@ -81,6 +85,21 @@ export function buildDiffLineIndex(diff: string): Map<string, DiffLine[]> {
     index.set(file.path, existing ? [...existing, ...lines] : lines);
   }
   return index;
+}
+
+/**
+ * Drop a unified-diff marker from a quoted line, then trim what is left.
+ *
+ * The trim after the marker is the load-bearing part. Consuming the marker and
+ * ONE space (`/^[+-]\s?/`) leaves the code's own indentation attached, and every
+ * comparison downstream is against `entry.text.trim()` — so a `+`-prefixed
+ * excerpt of anything indented two spaces or more never matched, the finding
+ * degraded to `file_only`, and it lost the line. `diffHunk` is documented as
+ * carrying `-`/`+` lines, so marker-plus-indented-code is its ordinary shape:
+ * the miss was the common case, not the corner.
+ */
+function stripDiffMarker(line: string): string {
+  return line.replace(/^[+-]/, '').trim();
 }
 
 /** The first line of a quoted excerpt with real content, trimmed. */
@@ -128,7 +147,7 @@ export function computeFindingPosition(
 
   const quoted = excerptLines(finding.codeExcerpt ?? finding.diffHunk);
   if (quoted.length > 0) {
-    const needle = quoted[0].replace(/^[+-]\s?/, '');
+    const needle = stripDiffMarker(quoted[0]);
     const candidates = lines.filter((entry) => entry.text.trim() === needle);
     if (candidates.length > 0) {
       const chosen = claimed !== undefined
@@ -167,7 +186,7 @@ function matchedRunEnd(lines: readonly DiffLine[], start: number, quoted: readon
   const byLine = new Map(lines.map((entry) => [entry.line, entry.text.trim()]));
   let end = start;
   for (let offset = 1; offset < quoted.length; offset++) {
-    const expected = quoted[offset].replace(/^[+-]\s?/, '');
+    const expected = stripDiffMarker(quoted[offset]);
     if (byLine.get(start + offset) !== expected) break;
     end = start + offset;
   }

@@ -59,6 +59,25 @@ export interface RepositoryContextAnalysisPorts {
   impact: RepositoryAssuranceImpactPort;
   resolveArtifact(ref: string): RepositoryContextArtifact | null;
   releaseArtifacts(refs: Iterable<string>): void | Promise<void>;
+  /**
+   * ADR-033 D3 — read ONE inventoried text file from the retained checkout.
+   *
+   * Optional because a composition without a checkout has nothing to read from,
+   * and the deterministic packet remains the floor either way: this exists for
+   * the question the packet assembler could not have predicted, not to replace
+   * it. Reads stay inside the checkout — the adapter serves inventoried paths
+   * only and opens with `O_NOFOLLOW`.
+   */
+  readSourceFile?(checkoutRef: string, relativePath: string, maxBytes: number): Promise<string>;
+  /**
+   * ADR-033 D2 — the related-file edges among the changed paths, read off the
+   * parser-backed index built at the reviewed revision.
+   *
+   * Optional because a composition without an index still plans bundles (path
+   * adjacency and the diff's own import lines remain), and this only ever adds
+   * edges BETWEEN files already in the changeset.
+   */
+  relatedChangedPaths?(indexRef: string, changedPaths: string[]): Array<[string, string]>;
   selectDeepReviewAnchors?(indexRef: string, limit: number): {
     anchors: AssuranceSourceLocation[];
     indexedFiles: number;

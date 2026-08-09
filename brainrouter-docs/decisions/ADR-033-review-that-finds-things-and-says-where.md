@@ -66,10 +66,13 @@ Concretely, the parts that are engineering rather than prompting:
   common way a true finding becomes useless;
 - a **reflection pass** over the findings before they are published.
 
-The reported result of that split is worth stating because it argues against our instinct: **higher
-precision at roughly a ninth of the tokens**, with recall deliberately traded away. A reviewer that
-reports less and is right is more useful than one that reports more, because a reviewer nobody trusts
-gets muted.
+The result **published for that split** is worth stating because it argues against our instinct:
+higher precision at a small fraction of the cost, with recall deliberately traded away. That figure is
+someone else's measurement on someone else's corpus — it is the reason to try the shape, and it is not
+evidence about ours. Ours is D7's job, and until D7 has run we have no number of our own.
+
+The argument we are adopting, independent of any figure: a reviewer that reports less and is right is
+more useful than one that reports more, because a reviewer nobody trusts gets muted.
 
 ---
 
@@ -138,7 +141,7 @@ review people stop reading finds nothing at all.
 ### D7 · Measure it, or none of the above is knowable
 
 Build a small benchmark from **our own merged PRs** with known outcomes, and report precision,
-recall, wall-clock and tokens per run.
+recall, wall-clock, and cost per run (characters and model calls — see §6 for why not tokens).
 
 > **Without this, every change in this ADR is a belief.** It is also the only way to justify D6's
 > trade to someone who disagrees with it.
@@ -192,15 +195,65 @@ Three constraints, and the first is the one that matters:
    fixes — usable, and biased toward what we already catch. Worth stating that bias rather than
    discovering it later.
 
+### 5.1 What the implementation settled
+
+1. **The existing code graph answers it, and it had to be asked first.** The parser-backed index
+   built at the reviewed revision already records `imports` / `calls` / `tests` / `configures`
+   between symbols, so mapping those edges back to paths groups a route with the handler it calls
+   even when neither hunk mentions the other. The diff's own import lines remain as the floor for a
+   review with no checkout, but they are thin on their own: a unified diff shows three lines of
+   context around each hunk, and a file's imports sit at the top, so a change that does not touch
+   the import block produces no edges at all. Consulting the graph is also why the plan is now built
+   *after* the evidence packet rather than straight off the diff.
+2. **Concurrency is an injected number, not a constant** — four bundles in flight per review, chosen
+   by the scheduler that knows whose budget is being spent. Every unit is still charged against the
+   same model-call and duration budget, so parallelism changes the shape of the spend, not its size.
+3. **Still open, deliberately.** The local reviewer shares the definition, the parser and the
+   computed position — but it is an agent with real tools over a working-tree diff, and it has no
+   bundles, no concurrency and no reflection pass. That is the honest state: one review *definition*
+   with two orchestrations, not yet one orchestration.
+4. **A later `fix(…)` commit, blamed back to the pull request that introduced the line it changed.**
+   Real, and biased three ways that the dataset states in its own header: only defects we noticed,
+   only those fixed as their own commit, and therefore toward what our tooling already catches. The
+   absolute numbers mean little; the delta between two reviewer versions on the frozen set is what
+   the benchmark is for.
+
 ---
 
 ## 6. How this will be judged
 
 **One number and one behaviour.**
 
-The number: **precision on the D7 benchmark goes up, and tokens per review go down.** Both, or the
+The number: **precision on the D7 benchmark goes up, and cost per review goes down.** Both, or the
 split in §2 did not buy what it claims.
+
+Cost is measured in **characters sent and generated, plus model calls** — not tokens. We do not run a
+tokenizer: every provider uses a different one, so a token count here would be true for one model and
+wrong for the rest, and the claim above is a RATIO between two arms rather than an absolute budget.
+Across the same corpus and the same model, characters move with tokens, which is all a delta needs.
+Stated plainly because "tokens" is the word everyone reaches for, and using it for a number nobody
+tokenized would be a measurement we did not take.
 
 The behaviour: **take a real merged PR with a known defect, and check that the finding lands on the
 right line.** Not the right file — the right line. Everything else in this ADR is in service of a
 person looking where they were told and finding the thing there.
+
+### How that number gets produced
+
+A delta needs two measurements, so the harness has two arms on the same frozen set:
+`npx tsx brainrouter/benchmark/review-bench.ts --arm=legacy` runs the reviewer as it was before this ADR
+(size-split chunks, serial, the model's own line numbers, no reflection), and `--arm=bundled` runs
+what ships. Neither number means anything alone; the difference between them is the claim.
+
+Three things about the report are deliberate, because each of them was wrong once:
+
+- **Precision is reported twice** — "right file" and "right line". A finding anywhere inside a file
+  that happens to contain a known defect satisfies the first and not the second, and §6 is asking
+  about the second.
+- **Completion characters are counted, not just prompt size.** The reflection pass and the D3 second
+  round are extra generations; a cost claim that measures only the prompt would miss them.
+- **The ground truth's line numbers are recorded in the REVIEWED revision.** They are taken from
+  `git blame --porcelain`, which reports the line's position in the commit that introduced it —
+  not its position in the fix commit's parent, which is a different revision that later commits have
+  already shifted. A defect naming a file the reviewed revision does not contain is dropped rather
+  than shipped, because it is unfindable by construction and would depress recall forever.

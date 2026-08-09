@@ -77,7 +77,13 @@ export const REVIEW_REFLECTION_TOOL: ReviewToolSchema = {
   },
 };
 
-const REFLECTION_SYSTEM_PROMPT = [
+/**
+ * Exported so the D6 trade is assertable rather than a sentence in a prompt
+ * nobody re-reads: "we would rather miss a real issue than report a false one"
+ * is the instruction that decides what this pass deletes, and a future edit
+ * that quietly optimises for recall should fail a test, not ship.
+ */
+export const REVIEW_REFLECTION_SYSTEM_PROMPT = [
   'You are the final gate on a code review that will be published to the pull request author.',
   'You judge the findings as a SET. You do not add findings, you do not soften them, and you do not rewrite them.',
   'We would rather MISS a real issue than publish a false one: a wrong finding costs a person\'s attention and some trust every single time, and a review people stop reading finds nothing at all.',
@@ -232,7 +238,7 @@ export async function reflectOnReviewFindings(
   const remainder = findings.slice(maxFindings);
   try {
     const raw = await options.complete({
-      system: REFLECTION_SYSTEM_PROMPT,
+      system: REVIEW_REFLECTION_SYSTEM_PROMPT,
       user: buildReflectionPrompt(considered),
       tool: REVIEW_REFLECTION_TOOL,
     });

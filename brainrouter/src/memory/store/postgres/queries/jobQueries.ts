@@ -269,7 +269,11 @@ function withHistoricalCoverage(rawOutput: unknown, rawProgress: unknown): Recor
   for (const event of progress) {
     const kind = cleanText(event.kind, 100) ?? "";
     const data = objectValue(event.data);
-    if (kind === "diff-fetched") {
+    // ADR-033 D2 moved the unit count onto its own event: the plan is not known
+    // until the exact-revision graph has been consulted, which is after the diff
+    // arrives. Both kinds are read so rows written before that split still
+    // project their coverage.
+    if (kind === "diff-fetched" || kind === "review-units-planned") {
       totalParts = Math.max(totalParts, Math.max(0, Math.floor(Number(data.parts) || 0)));
       unreviewedParts = Math.max(unreviewedParts, Math.max(0, Math.floor(Number(data.unreviewedParts) || 0)));
     }

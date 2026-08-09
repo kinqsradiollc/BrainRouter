@@ -58,6 +58,8 @@ export interface AgentLike {
   // DESK-3 — session lifecycle + model control (all present on the real Agent).
   clearHistory?(): void;
   resetSessionCounters?(): void;
+  /** ADR-032 D5 — the session-end checkpoint. Fire-and-forget by contract. */
+  endSession?(): void;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   loadHistory?(entries: any[]): number;
   setModel?(model: string): void;
@@ -304,7 +306,16 @@ export function createHostCore(input: {
       // result is persisted to the transcript and re-read on switch-back. Drop
       // it so the pool can't grow without bound. Only spawned agents are dropped;
       // the single shared agent of the no-factory path is never evicted.
-      if (sk !== activeKey && input.spawnAgent && !next) pool.delete(sk);
+      if (sk !== activeKey && input.spawnAgent && !next) {
+        // ADR-032 D5 — this session is over as far as this process is
+        // concerned: its agent is about to be discarded and only its transcript
+        // survives. The CLI fires the session-end checkpoint on `/exit`; the
+        // desktop had no equivalent, so on this surface D5 simply never ran.
+        // Fire-and-forget by the method's own contract, and never let a
+        // learning failure interfere with dropping the agent.
+        try { rt.agent.endSession?.(); } catch { /* learning is never a liability */ }
+        pool.delete(sk);
+      }
       // Single-agent path: a switch was deferred until this turn ended.
       if (pendingSwitch) { const fn = pendingSwitch; pendingSwitch = null; fn(); }
       // WS1 — a detached child/worker may have finished mid-turn; fold its result

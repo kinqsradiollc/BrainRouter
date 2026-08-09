@@ -226,7 +226,7 @@ export function relatedPathsFromDiff(diff: string): Array<[string, string]> {
       if (!specifier.startsWith('.')) continue; // package imports cannot name a changed file
       const target = resolveRelativeSpecifier(directory, specifier, changed);
       if (!target || target === file.path) continue;
-      const key = [file.path, target].sort().join(' ');
+      const key = [file.path, target].sort().join('\u0000');
       if (seen.has(key)) continue;
       seen.add(key);
       edges.push([file.path, target]);
@@ -302,11 +302,14 @@ interface FileGroup {
  *
  * Invariants the tests pin: every changed file lands in exactly one bundle or
  * in `deferredPaths`; the plan is a pure function of its input (same diff, same
- * bundles, same ids); and a group is never split across bundles unless the
- * group is one file too large for the budget on its own.
+ * bundles, same ids); no bundle's diff exceeds `maxBundleChars` unless one
+ * indivisible file does; and a group is never split across bundles unless the
+ * group itself exceeds the budget.
  */
 export function planReviewBundles(input: ReviewBundlePlanInput): ReviewBundlePlan {
-  const maxBundleChars = Math.max(1_000, Math.trunc(input.maxBundleChars));
+  // Only guards against a non-positive budget; the caller owns the real number,
+  // and clamping it upward here would silently review more than it asked for.
+  const maxBundleChars = Math.max(1, Math.trunc(input.maxBundleChars));
   const maxBundles = Math.max(1, Math.trunc(input.maxBundles));
   const files = splitUnifiedDiffFiles(input.diff).filter((file) => file.diff.trim().length > 0);
   if (files.length === 0) return { bundles: [], deferredPaths: [], totalFiles: 0 };
@@ -318,12 +321,6 @@ export function planReviewBundles(input: ReviewBundlePlanInput): ReviewBundlePla
 
   const sets = new DisjointSet();
   const relations = new Map<number, Set<ReviewBundleRelation>>();
-  const noteRelation = (index: number, relation: ReviewBundleRelation): void => {
-    const root = sets.find(index);
-    const current = relations.get(root) ?? new Set<ReviewBundleRelation>();
-    current.add(relation);
-    relations.set(root, current);
-  };
   const join = (left: number, right: number, relation: ReviewBundleRelation): void => {
     const leftRelations = relations.get(sets.find(left)) ?? new Set<ReviewBundleRelation>();
     const rightRelations = relations.get(sets.find(right)) ?? new Set<ReviewBundleRelation>();
@@ -376,8 +373,8 @@ export function planReviewBundles(input: ReviewBundlePlanInput): ReviewBundlePla
     if (group.indexes.length === 1 && group.relations.size === 0) group.relations.add('standalone');
     // Ordering by directory keeps packed bundles local to one area of the tree,
     // so a bundle that ends up holding two small groups is still coherent.
-    const paths = group.indexes.map((index) => files[index].path || `￿${index}`).sort();
-    group.sortKey = `${directoryOf(paths[0])} ${paths[0]}`;
+    const paths = group.indexes.map((index) => files[index].path || `\uFFFF${index}`).sort();
+    group.sortKey = `${directoryOf(paths[0])}\u0000${paths[0]}`;
   }
 
   const ordered = [...groups.values()].sort((left, right) => left.sortKey.localeCompare(right.sortKey));
@@ -390,20 +387,23 @@ export function planReviewBundles(input: ReviewBundlePlanInput): ReviewBundlePla
     current = null;
   };
   for (const group of ordered) {
-    if (group.chars > maxBundleChars && group.indexes.length === 1) {
-      // One file larger than a whole bundle: split it along hunk boundaries so
-      // it is still reviewed end to end, and say so on every part.
+    if (group.chars > maxBundleChars) {
+      // A group larger than a whole bundle is split — however related its files
+      // are. The earlier version only split a group of ONE, so a connected
+      // component of many files was emitted whole and `maxBundleChars` stopped
+      // being a budget for it: a 494-file component produced a single 5 MB
+      // prompt. That is not "fewer tokens", it is a context-limit failure, and
+      // the coverage lost to it is invisible. Keeping files together is a
+      // preference; fitting in the model's window is a constraint.
       flush();
-      const file = files[group.indexes[0]];
-      const pieces = packOversizedFile(file, maxBundleChars);
-      pieces.forEach((piece, pieceIndex) => {
+      for (const piece of splitOversizedGroup(group, files, maxBundleChars)) {
         packed.push({
-          indexes: [group.indexes[0]],
+          indexes: piece.indexes,
           relations: new Set(group.relations),
-          part: { index: pieceIndex + 1, total: pieces.length },
+          ...(piece.part ? { part: piece.part } : {}),
         });
-        partText.set(packed.length - 1, piece);
-      });
+        if (piece.text !== undefined) partText.set(packed.length - 1, piece.text);
+      }
       continue;
     }
     if (current && current.chars + group.chars > maxBundleChars) flush();
@@ -442,13 +442,95 @@ export function planReviewBundles(input: ReviewBundlePlanInput): ReviewBundlePla
   };
 }
 
+/** One packed piece of an oversized group: files, and the text when hunk-split. */
+interface OversizedGroupPiece {
+  indexes: number[];
+  part?: { index: number; total: number };
+  /** Set only for a hunk-split file; otherwise the caller joins the diffs. */
+  text?: string;
+}
+
+/**
+ * Break a group that does not fit into pieces that do.
+ *
+ * Members are walked in PATH order rather than diff order so the same changeset
+ * always splits the same way — determinism is an invariant here, and diff order
+ * is git's business, not ours. A single member still too large for a whole
+ * bundle is hunk-split, which is the only case that produces `part`.
+ */
+function splitOversizedGroup(
+  group: FileGroup,
+  files: readonly ReviewDiffFile[],
+  maxBundleChars: number,
+): OversizedGroupPiece[] {
+  const pieces: OversizedGroupPiece[] = [];
+  const members = [...group.indexes].sort(
+    (left, right) => (files[left].path || '').localeCompare(files[right].path || '') || left - right,
+  );
+  let current: { indexes: number[]; chars: number } | null = null;
+  const flushCurrent = (): void => {
+    if (current && current.indexes.length) pieces.push({ indexes: current.indexes });
+    current = null;
+  };
+  for (const index of members) {
+    // Matches the accounting in the grouping pass (`+ 1` for the join newline)
+    // so a group of one splits here exactly as it did before this function.
+    const chars = files[index].diff.length + 1;
+    if (chars > maxBundleChars) {
+      flushCurrent();
+      const parts = packOversizedFile(files[index], maxBundleChars);
+      parts.forEach((text, partIndex) => {
+        pieces.push({ indexes: [index], part: { index: partIndex + 1, total: parts.length }, text });
+      });
+      continue;
+    }
+    if (current && current.chars + chars > maxBundleChars) flushCurrent();
+    if (!current) current = { indexes: [], chars: 0 };
+    current.indexes.push(index);
+    current.chars += chars;
+  }
+  flushCurrent();
+  return pieces;
+}
+
 /** Hunk-packed pieces of one file whose own diff exceeds the bundle budget. */
 function packOversizedFile(file: ReviewDiffFile, maxBundleChars: number): string[] {
-  const hunks = splitDiffFileByHunk(file.diff);
-  if (hunks.length <= 1) return [file.diff];
+  const lines = file.diff.split('\n');
+  const firstHunk = lines.findIndex((line) => line.startsWith('@@'));
+  // No hunks at all — a binary blob or a pure rename. Genuinely indivisible.
+  if (firstHunk < 0) return [file.diff];
+  const header = lines.slice(0, firstHunk).join('\n');
+  // Room left for content once every piece has paid for the file header twice
+  // over (header + the `@@` line it will carry). Below that there is nothing
+  // sensible to emit, so the file goes out whole and says so by being one part.
+  if (header.length + 80 >= maxBundleChars) return [file.diff];
+
+  const rawHunks: string[] = [];
+  let buffer: string[] = [];
+  for (const line of lines.slice(firstHunk)) {
+    if (line.startsWith('@@') && buffer.length) {
+      rawHunks.push(buffer.join('\n'));
+      buffer = [];
+    }
+    buffer.push(line);
+  }
+  if (buffer.length) rawHunks.push(buffer.join('\n'));
+
   const pieces: string[] = [];
   let current = '';
-  for (const hunk of hunks) {
+  const flush = (): void => { if (current) { pieces.push(current); current = ''; } };
+  for (const raw of rawHunks) {
+    const hunk = `${header}\n${raw}`;
+    // ONE hunk over the budget. A newly-added generated file is a single hunk
+    // of its whole content, so "split by hunk" leaves it exactly as oversized
+    // as it started — measured on our own history, five bundles across the
+    // benchmark set still blew the production cap this way, the worst at 256 KB.
+    // Splitting inside the hunk is what makes the budget hold for every file.
+    if (hunk.length > maxBundleChars) {
+      flush();
+      pieces.push(...splitHunkByLines(header, raw, maxBundleChars));
+      continue;
+    }
     if (!current) current = hunk;
     else if (current.length + 1 + hunk.length <= maxBundleChars) current += `\n${hunk}`;
     else {
@@ -456,6 +538,52 @@ function packOversizedFile(file: ReviewDiffFile, maxBundleChars: number): string
       current = hunk;
     }
   }
-  if (current) pieces.push(current);
-  return pieces;
+  flush();
+  return pieces.length ? pieces : [file.diff];
+}
+
+/**
+ * Cut ONE hunk into budget-sized pieces, giving each piece its own `@@` header.
+ *
+ * The header is RECOMPUTED rather than repeated, because a repeated header
+ * would tell the model that every piece starts at the hunk's original line —
+ * and D4 publishes lines the model reasons about. Old and new line counters
+ * advance by what each piece actually consumed: a context line advances both, a
+ * `-` line only the old side, a `+` line only the new one.
+ */
+function splitHunkByLines(header: string, hunk: string, maxBundleChars: number): string[] {
+  const lines = hunk.split('\n');
+  const marker = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(lines[0] ?? '');
+  if (!marker) return [`${header}\n${hunk}`];
+  let oldLine = Number(marker[1]);
+  let newLine = Number(marker[2]);
+
+  const pieces: string[] = [];
+  let body: string[] = [];
+  let oldCount = 0;
+  let newCount = 0;
+  const emit = (): void => {
+    if (!body.length) return;
+    pieces.push(
+      `${header}\n@@ -${oldLine},${oldCount} +${newLine},${newCount} @@\n${body.join('\n')}`,
+    );
+    oldLine += oldCount;
+    newLine += newCount;
+    body = [];
+    oldCount = 0;
+    newCount = 0;
+  };
+  // Every piece pays for the header and a generous `@@` line before content.
+  const room = maxBundleChars - header.length - 60;
+  let used = 0;
+  for (const line of lines.slice(1)) {
+    if (body.length && used + line.length + 1 > room) emit(), (used = 0);
+    body.push(line);
+    used += line.length + 1;
+    if (line.startsWith('+')) newCount += 1;
+    else if (line.startsWith('-')) oldCount += 1;
+    else if (!line.startsWith('\\')) { oldCount += 1; newCount += 1; }
+  }
+  emit();
+  return pieces.length ? pieces : [`${header}\n${hunk}`];
 }

@@ -10,6 +10,7 @@ import type { ReplContext } from '../commands/_context.js';
 // a tryHandleX(ctx) that returns true iff it matched the command. Walked
 // in order; first match wins, no match falls through to the legacy switch.
 import { tryHandleMemoryCommand } from '../commands/memory/index.js';
+import { tryHandleLearningCommand } from '../commands/learning/index.js';
 import { tryHandleUiCommand } from '../commands/ui/index.js';
 import { tryHandleWorkflowCommand } from '../commands/workflow/index.js';
 import { tryHandleObsCommand } from '../commands/obs/index.js';
@@ -137,6 +138,7 @@ export async function handleSlashCommand(
   if (await tryHandleConfigCommand(cmdCtx)) return;
   if (await tryHandleLoginCommand(cmdCtx)) return;
   if (await tryHandleMemoryCommand(cmdCtx)) return;
+  if (await tryHandleLearningCommand(cmdCtx)) return;
   if (await tryHandleUiCommand(cmdCtx)) return;
   if (await tryHandleWorkflowCommand(cmdCtx)) return;
   if (await tryHandleRequirementCommand(cmdCtx)) return;

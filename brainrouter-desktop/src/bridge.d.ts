@@ -132,6 +132,8 @@ declare global {
       /** Organization team spaces plus cross-organization personal teams. */
       teams?: {
         contexts(): Promise<unknown>;
+        /** Records the active organization so the learned store partitions on it (ADR-032 D8). */
+        setActiveOrg?(orgId?: string): Promise<unknown>;
         list(orgId?: string): Promise<unknown>;
         get(id: string, orgId?: string): Promise<unknown>;
         create(name: string, kind: string, orgId?: string): Promise<unknown>;

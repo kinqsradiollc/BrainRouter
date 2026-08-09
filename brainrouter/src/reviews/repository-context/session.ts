@@ -87,6 +87,48 @@ export class RepositoryContextAssuranceSession {
     return [...this.limitations.keys()];
   }
 
+  /**
+   * ADR-033 D3 — serve one file from the retained exact-revision checkout.
+   *
+   * Returns null when there is nothing to read from (no checkout, or the
+   * composition wired no reader), so the caller can tell the reviewer the
+   * evidence is unavailable instead of inventing it. Path safety and symlink
+   * containment stay where they already are: this only hands the request on.
+   */
+  get canReadSource(): boolean {
+    return Boolean(this.checkoutRef && this.input.analysis.readSourceFile && !this.cleaned);
+  }
+
+  /**
+   * ADR-033 D2 — related-file edges among the changed paths, or none.
+   *
+   * Empty before the index exists (it is built during context preparation) and
+   * empty after cleanup, so a caller that asks too early or too late plans its
+   * bundles from path adjacency alone rather than from a stale graph.
+   */
+  relatedChangedPaths(changedPaths: readonly string[]): Array<[string, string]> {
+    if (!this.indexRef || !this.input.analysis.relatedChangedPaths || this.cleaned) return [];
+    const safe = changedPaths.filter((path) => isSafeRepositoryRelativePath(path));
+    if (safe.length < 2) return [];
+    try {
+      return this.input.analysis.relatedChangedPaths(this.indexRef, safe);
+    } catch {
+      // Grouping is an optimisation over a correct default; a graph that cannot
+      // answer must never sink the review that asked it.
+      return [];
+    }
+  }
+
+  async readSourceFile(relativePath: string, maxBytes: number): Promise<string> {
+    if (!this.checkoutRef || !this.input.analysis.readSourceFile || this.cleaned) {
+      throw new Error("The exact-revision checkout is not available for reading.");
+    }
+    if (!isSafeRepositoryRelativePath(relativePath)) {
+      throw new Error("Requested review evidence path is not repo-relative.");
+    }
+    return this.input.analysis.readSourceFile(this.checkoutRef, relativePath, maxBytes);
+  }
+
   async enforceDeepReviewPreflight(input: {
     policy: DeepReviewPolicy;
     organizationId: string;

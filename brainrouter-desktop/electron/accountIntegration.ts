@@ -8,9 +8,43 @@ import {
 } from '@kinqs/brainrouter-types';
 
 type AccountConfig = {
-  cli?: { account?: { url?: string; userId?: string; displayName?: string; email?: string } };
+  cli?: { account?: { url?: string; userId?: string; orgId?: string; displayName?: string; email?: string } };
   servers?: Record<string, { identity?: string; apiKey?: string; url?: string }>;
 };
+
+/**
+ * ADR-032 D8 — record which tenant this install is currently working as.
+ *
+ * Sign-in writes `userId`; the ACTIVE ORG is a later, separate choice that the
+ * user can change at any time from the workspace switcher, so it cannot be
+ * captured once at sign-in without going stale the first time they switch. The
+ * learned store keys on `cli.account`, and core reads that file rather than
+ * renderer state, so the switcher's selection has to land here to have any
+ * effect on the partition.
+ *
+ * Pure on purpose: the decision (what changes, and whether anything changed at
+ * all) is separable from the config write, so it can be tested without a disk.
+ *
+ * An empty/unknown org clears the field rather than storing `''`. An absent org
+ * means PERSONAL, and personal is the safe reading — a lesson learned in one
+ * customer's workspace reaching another is a data leak with a pleasant name.
+ * Signed-out installs are left alone entirely: an org id with no account behind
+ * it would claim a tenancy nothing established.
+ */
+export function withAccountOrgId(
+  config: unknown,
+  orgId: unknown,
+): { changed: boolean; next: AccountConfig } {
+  const next = (config ?? {}) as AccountConfig;
+  const account = next.cli?.account;
+  if (!account) return { changed: false, next };
+  const desired = typeof orgId === 'string' ? orgId.trim() : '';
+  const current = typeof account.orgId === 'string' ? account.orgId.trim() : '';
+  if (desired === current) return { changed: false, next };
+  if (desired) account.orgId = desired;
+  else delete account.orgId;
+  return { changed: true, next };
+}
 
 type FetchResponse = {
   ok: boolean;

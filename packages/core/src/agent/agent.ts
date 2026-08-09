@@ -287,6 +287,8 @@ import {
   getPolicyAudit as getPolicyAuditImpl,
   loadHistory as loadHistoryImpl,
 } from './runtime/session.impl.js';
+import { scheduleLearningCheckpoint } from './runtime/learningPhase.js';
+import { emptySessionProvenance, type SessionProvenance } from './runtime/contentProvenance.js';
 import type { SteeringReceipt } from '../task/workContract.js';
 
 export interface RunTurnCallbacks {
@@ -1376,6 +1378,19 @@ export class Agent {
     return requestInterruptImpl.call(this);
   }
 
+  /**
+   * ADR-032 D5 — the session-end checkpoint.
+   *
+   * The last of the three moments learning fires at, and the one that catches
+   * the session which ended without a compaction and whose final turn was too
+   * close to the previous checkpoint to spend budget. Synchronous and
+   * fire-and-forget by design: a host calls this while shutting down, and a
+   * shutdown that waits on an LLM call is a shutdown people learn to kill.
+   */
+  public endSession(): void {
+    scheduleLearningCheckpoint(this, 'session-end');
+  }
+
   public requestSteer(
     text: string,
     options: { id?: string; source?: SteeringInput['source'] } = {},
@@ -1574,6 +1589,15 @@ export class Agent {
   /** continuation loop uses this to suppress auto-continuation after prose-only turns. */
   public lastTurnToolCalls = 0;
 
+  /**
+   * ADR-032 D7 — this session's content provenance, tallied per tool call.
+   *
+   * Session-scoped rather than per-turn because a checkpoint reflects on the
+   * whole session: the turn that fetched the hostile page and the turn that
+   * would "corroborate" it are usually not the same turn.
+   */
+  public sessionProvenance: SessionProvenance = emptySessionProvenance();
+
   /** C1 — child ids whose drain TIMED OUT this turn (the parent answered before they
    *  finished). The REPL polls these and auto-resumes once they settle. Empty when
    *  nothing timed out. */
@@ -1705,6 +1729,11 @@ export class Agent {
     this.usageBySkill = new Map();
     this.toolCallCounts = new Map();
     this.mcpServerCallCounts = new Map(); // CC-UX-E3
+    // ADR-032 D7 — provenance is a property of THIS session's reading, so a new
+    // session must not inherit the last one's untrusted reads (which would make
+    // it stricter than it should be) or its corroborations (which would make it
+    // laxer, and that is the direction that costs something).
+    this.sessionProvenance = emptySessionProvenance();
     // 9b: session-boundary reset for gated recall.
     this.recallHasFiredThisSession = false;
     this.recallNextTurnIsPostCompaction = false;

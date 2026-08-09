@@ -35,7 +35,11 @@ const IMPLEMENTATION_AND_TEST = [
 test('a file and its test are one review unit', () => {
   const plan = planReviewBundles({
     diff: IMPLEMENTATION_AND_TEST,
-    maxBundleChars: 200,
+    // Budget large enough to hold the pair. It has to be: the budget is a hard
+    // constraint now (a group over it is split however related its files are),
+    // so a budget too small to hold two files would be testing the splitter
+    // rather than the pairing this test is about.
+    maxBundleChars: 5_000,
     maxBundles: 10,
   });
   const withTotal = plan.bundles.find((bundle) => bundle.paths.includes('src/orders/total.ts'));
@@ -93,7 +97,9 @@ test('an import edge joins two changed files and can never add a third', () => {
 
   const plan = planReviewBundles({
     diff,
-    maxBundleChars: 200,
+    // Same reason as the pairing test: big enough that the budget is not what
+    // decides the outcome, so this measures the import edge.
+    maxBundleChars: 5_000,
     maxBundles: 10,
     relatedPaths: edges,
   });
@@ -111,7 +117,7 @@ test('one file bigger than a bundle is split by hunk, not truncated', () => {
     '+++ b/src/huge.ts',
     ...hunks,
   ].join('\n');
-  const plan = planReviewBundles({ diff, maxBundleChars: 1_000, maxBundles: 10 });
+  const plan = planReviewBundles({ diff, maxBundleChars: 200, maxBundles: 10 });
   assert.ok(plan.bundles.length > 1, 'an oversized file was not split');
   for (const bundle of plan.bundles) {
     assert.deepEqual(bundle.paths, ['src/huge.ts']);
@@ -122,6 +128,101 @@ test('one file bigger than a bundle is split by hunk, not truncated', () => {
     .map((bundle) => bundle.diff.split('\n').filter((line) => line.startsWith('@@')).length)
     .reduce((sum, count) => sum + count, 0);
   assert.equal(hunkCount, hunks.length, 'splitting lost a hunk');
+});
+
+test('the budget is a budget: a related GROUP too large is split too', () => {
+  // The regression this pins: the split only fired for a group of ONE, so a
+  // connected component of many related files was emitted whole. Measured on
+  // real pull requests, 27 of 102 bundles blew the production cap and one
+  // component produced a single 5 MB prompt — 87× the budget. That is a
+  // context-limit failure, and the coverage it costs is invisible.
+  // Each file fits on its own; the PAIR does not. That is the shape the old
+  // code emitted whole, and the shape a hunk split cannot rescue.
+  const body = Array.from({ length: 100 }, (_, index) => `const value${index} = ${index};`);
+  const diff = [
+    fileDiff('src/orders/total.ts', body),
+    fileDiff('src/orders/total.test.ts', body), // same family — one group
+  ].join('\n');
+  const maxBundleChars = 3_500;
+  const plan = planReviewBundles({ diff, maxBundleChars, maxBundles: 40 });
+  assert.ok(plan.bundles.length > 1, 'an oversized related group was emitted as one bundle');
+  for (const bundle of plan.bundles) {
+    assert.ok(
+      bundle.diff.length <= maxBundleChars,
+      `bundle ${bundle.id} is ${bundle.diff.length} chars, over the ${maxBundleChars} budget`,
+    );
+  }
+  // Nothing is lost by splitting: both files are still reviewed.
+  const covered = new Set(plan.bundles.flatMap((bundle) => bundle.paths));
+  assert.deepEqual([...covered].sort(), ['src/orders/total.test.ts', 'src/orders/total.ts']);
+});
+
+test('every bundle of a many-file changeset stays inside the budget', () => {
+  // The same property stated over a wider shape, so a future grouping rule that
+  // joins more files cannot quietly reintroduce an unbounded bundle.
+  const body = Array.from({ length: 60 }, (_, index) => `const v${index} = ${index};`);
+  const diff = Array.from({ length: 30 }, (_, index) =>
+    fileDiff(`src/area/mod${index}.ts`, body),
+  ).join('\n');
+  const maxBundleChars = 4_000;
+  const plan = planReviewBundles({
+    diff,
+    maxBundleChars,
+    maxBundles: 100,
+    // Join everything to everything: the worst case for a size budget.
+    relatedPaths: Array.from({ length: 29 }, (_, index) =>
+      [`src/area/mod0.ts`, `src/area/mod${index + 1}.ts`] as [string, string],
+    ),
+  });
+  for (const bundle of plan.bundles) {
+    assert.ok(
+      bundle.diff.length <= maxBundleChars,
+      `bundle ${bundle.id} is ${bundle.diff.length} chars, over the ${maxBundleChars} budget`,
+    );
+  }
+  const covered = new Set(plan.bundles.flatMap((bundle) => bundle.paths));
+  assert.equal(covered.size + plan.deferredPaths.length, 30);
+});
+
+test('a single enormous HUNK is cut up too, with honest line numbers on each piece', () => {
+  // A newly-added generated file is one hunk holding its whole content, so
+  // "split by hunk" left it exactly as oversized as it started. Five bundles
+  // across the committed benchmark set were still over the production cap this
+  // way, the worst at 256 KB — a context-limit failure wearing a budget's name.
+  const body = Array.from({ length: 300 }, (_, index) => `+const generated${index} = ${index};`);
+  const diff = [
+    'diff --git a/src/generated.ts b/src/generated.ts',
+    '--- /dev/null',
+    '+++ b/src/generated.ts',
+    `@@ -0,0 +1,${body.length} @@`,
+    ...body,
+  ].join('\n');
+  const maxBundleChars = 3_000;
+  const plan = planReviewBundles({ diff, maxBundleChars, maxBundles: 100 });
+  assert.ok(plan.bundles.length > 1, 'a single oversized hunk was not split');
+  for (const bundle of plan.bundles) {
+    assert.ok(
+      bundle.diff.length <= maxBundleChars,
+      `bundle ${bundle.id} is ${bundle.diff.length} chars, over the ${maxBundleChars} budget`,
+    );
+    assert.match(bundle.diff, /^diff --git/, 'a piece lost the file header');
+    assert.ok(bundle.part, 'a split part did not say it was a part');
+  }
+  // Nothing is lost, and the recomputed headers are honest: reading every piece
+  // in order reproduces the file's added lines exactly once, in order.
+  const added = plan.bundles.flatMap((bundle) =>
+    bundle.diff.split('\n').filter((line) => line.startsWith('+') && !line.startsWith('+++')),
+  );
+  assert.deepEqual(added, body);
+  // Each piece's `@@` header must name the line its first added line really is.
+  let expectedNew = 1;
+  for (const bundle of plan.bundles) {
+    const marker = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/m.exec(bundle.diff);
+    assert.ok(marker, 'a piece lost its hunk header');
+    assert.equal(Number(marker[1]), expectedNew, `piece ${bundle.id} claims the wrong start line`);
+    expectedNew += bundle.diff.split('\n')
+      .filter((line) => line.startsWith('+') && !line.startsWith('+++')).length;
+  }
 });
 
 test('family keys pair the test naming conventions we actually use', () => {

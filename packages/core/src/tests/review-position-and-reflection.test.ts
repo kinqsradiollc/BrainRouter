@@ -18,6 +18,7 @@ import {
   applyReflection,
   parseReflectionOutput,
   reflectOnReviewFindings,
+  REVIEW_REFLECTION_SYSTEM_PROMPT,
 } from '../review/reviewReflection.js';
 import type { ParsedReviewFinding } from '../review/reviewFindings.js';
 
@@ -54,6 +55,35 @@ test('the quoted evidence decides the line, not the model’s memory of it', () 
   assert.equal(position.kind, 'excerpt_relocated');
 });
 
+test('a diff-marked excerpt of INDENTED code still finds its line', () => {
+  // `diffHunk` is documented as carrying `-`/`+` lines, so marker-plus-indented
+  // code is its ordinary shape. Stripping the marker and exactly one space left
+  // the code's own indentation attached to the needle, which is compared with a
+  // TRIMMED line — so every excerpt indented two spaces or more silently missed
+  // and the finding degraded to file-only, losing the line ADR-033 §6 says the
+  // reviewer is judged on.
+  const index = buildDiffLineIndex(DIFF);
+  for (const excerpt of [
+    '+  const total = amount * rate;', // marker + the real two-space indent
+    '+ const total = amount * rate;',
+    '+const total = amount * rate;',
+    '  const total = amount * rate;',
+  ]) {
+    const position = computeFindingPosition(finding({ diffHunk: excerpt }), index);
+    assert.equal(position.line, 41, `excerpt did not resolve: ${JSON.stringify(excerpt)}`);
+  }
+});
+
+test('a multi-line diff-marked excerpt establishes the end line too', () => {
+  const index = buildDiffLineIndex(DIFF);
+  const position = computeFindingPosition(
+    finding({ diffHunk: '+  const total = amount * rate;\n+  return charge(total);' }),
+    index,
+  );
+  assert.equal(position.line, 41);
+  assert.equal(position.endLine, 42);
+});
+
 test('a multi-line excerpt establishes the end line too', () => {
   const index = buildDiffLineIndex(DIFF);
   const position = computeFindingPosition(
@@ -62,6 +92,30 @@ test('a multi-line excerpt establishes the end line too', () => {
   );
   assert.equal(position.line, 41);
   assert.equal(position.endLine, 42);
+});
+
+test('an added line that itself looks like a diff header still advances the count', () => {
+  // A `+++ x` line inside a hunk is an ADDED line whose content is `++ x` — a
+  // diff of a diff, a markdown fence, a test fixture. Treating it as a file
+  // header skips it without advancing the new-file counter, and every finding
+  // below it lands one line early: the silent drift D4 exists to stop.
+  const index = buildDiffLineIndex([
+    'diff --git a/docs/patch.md b/docs/patch.md',
+    '--- a/docs/patch.md',
+    '+++ b/docs/patch.md',
+    '@@ -1,0 +1,3 @@',
+    '+++ b/example.ts',
+    '+--- a/example.ts',
+    '+const afterTheHeaders = true;',
+  ].join('\n'));
+  const lines = index.get('docs/patch.md') ?? [];
+  assert.deepEqual(lines.map((entry) => entry.line), [1, 2, 3]);
+  assert.equal(lines[2].text, 'const afterTheHeaders = true;');
+  const position = computeFindingPosition(
+    finding({ file: 'docs/patch.md', codeExcerpt: 'const afterTheHeaders = true;' }),
+    index,
+  );
+  assert.equal(position.line, 3);
 });
 
 test('a line that cannot be established is not published at all', () => {
@@ -128,6 +182,14 @@ test('an unexplained deletion is refused, and an outage keeps every finding', as
   });
   assert.equal(outage.reflected, false);
   assert.equal(outage.findings.length, 2);
+});
+
+test('the pass is told which way to trade, so nobody optimises recall by accident', () => {
+  // ADR-033 D6 — state it where the decision is made. A reviewer nobody trusts
+  // gets muted, and a muted reviewer finds nothing at all.
+  assert.match(REVIEW_REFLECTION_SYSTEM_PROMPT, /rather MISS a real issue than publish a false one/);
+  assert.match(REVIEW_REFLECTION_SYSTEM_PROMPT, /do not add findings/i);
+  assert.match(REVIEW_REFLECTION_SYSTEM_PROMPT, /Drop a finding when/);
 });
 
 test('a finding with no verdict is kept, so a truncated reply loses nothing', () => {

@@ -31,8 +31,9 @@ import {
 } from './reflection.js';
 import { sweepRetirement, type RetirementPolicy } from './retirement.js';
 import {
-  applyLearnedTransition, listLearnedItems, logLearningRejection,
-  newLearnedItemId, noteLearnedOutcome, readLearningState, storeLearnedItem,
+  applyLearnedTransition, attachLearnedSkill, listLearnedItems,
+  logLearningRejection, newLearnedItemId, noteLearnedOutcome, readLearningState,
+  storeLearnedItem,
 } from './store.js';
 import type {
   LearnedItem, LearnedTenant, LearningCheckpointReason,
@@ -244,10 +245,8 @@ export async function runLearningCheckpoint(
       if (written) {
         stored.skillId = written;
         skillsWritten.push(written);
-        // Re-store so the skill id is durable; the statement matches, so this
-        // reinforces the row it just created rather than adding a second.
         try {
-          storeLearnedItem(input.tenant, stored, now);
+          attachLearnedSkill(input.tenant, stored.id, written, now);
         } catch { /* the skill file is written; the link is a convenience */ }
       }
     }

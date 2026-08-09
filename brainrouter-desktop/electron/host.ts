@@ -88,7 +88,7 @@ import { WorkspaceFileListCache, type WorkspaceFileListResult } from './workspac
 import { startWorkspaceWatcher } from './fileWatch.js';
 import { loadSchedules, addSchedule, removeSchedule, setScheduleEnabled } from '@kinqs/brainrouter-core/schedule';
 import { parseCron, nextCronFire } from '@kinqs/brainrouter-core/schedule';
-import { parseReviewFindings, stripReasoning, buildReviewInstructionBlock, buildWorkingTreeReviewPrompt } from '@kinqs/brainrouter-core/review';
+import { parseReviewFindings, positionReviewFindings, stripReasoning, buildReviewInstructionBlock, buildWorkingTreeReviewPrompt } from '@kinqs/brainrouter-core/review';
 import {
   hashDiff,
   reviewGate,
@@ -947,7 +947,12 @@ async function main(): Promise<void> {
     try { answer = await reviewer.runTurn(prompt, cb, { preplanned: true }); }
     catch (err) { phase('failed', err instanceof Error ? err.message : String(err)); const r: ReviewRun = { ...base, status: 'failed', summary: `Review failed: ${err instanceof Error ? err.message : String(err)}` }; saveReview(workspaceRoot, r); return { ...r, files: files.length }; }
     phase('findings', 'parsing reviewer output');
-    const findings: ReviewFinding[] = parseReviewFindings(answer).map((f, i) => ({
+    // ADR-033 D4 — the line a finding is filed on is COMPUTED from the diff and
+    // the excerpt the reviewer quoted, never taken from its memory of what line
+    // it was looking at. A correct finding on the wrong line reads as a false
+    // positive to whoever opens the file, so an unplaceable finding loses its
+    // line and stays in the list rather than pointing at the wrong code.
+    const findings: ReviewFinding[] = positionReviewFindings(parseReviewFindings(answer), diff).map(({ finding: f }, i) => ({
       id: `f${i}_${Date.now().toString(36)}`, file: f.file, line: f.line ?? undefined, endLine: f.endLine ?? undefined,
       severity: SEV_MAP[String(f.severity ?? '').toLowerCase()] ?? 'medium',
       confidence: f.confidence ?? 70, summary: f.summary,
