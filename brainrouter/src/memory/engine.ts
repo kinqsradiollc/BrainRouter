@@ -717,7 +717,7 @@ export class MemoryEngine {
     filters?: MemoryListFilters,
     pagination?: CursorPaginationOptions<{ createdTime: string; recordId: string }>
   ) {
-    return this.store.listMemories(userId, filters, pagination);
+    return this.store.listMemories(userId, { ...filters, excludeLearned: true }, pagination);
   }
 
   public deleteMemory(userId: string, recordId: string) {
@@ -730,6 +730,7 @@ export class MemoryEngine {
 
   public upsertEngineeringMemory(params: {
     userId: string;
+    orgId?: string | null;
     sessionKey?: string;
     sessionId?: string;
     type: MemoryType;
@@ -800,7 +801,7 @@ export class MemoryEngine {
   public recordLesson(
     userId: string,
     text: string,
-    opts?: { sessionKey?: string; activeSkill?: string; evidence?: string; priority?: number; kind?: string; supersedes?: string | string[] },
+    opts?: lessonOps.RecordLessonOptions,
   ): Promise<{ recordId: string; reinforced: boolean; confidence: number; corroborations: number; supersededIds: string[] }> {
     return lessonOps.recordLesson(this, userId, text, opts);
   }
@@ -961,7 +962,11 @@ export class MemoryEngine {
    * sweep, with counts + a size proxy + a sample, WITHOUT mutating anything.
    */
   public async governancePlan(userId: string, filters: GovernancePlanFilters): Promise<GovernancePlanResult> {
-    const items = await this.store.listMemories(userId, { type: filters.type, archived: false });
+    const items = await this.store.listMemories(userId, {
+      type: filters.type,
+      archived: false,
+      excludeLearned: true,
+    });
     return planGovernance(items, filters, Date.now());
   }
 
@@ -1220,12 +1225,12 @@ export class MemoryEngine {
   // Point-in-Time Search (asOf)
   // ============================
 
-  public searchAsOf(userId: string, query: string, asOf: string, limit = 10): Promise<{
+  public searchAsOf(userId: string, query: string, asOf: string, limit = 10, orgId?: string): Promise<{
     memories: Array<{ recordId: string; content: string; type: string; score: number }>;
     asOf: string;
     count: number;
   }> {
-    return memoryOps.searchAsOf(this, userId, query, asOf, limit);
+    return memoryOps.searchAsOf(this, userId, query, asOf, limit, orgId);
   }
 }
 

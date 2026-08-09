@@ -354,6 +354,92 @@ test('DESK-5v concurrent sessions: a mid-turn switch spawns a second agent and n
   assert.ok(out.some((m) => m.sessionKey === 'sess:B' && m.event.kind === 'assistant-delta'), "B's stream stayed tagged B");
 });
 
+test('ADR-032 D5: a background session fires its session-end checkpoint when its agent is dropped', async () => {
+  // The desktop pool discards a finished BACKGROUND agent; that is where the
+  // session actually ends on this surface. Without this the CLI's `/exit` was
+  // the only place D5 ever ran, so a desktop-only user never learned anything
+  // from a session that ended without a compaction.
+  const { out, send } = collect();
+  let releaseA!: () => void;
+  let releaseB!: () => void;
+  const gateA = new Promise<void>((r) => { releaseA = r; });
+  const gateB = new Promise<void>((r) => { releaseB = r; });
+  let endedB = 0;
+  const agentA: AgentLike = {
+    sessionKey: 'sess:A',
+    runTurn: async () => { await gateA; return 'done-A'; },
+    resetSessionCounters: () => {}, loadHistory: () => 1, getModel: () => 'm', clearHistory: () => {},
+  };
+  const agentB: AgentLike = {
+    sessionKey: 'sess:spawn',
+    runTurn: async () => { await gateB; return 'done-B'; },
+    resetSessionCounters: () => {}, loadHistory: () => 1, getModel: () => 'm',
+    clearHistory: () => {}, endSession: () => { endedB += 1; },
+  };
+  const core = createHostCore({
+    agent: agentA, send, spawnAgent: () => agentB,
+    transcriptExists: (k) => k === 'sess:A' || k === 'sess:B',
+  });
+  // A is busy, so switching spawns a SECOND agent for B rather than reusing A.
+  const turnA = core.handle({ kind: 'start-turn', prompt: 'long A' });
+  await core.handle({ kind: 'resume-session', sessionKey: 'sess:B' });
+  const turnB = core.handle({ kind: 'start-turn', prompt: 'long B' });
+  // Look away: B keeps running, but it is now a BACKGROUND session.
+  await core.handle({ kind: 'resume-session', sessionKey: 'sess:A' });
+  assert.equal(endedB, 0, 'a session still running has not ended');
+  releaseB();
+  await turnB;
+  assert.equal(endedB, 1, 'the dropped background agent never fired its session-end checkpoint');
+  releaseA();
+  await turnA;
+  assert.ok(out.length > 0);
+});
+
+test('ADR-032 D5: shutdown awaits a drain that outlived background pool eviction', async () => {
+  const { send } = collect();
+  let releaseA!: () => void;
+  let releaseB!: () => void;
+  let releaseDrain!: () => void;
+  const gateA = new Promise<void>((resolve) => { releaseA = resolve; });
+  const gateB = new Promise<void>((resolve) => { releaseB = resolve; });
+  const drainGate = new Promise<void>((resolve) => { releaseDrain = resolve; });
+  let shutdownRan = false;
+  const agentA: AgentLike = {
+    sessionKey: 'sess:A',
+    runTurn: async () => { await gateA; return 'done-A'; },
+    resetSessionCounters: () => {}, loadHistory: () => 1, getModel: () => 'm',
+  };
+  const agentB: AgentLike = {
+    sessionKey: 'sess:spawn',
+    runTurn: async () => { await gateB; return 'done-B'; },
+    resetSessionCounters: () => {}, loadHistory: () => 1, getModel: () => 'm',
+    endSession: async () => { await drainGate; },
+  };
+  const core = createHostCore({
+    agent: agentA,
+    send,
+    spawnAgent: () => agentB,
+    transcriptExists: () => true,
+    onShutdown: () => { shutdownRan = true; },
+  });
+
+  const turnA = core.handle({ kind: 'start-turn', prompt: 'A' });
+  await core.handle({ kind: 'resume-session', sessionKey: 'sess:B' });
+  const turnB = core.handle({ kind: 'start-turn', prompt: 'B' });
+  await core.handle({ kind: 'resume-session', sessionKey: 'sess:A' });
+  releaseB();
+  await turnB;
+  releaseA();
+  await turnA;
+
+  const shutdown = core.handle({ kind: 'shutdown' });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(shutdownRan, false, 'transport teardown cannot pass an evicted Agent checkpoint');
+  releaseDrain();
+  await shutdown;
+  assert.equal(shutdownRan, true);
+});
+
 test('session-changed carries the AUTHORITATIVE running flag so the renderer can clear a stale "working…"', async () => {
   const { out, send } = collect();
   let releaseA!: () => void;
@@ -424,17 +510,28 @@ test('query: routes to handlers; unknown names error; thrown handlers error', as
   assert.deepEqual(results[0].event.result, [{ sessionKey: 's1' }]);
 });
 
-test('garbage on the wire is ignored; shutdown dismisses + calls onShutdown', async () => {
+test('garbage is ignored; shutdown dismisses, drains learning, then calls onShutdown', async () => {
   const { out, send } = collect();
   let shut = false;
-  const core = createHostCore({ agent: fakeAgent(), send, onShutdown: () => { shut = true; } });
+  let releaseLearning!: () => void;
+  const learning = new Promise<void>((resolve) => { releaseLearning = resolve; });
+  const lifecycle: string[] = [];
+  const agent: AgentLike = {
+    ...fakeAgent(),
+    endSession: async () => { await learning; lifecycle.push('learning'); },
+  };
+  const core = createHostCore({ agent, send, onShutdown: () => { lifecycle.push('shutdown'); shut = true; } });
   await core.handle('garbage');
   await core.handle({ kind: 'unknown-thing' });
   assert.equal(out.length, 0);
   const p = core.broker.request({ type: 'confirm', title: 'x' });
-  await core.handle({ kind: 'shutdown' });
+  const shutdown = core.handle({ kind: 'shutdown' });
   assert.deepEqual(await p.response, { type: 'dismissed' });
+  assert.equal(shut, false, 'transport teardown waits for the bounded learning drain');
+  releaseLearning();
+  await shutdown;
   assert.equal(shut, true);
+  assert.deepEqual(lifecycle, ['learning', 'shutdown']);
 });
 
 test('interrupt flags the agent for a cooperative stop', async () => {
@@ -461,6 +558,205 @@ test('new-session: fresh key + cleared history + session-changed event', async (
   assert.equal(agent.sessionKey, 'root:My-Chat-');
   const ev = out.find((m) => m.event.kind === 'session-changed')!.event as { sessionKey: string; loadedMessages: number };
   assert.equal(ev.loadedMessages, 0);
+});
+
+test('ADR-032 D5: an idle retarget awaits endSession before changing session identity', async () => {
+  const { send } = collect();
+  let releaseDrain!: () => void;
+  const drainGate = new Promise<void>((resolve) => { releaseDrain = resolve; });
+  const lifecycle: string[] = [];
+  const agent: AgentLike = {
+    ...fakeAgent(),
+    sessionKey: 'root:old',
+    endSession: async () => {
+      lifecycle.push(`drain:${agent.sessionKey}`);
+      await drainGate;
+    },
+    resetSessionCounters: () => { lifecycle.push(`reset:${agent.sessionKey}`); },
+    clearHistory: () => { lifecycle.push(`clear:${agent.sessionKey}`); },
+  };
+  const core = createHostCore({ agent, send, transcriptExists: () => true });
+
+  const retarget = core.handle({ kind: 'new-session', label: 'next' });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(agent.sessionKey, 'root:old', 'the old key remains pinned while its checkpoint drains');
+  assert.deepEqual(lifecycle, ['drain:root:old']);
+
+  releaseDrain();
+  await retarget;
+  assert.equal(agent.sessionKey, 'root:next');
+  assert.deepEqual(lifecycle, ['drain:root:old', 'reset:root:next', 'clear:root:next']);
+
+  await core.handle({ kind: 'resume-session', sessionKey: 'root:saved' });
+  assert.equal(agent.sessionKey, 'root:saved');
+  assert.deepEqual(lifecycle.slice(-2), ['drain:root:next', 'reset:root:saved']);
+});
+
+test('ADR-032 D8: tenant rebind drains every pooled Agent before transport replacement and respawn', async () => {
+  const { send } = collect();
+  const lifecycle: string[] = [];
+  let releaseA!: () => void;
+  let releaseDrainA!: () => void;
+  let releaseDrainB!: () => void;
+  const turnGateA = new Promise<void>((resolve) => { releaseA = resolve; });
+  const drainGateA = new Promise<void>((resolve) => { releaseDrainA = resolve; });
+  const drainGateB = new Promise<void>((resolve) => { releaseDrainB = resolve; });
+  const agentA: AgentLike = {
+    sessionKey: 'sess:A',
+    runTurn: async () => { await turnGateA; return 'done-A'; },
+    requestInterrupt: () => { lifecycle.push('interrupt:A'); releaseA(); },
+    endSession: async () => { lifecycle.push(`drain-start:${agentA.sessionKey}`); await drainGateA; lifecycle.push('drain-end:A'); },
+  };
+  const agentB: AgentLike = {
+    sessionKey: 'sess:spawn',
+    runTurn: async () => 'done-B',
+    endSession: async () => { lifecycle.push(`drain-start:${agentB.sessionKey}`); await drainGateB; lifecycle.push('drain-end:B'); },
+    getModel: () => 'old-model',
+  };
+  const replacement: AgentLike = {
+    sessionKey: 'replacement',
+    runTurn: async () => { lifecycle.push('replacement-turn'); return 'new-tenant'; },
+    getModel: () => 'new-model',
+  };
+  const core = createHostCore({
+    agent: agentA,
+    send,
+    spawnAgent: () => agentB,
+    transcriptExists: () => true,
+  });
+
+  const turnA = core.handle({ kind: 'start-turn', prompt: 'old tenant work' });
+  await core.handle({ kind: 'resume-session', sessionKey: 'sess:B' });
+  const rebind = core.rebindTenant(async (sessionKey) => {
+    lifecycle.push(`reconnect:${sessionKey}`);
+    lifecycle.push('spawn:new');
+    return replacement;
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(lifecycle.includes('reconnect:sess:B'), false, 'transport stayed old while either checkpoint was pending');
+
+  releaseDrainA();
+  releaseDrainB();
+  await rebind;
+  await turnA;
+  assert.ok(lifecycle.indexOf('drain-end:A') < lifecycle.indexOf('reconnect:sess:B'));
+  assert.ok(lifecycle.indexOf('drain-end:B') < lifecycle.indexOf('reconnect:sess:B'));
+  assert.ok(lifecycle.indexOf('reconnect:sess:B') < lifecycle.indexOf('spawn:new'));
+
+  await core.handle({ kind: 'start-turn', prompt: 'new tenant work' });
+  assert.equal(lifecycle.at(-1), 'replacement-turn', 'only the replacement serves turns after rebinding');
+});
+
+test('ADR-032 D8: commands arriving during tenant transport replacement wait for the new boundary', async () => {
+  const { out, send } = collect();
+  let releaseTransport!: () => void;
+  const transportGate = new Promise<void>((resolve) => { releaseTransport = resolve; });
+  const lifecycle: string[] = [];
+  const replacement = fakeAgent();
+  replacement.sessionKey = 'replacement';
+  const core = createHostCore({
+    agent: { ...fakeAgent(), endSession: () => { lifecycle.push('drain'); } },
+    send,
+    queries: {
+      'central-mutation': () => { lifecycle.push('query'); return { ok: true }; },
+    },
+  });
+
+  const rebind = core.rebindTenant(async () => {
+    lifecycle.push('transport-start');
+    await transportGate;
+    lifecycle.push('transport-ready');
+    return replacement;
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const query = core.handle({ kind: 'query', id: 'q-tenant', name: 'central-mutation' });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(lifecycle, ['drain', 'transport-start'], 'the old transport cannot serve a concurrent query');
+
+  releaseTransport();
+  await Promise.all([rebind, query]);
+  assert.deepEqual(lifecycle, ['drain', 'transport-start', 'transport-ready', 'query']);
+  assert.ok(out.some((message) => message.event.kind === 'query-result' && message.event.id === 'q-tenant'));
+});
+
+test('ADR-032 D8: identity resolving mid-turn preserves the turn and enables learning for the next turn', async () => {
+  const { send } = collect();
+  let releaseTurn!: () => void;
+  const turnGate = new Promise<void>((resolve) => { releaseTurn = resolve; });
+  let binding = { tenant: { userId: 'unresolved-profile-a', orgId: null as string | null }, enabled: false };
+  const observed: Array<typeof binding> = [];
+  let interrupts = 0;
+  let clears = 0;
+  const agent: AgentLike = {
+    sessionKey: 'sess:identity',
+    runTurn: async () => {
+      observed.push(structuredClone(binding));
+      if (observed.length === 1) await turnGate;
+      return 'done';
+    },
+    requestInterrupt: () => { interrupts += 1; },
+    clearHistory: () => { clears += 1; },
+    setLearningBinding: (tenant, enabled) => { binding = { tenant: { ...tenant }, enabled }; },
+  };
+  const core = createHostCore({ agent, send });
+
+  const firstTurn = core.handle({ kind: 'start-turn', prompt: 'already running' });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const identityBind = core.bindLearning({ userId: 'user-a', orgId: 'org-a' }, true);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  assert.equal(interrupts, 0, 'background identity discovery never interrupts an active turn');
+  assert.equal(clears, 0, 'background identity discovery never clears conversation history');
+  assert.deepEqual(binding, {
+    tenant: { userId: 'unresolved-profile-a', orgId: null },
+    enabled: false,
+  }, 'the running turn keeps the disabled boot binding until finalization');
+
+  releaseTurn();
+  await Promise.all([firstTurn, identityBind]);
+  await core.handle({ kind: 'start-turn', prompt: 'next turn' });
+
+  assert.deepEqual(observed, [
+    { tenant: { userId: 'unresolved-profile-a', orgId: null }, enabled: false },
+    { tenant: { userId: 'user-a', orgId: 'org-a' }, enabled: true },
+  ]);
+  assert.equal(interrupts, 0);
+  assert.equal(clears, 0);
+});
+
+test('ADR-032 D8: a failed transport replacement installs a usable tenant-derived fallback Agent', async () => {
+  const { send } = collect();
+  const lifecycle: string[] = [];
+  const fallback: AgentLike = {
+    sessionKey: 'fallback',
+    runTurn: async () => { lifecycle.push('fallback-turn'); return 'offline-ready'; },
+    getModel: () => 'fallback-model',
+  };
+  const core = createHostCore({
+    agent: {
+      ...fakeAgent(),
+      sessionKey: 'sess:active',
+      endSession: () => { lifecycle.push('drain'); },
+    },
+    send,
+    spawnAgent: (sessionKey) => {
+      lifecycle.push(`fallback:${sessionKey}`);
+      return fallback;
+    },
+  });
+
+  await assert.rejects(
+    core.rebindTenant(async () => {
+      lifecycle.push('transport');
+      throw new Error('transport replacement failed');
+    }),
+    /transport replacement failed/,
+  );
+  assert.deepEqual(lifecycle, ['drain', 'transport', 'fallback:sess:active']);
+  assert.equal(fallback.sessionKey, 'sess:active');
+
+  await core.handle({ kind: 'start-turn', prompt: 'continue offline' });
+  assert.equal(lifecycle.at(-1), 'fallback-turn', 'the failed switch never leaves the host without an active Agent');
 });
 
 test('DESK-6t resume-session: switches + emits count, but LAZY-loads history on the first turn (not on resume)', async () => {

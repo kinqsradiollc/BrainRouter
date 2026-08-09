@@ -6,6 +6,7 @@
 import type { SettingsSection } from '../../lib/commands/commands.js';
 import type { ConnectorCatalogEntry, ConnectorRecord, ConnectorRunRecord, ModelPolicy } from '@kinqs/brainrouter-types';
 import type { ConfigSchemaDescriptor } from '@kinqs/brainrouter-core/config';
+import type { LearnedItem, LearnedTenant, LearningLogEntry } from '@kinqs/brainrouter-core/learning';
 
 export interface ConnectorSlimPreview {
   id: string;
@@ -94,6 +95,16 @@ export interface ConfigSnapshot {
   extensions?: {
     trusted: boolean;
     items: Array<{ name: string; version: string; source: 'builtin' | 'user' | 'workspace'; description: string; contributes: string[]; enabled: boolean; blocked: boolean }>;
+  };
+  /** ADR-032 Q4 — the exact tenant-scoped behavioural store that reaches the
+   * agent, exposed read-only here except for explicit human correction/revert. */
+  learning?: {
+    tenant: LearnedTenant;
+    items: LearnedItem[];
+    log: LearningLogEntry[];
+    correctionAllowed: boolean;
+    correctionBlockedReason?: string;
+    error?: string;
   };
 }
 

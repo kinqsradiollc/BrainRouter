@@ -67,7 +67,10 @@ export interface RunChatContext {
   maybeResumeOnChildComplete: () => void;
   handleQueueCommand: (args: string[]) => void;
   drainInputQueue: () => void;
-  runChatTurn: (rawInput: string) => Promise<void>;
+  runChatTurn: (
+    rawInput: string,
+    options?: { agent?: Agent; ephemeral?: boolean },
+  ) => Promise<void>;
   hasLiveActors: () => boolean;
   tickChildRefresh: () => void;
   ensureChildRefreshTimer: () => void;

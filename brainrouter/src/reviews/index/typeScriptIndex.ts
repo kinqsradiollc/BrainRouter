@@ -15,6 +15,8 @@ import type {
 } from './graphTypes.js';
 import { isTypeScriptSourcePath } from './pathResolution.js';
 import { buildTypeScriptGraph } from './typeScriptGraph.js';
+import { generatedSourceRelationships } from './generatedSourceRelationships.js';
+import { parseWorkspaceModuleAliases } from './workspaceModuleAliases.js';
 
 export interface TypeScriptIndexOptions {
   checkouts: CheckoutIndexResolver;
@@ -170,9 +172,41 @@ export class TypeScriptAssuranceIndexAdapter implements RepositoryAssuranceIndex
       }
     }
 
+    // Workspace package names/exports resolve otherwise-external imports back
+    // to exact-revision source. Reads are bounded by the same per-file ceiling;
+    // a missing or malformed manifest grants no relationship.
+    const manifestSources: Array<{ path: string; source: string }> = [];
+    for (const path of checkout.eligiblePaths.filter((candidate) => /(^|\/)package\.json$/i.test(candidate))) {
+      if (await canceled(cancellation)) throw new ParserIndexCanceledError();
+      try {
+        manifestSources.push({
+          path,
+          source: await this.options.checkouts.readEligibleTextFile(input.checkoutRef, path, this.maxFileBytes),
+        });
+      } catch {
+        // JSON remains listed as unsupported coverage; alias resolution is an
+        // optional deterministic enhancement and must not fail TS indexing.
+      }
+    }
+
+    const configSources: Array<{ path: string; source: string }> = [];
+    for (const path of checkout.eligiblePaths.filter((candidate) => /(^|\/)tsconfig(?:\.[^/]+)?\.json$/i.test(candidate))) {
+      if (await canceled(cancellation)) throw new ParserIndexCanceledError();
+      try {
+        configSources.push({
+          path,
+          source: await this.options.checkouts.readEligibleTextFile(input.checkoutRef, path, this.maxFileBytes),
+        });
+      } catch {
+        // Like package aliases, generated/source mapping is an optional exact
+        // relationship. An unavailable config grants no relationship.
+      }
+    }
+
     const graph = buildTypeScriptGraph({
       files,
       eligiblePaths: new Set(supportedPaths),
+      workspaceAliases: parseWorkspaceModuleAliases(manifestSources),
       maxSymbols: this.maxSymbols,
       maxRelationships: this.maxRelationships,
     });
@@ -283,6 +317,7 @@ export class TypeScriptAssuranceIndexAdapter implements RepositoryAssuranceIndex
       receipt,
       symbols: graph.symbols,
       relationships: graph.relationships,
+      pathRelationships: generatedSourceRelationships(configSources, new Set(checkout.eligiblePaths)),
       limitations,
     });
     return { receipt, limitations };

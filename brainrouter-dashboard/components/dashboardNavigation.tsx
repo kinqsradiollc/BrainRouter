@@ -27,6 +27,7 @@ const iconProps = {
 const KNOWLEDGE_ROUTES = [
   "/knowledge",
   "/memories",
+  "/learned-behaviors",
   "/sources",
   "/working-memory",
   "/scenes",

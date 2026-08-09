@@ -23,3 +23,4 @@ export {
 } from './pool/brainProfiles.js';
 export { normalizeMcpToolName } from './pool/toolNames.js';
 export { dueForReconnect } from './pool/reconnectSweep.js';
+export type { HostLearningRequest, HostLearningResult } from './hostLearning.js';

@@ -16,3 +16,9 @@ test("connections is available to normal signed-in users", () => {
   assert.equal(item?.label, "Connections");
   assert.equal(item?.adminOnly, undefined);
 });
+
+test("learned behavior is grouped under the Knowledge route", () => {
+  const workspace = PRODUCT_NAV_GROUPS.find((group) => group.label === "Workspace");
+  const item = workspace?.items.find((candidate) => candidate.href === "/knowledge");
+  assert.equal(isNavItemActive("/learned-behaviors", item!), true);
+});

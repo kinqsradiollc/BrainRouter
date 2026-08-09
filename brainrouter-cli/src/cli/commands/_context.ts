@@ -33,11 +33,13 @@ export interface ReplContext {
   /** Programmatically run an agent turn (used by /continue and friends). */
   runAgentTurn: (prompt: string) => void;
   /**
-   * Awaitable variant — same semantics but the caller can attach a .finally
-   * to do post-turn cleanup. Used by /side and /btw to restore the parent
-   * sessionKey after the side conversation finishes.
+   * Awaitable variant. `/side` and `/btw` supply an isolated Agent and mark the
+   * turn ephemeral so the shared renderer can skip durable REPL side effects.
    */
-  runAgentTurnAsync: (prompt: string) => Promise<void>;
+  runAgentTurnAsync: (
+    prompt: string,
+    options?: { agent?: Agent; ephemeral?: boolean },
+  ) => Promise<void>;
 }
 
 /**

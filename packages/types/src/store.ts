@@ -77,6 +77,8 @@ export interface MemoryListFilters {
   scene?: string;
   skill?: string;
   archived?: boolean;
+  /** Generic owner-only surfaces must exclude organization-scoped learned records. */
+  excludeLearned?: boolean;
 }
 
 export interface MemoryListItem {
@@ -152,7 +154,7 @@ export interface IMemoryStore {
   importMemories(userId: string, data: MemoryImport): Promise<ImportResult>;
   hardDeleteMemory(userId: string, recordId: string, reason: string): Promise<void>;
   searchCognitiveFts(userId: string, query: string, limit: number): Promise<CognitiveFtsResult[]>;
-  searchCognitiveFtsAsOf(userId: string, query: string, limit: number, asOf: string): Promise<CognitiveFtsResult[]>;
+  searchCognitiveFtsAsOf(userId: string, query: string, limit: number, asOf: string, orgId?: string): Promise<CognitiveFtsResult[]>;
   /**
    * Federation Stage 1 (0.4.0) — batch lookup of `workspace_tag` for a
    * set of record ids. Used by the recall pipeline when a workspace

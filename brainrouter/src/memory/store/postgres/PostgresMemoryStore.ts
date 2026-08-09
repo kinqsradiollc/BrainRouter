@@ -140,6 +140,8 @@ import * as chatThreads from "./queries/chatThreadsQueries.js";
 import * as vulnerability from "./queries/vulnerabilityQueries.js";
 import * as vulnScans from "./queries/vulnerabilityScanQueries.js";
 import * as cognitive from "./queries/cognitiveQueries.js";
+import * as learnedBehavior from "./queries/learnedBehaviorQueries.js";
+import * as hostedLearning from "./queries/hostedLearningQueries.js";
 import * as operations from "./queries/operationsQueries.js";
 import * as search from "./queries/searchQueries.js";
 import * as contradiction from "./queries/contradictionQueries.js";
@@ -922,8 +924,12 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
     return cognitive.getMemoriesByFilePath(this.exec, userId, filePath, limit);
   }
 
-  public findLessonByFingerprint(userId: string, fingerprint: string): Promise<CognitiveRecord | null> {
-    return cognitive.findLessonByFingerprint(this.exec, userId, fingerprint);
+  public findLessonByFingerprint(
+    userId: string,
+    fingerprint: string,
+    orgId: string | null = null,
+  ): Promise<CognitiveRecord | null> {
+    return cognitive.findLessonByFingerprint(this.exec, userId, fingerprint, orgId);
   }
 
   public findLessonsByConflictKey(userId: string, conflictKey: string): Promise<CognitiveRecord[]> {
@@ -932,6 +938,117 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
 
   public listLessonsForHygiene(userId: string, limit: number): Promise<CognitiveRecord[]> {
     return cognitive.listLessonsForHygiene(this.exec, userId, limit);
+  }
+
+  /** ADR-032 Q4 — central, tenant-scoped records for hosted inspection. */
+  public listHostedLearnedRecords(userId: string, orgId: string, limit?: number): Promise<CognitiveRecord[]> {
+    return learnedBehavior.listHostedLearnedRecords(this.exec, userId, orgId, limit);
+  }
+
+  /** ADR-032 D6 — persistent fair partition for bounded retirement work. */
+  public takeHostedLearnedRetirementBatch(
+    userId: string,
+    orgId: string,
+    limit?: number,
+    now?: Date,
+  ): Promise<CognitiveRecord[]> {
+    return learnedBehavior.takeHostedLearnedRetirementBatch(this.exec, userId, orgId, limit, now);
+  }
+
+  public getHostedLearnedRecordByItemId(
+    userId: string,
+    orgId: string,
+    itemId: string,
+  ): Promise<CognitiveRecord | null> {
+    return learnedBehavior.getHostedLearnedRecordByItemId(this.exec, userId, orgId, itemId);
+  }
+
+  public retrieveHostedLearnedRecords(
+    userId: string,
+    orgId: string,
+    limit?: number,
+    now?: Date,
+  ): Promise<CognitiveRecord[]> {
+    return learnedBehavior.retrieveHostedLearnedRecords(this.exec, userId, orgId, limit, now);
+  }
+
+  public noteHostedLearningOutcomes(
+    userId: string,
+    orgId: string,
+    sessionIdentity: string,
+    jobId: string,
+    outcomes: readonly learnedBehavior.HostedLearningOutcomeInput[],
+    now?: Date,
+    expectedRecordId?: string,
+  ): Promise<CognitiveRecord[]> {
+    return learnedBehavior.noteHostedLearningOutcomes(
+      this.exec,
+      userId,
+      orgId,
+      sessionIdentity,
+      jobId,
+      outcomes,
+      now,
+      expectedRecordId,
+    );
+  }
+
+  /** ADR-032 D4 — atomic central archive + explicit human-revert marker. */
+  public revertHostedLearnedRecord(
+    userId: string,
+    orgId: string,
+    itemId: string,
+    reason: string,
+    now?: Date,
+  ): Promise<CognitiveRecord | null> {
+    return learnedBehavior.revertHostedLearnedRecord(this.exec, userId, orgId, itemId, reason, now);
+  }
+
+  /** ADR-032 D4/D8 — inspect one learned lifecycle through both tenant keys. */
+  public getHostedLearnedLifecycle(
+    userId: string,
+    orgId: string,
+    recordId: string,
+    itemId: string,
+  ): Promise<learnedBehavior.HostedLearnedLifecycleResult | null> {
+    return learnedBehavior.getHostedLearnedLifecycle(this.exec, userId, orgId, recordId, itemId);
+  }
+
+  /** ADR-032 D4/D6 — authenticated learned-only archive/restore transition. */
+  public transitionHostedLearnedLifecycle(
+    userId: string,
+    orgId: string,
+    recordId: string,
+    itemId: string,
+    operation: "archive" | "restore",
+    reason: string,
+    now?: Date,
+  ): Promise<learnedBehavior.HostedLearnedLifecycleResult | null> {
+    return learnedBehavior.transitionHostedLearnedLifecycle(
+      this.exec, userId, orgId, recordId, itemId, operation, reason, now,
+    );
+  }
+
+  /** ADR-032 D6/Q4 — mirror bounded outcomes without overriding human revert. */
+  public syncHostedLearnedRecord(
+    userId: string,
+    orgId: string,
+    recordId: string,
+    itemId: string,
+    learned: Record<string, unknown>,
+    now?: Date,
+  ): Promise<learnedBehavior.HostedLearnedSyncResult | null> {
+    return learnedBehavior.syncHostedLearnedRecord(
+      this.exec, userId, orgId, recordId, itemId, learned, now,
+    );
+  }
+
+  /** ADR-032 D5/Q1 — atomic durable cost admission plus queue insertion. */
+  public enqueueHostedLearningCheckpointJob(
+    input: Parameters<typeof hostedLearning.enqueueHostedLearningCheckpointJob>[1],
+    options?: Parameters<typeof hostedLearning.enqueueHostedLearningCheckpointJob>[2],
+  ): ReturnType<typeof hostedLearning.enqueueHostedLearningCheckpointJob> {
+    return hostedLearning.enqueueHostedLearningCheckpointJob(this.exec, input, options);
   }
 
   public updateCognitiveConfidence(userId: string, recordId: string, confidence: number, status: MemoryStatus): Promise<void> {
@@ -986,8 +1103,8 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
     return search.searchCognitiveFts(this.exec, userId, query, limit, orgId);
   }
 
-  public searchCognitiveFtsAsOf(userId: string, query: string, limit: number, asOf: string): Promise<CognitiveFtsResult[]> {
-    return search.searchCognitiveFtsAsOf(this.exec, userId, query, limit, asOf);
+  public searchCognitiveFtsAsOf(userId: string, query: string, limit: number, asOf: string, orgId?: string): Promise<CognitiveFtsResult[]> {
+    return search.searchCognitiveFtsAsOf(this.exec, userId, query, limit, asOf, orgId);
   }
 
   // ── vector (pgvector) ────────────────────────────────────────────────

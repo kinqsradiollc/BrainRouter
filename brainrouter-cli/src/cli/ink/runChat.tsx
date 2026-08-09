@@ -372,6 +372,7 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       ctx.unsubscribeExternalSteering?.();
       ctx.unsubscribeExternalSteering = null;
       if (ctx.childRefreshTimer) { clearInterval(ctx.childRefreshTimer); ctx.childRefreshTimer = null; }
+      try { await agent.endSession(); } catch { /* bounded learning is best effort */ }
       try { await mcpClient.close(); } catch { /* already closed */ }
       try {
         runHooks(agent.workspaceRoot, 'session-end', {
@@ -393,6 +394,7 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       ctx.unsubscribeExternalSteering?.();
       ctx.unsubscribeExternalSteering = null;
       if (ctx.childRefreshTimer) { clearInterval(ctx.childRefreshTimer); ctx.childRefreshTimer = null; }
+      try { await agent.endSession(); } catch { /* bounded learning is best effort */ }
       try { await mcpClient.close(); } catch { /* already closed */ }
       try {
         runHooks(agent.workspaceRoot, 'session-end', {

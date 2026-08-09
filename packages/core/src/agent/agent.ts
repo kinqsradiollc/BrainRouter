@@ -287,7 +287,11 @@ import {
   getPolicyAudit as getPolicyAuditImpl,
   loadHistory as loadHistoryImpl,
 } from './runtime/session.impl.js';
+import { finishLearningSession } from './runtime/learningPhase.js';
+import { emptySessionProvenance, type SessionProvenance } from './runtime/contentProvenance.js';
+import type { LearnedTenant } from '../learning/index.js';
 import type { SteeringReceipt } from '../task/workContract.js';
+import { ReviewProviderRequestBudgetExceededError } from './runtime/modelRequestBudget.js';
 
 export interface RunTurnCallbacks {
   onStatusUpdate: (status: string) => void;
@@ -471,6 +475,12 @@ export interface AgentOptions {
   workspaceRoot: string;
   launchCwd: string;
   sessionKey?: string;
+  /** Host-authenticated learning partition. Captured for the lifetime of each
+   * conceptual session so a mutable UI/account selection cannot retarget it. */
+  learnedTenant?: LearnedTenant;
+  /** Fail-closed host switch. Authenticated clients set false when they cannot
+   * prove the server-pinned learning identity; no local fallback is shared. */
+  learningEnabled?: boolean;
   roleOverlay?: string;
   /** Domain persona selected for workspace capability resolution. */
   workspaceAgentId?: string;
@@ -529,6 +539,15 @@ export interface AgentOptions {
    */
   authorityToolCeiling?: { local: string[]; mcp: string[] };
   disallowedTools?: string[];
+  /** Apply the shared review source deny/redaction policy to local read tools.
+   * Intended for isolated review Agents whose outputs cross a model boundary. */
+  reviewSourceSafety?: boolean;
+  /** Hard physical provider-request ceiling for one isolated turn. Unlike the
+   * adaptive tool budget, this counts transport retries and fallbacks too. */
+  maxModelCallsPerTurn?: number;
+  /** Per-call reconnect ceiling. Reviewers use zero so retries cannot escape
+   * the aggregate review-call budget. */
+  maxLlmReconnectsPerCall?: number;
   /**
    * 0.4.x-5 — per-child reasoning-effort override. When set, the child uses
    * this instead of the session-resolved `/effort` for its turns.
@@ -663,6 +682,9 @@ export class Agent {
    *  no callbacks param, so we bridge through the instance). */
   public codeIndexListener: ((e: { file: string; chunks: number }) => void) | null = null;
   public sessionKey: string;
+  public learnedTenant?: LearnedTenant;
+  public readonly learnedTenantPinnedByHost: boolean;
+  public learningEnabled: boolean;
   /**
    * Federation Stage 3 — the per-process key the `attachFederation`
    * runtime registered against the brain. Used by `/dm` and
@@ -882,6 +904,10 @@ export class Agent {
    * This can only subtract after access, role, capability, and scope gates.
    */
   public activeSkillAllowedTools?: string[];
+  /** Owning item for a learned skill loaded during this turn. Tool
+   * authorization revalidates it on every call so an external revert takes
+   * effect immediately. */
+  public activeLearnedSkillItemId?: string;
   /**
    * Parent trace context (set by spawn_agent for child agents). When present,
    * the per-turn span uses these as its trace/parent so OTEL viewers can
@@ -908,6 +934,10 @@ export class Agent {
   public toolScope?: { local: string[]; mcp: string[] };
   public authorityToolCeiling?: { local: string[]; mcp: string[] };
   public disallowedTools: string[];
+  public readonly reviewSourceSafety: boolean;
+  public readonly maxModelCallsPerTurn?: number;
+  public readonly maxLlmReconnectsPerCall?: number;
+  private modelProviderRequestsThisTurn = 0;
   /** HONK-L3 — built-in tools whose schema was flattened for a local model THIS
    *  turn; their args are re-nested at dispatch via `nestArguments`. */
   public flattenedToolNames = new Set<string>();
@@ -940,6 +970,11 @@ export class Agent {
     // each CLI is its own session for local state. The memory DB is
     // userId-scoped, so cross-CLI recall continuity is unaffected.
     this.sessionKey = options.sessionKey ?? randomUUID();
+    this.learnedTenant = options.learnedTenant
+      ? { orgId: options.learnedTenant.orgId?.trim() || null, userId: options.learnedTenant.userId.trim() || 'local' }
+      : undefined;
+    this.learnedTenantPinnedByHost = !!options.learnedTenant;
+    this.learningEnabled = options.learningEnabled !== false;
     this.roleOverlay = options.roleOverlay;
     this.workspaceAgentId = options.workspaceAgentId;
     this.accessMode = options.accessMode ?? 'shell';
@@ -961,6 +996,13 @@ export class Agent {
     this.toolScope = options.toolScope;
     this.authorityToolCeiling = options.authorityToolCeiling;
     this.disallowedTools = options.disallowedTools ?? [];
+    this.reviewSourceSafety = options.reviewSourceSafety ?? false;
+    this.maxModelCallsPerTurn = options.maxModelCallsPerTurn === undefined
+      ? undefined
+      : Math.max(1, Math.trunc(options.maxModelCallsPerTurn));
+    this.maxLlmReconnectsPerCall = options.maxLlmReconnectsPerCall === undefined
+      ? undefined
+      : Math.max(0, Math.trunc(options.maxLlmReconnectsPerCall));
     this.effortOverride = options.effortOverride;
     this.tier = options.tier;
     this.agentDepth = options.agentDepth ?? 0;
@@ -972,6 +1014,29 @@ export class Agent {
     this.prompter = options.prompter ?? HEADLESS_PROMPTER;
     this.parentReviewPolicy = options.parentReviewPolicy;
     this.parentExecutionMode = options.parentExecutionMode;
+  }
+
+  /** Apply an authenticated host identity between turns without replacing the
+   * Agent or losing its conversation. Hosts serialize this call against turns. */
+  public setLearningBinding(tenant: LearnedTenant, enabled: boolean): void {
+    this.learnedTenant = {
+      orgId: tenant.orgId?.trim() || null,
+      userId: tenant.userId.trim() || 'local',
+    };
+    this.learningEnabled = enabled;
+  }
+
+  /**
+   * Reserve one physical provider request for an isolated reviewer. Ordinary
+   * Agents retain their existing recovery behavior; only reviewSourceSafety
+   * Agents with an explicit ceiling consume this counter.
+   */
+  public reserveModelProviderRequest(): void {
+    if (!this.reviewSourceSafety || this.maxModelCallsPerTurn === undefined) return;
+    if (this.modelProviderRequestsThisTurn >= this.maxModelCallsPerTurn) {
+      throw new ReviewProviderRequestBudgetExceededError(this.maxModelCallsPerTurn);
+    }
+    this.modelProviderRequestsThisTurn += 1;
   }
 
   /** Expose for orchestration so spawn_agent can record the parent linkage. */
@@ -1232,6 +1297,7 @@ export class Agent {
   async runTurn(prompt: string, callbacks: RunTurnCallbacks, opts?: { hiddenPrompt?: boolean; images?: Array<{ mediaType: string; dataBase64: string }>; preplanned?: boolean }): Promise<string> {
     // Body moved to ./runTurn.impl.ts (god-file breakdown); delegate with `this`
     // bound so all instance state resolves exactly as before.
+    if (this.reviewSourceSafety) this.modelProviderRequestsThisTurn = 0;
     return runTurnImpl.call(this, prompt, callbacks, opts);
   }
 
@@ -1374,6 +1440,19 @@ export class Agent {
 
   public requestInterrupt(): void {
     return requestInterruptImpl.call(this);
+  }
+
+  /**
+   * ADR-032 D5 — the session-end checkpoint.
+   *
+   * The last of the three moments learning fires at, and the one that catches
+   * the session which ended without a compaction and whose final turn was too
+   * close to the previous checkpoint to spend budget. It drains this session's
+   * checkpoints within a strict timeout, so hosts can await it before closing
+   * memory transport without turning an unbounded LLM call into a slow exit.
+   */
+  public endSession(timeoutMs = 2_500): Promise<void> {
+    return finishLearningSession(this, timeoutMs);
   }
 
   public requestSteer(
@@ -1574,6 +1653,15 @@ export class Agent {
   /** continuation loop uses this to suppress auto-continuation after prose-only turns. */
   public lastTurnToolCalls = 0;
 
+  /**
+   * ADR-032 D7 — this session's content provenance, tallied per tool call.
+   *
+   * Session-scoped rather than per-turn because a checkpoint reflects on the
+   * whole session: the turn that fetched the hostile page and the turn that
+   * would "corroborate" it are usually not the same turn.
+   */
+  public sessionProvenance: SessionProvenance = emptySessionProvenance();
+
   /** C1 — child ids whose drain TIMED OUT this turn (the parent answered before they
    *  finished). The REPL polls these and auto-resumes once they settle. Empty when
    *  nothing timed out. */
@@ -1705,6 +1793,12 @@ export class Agent {
     this.usageBySkill = new Map();
     this.toolCallCounts = new Map();
     this.mcpServerCallCounts = new Map(); // CC-UX-E3
+    // ADR-032 D7 — provenance is a property of THIS session's reading, so a new
+    // session must not inherit the last one's untrusted reads (which would make
+    // it stricter than it should be) or its corroborations (which would make it
+    // laxer, and that is the direction that costs something).
+    this.sessionProvenance = emptySessionProvenance();
+    if (!this.learnedTenantPinnedByHost) this.learnedTenant = undefined;
     // 9b: session-boundary reset for gated recall.
     this.recallHasFiredThisSession = false;
     this.recallNextTurnIsPostCompaction = false;

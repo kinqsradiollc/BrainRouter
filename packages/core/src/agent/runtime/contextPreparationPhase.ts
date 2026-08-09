@@ -36,6 +36,7 @@ import {
   requiredSkillPreflightPrompt,
   type RequiredSkillPreflightResult,
 } from './requiredSkillPreflight.js';
+import { applyLearnedContext } from './learningPhase.js';
 import { callOpenAI } from '../transport/llmTransport.js';
 
 export interface PrepareTurnContextInput {
@@ -155,10 +156,12 @@ export async function prepareTurnContextPhase(
 
   agent.lastUserPrompt = prompt;
   agent.lastTurnHitLoopLimit = false;
-  try {
-    agent.autoCaptureRequirement(prompt, input.callbacks);
-  } catch {
-    // Requirement capture is best-effort and cannot fail the user turn.
+  if (!agent.reviewSourceSafety) {
+    try {
+      agent.autoCaptureRequirement(prompt, input.callbacks);
+    } catch {
+      // Requirement capture is best-effort and cannot fail the user turn.
+    }
   }
 
   const fanOutHinted = await preparePlanningHint(
@@ -167,6 +170,9 @@ export async function prepareTurnContextPhase(
     input.callbacks,
   );
   applyGoalAnchor(agent);
+  // ADR-032 D1 — the learned block, attached like every other anchor and
+  // never merged into the base prompt.
+  applyLearnedContext(agent);
   applyRequiredSkillAnchor(agent, input.requiredSkillActivation);
   applyRequiredSkillWorkflows(agent, input.requiredSkillPreflight);
   appendUserMessage(agent, prompt, input.images);

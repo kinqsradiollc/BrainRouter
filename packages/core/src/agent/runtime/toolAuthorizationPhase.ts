@@ -52,6 +52,28 @@ export interface ToolAuthorizationInput {
   trace: { traceId: string; spanId: string };
 }
 
+/** These RPCs carry server-pinned identity or mutate the learned lifecycle.
+ * They are called by trusted host code directly through the MCP client and are
+ * intentionally absent from the model inventory. A guessed prefixed name must
+ * still be refused here because the pool's legacy resolver accepts names that
+ * were never advertised. */
+const HOST_ONLY_MCP_RAW_TOOLS = [
+  'memory_learning_identity',
+  'memory_learned_lifecycle',
+  'memory_learned_revert',
+  'memory_learned_sync',
+  'memory_record_learned',
+] as const;
+
+export function isHostOnlyMcpModelDispatch(name: string, descriptor?: unknown): boolean {
+  const rawName = descriptor && typeof descriptor === 'object'
+    ? String((descriptor as { __rawName?: unknown }).__rawName ?? '')
+    : '';
+  return HOST_ONLY_MCP_RAW_TOOLS.some((raw) => (
+    name === raw || name.endsWith(`_${raw}`) || rawName === raw
+  ));
+}
+
 export function authorizeToolCall(input: ToolAuthorizationInput): void {
   const {
     agent,
@@ -76,6 +98,10 @@ export function authorizeToolCall(input: ToolAuthorizationInput): void {
     }
     throw new Error(reason);
   };
+
+  if (!isLocal && isHostOnlyMcpModelDispatch(name, input.mcpTool)) {
+    deny(`Tool "${diagnosticName}" denied: host-only learned-memory RPCs cannot be model-dispatched.`);
+  }
 
   if (name !== 'reconcile_steer' && !input.skillAllowsTool(name)) {
     deny(

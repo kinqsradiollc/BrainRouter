@@ -11,7 +11,10 @@
  */
 import type { WorkspaceManifest } from './manifest.js';
 import { getWorkspaceProfile } from './profiles.js';
-import { renderDesignArtifactBlock, type WorkspaceDesignArtifact } from './designArtifact.js';
+import {
+  renderDesignArtifactBlock,
+  type WorkspaceDesignArtifact,
+} from './designArtifactPrompt.js';
 
 export interface WorkspaceCapabilityResolutionInput {
   manifest: Pick<WorkspaceManifest, 'profile' | 'persona' | 'capabilities'> | null | undefined;

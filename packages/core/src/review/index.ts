@@ -4,6 +4,17 @@
 // internal service layer (service.ts) stays unexported.
 export * from './critic.js';
 export * from './reviewFindings.js';
+// ADR-033 — review that finds things and says where: bundles (D2), the ask for
+// a file (D3), computed positions (D4), the reflection pass (D5), and the one
+// orchestration both front doors are meant to share (D1).
+export * from './reviewBundles.js';
+export * from './reviewEvidenceRequest.js';
+export * from './findingPosition.js';
+export * from './reviewReflection.js';
+export * from './reviewOrchestration.js';
+export * from './localReviewOrchestration.js';
+export * from './sourceSafety.js';
+export * from './reviewEvidenceBoundary.js';
 export * from './reviewInstructions.js';
 export * from './reviewModel.js';
 export * from './reviewGrounding.js';

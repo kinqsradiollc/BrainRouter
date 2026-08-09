@@ -17,6 +17,7 @@ import { readGoal, resumeGoal } from '@kinqs/brainrouter-core/goal';
 import { askYesNo } from '../../prompt/cliPrompt.js';
 import { buildGoalKickoffPrompt } from '../_helpers.js';
 import type { CommandContext } from '../_context.js';
+import { createEphemeralSideAgent } from './ephemeralSideAgent.js';
 
 
 export async function tryHandleSessionCommand(ctx: CommandContext): Promise<boolean> {
@@ -143,6 +144,7 @@ export async function tryHandleSessionCommand(ctx: CommandContext): Promise<bool
         console.log(chalk.red(`\nNo transcript found for "${sessionKey}".\n`));
         return true;
       }
+      await agent.endSession();
       agent.sessionKey = sessionKey;
       // The persisted transcript doesn't record per-call token usage, so
       // we can't reconstruct counters for the resumed session — start
@@ -198,6 +200,7 @@ export async function tryHandleSessionCommand(ctx: CommandContext): Promise<bool
       const label = args.join(' ').trim() || `fork-${new Date().toISOString().slice(11, 19)}`;
       const newKey = `${agent.sessionKey}:fork:${randomUUID().slice(0, 8)}:${label.replace(/[^A-Za-z0-9._-]+/g, '-')}`;
       const previous = agent.sessionKey;
+      await agent.endSession();
       agent.fork(newKey);
       console.log(chalk.green(`\n✓ Forked session.`));
       console.log(chalk.gray(`  Parent : ${previous}`));
@@ -270,6 +273,7 @@ export async function tryHandleSessionCommand(ctx: CommandContext): Promise<bool
       const kept = truncateAtTurn(entries, chosen.endIndex);
       const previous = agent.sessionKey;
       const newKey = `${agent.sessionKey.split(':')[0]}:rewind:${randomUUID().slice(0, 8)}`;
+      await agent.endSession();
       agent.fork(newKey);
       const loaded = agent.loadHistory(kept);
       agent.refreshSystemPrompt();
@@ -321,7 +325,9 @@ export async function tryHandleSessionCommand(ctx: CommandContext): Promise<bool
       const label = args.join(' ').trim() || `new-${new Date().toISOString().slice(11, 19)}`;
       const newKey = `${agent.sessionKey.split(':')[0]}:${label.replace(/[^A-Za-z0-9._-]+/g, '-')}`;
       const previous = agent.sessionKey;
+      await agent.endSession();
       agent.sessionKey = newKey;
+      agent.resetSessionCounters();
       agent.clearHistory();
       console.log(chalk.green(`\n✓ Started a new chat.`));
       console.log(chalk.gray(`  Old: ${previous}`));
@@ -339,16 +345,13 @@ export async function tryHandleSessionCommand(ctx: CommandContext): Promise<bool
       }
       const original = agent.sessionKey;
       const sideKey = `${original}:side:${randomUUID().slice(0, 6)}`;
-      agent.sessionKey = sideKey;
+      const sideAgent = createEphemeralSideAgent(agent, sideKey);
       console.log(chalk.gray(`(side conversation in ${sideKey} — answer is ephemeral)\n`));
-      // Fire-and-forget BUT restore the sessionKey when the turn finishes,
-      // not after a fixed 100ms. The old setTimeout race restored the key
-      // long before the turn finished its async work — capture, transcript
-      // writes, contradiction checks — so side-conversation tool messages
-      // and the assistant reply ended up appended to the MAIN session.
-      void ctx.repl.runAgentTurnAsync(prompt).finally(() => {
-        agent.sessionKey = original;
-      });
+      // The main Agent is never retargeted. The isolated side runtime has a
+      // cloned history, fresh provenance, learning disabled, and no durable
+      // transcript; the shared UI runner also suppresses crash/offline queues,
+      // continuation, and automatic skill extraction for this turn.
+      void ctx.repl.runAgentTurnAsync(prompt, { agent: sideAgent, ephemeral: true });
       return true;
     }
     case '/cd': {
@@ -378,6 +381,11 @@ export async function tryHandleSessionCommand(ctx: CommandContext): Promise<bool
       return true;
     }
     case '/clear': {
+      // Preserve the final trajectory long enough for ADR-032's bounded
+      // session-end checkpoint. `Agent.endSession` owns the timeout and is
+      // idempotent for a logical session, so repeated clears cannot duplicate
+      // the underlying final reflection.
+      await agent.endSession();
       agent.clearHistory();
       console.log(chalk.yellow('\nConversation history cleared.\n'));
       return true;

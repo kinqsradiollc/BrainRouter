@@ -12,6 +12,8 @@ export interface ParserBackedIndexHandle {
   receipt: AssuranceCodeIndexReceipt;
   symbols: AssuranceCodeSymbol[];
   relationships: AssuranceCodeRelationshipEdge[];
+  /** Exact inventory path pairs that do not require a shared parsed symbol. */
+  pathRelationships?: Array<[string, string]>;
   limitations: AssuranceCoverageLimitation[];
 }
 

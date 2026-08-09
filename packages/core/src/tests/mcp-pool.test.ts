@@ -25,6 +25,7 @@ function seedFakeServer(
     read?: Record<string, any>;
     nextCursor?: string;
   },
+  hostLearningImpl?: (request: any) => any,
 ) {
   const fakeWrapper: any = {
     isConnected: () => true,
@@ -43,6 +44,10 @@ function seedFakeServer(
       resources?.read?.[uri] ?? { contents: [{ uri, text: `${serverId}::${uri}` }] },
     callTool: async (name: string, args: any) =>
       callImpl ? callImpl(name, args) : { isError: false, content: [{ type: 'text', text: `${serverId}::${name}` }] },
+    callHostLearning: async (request: any) =>
+      hostLearningImpl
+        ? hostLearningImpl(request)
+        : { isError: false, content: [{ type: 'text', text: `${serverId}::${request.operation}` }] },
     close: async () => {},
   };
   // Bracket access bypasses `private` for test-only stubbing; the
@@ -224,6 +229,32 @@ test('McpClientPool: callTool reports unknown-tool with actionable message', asy
   const res = await pool.callTool('totally_not_a_tool', {});
   assert.equal(res.isError, true);
   assert.match(res.content?.[0]?.text ?? '', /not found on any connected MCP server/);
+});
+
+test('McpClientPool: host learning routes only through the verified BrainRouter connection', async () => {
+  const pool = new McpClientPool();
+  seedFakeServer(pool, 'github', 'third-party', []);
+  seedFakeServer(pool, 'brain', 'brainrouter', []);
+
+  const result = await pool.callHostLearning({
+    operation: 'revert',
+    input: { itemId: 'lrn_0123456789abcdef01', reason: 'the contract changed' },
+  });
+
+  assert.equal(result.content[0]?.text, 'brain::revert');
+});
+
+test('McpClientPool: host learning fails closed without a verified BrainRouter connection', async () => {
+  const pool = new McpClientPool();
+  seedFakeServer(pool, 'github', 'third-party', []);
+
+  const result = await pool.callHostLearning({
+    operation: 'revert',
+    input: { itemId: 'lrn_0123456789abcdef01', reason: 'the contract changed' },
+  });
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0]?.text ?? '', /No verified BrainRouter MCP server/);
 });
 
 test('McpClientPool: identity precedence — brainrouter wins over third-party', () => {

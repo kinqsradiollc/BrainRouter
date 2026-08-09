@@ -340,6 +340,12 @@ export interface BuildPayloadOptions {
   /** Disable compatibility retries when the caller's contract permits one request only. */
   allowCompatibilityRetry?: boolean;
   /**
+   * Invoked immediately before each physical provider request, including
+   * compatibility retries. A caller may throw here to enforce an aggregate
+   * request ceiling without changing transport behavior for other callers.
+   */
+  beforeProviderRequest?: () => void;
+  /**
    * Router gateway — verbatim OpenAI request params to forward to the upstream
    * (temperature, top_p, max_tokens/max_completion_tokens, stop,
    * presence/frequency_penalty, seed, response_format, n, logprobs,
@@ -905,6 +911,7 @@ async function callNativeProvider(
   const release = await acquireLLMSlot();
   let res: Response;
   try {
+    options.beforeProviderRequest?.();
     res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: fetchSignal });
   } catch (err: any) {
     if (err?.name === 'AbortError') {
@@ -1020,6 +1027,7 @@ export async function callOpenAI(
     // backend instance.
     const release = await acquireLLMSlot();
     try {
+      options.beforeProviderRequest?.();
       return await fetch(requestUrl, {
         method: 'POST',
         headers,
@@ -1248,6 +1256,7 @@ export async function callOpenAIStream(
 
     const release = await acquireLLMSlot();
     try {
+      options.beforeProviderRequest?.();
       const res = await fetch(requestUrl, {
         method: 'POST',
         headers,

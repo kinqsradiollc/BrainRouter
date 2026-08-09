@@ -116,6 +116,7 @@ export async function listMemories(
   if (filters?.scene) { where.push("scene_name = ?"); args.push(filters.scene); }
   if (filters?.skill) { where.push("skill_tag = ?"); args.push(filters.skill); }
   if (typeof filters?.archived === "boolean") { where.push("archived = ?"); args.push(filters.archived ? 1 : 0); }
+  if (filters?.excludeLearned) { where.push("metadata_json::jsonb -> 'learned' IS NULL"); }
   if (pagination?.cursor) {
     where.push("(created_time < ? OR (created_time = ? AND record_id > ?))");
     args.push(pagination.cursor.createdTime, pagination.cursor.createdTime, pagination.cursor.recordId);
@@ -146,10 +147,11 @@ export async function getMemoryStats(exec: Executor, userId: string): Promise<{
   lastRecallAt: string | null; sensoryTotal: number; sensoryUnextracted: number;
   focusSceneTotal: number; extraction: ExtractionStatus;
 }> {
-  const totalRow = await exec.one<{ c: string }>("SELECT COUNT(*) AS c FROM cognitive_records WHERE user_id = $1", [userId]);
-  const archivedRow = await exec.one<{ c: string }>("SELECT COUNT(*) AS c FROM cognitive_records WHERE user_id = $1 AND archived = 1", [userId]);
-  const typeRows = await exec.rows<{ type: string; c: string }>("SELECT type, COUNT(*) AS c FROM cognitive_records WHERE user_id = $1 GROUP BY type", [userId]);
-  const citationRows = await exec.one<{ cited: string | null; total: string }>("SELECT SUM(citation_count) AS cited, COUNT(*) AS total FROM cognitive_records WHERE user_id = $1", [userId]);
+  const ordinary = "metadata_json::jsonb -> 'learned' IS NULL";
+  const totalRow = await exec.one<{ c: string }>(`SELECT COUNT(*) AS c FROM cognitive_records WHERE user_id = $1 AND ${ordinary}`, [userId]);
+  const archivedRow = await exec.one<{ c: string }>(`SELECT COUNT(*) AS c FROM cognitive_records WHERE user_id = $1 AND archived = 1 AND ${ordinary}`, [userId]);
+  const typeRows = await exec.rows<{ type: string; c: string }>(`SELECT type, COUNT(*) AS c FROM cognitive_records WHERE user_id = $1 AND ${ordinary} GROUP BY type`, [userId]);
+  const citationRows = await exec.one<{ cited: string | null; total: string }>(`SELECT SUM(citation_count) AS cited, COUNT(*) AS total FROM cognitive_records WHERE user_id = $1 AND ${ordinary}`, [userId]);
   const sensoryTotalRow = await exec.one<{ c: string; last_at: string | null }>("SELECT COUNT(*) AS c, MAX(recorded_at) AS last_at FROM sensory_stream WHERE user_id = $1", [userId]);
   const sensoryUnextractedRow = await exec.one<{ c: string }>("SELECT COUNT(*) AS c FROM sensory_stream WHERE user_id = $1 AND extracted_at IS NULL", [userId]);
 

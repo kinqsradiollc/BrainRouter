@@ -12,6 +12,7 @@ import { cliPrompter } from '../cli/prompt/cliPrompt.js';
 import { applyWorkspaceRoot, findWorkspaceRoot } from '@kinqs/brainrouter-core/workspace';
 import { DEFAULT_LLM } from './shared.js';
 import { refreshCliOrgConventionRepos } from './orgConvention.js';
+import { resolveCliLearnedTenant } from '../runtime/account/learnedTenant.js';
 
 export function registerRunCommand(program: Command): void {
   // One-shot non-interactive run — pipe-friendly for scripting/CI.
@@ -145,11 +146,15 @@ export function registerRunCommand(program: Command): void {
         }
       }
 
+      const learnedIdentity = await resolveCliLearnedTenant({ mcpClient, servers: targetServers });
+      if (learnedIdentity.warning) process.stderr.write(`[BrainRouter] ${learnedIdentity.warning}\n`);
       const agent = new Agent(mcpClient, llm, {
         workspaceRoot: workspace.workspaceRoot,
         launchCwd: workspace.launchCwd,
         sessionKey: options.session,
         prompter: cliPrompter,
+        learnedTenant: learnedIdentity.tenant,
+        learningEnabled: learnedIdentity.enabled,
       });
 
       // CLI-7 — output format: text (default) | json (single line) | jsonl (per-event stream).
@@ -207,10 +212,12 @@ export function registerRunCommand(program: Command): void {
       } catch (err: any) {
         emit({ type: 'error', message: err?.message ?? String(err) });
         if (fmt !== 'jsonl') console.error(`run failed: ${err.message}`);
+        try { await agent.endSession(); } catch { /* bounded learning is best effort */ }
         await mcpClient.close();
         process.exit(1);
       }
       const durationMs = Date.now() - startedAt;
+      try { await agent.endSession(); } catch { /* bounded learning is best effort */ }
       await mcpClient.close();
 
       const u = agent.lastTurnUsage;

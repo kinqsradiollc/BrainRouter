@@ -59,6 +59,7 @@ import { teamsRouter } from './api/routes/teams.js';
 import { chatThreadsRouter } from './api/routes/chatThreads.js';
 import { publicSharePageRouter } from './api/routes/publicShare.js';
 import { vulnerabilitiesRouter } from './api/routes/vulnerabilities.js';
+import { learnedBehaviorsRouter } from './api/routes/learnedBehaviors.js';
 import { orgsRouter, projectsRouter, githubReposRouter } from './api/routes/tenancy/index.js';
 import { connectorOauthRouter } from './api/routes/connectors/oauth.js';
 import { connectorManageRouter } from './api/routes/connectors/manage.js';
@@ -301,6 +302,7 @@ if (USE_HTTP) {
   // Hosted webhook ingress — unauthenticated by JWT (verifies the App's HMAC).
   app.use("/api/triggers", triggersRouter);
   app.use("/api/memories", memoriesRouter);
+  app.use("/api/learned-behaviors", learnedBehaviorsRouter);
   app.use("/api/scenes", scenesRouter);
   app.use("/api/persona", personaRouter);
   app.use("/api/sessions", sessionsRouter);

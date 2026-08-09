@@ -4,6 +4,7 @@ import { reconnectBackoffMs } from '../reconnect/reconnect.js';
 import type { McpServerStatus } from '../types.js';
 import { dueForReconnect } from './reconnectSweep.js';
 import { isBrainrouterOwnedTool, normalizeMcpToolName } from './toolNames.js';
+import type { HostLearningRequest, HostLearningResult } from '../hostLearning.js';
 
 /**
  * 0.3.7 — Multi-MCP support. Wraps a `Map<serverId, McpClientWrapper>`
@@ -371,6 +372,28 @@ export class McpClientPool {
     }
     const result = await wrapper.readResource({ uri }, options);
     return { server: serverId, ...result };
+  }
+
+  /**
+   * Invoke the BrainRouter host lifecycle channel without exposing a tool name
+   * to the model. Routing is by verified server identity, never by a caller-
+   * supplied server id, so learned state cannot spill into a third-party MCP.
+   */
+  async callHostLearning(
+    request: HostLearningRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<HostLearningResult> {
+    const wrapper = this.getBrainrouterClient();
+    if (!wrapper) {
+      return {
+        isError: true,
+        content: [{
+          type: 'text',
+          text: 'No verified BrainRouter MCP server is connected; host learning lifecycle is unavailable.',
+        }],
+      };
+    }
+    return wrapper.callHostLearning(request, options);
   }
 
   /**

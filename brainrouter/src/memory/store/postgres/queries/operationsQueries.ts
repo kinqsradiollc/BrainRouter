@@ -90,7 +90,17 @@ export async function getOperationLog(
   options?: CursorPaginationOptions<{ createdAt: string; id: string }>,
   filters?: OperationLogFilters,
 ): Promise<MemoryOperation[]> {
-  const where = ["user_id = ?"];
+  const where = [
+    "o.user_id = ?",
+    "o.operation NOT LIKE 'learned_item_%'",
+    "o.metadata_json::jsonb -> 'itemId' IS NULL",
+    `NOT EXISTS (
+      SELECT 1 FROM cognitive_records cr
+       WHERE cr.user_id = o.user_id
+         AND cr.record_id = o.record_id
+         AND cr.metadata_json::jsonb -> 'learned' IS NOT NULL
+    )`,
+  ];
   const args: any[] = [userId];
   if (filters?.operation) { where.push("operation = ?"); args.push(filters.operation); }
   if (filters?.sessionKey) { where.push("session_key = ?"); args.push(filters.sessionKey); }
@@ -102,8 +112,8 @@ export async function getOperationLog(
   }
   args.push(options?.limit ?? 100);
   const rows = await exec.rows(
-    pg(`SELECT id, user_id, record_id, operation, actor, session_key, reason, created_at, metadata_json
-          FROM memory_operations WHERE ${where.join(" AND ")}
+    pg(`SELECT o.id, o.user_id, o.record_id, o.operation, o.actor, o.session_key, o.reason, o.created_at, o.metadata_json
+          FROM memory_operations o WHERE ${where.join(" AND ")}
          ORDER BY created_at DESC, id ASC LIMIT ?`),
     args,
   );
@@ -111,9 +121,39 @@ export async function getOperationLog(
 }
 
 export async function exportMemories(exec: Executor, userId: string): Promise<MemoryExport> {
-  const memoryRows = await exec.rows("SELECT * FROM cognitive_records WHERE user_id = $1 ORDER BY created_time ASC, record_id ASC", [userId]);
-  const evidenceRows = await exec.rows("SELECT * FROM memory_evidence WHERE user_id = $1 ORDER BY observed_at ASC, id ASC", [userId]);
-  const operationRows = await exec.rows("SELECT * FROM memory_operations WHERE user_id = $1 ORDER BY created_at ASC, id ASC", [userId]);
+  const memoryRows = await exec.rows(
+    `SELECT * FROM cognitive_records
+      WHERE user_id = $1
+        AND metadata_json::jsonb -> 'learned' IS NULL
+      ORDER BY created_time ASC, record_id ASC`,
+    [userId],
+  );
+  const evidenceRows = await exec.rows(
+    `SELECT e.* FROM memory_evidence e
+      WHERE e.user_id = $1
+        AND NOT EXISTS (
+          SELECT 1 FROM cognitive_records cr
+           WHERE cr.user_id = e.user_id
+             AND cr.record_id = e.record_id
+             AND cr.metadata_json::jsonb -> 'learned' IS NOT NULL
+        )
+      ORDER BY e.observed_at ASC, e.id ASC`,
+    [userId],
+  );
+  const operationRows = await exec.rows(
+    `SELECT o.* FROM memory_operations o
+      WHERE o.user_id = $1
+        AND o.operation NOT LIKE 'learned_item_%'
+        AND o.metadata_json::jsonb -> 'itemId' IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM cognitive_records cr
+           WHERE cr.user_id = o.user_id
+             AND cr.record_id = o.record_id
+             AND cr.metadata_json::jsonb -> 'learned' IS NOT NULL
+        )
+      ORDER BY o.created_at ASC, o.id ASC`,
+    [userId],
+  );
   return {
     version: 1,
     exportedAt: new Date().toISOString(),

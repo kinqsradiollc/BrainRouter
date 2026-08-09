@@ -36,8 +36,16 @@ export const CODE_REVIEW_MARKER = '<!-- brainrouter-code-review -->';
  *
  * The no-tools framing remains correct, and required, when no context resolved.
  */
-export function buildCodeReviewContract(options?: { repositoryContext?: boolean }): string {
-  const mode = options?.repositoryContext === true ? 'attached-context' : 'diff-only';
+export function buildCodeReviewContract(
+  options?: { repositoryContext?: boolean; canRequestFiles?: boolean },
+): string {
+  // ADR-033 D3 — `canRequestFiles` is set only when a checkout reader is wired,
+  // so the contract can never license an ask the executor cannot serve.
+  const mode = options?.canRequestFiles === true
+    ? 'requestable-context'
+    : options?.repositoryContext === true
+      ? 'attached-context'
+      : 'diff-only';
   return (
     'You are a senior software engineer reviewing a pull request for QUALITY (NOT security — a separate reviewer covers vulnerabilities; do not report injection / secrets / auth issues here). The unified diff is provided ABOVE — review it DIRECTLY. The added (`+`) lines are the new code.\n' +
     buildGroundingClause(mode) + '\n' +

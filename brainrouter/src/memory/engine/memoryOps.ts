@@ -22,6 +22,7 @@ import { buildSessionReflectPrompt, parseSessionReflectResponse } from "../util/
 import { decayPotential } from "../pipeline/skill/skill-prewarm.js";
 import { NeuralSparkEngine } from "../pipeline/skill/neural-spark.js";
 import { pageRank, articulationPoints, shortestPath, namespaceOverview } from "../graph/graph-analytics.js";
+import { hasLearnedMemoryMetadata } from "../util/learned-record.js";
 
 /**
  * REFAC-ENGINE-SPLIT (0.4.17) — the cognitive-record write / verify / synthesis
@@ -133,6 +134,7 @@ export async function getMemoryById(engine: MemoryEngine, userId: string, record
 
 export async function upsertEngineeringMemory(engine: MemoryEngine, params: {
   userId: string;
+  orgId?: string | null;
   sessionKey?: string;
   sessionId?: string;
   type: MemoryType;
@@ -152,6 +154,7 @@ export async function upsertEngineeringMemory(engine: MemoryEngine, params: {
   const record: CognitiveRecord = {
     id: `cognitive_manual_${randomUUID()}`,
     userId: params.userId,
+    orgId: params.orgId?.trim() || null,
     sessionKey: params.sessionKey ?? "",
     sessionId: params.sessionId ?? "",
     // SECRET-REDACTION + LENGTH-CAP — structured-record captures (requirement
@@ -218,7 +221,10 @@ export async function verifyMemories(
     return result; // store lacks the source-provenance capability
   }
   const limit = Math.max(1, Math.min(5000, opts?.limit ?? 1000));
-  const records = (await engine.store.listMemories(userId, { archived: false })).slice(0, limit);
+  const records = (await engine.store.listMemories(userId, {
+    archived: false,
+    excludeLearned: true,
+  })).slice(0, limit);
   for (const rec of records) {
     const chunks = await store.getRecordSourceChunks(userId, rec.recordId);
     if (!chunks || chunks.length === 0) continue; // not code-anchored
@@ -357,7 +363,7 @@ export async function updateMemory(engine: MemoryEngine, userId: string, recordI
   note?: string;
 }) {
   const existing = await engine.store.getMemoryById(userId, recordId);
-  if (!existing) return null;
+  if (!existing || hasLearnedMemoryMetadata(existing)) return null;
   const now = new Date().toISOString();
   const updated: CognitiveRecord = {
     ...existing,
@@ -366,7 +372,10 @@ export async function updateMemory(engine: MemoryEngine, userId: string, recordI
     confidence: updates.confidence ?? existing.confidence,
     verificationStatus: updates.verificationStatus ?? existing.verificationStatus,
     updatedTime: now,
-    archived: updates.status === "archived" ? true : existing.archived,
+    // Status is the lifecycle authority. Explicitly restoring to active must
+    // clear the archived flag; otherwise the row says active but recall still
+    // drops it forever.
+    archived: updates.status ? updates.status === "archived" : existing.archived,
     metadata: updates.note
       ? { ...existing.metadata, governanceNote: updates.note, governanceNoteAt: now }
       : existing.metadata,
@@ -431,6 +440,10 @@ export async function getDiagnostics(engine: MemoryEngine, userId: string): Prom
     .sort();
   const recentOperations = await engine.store.getOperationLog(userId, { limit: 50 });
   const recentErrors = recentOperations
+    .filter((operation) => (
+      !operation.operation.startsWith("learned_item_")
+      && !(operation.metadata && typeof operation.metadata === "object" && "itemId" in operation.metadata)
+    ))
     .filter((op) => /error|degrad|fail/i.test(`${op.operation} ${op.reason} ${JSON.stringify(op.metadata ?? {})}`))
     .slice(0, 10);
 
@@ -512,7 +525,7 @@ export async function markCited(engine: MemoryEngine, userId: string, citedRecor
   };
 }
 
-export async function searchAsOf(engine: MemoryEngine, userId: string, query: string, asOf: string, limit = 10): Promise<{
+export async function searchAsOf(engine: MemoryEngine, userId: string, query: string, asOf: string, limit = 10, orgId?: string): Promise<{
   memories: Array<{ recordId: string; content: string; type: string; score: number }>;
   asOf: string;
   count: number;
@@ -522,7 +535,7 @@ export async function searchAsOf(engine: MemoryEngine, userId: string, query: st
     throw new Error(`Invalid asOf timestamp: "${asOf}". Must be a valid ISO 8601 date string.`);
   }
 
-  const results = await engine.store.searchCognitiveFtsAsOf(userId, query, limit, asOf);
+  const results = await engine.store.searchCognitiveFtsAsOf(userId, query, limit, asOf, orgId);
   return {
     memories: results.map(r => ({
       recordId: r.record_id,

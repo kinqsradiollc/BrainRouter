@@ -196,7 +196,13 @@ export const GREP_MAX_SCAN_MS = 4000;              // whole-scan wall-clock budg
  * results, a final sentinel hit (`path: '(search truncated)'`) is appended so the
  * model knows the scan stopped early. Pure-ish (fs reads).
  */
-export function grepSearch(query: string, root: string, wsRoot: string, max = 50): GrepHit[] {
+export function grepSearch(
+  query: string,
+  root: string,
+  wsRoot: string,
+  max = 50,
+  shouldScan: (repoRelativePath: string) => boolean = () => true,
+): GrepHit[] {
   let matcher: (line: string) => boolean;
   try {
     const re = new RegExp(query);
@@ -211,6 +217,7 @@ export function grepSearch(query: string, root: string, wsRoot: string, max = 50
 
   const scanFile = (full: string): void => {
     try {
+      if (!shouldScan(path.relative(wsRoot, full).replaceAll('\\', '/'))) return;
       // Per-file size guard — check before reading so a huge file never loads.
       if (fs.statSync(full).size > GREP_MAX_FILE_BYTES) { truncatedReason ||= 'skipped files over 2 MB'; return; }
       const content = fs.readFileSync(full, 'utf8');

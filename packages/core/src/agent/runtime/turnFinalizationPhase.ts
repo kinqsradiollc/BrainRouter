@@ -6,6 +6,7 @@ import { isTelemetryEnabled } from '../../telemetry/recorder/telemetry.js';
 import { recordDailyUsage } from '../../usage/usageHistoryStore.js';
 import { shrinkOversizedToolResults } from '../guards/turnEndShrink.js';
 import { normalizeTurnCompletionAnswer } from './completionPhase.js';
+import { scheduleLearningCheckpoint } from './learningPhase.js';
 
 interface TurnSpan {
   end(extra?: Record<string, unknown>): void;
@@ -45,6 +46,11 @@ export async function finalizeTurnPhase(
   agent.lastAnswer = finalAnswer;
 
   await agent.captureTurn(input.prompt, finalAnswer, input.callbacks);
+  // ADR-032 D5 — the turn-end checkpoint. Dispatched, never awaited: §1's worst
+  // gap is that an agent learns only when it remembers to ask, and the fix for
+  // that must not become a thing a person waits on. It sits after captureTurn
+  // so the trajectory it reads is the finished one.
+  scheduleLearningCheckpoint(agent, 'turn-end');
   if (agent.hookAdvisoryActive()) {
     runHooks(agent.workspaceRoot, 'post-turn', {
       payload: {
@@ -125,6 +131,14 @@ export async function finalizeTurnPhase(
   skillUsage.calls += agent.lastTurnUsage.calls;
   skillUsage.turns += 1;
   agent.usageBySkill.set(skillKey, skillUsage);
+
+  if (agent.activeLearnedSkillItemId) {
+    agent.activeLearnedSkillItemId = undefined;
+    agent.activeSkill = undefined;
+    agent.activeSkills = [];
+    agent.activeSkillAllowedTools = undefined;
+    agent.activeSkillDisallowedTools = [];
+  }
 
   if (!agent.silent && isTelemetryEnabled()) {
     try {

@@ -34,6 +34,15 @@ async function attachApiKeyUser(req: AuthedRequest, key: string): Promise<boolea
   return true;
 }
 
+function attachUserRecord(
+  req: AuthedRequest,
+  user: { userId: string; isAdmin: boolean; email: string },
+): void {
+  req.userId = user.userId;
+  req.isAdmin = user.isAdmin;
+  req.email = user.email;
+}
+
 const configuredJwtSecret = process.env.BRAINROUTER_JWT_SECRET?.trim();
 const generatedJwtSecret = randomBytes(32).toString("hex");
 export const USING_FALLBACK_JWT_SECRET = !configuredJwtSecret;
@@ -56,11 +65,11 @@ if (USING_FALLBACK_JWT_SECRET) {
   console.error("[BrainRouter] WARNING: BRAINROUTER_JWT_SECRET not set. Using random secret — sessions will not survive restarts.");
 }
 
-// AUTH-GUARDS — three guards with intentionally divergent security semantics,
-// not one factory: `requireAuth` is API-key-only, `requireJwt` re-checks the
-// user in the DB + the disabled flag, and `requireAnyAuth` deliberately TRUSTS a
-// valid JWT payload without that re-check (its API-key branch reuses
-// `attachApiKeyUser`). They share `bearerFrom` + the `{ error, code }` envelope.
+// AUTH-GUARDS — intentionally divergent security semantics, not one factory:
+// `requireAuth` is API-key-only, `requireJwt` re-checks JWT users,
+// `requireAnyAuth` deliberately TRUSTS a valid JWT payload without that check,
+// and `requireActiveAnyAuth` accepts either credential only after a live user
+// status lookup. They share `bearerFrom` + the `{ error, code }` envelope.
 
 export async function requireAuth(req: AuthedRequest, res: Response, next: NextFunction) {
   const key = bearerFrom(req);
@@ -126,6 +135,54 @@ export async function requireAnyAuth(req: AuthedRequest, res: Response, next: Ne
     sendError(res, 401, "Authentication required");
     return;
   }
+  next();
+}
+
+/**
+ * Authentication guard for authority-changing or provider-spending routes.
+ *
+ * `requireAnyAuth` intentionally accepts the claims in a still-valid JWT. That
+ * is useful on broad read paths, but it means an account disabled after token
+ * issue can remain active until expiry. Learning changes future behaviour and
+ * hosted chat can enqueue paid reflection, so these routes re-read the user on
+ * every request. Organization membership is still checked independently by
+ * the route's tenancy middleware.
+ */
+export async function requireActiveAnyAuth(req: AuthedRequest, res: Response, next: NextFunction) {
+  const bearer = bearerFrom(req);
+  if (!bearer) {
+    sendError(res, 401, "Authentication required");
+    return;
+  }
+
+  if (bearer.split(".").length === 3) {
+    const payload = verifyJwt(bearer, JWT_SECRET);
+    if (payload && typeof payload.userId === "string") {
+      const user = await memoryEngine.getUserById(payload.userId);
+      if (!user) {
+        sendError(res, 401, "Authentication required");
+        return;
+      }
+      if (user.status === "disabled") {
+        sendError(res, 403, "Account disabled");
+        return;
+      }
+      attachUserRecord(req, user);
+      next();
+      return;
+    }
+  }
+
+  const user = await memoryEngine.getUserByApiKey(bearer);
+  if (!user) {
+    sendError(res, 401, "Authentication required");
+    return;
+  }
+  if (user.status === "disabled") {
+    sendError(res, 403, "Account disabled");
+    return;
+  }
+  attachUserRecord(req, user);
   next();
 }
 

@@ -86,6 +86,7 @@ export function createHandleQueryResult(ctx: AgentEventsCtx): (rawId: string, re
       return;
     }
     if (error) {
+      if (id === 'a-learning-correct') q('q-snapshot', 'config-snapshot');
       if (id === 'q-list') {
         setFilesLoading(false);
         setFilesTruncated(false);
@@ -819,6 +820,21 @@ export function createHandleQueryResult(ctx: AgentEventsCtx): (rawId: string, re
         return;
       }
       case 'a-allow-rule': setToast(`Always-allow rule saved${result && typeof result === 'object' && 'rule' in (result as object) ? `: ${(result as { rule: string }).rule}` : ''} — shared with the CLI.`); q('q-snapshot', 'config-snapshot'); return;
+      case 'a-learning-correct': {
+        const r = result as { admitted?: boolean; rule?: string; reason?: string; item?: { id?: string } } | null;
+        q('q-snapshot', 'config-snapshot');
+        if (r?.admitted) setToast(`✓ Human correction recorded as an instruction${r.item?.id ? ` · ${r.item.id}` : '.'}`);
+        else setToast(`✗ Correction not recorded${r?.rule ? ` (${r.rule})` : ''}: ${r?.reason ?? 'The learning gate refused it.'}`);
+        return;
+      }
+      case 'a-learning-revert': {
+        const r = result as { ok?: boolean; complete?: boolean; error?: string } | null;
+        q('q-snapshot', 'config-snapshot');
+        if (!r?.ok) setToast('✗ Learned behaviour was not found in the active account and organization.');
+        else if (!r.complete) setToast(`⚠ Reverted locally; central-memory archive is pending${r.error ? `: ${r.error}` : '.'}`);
+        else setToast('✓ Learned behaviour reverted; its skill and central-memory copy are disabled.');
+        return;
+      }
       case 'a-term': return; // term-exec output is rendered by the live TerminalPanel (xterm), not buffered here
       case 'a-git': {
         const r = result as { out?: string; code?: number };

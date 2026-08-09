@@ -175,11 +175,25 @@ export function parseCriticOutput(raw: string): CriticResult | null {
   return null;
 }
 
+/**
+ * A forced-tool-call schema this completion backend can drive.
+ *
+ * Widened from `typeof CRITIC_TOOL` for ADR-033 D5: the review reflection pass
+ * needs the same transport (forced tool-call, one retry without tools, fenced
+ * JSON fallback) with a different tool, and copying `makeCriticCompletion` to
+ * get it would be two backends drifting apart from the first change.
+ */
+export interface ReviewToolSchema {
+  name: string;
+  description: string;
+  parameters: unknown;
+}
+
 /** One critique request as handed to the completion backend (real or fake). */
 export interface CriticRequest {
   system: string;
   user: string;
-  tool: typeof CRITIC_TOOL;
+  tool: ReviewToolSchema;
 }
 
 /** The injectable LLM seam: returns the raw reply (tool args JSON or content). */

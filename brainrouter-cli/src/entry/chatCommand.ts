@@ -14,6 +14,7 @@ import { runChat } from '../cli/ink/runChat.js';
 import { applyWorkspaceRoot, findWorkspaceRoot } from '@kinqs/brainrouter-core/workspace';
 import { DEFAULT_LLM } from './shared.js';
 import { refreshCliOrgConventionRepos } from './orgConvention.js';
+import { resolveCliLearnedTenant } from '../runtime/account/learnedTenant.js';
 import { safeOnboardingError } from '../cli/commands/init/onboardingErrors.js';
 import { runCliOnboardingSequence } from '../cli/commands/init/onboardingSequence.js';
 
@@ -236,10 +237,14 @@ export function registerChatCommand(program: Command): void {
       // hooks) before the first turn. Workspace-tier extensions only load in a
       // trusted workspace; best-effort, never blocks boot.
       await loadExtensions(workspace.workspaceRoot, { version: VERSION }).catch(() => undefined);
+      const learnedIdentity = await resolveCliLearnedTenant({ mcpClient, servers: targetServers });
+      if (learnedIdentity.warning) console.error(chalk.yellow(`[BrainRouter] ${learnedIdentity.warning}`));
       const agent = new Agent(mcpClient, llm, {
         workspaceRoot: workspace.workspaceRoot,
         launchCwd: workspace.launchCwd,
         prompter: cliPrompter,
+        learnedTenant: learnedIdentity.tenant,
+        learningEnabled: learnedIdentity.enabled,
       });
       // CC-P2.1 — `--continue` / `--resume <key>`: load a persisted session's
       // transcript into this launch before the REPL starts. Errors print and
@@ -292,7 +297,26 @@ export function registerChatCommand(program: Command): void {
       // skip the `finally` below. Best-effort unregister on signal so a
       // mid-tool-call kill doesn't leave a ghost waiting for the brain's
       // 5-min sweeper. Errors are swallowed by `stop()` itself.
-      const onSignal = () => { void federation?.stop(); };
+      let signalEnding = false;
+      const onSignal = (signal: NodeJS.Signals) => {
+        if (signal === 'SIGINT' && !signalEnding) {
+          signalEnding = true;
+          // Ink owns the normal Ctrl+C unmount. Start the same bounded drain
+          // immediately; runChat's cleanup awaits the idempotent Promise.
+          void agent.endSession();
+          void federation?.stop();
+          return;
+        }
+        if (signalEnding) {
+          process.exit(signal === 'SIGTERM' ? 143 : 130);
+        }
+        signalEnding = true;
+        void (async () => {
+          try { await agent.endSession(); } catch { /* bounded learning is best effort */ }
+          await federation?.stop();
+          process.exit(signal === 'SIGTERM' ? 143 : 130);
+        })();
+      };
       process.once('SIGINT', onSignal);
       process.once('SIGTERM', onSignal);
       try {

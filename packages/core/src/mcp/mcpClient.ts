@@ -11,3 +11,4 @@
 export { McpClientWrapper } from './client/client.js';
 export { resolveIdentityFromConfig } from './client/identity.js';
 export { isSessionNotFoundError } from './client/sessionErrors.js';
+export type { HostLearningRequest, HostLearningResult } from './hostLearning.js';
