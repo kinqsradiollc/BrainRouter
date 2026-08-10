@@ -90,6 +90,12 @@ deep dives.
   incremental per-segment transcription so text exists during the meeting and a failure is bounded
   to one segment, failed segments shown as marked gaps that retry from the audio still on disk, and
   a destructive acceptance test — kill the app mid-recording and lose nothing.
+  [ADR-036 the finding carries its code](decisions/ADR-036-the-finding-carries-its-code.md) —
+  proposed review-console change that renders each bot finding's own hunk in the dashboard: the
+  excerpt persisted with the finding at the reviewed revision rather than fetched from the forge, so
+  it survives a deleted branch and needs no credentials; before/after when a fix is proposed; the
+  finding's hunk rather than the whole diff, with "Open pull request" kept as the honest boundary;
+  and repository source treated as untrusted data that may never become markup.
 
 Published benchmark results: [`../brainrouter-benchmark/reports/`](../brainrouter-benchmark/reports/).
 
