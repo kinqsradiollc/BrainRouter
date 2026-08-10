@@ -100,6 +100,12 @@ export function resetLearningBudget(sessionKey?: string): void {
 
 export interface CheckpointAdmission {
   readonly sessionKey: string;
+  /**
+   * The workspace this session ran in, recorded so a lesson knows WHERE it was
+   * learned. Selection uses it to keep repo-specific advice from being
+   * delivered, confidently and wrongly, in an unrelated codebase.
+   */
+  readonly project?: string;
   readonly tenant?: LearnedTenant;
   readonly reason: LearningCheckpointReason;
   readonly nowMs: number;
@@ -147,6 +153,12 @@ function spendBudget(key: string, nowMs: number): void {
 export interface LearningCheckpointInput {
   readonly tenant: LearnedTenant;
   readonly sessionKey: string;
+  /**
+   * The workspace this session ran in, recorded so a lesson knows WHERE it was
+   * learned. Selection uses it to keep repo-specific advice from being
+   * delivered, confidently and wrongly, in an unrelated codebase.
+   */
+  readonly project?: string;
   readonly reason: LearningCheckpointReason;
   /** The bounded session window. Untrusted — see `reflection.ts`. */
   readonly trajectory: string;
@@ -634,6 +646,7 @@ function buildItem(
       corroboratingActionIds: candidate.corroboratingActionIds,
       sawUntrustedContent: candidate.sawUntrustedContent,
       gateReasoning,
+      ...(input.project ? { project: input.project } : {}),
     },
     allowedTools: learnedToolCeiling(candidate, input),
     status: 'active',
@@ -684,6 +697,8 @@ function promoteToSkill(
 export interface HumanCorrectionInput {
   tenant: LearnedTenant;
   sessionKey: string;
+  /** Workspace this correction was made in — see LearnedProvenance.project. */
+  project?: string;
   statement: string;
   falsifier: string;
   expectation: string;
@@ -764,6 +779,7 @@ export function buildHumanCorrectionItem(input: HumanCorrectionInput): HumanCorr
       corroboratedByTrustedAction: true,
       sawUntrustedContent: false,
       gateReasoning: verdict.reasoning,
+      ...(input.project ? { project: input.project } : {}),
     },
     status: 'active',
     createdAt: at,
