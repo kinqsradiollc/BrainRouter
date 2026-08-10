@@ -83,12 +83,36 @@ export function resolveReviewPolicy(config: Record<string, unknown> | undefined,
 
 export type ReviewCommand = "security" | "code" | "both";
 
+/**
+ * Mention form of a command, bounded so a comment cannot cost quadratic time.
+ *
+ * The earlier `@\S*brainrouter\S*\s+<cmd>` was quadratic on the ONE input an
+ * anonymous-ish party fully controls: a PR comment body. `\S` matches `@`, so
+ * every `@` in the text is a fresh start position, and from each one `\S*`
+ * consumes to end-of-string and backtracks a character at a time looking for
+ * the literal. Measured here: 8k `@` = 122ms, 16k = 488ms, 32k = 1.9s — and
+ * GitHub caps a comment at 65,536 characters, so one comment cost roughly 7.7s
+ * per pattern and all THREE ran, because none of them matched. That is ~23s of
+ * a single-threaded Node process shared by every tenant, from one comment, on a
+ * webhook path that answers before any permission check.
+ *
+ * Two changes remove the blow-up. `[^\s@]` cannot cross an `@`, so a run of
+ * them stops being N nested start positions; and `{0,48}` bounds the work per
+ * position (a GitHub handle is at most 39 characters, so this is generous).
+ */
+const mentionCommand = (command: string): RegExp =>
+  new RegExp(`@[^\\s@]{0,48}brainrouter[^\\s@]{0,48}[ \\t]+${command}`, "i");
+
+const MENTION_SECURITY_REVIEW = mentionCommand("security-review\\b");
+const MENTION_CODE_REVIEW = mentionCommand("code-review\\b");
+const MENTION_REVIEW = mentionCommand("review(?!-)\\b");
+
 /** Parse only supported PR commands; legacy /review never consumes /code-review. */
 export function parseReviewCommand(body: string): ReviewCommand | null {
   const text = String(body ?? "");
-  if (/(^|\s)\/security-review\b/i.test(text) || /@\S*brainrouter\S*\s+security-review\b/i.test(text)) return "security";
-  if (/(^|\s)\/code-review\b/i.test(text) || /@\S*brainrouter\S*\s+code-review\b/i.test(text)) return "code";
-  if (/(^|\s)\/review(?!-)\b/i.test(text) || /@\S*brainrouter\S*\s+review(?!-)\b/i.test(text)) return "both";
+  if (/(^|\s)\/security-review\b/i.test(text) || MENTION_SECURITY_REVIEW.test(text)) return "security";
+  if (/(^|\s)\/code-review\b/i.test(text) || MENTION_CODE_REVIEW.test(text)) return "code";
+  if (/(^|\s)\/review(?!-)\b/i.test(text) || MENTION_REVIEW.test(text)) return "both";
   return null;
 }
 

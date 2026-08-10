@@ -154,8 +154,27 @@ export class RepositoryAssuranceCampaignService {
     if (!Number.isInteger(attempt) || attempt < 1) {
       throw new Error('Assurance stage attempt must be a positive integer.');
     }
-    const startedAt = this.deps.now();
-    const stageId = this.deps.nextId('stage');
+    // A stage attempt owns ONE receipt id for its whole life. Minting a fresh id
+    // on every call looked harmless while stages only ran once, but an
+    // interrupted stage does run again: `terminalStage()` reads a receipt left
+    // `running` by a dead process as "unfinished, retry it", and the retry
+    // arrives here with the SAME attempt number. The store then refuses it —
+    // "A stage attempt cannot change its receipt id" — and the run can never
+    // make progress again. One crash, one permanently unretryable run.
+    //
+    // So resume the existing receipt rather than replacing it, and refuse to
+    // redo a stage that already finished: a terminal receipt is the record of
+    // work that happened, and re-running it would overwrite an outcome with a
+    // second opinion. `running` -> `running` is an allowed transition (the
+    // store's `from === to` clause), which is what makes resuming legal.
+    const previous = run.stages.find(
+      (receipt) => receipt.stage === stage && receipt.attempt === attempt,
+    );
+    if (previous && previous.status !== 'running' && previous.status !== 'pending') {
+      return run;
+    }
+    const startedAt = previous?.startedAt ?? this.deps.now();
+    const stageId = previous?.id ?? this.deps.nextId('stage');
     if (await this.deps.cancellation?.isCancellationRequested(runId)) {
       await this.deps.runs.saveStage(runId, {
         id: stageId,
