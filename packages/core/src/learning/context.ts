@@ -40,6 +40,16 @@ const MAX_LINE = 240;
  */
 export const MAX_INSTRUCTIONS_IN_CONTEXT = 8;
 export const MAX_EVIDENCE_IN_CONTEXT = 8;
+/**
+ * How much of the window another project may occupy.
+ *
+ * Not zero: a lesson learned elsewhere is often the most valuable thing in the
+ * store, because the general ones are learned wherever you happen to be. Not
+ * unbounded either — the point is that working in one repository should not mean
+ * reading advice about six others.
+ */
+export const MAX_FOREIGN_INSTRUCTIONS = 3;
+export const MAX_FOREIGN_EVIDENCE = 2;
 
 /** The tagged system-message slot this block occupies. */
 export const LEARNED_CONTEXT_TAG = 'learned-behaviour';
@@ -52,24 +62,70 @@ export const LEARNED_CONTEXT_TAG = 'learned-behaviour';
  * retrieval count climbing while their confirmation count stayed at zero —
  * the measurement would then justify itself.
  */
-export function selectLearnedForTurn(items: readonly LearnedItem[]): LearnedItem[] {
+/**
+ * Choose what reaches the model this turn.
+ *
+ * `project` is the workspace the CURRENT session is in. It matters because the
+ * partition key is `(orgId, userId)` and nothing else: without scoping, a lesson
+ * learned in one repository is delivered as a system message in every other
+ * repository that person opens. Some lessons survive that move ("prefer `rg`
+ * over `grep`"); a repo-specific one does not — it becomes confident, precise,
+ * wrong advice about a codebase it was never about, and D6 will never retire it
+ * there because its falsifier is not observable in a project that has no such
+ * migration.
+ *
+ * Scoping RANKS rather than filters, deliberately. A hard filter would throw
+ * away the genuinely portable lessons, which are the ones most worth having, and
+ * we have no reliable signal for which is which — asking the model to
+ * self-declare "this is general" is exactly the plausible-but-unstable judgement
+ * ADR-033 says to keep out of the model's hands. So same-project items sort
+ * first and foreign ones are additionally capped, which bounds how much of the
+ * window an unrelated project can occupy without pretending we can classify.
+ *
+ * An item with no recorded project (written before provenance carried one) is
+ * treated as unscoped: it neither gains the same-project bonus nor counts
+ * against the foreign cap, because we do not know where it came from and
+ * guessing would be worse than saying so.
+ */
+export function selectLearnedForTurn(
+  items: readonly LearnedItem[],
+  project?: string,
+): LearnedItem[] {
   const live = items.filter((item) => (
     item.status === 'active'
     // Legacy/local-only rows have no lifecycle field. New centrally-backed
     // rows do not reach the model until their reversible pointer is durable.
     && (!item.memoryLifecycle || item.memoryLifecycle.status === 'active')
   ));
+  const scope = (item: LearnedItem): 'same' | 'foreign' | 'unscoped' => {
+    const origin = item.provenance.project;
+    if (!origin || !project) return 'unscoped';
+    return origin === project ? 'same' : 'foreign';
+  };
   const rank = (item: LearnedItem): number => (
-    (item.tier === 'instruction' ? 1_000 : 0) + item.outcome.confirmations * 10 - item.outcome.contradictions * 5
+    (item.tier === 'instruction' ? 1_000 : 0)
+    // Enough to outrank confirmations without outranking the tier: a human
+    // correction from another project still beats a local inference.
+    + (scope(item) === 'same' ? 100 : 0)
+    + item.outcome.confirmations * 10 - item.outcome.contradictions * 5
   );
-  const instructions = live
-    .filter((item) => item.tier === 'instruction')
-    .sort((a, b) => rank(b) - rank(a))
-    .slice(0, MAX_INSTRUCTIONS_IN_CONTEXT);
-  const evidence = live
-    .filter((item) => item.tier === 'evidence')
-    .sort((a, b) => rank(b) - rank(a))
-    .slice(0, MAX_EVIDENCE_IN_CONTEXT);
+  /** Keep foreign items from crowding out the project actually being worked on. */
+  const boundForeign = (chosen: LearnedItem[], cap: number): LearnedItem[] => {
+    let foreign = 0;
+    return chosen.filter((item) => {
+      if (scope(item) !== 'foreign') return true;
+      foreign += 1;
+      return foreign <= cap;
+    });
+  };
+  const instructions = boundForeign(
+    live.filter((item) => item.tier === 'instruction').sort((a, b) => rank(b) - rank(a)),
+    MAX_FOREIGN_INSTRUCTIONS,
+  ).slice(0, MAX_INSTRUCTIONS_IN_CONTEXT);
+  const evidence = boundForeign(
+    live.filter((item) => item.tier === 'evidence').sort((a, b) => rank(b) - rank(a)),
+    MAX_FOREIGN_EVIDENCE,
+  ).slice(0, MAX_EVIDENCE_IN_CONTEXT);
   return [...instructions, ...evidence];
 }
 

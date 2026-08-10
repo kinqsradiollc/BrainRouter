@@ -91,7 +91,14 @@ export function applyLearnedContext(agent: Agent): void {
   if (agent.silent) return;
   let selected;
   try {
-    selected = selectLearnedForTurn(listLearnedItems(learnedTenantForAgent(agent)));
+    // The workspace decides RELEVANCE, not access: the partition is still
+    // `(orgId, userId)`, so this only reorders and bounds what a turn sees.
+    // Without it, advice about one repository arrives as a system message in
+    // every other repository the same person opens.
+    selected = selectLearnedForTurn(
+      listLearnedItems(learnedTenantForAgent(agent)),
+      agent.workspaceRoot,
+    );
   } catch {
     // A corrupt or unreadable store must not take the turn down with it.
     agent.removeTaggedSystemMessage(LEARNED_CONTEXT_TAG);
@@ -306,6 +313,9 @@ export function scheduleLearningCheckpoint(
   const work: Promise<void> = runLearningCheckpoint({
     tenant,
     sessionKey,
+    // Record WHERE this was learned. Selection uses it to stop repo-specific
+    // advice being delivered, confidently and wrongly, in another codebase.
+    ...(agent.workspaceRoot ? { project: agent.workspaceRoot } : {}),
     reason,
     trajectory,
     sawUntrustedContent,

@@ -106,6 +106,21 @@ export interface LearnedProvenance {
   readonly sawUntrustedContent: boolean;
   /** D2 — the reviewer's stated reasoning, so "why is this here" is answerable. */
   readonly gateReasoning: string;
+  /**
+   * WHERE it was learned — a stable id for the workspace the session ran in.
+   *
+   * The partition key is `(orgId, userId)` and nothing else, so without this a
+   * lesson learned in one repository is delivered, as a system message, in every
+   * other repository that person opens. "Prefer `rg` over `grep`" survives that
+   * move; "run the migration before the seed" does not — it becomes confident,
+   * specific, wrong advice about a codebase it was never about, and its
+   * falsifier will never be observed there because nobody runs that migration.
+   *
+   * Optional because rows written before this existed have no answer, and
+   * inventing one would be worse than admitting it: an item with no project is
+   * treated as unscoped rather than as belonging to the current one.
+   */
+  readonly project?: string;
 }
 
 /**
