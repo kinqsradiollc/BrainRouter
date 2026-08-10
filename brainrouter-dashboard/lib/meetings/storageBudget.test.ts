@@ -14,12 +14,30 @@ import {
   ensureCapturePersistence,
   evaluateCaptureBudget,
   formatCaptureBytes,
+  isStorageQuotaError,
 } from "./storageBudget";
 
 test("a healthy, persistent origin says nothing", () => {
   const budget = evaluateCaptureBudget({ usageBytes: 10_000_000, quotaBytes: 1_000_000_000, persisted: true });
   assert.equal(budget.level, "ok");
   assert.equal(budget.message, "");
+});
+
+test("a full store is recognised however this browser spells it", () => {
+  // The recorder stops on this answer, so a miss leaves "■ Stop recording" on
+  // screen while nothing is being written — the silent loss, wearing a button.
+  assert.equal(isStorageQuotaError(Object.assign(new Error("full"), { name: "QuotaExceededError" })), true);
+  assert.equal(isStorageQuotaError(Object.assign(new Error("full"), { name: "NS_ERROR_FILE_NO_DEVICE_SPACE" })), true);
+  assert.equal(isStorageQuotaError(Object.assign(new Error("full"), { name: "SomeOldDOMException", code: 22 })), true);
+});
+
+test("an ordinary write failure is not mistaken for a full store", () => {
+  // Stopping the recording is the right answer to "no more room" and the wrong
+  // answer to a transient error, which the next chunk may well survive.
+  assert.equal(isStorageQuotaError(new Error("the file handle went away")), false);
+  assert.equal(isStorageQuotaError({ code: 22 }), false, "an errno 22 with no DOMException shape is EINVAL");
+  assert.equal(isStorageQuotaError(undefined), false);
+  assert.equal(isStorageQuotaError("QuotaExceededError"), false);
 });
 
 test("a healthy origin WITHOUT persistence still warns, because it can be evicted", () => {

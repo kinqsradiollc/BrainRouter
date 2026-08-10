@@ -12,14 +12,21 @@
  * into an infinite loop of uploads, and the gap the user was supposed to see and
  * fix never settles long enough to be seen.
  *
+ * There are TWO bounds here, because there are two ways to loop for ever.
+ * `maxAttempts` bounds verdicts on the AUDIO — the ordinary D5 budget.
+ * `maxDeferrals` bounds the refunds D7 grants for verdicts on the SERVER: an
+ * outage costs no attempt, but "costs no attempt" must not mean "may recur
+ * without limit", or a caller that misreports a permanent failure as a
+ * temporary one keeps a segment at `attempts: 0` and in flight for ever. The
+ * queue is not entitled to assume a status line is honest.
+ *
  * There is deliberately NO jitter, unlike `mcp/reconnect`. Jitter exists to
  * de-synchronize many clients against one server; here a single client drains
  * its own queue, so there is no herd to spread — and a deterministic schedule is
  * what lets the two hosts, and these tests, agree on when the next attempt is
  * due.
  */
-import { isTerminalCaptureStatus } from './captureSession.js';
-import type { MeetingCaptureSession, MeetingSegment } from './types.js';
+import type { MeetingSegment } from './types.js';
 
 export interface MeetingRetryPolicy {
   /** Total attempts a segment may make, including the first. */
@@ -27,18 +34,44 @@ export interface MeetingRetryPolicy {
   readonly baseDelayMs: number;
   readonly factor: number;
   readonly maxDelayMs: number;
+  /**
+   * D7 — how many times an outage may be refunded to ONE segment before an
+   * outage starts costing an attempt like any other failure.
+   *
+   * This is the bound on the give-back, and it is a separate axis from
+   * `maxAttempts` on purpose. Without it, "an outage does not count" reads as
+   * "an outage may happen for ever": a segment answered every time with a
+   * try-again-later status sits at `attempts: 0`, `planTranscription` keeps
+   * calling it ready, and the queue re-uploads the same bytes until the process
+   * dies. That is not hypothetical — a gateway that reports one status for both
+   * "the sidecar is down" and "ffmpeg cannot decode these bytes" produces
+   * exactly it, and the transcript never says a word about the segment that will
+   * never work.
+   */
+  readonly maxDeferrals: number;
 }
 
 /**
  * Four attempts over roughly half a minute: long enough to ride out a sidecar
  * restart or a lost network, short enough that a genuinely broken endpoint stops
  * hiding behind "retrying" and becomes a visible gap the user can act on.
+ *
+ * `maxDeferrals` is sized from the probe rate rather than guessed. During an
+ * outage the queue backs off on this same curve, capped at `maxDelayMs`, so a
+ * segment at the head of the queue is probed at most about once a minute: ten
+ * minutes of a genuinely dead endpoint costs it roughly ten to fourteen refunds.
+ * Twenty-four is comfortably more than double that, so §6's "point the endpoint
+ * at a black hole for sixty seconds" — and a real ten-minute outage — still cost
+ * a meeting nothing at all, while an endpoint that is down (or lying) for good
+ * stops being refunded after ~20 minutes and the ordinary D5 bound finishes the
+ * job.
  */
 export const DEFAULT_MEETING_RETRY_POLICY: MeetingRetryPolicy = {
   maxAttempts: 4,
   baseDelayMs: 2_000,
   factor: 2,
   maxDelayMs: 60_000,
+  maxDeferrals: 24,
 };
 
 /**
@@ -95,26 +128,28 @@ export function retryDecision(segment: MeetingSegment, options: MeetingRetryOpti
 }
 
 /**
- * The segments a host should attempt right now.
+ * D7 — has this segment used up the outages it is allowed to be forgiven?
  *
- * A terminal session yields none: under D6 its audio is deleted once the meeting
- * is accepted or discarded, so retrying from a file that no longer exists is a
- * request that can only fail.
+ * The queue asks this before refunding an attempt. `true` does NOT doom the
+ * segment: it means the next outage is charged like any other failure, so the
+ * ordinary bounded retry in `retryDecision` takes over and the segment either
+ * transcribes when the endpoint returns or becomes a stated gap. That is the
+ * difference between "we stop being infinitely credulous" and "we give up".
+ *
+ * Deliberately NOT folded into `retryDecision`: that answers "may this failed
+ * segment be attempted again, and when", which is about the audio's budget.
+ * This is about the server's credit, a segment can be `pending` while it is
+ * spent, and merging the two would make one verdict mean two things.
+ *
+ * There is no per-session or wall-clock variant of this bound, and that is a
+ * choice rather than an omission. Marking a segment we never probed as "could
+ * not be transcribed" would be a lie of exactly the kind D5 exists to prevent,
+ * and a wall-clock deadline would fire on a laptop that merely slept. So the
+ * counter only moves when a real request really failed, and a permanently dead
+ * endpoint converts a meeting to gaps front-to-back at the probe rate — slowly,
+ * but never faster than the truth arrives.
  */
-export function retryableSegments(
-  session: MeetingCaptureSession,
-  options: MeetingRetryOptions = {},
-): readonly MeetingSegment[] {
-  if (isTerminalCaptureStatus(session.status)) return [];
-  return session.segments.filter((segment) => retryDecision(segment, options).verdict === 'ready');
-}
-
-/** True once every failed segment has spent its budget — the point at which a host stops draining. */
-export function retriesExhausted(
-  session: MeetingCaptureSession,
-  options: MeetingRetryOptions = {},
-): boolean {
-  const failed = session.segments.filter((segment) => segment.state === 'failed');
-  if (!failed.length) return false;
-  return failed.every((segment) => retryDecision(segment, options).verdict === 'exhausted');
+export function deferralsExhausted(segment: MeetingSegment, options: MeetingRetryOptions = {}): boolean {
+  const policy = options.policy ?? DEFAULT_MEETING_RETRY_POLICY;
+  return (segment.deferrals ?? 0) >= policy.maxDeferrals;
 }

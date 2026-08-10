@@ -90,6 +90,22 @@ export interface MeetingSegment {
   readonly failureReason?: string;
   /** D5 — transcription attempts MADE (not queued). The bound in `retryPolicy.ts` reads this. */
   readonly attempts: number;
+  /**
+   * D7 — how many times an attempt on THIS segment was refunded because the
+   * endpoint did not answer.
+   *
+   * It is not `attempts`, and the split is the whole point: an outage is a
+   * verdict on the server, so the attempt is given back. But the give-back has
+   * to be bounded or a server that answers every request with a "try again
+   * later" status — including one that is really saying "these bytes will never
+   * decode" — is an unbounded upload loop against our own sidecar, with the
+   * segment sitting at `attempts: 0` forever and the transcript never admitting
+   * anything is wrong.
+   *
+   * Absent until an outage actually touches the segment: most segments in a
+   * meeting never see one, and a `0` written 180 times is noise in the record.
+   */
+  readonly deferrals?: number;
   /** ISO timestamp of the most recent attempt; the backoff clock starts here. */
   readonly lastAttemptAt?: string;
 }

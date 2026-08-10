@@ -27,12 +27,13 @@
  *    depend on a bookkeeping write that the tab never got to make.
  *
  * The manifest `payload` is opaque text on purpose. The meeting session model
- * (status, segments, transcript) is shared and lives in the core package, which
- * the dashboard is not permitted to depend on — `scripts/check-package-boundaries.mjs`
- * allows dashboard → hooks/sdk/types only. Keeping the payload opaque means this
- * store holds the caller's one copy of that model instead of growing a second,
- * quietly divergent one, which is the ADR-029 failure D1b names by name.
+ * (status, segments, transcript) is shared and lives in
+ * `@kinqs/brainrouter-core/meetings`; this file is storage, and storage that
+ * knew the shape of a meeting would be the beginning of a second, quietly
+ * divergent model — the ADR-029 failure D1b names by name. `capturePayload.ts`
+ * owns the envelope; this file moves the bytes it is given.
  */
+import { isMeetingSessionId, newMeetingSessionId } from "@kinqs/brainrouter-core/meetings";
 
 /**
  * Which durable store is actually in use.
@@ -80,9 +81,6 @@ export interface CaptureStorageBackend {
   deleteSession(sessionId: string): Promise<void>;
 }
 
-/** Ids name directories, so the alphabet is deliberately narrow (no dot, no slash). */
-const SESSION_ID_SHAPE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
-
 /**
  * Zero-padding width for a chunk key. Six digits is 999,999 chunks — at a
  * twenty-second cadence that is over 230 days of continuous recording, so the
@@ -99,8 +97,17 @@ export const CAPTURE_CHUNK_SUFFIX = ".part";
 /** The manifest's file name inside an OPFS session directory. */
 export const CAPTURE_MANIFEST_NAME = "manifest.json";
 
+/**
+ * The id alphabet is the SHARED one (`isMeetingSessionId`), not a second copy of
+ * it.
+ *
+ * A session id names a directory on both hosts, and the shared model already
+ * refuses to mint one containing a path separator for exactly that reason. Two
+ * regexes for one rule is how a traversal guard ends up enforced in one host and
+ * not the other; this is the store's boundary check, delegating to the rule.
+ */
 export function isCaptureSessionId(value: unknown): value is string {
-  return typeof value === "string" && SESSION_ID_SHAPE.test(value);
+  return isMeetingSessionId(value);
 }
 
 /** Every entry point that can turn a caller's string into a path goes through here. */
@@ -111,18 +118,8 @@ export function assertCaptureSessionId(value: string): string {
   return value;
 }
 
-/**
- * A path-safe random id.
- *
- * `crypto.randomUUID` only exists in a secure context, and the dashboard is not
- * always served from one, so the fallback is not decoration — without it a
- * plain-http origin could not start a recording at all.
- */
-export function newCaptureSessionId(): string {
-  const webcrypto = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
-  if (typeof webcrypto?.randomUUID === "function") return `mtg-${webcrypto.randomUUID()}`;
-  return `mtg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
-}
+/** A path-safe random id, minted by the shared model so both hosts name captures alike. */
+export const newCaptureSessionId = newMeetingSessionId;
 
 export function captureChunkKey(sequence: number): string {
   if (!Number.isInteger(sequence) || sequence < 0 || sequence > MAX_CAPTURE_CHUNK_SEQUENCE) {

@@ -124,6 +124,31 @@ export function evaluateCaptureBudget(input: CaptureBudgetInput): CaptureBudget 
   };
 }
 
+/**
+ * Whether a rejected write means "there is no more room".
+ *
+ * This is the one write failure that is terminal, so it is the one a recorder
+ * must react to rather than log. `evaluateCaptureBudget` warns BEFORE the space
+ * runs out; this is what recognises the moment the warning was about, on the
+ * path where the budget check never ran because the write itself threw.
+ *
+ * Three shapes, because the browsers disagree and getting this wrong means the
+ * Stop button keeps saying "recording" while nothing is written:
+ *
+ * - `QuotaExceededError` — the standard `DOMException` name, Chrome and Safari.
+ * - `NS_ERROR_FILE_NO_DEVICE_SPACE` — Firefox, when the disk itself is full.
+ * - legacy `code === 22` — older `DOMException`s carry the code and no useful
+ *   name.
+ */
+export function isStorageQuotaError(caught: unknown): boolean {
+  if (!caught || typeof caught !== "object") return false;
+  const error = caught as { name?: unknown; code?: unknown };
+  if (error.name === "QuotaExceededError" || error.name === "NS_ERROR_FILE_NO_DEVICE_SPACE") return true;
+  // 22 is DOMException.QUOTA_EXCEEDED_ERR. Checked only alongside a DOMException-ish
+  // shape, so an unrelated errno 22 (EINVAL) is not mistaken for a full disk.
+  return error.code === 22 && typeof error.name === "string";
+}
+
 /** A short, non-technical size. Deliberately coarse — this appears mid-sentence. */
 export function formatCaptureBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 MB";

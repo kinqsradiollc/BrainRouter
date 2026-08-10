@@ -59,6 +59,19 @@
 /* ADR-035 D2 — the recovery offer for captures a crash interrupted. */
 .mv-recovery{margin-bottom:13px;padding:12px 13px;border:1px solid color-mix(in srgb,var(--accent) 35%,var(--border));border-radius:10px;background:var(--accent-soft)}.mv-recovery strong{display:block;font-size:11.5px}.mv-recovery p{margin:3px 0 9px;color:var(--text-faint);font-size:10px}.mv-recovery-row{display:flex;align-items:center;gap:8px;padding:7px 0;border-top:1px solid var(--border)}.mv-recovery-row>span{display:flex;min-width:0;flex-direction:column;flex:1;font-size:11px}.mv-recovery-row small{color:var(--text-faint);font:9px var(--mono)}
 .mv-recovery-cta{display:flex;flex-direction:column;gap:2px;width:100%;margin:0 0 8px;padding:9px 10px;border:1px solid color-mix(in srgb,var(--accent) 35%,var(--border));border-radius:9px;background:var(--accent-soft);text-align:left;cursor:pointer}.mv-recovery-cta strong{font-size:11px}.mv-recovery-cta small{color:var(--text-faint);font-size:9.5px}
+/* §6 — the recovered audio, played back. Full width under its row rather than
+   inside it, because a native audio control squashes a flex row to nothing. */
+.mv-recovery-audio{display:block;width:100%;height:30px;margin:2px 0 7px}
+/* ADR-035 D4/D5 — segment states while a capture transcribes. The text itself
+   lands in the transcript box; this says which segments are settled, in flight,
+   or a stated gap with a retry. */
+.mv-live{margin-bottom:15px;padding:12px 13px;border:1px solid var(--border);border-radius:10px;background:var(--surface)}.mv-live .mv-card-lab{margin-bottom:8px}.mv-live-empty{margin:0;color:var(--text-faint);font-size:10px}.mv-live-rows{display:flex;flex-direction:column;gap:2px;max-height:186px;overflow:auto}
+.mv-live-row{display:flex;align-items:center;gap:9px;padding:4px 2px;border-top:1px solid var(--border)}.mv-live-row:first-child{border-top:0}.mv-live-at{color:var(--text-faint);font:9px var(--mono);white-space:nowrap}.mv-live-state{color:var(--text-faint);font-size:10px}.mv-live-settled .mv-live-state{color:color-mix(in srgb,var(--ok) 62%,var(--text))}.mv-live-provisional .mv-live-state{color:var(--accent)}
+.mv-live-gap{display:flex;min-width:0;flex-direction:column;flex:1;color:color-mix(in srgb,var(--err) 62%,var(--text));font-size:10px}.mv-live-gap small{color:var(--text-faint);font-size:9px}
+/* D7 — the drain phase in words. The rows cannot say it: an outage leaves every
+   segment `pending`, which looks exactly like a queue that is working. */
+.mv-live-note{margin:8px 0 0;color:var(--text-faint);font-size:9.5px;line-height:1.5}
+.mv-unresolved{align-self:center;color:var(--text-faint);font-size:10px;line-height:1.4}
 .mv-compose-grid{display:grid;grid-template-columns:1fr 1fr;gap:13px}.mv-field{display:flex;flex-direction:column;gap:6px}.mv-field-wide{grid-column:1/-1}.mv-field>span{color:var(--text-faint);font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase}.mv-field input,.mv-field select,.mv-field textarea,.tmv input,.tmv select,.mtk input{width:100%;min-width:0;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:var(--input);color:var(--text);outline:0}.mv-field input:focus,.mv-field select:focus,.mv-field textarea:focus,.tmv input:focus,.tmv select:focus,.mtk input:focus{border-color:var(--accent)}.mv-field textarea{min-height:280px;resize:vertical;font:11.5px/1.6 var(--mono)}.mv-compose-actions{display:flex;gap:8px;margin-top:15px}
 
 /* Three-column Meeting Track */

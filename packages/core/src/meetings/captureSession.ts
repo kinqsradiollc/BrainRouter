@@ -52,6 +52,21 @@ export const MEETING_INTERRUPTED_REASON = 'Transcription was interrupted before 
 /** D5 — what an untranscribed segment says when the user finalizes anyway. */
 export const MEETING_UNFINISHED_REASON = 'Not transcribed before the meeting was finalized.';
 
+/** D7 — what a segment says while the endpoint is down. Not a verdict on the audio. */
+export const MEETING_ENDPOINT_UNAVAILABLE_REASON = 'The transcription endpoint is unavailable.';
+
+/**
+ * D5/D7 — what a segment says once its outage refunds are spent.
+ *
+ * Distinct from `MEETING_ENDPOINT_UNAVAILABLE_REASON` because it means something
+ * a user can act on that the other does not: we have stopped waiting for the
+ * endpoint on this segment's behalf, so it is now on the ordinary retry budget
+ * and heading for a stated gap. "Unavailable" forever is the spinner ADR-028
+ * asks a surface not to show.
+ */
+export const MEETING_ENDPOINT_UNRESPONSIVE_REASON =
+  'The transcription endpoint did not answer for this segment after many attempts.';
+
 export interface CreateMeetingCaptureInput {
   /** Supply one to adopt a host-generated id; otherwise a random, path-safe id is minted. */
   readonly id?: string;
@@ -207,6 +222,67 @@ export function markFailed(
       state: 'failed',
       failureReason: reason.trim() || 'Transcription failed.',
       attempts,
+      lastAttemptAt: at,
+    };
+  });
+}
+
+/**
+ * D7 — the endpoint was down, so no attempt on this audio ever happened.
+ *
+ * The dispatcher has to announce an attempt (`markTranscribing`) BEFORE it can
+ * discover whether the endpoint answers, so an outage always arrives with an
+ * attempt already spent. Left that way, every outage costs every queued segment
+ * one of its four attempts, and a few minutes of a dead sidecar permanently
+ * marks a perfectly good meeting as gaps — the exact silent loss this ADR
+ * exists to end. So the attempt is GIVEN BACK here, and only here: "this
+ * segment's audio is bad" is a verdict on the audio and counts; "the endpoint
+ * is down" is a verdict on the server and does not.
+ *
+ * The state it lands in depends on what the give-back leaves behind:
+ *
+ * - **No attempts left over** — the segment was never really tried, so it is
+ *   `pending`: D4's "queued because the endpoint is down".
+ * - **Attempts still spent** — an earlier, genuine failure is still on this
+ *   segment's record, so it stays `failed` and keeps saying so. Laundering it
+ *   into `pending` would hide a segment that has already burned its budget
+ *   behind a spinner, and would let the planner treat an exhausted segment as
+ *   fresh work forever.
+ *
+ * `previousFailureReason` is what the segment said before this dispatch, which
+ * `markTranscribing` cleared; passing it back keeps a specific diagnosis from
+ * being overwritten by a generic one.
+ *
+ * The refund is COUNTED as well as granted (`deferrals`). Granting it without
+ * counting it is what turns D7's "an outage costs no retry budget" into "an
+ * outage may recur without limit": a caller that reports every failure as an
+ * outage would hold a segment at `attempts: 0` for ever. The bound on the count
+ * lives in `retryPolicy.ts` (`deferralsExhausted`) and is applied by the queue,
+ * which is the single writer and the only thing that can see the endpoint.
+ */
+export function requeueSegment(
+  session: MeetingCaptureSession,
+  index: number,
+  previousFailureReason?: string,
+  at: string = new Date().toISOString(),
+): MeetingCaptureSession {
+  return replaceSegment(session, index, (segment) => {
+    // Only an announced attempt can be given back. Anything else is a caller
+    // confusion, and returning the segment untouched is safer than inventing
+    // an attempt to refund.
+    if (segment.state !== 'transcribing') return segment;
+    const attempts = Math.max(0, segment.attempts - 1);
+    const deferrals = (segment.deferrals ?? 0) + 1;
+    if (attempts === 0) {
+      const { failureReason: _dropped, ...rest } = segment;
+      return { ...rest, state: 'pending', attempts, deferrals, lastAttemptAt: at };
+    }
+    return {
+      ...segment,
+      state: 'failed',
+      failureReason: previousFailureReason?.trim() || MEETING_ENDPOINT_UNAVAILABLE_REASON,
+      attempts,
+      deferrals,
       lastAttemptAt: at,
     };
   });

@@ -45,6 +45,25 @@ const ALLOWED_INTERNAL_EDGES = new Map([
   ['dashboard', new Set(['hooks', 'sdk', 'types'])],
 ]);
 
+/**
+ * Exceptions granted to ONE specifier, not to a package.
+ *
+ * ADR-035 D1b decides that a meeting captured in the browser gets the same
+ * guarantee as one captured on the desktop, and that "the session model, the
+ * segment protocol, and the recovery flow are shared — only the write target is
+ * host-specific". The dashboard therefore has to import the shared meetings
+ * module rather than mirror it; a mirrored copy is the "two features, and the
+ * second one is quietly worse" failure that ADR names by name, and it would mean
+ * two retry rules that drift.
+ *
+ * Granting the whole `dashboard -> core` edge would be the lazy way to say that
+ * and would let anything else in Core follow. This allowlist is by exact
+ * specifier, so `@kinqs/brainrouter-core/meetings` — pure TypeScript with no
+ * filesystem, network or Node builtin in it — is in, and the rest of Core stays
+ * out and still fails this check.
+ */
+const ALLOWED_INTERNAL_SPECIFIERS = new Map([['dashboard', new Set(['@kinqs/brainrouter-core/meetings'])]]);
+
 const SOURCE_AREAS = [
   { id: 'types', root: 'packages/types/src' },
   { id: 'protocol', root: 'packages/agent-protocol/src' },
@@ -185,7 +204,11 @@ export function checkImport({ area, filePath, specifier, policy }) {
 
   if (packageName) {
     const target = INTERNAL_PACKAGES.get(packageName);
-    if (target !== area && !ALLOWED_INTERNAL_EDGES.get(area)?.has(target)) {
+    if (
+      target !== area
+      && !ALLOWED_INTERNAL_EDGES.get(area)?.has(target)
+      && !ALLOWED_INTERNAL_SPECIFIERS.get(area)?.has(specifier)
+    ) {
       return violation(`${area} may not depend on ${target}`);
     }
 

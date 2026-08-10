@@ -56,6 +56,11 @@ function fakeCapture(begin?: () => Promise<MeetingCaptureSession>): Recorded {
       append: async (id, bytes, durationMs) => { appended.push({ id, bytes: [...bytes], durationMs }); return session(id); },
       stop: async (id) => { stopped.push(id); return { ...session(id), status: "stopped" }; },
       read: async () => ({ bytes: new Uint8Array(), contentType: "audio/webm" }),
+      // The recorder never asks the host to transcribe or to retry — that is the
+      // compose view's business — so these exist only to satisfy the port.
+      adopt: async (id) => session(id),
+      retrySegment: async (id) => session(id),
+      onProgress: () => () => undefined,
       finalize: async () => undefined,
       discard: async () => undefined,
       resumable: async () => [],

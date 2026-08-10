@@ -103,6 +103,30 @@ export interface OpenedCaptureStore {
 }
 
 /**
+ * What the person about to record needs to know about where their audio is
+ * going — empty when there is nothing to say.
+ *
+ * Golden rule 23, made into a sentence someone can act on. `rejected` and `kind`
+ * are already returned by `openMeetingCaptureStore`; without this they were
+ * computed and thrown away, which is the same as not having them. A recording
+ * that quietly landed in IndexedDB because OPFS refused behaves differently
+ * enough — slower, and evicted sooner — that "it worked yesterday" needs an
+ * answer six weeks from now.
+ *
+ * Pure, and separate from the budget message, because the two are independent:
+ * a store can be the fallback with plenty of room, or the preferred one that is
+ * nearly full, and a user may need to hear either, both, or neither.
+ */
+export function captureFallbackNotice(selection: {
+  readonly kind: CaptureStorageKind;
+  readonly rejected: readonly CaptureBackendAttempt[];
+}): string {
+  if (selection.kind === "opfs" || selection.rejected.length === 0) return "";
+  const reasons = selection.rejected.map((attempt) => attempt.error).join("; ");
+  return `This recording is being saved to this browser's database rather than its file store (${reasons}).`;
+}
+
+/**
  * Open the store the browser can actually give us, having first asked for
  * persistent storage.
  *

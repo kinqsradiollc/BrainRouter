@@ -13,6 +13,7 @@ import test from "node:test";
 import { FakeCaptureBackend } from "./_captureBackendFixture";
 import type { CaptureStorageBackend } from "./captureStorage";
 import {
+  captureFallbackNotice,
   firstUsableCaptureBackend,
   openMeetingCaptureStore,
   type CaptureBackendCandidate,
@@ -84,6 +85,23 @@ test("opening reports which store was used and whether it can be evicted", async
   assert.equal(result.persisted, true);
   assert.deepEqual(result.rejected.map((attempt) => attempt.kind), ["opfs"]);
   assert.equal((await result.store.budget()).level, "ok");
+});
+
+test("falling back to IndexedDB is something the recorder is told, with the reason", async () => {
+  const notice = captureFallbackNotice({
+    kind: "indexeddb",
+    rejected: [{ kind: "opfs", error: "quota policy refused the write" }],
+  });
+  assert.match(notice, /browser's database/);
+  assert.match(notice, /quota policy refused the write/);
+});
+
+test("the preferred store says nothing, and neither does a fallback nobody fell back from", async () => {
+  // A notice on the happy path is noise, and noise is what makes the real
+  // warning ignorable.
+  assert.equal(captureFallbackNotice({ kind: "opfs", rejected: [] }), "");
+  assert.equal(captureFallbackNotice({ kind: "opfs", rejected: [{ kind: "indexeddb", error: "x" }] }), "");
+  assert.equal(captureFallbackNotice({ kind: "indexeddb", rejected: [] }), "");
 });
 
 test("a refused persistence request does not stop the store opening", async () => {

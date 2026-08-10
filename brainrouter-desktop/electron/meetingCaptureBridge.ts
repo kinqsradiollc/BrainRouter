@@ -1,10 +1,18 @@
 /**
- * ADR-035 D1/D2 — the IPC surface over the meeting capture store.
+ * ADR-035 D1/D2/D3 — the IPC surface over the meeting capture store and the
+ * host-owned transcription queue.
  *
  * The renderer has no filesystem, so every byte of meeting audio crosses this
  * boundary on its way to disk. That is the whole reason the channels exist:
  * `ondataavailable` fires in the renderer and the durable write has to happen in
  * a process that outlives a renderer crash, which is main.
+ *
+ * Transcription is on this side for the same reason (open question 3): "a
+ * renderer-owned queue dies with the window, which is the defect this ADR exists
+ * to fix". The renderer therefore asks for two things only — start transcribing
+ * this capture, retry this segment — and is TOLD about progress on a push
+ * channel, so a window that reloads mid-meeting rejoins a queue that never
+ * stopped instead of restarting one.
  *
  * The handlers do nothing but validate and delegate. Validation is not
  * ceremony — a compromised or merely buggy renderer supplies these arguments,
@@ -15,11 +23,16 @@
  * `recording` by a crash is corrected, and capture directories no record claims
  * are reaped and logged.
  */
-import { app, ipcMain } from 'electron';
+import { BrowserWindow, app, ipcMain } from 'electron';
 import type { MeetingCaptureScope, MeetingCaptureTemplate } from '@kinqs/brainrouter-core/meetings';
 import { MeetingCaptureStore } from './meetingCapture.js';
+import { MeetingTranscriptionSupervisor, type MeetingCaptureProgress } from './meetingTranscription.js';
+import { transcribeCaptureSegment } from './meetingsBridge.js';
 
 const TEMPLATES: readonly MeetingCaptureTemplate[] = ['general', 'standup', 'one-on-one', 'retrospective'];
+
+/** D4's push channel: a capture's record changed, and it is already on disk. */
+export const MEETING_CAPTURE_PROGRESS_CHANNEL = 'meetings:capture-progress';
 
 function text(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
@@ -29,6 +42,14 @@ function requireId(value: unknown): string {
   const id = text(value);
   if (!id) throw new Error('A meeting capture id is required.');
   return id;
+}
+
+/** Segment indices name files, so anything that is not a whole number is refused. */
+function requireIndex(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    throw new Error('A meeting segment index is required.');
+  }
+  return value;
 }
 
 /** Chrome hands `ondataavailable` an ArrayBuffer; structured clone may deliver either shape. */
@@ -43,14 +64,40 @@ function scopeOf(value: unknown): MeetingCaptureScope {
   return { orgId: text(raw.orgId) ?? null, workspaceId: text(raw.workspaceId) ?? null };
 }
 
+/**
+ * Progress goes to every window rather than to the one that pressed Record.
+ *
+ * A capture belongs to the process, not to a window: the window that started it
+ * may have been reloaded or closed, and the one the user is looking at now is
+ * the one that has to show the text (ADR-029 — one workspace, many surfaces).
+ */
+function broadcast(progress: MeetingCaptureProgress): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) window.webContents.send(MEETING_CAPTURE_PROGRESS_CHANNEL, progress);
+  }
+}
+
 export function registerMeetingCaptureBridge(userDataPath = app.getPath('userData')): MeetingCaptureStore {
   const store = new MeetingCaptureStore(userDataPath);
+  const supervisor = new MeetingTranscriptionSupervisor(store, {
+    transcribe: transcribeCaptureSegment,
+    publish: broadcast,
+  });
 
   void store.recoverInterrupted().then((report) => {
     if (report.recovered.length) console.warn(`[meetings] recovered ${report.recovered.length} interrupted capture(s).`);
-    // D6 asks for the reap to be logged: a directory holding audio no session
-    // claims is exactly the artifact nobody would otherwise notice.
-    if (report.reaped.length) console.warn(`[meetings] reaped ${report.reaped.length} orphaned capture director(ies).`);
+    // §6 asks that "the audio up to the kill" be there, and the chunk a kill
+    // landed on top of is the one that is easiest to lose and hardest to notice
+    // losing. Logged separately from the reap so it is visible that the boot
+    // pass rescued audio rather than only deleting things.
+    if (report.adopted.length) console.warn(`[meetings] adopted a durable chunk the record had not claimed in ${report.adopted.length} capture(s).`);
+    // D6 asks for the reap to be logged: a capture directory nobody will ever be
+    // offered is exactly the artifact nobody would otherwise notice. The wording
+    // covers all three cases the store reaps — no record, a record that is
+    // already terminal because a kill interrupted the delete, and a Record that
+    // died before its first chunk — because claiming they were all orphans would
+    // be a guess.
+    if (report.reaped.length) console.warn(`[meetings] reaped ${report.reaped.length} capture director(ies) holding no recoverable audio.`);
   }).catch((caught: unknown) => {
     console.warn('[meetings] capture recovery failed:', caught instanceof Error ? caught.message : caught);
   });
@@ -58,7 +105,7 @@ export function registerMeetingCaptureBridge(userDataPath = app.getPath('userDat
   ipcMain.handle('meetings:captureBegin', async (_event, input: unknown) => {
     const raw = input && typeof input === 'object' ? input as Record<string, unknown> : {};
     const template = text(raw.template);
-    return await store.begin({
+    return await supervisor.begin({
       scope: scopeOf(raw),
       ...(text(raw.title) ? { title: text(raw.title)! } : {}),
       ...(template && TEMPLATES.includes(template as MeetingCaptureTemplate) ? { template: template as MeetingCaptureTemplate } : {}),
@@ -72,20 +119,29 @@ export function registerMeetingCaptureBridge(userDataPath = app.getPath('userDat
     // A chunk that measured as instant is still a chunk of audio; clamping to
     // one millisecond keeps the shared model's positive-duration rule from
     // rejecting bytes that are already worth keeping.
-    return await store.append(requireId(id), requireBytes(bytes), Math.max(1, Math.round(elapsed)));
+    return await supervisor.append(requireId(id), requireBytes(bytes), Math.max(1, Math.round(elapsed)));
   });
 
-  ipcMain.handle('meetings:captureStop', async (_event, id: unknown) => await store.stop(requireId(id)));
+  ipcMain.handle('meetings:captureStop', async (_event, id: unknown) => await supervisor.stop(requireId(id)));
   ipcMain.handle('meetings:captureRead', async (_event, id: unknown) => await store.read(requireId(id)));
+  // D3 — "transcribe this capture" no longer means "post the whole thing". It
+  // means: this process should be draining it, segment by segment, from here on.
+  ipcMain.handle('meetings:captureAdopt', async (_event, id: unknown) => await supervisor.adopt(requireId(id)));
+  ipcMain.handle('meetings:captureRetrySegment', async (_event, id: unknown, index: unknown) =>
+    await supervisor.retry(requireId(id), requireIndex(index)));
   ipcMain.handle('meetings:captureFinalize', async (_event, id: unknown) => {
-    await store.finalize(requireId(id));
+    await supervisor.close(requireId(id), 'finalize');
     return { ok: true };
   });
   ipcMain.handle('meetings:captureDiscard', async (_event, id: unknown) => {
-    await store.discard(requireId(id));
+    await supervisor.close(requireId(id), 'discard');
     return { ok: true };
   });
   ipcMain.handle('meetings:captureResumable', async (_event, scope: unknown) => await store.resumable(scopeOf(scope)));
+
+  // Timers only; the audio and the record are already on disk, so quitting mid
+  // drain costs the remaining segments a retry and nothing else.
+  app.once('will-quit', () => supervisor.dispose());
 
   return store;
 }

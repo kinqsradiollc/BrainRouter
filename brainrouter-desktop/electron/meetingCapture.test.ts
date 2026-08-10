@@ -12,12 +12,32 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { appendSegment, type MeetingCaptureSession } from '@kinqs/brainrouter-core/meetings';
 import { MeetingCaptureStore, MEETING_CAPTURE_DIRECTORY } from './meetingCapture.js';
 
 const POSIX = process.platform !== 'win32';
 
 function userData(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-meeting-capture-'));
+}
+
+/**
+ * What the transcription supervisor does with a chunk, in the order D1 fixes:
+ * the bytes, then the record that claims them, carrying the count the disk took.
+ *
+ * The store no longer offers this as one call, because the record belongs to the
+ * transcription queue while a capture is open (`meetingTranscription.ts`) and a
+ * store that also wrote it would be a second writer.
+ */
+async function append(
+  store: MeetingCaptureStore,
+  id: string,
+  bytes: Uint8Array,
+  durationMs: number,
+): Promise<MeetingCaptureSession> {
+  const { session } = await store.stored(id);
+  const written = await store.writeSegment(id, session.segments.length, bytes);
+  return await store.persist(appendSegment(session, { byteLength: written, durationMs }));
 }
 
 function captureRoot(home: string): string {
@@ -55,8 +75,8 @@ test('a chunk handed to the store lands on disk at 0600 and is readable back', a
   const first = new Uint8Array([1, 2, 3, 4]);
   const second = new Uint8Array([5, 6, 7]);
 
-  const afterFirst = await store.append(session.id, first, 20_000);
-  const afterSecond = await store.append(session.id, second, 15_000);
+  const afterFirst = await append(store, session.id, first, 20_000);
+  const afterSecond = await append(store, session.id, second, 15_000);
 
   const directory = path.join(captureRoot(home), session.id);
   const segment = path.join(directory, 'segment-00000.webm');
@@ -76,29 +96,34 @@ test('a chunk handed to the store lands on disk at 0600 and is readable back', a
   assert.equal(audio.contentType, 'audio/webm;codecs=opus');
 });
 
-test('overlapping appends are serialized rather than overwriting one another', async () => {
+test('a segment index can only ever be written once', async () => {
   const home = userData();
   const store = new MeetingCaptureStore(home);
   const session = await store.begin({ scope: { orgId: null } });
 
-  await Promise.all([
-    store.append(session.id, new Uint8Array([1]), 1_000),
-    store.append(session.id, new Uint8Array([2]), 1_000),
-    store.append(session.id, new Uint8Array([3]), 1_000),
-  ]);
+  // The supervisor serializes appends so it never asks twice for one index; this
+  // is the store's own guard behind that, and it matters because the second
+  // write would be a chunk of audio silently replacing a different one.
+  assert.equal(await store.writeSegment(session.id, 0, new Uint8Array([1, 2])), 2);
+  await assert.rejects(() => store.writeSegment(session.id, 0, new Uint8Array([9])), /EEXIST/);
+  assert.deepEqual(new Uint8Array(fs.readFileSync(path.join(captureRoot(home), session.id, 'segment-00000.webm'))), new Uint8Array([1, 2]));
 
-  const stored = await store.session(session.id);
-  assert.deepEqual(stored.segments.map((entry) => entry.index), [0, 1, 2]);
-  assert.equal((await store.read(session.id)).bytes.byteLength, 3);
+  // And a capture that no longer exists is not recreated by writing into it: a
+  // segment file in a directory with no record is the orphan the boot pass
+  // deletes, so writing one would be writing audio already destined for the bin.
+  await store.discard(session.id);
+  await assert.rejects(() => store.writeSegment(session.id, 1, new Uint8Array([3])), /no longer on this device/);
+  assert.equal(fs.existsSync(path.join(captureRoot(home), session.id)), false);
 });
 
-test('a session a crash left recording is recovered and offered back with its audio', async () => {
+test('a session a crash left recording is recovered, and the chunk it never claimed is adopted', async () => {
   const home = userData();
   const store = new MeetingCaptureStore(home);
   const session = await store.begin({ scope: { orgId: 'org_1' }, title: 'Interrupted' });
-  await store.append(session.id, new Uint8Array([9, 9, 9]), 20_000);
-  // The process dies here: the record still says `recording`, and a segment file
-  // written after the last record update is a torn tail nothing accounts for.
+  await append(store, session.id, new Uint8Array([9, 9, 9]), 20_000);
+  // The process dies here. D1 writes the bytes and THEN the record, so the last
+  // thing a kill can interrupt is the record — leaving a chunk that is fully
+  // written, closed and durable, and that the session does not mention.
   const directory = path.join(captureRoot(home), session.id);
   fs.writeFileSync(path.join(directory, 'segment-00001.webm'), Buffer.from([7]));
 
@@ -106,24 +131,106 @@ test('a session a crash left recording is recovered and offered back with its au
   const report = await next.recoverInterrupted();
 
   assert.deepEqual(report.recovered, [session.id]);
+  assert.deepEqual(report.adopted, [session.id]);
   assert.deepEqual(report.reaped, []);
   // ADR-028 — the status now says what is true, and nothing claims to be live.
   assert.equal((await next.session(session.id)).status, 'stopped');
-  assert.equal(fs.existsSync(path.join(directory, 'segment-00001.webm')), false);
+  // §6 asks for "the audio up to the kill". Deleting this file was the obvious
+  // reading of "torn tail" and it is the wrong one: the chunk is real audio and
+  // the RECORD is the stale artifact, so the record is extended to claim it.
+  assert.ok(fs.existsSync(path.join(directory, 'segment-00001.webm')));
+  assert.deepEqual(
+    (await next.session(session.id)).segments.map((segment) => [segment.index, segment.byteLength]),
+    [[0, 3], [1, 1]],
+  );
 
   const offers = await next.resumable({ orgId: 'org_1' });
-  assert.deepEqual(offers.map((offer) => [offer.sessionId, offer.byteLength, offer.segments]), [[session.id, 3, 1]]);
+  assert.deepEqual(offers.map((offer) => [offer.sessionId, offer.byteLength, offer.segments]), [[session.id, 4, 2]]);
   // Open question 5 — a capture started under one org is never offered under another.
   assert.deepEqual(await next.resumable({ orgId: 'org_2' }), []);
+});
+
+test('adoption stops at the first hole, and a chunk with no bytes in it is not audio', async () => {
+  const home = userData();
+  const store = new MeetingCaptureStore(home);
+  const session = await store.begin({ scope: { orgId: null }, title: 'Holes' });
+  await append(store, session.id, new Uint8Array([1, 2, 3]), 20_000);
+  const directory = path.join(captureRoot(home), session.id);
+  // Contiguous from the end of the record, then an `open` that beat its write,
+  // then a file on the far side of the hole. Only the first may be believed: a
+  // segment's INDEX is the chunk the queue reads audio from, so bridging a hole
+  // would transcribe segment 2 from segment 3's audio — text that looks right
+  // and is wrong, which is worse than an unclaimed chunk.
+  fs.writeFileSync(path.join(directory, 'segment-00001.webm'), Buffer.from([4, 5]));
+  fs.writeFileSync(path.join(directory, 'segment-00002.webm'), Buffer.alloc(0));
+  fs.writeFileSync(path.join(directory, 'segment-00003.webm'), Buffer.from([6]));
+
+  const next = new MeetingCaptureStore(home);
+  const report = await next.recoverInterrupted();
+
+  assert.deepEqual(report.adopted, [session.id]);
+  assert.deepEqual(
+    (await next.session(session.id)).segments.map((segment) => [segment.index, segment.byteLength]),
+    [[0, 3], [1, 2]],
+  );
+  assert.ok(fs.existsSync(path.join(directory, 'segment-00001.webm')));
+  assert.equal(fs.existsSync(path.join(directory, 'segment-00002.webm')), false);
+  assert.equal(fs.existsSync(path.join(directory, 'segment-00003.webm')), false);
+});
+
+test('a Record that died before its first chunk is reaped instead of outliving every pass', async () => {
+  const home = userData();
+  const store = new MeetingCaptureStore(home);
+  const cancelled = await store.begin({ scope: { orgId: null }, title: 'Cancelled' });
+  const kept = await store.begin({ scope: { orgId: null }, title: 'Kept' });
+  await append(store, kept.id, new Uint8Array([1, 2]), 20_000);
+
+  // Not by THIS launch: a capture created seconds ago has no audio under it
+  // either, and it is about to. Reaping it would delete a live recording's
+  // directory out from under the recorder still opening its microphone.
+  assert.deepEqual((await store.recoverInterrupted()).reaped, []);
+  assert.ok(fs.existsSync(path.join(captureRoot(home), cancelled.id)));
+
+  // Backdated rather than raced: the guard compares the record's `startedAt`
+  // against the moment the store opened, and a test that relied on two clock
+  // reads landing in different milliseconds would fail on a fast enough disk.
+  const record = path.join(captureRoot(home), cancelled.id, 'session.json');
+  const stored = JSON.parse(fs.readFileSync(record, 'utf8')) as { session: Record<string, unknown> };
+  stored.session.startedAt = '2026-08-09T09:00:00.000Z';
+  fs.writeFileSync(record, JSON.stringify(stored));
+
+  const next = new MeetingCaptureStore(home);
+  const report = await next.recoverInterrupted();
+
+  // D6/D2 — `resumable` would never offer it (no bytes) and the orphan rule
+  // would never claim it (it HAS a record), so without this pass it is a
+  // directory that survives every launch for ever.
+  assert.deepEqual(report.reaped, [cancelled.id]);
+  assert.equal(fs.existsSync(path.join(captureRoot(home), cancelled.id)), false);
+  assert.ok(fs.existsSync(path.join(captureRoot(home), kept.id)));
+  assert.deepEqual((await next.resumable()).map((offer) => offer.sessionId), [kept.id]);
+});
+
+test('a chunk the store no longer holds reads back as missing rather than as a fault', async () => {
+  const home = userData();
+  const store = new MeetingCaptureStore(home);
+  const session = await store.begin({ scope: { orgId: null } });
+  await append(store, session.id, new Uint8Array([1, 2, 3]), 20_000);
+
+  assert.deepEqual(await store.readSegment(session.id, 0), new Uint8Array([1, 2, 3]));
+  // `null` is the word the shared segment reader understands: it becomes a
+  // stated gap charged to the retry bound (D5) rather than a retry for ever
+  // against a store that has nothing left to give.
+  assert.equal(await store.readSegment(session.id, 7), null);
 });
 
 test('a discarded capture is really deleted and never offered again', async () => {
   const home = userData();
   const store = new MeetingCaptureStore(home);
   const kept = await store.begin({ scope: { orgId: null }, title: 'Kept' });
-  await store.append(kept.id, new Uint8Array([1, 2]), 20_000);
+  await append(store, kept.id, new Uint8Array([1, 2]), 20_000);
   const thrown = await store.begin({ scope: { orgId: null }, title: 'Thrown away' });
-  await store.append(thrown.id, new Uint8Array([3, 4]), 20_000);
+  await append(store, thrown.id, new Uint8Array([3, 4]), 20_000);
 
   await store.discard(thrown.id);
   assert.equal(fs.existsSync(path.join(captureRoot(home), thrown.id)), false);
@@ -135,11 +242,67 @@ test('a discarded capture is really deleted and never offered again', async () =
   assert.deepEqual(await store.resumable(), []);
 });
 
+test('a discard the process did not live to finish is completed at the next boot', async () => {
+  const home = userData();
+  const store = new MeetingCaptureStore(home);
+  const thrown = await store.begin({ scope: { orgId: null }, title: 'Thrown away' });
+  await append(store, thrown.id, new Uint8Array([1, 2, 3]), 20_000);
+  const directory = path.join(captureRoot(home), thrown.id);
+  const record = path.join(directory, 'session.json');
+  // `close` writes the terminal status and THEN deletes; the app is killed
+  // between the two, which is the state this leaves on disk.
+  const stored = JSON.parse(fs.readFileSync(record, 'utf8')) as { session: Record<string, unknown> };
+  stored.session.status = 'discarded';
+  stored.session.closedAt = new Date().toISOString();
+  fs.writeFileSync(record, JSON.stringify(stored));
+
+  const next = new MeetingCaptureStore(home);
+  const report = await next.recoverInterrupted();
+
+  // D6 — audio the user threw away is gone, and the reap is reported so it can
+  // be logged. Nothing else in the app would ever have retried this delete.
+  assert.deepEqual(report.reaped, [thrown.id]);
+  assert.deepEqual(report.recovered, []);
+  assert.equal(fs.existsSync(directory), false);
+  assert.deepEqual(await next.resumable(), []);
+});
+
+test('a chunk that only partly reached the disk fails the append instead of being recorded', async () => {
+  const home = userData();
+  const store = new MeetingCaptureStore(home);
+  const session = await store.begin({ scope: { orgId: null } });
+  const target = fs.promises as { open: typeof fs.promises.open };
+  const realOpen = target.open;
+  // The ENOSPC boundary in miniature: `write` RESOLVES having taken fewer bytes
+  // than it was given, which is the case a caller that trusted it would record
+  // as a full segment.
+  target.open = (async (file: fs.PathLike, flags?: unknown, mode?: unknown) => {
+    const handle = await realOpen(file, flags as number, mode as number);
+    const write = handle.write.bind(handle);
+    handle.write = (async (bytes: Uint8Array) => {
+      const result = await write(bytes.subarray(0, 1));
+      return { bytesWritten: result.bytesWritten, buffer: bytes };
+    }) as typeof handle.write;
+    return handle;
+  }) as typeof fs.promises.open;
+
+  try {
+    await assert.rejects(() => append(store, session.id, new Uint8Array([1, 2, 3, 4]), 20_000), /reached the disk/);
+  } finally { target.open = realOpen; }
+
+  // The record never claims audio the disk did not take, and the truncated file
+  // does not hold the index against a retry.
+  assert.deepEqual((await store.session(session.id)).segments, []);
+  assert.equal(fs.existsSync(path.join(captureRoot(home), session.id, 'segment-00000.webm')), false);
+  const retried = await append(store, session.id, new Uint8Array([1, 2, 3, 4]), 20_000);
+  assert.deepEqual(retried.segments.map((entry) => [entry.index, entry.byteLength]), [[0, 4]]);
+});
+
 test('a capture directory with no session record is reaped at boot', async () => {
   const home = userData();
   const store = new MeetingCaptureStore(home);
   const live = await store.begin({ scope: { orgId: null } });
-  await store.append(live.id, new Uint8Array([1]), 20_000);
+  await append(store, live.id, new Uint8Array([1]), 20_000);
   const orphan = path.join(captureRoot(home), 'mtg-orphaned-capture');
   fs.mkdirSync(orphan, { recursive: true });
   fs.writeFileSync(path.join(orphan, 'segment-00000.webm'), Buffer.from([1, 2, 3]));
@@ -154,5 +317,5 @@ test('a capture directory with no session record is reaped at boot', async () =>
 test('a capture id that is not path-safe is refused before it becomes a path', async () => {
   const store = new MeetingCaptureStore(userData());
   await assert.rejects(() => store.session('../../etc'), /not a meeting capture id/);
-  await assert.rejects(() => store.append('..', new Uint8Array([1]), 20_000), /not a meeting capture id/);
+  await assert.rejects(() => append(store, '..', new Uint8Array([1]), 20_000), /not a meeting capture id/);
 });

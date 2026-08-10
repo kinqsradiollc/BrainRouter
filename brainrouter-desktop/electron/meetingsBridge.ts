@@ -7,6 +7,7 @@
  */
 import { ipcMain } from 'electron';
 import { loadConfig } from '@kinqs/brainrouter-core/config';
+import { MeetingEndpointUnavailableError } from '@kinqs/brainrouter-core/meetings';
 import { brainRouterAccountHeaders, resolveBrainRouterAccountApi, resolveBrainRouterAccountContext, type BrainRouterAccountContext } from './accountIntegration.js';
 import {
   meetingRequests,
@@ -80,6 +81,42 @@ async function requestJson<T>(request: AccountRequest, fallback: string): Promis
   try { payload = await response.json(); } catch { payload = null; }
   if (!response.ok) throw new Error(apiError(payload) ?? `${fallback} (${response.status}).`);
   return payload as T;
+}
+
+/**
+ * ADR-035 D3/D7 — one captured segment against the STT endpoint, for the
+ * host-owned transcription queue.
+ *
+ * It shares `accountFetch` with the IPC handlers deliberately: the bearer, the
+ * https-or-loopback rule and the org context are one implementation, and a
+ * second HTTP path for meeting audio would be a second place to get any of them
+ * wrong.
+ *
+ * The failure it throws is SHAPED for the shared classifier, because D7 turns on
+ * telling two things apart. A status the endpoint declined to serve with travels
+ * on `.status`, so 429/503 read as an outage and cost the segment no attempt. A
+ * signed-out desktop is also an outage rather than a verdict on the audio: those
+ * bytes are fine and will transcribe once someone signs in, and burning four
+ * attempts on being logged out would turn a good meeting into permanent gaps.
+ */
+export async function transcribeCaptureSegment(
+  input: { bytes: Uint8Array; contentType: string; language?: string },
+): Promise<string> {
+  const response = await accountFetch(meetingRequests.transcribe(input));
+  if (!response) throw new MeetingEndpointUnavailableError('Sign in to BrainRouter to transcribe this recording.');
+  let payload: unknown;
+  try { payload = await response.json(); } catch { payload = null; }
+  if (!response.ok) {
+    const failure = new Error(apiError(payload) ?? `Could not transcribe this segment (${response.status}).`);
+    (failure as Error & { status?: number }).status = response.status;
+    throw failure;
+  }
+  const text = (payload as { text?: unknown } | null)?.text;
+  // A segment of silence legitimately transcribes to an empty string, so only a
+  // missing/!string field is an error — treating "" as one would turn a quiet
+  // twenty seconds into a stated gap.
+  if (typeof text !== 'string') throw new Error('The transcription endpoint returned no text for this segment.');
+  return text;
 }
 
 function arrayField(payload: unknown, field: string): unknown[] {

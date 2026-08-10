@@ -187,6 +187,16 @@ contextBridge.exposeInMainWorld('brainrouter', {
     captureFinalize(id: string): Promise<unknown> { return ipcRenderer.invoke('meetings:captureFinalize', id); },
     captureDiscard(id: string): Promise<unknown> { return ipcRenderer.invoke('meetings:captureDiscard', id); },
     captureResumable(scope?: { orgId?: string | null; workspaceId?: string | null }): Promise<unknown> { return ipcRenderer.invoke('meetings:captureResumable', scope); },
+    // ADR-035 D3/D4/D5 — the transcription queue lives in main, so the renderer
+    // asks it to start on a capture or to retry one segment, and is TOLD about
+    // every persisted change. A window reload rejoins a drain that never stopped.
+    captureAdopt(id: string): Promise<unknown> { return ipcRenderer.invoke('meetings:captureAdopt', id); },
+    captureRetrySegment(id: string, index: number): Promise<unknown> { return ipcRenderer.invoke('meetings:captureRetrySegment', id, index); },
+    onCaptureProgress(listener: (progress: unknown) => void): () => void {
+      const wrapped = (_e: unknown, progress: unknown) => listener(progress);
+      ipcRenderer.on('meetings:capture-progress', wrapped);
+      return () => ipcRenderer.removeListener('meetings:capture-progress', wrapped);
+    },
     // SERVER Track board (org-scoped /api/track), surfaced inside Meetings mode.
     serverTracks(orgId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:serverTracks', orgId); },
     serverTrackCreate(input: { title: string; description?: string; priority?: string; assignee?: string; statusCategory?: string }, orgId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:serverTrackCreate', input, orgId); },

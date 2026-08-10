@@ -18,8 +18,12 @@ import type {
   MeetingCaptureScope,
   MeetingCaptureSession,
   MeetingCaptureTemplate,
+  MeetingDrainPhase,
   MeetingRecoverySummary,
 } from "@kinqs/brainrouter-core/meetings";
+
+/** The queue phases main may push. Listed so an unknown one is dropped rather than rendered. */
+const DRAIN_PHASES: readonly MeetingDrainPhase[] = ["idle", "waiting", "unavailable", "closed"];
 
 export interface BeginCaptureInput {
   title?: string;
@@ -31,8 +35,30 @@ export interface BeginCaptureInput {
 }
 
 export interface CapturedAudio {
-  bytes: Uint8Array;
+  /**
+   * Backed by a plain `ArrayBuffer`, not merely by an `ArrayBufferLike`, because
+   * the only thing the renderer does with these bytes is put them in a `Blob` to
+   * play them back (§6's "on disk and PLAYABLE"). `Blob` refuses a view over a
+   * `SharedArrayBuffer`, so stating the buffer here is what keeps the playback
+   * site from having to copy an hour of audio to satisfy the type.
+   */
+  bytes: Uint8Array<ArrayBuffer>;
   contentType: string;
+}
+
+/**
+ * D4 — a capture's record changed in main, and it is already on disk.
+ *
+ * Except when `errors` is present, which is the push that exists BECAUSE a write
+ * failed. A surface that renders the session and drops the errors is telling the
+ * user their meeting is safe on the strength of a message that says it is not.
+ */
+export interface MeetingCaptureProgress {
+  sessionId: string;
+  session: MeetingCaptureSession;
+  /** D4/D7 — why the host's queue last stopped. Absent on mid-drain pushes. */
+  phase?: MeetingDrainPhase;
+  errors?: readonly string[];
 }
 
 export interface MeetingCaptureOps {
@@ -42,6 +68,12 @@ export interface MeetingCaptureOps {
   append(id: string, bytes: Uint8Array, durationMs: number): Promise<MeetingCaptureSession>;
   stop(id: string): Promise<MeetingCaptureSession>;
   read(id: string): Promise<CapturedAudio>;
+  /** D3 — ask the host to drive this capture's segment queue, and say where it is now. */
+  adopt(id: string): Promise<MeetingCaptureSession>;
+  /** D5 — one more attempt at one stated gap, from the audio still on disk. */
+  retrySegment(id: string, index: number): Promise<MeetingCaptureSession>;
+  /** D4 — subscribe to the host's progress. Returns the unsubscribe. */
+  onProgress(listener: (progress: MeetingCaptureProgress) => void): () => void;
   finalize(id: string): Promise<void>;
   discard(id: string): Promise<void>;
   resumable(scope: MeetingCaptureScope): Promise<MeetingRecoverySummary[]>;
@@ -55,6 +87,9 @@ interface CaptureBridge {
   captureFinalize?(id: string): Promise<unknown>;
   captureDiscard?(id: string): Promise<unknown>;
   captureResumable?(scope?: { orgId?: string | null; workspaceId?: string | null }): Promise<unknown>;
+  captureAdopt?(id: string): Promise<unknown>;
+  captureRetrySegment?(id: string, index: number): Promise<unknown>;
+  onCaptureProgress?(listener: (progress: unknown) => void): () => void;
 }
 
 export class MeetingCaptureUnavailableError extends Error {
@@ -80,8 +115,12 @@ function session(value: unknown): MeetingCaptureSession {
 function audio(value: unknown): CapturedAudio {
   const payload = (value ?? {}) as { bytes?: unknown; contentType?: unknown };
   // Structured clone can deliver either shape depending on how main produced it.
+  // The assertion on the view states the one thing the compiler cannot see: a
+  // `Uint8Array` that arrived over IPC is never backed by a `SharedArrayBuffer`
+  // — main read it out of a file — and asserting it here beats copying the whole
+  // recording at the playback site just to change its type.
   const bytes = payload.bytes instanceof Uint8Array
-    ? payload.bytes
+    ? payload.bytes as Uint8Array<ArrayBuffer>
     : payload.bytes instanceof ArrayBuffer ? new Uint8Array(payload.bytes) : null;
   if (!bytes) throw new Error("The capture store returned no audio for that meeting.");
   return { bytes, contentType: typeof payload.contentType === "string" && payload.contentType ? payload.contentType : "audio/webm" };
@@ -96,6 +135,11 @@ export function createMeetingCaptureOps(): MeetingCaptureOps {
       available: false,
       begin: async () => unavailable(), append: async () => unavailable(), stop: async () => unavailable(),
       read: async () => unavailable(), finalize: async () => unavailable(), discard: async () => unavailable(),
+      adopt: async () => unavailable(), retrySegment: async () => unavailable(),
+      // Nothing can ever be published on a build with no capture store, so the
+      // subscription is a no-op rather than a throw: a surface that only listens
+      // should not have to guard against a channel that will simply stay quiet.
+      onProgress: () => () => undefined,
       // A build with no capture store has no captures to offer back, so an empty
       // recovery list is the truthful answer rather than an error banner.
       resumable: async () => [],
@@ -114,6 +158,38 @@ export function createMeetingCaptureOps(): MeetingCaptureOps {
     append: async (id, bytes, durationMs) => session(await api.captureAppend!(id, bytes, durationMs)),
     stop: async (id) => session(await api.captureStop!(id)),
     read: async (id) => audio(await api.captureRead?.(id)),
+    // D3 — these three arrived after the first capture channels did, so a
+    // preload that predates them is refused loudly rather than silently doing
+    // nothing: "the transcript never appears" is the failure mode this ADR is
+    // about, and it must not be reachable by a stale window.
+    adopt: async (id) => {
+      if (!api.captureAdopt) unavailable();
+      return session(await api.captureAdopt(id));
+    },
+    retrySegment: async (id, index) => {
+      if (!api.captureRetrySegment) unavailable();
+      return session(await api.captureRetrySegment(id, index));
+    },
+    onProgress: (listener) => api.onCaptureProgress?.((value) => {
+      const progress = (value ?? {}) as { sessionId?: unknown; session?: unknown; phase?: unknown; errors?: unknown };
+      const payload = progress.session as MeetingCaptureSession | undefined;
+      // A malformed push is dropped rather than thrown: this runs inside an IPC
+      // listener, where a throw would take out every later event on the channel.
+      if (typeof progress.sessionId !== "string" || !payload || !Array.isArray(payload.segments)) return;
+      // Errors are narrowed to strings because they are RENDERED: a non-string
+      // that got this far would reach the user as "[object Object]", which is a
+      // worse way to report a durability failure than not reporting it.
+      const errors = Array.isArray(progress.errors)
+        ? progress.errors.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+        : [];
+      const phase = DRAIN_PHASES.find((candidate) => candidate === progress.phase);
+      listener({
+        sessionId: progress.sessionId,
+        session: payload,
+        ...(phase ? { phase } : {}),
+        ...(errors.length ? { errors } : {}),
+      });
+    }) ?? (() => undefined),
     finalize: async (id) => { await api.captureFinalize?.(id); },
     discard: async (id) => { await api.captureDiscard?.(id); },
     resumable: async (scope) => {

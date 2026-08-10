@@ -134,6 +134,11 @@ declare global {
         captureFinalize?(id: string): Promise<unknown>;
         captureDiscard?(id: string): Promise<unknown>;
         captureResumable?(scope?: { orgId?: string | null; workspaceId?: string | null }): Promise<unknown>;
+        /** ADR-035 D3/D4/D5 — the transcription queue is host-owned; these are the
+         *  renderer's two requests to it and the push it listens to. */
+        captureAdopt?(id: string): Promise<unknown>;
+        captureRetrySegment?(id: string, index: number): Promise<unknown>;
+        onCaptureProgress?(listener: (progress: unknown) => void): () => void;
         serverTracks(orgId?: string): Promise<unknown>;
         serverTrackCreate(input: { title: string; description?: string; priority?: string; assignee?: string; statusCategory?: string }, orgId?: string): Promise<unknown>;
         serverTrackTransition(id: string, statusCategory: string, orgId?: string): Promise<unknown>;
