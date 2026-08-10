@@ -125,12 +125,31 @@ export class FakeCaptureBackend implements CaptureStorageBackend {
     this.calls.push(`wroteManifest:${sessionId}`);
   }
 
+  /**
+   * Sessions whose NEXT manifest read refuses — consumed like `failWrites`, so a
+   * test can fail exactly one reading. A permanent failure would mask what it
+   * was aimed at: every later write reads the manifest first, so a store that
+   * refuses for ever also refuses the write that a wrong decision would make.
+   */
+  readonly failManifestReads = new Set<string>();
+
   async readManifest(sessionId: string): Promise<CaptureManifest | undefined> {
     this.calls.push(`readManifest:${sessionId}`);
+    if (this.failManifestReads.delete(sessionId)) throw new Error(`cannot read ${sessionId}`);
     return this.manifests.get(sessionId);
   }
 
+  /**
+   * Run before the listing is taken — the seam that reproduces the reap's one
+   * genuine race: another TAB beginning a session after the caller took its own
+   * listing and before the reap took this one. Nothing else can produce that
+   * interleaving deterministically, and it is exactly the window the reap's
+   * "is this abandoned?" question exists to survive.
+   */
+  beforeListSessionIds?: () => Promise<void>;
+
   async listSessionIds(): Promise<readonly string[]> {
+    await this.beforeListSessionIds?.();
     this.calls.push("listSessionIds");
     const ids = new Set<string>(this.manifests.keys());
     for (const key of this.chunks.keys()) ids.add(splitKey(key)[0]);

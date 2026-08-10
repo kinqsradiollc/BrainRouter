@@ -46,8 +46,17 @@
  *    rewrites it. With no capture behind the text (a pasted or imported
  *    transcript) there is no frozen scope, and the switcher is the only truth
  *    there is.
+ * 4. **Nor can a capture ANOTHER window is recording.** The same consequence as
+ *    invariant 1, reached by a mechanism invariant 1 cannot see: the hold is
+ *    this window's own state, and a second BrowserWindow's hold is empty, so
+ *    every boolean in it reads false about a meeting being recorded next door.
+ *    That question is therefore asked of the RECORD, through the shared capture
+ *    lease, which every holder of the store reads the same way. The two guards
+ *    are both needed and neither subsumes the other: the lease cannot cover
+ *    `arming` (no session exists yet) and the hold cannot cover another window.
  */
 import {
+  describeCaptureWriter,
   settleTranscriptForSubmit,
   type MeetingCaptureSession,
   type TranscriptFold,
@@ -135,10 +144,18 @@ export interface MeetingSubmissionInput {
   readonly busy: boolean;
   /** The workspace the app-wide switcher is on. Used only when no capture is behind the text. */
   readonly activeOrgId?: string;
+  /**
+   * Invariant 4 — this WINDOW's capture-lease identity.
+   *
+   * Optional, and its absence means "the caller will not say who it is", which
+   * the shared rule reads as "not the writer" — so an anonymous caller is
+   * refused over any live recording rather than being quietly exempted.
+   */
+  readonly holderId?: string;
 }
 
 /** Why a click did nothing — named so a test can tell "refused" from "posted nothing". */
-export type MeetingSubmissionRefusal = "incomplete" | "busy" | "capture-in-flight";
+export type MeetingSubmissionRefusal = "incomplete" | "busy" | "capture-in-flight" | "held-by-another";
 
 export interface PreparedMeetingSubmission {
   readonly ok: true;
@@ -163,6 +180,14 @@ export function prepareSubmission(state: MeetingSubmissionInput): MeetingSubmiss
   // capture with an empty title is refused for the capture, because that is the
   // one a caller must not resolve by filling the form in.
   if (captureInFlight(state.hold)) return { ok: false, reason: "capture-in-flight" };
+  // Invariant 4, and the reason it is a SECOND question rather than the same
+  // one: the hold is this window's memory, and the whole defect is that a second
+  // window's hold is empty. `captureInFlight` covers the two windows the record
+  // cannot — Record before a session exists, and Stop after the last chunk — and
+  // the lease covers the writer this window has never heard of.
+  if (state.session && describeCaptureWriter(state.session, state.holderId)) {
+    return { ok: false, reason: "held-by-another" };
+  }
   if (state.busy) return { ok: false, reason: "busy" };
   const title = state.title.trim();
   if (!title || !state.transcript.trim()) return { ok: false, reason: "incomplete" };

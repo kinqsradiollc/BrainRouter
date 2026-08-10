@@ -21,7 +21,9 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import {
+  isCaptureBeingWritten,
   MeetingEndpointUnavailableError,
+  MEETING_CAPTURE_HEARTBEAT_MS,
   MEETING_GAP_PHRASE,
   transcriptText,
   type MeetingCaptureSession,
@@ -291,4 +293,108 @@ test('closing a capture stops the queue before the audio is deleted', async () =
   assert.equal(fs.existsSync(captureDirectory(home, session.id)), false);
   assert.deepEqual(await store.resumable(), []);
   assert.ok(published.every((progress) => progress.session.segments.every((segment) => segment.text !== 'late')));
+});
+
+/**
+ * D6 — the process that owns the record is the one that says it is still here.
+ *
+ * The RULES are `captureLease.ts`'s and are tested there. What is asserted here
+ * is the part only a host can get wrong: that a heartbeat is actually sent, on
+ * both cadences, that it extends the term without moving the fence, and that
+ * Stop hands the recording back instead of leaving it to expire.
+ *
+ * Nothing here injects a clock into the lease, deliberately. Freshness is the
+ * difference between two readings of the SAME machine's wall clock — that is
+ * what lets a second process read this file and agree — so a host that stamped
+ * its leases from a test clock would be a host whose records only made sense to
+ * itself. The cost is that the lapse itself (thirty seconds) is out of reach of
+ * a unit test, which is why these assert the heartbeat rather than the expiry.
+ */
+function tick(ms: number): Promise<void> {
+  return new Promise((resolve) => { setTimeout(resolve, ms); });
+}
+
+test('a recording says it is still being written to, on the chunk and on the timer', async () => {
+  const { store, supervisor, wakeDelays, runWakes } = harness(async () => 'text');
+  const session = await supervisor.begin({ scope: { orgId: null }, holder: { holderId: 'wr-me', holder: 'Another window' } });
+  assert.equal(session.writer?.holderId, 'wr-me');
+  assert.equal(session.writer?.epoch, 1);
+  // Without a timer the stamp on disk is one instant old and the record is stale
+  // half a minute later, which makes the whole mechanism inert on any meeting
+  // longer than that.
+  assert.ok(wakeDelays.includes(MEETING_CAPTURE_HEARTBEAT_MS), `expected a heartbeat wake, got ${wakeDelays.join(',')}`);
+
+  const atRecord = session.writer!.heartbeatAt;
+  await tick(4);
+  await supervisor.append(session.id, new Uint8Array([1, 2]), 20_000);
+  await supervisor.settle(session.id);
+  const afterChunk = (await record(store, session.id)).writer!;
+  // The beat that survives a throttled or stalled main thread is the one riding
+  // the durable write, because that one comes from the media stack.
+  assert.ok(afterChunk.heartbeatAt > atRecord, 'the chunk carried a heartbeat');
+  // …and a renewal never moves the fencing epoch, or a writer that was gone
+  // could renew its way back over one that took the recording (migration 048).
+  assert.equal(afterChunk.epoch, 1);
+
+  await tick(4);
+  await runWakes();
+  await tick(4);
+  const afterTimer = (await record(store, session.id)).writer!;
+  assert.ok(afterTimer.heartbeatAt > afterChunk.heartbeatAt, 'the timer carried a heartbeat');
+  assert.equal(afterTimer.epoch, 1);
+});
+
+test('Stop hands the recording back at once, and keeps the fence', async () => {
+  const { store, supervisor } = harness(async () => 'text');
+  const session = await supervisor.begin({ scope: { orgId: null }, holder: { holderId: 'wr-me' } });
+  await supervisor.append(session.id, new Uint8Array([1, 2]), 20_000);
+  await supervisor.settle(session.id);
+  await supervisor.stop(session.id);
+
+  const stopped = await record(store, session.id);
+  assert.equal(isCaptureBeingWritten(stopped), false, 'a stopped capture is not being written to');
+  // The record is kept with its term ended rather than dropped: an epoch that
+  // resets is not a fencing token.
+  assert.equal(stopped.writer?.epoch, 1);
+  assert.deepEqual((await store.resumable()).map((row) => row.sessionId), [session.id]);
+});
+
+test('a pick-up is refused while another window is recording, and fences it once it is not', async () => {
+  const { store, supervisor } = harness(async () => 'text');
+  const session = await supervisor.begin({ scope: { orgId: null }, holder: { holderId: 'wr-first' } });
+  await supervisor.append(session.id, new Uint8Array([1, 2]), 20_000);
+  await supervisor.settle(session.id);
+
+  await assert.rejects(
+    () => supervisor.adopt(session.id, { holderId: 'wr-second' }),
+    /recording this meeting right now/,
+  );
+  // A refused pick-up must leave the fence exactly where it was, or the refusal
+  // would itself be a way to invalidate the writer it just protected.
+  const refused = await record(store, session.id);
+  assert.equal(refused.writer?.holderId, 'wr-first');
+  assert.equal(refused.writer?.epoch, 1);
+
+  await supervisor.stop(session.id);
+  const taken = await supervisor.adopt(session.id, { holderId: 'wr-second' });
+  assert.equal(taken.writer?.holderId, 'wr-second');
+  assert.equal(taken.writer?.epoch, 2, 'acquisition issues a new epoch, so the previous writer is fenced out');
+});
+
+test('a second window cannot close a meeting another one is recording, and the recorder still can', async () => {
+  const { home, supervisor } = harness(async () => 'text');
+  const session = await supervisor.begin({ scope: { orgId: null }, holder: { holderId: 'wr-first' } });
+  await supervisor.append(session.id, new Uint8Array([1, 2]), 20_000);
+  await supervisor.settle(session.id);
+
+  await assert.rejects(
+    () => supervisor.close(session.id, 'discard', { holderId: 'wr-second' }),
+    /recording this meeting right now/,
+  );
+  assert.ok(fs.existsSync(captureDirectory(home, session.id)), 'the audio survived the refused discard');
+
+  // The window that is recording it accepts the meeting as usual — the actor is
+  // threaded, so the guard tells the two windows apart instead of refusing both.
+  await supervisor.close(session.id, 'finalize', { holderId: 'wr-first' });
+  assert.equal(fs.existsSync(captureDirectory(home, session.id)), false);
 });

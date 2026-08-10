@@ -180,17 +180,21 @@ contextBridge.exposeInMainWorld('brainrouter', {
     // ADR-035 D1/D2 — local capture. Audio never accumulates in the renderer:
     // each recorder chunk crosses here and is on disk before anything else
     // happens to it, and main owns the directory because it outlives a crash.
-    captureBegin(input: { title?: string; template?: string; language?: string; orgId?: string | null; workspaceId?: string | null; contentType?: string }): Promise<unknown> { return ipcRenderer.invoke('meetings:captureBegin', input); },
+    // `holderId` is ADR-035 D6's capture lease: one id per BrowserWindow, sent
+    // with every call that takes or releases a recording, so the record itself
+    // says who is writing to it and a second window reads the same answer.
+    captureBegin(input: { title?: string; template?: string; language?: string; orgId?: string | null; workspaceId?: string | null; contentType?: string; holderId?: string }): Promise<unknown> { return ipcRenderer.invoke('meetings:captureBegin', input); },
     captureAppend(id: string, bytes: Uint8Array, durationMs: number): Promise<unknown> { return ipcRenderer.invoke('meetings:captureAppend', id, bytes, durationMs); },
     captureStop(id: string): Promise<unknown> { return ipcRenderer.invoke('meetings:captureStop', id); },
     captureRead(id: string): Promise<unknown> { return ipcRenderer.invoke('meetings:captureRead', id); },
-    captureFinalize(id: string): Promise<unknown> { return ipcRenderer.invoke('meetings:captureFinalize', id); },
-    captureDiscard(id: string): Promise<unknown> { return ipcRenderer.invoke('meetings:captureDiscard', id); },
+    captureFinalize(id: string, holderId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:captureFinalize', id, holderId); },
+    captureDiscard(id: string, holderId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:captureDiscard', id, holderId); },
     captureResumable(scope?: { orgId?: string | null; workspaceId?: string | null }): Promise<unknown> { return ipcRenderer.invoke('meetings:captureResumable', scope); },
+    captureWriting(scope?: { orgId?: string | null; workspaceId?: string | null }): Promise<unknown> { return ipcRenderer.invoke('meetings:captureWriting', scope); },
     // ADR-035 D3/D4/D5 — the transcription queue lives in main, so the renderer
     // asks it to start on a capture or to retry one segment, and is TOLD about
     // every persisted change. A window reload rejoins a drain that never stopped.
-    captureAdopt(id: string): Promise<unknown> { return ipcRenderer.invoke('meetings:captureAdopt', id); },
+    captureAdopt(id: string, holderId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:captureAdopt', id, holderId); },
     captureRetrySegment(id: string, index: number): Promise<unknown> { return ipcRenderer.invoke('meetings:captureRetrySegment', id, index); },
     // ADR-035 D6 — the compose draft lives beside the audio, under the same
     // 0700 directory, instead of in `localStorage` where any page script could

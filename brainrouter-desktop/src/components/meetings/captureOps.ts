@@ -27,6 +27,7 @@ import type {
   MeetingDrainPhase,
   MeetingRecoverySummary,
 } from "@kinqs/brainrouter-core/meetings";
+import { captureHolderId } from "./captureHolder.js";
 
 /** The queue phases main may push. Listed so an unknown one is dropped rather than rendered. */
 const DRAIN_PHASES: readonly MeetingDrainPhase[] = ["idle", "waiting", "unavailable", "closed"];
@@ -72,6 +73,16 @@ export interface MeetingCaptureProgress {
   /** D4/D7 — why the host's queue last stopped. Absent on mid-drain pushes. */
   phase?: MeetingDrainPhase;
   errors?: readonly string[];
+  /**
+   * D6 — another holder took this recording over, in the words to show the
+   * person who was making it.
+   *
+   * Distinct from `errors` because the response is different: `errors` means
+   * "keep recording, the record is behind", this means "stop, the audio you are
+   * still producing belongs to nobody". A surface that folded the two together
+   * would tell someone to wait for a write that is never coming.
+   */
+  writerLost?: string;
 }
 
 /**
@@ -130,6 +141,20 @@ export interface MeetingCaptureOps {
   discard(id: string): Promise<void>;
   resumable(scope: MeetingCaptureScope, options?: ResumableCaptureOptions): Promise<MeetingRecoverySummary[]>;
   /**
+   * D6 — the captures somebody is recording into right now, whichever window
+   * that is, with the lease that says so.
+   *
+   * The offer's complement. `resumableSessions` leaves a live recording out, so
+   * without this a second window has nothing to render where the meeting it can
+   * hear being recorded ought to be, and no way to know when it will appear.
+   * Whole sessions rather than summaries because the LEASE is the payload:
+   * `describeCaptureWriter` needs the holder and `captureLeaseStaleAt` needs the
+   * stamp.
+   */
+  writing(scope: MeetingCaptureScope): Promise<readonly MeetingCaptureSession[]>;
+  /** This window's lease identity — the same one every call above sends. */
+  readonly holderId: string;
+  /**
    * D6 — whether this preload can actually take a draft.
    *
    * `writeDraft` resolves either way, because a compose form that refuses to
@@ -146,14 +171,15 @@ export interface MeetingCaptureOps {
 }
 
 interface CaptureBridge {
-  captureBegin?(input: { title?: string; template?: string; language?: string; orgId?: string | null; workspaceId?: string | null; contentType?: string }): Promise<unknown>;
+  captureBegin?(input: { title?: string; template?: string; language?: string; orgId?: string | null; workspaceId?: string | null; contentType?: string; holderId?: string }): Promise<unknown>;
   captureAppend?(id: string, bytes: Uint8Array, durationMs: number): Promise<unknown>;
   captureStop?(id: string): Promise<unknown>;
   captureRead?(id: string): Promise<unknown>;
-  captureFinalize?(id: string): Promise<unknown>;
-  captureDiscard?(id: string): Promise<unknown>;
+  captureFinalize?(id: string, holderId?: string): Promise<unknown>;
+  captureDiscard?(id: string, holderId?: string): Promise<unknown>;
   captureResumable?(scope?: { orgId?: string | null; workspaceId?: string | null }): Promise<unknown>;
-  captureAdopt?(id: string): Promise<unknown>;
+  captureWriting?(scope?: { orgId?: string | null; workspaceId?: string | null }): Promise<unknown>;
+  captureAdopt?(id: string, holderId?: string): Promise<unknown>;
   captureRetrySegment?(id: string, index: number): Promise<unknown>;
   onCaptureProgress?(listener: (progress: unknown) => void): () => void;
   draftRead?(): Promise<unknown>;
@@ -225,9 +251,13 @@ function unavailable(): never { throw new MeetingCaptureUnavailableError(); }
 
 export function createMeetingCaptureOps(): MeetingCaptureOps {
   const api = bridge();
+  // Read once, here, so every call this adapter makes carries the same window
+  // identity — and so the surface can compare a record's writer against it.
+  const holderId = captureHolderId();
   if (!api) {
     return {
       available: false,
+      holderId,
       begin: async () => unavailable(), append: async () => unavailable(), stop: async () => unavailable(),
       read: async () => unavailable(), finalize: async () => unavailable(), discard: async () => unavailable(),
       adopt: async () => unavailable(), retrySegment: async () => unavailable(),
@@ -236,8 +266,10 @@ export function createMeetingCaptureOps(): MeetingCaptureOps {
       // should not have to guard against a channel that will simply stay quiet.
       onProgress: () => () => undefined,
       // A build with no capture store has no captures to offer back, so an empty
-      // recovery list is the truthful answer rather than an error banner.
+      // recovery list is the truthful answer rather than an error banner. Nor is
+      // anything being recorded into it, for the same reason.
       resumable: async () => [],
+      writing: async () => [],
       // D6 — no protected location, so no draft. This is the one place a
       // `localStorage` fallback would be tempting and it is exactly the store
       // the decision moved the draft OUT of, so the honest degraded mode is a
@@ -251,6 +283,7 @@ export function createMeetingCaptureOps(): MeetingCaptureOps {
   }
   return {
     available: true,
+    holderId,
     begin: async (input) => session(await api.captureBegin!({
       ...(input.title ? { title: input.title } : {}),
       ...(input.template ? { template: input.template } : {}),
@@ -258,6 +291,9 @@ export function createMeetingCaptureOps(): MeetingCaptureOps {
       ...(input.contentType ? { contentType: input.contentType } : {}),
       orgId: input.scope.orgId,
       workspaceId: input.scope.workspaceId ?? null,
+      // D6 — the record names its writer from the moment it exists, before the
+      // first byte of audio does.
+      holderId,
     })),
     append: async (id, bytes, durationMs) => session(await api.captureAppend!(id, bytes, durationMs)),
     stop: async (id) => session(await api.captureStop!(id)),
@@ -268,14 +304,17 @@ export function createMeetingCaptureOps(): MeetingCaptureOps {
     // about, and it must not be reachable by a stale window.
     adopt: async (id) => {
       if (!api.captureAdopt) unavailable();
-      return session(await api.captureAdopt(id));
+      // D6 — a pick-up TAKES the recording, so it says who is taking it. Main
+      // refuses while another window's lease is fresh, and the rejection is what
+      // reaches the compose form instead of a capture somebody else is making.
+      return session(await api.captureAdopt(id, holderId));
     },
     retrySegment: async (id, index) => {
       if (!api.captureRetrySegment) unavailable();
       return session(await api.captureRetrySegment(id, index));
     },
     onProgress: (listener) => api.onCaptureProgress?.((value) => {
-      const progress = (value ?? {}) as { sessionId?: unknown; session?: unknown; phase?: unknown; errors?: unknown };
+      const progress = (value ?? {}) as { sessionId?: unknown; session?: unknown; phase?: unknown; errors?: unknown; writerLost?: unknown };
       const payload = progress.session as MeetingCaptureSession | undefined;
       // A malformed push is dropped rather than thrown: this runs inside an IPC
       // listener, where a throw would take out every later event on the channel.
@@ -287,20 +326,40 @@ export function createMeetingCaptureOps(): MeetingCaptureOps {
         ? progress.errors.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
         : [];
       const phase = DRAIN_PHASES.find((candidate) => candidate === progress.phase);
+      // Narrowed to a non-empty string for the same reason `errors` is: it is
+      // RENDERED, and it is the sentence that tells someone their recording has
+      // been taken over — "[object Object]" would be a worse way to learn that
+      // than not learning it.
+      const writerLost = typeof progress.writerLost === "string" && progress.writerLost.trim() ? progress.writerLost : "";
       listener({
         sessionId: progress.sessionId,
         session: payload,
         ...(phase ? { phase } : {}),
         ...(errors.length ? { errors } : {}),
+        ...(writerLost ? { writerLost } : {}),
       });
     }) ?? (() => undefined),
-    finalize: async (id) => { await api.captureFinalize?.(id); },
-    discard: async (id) => { await api.captureDiscard?.(id); },
+    // D6 — both of these delete the audio, so both name this window. Main uses
+    // it to tell "the window that recorded this" from "a second window looking
+    // at a stale offer", and refuses the second one.
+    finalize: async (id) => { await api.captureFinalize?.(id, holderId); },
+    discard: async (id) => { await api.captureDiscard?.(id, holderId); },
     resumable: async (scope, options) => {
       const value = await api.captureResumable?.({ orgId: scope.orgId, workspaceId: scope.workspaceId ?? null });
       const rows = Array.isArray(value) ? value as MeetingRecoverySummary[] : [];
       const excluded = new Set(options?.exclude ?? []);
       return excluded.size ? rows.filter((row) => !excluded.has(row.sessionId)) : rows;
+    },
+    // A preload that predates this channel answers nothing, which reads as "no
+    // window is recording". That is the same answer this surface gave before the
+    // lease existed, so an old preload degrades to the old behaviour rather than
+    // to an error over a feature it cannot participate in.
+    writing: async (scope) => {
+      const value = await api.captureWriting?.({ orgId: scope.orgId, workspaceId: scope.workspaceId ?? null });
+      return Array.isArray(value)
+        ? value.filter((row): row is MeetingCaptureSession =>
+          Boolean(row) && typeof row === "object" && Array.isArray((row as MeetingCaptureSession).segments))
+        : [];
     },
     // D6 — absent on a preload that predates the draft channels. Unlike the
     // capture channels this degrades quietly rather than refusing: a draft that

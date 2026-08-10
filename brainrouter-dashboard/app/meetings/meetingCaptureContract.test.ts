@@ -1,27 +1,30 @@
 /**
- * ADR-035 — a wiring test for the dashboard's capture surface, because every
- * defect it guards typechecks.
+ * ADR-035 — what is left to say about the dashboard's capture surface once a
+ * test can DRIVE it.
  *
- * `app/meetings/page.tsx` had no test file at all, and that is a structural
- * fact rather than an oversight: every dashboard defect this ADR has had to
- * repair lived in it — the submit path, the recovery offer, the error slots,
- * the scope. The desktop's equivalent wiring is pinned line by line by
- * `brainrouter-desktop/src/lib/meetingCaptureContract.test.ts`, which is exactly
- * why the desktop stopped drifting. This is the same instrument for the same
- * reason.
+ * This file used to be the only instrument `app/meetings/page.tsx` had, and it
+ * asserted over source text because a 1900-line React component could not be
+ * exercised in this runner at all. That was a bad trade taken knowingly, and it
+ * failed in the way source assertions always fail: a `base:` field respelled and
+ * §6's doubled transcript came back with every test green; a
+ * `transcript = settled.text` deleted and the unmarked hole came back with every
+ * test green; `meetingOrgId` respelled `activeOrgId` and nothing here could have
+ * noticed at all.
  *
- * What it asserts is not "does this function work" — the pure rules are tested
- * where they live, in `lib/meetings/*.test.ts` and in the shared model. It is
- * that the pieces are CONNECTED in the one arrangement where a meeting is not
- * lost: a chunk written before it is recorded, a session transition that goes
- * through the single writer, a destructive path guarded in the function and not
- * only on the button, and a durability warning that renders where a person can
- * read it.
+ * `captureSurface.ts` moved those decisions out of the component, and
+ * `captureSurface.test.ts` now presses Record, hands over a chunk, leaves the
+ * page and reads what reached the POST. So what remains here is only what a
+ * behavioural test genuinely cannot see:
  *
- * Asserted against source text on purpose. A React render test cannot reach the
- * windows these defects live in — the two awaits between installing the queue
- * and `setRecording(true)`, or a chunk write failing while the dialog is closed
- * — and a defect nothing can reach is a defect that comes back.
+ * - **that something is GONE** — a deleted module, a dead identifier, a second
+ *   copy of a rule that must not grow back;
+ * - **the arrangement of a render** — a warning slot that has to be outside the
+ *   dialog, because the dialog can be closed while the microphone is open;
+ * - **the ONE wire between React and the surface** that the surface itself
+ *   cannot test: the unmount cleanup that calls `dispose()`.
+ *
+ * Anything that can be asserted by driving the surface belongs in the other
+ * file, not here.
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -30,24 +33,16 @@ import test from "node:test";
 const read = (relative: string): string => readFileSync(new URL(relative, import.meta.url), "utf8");
 
 const page = read("./page.tsx");
+const surface = read("./captureSurface.ts");
 const live = read("./LiveTranscript.tsx");
 const store = read("../../lib/meetings/captureStore.ts");
 
-/** Where `needle` sits in the page, asserted present so an ordering check cannot pass on -1. */
-function at(source: string, needle: string): number {
-  const index = source.indexOf(needle);
-  assert.ok(index > 0, `expected to find ${JSON.stringify(needle)}`);
-  return index;
-}
-
 /**
- * The page's EXECUTABLE lines, trimmed.
+ * A file's EXECUTABLE lines, trimmed.
  *
- * Every comment in that file names the defect it prevents, in the defect's own
+ * Every comment in these files names the defect it prevents, in the defect's own
  * vocabulary — so "this identifier appears nowhere" asked over the raw text is
- * answered by the paragraph explaining why it appears nowhere. Only the leading
- * marker is stripped, which is enough because the block comments this file
- * searches are all `*`-continued.
+ * answered by the paragraph explaining why it appears nowhere.
  */
 function codeLines(source: string): readonly string[] {
   return source
@@ -56,336 +51,161 @@ function codeLines(source: string): readonly string[] {
     .filter((line) => line.length > 0 && !line.startsWith("*") && !line.startsWith("//") && !line.startsWith("/*"));
 }
 
-test("D1/D1b — audio becomes bytes on a cadence, and nothing accumulates in the tab", () => {
-  // Without an explicit timeslice `MediaRecorder` may deliver one blob at the
-  // end, and the durable write buys nothing.
-  assert.match(page, /rec\.start\(MEETING_CAPTURE_TIMESLICE_MS\)/);
-  // The chunk goes to the store before it becomes anything else, and the segment
-  // record carries what the store actually took.
-  assert.match(page, /chunk = await capture\.store\.appendChunk\(capture\.sessionId, data\)/);
-  assert.match(page, /appendSegment\(session, \{ byteLength: chunk\.byteLength, durationMs \}\)/);
-  assert.ok(
-    at(page, "chunk = await capture.store.appendChunk(capture.sessionId, data)")
-      < at(page, "appendSegment(session, { byteLength: chunk.byteLength, durationMs })"),
-    "the bytes are written before the segment claims they exist",
-  );
-  // §1's defect by name: an array of chunks in the renderer's heap.
-  assert.doesNotMatch(page, /chunksRef|Blob\[\]/);
+test("A — the page hands the recording back on unmount, which is the one wire the surface cannot test", () => {
+  // `dispose()` is covered behaviourally in `captureSurface.test.ts`; what is
+  // NOT reachable from there is whether React ever calls it. Without this line a
+  // client-side navigation leaves the `MediaRecorder` running with the
+  // microphone open while the remounted page has a fresh empty guard.
+  assert.match(page, /useEffect\(\(\) => \{\s*void capture\.init\(\);\s*return \(\) => \{ void capture\.dispose\(\); \};\s*\}, \[capture\]\);/);
+  // …and the surface is built ONCE, with no dependencies. Rebuilding it when the
+  // org changes would drop the recording it is holding — which is the defect it
+  // exists to prevent, arriving through the door meant to stop it.
+  assert.match(page, /const capture = useMemo\(\(\) => \{/);
+  assert.match(page, /return new MeetingCaptureSurface\(ports\);\s*\}, \[\]\);/);
+  // The switcher's org reaches it through a ref for the same reason.
+  assert.match(page, /activeOrgId: \(\) => activeOrgRef\.current,/);
+  assert.match(page, /activeOrgRef\.current = activeOrgId;/);
+});
 
-  // D2 — the session exists before the recorder does, so a crash has somewhere
-  // to be found again.
-  assert.ok(at(page, "await store.begin({ sessionId })") < at(page, "rec.start(MEETING_CAPTURE_TIMESLICE_MS)"));
+test("the page keeps no second copy of the capture's state", () => {
+  // The four deleted guards were all React state in one mount describing a store
+  // scoped to the origin. A fifth of that shape would fail the same way, so the
+  // page is not allowed to hold any of it.
+  for (const revived of [
+    "captureRef",
+    "queueRef",
+    "recorderRef",
+    "armingRef",
+    "foldRef",
+    "setRecording(",
+    "setCaptureSession(",
+    "setSettlingCapture(",
+    "setCaptureWarning(",
+    "setDraftTranscript(",
+  ]) {
+    assert.equal(page.includes(revived), false, `${revived} is the surface's, not the page's`);
+  }
+  // §1's original defect by name: an array of chunks in the renderer's heap.
+  assert.doesNotMatch(page, /chunksRef|Blob\[\]/);
+  assert.doesNotMatch(surface, /chunksRef|Blob\[\]/);
 });
 
 test("every session transition goes through the queue, which is the single writer", () => {
   // Two writers would interleave a `markDone` with an `appendSegment` and lose
   // one of them — the same class of defect as losing the audio, just quieter.
-  for (const transition of ["appendSegment(", "stopCapture(", "finalizeCapture(", "discardCaptureSession("]) {
-    const calls = [...page.matchAll(new RegExp(transition.replace("(", "\\("), "g"))];
+  for (const transition of ["appendSegment(", "stopCapture(", "finalizeCapture(", "discardCaptureSession(", "heartbeatCaptureLease(", "releaseCaptureLease("]) {
+    const calls = [...surface.matchAll(new RegExp(transition.replace("(", "\\("), "g"))];
     assert.ok(calls.length > 0, `${transition} is still applied somewhere`);
     for (const call of calls) {
-      // Generous, because the transitions that matter most carry the longest
-      // comments: `persistChunk`'s index check explains itself at length inside
-      // the `apply` callback it guards.
-      const before = page.slice(Math.max(0, (call.index ?? 0) - 900), call.index);
+      const before = surface.slice(Math.max(0, (call.index ?? 0) - 1400), call.index);
       assert.ok(before.includes("queue.apply("), `${transition} runs inside queue.apply`);
     }
   }
 });
 
-test("FATAL 1 — what is POSTED is the settled text, with nothing in between to go stale", () => {
-  // `transcriptText` keeps only settled segments and stated gaps, so a
-  // provisional one contributes NOTHING: posted as-is, the sentences either side
-  // of it read as contiguous speech and the audio is deleted on the next line.
+test("composition has ONE rule, and the recompose model is gone rather than unused", () => {
+  // The last data-corruption defect on this host: the page rebuilt
+  // `base + transcriptText(session)` on every drain with `base` set to the box
+  // MINUS every segment, so a note typed BETWEEN two segments came back above
+  // the entire transcript and an edit came back reverted AND relocated.
   //
-  // This assertion is the one that has to bind on the VALUE. Its predecessor
-  // checked that `settleTranscriptForSubmit(...)` was called and ordered and
-  // that the body said `transcript`, and a verifier deleted the single line
-  // `transcript = settled.text;` — restoring the defect verbatim, since `let
-  // transcript = draftTranscript` survived — and all ten tests still passed,
-  // because every one of those three facts was still true of the broken
-  // program. There is no line to delete now: the posted field IS the settle
-  // result, and the shared `settleTranscriptForSubmit` takes a nullable session
-  // so the pasted-transcript case is this same call rather than a branch.
-  //
-  // The THIRD argument is asserted as hard as the first two. Handing it a fresh
-  // `EMPTY_TRANSCRIPT_FOLD` typechecks, keeps every ordering fact true, and
-  // makes the settle walk from segment zero over a box that already holds the
-  // meeting — so the doubled transcript is what gets POSTed and summarized.
-  const settle = at(page, "settleTranscriptForSubmit(draftTranscript, queue?.session ?? null, foldRef.current)");
-  const post = at(page, 'await authFetch<{ id: string }>("/api/meetings"');
-  const release = at(page, "await releaseCapture(true)");
-  assert.ok(settle < post, "the text is settled before it is posted");
-  assert.ok(post < release, "and the audio is only released once the meeting exists on the server");
-  assert.match(page, /body: \{ title: draftTitle\.trim\(\), transcript: submitted\.text, template: summaryTemplate \}/);
-  // The box is shown what was posted in the same breath. A create that FAILS
-  // leaves the person looking at their transcript again, and a box that does
-  // not hold the gap markers the server was just sent — while the fold says it
-  // does — is a surface disagreeing with the record about what is in the
-  // meeting, which is the class of thing this ADR exists to stop.
-  assert.match(page, /if \(submitted\.changed\) setDraftTranscript\(submitted\.text\);/);
-  // The box's own state is never what is posted: it has not re-rendered yet at
-  // this point in the function, so it is the pre-settle text by definition.
-  assert.doesNotMatch(page, /body: \{ title: draftTitle\.trim\(\), transcript: draftTranscript/);
-  assert.doesNotMatch(page, /let transcript = draftTranscript/);
-
-  // ADR-028 — and it is said BEFORE the click, not discovered afterwards.
-  assert.match(page, /unsettledSegments\(captureSession\)\.length/);
-  assert.match(page, /segments are still being transcribed/);
-});
-
-test("FATAL 2 — the destructive path is guarded in the function, not only on the button", () => {
-  // `recording` is false for the whole stretch between the queue being installed
-  // and the recorder starting, and Create landing there finalized and DELETED a
-  // session the recorder then wrote chunks into.
-  assert.match(page, /const captureInFlight = recording \|\| armingRef\.current \|\| captureRef\.current !== null;/);
-  assert.match(page, /if \(captureInFlight \|\| busy\) \{/);
-  assert.match(page, /armingRef\.current = true;/);
-  // Raised once, and lowered on every way out of `startRecording`: the store
-  // failing to open, the recorder failing to start, and the happy path.
-  assert.equal(page.match(/armingRef\.current = true;/g)?.length, 1);
-  assert.equal(page.match(/armingRef\.current = false;/g)?.length, 3);
-  // The button still says it too — this is belt as well as braces.
-  assert.match(page, /onClick=\{\(\) => void submitCreate\(\)\} disabled=\{busy === "create" \|\| recording \|\| settlingCapture\}/);
-});
-
-test("A — the create guard outlives Stop, and covers the window the last chunk lands in", () => {
-  // `finishCapture` used to null `captureRef` on its first line, BEFORE
-  // `settled()` and before the `stopCapture` transition. `stopRecording` has
-  // already set `recording` false and `armingRef` is down, so across that window
-  // every term of the guard was false, "Create + summarize" was enabled in the
-  // same row of the same dialog, and clicking it posted a transcript missing its
-  // final chunk with no gap marker — then deleted that chunk's audio.
-  const finish = at(page, "const finishCapture = useCallback(async (capture: ActiveCapture) => {");
-  const next = at(page, "const startRecording = useCallback(async () => {");
-  const body = page.slice(finish, next);
-  const settled = body.indexOf("await capture.store.settled(capture.sessionId)");
-  const stopped = body.indexOf("stopCapture(session)");
-  const released = body.indexOf("captureRef.current = null");
-  assert.ok(settled > 0 && stopped > 0 && released > 0, "all three steps are still here");
-  assert.ok(released > settled, "the guard outlives the store's write queue draining");
-  assert.ok(released > stopped, "and outlives the stop transition landing in the session");
-  // Released in the `finally`, identity-checked: a settle that THREW must not
-  // wedge Create for good, and a new recording started meanwhile must keep its
-  // own guard.
-  assert.match(body, /if \(captureRef\.current === capture\) captureRef\.current = null;/);
-  // …and the surface says so rather than offering a button it will refuse.
-  assert.match(page, /setSettlingCapture\(true\)/);
-  assert.match(page, /The end of this recording is still being written to this device/);
-});
-
-test("C — a recording that never started leaves nothing behind to wedge Create", () => {
-  // `captureRef` is set before `attachQueue` (which reads `getJwt()` and throws
-  // on a partitioned localStorage) and before `rec.start(...)` (which throws
-  // NotSupportedError when the stream went inactive). Leaked, it makes every
-  // later submit refuse while `recording` is false and the button says "Record":
-  // there is nothing to stop, and only a reload clears it.
-  const start = at(page, "const startRecording = useCallback(async () => {");
-  const body = page.slice(start, at(page, "const pickUpCapture = useCallback"));
-  assert.match(body, /if \(captureRef\.current\?\.sessionId === sessionId\) captureRef\.current = null;/);
-  // The failure path also releases the microphone: `onstop` is what stops the
-  // tracks, and it never fires for a recorder that would not start.
-  assert.match(body, /stream\?\.getTracks\(\)\.forEach\(\(track\) => track\.stop\(\)\);/);
-});
-
-test("D — the sticky slot reports the failure that happened, not the worst one", () => {
-  // One `try` covered `appendChunk`, the `queue.apply` that records the segment
-  // and `budget()`, and its single catch asserted the audio was gone for all
-  // three. Only the first loses audio.
-  const persist = at(page, "const persistChunk = useCallback(async (capture: ActiveCapture, data: Blob) => {");
-  const body = page.slice(persist, at(page, "const finishCapture = useCallback"));
-  // The lost-audio sentence belongs to the chunk write and nothing else.
-  const lost = "That audio is missing from the meeting, and no segment was recorded for it";
-  assert.equal(body.split(lost).length - 1, 1, "said once");
-  const append = body.indexOf("await capture.store.appendChunk(capture.sessionId, data)");
-  const apply = body.indexOf("await queue.apply(");
-  assert.ok(append > 0 && apply > append);
-  assert.ok(body.indexOf(lost) > append && body.indexOf(lost) < apply, "and only for the chunk write");
-  // A segment that could not be recorded leaves the audio written and
-  // unclaimed, which is the safe failure the transition is designed around.
-  assert.match(body, /The audio itself IS saved; that piece is left unclaimed/);
-  // A budget reading that could not be taken lost nothing, and says nothing.
-  const budget = body.indexOf("await capture.store.budget({");
-  assert.ok(budget > apply, "the budget is read after the segment is recorded");
-  assert.doesNotMatch(body.slice(budget), /setCaptureWarning\(/);
-});
-
-test("FATAL 3 — a chunk that could not be written reports into the STICKY slot", () => {
-  // `createErr` renders only inside the compose dialog, which the × and the
-  // scrim close WITHOUT stopping the recording; and `submitCreate` opens by
-  // clearing it, so the one sentence saying part of the recording was never
-  // written was erased at the moment the user committed and the audio was
-  // deleted.
-  assert.match(page, /setCaptureWarning\(`A piece of this recording could not be saved on this device/);
-  const failure = at(page, "A piece of this recording could not be saved on this device");
-  const routed = page.slice(Math.max(0, failure - 200), failure);
-  assert.doesNotMatch(routed, /setCreateErr\(/);
-  // Both capture slots follow the user out of the dialog.
-  assert.match(page, /\{!createOpen && captureWarning \?/);
-  assert.match(page, /\{!createOpen && captureNotice \?/);
-  // …and a recording with no dialog on screen is not a silent open microphone.
-  assert.match(page, /\{!createOpen && recording \?/);
-  // The one place that clears it is a NEW recording, where the last one's
-  // warnings genuinely stop being true.
-  assert.equal(page.match(/setCaptureWarning\(""\)/g)?.length, 2);
-});
-
-test("a recovered capture is folded in once, and its own language is used", () => {
-  // The doubling defect, and the reason this test is written as an exhaustive
-  // list rather than as three `assert.match`es.
-  //
-  // Its predecessor asserted `included: reconciled.accounted` and the `dirty:`
-  // line but never the `base:` field, so respelling `base: reconciled.retained`
-  // as `base: options.base` restored §6's doubled meeting verbatim with all 123
-  // tests green. The lesson is that pinning SOME of the fields that reach
-  // composition pins none of it. What reaches composition now is one value —
-  // the fold — so every write to it is enumerated: a `beginTranscriptFold`
-  // swapped for `EMPTY_TRANSCRIPT_FOLD` (the doubling), a `folded.fold` that is
-  // computed and dropped (the "call present, result unused" shape), a
-  // `submitted.fold` that never lands, and any FOURTH writer that appears
-  // beside them all fail here.
-  const foldWrites = codeLines(page).filter((line) => line.startsWith("foldRef.current ="));
-  assert.deepEqual(foldWrites, [
+  // The fold's writes are enumerated rather than merely present, because a
+  // `beginTranscriptFold` swapped for `EMPTY_TRANSCRIPT_FOLD` is the doubling,
+  // and a `folded.fold` computed and dropped is the "call present, result
+  // unused" shape that has survived a mutation round before.
+  assert.deepEqual(codeLines(surface).filter((line) => line.startsWith("this.#fold =")), [
     // Resume over the restored box rather than at segment zero — §6.
-    "foldRef.current = beginTranscriptFold(reconciled);",
+    "this.#fold = beginTranscriptFold(reconciled);",
     // The drain's fold, kept, or the next one appends the same run again.
-    "foldRef.current = folded.fold;",
+    "this.#fold = folded.fold;",
     // Submit's settle, kept, or a create that failed leaves the fold behind the
     // box and the gap markers it just wrote are appended a second time.
-    "foldRef.current = submitted.fold;",
+    "this.#fold = submitted.fold;",
+    // A created meeting starts a new box, so it starts a new fold.
+    "this.#fold = EMPTY_TRANSCRIPT_FOLD;",
   ]);
-  // The resume point is built from the reconcile of the RESTORED BOX, and it is
-  // the only thing built from it: `reconciled.retained` — the box with every
-  // segment stripped out of it — is what the recompose model used as its base,
-  // and it must never reach composition again on this host.
-  assert.match(page, /const reconciled = reconcileCaptureDraft\(options\.base, session\);/);
-  assert.doesNotMatch(page, /reconciled\.retained/);
-  // The empty fold has exactly one honest use on this page — the ref's initial
-  // value, for a box no capture has ever written into.
+  // `reconciled.retained` — the box with every segment stripped out of it — is
+  // what the recompose model used as its base. It must never reach composition
+  // again: a stripped complement reconciled a second time loses the rest of the
+  // meeting with no gap marker, doubles an edit, returns a deletion.
+  assert.doesNotMatch(surface, /reconciled\.retained/);
   assert.deepEqual(
-    codeLines(page).filter((line) => line.includes("EMPTY_TRANSCRIPT_FOLD")),
-    ["EMPTY_TRANSCRIPT_FOLD,", "const foldRef = useRef<TranscriptFold>(EMPTY_TRANSCRIPT_FOLD);"],
+    codeLines(surface).filter((line) => line.includes("reconcileCaptureDraft(")),
+    ["const reconciled = reconcileCaptureDraft(options.base, session);"],
+    "reconciled once, on the way in",
   );
-  // …and the fold is seeded before the session that triggers the fold effect is
-  // published, so there is no render in which the box is folded from zero.
-  const attach = at(page, "const attachQueue = useCallback(");
-  const seed = page.indexOf("foldRef.current = beginTranscriptFold(reconciled);", attach);
-  const publish = page.indexOf("setCaptureSession(session);", attach);
-  assert.ok(seed > attach && publish > seed, "the resume point is set before the session is published");
-  // Reconciliation still heals a stated gap in place on the way in, and the box
-  // is only rewritten when it actually changed.
-  assert.match(page, /if \(reconciled\.text !== options\.base\) setDraftTranscript\(reconciled\.text\);/);
-  // A meeting recorded in Japanese was recorded in Japanese, whatever the page's
-  // dropdown has since been reset to.
-  assert.match(page, /session\.language \?\? \(language === "auto" \? undefined : language\)/);
-});
-
-test("A — composition is the shared append-only fold, and the recompose model is gone", () => {
-  // The last data-corruption defect on this host, and its one cause: the page
-  // rebuilt `base + transcriptText(session)` on every drain with `base` set to
-  // the box MINUS every segment. That puts all of a person's own words first
-  // and the whole meeting after them, so across a kill a note typed BETWEEN two
-  // segments came back above the entire transcript and an edit to the last
-  // settled segment came back reverted AND relocated to the top — both then
-  // autosaved, POSTed and summarized.
-  //
-  // The fold is asserted as a whole line each, because each carries a value the
-  // ordering and the presence of the call say nothing about.
-  assert.match(page, /const folded = foldTranscript\(draftTranscript, captureSession, foldRef\.current\);/);
-  assert.match(page, /if \(!folded\.changed\) return;/);
-  assert.match(page, /setDraftTranscript\(folded\.text\);/);
-  // The second host's answer, gone rather than merely unused — including the
-  // module it lived in.
-  const code = codeLines(page).join("\n");
+  const code = codeLines(surface).join("\n");
   for (const dead of [
     "transcriptSync",
     "nextTranscriptSync",
     "appendTranscriptSync",
     "composeCaptureTranscript",
     "healTranscriptGaps",
-    "pendingTranscriptText",
-    "includedTranscriptIndices",
-    "transcriptRevisionPending",
     "transcriptText(",
   ]) {
-    assert.equal(code.includes(dead), false, `${dead} is gone from the page`);
+    assert.equal(code.includes(dead), false, `${dead} is gone`);
   }
   assert.throws(() => read("../../lib/meetings/transcriptSync.ts"), "the second composition rule is deleted, not orphaned");
-
-  // The `dirty` flag goes with it, and is NOT reconstructed. It was a keystroke
-  // — runtime state that dies with the tab — and the page recomputed it after a
-  // reload as `reconciled.userOwned.length > 0`, which is `[]` whenever every
-  // segment still matches the box verbatim. A note typed BETWEEN two segments
-  // leaves every segment matching, so it came back `false`, recomposition
-  // switched itself back ON across the very kill it was protecting the box
-  // from, and the note was relocated above the whole transcript. There is no
-  // better formula: "a person has taken ownership of the ordering" is not
-  // derivable from the box plus the session. An append-only fold needs no such
-  // fact, which is why the resume point is a fold — a thing that IS
-  // reconstructible, by `beginTranscriptFold` above.
-  assert.doesNotMatch(page, /dirty:|\.dirty\b|dirtyRef/);
-  // Under append-only composition no text is ever withheld from the box, so the
-  // affordance that offered it back has nothing left to offer.
+  // The `dirty` flag goes with it and is NOT reconstructed: "a person has taken
+  // ownership of the ordering" is not derivable from the box plus the session,
+  // and the page's formula for it came back `false` across the very kill it was
+  // protecting the box from. An append-only fold needs no such fact.
+  assert.doesNotMatch(surface, /dirty:|\.dirty\b|dirtyRef/);
   assert.doesNotMatch(page, /Bring the transcript up to date/);
-  assert.doesNotMatch(page, /appendCaptureText|captureRevisionPending/);
 });
 
-test("E/D6 — the draft is the protected store's, and it is the WHOLE compose box", () => {
+test("D6 — the draft is the protected store's, and it is the WHOLE compose box", () => {
   assert.doesNotMatch(page, /localStorage\.setItem/);
+  assert.equal(codeLines(surface).some((line) => line.includes("localStorage")), false, "the surface is handed a storage; it never reaches for one");
   assert.doesNotMatch(page, /brainrouter:meeting-draft/);
   // Read once and removed, because a copy left behind is not a move.
-  assert.match(page, /takeLegacyMeetingDraft\(localStorage\)/);
+  assert.match(surface, /takeLegacyMeetingDraft\(storage\)/);
   // What is persisted is the box, not the box minus what the session can account
-  // for. `retained` is a stripped COMPLEMENT: reopening reconciles it against
-  // the same session a second time, and the four corruptions that follow are
-  // all silent — a retained line matching a segment pins the frontier and loses
-  // the rest of the meeting with no gap marker, an edit comes back doubled, a
-  // deletion returns, a note is relocated.
-  //
-  // It is also what makes the fold's resume point reconstructible at all: the
-  // box that comes back holds this capture's segments verbatim, so
-  // `reconcileCaptureDraft` can say which ones and where. A stripped box has
-  // had exactly that evidence removed from it.
-  assert.match(page, /await writeMeetingDraft\(store, \{ title: draftTitle, transcript: draftTranscript, language, template: summaryTemplate \}\)/);
-  assert.doesNotMatch(page, /reconcileCaptureDraft\(draftTranscript, captureSession\)/);
-  // …and because a strip cannot be detected on the way back in, the type says so
-  // too: a host that reintroduced it would be contradicting the field's contract.
+  // for — and the type says so too, so a host that reintroduced the strip would
+  // be contradicting the field's contract.
+  assert.match(surface, /await writeMeetingDraft\(store, \{\s*title: this\.#state\.title,\s*transcript: this\.#state\.transcript,/);
   assert.match(read("../../lib/meetings/meetingDraft.ts"), /never `MeetingDraftReconciliation\.retained`/);
+});
 
-  // The one reconcile that stays is the READ side: the fold's resume point over
-  // a restored draft meeting a recovered capture, which is never written down.
-  const attach = at(page, "const attachQueue = useCallback(");
-  const reconcile = at(page, "const reconciled = reconcileCaptureDraft(options.base, session)");
-  assert.ok(reconcile > attach && reconcile < at(page, "const revokePreview = useCallback("));
-  const reconcileCalls = page
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => !line.startsWith("*") && !line.startsWith("//") && line.includes("reconcileCaptureDraft("));
-  assert.deepEqual(reconcileCalls, ["const reconciled = reconcileCaptureDraft(options.base, session);"], "reconciled once, on the way in");
+test("the durability slots follow the user out of the dialog", () => {
+  // The × and the scrim close the compose dialog WITHOUT stopping the
+  // recording, so a meeting can be captured with nothing of it on screen — and a
+  // warning rendered only inside a closed dialog is a warning nobody can act on.
+  // A render arrangement, which is why it is asserted here.
+  assert.match(page, /\{!cap\.createOpen && cap\.warning \?/);
+  assert.match(page, /\{!cap\.createOpen && cap\.notice \?/);
+  assert.match(page, /\{!cap\.createOpen && cap\.recording \?/);
+  // Two slots, not one: the notice is a READING rewritten by every chunk and the
+  // warning is an EVENT that is still true. Sharing one slot meant the
+  // highest-frequency writer won and every warning that mattered was erased by
+  // the next timeslice while it was still the case.
+  assert.match(page, /\{cap\.notice \? <div className=\{styles\.errorBar\} role="status">/);
+  assert.match(page, /\{cap\.warning \? <div className=\{styles\.errorBar\} role="alert">/);
+  // …and the retained-audio list is outside the dialog on purpose: it is raised
+  // by the same commit that closes it.
+  const retained = page.indexOf("{cap.retained.map((row) => (");
+  const dialog = page.indexOf("{cap.createOpen ? (");
+  assert.ok(retained > 0 && dialog > retained, "the retained-audio notice is rendered before the dialog, outside it");
+});
+
+test("open question 5 — the recovery offer asks the shared rule, and the store no longer imitates it", () => {
+  assert.match(surface, /resumableCaptures\(records, \{/);
+  // The store cannot answer this — it treats the payload as opaque text — so the
+  // predicate it used to restate is gone from it entirely.
+  assert.doesNotMatch(store, /!record\.closed && record\.byteLength > 0/);
+  assert.doesNotMatch(store, /async resumable\(|async attach\(/);
+  assert.doesNotMatch(surface, /store\.resumable\(/);
 });
 
 test("F — the wake floor and the phase sentence are the shared ones", () => {
-  // The two hosts did NOT agree, which is the strongest available argument for
-  // the export. This page floored the queue's own `nextWakeMs` with an inline
-  // `Math.max(500, result.nextWakeMs)` and the desktop's supervisor with a
+  // The two hosts did NOT agree: this file floored the queue's own `nextWakeMs`
+  // with an inline `Math.max(500, …)` and the desktop's supervisor with a
   // private `MIN_WAKE_MS = 250`, so the same schedule probed a struggling
   // sidecar at two different rates depending on which host you were on.
-  // Adopting the shared 500 halves the desktop's: two attempts a second rather
-  // than the four it was making. There was never a `MEETING_DRAIN_FLOOR_MS`
-  // anywhere — the number was a literal in this file, which is why nothing was
-  // ever going to notice the two drifting.
-  //
-  // The null check folds into the helper, because "nothing to schedule" and
-  // "not before the floor" are the same question about the same answer.
-  assert.match(page, /const delay = drainWakeDelayMs\(result\.nextWakeMs\);/);
-  assert.match(page, /if \(delay !== null\) \{/);
-  // …and the floored value is what ARMS the timer. Calling the helper and then
-  // arming on the raw `result.nextWakeMs` keeps every assertion above true and
-  // puts the unfloored schedule straight back — the "call present, result
-  // unused" shape, which is the one that has survived a mutation round before.
-  assert.match(page, /\}, delay\);/);
+  assert.match(surface, /const delay = drainWakeDelayMs\(result\.nextWakeMs\);/);
+  assert.match(surface, /if \(delay !== null\) \{/);
   assert.deepEqual(
-    codeLines(page).filter((line) => line.includes("result.nextWakeMs")),
+    codeLines(surface).filter((line) => line.includes("result.nextWakeMs")),
     ["const delay = drainWakeDelayMs(result.nextWakeMs);"],
     "the queue's raw schedule is read once, by the floor, and nowhere else",
   );
@@ -393,36 +213,7 @@ test("F — the wake floor and the phase sentence are the shared ones", () => {
   // copy of it. The dashboard's copy is deleted, not merely unused.
   assert.match(live, /capturePhaseNote,/);
   assert.doesNotMatch(live, /from "\.\.\/\.\.\/lib\/meetings\/capturePhase"/);
-});
-
-test("open question 5 — the recovery offer is scoped, and asks the shared rule", () => {
-  assert.match(page, /resumableCaptures\(await store\.list\(\), \{/);
-  assert.match(page, /scope: \{ orgId: activeOrgId \|\| null \}/);
-  // The store cannot answer this — it treats the payload as opaque text — so the
-  // predicate it used to restate is gone from it entirely.
-  assert.doesNotMatch(page, /store\.resumable\(/);
-  assert.doesNotMatch(store, /!record\.closed && record\.byteLength > 0/);
-  assert.doesNotMatch(store, /async resumable\(|async attach\(/);
-  // The other half of open question 5, which this host already had right: the
-  // meeting is created under the scope frozen at Record, not the one the
-  // switcher happens to be showing.
-  assert.match(page, /const captureOrgId = queue\?\.session\.scope\.orgId/);
-});
-
-test("§6 — the audio that came back is playable, and its object URL is handed back", () => {
-  assert.match(page, /await store\.readAudio\(record\.sessionId, mimeType \|\| DEFAULT_CAPTURE_MIME_TYPE\)/);
-  assert.match(page, /URL\.revokeObjectURL\(previewRef\.current\.url\)/);
-  // D6 — audio no session can claim is audio nothing can free, so every load
-  // reaps it, and the reap is logged.
-  assert.match(page, /await store\.reapOrphans\(active \? \{ keep: \[active\] \} : \{\}\)/);
-  assert.match(page, /console\.warn\(`\[meetings\] reaped/);
-  // ADR-028 — a recovery query that FAILED is not "nothing to recover".
-  assert.match(page, /setRecoveryError\(`Recordings saved on this device could not be checked/);
-});
-
-test("the live panel asks the shared phase rule rather than keeping its own", () => {
   assert.match(live, /capturePhaseNote\(session, phase, \{ gaps, provisional \}\)/);
-  assert.doesNotMatch(live, /function phaseNote/);
   // D4 — three states rendered as three different things.
   assert.match(live, /entry\.state === "transcribing" \? "Transcribing…" : "Queued"/);
 });

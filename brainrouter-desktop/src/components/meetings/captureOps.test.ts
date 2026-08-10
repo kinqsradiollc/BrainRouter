@@ -44,12 +44,18 @@ test("the capture scope and the recorder's content type travel with the session"
   assert.equal((await capture.read("mtg-1")).contentType, "audio/webm;codecs=opus");
   assert.equal((await capture.resumable({ orgId: "org_1" })).length, 1);
 
+  // D6 — `holderId` is on every call that takes or releases a recording, and it
+  // is the SAME id each time: it identifies this BrowserWindow to a record a
+  // second window reads, so an adapter that minted one per call would make every
+  // window a stranger to its own capture.
   assert.deepEqual(calls, [
-    { method: "captureBegin", args: [{ title: "Sync", contentType: "audio/webm;codecs=opus", orgId: "org_1", workspaceId: null }] },
+    { method: "captureBegin", args: [{ title: "Sync", contentType: "audio/webm;codecs=opus", orgId: "org_1", workspaceId: null, holderId: capture.holderId }] },
     { method: "captureAppend", args: ["mtg-1", new Uint8Array([1]), 20_000] },
     { method: "captureRead", args: ["mtg-1"] },
     { method: "captureResumable", args: [{ orgId: "org_1", workspaceId: null }] },
   ]);
+  assert.match(capture.holderId, /^wr-/);
+  assert.equal(createMeetingCaptureOps().holderId, capture.holderId, "one holder id per window, not per adapter");
 });
 
 test("F1 — the capture in hand is left out of the recovery offer", async () => {

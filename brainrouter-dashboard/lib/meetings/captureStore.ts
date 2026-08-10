@@ -112,10 +112,30 @@ export interface BeginCaptureInput {
 export interface ReapOrphansOptions {
   /**
    * Ids the reap must not touch whatever their manifest says — in practice the
-   * recording in hand. Everything else the store can judge for itself; this is
-   * the one fact only the caller has.
+   * recording in hand and the compose draft's reserved record. Everything else
+   * the store can judge for itself; this is the one fact only the caller has.
    */
   readonly keep?: readonly string[];
+  /**
+   * Whether a manifest holding NO audio has been abandoned and may be reclaimed
+   * — asked about a manifest the reap has JUST read.
+   *
+   * Two reasons it is the caller's question and not the store's, and they pull
+   * the same way. The store cannot read a payload, so it can see neither the
+   * lease that says a tab is recording into this right now nor the fact that one
+   * reserved id in this listing is not a meeting at all. And `keep` cannot stand
+   * in for it: `keep` is built from a listing the caller took earlier, and OPFS
+   * is scoped to the ORIGIN, so a session another tab began in between is absent
+   * from `keep` and present here — which does not matter while every live
+   * capture is protected by holding audio, and matters completely the moment a
+   * chunk-less manifest becomes reapable, because a recording is exactly that
+   * for as long as the microphone prompt is on screen.
+   *
+   * Absent, a manifest with no audio is NEVER reaped. That is the safe default
+   * and deliberately the old behaviour: a caller that has not said which of its
+   * records are meetings must not have one deleted on its behalf.
+   */
+  readonly abandoned?: (record: { readonly sessionId: string; readonly startedAt: string; readonly payload: string }) => boolean;
 }
 
 export class MeetingCaptureStore {
@@ -393,9 +413,19 @@ export class MeetingCaptureStore {
    *   or never ran leaves exactly this. The desktop reaps terminal captures on
    *   sight for the same reason; without it, audio the user accepted or threw
    *   away outlives the deletion they asked for.
+   * - **Captures abandoned before their first chunk**: a manifest that is not
+   *   closed, holds no audio, and that nobody is writing to. `begin` runs before
+   *   `getUserMedia`, so a tab killed while the microphone prompt is on screen
+   *   leaves exactly this — and it is unreachable by every other path: the reap
+   *   used to skip it (`!manifest.closed`), `resumableCaptures` will never offer
+   *   it (no audio), and no surface can name it. Metadata only, no audio at
+   *   risk, and the desktop has reaped precisely this case with precisely this
+   *   rationale since `recoverInterrupted` was written — so leaving it was the
+   *   shared reap rule holding on one host and not the other.
    *
-   * `keep` is for the recording in hand, whose manifest is deliberately not
-   * closed and which must survive a reap that runs beside it.
+   * `keep` is for the recording in hand and for the draft's reserved record;
+   * `writing` is for a recording ANOTHER TAB began after the caller last looked,
+   * which `keep` structurally cannot cover.
    */
   async reapOrphans(options: ReapOrphansOptions = {}): Promise<readonly string[]> {
     const keep = new Set(options.keep ?? []);
@@ -407,10 +437,21 @@ export class MeetingCaptureStore {
     for (const id of stored) {
       if (keep.has(id)) continue;
       const manifest = await this.#backend.readManifest(id);
-      // A live session, claimed by its own manifest. Includes one another TAB is
-      // recording right now — OPFS is scoped to the origin, not the tab.
-      if (manifest && !manifest.closed) continue;
-      if (!manifest) {
+      if (manifest && !manifest.closed) {
+        // A session claimed by its own manifest. It holds audio, so whatever
+        // else is true of it there is something here a person may still want —
+        // this is the branch a recording in progress and a crashed one both take.
+        const chunks = await this.#backend.listChunks(id);
+        if (chunks.length > 0) continue;
+        // No audio yet. Which used to end the question here, and that is defect
+        // C: a tab killed during the microphone prompt left a manifest nothing
+        // could offer, nothing could reap and no user could reach. The one thing
+        // that separates it from a recording whose first chunk has not landed is
+        // whether a writer is stamping it — and the manifest just read is the
+        // only reading late enough to see a tab that began after the caller's
+        // own listing. That question is the caller's to answer, from the lease.
+        if (!options.abandoned?.({ sessionId: id, startedAt: manifest.startedAt, payload: manifest.payload })) continue;
+      } else if (!manifest) {
         // No manifest AND no chunks: nothing to reclaim, and it is exactly what
         // a `begin` in another tab looks like for the instant between creating
         // the session directory and finishing its manifest write.

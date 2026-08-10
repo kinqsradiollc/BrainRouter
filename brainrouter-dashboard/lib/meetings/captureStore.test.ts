@@ -459,3 +459,73 @@ test("a recording rate turns the budget into remaining minutes", async () => {
   assert.equal(budget.level, "critical");
   assert.ok((budget.headroomMs ?? Infinity) < 120_000);
 });
+
+test("C — a manifest with no audio is reaped only when the caller says it was abandoned", async () => {
+  const backend = new FakeCaptureBackend();
+  const subject = store(backend);
+  // A tab killed during the microphone prompt: `begin` ran, no chunk followed.
+  await subject.begin({ sessionId: "mtg-abandoned", payload: "{}" });
+  // …and one this caller cannot judge at all.
+  await subject.begin({ sessionId: "mtg-unknown", payload: "{}" });
+
+  // Without the predicate nothing chunk-less is touched, which is the safe
+  // default and what a caller that never opted in still gets.
+  assert.deepEqual(await subject.reapOrphans(), []);
+  assert.deepEqual((await subject.list()).map((record) => record.sessionId).sort(), ["mtg-abandoned", "mtg-unknown"]);
+
+  assert.deepEqual(
+    await subject.reapOrphans({ abandoned: (record) => record.sessionId === "mtg-abandoned" }),
+    ["mtg-abandoned"],
+  );
+  assert.deepEqual((await subject.list()).map((record) => record.sessionId), ["mtg-unknown"]);
+});
+
+test("C — a chunk-less capture the caller is writing to survives the reap it runs beside", async () => {
+  const backend = new FakeCaptureBackend();
+  const subject = store(backend);
+  await subject.begin({ sessionId: "mtg-recording", payload: "{}" });
+  // The predicate is asked about the manifest the reap has JUST read, which is
+  // the only reading late enough to see a session another tab began after the
+  // caller took its own listing.
+  const seen: string[] = [];
+  assert.deepEqual(
+    await subject.reapOrphans({
+      abandoned: (record) => {
+        seen.push(record.sessionId);
+        assert.equal(record.payload, "{}", "the caller is handed the payload it needs to judge");
+        return false;
+      },
+    }),
+    [],
+  );
+  assert.deepEqual(seen, ["mtg-recording"]);
+  assert.ok(await subject.read("mtg-recording"));
+});
+
+test("C — a capture that HAS audio is never reaped, whatever the caller says about it", async () => {
+  const backend = new FakeCaptureBackend();
+  const subject = store(backend);
+  await subject.begin({ sessionId: "mtg-live", payload: "{}" });
+  await subject.appendChunk("mtg-live", audioBlob(64, 1));
+  assert.deepEqual(await subject.reapOrphans({ abandoned: () => true }), []);
+  assert.equal((await subject.read("mtg-live"))?.chunks.length, 1);
+});
+
+test("D6 — `keep` protects a record the caller alone knows is in use", async () => {
+  const backend = new FakeCaptureBackend();
+  const subject = store(backend);
+  await subject.begin({ sessionId: "mtg-in-hand", payload: "{}" });
+  await subject.begin({ sessionId: "mtg-settled", payload: "{}" });
+  await subject.setPayload("mtg-settled", "{}", { closed: true });
+
+  // Both would be reaped — one as a settled capture, one as a chunk-less
+  // manifest the caller called abandoned — and `keep` is the caller's one way to
+  // say "not that one".
+  assert.deepEqual(
+    await subject.reapOrphans({ keep: ["mtg-in-hand", "mtg-settled"], abandoned: () => true }),
+    [],
+  );
+  assert.ok(await subject.read("mtg-in-hand"));
+  assert.ok(await subject.read("mtg-settled"));
+  assert.deepEqual(await subject.reapOrphans({ abandoned: () => true }), ["mtg-in-hand", "mtg-settled"]);
+});

@@ -32,9 +32,11 @@ import {
   adoptCaptureChunks,
   createCaptureSession,
   DEFAULT_MEETING_SEGMENT_MS,
+  isCaptureLeaseFresh,
   isMeetingSessionId,
   recoverCaptureSession,
   resumableSessions,
+  type MeetingCaptureLease,
   type MeetingCaptureScope,
   type MeetingCaptureSession,
   type MeetingCaptureTemplate,
@@ -51,15 +53,31 @@ import type { CaptureSessionRecord } from "./captureStore";
  * the same question with its own `contentType` field. `title` is kept
  * separately too, so a capture recorded before the session model existed still
  * comes back with its name.
+ *
+ * `writer` is the session's own lease, MIRRORED beside it. It is the one field
+ * here that is deliberately redundant, and the redundancy is the point: when the
+ * session cannot be read back, `restoreCaptureSession` mints a fresh one, and a
+ * freshly minted session has no writer — so the single path where a payload is
+ * damaged is also the single path where a tab that is recording RIGHT NOW stops
+ * being able to say so, and a second tab is offered the live recording with an
+ * enabled Discard beside it. A lease at the top level survives a session shape
+ * this build cannot parse, which is the case that actually happens: a segment
+ * list written by another build, or a manifest torn mid-write.
  */
 export interface CapturePayload {
   readonly title?: string;
   readonly mimeType?: string;
   readonly session?: MeetingCaptureSession;
+  readonly writer?: MeetingCaptureLease;
 }
 
+/**
+ * The lease is written from the session and never from the caller, so the two
+ * copies cannot disagree: one writer of one fact, mirrored on the way out.
+ */
 export function serializeCapturePayload(payload: CapturePayload): string {
-  return JSON.stringify(payload);
+  const writer = payload.session?.writer ?? payload.writer;
+  return JSON.stringify({ ...payload, ...(writer ? { writer } : {}) });
 }
 
 /**
@@ -77,12 +95,33 @@ export function parseCapturePayload(text: string): CapturePayload {
     return {};
   }
   if (!parsed || typeof parsed !== "object") return {};
-  const candidate = parsed as { title?: unknown; mimeType?: unknown; session?: unknown };
+  const candidate = parsed as { title?: unknown; mimeType?: unknown; session?: unknown; writer?: unknown };
+  // Read from the top level FIRST and from the session second, so a payload
+  // whose session this build refuses still yields the writer that session was
+  // carrying. Older payloads have no top-level copy, which is the only reason
+  // the second reading exists.
+  const nested = (candidate.session as { writer?: unknown } | undefined)?.writer;
+  const writer = isStoredLease(candidate.writer) ? candidate.writer : isStoredLease(nested) ? nested : undefined;
   return {
     ...(typeof candidate.title === "string" ? { title: candidate.title } : {}),
     ...(typeof candidate.mimeType === "string" ? { mimeType: candidate.mimeType } : {}),
     ...(isStoredSession(candidate.session) ? { session: candidate.session } : {}),
+    ...(writer ? { writer } : {}),
   };
+}
+
+/**
+ * D6 — is a tab writing into this capture right now, judged from the stored
+ * manifest alone?
+ *
+ * The reap asks this about a manifest it has just read, which is the only
+ * reading late enough to see a session another tab began after the caller took
+ * its own listing. It deliberately does not restore the session: a payload too
+ * damaged to yield one still yields its writer, and a live recording must not
+ * become reapable because the record around its lease got harder to read.
+ */
+export function isCapturePayloadBeingWritten(payload: string, at?: string): boolean {
+  return isCaptureLeaseFresh(parseCapturePayload(payload).writer, at ?? new Date().toISOString());
 }
 
 export interface RestoreCaptureInput {
@@ -125,14 +164,22 @@ export function restoreCaptureSession(input: RestoreCaptureInput): MeetingCaptur
   const payload = parseCapturePayload(input.record.payload);
   const adopted = payload.session && payload.session.id === input.record.sessionId
     ? payload.session
-    : createCaptureSession({
-      id: isMeetingSessionId(input.record.sessionId) ? input.record.sessionId : undefined,
-      startedAt: input.record.startedAt,
-      scope: input.scope,
-      ...(payload.title ? { title: payload.title } : {}),
-      ...(input.template ? { template: input.template } : {}),
-      ...(input.language ? { language: input.language } : {}),
-    });
+    : {
+      ...createCaptureSession({
+        id: isMeetingSessionId(input.record.sessionId) ? input.record.sessionId : undefined,
+        startedAt: input.record.startedAt,
+        scope: input.scope,
+        ...(payload.title ? { title: payload.title } : {}),
+        ...(input.template ? { template: input.template } : {}),
+        ...(input.language ? { language: input.language } : {}),
+      }),
+      // The mirrored lease, carried onto the minted session — the ONE path where
+      // a live tab's claim would otherwise be dropped, because minting is what
+      // happens when the session cannot be read and a minted session has no
+      // writer. Without this the damaged-payload case offers a recording that is
+      // in progress back to a second tab with an enabled Discard beside it.
+      ...(payload.writer ? { writer: payload.writer } : {}),
+    };
   const reconciled = adoptCaptureChunks(adopted, input.record.chunks, {
     segmentMs: input.segmentMs ?? DEFAULT_MEETING_SEGMENT_MS,
   });
@@ -166,6 +213,13 @@ export interface ResumableCaptureOptions {
    * while its microphone is still open.
    */
   readonly exclude?: readonly string[];
+  /**
+   * The instant the offer is judged at, threaded so the lease's freshness and
+   * the recovery stamp are read off ONE clock reading. Two readings a
+   * millisecond apart would be harmless; two readings a test cannot pin are not,
+   * because "is somebody writing to this?" is now part of the answer.
+   */
+  readonly at?: string;
 }
 
 /**
@@ -183,6 +237,7 @@ export function resumableCaptures(
   options: ResumableCaptureOptions,
 ): readonly ResumableCapture[] {
   const excluded = new Set(options.exclude ?? []);
+  const at = options.at ?? new Date().toISOString();
   const candidates = records
     .filter((record) => !excluded.has(record.sessionId))
     // `closed` is not a second opinion about terminality — it IS
@@ -192,9 +247,9 @@ export function resumableCaptures(
     // minted RECORDING session over the chunks, which would offer back a meeting
     // the user finalized or explicitly threw away.
     .filter((record) => !record.closed)
-    .map((record) => ({ record, session: restoreCaptureSession({ record, scope: options.scope }) }));
+    .map((record) => ({ record, session: restoreCaptureSession({ record, scope: options.scope, at }) }));
   const offered = new Set(
-    resumableSessions(candidates.map((candidate) => candidate.session), { scope: options.scope })
+    resumableSessions(candidates.map((candidate) => candidate.session), { scope: options.scope, at })
       .map((session) => session.id),
   );
   // Ordered by the shared rule's own answer (newest first), not by the store's
@@ -224,6 +279,23 @@ function isStoredSession(value: unknown): value is MeetingCaptureSession {
   if (!candidate.scope || typeof candidate.scope !== "object") return false;
   if (!Array.isArray(candidate.segments)) return false;
   return candidate.segments.every(isStoredSegment);
+}
+
+/**
+ * A lease read back out of browser storage.
+ *
+ * Only the shape is checked here; whether the term is still running is
+ * `isCaptureLeaseFresh`'s question and is asked against a clock, not against a
+ * record. Keeping the two apart is what lets a lapsed lease still be READ — the
+ * epoch in it is what fences a writer that went away, and a lease dropped
+ * because it was old is a fencing token thrown away.
+ */
+function isStoredLease(value: unknown): value is MeetingCaptureLease {
+  if (!value || typeof value !== "object") return false;
+  const lease = value as Partial<MeetingCaptureLease>;
+  if (typeof lease.holderId !== "string" || !lease.holderId) return false;
+  if (!Number.isInteger(lease.epoch) || (lease.epoch ?? 0) <= 0) return false;
+  return typeof lease.heartbeatAt === "string";
 }
 
 function isStoredSegment(value: unknown, position: number): value is MeetingSegment {

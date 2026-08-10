@@ -9,9 +9,23 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { appendSegment, createCaptureSession, finalizeCapture, markDone, stopCapture } from "@kinqs/brainrouter-core/meetings";
+import {
+  acquireCaptureLease,
+  appendSegment,
+  createCaptureSession,
+  finalizeCapture,
+  isCaptureBeingWritten,
+  markDone,
+  stopCapture,
+} from "@kinqs/brainrouter-core/meetings";
 
-import { parseCapturePayload, restoreCaptureSession, resumableCaptures, serializeCapturePayload } from "./capturePayload";
+import {
+  isCapturePayloadBeingWritten,
+  parseCapturePayload,
+  restoreCaptureSession,
+  resumableCaptures,
+  serializeCapturePayload,
+} from "./capturePayload";
 import type { CaptureChunkRef } from "./captureStorage";
 import type { CaptureSessionRecord } from "./captureStore";
 
@@ -199,4 +213,96 @@ test("recovery corrects a segment left mid-attempt by the kill", () => {
   assert.equal(restored.status, "stopped");
   assert.equal(restored.segments[0]?.state, "failed");
   assert.equal(restored.segments[0]?.attempts, 1);
+});
+
+test("D6 — the writer is mirrored beside the session, so a payload this build cannot read still names it", () => {
+  // The one path where a live tab's claim would otherwise be dropped:
+  // `restoreCaptureSession` MINTS a session when the stored one will not parse,
+  // and a minted session has no writer — so a second tab would be offered a
+  // recording that is in progress, with an enabled Discard beside it.
+  const at = "2026-08-10T09:00:10.000Z";
+  const session = acquireCaptureLease(
+    createCaptureSession({ id: "mtg-1", startedAt: "2026-08-10T09:00:00.000Z", scope: SCOPE }),
+    { holderId: "wr-live", holder: "Another tab" },
+    at,
+  );
+  assert.equal(session.ok, true);
+  if (!session.ok) return;
+  const payload = serializeCapturePayload({ session: session.session });
+  assert.equal(JSON.parse(payload).writer.holderId, "wr-live", "the lease is written at the top level too");
+
+  // A session shape this build refuses — one segment with a drifted index, which
+  // is exactly what an older build could have written.
+  // The session shape this build refuses AND with no lease left inside it —
+  // which is what a half-written record looks like, and the only case where the
+  // mirrored copy is the difference between a live recording being protected
+  // and being handed to a second tab.
+  const damaged = JSON.stringify({
+    ...JSON.parse(payload),
+    session: { ...session.session, writer: undefined, segments: [{ index: 7 }] },
+  });
+  assert.equal(parseCapturePayload(damaged).session, undefined, "the session is refused");
+  assert.equal(parseCapturePayload(damaged).writer?.holderId, "wr-live", "and the writer survives it");
+  const restored = restoreCaptureSession({ record: record({ payload: damaged, chunks: chunks(2) }), scope: SCOPE, at });
+  assert.equal(restored.writer?.holderId, "wr-live", "the minted session carries the lease");
+  assert.equal(isCaptureBeingWritten(restored, at), true);
+  assert.equal(isCapturePayloadBeingWritten(damaged, at), true);
+
+  // …and it is still only fresh for as long as the lease is.
+  const later = "2026-08-10T09:30:00.000Z";
+  assert.equal(isCapturePayloadBeingWritten(damaged, later), false);
+});
+
+test("a lease read back out of storage is checked before it can hold a capture hostage", () => {
+  // Not paranoia about an attacker — OPFS is origin-scoped — but about our own
+  // past selves. A lease whose epoch is not a real fencing token is not a lease,
+  // and believing one would make a capture unrecoverable for ever.
+  const at = "2026-08-10T09:00:00.000Z";
+  for (const writer of [
+    { holderId: "wr-1", epoch: 0, heartbeatAt: at },
+    { holderId: "wr-1", epoch: 1.5, heartbeatAt: at },
+    { holderId: "", epoch: 1, heartbeatAt: at },
+    { holderId: "wr-1", epoch: 1, heartbeatAt: 12345 },
+    { holderId: "wr-1", epoch: 1 },
+  ]) {
+    const payload = JSON.stringify({ writer });
+    assert.equal(parseCapturePayload(payload).writer, undefined, `${JSON.stringify(writer)} is not a lease`);
+    assert.equal(isCapturePayloadBeingWritten(payload, at), false);
+  }
+  // …and a well-formed one is.
+  const good = JSON.stringify({ writer: { holderId: "wr-1", epoch: 1, heartbeatAt: at } });
+  assert.equal(parseCapturePayload(good).writer?.holderId, "wr-1");
+  assert.equal(isCapturePayloadBeingWritten(good, at), true);
+});
+
+test("the offer judges freshness and stamps recovery from ONE reading of the clock", () => {
+  // Two readings a millisecond apart would be harmless; two a test cannot pin
+  // are not, now that "is somebody writing to this?" is part of the answer.
+  const at = "2026-08-10T10:00:00.000Z";
+  let session = createCaptureSession({ id: "mtg-1", startedAt: "2026-08-10T09:00:00.000Z", scope: SCOPE });
+  session = appendSegment(session, { byteLength: 1024, durationMs: 20_000 });
+  const offered = resumableCaptures(
+    [record({ payload: serializeCapturePayload({ session }), chunks: chunks(1) })],
+    { scope: SCOPE, at },
+  );
+  assert.equal(offered.length, 1);
+  assert.equal(offered[0].session.stoppedAt, at, "the recovery stamp is the instant the offer was judged at");
+});
+
+test("open question 5 + D6 — a capture being written is not offered back, whoever asks", () => {
+  const at = "2026-08-10T09:00:10.000Z";
+  let session = createCaptureSession({ id: "mtg-1", startedAt: "2026-08-10T09:00:00.000Z", scope: SCOPE });
+  session = appendSegment(session, { byteLength: 1024, durationMs: 20_000 });
+  const leased = acquireCaptureLease(session, { holderId: "wr-live" }, at);
+  assert.equal(leased.ok, true);
+  if (!leased.ok) return;
+  const live = record({ payload: serializeCapturePayload({ session: leased.session }), chunks: chunks(1) });
+
+  assert.deepEqual(resumableCaptures([live], { scope: SCOPE, at }), [], "not while a tab is writing to it");
+  // …and once the lease lapses, the crashed recording is offered back.
+  const lapsed = "2026-08-10T09:01:00.000Z";
+  assert.deepEqual(
+    resumableCaptures([live], { scope: SCOPE, at: lapsed }).map((entry) => entry.record.sessionId),
+    ["mtg-1"],
+  );
 });

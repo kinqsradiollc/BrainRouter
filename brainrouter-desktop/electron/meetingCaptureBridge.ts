@@ -71,6 +71,24 @@ function scopeOf(value: unknown): MeetingCaptureScope {
 }
 
 /**
+ * D6 — the window on the other end of this call, as the capture lease names it.
+ *
+ * The id is minted in the renderer (one module-level constant per BrowserWindow
+ * — see `captureHolder.ts`) and threaded through every capture channel, because
+ * the id has to be the SAME one on the surface and in the record: the compose
+ * form asks `describeCaptureWriter(session, myHolderId)` whether the writer is
+ * itself, and a host-minted id the renderer could not name would make that
+ * question unanswerable. It is not a security boundary and does not pretend to
+ * be one — every window here is our own code and the capture directory is 0700.
+ * What it is is a coordination token, and an absent one is treated as "this
+ * caller will not say", which leaves the transition to refuse for any live
+ * writer at all rather than exempting an anonymous one.
+ */
+function holderOf(value: unknown): string | undefined {
+  return text(value);
+}
+
+/**
  * Progress goes to every window rather than to the one that pressed Record.
  *
  * A capture belongs to the process, not to a window: the window that started it
@@ -112,12 +130,16 @@ export function registerMeetingCaptureBridge(userDataPath = app.getPath('userDat
   ipcMain.handle('meetings:captureBegin', async (_event, input: unknown) => {
     const raw = input && typeof input === 'object' ? input as Record<string, unknown> : {};
     const template = text(raw.template);
+    const holderId = holderOf(raw.holderId);
     return await supervisor.begin({
       scope: scopeOf(raw),
       ...(text(raw.title) ? { title: text(raw.title)! } : {}),
       ...(template && TEMPLATES.includes(template as MeetingCaptureTemplate) ? { template: template as MeetingCaptureTemplate } : {}),
       ...(text(raw.language) ? { language: text(raw.language)! } : {}),
       ...(text(raw.contentType) ? { contentType: text(raw.contentType)! } : {}),
+      // The label is what ANOTHER window will read off this record, so it is
+      // written from that window's point of view rather than this one's.
+      ...(holderId ? { holder: { holderId, holder: 'Another window' } } : {}),
     });
   });
 
@@ -133,18 +155,31 @@ export function registerMeetingCaptureBridge(userDataPath = app.getPath('userDat
   ipcMain.handle('meetings:captureRead', async (_event, id: unknown) => await store.read(requireId(id)));
   // D3 — "transcribe this capture" no longer means "post the whole thing". It
   // means: this process should be draining it, segment by segment, from here on.
-  ipcMain.handle('meetings:captureAdopt', async (_event, id: unknown) => await supervisor.adopt(requireId(id)));
+  ipcMain.handle('meetings:captureAdopt', async (_event, id: unknown, holderId: unknown) => {
+    const holder = holderOf(holderId);
+    return await supervisor.adopt(requireId(id), holder ? { holderId: holder, holder: 'Another window' } : undefined);
+  });
   ipcMain.handle('meetings:captureRetrySegment', async (_event, id: unknown, index: unknown) =>
     await supervisor.retry(requireId(id), requireIndex(index)));
-  ipcMain.handle('meetings:captureFinalize', async (_event, id: unknown) => {
-    await supervisor.close(requireId(id), 'finalize');
+  // D6 — both of these DELETE the audio, so both name the window asking. Without
+  // the actor the shared transition has no way to tell the window that recorded
+  // this meeting from a second one that is merely looking at a stale offer, and
+  // it has to refuse for either or neither.
+  ipcMain.handle('meetings:captureFinalize', async (_event, id: unknown, holderId: unknown) => {
+    const holder = holderOf(holderId);
+    await supervisor.close(requireId(id), 'finalize', holder ? { holderId: holder } : undefined);
     return { ok: true };
   });
-  ipcMain.handle('meetings:captureDiscard', async (_event, id: unknown) => {
-    await supervisor.close(requireId(id), 'discard');
+  ipcMain.handle('meetings:captureDiscard', async (_event, id: unknown, holderId: unknown) => {
+    const holder = holderOf(holderId);
+    await supervisor.close(requireId(id), 'discard', holder ? { holderId: holder } : undefined);
     return { ok: true };
   });
   ipcMain.handle('meetings:captureResumable', async (_event, scope: unknown) => await store.resumable(scopeOf(scope)));
+  // D6 — the complement of `captureResumable`: what a surface must say instead of
+  // offering a live recording back. A window that only ever learns about its OWN
+  // capture has nothing to print here, which is the defect the lease replaced.
+  ipcMain.handle('meetings:captureWriting', async (_event, scope: unknown) => await store.writing(scopeOf(scope)));
 
   // D6 — the compose draft. It used to be written to `localStorage` from the
   // renderer, which is the store D6 names ("any page script can read") and which

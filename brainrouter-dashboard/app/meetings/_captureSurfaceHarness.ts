@@ -1,0 +1,348 @@
+/**
+ * The renderer harness for ADR-035's dashboard capture surface.
+ *
+ * One backend stands for the ORIGIN's storage and each `Tab` stands for a
+ * browser tab over it: its own `MeetingCaptureStore`, its own holder id, its own
+ * `MeetingCaptureSurface`. That is the shape of the host this ADR keeps being
+ * bitten by — OPFS is scoped to the origin, not to the tab — so it is the shape
+ * the harness has to have, or the defects it exists to catch are unreachable
+ * from it by construction.
+ *
+ * Everything is driven and nothing is stubbed that holds a decision: the store
+ * is the REAL `MeetingCaptureStore` over the real fixture backend, the
+ * transcription queue is the real shared scheduler, and the session model is the
+ * shared one. What is faked is the browser — a recorder whose chunks a test
+ * hands over by name, a clock a test moves, timers a test fires — because those
+ * are the things a Node runner does not have and the things a defect is never
+ * hiding in.
+ *
+ * The clock and the timers are deliberately manual. A lease's whole subject is
+ * elapsed time, and a test that waited thirty real seconds to find out whether a
+ * recording is offered back is a test nobody would run.
+ *
+ * The underscore prefix keeps it out of the `*.test.ts` glob.
+ */
+import { FakeCaptureBackend } from "../../lib/meetings/_captureBackendFixture";
+import { MeetingCaptureStore } from "../../lib/meetings/captureStore";
+import type { CaptureSessionRecord } from "../../lib/meetings/captureStore";
+import { restoreCaptureSession } from "../../lib/meetings/capturePayload";
+import type { LegacyDraftStorage } from "../../lib/meetings/meetingDraft";
+import {
+  MeetingCaptureSurface,
+  type CaptureMicrophone,
+  type CaptureRecorder,
+  type CaptureSurfacePorts,
+  type CaptureSurfaceState,
+  type CreateMeetingInput,
+} from "./captureSurface";
+
+/** A `MediaRecorder` reduced to what the surface uses, plus a way to hand it a chunk. */
+export class FakeRecorder implements CaptureRecorder {
+  mimeType = "audio/webm";
+
+  state: "inactive" | "recording" | "paused" = "inactive";
+
+  ondataavailable: ((event: { readonly data: Blob }) => void) | null = null;
+
+  onstop: (() => void) | null = null;
+
+  starts = 0;
+
+  stops = 0;
+
+  timeslice = 0;
+
+  /**
+   * Chunks handed over when `stop()` is called, because that is what a real
+   * `MediaRecorder` does: the final `ondataavailable` fires and `onstop` follows
+   * it immediately, which is the race `settled()` exists for.
+   */
+  pending: Blob[] = [];
+
+  /** A recorder that refuses to start — a mic unplugged between `getUserMedia` and here. */
+  startFails = false;
+
+  start(timesliceMs: number): void {
+    if (this.startFails) throw new Error("NotSupportedError");
+    this.state = "recording";
+    this.timeslice = timesliceMs;
+    this.starts += 1;
+  }
+
+  stop(): void {
+    if (this.state === "inactive") return;
+    this.state = "inactive";
+    this.stops += 1;
+    for (const blob of this.pending.splice(0)) this.ondataavailable?.({ data: blob });
+    this.onstop?.();
+  }
+
+  pause(): void {
+    this.state = "paused";
+  }
+
+  resume(): void {
+    this.state = "recording";
+  }
+
+  /** One timeslice's worth of audio, as the media stack would deliver it. */
+  emit(blob: Blob): void {
+    this.ondataavailable?.({ data: blob });
+  }
+}
+
+export class FakeMicrophone implements CaptureMicrophone {
+  readonly recorder = new FakeRecorder();
+
+  releases = 0;
+
+  release(): void {
+    this.releases += 1;
+  }
+}
+
+interface Timer {
+  readonly handle: number;
+  readonly run: () => void;
+  readonly dueAt: number;
+}
+
+/** The origin: one backend, one wall clock, many tabs. */
+export class CaptureOrigin {
+  readonly backend = new FakeCaptureBackend();
+
+  /** A fixed instant, so every stamp in a stored record is checkable. */
+  clock = Date.parse("2026-08-01T09:00:00.000Z");
+
+  readonly timers: Timer[] = [];
+
+  #nextHandle = 1;
+
+  tab(options: TabOptions = {}): CaptureTab {
+    return new CaptureTab(this, options);
+  }
+
+  setTimer(run: () => void, ms: number): number {
+    const handle = this.#nextHandle;
+    this.#nextHandle += 1;
+    this.timers.push({ handle, run, dueAt: this.clock + ms });
+    return handle;
+  }
+
+  clearTimer(handle: number): void {
+    const index = this.timers.findIndex((timer) => timer.handle === handle);
+    if (index >= 0) this.timers.splice(index, 1);
+  }
+
+  /** Move the wall clock WITHOUT firing anything — a tab that is not running. */
+  skip(ms: number): void {
+    this.clock += ms;
+  }
+
+  /** Move the clock and fire every timer that came due, in order. */
+  async advance(ms: number): Promise<void> {
+    const until = this.clock + ms;
+    for (;;) {
+      const due = this.timers.filter((timer) => timer.dueAt <= until).sort((a, b) => a.dueAt - b.dueAt)[0];
+      if (!due) break;
+      this.clock = Math.max(this.clock, due.dueAt);
+      this.clearTimer(due.handle);
+      due.run();
+      await flush();
+    }
+    this.clock = until;
+    await flush();
+  }
+
+  /** Every stored capture, as a tab's `list()` would see it. */
+  async records(): Promise<readonly CaptureSessionRecord[]> {
+    return new MeetingCaptureStore(this.backend).list();
+  }
+
+  async record(sessionId: string): Promise<CaptureSessionRecord | undefined> {
+    return new MeetingCaptureStore(this.backend).read(sessionId);
+  }
+
+  /** The stored session as any holder would restore it — the lease included. */
+  async session(sessionId: string, orgId: string | null = null) {
+    const record = await this.record(sessionId);
+    if (!record) throw new Error(`no stored capture ${sessionId}`);
+    return restoreCaptureSession({ record, scope: { orgId }, at: new Date(this.clock).toISOString() });
+  }
+}
+
+export interface TabOptions {
+  readonly holderId?: string;
+  readonly orgId?: string;
+  readonly legacyDraft?: LegacyDraftStorage;
+}
+
+export class CaptureTab {
+  readonly origin: CaptureOrigin;
+
+  readonly store: MeetingCaptureStore;
+
+  readonly surface: MeetingCaptureSurface;
+
+  readonly holderId: string;
+
+  orgId: string;
+
+  /** Every `POST /api/meetings` this tab made, in order. */
+  readonly posts: CreateMeetingInput[] = [];
+
+  readonly created: string[] = [];
+
+  readonly warnings: string[] = [];
+
+  readonly microphones: FakeMicrophone[] = [];
+
+  readonly objectUrls: string[] = [];
+
+  readonly revokedUrls: string[] = [];
+
+  /** What the STT endpoint says for each segment; a rejection is an outage. */
+  transcribeSegment: () => Promise<string> = async () => "spoken words";
+
+  /** What the import path returns. */
+  importText = "pasted words";
+
+  /** Whether the microphone can be opened at all. */
+  microphoneFails = false;
+
+  /** The microphone prompt, left on screen: `openMicrophone` never resolves. */
+  microphonePending = false;
+
+  /** A recorder that opens and then refuses to start. */
+  recorderStartFails = false;
+
+  /** The answer `window.confirm` gives the discard. */
+  confirmAnswer = true;
+
+  postFails: Error | null = null;
+
+  otherBusy = false;
+
+  #urls = 0;
+
+  constructor(origin: CaptureOrigin, options: TabOptions = {}) {
+    this.origin = origin;
+    this.orgId = options.orgId ?? "org-a";
+    this.holderId = options.holderId ?? `wr-tab-${Math.random().toString(36).slice(2, 8)}`;
+    this.store = new MeetingCaptureStore(origin.backend, {
+      persisted: true,
+      // Plenty of room, so the budget never becomes the reason a test fails.
+      estimate: async () => ({ usage: 1_000_000, quota: 10_000_000_000 }),
+    });
+    const ports: CaptureSurfacePorts = {
+      holderId: this.holderId,
+      openStore: async () => ({ store: this.store, kind: "opfs", persisted: true, rejected: [] }),
+      activeOrgId: () => this.orgId,
+      openMicrophone: async () => {
+        if (this.microphoneFails) throw new Error("denied");
+        if (this.microphonePending) await new Promise<void>(() => {});
+        const microphone = new FakeMicrophone();
+        microphone.recorder.startFails = this.recorderStartFails;
+        this.microphones.push(microphone);
+        return microphone;
+      },
+      createTranscriber: () => async () => this.transcribeSegment(),
+      createMeeting: async (input) => {
+        this.posts.push(input);
+        if (this.postFails) throw this.postFails;
+        return { id: `mtg-${this.posts.length}` };
+      },
+      transcribeFile: async () => this.importText,
+      legacyDraftStorage: () => options.legacyDraft ?? null,
+      confirm: () => this.confirmAnswer,
+      now: () => origin.clock,
+      setTimer: (run, ms) => origin.setTimer(run, ms),
+      clearTimer: (handle) => origin.clearTimer(handle),
+      createObjectUrl: () => {
+        this.#urls += 1;
+        const url = `blob:capture/${this.#urls}`;
+        this.objectUrls.push(url);
+        return url;
+      },
+      revokeObjectUrl: (url) => this.revokedUrls.push(url),
+      warn: (message) => this.warnings.push(message),
+      otherBusy: () => this.otherBusy,
+      onCreated: (meetingId) => this.created.push(meetingId),
+    };
+    this.surface = new MeetingCaptureSurface(ports);
+  }
+
+  get state(): CaptureSurfaceState {
+    return this.surface.snapshot();
+  }
+
+  /** The live recorder, or a failure — every test that has one needs it. */
+  get recorder(): FakeRecorder {
+    const microphone = this.microphones[this.microphones.length - 1];
+    if (!microphone) throw new Error("this tab never opened a microphone");
+    return microphone.recorder;
+  }
+
+  get microphone(): FakeMicrophone {
+    const microphone = this.microphones[this.microphones.length - 1];
+    if (!microphone) throw new Error("this tab never opened a microphone");
+    return microphone;
+  }
+
+  /**
+   * An endpoint that has taken the audio and not answered yet — the state a
+   * segment spends most of its life in, and the one a test cannot reach with a
+   * transcriber that resolves immediately.
+   */
+  deferTranscription(): { resolve(text: string): void; reject(error: Error): void } {
+    let settle: (text: string) => void = () => {};
+    let fail: (error: Error) => void = () => {};
+    const pending = new Promise<string>((resolveWith, rejectWith) => {
+      settle = resolveWith;
+      fail = rejectWith;
+    });
+    this.transcribeSegment = () => pending;
+    return { resolve: (text) => settle(text), reject: (error) => fail(error) };
+  }
+
+  /** Press Record and let the whole start path settle. */
+  async record(): Promise<void> {
+    await this.surface.record();
+    await flush();
+  }
+
+  /** Press Record WITHOUT waiting for it — for the microphone prompt still on screen. */
+  start(): Promise<void> {
+    return this.surface.record();
+  }
+
+  /** Hand over one timeslice of audio and let it land. */
+  async chunk(size = 1024, fill = 7): Promise<void> {
+    this.recorder.emit(audio(size, fill));
+    await flush();
+  }
+
+  /** Press Stop and let the settle, the release and the reap finish. */
+  async stop(): Promise<void> {
+    this.surface.stop();
+    await flush();
+  }
+}
+
+/** Deterministic bytes, so a reassembled recording can be checked byte for byte. */
+export function audio(size: number, fill: number): Blob {
+  return new Blob([new Uint8Array(size).fill(fill)]);
+}
+
+/**
+ * Let every queued promise run.
+ *
+ * `setImmediate` runs after the whole microtask queue, and the capture path is
+ * several awaits deep (store queue → queue.apply → persist → drain), so the
+ * rounds are what make one press of a button reach its last write.
+ */
+export async function flush(rounds = 8): Promise<void> {
+  for (let round = 0; round < rounds; round += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}

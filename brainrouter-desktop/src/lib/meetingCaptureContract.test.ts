@@ -12,6 +12,16 @@
  * the org-partition contract: this half of the desktop suite runs from SOURCE,
  * while the electron half runs from `dist-electron`, where no `.ts` file exists
  * to read.
+ *
+ * **What must NOT be added here.** Anything about a value being USED. A regex
+ * sees that a call is written; it cannot see that its result is assigned, and
+ * this file was green through four separate one-line changes that each lost a
+ * real meeting — the live session never remembered, the compose box's mirror
+ * never advanced, the progress filter reading a pinned empty hold, and Create
+ * posting the box as of the last title keystroke. Those belong in
+ * `components/meetings/meetingsView.test.tsx`, which renders the component and
+ * asserts on what reaches the POST. The line between the two files is: wiring
+ * that typechecks either way goes here; behaviour goes there.
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -158,8 +168,13 @@ test('D1 still holds through the supervisor: bytes first, then the count the dis
   assert.match(store, /adoptCaptureChunks\(session, chunks\)/);
   assert.doesNotMatch(store, /appendSegment\(|resumeCapture\(/);
   const writeAt = supervisor.indexOf('await this.#store.writeSegment(id, index, bytes)');
-  const recordAt = supervisor.indexOf('appendSegment(current, { byteLength: written');
+  const recordAt = supervisor.indexOf('{ byteLength: written, durationMs }');
   assert.ok(writeAt > 0 && recordAt > writeAt);
+  // D6 — and the same commit carries the heartbeat. The timer is the half a
+  // stalled main thread drops; this one comes off the media stack, which is why
+  // the staleness window is a multiple of the chunk cadence rather than of the
+  // timer. The behaviour is asserted for real in `meetingTranscription.test.ts`.
+  assert.match(supervisor, /appendSegment\(this\.#renew\(entry, current\)/);
 });
 
 test('live text distinguishes provisional from settled, and the fold rule is the SHARED one', () => {
@@ -312,7 +327,11 @@ test('F3 — Create cannot delete a recording out from under itself, and Stop is
   // The rule reads the values that are true NOW; the button reads the ones React
   // last rendered. A disabled attribute is a statement about a pixel.
   assert.match(view, /hold: holdStore\.current, busy: Boolean\(busy\)/);
-  assert.match(view, /disabled=\{!title\.trim\(\) \|\| !transcript\.trim\(\) \|\| Boolean\(busy\) \|\| capturing\}/);
+  // `heldByAnother` is the D6 half — a capture a SECOND window's lease is fresh
+  // on, which this window's hold reads false about because the hold is this
+  // window's memory. It is asserted behaviourally in `meetingsView.test.tsx`;
+  // here it only has to not have been dropped from the button.
+  assert.match(view, /disabled=\{!title\.trim\(\) \|\| !transcript\.trim\(\) \|\| Boolean\(busy\) \|\| capturing \|\| heldByAnother\}/);
   // …and it says why it is refusing rather than silently doing nothing.
   assert.match(view, /hold\.closing \? "Saving the recording…"/);
   // Record is off during both windows too. `recording` is false in each of them,

@@ -32,6 +32,14 @@
  *    directory, and the boot pass finishes any delete a kill interrupted — see
  *    `recoverInterrupted`. D6 asks for a real deletion, and one that only
  *    happens when the process survives long enough is not one.
+ * 5. **Who is recording is a fact IN the record, and this store never keeps a
+ *    second copy of it.** Every question about liveness — the offer, the reap,
+ *    the two destructive transitions — goes through `captureLease.ts` reading
+ *    `session.writer`. This store is registered once per PROCESS and
+ *    `openWorkspaceWindow` mints many windows inside it, so a `Set` of "ids we
+ *    are recording" held here would be right for one window and blank for the
+ *    next; that is exactly the mistake the lease replaced, and it would be no
+ *    better for being made in main.
  *
  * **Which durability this actually buys, stated rather than implied.** A segment
  * is handed to the kernel and the file is closed; from that moment the bytes
@@ -56,17 +64,23 @@
 import fs, { type Dirent } from 'node:fs';
 import path from 'node:path';
 import {
+  acquireCaptureLease,
   adoptCaptureChunks,
   capturedByteLength,
+  capturesBeingWritten,
   createCaptureSession,
   discardCapture,
   finalizeCapture,
+  isCaptureBeingWritten,
   isMeetingSessionId,
   isTerminalCaptureStatus,
   orphanCaptureIds,
   recoverCaptureSession,
   resumableSessions,
+  sameCaptureScope,
   summarizeRecovery,
+  type CaptureCloseActor,
+  type MeetingCaptureLeaseRequest,
   type MeetingCaptureScope,
   type MeetingCaptureSession,
   type MeetingCaptureTemplate,
@@ -98,6 +112,15 @@ export interface BeginCaptureInput {
   readonly language?: string;
   /** The recorder's own MIME type, kept so `read` can describe the bytes truthfully. */
   readonly contentType?: string;
+  /**
+   * D6 — the window that is about to record into this capture.
+   *
+   * Applied to the record BEFORE the first write, so the file names a writer
+   * before any audio exists. A second window that reads this directory a
+   * millisecond later already gets "somebody is recording this", which is the
+   * whole correction: liveness in the record rather than in one window's memory.
+   */
+  readonly holder?: MeetingCaptureLeaseRequest;
 }
 
 export interface CapturedAudio {
@@ -259,12 +282,20 @@ export class MeetingCaptureStore {
    * than merely detectable.
    */
   async begin(input: BeginCaptureInput): Promise<MeetingCaptureSession> {
-    const session = createCaptureSession({
+    const fresh = createCaptureSession({
       scope: input.scope,
       ...(input.title ? { title: input.title } : {}),
       ...(input.template ? { template: input.template } : {}),
       ...(input.language ? { language: input.language } : {}),
     });
+    // The lease goes on BEFORE the record is first written, so there is no
+    // instant at which a capture exists on disk without naming its writer. A
+    // fresh session is `recording` and has no writer, so this cannot refuse —
+    // the branch is here because an unchecked `!` on a union is how the next
+    // person discovers that it can.
+    const claimed = input.holder ? acquireCaptureLease(fresh, input.holder) : null;
+    if (claimed && !claimed.ok) throw new Error(claimed.detail);
+    const session = claimed ? claimed.session : fresh;
     await fs.promises.mkdir(this.root, { recursive: true, mode: DIRECTORY_MODE });
     await chmodQuiet(this.root, DIRECTORY_MODE);
     const directory = this.directory(session.id);
@@ -390,14 +421,22 @@ export class MeetingCaptureStore {
     };
   }
 
-  /** D6 — the user accepted the meeting, so the audio is released. */
-  async finalize(id: string): Promise<void> {
-    await this.close(id, finalizeCapture);
+  /**
+   * D6 — the user accepted the meeting, so the audio is released.
+   *
+   * `by` is the window asking. It is passed through to the shared transition,
+   * which refuses while ANOTHER holder is recording: finalizing marks every
+   * unfinished segment as a gap and this method then deletes the audio, so a
+   * second window doing it to a live meeting is the loss this ADR exists to
+   * end, arriving through the accept button instead of the delete one.
+   */
+  async finalize(id: string, by?: CaptureCloseActor): Promise<void> {
+    await this.close(id, finalizeCapture, by);
   }
 
-  /** D6 — an explicit discard, and a real deletion rather than a hidden one. */
-  async discard(id: string): Promise<void> {
-    await this.close(id, discardCapture);
+  /** D6 — an explicit discard, and a real deletion rather than a hidden one. Refused while another window records. */
+  async discard(id: string, by?: CaptureCloseActor): Promise<void> {
+    await this.close(id, discardCapture, by);
   }
 
   /**
@@ -412,6 +451,32 @@ export class MeetingCaptureStore {
       if (stored) sessions.push(stored.session);
     }
     return resumableSessions(sessions, scope ? { scope } : {}).map(summarizeRecovery);
+  }
+
+  /**
+   * D6 — the captures somebody is recording into RIGHT NOW, whichever window
+   * that is.
+   *
+   * The complement of `resumable`, and it exists because a surface has to say
+   * something rather than nothing. `resumableSessions` already leaves a live
+   * recording out of the offer, so a second window's Meetings screen shows no
+   * row for a meeting it can plainly hear being recorded next door. This is what
+   * lets it print "Another window is recording this meeting right now" and
+   * schedule its refresh for the instant the lease lapses (ADR-028) instead of
+   * leaving the user to guess.
+   *
+   * Whole sessions rather than `MeetingRecoverySummary`, because the lease is
+   * what the caller needs: `describeCaptureWriter` names the holder and
+   * `captureLeaseStaleAt` says when it ends, and a summary carries neither.
+   */
+  async writing(scope?: MeetingCaptureScope): Promise<MeetingCaptureSession[]> {
+    const sessions: MeetingCaptureSession[] = [];
+    for (const id of await this.storedIds()) {
+      const stored = await this.loadQuietly(id);
+      if (stored) sessions.push(stored.session);
+    }
+    return capturesBeingWritten(sessions)
+      .filter((session) => !scope || sameCaptureScope(session.scope, scope));
   }
 
   /**
@@ -457,7 +522,15 @@ export class MeetingCaptureStore {
       // outlives every pass forever. The `openedAt` guard is what keeps this
       // from reaping a capture the CURRENT launch has just created and not yet
       // written a chunk for — that session is seconds old and about to have one.
-      if (capturedByteLength(session) === 0 && session.startedAt < this.openedAt) {
+      //
+      // D6 — and `openedAt` only knows about THIS process. The desktop takes no
+      // single-instance lock, so a second launch runs this pass over the same
+      // directory while the first one is recording, and every capture the first
+      // one started is older than the second one's `openedAt`. For the seconds
+      // between Record and the first chunk that is a live meeting with no bytes
+      // yet — deleted, from a boot pass, while the microphone is open. The lease
+      // is the only fact that crosses processes, so it is the one asked here.
+      if (capturedByteLength(session) === 0 && session.startedAt < this.openedAt && !isCaptureBeingWritten(session)) {
         await fs.promises.rm(this.directory(id), { recursive: true, force: true });
         reaped.push(id);
         continue;
@@ -516,15 +589,21 @@ export class MeetingCaptureStore {
 
   private async close(
     id: string,
-    transition: (session: MeetingCaptureSession) => MeetingCaptureSession,
+    transition: (session: MeetingCaptureSession, at?: string, by?: CaptureCloseActor) => MeetingCaptureSession,
+    by?: CaptureCloseActor,
   ): Promise<void> {
     await this.serialize(id, async () => {
       const stored = await this.loadQuietly(id);
       // The terminal status is written BEFORE the delete, so a crash between the
       // two leaves a record that recovery will not offer again. Offering back a
       // meeting the user threw away is worse than losing the reap.
+      //
+      // The transition can THROW here — that is the point of passing the actor.
+      // It throws only while another holder's lease is fresh, and the throw
+      // happens before the write and therefore before the `rm`, so a second
+      // window's Delete leaves the live recording exactly as it found it.
       if (stored && !isTerminalCaptureStatus(stored.session.status)) {
-        await this.write(transition(stored.session), stored.contentType);
+        await this.write(transition(stored.session, undefined, by), stored.contentType);
       }
       await fs.promises.rm(this.directory(id), { recursive: true, force: true });
     });
