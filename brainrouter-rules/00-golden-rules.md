@@ -102,3 +102,47 @@ else, remember these. Each links to the topical file with the full context.
     `npm run verify` (typecheck + lint + test) for cross-cutting/high-risk
     changes, release/publish work, or CI-parity diagnosis; the brain's
     integration tests need reachable pgvector Postgres. → [`07`](07-testing.md)
+
+22. **⛔ Never store a credential where page script can read it.** No token,
+    refresh token, API key, or password goes in `localStorage`, `sessionStorage`,
+    IndexedDB, or a non-`httpOnly` cookie — any XSS reads all of them, and a
+    refresh token or API key sitting there survives both a password change and a
+    "sign out". Browser sessions use `httpOnly; Secure; SameSite` cookies with
+    CSRF protection; local processes use OS-protected storage (Electron
+    `safeStorage`) or a `0600` file, never plaintext `config.json`. → [`06`](06-desktop-and-dashboard.md)
+
+23. **⛔ A fallback must be visible, or it is a silent outage.** Degrading to a
+    lesser path is fine; degrading *quietly* is not. When a capability is
+    unavailable, the result must say which path ran and why the better one did
+    not — surfaced to the caller, not buried in a receipt. PR review fell back
+    to diff-only for days while deep review was dead, and the reviewer reported
+    success the whole time: a degradation nobody can see is indistinguishable
+    from working. → [`04`](04-memory-engine-and-mcp-server.md)
+
+24. **⛔ Assert runtime binaries at boot, never at first use.** Anything the
+    product shells out to — `git`, `docker`, a parser CLI — must be checked when
+    the service starts and fail loudly there. `node:*-slim` images ship without
+    `git`, and a missing binary discovered mid-request surfaces as a domain
+    error (`EXACT_SOURCE_UNAVAILABLE`) that blames the feature instead of the
+    image. → [`04`](04-memory-engine-and-mcp-server.md)
+
+25. **⛔ A SQL `CHECK (... IN (...))` that mirrors a TypeScript union needs a
+    parity test.** The in-memory test store has no constraints, so a migration
+    can drift from its union and every unit test still passes while production
+    rejects the row. Migration 056 exists because `cleanup` was missing from the
+    assurance stage CHECK and killed every review at its last stage. Copy
+    `migrations.stageParity.test.ts` for any new CHECK/union pair. → [`07`](07-testing.md)
+
+26. **An interrupted unit of work must stay retryable.** A record left mid-flight
+    by a crash is the normal case, not the exotic one. Identity belongs to the
+    attempt, so a retry RESUMES the existing row rather than minting a new id for
+    the same attempt — and a terminal record is never re-run. Getting this
+    backwards made one crash wedge a review run permanently. → [`04`](04-memory-engine-and-mcp-server.md)
+
+27. **⛔ Bound every regex that runs over attacker-controlled text.** Webhook
+    bodies, PR comments, fetched pages, connector documents and model output are
+    all attacker-influenced. Unbounded `\S*`/`.*` with a literal after it is
+    quadratic: `@\S*brainrouter\S*\s+review` cost ~23s of the shared,
+    single-threaded brain for one 64 KB PR comment. Use a bounded quantifier and
+    a character class that cannot cross the repeated delimiter, and cap input
+    length before matching. → [`02`](02-code-style-and-conventions.md)

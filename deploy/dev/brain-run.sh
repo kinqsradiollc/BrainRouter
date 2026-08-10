@@ -27,6 +27,22 @@ if [ "${BRAIN_INSTALL_DOCKER_CLI:-0}" = "1" ] && ! command -v docker >/dev/null 
   rm -rf /var/lib/apt/lists/*
 fi
 
+# 2b) REQUIRED: git. The exact-revision checkout that deep review is built on
+#     (`reviews/source/exactCheckout.ts`) shells out to git init/fetch/checkout,
+#     and bookworm-slim ships without it. Absent, every exact checkout fails with
+#     EXACT_SOURCE_UNAVAILABLE, the parser index is never built, and deep review
+#     ends at DEEP_REVIEW_PREFLIGHT_SOURCE_UNAVAILABLE — while ORDINARY pr review
+#     still passes, because it silently falls back to a diff-only packet. That
+#     split is exactly why this was invisible for so long: the reviewer looked
+#     healthy and the deep path was dead.
+#     Same idempotent shape as the Docker CLI above: the guard skips it on every
+#     restart, so this costs one apt-get on container (re)creation.
+if ! command -v git >/dev/null 2>&1; then
+  apt-get update
+  apt-get install -y --no-install-recommends git ca-certificates
+  rm -rf /var/lib/apt/lists/*
+fi
+
 # 3) Fingerprint the runtime-package sources. Their dist directories live in
 #    persistent Linux volumes, while their sources come from the host bind mount;
 #    existence-only checks therefore keep stale exports after a source update.
