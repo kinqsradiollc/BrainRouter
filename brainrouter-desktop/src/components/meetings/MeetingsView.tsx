@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactElement } from "react";
+import type { MeetingCaptureScope, MeetingRecoverySummary } from "@kinqs/brainrouter-core/meetings";
 import "./meetings.css";
 import { MeetingTracksView } from "./MeetingTracksView.js";
 import { SharePopover } from "./SharePopover.js";
 import { TeamsView } from "./TeamsView.js";
+import { createMeetingCaptureOps } from "./captureOps.js";
+import { MeetingCaptureRecorder } from "./captureRecorder.js";
 import { createTeamsOps } from "./teamsOps.js";
 import { useActiveOrg } from "../../lib/orgContext.js";
 import { bridgeQuery } from "../../lib/bridgeQuery.js";
@@ -26,6 +29,16 @@ const MAX_AUDIO_BYTES = 40 * 1024 * 1024;
 
 function errorText(caught: unknown, fallback: string): string {
   return caught instanceof Error && caught.message ? caught.message : fallback;
+}
+
+/** Recovery offers say how much audio is on disk, so "it is still there" is a number and not a promise. */
+function megabytes(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(bytes < 1024 * 1024 ? 2 : 1)} MB`;
+}
+
+function minutes(durationMs: number): string {
+  const total = Math.max(0, Math.round(durationMs / 1000));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
 function ScopeBadge({ scope }: { scope: MeetingScope }): ReactElement {
@@ -65,6 +78,21 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
   const [editing, setEditing] = useState(false);
   const [draftSummary, setDraftSummary] = useState("");
   const [copied, setCopied] = useState(false);
+  // ADR-035 D2 — the recovery offer has to be where the user LANDS after a
+  // crash, which is the library, not the compose form they never opened. This is
+  // only the count and the way in; the offer itself lives in the compose view
+  // beside the transcript it fills.
+  const capture = useMemo(() => createMeetingCaptureOps(), []);
+  const [interrupted, setInterrupted] = useState(0);
+  useEffect(() => {
+    let active = true;
+    void capture.resumable({ orgId: scopedOrgId ?? null })
+      .then((rows) => { if (active) setInterrupted(rows.length); })
+      .catch(() => undefined);
+    // Re-read when compose closes: a capture recovered or discarded in there is
+    // one this banner must stop advertising.
+    return () => { active = false; };
+  }, [capture, composing, scopedOrgId]);
 
   const refreshList = useCallback(async () => {
     setLoading(true);
@@ -281,6 +309,7 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
             <label className="mv-search"><span aria-hidden="true">⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search meetings" aria-label="Search meetings" />{query ? <button type="button" onClick={() => setQuery("")} aria-label="Clear search">×</button> : null}</label>
             <div className="mv-scope-filters" role="group" aria-label="Filter meeting visibility">{(["all", ...MEETING_SCOPES] as const).map((scope) => <button type="button" key={scope} className={scopeFilter === scope ? "mv-on" : ""} aria-pressed={scopeFilter === scope} onClick={() => setScopeFilter(scope)}>{scope === "org" ? "Org" : scope[0].toUpperCase() + scope.slice(1)}</button>)}</div>
             {error ? <div className="mv-list-error" role="alert">{error}<button type="button" onClick={() => void refreshList()}>Retry</button></div> : null}
+            {interrupted > 0 && !composing ? <button type="button" className="mv-recovery-cta" onClick={() => { setComposing(true); setSelectedId(null); }}><strong>{interrupted === 1 ? "1 interrupted recording" : `${interrupted} interrupted recordings`}</strong><small>The audio is still on this device — recover it</small></button> : null}
             <div className="mv-items">
               {filtered.map((item) => <button type="button" key={item.id} className={`mv-item${!composing && item.id === selectedId ? " mv-on" : ""}`} onClick={() => { setComposing(false); setSelectedId(item.id); }} aria-pressed={!composing && item.id === selectedId}><span className="mv-item-t">{item.title}</span><span className="mv-item-m"><span className="mv-item-d">{item.date}</span><span className={`mv-summary-dot mv-summary-${item.summaryStatus}`} title={`Summary ${item.summaryStatus}`} /><ScopeBadge scope={item.scope} />{!item.canEdit ? <span className="mv-shared-readonly">Shared</span> : null}</span></button>)}
               {!filtered.length ? <div className="mv-state">{loading ? "Loading meetings…" : items.length ? "No meetings match these filters." : "No meetings yet. Record, import audio, or paste a transcript to begin."}</div> : null}
@@ -352,9 +381,16 @@ function NewMeeting({ ops, orgId, onCreated, onCancel }: { ops: MeetingsOps; org
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [recovered, setRecovered] = useState(false);
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
+  // ADR-035 D2 — captures from a previous run that hold audio and never reached
+  // a terminal state. The list is the recovery offer; the shared model decides
+  // which sessions qualify and scopes them to the org now in context.
+  const [recoveries, setRecoveries] = useState<MeetingRecoverySummary[]>([]);
+  const capture = useMemo(() => createMeetingCaptureOps(), []);
+  const captureScope = useMemo<MeetingCaptureScope>(() => ({ orgId: orgId ?? null }), [orgId]);
+  const recorderRef = useRef<MeetingCaptureRecorder | null>(null);
+  // The capture whose audio produced the transcript in the box. Held so the
+  // audio can be released once the meeting is created (D6) — never to hold audio.
+  const captureIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     try {
@@ -369,10 +405,16 @@ function NewMeeting({ ops, orgId, onCreated, onCancel }: { ops: MeetingsOps; org
     }, 250);
     return () => globalThis.clearTimeout(timer);
   }, [language, template, title, transcript]);
-  useEffect(() => () => {
-    if (recorderRef.current && recorderRef.current.state !== "inactive") { recorderRef.current.onstop = null; recorderRef.current.stop(); }
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-  }, []);
+  // Unmounting releases the microphone but does NOT discard the capture: the
+  // chunks already written stay on disk and are offered back next launch (D2).
+  useEffect(() => () => { void recorderRef.current?.dispose(); }, []);
+  useEffect(() => {
+    let active = true;
+    void capture.resumable(captureScope)
+      .then((rows) => { if (active) setRecoveries(rows); })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [capture, captureScope]);
 
   const transcribe = useCallback(async (blob: Blob) => {
     setBusy("transcribe"); setError("");
@@ -386,19 +428,59 @@ function NewMeeting({ ops, orgId, onCreated, onCancel }: { ops: MeetingsOps; org
     finally { setBusy(""); }
   }, [language, ops]);
 
+  /** D1 — transcription now reads the audio back off disk instead of from a heap buffer that may no longer exist. */
+  const transcribeCapture = useCallback(async (sessionId: string) => {
+    setError("");
+    setBusy("transcribe");
+    try {
+      const audio = await capture.read(sessionId);
+      captureIdRef.current = sessionId;
+      // The view is handed the bytes and passes them straight on: `BlobPart`
+      // insists on a plain-ArrayBuffer view, and structured clone across the
+      // bridge only ever produces one.
+      await transcribe(new Blob([audio.bytes as BlobPart], { type: audio.contentType }));
+    } catch (caught) { setBusy(""); setError(errorText(caught, "Could not read the recorded audio.")); }
+  }, [capture, transcribe]);
+
   const startRecording = useCallback(async () => {
     setError("");
+    // ADR-028 — a build that cannot write the audio down says so, rather than
+    // recording into memory and looking exactly like a durable capture.
+    if (!capture.available) { setError("This build cannot store meeting audio safely. Restart BrainRouter after updating the desktop app."); return; }
+    const recorder = new MeetingCaptureRecorder({ capture, onChunkError: setError });
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
-      streamRef.current = stream; recorderRef.current = recorder; chunksRef.current = [];
-      recorder.ondataavailable = (event) => { if (event.data.size) chunksRef.current.push(event.data); };
-      recorder.onstop = () => { stream.getTracks().forEach((track) => track.stop()); streamRef.current = null; void transcribe(new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" })); };
-      recorder.start(); setRecording(true); setPaused(false);
-    } catch { setError("Microphone access was denied or is unavailable."); }
-  }, [transcribe]);
-  const stopRecording = useCallback(() => { recorderRef.current?.stop(); recorderRef.current = null; setRecording(false); setPaused(false); }, []);
-  const togglePause = useCallback(() => { const recorder = recorderRef.current; if (!recorder) return; if (recorder.state === "recording") { recorder.pause(); setPaused(true); } else if (recorder.state === "paused") { recorder.resume(); setPaused(false); } }, []);
+      captureIdRef.current = await recorder.start({
+        scope: captureScope, title, template,
+        ...(language === "auto" ? {} : { language }),
+      });
+      recorderRef.current = recorder;
+      setRecording(true); setPaused(false);
+    } catch (caught) { setError(errorText(caught, "Could not start recording.")); }
+  }, [capture, captureScope, language, template, title]);
+
+  const stopRecording = useCallback(async () => {
+    const recorder = recorderRef.current;
+    recorderRef.current = null;
+    setRecording(false); setPaused(false);
+    const sessionId = await recorder?.stop();
+    if (sessionId) await transcribeCapture(sessionId);
+  }, [transcribeCapture]);
+
+  const togglePause = useCallback(() => {
+    const recorder = recorderRef.current;
+    if (!recorder) return;
+    if (recorder.paused) recorder.resume(); else recorder.pause();
+    setPaused(recorder.paused);
+  }, []);
+
+  /** D6 — an explicit discard is a real deletion of the audio, not a hidden row. */
+  const discardCapture = useCallback(async (sessionId: string) => {
+    try { await capture.discard(sessionId); }
+    catch (caught) { setError(errorText(caught, "Could not delete that recording.")); return; }
+    if (captureIdRef.current === sessionId) captureIdRef.current = null;
+    setRecoveries((rows) => rows.filter((row) => row.sessionId !== sessionId));
+  }, [capture]);
+
   const importAudio = useCallback((event: ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; if (file) void transcribe(file); event.target.value = ""; }, [transcribe]);
 
   const submit = useCallback(async () => {
@@ -406,10 +488,19 @@ function NewMeeting({ ops, orgId, onCreated, onCancel }: { ops: MeetingsOps; org
     setBusy("create"); setError("");
     try {
       const result = await ops.createFromTranscript({ title: title.trim(), transcript, template }, orgId);
+      // D6 — the meeting exists on the account, so the captured audio has done
+      // its job and is released. Deliberately after the create succeeds: audio
+      // that is deleted before the transcript is safe somewhere is audio lost.
+      const captured = captureIdRef.current;
+      captureIdRef.current = null;
+      if (captured) {
+        await capture.finalize(captured).catch(() => undefined);
+        setRecoveries((rows) => rows.filter((row) => row.sessionId !== captured));
+      }
       localStorage.removeItem(DRAFT_KEY); await onCreated(result.id);
     } catch (caught) { setError(errorText(caught, "Could not create this meeting.")); }
     finally { setBusy(""); }
-  }, [busy, onCreated, ops, orgId, template, title, transcript]);
+  }, [busy, capture, onCreated, ops, orgId, template, title, transcript]);
 
-  return <main className="mv-detail"><button type="button" className="mv-mobile-back" onClick={onCancel}>← Meetings</button><div className="mv-compose"><div className="mv-compose-head"><div><span className="mv-eyebrow">Capture</span><h3>New meeting</h3><p>Record, import audio, or paste a transcript. Your draft stays on this device until it is summarized.</p></div>{recovered ? <span className="mv-recovered">Draft recovered</span> : null}</div>{error ? <div className="mv-error" role="alert"><span>{error}</span><button type="button" onClick={() => setError("")} aria-label="Dismiss error">×</button></div> : null}<div className="mv-capture-bar">{recording ? <><button type="button" className="mv-recording" onClick={stopRecording}><span /> Stop & transcribe</button><button type="button" className="mv-secondary" onClick={togglePause}>{paused ? "Resume" : "Pause"}</button></> : <button type="button" className="mv-secondary" onClick={() => void startRecording()} disabled={Boolean(busy)}>● Record audio</button>}<label className={`mv-secondary mv-file-btn${busy ? " mv-disabled" : ""}`}>↑ Import audio<input type="file" accept="audio/*" onChange={importAudio} disabled={Boolean(busy)} /></label><span>{busy === "transcribe" ? "Transcribing audio…" : "MP3, M4A, WAV, or WebM · up to 40 MB"}</span></div><div className="mv-compose-grid"><label className="mv-field mv-field-wide"><span>Meeting title</span><input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Weekly product sync" maxLength={180} /></label><label className="mv-field"><span>Summary template</span><select value={template} onChange={(event) => setTemplate(event.target.value as CreateMeetingInput["template"])}><option value="general">General</option><option value="standup">Stand-up</option><option value="one-on-one">1:1</option><option value="retrospective">Retrospective</option></select></label><label className="mv-field"><span>Audio language</span><select value={language} onChange={(event) => setLanguage(event.target.value)}><option value="auto">Auto-detect</option><option value="en">English</option><option value="es">Spanish</option><option value="fr">French</option><option value="de">German</option><option value="ja">Japanese</option></select></label><label className="mv-field mv-field-wide"><span>Transcript</span><textarea value={transcript} onChange={(event) => setTranscript(event.target.value)} placeholder="Paste a transcript here, or record/import audio above…" /></label></div><div className="mv-compose-actions"><button type="button" className="mv-primary" disabled={!title.trim() || !transcript.trim() || Boolean(busy)} onClick={() => void submit()}>{busy === "create" ? "Creating & summarizing…" : "Create meeting"}</button><button type="button" className="mv-secondary" onClick={onCancel}>Cancel</button></div></div></main>;
+  return <main className="mv-detail"><button type="button" className="mv-mobile-back" onClick={onCancel}>← Meetings</button><div className="mv-compose"><div className="mv-compose-head"><div><span className="mv-eyebrow">Capture</span><h3>New meeting</h3><p>Record, import audio, or paste a transcript. Your draft stays on this device until it is summarized.</p></div>{recovered ? <span className="mv-recovered">Draft recovered</span> : null}</div>{error ? <div className="mv-error" role="alert"><span>{error}</span><button type="button" onClick={() => setError("")} aria-label="Dismiss error">×</button></div> : null}{recoveries.length ? <div className="mv-recovery" role="status"><strong>{recoveries.length === 1 ? "A recording was interrupted" : `${recoveries.length} recordings were interrupted`}</strong><p>The audio is still on this device. Transcribe it, or delete it for good.</p>{recoveries.map((row) => <div className="mv-recovery-row" key={row.sessionId}><span>{row.title}<small>{new Date(row.startedAt).toLocaleString()} · {minutes(row.durationMs)} · {megabytes(row.byteLength)} · {row.segments} segment{row.segments === 1 ? "" : "s"}</small></span><button type="button" className="mv-secondary" disabled={Boolean(busy) || recording} onClick={() => void transcribeCapture(row.sessionId)}>Transcribe it</button><button type="button" className="mv-ghost" onClick={() => void discardCapture(row.sessionId)}>Delete audio</button></div>)}</div> : null}<div className="mv-capture-bar">{recording ? <><button type="button" className="mv-recording" onClick={() => void stopRecording()}><span /> Stop & transcribe</button><button type="button" className="mv-secondary" onClick={togglePause}>{paused ? "Resume" : "Pause"}</button></> : <button type="button" className="mv-secondary" onClick={() => void startRecording()} disabled={Boolean(busy)}>● Record audio</button>}<label className={`mv-secondary mv-file-btn${busy ? " mv-disabled" : ""}`}>↑ Import audio<input type="file" accept="audio/*" onChange={importAudio} disabled={Boolean(busy)} /></label><span>{busy === "transcribe" ? "Transcribing audio…" : "MP3, M4A, WAV, or WebM · up to 40 MB"}</span></div><div className="mv-compose-grid"><label className="mv-field mv-field-wide"><span>Meeting title</span><input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Weekly product sync" maxLength={180} /></label><label className="mv-field"><span>Summary template</span><select value={template} onChange={(event) => setTemplate(event.target.value as CreateMeetingInput["template"])}><option value="general">General</option><option value="standup">Stand-up</option><option value="one-on-one">1:1</option><option value="retrospective">Retrospective</option></select></label><label className="mv-field"><span>Audio language</span><select value={language} onChange={(event) => setLanguage(event.target.value)}><option value="auto">Auto-detect</option><option value="en">English</option><option value="es">Spanish</option><option value="fr">French</option><option value="de">German</option><option value="ja">Japanese</option></select></label><label className="mv-field mv-field-wide"><span>Transcript</span><textarea value={transcript} onChange={(event) => setTranscript(event.target.value)} placeholder="Paste a transcript here, or record/import audio above…" /></label></div><div className="mv-compose-actions"><button type="button" className="mv-primary" disabled={!title.trim() || !transcript.trim() || Boolean(busy)} onClick={() => void submit()}>{busy === "create" ? "Creating & summarizing…" : "Create meeting"}</button><button type="button" className="mv-secondary" onClick={onCancel}>Cancel</button></div></div></main>;
 }

@@ -177,6 +177,16 @@ contextBridge.exposeInMainWorld('brainrouter', {
     actionToTrack(meetingId: string, actionId: string, orgId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:actionToTrack', meetingId, actionId, orgId); },
     actionUntrack(meetingId: string, actionId: string, orgId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:actionUntrack', meetingId, actionId, orgId); },
     toggleAction(meetingId: string, actionId: string, done: boolean, orgId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:toggleAction', meetingId, actionId, done, orgId); },
+    // ADR-035 D1/D2 — local capture. Audio never accumulates in the renderer:
+    // each recorder chunk crosses here and is on disk before anything else
+    // happens to it, and main owns the directory because it outlives a crash.
+    captureBegin(input: { title?: string; template?: string; language?: string; orgId?: string | null; workspaceId?: string | null; contentType?: string }): Promise<unknown> { return ipcRenderer.invoke('meetings:captureBegin', input); },
+    captureAppend(id: string, bytes: Uint8Array, durationMs: number): Promise<unknown> { return ipcRenderer.invoke('meetings:captureAppend', id, bytes, durationMs); },
+    captureStop(id: string): Promise<unknown> { return ipcRenderer.invoke('meetings:captureStop', id); },
+    captureRead(id: string): Promise<unknown> { return ipcRenderer.invoke('meetings:captureRead', id); },
+    captureFinalize(id: string): Promise<unknown> { return ipcRenderer.invoke('meetings:captureFinalize', id); },
+    captureDiscard(id: string): Promise<unknown> { return ipcRenderer.invoke('meetings:captureDiscard', id); },
+    captureResumable(scope?: { orgId?: string | null; workspaceId?: string | null }): Promise<unknown> { return ipcRenderer.invoke('meetings:captureResumable', scope); },
     // SERVER Track board (org-scoped /api/track), surfaced inside Meetings mode.
     serverTracks(orgId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:serverTracks', orgId); },
     serverTrackCreate(input: { title: string; description?: string; priority?: string; assignee?: string; statusCategory?: string }, orgId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:serverTrackCreate', input, orgId); },

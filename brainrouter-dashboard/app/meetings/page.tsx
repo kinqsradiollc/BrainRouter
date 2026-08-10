@@ -6,6 +6,14 @@
  * four-level sharing vocabulary (Private / Team / Org / Public). Real, org-scoped
  * data from the backend at :3747 (/api/meetings) using the signed-in account's JWT
  * — the same dataset the desktop sees for the same account. No sample data.
+ *
+ * ADR-035 D1b — capture is DURABLE here, not held in a React ref. Every chunk is
+ * written to OPFS (or IndexedDB) as it arrives, so a tab that crashes, reloads or
+ * is closed mid-meeting comes back with the audio it had recorded, and the
+ * session is offered back on the next load. The store is `lib/meetings/`; this
+ * page only drives the recorder, watches the budget it reports, and renders the
+ * recovery offer. Nothing here defers work to an unload handler — a closing tab
+ * gets very little time, so nothing important may depend on it running.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { Lock, UsersThree, Buildings, GlobeHemisphereWest, Microphone, type Icon } from "@phosphor-icons/react";
@@ -17,6 +25,10 @@ import { useActiveOrg } from "../../components/OrgWorkspaceProvider";
 import { BASE_URL } from "../../lib/client";
 import { getApiKey, getJwt } from "../../lib/client-auth";
 import { invalidateDashboardQueries, queryDashboard } from "../../lib/dashboardQuery";
+import { newCaptureSessionId } from "../../lib/meetings/captureStorage";
+import { MEETING_CAPTURE_TIMESLICE_MS, type CaptureSessionRecord, type MeetingCaptureStore } from "../../lib/meetings/captureStore";
+import { openMeetingCaptureStore } from "../../lib/meetings/openCaptureStore";
+import { formatCaptureBytes } from "../../lib/meetings/storageBudget";
 import styles from "./meetings.module.css";
 
 type Scope = "private" | "team" | "org" | "public";
@@ -35,6 +47,33 @@ interface Detail {
 }
 type Overview = Omit<Detail, "transcript">;
 interface TranscriptPage { segments: Array<{ ordinal: number; at: string; speaker: string; text: string }>; total: number; nextCursor: string | null }
+
+/**
+ * ADR-035 D1b — the recording in progress. `bytes` and `startedMs` are here and
+ * not in React state on purpose: they feed the storage-budget projection on every
+ * chunk, and a re-render per 20-second chunk is not a reason to re-render a page
+ * showing a meeting library.
+ */
+interface ActiveCapture {
+  readonly store: MeetingCaptureStore;
+  readonly sessionId: string;
+  readonly startedMs: number;
+  readonly mimeType: string;
+  bytes: number;
+}
+
+/** What we put in the capture manifest, so a recovered meeting keeps its name and format. */
+interface CapturePayload { readonly title?: string; readonly mimeType?: string }
+
+function capturePayload(record: CaptureSessionRecord): CapturePayload {
+  try {
+    const parsed = JSON.parse(record.payload || "{}") as CapturePayload;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    // A payload we cannot read must not make the audio beside it unreachable.
+    return {};
+  }
+}
 
 const SCOPE_META: Record<Scope, { label: string; blurb: string; badge: string; dot: string; Icon: Icon }> = {
   private: { label: "Private", blurb: "Only you can see this meeting.", badge: styles.bPrivate, dot: "", Icon: Lock },
@@ -110,8 +149,14 @@ export default function MeetingsPage() {
   const [scopeFilter, setScopeFilter] = useState<Scope | "all">("all");
   const [draftRecovered, setDraftRecovered] = useState(false);
   const [copied, setCopied] = useState(false);
+  // ADR-035 D1b — what the durable store has to say about itself: a quota
+  // warning, a missing-persistence warning, or an unfinished recording waiting
+  // to be picked back up.
+  const [captureNotice, setCaptureNotice] = useState("");
+  const [recoverable, setRecoverable] = useState<readonly CaptureSessionRecord[]>([]);
   const recorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
+  const captureRef = useRef<ActiveCapture | null>(null);
+  const captureStoreRef = useRef<{ store: MeetingCaptureStore; persisted: boolean } | null>(null);
 
   useEffect(() => {
     try {
@@ -164,7 +209,8 @@ export default function MeetingsPage() {
     }
   }, [detail, draftSummary, activeOrgId]);
 
-  const transcribe = useCallback(async (blob: Blob) => {
+  /** Resolves true only when speech actually became text — the caller decides what to keep. */
+  const transcribe = useCallback(async (blob: Blob): Promise<boolean> => {
     setBusy("transcribe");
     setCreateErr("");
     try {
@@ -179,34 +225,47 @@ export default function MeetingsPage() {
       if (!res.ok) throw new Error(`Transcription failed (${res.status})`);
       const out = (await res.json()) as { text?: string };
       const text = (out.text ?? "").trim();
-      if (text) setDraftTranscript((cur) => (cur ? `${cur}\n${text}` : text));
-      else setCreateErr("No speech was detected in the recording.");
+      if (text) { setDraftTranscript((cur) => (cur ? `${cur}\n${text}` : text)); return true; }
+      setCreateErr("No speech was detected in the recording.");
+      return false;
     } catch (caught) {
       setCreateErr(caught instanceof Error ? caught.message : "Transcription failed.");
+      return false;
     } finally {
       setBusy("");
     }
   }, [language]);
 
-  const startRecording = useCallback(async () => {
-    setCreateErr("");
+  // One store per page, opened lazily. `requestPersistence` is false everywhere
+  // except Record: opening it to look for a recovered meeting must not put a
+  // storage-permission prompt in front of someone browsing their library.
+  const captureStore = useCallback(async (requestPersistence: boolean): Promise<MeetingCaptureStore> => {
+    const cached = captureStoreRef.current;
+    if (cached && (!requestPersistence || cached.persisted)) return cached.store;
+    const opened = await openMeetingCaptureStore({ requestPersistence });
+    captureStoreRef.current = { store: opened.store, persisted: opened.persisted };
+    if (requestPersistence) setCaptureNotice((await opened.store.budget()).message);
+    return opened.store;
+  }, []);
+
+  // ADR-035 D2 — on load, a session with audio and no terminal state is offered
+  // back. This is the whole recovery path: nothing was written at unload, so
+  // there is nothing to reconstruct.
+  const refreshRecoverable = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const rec = new MediaRecorder(stream);
-      chunksRef.current = [];
-      rec.ondataavailable = (e) => { if (e.data.size) chunksRef.current.push(e.data); };
-      rec.onstop = () => {
-        stream.getTracks().forEach((t) => t.stop());
-        void transcribe(new Blob(chunksRef.current, { type: rec.mimeType || "audio/webm" }));
-      };
-      recorderRef.current = rec;
-      rec.start();
-      setRecording(true);
-      setRecordingPaused(false);
+      const store = await captureStore(false);
+      // The recording happening right now is unfinished by definition; offering
+      // it back while the microphone is still open would be nonsense.
+      const active = captureRef.current?.sessionId;
+      setRecoverable((await store.resumable()).filter((record) => record.sessionId !== active));
     } catch {
-      setCreateErr("Microphone access was denied or is unavailable.");
+      // No durable store in this browser. Record says so, loudly, once — a
+      // library view is not the place to argue about it.
+      setRecoverable([]);
     }
-  }, [transcribe]);
+  }, [captureStore]);
+
+  useEffect(() => { void refreshRecoverable(); }, [refreshRecoverable]);
 
   const stopRecording = useCallback(() => {
     recorderRef.current?.stop();
@@ -214,6 +273,126 @@ export default function MeetingsPage() {
     setRecording(false);
     setRecordingPaused(false);
   }, []);
+
+  /**
+   * ADR-035 D1 — the chunk becomes bytes before it becomes anything else, and
+   * the budget is re-read from what has actually been written.
+   */
+  const persistChunk = useCallback(async (capture: ActiveCapture, data: Blob) => {
+    try {
+      const chunk = await capture.store.appendChunk(capture.sessionId, data);
+      capture.bytes += chunk.byteLength;
+      const budget = await capture.store.budget({
+        byteLength: capture.bytes,
+        recordedMs: Date.now() - capture.startedMs,
+      });
+      setCaptureNotice(budget.message);
+      // Out of space: stop while everything recorded so far is still readable.
+      // Continuing would keep failing writes and lose exactly the audio the user
+      // thinks is being captured.
+      if (budget.level === "exhausted") stopRecording();
+    } catch (caught) {
+      setCreateErr(caught instanceof Error ? caught.message : "A piece of this recording could not be saved.");
+    }
+  }, [stopRecording]);
+
+  /** Stop pressed (or the store filled up): read the audio back off the device and transcribe it. */
+  const finishCapture = useCallback(async (capture: ActiveCapture) => {
+    captureRef.current = null;
+    try {
+      const audio = await capture.store.readAudio(capture.sessionId, capture.mimeType);
+      if (!audio.byteLength) {
+        setCreateErr("No audio was captured — check that the right microphone is selected.");
+        await capture.store.delete(capture.sessionId);
+        return;
+      }
+      if (audio.missing.length) {
+        setCaptureNotice(`${audio.missing.length} part(s) of this recording could not be read back; the rest is intact.`);
+      }
+      const transcribed = await transcribe(audio.blob);
+      // D6 — the audio is released once it has become text the user has. If it
+      // did not, it stays on the device and comes back as a recovery offer,
+      // which is the difference this ADR is about.
+      if (transcribed) await capture.store.delete(capture.sessionId);
+      else setCaptureNotice("This recording is saved on this device — you can try transcribing it again below.");
+    } catch (caught) {
+      setCreateErr(caught instanceof Error ? caught.message : "The recording could not be read back.");
+    } finally {
+      await refreshRecoverable();
+    }
+  }, [transcribe, refreshRecoverable]);
+
+  const startRecording = useCallback(async () => {
+    setCreateErr("");
+    let store: MeetingCaptureStore;
+    let sessionId: string;
+    try {
+      store = await captureStore(true);
+      sessionId = newCaptureSessionId();
+      // D2 — the session exists from the moment Record is pressed, so a crash
+      // has somewhere to be found again.
+      await store.begin({ sessionId, payload: JSON.stringify({ title: draftTitle.trim() } satisfies CapturePayload) });
+    } catch (caught) {
+      setCreateErr(caught instanceof Error ? caught.message : "This browser cannot store a recording durably.");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const rec = new MediaRecorder(stream);
+      const capture: ActiveCapture = {
+        store,
+        sessionId,
+        startedMs: Date.now(),
+        mimeType: rec.mimeType || "audio/webm",
+        bytes: 0,
+      };
+      captureRef.current = capture;
+      void store.setPayload(sessionId, JSON.stringify({ title: draftTitle.trim(), mimeType: capture.mimeType } satisfies CapturePayload)).catch(() => {});
+      rec.ondataavailable = (e) => { if (e.data.size) void persistChunk(capture, e.data); };
+      rec.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        void finishCapture(capture);
+      };
+      recorderRef.current = rec;
+      // D1 — an explicit timeslice. Without one MediaRecorder may hand over a
+      // single blob at the end, and writing it down then buys nothing.
+      rec.start(MEETING_CAPTURE_TIMESLICE_MS);
+      setRecording(true);
+      setRecordingPaused(false);
+    } catch {
+      void store.delete(sessionId).catch(() => {});
+      setCreateErr("Microphone access was denied or is unavailable.");
+    }
+  }, [captureStore, draftTitle, finishCapture, persistChunk]);
+
+  /** D2/D6 — the two things a user may do with a recording that came back. */
+  const recoverCapture = useCallback(async (record: CaptureSessionRecord) => {
+    setCreateOpen(true);
+    setCaptureNotice("");
+    try {
+      const store = await captureStore(false);
+      const { title, mimeType } = capturePayload(record);
+      const audio = await store.readAudio(record.sessionId, mimeType);
+      if (title) setDraftTitle((cur) => cur || title);
+      if (await transcribe(audio.blob)) await store.delete(record.sessionId);
+    } catch (caught) {
+      setCreateErr(caught instanceof Error ? caught.message : "The saved recording could not be read.");
+    } finally {
+      await refreshRecoverable();
+    }
+  }, [captureStore, transcribe, refreshRecoverable]);
+
+  const discardCapture = useCallback(async (record: CaptureSessionRecord) => {
+    if (!window.confirm("Discard this unfinished recording? Its audio is deleted from this device.")) return;
+    try {
+      const store = await captureStore(false);
+      await store.delete(record.sessionId);
+    } catch (caught) {
+      setCreateErr(caught instanceof Error ? caught.message : "The recording could not be deleted.");
+    } finally {
+      await refreshRecoverable();
+    }
+  }, [captureStore, refreshRecoverable]);
 
   const toggleRecordingPause = useCallback(() => {
     const recorder = recorderRef.current;
@@ -499,6 +678,14 @@ export default function MeetingsPage() {
       <PageHeader title="Meetings" description="Recallable meeting summaries across your organization." />
       <div className={styles.page}>
       {error ? <div className={styles.errorBar} role="alert">{error}</div> : null}
+      {recoverable.length ? (
+        <div className={styles.errorBar} role="status">
+          {recoverable.length === 1
+            ? "An unfinished recording is still saved on this device."
+            : `${recoverable.length} unfinished recordings are still saved on this device.`}{" "}
+          <button type="button" className={styles.track} onClick={() => { setCreateErr(""); setCreateOpen(true); }}>Review</button>
+        </div>
+      ) : null}
       <div className={styles.wrap}>
         <div className={styles.list}>
           <div className={styles.listHead}>
@@ -696,6 +883,28 @@ export default function MeetingsPage() {
               <label className={styles.importAudio}>Import audio<input type="file" accept="audio/*,.webm,.m4a,.mp3,.wav,.ogg" onChange={(event) => { const file = event.target.files?.[0]; if (file) void transcribe(file); event.target.value = ""; }} /></label>
               <span>{draftRecovered ? "Recovered your saved draft" : "Drafts are saved on this device"}</span>
             </div>
+            {recoverable.length ? (
+              <div className={styles.linkzone}>
+                <div className={styles.teamPickH}>Unfinished recordings on this device</div>
+                {recoverable.map((record) => {
+                  const { title } = capturePayload(record);
+                  return (
+                    <div key={record.sessionId} className={styles.recoverRow}>
+                      <span className={styles.recoverWhat}>
+                        <b>{title || "Untitled recording"}</b>
+                        <span>{new Date(record.startedAt).toLocaleString()} · {formatCaptureBytes(record.byteLength)} · {record.chunks.length} part{record.chunks.length === 1 ? "" : "s"}</span>
+                      </span>
+                      <span className={styles.recoverActions}>
+                        <button type="button" className={styles.newBtn} disabled={busy === "transcribe" || recording} onClick={() => void recoverCapture(record)}>Transcribe</button>
+                        <button type="button" className={styles.track} disabled={busy === "transcribe"} onClick={() => void discardCapture(record)}>Discard</button>
+                      </span>
+                    </div>
+                  );
+                })}
+                <div className={styles.teamPickNote}>Audio never leaves this device until you transcribe it, and is deleted once it becomes a transcript or you discard it.</div>
+              </div>
+            ) : null}
+            {captureNotice ? <div className={styles.errorBar} role="status">{captureNotice}</div> : null}
             {createErr ? <div className={styles.errorBar} role="alert">{createErr}</div> : null}
             <div className={styles.modalActions} style={{ justifyContent: "space-between" }}>
               <div className={styles.recordActions}><button type="button" className={styles.track} onClick={() => (recording ? stopRecording() : void startRecording())} disabled={busy === "transcribe"}>{recording ? "■ Stop recording" : busy === "transcribe" ? "Transcribing…" : <><Microphone size={13} weight="fill" /> Record</>}</button>{recording ? <button type="button" className={styles.track} onClick={toggleRecordingPause}>{recordingPaused ? "▶ Resume" : "Ⅱ Pause"}</button> : null}</div>

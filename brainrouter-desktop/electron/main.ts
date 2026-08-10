@@ -48,6 +48,7 @@ import { addOpened, noteActivity, reorderWorkspace, type ActivityReason } from '
 import { createComputerUsePort } from './computerUse.js';
 import { hardenWebviewPreferences, isAllowedArtifactWebviewSrc } from './webviewPolicy.js';
 import { registerMeetingsBridge } from './meetingsBridge.js';
+import { registerMeetingCaptureBridge } from './meetingCaptureBridge.js';
 import { registerChatSyncBridge } from './chatSyncBridge.js';
 import { checkComputerUsePermissions, openAccessibilitySettings, openScreenRecordingSettings } from './computerUsePermissions.js';
 import { setupTray } from './tray.js';
@@ -867,6 +868,10 @@ app.whenReady().then(() => {
     return { recents: markWorkspaceReordered(dragged, target) };
   });
   registerMeetingsBridge();
+  // ADR-035 D1 — meeting audio is written by main, which outlives a renderer
+  // crash. Registered here so the boot recovery pass runs before any window can
+  // press Record.
+  registerMeetingCaptureBridge();
   registerChatSyncBridge();
   ipcMain.handle('computerUse:checkPermissions', () => checkComputerUsePermissions());
   ipcMain.handle('computerUse:openAccessibilitySettings', () => openAccessibilitySettings());

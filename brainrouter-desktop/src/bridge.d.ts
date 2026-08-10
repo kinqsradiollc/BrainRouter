@@ -125,6 +125,15 @@ declare global {
         actionToTrack(meetingId: string, actionId: string, orgId?: string): Promise<unknown>;
         actionUntrack(meetingId: string, actionId: string, orgId?: string): Promise<unknown>;
         toggleAction(meetingId: string, actionId: string, done: boolean, orgId?: string): Promise<unknown>;
+        /** ADR-035 D1/D2 — durable local capture. Absent on older preloads, which
+         *  is why the renderer refuses to record rather than buffering in the heap. */
+        captureBegin?(input: { title?: string; template?: string; language?: string; orgId?: string | null; workspaceId?: string | null; contentType?: string }): Promise<unknown>;
+        captureAppend?(id: string, bytes: Uint8Array, durationMs: number): Promise<unknown>;
+        captureStop?(id: string): Promise<unknown>;
+        captureRead?(id: string): Promise<unknown>;
+        captureFinalize?(id: string): Promise<unknown>;
+        captureDiscard?(id: string): Promise<unknown>;
+        captureResumable?(scope?: { orgId?: string | null; workspaceId?: string | null }): Promise<unknown>;
         serverTracks(orgId?: string): Promise<unknown>;
         serverTrackCreate(input: { title: string; description?: string; priority?: string; assignee?: string; statusCategory?: string }, orgId?: string): Promise<unknown>;
         serverTrackTransition(id: string, statusCategory: string, orgId?: string): Promise<unknown>;
