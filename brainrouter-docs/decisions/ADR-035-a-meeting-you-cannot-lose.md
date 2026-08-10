@@ -68,7 +68,7 @@ on top of it.
 
 ## 3. Decisions
 
-### D1 · Audio is written to disk as it arrives, never accumulated in memory
+### D1 · Audio is written to durable storage as it arrives, never accumulated in memory
 
 `ondataavailable` appends each chunk to a segment file under a per-meeting capture directory,
 before anything else happens to it. `chunksRef` stops existing.
@@ -79,6 +79,40 @@ nothing.
 
 > **The test is not "does it save at the end". It is: kill the app mid-recording, and the audio up
 > to that instant is on disk and playable.**
+
+### D1b · The dashboard gets the SAME guarantee, not a lesser one
+
+A meeting captured in the browser must survive a crash exactly as one captured on
+the desktop does. The mechanism differs because the storage does; the promise
+does not.
+
+The browser is not the memory-only environment it used to be:
+
+- **OPFS** (Origin Private File System) gives real, quota-backed file writes and
+  is the closest analogue to D1's disk append — chunks land as they arrive.
+- **IndexedDB** is the fallback where OPFS is unavailable, storing chunks as
+  blobs keyed by session and sequence.
+
+Both survive a tab crash, a reload, and the browser being closed. Neither is
+`localStorage`, which is synchronous, small, and the wrong tool for megabytes of
+audio (and, per golden rule 22, not somewhere product data of this weight
+belongs).
+
+> **The session model, the segment protocol, and the recovery flow are shared.
+> Only the write target is host-specific.** If the dashboard needed a different
+> session shape, we would end up with two meeting features and the second would
+> quietly be the worse one — which is the ADR-029 failure this repo keeps paying
+> for.
+
+Two things the browser makes harder, and neither is a reason to accept less:
+
+- **Quota.** OPFS and IndexedDB are bounded and can be evicted. The recorder must
+  ask for persistent storage, watch its budget, and tell the user BEFORE it is a
+  problem — an eviction discovered at Stop is the same silent loss this ADR
+  exists to end.
+- **A closing tab gets very little time.** So durability cannot depend on an
+  unload handler running. Chunks are already written; nothing important may be
+  deferred to the moment the tab dies.
 
 ### D2 · A meeting is a session with an id, created at Record, not at Stop
 
@@ -122,8 +156,9 @@ until the user resolves or discards the meeting.
 
 Captured audio is the most sensitive artifact this product writes to disk. So:
 
-- the capture directory is `0700`, and files within it `0600` (cf. ADR golden rule 22 and the
-  `saveConfig` mode fix);
+- on the desktop, the capture directory is `0700` and files within it `0600` (cf. ADR golden rule 22
+  and the `saveConfig` mode fix); in the browser, OPFS/IndexedDB are already origin-scoped, and the
+  equivalent obligation is that the data is deleted on the same schedule rather than left to quota;
 - audio is deleted when the meeting is summarized and the user has accepted it, or on an explicit
   discard, or after a retention window the user can see and set;
 - an orphaned capture directory with no session row is reaped at boot, and the reap is logged.
@@ -170,9 +205,9 @@ redesign what already works.
    per-session browser partition. Reusing an existing rooted location beats inventing one.
 3. **Who owns retry — renderer or host?** A renderer-owned queue dies with the window, which is the
    defect this ADR exists to fix; a host-owned queue survives and can drain after a restart.
-4. **Does the hosted path get the same guarantee?** A meeting captured on the desktop and a meeting
-   captured through the dashboard should not have different durability, and the dashboard has no
-   disk.
+4. **Which browser store, and what happens at the quota edge?** D1b commits to OPFS with an
+   IndexedDB fallback; what remains open is the eviction policy and how early a user is warned that
+   a long meeting is approaching the origin's budget.
 5. **What happens to an in-flight meeting when the org context switches?** ADR-019's switcher scopes
    meetings; a recording that started under one org must not silently land in another.
 
@@ -183,6 +218,9 @@ redesign what already works.
 **One test, and it is destructive on purpose.**
 
 > Start a recording. Speak for two minutes. **Kill the application** — not close, kill. Reopen it.
+>
+> Run it on BOTH hosts: kill the desktop app, and kill the browser tab (and then the whole browser).
+> A meeting captured in the dashboard must come back exactly as one captured on the desktop does.
 
 The meeting must be there, the audio up to the kill must be on disk and playable, the transcript for
 every completed segment must be present, and the session must offer to resume or finalize.
