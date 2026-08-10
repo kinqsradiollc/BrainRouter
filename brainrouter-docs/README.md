@@ -84,6 +84,12 @@ deep dives.
   accepted rule that a behavioural change must be reversible, attributable and falsifiable: a gate whose price of admission is naming what would show the lesson wrong, two provenance tiers (model-inferred evidence, human-corrected instruction) neither of which touches the base prompt, learned procedures promoted to a user-scoped skill store outside the generated library, automatic bounded checkpoints at turn end / compaction / session end, and retirement that demotes what never pays off back down the ladder it climbed;
   [ADR-033 review that finds things, and says where](decisions/ADR-033-review-that-finds-things-and-says-where.md) —
   accepted split of deterministic engineering from model judgement in code review: review units are bundles of related files decided by path and import relationships and run concurrently, the non-interactive bot may ask once for a file from the checkout it already has, a finding's line is computed from the evidence it quoted rather than remembered, a reflection pass reads the findings as a set and may publish fewer than it received, precision is the target and recall is the trade, a benchmark built from our own merged pull requests keeps that claim checkable, and a review that cannot complete says so instead of holding the merge gate.;
+  [ADR-034 messages that arrive](decisions/ADR-034-messages-that-arrive.md) —
+  proposed cross-session messaging that works offline on one device and across devices through the
+  backend, addressed by what a session IS rather than by an opaque id: sessions choose each other by
+  description, the delivery gate lives in the RECIPIENT so a message cannot bypass it by choosing a
+  transport, and session titles are named by the agent on the first turn rather than left as a
+  timestamp;
   [ADR-035 a meeting you cannot lose](decisions/ADR-035-a-meeting-you-cannot-lose.md) —
   proposed durability-then-liveness rework of meeting capture: audio written to disk as it arrives
   instead of accumulating in a renderer ref, a session created at Record rather than at Stop,
