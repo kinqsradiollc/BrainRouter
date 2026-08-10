@@ -146,7 +146,9 @@ export class MeetingCaptureStore {
    *
    * Refuses to write over an existing manifest: the only way that happens is a
    * caller reusing an id, and the loser of that collision would be a recording
-   * someone still wants. Use `attach` to continue a session on purpose.
+   * someone still wants. A session found at load is continued by reading it
+   * (`read`) and appending, which is what `restoreCaptureSession` already does —
+   * the sequence counter seeds itself from the chunks on first append.
    *
    * On the SAME queue as every other write, and the check and the write are one
    * task on it. Off the queue, the read that finds no manifest and the write
@@ -170,15 +172,6 @@ export class MeetingCaptureStore {
       this.#next.set(sessionId, await this.#seedSequence(sessionId));
       return this.#record(sessionId, manifest);
     });
-  }
-
-  /** Reopen a session found at load — the recovery half of D2. */
-  async attach(sessionId: string): Promise<CaptureSessionRecord> {
-    const id = assertCaptureSessionId(sessionId);
-    const manifest = await this.#backend.readManifest(id);
-    if (!manifest) throw new Error(`No meeting capture named ${id} is stored.`);
-    this.#next.set(id, await this.#seedSequence(id));
-    return this.#record(id, manifest);
   }
 
   /**
@@ -335,18 +328,14 @@ export class MeetingCaptureStore {
     return records.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
   }
 
-  /**
-   * D2 — "a session with audio and no terminal state is offered back".
-   *
-   * Both halves matter. Without the audio test, a Record cancelled a second
-   * later comes back as an offer, and an offer users learn to dismiss protects
-   * nobody. Without the terminal test, a meeting someone finished or explicitly
-   * threw away comes back, which is worse than noise.
-   */
-  async resumable(): Promise<readonly CaptureSessionRecord[]> {
-    const records = await this.list();
-    return records.filter((record) => !record.closed && record.byteLength > 0);
-  }
+  // D2's recovery offer is deliberately NOT a method here. "A session with audio
+  // and no terminal state" is the shared `isResumableSession`, and open question
+  // 5 adds a scope to it — neither of which this class can see, because it treats
+  // `payload` as opaque text on purpose. A `!closed && byteLength > 0` written
+  // out here was that rule imitated rather than called, and an imitation cannot
+  // grow a scope: it offered a capture recorded under one organization back under
+  // another. `resumableCaptures` in `capturePayload.ts` owns the answer, over
+  // `list()`, where the payload is understood.
 
   /**
    * D6 — a real deletion, and one an in-flight write cannot undo.

@@ -70,11 +70,6 @@ export class MeetingCaptureRecorder {
     this.now = options.now ?? (() => Date.now());
   }
 
-  /** The capture currently being written, or null when idle. */
-  get activeSessionId(): string | null {
-    return this.sessionId;
-  }
-
   get paused(): boolean {
     return this.recorder?.state === "paused";
   }

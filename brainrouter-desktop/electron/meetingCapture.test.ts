@@ -40,6 +40,11 @@ async function append(
   return await store.persist(appendSegment(session, { byteLength: written, durationMs }));
 }
 
+/** What the store has on disk. `stored` also carries the recorder MIME, which no assertion here wants. */
+async function record(store: MeetingCaptureStore, id: string): Promise<MeetingCaptureSession> {
+  return (await store.stored(id)).session;
+}
+
 function captureRoot(home: string): string {
   return path.join(home, MEETING_CAPTURE_DIRECTORY);
 }
@@ -134,13 +139,13 @@ test('a session a crash left recording is recovered, and the chunk it never clai
   assert.deepEqual(report.adopted, [session.id]);
   assert.deepEqual(report.reaped, []);
   // ADR-028 — the status now says what is true, and nothing claims to be live.
-  assert.equal((await next.session(session.id)).status, 'stopped');
+  assert.equal((await record(next, session.id)).status, 'stopped');
   // §6 asks for "the audio up to the kill". Deleting this file was the obvious
   // reading of "torn tail" and it is the wrong one: the chunk is real audio and
   // the RECORD is the stale artifact, so the record is extended to claim it.
   assert.ok(fs.existsSync(path.join(directory, 'segment-00001.webm')));
   assert.deepEqual(
-    (await next.session(session.id)).segments.map((segment) => [segment.index, segment.byteLength]),
+    (await record(next, session.id)).segments.map((segment) => [segment.index, segment.byteLength]),
     [[0, 3], [1, 1]],
   );
 
@@ -170,7 +175,7 @@ test('adoption stops at the first hole, and a chunk with no bytes in it is not a
 
   assert.deepEqual(report.adopted, [session.id]);
   assert.deepEqual(
-    (await next.session(session.id)).segments.map((segment) => [segment.index, segment.byteLength]),
+    (await record(next, session.id)).segments.map((segment) => [segment.index, segment.byteLength]),
     [[0, 3], [1, 2]],
   );
   assert.ok(fs.existsSync(path.join(directory, 'segment-00001.webm')));
@@ -222,6 +227,35 @@ test('a chunk the store no longer holds reads back as missing rather than as a f
   // stated gap charged to the retry bound (D5) rather than a retry for ever
   // against a store that has nothing left to give.
   assert.equal(await store.readSegment(session.id, 7), null);
+});
+
+test('one unreadable segment costs that segment, not the whole recording', async () => {
+  const home = userData();
+  const store = new MeetingCaptureStore(home);
+  const session = await store.begin({ scope: { orgId: null }, contentType: 'audio/webm;codecs=opus' });
+  await append(store, session.id, new Uint8Array([1, 2]), 20_000);
+  await append(store, session.id, new Uint8Array([3, 4]), 20_000);
+  await append(store, session.id, new Uint8Array([5, 6]), 20_000);
+
+  // The record still claims three segments — this is exactly the state §6 is
+  // about, where the recovery card advertises a byte count for audio one file
+  // of which the disk will not give back.
+  fs.rmSync(path.join(captureRoot(home), session.id, 'segment-00001.webm'));
+
+  const audio = await store.read(session.id);
+  // Before the per-segment guard this call REJECTED, and the surface showed the
+  // user an errno for a meeting whose other segments were sitting right here.
+  assert.deepEqual(audio.bytes, new Uint8Array([1, 2, 5, 6]));
+  assert.deepEqual(audio.missing, [1]);
+  assert.equal(audio.contentType, 'audio/webm;codecs=opus');
+
+  // …and a healthy capture says nothing is missing, so a caller can tell the
+  // two apart without inspecting the bytes.
+  const whole = await store.begin({ scope: { orgId: null } });
+  await append(store, whole.id, new Uint8Array([7, 8]), 20_000);
+  const intact = await store.read(whole.id);
+  assert.deepEqual(intact.bytes, new Uint8Array([7, 8]));
+  assert.deepEqual(intact.missing, []);
 });
 
 test('a discarded capture is really deleted and never offered again', async () => {
@@ -292,7 +326,7 @@ test('a chunk that only partly reached the disk fails the append instead of bein
 
   // The record never claims audio the disk did not take, and the truncated file
   // does not hold the index against a retry.
-  assert.deepEqual((await store.session(session.id)).segments, []);
+  assert.deepEqual((await record(store, session.id)).segments, []);
   assert.equal(fs.existsSync(path.join(captureRoot(home), session.id, 'segment-00000.webm')), false);
   const retried = await append(store, session.id, new Uint8Array([1, 2, 3, 4]), 20_000);
   assert.deepEqual(retried.segments.map((entry) => [entry.index, entry.byteLength]), [[0, 4]]);
@@ -316,6 +350,6 @@ test('a capture directory with no session record is reaped at boot', async () =>
 
 test('a capture id that is not path-safe is refused before it becomes a path', async () => {
   const store = new MeetingCaptureStore(userData());
-  await assert.rejects(() => store.session('../../etc'), /not a meeting capture id/);
+  await assert.rejects(() => store.stored('../../etc'), /not a meeting capture id/);
   await assert.rejects(() => append(store, '..', new Uint8Array([1]), 20_000), /not a meeting capture id/);
 });

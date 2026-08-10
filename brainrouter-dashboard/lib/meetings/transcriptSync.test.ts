@@ -15,6 +15,8 @@ import {
   createCaptureSession,
   markDone,
   markFailed,
+  reconcileCaptureDraft,
+  stopCapture,
   type MeetingCaptureSession,
 } from "@kinqs/brainrouter-core/meetings";
 
@@ -24,6 +26,8 @@ import {
   healTranscriptGaps,
   nextTranscriptSync,
   pendingTranscriptText,
+  settleTranscriptForSubmit,
+  submitTranscript,
   transcriptRevisionPending,
 } from "./transcriptSync";
 
@@ -137,4 +141,156 @@ test("a segment still in flight contributes nothing rather than a placeholder", 
   const session = markDone(withSegments(2), 0, "settled");
   assert.equal(nextTranscriptSync(state, session, "").text, "settled");
   assert.equal(pendingTranscriptText(session, []), "settled");
+});
+
+// ── D5 at submit: the last moment an unmarked hole can be refused ─────────────
+
+test("creating the meeting states an unsettled segment as a gap, not as silence", () => {
+  // THE reproduction. Segment 1 never transcribed, so `transcriptText` drops it
+  // and the two sentences either side read as contiguous speech — D5's "quietly
+  // wrong" transcript, POSTed and then summarized, with the audio deleted on the
+  // next line.
+  let session = markDone(withSegments(3), 0, "first twenty seconds");
+  session = markDone(session, 2, "third twenty seconds");
+  session = stopCapture(session);
+  let state = beginTranscriptSync("");
+  const composed = nextTranscriptSync(state, session, "");
+  state = composed.state;
+  assert.equal(composed.text, "first twenty seconds\nthird twenty seconds", "what the box holds while it is still coming");
+
+  const submitted = settleTranscriptForSubmit(state, session, composed.text ?? "");
+  assert.equal(
+    submitted.text,
+    "first twenty seconds\n[00:00:20–00:00:40 could not be transcribed]\nthird twenty seconds",
+  );
+  assert.deepEqual(submitted.stated, [1]);
+});
+
+test("submitTranscript IS the posted text — a provisional segment cannot reach the server as silence", () => {
+  // The page posts this return value directly, with no local in between. That
+  // shape exists because of the mutation that survived the last round: the page
+  // settled into a `let transcript = draftTranscript` and posted the identifier,
+  // so deleting the one assignment restored the unmarked hole with every
+  // assertion still green. This test binds on the VALUE — delete the delegation
+  // below (return the box unchanged) and the meeting goes to the server missing
+  // twenty seconds with nothing saying so, which is exactly what fails here.
+  let session = markDone(withSegments(3), 0, "first twenty seconds");
+  session = markDone(session, 2, "third twenty seconds");
+  session = stopCapture(session);
+  let state = beginTranscriptSync("");
+  const composed = nextTranscriptSync(state, session, "");
+  state = composed.state;
+  const box = composed.text ?? "";
+  assert.equal(box, "first twenty seconds\nthird twenty seconds", "the box while it is still coming");
+
+  const posted = submitTranscript(state, session, box);
+  assert.equal(
+    posted.text,
+    "first twenty seconds\n[00:00:20–00:00:40 could not be transcribed]\nthird twenty seconds",
+  );
+  assert.notEqual(posted.text, box, "what is posted is never simply the box");
+  assert.deepEqual(posted.stated, [1]);
+});
+
+test("submitTranscript posts a pasted transcript untouched, and claims nothing about it", () => {
+  // The no-capture case, which used to be the whole reason for the mutable
+  // local. `stated` is empty because there is no segment that could have failed
+  // — not because the queue finished.
+  const state = beginTranscriptSync("");
+  const posted = submitTranscript(state, null, "pasted notes from the call");
+  assert.equal(posted.text, "pasted notes from the call");
+  assert.deepEqual(posted.stated, []);
+  assert.equal(posted.state, state, "nothing to advance");
+});
+
+test("settling at submit does not disturb a transcript that already finished", () => {
+  let session = markDone(markDone(withSegments(2), 0, "first"), 1, "second");
+  session = stopCapture(session);
+  let state = beginTranscriptSync("");
+  const composed = nextTranscriptSync(state, session, "");
+  state = composed.state;
+  const submitted = settleTranscriptForSubmit(state, session, composed.text ?? "");
+  assert.equal(submitted.text, "first\nsecond");
+  assert.deepEqual(submitted.stated, []);
+});
+
+test("an edited box keeps its edits and gains the gaps at submit", () => {
+  // The person owns the box, so the append-only rule still applies — but the
+  // segment that never transcribed is still stated rather than dropped.
+  let session = markDone(withSegments(2), 0, "first");
+  session = stopCapture(session);
+  let state = beginTranscriptSync("");
+  state = nextTranscriptSync(state, session, "").state;
+  state = nextTranscriptSync(state, session, "first, corrected by hand").state;
+  assert.equal(state.dirty, true);
+
+  const submitted = settleTranscriptForSubmit(state, session, "first, corrected by hand");
+  assert.equal(submitted.text, "first, corrected by hand\n[00:00:20–00:00:40 could not be transcribed]");
+  assert.deepEqual(submitted.stated, [1]);
+});
+
+test("a keystroke that submit beat to the sync effect is still treated as an edit", () => {
+  // Submit can be the very next thing after typing, and the effect that would
+  // have set `dirty` runs after the render. Recomposing here would delete the
+  // words the person had just typed.
+  let session = markDone(withSegments(2), 0, "first");
+  session = stopCapture(session);
+  let state = beginTranscriptSync("");
+  state = nextTranscriptSync(state, session, "").state;
+  assert.equal(state.dirty, false);
+
+  const submitted = settleTranscriptForSubmit(state, session, "first\nand a note nobody has seen yet");
+  assert.match(submitted.text, /and a note nobody has seen yet/);
+  assert.equal(submitted.state.dirty, true);
+});
+
+// ── D4/§6: the restored draft and the recovered session both hold the meeting ─
+
+test("picking a recovered capture back up does not compose the meeting twice", () => {
+  // §6's kill-and-reopen, from this host's side. The draft came back holding the
+  // transcript, and `composeCaptureTranscript` appends the WHOLE transcript to
+  // its base — so composing over the draft produced the meeting twice, POSTed it
+  // and summarized it. Composition resumes over `retained` instead.
+  let session = markDone(markDone(withSegments(2), 0, "first"), 1, "second");
+  session = stopCapture(session);
+  const draft = "a note I typed before recording\nfirst\nsecond";
+  const reconciled = reconcileCaptureDraft(draft, session);
+
+  const state = {
+    base: reconciled.retained,
+    written: reconciled.text,
+    included: reconciled.accounted,
+    dirty: reconciled.userOwned.length > 0,
+  };
+  assert.equal(state.dirty, false, "nothing was edited, so automatic composition stays on");
+  const next = nextTranscriptSync(state, session, reconciled.text);
+  const settled = next.text ?? reconciled.text;
+  assert.equal(settled.match(/first/g)?.length, 1);
+  assert.equal(settled.match(/second/g)?.length, 1);
+  assert.match(settled, /a note I typed before recording/);
+
+  // The old behaviour, asserted so this test cannot quietly stop proving
+  // anything: composing over the raw draft is still the doubling.
+  const doubled = nextTranscriptSync(beginTranscriptSync(draft), session, draft);
+  assert.equal(doubled.text?.match(/first/g)?.length, 2);
+});
+
+test("a recovered capture whose text the person edited switches to append-only", () => {
+  // `nextTranscriptSync` RECOMPOSES `base + transcriptText(session)` on every
+  // drain, so leaving automatic composition on here would restore the pre-edit
+  // wording of the segment they fixed.
+  let session = markDone(markDone(withSegments(2), 0, "the wrong name"), 1, "second");
+  session = stopCapture(session);
+  const draft = "the right name\nsecond";
+  const reconciled = reconcileCaptureDraft(draft, session);
+  assert.deepEqual(reconciled.userOwned, [0]);
+
+  const state = {
+    base: reconciled.retained,
+    written: reconciled.text,
+    included: reconciled.accounted,
+    dirty: reconciled.userOwned.length > 0,
+  };
+  assert.equal(state.dirty, true);
+  assert.equal(nextTranscriptSync(state, session, reconciled.text).text, undefined, "their wording stands");
 });

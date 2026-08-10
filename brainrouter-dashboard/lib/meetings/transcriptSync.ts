@@ -22,9 +22,12 @@
  * this module only decides what goes in the box and when.
  */
 import {
+  finalizeCapture,
   formatCaptureGap,
+  isTerminalCaptureStatus,
   transcriptSoFar,
   transcriptText,
+  unsettledSegments,
   type MeetingCaptureSession,
 } from "@kinqs/brainrouter-core/meetings";
 
@@ -173,4 +176,83 @@ export function appendTranscriptSync(
   // Stays `dirty`: their edit is still theirs, and the next drain must not
   // replace the whole box just because it matches what we last wrote again.
   return { state: { ...state, written: text, included: includedTranscriptIndices(session), dirty: true }, text };
+}
+
+export interface SubmitTranscript {
+  readonly state: TranscriptSyncState;
+  /** The text the meeting must be created from. */
+  readonly text: string;
+  /**
+   * Segments this text now states as gaps because they never transcribed —
+   * empty when the queue had already finished. What the surface warns about
+   * BEFORE the click is the same set (`unsettledSegments`); this is what
+   * actually went in.
+   */
+  readonly stated: readonly number[];
+}
+
+/**
+ * D5, at the one moment it is irreversible: the text a meeting is created from.
+ *
+ * `transcriptText` keeps only settled segments and stated gaps, so a segment
+ * still in flight contributes NOTHING to the compose box. That is right while
+ * the meeting is being recorded — it is still coming — and wrong at submit,
+ * because the create is followed by `finalizeCapture` and the deletion of the
+ * audio, so it is never coming again. Posted as-is, twenty seconds of a meeting
+ * would vanish between two sentences that then read as contiguous speech: D5's
+ * "unmarked hole", which it calls worse than a transcript that says
+ * `00:12:30–00:13:00 could not be transcribed`.
+ *
+ * So the text is composed over the session as `finalizeCapture` is about to
+ * leave it — that transition IS the shared rule for "unsettled at the end
+ * becomes a stated gap", and calling it here rather than restating its verdict
+ * is what keeps the transcript and the record saying the same thing.
+ *
+ * Which composition applies is the same question as ever, and gets the same
+ * answer: an untouched box is recomposed, an edited one is appended to. `current
+ * !== state.written` counts as edited even when `dirty` is not set yet, because
+ * submit can be the very next thing after a keystroke and the sync effect that
+ * would have noticed runs after the render.
+ */
+export function settleTranscriptForSubmit(
+  state: TranscriptSyncState,
+  session: MeetingCaptureSession,
+  current: string,
+): SubmitTranscript {
+  const stated = unsettledSegments(session).map((segment) => segment.index);
+  const settled = stated.length && !isTerminalCaptureStatus(session.status)
+    ? finalizeCapture(session)
+    : session;
+  if (state.dirty || current !== state.written) {
+    const appended = appendTranscriptSync({ ...state, dirty: true }, settled, current);
+    return { state: appended.state, text: appended.text, stated };
+  }
+  const next = nextTranscriptSync(state, settled, current);
+  return { state: next.state, text: next.text ?? current, stated };
+}
+
+/**
+ * The whole of "what text does this meeting get created from", including the
+ * case where there is no capture at all.
+ *
+ * This exists to remove a variable. The page used to settle into a `let
+ * transcript = draftTranscript` and then post the identifier — so deleting the
+ * one line that assigned the settled text put the unmarked-hole defect back
+ * while every test still passed, because the call was still there, still
+ * ordered, and the posted identifier was spelled the same either way. There is
+ * no line to delete now: the text a meeting is created from is this function's
+ * return value, and a pasted transcript with no session takes the same path
+ * rather than a branch beside it.
+ *
+ * `stated` is empty for a pasted transcript because nothing was captured, which
+ * is not the same claim as "nothing failed" — with no session there is no
+ * segment that could have.
+ */
+export function submitTranscript(
+  state: TranscriptSyncState,
+  session: MeetingCaptureSession | null,
+  current: string,
+): SubmitTranscript {
+  if (!session) return { state, text: current, stated: [] };
+  return settleTranscriptForSubmit(state, session, current);
 }

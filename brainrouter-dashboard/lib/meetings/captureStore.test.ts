@@ -11,7 +11,21 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { audioBlob, FakeCaptureBackend } from "./_captureBackendFixture";
+import { resumableCaptures } from "./capturePayload";
 import { MeetingCaptureStore, MEETING_CAPTURE_TIMESLICE_MS, type MeetingCaptureStoreOptions } from "./captureStore";
+
+/**
+ * D2's offer is not a store method — the store treats `payload` as opaque text,
+ * so it can see neither a session's terminal state nor its scope. It is the
+ * shared `resumableSessions`, asked through `capturePayload.ts`, over `list()`.
+ * These assertions go through that pair because what they are about is what a
+ * user is offered back.
+ */
+const SCOPE = { orgId: null };
+
+async function offered(subject: MeetingCaptureStore): Promise<readonly string[]> {
+  return resumableCaptures(await subject.list(), { scope: SCOPE }).map((entry) => entry.record.sessionId);
+}
 
 function store(backend = new FakeCaptureBackend(), options: MeetingCaptureStoreOptions = {}): MeetingCaptureStore {
   return new MeetingCaptureStore(backend, options);
@@ -118,7 +132,7 @@ test("an empty chunk is refused", async () => {
   const subject = store(backend);
   await subject.begin({ sessionId: "mtg-1" });
   await assert.rejects(() => subject.appendChunk("mtg-1", new Blob([])), /at least one byte/);
-  assert.deepEqual(await subject.resumable(), [], "a session of empty chunks is not offered back");
+  assert.deepEqual(await offered(subject), [], "a session of empty chunks is not offered back");
 });
 
 test("an unsafe session id never reaches the backend", async () => {
@@ -130,23 +144,25 @@ test("an unsafe session id never reaches the backend", async () => {
   assert.deepEqual(backend.calls, []);
 });
 
-test("attach resumes an existing capture and continues its numbering", async () => {
+test("a reloaded tab continues an existing capture's numbering", async () => {
   const backend = new FakeCaptureBackend();
   const first = store(backend);
   await first.begin({ sessionId: "mtg-1" });
   await first.appendChunk("mtg-1", audioBlob(8, 1));
   await first.appendChunk("mtg-1", audioBlob(8, 2));
 
-  // A fresh store is what a reloaded tab gets: no in-memory sequence counter.
+  // A fresh store is what a reloaded tab gets: no in-memory sequence counter. It
+  // seeds itself from the chunks the backend actually holds, so picking a
+  // recovered capture back up cannot overwrite the audio it came back with.
   const second = store(backend);
-  const record = await second.attach("mtg-1");
-  assert.equal(record.byteLength, 16);
+  const record = await second.read("mtg-1");
+  assert.equal(record?.byteLength, 16);
   const next = await second.appendChunk("mtg-1", audioBlob(8, 3));
   assert.equal(next.sequence, 2);
 });
 
-test("attaching a capture that is not stored fails rather than inventing one", async () => {
-  await assert.rejects(() => store().attach("mtg-missing"), /No meeting capture/);
+test("reading a capture that is not stored answers 'nothing here' rather than inventing one", async () => {
+  assert.equal(await store().read("mtg-missing"), undefined);
 });
 
 test("recovery offers sessions with audio and no terminal state, newest first", async () => {
@@ -161,7 +177,7 @@ test("recovery offers sessions with audio and no terminal state, newest first", 
   await subject.appendChunk("done", audioBlob(4, 3));
   await subject.setPayload("done", "{}", { closed: true });
 
-  assert.deepEqual((await subject.resumable()).map((record) => record.sessionId), ["new", "old"]);
+  assert.deepEqual(await offered(subject), ["new", "old"]);
 });
 
 test("the payload round-trips without the store looking inside it", async () => {
@@ -301,7 +317,7 @@ test("a live recording is never reaped, not even one this store has never seen",
   const reaper = store(backend);
   assert.deepEqual(await reaper.reapOrphans(), []);
   assert.equal((await recorder.read("mtg-new"))?.byteLength, 64, "the meeting in progress survives");
-  assert.equal((await recorder.resumable()).length, 1, "and can still be offered back");
+  assert.equal((await offered(recorder)).length, 1, "and can still be offered back");
 });
 
 test("the reap only deletes what its own snapshot saw", async () => {

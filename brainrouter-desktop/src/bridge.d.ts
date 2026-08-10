@@ -139,6 +139,11 @@ declare global {
         captureAdopt?(id: string): Promise<unknown>;
         captureRetrySegment?(id: string, index: number): Promise<unknown>;
         onCaptureProgress?(listener: (progress: unknown) => void): () => void;
+        /** ADR-035 D6 — the compose draft, held by the host in the same 0700
+         *  directory as the audio rather than in a renderer-readable store. */
+        draftRead?(): Promise<unknown>;
+        draftWrite?(draft: { title?: string; transcript?: string; template?: string; language?: string }): Promise<unknown>;
+        draftClear?(): Promise<unknown>;
         serverTracks(orgId?: string): Promise<unknown>;
         serverTrackCreate(input: { title: string; description?: string; priority?: string; assignee?: string; statusCategory?: string }, orgId?: string): Promise<unknown>;
         serverTrackTransition(id: string, statusCategory: string, orgId?: string): Promise<unknown>;

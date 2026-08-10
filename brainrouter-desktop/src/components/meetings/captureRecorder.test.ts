@@ -55,7 +55,7 @@ function fakeCapture(begin?: () => Promise<MeetingCaptureSession>): Recorded {
       begin: begin ?? (async () => session("mtg-test")),
       append: async (id, bytes, durationMs) => { appended.push({ id, bytes: [...bytes], durationMs }); return session(id); },
       stop: async (id) => { stopped.push(id); return { ...session(id), status: "stopped" }; },
-      read: async () => ({ bytes: new Uint8Array(), contentType: "audio/webm" }),
+      read: async () => ({ bytes: new Uint8Array(), contentType: "audio/webm", missing: [] }),
       // The recorder never asks the host to transcribe or to retry — that is the
       // compose view's business — so these exist only to satisfy the port.
       adopt: async (id) => session(id),
@@ -64,6 +64,12 @@ function fakeCapture(begin?: () => Promise<MeetingCaptureSession>): Recorded {
       finalize: async () => undefined,
       discard: async () => undefined,
       resumable: async () => [],
+      // Nor does it touch the compose draft (D6): the recorder handles audio,
+      // and the draft is text the person owns.
+      draftAvailable: true,
+      readDraft: async () => null,
+      writeDraft: async () => undefined,
+      clearDraft: async () => undefined,
     },
   };
 }
@@ -121,7 +127,11 @@ test("every chunk is written through the host, in order, and none is kept", asyn
   ]);
   // The capture is marked stopped only AFTER the final chunk is on disk.
   assert.deepEqual(capture.stopped, ["mtg-test"]);
-  assert.equal(recorder.activeSessionId, null);
+  // Stopping released the capture: a second stop has nothing to close and says
+  // so, rather than closing the same session twice. Asserted through the public
+  // surface because there is no test-only accessor for the id.
+  assert.equal(await recorder.stop(), null);
+  assert.deepEqual(capture.stopped, ["mtg-test"]);
 });
 
 test("a chunk that cannot be written is reported while the meeting is still running", async () => {
@@ -159,5 +169,9 @@ test("a microphone that will not open, and a store that will not begin, both rel
   });
   await assert.rejects(() => recorder.start({ scope: { orgId: null } }), /No capture directory/);
   assert.equal(microphone.stops, 1);
-  assert.equal(recorder.activeSessionId, null);
+  // A failed start claimed no capture, so there is nothing to stop and nothing
+  // to close — a recorder left holding a half-started id would refuse the next
+  // Record with "a meeting is already being captured".
+  assert.equal(await recorder.stop(), null);
+  assert.deepEqual(capture.stopped, []);
 });

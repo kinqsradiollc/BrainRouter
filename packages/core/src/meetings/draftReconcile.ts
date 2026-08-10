@@ -47,6 +47,57 @@
  * beside a duplicate line they can delete — whereas guessing that trailing text
  * IS the edited segment would swallow a pasted draft whole.
  *
+ * The second limit, and the reason the contract below is the whole defence: in a
+ * box that has never held the transcript, a typed line that happens to equal
+ * segment N's text verbatim pins the frontier at N, and segments before it are
+ * read as deleted rather than as never-folded. There is no rule that separates
+ * those two readings — "unmatched below the frontier" is exactly what a
+ * deliberate deletion looks like — and refusing to believe an unanchored match
+ * would resurrect the first line of every transcript whose opening the person
+ * deleted, which is worse and far commoner. A box that HOLDS the transcript has
+ * anchors for every segment and cannot reach this state, which is why persisting
+ * the whole box is not merely tidier than persisting `retained`.
+ *
+ * ## What `composeBox` must be, and why it is not a formality
+ *
+ * **`composeBox` is the WHOLE compose box, exactly as the person sees it** —
+ * their words and every segment the surface has already folded in. It is what a
+ * host persists as the draft and restores verbatim on reopen.
+ *
+ * **It is never `retained` from a previous call.** `retained` is this function's
+ * answer to "which of this text did no segment contribute", and it is by
+ * construction the COMPLEMENT of the frontier rule's input: every segment
+ * contribution has been stripped out of it. Replaying it here runs the rule on
+ * the one input it was not designed for, and the result is not a near miss — it
+ * is four different silent corruptions, all of them reproduced in
+ * `meeting-draft-reconcile.test.ts`:
+ *
+ * - a typed note that happens to be a whole line one segment also said pins the
+ *   frontier at that segment, so every EARLIER segment is reported accounted-for
+ *   and `userOwned` and is dropped from the meeting with no gap marker;
+ * - an edit to a settled segment survives the strip (it is the person's text
+ *   now), so on reopen the box holds the edit AND the original folds in again —
+ *   the doubling this module exists to end, reappearing across a kill;
+ * - a line the person DELETED comes back, because the deletion left nothing in
+ *   the stripped box to record that it happened;
+ * - a note typed BETWEEN two segments is relocated to the top, because the
+ *   stripped box is all that survives and everything folds in after it.
+ *
+ * **This cannot be detected here, and pretending otherwise would be worse than
+ * saying so.** A `retained` box and a perfectly legitimate box that has simply
+ * never held the transcript — a fresh window, a pasted agenda, a session
+ * recovered from a previous run — are the same string with the same relationship
+ * to the same session. There is no property of the input that separates them,
+ * because the thing that separates them (whether the box ever held those
+ * segments) is exactly what stripping destroyed. So the contract is stated, in
+ * the signature and here, and enforced by tests over the round trip the hosts
+ * actually perform rather than by a guard that would fire on half of the honest
+ * cases and none of the dishonest ones.
+ *
+ * `retained` remains correct for what it is for: composing the NEXT box in
+ * memory, where the transcript is about to be appended to it again in the same
+ * breath. See the field's own note.
+ *
  * Pure, like the rest of this subsystem: no draft store, no textarea, no host.
  */
 import { formatCaptureGap, transcriptSoFar, type MeetingTranscriptEntry } from './transcript.js';
@@ -90,6 +141,13 @@ export interface MeetingDraftReconciliation {
    * A host that recomposes the whole transcript on each drain (rather than
    * appending to it) needs this as its base: composing over the raw draft is
    * precisely how the dashboard doubled the meeting.
+   *
+   * **This is a composition base, not a document.** It is only ever correct
+   * alongside the transcript that is about to be re-appended to it. It must not
+   * be persisted as the draft and it must not be fed back in as `composeBox` —
+   * see the module header for the four corruptions that causes. What a host
+   * persists is `text`, or the box the person is looking at; both hold the
+   * whole meeting, which is the only shape this function can reconcile.
    */
   readonly retained: string;
 }
@@ -97,14 +155,22 @@ export interface MeetingDraftReconciliation {
 /**
  * Reconcile a restored draft against a recovered session.
  *
- * Neither argument is modified and no text is ever deleted from the draft: the
- * result's `text` differs from `draft` only where a stated gap has been healed.
+ * @param composeBox The FULL compose box as the person sees it — their own words
+ *   and every segment already folded into it. This is what a host persists and
+ *   restores verbatim. It is NEVER `retained` from a previous call: that box has
+ *   had the segments stripped out of it, which is the one input the frontier
+ *   rule cannot read. The module header lists what replaying it destroys.
+ * @param session The recovered capture record.
+ *
+ * Neither argument is modified and no text is ever deleted from the box: the
+ * result's `text` differs from `composeBox` only where a stated gap has been
+ * healed.
  */
 export function reconcileCaptureDraft(
-  draft: string,
+  composeBox: string,
   session: MeetingCaptureSession,
 ): MeetingDraftReconciliation {
-  const lines = draft.length ? draft.split('\n') : [];
+  const lines = composeBox.length ? composeBox.split('\n') : [];
   const matched = new Map<number, string>();
   const consumed = new Set<number>();
   let cursor = 0;

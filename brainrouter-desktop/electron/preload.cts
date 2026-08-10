@@ -192,6 +192,12 @@ contextBridge.exposeInMainWorld('brainrouter', {
     // every persisted change. A window reload rejoins a drain that never stopped.
     captureAdopt(id: string): Promise<unknown> { return ipcRenderer.invoke('meetings:captureAdopt', id); },
     captureRetrySegment(id: string, index: number): Promise<unknown> { return ipcRenderer.invoke('meetings:captureRetrySegment', id, index); },
+    // ADR-035 D6 — the compose draft lives beside the audio, under the same
+    // 0700 directory, instead of in `localStorage` where any page script could
+    // read the meeting's own words back.
+    draftRead(): Promise<unknown> { return ipcRenderer.invoke('meetings:draftRead'); },
+    draftWrite(draft: { title?: string; transcript?: string; template?: string; language?: string }): Promise<unknown> { return ipcRenderer.invoke('meetings:draftWrite', draft); },
+    draftClear(): Promise<unknown> { return ipcRenderer.invoke('meetings:draftClear'); },
     onCaptureProgress(listener: (progress: unknown) => void): () => void {
       const wrapped = (_e: unknown, progress: unknown) => listener(progress);
       ipcRenderer.on('meetings:capture-progress', wrapped);

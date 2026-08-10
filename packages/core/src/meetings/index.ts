@@ -27,6 +27,11 @@
 // box should hold when a restored draft and a recovered session both already
 // contain the transcript. That second one is why a recovered meeting used to be
 // summarized twice on BOTH hosts.
+//
+// `capturePhase` is the sixth and the plainest: the one sentence a live panel
+// prints about the queue. It is surface WORDING, which is why it took two
+// rounds to arrive here — but it is a rule (which state outranks which) and it
+// had already drifted between the hosts while it lived in each of them.
 export * from './types.js';
 export * from './captureSession.js';
 export * from './transcript.js';
@@ -37,3 +42,4 @@ export * from './segmentAudio.js';
 export * from './chunkAdoption.js';
 export * from './draftReconcile.js';
 export * from './transcriptionQueue.js';
+export * from './capturePhase.js';

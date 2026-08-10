@@ -15,7 +15,7 @@
  *    the record is only rewritten afterwards, by the transcription supervisor
  *    that owns it (`meetingTranscription.ts`). A crash between the two leaves a
  *    segment file the record does not mention, which the next boot ADOPTS — see
- *    `adoptUnclaimedChunks`; the reverse order would leave a record pointing at
+ *    `claimStoredChunks`; the reverse order would leave a record pointing at
  *    audio that does not exist, and recovery believes the record
  *    (`MeetingSegment.byteLength` is "what the host actually wrote"). The two
  *    halves are separate methods for one reason: under D3 the transcription
@@ -56,7 +56,7 @@
 import fs, { type Dirent } from 'node:fs';
 import path from 'node:path';
 import {
-  appendSegment,
+  adoptCaptureChunks,
   capturedByteLength,
   createCaptureSession,
   discardCapture,
@@ -66,14 +66,12 @@ import {
   orphanCaptureIds,
   recoverCaptureSession,
   resumableSessions,
-  resumeCapture,
-  stopCapture,
   summarizeRecovery,
-  DEFAULT_MEETING_SEGMENT_MS,
   type MeetingCaptureScope,
   type MeetingCaptureSession,
   type MeetingCaptureTemplate,
   type MeetingRecoverySummary,
+  type MeetingStoredChunk,
 } from '@kinqs/brainrouter-core/meetings';
 
 /** Sub-directory of the Electron `userData` root. Open question 2 — an existing rooted location, not a new one. */
@@ -105,6 +103,15 @@ export interface BeginCaptureInput {
 export interface CapturedAudio {
   readonly bytes: Uint8Array;
   readonly contentType: string;
+  /**
+   * §6/D5 — segment indices the record claims and the disk could not give back.
+   *
+   * Stated rather than thrown, for the same reason a failed segment is a marked
+   * gap and not an omission: an hour of meeting is fifty-nine other minutes that
+   * are right here, and refusing all of them because one file is unreadable is
+   * the silent-total-loss failure this ADR exists to end, wearing an errno.
+   */
+  readonly missing: readonly number[];
 }
 
 /** What one boot pass corrected, so the reap D6 asks for can be logged. */
@@ -332,10 +339,6 @@ export class MeetingCaptureStore {
     });
   }
 
-  async session(id: string): Promise<MeetingCaptureSession> {
-    return (await this.load(id)).session;
-  }
-
   /** The record together with the recorder MIME that describes its bytes. */
   async stored(id: string): Promise<{ session: MeetingCaptureSession; contentType: string }> {
     const stored = await this.load(id);
@@ -346,19 +349,34 @@ export class MeetingCaptureStore {
    * The captured audio, segments concatenated in index order — which is the
    * original recorder stream, because a `MediaRecorder` timeslice splits one
    * container rather than producing many.
+   *
+   * A segment the disk cannot give back is REPORTED, not thrown. `readSegment`
+   * already draws that line for transcription — a missing file is `null` and
+   * becomes a stated gap — and playback needs the same line for the same reason:
+   * this is §6's "on disk AND playable", judged over a whole meeting, and one
+   * unreadable chunk that rejected the concatenation made the other fifty-nine
+   * minutes unreachable while the recovery card went on advertising their bytes.
+   * The dashboard's `readAudio` returns what it has plus `missing`; this is that
+   * rule on this host (D1b).
    */
   async read(id: string): Promise<CapturedAudio> {
     const stored = await this.load(id);
-    const directory = this.directory(id);
     const parts: Buffer[] = [];
+    const missing: number[] = [];
     for (const segment of stored.session.segments) {
-      parts.push(await fs.promises.readFile(path.join(directory, segmentName(segment.index))));
+      const bytes = await this.readSegment(id, segment.index);
+      if (!bytes) { missing.push(segment.index); continue; }
+      parts.push(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength));
     }
     // Handed back as a plain `Uint8Array` view over the concatenation rather
     // than a `Buffer`: that is what structured clone delivers to the renderer,
     // so the declared type should not promise a Node-only subclass.
     const merged = Buffer.concat(parts);
-    return { bytes: new Uint8Array(merged.buffer, merged.byteOffset, merged.byteLength), contentType: stored.contentType };
+    return {
+      bytes: new Uint8Array(merged.buffer, merged.byteOffset, merged.byteLength),
+      contentType: stored.contentType,
+      missing,
+    };
   }
 
   /** D6 — the user accepted the meeting, so the audio is released. */
@@ -418,7 +436,7 @@ export class MeetingCaptureStore {
         reaped.push(id);
         continue;
       }
-      const claimed = await this.adoptUnclaimedChunks(id, stored.session);
+      const claimed = await this.claimStoredChunks(id, stored.session);
       if (claimed.segments.length > stored.session.segments.length) adopted.push(id);
       const session = recoverCaptureSession(claimed);
       // D6/D2 — a Record the user cancelled, or that died before its first chunk
@@ -502,40 +520,31 @@ export class MeetingCaptureStore {
   }
 
   /**
-   * Believe the chunks.
+   * Believe the chunks — the FILES half of it, and only that half.
    *
    * D1 writes the bytes and THEN the record, so the last thing a kill can
-   * interrupt is the record — leaving a segment file the session does not
-   * mention. Deleting those files was the obvious reading of "torn tail" and it
-   * is the wrong one: a chunk at index `segments.length` was fully written and
-   * closed, and throwing it away discards up to twenty seconds of real audio at
-   * exactly the moment §6 asks for "the audio up to the kill". The record is the
-   * stale artifact here, not the file. So the record is extended to claim what
-   * the disk actually holds — the same policy the dashboard reaches by the same
-   * argument (`capturePayload.ts`, `adoptChunks`).
+   * interrupt is the record, leaving a segment file the session does not
+   * mention. Which of those files may be believed is `adoptCaptureChunks` in
+   * `@kinqs/brainrouter-core/meetings`: contiguous from the end of the record,
+   * non-empty, nothing for a terminal capture. That rule used to live here AND
+   * in the dashboard, in two copies whose comments admitted nothing kept them
+   * aligned — so it moved to core, where a segment's index means the same thing
+   * on both hosts (D1b).
    *
-   * The rule for what may be believed, because "any leftover file" is too
-   * generous:
-   *
-   * - **Contiguous from the end of the record.** A segment's index IS the chunk
-   *   the queue reads audio from, so bridging a hole would transcribe segment
-   *   N+1 from segment N+2's audio — text that looks right and is wrong, which
-   *   is worse than an unclaimed chunk. The walk stops at the first missing
-   *   index and everything past it is deleted.
-   * - **Non-empty.** `open` can succeed and the process die before the write, and
-   *   the shared model refuses a zero-byte segment anyway.
+   * What is left here is the part that genuinely needs a filesystem: measuring
+   * what each stored chunk actually holds, and deleting the bytes the shared
+   * rule rejected. Deleting them is desktop policy rather than the rule's: a
+   * file past a hole can never be read back in the right order again, so keeping
+   * it would hold disk for audio nothing will ever transcribe (D6).
    *
    * Only the HIGHEST-indexed file can be a genuinely torn write, because
-   * `writeSegment` serializes per session and only resolves after `close`. It is
-   * adopted regardless: a truncated tail is at worst one segment the endpoint
-   * cannot decode, which D5 turns into a stated gap with a retry — while
-   * deleting it is silent loss, which is the failure this ADR exists to end.
-   *
-   * Durations are the recorder's nominal timeslice: the measured elapsed time
-   * died with the process that measured it, and a gap marker needs a range that
-   * is monotonic and about right, not one invented to look precise.
+   * `writeSegment` serializes per session and only resolves after `close`. The
+   * shared rule adopts it regardless, and that is the answer this host wants: a
+   * truncated tail is at worst one segment the endpoint cannot decode, which D5
+   * turns into a stated gap with a retry — while deleting it is silent loss,
+   * which is the failure this ADR exists to end.
    */
-  private async adoptUnclaimedChunks(
+  private async claimStoredChunks(
     id: string,
     session: MeetingCaptureSession,
   ): Promise<MeetingCaptureSession> {
@@ -550,28 +559,19 @@ export class MeetingCaptureStore {
     }
     if (!unclaimed.size) return session;
 
-    const believable = new Map<number, number>();
-    for (let index = session.segments.length; unclaimed.has(index); index += 1) {
-      const bytes = await fileSize(path.join(directory, unclaimed.get(index)!));
-      if (bytes <= 0) break;
-      believable.set(index, bytes);
+    const chunks: MeetingStoredChunk[] = [];
+    for (const [sequence, entry] of unclaimed) {
+      chunks.push({ sequence, byteLength: await fileSize(path.join(directory, entry)) });
     }
-    for (const [index, entry] of unclaimed) {
-      if (believable.has(index)) continue;
-      await fs.promises.rm(path.join(directory, entry), { force: true });
+    // The nominal segment length is the shared rule's own default and is left to
+    // it: the measured elapsed time died with the process that measured it, and
+    // a gap marker (D5) needs a range that is monotonic and about right.
+    const adoption = adoptCaptureChunks(session, chunks);
+    for (const sequence of adoption.rejected) {
+      const entry = unclaimed.get(sequence);
+      if (entry) await fs.promises.rm(path.join(directory, entry), { force: true });
     }
-    if (!believable.size) return session;
-
-    // `appendSegment` only accepts a recording session, so a cleanly stopped one
-    // is resumed for the append and stopped again with its ORIGINAL timestamp —
-    // the recording did not restart, and rewriting `stoppedAt` would misreport
-    // when it ended.
-    const stoppedAt = session.status === 'stopped' ? session.stoppedAt : undefined;
-    let next = session.status === 'recording' ? session : resumeCapture(session);
-    for (const byteLength of believable.values()) {
-      next = appendSegment(next, { byteLength, durationMs: DEFAULT_MEETING_SEGMENT_MS });
-    }
-    return session.status === 'recording' ? next : stopCapture(next, stoppedAt);
+    return adoption.session;
   }
 
   private async storedIds(): Promise<string[]> {

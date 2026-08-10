@@ -20,12 +20,22 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { MeetingEndpointUnavailableError, MEETING_GAP_PHRASE, transcriptText } from '@kinqs/brainrouter-core/meetings';
+import {
+  MeetingEndpointUnavailableError,
+  MEETING_GAP_PHRASE,
+  transcriptText,
+  type MeetingCaptureSession,
+} from '@kinqs/brainrouter-core/meetings';
 import { MeetingCaptureStore, MEETING_CAPTURE_DIRECTORY } from './meetingCapture.js';
 import { MeetingTranscriptionSupervisor, type MeetingCaptureProgress } from './meetingTranscription.js';
 
 function userData(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-meeting-queue-'));
+}
+
+/** What the store has on disk. `stored` also carries the recorder MIME, which no assertion here wants. */
+async function record(store: MeetingCaptureStore, id: string): Promise<MeetingCaptureSession> {
+  return (await store.stored(id)).session;
 }
 
 function captureDirectory(home: string, id: string): string {
@@ -39,6 +49,8 @@ interface Harness {
   /** One entry per request that reached the "endpoint", newest last. */
   readonly requests: number[];
   readonly published: MeetingCaptureProgress[];
+  /** Every delay the supervisor asked to be woken after, in the order it asked. */
+  readonly wakeDelays: number[];
   /** Backoff wakes the supervisor asked for, so a test can run them at once. */
   runWakes(): Promise<void>;
 }
@@ -51,6 +63,7 @@ function harness(
   const requests: number[] = [];
   const published: MeetingCaptureProgress[] = [];
   const wakes: Array<{ run: () => void; delayMs: number }> = [];
+  const wakeDelays: number[] = [];
   const clock = { nowMs: Date.parse('2026-08-10T09:00:00.000Z') };
   const supervisor = new MeetingTranscriptionSupervisor(store, {
     transcribe: async ({ bytes }) => {
@@ -62,7 +75,7 @@ function harness(
     // backoff would be a test nobody runs. Firing a wake moves the clock by the
     // delay that was asked for, because the queue serves its own cooldown from
     // the clock and would otherwise refuse the probe the timer just triggered.
-    schedule: (run, delayMs) => { wakes.push({ run, delayMs }); return () => undefined; },
+    schedule: (run, delayMs) => { wakes.push({ run, delayMs }); wakeDelays.push(delayMs); return () => undefined; },
     now: () => clock.nowMs,
   });
   return {
@@ -71,6 +84,7 @@ function harness(
     supervisor,
     requests,
     published,
+    wakeDelays,
     async runWakes() {
       for (const wake of wakes.splice(0, wakes.length)) {
         clock.nowMs += wake.delayMs;
@@ -92,7 +106,7 @@ test('every segment is transcribed on its own, and the text is persisted as it l
   // §6 — nothing ever posts the whole capture, so a meeting past the 40 MB body
   // limit is not a meeting that fails. Each request carried exactly one segment.
   assert.deepEqual(requests, [2, 3]);
-  const stored = await store.session(session.id);
+  const stored = await record(store, session.id);
   assert.deepEqual(stored.segments.map((segment) => [segment.state, segment.text]), [['done', 'chunk-2'], ['done', 'chunk-3']]);
   assert.equal(transcriptText(stored), 'chunk-2\nchunk-3');
   // D4 — the surface is told, and only ever about a record already on disk.
@@ -159,7 +173,7 @@ test('an outage costs no retry budget and drains when the endpoint returns', asy
 
   // D7 — the endpoint is a fact about the server, not about the audio. The
   // segment is queued, not failed, and has spent nothing.
-  const during = await store.session(session.id);
+  const during = await record(store, session.id);
   assert.equal(during.segments[0]?.state, 'pending');
   assert.equal(during.segments[0]?.attempts, 0);
 
@@ -167,8 +181,46 @@ test('an outage costs no retry budget and drains when the endpoint returns', asy
   await runWakes();
   await supervisor.settle(session.id);
 
-  assert.equal((await store.session(session.id)).segments[0]?.text, 'recovered');
+  assert.equal((await record(store, session.id)).segments[0]?.text, 'recovered');
   assert.ok(requests.length >= 2);
+});
+
+test('a queue that stopped with work still ready is woken on the shared floor, not immediately', async () => {
+  const { store, supervisor, requests, wakeDelays } = harness(async () => 'never reached');
+  const session = await supervisor.begin({ scope: { orgId: null } });
+  // The one case the floor exists for: the RECORD cannot be written, so the
+  // attempt is never announced and the segment stays ready with nothing spent.
+  // The queue answers `nextWakeMs: 0` — "come back", not "idle" — and honouring
+  // that literally spins the main process against a disk already refusing it.
+  // Only the `transcribing` write fails, so the chunk itself still lands and
+  // this is the state a full disk actually produces rather than a broken store.
+  const persist = store.persist.bind(store);
+  store.persist = async (next) => {
+    if (next.segments.some((segment) => segment.state === 'transcribing')) throw new Error('no space left on device');
+    return await persist(next);
+  };
+  await supervisor.append(session.id, new Uint8Array([1, 2]), 20_000);
+  await supervisor.settle(session.id);
+
+  // Nothing was sent, because the attempt could not be recorded…
+  assert.deepEqual(requests, []);
+  // …and the wake is the shared floor rather than the zero the queue reported.
+  assert.ok(wakeDelays.length > 0, 'the supervisor scheduled another drain');
+  assert.deepEqual(wakeDelays.filter((delay) => delay < 500), []);
+  assert.equal(wakeDelays[0], 500);
+});
+
+test('a real backoff passes through the floor untouched', async () => {
+  const { supervisor, wakeDelays } = harness(async () => { throw new Error('sidecar said no'); });
+  const session = await supervisor.begin({ scope: { orgId: null } });
+  await supervisor.append(session.id, new Uint8Array([1]), 20_000);
+  await supervisor.settle(session.id);
+
+  // The floor only ever binds on the error path above: the retry policy's base
+  // delay is 2 s, four times the floor, and a floor that started clamping real
+  // backoffs would be a retry rule wearing a scheduler's clothes.
+  assert.ok(wakeDelays.length > 0, 'a failed segment schedules its retry');
+  assert.ok(wakeDelays[0] !== undefined && wakeDelays[0] >= 2000, `expected the policy's backoff, got ${String(wakeDelays[0])}`);
 });
 
 test('a segment that cannot be transcribed becomes a stated gap, and the retry fills it in', async () => {
@@ -187,7 +239,7 @@ test('a segment that cannot be transcribed becomes a stated gap, and the retry f
   }
   await supervisor.settle(session.id);
 
-  const failed = await store.session(session.id);
+  const failed = await record(store, session.id);
   assert.equal(failed.segments[0]?.state, 'failed');
   assert.equal(failed.segments[0]?.attempts, 4);
   // D5 — a hole in a transcript is quietly wrong; this says where it is.
@@ -199,7 +251,7 @@ test('a segment that cannot be transcribed becomes a stated gap, and the retry f
   answer = 'filled in';
   const retried = await supervisor.retry(session.id, 0);
   assert.equal(retried.segments[0]?.text, 'filled in');
-  assert.equal(transcriptText(await store.session(session.id)), 'filled in');
+  assert.equal(transcriptText(await record(store, session.id)), 'filled in');
 });
 
 test('a new process finishes the segments the last one left behind', async () => {
@@ -208,7 +260,7 @@ test('a new process finishes the segments the last one left behind', async () =>
   await first.supervisor.append(session.id, new Uint8Array([1, 2]), 20_000);
   await first.supervisor.append(session.id, new Uint8Array([3, 4]), 20_000);
   await first.supervisor.settle(session.id);
-  assert.deepEqual((await first.store.session(session.id)).segments.map((segment) => segment.state), ['pending', 'pending']);
+  assert.deepEqual((await record(first.store, session.id)).segments.map((segment) => segment.state), ['pending', 'pending']);
 
   // The app is killed here. A new launch runs the boot pass and a NEW supervisor
   // over the same directory — the queue is restartable because it holds no work
@@ -220,7 +272,7 @@ test('a new process finishes the segments the last one left behind', async () =>
   await supervisor.settle(session.id);
 
   assert.deepEqual(requests, [2, 2]);
-  assert.equal(transcriptText(await store.session(session.id)), 'after-restart-2\nafter-restart-2');
+  assert.equal(transcriptText(await record(store, session.id)), 'after-restart-2\nafter-restart-2');
 });
 
 test('closing a capture stops the queue before the audio is deleted', async () => {

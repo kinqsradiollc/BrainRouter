@@ -139,17 +139,14 @@ test('D1 still holds through the supervisor: bytes first, then the count the dis
   const store = read('../../electron/meetingCapture.ts');
   const supervisor = read('../../electron/meetingTranscription.ts');
 
-  // The store writes bytes and no longer edits the record of an OPEN capture,
-  // because D3's queue is its single writer and two writers would interleave an
-  // append with a `markDone` and lose one of them. The boot pass is the one
-  // allowed exception — it runs before any queue exists, and it is where a
-  // durable chunk the kill landed on top of is claimed rather than deleted (§6,
-  // "the audio up to the kill") — so this is about WHERE the store appends.
-  const adoptAt = store.indexOf('private async adoptUnclaimedChunks(');
-  assert.ok(adoptAt > 0);
-  for (const match of store.matchAll(/appendSegment\(/g)) {
-    assert.ok((match.index ?? 0) > adoptAt, 'the store only extends a record inside the boot pass');
-  }
+  // The store writes bytes and no longer extends a record AT ALL: D3's queue is
+  // the single writer of an open capture, and the boot pass's one exception —
+  // claiming a durable chunk the kill landed on top of (§6, "the audio up to the
+  // kill") — is now the shared rule's. Both hosts had written that rule for
+  // themselves and both comments admitted nothing kept the two aligned, so a
+  // second copy reappearing here is the drift D1b is about.
+  assert.match(store, /adoptCaptureChunks\(session, chunks\)/);
+  assert.doesNotMatch(store, /appendSegment\(|resumeCapture\(/);
   const writeAt = supervisor.indexOf('await this.#store.writeSegment(id, index, bytes)');
   const recordAt = supervisor.indexOf('appendSegment(current, { byteLength: written');
   assert.ok(writeAt > 0 && recordAt > writeAt);
@@ -173,6 +170,93 @@ test('live text distinguishes provisional from settled, and a gap says where it 
   assert.match(fold, /formatCaptureGap\(entry\.startMs, entry\.endMs\)/);
   assert.match(fold, /planTranscription\(session\)\.exhausted/);
   assert.match(view, /onRetry\(entry\.index\)/);
+});
+
+test('a recovered capture is folded in once, through the shared reconciliation', () => {
+  const view = read('../components/meetings/MeetingsView.tsx');
+
+  // The fatal defect this guards: a restored draft ALREADY holds the capture's
+  // settled segments, so resetting the fold to empty before adopting appended
+  // every one of them a second time — and the doubled text is what was POSTed
+  // and summarized. The rule is shared with the dashboard, which had the same
+  // bug in its own dialect (D1b).
+  assert.match(view, /reconcileCaptureDraft\(transcriptRef\.current, session\)/);
+  assert.match(view, /foldRef\.current = \{ inserted: reconciled\.matched, next: reconciled\.next \}/);
+  // …and it has to run BEFORE the fold, which is what `applySession` does.
+  const reconcileAt = view.indexOf('const reconciled = reconcileCaptureDraft(transcriptRef.current, session)');
+  const applyAt = view.indexOf('applySession(session);', reconcileAt);
+  assert.ok(reconcileAt > 0 && applyAt > reconcileAt);
+  // The remaining empty fold is `startRecording`'s, where `begin` has just
+  // minted a session with no segments and there is genuinely nothing to
+  // reconcile against.
+  assert.equal(view.match(/foldRef\.current = EMPTY_TRANSCRIPT_FOLD/g)?.length, 1);
+
+  // E — and the recovered meeting comes back with its own NAME, which the
+  // recovery card is already displaying two lines above the empty title box.
+  // Create is disabled without one, so a crash used to end with the user
+  // retyping a title the surface could see and they could not.
+  assert.match(view, /if \(session\.title\) setTitle\(\(current\) => current \|\| session\.title\)/);
+});
+
+test('D6 — the draft lives where the audio does, and is the compose box itself', () => {
+  const view = read('../components/meetings/MeetingsView.tsx');
+  const ops = read('../components/meetings/captureOps.ts');
+  const legacy = read('../components/meetings/legacyDraft.ts');
+  const bridge = read('../../electron/meetingCaptureBridge.ts');
+  const preload = read('../../electron/preload.cts');
+  const declarations = read('../bridge.d.ts');
+  const drafts = read('../../electron/meetingDraft.ts');
+
+  // "Audio is never written to `localStorage` or any renderer-accessible store.
+  // The existing text draft should move to the same protected location for the
+  // same reason." Nothing writes that key any more, and the one read left that
+  // empties it lives in a module of its own — because it has to run when the
+  // meetings view opens, not when someone gets as far as the compose form.
+  // (Naming the store in a comment is how a fallback to it is argued against,
+  // here as in the adapter below, so only a CALL is refused.)
+  assert.doesNotMatch(view, /localStorage\.\w/);
+  assert.match(legacy, /storage\.removeItem\(LEGACY_DRAFT_KEY\)/);
+  assert.match(view, /migrateLegacyDraft\(capture\)/);
+  // …and no fallback to it from the adapter either, which is where a "the host
+  // is unavailable" branch would be tempting. (Naming the store in a comment is
+  // how that branch is argued against, so only a CALL is refused here.)
+  assert.doesNotMatch(ops, /localStorage\.\w/);
+
+  for (const channel of ['draftRead', 'draftWrite', 'draftClear']) {
+    assert.match(bridge, new RegExp(`ipcMain\\.handle\\('meetings:${channel}'`), `main handles meetings:${channel}`);
+    assert.match(preload, new RegExp(`ipcRenderer\\.invoke\\('meetings:${channel}'`), `preload invokes meetings:${channel}`);
+    assert.match(declarations, new RegExp(`${channel}\\?\\(`), `bridge.d.ts declares ${channel}`);
+  }
+  // The same protected location, with the same modes as the audio beside it.
+  assert.match(drafts, /MEETING_CAPTURE_DIRECTORY/);
+  assert.match(drafts, /DIRECTORY_MODE = 0o700/);
+  assert.match(drafts, /FILE_MODE = 0o600/);
+
+  // C — the draft is the WHOLE box. Stripping the capture's settled segments out
+  // of it kept the transcript out of `localStorage`, which stopped being the
+  // question the moment the draft moved into the 0600 file the audio is in; what
+  // it left was a saved draft that no longer said what the box said, and a
+  // recovery that reconciled it against the same session came back with a
+  // doubled edit, an undone deletion, a relocated note, or — worst — a kept line
+  // matching a later segment and silently swallowing the minutes before it.
+  assert.match(view, /capture\.writeDraft\(\{ title, transcript, /);
+  assert.doesNotMatch(view, /reconcileCaptureDraft\(transcript, session\)\.retained/);
+  assert.doesNotMatch(view, /transcript: owned/);
+  // The reconciliation stays exactly where it is right: over a box whose
+  // contents are what they claim to be, as an in-memory recompose base. One
+  // call, and it is `adoptCapture`'s.
+  assert.equal(view.match(/= reconcileCaptureDraft\(/g)?.length, 1);
+  assert.match(view, /const reconciled = reconcileCaptureDraft\(transcriptRef\.current, session\);/);
+});
+
+test('open question 5 — a meeting is filed under the org the RECORDING started in', () => {
+  const view = read('../components/meetings/MeetingsView.tsx');
+
+  // "A recording that started under one org must not silently land in another."
+  // The active org comes from the app-wide switcher and can move mid-meeting;
+  // the capture's scope is frozen at Record and nothing rewrites it.
+  assert.match(view, /const filedOrgId = session \? session\.scope\.orgId \?\? undefined : orgId;/);
+  assert.match(view, /ops\.createFromTranscript\(\{[^}]*\}, filedOrgId\)/);
 });
 
 test('Create cannot delete a recording out from under itself', () => {
@@ -204,11 +288,73 @@ test('the surface renders the whole of what the host publishes, not just the ses
   // so a queue waiting on a dead endpoint renders exactly like one that is
   // working. That difference exists only in the drain phase.
   assert.match(view, /if \(progress\.phase\) setPhase\(progress\.phase\)/);
-  assert.match(view, /phaseNote\(session, phase, gaps, provisional\)/);
-  // D5/D7 — and once the refunds are spent the queue has stopped waiting for the
-  // endpoint on that segment's behalf, which is precisely when a surface should
-  // stop showing a spinner and show the gap.
-  assert.match(view, /MEETING_ENDPOINT_UNRESPONSIVE_REASON/);
+  // F/D1b — the SENTENCE those states turn into is core's, not this host's. It
+  // was written twice and the two copies had already drifted ("these segments
+  // transcribe when it comes back" here, "WILL transcribe" on the dashboard),
+  // which is the difference between two hosts making one promise and two hosts
+  // making two. That includes the branch that fires rarest and matters most —
+  // the refunds being spent — so the desktop must not restate any of it.
+  assert.match(view, /capturePhaseNote\(session, phase, \{ gaps, provisional \}\)/);
+  assert.doesNotMatch(view, /function phaseNote\(/);
+  assert.doesNotMatch(view, /MEETING_ENDPOINT_UNRESPONSIVE_REASON/);
+  assert.doesNotMatch(view, /The transcription service is not answering/);
+});
+
+test('A1 — navigating away from the compose form does not end the meeting', () => {
+  const view = read('../components/meetings/MeetingsView.tsx');
+
+  // The defect: the recorder lived inside `<NewMeeting/>`, whose only unmount
+  // cleanup released the microphone, and FOUR ordinary clicks unmounted it
+  // mid-recording — Cancel, opening a meeting from the library, the Track/Teams
+  // tabs, and the workspace switcher. Nothing said the recording had ended,
+  // because the state that knew was in the component that just went away.
+  //
+  // The decision, matching the dashboard (D1b): navigation does NOT stop the
+  // recording. The form stays mounted while `recording` is true and is merely
+  // hidden, and an indicator above the tab switch leads back to it.
+  assert.match(view, /\{composing \|\| recording \? \(/);
+  assert.match(view, /display: composeVisible \? "contents" : "none"/);
+  assert.match(view, /const composeVisible = composing && mode === "meetings";/);
+  assert.match(view, /\{mode === "meetings" \|\| recording \? \(/);
+  assert.match(view, /onRecordingChange=\{setRecording\}/);
+  assert.match(view, /useEffect\(\(\) => \{ onRecordingChange\(recording\); \}/);
+  // The indicator, and the way back. It is rendered before the tab switch so it
+  // survives the two tabs that replace everything below it.
+  const barAt = view.indexOf('recording && !composeVisible ?');
+  const tabsAt = view.indexOf('{mode === "tracked" ? <MeetingTracksView');
+  assert.ok(barAt > 0 && tabsAt > barAt, 'the recording indicator is rendered above the tab switch');
+  assert.match(view, /A meeting is being recorded\. Its audio is being saved to this device\./);
+  assert.match(view, /setMode\("meetings"\); setSelectedId\(null\); setComposing\(true\);/);
+
+  // And when the form really does go — the meetings view itself unmounting —
+  // the capture is CLOSED rather than abandoned. `dispose` stopped the
+  // microphone without telling the store, so the session stayed
+  // `status: "recording"` and the library advertised the user's own click as an
+  // interrupted recording.
+  assert.doesNotMatch(view, /recorderRef\.current\?\.dispose\(\)/);
+  assert.match(view, /mountedRef\.current = false;\s*\n\s*const recorder = recorderRef\.current;\s*\n\s*recorderRef\.current = null;\s*\n\s*void recorder\?\.stop\(\);/);
+});
+
+test('B — one unreadable segment is stated, not thrown at the whole recording', () => {
+  const view = read('../components/meetings/MeetingsView.tsx');
+  const store = read('../../electron/meetingCapture.ts');
+  const ops = read('../components/meetings/captureOps.ts');
+
+  // §6 judges this on the audio being "on disk AND playable". A `readFile` per
+  // claimed segment with no guard meant one missing file rejected the whole
+  // concatenation: fifty-nine other minutes on disk and unreachable, with the
+  // recovery card still advertising their byte count and the user shown an
+  // errno. The per-segment reader already draws this line for transcription.
+  assert.match(store, /const bytes = await this\.readSegment\(id, segment\.index\);/);
+  assert.match(store, /if \(!bytes\) \{ missing\.push\(segment\.index\); continue; \}/);
+  assert.doesNotMatch(store, /parts\.push\(await fs\.promises\.readFile\(/);
+  // Carried across the bridge and rendered, because a player that is short of
+  // the recording and says nothing is the silent loss in a smaller costume.
+  assert.match(ops, /missing: readonly number\[\]/);
+  assert.match(view, /missing: audio\.missing\.length/);
+  assert.match(view, /could not be read back/);
+  // Nothing readable at all is not a player with a caption under it.
+  assert.match(view, /if \(!audio\.bytes\.byteLength\)/);
 });
 
 test('the capture channels exist on both sides of the Electron boundary', () => {

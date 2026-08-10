@@ -14,6 +14,21 @@
  * `fold` below stands in for the hosts' append step (the desktop's
  * `foldTranscript`, the dashboard's compose) so the round trip — reconcile, then
  * append what is left — can be asserted end to end from core.
+ *
+ * ## What this file got wrong last round, and how it is written now
+ *
+ * The §6 test handed `reconcileCaptureDraft` a restored draft that still held
+ * the transcript — correct under the contract, but a shape the product could not
+ * produce, because both hosts were persisting `retained` (the box with every
+ * segment stripped out) and replaying THAT. So the test asserted the happy path
+ * of an input the product never had, and four corruptions of the input it did
+ * have went unnoticed.
+ *
+ * The fix is structural rather than another case: every kill-and-reopen test
+ * goes through `killAndReopen`, which takes the PERSIST STEP as a parameter.
+ * `persistWholeBox` is the contract; `persistRetained` is what the hosts did.
+ * The four corruptions are the difference between them, asserted as text, so
+ * neither the contract nor the reason for it can quietly stop being true.
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -25,6 +40,7 @@ import {
   markDone,
   markFailed,
   markTranscribing,
+  MEETING_GAP_PHRASE,
   reconcileCaptureDraft,
   recoverCaptureSession,
   transcriptSoFar,
@@ -80,6 +96,36 @@ function fold(text: string, session: MeetingCaptureSession, next: number): strin
   if (!additions.length) return text;
   const joined = additions.join('\n');
   return text ? `${text}\n${joined}` : joined;
+}
+
+/** What a host writes to its draft store. The contract, and the violation. */
+type PersistDraft = (box: string, session: MeetingCaptureSession) => string;
+
+/**
+ * The contract: the whole compose box, exactly as the person sees it. Both hosts
+ * now keep the draft in protected storage, so there is no size objection left to
+ * stripping it — and stripping it is what the four tests below cost.
+ */
+const persistWholeBox: PersistDraft = (box) => box;
+
+/**
+ * What both hosts persisted instead: `retained`, the box with every segment
+ * contribution removed. Replaying it feeds the frontier rule the COMPLEMENT of
+ * its own input.
+ */
+const persistRetained: PersistDraft = (box, session) => reconcileCaptureDraft(box, session).retained;
+
+/**
+ * §6's destructive test, as the hosts perform it: whatever was persisted is
+ * restored verbatim into the next compose box, reconciled against the recovered
+ * session, and the rest of the transcript folded in. The answer is the text the
+ * person is left looking at — and the text that gets POSTed and summarized.
+ */
+function killAndReopen(box: string, live: MeetingCaptureSession, persist: PersistDraft): string {
+  const restored = persist(box, live);
+  const recovered = recoverCaptureSession(live, '2026-08-09T10:05:00.000Z');
+  const reconciled = reconcileCaptureDraft(restored, recovered);
+  return fold(reconciled.text, recovered, reconciled.next);
 }
 
 test('the fatal case — a draft that IS the mirrored transcript folds in once, not twice', () => {
@@ -276,17 +322,102 @@ test('§6 end to end — kill, reopen, restore the draft, adopt the recovery: on
   live = settle(live, 0, 'Sentence 1.');
   live = settle(live, 1, 'Sentence 2.');
   live = markTranscribing(live, 2, '2026-08-09T10:01:00.000Z');
-  const draft = 'Agenda I pasted in.\nSentence 1.\nSentence 2.';
+  // The box at that instant: their agenda, and the transcript the surface has
+  // mirrored into it. This — not some stripped version of it — is what the
+  // draft store holds when the process dies.
+  const box = 'Agenda I pasted in.\nSentence 1.\nSentence 2.';
+  assert.equal(persistWholeBox(box, live), box, 'the draft store holds the meeting, not a residue of it');
 
-  // Reopen: the record is recovered, and the interrupted segment is stated
-  // rather than left spinning.
-  const recovered = recoverCaptureSession(live, '2026-08-09T10:05:00.000Z');
-  const reconciled = reconcileCaptureDraft(draft, recovered);
-  const filed = fold(reconciled.text, recovered, reconciled.next);
+  const filed = killAndReopen(box, live, persistWholeBox);
 
   assert.ok(filed.startsWith('Agenda I pasted in.'), 'their agenda is still the first thing in the box');
   assert.equal(filed.split('Sentence 1.').length - 1, 1);
   assert.equal(filed.split('Sentence 2.').length - 1, 1);
-  assert.equal(filed, `${draft}\n${formatCaptureGap(40_000, 60_000)}`, 'the interrupted range is stated, once');
-  assert.equal(reconciled.retained, 'Agenda I pasted in.', 'the base a recomposing host must start from');
+  // The interrupted segment is stated rather than left spinning, and stated once.
+  assert.equal(filed, `${box}\n${formatCaptureGap(40_000, 60_000)}`, 'the interrupted range is stated, once');
+
+  // And the reason the four tests below exist: on THIS input — nothing edited,
+  // nothing deleted — persisting `retained` instead reaches the same answer. A
+  // §6 test alone cannot see the contract being violated, which is exactly how
+  // it was violated on both hosts for a round.
+  assert.equal(killAndReopen(box, live, persistRetained), filed, 'indistinguishable here, and only here');
+});
+
+/**
+ * The four corruptions of replaying `retained`.
+ *
+ * Each is the same shape: the same box and the same session, persisted the two
+ * ways. Under the contract the meeting survives the kill intact; under the strip
+ * it comes back wrong, silently, in a way no error and no marker announces.
+ */
+test('corruption 1 — one whole-line collision drops every earlier segment, with no gap marker', () => {
+  let session = capture(3, 'mtg-collide');
+  session = settle(session, 0, 'Sentence 1.');
+  session = settle(session, 1, 'Sentence 2.');
+  // The meeting ends by saying out loud the action item the person had already
+  // typed at the top of the box. One line, identical.
+  session = settle(session, 2, 'Ship on Friday.');
+  const box = 'Ship on Friday.\nSentence 1.\nSentence 2.\nShip on Friday.';
+
+  assert.equal(killAndReopen(box, session, persistWholeBox), box, 'the whole meeting survives the kill');
+
+  // Stripped, the box is just their note — which the walk then matches against
+  // segment 2, pinning the frontier there. Segments 0 and 1 are reported
+  // accounted-for and user-owned, so nothing folds them in.
+  const stripped = persistRetained(box, session);
+  assert.equal(stripped, 'Ship on Friday.');
+  const reconciled = reconcileCaptureDraft(stripped, session);
+  assert.deepEqual(reconciled.userOwned, [0, 1], 'text the person never touched, declared theirs');
+
+  const corrupted = killAndReopen(box, session, persistRetained);
+  assert.equal(corrupted, 'Ship on Friday.', 'two minutes of meeting are simply gone');
+  assert.ok(!corrupted.includes('Sentence 1.'));
+  assert.ok(!corrupted.includes('Sentence 2.'));
+  // The part that makes it a silent loss rather than a stated one (D5).
+  assert.ok(!corrupted.includes(MEETING_GAP_PHRASE), 'and nothing in the box says anything is missing');
+});
+
+test('corruption 2 — an edited segment doubles across the kill', () => {
+  const session = threeSettled();
+  // D4: the person fixed a name after segment 1 settled.
+  const box = 'Sentence 1.\nSentence 2, corrected by hand.\nSentence 3.';
+
+  assert.equal(killAndReopen(box, session, persistWholeBox), box, 'their wording stands, and stands alone');
+
+  // The edit is the only thing the strip keeps — and with the segments gone,
+  // nothing records that it WAS segment 1, so segment 1 folds in beside it.
+  assert.equal(persistRetained(box, session), 'Sentence 2, corrected by hand.');
+  assert.equal(
+    killAndReopen(box, session, persistRetained),
+    'Sentence 2, corrected by hand.\nSentence 1.\nSentence 2.\nSentence 3.',
+    'the pre-edit wording is back, the meeting is out of order, and the edit is now a duplicate',
+  );
+});
+
+test('corruption 3 — a deleted line comes back', () => {
+  const session = threeSettled();
+  const box = 'Sentence 1.\nSentence 3.';
+
+  assert.equal(killAndReopen(box, session, persistWholeBox), box, 'a deletion is a decision, and it holds');
+
+  // A deletion leaves nothing behind, so the stripped box is empty and the
+  // reopened one has no evidence any of this was ever in it.
+  assert.equal(persistRetained(box, session), '');
+  const corrupted = killAndReopen(box, session, persistRetained);
+  assert.equal(corrupted, 'Sentence 1.\nSentence 2.\nSentence 3.');
+  assert.ok(corrupted.includes('Sentence 2.'), 'the line they deleted is back in the meeting');
+});
+
+test('corruption 4 — a note typed between two segments is relocated to the top', () => {
+  const session = threeSettled();
+  const box = 'Sentence 1.\nMy note about that first bit.\nSentence 2.\nSentence 3.';
+
+  assert.equal(killAndReopen(box, session, persistWholeBox), box, 'their note stays where they put it');
+
+  assert.equal(persistRetained(box, session), 'My note about that first bit.');
+  assert.equal(
+    killAndReopen(box, session, persistRetained),
+    'My note about that first bit.\nSentence 1.\nSentence 2.\nSentence 3.',
+    'the note now reads as a preamble to a meeting it was a remark inside',
+  );
 });

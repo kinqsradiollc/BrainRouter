@@ -25,7 +25,11 @@
  *   then says.
  * - **The clock.** The queue reports when it is worth draining again; turning
  *   that into a timer is host work, and it is injectable so a test can advance a
- *   backoff without waiting for it.
+ *   backoff without waiting for it. The DELAY itself is not host work: this file
+ *   kept its own `MIN_WAKE_MS = 500` beside the dashboard's own
+ *   `MEETING_DRAIN_FLOOR_MS = 500`, two copies of a scheduling floor that agreed
+ *   only by inspection, so it now asks `drainWakeDelayMs` — which also folds in
+ *   the "is there anything to schedule at all" check.
  * - **The push to the renderer.** D4 wants text as it is produced, so every
  *   persisted transition is published. The persist port is the right place: a
  *   published session is by construction one that is already on disk. A drain
@@ -44,6 +48,7 @@ import {
   appendSegment,
   createMeetingTranscriptionQueue,
   createSegmentAudioReader,
+  drainWakeDelayMs,
   isTerminalCaptureStatus,
   stopCapture,
   MeetingEndpointUnavailableError,
@@ -104,17 +109,6 @@ export interface MeetingTranscriptionSupervisorOptions {
    */
   readonly now?: () => number;
 }
-
-/**
- * The floor on how soon a drain may run again.
- *
- * The queue can legitimately report `nextWakeMs: 0` — that is what it says when
- * it stopped with work still ready because a write failed and blocked a segment.
- * Honouring a zero literally would spin the main process against a disk that is
- * already refusing us. This is a scheduling floor, not a retry rule: the retry
- * schedule is still entirely the shared policy's.
- */
-const MIN_WAKE_MS = 250;
 
 function defaultSchedule(run: () => void, delayMs: number): () => void {
   const handle = setTimeout(run, delayMs);
@@ -216,7 +210,8 @@ export class MeetingTranscriptionSupervisor {
     // comes back `unavailable`, and a surface that only read the session would
     // show the same gap with no explanation of why it is still there.
     if (!entry.closed) this.#report(id, result);
-    if (result.nextWakeMs !== null) this.#wake(id, entry, result.nextWakeMs);
+    const delay = drainWakeDelayMs(result.nextWakeMs);
+    if (delay !== null) this.#wake(id, entry, delay);
     return result.session;
   }
 
@@ -346,7 +341,8 @@ export class MeetingTranscriptionSupervisor {
       (result) => {
         if (entry.closed) return;
         this.#report(id, result);
-        if (result.nextWakeMs !== null) this.#wake(id, entry, result.nextWakeMs);
+        const delay = drainWakeDelayMs(result.nextWakeMs);
+        if (delay !== null) this.#wake(id, entry, delay);
       },
       (caught: unknown) => {
         if (entry.closed) return;
@@ -374,13 +370,14 @@ export class MeetingTranscriptionSupervisor {
     });
   }
 
+  /** `delayMs` is already `drainWakeDelayMs`'s answer — the floor is the shared rule's, not this file's. */
   #wake(id: string, entry: CaptureEntry, delayMs: number): void {
     if (entry.closed) return;
     entry.cancelWake?.();
     entry.cancelWake = this.#schedule(() => {
       entry.cancelWake = null;
       this.#kick(id, entry);
-    }, Math.max(MIN_WAKE_MS, delayMs));
+    }, delayMs);
   }
 }
 

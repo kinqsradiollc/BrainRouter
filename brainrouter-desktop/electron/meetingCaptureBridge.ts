@@ -19,6 +19,11 @@
  * and the store turns a session id into a directory path, so a non-string id has
  * to be refused here rather than discovered by `path.join`.
  *
+ * The compose DRAFT crosses here for a different reason and the same rule: D6
+ * asks that it move out of `localStorage` into the protected location the audio
+ * already lives in, so the renderer asks the host to hold it too
+ * (`meetingDraft.ts`).
+ *
  * Registration also runs the one boot recovery pass (D2/D6): a session left
  * `recording` by a crash is corrected, and capture directories no record claims
  * are reaped and logged.
@@ -26,6 +31,7 @@
 import { BrowserWindow, app, ipcMain } from 'electron';
 import type { MeetingCaptureScope, MeetingCaptureTemplate } from '@kinqs/brainrouter-core/meetings';
 import { MeetingCaptureStore } from './meetingCapture.js';
+import { MeetingDraftStore, normalizeComposeDraft } from './meetingDraft.js';
 import { MeetingTranscriptionSupervisor, type MeetingCaptureProgress } from './meetingTranscription.js';
 import { transcribeCaptureSegment } from './meetingsBridge.js';
 
@@ -79,6 +85,7 @@ function broadcast(progress: MeetingCaptureProgress): void {
 
 export function registerMeetingCaptureBridge(userDataPath = app.getPath('userData')): MeetingCaptureStore {
   const store = new MeetingCaptureStore(userDataPath);
+  const drafts = new MeetingDraftStore(userDataPath);
   const supervisor = new MeetingTranscriptionSupervisor(store, {
     transcribe: transcribeCaptureSegment,
     publish: broadcast,
@@ -138,6 +145,20 @@ export function registerMeetingCaptureBridge(userDataPath = app.getPath('userDat
     return { ok: true };
   });
   ipcMain.handle('meetings:captureResumable', async (_event, scope: unknown) => await store.resumable(scopeOf(scope)));
+
+  // D6 — the compose draft. It used to be written to `localStorage` from the
+  // renderer, which is the store D6 names ("any page script can read") and which
+  // filled up with the recorded meeting's own words once D4 started folding live
+  // transcript into the box. The words now live where the audio does.
+  ipcMain.handle('meetings:draftRead', async () => await drafts.read());
+  ipcMain.handle('meetings:draftWrite', async (_event, draft: unknown) => {
+    await drafts.write(normalizeComposeDraft(draft));
+    return { ok: true };
+  });
+  ipcMain.handle('meetings:draftClear', async () => {
+    await drafts.clear();
+    return { ok: true };
+  });
 
   // Timers only; the audio and the record are already on disk, so quitting mid
   // drain costs the remaining segments a retry and nothing else.

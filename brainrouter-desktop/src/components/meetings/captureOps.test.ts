@@ -52,6 +52,75 @@ test("the capture scope and the recorder's content type travel with the session"
   ]);
 });
 
+test("D6 — the compose draft crosses the bridge, and a stale record is narrowed rather than trusted", async () => {
+  const calls: string[] = [];
+  setBridge({
+    captureBegin: async () => SESSION,
+    captureAppend: async () => SESSION,
+    draftRead: async () => { calls.push("draftRead"); return { title: "Sync", transcript: "Typed.", template: "standup", language: " en ", pastedBy: "ignored" }; },
+    draftWrite: async () => { calls.push("draftWrite"); return { ok: true }; },
+    draftClear: async () => { calls.push("draftClear"); return { ok: true }; },
+  });
+  const capture = createMeetingCaptureOps();
+
+  assert.deepEqual(await capture.readDraft(), { title: "Sync", transcript: "Typed.", template: "standup", language: "en" });
+  await capture.writeDraft({ title: "Sync", transcript: "Typed." });
+  await capture.clearDraft();
+  assert.deepEqual(calls, ["draftRead", "draftWrite", "draftClear"]);
+
+  // The draft file outlives app versions and is rendered straight into the
+  // compose form, so a record written by some other one is refused rather than
+  // put on screen.
+  setBridge({ captureBegin: async () => SESSION, captureAppend: async () => SESSION, draftRead: async () => ({ title: 7, transcript: null, template: "invented" }) });
+  assert.equal(await createMeetingCaptureOps().readDraft(), null);
+});
+
+test("D6 — a preload with no draft channels keeps no draft, rather than keeping one where it must not", async () => {
+  setBridge({ list: async () => ({ meetings: [] }) });
+  const capture = createMeetingCaptureOps();
+
+  assert.equal(capture.available, false);
+  assert.equal(await capture.readDraft(), null);
+  // Unlike `begin`/`append`, these resolve: a draft that does not persist costs
+  // a retype, while the `localStorage` fallback that would persist it is the
+  // exact store D6 moved the draft out of.
+  await capture.writeDraft({ title: "Sync", transcript: "Typed." });
+  await capture.clearDraft();
+  // …but a caller that is about to DELETE the only other copy has to be able to
+  // tell that write apart from one that landed. The migration out of
+  // `localStorage` is that caller, and this is the flag it reads.
+  assert.equal(capture.draftAvailable, false);
+  // The case that actually cost a draft: a preload old enough to have the
+  // CAPTURE channels but not the draft ones. `writeDraft` resolves there and
+  // writes nothing, so the migration must be told before it deletes the
+  // original.
+  setBridge({ captureBegin: async () => SESSION, captureAppend: async () => SESSION });
+  assert.equal(createMeetingCaptureOps().draftAvailable, false);
+  setBridge({ captureBegin: async () => SESSION, captureAppend: async () => SESSION, draftWrite: async () => ({ ok: true }) });
+  assert.equal(createMeetingCaptureOps().draftAvailable, true);
+});
+
+test("§6 — the segments the store could not read back cross the bridge with the audio", async () => {
+  setBridge({
+    captureBegin: async () => SESSION,
+    captureAppend: async () => SESSION,
+    captureRead: async () => ({ bytes: new Uint8Array([1, 2]), contentType: "audio/webm", missing: [1, "nonsense", 4.5, 3] }),
+  });
+
+  // Rendered as a count under the player, so a non-integer that got this far
+  // would reach the user as part of a sentence about their recording.
+  assert.deepEqual((await createMeetingCaptureOps().read("mtg-1")).missing, [1, 3]);
+
+  // A host that predates the guard says nothing, which reads as "nothing was
+  // missing" — the same answer it used to give by rejecting the whole read.
+  setBridge({
+    captureBegin: async () => SESSION,
+    captureAppend: async () => SESSION,
+    captureRead: async () => ({ bytes: new Uint8Array([1, 2]), contentType: "audio/webm" }),
+  });
+  assert.deepEqual((await createMeetingCaptureOps().read("mtg-1")).missing, []);
+});
+
 test("a capture store that answers with the wrong shape is an error, not a silent no-op", async () => {
   setBridge({ captureBegin: async () => ({ id: "mtg-1" }), captureAppend: async () => ({ id: "mtg-1", segments: [] }), captureRead: async () => ({}) });
   const capture = createMeetingCaptureOps();

@@ -29,21 +29,18 @@
  * for a chunk whose sequence is not exactly the next index.
  */
 import {
-  appendSegment,
+  adoptCaptureChunks,
   createCaptureSession,
   DEFAULT_MEETING_SEGMENT_MS,
   isMeetingSessionId,
-  isTerminalCaptureStatus,
   recoverCaptureSession,
-  resumeCapture,
-  stopCapture,
+  resumableSessions,
   type MeetingCaptureScope,
   type MeetingCaptureSession,
   type MeetingCaptureTemplate,
   type MeetingSegment,
 } from "@kinqs/brainrouter-core/meetings";
 
-import type { CaptureChunkRef } from "./captureStorage";
 import type { CaptureSessionRecord } from "./captureStore";
 
 /**
@@ -115,8 +112,11 @@ export interface RestoreCaptureInput {
  *    fresh session minted over the same id, so old recordings keep working
  *    rather than becoming unreachable audio.
  * 2. **Believe the chunks.** Any chunk the session does not describe becomes a
- *    segment. This is what makes a write that never landed cost a late record
- *    instead of lost audio.
+ *    segment. That rule is the SHARED `adoptCaptureChunks` — both hosts had
+ *    written it out for themselves, and a pure rule kept aligned by attention is
+ *    a rule that is one edit away from diverging. What is left here is the
+ *    host-specific half: this store leaves the chunks past a hole where they are
+ *    (`rejected`) for its own reap to claim, rather than deleting them.
  * 3. **Recover.** `recoverCaptureSession` is the shared rule: nothing is
  *    recording any more, and a segment left mid-attempt did not succeed. It runs
  *    LAST because step 2 needs a session that still accepts appends.
@@ -133,42 +133,76 @@ export function restoreCaptureSession(input: RestoreCaptureInput): MeetingCaptur
       ...(input.template ? { template: input.template } : {}),
       ...(input.language ? { language: input.language } : {}),
     });
-  const reconciled = adoptChunks(adopted, input.record.chunks, input.segmentMs ?? DEFAULT_MEETING_SEGMENT_MS);
-  return recoverCaptureSession(reconciled, input.at);
+  const reconciled = adoptCaptureChunks(adopted, input.record.chunks, {
+    segmentMs: input.segmentMs ?? DEFAULT_MEETING_SEGMENT_MS,
+  });
+  return recoverCaptureSession(reconciled.session, input.at);
 }
 
 /**
- * Record every chunk the session does not yet describe.
+ * Open question 5 — a stored capture, restored, alongside the record its audio
+ * still lives in.
  *
- * Stops at the first sequence that is not the next index. A hole means the store
- * lost a chunk's bytes, and inventing a segment to bridge it would hand the
- * queue an index that reads somebody else's audio — the one failure mode worse
- * than an unclaimed chunk, because it produces text that looks right.
+ * Both halves are needed by the surface and neither is derivable from the other:
+ * the session is what `summarizeRecovery` describes and what a pick-up resumes,
+ * and the record is what Play reads and what Discard deletes.
  */
-export function adoptChunks(
-  session: MeetingCaptureSession,
-  chunks: readonly CaptureChunkRef[],
-  segmentMs: number,
-): MeetingCaptureSession {
-  // D6 — a finalized or discarded meeting has had its audio released; anything
-  // still stored for it is an orphan for the reap, not work to adopt.
-  if (isTerminalCaptureStatus(session.status)) return session;
-  const pending = chunks
-    .slice()
-    .sort((left, right) => left.sequence - right.sequence)
-    .filter((chunk) => chunk.sequence >= session.segments.length && chunk.byteLength > 0);
-  if (pending.length === 0) return session;
+export interface ResumableCapture {
+  readonly record: CaptureSessionRecord;
+  readonly session: MeetingCaptureSession;
+}
 
-  // `appendSegment` only accepts a recording session, so a cleanly stopped one is
-  // resumed for the append and stopped again with its ORIGINAL timestamp — the
-  // recording did not restart, and rewriting `stoppedAt` would misreport when.
-  const stoppedAt = session.status === "stopped" ? session.stoppedAt : undefined;
-  let next = session.status === "recording" ? session : resumeCapture(session);
-  for (const chunk of pending) {
-    if (chunk.sequence !== next.segments.length) break;
-    next = appendSegment(next, { byteLength: chunk.byteLength, durationMs: segmentMs });
-  }
-  return session.status === "recording" ? next : stopCapture(next, stoppedAt);
+export interface ResumableCaptureOptions {
+  /**
+   * The workspace in context. A capture recorded under one organization is not
+   * offered back under another — ADR-019's switcher can move while a meeting is
+   * unfinished, and the offer is precisely where that recording would change
+   * hands.
+   */
+  readonly scope: MeetingCaptureScope;
+  /**
+   * Ids to leave out whatever their record says — in practice the recording in
+   * hand, which is unfinished by definition and would be nonsense to offer back
+   * while its microphone is still open.
+   */
+  readonly exclude?: readonly string[];
+}
+
+/**
+ * D2's recovery offer for this host, decided by the SHARED predicate.
+ *
+ * The store cannot answer this: it treats `payload` as opaque text on purpose,
+ * so it can see neither a session's scope nor its terminal state, and the
+ * `!closed && byteLength > 0` it used to filter by was D2's rule written down a
+ * second time — one that could not have a scope in it and drifted the moment
+ * open question 5 was answered. This module owns the record → session mapping,
+ * so it is where `resumableSessions` can be asked instead of imitated.
+ */
+export function resumableCaptures(
+  records: readonly CaptureSessionRecord[],
+  options: ResumableCaptureOptions,
+): readonly ResumableCapture[] {
+  const excluded = new Set(options.exclude ?? []);
+  const candidates = records
+    .filter((record) => !excluded.has(record.sessionId))
+    // `closed` is not a second opinion about terminality — it IS
+    // `isTerminalCaptureStatus`, written by the queue's persist so the store can
+    // answer without parsing anything. Honouring it first is what covers the one
+    // case restoring cannot: a payload too damaged to read yields a freshly
+    // minted RECORDING session over the chunks, which would offer back a meeting
+    // the user finalized or explicitly threw away.
+    .filter((record) => !record.closed)
+    .map((record) => ({ record, session: restoreCaptureSession({ record, scope: options.scope }) }));
+  const offered = new Set(
+    resumableSessions(candidates.map((candidate) => candidate.session), { scope: options.scope })
+      .map((session) => session.id),
+  );
+  // Ordered by the shared rule's own answer (newest first), not by the store's
+  // listing: two surfaces that sort a recovery offer differently are two
+  // surfaces a user has to learn twice.
+  return candidates
+    .filter((candidate) => offered.has(candidate.session.id))
+    .sort((left, right) => right.session.startedAt.localeCompare(left.session.startedAt));
 }
 
 const SEGMENT_STATES = new Set(["pending", "transcribing", "done", "failed"]);

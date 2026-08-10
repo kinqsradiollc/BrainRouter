@@ -26,7 +26,13 @@
  * guarantees one entry per segment, always, so no segment can fall out of this
  * list by a filter someone wrote here.
  */
-import { transcriptSoFar, formatCaptureTimestamp, type MeetingCaptureSession, type MeetingDrainPhase } from "@kinqs/brainrouter-core/meetings";
+import {
+  capturePhaseNote,
+  formatCaptureTimestamp,
+  transcriptSoFar,
+  type MeetingCaptureSession,
+  type MeetingDrainPhase,
+} from "@kinqs/brainrouter-core/meetings";
 
 import styles from "./meetings.module.css";
 
@@ -39,31 +45,18 @@ export interface LiveTranscriptProps {
   readonly onRetry: (index: number) => void;
 }
 
-/**
- * What the queue is doing, in words.
- *
- * `unavailable` gets the longest sentence on purpose: it is the state a user is
- * most likely to read as "my meeting is being lost", and D7's whole point is
- * that it is not — the audio is on the device and the segments drain when the
- * endpoint returns.
- */
-function phaseNote(phase: MeetingDrainPhase | null, gaps: number, provisional: number): string {
-  if (phase === "unavailable") {
-    return "The transcription service is not answering. The audio is saved on this device and these segments will transcribe when it comes back.";
-  }
-  if (phase === "closed") return "This meeting is closed; its audio has been released.";
-  if (provisional > 0) return "";
-  if (phase === "waiting") return "Waiting to retry.";
-  if (gaps > 0) return "Nothing left to try automatically — retry a gap to fill it in from the audio still on this device.";
-  return "";
-}
-
 export function LiveTranscript({ session, phase, retrying, onRetry }: LiveTranscriptProps) {
   const entries = transcriptSoFar(session);
   const settled = entries.filter((entry) => entry.kind === "settled").length;
   const provisional = entries.filter((entry) => entry.kind === "provisional").length;
   const gaps = entries.filter((entry) => entry.kind === "gap").length;
-  const note = phaseNote(phase, gaps, provisional);
+  // The wording and the precedence between the states are the SHARED
+  // `capturePhase`'s, not this component's and no longer this host's: the branch
+  // that matters most — the queue having stopped waiting for the endpoint on a
+  // segment's behalf — is one no render test can reach by hand, and while the
+  // rule lived once here and once in the desktop's meetings view the two had
+  // already drifted a word apart in the outage sentence.
+  const note = capturePhaseNote(session, phase, { gaps, provisional });
 
   return (
     <div className={styles.linkzone}>
