@@ -51,14 +51,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  MEETING_CAPTURE_LEASE_STALE_MS,
   formatCaptureGap,
-  type MeetingCaptureLease,
   type MeetingCaptureSession,
   type MeetingRecoverySummary,
   type MeetingSegment,
 } from "@kinqs/brainrouter-core/meetings";
 import { MeetingsView } from "./MeetingsView.js";
+import type { MeetingCaptureWriter } from "./captureOps.js";
 import { captureHolderId } from "./captureHolder.js";
 import type { CreateMeetingInput, MeetingsOps } from "./types.js";
 import {
@@ -105,9 +104,15 @@ function session(over: Partial<MeetingCaptureSession> = {}): MeetingCaptureSessi
   };
 }
 
-/** A lease that is fresh right now, belonging to whoever is named. */
-function lease(holderId: string, holder = "Another window"): MeetingCaptureLease {
-  return { holderId, holder, epoch: 3, heartbeatAt: new Date().toISOString() };
+/**
+ * A row of main's writer registry: that window is recording that capture.
+ *
+ * There is no time in it, because main answers this exactly rather than
+ * inferring it from a stamp — which is why the surface below never waits for
+ * anything to lapse and is TOLD instead.
+ */
+function writer(sessionId: string, holderId: string): MeetingCaptureWriter {
+  return { sessionId, holderId, note: "Another window is recording this meeting right now." };
 }
 
 function recovery(over: Partial<MeetingRecoverySummary> = {}): MeetingRecoverySummary {
@@ -141,9 +146,11 @@ interface FakeHost {
   readonly created: CreatedMeeting[];
   /** The record the host would hand back from `begin`, `stop` and `adopt`. */
   record: MeetingCaptureSession;
-  /** The offer, and its complement — what another writer is holding. */
+  /** The offer, and its complement — what window is recording what. */
   resumable: MeetingRecoverySummary[];
-  writing: MeetingCaptureSession[];
+  writing: MeetingCaptureWriter[];
+  /** Push "the live set changed", as main does on Record, Stop, close and a window going away. */
+  announceWriters(): void;
   /** Fail the next create, so the compose form stays up and can be read. */
   createFails: boolean;
   /** Refuse the next pick-up, the way a lease held by another window does. */
@@ -151,7 +158,7 @@ interface FakeHost {
   /** Hold `captureStop` open, which is the window `closing` covers. */
   holdStop(): () => void;
   /** Publish a persisted change, as main's broadcast does. */
-  push(progress: { sessionId?: string; session: MeetingCaptureSession; phase?: string; errors?: string[]; writerLost?: string }): void;
+  push(progress: { sessionId?: string; session: MeetingCaptureSession; phase?: string; errors?: string[] }): void;
   readonly ops: MeetingsOps;
 }
 
@@ -168,6 +175,7 @@ function unused(): never {
  */
 function installHost(): { host: FakeHost; restore: () => void } {
   const listeners = new Set<(progress: unknown) => void>();
+  const writerListeners = new Set<() => void>();
   const host: FakeHost = {
     begun: [],
     stopped: [],
@@ -178,6 +186,7 @@ function installHost(): { host: FakeHost; restore: () => void } {
     record: session(),
     resumable: [],
     writing: [],
+    announceWriters: () => undefined,
     createFails: false,
     adoptRefusal: null,
     holdStop: () => () => undefined,
@@ -217,6 +226,7 @@ function installHost(): { host: FakeHost; restore: () => void } {
     const payload = { sessionId: progress.sessionId ?? progress.session.id, ...progress };
     for (const listener of [...listeners]) listener(payload);
   };
+  host.announceWriters = () => { for (const listener of [...writerListeners]) listener(); };
 
   const meetings = {
     captureBegin: async (input: { holderId?: string }) => { host.begun.push({ ...(input.holderId ? { holderId: input.holderId } : {}) }); return host.record; },
@@ -240,6 +250,10 @@ function installHost(): { host: FakeHost; restore: () => void } {
     onCaptureProgress: (listener: (progress: unknown) => void) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
+    },
+    onCaptureWriters: (listener: () => void) => {
+      writerListeners.add(listener);
+      return () => writerListeners.delete(listener);
     },
     draftRead: async () => null,
     draftWrite: async () => ({ ok: true }),
@@ -507,21 +521,22 @@ test("cancelling while the microphone is being opened does not throw the compose
 test("a capture another window is recording is named, not offered back with a Delete", async () => {
   const { host, restore } = installHost();
   try {
-    // The record says a DIFFERENT window holds a fresh lease. This window has
-    // never heard of it: its own hold is empty, which is exactly the case every
+    // Main says a DIFFERENT window is recording it. This window has never heard
+    // of that capture: its own hold is empty, which is exactly the case every
     // guard held in one mount's memory answered wrongly.
-    const live = session({ id: "mtg-20260809-livelive", writer: lease("wr-second-window") });
-    host.writing = [live];
+    const live = "mtg-20260809-livelive";
+    host.writing = [writer(live, "wr-second-window")];
     // …and the offer is stale: it still lists the capture that has since gone
     // live. This is the only way to reach the destructive control at all.
-    host.resumable = [recovery({ sessionId: live.id, title: "Board review" })];
+    host.resumable = [recovery({ sessionId: live, title: "Board review" })];
     const mounted = await compose(host);
 
     assert.match(screenText(mounted.root), /Another window is recording this meeting right now\./);
     assert.equal(isDisabled(button(mounted.root, "Delete audio")), true, "its audio cannot be deleted from here");
     assert.equal(isDisabled(button(mounted.root, "Transcribe it")), true, "nor taken over from here");
     // …and the guard is the rule, not the pixel: reaching past the attribute
-    // still refuses, and says why.
+    // still refuses, and says why — in main's words, which are the same words
+    // main throws if the call is made anyway.
     const del = button(mounted.root, "Delete audio");
     await mounted.act(() => (del.props as { onClick(): void }).onClick());
     assert.deepEqual(host.discarded, []);
@@ -530,45 +545,45 @@ test("a capture another window is recording is named, not offered back with a De
   } finally { restore(); }
 });
 
-test("a lease that lapses brings the recording back on its own, without a click", async () => {
+test("when the other window stops, the surface comes back on its own — because it is told", async () => {
   const { host, restore } = installHost();
   try {
-    // A writer whose last heartbeat is nearly a full staleness window old: fresh
-    // now, abandoned in a moment. That is what a killed process leaves behind.
-    const lapsing = session({
-      id: "mtg-20260809-lapselaps",
-      writer: { holderId: "wr-second-window", holder: "Another window", epoch: 2, heartbeatAt: new Date(Date.now() - (MEETING_CAPTURE_LEASE_STALE_MS - 150)).toISOString() },
-    });
-    host.writing = [lapsing];
-    host.resumable = [recovery({ sessionId: lapsing.id, title: "Board review" })];
+    const live = "mtg-20260809-livelive";
+    host.writing = [writer(live, "wr-second-window")];
+    host.resumable = [recovery({ sessionId: live, title: "Board review" })];
     const mounted = await compose(host);
     assert.match(screenText(mounted.root), /Another window is recording this meeting right now\./);
     assert.equal(isDisabled(button(mounted.root, "Delete audio")), true);
 
-    // The writer died: nothing renews it, and nothing clicks anything either.
+    // The other window stopped — or reloaded, or died. Main knows which and does
+    // not care which: the set changed, so it says so. Nothing is clicked here.
     host.writing = [];
-    await new Promise((resolve) => { setTimeout(resolve, 600); });
+    await mounted.act(() => host.announceWriters());
     await mounted.flush();
 
-    // ADR-028 — the surface came back by itself at the instant it said it would,
-    // rather than sitting on a stale answer until the user tried something.
+    // ADR-028 — the surface corrected itself at the instant the answer changed,
+    // rather than sitting on a stale one for the rest of this page view. The
+    // previous shape had this window waiting out a staleness window instead, and
+    // a reload of the recording window meant it waited for ever.
     assert.doesNotMatch(screenText(mounted.root), /is recording this meeting right now/);
     assert.equal(isDisabled(button(mounted.root, "Delete audio")), false);
     mounted.unmount();
   } finally { restore(); }
 });
 
-test("Create cannot finalize a capture a second window has taken over", async () => {
+test("Create cannot finalize a capture a second window is recording", async () => {
   const { host, restore } = installHost();
   try {
+    // The capture this form is about to hold is one main says another window is
+    // recording. Reachable in the app the same way: this window pressed Record,
+    // reloaded, and its replacement adopted the meeting the new page found.
+    host.writing = [writer(host.record.id, "wr-second-window")];
     const mounted = await compose(host);
     await press(mounted, "● Record audio");
     await typeInto(mounted, TITLE_FIELD, "Weekly sync");
-    // This window recorded it; a second window then took the lease, which the
-    // host publishes on the next persisted change.
-    const stolen = session({ writer: lease("wr-second-window"), segments: [segment(0, { text: "Ship on Friday." })] });
-    host.record = stolen;
-    await mounted.act(() => host.push({ session: stolen }));
+    const held = session({ segments: [segment(0, { text: "Ship on Friday." })] });
+    host.record = held;
+    await mounted.act(() => host.push({ session: held }));
     await press(mounted, "Stop recording");
 
     assert.equal(isDisabled(button(mounted.root, "Create meeting")), true);
@@ -582,40 +597,19 @@ test("Create cannot finalize a capture a second window has taken over", async ()
   } finally { restore(); }
 });
 
-test("losing the recording to another window stops this window's microphone and says so", async () => {
-  const { host, restore } = installHost();
-  try {
-    const mounted = await compose(host);
-    await press(mounted, "● Record audio");
-    assert.ok(hasButton(mounted.root, "Stop recording"));
-
-    host.record = session({ status: "stopped", writer: lease("wr-second-window") });
-    await mounted.act(() => host.push({
-      session: host.record,
-      writerLost: "Another window is recording this meeting right now.",
-    }));
-
-    assert.match(screenText(mounted.root), /Another window is recording this meeting right now\./);
-    assert.match(screenText(mounted.root), /This window has stopped recording/);
-    assert.equal(host.stopped.length, 1, "the capture was closed rather than left running");
-    mounted.unmount();
-  } finally { restore(); }
-});
-
 test("every call that takes or releases a recording names this window", async () => {
   const { host, restore } = installHost();
   try {
+    // Main says THIS window is recording it, which is what it really says while
+    // a recording is running — and this window still has to be able to finish
+    // the meeting. A guard that only asked "is anybody recording this?" would
+    // wedge Create on the one window entitled to press it.
+    host.writing = [writer(host.record.id, captureHolderId())];
     const mounted = await compose(host);
     await press(mounted, "● Record audio");
-    // The record carries THIS window's lease, which is what the host really
-    // leaves behind: Stop reads the capture back through `adopt`, and a pick-up
-    // acquires. So the meeting this window recorded is one it is the writer of —
-    // and it still has to be able to finish it. A guard that only asked "is
-    // anybody writing?" would wedge Create on the one window entitled to press it.
     host.record = session({
       status: "stopped",
       segments: [segment(0, { text: "Ship on Friday." })],
-      writer: lease(captureHolderId(), "This window"),
     });
     await mounted.act(() => host.push({ session: host.record }));
     await press(mounted, "Stop recording");
@@ -625,7 +619,8 @@ test("every call that takes or releases a recording names this window", async ()
     const holder = captureHolderId();
     assert.deepEqual(host.begun, [{ holderId: holder }]);
     // Stop reads the record back through `adopt`, and Create releases the audio
-    // through `finalize`; both are lease-bearing operations on this capture.
+    // through `finalize`; both are refused for a window that is not the writer,
+    // so both have to name this one.
     assert.deepEqual(host.adopted.map((row) => row.holderId), [holder]);
     assert.deepEqual(host.finalized, [{ id: host.record.id, holderId: holder }]);
     mounted.unmount();

@@ -27,16 +27,24 @@
  * diverged, every segment after the divergence would be transcribed from the
  * wrong audio — silently, with plausible text. Nothing here appends a segment
  * for a chunk whose sequence is not exactly the next index.
+ *
+ * **Liveness is deliberately NOT in this envelope.** It was: a lease with a
+ * heartbeat stamp, mirrored beside the session so a damaged payload still named
+ * its writer. On this host that answer is `captureLock.ts` — a Web Lock, held for
+ * the life of the recording and released by the BROWSER when the tab dies — so a
+ * stamp here could only ever be a second, slower opinion about the same fact.
+ * Worse, a stale one: after a kill the stamp stays fresh for the length of the
+ * old threshold, and a session restored with it would be withheld from the
+ * recovery offer for exactly as long as §6 says it must not be. So a lease found
+ * in a record written by an older build is READ AND DROPPED, not honoured.
  */
 import {
   adoptCaptureChunks,
   createCaptureSession,
   DEFAULT_MEETING_SEGMENT_MS,
-  isCaptureLeaseFresh,
   isMeetingSessionId,
   recoverCaptureSession,
   resumableSessions,
-  type MeetingCaptureLease,
   type MeetingCaptureScope,
   type MeetingCaptureSession,
   type MeetingCaptureTemplate,
@@ -54,30 +62,19 @@ import type { CaptureSessionRecord } from "./captureStore";
  * separately too, so a capture recorded before the session model existed still
  * comes back with its name.
  *
- * `writer` is the session's own lease, MIRRORED beside it. It is the one field
- * here that is deliberately redundant, and the redundancy is the point: when the
- * session cannot be read back, `restoreCaptureSession` mints a fresh one, and a
- * freshly minted session has no writer — so the single path where a payload is
- * damaged is also the single path where a tab that is recording RIGHT NOW stops
- * being able to say so, and a second tab is offered the live recording with an
- * enabled Discard beside it. A lease at the top level survives a session shape
- * this build cannot parse, which is the case that actually happens: a segment
- * list written by another build, or a manifest torn mid-write.
+ * There is no `writer` field. The envelope describes what the meeting IS; who is
+ * writing to it at this instant is a question about live tabs, and it is asked
+ * of the browser (`captureLock.ts`) rather than of bytes that were written down
+ * some unknown time ago.
  */
 export interface CapturePayload {
   readonly title?: string;
   readonly mimeType?: string;
   readonly session?: MeetingCaptureSession;
-  readonly writer?: MeetingCaptureLease;
 }
 
-/**
- * The lease is written from the session and never from the caller, so the two
- * copies cannot disagree: one writer of one fact, mirrored on the way out.
- */
 export function serializeCapturePayload(payload: CapturePayload): string {
-  const writer = payload.session?.writer ?? payload.writer;
-  return JSON.stringify({ ...payload, ...(writer ? { writer } : {}) });
+  return JSON.stringify(payload);
 }
 
 /**
@@ -95,33 +92,12 @@ export function parseCapturePayload(text: string): CapturePayload {
     return {};
   }
   if (!parsed || typeof parsed !== "object") return {};
-  const candidate = parsed as { title?: unknown; mimeType?: unknown; session?: unknown; writer?: unknown };
-  // Read from the top level FIRST and from the session second, so a payload
-  // whose session this build refuses still yields the writer that session was
-  // carrying. Older payloads have no top-level copy, which is the only reason
-  // the second reading exists.
-  const nested = (candidate.session as { writer?: unknown } | undefined)?.writer;
-  const writer = isStoredLease(candidate.writer) ? candidate.writer : isStoredLease(nested) ? nested : undefined;
+  const candidate = parsed as { title?: unknown; mimeType?: unknown; session?: unknown };
   return {
     ...(typeof candidate.title === "string" ? { title: candidate.title } : {}),
     ...(typeof candidate.mimeType === "string" ? { mimeType: candidate.mimeType } : {}),
     ...(isStoredSession(candidate.session) ? { session: candidate.session } : {}),
-    ...(writer ? { writer } : {}),
   };
-}
-
-/**
- * D6 — is a tab writing into this capture right now, judged from the stored
- * manifest alone?
- *
- * The reap asks this about a manifest it has just read, which is the only
- * reading late enough to see a session another tab began after the caller took
- * its own listing. It deliberately does not restore the session: a payload too
- * damaged to yield one still yields its writer, and a live recording must not
- * become reapable because the record around its lease got harder to read.
- */
-export function isCapturePayloadBeingWritten(payload: string, at?: string): boolean {
-  return isCaptureLeaseFresh(parseCapturePayload(payload).writer, at ?? new Date().toISOString());
 }
 
 export interface RestoreCaptureInput {
@@ -162,24 +138,23 @@ export interface RestoreCaptureInput {
  */
 export function restoreCaptureSession(input: RestoreCaptureInput): MeetingCaptureSession {
   const payload = parseCapturePayload(input.record.payload);
-  const adopted = payload.session && payload.session.id === input.record.sessionId
+  const stored = payload.session && payload.session.id === input.record.sessionId
     ? payload.session
-    : {
-      ...createCaptureSession({
-        id: isMeetingSessionId(input.record.sessionId) ? input.record.sessionId : undefined,
-        startedAt: input.record.startedAt,
-        scope: input.scope,
-        ...(payload.title ? { title: payload.title } : {}),
-        ...(input.template ? { template: input.template } : {}),
-        ...(input.language ? { language: input.language } : {}),
-      }),
-      // The mirrored lease, carried onto the minted session — the ONE path where
-      // a live tab's claim would otherwise be dropped, because minting is what
-      // happens when the session cannot be read and a minted session has no
-      // writer. Without this the damaged-payload case offers a recording that is
-      // in progress back to a second tab with an enabled Discard beside it.
-      ...(payload.writer ? { writer: payload.writer } : {}),
-    };
+    : createCaptureSession({
+      id: isMeetingSessionId(input.record.sessionId) ? input.record.sessionId : undefined,
+      startedAt: input.record.startedAt,
+      scope: input.scope,
+      ...(payload.title ? { title: payload.title } : {}),
+      ...(input.template ? { template: input.template } : {}),
+      ...(input.language ? { language: input.language } : {}),
+    });
+  // A lease written by an older build is dropped here, and this is the one line
+  // that has to do it: `isResumableSession` refuses to offer a session whose
+  // `writer` looks fresh, so a stamp left by a tab that was killed a second ago
+  // would withhold the recovered meeting for the whole of the old staleness
+  // window — §6's headline failure, arriving from a field nothing writes any
+  // more. Liveness on this host is the Web Lock, and only the Web Lock.
+  const { writer, ...adopted } = stored;
   const reconciled = adoptCaptureChunks(adopted, input.record.chunks, {
     segmentMs: input.segmentMs ?? DEFAULT_MEETING_SEGMENT_MS,
   });
@@ -208,16 +183,20 @@ export interface ResumableCaptureOptions {
    */
   readonly scope: MeetingCaptureScope;
   /**
-   * Ids to leave out whatever their record says — in practice the recording in
-   * hand, which is unfinished by definition and would be nonsense to offer back
-   * while its microphone is still open.
+   * Ids to leave out whatever their record says.
+   *
+   * Two kinds, and the second is the whole of "a live recording is not offered
+   * back": the capture in hand, which is unfinished by definition and would be
+   * nonsense to offer while its microphone is still open, and every capture some
+   * tab of this origin currently HOLDS THE LOCK for. The record cannot answer
+   * that second one — nothing in it is about live tabs — so the caller asks
+   * `captureLock.ts` and hands the answer in here.
    */
   readonly exclude?: readonly string[];
   /**
-   * The instant the offer is judged at, threaded so the lease's freshness and
-   * the recovery stamp are read off ONE clock reading. Two readings a
-   * millisecond apart would be harmless; two readings a test cannot pin are not,
-   * because "is somebody writing to this?" is now part of the answer.
+   * The instant the offer is judged at, threaded so the recovery stamp is a
+   * reading a test can pin rather than whatever the wall clock said between two
+   * statements.
    */
   readonly at?: string;
 }
@@ -279,23 +258,6 @@ function isStoredSession(value: unknown): value is MeetingCaptureSession {
   if (!candidate.scope || typeof candidate.scope !== "object") return false;
   if (!Array.isArray(candidate.segments)) return false;
   return candidate.segments.every(isStoredSegment);
-}
-
-/**
- * A lease read back out of browser storage.
- *
- * Only the shape is checked here; whether the term is still running is
- * `isCaptureLeaseFresh`'s question and is asked against a clock, not against a
- * record. Keeping the two apart is what lets a lapsed lease still be READ — the
- * epoch in it is what fences a writer that went away, and a lease dropped
- * because it was old is a fencing token thrown away.
- */
-function isStoredLease(value: unknown): value is MeetingCaptureLease {
-  if (!value || typeof value !== "object") return false;
-  const lease = value as Partial<MeetingCaptureLease>;
-  if (typeof lease.holderId !== "string" || !lease.holderId) return false;
-  if (!Number.isInteger(lease.epoch) || (lease.epoch ?? 0) <= 0) return false;
-  return typeof lease.heartbeatAt === "string";
 }
 
 function isStoredSegment(value: unknown, position: number): value is MeetingSegment {

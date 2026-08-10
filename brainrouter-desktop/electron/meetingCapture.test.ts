@@ -382,80 +382,47 @@ test('a capture id that is not path-safe is refused before it becomes a path', a
 });
 
 /**
- * D6 — liveness, from here on, is a fact IN the record.
+ * D6 — liveness is not this store's to know, and the boot pass has to be TOLD.
  *
- * The four tests below are the store's half of that. They exist because every
- * previous version of this guard lived in ONE holder's memory: this store is
- * registered once per process and `openWorkspaceWindow` mints many windows
- * inside it, so a second window asked "is anything recording?" and got the
- * answer "no" about a meeting being recorded eight inches away.
+ * The question "is a window recording into this capture?" is the process's, and
+ * the process answers it exactly (`meetingTranscription.ts`). What is left here
+ * is the one pass that runs with no window involved at all, and the one that can
+ * destroy a live meeting three different ways if it is wrong about this.
  */
-test('Record names its writer in the record before any audio exists', async () => {
+test('the boot pass leaves a capture that is being recorded into exactly as it found it', async () => {
   const home = userData();
   const store = new MeetingCaptureStore(home);
-  const session = await store.begin({ scope: { orgId: null }, holder: { holderId: 'wr-first', holder: 'Another window' } });
+  const live = await store.begin({ scope: { orgId: null }, title: 'Live' });
+  await append(store, live.id, new Uint8Array([1, 2, 3]), 20_000);
+  // A chunk the record has not claimed yet, which is what an in-flight recording
+  // looks like from outside for the moment between the bytes and the record.
+  const directory = path.join(captureRoot(home), live.id);
+  fs.writeFileSync(path.join(directory, 'segment-00001.webm'), Buffer.from([4, 5]));
+  // …and a Record pressed a moment ago, from a previous process's point of view:
+  // no chunk yet, and older than the store now running this pass.
+  const arming = await store.begin({ scope: { orgId: null }, title: 'Just pressed Record' });
+  await store.persist({ ...arming, startedAt: '2020-01-01T00:00:00.000Z' });
 
-  assert.equal(session.writer?.holderId, 'wr-first');
-  assert.equal(session.writer?.epoch, 1);
-  // On DISK, not merely in the answer: a second process reads the file, not this
-  // return value, and there is no moment at which the file exists without it.
-  const written = JSON.parse(fs.readFileSync(path.join(captureRoot(home), session.id, 'session.json'), 'utf8')) as { session: MeetingCaptureSession };
-  assert.equal(written.session.writer?.holderId, 'wr-first');
-});
+  const next = new MeetingCaptureStore(home);
+  const report = await next.recoverInterrupted({ isWriting: (id) => id === live.id || id === arming.id });
 
-test('a capture being recorded is not offered back, and is named instead', async () => {
-  const home = userData();
-  const store = new MeetingCaptureStore(home);
-  const live = await store.begin({ scope: { orgId: 'org_1' }, holder: { holderId: 'wr-first' } });
-  await append(store, live.id, new Uint8Array([1, 2, 3, 4]), 20_000);
-  const idle = await store.begin({ scope: { orgId: 'org_1' } });
-  await append(store, idle.id, new Uint8Array([5, 6, 7, 8]), 20_000);
+  // All three destructive halves of the pass, not one: guarding only the reap
+  // left the record rewrite and the chunk adoption to run over a live capture,
+  // and the adoption is the one that ends the meeting — the recorder's own
+  // segment count cannot advance past a collision, so every later chunk failed
+  // `EEXIST` for ever with no self-heal.
+  assert.deepEqual(report, { recovered: [], adopted: [], reaped: [] });
+  const untouched = await record(next, live.id);
+  assert.equal(untouched.status, 'recording');
+  assert.deepEqual(untouched.segments.map((segment) => segment.index), [0]);
+  assert.ok(fs.existsSync(path.join(directory, 'segment-00001.webm')));
+  assert.ok(fs.existsSync(path.join(captureRoot(home), arming.id)));
 
-  assert.deepEqual((await store.resumable({ orgId: 'org_1' })).map((row) => row.sessionId), [idle.id]);
-  assert.deepEqual((await store.writing({ orgId: 'org_1' })).map((row) => row.id), [live.id]);
-  // The org filter still applies to both halves: a live recording in another
-  // workspace is not something this one has to explain, or could act on.
-  assert.deepEqual(await store.writing({ orgId: 'org_2' }), []);
-});
-
-test('a second window can neither finish nor throw away a recording another one is making', async () => {
-  const home = userData();
-  const store = new MeetingCaptureStore(home);
-  const session = await store.begin({ scope: { orgId: null }, holder: { holderId: 'wr-first' } });
-  await append(store, session.id, new Uint8Array([1, 2, 3, 4]), 20_000);
-
-  await assert.rejects(() => store.discard(session.id, { holderId: 'wr-second' }), /recording this meeting right now/);
-  await assert.rejects(() => store.finalize(session.id, { holderId: 'wr-second' }), /recording this meeting right now/);
-  // Refused BEFORE the write and therefore before the delete: the audio and the
-  // status are exactly as the recording left them.
-  const survived = await record(store, session.id);
-  assert.equal(survived.status, 'recording');
-  assert.equal(survived.segments[0]?.byteLength, 4);
-  assert.ok(fs.existsSync(path.join(captureRoot(home), session.id)));
-
-  // …and the window that IS recording it may still finish the meeting, or the
-  // guard would have made a recording impossible to end.
-  await store.finalize(session.id, { holderId: 'wr-first' });
-  assert.equal(fs.existsSync(path.join(captureRoot(home), session.id)), false);
-});
-
-test('the boot pass leaves an empty capture alone while somebody is recording into it', async () => {
-  const home = userData();
-  const store = new MeetingCaptureStore(home);
-  const live = await store.begin({ scope: { orgId: null }, holder: { holderId: 'wr-first' } });
-  // A Record from a PREVIOUS launch, as far as a second process can tell: no
-  // chunk has landed yet and the session predates that process opening. The
-  // desktop takes no single-instance lock, so this pass really does run over a
-  // directory another process is recording into.
-  await store.persist({ ...live, startedAt: '2020-01-01T00:00:00.000Z' });
-
-  const rebooted = new MeetingCaptureStore(home);
-  assert.deepEqual((await rebooted.recoverInterrupted()).reaped, []);
-  assert.ok(fs.existsSync(path.join(captureRoot(home), live.id)));
-
-  // The same capture with nobody writing to it is exactly what the reap is for,
-  // so the guard cannot be "never reap an empty capture".
-  const abandoned = await store.begin({ scope: { orgId: null } });
-  await store.persist({ ...abandoned, startedAt: '2020-01-01T00:00:00.000Z' });
-  assert.deepEqual((await new MeetingCaptureStore(home).recoverInterrupted()).reaped, [abandoned.id]);
+  // The same two captures with nobody recording are exactly what this pass is
+  // for, so the guard cannot be "never correct anything".
+  const corrected = await new MeetingCaptureStore(home).recoverInterrupted();
+  assert.deepEqual(corrected.recovered, [live.id]);
+  assert.deepEqual(corrected.adopted, [live.id]);
+  assert.deepEqual(corrected.reaped, [arming.id]);
+  assert.equal((await record(next, live.id)).status, 'stopped');
 });

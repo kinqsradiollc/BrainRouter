@@ -21,15 +21,17 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import {
-  isCaptureBeingWritten,
   MeetingEndpointUnavailableError,
-  MEETING_CAPTURE_HEARTBEAT_MS,
   MEETING_GAP_PHRASE,
   transcriptText,
   type MeetingCaptureSession,
 } from '@kinqs/brainrouter-core/meetings';
 import { MeetingCaptureStore, MEETING_CAPTURE_DIRECTORY } from './meetingCapture.js';
-import { MeetingTranscriptionSupervisor, type MeetingCaptureProgress } from './meetingTranscription.js';
+import {
+  MeetingTranscriptionSupervisor,
+  MEETING_CAPTURE_WRITER_NOTE,
+  type MeetingCaptureProgress,
+} from './meetingTranscription.js';
 
 function userData(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-meeting-queue-'));
@@ -296,105 +298,130 @@ test('closing a capture stops the queue before the audio is deleted', async () =
 });
 
 /**
- * D6 — the process that owns the record is the one that says it is still here.
+ * D6 — who is recording is a question THIS PROCESS answers exactly.
  *
- * The RULES are `captureLease.ts`'s and are tested there. What is asserted here
- * is the part only a host can get wrong: that a heartbeat is actually sent, on
- * both cadences, that it extends the term without moving the fence, and that
- * Stop hands the recording back instead of leaving it to expire.
+ * The supervisor is created once per process and every BrowserWindow lives in
+ * that process, so "is somebody recording into this capture?" is a lookup rather
+ * than an inference. These tests are the four transitions that lookup has —
+ * Record, Stop, close, and the window going away — and the one property the
+ * previous shape (a lease with a heartbeat) got wrong in the direction that
+ * costs a meeting.
  *
- * Nothing here injects a clock into the lease, deliberately. Freshness is the
- * difference between two readings of the SAME machine's wall clock — that is
- * what lets a second process read this file and agree — so a host that stamped
- * its leases from a test clock would be a host whose records only made sense to
- * itself. The cost is that the lapse itself (thirty seconds) is out of reach of
- * a unit test, which is why these assert the heartbeat rather than the expiry.
+ * Nothing here has a clock in it, deliberately. There is no term to expire, so
+ * there is no threshold to tune and no window in which a dead writer still looks
+ * alive: a renderer that reloaded reports `releaseWindow` and stops being the
+ * writer at that instant, where a heartbeat main owned kept a recording claimed
+ * for a page that no longer existed.
  */
-function tick(ms: number): Promise<void> {
-  return new Promise((resolve) => { setTimeout(resolve, ms); });
-}
-
-test('a recording says it is still being written to, on the chunk and on the timer', async () => {
-  const { store, supervisor, wakeDelays, runWakes } = harness(async () => 'text');
-  const session = await supervisor.begin({ scope: { orgId: null }, holder: { holderId: 'wr-me', holder: 'Another window' } });
-  assert.equal(session.writer?.holderId, 'wr-me');
-  assert.equal(session.writer?.epoch, 1);
-  // Without a timer the stamp on disk is one instant old and the record is stale
-  // half a minute later, which makes the whole mechanism inert on any meeting
-  // longer than that.
-  assert.ok(wakeDelays.includes(MEETING_CAPTURE_HEARTBEAT_MS), `expected a heartbeat wake, got ${wakeDelays.join(',')}`);
-
-  const atRecord = session.writer!.heartbeatAt;
-  await tick(4);
-  await supervisor.append(session.id, new Uint8Array([1, 2]), 20_000);
-  await supervisor.settle(session.id);
-  const afterChunk = (await record(store, session.id)).writer!;
-  // The beat that survives a throttled or stalled main thread is the one riding
-  // the durable write, because that one comes from the media stack.
-  assert.ok(afterChunk.heartbeatAt > atRecord, 'the chunk carried a heartbeat');
-  // …and a renewal never moves the fencing epoch, or a writer that was gone
-  // could renew its way back over one that took the recording (migration 048).
-  assert.equal(afterChunk.epoch, 1);
-
-  await tick(4);
-  await runWakes();
-  await tick(4);
-  const afterTimer = (await record(store, session.id)).writer!;
-  assert.ok(afterTimer.heartbeatAt > afterChunk.heartbeatAt, 'the timer carried a heartbeat');
-  assert.equal(afterTimer.epoch, 1);
-});
-
-test('Stop hands the recording back at once, and keeps the fence', async () => {
+test('a recording says which window is making it, until that window stops', async () => {
   const { store, supervisor } = harness(async () => 'text');
-  const session = await supervisor.begin({ scope: { orgId: null }, holder: { holderId: 'wr-me' } });
+  const session = await supervisor.begin({ scope: { orgId: null }, writerId: 'wr-me' });
+
+  assert.deepEqual(await supervisor.writing(), [
+    { sessionId: session.id, holderId: 'wr-me', note: MEETING_CAPTURE_WRITER_NOTE },
+  ]);
+  assert.equal(supervisor.isWriting(session.id), true);
+  // The claim is in the PROCESS and not in the record: nothing about a writer is
+  // written to disk, so there is nothing on disk that can be stale.
+  assert.equal('writer' in (await record(store, session.id)), false);
+
   await supervisor.append(session.id, new Uint8Array([1, 2]), 20_000);
   await supervisor.settle(session.id);
-  await supervisor.stop(session.id);
+  assert.equal(supervisor.isWriting(session.id), true);
 
-  const stopped = await record(store, session.id);
-  assert.equal(isCaptureBeingWritten(stopped), false, 'a stopped capture is not being written to');
-  // The record is kept with its term ended rather than dropped: an epoch that
-  // resets is not a fencing token.
-  assert.equal(stopped.writer?.epoch, 1);
+  await supervisor.stop(session.id);
+  assert.deepEqual(await supervisor.writing(), []);
+  assert.equal(supervisor.isWriting(session.id), false);
+  // …and the meeting is offerable to any window AT ONCE, rather than after a
+  // staleness window somebody has to sit through.
   assert.deepEqual((await store.resumable()).map((row) => row.sessionId), [session.id]);
 });
 
-test('a pick-up is refused while another window is recording, and fences it once it is not', async () => {
-  const { store, supervisor } = harness(async () => 'text');
-  const session = await supervisor.begin({ scope: { orgId: null }, holder: { holderId: 'wr-first' } });
-  await supervisor.append(session.id, new Uint8Array([1, 2]), 20_000);
-  await supervisor.settle(session.id);
+test('the org filter applies to who is recording, as it does to the offer', async () => {
+  const { supervisor } = harness(async () => 'text');
+  const mine = await supervisor.begin({ scope: { orgId: 'org_1' }, writerId: 'wr-me' });
+  await supervisor.begin({ scope: { orgId: 'org_2' }, writerId: 'wr-me' });
 
-  await assert.rejects(
-    () => supervisor.adopt(session.id, { holderId: 'wr-second' }),
-    /recording this meeting right now/,
-  );
-  // A refused pick-up must leave the fence exactly where it was, or the refusal
-  // would itself be a way to invalidate the writer it just protected.
-  const refused = await record(store, session.id);
-  assert.equal(refused.writer?.holderId, 'wr-first');
-  assert.equal(refused.writer?.epoch, 1);
-
-  await supervisor.stop(session.id);
-  const taken = await supervisor.adopt(session.id, { holderId: 'wr-second' });
-  assert.equal(taken.writer?.holderId, 'wr-second');
-  assert.equal(taken.writer?.epoch, 2, 'acquisition issues a new epoch, so the previous writer is fenced out');
+  // A live recording in another workspace is not something this one has to
+  // explain, or could act on (open question 5).
+  assert.deepEqual((await supervisor.writing({ orgId: 'org_1' })).map((row) => row.sessionId), [mine.id]);
+  assert.deepEqual(await supervisor.writing({ orgId: 'org_3' }), []);
 });
 
-test('a second window cannot close a meeting another one is recording, and the recorder still can', async () => {
-  const { home, supervisor } = harness(async () => 'text');
-  const session = await supervisor.begin({ scope: { orgId: null }, holder: { holderId: 'wr-first' } });
+test('a second window can neither pick up nor close a recording another one is making', async () => {
+  const { home, store, supervisor } = harness(async (bytes) => `chunk-${bytes.byteLength}`);
+  const session = await supervisor.begin({ scope: { orgId: null }, writerId: 'wr-first' });
   await supervisor.append(session.id, new Uint8Array([1, 2]), 20_000);
   await supervisor.settle(session.id);
 
-  await assert.rejects(
-    () => supervisor.close(session.id, 'discard', { holderId: 'wr-second' }),
-    /recording this meeting right now/,
-  );
-  assert.ok(fs.existsSync(captureDirectory(home, session.id)), 'the audio survived the refused discard');
+  await assert.rejects(() => supervisor.adopt(session.id, 'wr-second'), /recording this meeting right now/);
+  await assert.rejects(() => supervisor.close(session.id, 'discard', 'wr-second'), /recording this meeting right now/);
+  await assert.rejects(() => supervisor.close(session.id, 'finalize', 'wr-second'), /recording this meeting right now/);
 
-  // The window that is recording it accepts the meeting as usual — the actor is
-  // threaded, so the guard tells the two windows apart instead of refusing both.
-  await supervisor.close(session.id, 'finalize', { holderId: 'wr-first' });
+  // THE POINT, and the defect this ordering was written for: a refused
+  // destructive action must leave the live capture exactly as it was. The
+  // refusal used to happen inside the store, AFTER this supervisor had dropped
+  // the entry, marked it closed and stopped its timers — and the supervisor is
+  // per PROCESS, so those were the RECORDING window's. Measured: the heartbeat
+  // froze at the refusal and thirty-one seconds later the same button deleted
+  // the meeting with the microphone still open.
+  assert.ok(fs.existsSync(captureDirectory(home, session.id)), 'the audio survived the refused delete');
+  assert.deepEqual(await supervisor.writing(), [
+    { sessionId: session.id, holderId: 'wr-first', note: MEETING_CAPTURE_WRITER_NOTE },
+  ], 'the recording window is still the writer');
+  // …and its queue is still working, rather than inert against ports a close
+  // turned off underneath it.
+  await supervisor.append(session.id, new Uint8Array([3, 4, 5]), 20_000);
+  await supervisor.settle(session.id);
+  assert.deepEqual(
+    (await record(store, session.id)).segments.map((segment) => [segment.state, segment.text]),
+    [['done', 'chunk-2'], ['done', 'chunk-3']],
+  );
+  // …so the second window's next click is refused for the same reason as its
+  // first, however long it waits.
+  await assert.rejects(() => supervisor.close(session.id, 'discard', 'wr-second'), /recording this meeting right now/);
+
+  // The window that IS recording it may still finish the meeting, or the guard
+  // would have wedged the one window entitled to press the button.
+  await supervisor.close(session.id, 'finalize', 'wr-first');
   assert.equal(fs.existsSync(captureDirectory(home, session.id)), false);
+});
+
+test('a window that goes away stops being the writer, and its recording is offered back', async () => {
+  const { home, store, supervisor } = harness(async () => 'text');
+  const session = await supervisor.begin({ scope: { orgId: null }, writerId: 'wr-first' });
+  await supervisor.append(session.id, new Uint8Array([1, 2]), 20_000);
+  await supervisor.settle(session.id);
+
+  // A RELOAD, which is the case a lease could not see: main is untouched by one,
+  // so a heartbeat main owned went on renewing itself for a page that no longer
+  // existed and Transcribe, Create and Delete were refused for ever over a
+  // recording nobody was making. Here the page says it is going, and that is the
+  // whole of the mechanism.
+  assert.deepEqual(supervisor.releaseWindow('wr-first'), [session.id]);
+  assert.deepEqual(await supervisor.writing(), []);
+  assert.equal(supervisor.isWriting(session.id), false);
+
+  // Reporting it twice is not an error — the page's own `pagehide` and main's
+  // `destroyed` hook both fire for an ordinary window close.
+  assert.deepEqual(supervisor.releaseWindow('wr-first'), []);
+
+  // …and the reloaded window, which is a NEW writer with a new id, gets the
+  // meeting back: it is an ordinary unfinished recording now.
+  const reloaded = await supervisor.adopt(session.id, 'wr-reloaded');
+  assert.equal(reloaded.segments.length, 1);
+  await supervisor.close(session.id, 'discard', 'wr-reloaded');
+  assert.equal(fs.existsSync(captureDirectory(home, session.id)), false);
+  assert.deepEqual(await store.resumable(), []);
+});
+
+test('an anonymous Record claims nothing, and blocks nobody', async () => {
+  const { supervisor } = harness(async () => 'text');
+  // The caller would not say who it was, so there is nothing for another window
+  // to be told about — and nothing for it to be refused over either. Treating an
+  // absent id as a claim nobody could ever match would make the capture
+  // permanently undeletable, which is the failure this round removed.
+  const session = await supervisor.begin({ scope: { orgId: null } });
+  assert.deepEqual(await supervisor.writing(), []);
+  await supervisor.close(session.id, 'discard', 'wr-anyone');
 });

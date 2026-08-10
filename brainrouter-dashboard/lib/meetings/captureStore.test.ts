@@ -127,6 +127,23 @@ test("an unreadable chunk is reported, not thrown away and not thrown", async ()
   assert.equal(audio.byteLength, 4, "the rest of the meeting still comes back");
 });
 
+test("a chunk whose read THROWS is reported too — one bad segment does not cost the meeting", async () => {
+  // The reproduction: `preview` came back null and the whole recovered meeting
+  // was unplayable while five of six segments sat on the device, because the
+  // read of segment 2 rejected instead of resolving `undefined`. Both real
+  // backends reject — IndexedDB on `onerror`/`onabort`, OPFS when `getFile()`
+  // finds the entry gone — so this is the ordinary injury, not the exotic one.
+  const backend = new FakeCaptureBackend();
+  const subject = store(backend);
+  await subject.begin({ sessionId: "mtg-1" });
+  for (const fill of [1, 2, 3]) await subject.appendChunk("mtg-1", audioBlob(4, fill));
+  backend.failReads.add("mtg-1:1");
+
+  const audio = await subject.readAudio("mtg-1");
+  assert.deepEqual(audio.missing, [1], "the segment that could not be read is NAMED");
+  assert.equal(audio.byteLength, 8, "and the rest of the recording is still playable");
+});
+
 test("an empty chunk is refused", async () => {
   const backend = new FakeCaptureBackend();
   const subject = store(backend);
@@ -500,6 +517,28 @@ test("C — a chunk-less capture the caller is writing to survives the reap it r
   );
   assert.deepEqual(seen, ["mtg-recording"]);
   assert.ok(await subject.read("mtg-recording"));
+});
+
+test("C — the reap WAITS for an answer the caller has to ask the browser for", async () => {
+  // The liveness answer on this host is `navigator.locks.query()`, which is a
+  // promise. A reap that did not await the predicate would read the pending
+  // promise as truthy and delete every chunk-less manifest, including the
+  // recording another tab has open on its microphone prompt right now.
+  const backend = new FakeCaptureBackend();
+  const subject = store(backend);
+  await subject.begin({ sessionId: "mtg-being-recorded", payload: "{}" });
+  await subject.begin({ sessionId: "mtg-abandoned", payload: "{}" });
+
+  assert.deepEqual(
+    await subject.reapOrphans({
+      abandoned: async (record) => {
+        await Promise.resolve();
+        return record.sessionId === "mtg-abandoned";
+      },
+    }),
+    ["mtg-abandoned"],
+  );
+  assert.ok(await subject.read("mtg-being-recorded"), "the recording another tab is holding survives");
 });
 
 test("C — a capture that HAS audio is never reaped, whatever the caller says about it", async () => {

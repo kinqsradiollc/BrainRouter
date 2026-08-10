@@ -14,13 +14,11 @@ import {
   appendSegment,
   createCaptureSession,
   finalizeCapture,
-  isCaptureBeingWritten,
   markDone,
   stopCapture,
 } from "@kinqs/brainrouter-core/meetings";
 
 import {
-  isCapturePayloadBeingWritten,
   parseCapturePayload,
   restoreCaptureSession,
   resumableCaptures,
@@ -215,64 +213,43 @@ test("recovery corrects a segment left mid-attempt by the kill", () => {
   assert.equal(restored.segments[0]?.attempts, 1);
 });
 
-test("D6 — the writer is mirrored beside the session, so a payload this build cannot read still names it", () => {
-  // The one path where a live tab's claim would otherwise be dropped:
-  // `restoreCaptureSession` MINTS a session when the stored one will not parse,
-  // and a minted session has no writer — so a second tab would be offered a
-  // recording that is in progress, with an enabled Discard beside it.
+test("D6 — a lease left in a record by an older build is read and DROPPED", () => {
+  // §6's headline failure came from this field. Liveness used to be a heartbeat
+  // stamp in the payload, and a tab killed one second ago leaves one that still
+  // looks fresh — so the recovered meeting was withheld from the offer for the
+  // whole of the old staleness window, on a surface that asks once and never
+  // asks again. The answer moved to `captureLock.ts`, where a dead tab's claim
+  // is gone the instant the tab is, and a stamp found here must not be able to
+  // speak.
   const at = "2026-08-10T09:00:10.000Z";
-  const session = acquireCaptureLease(
-    createCaptureSession({ id: "mtg-1", startedAt: "2026-08-10T09:00:00.000Z", scope: SCOPE }),
-    { holderId: "wr-live", holder: "Another tab" },
-    at,
+  let session = createCaptureSession({ id: "mtg-1", startedAt: "2026-08-10T09:00:00.000Z", scope: SCOPE });
+  session = appendSegment(session, { byteLength: 1024, durationMs: 20_000 });
+  const leased = acquireCaptureLease(session, { holderId: "wr-killed", holder: "Another tab" }, at);
+  assert.equal(leased.ok, true);
+  if (!leased.ok) return;
+  // Exactly what the previous build wrote: the lease inside the session AND
+  // mirrored at the top level of the envelope.
+  const legacy = JSON.stringify({ session: leased.session, writer: leased.lease });
+
+  const restored = restoreCaptureSession({ record: record({ payload: legacy, chunks: chunks(1) }), scope: SCOPE, at });
+  assert.equal(restored.writer, undefined, "the stamp does not survive into the session");
+  assert.equal(restored.segments.length, 1, "and the meeting itself comes back untouched");
+  // One second after the kill, with no threshold waited out and nothing re-asked.
+  assert.deepEqual(
+    resumableCaptures([record({ payload: legacy, chunks: chunks(1) })], { scope: SCOPE, at }).map((entry) => entry.record.sessionId),
+    ["mtg-1"],
+    "the killed tab's recording is offered back on the FIRST check",
   );
-  assert.equal(session.ok, true);
-  if (!session.ok) return;
-  const payload = serializeCapturePayload({ session: session.session });
-  assert.equal(JSON.parse(payload).writer.holderId, "wr-live", "the lease is written at the top level too");
-
-  // A session shape this build refuses — one segment with a drifted index, which
-  // is exactly what an older build could have written.
-  // The session shape this build refuses AND with no lease left inside it —
-  // which is what a half-written record looks like, and the only case where the
-  // mirrored copy is the difference between a live recording being protected
-  // and being handed to a second tab.
-  const damaged = JSON.stringify({
-    ...JSON.parse(payload),
-    session: { ...session.session, writer: undefined, segments: [{ index: 7 }] },
-  });
-  assert.equal(parseCapturePayload(damaged).session, undefined, "the session is refused");
-  assert.equal(parseCapturePayload(damaged).writer?.holderId, "wr-live", "and the writer survives it");
-  const restored = restoreCaptureSession({ record: record({ payload: damaged, chunks: chunks(2) }), scope: SCOPE, at });
-  assert.equal(restored.writer?.holderId, "wr-live", "the minted session carries the lease");
-  assert.equal(isCaptureBeingWritten(restored, at), true);
-  assert.equal(isCapturePayloadBeingWritten(damaged, at), true);
-
-  // …and it is still only fresh for as long as the lease is.
-  const later = "2026-08-10T09:30:00.000Z";
-  assert.equal(isCapturePayloadBeingWritten(damaged, later), false);
 });
 
-test("a lease read back out of storage is checked before it can hold a capture hostage", () => {
-  // Not paranoia about an attacker — OPFS is origin-scoped — but about our own
-  // past selves. A lease whose epoch is not a real fencing token is not a lease,
-  // and believing one would make a capture unrecoverable for ever.
-  const at = "2026-08-10T09:00:00.000Z";
-  for (const writer of [
-    { holderId: "wr-1", epoch: 0, heartbeatAt: at },
-    { holderId: "wr-1", epoch: 1.5, heartbeatAt: at },
-    { holderId: "", epoch: 1, heartbeatAt: at },
-    { holderId: "wr-1", epoch: 1, heartbeatAt: 12345 },
-    { holderId: "wr-1", epoch: 1 },
-  ]) {
-    const payload = JSON.stringify({ writer });
-    assert.equal(parseCapturePayload(payload).writer, undefined, `${JSON.stringify(writer)} is not a lease`);
-    assert.equal(isCapturePayloadBeingWritten(payload, at), false);
-  }
-  // …and a well-formed one is.
-  const good = JSON.stringify({ writer: { holderId: "wr-1", epoch: 1, heartbeatAt: at } });
-  assert.equal(parseCapturePayload(good).writer?.holderId, "wr-1");
-  assert.equal(isCapturePayloadBeingWritten(good, at), true);
+test("nothing writes liveness into the envelope any more", () => {
+  // A `writer` here would be a second, slower opinion about a fact the browser
+  // states exactly — and the offer would start honouring it again the moment
+  // somebody restored the field.
+  const session = createCaptureSession({ id: "mtg-1", scope: SCOPE });
+  const payload = serializeCapturePayload({ title: "Weekly sync", mimeType: "audio/webm", session });
+  assert.deepEqual(Object.keys(JSON.parse(payload)).sort(), ["mimeType", "session", "title"]);
+  assert.equal("writer" in parseCapturePayload(payload), false);
 });
 
 test("the offer judges freshness and stamps recovery from ONE reading of the clock", () => {
@@ -290,19 +267,24 @@ test("the offer judges freshness and stamps recovery from ONE reading of the clo
 });
 
 test("open question 5 + D6 — a capture being written is not offered back, whoever asks", () => {
+  // "Nobody is writing to it" is still half of D2's rule; what changed is where
+  // the answer comes from. The record cannot hold it — a stamp is only ever a
+  // guess about a tab that may already be gone — so the caller asks the browser
+  // and hands the live ids in as `exclude`.
   const at = "2026-08-10T09:00:10.000Z";
   let session = createCaptureSession({ id: "mtg-1", startedAt: "2026-08-10T09:00:00.000Z", scope: SCOPE });
   session = appendSegment(session, { byteLength: 1024, durationMs: 20_000 });
-  const leased = acquireCaptureLease(session, { holderId: "wr-live" }, at);
-  assert.equal(leased.ok, true);
-  if (!leased.ok) return;
-  const live = record({ payload: serializeCapturePayload({ session: leased.session }), chunks: chunks(1) });
+  const live = record({ payload: serializeCapturePayload({ session }), chunks: chunks(1) });
 
-  assert.deepEqual(resumableCaptures([live], { scope: SCOPE, at }), [], "not while a tab is writing to it");
-  // …and once the lease lapses, the crashed recording is offered back.
-  const lapsed = "2026-08-10T09:01:00.000Z";
   assert.deepEqual(
-    resumableCaptures([live], { scope: SCOPE, at: lapsed }).map((entry) => entry.record.sessionId),
+    resumableCaptures([live], { scope: SCOPE, at, exclude: ["mtg-1"] }),
+    [],
+    "not while a tab holds the lock for it",
+  );
+  // …and the instant that tab lets go — or dies, which is the same thing to the
+  // browser — the recording is offered back. No threshold, no second check.
+  assert.deepEqual(
+    resumableCaptures([live], { scope: SCOPE, at }).map((entry) => entry.record.sessionId),
     ["mtg-1"],
   );
 });

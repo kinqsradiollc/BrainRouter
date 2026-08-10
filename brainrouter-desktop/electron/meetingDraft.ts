@@ -40,8 +40,8 @@
  *    A draft is a copy of the form; anything else is a different document
  *    wearing the same name.
  *
- * Like `meetingCapture.ts`, it does not import `electron`: the IPC surface is in
- * `meetingCaptureBridge.ts` so the mode guarantee can be checked against a
+ * Like `meetingCapture.ts`, it does not import `electron`: the channels are in
+ * `meetingCaptureChannels.ts` so the mode guarantee can be checked against a
  * temporary directory.
  */
 import fs from 'node:fs';

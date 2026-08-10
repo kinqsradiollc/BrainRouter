@@ -121,21 +121,32 @@ export interface ReapOrphansOptions {
    * — asked about a manifest the reap has JUST read.
    *
    * Two reasons it is the caller's question and not the store's, and they pull
-   * the same way. The store cannot read a payload, so it can see neither the
-   * lease that says a tab is recording into this right now nor the fact that one
-   * reserved id in this listing is not a meeting at all. And `keep` cannot stand
-   * in for it: `keep` is built from a listing the caller took earlier, and OPFS
-   * is scoped to the ORIGIN, so a session another tab began in between is absent
-   * from `keep` and present here — which does not matter while every live
-   * capture is protected by holding audio, and matters completely the moment a
-   * chunk-less manifest becomes reapable, because a recording is exactly that
-   * for as long as the microphone prompt is on screen.
+   * the same way. The store cannot read a payload, so it cannot tell that one
+   * reserved id in this listing is not a meeting at all; and it cannot see the
+   * browser's lock table, which is where "a tab is recording into this right
+   * now" actually lives. And `keep` cannot stand in for it: `keep` is built from
+   * a listing the caller took earlier, and OPFS is scoped to the ORIGIN, so a
+   * session another tab began in between is absent from `keep` and present here
+   * — which does not matter while every live capture is protected by holding
+   * audio, and matters completely the moment a chunk-less manifest becomes
+   * reapable, because a recording is exactly that for as long as the microphone
+   * prompt is on screen.
+   *
+   * **It may answer asynchronously, and the reap waits for it.** That is not a
+   * convenience: the authoritative liveness answer on this host is
+   * `navigator.locks.query()`, which is a promise, and a predicate forced to be
+   * synchronous could only consult something taken EARLIER — which is precisely
+   * the stale reading this argument exists to avoid.
    *
    * Absent, a manifest with no audio is NEVER reaped. That is the safe default
    * and deliberately the old behaviour: a caller that has not said which of its
    * records are meetings must not have one deleted on its behalf.
    */
-  readonly abandoned?: (record: { readonly sessionId: string; readonly startedAt: string; readonly payload: string }) => boolean;
+  readonly abandoned?: (record: {
+    readonly sessionId: string;
+    readonly startedAt: string;
+    readonly payload: string;
+  }) => boolean | Promise<boolean>;
 }
 
 export class MeetingCaptureStore {
@@ -298,6 +309,16 @@ export class MeetingCaptureStore {
    *
    * Queued behind this session's writes, so the answer includes the chunk that
    * was still in flight when Stop was pressed.
+   *
+   * **Unreadable is unreadable, whatever the reason.** A chunk that reads back
+   * `undefined` and a chunk whose read THROWS are the same fact about the same
+   * twenty seconds of audio, and both belong in `missing`. Letting the throw
+   * escape made one bad chunk deny the user the whole meeting — `preview` came
+   * back null and fifty-nine playable minutes went unheard — and it is not a
+   * hypothetical shape: the IndexedDB backend's request wrapper rejects on
+   * `onerror`/`onabort`, and OPFS's `getFile()` throws when the entry is gone or
+   * the file is locked. The desktop answers this injury with `missing=[2]`; D1b
+   * says this host gets the same guarantee and not a lesser one.
    */
   async readAudio(sessionId: string, type = "audio/webm"): Promise<CaptureAudio> {
     const id = assertCaptureSessionId(sessionId);
@@ -307,7 +328,13 @@ export class MeetingCaptureStore {
       const missing: number[] = [];
       let byteLength = 0;
       for (const chunk of chunks) {
-        const blob = await this.#backend.readChunk(id, chunk.sequence);
+        let blob: Blob | undefined;
+        try {
+          blob = await this.#backend.readChunk(id, chunk.sequence);
+        } catch {
+          // Named below with every other chunk this device could not hand back.
+          blob = undefined;
+        }
         if (!blob) {
           missing.push(chunk.sequence);
           continue;
@@ -447,10 +474,11 @@ export class MeetingCaptureStore {
         // C: a tab killed during the microphone prompt left a manifest nothing
         // could offer, nothing could reap and no user could reach. The one thing
         // that separates it from a recording whose first chunk has not landed is
-        // whether a writer is stamping it — and the manifest just read is the
-        // only reading late enough to see a tab that began after the caller's
-        // own listing. That question is the caller's to answer, from the lease.
-        if (!options.abandoned?.({ sessionId: id, startedAt: manifest.startedAt, payload: manifest.payload })) continue;
+        // whether a tab is holding it — and this moment, not the caller's
+        // earlier listing, is the only reading late enough to see a tab that
+        // began after it. That question is the caller's to answer, and it is
+        // awaited because the browser answers it asynchronously.
+        if (!(await options.abandoned?.({ sessionId: id, startedAt: manifest.startedAt, payload: manifest.payload }))) continue;
       } else if (!manifest) {
         // No manifest AND no chunks: nothing to reclaim, and it is exactly what
         // a `begin` in another tab looks like for the instant between creating

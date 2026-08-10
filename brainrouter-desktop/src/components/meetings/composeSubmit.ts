@@ -50,13 +50,18 @@
  *    invariant 1, reached by a mechanism invariant 1 cannot see: the hold is
  *    this window's own state, and a second BrowserWindow's hold is empty, so
  *    every boolean in it reads false about a meeting being recorded next door.
- *    That question is therefore asked of the RECORD, through the shared capture
- *    lease, which every holder of the store reads the same way. The two guards
- *    are both needed and neither subsumes the other: the lease cannot cover
- *    `arming` (no session exists yet) and the hold cannot cover another window.
+ *    That question is answered by MAIN, which holds every window of this process
+ *    and therefore knows exactly; `heldByAnother` is that answer as this window
+ *    last heard it. The two guards are both needed and neither subsumes the
+ *    other: main cannot cover `arming` (no session exists yet) and the hold
+ *    cannot cover another window.
+ *
+ *    This one is an affordance rather than the enforcement. The refusal that
+ *    matters is main's — `submit` finalizes the capture, and main throws over a
+ *    capture another window is recording — because a rule reading state this
+ *    window fetched a moment ago is a rule that can be a moment out of date.
  */
 import {
-  describeCaptureWriter,
   settleTranscriptForSubmit,
   type MeetingCaptureSession,
   type TranscriptFold,
@@ -145,13 +150,15 @@ export interface MeetingSubmissionInput {
   /** The workspace the app-wide switcher is on. Used only when no capture is behind the text. */
   readonly activeOrgId?: string;
   /**
-   * Invariant 4 — this WINDOW's capture-lease identity.
+   * Invariant 4 — main says another window is recording the capture behind this
+   * text.
    *
-   * Optional, and its absence means "the caller will not say who it is", which
-   * the shared rule reads as "not the writer" — so an anonymous caller is
-   * refused over any live recording rather than being quietly exempted.
+   * A boolean rather than an identity to compare, because the comparison is not
+   * this module's to make: main holds every window and answers it exactly, and a
+   * rule that re-derived it here from a record would be re-deriving it from
+   * something that cannot see a second window at all.
    */
-  readonly holderId?: string;
+  readonly heldByAnother?: boolean;
 }
 
 /** Why a click did nothing — named so a test can tell "refused" from "posted nothing". */
@@ -182,12 +189,10 @@ export function prepareSubmission(state: MeetingSubmissionInput): MeetingSubmiss
   if (captureInFlight(state.hold)) return { ok: false, reason: "capture-in-flight" };
   // Invariant 4, and the reason it is a SECOND question rather than the same
   // one: the hold is this window's memory, and the whole defect is that a second
-  // window's hold is empty. `captureInFlight` covers the two windows the record
-  // cannot — Record before a session exists, and Stop after the last chunk — and
-  // the lease covers the writer this window has never heard of.
-  if (state.session && describeCaptureWriter(state.session, state.holderId)) {
-    return { ok: false, reason: "held-by-another" };
-  }
+  // window's hold is empty. `captureInFlight` covers the two moments main cannot
+  // — Record before a session exists, and Stop after the last chunk — and this
+  // covers the writer this window has never heard of.
+  if (state.heldByAnother) return { ok: false, reason: "held-by-another" };
   if (state.busy) return { ok: false, reason: "busy" };
   const title = state.title.trim();
   if (!title || !state.transcript.trim()) return { ok: false, reason: "incomplete" };

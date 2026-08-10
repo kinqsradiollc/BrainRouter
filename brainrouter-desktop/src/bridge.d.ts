@@ -134,9 +134,11 @@ declare global {
         captureFinalize?(id: string, holderId?: string): Promise<unknown>;
         captureDiscard?(id: string, holderId?: string): Promise<unknown>;
         captureResumable?(scope?: { orgId?: string | null; workspaceId?: string | null }): Promise<unknown>;
-        /** ADR-035 D6 — the captures a writer holds RIGHT NOW, with their leases,
-         *  so a second window can say who is recording instead of offering it back. */
+        /** ADR-035 D6 — the captures a window in this process is recording RIGHT
+         *  NOW, so a second window can say who is recording instead of offering it
+         *  back, and the push that says the answer has changed. */
         captureWriting?(scope?: { orgId?: string | null; workspaceId?: string | null }): Promise<unknown>;
+        onCaptureWriters?(listener: () => void): () => void;
         /** ADR-035 D3/D4/D5 — the transcription queue is host-owned; these are the
          *  renderer's two requests to it and the push it listens to. */
         captureAdopt?(id: string, holderId?: string): Promise<unknown>;

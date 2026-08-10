@@ -1,28 +1,37 @@
 /**
  * The renderer harness for ADR-035's dashboard capture surface.
  *
- * One backend stands for the ORIGIN's storage and each `Tab` stands for a
- * browser tab over it: its own `MeetingCaptureStore`, its own holder id, its own
+ * One backend stands for the ORIGIN's storage, one lock table stands for the
+ * origin's `navigator.locks`, and each `Tab` stands for a browser tab over both:
+ * its own `MeetingCaptureStore`, its own `CaptureLocks`, its own
  * `MeetingCaptureSurface`. That is the shape of the host this ADR keeps being
- * bitten by — OPFS is scoped to the origin, not to the tab — so it is the shape
- * the harness has to have, or the defects it exists to catch are unreachable
- * from it by construction.
+ * bitten by — OPFS and the lock table are scoped to the origin, not to the tab —
+ * so it is the shape the harness has to have, or the defects it exists to catch
+ * are unreachable from it by construction.
  *
  * Everything is driven and nothing is stubbed that holds a decision: the store
  * is the REAL `MeetingCaptureStore` over the real fixture backend, the
- * transcription queue is the real shared scheduler, and the session model is the
- * shared one. What is faked is the browser — a recorder whose chunks a test
- * hands over by name, a clock a test moves, timers a test fires — because those
- * are the things a Node runner does not have and the things a defect is never
- * hiding in.
+ * transcription queue is the real shared scheduler, the locks are the real
+ * `CaptureLocks` over a lock table that behaves like the browser's, and the
+ * session model is the shared one. What is faked is the browser — a recorder
+ * whose chunks a test hands over by name, a clock a test moves, timers a test
+ * fires — because those are the things a Node runner does not have and the
+ * things a defect is never hiding in.
  *
- * The clock and the timers are deliberately manual. A lease's whole subject is
- * elapsed time, and a test that waited thirty real seconds to find out whether a
- * recording is offered back is a test nobody would run.
+ * `tab.kill()` is what §6 is judged with: the browser drops the locks that tab
+ * held and the tab never runs another line. No clock moves, because nothing
+ * about the answer depends on one any more.
+ *
+ * The clock and the timers are still manual, for the two things that really are
+ * about elapsed time: the draft's debounce, and D7's outage backoff — the queue
+ * reads the same `now` port, so a test can drive a probe schedule that would
+ * otherwise cost it a minute of real seconds.
  *
  * The underscore prefix keeps it out of the `*.test.ts` glob.
  */
 import { FakeCaptureBackend } from "../../lib/meetings/_captureBackendFixture";
+import { FakeLockManager, FakeLockOrigin } from "../../lib/meetings/_captureLockFixture";
+import { CaptureLocks } from "../../lib/meetings/captureLock";
 import { MeetingCaptureStore } from "../../lib/meetings/captureStore";
 import type { CaptureSessionRecord } from "../../lib/meetings/captureStore";
 import { restoreCaptureSession } from "../../lib/meetings/capturePayload";
@@ -107,9 +116,17 @@ interface Timer {
   readonly dueAt: number;
 }
 
-/** The origin: one backend, one wall clock, many tabs. */
+/** The origin: one backend, one lock table, one wall clock, many tabs. */
 export class CaptureOrigin {
   readonly backend = new FakeCaptureBackend();
+
+  /**
+   * `navigator.locks` for this origin — shared by every tab, as the real one is.
+   *
+   * It logs into the backend's own call list so the two fakes read as one
+   * ordered history of what this origin did.
+   */
+  readonly locks = new FakeLockOrigin(this.backend.calls);
 
   /** A fixed instant, so every stamp in a stored record is checkable. */
   clock = Date.parse("2026-08-01T09:00:00.000Z");
@@ -163,7 +180,7 @@ export class CaptureOrigin {
     return new MeetingCaptureStore(this.backend).read(sessionId);
   }
 
-  /** The stored session as any holder would restore it — the lease included. */
+  /** The stored session as any tab would restore it. */
   async session(sessionId: string, orgId: string | null = null) {
     const record = await this.record(sessionId);
     if (!record) throw new Error(`no stored capture ${sessionId}`);
@@ -172,9 +189,13 @@ export class CaptureOrigin {
 }
 
 export interface TabOptions {
-  readonly holderId?: string;
   readonly orgId?: string;
   readonly legacyDraft?: LegacyDraftStorage;
+  /**
+   * A tab whose browser has no Web Locks — a dashboard served over plain http.
+   * Golden rule 23's case, and the only way to reach the fallback's behaviour.
+   */
+  readonly withoutLocks?: boolean;
 }
 
 export class CaptureTab {
@@ -184,7 +205,10 @@ export class CaptureTab {
 
   readonly surface: MeetingCaptureSurface;
 
-  readonly holderId: string;
+  /** This tab's view of the origin's lock table; `null` when it has none. */
+  readonly lockManager: FakeLockManager | null;
+
+  readonly locks: CaptureLocks;
 
   orgId: string;
 
@@ -210,8 +234,22 @@ export class CaptureTab {
   /** Whether the microphone can be opened at all. */
   microphoneFails = false;
 
-  /** The microphone prompt, left on screen: `openMicrophone` never resolves. */
+  /**
+   * The microphone prompt, left on screen: `openMicrophone` waits until
+   * `answerMicrophone()` — which is how long a real one can sit there, and the
+   * window in which the previous build's record said nobody was recording.
+   */
   microphonePending = false;
+
+  /** The person clicks Allow. Resolves a prompt this tab is still waiting on. */
+  answerMicrophone(): void {
+    const answer = this.#prompt;
+    this.#prompt = null;
+    this.microphonePending = false;
+    answer?.();
+  }
+
+  #prompt: (() => void) | null = null;
 
   /** A recorder that opens and then refuses to start. */
   recorderStartFails = false;
@@ -228,19 +266,24 @@ export class CaptureTab {
   constructor(origin: CaptureOrigin, options: TabOptions = {}) {
     this.origin = origin;
     this.orgId = options.orgId ?? "org-a";
-    this.holderId = options.holderId ?? `wr-tab-${Math.random().toString(36).slice(2, 8)}`;
+    this.lockManager = options.withoutLocks ? null : origin.locks.tab();
+    this.locks = new CaptureLocks(this.lockManager);
     this.store = new MeetingCaptureStore(origin.backend, {
       persisted: true,
       // Plenty of room, so the budget never becomes the reason a test fails.
       estimate: async () => ({ usage: 1_000_000, quota: 10_000_000_000 }),
     });
     const ports: CaptureSurfacePorts = {
-      holderId: this.holderId,
+      locks: this.locks,
       openStore: async () => ({ store: this.store, kind: "opfs", persisted: true, rejected: [] }),
       activeOrgId: () => this.orgId,
       openMicrophone: async () => {
         if (this.microphoneFails) throw new Error("denied");
-        if (this.microphonePending) await new Promise<void>(() => {});
+        if (this.microphonePending) {
+          await new Promise<void>((answered) => {
+            this.#prompt = answered;
+          });
+        }
         const microphone = new FakeMicrophone();
         microphone.recorder.startFails = this.recorderStartFails;
         this.microphones.push(microphone);
@@ -326,6 +369,19 @@ export class CaptureTab {
   async stop(): Promise<void> {
     this.surface.stop();
     await flush();
+  }
+
+  /**
+   * §6's kill. NOT `dispose()`.
+   *
+   * The tab is gone: nothing in it runs again, no teardown happens, no Stop is
+   * pressed, and the only thing that changes anywhere is that the browser drops
+   * the locks this tab was holding. Everything else — the manifest, the chunks,
+   * the half-written session — is left exactly as the kill found it, which is
+   * the whole point of the test.
+   */
+  kill(): void {
+    this.lockManager?.kill();
   }
 }
 

@@ -22,16 +22,28 @@
  * reason: logic no test can execute is logic nobody has checked, and this is the
  * module whose whole job is not losing a recording.
  *
- * **Liveness is in the record, not in this object.** Four rounds of guards —
- * `captureRef.current`, `queueRef.current` here, `hold.sessionId` and
- * `captureInFlight(hold)` on the desktop — were the same mistake four times:
- * state in ONE mount describing a store scoped to the whole ORIGIN. A second tab
- * has an empty guard, so every "is something recording?" question answers false
- * and the live meeting is offered back with an enabled Discard beside it. The
- * shared `captureLease` moves that fact into the session record every holder
- * already reads; this module acquires, heartbeats and releases it, and asks it
- * back at the four places that can destroy a recording — the offer, the discard,
- * the reap and the create guard.
+ * **Liveness is the browser's, not this object's and not the record's.** Four
+ * rounds of guards — `captureRef.current`, `queueRef.current` here,
+ * `hold.sessionId` and `captureInFlight(hold)` on the desktop — were the same
+ * mistake four times: state in ONE mount describing a store scoped to the whole
+ * ORIGIN. A second tab has an empty guard, so every "is something recording?"
+ * question answers false and the live meeting is offered back with an enabled
+ * Discard beside it.
+ *
+ * The fifth round moved the fact into the record as a LEASE, and that was the
+ * same mistake once more in a longer form: a heartbeat and a staleness threshold
+ * are a guess about a question this host can answer exactly. The guess cost §6
+ * its headline — after a real kill the stamp stays fresh, so a reopened tab is
+ * shown an empty device holding a complete, playable meeting, and it never
+ * corrects itself because the offer is computed on mount and nothing re-asks.
+ *
+ * So the question goes to `navigator.locks` (`captureLock.ts`): a lock over the
+ * capture id, exclusive across every tab of the origin, taken before the
+ * microphone is even asked for, and released BY THE BROWSER the instant the tab
+ * dies. There is no clock in it, no threshold to tune, and no window in which a
+ * dead writer looks alive — so the four places that can destroy a recording (the
+ * offer, the discard, the reap and the create guard) ask it and get today's
+ * answer rather than one from up to thirty seconds ago.
  *
  * **The teardown is not optional.** A client-side navigation away from
  * /meetings used to leave the `MediaRecorder` running with the microphone open,
@@ -44,27 +56,18 @@
  * back on unmount.
  */
 import {
-  acquireCaptureLease,
   appendSegment,
   beginTranscriptFold,
-  capturesBeingWritten,
   createCaptureSession,
-  describeCaptureWriter,
   discardCapture as discardCaptureSession,
   drainWakeDelayMs,
   EMPTY_TRANSCRIPT_FOLD,
   finalizeCapture,
   foldTranscript,
-  heartbeatCaptureLease,
-  isCaptureLeaseFresh,
-  MEETING_CAPTURE_HEARTBEAT_MS,
   reconcileCaptureDraft,
-  releaseCaptureLease,
   settleTranscriptForSubmit,
   stopCapture,
   unsettledSegments,
-  type MeetingCaptureLease,
-  type MeetingCaptureLeaseClaim,
   type MeetingCaptureSession,
   type MeetingCaptureTemplate,
   type MeetingDrainPhase,
@@ -73,9 +76,12 @@ import {
 } from "@kinqs/brainrouter-core/meetings";
 
 import {
-  isCapturePayloadBeingWritten,
+  CAPTURE_HELD_ELSEWHERE,
+  CAPTURE_LOCKS_UNAVAILABLE,
+  type CaptureLocks,
+} from "../../lib/meetings/captureLock";
+import {
   parseCapturePayload,
-  restoreCaptureSession,
   resumableCaptures,
   serializeCapturePayload,
   type ResumableCapture,
@@ -109,9 +115,6 @@ export const CAPTURE_TEMPLATES: readonly MeetingCaptureTemplate[] = ["general", 
 export function captureTemplate(value: string): MeetingCaptureTemplate {
   return CAPTURE_TEMPLATES.find((template) => template === value) ?? "general";
 }
-
-/** What a surface calls this tab when it is holding a recording someone else wants. */
-export const CAPTURE_HOLDER_LABEL = "Another tab";
 
 /**
  * The opening of the reap's own warning, so a later success can retract exactly
@@ -207,8 +210,13 @@ export interface CreateMeetingInput {
 }
 
 export interface CaptureSurfacePorts {
-  /** This TAB's writer id (`captureHolder.ts`), threaded into every lease call. */
-  readonly holderId: string;
+  /**
+   * THIS tab's Web Locks (`captureLock.ts`) — the authority on which captures a
+   * tab of this origin is writing to. One per surface: the handles it holds are
+   * what "that one is mine" means, so a shared instance would make two tabs read
+   * each other's recordings as their own.
+   */
+  readonly locks: CaptureLocks;
   openStore(requestPersistence: boolean): Promise<OpenedCaptureStore>;
   /** The switcher's CURRENT workspace. Read at Record, and never again for that recording. */
   activeOrgId(): string;
@@ -232,16 +240,6 @@ export interface CaptureSurfacePorts {
 
 export type CaptureBusy = "" | "transcribe" | "preview" | "create";
 
-/**
- * What one heartbeat learned.
- *
- * `unknown` is the answer that has to exist: a record that cannot be read after
- * this tab's own term has lapsed leaves it unable to say whether it is still the
- * writer or a zombie whose recording was taken over, and the two call for
- * opposite things.
- */
-export type CaptureBeat = "held" | "lost" | "unknown" | "unheld";
-
 export interface CaptureSurfaceState {
   readonly createOpen: boolean;
   readonly title: string;
@@ -260,8 +258,26 @@ export interface CaptureSurfaceState {
   readonly settling: boolean;
   /** A READING: which store, how much room. Rewritten by every chunk. */
   readonly notice: string;
-  /** An EVENT that is still true: a failed persist, a full store, a lost lease. */
+  /** An EVENT that is still true: a failed persist, a full store, a refused write. */
   readonly warning: string;
+  /**
+   * Golden rule 23 — the standing sentence for a browser that cannot answer "is
+   * another tab writing to this?" at all, and `""` for one that can.
+   *
+   * Its own slot rather than the warning's, because it is a PROPERTY OF THIS
+   * BROWSER for the whole page view: it must not be cleared by the next event,
+   * and it must not clear one. Without it the degradation is invisible, which is
+   * the definition of a silent outage.
+   */
+  readonly coordination: string;
+  /**
+   * The captures some tab of this origin is writing to, as of the last check.
+   *
+   * Published so the offer's controls can say what the functions will refuse.
+   * The functions ask again, authoritatively, at the moment of the click — this
+   * is a rendering, and a rendering is always slightly old.
+   */
+  readonly writing: readonly string[];
   readonly createError: string;
   readonly busy: CaptureBusy;
   readonly session: MeetingCaptureSession | null;
@@ -286,6 +302,8 @@ const EMPTY_STATE: CaptureSurfaceState = {
   settling: false,
   notice: "",
   warning: "",
+  coordination: "",
+  writing: [],
   createError: "",
   busy: "",
   session: null,
@@ -334,12 +352,7 @@ export class MeetingCaptureSurface {
   /** One per meeting, and the SINGLE WRITER of its session while it exists. */
   #queue: MeetingTranscriptionQueue | null = null;
 
-  /** What this tab believes it holds, or `null` when it holds nothing. */
-  #claim: MeetingCaptureLeaseClaim | null = null;
-
   #wake: number | null = null;
-
-  #beat: number | null = null;
 
   #draftSave: number | null = null;
 
@@ -368,9 +381,10 @@ export class MeetingCaptureSurface {
    * before that, and without it a chunk still ahead of `appendChunk` is settled
    * around rather than waited for. It used to work by accident, because
    * `appendChunk` was the first statement and therefore joined the store's queue
-   * synchronously; the heartbeat that now precedes it broke that accident, and a
-   * meeting was settled without its ending. Tracking the work says what was
-   * meant instead of depending on the order of two awaits.
+   * synchronously; a heartbeat inserted in front of it broke that accident and a
+   * meeting was settled without its ending. The heartbeat is gone and the
+   * accident holds again — which is exactly why this stays: the invariant should
+   * not depend on which statement happens to come first.
    */
   readonly #chunkWork = new Set<Promise<void>>();
 
@@ -378,6 +392,11 @@ export class MeetingCaptureSurface {
 
   constructor(ports: CaptureSurfacePorts) {
     this.#ports = ports;
+    // Golden rule 23, raised before anything is recorded rather than at the
+    // moment it costs somebody a meeting: whether this browser can see other
+    // tabs at all is known from the first line, and a degradation nobody is told
+    // about is indistinguishable from working.
+    if (!ports.locks.available) this.#state = { ...this.#state, coordination: CAPTURE_LOCKS_UNAVAILABLE };
   }
 
   // ————————————————————————————————————————————————————————— the React seam
@@ -390,11 +409,6 @@ export class MeetingCaptureSurface {
   };
 
   snapshot = (): CaptureSurfaceState => this.#state;
-
-  /** This tab's writer id, so a surface can ask "is that lease mine?" while rendering. */
-  get holderId(): string {
-    return this.#ports.holderId;
-  }
 
   // ——————————————————————————————————————————————————————————— the compose box
 
@@ -486,11 +500,19 @@ export class MeetingCaptureSurface {
   // ————————————————————————————————————————————————————————————— recording
 
   /**
-   * D2 — pressing Record creates the session, and D6 — the writer is named in
-   * that session BEFORE the manifest is written, so the very first thing on this
-   * device says who is recording. A tab killed during the microphone prompt is
-   * then distinguishable from one still waiting for it, which is the whole of
-   * defect C.
+   * D2 — pressing Record creates the session, and the LOCK over it is taken
+   * before the session record exists and therefore before the microphone is
+   * asked for.
+   *
+   * That order is the whole of defect C, and it is the one thing the heartbeat
+   * this replaced could not do. The beat was started here too, but it wrote
+   * nothing until `#queue` existed — which is after `openMicrophone()` resolves
+   * — so for the entire length of the permission prompt the record said nobody
+   * was writing. Measured: after 35 seconds a second tab's ordinary refresh
+   * REAPED the session, and the chunk that arrived when the person finally
+   * clicked Allow landed into a meeting that no longer existed. A lock has no
+   * such hole: it is held from this line, by the browser, whether or not this
+   * tab ever gets a microphone, and it is released the instant the tab dies.
    */
   async record(): Promise<void> {
     this.#patch({ createError: "", warning: "" });
@@ -505,9 +527,16 @@ export class MeetingCaptureSurface {
     let store: MeetingCaptureStore;
     let sessionId: string;
     let session: MeetingCaptureSession;
+    /** The lock to hand back if anything below fails; `""` while there is none. */
+    let held = "";
     try {
       store = await this.#store(true);
       sessionId = newCaptureSessionId();
+      // Before `begin`, and so before `getUserMedia`. A fresh id cannot already
+      // be taken, so the refusal is unreachable rather than impossible — and an
+      // unreachable branch that says what it means beats one that assumes.
+      if (await this.#ports.locks.hold(sessionId) === "taken") throw new Error(CAPTURE_HELD_ELSEWHERE);
+      held = sessionId;
       // Open question 5 — the org is frozen HERE, at Record. Nothing rewrites a
       // session's scope afterwards, so a recording that started under one
       // organization cannot silently land in another when the switcher moves.
@@ -519,19 +548,10 @@ export class MeetingCaptureSurface {
         template: captureTemplate(this.#state.template),
         ...(this.#state.language === "auto" ? {} : { language: this.#state.language }),
       });
-      const lease = acquireCaptureLease(session, { holderId: this.#ports.holderId, holder: CAPTURE_HOLDER_LABEL }, startedAt);
-      if (!lease.ok) throw new Error(lease.detail);
-      session = lease.session;
-      this.#claim = { holderId: lease.lease.holderId, epoch: lease.lease.epoch };
       await store.begin({ sessionId, startedAt, payload: serializeCapturePayload({ ...(title ? { title } : {}), session }) });
-      // Started before `getUserMedia`, not after: the prompt can sit on screen
-      // for a minute, and a lease nobody is renewing across it is a live
-      // recording that every other tab reads as abandoned.
-      this.#startHeartbeat();
     } catch (caught) {
       this.#arming = false;
-      this.#claim = null;
-      this.#stopHeartbeat();
+      if (held) this.#ports.locks.release(held);
       this.#patch({ createError: describe(caught, "This browser cannot store a recording durably.") });
       return;
     }
@@ -583,8 +603,7 @@ export class MeetingCaptureSurface {
       // never runs, so without this the microphone stays open with nothing
       // recording it.
       microphone?.release();
-      this.#stopHeartbeat();
-      this.#claim = null;
+      this.#ports.locks.release(sessionId);
       this.#recorder = null;
       this.#microphone = null;
       // Only tear down the queue and the guard if they are THIS recording's: a
@@ -625,11 +644,14 @@ export class MeetingCaptureSurface {
    * ADR-035 D1/D3 — the chunk becomes bytes before it becomes anything else,
    * then a segment, then work for the queue.
    *
-   * The heartbeat rides here as well as on the timer, and that is not belt and
-   * braces: in a BACKGROUND tab timers are clamped, and a recording tab the user
-   * has switched away from is exactly the second-holder case the lease exists
-   * for. `ondataavailable` comes from the media stack rather than from a timer,
-   * so a throttled tab still stamps its record on the chunk cadence.
+   * **Nothing is asked before the write.** There used to be a heartbeat here,
+   * and with it a rule about what to do when this tab could no longer tell
+   * whether it still held the recording. Neither is needed now and neither is
+   * safe to reintroduce: a lock cannot be taken from a tab that holds it, so
+   * while this handler is running nobody else is writing to this capture —
+   * there is no zombie case to detect. `appendChunk` is the first statement
+   * again, which also restores the property the beat quietly broke: the write
+   * joins the store's queue synchronously, before Stop can settle around it.
    *
    * Three steps, three separate failures, and they are NOT the same news. One
    * `try` around all three wrote one sentence for all of them — "that audio is
@@ -645,15 +667,6 @@ export class MeetingCaptureSurface {
       this.#patch({ warning: "Storage for this site is full. Recording stopped so the audio already saved stays intact." });
       this.stop();
     };
-    const holding = this.#queue;
-    const beat = await this.#beatLease();
-    // The heartbeat is what discovers that another tab took this recording over,
-    // and a tab that has lost it — or that cannot tell whether it still holds it
-    // — must not append its microphone's audio to a meeting somebody else may
-    // now be writing. `unknown` is only ever returned once this tab's own term
-    // has lapsed AND the record cannot be read, so a healthy recording never
-    // takes this path.
-    if (this.#queue !== holding || beat === "unknown") return;
     let chunk: CaptureChunkRef;
     try {
       chunk = await capture.store.appendChunk(capture.sessionId, data);
@@ -739,19 +752,19 @@ export class MeetingCaptureSurface {
       await capture.store.settled(capture.sessionId);
       const queue = this.#queue;
       if (!queue || queue.session.id !== capture.sessionId) return;
-      const claim = this.#claim;
       // Ordered after the final chunk's own `apply` by the queue's write chain,
-      // so `stopCapture` cannot land before the segment it belongs with. The
-      // lease is handed back in the SAME transition, so a cleanly stopped
-      // meeting is offerable at once rather than after the staleness window.
-      await queue.apply((session) => {
-        const stopped = session.status === "recording" ? stopCapture(session, this.#instant()) : session;
-        if (!claim) return stopped;
-        const released = releaseCaptureLease(stopped, claim, this.#instant());
-        return released.ok ? released.session : stopped;
-      });
-      this.#claim = null;
-      this.#stopHeartbeat();
+      // so `stopCapture` cannot land before the segment it belongs with.
+      await queue.apply((session) => (session.status === "recording" ? stopCapture(session, this.#instant()) : session));
+      // The lock goes back HERE, with the recording, and not when this tab
+      // eventually creates or discards the meeting. What it protects is a
+      // capture being WRITTEN TO — the microphone is closed and the last chunk
+      // has landed, so that has stopped being true, and holding on would keep a
+      // finished meeting out of every other tab's offer for as long as this one
+      // stayed open on the compose box. What remains here afterwards is
+      // transcription and a text box; a second tab that picks the meeting up
+      // from now on is a person moving tabs, and the destructive paths ask the
+      // lock again before they touch anything.
+      this.#ports.locks.release(capture.sessionId);
       this.#publishSession(queue.session);
       if (!queue.session.segments.length) {
         this.#patch({ createError: "No audio was captured — check that the right microphone is selected." });
@@ -776,141 +789,6 @@ export class MeetingCaptureSurface {
     // The chunk that landed a moment ago has already scheduled a drain of its
     // own, so this is a second chance rather than the only one.
     await this.#runDrain();
-  }
-
-  // ——————————————————————————————————————————————————————————— the lease
-
-  /**
-   * Still here.
-   *
-   * Two answers matter and they are not the same answer. A renewal that is
-   * REFUSED because another holder has the recording (`held_by_another`,
-   * `stale_epoch`) means this tab lost it, and continuing to record would write
-   * audio into a session somebody else is finalizing. A renewal refused because
-   * the TERM RAN OUT means nothing of the sort: the shared rule deliberately
-   * never revives an expired lease — that is 048's leaked unfenced heartbeat —
-   * and its own remedy is to acquire again, which mints a new epoch and fences
-   * whatever was carrying the old one.
-   *
-   * That second case is not exotic here, it is the common one: a BACKGROUND tab
-   * has its timers clamped, so the only heartbeat it gets is the chunk's, and a
-   * throttled cadence longer than the staleness window would otherwise stop a
-   * perfectly live recording dead. Re-acquiring keeps it recording unless
-   * somebody actually took it, which is exactly the distinction the lease is for.
-   */
-  async #beatLease(): Promise<CaptureBeat> {
-    const queue = this.#queue;
-    const claim = this.#claim;
-    if (!queue || !claim) return "unheld";
-    const at = this.#instant();
-    // **The STORED lease is the authority, never the queue's copy of it.** The
-    // queue holds this tab's own session in memory, and a tab that was frozen
-    // for a minute holds a session that knows nothing about the tab that took
-    // the recording over meanwhile — so renewing against it would hand the
-    // recording back to the writer the fence was raised against, and the next
-    // persist would write this tab's segments over the other tab's. This read is
-    // the whole difference between a lease and a fourth in-memory guard.
-    let stored: MeetingCaptureLease | undefined;
-    try {
-      const record = await (await this.#store(false)).read(queue.session.id);
-      stored = record ? parseCapturePayload(record.payload).writer : undefined;
-    } catch {
-      // A record we could not read is not evidence of anything — least of all
-      // that this tab still holds the recording. Renewing on a reading we do not
-      // have could hand the recording back to the writer a fence was raised
-      // against, so the beat says what it actually knows instead.
-      //
-      // The answer is not the same in both directions, and the difference is the
-      // whole of it. INSIDE our own term nobody can legitimately have taken this
-      // recording, so an unreadable record changes nothing and the meeting keeps
-      // being written — the ADR's own rule, which is that a store having a bad
-      // moment must not cost somebody their audio. Once the term has lapsed we
-      // cannot tell a healthy recording from a zombie one, and a zombie's next
-      // persist would write this tab's session over the tab that took it: so
-      // that is the case, and only that case, where the write waits.
-      return isCaptureLeaseFresh(queue.session.writer, at) ? "held" : "unknown";
-    }
-    // The ONE place that decides this tab has lost the recording. Everything
-    // below runs only when the record still says this claim holds it, or says
-    // nothing fresh at all.
-    if (stored && (stored.holderId !== claim.holderId || stored.epoch !== claim.epoch) && isCaptureLeaseFresh(stored, at)) {
-      this.#loseRecording(
-        describeCaptureWriter({ ...queue.session, writer: stored }, this.#ports.holderId, at)
-          ?? "Another tab is recording this meeting right now.",
-      );
-      return "lost";
-    }
-    // An array rather than a `let`, because a variable assigned only inside a
-    // closure keeps its initializer's narrowing and the renewal would read as
-    // unreachable.
-    const renewed: MeetingCaptureLeaseClaim[] = [];
-    try {
-      await queue.apply((session) => {
-        // Judged against the stored lease and written back through the single
-        // writer, so the epoch advances past whatever the record last held.
-        const current = stored ? { ...session, writer: stored } : session;
-        const outcome = heartbeatCaptureLease(current, claim, at);
-        if (outcome.ok) return outcome.session;
-        if (outcome.reason === "capture_closed") return session;
-        // The term ran out — which the shared rule refuses to revive, and whose
-        // own remedy is to acquire again. That is the common case here, not an
-        // exotic one: a background tab's timers are clamped, so its only
-        // heartbeat is the chunk's, and a cadence longer than the window would
-        // otherwise stop a perfectly live recording dead.
-        const retaken = acquireCaptureLease(current, { holderId: this.#ports.holderId, holder: CAPTURE_HOLDER_LABEL }, at);
-        if (!retaken.ok) return session;
-        renewed.push({ holderId: retaken.lease.holderId, epoch: retaken.lease.epoch });
-        return retaken.session;
-      });
-    } catch (caught) {
-      this.#patch({ warning: `This recording's progress could not be saved on this device — ${describe(caught, "the capture store refused the write.")}` });
-      return "held";
-    }
-    if (renewed.length) this.#claim = renewed[0];
-    return "held";
-  }
-
-  /**
-   * Another holder has this recording. Stop, say so, and touch NOTHING else —
-   * the session belongs to whoever took it, and finalizing or deleting it from
-   * here is exactly the destruction the lease exists to prevent.
-   */
-  #loseRecording(detail: string): void {
-    this.#claim = null;
-    this.#stopHeartbeat();
-    const recorder = this.#recorder;
-    this.#recorder = null;
-    this.#queue = null;
-    try {
-      recorder?.stop();
-    } catch {
-      // A recorder that will not stop still has to release the microphone below.
-    }
-    this.#microphone?.release();
-    this.#microphone = null;
-    this.#active = null;
-    this.#patch({
-      recording: false,
-      paused: false,
-      warning: `This recording is no longer being written by this tab — ${detail} Recording here has stopped so the two do not write over each other.`,
-    });
-  }
-
-  #startHeartbeat(): void {
-    this.#stopHeartbeat();
-    if (this.#disposed) return;
-    this.#beat = this.#ports.setTimer(() => {
-      this.#beat = null;
-      void this.#beatLease().finally(() => {
-        if (this.#claim) this.#startHeartbeat();
-      });
-    }, MEETING_CAPTURE_HEARTBEAT_MS);
-  }
-
-  #stopHeartbeat(): void {
-    if (this.#beat === null) return;
-    this.#ports.clearTimer(this.#beat);
-    this.#beat = null;
   }
 
   // ——————————————————————————————————————————————————————— the shared queue
@@ -970,6 +848,12 @@ export class MeetingCaptureSurface {
     options: { readonly mimeType?: string; readonly title?: string; readonly base: string },
   ): MeetingTranscriptionQueue {
     this.#cancelWake();
+    // The capture being replaced has left this tab's hands, so its lock goes
+    // back with it. Without this, starting a second recording without creating
+    // the first would keep the first out of every tab's offer — including this
+    // one's — until the page was closed.
+    const previous = this.#queue;
+    if (previous && previous.session.id !== session.id) this.#ports.locks.release(previous.session.id);
     // A meeting recorded in Japanese was recorded in Japanese; re-transcribing
     // it as "auto" because the page's dropdown has since been reset is the
     // recovered meeting coming back as a lesser one.
@@ -980,6 +864,12 @@ export class MeetingCaptureSurface {
       mimeType: options.mimeType ?? DEFAULT_CAPTURE_MIME_TYPE,
       ...(options.title ? { title: options.title } : {}),
       transcribe: this.#ports.createTranscriber(sessionLanguage),
+      // One clock for the host and its scheduler. The desktop's supervisor has
+      // always passed this; without it here the queue read `Date.now()` while
+      // everything around it read the port, so D7's backoff could not be driven
+      // by a test at all — and an outage schedule nobody can run is one nobody
+      // has checked.
+      now: () => this.#ports.now(),
     });
     this.#queue = queue;
     const reconciled = reconcileCaptureDraft(options.base, session);
@@ -1032,6 +922,15 @@ export class MeetingCaptureSurface {
    * it is offered back. D6 rides along: audio whose manifest is gone, or whose
    * meeting is settled, or that was abandoned before its first chunk, can never
    * be offered back, so it is reaped rather than left in the origin's quota.
+   *
+   * §6's destructive test is decided HERE, and it is decided on the first call
+   * rather than eventually. This runs on mount and on an org change and nothing
+   * re-runs it, which was fatal while "is somebody writing?" was a stamp with a
+   * thirty-second threshold: a tab opened straight after a kill read the dead
+   * tab's stamp as fresh, showed an empty device, and never asked again. The
+   * lock the dead tab held is already gone, so the same single call now offers
+   * the meeting back — no re-check, no waiting, and nothing for a person to
+   * press.
    */
   async refreshRecoverable(): Promise<void> {
     const scope = { orgId: this.#ports.activeOrgId() || null };
@@ -1055,26 +954,34 @@ export class MeetingCaptureSurface {
       this.#patch({ recoveryError: `Recordings saved on this device could not be checked — ${describe(caught, "the capture store did not answer.")} Any audio already written is still there.` });
       return;
     }
+    // The live set comes from the BROWSER, not from this tab's memory and not
+    // from the records: a second tab's recording is invisible to both, and the
+    // lock table is the one place every tab of this origin agrees.
+    const writers = await this.#ports.locks.writers();
     // D6 — the reap gets its own try. It is housekeeping, and a failed tidy-up
     // must not be reported as an empty device.
     try {
-      // The live set is read off the RECORDS, not off this tab's memory: the
-      // whole point of the lease is that a second tab's recording is invisible
-      // to everything except the record it is stamping.
-      const live = capturesBeingWritten(
-        records.map((record) => restoreCaptureSession({ record, scope, at })),
-        at,
-      ).map((session) => session.id);
       const reaped = await store.reapOrphans({
-        keep: [...(active ? [active] : []), ...live],
+        keep: [...(active ? [active] : []), ...writers.ids],
         // Defect C — a capture abandoned before its first chunk. Two records
         // look like that and only one of them is one: the compose draft is a
         // manifest with no audio that is never closed, and a recording waiting
-        // on the microphone prompt is stamping its lease the whole time.
-        abandoned: (record) => (
-          record.sessionId !== MEETING_DRAFT_CAPTURE_ID
-          && !isCapturePayloadBeingWritten(record.payload, at)
-        ),
+        // on the microphone prompt is holding its lock the whole time.
+        //
+        // Asked again HERE rather than reusing the set above, and that is the
+        // point of the predicate: the reap's own listing is taken after this
+        // caller's, so a tab that pressed Record in between is absent from
+        // everything computed earlier and present in the browser's answer now.
+        //
+        // `known` is the fallback's one concession (golden rule 23): a browser
+        // with no Web Locks cannot tell a killed prompt from a live one, so it
+        // reclaims neither. The cost is metadata left behind on such a browser;
+        // the alternative cost is somebody's meeting.
+        abandoned: async (record) => {
+          if (record.sessionId === MEETING_DRAFT_CAPTURE_ID) return false;
+          const now = await this.#ports.locks.writers();
+          return now.known && !now.ids.has(record.sessionId);
+        },
       });
       // D6 asks for the reap to be logged: audio no session claims is exactly
       // the artifact nobody would otherwise notice.
@@ -1090,12 +997,18 @@ export class MeetingCaptureSurface {
     // Open question 5 — the offer is SCOPED, and the scope is the shared
     // `resumableSessions` asked through `resumableCaptures`. The store cannot
     // answer it, because it treats the payload as opaque text.
+    //
+    // "Nobody is writing to it" is the other half of D2's rule and it is
+    // excluded here rather than filtered inside, because the record has nothing
+    // to say about live tabs any more: a capture some tab holds the lock for is
+    // not offered to anyone, including this one.
     this.#patch({
       recoverable: resumableCaptures(records, {
         scope,
         at,
-        ...(active ? { exclude: [active] } : {}),
+        exclude: [...(active ? [active] : []), ...writers.ids],
       }),
+      writing: [...writers.ids],
       recoveryError: "",
     });
   }
@@ -1103,35 +1016,30 @@ export class MeetingCaptureSurface {
   /**
    * D2/D3 — pick a crashed recording back up, and carry on transcribing it.
    *
-   * The lease is taken FIRST and the pick-up refused if another tab still holds
-   * it: two queues over one session would interleave their writes, and the
-   * second one to persist would erase the first one's segments.
+   * The lock is taken FIRST and the pick-up refused if another tab holds it: two
+   * queues over one session would interleave their writes, and the second one to
+   * persist would erase the first one's segments. A tab that crashed while
+   * holding it is not a refusal — the browser released it when the tab died, so
+   * the recording is available on the first ask.
    */
   async pickUp(entry: ResumableCapture): Promise<void> {
     this.#patch({ createOpen: true, notice: "", warning: "", createError: "" });
     try {
       const store = await this.#store(false);
       const { title, mimeType } = parseCapturePayload(entry.record.payload);
-      const taken = acquireCaptureLease(
-        entry.session,
-        { holderId: this.#ports.holderId, holder: CAPTURE_HOLDER_LABEL },
-        this.#instant(),
-      );
-      if (!taken.ok) {
-        this.#patch({ createError: taken.detail });
+      if (await this.#ports.locks.hold(entry.session.id) === "taken") {
+        this.#patch({ createError: CAPTURE_HELD_ELSEWHERE });
         return;
       }
-      this.#claim = { holderId: taken.lease.holderId, epoch: taken.lease.epoch };
       if (title) this.#patch({ title: this.#state.title || title });
-      const queue = this.#attachQueue(store, taken.session, {
+      const queue = this.#attachQueue(store, entry.session, {
         ...(mimeType ? { mimeType } : {}),
         ...(title ? { title } : {}),
         base: this.#state.transcript,
       });
-      // Persisted before anything else happens to it, so a second tab can see
-      // this one holding the recording rather than inferring it later.
+      // Persisted before anything else happens to it, so the recovery stamp this
+      // pick-up was judged under is on the device rather than only in this tab.
       await queue.apply((session) => session);
-      this.#startHeartbeat();
       await this.#runDrain();
     } catch (caught) {
       this.#patch({ createError: describe(caught, "The saved recording could not be read.") });
@@ -1160,14 +1068,11 @@ export class MeetingCaptureSurface {
         return;
       }
       const store = await this.#store(false);
-      const at = this.#instant();
-      const writer = describeCaptureWriter(
-        restoreCaptureSession({ record, scope: { orgId: this.#ports.activeOrgId() || null }, at }),
-        this.#ports.holderId,
-        at,
-      );
-      if (writer) {
-        this.#patch({ createError: `This recording cannot be deleted. ${writer}` });
+      // Asked of the browser at the moment of the click, not read off a listing
+      // taken when the page rendered: another tab may have pressed Record on
+      // this very capture since, and this deletes an hour of somebody's meeting.
+      if (await this.#writtenElsewhere(record.sessionId)) {
+        this.#patch({ createError: `This recording cannot be deleted. ${CAPTURE_HELD_ELSEWHERE}` });
         return;
       }
       await store.delete(record.sessionId);
@@ -1185,6 +1090,12 @@ export class MeetingCaptureSurface {
    * manifest is marked closed BEFORE the delete: a kill between the two leaves a
    * closed session that `resumable` will not offer back, which is the right way
    * round.
+   *
+   * The shared transitions take an optional actor, which they compare against a
+   * lease in the session. Nothing writes one here any more, so passing it would
+   * be handing a guard an argument it cannot use — "is another tab writing to
+   * this?" is asked of the browser by the two callers that can destroy
+   * something, before they get this far.
    */
   async #release(accepted: boolean): Promise<void> {
     const queue = this.#queue;
@@ -1193,12 +1104,9 @@ export class MeetingCaptureSurface {
     this.#cancelWake();
     const sessionId = queue.session.id;
     this.#revokePreview();
-    // The actor, so the shared transition can tell "the writer is closing its
-    // own recording" from "somebody else is closing one that is being written".
-    const by = { holderId: this.#ports.holderId };
     try {
       await queue.apply((session) => (
-        accepted ? finalizeCapture(session, this.#instant(), by) : discardCaptureSession(session, this.#instant(), by)
+        accepted ? finalizeCapture(session, this.#instant()) : discardCaptureSession(session, this.#instant())
       ));
       // Then WAIT for the queue. A segment already in flight persists the whole
       // session when it lands, and a persist that lands after the delete is a
@@ -1213,8 +1121,10 @@ export class MeetingCaptureSurface {
       // could never be read.
       this.#retainAudio(sessionId, caught);
     } finally {
-      this.#claim = null;
-      this.#stopHeartbeat();
+      // This capture has left this tab's hands whichever way the delete went, so
+      // the lock goes back even on the failure path — a retained recording that
+      // no tab could ever pick up again would be the audio nobody can reach.
+      this.#ports.locks.release(sessionId);
       this.#patch({ session: null, phase: null, retrying: null });
     }
   }
@@ -1314,12 +1224,20 @@ export class MeetingCaptureSurface {
       return;
     }
     const queue = this.#queue;
-    // …and the lease, which is the term the other three cannot see: another tab
-    // may have taken this recording over, and finalizing from here would delete
-    // audio it is still writing.
-    const stolen = queue ? describeCaptureWriter(queue.session, this.#ports.holderId, this.#instant()) : null;
-    if (stolen) {
-      this.#patch({ createError: `This meeting cannot be created from this tab. ${stolen}` });
+    // …and the one the other three cannot see: another tab may have picked this
+    // recording up since this one stopped, and Create FINALIZES the capture and
+    // DELETES its audio — so from here it would destroy a meeting somebody else
+    // is recording into right now.
+    //
+    // Asked of the browser, not of `queue.session`. The queue holds this tab's
+    // own in-memory copy, which was last read before the other tab existed and
+    // will therefore always say the coast is clear — the exact mistake the offer
+    // and the reap were rewritten to stop making, left in the one path that
+    // deletes audio. `known: false` allows it through deliberately: a browser
+    // that cannot see other tabs must not be a browser where Create is wedged
+    // for ever, and its user has been told so since the page loaded.
+    if (queue && await this.#writtenElsewhere(queue.session.id)) {
+      this.#patch({ createError: `This meeting cannot be created from this tab. ${CAPTURE_HELD_ELSEWHERE}` });
       return;
     }
     this.#patch({ busy: "create", createError: "" });
@@ -1406,15 +1324,20 @@ export class MeetingCaptureSurface {
    * deferred to the moment the tab dies" — and none of this is deferred work:
    * the audio and the session are already written. What is here is the three
    * things that outlive a React tree and should not: an open MICROPHONE with a
-   * recorder writing chunks through a closure nothing can reach any more, a
-   * lease that would keep the meeting unofferable for the whole staleness
-   * window, and an object URL over an hour of audio.
+   * recorder writing chunks through a closure nothing can reach any more, an
+   * object URL over an hour of audio, and the locks.
+   *
+   * The locks are the one that needs saying, because they are also the one this
+   * teardown is NOT load-bearing for. A client-side navigation leaves the tab
+   * alive, so nothing would release them and the meeting would stay out of this
+   * browser's offer until the tab was closed — hence `releaseAll`. But a tab
+   * that is KILLED never reaches this line and does not need to: the browser
+   * drops what it held. Nothing here is a promise §6 depends on.
    */
   async dispose(): Promise<void> {
     if (this.#disposed) return;
     this.#disposed = true;
     this.#cancelWake();
-    this.#stopHeartbeat();
     this.#flushDraftSave();
     this.#revokePreview();
     const recorder = this.#recorder;
@@ -1427,37 +1350,40 @@ export class MeetingCaptureSurface {
       }
       this.#microphone?.release();
       // `onstop` settles the capture, which is where the stop transition and the
-      // lease release happen. Awaited so a caller — a test, or a host that has a
+      // lock release happen. Awaited so a caller — a test, or a host that has a
       // moment — can know the recording landed.
       await this.#finishing;
     } else {
       this.#microphone?.release();
-      // No recorder, but possibly a picked-up capture whose queue is still
-      // draining into it: hand the lease back so the next load offers it at once
-      // instead of after the staleness window.
-      await this.#releaseLease();
     }
     this.#microphone = null;
+    // Last, and unconditional: a picked-up capture still draining, a recording
+    // whose settle threw, a lock taken for a session that never got a
+    // microphone. All of them belong to a tab that is about to stop existing as
+    // far as this page is concerned.
+    this.#ports.locks.releaseAll();
     this.#patch({ recording: false, paused: false });
   }
 
-  /** Hand the recording back without closing it — the pick-up case at teardown. */
-  async #releaseLease(): Promise<void> {
-    const queue = this.#queue;
-    const claim = this.#claim;
-    if (!queue || !claim) return;
-    this.#claim = null;
-    try {
-      await queue.apply((session) => {
-        const released = releaseCaptureLease(session, claim, this.#instant());
-        return released.ok ? released.session : session;
-      });
-    } catch {
-      // Expiry is the mechanism that can be trusted; this is the optimisation.
-    }
-  }
-
   // ————————————————————————————————————————————————————————————— plumbing
+
+  /**
+   * Is a DIFFERENT tab writing to this capture at this instant — the question
+   * both destructive paths ask, and the only place that decides it.
+   *
+   * Two things it is careful about. A lock this tab holds is not somebody else's
+   * (a picked-up capture is created from the tab that picked it up), and a
+   * browser that cannot answer says no rather than yes: `known: false` here
+   * would make Create and Discard permanently impossible on an origin without
+   * Web Locks, which is a bigger outage than the one it would be guarding
+   * against — and that user has been told, in `coordination`, since the page
+   * loaded.
+   */
+  async #writtenElsewhere(sessionId: string): Promise<boolean> {
+    if (this.#ports.locks.holds(sessionId)) return false;
+    const writers = await this.#ports.locks.writers();
+    return writers.ids.has(sessionId);
+  }
 
   /**
    * One store per surface, opened lazily. `requestPersistence` is false

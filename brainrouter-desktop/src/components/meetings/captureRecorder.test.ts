@@ -64,9 +64,10 @@ function fakeCapture(begin?: () => Promise<MeetingCaptureSession>): Recorded {
       finalize: async () => undefined,
       discard: async () => undefined,
       resumable: async () => [],
-      // Nor does it ask who is recording (D6): the lease is the compose view's
+      // Nor does it ask who is recording (D6): that is the compose view's
       // question, and the recorder's job is to have nowhere to put a chunk.
       writing: async () => [],
+      onWriters: () => () => undefined,
       holderId: "wr-recorder-test",
       // Nor does it touch the compose draft (D6): the recorder handles audio,
       // and the draft is text the person owns.

@@ -41,35 +41,33 @@
  * - **Closing.** A capture whose audio D6 has released must have no queue still
  *   writing to it, so the entry is marked closed BEFORE the delete and its ports
  *   become inert rather than racing the `rm`.
- * - **The capture lease's heartbeat.** The RULES are `captureLease.ts`'s and not
- *   restated here; what is host work is that somebody has to say "still here" on
- *   a cadence, and it has to be the process that owns the record — a renderer
- *   heartbeat dies with the window, which is the same argument that put the
- *   queue here. It rides every durable write as well as the timer, because the
- *   timer is the half that a stalled main thread drops, and it is held only
- *   while a recorder is actually feeding the capture: a lease that outlived the
- *   recording would bury the meeting from every other window for as long as this
- *   process stayed up.
+ * - **Who is recording, which is a question this process can answer EXACTLY.**
+ *   See `#writers` below. It replaced a lease — a heartbeat stamped into the
+ *   record plus a staleness threshold — and the reason is not that the lease was
+ *   badly built: it is that a timing heuristic was standing in for a fact main
+ *   already had. Two `BrowserWindow`s share ONE Electron process and one
+ *   supervisor, so "is somebody recording into this capture" is a map lookup
+ *   here, with no clock, no threshold and no window in which a dead writer still
+ *   looks alive. The lease's cost was measured rather than argued: a window
+ *   RELOAD left main re-arming a heartbeat for a renderer that no longer
+ *   existed, so Transcribe, Create and Delete were all refused for ever over a
+ *   recording nobody was making.
  *
- * It does not import `electron`: the IPC surface and the broadcast live in
- * `meetingCaptureBridge.ts`, so the supervisor can be unit-tested against a
- * temporary directory and a fake transcriber.
+ * It does not import `electron`: the channels live in
+ * `meetingCaptureChannels.ts` and the broadcast in `meetingCaptureBridge.ts`, so
+ * the supervisor can be unit-tested against a temporary directory and a fake
+ * transcriber.
  */
 import {
-  acquireCaptureLease,
   appendSegment,
   createMeetingTranscriptionQueue,
   createSegmentAudioReader,
   drainWakeDelayMs,
-  heartbeatCaptureLease,
   isTerminalCaptureStatus,
-  releaseCaptureLease,
+  sameCaptureScope,
   stopCapture,
-  MEETING_CAPTURE_HEARTBEAT_MS,
   MeetingEndpointUnavailableError,
-  type CaptureCloseActor,
-  type MeetingCaptureLeaseClaim,
-  type MeetingCaptureLeaseRequest,
+  type MeetingCaptureScope,
   type MeetingCaptureSession,
   type MeetingDrainPhase,
   type MeetingDrainResult,
@@ -113,19 +111,37 @@ export interface MeetingCaptureProgress {
    * meeting, and that is worth saying out loud (ADR-028).
    */
   readonly errors?: readonly string[];
-  /**
-   * D6 — this process was writing to that capture and is not any more, in the
-   * words to show the person who was recording.
-   *
-   * Separate from `errors` because it is a different fact and needs a different
-   * response: `errors` means "the record is stale on disk, the audio is still
-   * here", and the window should keep recording. This means another holder took
-   * the recording over — the fencing epoch moved — and the right move is to stop
-   * the microphone in this window rather than keep producing chunks nothing will
-   * ever claim. A surface that rendered it as the other message would tell the
-   * user to wait for a write that is never coming.
-   */
-  readonly writerLost?: string;
+}
+
+/**
+ * D6 — what a surface says instead of offering a live recording back.
+ *
+ * One sentence, in one place, because it is said twice: a second window's
+ * Meetings screen prints it where the offer would have been, and the destructive
+ * channels THROW it. Two spellings of it would be two answers to the same
+ * question.
+ *
+ * It never has to name WHICH window, because it is only ever shown to a window
+ * that is not the writer — the rows below carry the holder id, and a surface
+ * drops its own before it renders anything.
+ */
+export const MEETING_CAPTURE_WRITER_NOTE = 'Another window is recording this meeting right now.';
+
+/**
+ * D6 — a capture this process is being recorded into at this instant.
+ *
+ * Not a lease and not a claim: there is no term, no heartbeat and no expiry,
+ * because there is nothing here to expire. An entry exists exactly while a
+ * window in THIS process is feeding this capture, and it is removed by the four
+ * events that end that — Stop, close, the window going away, and a refused write
+ * of the capture itself.
+ */
+export interface MeetingCaptureWriter {
+  readonly sessionId: string;
+  /** The window recording it. A surface compares this against its own id. */
+  readonly holderId: string;
+  /** What that surface then says, if the id is not its own. */
+  readonly note: string;
 }
 
 export interface MeetingTranscriptionSupervisorOptions {
@@ -160,29 +176,25 @@ class CaptureEntry {
   cancelWake: (() => void) | null = null;
   appends: Promise<unknown> = Promise.resolve();
   drains: Promise<unknown> = Promise.resolve();
+}
+
+/** D6 — Record, and the window doing it, so this process can say so exactly. */
+export interface BeginRecordingInput extends BeginCaptureInput {
   /**
-   * D6 — what this process believes it holds on this capture's lease, and the
-   * timer that keeps saying so.
+   * The window that is about to record into this capture.
    *
-   * `claim` is null whenever nobody is recording into this capture from here:
-   * before Record, after Stop, and the moment a heartbeat comes back refused.
-   * `holder` outlives the claim because a lapsed lease is RE-ACQUIRED rather
-   * than renewed (the lease module's invariant 4), and re-acquiring needs the
-   * same identity the surface is describing.
-   */
-  claim: MeetingCaptureLeaseClaim | null = null;
-  holder: MeetingCaptureLeaseRequest | null = null;
-  cancelBeat: (() => void) | null = null;
-  /**
-   * "This process just lost the recording", waiting to be published.
+   * Minted in the renderer, one per BrowserWindow (`captureHolder.ts`), and it
+   * has to be the renderer's rather than a host-minted one for a single reason:
+   * the surface asks "is the window recording this me?", and an id it could not
+   * name would make that question unanswerable. It is a coordination token and
+   * not a credential — every window here is our own code and the capture
+   * directory is `0700`.
    *
-   * Held here rather than published from inside the transition because a
-   * transition runs INSIDE the queue's write chain: publishing there would send
-   * the surface the session as it was before the commit, which is the one thing
-   * the progress channel promises never to do (D4 — what is pushed is already on
-   * disk). It is flushed by the caller, after the commit resolves.
+   * Absent when the caller will not say, which registers no writer at all: an
+   * anonymous Record is one no other window can be told about, which is worse
+   * than the alternative only if you think a missing id should confer immunity.
    */
-  notice: string | null = null;
+  readonly writerId?: string;
 }
 
 export class MeetingTranscriptionSupervisor {
@@ -192,6 +204,28 @@ export class MeetingTranscriptionSupervisor {
   readonly #schedule: (run: () => void, delayMs: number) => () => void;
   readonly #now: (() => number) | undefined;
   readonly #entries = new Map<string, Promise<CaptureEntry>>();
+  /**
+   * D6 — capture id → the window recording into it. The whole mechanism.
+   *
+   * This map is authoritative rather than advisory, which is the entire point of
+   * moving the question here: one Electron process holds every BrowserWindow, so
+   * a second window asking "is anything recording this?" is the SAME object
+   * answering that the recording window's own Record put the entry into. There
+   * is no threshold to tune, and a writer cannot be dead-but-fresh, because
+   * nothing here is inferred from a clock.
+   *
+   * It is not a `Set` beside the store, which is what the previous rounds
+   * (rightly) refused: that was per-WINDOW state — `hold.sessionId`,
+   * `captureRef.current` — and a second window's copy was empty. This is per
+   * PROCESS, which is the unit the desktop's store is registered in.
+   *
+   * The four removals are the four ways a window stops recording: `stop`, the
+   * capture being closed, the window going away (`releaseWindow`, driven by the
+   * host from `pagehide`/destroyed), and a `begin` that failed. A renderer
+   * RELOAD is the third of those, and it is why a lease could not do this job:
+   * main is untouched by a reload, so a heartbeat it owns never goes stale.
+   */
+  readonly #writers = new Map<string, string>();
 
   constructor(store: MeetingCaptureStore, options: MeetingTranscriptionSupervisorOptions) {
     this.#store = store;
@@ -201,17 +235,23 @@ export class MeetingTranscriptionSupervisor {
     this.#now = options.now;
   }
 
-  /** D2 — Record creates the meeting, its directory, the lease it is recorded under, and the queue that will drain it. */
-  async begin(input: BeginCaptureInput): Promise<MeetingCaptureSession> {
+  /** D2 — Record creates the meeting, its directory, the queue that will drain it, and the record of who is recording. */
+  async begin(input: BeginRecordingInput): Promise<MeetingCaptureSession> {
     const session = await this.#store.begin(input);
-    // Materialized now rather than on the first chunk so the queue is never
-    // constructed from a record another writer is already appending to.
-    const entry = await this.#entry(session.id);
-    // `begin` put the lease in the record; this is where the PROCESS starts
-    // saying it is still there. Without the heartbeat the stamp on disk is one
-    // instant old and stale thirty seconds later, so the whole mechanism would
-    // be inert exactly when a meeting runs longer than half a minute.
-    if (input.holder) this.#take(entry, input.holder, session);
+    // Registered before the queue is materialized, so there is no instant at
+    // which a capture exists and this process cannot say who is recording it.
+    if (input.writerId) this.#writers.set(session.id, input.writerId);
+    try {
+      // Materialized now rather than on the first chunk so the queue is never
+      // constructed from a record another writer is already appending to.
+      await this.#entry(session.id);
+    } catch (caught) {
+      // A capture whose queue could not be opened is one nothing will ever
+      // record into, and leaving it claimed would bury it from every window for
+      // as long as this process lived.
+      this.#writers.delete(session.id);
+      throw caught;
+    }
     return session;
   }
 
@@ -226,15 +266,8 @@ export class MeetingTranscriptionSupervisor {
     const next = entry.appends.then(async () => {
       const index = entry.queue.session.segments.length;
       const written = await this.#store.writeSegment(id, index, bytes);
-      // D6 — the heartbeat rides the DURABLE WRITE, not only the timer, and the
-      // two are folded into one commit so a chunk can never be recorded without
-      // its writer also saying it is still here. The timer is the one that is
-      // easy to lose: a throttled or stalled main thread misses beats, while
-      // `ondataavailable` comes from the media stack, which is why the staleness
-      // window is a multiple of the chunk cadence rather than of the timer.
       const session = await entry.queue.apply((current) =>
-        appendSegment(this.#renew(entry, current), { byteLength: written, durationMs }));
-      this.#flushNotice(id, entry);
+        appendSegment(current, { byteLength: written, durationMs }));
       this.#kick(id, entry);
       return session;
     });
@@ -247,17 +280,18 @@ export class MeetingTranscriptionSupervisor {
   /**
    * Capture ended cleanly. The audio stays and the queue keeps draining it (D7).
    *
-   * D6 — and the lease is handed back in the same commit the capture is marked
-   * stopped, so the meeting is offerable to any other window AT ONCE rather than
-   * thirty seconds later. This is an optimisation and nothing here depends on
-   * it: §6 kills the process, which never reaches this line, and expiry is what
-   * covers that.
+   * D6 — and nobody is recording into it from this moment, so any window may
+   * offer it back, transcribe it or delete it. The removal happens once the last
+   * chunk has settled and BEFORE the commit that marks the capture stopped: a
+   * `persist` that failed does not mean the microphone is still open, and
+   * leaving the capture claimed over a failed write is how a stopped recording
+   * becomes untouchable.
    */
   async stop(id: string): Promise<MeetingCaptureSession> {
     const entry = await this.#entry(id);
     await entry.appends.catch(() => undefined);
-    this.#stopBeat(entry);
-    const session = await entry.queue.apply((current) => this.#release(entry, stopCapture(current)));
+    this.#writers.delete(id);
+    const session = await entry.queue.apply((current) => stopCapture(current));
     this.#kick(id, entry);
     return session;
   }
@@ -271,29 +305,17 @@ export class MeetingTranscriptionSupervisor {
    * user has not asked us to do anything with is not a decision a launch should
    * make for them. The offer is the consent, so this is where the queue starts.
    */
-  async adopt(id: string, holder?: MeetingCaptureLeaseRequest): Promise<MeetingCaptureSession> {
+  async adopt(id: string, holderId?: string): Promise<MeetingCaptureSession> {
+    // D6 — refused outright while another window is recording into it, and
+    // BEFORE the entry is opened: refusing is the whole point of doing this here
+    // rather than after the compose form has already filled itself in from a
+    // meeting somebody else is making.
+    //
+    // A pick-up registers no writer of its own, because a pick-up is not a
+    // recording — nobody is producing audio for this capture, so nothing should
+    // claim otherwise. What it buys is the refusal.
+    this.#refuseForeignWriter(id, holderId);
     const entry = await this.#entry(id);
-    // D6 — a pick-up TAKES the recording, and is refused outright while another
-    // window's lease is fresh. The acquisition is what fences the previous
-    // holder: it issues a new epoch, so a window that was stalled long enough to
-    // lose the lease cannot heartbeat its way back over this one. Refusing is
-    // the whole point of doing it here rather than after the compose form has
-    // already filled itself in from a meeting somebody else is recording.
-    if (holder) {
-      let taken: MeetingCaptureLeaseClaim | null = null;
-      await entry.queue.apply((current) => {
-        const outcome = acquireCaptureLease(current, holder);
-        if (!outcome.ok) throw new Error(outcome.detail);
-        taken = { holderId: outcome.lease.holderId, epoch: outcome.lease.epoch };
-        return outcome.session;
-      });
-      entry.holder = holder;
-      entry.claim = taken;
-      // No heartbeat: a pick-up is not a recording. The lease lapses on its own
-      // in one staleness window, which is exactly right — nobody is producing
-      // audio for this capture, so nothing should keep claiming otherwise. What
-      // the acquisition buys is the refusal above and the fence.
-    }
     this.#kick(id, entry);
     return entry.queue.session;
   }
@@ -320,26 +342,81 @@ export class MeetingTranscriptionSupervisor {
    * that is about to stop existing, and nothing is published for a capture the
    * user has just finished with.
    */
-  async close(id: string, outcome: 'finalize' | 'discard', by?: CaptureCloseActor): Promise<void> {
+  async close(id: string, outcome: 'finalize' | 'discard', by?: string): Promise<void> {
+    // FIRST, and before anything is touched. The previous shape refused inside
+    // the store, after this method had already dropped the entry, marked it
+    // closed and stopped its timers — and the supervisor is per PROCESS, so
+    // those were the RECORDING window's. Measured: a second window's refused
+    // Delete froze the live capture's heartbeat, and thirty-one seconds later
+    // the same button deleted the meeting while the microphone was open. A
+    // refused destructive action must leave the live capture exactly as it was,
+    // which is only true if the refusal happens before the first mutation.
+    this.#refuseForeignWriter(id, by);
     const pending = this.#entries.get(id);
     this.#entries.delete(id);
+    this.#writers.delete(id);
     const entry = pending ? await pending.catch(() => null) : null;
     if (entry) {
       entry.closed = true;
       entry.cancelWake?.();
       entry.cancelWake = null;
-      this.#stopBeat(entry);
       // Let what is already running finish against the now-inert ports, so the
       // delete below is not racing a write it cannot see.
       await entry.appends.catch(() => undefined);
       await entry.drains.catch(() => undefined);
     }
-    // `by` reaches the shared transition, which THROWS while another holder is
-    // recording. The entry has already been dropped from the map at that point,
-    // which is correct: the refusal means this window has no business driving
-    // that capture, and the window that is recording it owns its own entry.
-    if (outcome === 'finalize') await this.#store.finalize(id, by);
-    else await this.#store.discard(id, by);
+    if (outcome === 'finalize') await this.#store.finalize(id);
+    else await this.#store.discard(id);
+  }
+
+  /**
+   * D6 — the captures this process is being recorded into, scoped to one
+   * workspace, for a surface to say what it must not offer back.
+   *
+   * The record is read only to answer the SCOPE question (open question 5 — a
+   * meeting recorded under one org is never re-attached under another). Liveness
+   * itself never touches the disk: it is the map, which is the correction this
+   * round is. A capture whose record has gone is dropped rather than reported,
+   * because there is nothing left for a surface to say anything about.
+   */
+  async writing(scope?: MeetingCaptureScope): Promise<MeetingCaptureWriter[]> {
+    const rows: MeetingCaptureWriter[] = [];
+    for (const [sessionId, holderId] of this.#writers) {
+      if (scope) {
+        try {
+          const { session } = await this.#store.stored(sessionId);
+          if (!sameCaptureScope(session.scope, scope)) continue;
+        } catch { continue; }
+      }
+      rows.push({ sessionId, holderId, note: MEETING_CAPTURE_WRITER_NOTE });
+    }
+    return rows;
+  }
+
+  /** D6 — is anybody in this process recording into that capture? The whole predicate. */
+  isWriting(id: string): boolean {
+    return this.#writers.has(id);
+  }
+
+  /**
+   * D6 — that window is gone: reloaded, closed, or its renderer died.
+   *
+   * The event a lease could only APPROXIMATE, and got wrong in the direction
+   * that matters: main is untouched by a renderer reload, so a heartbeat main
+   * owns never lapses and the recording stays claimed by a page that no longer
+   * exists. Here it is a fact the host observes and reports, and the captures
+   * that window was recording become ordinary unfinished recordings — offered
+   * back, playable, and deletable — at that instant.
+   *
+   * Returns what it released, so the host can tell every window to look again.
+   */
+  releaseWindow(holderId: string): string[] {
+    const released: string[] = [];
+    for (const [sessionId, writer] of this.#writers) {
+      if (writer === holderId) released.push(sessionId);
+    }
+    for (const sessionId of released) this.#writers.delete(sessionId);
+    return released;
   }
 
   /**
@@ -367,21 +444,33 @@ export class MeetingTranscriptionSupervisor {
   /**
    * Stop every timer. Called when the app is quitting; the audio is already on disk.
    *
-   * The lease is deliberately NOT released here. Quitting is not the same event
-   * as stopping a recording, and a release on the way out would say "nobody is
-   * writing" about a capture whose window may still be up in another process. A
-   * lease nobody renews lapses by itself in one staleness window, which is the
-   * only mechanism §6's kill leaves standing anyway.
+   * The writers are dropped with them, because this process is the only thing
+   * that ever knew about them: nothing survives to be corrected, and the record
+   * on disk says `recording`, which the next launch's boot pass reads as the
+   * interrupted recording it is.
    */
   dispose(): void {
     for (const pending of this.#entries.values()) {
       void pending.then((entry) => {
         entry.cancelWake?.();
         entry.cancelWake = null;
-        this.#stopBeat(entry);
       }, () => undefined);
     }
     this.#entries.clear();
+    this.#writers.clear();
+  }
+
+  /**
+   * D6 — the one guard, asked by everything that would take a recording away
+   * from the window making it.
+   *
+   * Silent when the asker IS the writer: a window has to be able to finish the
+   * meeting it is recording, and a guard that only asked "is anybody writing?"
+   * would wedge the single window entitled to press Create.
+   */
+  #refuseForeignWriter(id: string, holderId?: string): void {
+    const writer = this.#writers.get(id);
+    if (writer !== undefined && writer !== holderId) throw new Error(MEETING_CAPTURE_WRITER_NOTE);
   }
 
   #entry(id: string): Promise<CaptureEntry> {
@@ -482,114 +571,6 @@ export class MeetingTranscriptionSupervisor {
       phase: result.phase,
       ...(result.errors.length ? { errors: result.errors } : {}),
     });
-  }
-
-  /** Record what `begin` already wrote, and start saying it is still true. */
-  #take(entry: CaptureEntry, holder: MeetingCaptureLeaseRequest, session: MeetingCaptureSession): void {
-    entry.holder = holder;
-    entry.claim = session.writer ? { holderId: session.writer.holderId, epoch: session.writer.epoch } : null;
-    this.#beat(session.id, entry);
-  }
-
-  /**
-   * The heartbeat as a TRANSITION, so it composes with whatever else is being
-   * committed and never needs a write of its own.
-   *
-   * The three refusals are three different situations and only one of them is a
-   * loss:
-   *
-   * - `lease_expired` / `not_held` — nobody else has taken it; the term simply
-   *   ran out (a stall longer than the window, or a record written by a build
-   *   that had no lease in it). Re-acquire, which is what the lease module
-   *   insists on: a renewal that revived an expired term is migration 048's
-   *   unfenced heartbeat, and it would let a writer that was gone for a minute
-   *   hold a recording another window has since taken.
-   * - `held_by_another` / `stale_epoch` — somebody else IS recording this. The
-   *   claim is dropped and the window is told, because continuing to produce
-   *   chunks for a capture we no longer own is work nobody will ever read.
-   * - `capture_closed` — the meeting was finalized or discarded underneath us.
-   *   Nothing to say: the surface that closed it already knows.
-   *
-   * The session is returned UNCHANGED on every refusal. Refusing to record the
-   * audio would be the loss this ADR exists to prevent, arriving through the
-   * door meant to stop it — the lease coordinates a recording, it does not
-   * license one.
-   */
-  #renew(entry: CaptureEntry, session: MeetingCaptureSession): MeetingCaptureSession {
-    const claim = entry.claim;
-    const holder = entry.holder;
-    if (!claim || !holder) return session;
-    const beat = heartbeatCaptureLease(session, claim);
-    if (beat.ok) {
-      entry.claim = { holderId: beat.lease.holderId, epoch: beat.lease.epoch };
-      return beat.session;
-    }
-    if (beat.reason === 'lease_expired' || beat.reason === 'not_held') {
-      const taken = acquireCaptureLease(session, holder);
-      if (taken.ok) {
-        entry.claim = { holderId: taken.lease.holderId, epoch: taken.lease.epoch };
-        return taken.session;
-      }
-      entry.notice = taken.detail;
-      this.#drop(entry);
-      return session;
-    }
-    if (beat.reason !== 'capture_closed') entry.notice = beat.detail;
-    this.#drop(entry);
-    return session;
-  }
-
-  /** Hand the recording back in the same commit that stops it. Silent when there is nothing held. */
-  #release(entry: CaptureEntry, session: MeetingCaptureSession): MeetingCaptureSession {
-    const claim = entry.claim;
-    if (!claim) return session;
-    entry.claim = null;
-    const released = releaseCaptureLease(session, claim);
-    // A refusal here means the lease is already somebody else's or the capture
-    // is closed — in both cases there is nothing of ours left to hand back, and
-    // overwriting the record with our idea of the lease would undo a real one.
-    return released.ok ? released.session : session;
-  }
-
-  #drop(entry: CaptureEntry): void {
-    entry.claim = null;
-    this.#stopBeat(entry);
-  }
-
-  /**
-   * The timer half of the heartbeat: five seconds, re-armed after each beat.
-   *
-   * One-shot-and-re-arm rather than an interval so it uses the same injected
-   * scheduler the backoff does — a test can then advance a heartbeat at an exact
-   * instant instead of waiting five real seconds for one.
-   */
-  #beat(id: string, entry: CaptureEntry): void {
-    this.#stopBeat(entry);
-    if (entry.closed || !entry.claim) return;
-    entry.cancelBeat = this.#schedule(() => {
-      entry.cancelBeat = null;
-      if (entry.closed || !entry.claim) return;
-      void entry.queue.apply((current) => this.#renew(entry, current)).then(
-        () => { this.#flushNotice(id, entry); this.#beat(id, entry); },
-        // A failed beat is a failed WRITE, which the drain path already reports.
-        // The claim is untouched, so the next beat tries again — dropping it
-        // here would abandon a recording over one unlucky `persist`.
-        () => { this.#beat(id, entry); },
-      );
-    }, MEETING_CAPTURE_HEARTBEAT_MS);
-  }
-
-  #stopBeat(entry: CaptureEntry): void {
-    entry.cancelBeat?.();
-    entry.cancelBeat = null;
-  }
-
-  /** D6/ADR-028 — publish "you lost the recording" once, after the commit that discovered it. */
-  #flushNotice(id: string, entry: CaptureEntry): void {
-    const notice = entry.notice;
-    if (!notice || entry.closed) { entry.notice = null; return; }
-    entry.notice = null;
-    this.#publish({ sessionId: id, session: entry.queue.session, writerLost: notice });
   }
 
   /** `delayMs` is already `drainWakeDelayMs`'s answer — the floor is the shared rule's, not this file's. */

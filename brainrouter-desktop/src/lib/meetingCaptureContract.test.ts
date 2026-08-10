@@ -123,6 +123,7 @@ test('a capture is transcribed segment by segment, by the host, and the 40 MB re
 
 test('the transcription queue lives in main and pushes every persisted change', () => {
   const bridge = read('../../electron/meetingCaptureBridge.ts');
+  const channels = read('../../electron/meetingCaptureChannels.ts');
   const supervisor = read('../../electron/meetingTranscription.ts');
   const preload = read('../../electron/preload.cts');
   const declarations = read('../bridge.d.ts');
@@ -143,12 +144,13 @@ test('the transcription queue lives in main and pushes every persisted change', 
   assert.doesNotMatch(supervisor, /initializationSegmentLength|segmentUploadBytes|CLUSTER/);
 
   for (const channel of ['captureAdopt', 'captureRetrySegment']) {
-    assert.match(bridge, new RegExp(`ipcMain\\.handle\\('meetings:${channel}'`), `main handles meetings:${channel}`);
+    assert.match(channels, new RegExp(`host\\.handle\\('meetings:${channel}'`), `main handles meetings:${channel}`);
     assert.match(preload, new RegExp(`ipcRenderer\\.invoke\\('meetings:${channel}'`), `preload invokes meetings:${channel}`);
     assert.match(declarations, new RegExp(`${channel}\\?\\(`), `bridge.d.ts declares ${channel}`);
   }
   // D4 — progress is pushed, not polled, and only after the write.
-  assert.match(bridge, /webContents\.send\(MEETING_CAPTURE_PROGRESS_CHANNEL/);
+  assert.match(bridge, /publish: \(progress\) => \{ broadcast\(MEETING_CAPTURE_PROGRESS_CHANNEL, progress\); \}/);
+  assert.match(bridge, /window\.webContents\.send\(channel, payload\)/);
   assert.match(preload, /ipcRenderer\.on\('meetings:capture-progress'/);
   const persistAt = supervisor.indexOf('await this.#store.persist(next)');
   const publishAt = supervisor.indexOf('this.#publish({ sessionId: id, session: next })');
@@ -170,11 +172,43 @@ test('D1 still holds through the supervisor: bytes first, then the count the dis
   const writeAt = supervisor.indexOf('await this.#store.writeSegment(id, index, bytes)');
   const recordAt = supervisor.indexOf('{ byteLength: written, durationMs }');
   assert.ok(writeAt > 0 && recordAt > writeAt);
-  // D6 — and the same commit carries the heartbeat. The timer is the half a
-  // stalled main thread drops; this one comes off the media stack, which is why
-  // the staleness window is a multiple of the chunk cadence rather than of the
-  // timer. The behaviour is asserted for real in `meetingTranscription.test.ts`.
-  assert.match(supervisor, /appendSegment\(this\.#renew\(entry, current\)/);
+  // D6 — and the commit carries nothing else. The append used to fold a lease
+  // heartbeat into it, which is a clock standing in for a fact main already had;
+  // gating the audio path on any part of that is the loss this ADR exists to
+  // prevent arriving through the door meant to stop it.
+  assert.match(supervisor, /appendSegment\(current, \{ byteLength: written, durationMs \}\)/);
+});
+
+test('D6 — liveness is the process\'s own answer, and nothing on this host reads a lease', () => {
+  const supervisor = read('../../electron/meetingTranscription.ts');
+  const store = read('../../electron/meetingCapture.ts');
+  const view = read('../components/meetings/MeetingsView.tsx');
+  const submit = read('../components/meetings/composeSubmit.ts');
+  const main = read('../../electron/main.ts');
+
+  // The registry, in the one place that can hold it: a supervisor created once
+  // per PROCESS, which is the unit every BrowserWindow lives in. The behaviour
+  // is asserted for real in `meetingTranscription.test.ts` and
+  // `meetingCaptureChannels.test.ts`; what is asserted here is that no second
+  // answer to the same question has grown back.
+  assert.match(supervisor, /readonly #writers = new Map<string, string>\(\);/);
+  // Nothing on this host may ask the lease anything — not the supervisor, not
+  // the store, not the surface, not the rule behind Create. Every name below is
+  // a CALL rather than a word, because the comments in those files argue at
+  // length about why the lease is gone and should go on being able to.
+  //
+  // It failed in the direction that costs a meeting: a window RELOAD left main
+  // renewing a lease for a renderer that no longer existed, so Transcribe,
+  // Create and Delete were refused for ever over a recording nobody was making.
+  const leaseCalls = /acquireCaptureLease|heartbeatCaptureLease|releaseCaptureLease|isCaptureBeingWritten|capturesBeingWritten|describeCaptureWriter|captureLeaseStaleAt|MEETING_CAPTURE_HEARTBEAT_MS|MEETING_CAPTURE_LEASE_STALE_MS/;
+  for (const source of [supervisor, store, view, submit]) assert.doesNotMatch(source, leaseCalls);
+  // …and the two-PROCESS case is prevented rather than detected, which is the
+  // only thing that makes one process's answer complete.
+  assert.match(main, /app\.requestSingleInstanceLock\(\)/);
+  // D6 — the boot pass is TOLD who is recording rather than reading it off the
+  // record, and it guards the whole pass rather than one of its three
+  // destructive halves.
+  assert.match(store, /if \(isWriting\(id\)\) \{ sessions\.push\(stored\.session\); continue; \}/);
 });
 
 test('live text distinguishes provisional from settled, and the fold rule is the SHARED one', () => {
@@ -234,7 +268,7 @@ test('D6 — the draft lives where the audio does, and is the compose box itself
   const view = read('../components/meetings/MeetingsView.tsx');
   const ops = read('../components/meetings/captureOps.ts');
   const legacy = read('../components/meetings/legacyDraft.ts');
-  const bridge = read('../../electron/meetingCaptureBridge.ts');
+  const channels = read('../../electron/meetingCaptureChannels.ts');
   const preload = read('../../electron/preload.cts');
   const declarations = read('../bridge.d.ts');
   const drafts = read('../../electron/meetingDraft.ts');
@@ -255,7 +289,7 @@ test('D6 — the draft lives where the audio does, and is the compose box itself
   assert.doesNotMatch(ops, /localStorage\.\w/);
 
   for (const channel of ['draftRead', 'draftWrite', 'draftClear']) {
-    assert.match(bridge, new RegExp(`ipcMain\\.handle\\('meetings:${channel}'`), `main handles meetings:${channel}`);
+    assert.match(channels, new RegExp(`host\\.handle\\('meetings:${channel}'`), `main handles meetings:${channel}`);
     assert.match(preload, new RegExp(`ipcRenderer\\.invoke\\('meetings:${channel}'`), `preload invokes meetings:${channel}`);
     assert.match(declarations, new RegExp(`${channel}\\?\\(`), `bridge.d.ts declares ${channel}`);
   }
@@ -472,20 +506,38 @@ test('B — one unreadable segment is stated, not thrown at the whole recording'
 test('the capture channels exist on both sides of the Electron boundary', () => {
   const main = read('../../electron/main.ts');
   const bridge = read('../../electron/meetingCaptureBridge.ts');
+  const channels = read('../../electron/meetingCaptureChannels.ts');
   const preload = read('../../electron/preload.cts');
   const declarations = read('../bridge.d.ts');
 
   // Registered in main, which outlives a renderer crash — that is the whole
   // reason the write does not happen in the renderer.
   assert.match(main, /registerMeetingCaptureBridge\(\)/);
-  for (const channel of ['captureBegin', 'captureAppend', 'captureStop', 'captureRead', 'captureFinalize', 'captureDiscard', 'captureResumable']) {
-    assert.match(bridge, new RegExp(`ipcMain\\.handle\\('meetings:${channel}'`), `main handles meetings:${channel}`);
+  // `captureWriting` and `captureRelease` were the two this list used to leave
+  // out, and they are D6's whole surface: what a second window is told, and how
+  // a window that is going away says so.
+  for (const channel of ['captureBegin', 'captureAppend', 'captureStop', 'captureRead', 'captureFinalize', 'captureDiscard', 'captureResumable', 'captureWriting', 'captureRelease']) {
+    assert.match(channels, new RegExp(`host\\.handle\\('meetings:${channel}'`), `main handles meetings:${channel}`);
     assert.match(preload, new RegExp(`ipcRenderer\\.invoke\\('meetings:${channel}'`), `preload invokes meetings:${channel}`);
+  }
+  for (const channel of ['captureBegin', 'captureAppend', 'captureStop', 'captureRead', 'captureFinalize', 'captureDiscard', 'captureResumable', 'captureWriting']) {
     assert.match(declarations, new RegExp(`${channel}\\?\\(`), `bridge.d.ts declares ${channel}`);
   }
+  // D6 — `captureRelease` is the preload's own, sent when the PAGE goes away
+  // rather than when the renderer asks for it, so it is not on the declared
+  // surface: a component that could call it could hand away a recording that is
+  // still running.
+  assert.match(preload, /window\.addEventListener\('pagehide'/);
+  assert.doesNotMatch(declarations, /captureRelease/);
+  // …and the push that says the answer changed, which is what replaced waiting
+  // out a staleness window.
+  assert.match(preload, /ipcRenderer\.on\('meetings:capture-writers'/);
+  assert.match(declarations, /onCaptureWriters\?\(/);
 
-  // D2/D6 — the boot pass runs at registration, before any window can Record.
-  assert.match(bridge, /store\.recoverInterrupted\(\)/);
+  // D2/D6 — the boot pass runs at registration, before any window can Record,
+  // and is handed the one liveness answer this host has.
+  assert.match(channels, /store\.recoverInterrupted\(\{/);
+  assert.match(channels, /isWriting: \(id\) => supervisor\.isWriting\(id\)/);
 });
 
 test('captured audio is written 0700/0600 under the existing app-data root', () => {

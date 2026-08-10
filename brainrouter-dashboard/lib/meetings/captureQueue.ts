@@ -125,6 +125,17 @@ export interface CaptureQueueOptions {
   readonly mimeType?: string;
   readonly title?: string;
   readonly maxInFlight?: number;
+  /**
+   * The scheduler's clock, so a host and its queue share one.
+   *
+   * The desktop's supervisor has always passed this and the dashboard never did,
+   * which left the browser's D7 behaviour — how long the queue refuses to probe
+   * an endpoint that is down, and when it tries again — unreachable from a test:
+   * the harness moved its own clock and the queue kept reading `Date.now()`, so
+   * the backoff could only be exercised by waiting real seconds for it. An
+   * outage schedule nobody can test is a schedule nobody has checked.
+   */
+  readonly now?: () => number;
 }
 
 /**
@@ -154,6 +165,7 @@ export function createCaptureQueue(options: CaptureQueueOptions): MeetingTranscr
       },
     }),
     transcribe: (audio, type) => options.transcribe(audio, type),
+    ...(options.now ? { now: options.now } : {}),
     async persist(next) {
       await store.setPayload(
         sessionId,

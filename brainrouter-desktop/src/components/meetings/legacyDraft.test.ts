@@ -45,6 +45,7 @@ function fakeCapture(options: { draftAvailable?: boolean; stored?: MeetingCompos
       discard: async () => undefined,
       resumable: async () => [],
       writing: async () => [],
+      onWriters: () => () => undefined,
       holderId: 'wr-legacy-draft-test',
       draftAvailable: options.draftAvailable ?? true,
       readDraft: async () => options.stored ?? null,

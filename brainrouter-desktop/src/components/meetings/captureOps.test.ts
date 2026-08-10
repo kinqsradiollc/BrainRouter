@@ -152,6 +152,34 @@ test("§6 — the segments the store could not read back cross the bridge with t
   assert.deepEqual((await createMeetingCaptureOps().read("mtg-1")).missing, []);
 });
 
+test("D6 — a writer row is only believed when all three of its fields are there", async () => {
+  setBridge({
+    captureBegin: async () => SESSION,
+    captureAppend: async () => SESSION,
+    captureWriting: async () => [
+      { sessionId: "mtg-live", holderId: "wr-second-window", note: "Another window is recording this meeting right now." },
+      // Every one of these is a row that would silently unlock a destructive
+      // control over a live recording: a row with no holder id compares unequal
+      // to THIS window's, so it would lock the capture this window is recording
+      // and wedge its own Create; a row with no note renders an empty banner
+      // where the explanation should be; a row with no session id locks nothing
+      // at all while claiming something is live.
+      { sessionId: "mtg-holderless", note: "Another window is recording this meeting right now." },
+      { sessionId: "mtg-noteless", holderId: "wr-third-window" },
+      { holderId: "wr-fourth-window", note: "Another window is recording this meeting right now." },
+      null,
+    ],
+  });
+
+  assert.deepEqual((await createMeetingCaptureOps().writing({ orgId: null })).map((row) => row.sessionId), ["mtg-live"]);
+
+  // A preload that predates the channel answers nothing, which reads as "no
+  // window is recording" — the answer this surface gave before D6 existed,
+  // rather than an error over a feature it cannot take part in.
+  setBridge({ captureBegin: async () => SESSION, captureAppend: async () => SESSION });
+  assert.deepEqual(await createMeetingCaptureOps().writing({ orgId: null }), []);
+});
+
 test("a capture store that answers with the wrong shape is an error, not a silent no-op", async () => {
   setBridge({ captureBegin: async () => ({ id: "mtg-1" }), captureAppend: async () => ({ id: "mtg-1", segments: [] }), captureRead: async () => ({}) });
   const capture = createMeetingCaptureOps();

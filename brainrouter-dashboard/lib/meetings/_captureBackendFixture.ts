@@ -72,6 +72,17 @@ export class FakeCaptureBackend implements CaptureStorageBackend {
    */
   readonly unreadable = new Set<string>();
 
+  /**
+   * Sequences whose read THROWS, keyed `"sessionId:sequence"`.
+   *
+   * A separate set from `unreadable` because the two are separate code paths and
+   * only one of them used to be survivable: both real backends reject rather
+   * than resolve `undefined` when the bytes cannot be produced (IndexedDB's
+   * `onerror`/`onabort`, OPFS's `getFile()` on a missing or locked entry), so a
+   * fixture that could only answer `undefined` was testing the easier half.
+   */
+  readonly failReads = new Set<string>();
+
   readonly chunks = new Map<string, Blob>();
   readonly manifests = new Map<string, CaptureManifest>();
 
@@ -105,6 +116,7 @@ export class FakeCaptureBackend implements CaptureStorageBackend {
   async readChunk(sessionId: string, sequence: number): Promise<Blob | undefined> {
     const key = `${sessionId}:${sequence}`;
     this.calls.push(`readChunk:${key}`);
+    if (this.failReads.has(key)) throw new Error(`NotAllowedError: cannot read ${key}`);
     return this.unreadable.has(key) ? undefined : this.chunks.get(key);
   }
 

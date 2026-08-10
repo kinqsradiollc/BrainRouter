@@ -93,7 +93,7 @@ test("the page keeps no second copy of the capture's state", () => {
 test("every session transition goes through the queue, which is the single writer", () => {
   // Two writers would interleave a `markDone` with an `appendSegment` and lose
   // one of them — the same class of defect as losing the audio, just quieter.
-  for (const transition of ["appendSegment(", "stopCapture(", "finalizeCapture(", "discardCaptureSession(", "heartbeatCaptureLease(", "releaseCaptureLease("]) {
+  for (const transition of ["appendSegment(", "stopCapture(", "finalizeCapture(", "discardCaptureSession("]) {
     const calls = [...surface.matchAll(new RegExp(transition.replace("(", "\\("), "g"))];
     assert.ok(calls.length > 0, `${transition} is still applied somewhere`);
     for (const call of calls) {
@@ -101,6 +101,51 @@ test("every session transition goes through the queue, which is the single write
       assert.ok(before.includes("queue.apply("), `${transition} runs inside queue.apply`);
     }
   }
+});
+
+test("liveness is the browser's lock, and the lease is GONE rather than merely unread", () => {
+  // A heartbeat that is still written is a second opinion about a fact the
+  // browser states exactly — and the offer would start honouring it again the
+  // moment somebody restored the read, which is how §6's headline broke. So the
+  // identifiers go, on both sides of the seam.
+  for (const dead of [
+    "acquireCaptureLease",
+    "heartbeatCaptureLease",
+    "releaseCaptureLease",
+    "isCaptureLeaseFresh",
+    "describeCaptureWriter",
+    "capturesBeingWritten",
+    "MEETING_CAPTURE_HEARTBEAT_MS",
+    "beatLease",
+    "startHeartbeat",
+    "holderId",
+  ]) {
+    assert.equal(codeLines(surface).some((line) => line.includes(dead)), false, `${dead} is gone from the surface`);
+    assert.equal(codeLines(page).some((line) => line.includes(dead)), false, `${dead} is gone from the page`);
+  }
+  // There is no threshold left anywhere on this host, which is the property that
+  // makes the killed-tab case answerable at once instead of eventually.
+  assert.doesNotMatch(surface, /STALE_MS/);
+  // The writer id had exactly one job — naming a lease holder across a reload.
+  // A Web Lock is per browsing context by construction and a reload releases it,
+  // so the module is deleted rather than left orphaned.
+  assert.throws(() => read("../../lib/meetings/captureHolder.ts"), "the holder-id module is deleted");
+  // …and the manifest has no field to put liveness back into.
+  assert.equal(
+    codeLines(read("../../lib/meetings/capturePayload.ts")).some((line) => line.includes("writer?: MeetingCaptureLease")),
+    false,
+    "the envelope carries what a meeting IS, not who was writing to it a moment ago",
+  );
+});
+
+test("golden rule 23 — the browser that cannot coordinate says so, in its own slot", () => {
+  // A render arrangement, which is why it is asserted here: the sentence is a
+  // standing property of this browser for the whole page view, so it gets a slot
+  // that no event overwrites — inside the dialog and outside it, exactly like
+  // the notice it sits beside.
+  assert.match(page, /\{!cap\.createOpen && cap\.coordination \? <div className=\{styles\.errorBar\} role="status">/);
+  assert.match(page, /\{cap\.coordination \? <div className=\{styles\.errorBar\} role="status">/);
+  assert.match(surface, /if \(!ports\.locks\.available\) this\.#state = \{ \.\.\.this\.#state, coordination: CAPTURE_LOCKS_UNAVAILABLE \};/);
 });
 
 test("composition has ONE rule, and the recompose model is gone rather than unused", () => {

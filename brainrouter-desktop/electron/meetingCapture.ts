@@ -32,14 +32,17 @@
  *    directory, and the boot pass finishes any delete a kill interrupted — see
  *    `recoverInterrupted`. D6 asks for a real deletion, and one that only
  *    happens when the process survives long enough is not one.
- * 5. **Who is recording is a fact IN the record, and this store never keeps a
- *    second copy of it.** Every question about liveness — the offer, the reap,
- *    the two destructive transitions — goes through `captureLease.ts` reading
- *    `session.writer`. This store is registered once per PROCESS and
- *    `openWorkspaceWindow` mints many windows inside it, so a `Set` of "ids we
- *    are recording" held here would be right for one window and blank for the
- *    next; that is exactly the mistake the lease replaced, and it would be no
- *    better for being made in main.
+ * 5. **This store does not know who is recording, and does not guess.** Liveness
+ *    is a question about the PROCESS — which window has a microphone open — and
+ *    the process knows it exactly: `MeetingTranscriptionSupervisor` is created
+ *    once beside this store and holds one entry per live capture. So the offer,
+ *    the reap and the two destructive transitions ask IT (`isWriting` below is
+ *    how the boot pass does), and this module keeps no second answer of its own.
+ *    It previously read a lease off `session.writer` — a heartbeat plus a
+ *    staleness threshold — which was a timing heuristic standing in for a fact
+ *    main already had, and it failed in the direction that costs a meeting: a
+ *    window RELOAD left main heartbeating for a renderer that no longer existed,
+ *    so the recording was refused to every window for ever.
  *
  * **Which durability this actually buys, stated rather than implied.** A segment
  * is handed to the kernel and the file is closed; from that moment the bytes
@@ -56,31 +59,25 @@
  * `@kinqs/brainrouter-core/meetings` — D1b's "only the write target is
  * host-specific". This file is the write target and nothing more.
  *
- * It deliberately does not import `electron`: the IPC surface lives in
- * `meetingCaptureBridge.ts` so the store itself can be unit-tested against a
- * temporary directory, which is where the `0700`/`0600` guarantee is actually
- * checked.
+ * It deliberately does not import `electron`: the channels live in
+ * `meetingCaptureChannels.ts` and Electron itself in `meetingCaptureBridge.ts`,
+ * so the store can be unit-tested against a temporary directory — which is where
+ * the `0700`/`0600` guarantee is actually checked.
  */
 import fs, { type Dirent } from 'node:fs';
 import path from 'node:path';
 import {
-  acquireCaptureLease,
   adoptCaptureChunks,
   capturedByteLength,
-  capturesBeingWritten,
   createCaptureSession,
   discardCapture,
   finalizeCapture,
-  isCaptureBeingWritten,
   isMeetingSessionId,
   isTerminalCaptureStatus,
   orphanCaptureIds,
   recoverCaptureSession,
   resumableSessions,
-  sameCaptureScope,
   summarizeRecovery,
-  type CaptureCloseActor,
-  type MeetingCaptureLeaseRequest,
   type MeetingCaptureScope,
   type MeetingCaptureSession,
   type MeetingCaptureTemplate,
@@ -112,15 +109,25 @@ export interface BeginCaptureInput {
   readonly language?: string;
   /** The recorder's own MIME type, kept so `read` can describe the bytes truthfully. */
   readonly contentType?: string;
+}
+
+/** What one boot pass must be told before it corrects anything — see `recoverInterrupted`. */
+export interface MeetingCaptureRecoveryOptions {
   /**
-   * D6 — the window that is about to record into this capture.
+   * D6 — is a window in this process recording into that capture right now?
    *
-   * Applied to the record BEFORE the first write, so the file names a writer
-   * before any audio exists. A second window that reads this directory a
-   * millisecond later already gets "somebody is recording this", which is the
-   * whole correction: liveness in the record rather than in one window's memory.
+   * The boot pass REWRITES records, ADOPTS chunk files and DELETES directories,
+   * and every one of those is wrong for a live capture: measured, a second pass
+   * over a recording rewrote it to `stopped` and adopted the chunk the recorder
+   * had just written, after which every remaining chunk failed `EEXIST` for
+   * ever, because an in-memory segment count can never advance past a collision.
+   * The rest of that meeting was lost with no self-heal.
+   *
+   * Defaults to "nobody", which is the truth at the one moment this actually
+   * runs — registration, before any window can press Record — and a lie at any
+   * other, which is why the caller can say otherwise.
    */
-  readonly holder?: MeetingCaptureLeaseRequest;
+  readonly isWriting?: (id: string) => boolean;
 }
 
 export interface CapturedAudio {
@@ -282,20 +289,12 @@ export class MeetingCaptureStore {
    * than merely detectable.
    */
   async begin(input: BeginCaptureInput): Promise<MeetingCaptureSession> {
-    const fresh = createCaptureSession({
+    const session = createCaptureSession({
       scope: input.scope,
       ...(input.title ? { title: input.title } : {}),
       ...(input.template ? { template: input.template } : {}),
       ...(input.language ? { language: input.language } : {}),
     });
-    // The lease goes on BEFORE the record is first written, so there is no
-    // instant at which a capture exists on disk without naming its writer. A
-    // fresh session is `recording` and has no writer, so this cannot refuse —
-    // the branch is here because an unchecked `!` on a union is how the next
-    // person discovers that it can.
-    const claimed = input.holder ? acquireCaptureLease(fresh, input.holder) : null;
-    if (claimed && !claimed.ok) throw new Error(claimed.detail);
-    const session = claimed ? claimed.session : fresh;
     await fs.promises.mkdir(this.root, { recursive: true, mode: DIRECTORY_MODE });
     await chmodQuiet(this.root, DIRECTORY_MODE);
     const directory = this.directory(session.id);
@@ -424,19 +423,20 @@ export class MeetingCaptureStore {
   /**
    * D6 — the user accepted the meeting, so the audio is released.
    *
-   * `by` is the window asking. It is passed through to the shared transition,
-   * which refuses while ANOTHER holder is recording: finalizing marks every
-   * unfinished segment as a gap and this method then deletes the audio, so a
-   * second window doing it to a live meeting is the loss this ADR exists to
-   * end, arriving through the accept button instead of the delete one.
+   * Unconditional, and deliberately: finalizing marks every unfinished segment
+   * as a gap and then deletes the audio, so "is anybody still recording this?"
+   * has to be answered BEFORE it — by the supervisor, which is the only thing in
+   * this process that knows (invariant 5). A second guard here could only
+   * re-derive that answer from the record, which is the heuristic this round
+   * removed.
    */
-  async finalize(id: string, by?: CaptureCloseActor): Promise<void> {
-    await this.close(id, finalizeCapture, by);
+  async finalize(id: string): Promise<void> {
+    await this.close(id, finalizeCapture);
   }
 
-  /** D6 — an explicit discard, and a real deletion rather than a hidden one. Refused while another window records. */
-  async discard(id: string, by?: CaptureCloseActor): Promise<void> {
-    await this.close(id, discardCapture, by);
+  /** D6 — an explicit discard, and a real deletion rather than a hidden one. Guarded by its caller, like `finalize`. */
+  async discard(id: string): Promise<void> {
+    await this.close(id, discardCapture);
   }
 
   /**
@@ -454,32 +454,6 @@ export class MeetingCaptureStore {
   }
 
   /**
-   * D6 — the captures somebody is recording into RIGHT NOW, whichever window
-   * that is.
-   *
-   * The complement of `resumable`, and it exists because a surface has to say
-   * something rather than nothing. `resumableSessions` already leaves a live
-   * recording out of the offer, so a second window's Meetings screen shows no
-   * row for a meeting it can plainly hear being recorded next door. This is what
-   * lets it print "Another window is recording this meeting right now" and
-   * schedule its refresh for the instant the lease lapses (ADR-028) instead of
-   * leaving the user to guess.
-   *
-   * Whole sessions rather than `MeetingRecoverySummary`, because the lease is
-   * what the caller needs: `describeCaptureWriter` names the holder and
-   * `captureLeaseStaleAt` says when it ends, and a summary carries neither.
-   */
-  async writing(scope?: MeetingCaptureScope): Promise<MeetingCaptureSession[]> {
-    const sessions: MeetingCaptureSession[] = [];
-    for (const id of await this.storedIds()) {
-      const stored = await this.loadQuietly(id);
-      if (stored) sessions.push(stored.session);
-    }
-    return capturesBeingWritten(sessions)
-      .filter((session) => !scope || sameCaptureScope(session.scope, scope));
-  }
-
-  /**
    * The boot pass, run once before any recording starts.
    *
    * Four truths a crash leaves behind and all are corrected rather than
@@ -490,8 +464,16 @@ export class MeetingCaptureStore {
    * Record that died before its first chunk landed is a directory holding
    * nothing anyone will ever be offered. Directories with no readable record are
    * orphans and are reaped too (D6).
+   *
+   * D6 — and a capture somebody is recording into is NONE of those four. It is
+   * skipped whole rather than at one of the three places it would otherwise be
+   * damaged: the byte-less reap used to be the only guarded one, which left the
+   * record rewrite and the chunk adoption to run over a live recording and take
+   * the rest of the meeting with them. It is still listed as a session, or the
+   * orphan sweep at the end would delete the directory it just spared.
    */
-  async recoverInterrupted(): Promise<MeetingCaptureRecoveryReport> {
+  async recoverInterrupted(options: MeetingCaptureRecoveryOptions = {}): Promise<MeetingCaptureRecoveryReport> {
+    const isWriting = options.isWriting ?? (() => false);
     const ids = await this.storedIds();
     const sessions: MeetingCaptureSession[] = [];
     const recovered: string[] = [];
@@ -500,6 +482,7 @@ export class MeetingCaptureStore {
     for (const id of ids) {
       const stored = await this.loadQuietly(id);
       if (!stored) continue;
+      if (isWriting(id)) { sessions.push(stored.session); continue; }
       if (isTerminalCaptureStatus(stored.session.status)) {
         // `close` writes the terminal status BEFORE deleting the audio, so a
         // kill in between leaves the directory of a meeting the user accepted or
@@ -523,14 +506,13 @@ export class MeetingCaptureStore {
       // from reaping a capture the CURRENT launch has just created and not yet
       // written a chunk for — that session is seconds old and about to have one.
       //
-      // D6 — and `openedAt` only knows about THIS process. The desktop takes no
-      // single-instance lock, so a second launch runs this pass over the same
-      // directory while the first one is recording, and every capture the first
-      // one started is older than the second one's `openedAt`. For the seconds
-      // between Record and the first chunk that is a live meeting with no bytes
-      // yet — deleted, from a boot pass, while the microphone is open. The lease
-      // is the only fact that crosses processes, so it is the one asked here.
-      if (capturedByteLength(session) === 0 && session.startedAt < this.openedAt && !isCaptureBeingWritten(session)) {
+      // `openedAt` only knows about THIS process, and that is now enough: a
+      // capture a live window in this process is recording never reaches here
+      // (`isWriting` above), and a SECOND process over the same `userData`
+      // directory is prevented rather than detected — main takes Electron's
+      // single-instance lock, which is the only thing that can actually make one
+      // process's answer about liveness complete.
+      if (capturedByteLength(session) === 0 && session.startedAt < this.openedAt) {
         await fs.promises.rm(this.directory(id), { recursive: true, force: true });
         reaped.push(id);
         continue;
@@ -589,21 +571,15 @@ export class MeetingCaptureStore {
 
   private async close(
     id: string,
-    transition: (session: MeetingCaptureSession, at?: string, by?: CaptureCloseActor) => MeetingCaptureSession,
-    by?: CaptureCloseActor,
+    transition: (session: MeetingCaptureSession) => MeetingCaptureSession,
   ): Promise<void> {
     await this.serialize(id, async () => {
       const stored = await this.loadQuietly(id);
       // The terminal status is written BEFORE the delete, so a crash between the
       // two leaves a record that recovery will not offer again. Offering back a
       // meeting the user threw away is worse than losing the reap.
-      //
-      // The transition can THROW here — that is the point of passing the actor.
-      // It throws only while another holder's lease is fresh, and the throw
-      // happens before the write and therefore before the `rm`, so a second
-      // window's Delete leaves the live recording exactly as it found it.
       if (stored && !isTerminalCaptureStatus(stored.session.status)) {
-        await this.write(transition(stored.session, undefined, by), stored.contentType);
+        await this.write(transition(stored.session), stored.contentType);
       }
       await fs.promises.rm(this.directory(id), { recursive: true, force: true });
     });

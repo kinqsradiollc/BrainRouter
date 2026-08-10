@@ -16,7 +16,7 @@
  *
  * **The recording itself is not in this file any more, and that is the point.**
  * `captureSurface.ts` owns every decision about a capture that is being written:
- * the lease, the chunk write, composition, the POST, the destructive controls
+ * the cross-tab lock, the chunk write, composition, the POST, the destructive controls
  * and the unmount teardown. This page supplies the browser — a real
  * `MediaRecorder`, the durable store, `authFetch`, timers — renders what the
  * surface says, and owns the meeting LIBRARY beside it.
@@ -73,7 +73,7 @@
  */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from "react";
 import { Lock, UsersThree, Buildings, GlobeHemisphereWest, Microphone, type Icon } from "@phosphor-icons/react";
-import { describeCaptureWriter, summarizeRecovery } from "@kinqs/brainrouter-core/meetings";
+import { summarizeRecovery } from "@kinqs/brainrouter-core/meetings";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
 import { InlineLoading } from "../../components/LoadingSpinner";
@@ -82,7 +82,7 @@ import { useActiveOrg } from "../../components/OrgWorkspaceProvider";
 import { BASE_URL } from "../../lib/client";
 import { getApiKey, getJwt } from "../../lib/client-auth";
 import { invalidateDashboardQueries, queryDashboard } from "../../lib/dashboardQuery";
-import { tabCaptureHolderId } from "../../lib/meetings/captureHolder";
+import { browserCaptureLocks, CAPTURE_HELD_ELSEWHERE } from "../../lib/meetings/captureLock";
 import { createSttTranscriber, DEFAULT_CAPTURE_MIME_TYPE } from "../../lib/meetings/captureQueue";
 import { openMeetingCaptureStore } from "../../lib/meetings/openCaptureStore";
 import { formatCaptureBytes } from "../../lib/meetings/storageBudget";
@@ -192,9 +192,10 @@ export default function MeetingsPage() {
   busyRef.current = busy;
   const capture = useMemo(() => {
     const ports: CaptureSurfacePorts = {
-      // One per TAB, kept in `sessionStorage`, so a reload reclaims its own
-      // lease at once instead of waiting the staleness window out.
-      holderId: tabCaptureHolderId(),
+      // One per TAB, over `navigator.locks`: a lock this tab holds is released
+      // by the browser the moment the tab dies, so a killed recording is
+      // offerable back on the very next check rather than after a threshold.
+      locks: browserCaptureLocks(),
       openStore: (requestPersistence) => openMeetingCaptureStore({ requestPersistence }),
       activeOrgId: () => activeOrgRef.current,
       async openMicrophone() {
@@ -265,7 +266,6 @@ export default function MeetingsPage() {
   }, []);
   const cap = useSyncExternalStore(capture.subscribe, capture.snapshot, capture.snapshot);
   // Derived from the snapshot above, so both are recomputed on the same render.
-  const holderId = capture.holderId;
   const unresolved = capture.unresolved;
 
   // Poll while notes are generating — the server keeps summarizing across refreshes,
@@ -608,6 +608,10 @@ export default function MeetingsPage() {
           rendered here exactly while there is no dialog to render them in. */}
       {!cap.createOpen && cap.warning ? <div className={styles.errorBar} role="alert">{cap.warning}</div> : null}
       {!cap.createOpen && cap.notice ? <div className={styles.errorBar} role="status">{cap.notice}</div> : null}
+      {/* Golden rule 23 — this browser has no Web Locks, so it cannot see what
+          another tab is recording. A degradation nobody is shown is
+          indistinguishable from working, and this one can cost a meeting. */}
+      {!cap.createOpen && cap.coordination ? <div className={styles.errorBar} role="status">{cap.coordination}</div> : null}
       {!cap.createOpen && cap.recording ? (
         <div className={styles.errorBar} role="status">
           A meeting is being recorded. Its audio is being saved to this device.{" "}
@@ -832,8 +836,10 @@ export default function MeetingsPage() {
                   // D6 — the button says what the function will refuse. The
                   // offer already excludes a capture somebody is writing to, so
                   // this is the belt beside `discard`'s braces: a listing taken
-                  // a moment ago and a tab that started recording since.
-                  const writer = describeCaptureWriter(entry.session, holderId);
+                  // a moment ago and a tab that started recording since. The
+                  // function asks the browser again on the click, which is the
+                  // answer that actually decides.
+                  const writer = cap.writing.includes(entry.record.sessionId) ? CAPTURE_HELD_ELSEWHERE : null;
                   return (
                     <Fragment key={entry.record.sessionId}>
                       <div className={styles.recoverRow}>
@@ -895,6 +901,7 @@ export default function MeetingsPage() {
                 the case. The warning is rendered second, next to the actions, so
                 it is the last thing read before Create. */}
             {cap.notice ? <div className={styles.errorBar} role="status">{cap.notice}</div> : null}
+            {cap.coordination ? <div className={styles.errorBar} role="status">{cap.coordination}</div> : null}
             {cap.warning ? <div className={styles.errorBar} role="alert">{cap.warning}</div> : null}
             {cap.createError ? <div className={styles.errorBar} role="alert">{cap.createError}</div> : null}
             {/* D5, said in advance. Creating the meeting is what turns an
