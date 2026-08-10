@@ -110,6 +110,30 @@ const apiRateLimit = createRateLimiter({
   max: Number.isFinite(GLOBAL_RATE_LIMIT_MAX) ? GLOBAL_RATE_LIMIT_MAX : 600,
 });
 
+/**
+ * Password guessing is per-ACCOUNT, so the throttle has to be too.
+ *
+ * `authRateLimit` keys on IP, which stops one host hammering the login form and
+ * does nothing about the attack that matters: many hosts trying a handful of
+ * passwords against ONE account. A botnet with 200 addresses gets 4,000 attempts
+ * per window against a single victim while every individual IP looks polite.
+ *
+ * Keyed on the submitted email so the budget belongs to the account under
+ * attack. Lower-cased and trimmed, because `Bob@x.com ` and `bob@x.com` are the
+ * same account and must not be two budgets. A missing email falls back to the
+ * IP rather than to a shared bucket — one empty-body flood must not exhaust the
+ * budget of every account at once.
+ */
+const signinAccountRateLimit = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: "Too many sign-in attempts for this account",
+  keyGenerator: (req) => {
+    const email = String((req.body as { email?: unknown } | undefined)?.email ?? "").trim().toLowerCase();
+    return email ? `account:${email}` : `ip:${req.ip ?? "unknown"}`;
+  },
+});
+
 // ─── CLI flags ────────────────────────────────────────────────────────────────
 function parseFlag(flag: string): string | undefined {
   const idx = process.argv.indexOf(flag);
@@ -273,8 +297,15 @@ if (USE_HTTP) {
 
   if (serveRest) {
   app.use("/api", apiRateLimit);
-  app.use("/api/auth/signin", authRateLimit);
+  app.use("/api/auth/signin", authRateLimit, signinAccountRateLimit);
   app.use("/api/auth/signup", authRateLimit);
+  // Both of these send mail and write a row for an UNAUTHENTICATED caller, so
+  // the global 600/min was the only thing between a stranger and using our
+  // mail sender as an amplifier against someone else's inbox. The reset side is
+  // included because a token guess is a credential attempt like any other.
+  app.use("/api/auth/forgot-password", authRateLimit);
+  app.use("/api/auth/reset-password", authRateLimit);
+  app.use("/api/auth/resend-verification", authRateLimit);
   app.use("/api/auth", authRouter);
   app.use("/api/users", usersRouter);
   app.use("/api/orgs", orgsRouter);
