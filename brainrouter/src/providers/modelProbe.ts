@@ -8,6 +8,8 @@
  *     model's reasoning capability via `inferModelReasoningCapabilities`.
  */
 import { resolveModelsUrl, resolveEmbeddingsUrl } from "./wireFormat.js";
+import { fetchUpstreamWithPolicy } from "../services/gateway/upstreamPolicy.js";
+import type { UpstreamTargetPolicy } from "@kinqs/brainrouter-core/provider";
 
 // Loaded lazily + defensively — core's provider barrel is Node-safe and already a
 // backend dependency, but we tolerate any export drift without crashing a probe.
@@ -51,7 +53,19 @@ export interface ProbedModel {
  * we go straight to the plain OpenAI-compatible GET /v1/models (which returns
  * every model, incl. `text-embedding-*`).
  */
-export async function probeModels(baseUrl: string, apiKey: string, kind: string = "llm", timeoutMs = 8000): Promise<ProbedModel[]> {
+/**
+ * Probe a provider's model list.
+ *
+ * `policy` is the SSRF boundary, not an optimisation. `baseUrl` arrives raw from
+ * an admin request body, and every request built from it used bare `fetch` — so
+ * `http://169.254.169.254/...` or a docker-internal address was reachable, and
+ * the GET variant returned the response body to the caller. Hosted mode is
+ * fail-closed (loopback and RFC1918 are refused); a self-hosted deployment that
+ * legitimately runs Ollama or LM Studio opts in with an exact-origin allowlist.
+ * Omitted means hosted, because the safe default must be the one you get by
+ * forgetting.
+ */
+export async function probeModels(baseUrl: string, apiKey: string, kind: string = "llm", timeoutMs = 8000, policy: UpstreamTargetPolicy = {}): Promise<ProbedModel[]> {
   const c = await core();
   const chat = kind === "llm" || !kind;
 
@@ -71,15 +85,15 @@ export async function probeModels(baseUrl: string, apiKey: string, kind: string 
   if (kind === "reranker") {
     const rerankBase = baseUrl.replace(/\/+$/, "").replace(/\/rerank$/, "");
     try {
-      return await probeModelsViaGet(rerankBase, apiKey, timeoutMs, c);
+      return await probeModelsViaGet(rerankBase, apiKey, timeoutMs, c, policy);
     } catch (listError) {
-      const alive = await probeRerankEndpoint(rerankBase, apiKey, timeoutMs, c);
+      const alive = await probeRerankEndpoint(rerankBase, apiKey, timeoutMs, c, policy);
       if (alive) return []; // reachable rerank endpoint, no listing — type the model manually
       throw listError;
     }
   }
 
-  return probeModelsViaGet(baseUrl, apiKey, timeoutMs, c);
+  return probeModelsViaGet(baseUrl, apiKey, timeoutMs, c, policy);
 }
 
 /**
@@ -87,19 +101,19 @@ export async function probeModels(baseUrl: string, apiKey: string, kind: string 
  * error (missing/unknown model) — proves a live rerank surface; 404/405/network
  * failures do not.
  */
-async function probeRerankEndpoint(base: string, apiKey: string, timeoutMs: number, c: Awaited<ReturnType<typeof core>>): Promise<boolean> {
+async function probeRerankEndpoint(base: string, apiKey: string, timeoutMs: number, c: Awaited<ReturnType<typeof core>>, policy: UpstreamTargetPolicy): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     const key = apiKey || c.LOCAL_PLACEHOLDER_KEY || "";
     if (key) headers.Authorization = `Bearer ${key}`;
-    const res = await fetch(`${base}/rerank`, {
+    const res = await fetchUpstreamWithPolicy(`${base}/rerank`, {
       method: "POST",
       headers,
       body: JSON.stringify({ query: "connectivity probe", documents: ["a", "b"], top_n: 1 }),
       signal: controller.signal,
-    });
+    }, policy);
     if (res.ok) return true;
     if (res.status === 404 || res.status === 405) return false;
     // 400/401/422 etc.: the rerank route exists and parsed the request shape.
@@ -111,7 +125,7 @@ async function probeRerankEndpoint(base: string, apiKey: string, timeoutMs: numb
   }
 }
 
-async function probeModelsViaGet(baseUrl: string, apiKey: string, timeoutMs: number, c: Awaited<ReturnType<typeof core>>): Promise<ProbedModel[]> {
+async function probeModelsViaGet(baseUrl: string, apiKey: string, timeoutMs: number, c: Awaited<ReturnType<typeof core>>, policy: UpstreamTargetPolicy): Promise<ProbedModel[]> {
   const url = resolveModelsUrl(baseUrl);
   if (!url) return [];
   const controller = new AbortController();
@@ -120,7 +134,7 @@ async function probeModelsViaGet(baseUrl: string, apiKey: string, timeoutMs: num
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     const key = apiKey || c.LOCAL_PLACEHOLDER_KEY || "";
     if (key) headers.Authorization = `Bearer ${key}`;
-    const res = await fetch(url, { headers, signal: controller.signal });
+    const res = await fetchUpstreamWithPolicy(url, { headers, signal: controller.signal }, policy);
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       throw new Error(`GET ${url} → ${res.status} ${res.statusText}${body ? ` — ${body.slice(0, 200)}` : ""}`);
@@ -150,7 +164,7 @@ async function probeModelsViaGet(baseUrl: string, apiKey: string, timeoutMs: num
  * force the whole `cognitive_vec` table to be rebuilt + re-embedded).
  * Returns the dimension, or null if the probe fails.
  */
-export async function probeEmbeddingDim(baseUrl: string, apiKey: string, model: string, timeoutMs = 8000): Promise<number | null> {
+export async function probeEmbeddingDim(baseUrl: string, apiKey: string, model: string, timeoutMs = 8000, policy: UpstreamTargetPolicy = {}): Promise<number | null> {
   const url = resolveEmbeddingsUrl(baseUrl);
   if (!url) return null;
   const controller = new AbortController();
@@ -159,7 +173,7 @@ export async function probeEmbeddingDim(baseUrl: string, apiKey: string, model: 
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     const key = apiKey || (await core()).LOCAL_PLACEHOLDER_KEY || "";
     if (key) headers.Authorization = `Bearer ${key}`;
-    const res = await fetch(url, { method: "POST", headers, body: JSON.stringify({ input: "dimension probe", model }), signal: controller.signal });
+    const res = await fetchUpstreamWithPolicy(url, { method: "POST", headers, body: JSON.stringify({ input: "dimension probe", model }), signal: controller.signal }, policy);
     if (!res.ok) return null;
     const data = (await res.json()) as any;
     const vec = data?.data?.[0]?.embedding;
