@@ -1,6 +1,7 @@
 # ADR-035 — A meeting you cannot lose
 
-**Status:** PROPOSED — for owner review.
+**Status:** ACCEPTED — owner-approved. D1/D1b/D2 built; D3/D4/D5/D7 built and under repair;
+D9–D11 added after use and NOT built; D6's retention window not built.
 **Depends on:** ADR-018 (meetings capture/transcribe/summarize), ADR-028 (surfaces that tell the truth),
 ADR-027 D12 (distributed-systems correctness), ADR-029 (one workspace, many surfaces).
 
@@ -184,6 +185,85 @@ redesign what already works.
 
 ---
 
+## 3b. Decisions added after using it
+
+D1–D8 were written before anything was built. The three below come from running the result: the
+capture is durable and the live text is slow, and the reason turned out to be a mistake in D3 rather
+than a number that needed tuning.
+
+### D9 · The durability chunk and the transcription unit are different things
+
+D3 said "the unit of transcription is a segment" and D1 said chunks are written as they arrive, and
+the implementation quite reasonably made those **one 20-second constant**
+(`DEFAULT_MEETING_SEGMENT_MS`). That constant is now doing three jobs with three different right
+answers:
+
+| concern | what it actually wants |
+|---|---|
+| **durability** — bound the worst-case loss | short: 2–5s. A crash costs seconds, not twenty. |
+| **transcription quality** — the model needs context | utterance-shaped, decided by speech, not by a clock |
+| **liveness** — text appears while talking | continuous; anything clock-shaped has a floor |
+
+One number cannot satisfy those. Twenty seconds is simultaneously too long to lose, arbitrary as a
+linguistic boundary — it cuts sentences in half, which §5.1 warned about and then did anyway — and
+far too coarse to feel live.
+
+**So they separate.** The durability chunk is small and is written as it arrives. What gets sent for
+transcription is assembled from those chunks and is sized by the transcription strategy, not by the
+write cadence.
+
+> **Shrinking the segment is not the fix, and would make it worse.** A batch upload's latency floor
+> is about half the segment plus decode plus round-trip, so halving it halves nothing that matters
+> while cutting more words in half. The knob was the wrong knob.
+
+### D10 · Live transcription is a streaming session where the endpoint offers one
+
+Batch-posting a file per segment cannot produce live text, whatever the segment size. Streaming
+transcription APIs — including the one this was measured against — hold a persistent connection,
+accept audio continuously, and return **incremental deltas while the person is still speaking**,
+with utterance boundaries decided server-side by voice activity or by a model judging the thought
+complete, and with an explicit latency-versus-accuracy control rather than a fixed cadence.
+
+So transcription becomes two strategies behind one port:
+
+- **streaming** where the configured endpoint supports it — continuous audio up, deltas down, which
+  is what D4's "provisional" state was always describing;
+- **segmented upload** — today's path — as the fallback, and as what drains a queue after an outage.
+
+**The strategy is a property of the endpoint, not of the host.** Both hosts get whichever the
+endpoint supports, or D1b's promise breaks again in a new place.
+
+Durability does not move. Chunks are still written before anything is sent, so a dropped connection
+costs a reconnect and not a meeting — and the queue that already exists is what replays what the
+stream did not acknowledge.
+
+### D11 · In the browser, the server is the system of record — not the origin's quota
+
+D7 made the local disk the source of truth and the network an accelerator. That is right for the
+desktop and **wrong for the browser**, because the browser is the host whose storage can be taken
+away from it.
+
+`navigator.storage.persist()` can simply be refused — it is granted on engagement heuristics, not on
+asking — and eviction under pressure is per-origin. A refused grant means a long meeting can be
+evicted mid-recording, and no amount of quota-watching prevents it. Warning earlier does not fix it;
+it only narrates it.
+
+**The fix is that the bytes leave the machine.** Once audio is streaming (D10) or uploading as it is
+captured, local storage stops being the system of record and becomes what it should have been: a
+buffer for the offline case, sized to the outage rather than to the meeting.
+
+Two things that are worth doing whatever else happens, because they are cheap and reduce the exposure
+now:
+
+- **Record speech at a speech bitrate.** `new MediaRecorder(stream)` is constructed with no options
+  on both hosts, so it uses the browser default of roughly 128 kbps — about 60 MB an hour. Speech is
+  fine at 24–32 kbps, which is nearer 15 MB. A four-fold cut in the thing being evicted.
+- **Say which promise the user has.** "Persisted" and "best-effort" are different guarantees and the
+  surface currently shows the same face for both. Per ADR-028, the one that can lose your meeting
+  should not look like the one that cannot.
+
+---
+
 ## 4. What this explicitly does not do
 
 - **No speaker diarization.** Valuable, and a separate decision with its own model and privacy
@@ -198,16 +278,23 @@ redesign what already works.
 
 ## 5. Open questions
 
-1. **Segment length.** Long enough for the model to have context, short enough that a failure is
-   cheap and text feels live. 15–30s is the obvious starting range; it should be measured against
-   transcription quality rather than guessed, because too-short segments cut words in half.
+1. ~~**Segment length.**~~ **ANSWERED, and the question was wrong.** It was measured: 20s was
+   chosen from the "obvious starting range" below and the result is visibly slow. But the finding is
+   not that the number should be smaller — it is that one number was serving three concerns with
+   three different right answers. See **D9**. What remains open is the durability chunk's size
+   (2–5s, bounded by how much loss is acceptable, not by transcription quality) and the streaming
+   endpoint's latency setting, both of which are now separate questions with separate evidence.
 2. **Where does the capture directory live?** The desktop already has an app-data root and a
    per-session browser partition. Reusing an existing rooted location beats inventing one.
 3. **Who owns retry — renderer or host?** A renderer-owned queue dies with the window, which is the
    defect this ADR exists to fix; a host-owned queue survives and can drain after a restart.
-4. **Which browser store, and what happens at the quota edge?** D1b commits to OPFS with an
-   IndexedDB fallback; what remains open is the eviction policy and how early a user is warned that
-   a long meeting is approaching the origin's budget.
+4. ~~**Which browser store, and what happens at the quota edge?**~~ **PARTLY ANSWERED, and the
+   framing was wrong.** OPFS with an IndexedDB fallback stands. But "how early is the user warned"
+   assumed warning was the remedy, and it is not: persistence can be refused outright and eviction
+   is per-origin, so a long meeting can vanish no matter how early we said something. See **D11** —
+   the remedy is that the bytes leave the machine. What remains genuinely open is what the local
+   buffer should hold once the server is the record: how much outage it must survive, and what it
+   does when that budget is exhausted anyway.
 5. **What happens to an in-flight meeting when the org context switches?** ADR-019's switcher scopes
    meetings; a recording that started under one org must not silently land in another.
 
@@ -234,6 +321,17 @@ Two supporting criteria, because the destructive test alone can be satisfied bad
 - **A failed segment is visible and recoverable.** Point the STT endpoint at a black hole for sixty
   seconds mid-meeting. Those segments appear as marked gaps, the rest of the transcript is intact,
   and retrying after the endpoint returns fills them in from the audio still on disk.
+
+For D9–D11, three more, because "it feels faster" is not checkable either:
+
+- **Text appears while the sentence is still being spoken.** Not after it. If the first text for an
+  utterance arrives only once the utterance is over, D10 did not land — whatever the segment size.
+- **The worst case is seconds.** Kill it mid-sentence and count what is missing. D9 is the claim
+  that this is bounded by the write cadence, not by the transcription unit; if they are still the
+  same number, nothing changed.
+- **Refuse persistence and record for an hour anyway.** In a browser where
+  `navigator.storage.persist()` returns false, the meeting must still be recoverable — because the
+  bytes are elsewhere. If the answer is a louder warning, D11 was not built.
 
 Not judged by: whether live text looks good. It will. The question is what remains when something
 goes wrong, because that is the case the current design answers with silence.
