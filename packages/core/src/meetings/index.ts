@@ -33,6 +33,17 @@
 // rounds to arrive here — but it is a rule (which state outranks which) and it
 // had already drifted between the hosts while it lived in each of them.
 //
+// `captureLease` is the eighth, and it is a different KIND of correction from
+// the seven above. Those moved a rule that each host had written out twice; this
+// one moves a FACT that neither host could hold at all. "Is someone recording
+// into this capture right now" was kept in React state in one mount, while the
+// store it describes is per-process on the desktop and per-origin in the
+// browser — so a second window or a second tab was offered a live recording back
+// with an enabled Delete. The fact now lives in the record every holder reads,
+// as a lease with a heartbeat and a fencing epoch (ADR-029 B2/Q1), and the
+// offer, the discard, the finalize and the reap all ask it rather than asking
+// themselves.
+//
 // `transcriptFold` is the seventh, and the one that had already drifted into
 // two DIFFERENT answers rather than two copies of one: the desktop appended to
 // the compose box and the dashboard recomposed it from a stripped base, so the
@@ -40,6 +51,7 @@
 // relocated or reverted on the other. Composition is one rule now, and it is
 // the append one — position in that box is the person's, not the surface's.
 export * from './types.js';
+export * from './captureLease.js';
 export * from './captureSession.js';
 export * from './transcript.js';
 export * from './recovery.js';

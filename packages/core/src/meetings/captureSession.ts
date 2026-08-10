@@ -20,7 +20,16 @@
  *    result for a segment that is already `done` is therefore dropped here, in
  *    the one place both hosts share, rather than in whichever surface remembered
  *    to guard against it.
+ * 3. **A meeting someone is recording cannot be closed by someone else.** The
+ *    two terminal transitions release the audio, so calling either on a live
+ *    capture destroys a meeting in progress. That guard is HERE, on the
+ *    transition, rather than on a button: the defect it prevents was reached
+ *    from a second window and from a second tab, and every previous attempt to
+ *    stop it lived in one mount's React state, which the other holder does not
+ *    have. `captureLease.ts` owns the liveness rule; this module refuses to
+ *    apply the transition when it says someone is writing.
  */
+import { describeCaptureWriter } from './captureLease.js';
 import type {
   MeetingCaptureScope,
   MeetingCaptureSession,
@@ -307,6 +316,18 @@ export function resumeCapture(session: MeetingCaptureSession): MeetingCaptureSes
 }
 
 /**
+ * Who is asking to close a capture, for the guard in invariant 3.
+ *
+ * Optional at every call site, and omitting it is not a hatch: a caller that
+ * does not name itself is treated as NOT the writer, so it is refused while
+ * anyone is recording. The only caller that can name itself is the one holding
+ * the lease.
+ */
+export interface CaptureCloseActor {
+  readonly holderId: string;
+}
+
+/**
  * D5/D6 — the user accepted the meeting.
  *
  * Segments that never transcribed become stated gaps rather than disappearing.
@@ -314,12 +335,19 @@ export function resumeCapture(session: MeetingCaptureSession): MeetingCaptureSes
  * rule, and it is the wrong one: under D7 a segment can sit queued indefinitely
  * while the endpoint is down, and a user who can never finalize is a user whose
  * audio is never released.
+ *
+ * It IS refused while another holder is recording (invariant 3): finalizing
+ * marks every unfinished segment as a gap and the host then deletes the audio,
+ * so a second window doing it to a live meeting is the loss this ADR exists to
+ * end, arriving through the accept button instead of the delete one.
  */
 export function finalizeCapture(
   session: MeetingCaptureSession,
   at: string = new Date().toISOString(),
+  by?: CaptureCloseActor,
 ): MeetingCaptureSession {
   requireOpen(session, 'finalize');
+  requireNoOtherWriter(session, 'finalize', at, by);
   const segments = session.segments.map((segment) =>
     segment.state === 'pending' || segment.state === 'transcribing'
       ? { ...segment, state: 'failed' as const, failureReason: MEETING_UNFINISHED_REASON, lastAttemptAt: at }
@@ -328,12 +356,21 @@ export function finalizeCapture(
   return { ...session, status: 'finalized', segments, stoppedAt: session.stoppedAt ?? at, closedAt: at };
 }
 
-/** D6 — an explicit discard. The host deletes the audio; the record says why it is gone. */
+/**
+ * D6 — an explicit discard. The host deletes the audio; the record says why it
+ * is gone.
+ *
+ * Refused while another holder is recording (invariant 3). This is the exact
+ * defect: a second window or a second tab was offered the live recording back
+ * with an enabled Delete, and pressing it destroyed a meeting in progress.
+ */
 export function discardCapture(
   session: MeetingCaptureSession,
   at: string = new Date().toISOString(),
+  by?: CaptureCloseActor,
 ): MeetingCaptureSession {
   requireOpen(session, 'discard');
+  requireNoOtherWriter(session, 'discard', at, by);
   return { ...session, status: 'discarded', stoppedAt: session.stoppedAt ?? at, closedAt: at };
 }
 
@@ -374,6 +411,28 @@ function requireOpen(session: MeetingCaptureSession, verb: string): void {
   if (isTerminalCaptureStatus(session.status)) {
     throw new Error(`Cannot ${verb} a meeting that is already ${session.status}.`);
   }
+}
+
+/**
+ * Invariant 3 — nobody closes a recording somebody else is making.
+ *
+ * A throw rather than a silent no-op, and rather than a returned outcome: both
+ * transitions are followed by the host deleting the audio, so a caller that
+ * mistook "unchanged" for "done" would delete the recording anyway. The refusal
+ * has to be impossible to ignore.
+ *
+ * A capture with no live lease is unaffected, which is what lets this land ahead
+ * of the hosts: until a host acquires a lease there is nothing to refuse, and
+ * from the moment it does it must pass the same `holderId` here.
+ */
+function requireNoOtherWriter(
+  session: MeetingCaptureSession,
+  verb: string,
+  at: string,
+  by: CaptureCloseActor | undefined,
+): void {
+  const writer = describeCaptureWriter(session, by?.holderId, at);
+  if (writer) throw new Error(`Cannot ${verb} this meeting. ${writer}`);
 }
 
 function replaceSegment(
