@@ -84,6 +84,12 @@ deep dives.
   accepted rule that a behavioural change must be reversible, attributable and falsifiable: a gate whose price of admission is naming what would show the lesson wrong, two provenance tiers (model-inferred evidence, human-corrected instruction) neither of which touches the base prompt, learned procedures promoted to a user-scoped skill store outside the generated library, automatic bounded checkpoints at turn end / compaction / session end, and retirement that demotes what never pays off back down the ladder it climbed;
   [ADR-033 review that finds things, and says where](decisions/ADR-033-review-that-finds-things-and-says-where.md) —
   accepted split of deterministic engineering from model judgement in code review: review units are bundles of related files decided by path and import relationships and run concurrently, the non-interactive bot may ask once for a file from the checkout it already has, a finding's line is computed from the evidence it quoted rather than remembered, a reflection pass reads the findings as a set and may publish fewer than it received, precision is the target and recall is the trade, a benchmark built from our own merged pull requests keeps that claim checkable, and a review that cannot complete says so instead of holding the merge gate.;
+  [ADR-034 messages that arrive](decisions/ADR-034-messages-that-arrive.md) —
+  proposed cross-session messaging that works offline on one device and across devices through the
+  backend, addressed by what a session IS rather than by an opaque id: sessions choose each other by
+  description, the delivery gate lives in the RECIPIENT so a message cannot bypass it by choosing a
+  transport, and session titles are named by the agent on the first turn rather than left as a
+  timestamp;
   [ADR-035 a meeting you cannot lose](decisions/ADR-035-a-meeting-you-cannot-lose.md) —
   proposed durability-then-liveness rework of meeting capture: audio written to disk as it arrives
   instead of accumulating in a renderer ref, a session created at Record rather than at Stop,
@@ -101,7 +107,24 @@ deep dives.
   cookie, the access token to memory only, and the never-expiring API key out of the browser
   entirely. Because the dashboard is CROSS-ORIGIN with the API, `SameSite` gives no CSRF protection,
   so an origin check plus a double-submit token ship WITH the cookie rather than after it — and a
-  `*` CORS origin combined with credentials must refuse to boot.
+  `*` CORS origin combined with credentials must refuse to boot.;
+  [ADR-038 a planner worth opening](decisions/ADR-038-a-planner-worth-opening.md) —
+  proposed rework of planner and notes across dashboard, desktop and CLI: shared components instead
+  of one implementation per host (notes exists twice today), a real token system instead of 67 lines
+  of per-page CSS, a Today view designed for a working day rather than an empty text field, sync
+  turned from a caption into a control, and the CLI given the operations a terminal is better at
+  rather than an imitation of the GUI;
+  [ADR-039 the half of security a model cannot see](decisions/ADR-039-the-half-of-security-a-model-cannot-see.md) —
+  proposed addition of static data-flow analysis as a review INPUT rather than a parallel bot: the
+  engine enumerates candidates deterministically, the model adversarially verifies which are
+  reachable, and only survivors publish — argued from this release, where the two approaches found
+  almost disjoint sets and raw scanner output was 300+ alerts of which 11 were real. Grounded in how
+  this class of engine actually works: database-first rather than per-diff (so it is its own stage
+  with its own budget, never blocking the review), precision already encoded as query metadata and
+  selected by suite rather than by a filter of ours, taint models extended as DATA so our own
+  chokepoints can be declared as barriers — without which it re-reports code we already fixed — and
+  a separate engine licence that decides, before any engineering, whether this can run against
+  customer code at all.
 
 Published benchmark results: [`../brainrouter-benchmark/reports/`](../brainrouter-benchmark/reports/).
 
