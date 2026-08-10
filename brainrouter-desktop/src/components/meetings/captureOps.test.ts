@@ -52,6 +52,31 @@ test("the capture scope and the recorder's content type travel with the session"
   ]);
 });
 
+test("F1 — the capture in hand is left out of the recovery offer", async () => {
+  setBridge({
+    captureBegin: async () => SESSION,
+    captureAppend: async () => SESSION,
+    captureResumable: async () => [{ sessionId: "mtg-live" }, { sessionId: "mtg-left-over" }],
+  });
+  const capture = createMeetingCaptureOps();
+
+  // The store cannot answer this and should not try: D2's predicate is "audio
+  // present, no terminal state", which the recording being made RIGHT NOW
+  // satisfies — so the library offered to transcribe or DELETE it while the
+  // microphone was still open. Only the window holding the recorder knows which
+  // session that is.
+  assert.deepEqual(
+    (await capture.resumable({ orgId: null }, { exclude: ["mtg-live"] })).map((row) => row.sessionId),
+    ["mtg-left-over"],
+  );
+  // …and with nothing in hand, nothing is dropped: every unfinished recording on
+  // the device is still this ADR's deliverable.
+  assert.deepEqual(
+    (await capture.resumable({ orgId: null })).map((row) => row.sessionId),
+    ["mtg-live", "mtg-left-over"],
+  );
+});
+
 test("D6 — the compose draft crosses the bridge, and a stale record is narrowed rather than trusted", async () => {
   const calls: string[] = [];
   setBridge({

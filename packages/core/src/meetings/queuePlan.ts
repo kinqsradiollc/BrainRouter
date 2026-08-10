@@ -106,27 +106,28 @@ export function planTranscription(
  * The floor on how soon a host may drain again, and the reason it lives beside
  * the schedule rather than in each host's timer.
  *
- * It is STILL two constants over the same `nextWakeMs` — the desktop's
- * `MIN_WAKE_MS = 500` in `meetingTranscription.ts` and the dashboard's
- * `MEETING_DRAIN_FLOOR_MS = 500` in its meetings page — because this export has
- * been written and left unwired. Both exist for one reason: the queue can
- * legitimately answer `0`, which is what it says when it stopped with work still
- * ready because a write failed and blocked a segment. Honouring a zero literally
- * spins a host against a store that is already refusing it.
+ * It is one number now, and both hosts ask for it: the desktop's
+ * `meetingTranscription.ts` and the dashboard's meetings page each call
+ * `drainWakeDelayMs` and neither keeps a floor of its own. What they kept
+ * before is the argument for this export, and it is a stronger one than "two
+ * copies that agree": they did NOT agree. The desktop had `MIN_WAKE_MS = 250`
+ * and the dashboard an inline `Math.max(500, result.nextWakeMs)` — one rule,
+ * two values, and nothing anywhere that could notice.
+ *
+ * Both existed for the same reason: the queue can legitimately answer `0`,
+ * which is what it says when it stopped with work still ready because a write
+ * failed and blocked a segment. Honouring a zero literally spins a host against
+ * a store that is already refusing it.
  *
  * So the floor only ever BINDS on that error path: every real backoff this
  * schedule produces starts at `baseDelayMs` (2 s), four times this value, and
- * passes through untouched. Sized for the path it actually serves — two attempts
- * a second at a failing store rather than four — the cost is at most half a
- * second of lateness on a backoff that was about to elapse anyway.
+ * passes through untouched. Sized for the path it actually serves — two
+ * attempts a second at a failing store rather than the desktop's four — the
+ * cost is at most half a second of lateness on a backoff that was about to
+ * elapse anyway.
  *
  * It is a SCHEDULING floor, not a retry rule: what is due, and when, remains
  * entirely `retryPolicy.ts`'s answer.
- *
- * Both hosts agree on the number today, which is precisely why this is worth
- * wiring rather than leaving alone: the value is not the point, the single
- * definition is. Two copies that agree are one edit away from being two copies
- * that do not, and nothing would catch it.
  */
 export const MEETING_MIN_WAKE_MS = 500;
 

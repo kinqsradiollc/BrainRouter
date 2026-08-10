@@ -152,6 +152,61 @@ test("a chunk that cannot be written is reported while the meeting is still runn
   assert.deepEqual(failures, ["The disk is full."]);
 });
 
+test("stopping releases the session, so the next Record is not refused", async () => {
+  const capture = fakeCapture();
+  const fakes: FakeRecorder[] = [];
+  const recorder = new MeetingCaptureRecorder({
+    capture: capture.ops,
+    openStream: async () => tracked().stream,
+    createRecorder: () => { const next = new FakeRecorder(); fakes.push(next); return next as unknown as MediaRecorder; },
+  });
+
+  await recorder.start({ scope: { orgId: null } });
+  // A second Record while one is running is refused BY THE SESSION ID. That is
+  // the field, and clearing it is what `stop` has to do.
+  await assert.rejects(() => recorder.start({ scope: { orgId: null } }), /already being captured/);
+  await recorder.stop();
+
+  // Asserted through the effect the field HAS, not through a second `stop`:
+  // `stop` also nulls `this.recorder`, so a second call answers `null` down that
+  // branch whether or not the id was released — and a recorder still holding one
+  // refuses every later Record with "a meeting is already being captured", which
+  // is the microphone never opening again for the rest of the session.
+  assert.equal(await recorder.start({ scope: { orgId: null } }), "mtg-test");
+  assert.equal(fakes.length, 2);
+  assert.equal(fakes[1]?.state, "recording");
+});
+
+test("a recorder that will not start releases the microphone rather than leaving it open", async () => {
+  const capture = fakeCapture();
+  const microphone = tracked();
+  let broken = true;
+  const recorder = new MeetingCaptureRecorder({
+    capture: capture.ops,
+    openStream: async () => microphone.stream,
+    createRecorder: () => {
+      const fake = new FakeRecorder();
+      // `NotSupportedError`: the stream went inactive between `getUserMedia` and
+      // here — an interface unplugged, a device the OS took back. It is the LAST
+      // statement of `start`, after the stream, the recorder and the session id
+      // have all been stored, so an escape leaves this object holding a live
+      // microphone that the caller never receives a handle to.
+      if (broken) fake.start = () => { throw new Error("NotSupportedError"); };
+      return fake as unknown as MediaRecorder;
+    },
+  });
+
+  await assert.rejects(() => recorder.start({ scope: { orgId: null } }), MicrophoneUnavailableError);
+  // A recording light that never goes out, for a meeting nothing is capturing.
+  assert.equal(microphone.stops, 1);
+
+  // …and the id goes back with it, or this window can never record again. (The
+  // capture directory `begin` created is left with no audio under it, which is
+  // exactly what the store's boot pass reaps.)
+  broken = false;
+  assert.equal(await recorder.start({ scope: { orgId: null } }), "mtg-test");
+});
+
 test("a microphone that will not open, and a store that will not begin, both release the stream", async () => {
   const capture = fakeCapture(async () => { throw new Error("No capture directory."); });
   const microphone = tracked();

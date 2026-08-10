@@ -40,6 +40,22 @@ function at(source: string, needle: string): number {
   return index;
 }
 
+/**
+ * The page's EXECUTABLE lines, trimmed.
+ *
+ * Every comment in that file names the defect it prevents, in the defect's own
+ * vocabulary — so "this identifier appears nowhere" asked over the raw text is
+ * answered by the paragraph explaining why it appears nowhere. Only the leading
+ * marker is stripped, which is enough because the block comments this file
+ * searches are all `*`-continued.
+ */
+function codeLines(source: string): readonly string[] {
+  return source
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("*") && !line.startsWith("//") && !line.startsWith("/*"));
+}
+
 test("D1/D1b — audio becomes bytes on a cadence, and nothing accumulates in the tab", () => {
   // Without an explicit timeslice `MediaRecorder` may deliver one blob at the
   // end, and the durable write buys nothing.
@@ -89,14 +105,25 @@ test("FATAL 1 — what is POSTED is the settled text, with nothing in between to
   // transcript = draftTranscript` survived — and all ten tests still passed,
   // because every one of those three facts was still true of the broken
   // program. There is no line to delete now: the posted field IS the settle
-  // result, and `submitTranscript` covers the no-capture case that used to be
-  // the reason for the mutable local.
-  const settle = at(page, "submitTranscript(syncRef.current, queue?.session ?? null, draftTranscript)");
+  // result, and the shared `settleTranscriptForSubmit` takes a nullable session
+  // so the pasted-transcript case is this same call rather than a branch.
+  //
+  // The THIRD argument is asserted as hard as the first two. Handing it a fresh
+  // `EMPTY_TRANSCRIPT_FOLD` typechecks, keeps every ordering fact true, and
+  // makes the settle walk from segment zero over a box that already holds the
+  // meeting — so the doubled transcript is what gets POSTed and summarized.
+  const settle = at(page, "settleTranscriptForSubmit(draftTranscript, queue?.session ?? null, foldRef.current)");
   const post = at(page, 'await authFetch<{ id: string }>("/api/meetings"');
   const release = at(page, "await releaseCapture(true)");
   assert.ok(settle < post, "the text is settled before it is posted");
   assert.ok(post < release, "and the audio is only released once the meeting exists on the server");
   assert.match(page, /body: \{ title: draftTitle\.trim\(\), transcript: submitted\.text, template: summaryTemplate \}/);
+  // The box is shown what was posted in the same breath. A create that FAILS
+  // leaves the person looking at their transcript again, and a box that does
+  // not hold the gap markers the server was just sent — while the fold says it
+  // does — is a surface disagreeing with the record about what is in the
+  // meeting, which is the class of thing this ADR exists to stop.
+  assert.match(page, /if \(submitted\.changed\) setDraftTranscript\(submitted\.text\);/);
   // The box's own state is never what is posted: it has not re-rendered yet at
   // this point in the function, so it is the pre-settle text by definition.
   assert.doesNotMatch(page, /body: \{ title: draftTitle\.trim\(\), transcript: draftTranscript/);
@@ -204,18 +231,103 @@ test("FATAL 3 — a chunk that could not be written reports into the STICKY slot
 });
 
 test("a recovered capture is folded in once, and its own language is used", () => {
-  // `beginTranscriptSync(options.base)` is what doubled a recovered meeting:
-  // `base` is the restored draft, which already holds the transcript, and
-  // composition appends the WHOLE transcript to its base.
-  assert.doesNotMatch(page, /syncRef\.current = beginTranscriptSync\(options\.base\)/);
-  assert.match(page, /const reconciled = reconcileCaptureDraft\(options\.base, session\)/);
-  assert.match(page, /included: reconciled\.accounted/);
-  // A segment the person edited must switch the page to its append-only
-  // affordance, or the next recompose restores the pre-edit wording.
-  assert.match(page, /dirty: reconciled\.userOwned\.length > 0/);
+  // The doubling defect, and the reason this test is written as an exhaustive
+  // list rather than as three `assert.match`es.
+  //
+  // Its predecessor asserted `included: reconciled.accounted` and the `dirty:`
+  // line but never the `base:` field, so respelling `base: reconciled.retained`
+  // as `base: options.base` restored §6's doubled meeting verbatim with all 123
+  // tests green. The lesson is that pinning SOME of the fields that reach
+  // composition pins none of it. What reaches composition now is one value —
+  // the fold — so every write to it is enumerated: a `beginTranscriptFold`
+  // swapped for `EMPTY_TRANSCRIPT_FOLD` (the doubling), a `folded.fold` that is
+  // computed and dropped (the "call present, result unused" shape), a
+  // `submitted.fold` that never lands, and any FOURTH writer that appears
+  // beside them all fail here.
+  const foldWrites = codeLines(page).filter((line) => line.startsWith("foldRef.current ="));
+  assert.deepEqual(foldWrites, [
+    // Resume over the restored box rather than at segment zero — §6.
+    "foldRef.current = beginTranscriptFold(reconciled);",
+    // The drain's fold, kept, or the next one appends the same run again.
+    "foldRef.current = folded.fold;",
+    // Submit's settle, kept, or a create that failed leaves the fold behind the
+    // box and the gap markers it just wrote are appended a second time.
+    "foldRef.current = submitted.fold;",
+  ]);
+  // The resume point is built from the reconcile of the RESTORED BOX, and it is
+  // the only thing built from it: `reconciled.retained` — the box with every
+  // segment stripped out of it — is what the recompose model used as its base,
+  // and it must never reach composition again on this host.
+  assert.match(page, /const reconciled = reconcileCaptureDraft\(options\.base, session\);/);
+  assert.doesNotMatch(page, /reconciled\.retained/);
+  // The empty fold has exactly one honest use on this page — the ref's initial
+  // value, for a box no capture has ever written into.
+  assert.deepEqual(
+    codeLines(page).filter((line) => line.includes("EMPTY_TRANSCRIPT_FOLD")),
+    ["EMPTY_TRANSCRIPT_FOLD,", "const foldRef = useRef<TranscriptFold>(EMPTY_TRANSCRIPT_FOLD);"],
+  );
+  // …and the fold is seeded before the session that triggers the fold effect is
+  // published, so there is no render in which the box is folded from zero.
+  const attach = at(page, "const attachQueue = useCallback(");
+  const seed = page.indexOf("foldRef.current = beginTranscriptFold(reconciled);", attach);
+  const publish = page.indexOf("setCaptureSession(session);", attach);
+  assert.ok(seed > attach && publish > seed, "the resume point is set before the session is published");
+  // Reconciliation still heals a stated gap in place on the way in, and the box
+  // is only rewritten when it actually changed.
+  assert.match(page, /if \(reconciled\.text !== options\.base\) setDraftTranscript\(reconciled\.text\);/);
   // A meeting recorded in Japanese was recorded in Japanese, whatever the page's
   // dropdown has since been reset to.
   assert.match(page, /session\.language \?\? \(language === "auto" \? undefined : language\)/);
+});
+
+test("A — composition is the shared append-only fold, and the recompose model is gone", () => {
+  // The last data-corruption defect on this host, and its one cause: the page
+  // rebuilt `base + transcriptText(session)` on every drain with `base` set to
+  // the box MINUS every segment. That puts all of a person's own words first
+  // and the whole meeting after them, so across a kill a note typed BETWEEN two
+  // segments came back above the entire transcript and an edit to the last
+  // settled segment came back reverted AND relocated to the top — both then
+  // autosaved, POSTed and summarized.
+  //
+  // The fold is asserted as a whole line each, because each carries a value the
+  // ordering and the presence of the call say nothing about.
+  assert.match(page, /const folded = foldTranscript\(draftTranscript, captureSession, foldRef\.current\);/);
+  assert.match(page, /if \(!folded\.changed\) return;/);
+  assert.match(page, /setDraftTranscript\(folded\.text\);/);
+  // The second host's answer, gone rather than merely unused — including the
+  // module it lived in.
+  const code = codeLines(page).join("\n");
+  for (const dead of [
+    "transcriptSync",
+    "nextTranscriptSync",
+    "appendTranscriptSync",
+    "composeCaptureTranscript",
+    "healTranscriptGaps",
+    "pendingTranscriptText",
+    "includedTranscriptIndices",
+    "transcriptRevisionPending",
+    "transcriptText(",
+  ]) {
+    assert.equal(code.includes(dead), false, `${dead} is gone from the page`);
+  }
+  assert.throws(() => read("../../lib/meetings/transcriptSync.ts"), "the second composition rule is deleted, not orphaned");
+
+  // The `dirty` flag goes with it, and is NOT reconstructed. It was a keystroke
+  // — runtime state that dies with the tab — and the page recomputed it after a
+  // reload as `reconciled.userOwned.length > 0`, which is `[]` whenever every
+  // segment still matches the box verbatim. A note typed BETWEEN two segments
+  // leaves every segment matching, so it came back `false`, recomposition
+  // switched itself back ON across the very kill it was protecting the box
+  // from, and the note was relocated above the whole transcript. There is no
+  // better formula: "a person has taken ownership of the ordering" is not
+  // derivable from the box plus the session. An append-only fold needs no such
+  // fact, which is why the resume point is a fold — a thing that IS
+  // reconstructible, by `beginTranscriptFold` above.
+  assert.doesNotMatch(page, /dirty:|\.dirty\b|dirtyRef/);
+  // Under append-only composition no text is ever withheld from the box, so the
+  // affordance that offered it back has nothing left to offer.
+  assert.doesNotMatch(page, /Bring the transcript up to date/);
+  assert.doesNotMatch(page, /appendCaptureText|captureRevisionPending/);
 });
 
 test("E/D6 — the draft is the protected store's, and it is the WHOLE compose box", () => {
@@ -228,18 +340,20 @@ test("E/D6 — the draft is the protected store's, and it is the WHOLE compose b
   // the same session a second time, and the four corruptions that follow are
   // all silent — a retained line matching a segment pins the frontier and loses
   // the rest of the meeting with no gap marker, an edit comes back doubled, a
-  // deletion returns, a note is relocated. On this host the first is worst,
-  // because `dirty` flips on a non-empty `userOwned` and automatic composition
-  // then never runs again.
+  // deletion returns, a note is relocated.
+  //
+  // It is also what makes the fold's resume point reconstructible at all: the
+  // box that comes back holds this capture's segments verbatim, so
+  // `reconcileCaptureDraft` can say which ones and where. A stripped box has
+  // had exactly that evidence removed from it.
   assert.match(page, /await writeMeetingDraft\(store, \{ title: draftTitle, transcript: draftTranscript, language, template: summaryTemplate \}\)/);
   assert.doesNotMatch(page, /reconcileCaptureDraft\(draftTranscript, captureSession\)/);
   // …and because a strip cannot be detected on the way back in, the type says so
   // too: a host that reintroduced it would be contradicting the field's contract.
   assert.match(read("../../lib/meetings/meetingDraft.ts"), /never `MeetingDraftReconciliation\.retained`/);
 
-  // The one reconcile that stays is the READ side: an in-memory recompose base
-  // for a restored draft meeting a recovered capture, which is never written
-  // down.
+  // The one reconcile that stays is the READ side: the fold's resume point over
+  // a restored draft meeting a recovered capture, which is never written down.
   const attach = at(page, "const attachQueue = useCallback(");
   const reconcile = at(page, "const reconciled = reconcileCaptureDraft(options.base, session)");
   assert.ok(reconcile > attach && reconcile < at(page, "const revokePreview = useCallback("));
@@ -251,14 +365,30 @@ test("E/D6 — the draft is the protected store's, and it is the WHOLE compose b
 });
 
 test("F — the wake floor and the phase sentence are the shared ones", () => {
-  // Both hosts kept a private 500 ms floor over the same `nextWakeMs`, agreeing
-  // by coincidence rather than by construction. The null check folds into the
-  // helper, because "nothing to schedule" and "not before the floor" are the
-  // same question about the same answer.
+  // The two hosts did NOT agree, which is the strongest available argument for
+  // the export. This page floored the queue's own `nextWakeMs` with an inline
+  // `Math.max(500, result.nextWakeMs)` and the desktop's supervisor with a
+  // private `MIN_WAKE_MS = 250`, so the same schedule probed a struggling
+  // sidecar at two different rates depending on which host you were on.
+  // Adopting the shared 500 halves the desktop's: two attempts a second rather
+  // than the four it was making. There was never a `MEETING_DRAIN_FLOOR_MS`
+  // anywhere — the number was a literal in this file, which is why nothing was
+  // ever going to notice the two drifting.
+  //
+  // The null check folds into the helper, because "nothing to schedule" and
+  // "not before the floor" are the same question about the same answer.
   assert.match(page, /const delay = drainWakeDelayMs\(result\.nextWakeMs\);/);
   assert.match(page, /if \(delay !== null\) \{/);
-  assert.doesNotMatch(page, /MEETING_DRAIN_FLOOR_MS/);
-  assert.doesNotMatch(page, /Math\.max\(\w*FLOOR\w*, result\.nextWakeMs\)/);
+  // …and the floored value is what ARMS the timer. Calling the helper and then
+  // arming on the raw `result.nextWakeMs` keeps every assertion above true and
+  // puts the unfloored schedule straight back — the "call present, result
+  // unused" shape, which is the one that has survived a mutation round before.
+  assert.match(page, /\}, delay\);/);
+  assert.deepEqual(
+    codeLines(page).filter((line) => line.includes("result.nextWakeMs")),
+    ["const delay = drainWakeDelayMs(result.nextWakeMs);"],
+    "the queue's raw schedule is read once, by the floor, and nowhere else",
+  );
   // …and the live panel's sentence comes from the shared module, not a local
   // copy of it. The dashboard's copy is deleted, not merely unused.
   assert.match(live, /capturePhaseNote,/);

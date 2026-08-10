@@ -307,19 +307,30 @@ export class MeetingCaptureStore {
    * this host decides. Handing the raw file straight to the queue is what made
    * the desktop transcribe segment 0 and nothing else.
    *
-   * `null` rather than a throw for a missing file, because that is the word the
-   * shared reader understands: it becomes a stated gap charged to the retry
-   * bound (D5) instead of a retry forever against a store with nothing to give.
-   * Any OTHER failure — a permission problem, a bad descriptor — is a fault
-   * worth surfacing, so it is rethrown rather than reported as missing audio.
+   * `null` rather than a throw, because that is the word the shared reader
+   * understands: it becomes a stated gap charged to the retry bound (D5)
+   * instead of a retry forever against a store with nothing to give.
+   *
+   * **For every failure, not only `ENOENT`.** Narrowing to "the file is gone"
+   * read as a principle — a permission problem is a fault worth surfacing —
+   * and in practice it was the same silent total loss wearing a different
+   * errno. Measured: a deleted file plays and is reported `missing: [1]`; the
+   * same file at mode `000` threw `EACCES` and the same path replaced by a
+   * directory threw `EISDIR`, and each of those took `read` down with it, so
+   * fifty-nine other minutes that were sitting right there became unreachable
+   * and the user was shown an errno for a recording whose byte count the
+   * recovery card was still advertising. Unreadable is unreadable, whatever
+   * the reason; D5's answer to unreadable audio is a stated gap.
    */
   async readSegment(id: string, index: number): Promise<Uint8Array | null> {
+    // Built OUTSIDE the try, like `loadQuietly`'s: "this is not a capture id" is
+    // a programming error worth surfacing, not a segment that would not read.
+    const file = path.join(this.directory(id), segmentName(index));
     try {
-      const buffer = await fs.promises.readFile(path.join(this.directory(id), segmentName(index)));
+      const buffer = await fs.promises.readFile(file);
       return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-    } catch (caught) {
-      if ((caught as NodeJS.ErrnoException | null)?.code === 'ENOENT') return null;
-      throw caught;
+    } catch {
+      return null;
     }
   }
 

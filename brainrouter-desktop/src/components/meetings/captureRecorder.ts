@@ -112,7 +112,25 @@ export class MeetingCaptureRecorder {
     recorder.ondataavailable = (event: BlobEvent) => {
       if (event.data.size) this.enqueue(sessionId, event.data);
     };
-    recorder.start(this.segmentMs);
+    /**
+     * Guarded, because this is the one statement that runs AFTER the fields are
+     * set. `MediaRecorder.start` throws `NotSupportedError` when the stream went
+     * inactive between `getUserMedia` and here — an unplugged interface, a
+     * device the OS took back. An escape from this line left the microphone open
+     * with the tracks live and this object holding a session id, while the
+     * caller never received one: nothing could stop it, and nothing could start
+     * anything else either, because the next `start` is refused by the id it
+     * kept. So the tracks are released and the fields are put back, exactly as
+     * the two failures above do it, and the capture directory this leaves empty
+     * is reaped by the boot pass (a record with no audio under it).
+     */
+    try { recorder.start(this.segmentMs); }
+    catch {
+      this.recorder = null;
+      this.sessionId = null;
+      this.release();
+      throw new MicrophoneUnavailableError();
+    }
     return sessionId;
   }
 

@@ -32,6 +32,13 @@
 // prints about the queue. It is surface WORDING, which is why it took two
 // rounds to arrive here — but it is a rule (which state outranks which) and it
 // had already drifted between the hosts while it lived in each of them.
+//
+// `transcriptFold` is the seventh, and the one that had already drifted into
+// two DIFFERENT answers rather than two copies of one: the desktop appended to
+// the compose box and the dashboard recomposed it from a stripped base, so the
+// same edit and the same typed note survived a kill on one host and were
+// relocated or reverted on the other. Composition is one rule now, and it is
+// the append one — position in that box is the person's, not the surface's.
 export * from './types.js';
 export * from './captureSession.js';
 export * from './transcript.js';
@@ -41,5 +48,6 @@ export * from './queuePlan.js';
 export * from './segmentAudio.js';
 export * from './chunkAdoption.js';
 export * from './draftReconcile.js';
+export * from './transcriptFold.js';
 export * from './transcriptionQueue.js';
 export * from './capturePhase.js';

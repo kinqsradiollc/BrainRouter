@@ -36,6 +36,16 @@
  * session record is gone, because the browser's quota is finite and audio nothing
  * can offer back is audio nothing can free.
  *
+ * ADR-035 D4 — and the text goes into the box by ONE rule, the shared
+ * `foldTranscript`, which appends from where it left off and never moves a line
+ * the box already holds. This page used to have a second answer: it recomposed
+ * `base + transcriptText(session)` on every drain over a base with every segment
+ * stripped out of it, which put all of the person's own words first and the
+ * whole meeting after them. A note typed BETWEEN two segments came back above
+ * the entire transcript across a kill, and an edit to the last settled segment
+ * came back reverted AND relocated to the top — both silent, both POSTed, both
+ * on this host only. Position in that box is the person's, not this surface's.
+ *
  * ADR-035 D6 — the compose draft lives in that same protected store, not in
  * `localStorage` (`meetingDraft.ts`): the words of a meeting do not belong in a
  * store any page script can read. It holds the compose box WHOLE — exactly what
@@ -48,11 +58,15 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type React
 import { Lock, UsersThree, Buildings, GlobeHemisphereWest, Microphone, type Icon } from "@phosphor-icons/react";
 import {
   appendSegment,
+  beginTranscriptFold,
   createCaptureSession,
   discardCapture as discardCaptureSession,
   drainWakeDelayMs,
+  EMPTY_TRANSCRIPT_FOLD,
   finalizeCapture,
+  foldTranscript,
   reconcileCaptureDraft,
+  settleTranscriptForSubmit,
   stopCapture,
   summarizeRecovery,
   unsettledSegments,
@@ -60,6 +74,7 @@ import {
   type MeetingCaptureTemplate,
   type MeetingDrainPhase,
   type MeetingTranscriptionQueue,
+  type TranscriptFold,
 } from "@kinqs/brainrouter-core/meetings";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
@@ -83,14 +98,6 @@ import {
 } from "../../lib/meetings/meetingDraft";
 import { captureFallbackNotice, openMeetingCaptureStore, type OpenedCaptureStore } from "../../lib/meetings/openCaptureStore";
 import { formatCaptureBytes, isStorageQuotaError } from "../../lib/meetings/storageBudget";
-import {
-  appendTranscriptSync,
-  beginTranscriptSync,
-  nextTranscriptSync,
-  submitTranscript,
-  transcriptRevisionPending,
-  type TranscriptSyncState,
-} from "../../lib/meetings/transcriptSync";
 import { LiveTranscript } from "./LiveTranscript";
 import styles from "./meetings.module.css";
 
@@ -338,7 +345,17 @@ export default function MeetingsPage() {
   const queueRef = useRef<MeetingTranscriptionQueue | null>(null);
   /** Pending `setTimeout` for the next drain, so a re-render cannot stack two. */
   const wakeRef = useRef<number | null>(null);
-  const syncRef = useRef<TranscriptSyncState>(beginTranscriptSync(""));
+  /**
+   * D4 — how much of this capture's transcript is already in the box, and the
+   * exact string it holds for each segment. The shared fold's resume point.
+   *
+   * A ref and not state because it is not rendered, and because it is
+   * RECONSTRUCTIBLE: `attachQueue` rebuilds it from the restored box with
+   * `beginTranscriptFold`, which is the whole reason the resume point is a fold
+   * and not the `dirty` keystroke flag it replaced. That flag died with the tab
+   * and came back `false` across the very kill it was protecting the box from.
+   */
+  const foldRef = useRef<TranscriptFold>(EMPTY_TRANSCRIPT_FOLD);
   // The object URL behind the player, mirrored in a ref so it can be revoked
   // from an unmount cleanup without the state value going stale in the closure.
   const previewRef = useRef<{ sessionId: string; url: string } | null>(null);
@@ -506,17 +523,21 @@ export default function MeetingsPage() {
    * line that happens to match a segment pins the frontier and the rest of the
    * meeting disappears with no gap marker; a hand-corrected sentence comes back
    * with the original beside it; a deleted line returns; a typed note is
-   * relocated to the top. On this host the first is the worst case, because
-   * `dirty` flips on a non-empty `userOwned` and automatic composition then
-   * never runs again.
+   * relocated to the top.
    *
    * Nor can the stripping be detected on the way back in. A `retained` box and a
    * legitimately empty one are the same string standing in the same relation to
    * the same session — the property that separates them is whether the box ever
    * held those segments, which is exactly what the strip destroyed.
    *
+   * That property is also what the fold's resume point is rebuilt from, which is
+   * the positive reason to persist the whole box rather than merely the absence
+   * of a reason not to: a box holding this capture's segments verbatim is one
+   * `reconcileCaptureDraft` can say WHICH and WHERE about, and a stripped one
+   * has had exactly that evidence removed.
+   *
    * So the box is the record, and the reconcile happens ONCE, on the way out, in
-   * `attachQueue` — where its result is an in-memory recompose base and never
+   * `attachQueue` — where its result becomes the fold's resume point and never
    * something written down.
    */
   useEffect(() => {
@@ -570,10 +591,12 @@ export default function MeetingsPage() {
       // one shared answer, because the queue can legitimately reply
       // `nextWakeMs: 0` — what it says when a failed persist blocked a segment —
       // and honouring a zero literally spins this timer against a store that is
-      // already refusing it. This page and the desktop kept that floor as a
-      // private constant each, agreeing on 500 by coincidence rather than by
-      // construction; two copies that agree are one edit away from two that do
-      // not, and nothing would have caught it.
+      // already refusing it. The floor used to be an inline `Math.max(500, …)`
+      // here and a private `MIN_WAKE_MS = 250` in the desktop's supervisor: the
+      // two hosts probed a struggling sidecar at DIFFERENT rates over the same
+      // schedule, which is the argument for the shared export. Adopting 500
+      // halves the desktop's rate — two attempts a second rather than the four
+      // it was making.
       const delay = drainWakeDelayMs(result.nextWakeMs);
       if (delay !== null) {
         wakeRef.current = window.setTimeout(() => {
@@ -597,13 +620,16 @@ export default function MeetingsPage() {
    * dropdown has since been reset is the recovered meeting coming back as a
    * lesser one.
    *
-   * `beginTranscriptSync(options.base)` used to be the whole of the second line,
-   * and it is what doubled a recovered meeting: `base` is the restored draft,
-   * which ALREADY holds the transcript, and `composeCaptureTranscript` appends
-   * the whole transcript to it. `reconcileCaptureDraft` is the shared answer to
-   * "which segments does this text already account for" — so composition resumes
-   * over the person's own words (`retained`) rather than over a copy of the
-   * meeting.
+   * `EMPTY_TRANSCRIPT_FOLD` on the second line is the doubling defect: `base` is
+   * the restored draft, which ALREADY holds this capture's settled segments, so
+   * a fold starting at zero appends every one of them a second time and the
+   * doubled text is what gets POSTed and summarized. `reconcileCaptureDraft` is
+   * the shared answer to "which segments does this text already account for",
+   * and `beginTranscriptFold` is what carries that answer into the fold — both
+   * how far it got (`next`) and the exact string the box holds for each segment
+   * (`matched`), so a later gap-heal still finds its own marker and still cannot
+   * touch anything it did not write. The desktop calls the same two functions in
+   * the same order for the same defect — D1b.
    */
   const attachQueue = useCallback((
     store: MeetingCaptureStore,
@@ -625,18 +651,11 @@ export default function MeetingsPage() {
     });
     queueRef.current = queue;
     const reconciled = reconcileCaptureDraft(options.base, session);
-    syncRef.current = {
-      base: reconciled.retained,
-      written: reconciled.text,
-      included: reconciled.accounted,
-      // Not defensive coding: `nextTranscriptSync` RECOMPOSES `base +
-      // transcriptText(session)` on every drain, so a segment the person edited
-      // would be restored to its pre-edit wording by the next one. `userOwned`
-      // is exactly that set, so a non-empty one switches this capture to the
-      // append-only affordance D4 asks for — which is already built. Empty, and
-      // automatic composition is safe and stays on.
-      dirty: reconciled.userOwned.length > 0,
-    };
+    foldRef.current = beginTranscriptFold(reconciled);
+    // Reconciliation heals a stated gap the session has since settled in place,
+    // on the way in, so the restored box stops claiming a range could not be
+    // transcribed the moment it can be. It never appends: appending is the
+    // fold's job, and it resumes at `reconciled.next`.
     if (reconciled.text !== options.base) setDraftTranscript(reconciled.text);
     setCaptureSession(session);
     setCapturePhase(null);
@@ -1143,35 +1162,35 @@ export default function MeetingsPage() {
     }
   }, [runDrain]);
 
-  // D4 — the compose box follows the live transcript until the moment a person
-  // types in it, and never afterwards. `nextTranscriptSync` owns that rule; this
-  // only applies its answer.
+  /**
+   * D4 — the ONE place a segment writes into the compose box.
+   *
+   * The rule is the shared `foldTranscript` and nothing here restates it: text
+   * is APPENDED from where the fold left off, a gap it wrote itself is corrected
+   * where it sits, and no line the box already holds is ever moved or removed.
+   * That is why there is no longer a `dirty` flag, no "append what has
+   * transcribed since" button, and no branch between an edited box and an
+   * untouched one — an append-only rule cannot overwrite an edit, so there is
+   * nothing for a flag to protect and nothing being withheld for a button to
+   * offer.
+   *
+   * It runs on every keystroke as well as every drain, which is deliberate and
+   * cheap: with nothing new settled the fold reports `changed: false` and this
+   * does nothing at all.
+   */
   useEffect(() => {
     if (!captureSession) return;
-    const next = nextTranscriptSync(syncRef.current, captureSession, draftTranscript);
-    syncRef.current = next.state;
-    if (next.text !== undefined) setDraftTranscript(next.text);
+    const folded = foldTranscript(draftTranscript, captureSession, foldRef.current);
+    if (!folded.changed) return;
+    foldRef.current = folded.fold;
+    setDraftTranscript(folded.text);
   }, [captureSession, draftTranscript]);
-
-  // Whether the transcript has moved on from what the user's edited box holds.
-  // Recomputed every render rather than memoized: it reads a ref, so a
-  // dependency array could only ever be a lie about what it depends on, and the
-  // work is a pass over a list that is already in memory.
-  const captureRevisionPending = captureSession !== null
-    && transcriptRevisionPending(syncRef.current, captureSession, draftTranscript);
 
   // ADR-028/D5 — how many segments would go in as stated gaps if the meeting
   // were created right now. Said before the click rather than discovered in the
   // saved transcript, because after the click the audio they would have come
   // from is deleted.
   const unresolvedSegments = captureSession ? unsettledSegments(captureSession).length : 0;
-
-  const appendCaptureText = useCallback(() => {
-    if (!captureSession) return;
-    const next = appendTranscriptSync(syncRef.current, captureSession, draftTranscript);
-    syncRef.current = next.state;
-    setDraftTranscript(next.text);
-  }, [captureSession, draftTranscript]);
 
   // Nothing durable depends on either of these running — the audio and the
   // session are already written. One stops a timer firing into an unmounted
@@ -1473,10 +1492,16 @@ export default function MeetingsPage() {
       // posted the identifier, so deleting the single assignment restored the
       // unmarked hole while the call, its ordering and the posted identifier all
       // still read correctly.
+      //
+      // It is the same append rule the drain uses, with `settleAll` — so an edit
+      // is still not overwritten and nothing is reordered on the way to the
+      // POST. A pasted transcript with no capture behind it takes this same call
+      // rather than a branch beside it: `settleTranscriptForSubmit` takes a null
+      // session and returns the box untouched.
       const queue = queueRef.current;
-      const submitted = submitTranscript(syncRef.current, queue?.session ?? null, draftTranscript);
-      syncRef.current = submitted.state;
-      if (submitted.text !== draftTranscript) setDraftTranscript(submitted.text);
+      const submitted = settleTranscriptForSubmit(draftTranscript, queue?.session ?? null, foldRef.current);
+      foldRef.current = submitted.fold;
+      if (submitted.changed) setDraftTranscript(submitted.text);
       // Open question 5 — the recording's org was frozen at Record, and this is
       // the one call that could still move it. ADR-019's switcher can change the
       // active org mid-meeting; sending the CURRENT one would land an hour of
@@ -1808,14 +1833,11 @@ export default function MeetingsPage() {
             {captureSession ? (
               <LiveTranscript session={captureSession} phase={capturePhase} retrying={retryingSegment} onRetry={(index) => void retrySegment(index)} />
             ) : null}
-            {captureRevisionPending ? (
-              <div className={styles.linkzone}>
-                <div className={styles.teamPickH}>
-                  The transcript has moved on since you edited the box above. Your own words are kept: new text is added at the end, and a gap that has since been filled in is replaced where it stands.
-                </div>
-                <button type="button" className={styles.newBtn} onClick={appendCaptureText}>Bring the transcript up to date</button>
-              </div>
-            ) : null}
+            {/* There is deliberately no catch-up affordance here any more. It
+                existed because automatic composition switched OFF for good the
+                moment a person typed, so new text had to be withheld and then
+                offered back. Under the append-only fold nothing is ever
+                withheld from the box, so there is nothing left to offer. */}
             {/* Two slots, and the order is the point. `captureNotice` is a
                 READING — the store's kind and how much room is left — rewritten
                 by every chunk and blank most of the time. `captureWarning` is an

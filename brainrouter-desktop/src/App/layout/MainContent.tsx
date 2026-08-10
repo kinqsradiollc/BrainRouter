@@ -223,6 +223,23 @@ export function MainContent(p: MainContentProps): React.ReactElement {
   }, [ensurePanel, setMode]);
   // Meetings mode (ADR-018) — data flows through the injected ops bridge.
   const meetingsOps = React.useMemo(() => createMeetingsOps(), []);
+  /**
+   * ADR-035 A1/F4 — the fifth click, and the only one above the meetings view.
+   *
+   * A1 stopped four ordinary clicks from ending a live meeting by keeping the
+   * compose form mounted INSIDE that view. The activity-bar mode rail still did
+   * it, because this shell renders `<MeetingsView/>` only while its mode is
+   * selected: switching to Code stopped the recorder, released the microphone
+   * and stopped the session, with nothing anywhere on screen saying so. The
+   * audio already written was safe; the rest of the meeting was not.
+   *
+   * Same decision as A1's, one level up: the view stays mounted while a capture
+   * is open and is merely hidden, and an indicator says where the recording went
+   * and leads back to it. Closing the capture on a mode switch was the other
+   * available answer; ending it in silence was not.
+   */
+  const [meetingCapture, setMeetingCapture] = React.useState(false);
+  const meetingsVisible = mode === 'meetings';
 
   /**
    * ADR-029 A1 — following a reference goes to the mode that owns the target.
@@ -245,7 +262,25 @@ export function MainContent(p: MainContentProps): React.ReactElement {
 
   return (
     <div className="main">
-      {mode === 'notes' ? (
+      {/* F4 — mounted while the meetings mode is selected OR while a capture is
+          open, and only HIDDEN in between. The `workrow` ref goes to whichever
+          workrow is the visible one; a hidden node has no rect, so the drag
+          regions built in DOM order below are unaffected. */}
+      {meetingsVisible || meetingCapture ? (
+        <div className="workrow" ref={meetingsVisible ? workrowRef : null} {...(meetingsVisible ? {} : { style: { display: 'none' } })}>
+          <MeetingsView ops={meetingsOps} onCaptureChange={setMeetingCapture} />
+        </div>
+      ) : null}
+      {/* ADR-028 — and something says so from wherever the person went, because
+          the recording did not stop when the screen did. */}
+      {meetingCapture && !meetingsVisible ? (
+        <div className="meeting-appbar" role="status">
+          <span className="mv-recbar-dot" aria-hidden="true" />
+          <span>A meeting is being recorded. Its audio is being saved to this device.</span>
+          <button type="button" onClick={() => setMode('meetings')}>Back to the recording</button>
+        </div>
+      ) : null}
+      {meetingsVisible ? null : mode === 'notes' ? (
         // ADR-029 — Notes is user-scoped and cross-project (D1), so like the
         // planner it renders WITHOUT the workspace-bound side panel rail.
         <div className="workrow" ref={workrowRef}>
@@ -261,10 +296,6 @@ export function MainContent(p: MainContentProps): React.ReactElement {
         // rail: a personal planner has no per-workspace tabs to carry.
         <div className="workrow" ref={workrowRef}>
           <PlannerModeContainer onOpenNotes={() => setMode('notes')} onOpenRef={openWorkspaceRef} />
-        </div>
-      ) : mode === 'meetings' ? (
-        <div className="workrow" ref={workrowRef}>
-          <MeetingsView ops={meetingsOps} />
         </div>
       ) : mode === 'track' ? (
         <div className="workrow track-workrow" ref={workrowRef}>

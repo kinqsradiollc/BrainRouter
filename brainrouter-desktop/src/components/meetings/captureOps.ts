@@ -90,6 +90,29 @@ export interface MeetingComposeDraft {
   language?: string;
 }
 
+/**
+ * F1 — what a recovery offer must leave out, and why the store cannot work it
+ * out for itself.
+ *
+ * D2's predicate is "audio present, no terminal state", and `isResumableSession`
+ * deliberately does not narrow on `recording`: a session a clean quit left
+ * behind still holds audio that never transcribed, and D7 says it should drain
+ * when the endpoint returns. That is right, and it means the RECORDING BEING
+ * MADE RIGHT NOW satisfies the predicate too — so the library offered to
+ * "transcribe it, or delete it" while the microphone was still open.
+ *
+ * Only the window that owns the recorder knows which session that is, so it is
+ * the window that says. The filter is applied here rather than across the
+ * bridge for the same reason: main can see every capture on the device and none
+ * of the windows holding one. (The dashboard passes the same `exclude` into
+ * `resumableCaptures`, which is where ITS store lives — D1b, one rule, each
+ * host's own boundary.)
+ */
+export interface ResumableCaptureOptions {
+  /** Ids to leave out whatever the store says — in practice the capture in hand. */
+  readonly exclude?: readonly string[];
+}
+
 export interface MeetingCaptureOps {
   /** False when this build's preload has no capture channels — see the module header. */
   readonly available: boolean;
@@ -105,7 +128,7 @@ export interface MeetingCaptureOps {
   onProgress(listener: (progress: MeetingCaptureProgress) => void): () => void;
   finalize(id: string): Promise<void>;
   discard(id: string): Promise<void>;
-  resumable(scope: MeetingCaptureScope): Promise<MeetingRecoverySummary[]>;
+  resumable(scope: MeetingCaptureScope, options?: ResumableCaptureOptions): Promise<MeetingRecoverySummary[]>;
   /**
    * D6 — whether this preload can actually take a draft.
    *
@@ -273,9 +296,11 @@ export function createMeetingCaptureOps(): MeetingCaptureOps {
     }) ?? (() => undefined),
     finalize: async (id) => { await api.captureFinalize?.(id); },
     discard: async (id) => { await api.captureDiscard?.(id); },
-    resumable: async (scope) => {
+    resumable: async (scope, options) => {
       const value = await api.captureResumable?.({ orgId: scope.orgId, workspaceId: scope.workspaceId ?? null });
-      return Array.isArray(value) ? value as MeetingRecoverySummary[] : [];
+      const rows = Array.isArray(value) ? value as MeetingRecoverySummary[] : [];
+      const excluded = new Set(options?.exclude ?? []);
+      return excluded.size ? rows.filter((row) => !excluded.has(row.sessionId)) : rows;
     },
     // D6 — absent on a preload that predates the draft channels. Unlike the
     // capture channels this degrades quietly rather than refusing: a draft that

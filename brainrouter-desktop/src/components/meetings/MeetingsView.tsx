@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactElement } from "react";
 import {
   DEFAULT_MEETING_SEGMENT_MS,
+  EMPTY_TRANSCRIPT_FOLD,
+  beginTranscriptFold,
   capturePhaseNote,
+  foldTranscript,
   formatCaptureTimestamp,
   reconcileCaptureDraft,
   transcriptSoFar,
@@ -10,6 +13,7 @@ import {
   type MeetingCaptureSession,
   type MeetingDrainPhase,
   type MeetingRecoverySummary,
+  type TranscriptFold,
 } from "@kinqs/brainrouter-core/meetings";
 import "./meetings.css";
 import { MeetingTracksView } from "./MeetingTracksView.js";
@@ -17,8 +21,8 @@ import { SharePopover } from "./SharePopover.js";
 import { TeamsView } from "./TeamsView.js";
 import { createMeetingCaptureOps, type MeetingCaptureProgress, type MeetingComposeDraft } from "./captureOps.js";
 import { MeetingCaptureRecorder } from "./captureRecorder.js";
+import { NO_CAPTURE_HOLD, captureInFlight, createCaptureHold, prepareSubmission, type MeetingCaptureHold } from "./composeSubmit.js";
 import { migrateLegacyDraft } from "./legacyDraft.js";
-import { EMPTY_TRANSCRIPT_FOLD, foldTranscript, type TranscriptFold } from "./liveTranscript.js";
 import { createTeamsOps } from "./teamsOps.js";
 import { useActiveOrg } from "../../lib/orgContext.js";
 import { bridgeQuery } from "../../lib/bridgeQuery.js";
@@ -72,7 +76,7 @@ function initials(handle: string): string {
   return parts.slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "?";
 }
 
-export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
+export function MeetingsView({ ops, onCaptureChange }: { ops: MeetingsOps; onCaptureChange?: (active: boolean) => void }): ReactElement {
   const teamsOps = useMemo(() => createTeamsOps(), []);
   const [mode, setMode] = useState<"meetings" | "tracked" | "teams">("meetings");
   const [teamRevision, setTeamRevision] = useState(0);
@@ -118,16 +122,28 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
    */
   const legacyDraft = useMemo(() => migrateLegacyDraft(capture), [capture]);
   /**
-   * A1 — a recording is a fact about the APP, not about whether the compose form
-   * happens to be on screen.
+   * A1/F1 — the capture the compose form is holding, as a fact about the APP
+   * rather than about whether that form happens to be on screen.
    *
    * Held here because four ordinary clicks — Cancel, opening a meeting from the
    * library, the Track/Teams tabs, the workspace switcher — used to unmount the
    * composer and take the live recorder with it, ending the meeting with nothing
-   * on screen to say so. The composer now stays mounted for as long as this is
-   * true, and this is also what puts the indicator below in front of the user.
+   * on screen to say so. The composer now stays mounted for as long as a capture
+   * is open, and this is also what puts the indicator below in front of the user.
+   *
+   * It carries the capture's ID and not merely a flag because of F1: the library
+   * asked the store for unfinished recordings and got back the one being made
+   * right now — `isResumableSession` deliberately does not narrow on `recording`
+   * (a clean quit leaves audio that never transcribed) — so the CTA offered to
+   * "transcribe it, or delete it" at the same moment the bar above said a meeting
+   * was being recorded, and its Delete had neither a confirmation nor a guard.
    */
-  const [recording, setRecording] = useState(false);
+  const [hold, setHold] = useState<MeetingCaptureHold>(NO_CAPTURE_HOLD);
+  const recording = hold.recording;
+  // A1/F3 — the composer stays mounted for as long as the capture is still being
+  // written to, which is NOT only while the microphone is open: Stop returns
+  // before the final chunk has reached the disk.
+  const capturing = captureInFlight(hold);
   const [interrupted, setInterrupted] = useState(0);
   // ADR-028 — a recovery query that FAILED is not "nothing to recover". Both
   // read the same on screen and only one of them means the audio is gone, so a
@@ -142,16 +158,31 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
   // Joined into a string so the effect below re-runs when the SET changes rather
   // than on every render, which an array identity would cause.
   const retainedKey = retained.map((row) => row.sessionId).join(" ");
+  const heldCaptureId = hold.sessionId;
   useEffect(() => {
     let active = true;
     const released = new Set(retainedKey ? retainedKey.split(" ") : []);
-    void capture.resumable({ orgId: scopedOrgId ?? null })
+    // F1 — the capture in hand is left out. It is unfinished by definition, and
+    // the store cannot judge it: only this window knows which session its own
+    // microphone is open on.
+    void capture.resumable({ orgId: scopedOrgId ?? null }, heldCaptureId ? { exclude: [heldCaptureId] } : {})
       .then((rows) => { if (active) { setInterrupted(rows.filter((row) => !released.has(row.sessionId)).length); setRecoveryError(""); } })
       .catch((caught) => { if (active) { setInterrupted(0); setRecoveryError(errorText(caught, "Could not check this device for unfinished recordings.")); } });
     // Re-read when compose closes: a capture recovered or discarded in there is
     // one this banner must stop advertising.
     return () => { active = false; };
-  }, [capture, composing, recoveryRevision, retainedKey, scopedOrgId]);
+  }, [capture, composing, heldCaptureId, recoveryRevision, retainedKey, scopedOrgId]);
+  /**
+   * F4 — the fifth click: the activity-bar mode rail.
+   *
+   * A1 kept the composer mounted through the four clicks INSIDE this view, and
+   * the rail still ended the meeting silently, because the shell renders this
+   * whole view only while its mode is selected. So the shell is told, and it
+   * keeps this view mounted and says where the recording went — the same
+   * decision as A1's, one level up. Reported from an effect rather than from
+   * each call site so the answer is the state itself and cannot drift from it.
+   */
+  useEffect(() => { onCaptureChange?.(capturing); }, [capturing, onCaptureChange]);
 
   const retainAudio = useCallback((notice: { sessionId: string; message: string }) => {
     setRetained((rows) => [...rows.filter((row) => row.sessionId !== notice.sessionId), notice]);
@@ -394,20 +425,20 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
           switch on purpose: the Track and Teams tabs replace everything below
           this line, and an indicator inside the part that gets replaced is one
           the user cannot see from three of the four places they can go. */}
-      {recording && !composeVisible ? (
+      {capturing && !composeVisible ? (
         <div className="mv-recbar" role="status">
           <span className="mv-recbar-dot" aria-hidden="true" />
-          <span>A meeting is being recorded. Its audio is being saved to this device.</span>
+          <span>{recording ? "A meeting is being recorded. Its audio is being saved to this device." : "The last part of a recording is still being saved to this device."}</span>
           <button type="button" onClick={() => { setMode("meetings"); setSelectedId(null); setComposing(true); }}>Back to the recording</button>
         </div>
       ) : null}
       {mode === "tracked" ? <MeetingTracksView ops={ops} orgId={scopedOrgId} /> : null}
       {mode === "teams" ? <TeamsView ops={teamsOps} onChanged={() => setTeamRevision((value) => value + 1)} /> : null}
-      {mode === "meetings" || recording ? (
+      {mode === "meetings" || capturing ? (
         // Hidden rather than unmounted while another tab is open, and only while
-        // a recording is running: the live recorder, the folded transcript and
-        // the phase all live in the compose form below, and React discards every
-        // one of them on unmount.
+        // a capture is open: the live recorder, the folded transcript and the
+        // phase all live in the compose form below, and React discards every one
+        // of them on unmount.
         <div className="mv-root" {...(mode === "meetings" ? {} : { style: { display: "none" } })}>
           <aside className={`mv-col${selectedId || composing ? " mv-col-has-selection" : ""}`}>
             <div className="mv-col-head"><div><span className="mv-eyebrow">Library</span><h2>Meetings <span>{items.length}</span></h2></div><button type="button" className="mv-newbtn" onClick={() => { setComposing(true); setSelectedId(null); }}>+ New</button></div>
@@ -428,15 +459,15 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
             {nextCursor ? <button type="button" className="mv-load-more" disabled={busy === "more-meetings"} onClick={() => void loadMoreMeetings()}>{busy === "more-meetings" ? "Loading…" : "Load more meetings"}</button> : null}
           </aside>
 
-          {/* A1 — mounted while composing OR while a recording is running, and
-              only HIDDEN in between. `display: contents` so a shown composer
+          {/* A1 — mounted while composing OR while a capture is open, and only
+              HIDDEN in between. `display: contents` so a shown composer
               lays out exactly as it did when it was a direct child; the wrapper
               exists solely to have something to hide. Unmounting it is what
               stopped the microphone, dropped the live transcript, and left the
               session claiming to be recording. */}
-          {composing || recording ? (
+          {composing || capturing ? (
             <div style={{ display: composeVisible ? "contents" : "none" }}>
-              <NewMeeting ops={ops} orgId={scopedOrgId} legacyDraft={legacyDraft} onAudioRetained={retainAudio} onRecordingChange={setRecording} onCancel={() => { setComposing(false); void refreshList(); }} onCreated={async (id) => { await refreshList(); setComposing(false); setSelectedId(id); }} />
+              <NewMeeting ops={ops} orgId={scopedOrgId} legacyDraft={legacyDraft} onAudioRetained={retainAudio} onCaptureHold={setHold} onCancel={() => { setComposing(false); void refreshList(); }} onCreated={async (id) => { await refreshList(); setComposing(false); setSelectedId(id); }} />
             </div>
           ) : null}
           {composing ? null : detail ? (
@@ -556,17 +587,28 @@ function LiveTranscript({ session, phase, retrying, onRetry }: { session: Meetin
  *
  * `legacyDraft` is the view's one-time migration out of `localStorage`, awaited
  * rather than repeated here so the protected file is read after the hand-over,
- * and `onRecordingChange` is what keeps this component mounted through the four
- * clicks that used to unmount it mid-meeting (A1). Everything the recording
- * consists of — the `MediaRecorder`, the fold, the phase, the live rows — is
- * state inside this function, so its lifetime IS the meeting's.
+ * and `onCaptureHold` is what keeps this component mounted through the four
+ * clicks that used to unmount it mid-meeting (A1) and what keeps the library's
+ * recovery offer from advertising the recording in hand (F1). Everything the
+ * recording consists of — the `MediaRecorder`, the fold, the phase, the live
+ * rows — is state inside this function, so its lifetime IS the meeting's.
  */
-function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onRecordingChange, onCreated, onCancel }: { ops: MeetingsOps; orgId?: string; legacyDraft: Promise<MeetingComposeDraft | null>; onAudioRetained(notice: { sessionId: string; message: string }): void; onRecordingChange(recording: boolean): void; onCreated(id: string): Promise<void>; onCancel(): void }): ReactElement {
+function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onCaptureHold, onCreated, onCancel }: { ops: MeetingsOps; orgId?: string; legacyDraft: Promise<MeetingComposeDraft | null>; onAudioRetained(notice: { sessionId: string; message: string }): void; onCaptureHold(hold: MeetingCaptureHold): void; onCreated(id: string): Promise<void>; onCancel(): void }): ReactElement {
   const [title, setTitle] = useState("");
   const [transcript, setTranscript] = useState("");
   const [template, setTemplate] = useState<CreateMeetingInput["template"]>("general");
   const [language, setLanguage] = useState("auto");
-  const [recording, setRecording] = useState(false);
+  /**
+   * F1/F3 — the capture this form holds, and the three windows in which it is
+   * still being written to. One object rather than a flag per window, because
+   * every reader needs a different pair of them and mirrors that can disagree
+   * are how the last two of these were reached.
+   *
+   * This is the RENDERED copy. `holdStore.current` below is the same value one
+   * commit earlier, and the store is the only thing that writes either.
+   */
+  const [hold, setHold] = useState<MeetingCaptureHold>(NO_CAPTURE_HOLD);
+  const { recording } = hold;
   const [paused, setPaused] = useState(false);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -618,9 +660,17 @@ function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onRecordingChang
   const capture = useMemo(() => createMeetingCaptureOps(), []);
   const captureScope = useMemo<MeetingCaptureScope>(() => ({ orgId: orgId ?? null }), [orgId]);
   const recorderRef = useRef<MeetingCaptureRecorder | null>(null);
-  // The capture whose audio produced the transcript in the box. Held so the
-  // audio can be released once the meeting is created (D6) — never to hold audio.
-  const captureIdRef = useRef<string | null>(null);
+  /**
+   * The ONE writer of the hold, and the copy that is true right now.
+   *
+   * `submit`'s guard and the progress subscription both read it synchronously,
+   * and both are wrong reading the rendered copy instead: the guard is the last
+   * thing between a running recorder and the delete D6 performs, and the
+   * subscription is a closure that would otherwise pin the first render's value
+   * for the lifetime of the channel. `setHold` is the publish side, so a patch
+   * moves both copies or neither — see `createCaptureHold`.
+   */
+  const holdStore = useMemo(() => createCaptureHold(setHold), []);
   // D4 — the box's current value, mirrored so a segment arriving between renders
   // folds into what the user has typed rather than into a stale snapshot. It is
   // written by every path that changes the box, including the user's keystrokes.
@@ -639,7 +689,7 @@ function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onRecordingChang
   // minted while there is still something to revoke it.
   const mountedRef = useRef(true);
 
-  /** The one place the box is written to from a segment — see `liveTranscript.ts`. */
+  /** The one place the box is written to from a segment — the shared `foldTranscript`. */
   const applySession = useCallback((session: MeetingCaptureSession) => {
     liveRef.current = session;
     setLive(session);
@@ -703,7 +753,7 @@ function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onRecordingChang
   // polling) is what lets a segment appear the moment it is durable, and the
   // filter is by capture id because main broadcasts to every window.
   useEffect(() => capture.onProgress((progress) => {
-    if (progress.sessionId !== captureIdRef.current) return;
+    if (progress.sessionId !== holdStore.current.sessionId) return;
     applyProgress(progress);
   }), [applyProgress, capture]);
   // The object URL is a handle on a whole recording held in this window's heap,
@@ -744,10 +794,16 @@ function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onRecordingChang
     }, 250);
     return () => globalThis.clearTimeout(timer);
   }, [capture, draftLoaded, language, template, title, transcript]);
-  // A1 — the parent keeps this form mounted for as long as this is true, and
-  // shows the way back to it. Reported from an effect rather than from each
-  // call site so the answer is the state itself and cannot drift from it.
-  useEffect(() => { onRecordingChange(recording); }, [onRecordingChange, recording]);
+  // A1/F1 — the parent keeps this form mounted for as long as a capture is
+  // open, shows the way back to it, and leaves the capture in hand out of the
+  // recovery offer. Reported from an effect rather than from each call site so
+  // the answer is the state itself and cannot drift from it.
+  useEffect(() => { onCaptureHold(hold); }, [hold, onCaptureHold]);
+  // …and released when this form really does go, so the library stops excluding
+  // a capture nobody is holding any more. Its own effect, so it runs ONLY on
+  // unmount: clearing and re-reporting on every change would blink an offer for
+  // the live recording back on between the two.
+  useEffect(() => () => onCaptureHold(NO_CAPTURE_HOLD), [onCaptureHold]);
   /**
    * A1 — the unmount, which now only happens when the meetings view itself goes
    * away, and CLOSES the recording rather than abandoning it.
@@ -767,11 +823,14 @@ function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onRecordingChang
   }, []);
   useEffect(() => {
     let active = true;
-    void capture.resumable(captureScope)
+    // F1 — never the capture in hand. It is unfinished by definition, offering
+    // it back beside its own "Stop recording" button is nonsense, and its
+    // "Delete audio" deletes the directory the recorder is appending to.
+    void capture.resumable(captureScope, hold.sessionId ? { exclude: [hold.sessionId] } : {})
       .then((rows) => { if (active) { setRecoveries(rows); setRecoveryError(""); } })
       .catch((caught) => { if (active) { setRecoveries([]); setRecoveryError(errorText(caught, "Could not check this device for unfinished recordings.")); } });
     return () => { active = false; };
-  }, [capture, captureScope, recoveryRevision]);
+  }, [capture, captureScope, hold.sessionId, recoveryRevision]);
 
   /**
    * D8 — the IMPORT path, unchanged: one file, one request, and the size limit
@@ -802,7 +861,7 @@ function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onRecordingChang
   const adoptCapture = useCallback(async (sessionId: string) => {
     setError("");
     try {
-      captureIdRef.current = sessionId;
+      holdStore.update({ sessionId });
       // The previous capture's phase says nothing about this one, and a stale
       // "the service is not answering" over a queue that has not run yet would
       // be the same lie in the other direction.
@@ -815,16 +874,15 @@ function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onRecordingChang
        * a box this window had already folded into) holds this capture's settled
        * segments verbatim, so starting the fold at zero appended every one of
        * them a second time — and the doubled text is what was POSTed and
-       * summarized. The shared rule decides what is already there; `matched`
-       * drops straight into the fold because it is keyed by segment index and
-       * holds the exact strings the box currently has, so a later gap-heal still
-       * finds its own marker and still cannot touch anything it did not write.
+       * summarized. The shared rule decides what is already there, and
+       * `beginTranscriptFold` is how that answer becomes a resume point — a
+       * host that assembled one itself is a host that can assemble it wrongly.
        *
        * It must run BEFORE `applySession`, which is what folds. The dashboard
        * calls the same rule for the same defect — D1b.
        */
       const reconciled = reconcileCaptureDraft(transcriptRef.current, session);
-      foldRef.current = { inserted: reconciled.matched, next: reconciled.next };
+      foldRef.current = beginTranscriptFold(reconciled);
       if (reconciled.text !== transcriptRef.current) editTranscript(reconciled.text);
       applySession(session);
       // E — the recovered meeting's own name, which the card two lines above is
@@ -836,7 +894,7 @@ function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onRecordingChang
       if (session.title) setTitle((current) => current || session.title);
       setRecoveries((rows) => rows.filter((row) => row.sessionId !== sessionId));
     } catch (caught) { setError(errorText(caught, "Could not start transcribing that recording.")); }
-  }, [applySession, capture, editTranscript]);
+  }, [applySession, capture, editTranscript, holdStore]);
 
   /**
    * §6 — hearing the audio that survived.
@@ -877,7 +935,7 @@ function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onRecordingChang
 
   /** D5 — the retry affordance on a stated gap, from the audio still on disk. */
   const retrySegment = useCallback(async (index: number) => {
-    const sessionId = captureIdRef.current;
+    const sessionId = holdStore.current.sessionId;
     if (!sessionId) return;
     setRetrying(index);
     setError("");
@@ -896,8 +954,16 @@ function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onRecordingChang
     setCaptureIssue("");
     setRecordIssue("");
     const recorder = new MeetingCaptureRecorder({ capture, onChunkError: setCaptureIssue });
+    // F3 — raised BEFORE the first await and lowered only once the recorder is
+    // running or has failed to start. `recording` cannot cover this stretch: it
+    // is set at the very end, and by then `begin` has already created the
+    // session and its directory. A Create landing in that window finalizes and
+    // DELETES a capture the recorder is about to start appending to — and
+    // `getUserMedia` can sit on a permission prompt for as long as the person
+    // takes to answer it.
+    holdStore.update({ arming: true });
     try {
-      captureIdRef.current = await recorder.start({
+      const sessionId = await recorder.start({
         scope: captureScope, title, template,
         ...(language === "auto" ? {} : { language }),
       });
@@ -911,9 +977,13 @@ function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onRecordingChang
       setLive(null);
       setPhase(null);
       recorderRef.current = recorder;
-      setRecording(true); setPaused(false);
-    } catch (caught) { setError(errorText(caught, "Could not start recording.")); }
-  }, [capture, captureScope, language, template, title]);
+      holdStore.update({ sessionId, recording: true, arming: false, closing: false });
+      setPaused(false);
+    } catch (caught) {
+      holdStore.update({ arming: false });
+      setError(errorText(caught, "Could not start recording."));
+    }
+  }, [capture, captureScope, language, template, title, holdStore]);
 
   /**
    * D3/D7 — Stop ends the RECORDING, not the transcription.
@@ -921,17 +991,29 @@ function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onRecordingChang
    * There is nothing to upload here: every segment has been going to the host
    * queue as it landed, and the tail keeps draining in main whether or not this
    * window stays open.
+   *
+   * F3 — but Stop is not instantaneous, and `recording` goes false on its first
+   * line. `recorder.stop()` waits for `onstop`, then for the final chunk's
+   * `arrayBuffer`, the IPC and the disk write, and only then marks the capture
+   * stopped. Across all of that the Create button sits in the same row, and it
+   * finalizes the capture — so `closing` goes UP in the same commit `recording`
+   * goes down, and comes down in a `finally` so a settle that THREW cannot wedge
+   * Create for good.
    */
   const stopRecording = useCallback(async () => {
     const recorder = recorderRef.current;
     recorderRef.current = null;
-    setRecording(false); setPaused(false);
-    const sessionId = await recorder?.stop();
-    if (!sessionId) return;
-    captureIdRef.current = sessionId;
-    try { applySession(await capture.adopt(sessionId)); }
-    catch (caught) { setError(errorText(caught, "Could not read the state of that recording.")); }
-  }, [applySession, capture]);
+    holdStore.update({ recording: false, closing: Boolean(recorder) });
+    setPaused(false);
+    if (!recorder) return;
+    try {
+      const sessionId = await recorder.stop();
+      if (!sessionId) return;
+      holdStore.update({ sessionId });
+      try { applySession(await capture.adopt(sessionId)); }
+      catch (caught) { setError(errorText(caught, "Could not read the state of that recording.")); }
+    } finally { holdStore.update({ closing: false }); }
+  }, [applySession, capture, holdStore]);
 
   const togglePause = useCallback(() => {
     const recorder = recorderRef.current;
@@ -940,12 +1022,27 @@ function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onRecordingChang
     setPaused(recorder.paused);
   }, []);
 
-  /** D6 — an explicit discard is a real deletion of the audio, not a hidden row. */
+  /**
+   * D6 — an explicit discard is a real deletion of the audio, not a hidden row.
+   *
+   * F1 — and it is CONFIRMED, and refused outright for a capture that is still
+   * being written to. The store's `discard` has no guard of its own: it deletes
+   * the directory whatever the status says, so a discard of the live recording
+   * left the microphone open, every later chunk refused with "no longer on this
+   * device", and the composer still offering "Stop recording" for a capture that
+   * no longer existed. The offer no longer lists that capture at all (see
+   * `resumable`'s `exclude`), which is what makes this branch unreachable —
+   * which is precisely why it is here: an unreachable delete is one refactor
+   * away from being reachable again, and this one is not undoable.
+   */
   const discardCapture = useCallback(async (sessionId: string) => {
+    const hold = holdStore.current;
+    if (hold.sessionId === sessionId && captureInFlight(hold)) return;
+    if (!globalThis.confirm?.("Discard this unfinished recording? Its audio is deleted from this device.")) return;
     try { await capture.discard(sessionId); }
     catch (caught) { setError(errorText(caught, "Could not delete that recording.")); return; }
-    if (captureIdRef.current === sessionId) {
-      captureIdRef.current = null;
+    if (holdStore.current.sessionId === sessionId) {
+      holdStore.update({ sessionId: null });
       // The text it produced stays in the box — the user asked us to delete the
       // AUDIO, not the transcript they may already have edited.
       liveRef.current = null;
@@ -956,58 +1053,42 @@ function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onRecordingChang
     // app, which is not what "delete it for good" means.
     setPreview((current) => current?.sessionId === sessionId ? null : current);
     setRecoveries((rows) => rows.filter((row) => row.sessionId !== sessionId));
-  }, [capture]);
+  }, [capture, holdStore]);
 
   const importAudio = useCallback((event: ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; if (file) void transcribeFile(file); event.target.value = ""; }, [transcribeFile]);
 
   const submit = useCallback(async () => {
-    // The `recording` guard is not defensive tidiness. D4 fills the transcript
-    // box live, so a running meeting satisfies every other condition here within
-    // twenty seconds — and this function finalizes the capture, which under D6
-    // deletes the directory the recorder is still appending to. The next chunk
-    // then fails with "no longer on this device", the microphone stays open, and
-    // the surface still offers "Stop recording" for a capture that is gone.
-    // Guarded here as well as on the button because this is the destructive
-    // path; a disabled attribute is a statement about a pixel, not a rule.
-    if (!title.trim() || !transcript.trim() || busy || recording) return;
+    /**
+     * The whole of what this click may do is decided in `composeSubmit.ts`,
+     * from the values that are true RIGHT NOW rather than the ones React last
+     * rendered — the guard is the last thing between a running recorder and the
+     * delete D6 performs, and a disabled attribute is a statement about a pixel.
+     * Nothing here assembles any part of the create input: a settle step whose
+     * result the caller could quietly drop is one no assertion can hold, and
+     * that is exactly how this step went untested while it lost a gap marker
+     * and the segment behind it.
+     */
+    const prepared = prepareSubmission({
+      title, template, transcript: transcriptRef.current, session: liveRef.current,
+      fold: foldRef.current, hold: holdStore.current, busy: Boolean(busy),
+      ...(orgId ? { activeOrgId: orgId } : {}),
+    });
+    if (!prepared.ok) return;
     setBusy("create"); setError("");
+    // D5 — the box now says what is being posted, gaps included, rather than
+    // the user discovering them in the saved transcript.
+    if (prepared.changed) { foldRef.current = prepared.fold; editTranscript(prepared.input.transcript); }
     // D6 — from here the draft is on its way out, so a pending autosave must not
     // put it back. Released again if the create fails: the form still holds the
     // only copy of what the user typed.
     draftRetiredRef.current = true;
     try {
-      // D5 — the meeting is about to be created from this text, so anything the
-      // queue has not resolved will never reach it. It goes in as a stated gap
-      // with its time range rather than as an omission nobody can see, which is
-      // the same thing `finalizeCapture` does to the record a moment later.
-      let body = transcriptRef.current;
-      const session = liveRef.current;
-      if (session) {
-        const settled = foldTranscript(body, session, foldRef.current, { settleAll: true });
-        if (settled.changed) { foldRef.current = settled.fold; body = settled.text; editTranscript(body); }
-      }
-      /**
-       * Open question 5 — "a recording that started under one org must not
-       * silently land in another."
-       *
-       * The active org comes from the app-wide switcher and can move while a
-       * meeting is being recorded; the capture's scope cannot, because the
-       * shared model freezes it at Record and nothing rewrites it. So a meeting
-       * made from a capture is filed where the RECORDING began, not wherever the
-       * switcher has since been pointed. The recovery offer is already scoped
-       * through the same field, which is why it never offered the capture back
-       * under the wrong org — only this half was still reading the switcher.
-       *
-       * With no capture behind it (a pasted or imported transcript) there is no
-       * frozen scope and the active org is the only truth there is.
-       */
-      const filedOrgId = session ? session.scope.orgId ?? undefined : orgId;
-      const result = await ops.createFromTranscript({ title: title.trim(), transcript: body, template }, filedOrgId);
+      const result = await ops.createFromTranscript(prepared.input, prepared.orgId);
       // D6 — the meeting exists on the account, so the captured audio has done
       // its job and is released. Deliberately after the create succeeds: audio
       // that is deleted before the transcript is safe somewhere is audio lost.
-      const captured = captureIdRef.current;
-      captureIdRef.current = null;
+      const captured = holdStore.current.sessionId;
+      holdStore.update({ sessionId: null });
       if (captured) {
         try {
           await capture.finalize(captured);
@@ -1018,7 +1099,7 @@ function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onRecordingChang
           // recording: a state the surface never established. The row stays in
           // the offer because the audio really is still here, and the library
           // owns the message because this form is about to close.
-          onAudioRetained({ sessionId: captured, message: `"${title.trim()}" was created, but its recording is still on this device — ${errorText(caught, "the capture store refused the delete.")}` });
+          onAudioRetained({ sessionId: captured, message: `"${prepared.input.title}" was created, but its recording is still on this device — ${errorText(caught, "the capture store refused the delete.")}` });
         }
       }
       // D6 — the meeting holds these words now, so the draft's copy of them
@@ -1032,11 +1113,15 @@ function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onRecordingChang
       setError(errorText(caught, "Could not create this meeting."));
     }
     finally { setBusy(""); }
-  }, [busy, capture, editTranscript, onAudioRetained, onCreated, ops, orgId, recording, template, title, transcript]);
+  }, [busy, capture, editTranscript, onAudioRetained, onCreated, ops, orgId, template, title, holdStore]);
 
   // ADR-028 — how many segments would become gaps if the meeting were created
   // right now. Said before the click, not discovered in the saved transcript.
   const unresolved = live ? unsettledSegments(live).length : 0;
+  // F3 — the same rule `submit` refuses on, projected onto the pixels. Not the
+  // rule itself: this is React's last render, and Stop lowers `recording` before
+  // the final chunk has landed.
+  const capturing = captureInFlight(hold);
 
-  return <main className="mv-detail"><button type="button" className="mv-mobile-back" onClick={onCancel}>← Meetings</button><div className="mv-compose"><div className="mv-compose-head"><div><span className="mv-eyebrow">Capture</span><h3>New meeting</h3><p>Record, import audio, or paste a transcript. Your draft stays on this device until it is summarized.</p></div>{recovered ? <span className="mv-recovered">Draft recovered</span> : null}</div>{error ? <div className="mv-error" role="alert"><span>{error}</span><button type="button" onClick={() => setError("")} aria-label="Dismiss error">×</button></div> : null}{captureIssue ? <div className="mv-error" role="alert"><span>{captureIssue} This recording may be incomplete.</span><button type="button" onClick={() => setCaptureIssue("")} aria-label="Dismiss recording warning">×</button></div> : null}{recordIssue ? <div className="mv-error" role="alert"><span>{recordIssue}</span><button type="button" onClick={() => setRecordIssue("")} aria-label="Dismiss transcription warning">×</button></div> : null}{recoveryError ? <div className="mv-recovery" role="alert"><strong>Could not check for unfinished recordings</strong><p>{recoveryError} Audio already written to this device is still there.</p><button type="button" className="mv-secondary" onClick={() => setRecoveryRevision((value) => value + 1)}>Check again</button></div> : null}{recoveries.length ? <div className="mv-recovery" role="status"><strong>{recoveries.length === 1 ? "An unfinished recording is still on this device" : `${recoveries.length} unfinished recordings are still on this device`}</strong><p>The audio is here whether the app was killed or the recording was simply never turned into a meeting. Transcribe it, or delete it for good.</p>{recoveries.map((row) => <div className="mv-recovery-item" key={row.sessionId}><div className="mv-recovery-row"><span>{row.title}<small>{new Date(row.startedAt).toLocaleString()} · {minutes(row.durationMs)} · {megabytes(row.byteLength)} · {row.segments} segment{row.segments === 1 ? "" : "s"}</small></span><button type="button" className="mv-secondary" disabled={Boolean(busy) || recording} onClick={() => void adoptCapture(row.sessionId)}>Transcribe it</button><button type="button" className="mv-ghost" disabled={Boolean(busy)} onClick={() => void playCapture(row.sessionId)}>{busy === `play:${row.sessionId}` ? "Loading…" : "▶ Play"}</button><button type="button" className="mv-ghost" onClick={() => void discardCapture(row.sessionId)}>Delete audio</button></div>{preview?.sessionId === row.sessionId ? <><audio className="mv-recovery-audio" controls autoPlay src={preview.url} />{preview.missing ? <small className="mv-recovery-missing">{preview.missing === 1 ? "1 segment of this recording could not be read back and is" : `${preview.missing} segments of this recording could not be read back and are`} missing from what plays here. The rest of the audio is intact.</small> : null}</> : null}</div>)}</div> : null}<div className="mv-capture-bar">{recording ? <><button type="button" className="mv-recording" onClick={() => void stopRecording()}><span /> Stop recording</button><button type="button" className="mv-secondary" onClick={togglePause}>{paused ? "Resume" : "Pause"}</button></> : <button type="button" className="mv-secondary" onClick={() => void startRecording()} disabled={Boolean(busy)}>● Record audio</button>}<label className={`mv-secondary mv-file-btn${busy ? " mv-disabled" : ""}`}>↑ Import audio<input type="file" accept="audio/*" onChange={importAudio} disabled={Boolean(busy)} /></label><span>{busy === "transcribe" ? "Transcribing the imported file…" : `Recording is transcribed every ${Math.round(DEFAULT_MEETING_SEGMENT_MS / 1000)}s · imports up to 40 MB`}</span></div>{live ? <LiveTranscript session={live} phase={phase} retrying={retrying} onRetry={(index) => void retrySegment(index)} /> : null}<div className="mv-compose-grid"><label className="mv-field mv-field-wide"><span>Meeting title</span><input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Weekly product sync" maxLength={180} /></label><label className="mv-field"><span>Summary template</span><select value={template} onChange={(event) => setTemplate(event.target.value as CreateMeetingInput["template"])}><option value="general">General</option><option value="standup">Stand-up</option><option value="one-on-one">1:1</option><option value="retrospective">Retrospective</option></select></label><label className="mv-field"><span>Audio language</span><select value={language} onChange={(event) => setLanguage(event.target.value)}><option value="auto">Auto-detect</option><option value="en">English</option><option value="es">Spanish</option><option value="fr">French</option><option value="de">German</option><option value="ja">Japanese</option></select></label><label className="mv-field mv-field-wide"><span>Transcript</span><textarea value={transcript} onChange={(event) => editTranscript(event.target.value)} placeholder="Paste a transcript here, or record/import audio above…" /></label></div><div className="mv-compose-actions"><button type="button" className="mv-primary" disabled={!title.trim() || !transcript.trim() || Boolean(busy) || recording} onClick={() => void submit()}>{busy === "create" ? "Creating & summarizing…" : "Create meeting"}</button><button type="button" className="mv-secondary" onClick={onCancel}>Cancel</button>{recording ? <span className="mv-unresolved">Stop the recording before creating the meeting — creating it releases the captured audio, and the chunk being written right now would have nowhere to land.</span> : unresolved > 0 ? <span className="mv-unresolved">{unresolved === 1 ? "1 segment is still being transcribed" : `${unresolved} segments are still being transcribed`} — creating the meeting now states them as gaps.</span> : null}</div></div></main>;
+  return <main className="mv-detail"><button type="button" className="mv-mobile-back" onClick={onCancel}>← Meetings</button><div className="mv-compose"><div className="mv-compose-head"><div><span className="mv-eyebrow">Capture</span><h3>New meeting</h3><p>Record, import audio, or paste a transcript. Your draft stays on this device until it is summarized.</p></div>{recovered ? <span className="mv-recovered">Draft recovered</span> : null}</div>{error ? <div className="mv-error" role="alert"><span>{error}</span><button type="button" onClick={() => setError("")} aria-label="Dismiss error">×</button></div> : null}{captureIssue ? <div className="mv-error" role="alert"><span>{captureIssue} This recording may be incomplete.</span><button type="button" onClick={() => setCaptureIssue("")} aria-label="Dismiss recording warning">×</button></div> : null}{recordIssue ? <div className="mv-error" role="alert"><span>{recordIssue}</span><button type="button" onClick={() => setRecordIssue("")} aria-label="Dismiss transcription warning">×</button></div> : null}{recoveryError ? <div className="mv-recovery" role="alert"><strong>Could not check for unfinished recordings</strong><p>{recoveryError} Audio already written to this device is still there.</p><button type="button" className="mv-secondary" onClick={() => setRecoveryRevision((value) => value + 1)}>Check again</button></div> : null}{recoveries.length ? <div className="mv-recovery" role="status"><strong>{recoveries.length === 1 ? "An unfinished recording is still on this device" : `${recoveries.length} unfinished recordings are still on this device`}</strong><p>The audio is here whether the app was killed or the recording was simply never turned into a meeting. Transcribe it, or delete it for good.</p>{recoveries.map((row) => <div className="mv-recovery-item" key={row.sessionId}><div className="mv-recovery-row"><span>{row.title}<small>{new Date(row.startedAt).toLocaleString()} · {minutes(row.durationMs)} · {megabytes(row.byteLength)} · {row.segments} segment{row.segments === 1 ? "" : "s"}</small></span><button type="button" className="mv-secondary" disabled={Boolean(busy) || capturing} onClick={() => void adoptCapture(row.sessionId)}>Transcribe it</button><button type="button" className="mv-ghost" disabled={Boolean(busy)} onClick={() => void playCapture(row.sessionId)}>{busy === `play:${row.sessionId}` ? "Loading…" : "▶ Play"}</button><button type="button" className="mv-ghost" disabled={Boolean(busy) || capturing} onClick={() => void discardCapture(row.sessionId)}>Delete audio</button></div>{preview?.sessionId === row.sessionId ? <><audio className="mv-recovery-audio" controls autoPlay src={preview.url} />{preview.missing ? <small className="mv-recovery-missing">{preview.missing === 1 ? "1 segment of this recording could not be read back and is" : `${preview.missing} segments of this recording could not be read back and are`} missing from what plays here. The rest of the audio is intact.</small> : null}</> : null}</div>)}</div> : null}<div className="mv-capture-bar">{recording ? <><button type="button" className="mv-recording" onClick={() => void stopRecording()}><span /> Stop recording</button><button type="button" className="mv-secondary" onClick={togglePause}>{paused ? "Resume" : "Pause"}</button></> : <button type="button" className="mv-secondary" onClick={() => void startRecording()} disabled={Boolean(busy) || capturing}>● Record audio</button>}<label className={`mv-secondary mv-file-btn${busy ? " mv-disabled" : ""}`}>↑ Import audio<input type="file" accept="audio/*" onChange={importAudio} disabled={Boolean(busy)} /></label><span>{busy === "transcribe" ? "Transcribing the imported file…" : `Recording is transcribed every ${Math.round(DEFAULT_MEETING_SEGMENT_MS / 1000)}s · imports up to 40 MB`}</span></div>{live ? <LiveTranscript session={live} phase={phase} retrying={retrying} onRetry={(index) => void retrySegment(index)} /> : null}<div className="mv-compose-grid"><label className="mv-field mv-field-wide"><span>Meeting title</span><input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Weekly product sync" maxLength={180} /></label><label className="mv-field"><span>Summary template</span><select value={template} onChange={(event) => setTemplate(event.target.value as CreateMeetingInput["template"])}><option value="general">General</option><option value="standup">Stand-up</option><option value="one-on-one">1:1</option><option value="retrospective">Retrospective</option></select></label><label className="mv-field"><span>Audio language</span><select value={language} onChange={(event) => setLanguage(event.target.value)}><option value="auto">Auto-detect</option><option value="en">English</option><option value="es">Spanish</option><option value="fr">French</option><option value="de">German</option><option value="ja">Japanese</option></select></label><label className="mv-field mv-field-wide"><span>Transcript</span><textarea value={transcript} onChange={(event) => editTranscript(event.target.value)} placeholder="Paste a transcript here, or record/import audio above…" /></label></div><div className="mv-compose-actions"><button type="button" className="mv-primary" disabled={!title.trim() || !transcript.trim() || Boolean(busy) || capturing} onClick={() => void submit()}>{busy === "create" ? "Creating & summarizing…" : hold.closing ? "Saving the recording…" : "Create meeting"}</button><button type="button" className="mv-secondary" onClick={onCancel}>Cancel</button>{capturing ? <span className="mv-unresolved">Stop the recording before creating the meeting — creating it releases the captured audio, and the chunk being written right now would have nowhere to land.</span> : unresolved > 0 ? <span className="mv-unresolved">{unresolved === 1 ? "1 segment is still being transcribed" : `${unresolved} segments are still being transcribed`} — creating the meeting now states them as gaps.</span> : null}</div></div></main>;
 }

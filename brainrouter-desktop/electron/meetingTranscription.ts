@@ -26,10 +26,12 @@
  * - **The clock.** The queue reports when it is worth draining again; turning
  *   that into a timer is host work, and it is injectable so a test can advance a
  *   backoff without waiting for it. The DELAY itself is not host work: this file
- *   kept its own `MIN_WAKE_MS = 500` beside the dashboard's own
- *   `MEETING_DRAIN_FLOOR_MS = 500`, two copies of a scheduling floor that agreed
- *   only by inspection, so it now asks `drainWakeDelayMs` — which also folds in
- *   the "is there anything to schedule at all" check.
+ *   kept `const MIN_WAKE_MS = 250` while the dashboard inlined
+ *   `Math.max(500, result.nextWakeMs)` — one scheduling floor, two values, and
+ *   nothing anywhere that could notice. Both now ask `drainWakeDelayMs`, which
+ *   also folds in the "is there anything to schedule at all" check. Adopting the
+ *   shared 500 doubled THIS host's floor, and the floor only binds on the error
+ *   path anyway: every real backoff starts at 2 s and passes through untouched.
  * - **The push to the renderer.** D4 wants text as it is produced, so every
  *   persisted transition is published. The persist port is the right place: a
  *   published session is by construction one that is already on disk. A drain

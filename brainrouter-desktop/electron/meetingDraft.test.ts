@@ -41,21 +41,30 @@ test('the draft is written 0600 inside the 0700 capture directory', async () => 
 test('an emptied form deletes the draft, and a record from another version is refused', async () => {
   const home = userData();
   const drafts = new MeetingDraftStore(home);
+  const file = path.join(home, MEETING_CAPTURE_DIRECTORY, 'compose-draft.json');
 
   await drafts.write({ title: 'Weekly sync', transcript: 'Pasted notes.' });
+  assert.ok(fs.existsSync(file));
   // Writing an empty draft IS clearing it: a form the user emptied should not
   // come back with what they deleted.
   await drafts.write({ title: '', transcript: '' });
+  // Asserted on the FILE, not only through `read`. D6 is "deletion is a real
+  // deletion", and `read` narrows an empty record to `null` all by itself — so
+  // a test that only checks `read` cannot tell a draft that was deleted from
+  // one that was blanked and left on disk, which is the meeting's own words
+  // still sitting in the protected directory with nothing left that will ever
+  // remove them.
+  assert.equal(fs.existsSync(file), false);
   assert.equal(await drafts.read(), null);
 
   await drafts.write({ title: 'Weekly sync', transcript: 'Pasted notes.' });
   await drafts.clear();
+  assert.equal(fs.existsSync(file), false);
   assert.equal(await drafts.read(), null);
   // Clearing what is not there is not an error — the meeting was created either
   // way, and this runs after it.
   await drafts.clear();
 
-  const file = path.join(home, MEETING_CAPTURE_DIRECTORY, 'compose-draft.json');
   fs.writeFileSync(file, '{"version":1,"draft":{"title":7,"template":"invented"}}');
   assert.equal(await drafts.read(), null);
   fs.writeFileSync(file, 'not json at all');

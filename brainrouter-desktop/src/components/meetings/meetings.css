@@ -70,6 +70,13 @@
 .mv-recbar{display:flex;align-items:center;gap:9px;flex:0 0 auto;padding:9px 15px;border-bottom:1px solid color-mix(in srgb,var(--brand) 38%,var(--border));background:var(--brand-soft);color:color-mix(in srgb,var(--brand) 70%,var(--text));font-size:11px}
 .mv-recbar-dot{width:8px;height:8px;flex:0 0 auto;border-radius:50%;background:var(--brand);animation:mv-pulse 1.1s infinite}
 .mv-recbar button{margin-left:auto;border:0;color:inherit;font-size:11px;font-weight:650;text-decoration:underline;cursor:pointer}
+/* ADR-035 F4 — the same fact, one level up: the mode rail takes the whole
+   meetings view off screen, so this one belongs to the app shell. Fixed rather
+   than in flow because it appears over Chat, Code, Notes, Planner and Track,
+   and a bar that reflowed five unrelated layouts would be a fifth way to break
+   them. */
+.meeting-appbar{position:fixed;z-index:60;left:50%;bottom:18px;transform:translateX(-50%);display:flex;align-items:center;gap:9px;max-width:min(560px,92vw);padding:8px 15px;border:1px solid color-mix(in srgb,var(--brand) 38%,var(--border));border-radius:999px;background:var(--brand-soft);color:color-mix(in srgb,var(--brand) 70%,var(--text));font-size:11px;box-shadow:var(--shadow-sm)}
+.meeting-appbar button{border:0;background:none;color:inherit;font-size:11px;font-weight:650;text-decoration:underline;cursor:pointer}
 /* ADR-035 D4/D5 — segment states while a capture transcribes. The text itself
    lands in the transcript box; this says which segments are settled, in flight,
    or a stated gap with a retry. */

@@ -11,9 +11,14 @@
  * alone: folding a mirrored draft must not duplicate anything, and reconciling
  * must not delete a word the person wrote.
  *
- * `fold` below stands in for the hosts' append step (the desktop's
- * `foldTranscript`, the dashboard's compose) so the round trip — reconcile, then
- * append what is left — can be asserted end to end from core.
+ * `fold` below IS the hosts' append step — the shared `foldTranscript` — so the
+ * round trip (reconcile, then append what is left) is asserted end to end from
+ * core against the composition the product actually runs. It used to be a
+ * hand-rolled stand-in, and the stand-in disagreed with the real rule in exactly
+ * the §6 case: it stated an interrupted segment as a gap immediately, where the
+ * real fold waits because that segment still has retries and its audio is still
+ * on disk. A test double that is easier to reason about than the thing it stands
+ * in for is a test of the double.
  *
  * ## What this file got wrong last round, and how it is written now
  *
@@ -35,7 +40,9 @@ import test from 'node:test';
 
 import {
   appendSegment,
+  beginTranscriptFold,
   createCaptureSession,
+  foldTranscript,
   formatCaptureGap,
   markDone,
   markFailed,
@@ -43,7 +50,6 @@ import {
   MEETING_GAP_PHRASE,
   reconcileCaptureDraft,
   recoverCaptureSession,
-  transcriptSoFar,
   type MeetingCaptureSession,
 } from '../meetings/index.js';
 
@@ -84,18 +90,9 @@ function threeSettled(): MeetingCaptureSession {
   return session;
 }
 
-/**
- * The hosts' append step: everything from `next` onward that will not change on
- * its own, joined the way both hosts join it.
- */
+/** The hosts' append step, resumed at `next` over a box with no markers of ours in it. */
 function fold(text: string, session: MeetingCaptureSession, next: number): string {
-  const additions = transcriptSoFar(session)
-    .slice(next)
-    .filter((entry) => entry.kind !== 'provisional' && entry.text.length > 0)
-    .map((entry) => entry.text);
-  if (!additions.length) return text;
-  const joined = additions.join('\n');
-  return text ? `${text}\n${joined}` : joined;
+  return foldTranscript(text, session, { inserted: new Map(), next }).text;
 }
 
 /** What a host writes to its draft store. The contract, and the violation. */
@@ -125,7 +122,10 @@ function killAndReopen(box: string, live: MeetingCaptureSession, persist: Persis
   const restored = persist(box, live);
   const recovered = recoverCaptureSession(live, '2026-08-09T10:05:00.000Z');
   const reconciled = reconcileCaptureDraft(restored, recovered);
-  return fold(reconciled.text, recovered, reconciled.next);
+  // `beginTranscriptFold`, not `{ next }` alone: the resume point carries the
+  // exact strings the restored box holds for each segment, which is what lets a
+  // later retry heal a gap marker the previous run wrote.
+  return foldTranscript(reconciled.text, recovered, beginTranscriptFold(reconciled)).text;
 }
 
 test('the fatal case — a draft that IS the mirrored transcript folds in once, not twice', () => {
@@ -333,8 +333,30 @@ test('§6 end to end — kill, reopen, restore the draft, adopt the recovery: on
   assert.ok(filed.startsWith('Agenda I pasted in.'), 'their agenda is still the first thing in the box');
   assert.equal(filed.split('Sentence 1.').length - 1, 1);
   assert.equal(filed.split('Sentence 2.').length - 1, 1);
-  // The interrupted segment is stated rather than left spinning, and stated once.
-  assert.equal(filed, `${box}\n${formatCaptureGap(40_000, 60_000)}`, 'the interrupted range is stated, once');
+  // The interrupted segment is NOT stated yet, and that is the fold's rule
+  // rather than an omission: `recoverCaptureSession` left it failed with one
+  // attempt spent and three to come, and its audio is on disk. A gap marker now
+  // is a claim the next retry contradicts.
+  assert.equal(filed, box, 'nothing is appended over a segment that is still coming back');
+
+  // It is stated the moment it stops coming back — once, with its time range.
+  let spent = recoverCaptureSession(live, '2026-08-09T10:05:00.000Z');
+  for (let attempt = 0; attempt < 3; attempt += 1) spent = markFailed(spent, 2, 'The endpoint did not answer.');
+  const exhausted = reconcileCaptureDraft(box, spent);
+  assert.equal(
+    foldTranscript(exhausted.text, spent, beginTranscriptFold(exhausted)).text,
+    `${box}\n${formatCaptureGap(40_000, 60_000)}`,
+    'the interrupted range is stated, once',
+  );
+
+  // …and at submit whatever its budget says, because D6 is about to delete the
+  // audio it would have come from. D5: never an unmarked hole.
+  const recovered = recoverCaptureSession(live, '2026-08-09T10:05:00.000Z');
+  const resumed = reconcileCaptureDraft(box, recovered);
+  assert.equal(
+    foldTranscript(resumed.text, recovered, beginTranscriptFold(resumed), { settleAll: true }).text,
+    `${box}\n${formatCaptureGap(40_000, 60_000)}`,
+  );
 
   // And the reason the four tests below exist: on THIS input — nothing edited,
   // nothing deleted — persisting `retained` instead reaches the same answer. A

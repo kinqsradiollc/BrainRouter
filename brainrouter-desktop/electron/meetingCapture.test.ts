@@ -256,6 +256,33 @@ test('one unreadable segment costs that segment, not the whole recording', async
   const intact = await store.read(whole.id);
   assert.deepEqual(intact.bytes, new Uint8Array([7, 8]));
   assert.deepEqual(intact.missing, []);
+
+  // UNREADABLE IS NOT ONLY DELETED. Narrowing the guard to `ENOENT` read as a
+  // principle — a permission problem is a fault worth surfacing — and was the
+  // same total loss wearing a different errno: measured, a deleted file plays
+  // and is reported missing, the same path replaced by a DIRECTORY threw
+  // `EISDIR`, and mode `000` threw `EACCES`. Each of those took the whole read
+  // down with it. D5's answer to audio that will not read is a stated gap,
+  // whatever the reason it will not read.
+  const blocked = path.join(captureRoot(home), session.id, 'segment-00002.webm');
+  fs.rmSync(blocked);
+  fs.mkdirSync(blocked);
+  assert.equal(await store.readSegment(session.id, 2), null);
+  const eisdir = await store.read(session.id);
+  assert.deepEqual(eisdir.bytes, new Uint8Array([1, 2]));
+  assert.deepEqual(eisdir.missing, [1, 2]);
+
+  // `chmod 000` is meaningless as root, and POSIX modes do not exist on Windows.
+  if (POSIX && process.getuid?.() !== 0) {
+    const locked = path.join(captureRoot(home), whole.id, 'segment-00000.webm');
+    fs.chmodSync(locked, 0o000);
+    try {
+      assert.equal(await store.readSegment(whole.id, 0), null);
+      const eacces = await store.read(whole.id);
+      assert.equal(eacces.bytes.byteLength, 0);
+      assert.deepEqual(eacces.missing, [0]);
+    } finally { fs.chmodSync(locked, 0o600); }
+  }
 });
 
 test('a discarded capture is really deleted and never offered again', async () => {

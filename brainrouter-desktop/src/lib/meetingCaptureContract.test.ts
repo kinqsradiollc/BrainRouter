@@ -58,8 +58,18 @@ test('meeting audio is written on a cadence, through the host, and never held in
 
   // D2 — the offer is queried where the user lands after a crash (the library),
   // not only inside a compose form they would have to think to open.
-  assert.match(view, /capture\.resumable\(\{ orgId: scopedOrgId \?\? null \}\)/);
-  assert.match(view, /capture\.resumable\(captureScope\)/);
+  //
+  // F1 — and BOTH ask it to leave out the capture in hand. `isResumableSession`
+  // deliberately does not narrow on `recording` (a clean quit leaves audio that
+  // never transcribed), so the live recording satisfied D2's predicate and the
+  // library offered to transcribe it — or DELETE it, with no confirmation and
+  // no guard — while its own microphone was still open.
+  assert.match(view, /capture\.resumable\(\{ orgId: scopedOrgId \?\? null \}, heldCaptureId \? \{ exclude: \[heldCaptureId\] \} : \{\}\)/);
+  assert.match(view, /capture\.resumable\(captureScope, hold\.sessionId \? \{ exclude: \[hold\.sessionId\] \} : \{\}\)/);
+  // …and the delete that used to be one unguarded click is confirmed, and
+  // refused outright while the capture is still being written to.
+  assert.match(view, /Discard this unfinished recording\? Its audio is deleted from this device\./);
+  assert.match(view, /if \(hold\.sessionId === sessionId && captureInFlight\(hold\)\) return;/);
   // ADR-028 — and a recovery query that FAILED does not render as "nothing to
   // recover". A swallowed rejection here loses this ADR's whole deliverable
   // silently, on exactly the launch where the user is looking for it.
@@ -152,9 +162,8 @@ test('D1 still holds through the supervisor: bytes first, then the count the dis
   assert.ok(writeAt > 0 && recordAt > writeAt);
 });
 
-test('live text distinguishes provisional from settled, and a gap says where it is', () => {
+test('live text distinguishes provisional from settled, and the fold rule is the SHARED one', () => {
   const view = read('../components/meetings/MeetingsView.tsx');
-  const fold = read('../components/meetings/liveTranscript.ts');
 
   // D4 — the box is APPENDED to, never re-rendered from the session. A
   // `setTranscript(transcriptText(session))` anywhere here would compile, look
@@ -164,12 +173,17 @@ test('live text distinguishes provisional from settled, and a gap says where it 
   // D4 — and the three states are rendered as three different things.
   assert.match(view, /entry\.state === "transcribing" \? "Transcribing…" : "Queued"/);
   assert.match(view, /transcriptSoFar\(session\)/);
-
-  // D5 — the gap wording and its time range come from the shared transcript
-  // module, so a desktop transcript says what a dashboard one says.
-  assert.match(fold, /formatCaptureGap\(entry\.startMs, entry\.endMs\)/);
-  assert.match(fold, /planTranscription\(session\)\.exhausted/);
   assert.match(view, /onRetry\(entry\.index\)/);
+
+  // D1b — the fold itself is no longer this host's. It lived in
+  // `liveTranscript.ts` here while the dashboard recomposed `base +
+  // transcriptText(session)` on every drain, which relocated a note typed
+  // between two segments to the top of the meeting after a kill. Two hosts, one
+  // compose box, two answers — so the append rule moved to core and this file
+  // now has nowhere to keep a second one.
+  assert.match(view, /foldTranscript,[\s\S]{0,400}from "@kinqs\/brainrouter-core\/meetings"/);
+  assert.doesNotMatch(view, /from "\.\/liveTranscript\.js"/);
+  assert.doesNotMatch(view, /formatCaptureGap|planTranscription/);
 });
 
 test('a recovered capture is folded in once, through the shared reconciliation', () => {
@@ -181,7 +195,10 @@ test('a recovered capture is folded in once, through the shared reconciliation',
   // and summarized. The rule is shared with the dashboard, which had the same
   // bug in its own dialect (D1b).
   assert.match(view, /reconcileCaptureDraft\(transcriptRef\.current, session\)/);
-  assert.match(view, /foldRef\.current = \{ inserted: reconciled\.matched, next: reconciled\.next \}/);
+  // Through the shared `beginTranscriptFold` rather than assembled here: a
+  // resume point a host builds for itself is one it can build wrongly, and the
+  // wrong one appends the whole meeting a second time.
+  assert.match(view, /foldRef\.current = beginTranscriptFold\(reconciled\)/);
   // …and it has to run BEFORE the fold, which is what `applySession` does.
   const reconcileAt = view.indexOf('const reconciled = reconcileCaptureDraft(transcriptRef.current, session)');
   const applyAt = view.indexOf('applySession(session);', reconcileAt);
@@ -249,29 +266,60 @@ test('D6 — the draft lives where the audio does, and is the compose box itself
   assert.match(view, /const reconciled = reconcileCaptureDraft\(transcriptRef\.current, session\);/);
 });
 
-test('open question 5 — a meeting is filed under the org the RECORDING started in', () => {
+test('what Create posts is decided in one tested place, and the view assembles none of it', () => {
   const view = read('../components/meetings/MeetingsView.tsx');
+  const submit = read('../components/meetings/composeSubmit.ts');
 
-  // "A recording that started under one org must not silently land in another."
-  // The active org comes from the app-wide switcher and can move mid-meeting;
-  // the capture's scope is frozen at Record and nothing rewrites it.
-  assert.match(view, /const filedOrgId = session \? session\.scope\.orgId \?\? undefined : orgId;/);
-  assert.match(view, /ops\.createFromTranscript\(\{[^}]*\}, filedOrgId\)/);
+  // M1 — the settle step was four lines inside `submit`, and deleting
+  // `body = settled.text` left every renderer test and this whole file green
+  // while the POST lost a gap marker and the segment behind it. A step whose
+  // result the caller can quietly drop is a step no assertion can hold, so the
+  // result is the entire create input and there is nothing left here to build.
+  assert.match(view, /const prepared = prepareSubmission\(\{/);
+  assert.match(view, /if \(!prepared\.ok\) return;/);
+  assert.match(view, /ops\.createFromTranscript\(prepared\.input, prepared\.orgId\)/);
+  assert.doesNotMatch(view, /createFromTranscript\(\{/);
+  // D5 — and the settle is the SHARED rule, at the one moment it is
+  // irreversible: `finalizeCapture` follows the create and deletes the audio.
+  assert.match(submit, /settleTranscriptForSubmit\(state\.transcript, state\.session, state\.fold\)/);
+  assert.match(submit, /transcript: settled\.text/);
+
+  // Open question 5 — "a recording that started under one org must not silently
+  // land in another." The active org comes from the app-wide switcher and can
+  // move mid-meeting; the capture's scope is frozen at Record.
+  assert.match(submit, /state\.session \? state\.session\.scope\.orgId \?\? undefined : state\.activeOrgId/);
 });
 
-test('Create cannot delete a recording out from under itself', () => {
+test('F3 — Create cannot delete a recording out from under itself, and Stop is not instantaneous', () => {
   const view = read('../components/meetings/MeetingsView.tsx');
+  const submit = read('../components/meetings/composeSubmit.ts');
 
-  // The guard is not defensive tidiness. D4 fills the transcript box live, so a
-  // RUNNING meeting satisfies every other condition on this button within twenty
-  // seconds — and `submit` finalizes the capture, which under D6 removes the
-  // directory the recorder is still appending to. The next chunk then fails with
-  // "no longer on this device", the microphone stays open, and the surface goes
-  // on offering "Stop recording" for a capture that no longer exists.
-  assert.match(view, /disabled=\{!title\.trim\(\) \|\| !transcript\.trim\(\) \|\| Boolean\(busy\) \|\| recording\}/);
-  // Guarded in the function as well as on the button: a disabled attribute is a
-  // statement about a pixel, not a rule, and this is the destructive path.
-  assert.match(view, /if \(!title\.trim\(\) \|\| !transcript\.trim\(\) \|\| busy \|\| recording\) return;/);
+  // D4 fills the transcript box live, so a RUNNING meeting satisfies every other
+  // condition on this button within twenty seconds — and `submit` finalizes the
+  // capture, which under D6 removes the directory the recorder is appending to.
+  //
+  // `recording` alone did not cover it. `stopRecording` sets it false on its
+  // first line and THEN awaits `onstop`, the final chunk's `arrayBuffer`, the
+  // IPC and the disk write; a Create 4 ms into that window posted a transcript
+  // missing its last chunk with no gap marker — there was no segment for
+  // anything to state — and then released the audio. Record has the same window
+  // in the other direction, and `getUserMedia` can sit on a permission prompt.
+  assert.match(submit, /return hold\.recording \|\| hold\.arming \|\| hold\.closing;/);
+  assert.match(view, /holdStore\.update\(\{ arming: true \}\)/);
+  assert.match(view, /holdStore\.update\(\{ recording: false, closing: Boolean\(recorder\) \}\)/);
+  // In a `finally`, so a settle that THREW cannot wedge Create for good.
+  assert.match(view, /\} finally \{ holdStore\.update\(\{ closing: false \}\); \}/);
+  // The rule reads the values that are true NOW; the button reads the ones React
+  // last rendered. A disabled attribute is a statement about a pixel.
+  assert.match(view, /hold: holdStore\.current, busy: Boolean\(busy\)/);
+  assert.match(view, /disabled=\{!title\.trim\(\) \|\| !transcript\.trim\(\) \|\| Boolean\(busy\) \|\| capturing\}/);
+  // …and it says why it is refusing rather than silently doing nothing.
+  assert.match(view, /hold\.closing \? "Saving the recording…"/);
+  // Record is off during both windows too. `recording` is false in each of them,
+  // so the button that starts a capture was live while one was being armed or
+  // closed — a second recorder over the first, and two microphones on one
+  // meeting.
+  assert.match(view, /onClick=\{\(\) => void startRecording\(\)\} disabled=\{Boolean\(busy\) \|\| capturing\}/);
 });
 
 test('the surface renders the whole of what the host publishes, not just the session', () => {
@@ -312,15 +360,18 @@ test('A1 — navigating away from the compose form does not end the meeting', ()
   // The decision, matching the dashboard (D1b): navigation does NOT stop the
   // recording. The form stays mounted while `recording` is true and is merely
   // hidden, and an indicator above the tab switch leads back to it.
-  assert.match(view, /\{composing \|\| recording \? \(/);
+  assert.match(view, /\{composing \|\| capturing \? \(/);
   assert.match(view, /display: composeVisible \? "contents" : "none"/);
   assert.match(view, /const composeVisible = composing && mode === "meetings";/);
-  assert.match(view, /\{mode === "meetings" \|\| recording \? \(/);
-  assert.match(view, /onRecordingChange=\{setRecording\}/);
-  assert.match(view, /useEffect\(\(\) => \{ onRecordingChange\(recording\); \}/);
+  assert.match(view, /\{mode === "meetings" \|\| capturing \? \(/);
+  assert.match(view, /onCaptureHold=\{setHold\}/);
+  assert.match(view, /useEffect\(\(\) => \{ onCaptureHold\(hold\); \}/);
+  // …and released on unmount, so the library stops excluding a capture nobody
+  // holds any more (F1). Its own effect, so it runs only then.
+  assert.match(view, /useEffect\(\(\) => \(\) => onCaptureHold\(NO_CAPTURE_HOLD\), \[onCaptureHold\]\)/);
   // The indicator, and the way back. It is rendered before the tab switch so it
   // survives the two tabs that replace everything below it.
-  const barAt = view.indexOf('recording && !composeVisible ?');
+  const barAt = view.indexOf('capturing && !composeVisible ?');
   const tabsAt = view.indexOf('{mode === "tracked" ? <MeetingTracksView');
   assert.ok(barAt > 0 && tabsAt > barAt, 'the recording indicator is rendered above the tab switch');
   assert.match(view, /A meeting is being recorded\. Its audio is being saved to this device\./);
@@ -333,6 +384,41 @@ test('A1 — navigating away from the compose form does not end the meeting', ()
   // interrupted recording.
   assert.doesNotMatch(view, /recorderRef\.current\?\.dispose\(\)/);
   assert.match(view, /mountedRef\.current = false;\s*\n\s*const recorder = recorderRef\.current;\s*\n\s*recorderRef\.current = null;\s*\n\s*void recorder\?\.stop\(\);/);
+});
+
+test('F4 — the fifth click: the mode rail does not end the meeting either', () => {
+  const shell = read('../App/layout/MainContent.tsx');
+  const view = read('../components/meetings/MeetingsView.tsx');
+
+  // A1 kept the composer mounted through the four clicks INSIDE the meetings
+  // view. The activity-bar rail still ended a live meeting silently, because
+  // this shell rendered `<MeetingsView/>` only while its mode was selected:
+  // switching to Code left the recorder inactive, the microphone tracks
+  // stopped and the session stopped, with nothing on screen saying so.
+  //
+  // Same decision as A1's, one level up: mounted while a capture is open,
+  // merely hidden, with an app-level indicator that leads back.
+  assert.match(shell, /\{meetingsVisible \|\| meetingCapture \? \(/);
+  assert.match(shell, /ref=\{meetingsVisible \? workrowRef : null\}/);
+  assert.match(shell, /meetingsVisible \? \{\} : \{ style: \{ display: 'none' \} \}/);
+  assert.match(shell, /<MeetingsView ops=\{meetingsOps\} onCaptureChange=\{setMeetingCapture\} \/>/);
+  // Exactly one mount: a second `<MeetingsView/>` in the mode chain would be a
+  // second recorder, a second microphone and two windows onto one capture.
+  assert.equal(shell.match(/<MeetingsView /g)?.length, 1);
+  // …and the mode chain no longer claims the meetings branch, or the view would
+  // render twice while the mode is selected.
+  assert.match(shell, /\{meetingsVisible \? null : mode === 'notes' \? \(/);
+  assert.doesNotMatch(shell, /\) : mode === 'meetings' \? \(/);
+
+  // ADR-028 — the recording did not stop when the screen did, so something says
+  // so from wherever the person went, and it is a way back rather than a notice.
+  assert.match(shell, /\{meetingCapture && !meetingsVisible \? \(/);
+  assert.match(shell, /A meeting is being recorded\. Its audio is being saved to this device\./);
+  assert.match(shell, /onClick=\{\(\) => setMode\('meetings'\)\}/);
+
+  // The view answers with the same fact its own indicator uses — the state
+  // itself, reported from an effect, so the two cannot drift.
+  assert.match(view, /useEffect\(\(\) => \{ onCaptureChange\?\.\(capturing\); \}, \[capturing, onCaptureChange\]\)/);
 });
 
 test('B — one unreadable segment is stated, not thrown at the whole recording', () => {
@@ -348,6 +434,13 @@ test('B — one unreadable segment is stated, not thrown at the whole recording'
   assert.match(store, /const bytes = await this\.readSegment\(id, segment\.index\);/);
   assert.match(store, /if \(!bytes\) \{ missing\.push\(segment\.index\); continue; \}/);
   assert.doesNotMatch(store, /parts\.push\(await fs\.promises\.readFile\(/);
+  // F2 — and "unreadable" is not one errno. `readSegment` reported only ENOENT
+  // as missing and rethrew the rest, so a segment at mode 000 (EACCES) or a
+  // directory in its place (EISDIR) still took the whole recording down. The
+  // behaviour is asserted for real in `meetingCapture.test.ts`; what is asserted
+  // here is that no errno is being read at all, because the moment one is, this
+  // draws a line between two kinds of unreadable again.
+  assert.doesNotMatch(store, /ErrnoException|\bcode === '/);
   // Carried across the bridge and rendered, because a player that is short of
   // the recording and says nothing is the silent loss in a smaller costume.
   assert.match(ops, /missing: readonly number\[\]/);

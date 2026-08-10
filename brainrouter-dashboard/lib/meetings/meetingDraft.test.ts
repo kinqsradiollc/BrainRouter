@@ -14,6 +14,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import {
+  appendSegment,
+  beginTranscriptFold,
+  createCaptureSession,
+  foldTranscript,
+  formatCaptureGap,
+  markDone,
+  markFailed,
+  reconcileCaptureDraft,
+  settleTranscriptForSubmit,
+  stopCapture,
+  type MeetingCaptureSession,
+} from "@kinqs/brainrouter-core/meetings";
+
 import { audioBlob, FakeCaptureBackend } from "./_captureBackendFixture";
 import { resumableCaptures } from "./capturePayload";
 import { MeetingCaptureStore } from "./captureStore";
@@ -90,6 +104,124 @@ test("the draft is never offered back as a meeting, and the reap cannot take it"
   assert.deepEqual(offered.map((entry) => entry.record.sessionId), ["mtg-real"]);
   assert.deepEqual(await subject.reapOrphans(), []);
   assert.deepEqual(await readMeetingDraft(subject), DRAFT, "the draft survived the reap");
+});
+
+// ── §6, from this host's side: kill the tab, reopen it, get the box back ──────
+//
+// The three tests below drive the page's whole composition wiring — persist the
+// box, read it back, `reconcileCaptureDraft` → `beginTranscriptFold` →
+// `foldTranscript` → `settleTranscriptForSubmit` — over the real store. The
+// rules are the shared module's and are tested there; what is being asserted
+// here is that THIS host's durable half feeds them the one input they can
+// reconcile: the compose box whole. A draft that comes back short, stripped or
+// re-serialized wrongly is indistinguishable, to every function downstream,
+// from a box that never held the transcript at all — and the failure is silent,
+// which is why it is asserted as text a person could have typed rather than as
+// a field's shape.
+
+function captured(count: number): MeetingCaptureSession {
+  let session = createCaptureSession({ id: "mtg-1", scope: { orgId: null } });
+  for (let index = 0; index < count; index += 1) {
+    session = appendSegment(session, { byteLength: 100, durationMs: 20_000 });
+  }
+  return session;
+}
+
+/** A segment that failed and has since been retried into text. */
+function recovered(session: MeetingCaptureSession, index: number, text: string): MeetingCaptureSession {
+  const segments = session.segments.map((segment, at) => (at === index ? { ...segment, state: "pending" as const } : segment));
+  return markDone({ ...session, segments }, index, text);
+}
+
+/** The kill: what the debounced autosave wrote is all the next tab has. */
+async function reopen(subject: MeetingCaptureStore, transcript: string): Promise<string> {
+  await writeMeetingDraft(subject, { ...DRAFT, transcript });
+  return (await readMeetingDraft(subject)).transcript;
+}
+
+test("§6 — a note typed between two segments is still between them after the kill", async () => {
+  // The reproduction this host's recompose model produced: `base` was the box
+  // with every segment stripped out of it, so recomposing put ALL of the
+  // person's own words first and the meeting after them —
+  // `"S1\nMy note\nS2\nS3"` reopened as `"My note\nS1\nS2\nS3"`, autosaved,
+  // POSTed and summarized. Position in that box is the person's.
+  //
+  // The box carries a blank line and a trailing newline on purpose. "The box
+  // whole" is a claim about bytes, not about content: a draft that comes back
+  // tidied — blank lines dropped, ends trimmed — no longer line-matches the
+  // segments it holds, and the frontier rule then reads perfectly good text as
+  // never-folded and appends the meeting a second time under it.
+  const session = markDone(markDone(markDone(captured(3), 0, "S1"), 1, "S2"), 2, "S3");
+  const box = "an agenda I pasted before recording\n\nS1\nMy note\nS2\nS3\n";
+
+  const restored = await reopen(store(), box);
+  assert.equal(restored, box, "byte for byte, blank lines and all");
+  const reconciled = reconcileCaptureDraft(restored, session);
+  const folded = foldTranscript(reconciled.text, session, beginTranscriptFold(reconciled));
+
+  assert.equal(folded.changed, false, "the box already holds the whole meeting");
+  assert.equal(folded.text, box, "and every line of it is exactly where it was left");
+  assert.notEqual(folded.text, "an agenda I pasted before recording\nMy note\nS1\nS2\nS3");
+  // Folded once, not twice — the doubling `EMPTY_TRANSCRIPT_FOLD` would cause.
+  for (const line of ["an agenda I pasted before recording", "S1", "My note", "S2", "S3"]) {
+    assert.equal(folded.text.split("\n").filter((held) => held === line).length, 1, `${line} appears once`);
+  }
+});
+
+test("§6 — an edit to the last settled segment is never reverted and never relocated", async () => {
+  // The second reproduction: `"S1\nS2\nS3 corrected"` came back
+  // `"S3 corrected\nS1\nS2\nS3"` — the pre-edit wording restored INTO the
+  // meeting and the correction moved to the top.
+  //
+  // What an append-only fold does instead is the honest limit stated in the
+  // shared module: an edit to the LAST settled segment leaves no anchor after
+  // it, so that segment reads as never-folded and is appended once more. The
+  // person's wording still stands, first, with a duplicate line under it they
+  // can delete — which is the safe direction of the two.
+  const session = markDone(markDone(markDone(captured(3), 0, "S1"), 1, "S2"), 2, "S3");
+  const box = "S1\nS2\nS3 corrected";
+
+  const restored = await reopen(store(), box);
+  const reconciled = reconcileCaptureDraft(restored, session);
+  const folded = foldTranscript(reconciled.text, session, beginTranscriptFold(reconciled));
+
+  assert.equal(folded.text.startsWith(box), true, "their box is the head of the result, untouched");
+  assert.equal(folded.text, "S1\nS2\nS3 corrected\nS3");
+  assert.notEqual(folded.text, "S3 corrected\nS1\nS2\nS3");
+});
+
+test("§6 — a gap stated before the kill is healed where it stands, and submit states the rest", async () => {
+  // D5 both ways round. The box came back claiming a range could not be
+  // transcribed; the retry that ran while the tab was gone proved otherwise, so
+  // the claim is corrected IN PLACE rather than the recovered words being
+  // appended at the end with the false claim left standing above them.
+  const gap = formatCaptureGap(20_000, 40_000);
+  const failed = markDone(markFailed(markDone(captured(3), 0, "S1"), 1, "gave up"), 2, "S3");
+  const box = `S1\n${gap}\nS3`;
+
+  const restored = await reopen(store(), box);
+  assert.equal(restored, box, "the marker survives the store verbatim, or nothing can match it");
+
+  const session = stopCapture(recovered(failed, 1, "the recovered middle"));
+  const reconciled = reconcileCaptureDraft(restored, session);
+  assert.equal(reconciled.text, "S1\nthe recovered middle\nS3", "replaced where it sat");
+
+  const folded = foldTranscript(reconciled.text, session, beginTranscriptFold(reconciled));
+  assert.equal(folded.text, "S1\nthe recovered middle\nS3", "and nothing is appended after it");
+
+  // …and the segment still in flight when the tab died is STATED at submit
+  // rather than left as an unmarked hole, because the audio is deleted next.
+  //
+  // The box is `"S1"` and not `"S1\nS3"`, which is the fold's doing rather than
+  // this test's convenience: it stops at the first segment that could still
+  // change on its own, so a killed tab's draft never contains a hole for a
+  // reopened one to misread as a deleted line.
+  const stillOut = stopCapture(markDone(markDone(captured(3), 0, "S1"), 2, "S3"));
+  const opened = await reopen(store(), "S1");
+  const started = reconcileCaptureDraft(opened, stillOut);
+  const submitted = settleTranscriptForSubmit(started.text, stillOut, beginTranscriptFold(started));
+  assert.equal(submitted.text, `S1\n${gap}\nS3`);
+  assert.deepEqual(submitted.stated, [1]);
 });
 
 test("an unreadable draft degrades to no draft rather than to an exception", async () => {

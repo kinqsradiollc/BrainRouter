@@ -30,8 +30,8 @@
  *    text the box no longer holds verbatim, but which the draft has plainly
  *    moved PAST (a later segment is still there), was edited or deleted on
  *    purpose. It is reported as accounted-for and user-owned, and is never
- *    re-appended. This is the same rule the desktop's `foldTranscript` already
- *    encodes when it declines to replace a gap marker that is no longer there.
+ *    re-appended. This is the same rule the shared `foldTranscript` encodes when
+ *    it declines to replace a gap marker that is no longer there.
  *
  * How coverage is decided, and the one honest limit of it:
  *
@@ -123,8 +123,9 @@ export interface MeetingDraftReconciliation {
    * index → the exact string `text` currently holds for that segment.
    *
    * Only verbatim-present segments appear. This is what lets a later gap-heal
-   * (`foldTranscript` rule 3) find its own marker and replace it, and what keeps
-   * it from touching anything else.
+   * (`foldTranscript` invariant 3) find its own marker and replace it, and what
+   * keeps it from touching anything else. `beginTranscriptFold` is what carries
+   * it across, so a host never assembles that resume point itself.
    */
   readonly matched: ReadonlyMap<number, string>;
   /**
@@ -138,16 +139,24 @@ export interface MeetingDraftReconciliation {
    * The draft with every accounted contribution removed — the person's own
    * words, and only those.
    *
-   * A host that recomposes the whole transcript on each drain (rather than
-   * appending to it) needs this as its base: composing over the raw draft is
-   * precisely how the dashboard doubled the meeting.
+   * **Nothing should be composing from this, and the field is on its way out.**
+   * It served the one host that recomposed the whole box on every drain
+   * (`base + transcriptText(session)`), and that model is gone: composition is
+   * `foldTranscript`, which appends from `next` and never moves a line the box
+   * already holds. Recomposing from `retained` necessarily puts ALL of the
+   * person's own words first and the whole meeting after them, which is why a
+   * note typed BETWEEN two segments came back above the entire transcript, and
+   * an edit to the last settled segment came back reverted AND relocated — both
+   * reproduced, both on one host only, which is how a second composition rule
+   * announces itself.
    *
-   * **This is a composition base, not a document.** It is only ever correct
-   * alongside the transcript that is about to be re-appended to it. It must not
-   * be persisted as the draft and it must not be fed back in as `composeBox` —
-   * see the module header for the four corruptions that causes. What a host
-   * persists is `text`, or the box the person is looking at; both hold the
-   * whole meeting, which is the only shape this function can reconcile.
+   * It survives only until the dashboard stops passing it as `base`, and it is
+   * deleted with that change. Until then: it is a composition base, not a
+   * document. It must not be persisted as the draft and it must not be fed back
+   * in as `composeBox` — see the module header for the four corruptions that
+   * causes. What a host persists is `text`, or the box the person is looking at;
+   * both hold the whole meeting, which is the only shape this function can
+   * reconcile.
    */
   readonly retained: string;
 }
