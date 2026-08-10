@@ -95,7 +95,13 @@ deep dives.
   excerpt persisted with the finding at the reviewed revision rather than fetched from the forge, so
   it survives a deleted branch and needs no credentials; before/after when a fix is proposed; the
   finding's hunk rather than the whole diff, with "Open pull request" kept as the honest boundary;
-  and repository source treated as untrusted data that may never become markup.
+  and repository source treated as untrusted data that may never become markup.;
+  [ADR-037 credentials the page cannot read](decisions/ADR-037-credentials-the-page-cannot-read.md) —
+  proposed move of the dashboard session out of `localStorage`: the refresh token to an httpOnly
+  cookie, the access token to memory only, and the never-expiring API key out of the browser
+  entirely. Because the dashboard is CROSS-ORIGIN with the API, `SameSite` gives no CSRF protection,
+  so an origin check plus a double-submit token ship WITH the cookie rather than after it — and a
+  `*` CORS origin combined with credentials must refuse to boot.
 
 Published benchmark results: [`../brainrouter-benchmark/reports/`](../brainrouter-benchmark/reports/).
 
