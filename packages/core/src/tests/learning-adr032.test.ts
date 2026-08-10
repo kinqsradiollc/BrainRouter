@@ -2196,3 +2196,261 @@ test('§6: the same mistake three times is learned without being asked, and reti
   });
 });
 
+
+/**
+ * ADR-032 §6 — the acceptance the ADR asks to be judged on, through REAL Agents.
+ *
+ * Every other §6 test here proves a property of `runLearningCheckpoint`. None
+ * proves that an Agent nobody told about a lesson picks it up, and
+ * "built, tested, nothing calls it" has been the recurring defect in this work.
+ * So three separate Agents, and assertions on what each one actually receives:
+ *
+ *   A — repeats a failing action, then succeeds another way. Its OWN turn
+ *       finalizer schedules the checkpoint; nothing here calls it.
+ *   B — a NEWLY CONSTRUCTED Agent is handed the lesson by its own context
+ *       preparation and loads the procedure through `get_skill`.
+ *   C — after trusted contradictory evidence retires it, a NEWLY CONSTRUCTED
+ *       Agent can neither be told the statement nor resolve the skill.
+ *
+ * Only the model's OUTPUT is stubbed; there is no live model in CI. The
+ * trajectory, gate, store, skill writer, central-pointer lifecycle and tool
+ * ceiling are all shipping code, and the stub quotes evidence out of the REAL
+ * reflection prompt rather than inventing it — an unquotable citation is refused
+ * by the gate, which is the behaviour under test.
+ *
+ * Five things make this work, each learned by watching it fail:
+ *   1. NOT `silent` — both halves of the loop skip sub-agents by design.
+ *   2. A trajectory over MIN_TRAJECTORY_CHARS, or no checkpoint is spent.
+ *   3. `read_file`, not `run_command` — the shell tool's policy is `ask`, and a
+ *      test has no terminal to approve at.
+ *   4. Evidence quoted from the DECODED trajectory; the reflector receives it
+ *      JSON-encoded, and a fragment of the encoded form is correctly refused.
+ *   5. A `callHostLearning` stub that mints a record id — D4 keeps a lesson away
+ *      from the model until its reversible pointer is durable.
+ */
+test('§6: one Agent learns from its own repetition, a second runs it, a third cannot once retired', async () => {
+  await withHomeAsync(async (home) => {
+    const workspace = path.join(home, 'abc-workspace');
+    fs.mkdirSync(workspace, { recursive: true });
+    // Real content, not padding: a checkpoint needs MIN_TRAJECTORY_CHARS before
+    // it spends anything, and three one-line errors is genuinely too thin.
+    fs.writeFileSync(
+      path.join(workspace, 'present.txt'),
+      ['# Migration runbook', '',
+        'The jobs table is written by the background worker on a five second tick.',
+        'A migration that rewrites it while the worker is live blocks on the row',
+        'locks the worker holds, and the driver gives up after its thirty second',
+        'statement timeout rather than waiting for a lock it cannot get.',
+        'Stop the worker, run the migration, then start the worker again.',
+        'This is the order the deploy script uses, for the same reason.',
+      ].join('\n') + '\n',
+    );
+
+    const originalFetch = globalThis.fetch;
+    let phase: 'A' | 'B' | 'R' | 'C' = 'A';
+    let skillId = '';
+    let reflections = 0;
+    let evidence = '';
+    let contradiction = '';
+    let learnedId = '';
+    const STATEMENT = 'Check that a path exists before reading it; a missing path fails the read.';
+    const REFLECTION = 'You review one agent work session';
+
+    const reply = (message: unknown) => new Response(JSON.stringify({
+      choices: [{ message }], usage: { prompt_tokens: 10, completion_tokens: 5 },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    const call = (id: string, name: string, args: unknown) => ({
+      content: '',
+      tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+    });
+
+    globalThis.fetch = (async (_url: unknown, options: any) => {
+      const body = JSON.parse(options.body);
+      if (String(body.messages?.[0]?.content ?? '').includes(REFLECTION)) {
+        reflections += 1;
+        // The trajectory arrives JSON-ENCODED on one line. Decode it and quote a
+        // real line: the gate verifies citations against the RAW trajectory.
+        const user = String(body.messages?.[1]?.content ?? '');
+        const encoded = user.split('\n').find((line) => line.trimStart().startsWith('"'));
+        if (encoded) {
+          try {
+            const decoded = String(JSON.parse(encoded.trim()));
+            const line = decoded.split('\n').find((entry) => entry.includes('File not found'));
+            if (line) evidence = line.trim();
+            const ok = decoded.split('\n').find((entry) => entry.includes('the path that used to be missing'));
+            if (ok) contradiction = ok.trim();
+          } catch { /* unquotable — must fail the gate, not be papered over */ }
+        }
+        if (phase === 'R') {
+          // The world changed: missing.txt exists now, so the read SUCCEEDED —
+          // the lesson's own falsifier, observed. Cited from the real trajectory
+          // for the same reason the candidate was.
+          const detail = contradiction;
+          return reply({ content: JSON.stringify({
+            candidates: [],
+            outcomes: detail ? [{ id: learnedId, outcome: 'contradicted', detail }] : [],
+          }) });
+        }
+        if (phase === 'A' && evidence) {
+          return reply({ content: JSON.stringify({
+            candidates: [{
+              form: 'procedure', statement: STATEMENT,
+              falsifier: 'reading a path that does not exist succeeds',
+              expectation: 'reads stop failing on missing paths',
+              evidence: [evidence], occurrences: 3,
+              steps: ['List the directory first', 'Read only a path that is present'],
+            }],
+            outcomes: [],
+          }) });
+        }
+        return reply({ content: JSON.stringify({ candidates: [], outcomes: [] }) });
+      }
+      // Answer what the CONVERSATION needs. A positional script hands the
+      // runtime's own calls the answer meant for the next model turn.
+      const issued = (body.messages ?? []).flatMap((m: any) => m.tool_calls ?? []);
+      const argsOf = (c: any) => String(c?.function?.arguments ?? '');
+      const misses = issued.filter((c: any) => argsOf(c).includes('missing.txt')).length;
+      const readPresent = issued.some((c: any) => argsOf(c).includes(phase === 'R' ? 'missing.txt' : 'present.txt'));
+      const loaded = issued.some((c: any) => c?.function?.name === 'get_skill');
+
+      if (phase === 'A') {
+        if (misses < 3) return reply(call(`miss-${misses + 1}`, 'read_file', { path: 'missing.txt' }));
+        if (!readPresent) return reply(call('hit-1', 'read_file', { path: 'present.txt' }));
+        return reply({ content:
+          'missing.txt is not in this workspace. I tried it three times and got the same File not '
+          + 'found each time, which was my mistake rather than a flake. present.txt is the file that '
+          + 'is actually here, and reading it answered the question: the runbook says to stop the '
+          + 'background worker before migrating, because it holds row locks on the jobs table.' });
+      }
+      if (phase === 'R') {
+        if (!readPresent) return reply(call('recheck', 'read_file', { path: 'missing.txt' }));
+        return reply({ content: 'the path that used to be missing is present now, so the old precaution no longer applies. '
+          + 'It was created by the build step between the two sessions, which is exactly the observation the lesson named '
+          + 'as the thing that would show it wrong. Reading it succeeded on the first attempt with no error at all.' });
+      }
+      if (phase === 'B') {
+        if (!loaded) return reply(call('load', 'get_skill', { name: skillId, section: 'workflow' }));
+        if (!readPresent) return reply(call('post-load', 'read_file', { path: 'present.txt' }));
+        return reply({ content: 'read the file that exists' });
+      }
+      if (!loaded) return reply(call('load-retired', 'get_skill', { name: skillId, section: 'workflow' }));
+      return reply({ content: 'cannot load that' });
+    }) as typeof globalThis.fetch;
+
+    const stubMcp: any = {
+      listTools: async () => ({ tools: [{
+        name: 'get_skill', __rawName: 'get_skill', description: 'Get a skill',
+        inputSchema: { type: 'object', properties: { name: { type: 'string' }, section: { type: 'string' } }, required: ['name'] },
+      }] }),
+      // D4 — a lesson stays away from the model until its reversible central
+      // pointer is durable, so a stub that cannot mint one proves nothing.
+      callHostLearning: async (request: any) => {
+        const op = String(request?.operation ?? '');
+        if (op === 'record') return { content: [{ text: JSON.stringify({ recordId: 'rec-abc-1' }) }] };
+        if (op === 'lifecycle') return { content: [{ text: JSON.stringify({ found: true, learnedStatus: 'active', memoryStatus: 'active' }) }] };
+        return { content: [{ text: JSON.stringify({ found: true, accepted: true }) }] };
+      },
+      // Anything reaching a server is NOT_FOUND: a learned skill must resolve
+      // from the user-scoped store, never remotely.
+      callTool: async () => ({ content: [{ text: 'NOT_FOUND_REMOTE' }] }),
+      close: async () => {},
+    };
+    // NOT `silent`: a silent agent is a sub-agent, and both halves of the loop
+    // deliberately skip those — setting it would disable what this proves.
+    const newAgent = (sessionKey: string): any => {
+      const agent = new Agent(
+        stubMcp,
+        { provider: 'openai', apiKey: 'test', model: 'test' },
+        { workspaceRoot: workspace, launchCwd: workspace, learnedTenant: TENANT, sessionKey },
+      );
+      agent.setAccessMode('shell');
+      return agent;
+    };
+    const noop = { onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {} };
+
+    try {
+      // ---- A: learn, unasked, from its own repeated failure -----------------
+      const agentA = newAgent('s-abc-a');
+      const answerA = await agentA.runTurn('Read missing.txt for me.', noop);
+      assert.match(answerA, /missing\.txt is not in this workspace/);
+
+      // The finalizer dispatches off-turn: wait on the STORE, so this asserts
+      // the agent's own lifecycle rather than a call we made.
+      const deadline = Date.now() + 20_000;
+      let learned = listLearnedItems(TENANT);
+      while (learned.length === 0 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        learned = listLearnedItems(TENANT);
+      }
+      assert.equal(learned.length, 1,
+        `nothing learned; log=${JSON.stringify(readLearningLog(TENANT).slice(0, 3))}`);
+      const item = learned[0]!;
+      assert.equal(item.form, 'procedure');
+      assert.ok(item.skillId, 'a procedure must be promoted to something runnable');
+      assert.equal(item.provenance.sessionKey, 's-abc-a');
+      assert.ok(item.provenance.evidence.length > 0, 'a lesson admitted citing nothing');
+      skillId = item.skillId!;
+      learnedId = item.id;
+
+      // ---- B: a DIFFERENT agent is handed it, and runs it -------------------
+      phase = 'B';
+      const agentB = newAgent('s-abc-b');
+      assert.equal(await agentB.runTurn('Read a file in this workspace.', noop), 'read the file that exists');
+
+      assert.ok(
+        agentB.chatHistory.some((m: any) => m.role === 'system' && String(m.content ?? '').includes(STATEMENT)),
+        'a new agent was never handed what the last one learned',
+      );
+      const loadedMsg = agentB.chatHistory.find((m: any) => m.role === 'tool' && m.tool_call_id === 'load');
+      assert.ok(loadedMsg, 'the learned procedure was never loaded');
+      assert.doesNotMatch(String(loadedMsg.content ?? ''), /NOT_FOUND_REMOTE/,
+        'a user-scoped learned procedure must resolve locally, not from a server');
+      assert.match(String(loadedMsg.content ?? ''), /Read only a path that is present/);
+      assert.equal(
+        agentB.chatHistory.some((m: any) =>
+          m.role === 'assistant' && JSON.stringify(m.tool_calls ?? []).includes('missing.txt')),
+        false,
+        'the new agent repeated the mistake it had just been told about',
+      );
+
+      // ---- retirement: a real Agent observes the falsifier -------------------
+      // The file the lesson was about now exists, so reading it succeeds — the
+      // exact observation the lesson named as the thing that would show it
+      // wrong. Driven through an Agent rather than a direct checkpoint call,
+      // because "retires on its own" is the claim being tested.
+      phase = 'R';
+      fs.writeFileSync(path.join(workspace, 'missing.txt'), 'the build creates this now\n');
+      const agentR = newAgent('s-abc-retire');
+      await agentR.runTurn('Try that path again.', noop);
+
+      const retired = Date.now() + 20_000;
+      let status = listLearnedItems(TENANT, { includeInactive: true })[0]?.status;
+      while (status !== 'retired' && Date.now() < retired) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        status = listLearnedItems(TENANT, { includeInactive: true })[0]?.status;
+      }
+      assert.equal(status, 'retired',
+        `the agent did not retire its own lesson after observing the falsifier; log=${JSON.stringify(readLearningLog(TENANT).slice(0, 4))}`);
+
+      // ---- C: a third agent can neither be told it nor run it ---------------
+      phase = 'C';
+      const agentC = newAgent('s-abc-c');
+      await agentC.runTurn('Load the old reading procedure.', noop);
+
+      assert.equal(
+        agentC.chatHistory.some((m: any) => m.role === 'system' && String(m.content ?? '').includes(STATEMENT)),
+        false,
+        'a retired lesson was still delivered to a new agent',
+      );
+      assert.match(
+        String(agentC.chatHistory.find((m: any) => m.role === 'tool' && m.tool_call_id === 'load-retired')?.content ?? ''),
+        /NOT_FOUND_REMOTE/,
+        'a retired procedure still resolved locally — retirement did not disable it',
+      );
+      assert.equal(resolveLearnedSkill(TENANT, skillId), undefined);
+      assert.ok(reflections > 0, 'no checkpoint ever ran');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});

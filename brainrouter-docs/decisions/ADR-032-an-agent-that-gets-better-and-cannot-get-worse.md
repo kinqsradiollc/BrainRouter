@@ -2,6 +2,21 @@
 
 **Status:** ACCEPTED — approved by the owner for implementation.
 **Depends on:** ADR-020 (memory self-improvement), ADR-021 (profiles, capabilities), ADR-029 (the workspace address space, the untrusted-content fence), ADR-031 (one skill library, generated copies).
+**§6 acceptance (2026-08-10):** The full-Agent A/B/C exercise §6 asks for now exists
+(`packages/core/src/tests/learning-adr032.test.ts`) and passes. Four separately constructed Agents,
+driven through `runTurn` with only the model's OUTPUT stubbed: A repeats a failing read and its own
+turn finalizer schedules the checkpoint — nothing in the test calls it; B is handed the lesson by its
+own context preparation and loads the promoted procedure through `get_skill`, resolving locally
+rather than from a server; R observes the falsifier (the file exists now, so the read succeeds) and
+retires the lesson on its own; C can neither be told the statement nor resolve the skill. The
+trajectory, gate, store, skill writer, central-pointer lifecycle and tool ceiling are all shipping
+code, and the stub quotes its evidence out of the REAL reflection prompt, so an unquotable citation
+is refused by the gate rather than waved through. Mutation-checked: disabling `applyLearnedContext`
+fails it with "a new agent was never handed what the last one learned".
+
+This closes §6 steps 1–4 deterministically. It is NOT the live-model exercise §6 also asks for; that
+remains outstanding and needs an owner-approved run.
+
 **Implementation status (2026-08-09):** PARTIAL — local, CLI, Desktop and hosted chat now have
 tenant-pinned learning, explicit human-correction ingress, reversible central/device governance,
 and bounded automatic checkpoints. Hosted reflection is admitted and enqueued atomically through
