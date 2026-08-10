@@ -518,6 +518,44 @@ test("cancelling while the microphone is being opened does not throw the compose
   } finally { restore(); }
 });
 
+test("leaving Meetings while the microphone prompt is up starts nothing and claims nothing", async () => {
+  const { host, restore } = installHost();
+  try {
+    let answerPrompt = (): void => undefined;
+    const stops = { count: 0 };
+    const microphone = { getTracks: () => [{ stop: () => { stops.count += 1; } }] } as unknown as MediaStream;
+    const prompt = new Promise<MediaStream>((resolve) => { answerPrompt = () => resolve(microphone); });
+    Object.defineProperty(globalThis, "navigator", {
+      value: { mediaDevices: { getUserMedia: () => prompt } },
+      configurable: true,
+      writable: true,
+    });
+
+    const mounted = await compose(host);
+    const record = button(mounted.root, "● Record audio");
+    // Record pressed, and `getUserMedia` sitting on the permission prompt.
+    await mounted.act(() => (record.props as { onClick(): void }).onClick());
+    assert.deepEqual(host.begun, [], "nothing exists yet — the prompt is still up");
+
+    // The whole view goes away while the prompt is still up. Its cleanup stops
+    // `recorderRef.current`, which used to be assigned only once `start` had
+    // RETURNED: the teardown stopped nothing, and the person's answer to the
+    // prompt then started a recording on a view that no longer existed.
+    mounted.unmount();
+    answerPrompt();
+    await new Promise((resolve) => { setTimeout(resolve, 0); });
+
+    // Nothing running: the microphone the prompt opened is handed straight back…
+    assert.equal(stops.count, 1, "the microphone was released");
+    // …and nothing claimed. `captureBegin` is where main registers this window
+    // as the capture's writer, and the window it would have named is gone — so a
+    // capture created here is one no window can ever be offered, transcribe or
+    // delete for the rest of the process's life.
+    assert.deepEqual(host.begun, []);
+    assert.deepEqual(host.discarded, []);
+  } finally { restore(); }
+});
+
 test("a capture another window is recording is named, not offered back with a Delete", async () => {
   const { host, restore } = installHost();
   try {

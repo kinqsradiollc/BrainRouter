@@ -16,6 +16,18 @@
  * previous one's end, so two overlapping appends would produce a transcript
  * whose gaps point at the wrong minute.
  *
+ * **`start` is cancellable, and that is a third decision rather than a detail.**
+ * It crosses two awaits — the microphone, then the store — and
+ * `getUserMedia` can sit on a permission prompt for as long as the person takes
+ * to answer it. A caller that tore this recorder down during that stretch used
+ * to be ignored: the microphone opened anyway, the recorder started on a view
+ * that no longer existed, chunks went on being written, and main went on
+ * claiming the capture under that window's holder id for the life of the
+ * process — filtered out of every window's offer, dropped from its own writers
+ * panel as "mine", and refused to every other window. Invisible and
+ * unstoppable. So `stop` marks the attempt abandoned and `start` checks after
+ * each await: nothing runs, and nothing stays claimed.
+ *
  * Every collaborator is injectable — the media stream, the `MediaRecorder`, the
  * clock — so the cadence and the "nothing accumulates" property can be tested
  * without a microphone.
@@ -47,6 +59,23 @@ export class MicrophoneUnavailableError extends Error {
   }
 }
 
+/**
+ * `start` was abandoned before the recorder was running — the caller called
+ * `stop` while the microphone prompt was still up.
+ *
+ * Its own type rather than a generic failure because the two mean opposite
+ * things to a surface: `MicrophoneUnavailableError` is something the user has to
+ * be told about, and this is the user's own decision already carried out. A
+ * banner saying "Could not start recording" over a recording nobody wanted is
+ * ADR-028's complaint in miniature.
+ */
+export class CaptureCancelledError extends Error {
+  constructor() {
+    super("That recording was stopped before it started.");
+    this.name = "CaptureCancelledError";
+  }
+}
+
 export class MeetingCaptureRecorder {
   private readonly capture: MeetingCaptureOps;
   private readonly onChunkError: (message: string) => void;
@@ -60,6 +89,15 @@ export class MeetingCaptureRecorder {
   private sessionId: string | null = null;
   private lastChunkAt = 0;
   private writes: Promise<unknown> = Promise.resolve();
+  /**
+   * Which attempt to start is the current one.
+   *
+   * Bumped by `stop`, and compared by `start` across each of its awaits. A flag
+   * would not do: `stop` also has to leave this object usable, because the same
+   * recorder is reused for the next Record — so what is cancelled is one
+   * ATTEMPT, not the recorder.
+   */
+  private attempt = 0;
 
   constructor(options: MeetingCaptureRecorderOptions) {
     this.capture = options.capture;
@@ -81,9 +119,14 @@ export class MeetingCaptureRecorder {
    */
   async start(input: StartCaptureInput): Promise<string> {
     if (this.sessionId) throw new Error("A meeting is already being captured.");
+    const attempt = this.attempt;
     let stream: MediaStream;
     try { stream = await this.openStream(); }
     catch { throw new MicrophoneUnavailableError(); }
+    // The prompt was answered after the caller went away. Nothing has been
+    // claimed yet, so releasing the tracks is the whole of it — and it is the
+    // difference between a recording light that goes out and one that does not.
+    if (attempt !== this.attempt) { stopTracks(stream); throw new CaptureCancelledError(); }
 
     let recorder: MediaRecorder;
     try { recorder = this.createRecorder(stream); }
@@ -104,6 +147,16 @@ export class MeetingCaptureRecorder {
       throw caught;
     }
 
+    // …and asked again after the SECOND await, which is the one that leaves
+    // something behind: the capture exists, its directory exists, and main has
+    // registered this window as its writer. Abandoning it silently is what made
+    // the capture unreachable from every window at once.
+    if (attempt !== this.attempt) {
+      stopTracks(stream);
+      await this.abandon(sessionId);
+      throw new CaptureCancelledError();
+    }
+
     this.stream = stream;
     this.recorder = recorder;
     this.sessionId = sessionId;
@@ -121,14 +174,17 @@ export class MeetingCaptureRecorder {
      * caller never received one: nothing could stop it, and nothing could start
      * anything else either, because the next `start` is refused by the id it
      * kept. So the tracks are released and the fields are put back, exactly as
-     * the two failures above do it, and the capture directory this leaves empty
-     * is reaped by the boot pass (a record with no audio under it).
+     * the two failures above do it, and the capture is handed back for the same
+     * reason the cancellation above hands it back: it is CLAIMED from the moment
+     * `begin` returned, and a claim nothing releases outlives the failure by the
+     * whole life of the process.
      */
     try { recorder.start(this.segmentMs); }
     catch {
       this.recorder = null;
       this.sessionId = null;
       this.release();
+      await this.abandon(sessionId);
       throw new MicrophoneUnavailableError();
     }
     return sessionId;
@@ -146,8 +202,15 @@ export class MeetingCaptureRecorder {
    * Stops the recorder, waits for the final chunk to be written, and only then
    * marks the capture stopped. Returning before the queue drains would let the
    * caller read audio that is missing its last segment.
+   *
+   * It is also the CANCEL for a `start` that has not returned yet, which is the
+   * same statement one step earlier: a caller asking for this recording to end
+   * before the microphone answered is asking for it not to begin. There is
+   * nothing here to wait for in that case — the fields are still empty — so this
+   * returns `null` at once and the abandoned `start` cleans up after itself.
    */
   async stop(): Promise<string | null> {
+    this.attempt += 1;
     const recorder = this.recorder;
     const sessionId = this.sessionId;
     this.recorder = null;
@@ -166,19 +229,6 @@ export class MeetingCaptureRecorder {
     try { await this.capture.stop(sessionId); }
     catch (caught) { this.onChunkError(message(caught, "Could not close this recording.")); }
     return sessionId;
-  }
-
-  /** Unmount path: release the microphone and let the pending writes finish. */
-  async dispose(): Promise<void> {
-    const recorder = this.recorder;
-    this.recorder = null;
-    this.sessionId = null;
-    if (recorder && recorder.state !== "inactive") {
-      recorder.onstop = null;
-      recorder.stop();
-    }
-    this.release();
-    await this.settled();
   }
 
   /** Resolves once every queued chunk has been written (or failed). */
@@ -206,6 +256,27 @@ export class MeetingCaptureRecorder {
   private release(): void {
     stopTracks(this.stream);
     this.stream = null;
+  }
+
+  /**
+   * A capture that was created and will never be recorded into: hand it back.
+   *
+   * `discard` rather than `stop`, because there is provably nothing to keep —
+   * both callers are on the far side of `begin` and short of
+   * `recorder.start(...)`, so `ondataavailable` has never fired and the
+   * directory holds a record with no audio under it. What actually has to happen
+   * is the CLAIM going away: main registers this window as the capture's writer
+   * the moment `begin` returns, and a claim nothing releases hides that capture
+   * from every window's offer and refuses it to every other window for the whole
+   * life of the process.
+   *
+   * A failure here is swallowed on purpose. Both callers are already throwing,
+   * one of them into a component that is unmounting, so there is no surface left
+   * to say it on; and the durable half is covered anyway, because the next
+   * launch's boot pass reaps a record with no audio under it.
+   */
+  private async abandon(sessionId: string): Promise<void> {
+    try { await this.capture.discard(sessionId); } catch { /* nothing left to tell */ }
   }
 }
 

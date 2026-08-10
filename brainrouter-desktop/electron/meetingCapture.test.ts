@@ -121,6 +121,40 @@ test('a segment index can only ever be written once', async () => {
   assert.equal(fs.existsSync(path.join(captureRoot(home), session.id)), false);
 });
 
+test('a lease an older build wrote is read off the record and dropped', async () => {
+  const home = userData();
+  const store = new MeetingCaptureStore(home);
+  const session = await store.begin({ scope: { orgId: null }, title: 'Recorded by an older build' });
+  await append(store, session.id, new Uint8Array([1, 2, 3]), 20_000);
+  // A record as the previous shape left it: a heartbeat stamped a moment ago by
+  // a window that no longer exists. Against the REAL clock rather than a frozen
+  // instant, because that is the case the field was dangerous in — a build that
+  // read it would take its own `now` from the wall clock, and a stamp from 2026
+  // would look ancient to it and let the reintroduction pass.
+  const file = path.join(captureRoot(home), session.id, 'session.json');
+  const stored = JSON.parse(fs.readFileSync(file, 'utf8')) as { session: Record<string, unknown> };
+  stored.session.writer = { holderId: 'wr-a-window-that-is-gone', heartbeatAt: new Date(Date.now() - 1_000).toISOString(), epoch: 1 };
+  // Also: the capture was left `stopped` by a clean quit, so the boot pass finds
+  // nothing to correct and never rewrites it. That is the case
+  // `recoverCaptureSession`'s own drop cannot reach, and the one where the dead
+  // name used to ride every later `{...session}` back onto the disk.
+  stored.session.status = 'stopped';
+  stored.session.stoppedAt = new Date(Date.now() - 2_000).toISOString();
+  fs.writeFileSync(file, JSON.stringify(stored));
+
+  const next = new MeetingCaptureStore(home);
+  const read = await record(next, session.id);
+  assert.equal('writer' in read, false, 'the record came back without the retired field');
+  // …and one ordinary write takes it off the disk for good, rather than leaving
+  // the name of a window that no longer exists on this device for ever.
+  await next.persist(read);
+  const rewritten = JSON.parse(fs.readFileSync(file, 'utf8')) as { session: Record<string, unknown> };
+  assert.equal('writer' in rewritten.session, false);
+  // The meeting itself is untouched by any of that: it has audio and no terminal
+  // state, so it is offered back — at once, with nothing to wait out.
+  assert.deepEqual((await next.resumable()).map((offer) => offer.sessionId), [session.id]);
+});
+
 test('a session a crash left recording is recovered, and the chunk it never claimed is adopted', async () => {
   const home = userData();
   const store = new MeetingCaptureStore(home);

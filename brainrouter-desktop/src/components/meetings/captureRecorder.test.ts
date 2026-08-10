@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { DEFAULT_MEETING_SEGMENT_MS, type MeetingCaptureSession } from "@kinqs/brainrouter-core/meetings";
 import type { MeetingCaptureOps } from "./captureOps.js";
-import { MeetingCaptureRecorder, MicrophoneUnavailableError } from "./captureRecorder.js";
+import { CaptureCancelledError, MeetingCaptureRecorder, MicrophoneUnavailableError } from "./captureRecorder.js";
 
 class FakeRecorder {
   state: "inactive" | "recording" | "paused" = "inactive";
@@ -38,21 +38,29 @@ class FakeRecorder {
 
 interface Recorded {
   appended: Array<{ id: string; bytes: number[]; durationMs: number }>;
+  /** Captures the store actually created — what main would have registered a writer for. */
+  begun: string[];
   stopped: string[];
+  discarded: string[];
   ops: MeetingCaptureOps;
 }
 
 function fakeCapture(begin?: () => Promise<MeetingCaptureSession>): Recorded {
   const appended: Recorded["appended"] = [];
+  const begun: string[] = [];
   const stopped: string[] = [];
+  const discarded: string[] = [];
   const session = (id: string): MeetingCaptureSession =>
     ({ id, startedAt: "2026-01-01T00:00:00.000Z", scope: { orgId: null, workspaceId: null }, title: "Sync", template: "general", status: "recording", segments: [] });
+  const create = begin ?? (async () => session("mtg-test"));
   return {
     appended,
+    begun,
     stopped,
+    discarded,
     ops: {
       available: true,
-      begin: begin ?? (async () => session("mtg-test")),
+      begin: async () => { const created = await create(); begun.push(created.id); return created; },
       append: async (id, bytes, durationMs) => { appended.push({ id, bytes: [...bytes], durationMs }); return session(id); },
       stop: async (id) => { stopped.push(id); return { ...session(id), status: "stopped" }; },
       read: async () => ({ bytes: new Uint8Array(), contentType: "audio/webm", missing: [] }),
@@ -62,7 +70,7 @@ function fakeCapture(begin?: () => Promise<MeetingCaptureSession>): Recorded {
       retrySegment: async (id) => session(id),
       onProgress: () => () => undefined,
       finalize: async () => undefined,
-      discard: async () => undefined,
+      discard: async (id) => { discarded.push(id); },
       resumable: async () => [],
       // Nor does it ask who is recording (D6): that is the compose view's
       // question, and the recorder's job is to have nowhere to put a chunk.
@@ -204,11 +212,105 @@ test("a recorder that will not start releases the microphone rather than leaving
   await assert.rejects(() => recorder.start({ scope: { orgId: null } }), MicrophoneUnavailableError);
   // A recording light that never goes out, for a meeting nothing is capturing.
   assert.equal(microphone.stops, 1);
+  // …and the capture goes back too. `begin` had already returned, so main has
+  // registered this window as its writer; a claim nothing releases hides that
+  // capture from every window's offer and refuses it to every other window for
+  // the life of the process, over a recording that never started.
+  assert.deepEqual(capture.discarded, ["mtg-test"]);
 
-  // …and the id goes back with it, or this window can never record again. (The
-  // capture directory `begin` created is left with no audio under it, which is
-  // exactly what the store's boot pass reaps.)
+  // …and the id goes back with it, or this window can never record again.
   broken = false;
+  assert.equal(await recorder.start({ scope: { orgId: null } }), "mtg-test");
+});
+
+/**
+ * G1 — `start` crosses two awaits, and a caller may go away across either.
+ *
+ * `getUserMedia` sits on a permission prompt for as long as the person takes to
+ * answer it, and leaving Meetings during that used to be ignored entirely: the
+ * microphone opened, the recorder started on a view that no longer existed, and
+ * main went on claiming the capture under a holder id whose window was gone —
+ * filtered out of every offer by `isWriting`, dropped from its own window's
+ * writers panel as "mine", and refused to every other window. The two tests
+ * below are the two awaits.
+ */
+test("a teardown while the microphone prompt is up starts nothing at all", async () => {
+  const capture = fakeCapture();
+  const microphone = tracked();
+  let answerPrompt = (): void => undefined;
+  const prompt = new Promise<MediaStream>((resolve) => { answerPrompt = () => resolve(microphone.stream); });
+  const fakes: FakeRecorder[] = [];
+  const recorder = new MeetingCaptureRecorder({
+    capture: capture.ops,
+    openStream: () => prompt,
+    createRecorder: () => { const next = new FakeRecorder(); fakes.push(next); return next as unknown as MediaRecorder; },
+  });
+
+  const starting = recorder.start({ scope: { orgId: null } });
+  // The person leaves Meetings. There is nothing to stop yet, which is exactly
+  // why this used to do nothing — and why it has to cancel instead.
+  assert.equal(await recorder.stop(), null);
+  answerPrompt();
+
+  await assert.rejects(() => starting, CaptureCancelledError);
+  assert.deepEqual(fakes, [], "no recorder was ever constructed");
+  assert.deepEqual(capture.begun, [], "no capture was created, so none is claimed");
+  // The microphone the prompt opened is handed straight back rather than left
+  // live for a recording nobody is making.
+  assert.equal(microphone.stops, 1);
+});
+
+test("a capture created after the caller went away is handed back, not abandoned", async () => {
+  const capture = fakeCapture();
+  const microphone = tracked();
+  let acknowledge = (): void => undefined;
+  const pending = new Promise<void>((resolve) => { acknowledge = resolve; });
+  const fakes: FakeRecorder[] = [];
+  const recorder = new MeetingCaptureRecorder({
+    // The store is the SECOND await, and the one that leaves something behind.
+    capture: { ...capture.ops, begin: async (input) => { await pending; return await capture.ops.begin(input); } },
+    openStream: async () => microphone.stream,
+    createRecorder: () => { const next = new FakeRecorder(); fakes.push(next); return next as unknown as MediaRecorder; },
+  });
+
+  const starting = recorder.start({ scope: { orgId: null } });
+  // Let the microphone answer, so the teardown lands on the store's await rather
+  // than on the prompt's.
+  await new Promise((resolve) => { setTimeout(resolve, 0); });
+  assert.equal(await recorder.stop(), null);
+  acknowledge();
+
+  await assert.rejects(() => starting, CaptureCancelledError);
+  assert.deepEqual(capture.begun, ["mtg-test"], "the capture really was created");
+  assert.equal(fakes[0]?.state, "inactive", "and the recorder was never started");
+  assert.equal(microphone.stops, 1);
+  // THE POINT. `begin` is where main registers this window as the capture's
+  // writer, and none of the four removals — Stop, close, the window going away,
+  // a failed Record — is reached by a `start` that simply threw. The claim would
+  // outlive the failure by the whole life of the process.
+  assert.deepEqual(capture.discarded, ["mtg-test"]);
+});
+
+test("a cancelled attempt leaves the recorder usable, because the next Record is the same object", async () => {
+  const capture = fakeCapture();
+  const microphone = tracked();
+  let answerPrompt = (): void => undefined;
+  const prompt = new Promise<MediaStream>((resolve) => { answerPrompt = () => resolve(microphone.stream); });
+  let opens = 0;
+  const recorder = new MeetingCaptureRecorder({
+    capture: capture.ops,
+    openStream: () => { opens += 1; return opens === 1 ? prompt : Promise.resolve(tracked().stream); },
+    createRecorder: () => new FakeRecorder() as unknown as MediaRecorder,
+  });
+
+  const starting = recorder.start({ scope: { orgId: null } });
+  await recorder.stop();
+  answerPrompt();
+  await assert.rejects(() => starting, CaptureCancelledError);
+
+  // What is cancelled is one ATTEMPT, not the recorder: `stop` has to leave this
+  // object able to record again, or a person who changed their mind at the
+  // permission prompt would find Record dead for the rest of the window's life.
   assert.equal(await recorder.start({ scope: { orgId: null } }), "mtg-test");
 });
 

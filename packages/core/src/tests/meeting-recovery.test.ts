@@ -107,6 +107,60 @@ test('finalized and empty sessions are filtered out of the offer', () => {
   assert.deepEqual(resumableSessions(sessions).map((session) => session.id), ['mtg-real']);
 });
 
+/**
+ * A record exactly as the build with a capture lease wrote it: the meeting, plus
+ * a `writer` whose heartbeat is ONE SECOND OLD at the instant it is read.
+ *
+ * Cast, because the field is gone from the model — which is the point: this is
+ * what is on disk, not what the model admits to. Stamped against the real clock
+ * rather than the fixture's, and that is load-bearing rather than sloppy. A
+ * reintroduced liveness read would take its `now` from the wall clock, so a
+ * heartbeat frozen in 2026 would look ancient to it and the reintroduction would
+ * pass this test. One second ago looks alive to any such rule, whichever clock
+ * it asks — and the assertions below are still exact, because nothing they call
+ * reads a clock at all.
+ */
+function killedWithFreshStamp(): MeetingCaptureSession {
+  return {
+    ...captured('mtg-killed', '2026-08-09T09:00:00.000Z'),
+    writer: {
+      holderId: 'wr-killed',
+      epoch: 1,
+      heartbeatAt: new Date(Date.now() - 1_000).toISOString(),
+      holder: 'Another window',
+    },
+  } as MeetingCaptureSession;
+}
+
+test('§6 — a meeting killed one second ago is offered back on the FIRST check, stamp and all', () => {
+  // The defect this closes, in its own words: the previous build read that
+  // stamp, and a writer that died a second ago leaves one that looks perfectly
+  // fresh for a whole staleness window. So a device holding a complete, playable
+  // meeting offered nothing — on surfaces that ask once and never ask again,
+  // which is §6's headline failure produced by the field meant to prevent it.
+  const killed = killedWithFreshStamp();
+  assert.ok(isResumableSession(killed), 'a dead writer’s stamp withheld the meeting it was meant to protect');
+  assert.deepEqual(resumableSessions([killed]).map((session) => session.id), ['mtg-killed']);
+  // …and the same record after a recovery pass, which is the whole path a host
+  // walks: read the record, correct it, offer it. Still offered, and now with no
+  // stamp left in it for anything to read.
+  const recovered = recoverCaptureSession(killed, '2026-08-09T09:01:00.000Z');
+  assert.ok(isResumableSession(recovered));
+  assert.deepEqual(resumableSessions([recovered]).map((session) => session.id), ['mtg-killed']);
+});
+
+test('§6 — and it can be accepted or thrown away without waiting anything out', () => {
+  // The other half of the same field. Both transitions release the audio, so
+  // both used to refuse while the stamp looked fresh — which meant a killed
+  // recording could be neither recovered NOR discarded until a threshold nobody
+  // was counting down expired. Liveness is the host's question now, asked of a
+  // writer map or a Web Lock before either of these is called. No `at` is passed
+  // for the same reason the stamp is real: these two DO read a clock, and a
+  // reintroduced guard would read it here.
+  assert.equal(finalizeCapture(killedWithFreshStamp()).status, 'finalized');
+  assert.equal(discardCapture(killedWithFreshStamp()).status, 'discarded');
+});
+
 test('D6 — capture stores with no session record are reapable orphans', () => {
   const sessions = [captured('mtg-known', '2026-08-09T09:00:00.000Z')];
   assert.deepEqual(orphanCaptureIds(['mtg-known', 'mtg-stray', 'mtg-older-stray'], sessions), ['mtg-stray', 'mtg-older-stray']);

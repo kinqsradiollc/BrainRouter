@@ -42,7 +42,9 @@
  *    staleness threshold — which was a timing heuristic standing in for a fact
  *    main already had, and it failed in the direction that costs a meeting: a
  *    window RELOAD left main heartbeating for a renderer that no longer existed,
- *    so the recording was refused to every window for ever.
+ *    so the recording was refused to every window for ever. A lease found in a
+ *    record an older build wrote is dropped as the record is parsed (see
+ *    `parseStored`), so no such stamp survives a single read of this store.
  *
  * **Which durability this actually buys, stated rather than implied.** A segment
  * is handed to the kernel and the file is closed; from that moment the bytes
@@ -255,10 +257,22 @@ function parseStored(raw: string, id: string): StoredCapture | null {
   // session would make every path this store derives from `session.id` point
   // somewhere other than where the audio actually is.
   if (session.id !== id || !Array.isArray(session.segments)) return null;
+  // A lease an older build wrote is READ AND DROPPED here — the one place every
+  // read of this store passes through. `recoverCaptureSession` drops it too, but
+  // only for a session the boot pass rewrites: a capture a clean quit left
+  // `stopped` is not changed by that pass, so without this the dead field rode
+  // every later `{...session}` back onto the disk for the rest of the meeting's
+  // life. Nothing reads it — the shape is gone from the shared model, and
+  // liveness on this host is the supervisor's per-process writer map (invariant
+  // 5) — so carrying it is retention with no purpose, and the name of a window
+  // that no longer exists is exactly the thing this round removed. Cast because
+  // a session no longer HAS the field; what is read here is what an older build
+  // left on the device.
+  const { writer: _retired, ...carried } = session as MeetingCaptureSession & { writer?: unknown };
   return {
     version: 1,
     contentType: typeof record.contentType === 'string' && record.contentType ? record.contentType : DEFAULT_CONTENT_TYPE,
-    session,
+    session: carried,
   };
 }
 

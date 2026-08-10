@@ -148,13 +148,15 @@ export function restoreCaptureSession(input: RestoreCaptureInput): MeetingCaptur
       ...(input.template ? { template: input.template } : {}),
       ...(input.language ? { language: input.language } : {}),
     });
-  // A lease written by an older build is dropped here, and this is the one line
-  // that has to do it: `isResumableSession` refuses to offer a session whose
-  // `writer` looks fresh, so a stamp left by a tab that was killed a second ago
-  // would withhold the recovered meeting for the whole of the old staleness
-  // window — §6's headline failure, arriving from a field nothing writes any
-  // more. Liveness on this host is the Web Lock, and only the Web Lock.
-  const { writer, ...adopted } = stored;
+  // A lease written by an older build is dropped here. `isResumableSession` no
+  // longer reads it — the field is gone from the shared model and
+  // `recoverCaptureSession` drops it too — so this is belt to that braces, and
+  // it stays because it is the earlier of the two: a stamp reaches adoption
+  // before it reaches recovery, and a terminal session skips recovery
+  // altogether. Cast because the shape is no longer part of a session; what is
+  // read here is what an older build left on the device. Liveness on this host
+  // is the Web Lock, and only the Web Lock.
+  const { writer: _legacy, ...adopted } = stored as MeetingCaptureSession & { writer?: unknown };
   const reconciled = adoptCaptureChunks(adopted, input.record.chunks, {
     segmentMs: input.segmentMs ?? DEFAULT_MEETING_SEGMENT_MS,
   });
@@ -227,8 +229,13 @@ export function resumableCaptures(
     // the user finalized or explicitly threw away.
     .filter((record) => !record.closed)
     .map((record) => ({ record, session: restoreCaptureSession({ record, scope: options.scope, at }) }));
+  // No instant is threaded into the shared rule, because it no longer has one to
+  // take: "audio present, no terminal state" is a question about a record, and
+  // every answer it used to give a clock was an answer about a writer that had
+  // already been killed. `at` above still stamps the RECOVERY, which is a fact
+  // about when this launch found the meeting.
   const offered = new Set(
-    resumableSessions(candidates.map((candidate) => candidate.session), { scope: options.scope, at })
+    resumableSessions(candidates.map((candidate) => candidate.session), { scope: options.scope })
       .map((session) => session.id),
   );
   // Ordered by the shared rule's own answer (newest first), not by the store's

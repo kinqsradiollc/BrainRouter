@@ -82,11 +82,10 @@ import { useActiveOrg } from "../../components/OrgWorkspaceProvider";
 import { BASE_URL } from "../../lib/client";
 import { getApiKey, getJwt } from "../../lib/client-auth";
 import { invalidateDashboardQueries, queryDashboard } from "../../lib/dashboardQuery";
-import { browserCaptureLocks, CAPTURE_HELD_ELSEWHERE } from "../../lib/meetings/captureLock";
-import { createSttTranscriber, DEFAULT_CAPTURE_MIME_TYPE } from "../../lib/meetings/captureQueue";
-import { openMeetingCaptureStore } from "../../lib/meetings/openCaptureStore";
+import { captureHeldNote, CAPTURE_LIVENESS_UNKNOWN } from "../../lib/meetings/captureLock";
 import { formatCaptureBytes } from "../../lib/meetings/storageBudget";
-import { MeetingCaptureSurface, type CaptureSurfacePorts } from "./captureSurface";
+import { browserCapturePorts } from "./capturePorts";
+import { MeetingCaptureSurface, storedStillRecording } from "./captureSurface";
 import { LiveTranscript } from "./LiveTranscript";
 import styles from "./meetings.module.css";
 
@@ -191,77 +190,15 @@ export default function MeetingsPage() {
   const busyRef = useRef(busy);
   busyRef.current = busy;
   const capture = useMemo(() => {
-    const ports: CaptureSurfacePorts = {
-      // One per TAB, over `navigator.locks`: a lock this tab holds is released
-      // by the browser the moment the tab dies, so a killed recording is
-      // offerable back on the very next check rather than after a threshold.
-      locks: browserCaptureLocks(),
-      openStore: (requestPersistence) => openMeetingCaptureStore({ requestPersistence }),
+    // Everything device-shaped — the lock table, the store, the microphone, the
+    // STT endpoint, the clock — is `capturePorts.ts`, where a test can hold it.
+    // What is passed from here is only what React owns, and all three are
+    // functions so the surface reads the CURRENT value without being rebuilt.
+    const ports = browserCapturePorts({
       activeOrgId: () => activeOrgRef.current,
-      async openMicrophone() {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        let recorder: MediaRecorder;
-        try {
-          recorder = new MediaRecorder(stream);
-        } catch (caught) {
-          // A recorder that could not be constructed leaves the stream live and
-          // `onstop` never fires, so the microphone would stay open forever.
-          stream.getTracks().forEach((track) => track.stop());
-          throw caught;
-        }
-        // A thin adapter rather than the `MediaRecorder` itself: the DOM's event
-        // handlers carry a whole `BlobEvent`, and the surface is written against
-        // the two facts it actually uses so a test can be a plain object.
-        return {
-          recorder: {
-            get mimeType() { return recorder.mimeType; },
-            get state() { return recorder.state; },
-            start: (timesliceMs: number) => recorder.start(timesliceMs),
-            stop: () => recorder.stop(),
-            pause: () => recorder.pause(),
-            resume: () => recorder.resume(),
-            set ondataavailable(handler: ((event: { readonly data: Blob }) => void) | null) {
-              recorder.ondataavailable = handler ? (event) => handler({ data: event.data }) : null;
-            },
-            get ondataavailable() { return null; },
-            set onstop(handler: (() => void) | null) { recorder.onstop = handler; },
-            get onstop() { return null; },
-          },
-          release: () => stream.getTracks().forEach((track) => track.stop()),
-        };
-      },
-      createTranscriber: (language) => createSttTranscriber({
-        baseUrl: BASE_URL,
-        token: getJwt() || getApiKey() || "",
-        ...(language ? { language } : {}),
-      }),
-      createMeeting: (input) => authFetch<{ id: string }>("/api/meetings", {
-        method: "POST",
-        body: { title: input.title, transcript: input.transcript, template: input.template },
-        orgId: input.orgId || undefined,
-      }),
-      async transcribeFile(blob, language) {
-        const token = getJwt() || getApiKey() || "";
-        const res = await fetch(`${BASE_URL}/v1/audio/transcriptions${language === "auto" ? "" : `?language=${encodeURIComponent(language)}`}`, {
-          method: "POST",
-          headers: { "Content-Type": blob.type || DEFAULT_CAPTURE_MIME_TYPE, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-          body: blob,
-        });
-        if (!res.ok) throw new Error(`Transcription failed (${res.status})`);
-        const out = (await res.json()) as { text?: string };
-        return out.text ?? "";
-      },
-      legacyDraftStorage: () => (typeof localStorage === "undefined" ? null : localStorage),
-      confirm: (question) => window.confirm(question),
-      now: () => Date.now(),
-      setTimer: (run, ms) => window.setTimeout(run, ms),
-      clearTimer: (handle) => window.clearTimeout(handle),
-      createObjectUrl: (blob) => URL.createObjectURL(blob),
-      revokeObjectUrl: (url) => URL.revokeObjectURL(url),
-      warn: (message, detail) => (detail === undefined ? console.warn(message) : console.warn(message, detail)),
       otherBusy: () => Boolean(busyRef.current),
       onCreated: (meetingId) => setCreatedMeetingId(meetingId),
-    };
+    });
     return new MeetingCaptureSurface(ports);
   }, []);
   const cap = useSyncExternalStore(capture.subscribe, capture.snapshot, capture.snapshot);
@@ -839,7 +776,17 @@ export default function MeetingsPage() {
                   // a moment ago and a tab that started recording since. The
                   // function asks the browser again on the click, which is the
                   // answer that actually decides.
-                  const writer = cap.writing.includes(entry.record.sessionId) ? CAPTURE_HELD_ELSEWHERE : null;
+                  const writer = cap.writing.includes(entry.record.sessionId)
+                    ? captureHeldNote(storedStillRecording(entry.record))
+                    : null;
+                  // Golden rule 23 — and the one this page was SILENT about. On
+                  // a browser with no Web Locks (a dashboard on plain http over
+                  // a LAN) `writing` is empty because nothing can be known, not
+                  // because nothing is being written: tab two was offered tab
+                  // one's LIVE recording with an enabled Discard beside it, and
+                  // one click deleted the manifest and every chunk. Disabled and
+                  // said out loud rather than refused after the click.
+                  const undeletable = writer ?? (cap.writersKnown ? null : CAPTURE_LIVENESS_UNKNOWN);
                   return (
                     <Fragment key={entry.record.sessionId}>
                       <div className={styles.recoverRow}>
@@ -860,7 +807,7 @@ export default function MeetingsPage() {
                             {cap.preview?.sessionId === entry.record.sessionId ? "Hide audio" : cap.busy === "preview" ? "Reading…" : "Play"}
                           </button>
                           <button type="button" className={styles.newBtn} disabled={cap.busy === "transcribe" || cap.recording || Boolean(writer)} onClick={() => void capture.pickUp(entry)}>Pick up</button>
-                          <button type="button" className={styles.track} disabled={cap.busy === "transcribe" || Boolean(writer)} title={writer ?? undefined} onClick={() => void capture.discard(entry.record)}>Discard</button>
+                          <button type="button" className={styles.track} disabled={cap.busy === "transcribe" || Boolean(undeletable)} title={undeletable ?? undefined} onClick={() => void capture.discard(entry.record)}>Discard</button>
                         </span>
                       </div>
                       {cap.preview?.sessionId === entry.record.sessionId ? (

@@ -196,6 +196,15 @@ export interface TabOptions {
    * Golden rule 23's case, and the only way to reach the fallback's behaviour.
    */
   readonly withoutLocks?: boolean;
+  /**
+   * A browser that said no to `navigator.storage.persist()` — D11's case, which
+   * is granted on engagement heuristics rather than on asking.
+   *
+   * It changes what a test can see as well as what the product promises: an
+   * already-persisted store is reused, so nothing asks the browser for anything
+   * again, and "did this page raise a storage prompt?" becomes unanswerable.
+   */
+  readonly persistenceRefused?: boolean;
 }
 
 export class CaptureTab {
@@ -220,6 +229,16 @@ export class CaptureTab {
   readonly warnings: string[] = [];
 
   readonly microphones: FakeMicrophone[] = [];
+
+  /**
+   * Every `openStore` this tab asked for, and whether it asked for PERSISTENCE.
+   *
+   * `openMeetingCaptureStore({ requestPersistence: true })` calls
+   * `navigator.storage.persist()`, which is a permission prompt — so "did this
+   * page ask the browser for something?" is a question a test has to be able to
+   * put, exactly as it can for the microphone.
+   */
+  readonly storeOpens: boolean[] = [];
 
   readonly objectUrls: string[] = [];
 
@@ -275,7 +294,10 @@ export class CaptureTab {
     });
     const ports: CaptureSurfacePorts = {
       locks: this.locks,
-      openStore: async () => ({ store: this.store, kind: "opfs", persisted: true, rejected: [] }),
+      openStore: async (requestPersistence) => {
+        this.storeOpens.push(requestPersistence);
+        return { store: this.store, kind: "opfs", persisted: options.persistenceRefused !== true, rejected: [] };
+      },
       activeOrgId: () => this.orgId,
       openMicrophone: async () => {
         if (this.microphoneFails) throw new Error("denied");

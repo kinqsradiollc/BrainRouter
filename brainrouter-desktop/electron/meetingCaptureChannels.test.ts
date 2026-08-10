@@ -160,6 +160,25 @@ test('the holder id on Record reaches the writer registry, and the one on Delete
   assert.equal(fs.existsSync(captureDirectory(harness.home, session.id)), false);
 });
 
+test('the window that is recording may throw its own live capture away', async () => {
+  const harness = wire();
+  const first = harness.window('wr-first');
+  const session = await record(harness, first);
+  await harness.call(first, 'meetings:captureAppend', session.id, new Uint8Array([1, 2]), 20_000);
+
+  // The other half of the guard, and the half no test had. `captureFinalize`'s
+  // holder id was pinned by the refusals above; `captureDiscard`'s was not, so
+  // dropping it from THIS handler left every assertion in this file green while
+  // the recording window's own Delete threw the refusal meant for a second
+  // window — the one window entitled to press it, told that somebody else was
+  // recording the meeting it was recording.
+  await harness.call(first, 'meetings:captureDiscard', session.id, first.holderId);
+
+  assert.equal(fs.existsSync(captureDirectory(harness.home, session.id)), false);
+  assert.deepEqual(await harness.call(first, 'meetings:captureWriting', { orgId: null }), []);
+  assert.deepEqual(await harness.call(first, 'meetings:captureResumable', { orgId: null }), []);
+});
+
 test('a window that reloads hands the recording back, and the next window may have it', async () => {
   const harness = wire();
   const first = harness.window('wr-first');

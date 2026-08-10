@@ -415,6 +415,81 @@ test('a window that goes away stops being the writer, and its recording is offer
   assert.deepEqual(await store.resumable(), []);
 });
 
+test('a window going away releases ITS captures and nobody else\'s', async () => {
+  const { supervisor } = harness(async () => 'text');
+  const mine = await supervisor.begin({ scope: { orgId: null }, title: 'Mine', writerId: 'wr-first' });
+  const theirs = await supervisor.begin({ scope: { orgId: null }, title: 'Theirs', writerId: 'wr-second' });
+
+  // `openWorkspaceWindow` mints one window per workspace inside ONE Electron
+  // process, so two live recordings in this map is the ordinary case rather than
+  // an exotic one. A release that ignored the id it was given would answer a
+  // reload of either window by handing BOTH recordings back: the surviving one
+  // would drop out of its own writers panel, rejoin every other window's offer
+  // with an enabled Delete beside it, and stop being refused to anyone — while
+  // its microphone was still open.
+  assert.deepEqual(supervisor.releaseWindow('wr-first'), [mine.id]);
+
+  assert.equal(supervisor.isWriting(mine.id), false);
+  assert.equal(supervisor.isWriting(theirs.id), true);
+  assert.deepEqual(await supervisor.writing(), [
+    { sessionId: theirs.id, holderId: 'wr-second', note: MEETING_CAPTURE_WRITER_NOTE },
+  ]);
+  // …and the recording that survived is still refused to everyone else.
+  await assert.rejects(() => supervisor.close(theirs.id, 'discard', 'wr-first'), /recording this meeting right now/);
+});
+
+test('picking a capture up claims nothing, because a pick-up is not a recording', async () => {
+  const { store, supervisor } = harness(async () => 'text');
+  const session = await supervisor.begin({ scope: { orgId: null }, title: 'Interrupted', writerId: 'wr-first' });
+  await supervisor.append(session.id, new Uint8Array([1, 2]), 20_000);
+  await supervisor.settle(session.id);
+  // The window that recorded it is gone — a reload, a close, a crash — so this
+  // is an ordinary unfinished recording again.
+  supervisor.releaseWindow('wr-first');
+
+  await supervisor.adopt(session.id, 'wr-second');
+
+  // Nobody is producing audio for this capture, so nothing may claim otherwise.
+  // A writer registered here would contradict the one thing this map means, and
+  // it would be permanent: none of the four removals — Stop, close, the window
+  // going away, a failed Record — is reached by a pick-up, so the capture would
+  // be hidden from every window's offer and refused to every other window for
+  // the rest of the process's life, having been transcribed perfectly.
+  assert.equal(supervisor.isWriting(session.id), false);
+  assert.deepEqual(await supervisor.writing(), []);
+  assert.deepEqual((await store.resumable()).map((row) => row.sessionId), [session.id]);
+  // …including the window that picked it up, which must be able to finish it.
+  await supervisor.close(session.id, 'finalize', 'wr-second');
+});
+
+test('Stop waits for the chunk that is still landing before it commits', async () => {
+  const { store, supervisor } = harness(async (bytes) => `chunk-${bytes.byteLength}`);
+  const session = await supervisor.begin({ scope: { orgId: null }, title: 'Stopped mid-write' });
+  // The last chunk, held between the recorder handing it over and the disk
+  // taking it — which is exactly where Stop lands, because `MediaRecorder`
+  // flushes a final blob and the write behind it is IPC plus a file.
+  let landed = (): void => undefined;
+  const inFlight = new Promise<void>((resolve) => { landed = resolve; });
+  const write = store.writeSegment.bind(store);
+  store.writeSegment = async (id, index, bytes) => { await inFlight; return await write(id, index, bytes); };
+
+  const appending = supervisor.append(session.id, new Uint8Array([1, 2, 3]), 20_000);
+  const stopping = supervisor.stop(session.id);
+  landed();
+  const stopped = await stopping;
+  await appending;
+
+  // Without the wait, Stop commits `stopCapture` over a session with no segments
+  // and the append that follows is refused — the shared model will not extend a
+  // capture that is already stopped. The meeting's last chunk is on disk and in
+  // no record: no text, no gap marker, nothing to retry from, and the recovery
+  // card advertising a byte count for audio the session never claimed.
+  assert.equal(stopped.status, 'stopped');
+  assert.deepEqual(stopped.segments.map((segment) => segment.byteLength), [3]);
+  await supervisor.settle(session.id);
+  assert.deepEqual((await record(store, session.id)).segments.map((segment) => segment.text), ['chunk-3']);
+});
+
 test('an anonymous Record claims nothing, and blocks nobody', async () => {
   const { supervisor } = harness(async () => 'text');
   // The caller would not say who it was, so there is nothing for another window

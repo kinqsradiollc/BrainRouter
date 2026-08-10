@@ -7,17 +7,37 @@
  * should I offer the user", and D2 answers it in one line — a session with audio
  * and no terminal state.
  *
- * All three halves of that matter. Without "has audio" a host offers back an
- * empty session created by a Record that was cancelled a second later, and the
- * offer becomes noise a user learns to dismiss. Without "no terminal state" it
- * offers back a meeting the user already finalized or explicitly threw away,
- * which is worse than noise — it is a product that will not let go of a
- * recording someone asked it to forget. And without "nobody is writing to it"
- * it offers back a meeting that is BEING RECORDED, with a Delete beside it — the
- * defect `captureLease.ts` exists to end, and the reason that clause is in this
- * predicate rather than in each host's offer surface.
+ * Both halves matter. Without "has audio" a host offers back an empty session
+ * created by a Record that was cancelled a second later, and the offer becomes
+ * noise a user learns to dismiss. Without "no terminal state" it offers back a
+ * meeting the user already finalized or explicitly threw away, which is worse
+ * than noise — it is a product that will not let go of a recording someone asked
+ * it to forget.
+ *
+ * ## The third clause, and why it is the CALLER's
+ *
+ * A recording in progress must not be offered back either — with a Delete
+ * beside it, that is the loss this ADR exists to end. For one round this module
+ * asked the record: a lease, with a heartbeat stamp a writer refreshed. It is
+ * gone, because a stamp answers a different question from the one being asked.
+ * "Is somebody recording into this?" is about a live process; a stamp is about a
+ * moment that has already passed. An application killed one second ago leaves a
+ * stamp that still looks fresh for the whole staleness window, so the meeting
+ * §6's destructive test is about was withheld from the offer — on surfaces that
+ * ask once and never ask again. The field intended to protect a live recording
+ * was reliably hiding a dead one.
+ *
+ * The hosts can answer it exactly, and only they can: the desktop keeps a writer
+ * map in the single process every window lives in, and the browser holds a Web
+ * Lock per browsing context, released by the browser itself the moment the
+ * context is gone. Neither survives a `kill -9`, which is the property a stamp
+ * could not have. So the predicate here is the two record-shaped clauses, and
+ * each host subtracts its own live captures at its own boundary — the desktop
+ * through `supervisor.isWriting`, the dashboard through `resumableCaptures`'
+ * `exclude`. Reintroducing a clause here that reads the record would be the
+ * withheld-meeting defect again, and this time with no host left compensating
+ * for it.
  */
-import { isCaptureBeingWritten } from './captureLease.js';
 import { capturedByteLength, isTerminalCaptureStatus, sameCaptureScope } from './captureSession.js';
 import type { MeetingCaptureScope, MeetingCaptureSession } from './types.js';
 
@@ -28,31 +48,24 @@ export interface ResumableSessionOptions {
    * offer is the moment that would happen. Omit to consider every scope.
    */
   readonly scope?: MeetingCaptureScope;
-  /** The instant the offer is being computed at; injected by tests. */
-  readonly at?: string;
 }
 
 /**
- * D2 — audio present, no terminal state, and nobody recording into it.
+ * D2 — audio present and no terminal state.
  *
  * Status is deliberately not narrowed to `recording`: a session stopped by a
  * clean quit still holds audio that never finished transcribing, and D7 says it
  * should drain when the endpoint returns. Recovery is about unfinished work, not
  * about how the process died.
  *
- * The liveness clause is deliberately NOT relative to the caller — there is no
- * "unless it is me" here. A holder that is recording a capture already has it in
- * hand and has no use for an offer of it, and the moment the rule takes a viewer
- * it stops being one rule and becomes the per-mount guard that kept failing.
- * When the writer stops, `releaseCaptureLease` (or expiry, if it was killed)
- * makes the same session offerable to everyone at once.
+ * It takes no clock, and that is the point rather than an omission. Every
+ * instant this answered differently at was an instant a killed writer's meeting
+ * was being kept from the person looking for it. What survives a kill is the
+ * record; the record now says only what the meeting IS, so this reads it and
+ * needs to know nothing about when.
  */
-export function isResumableSession(
-  session: MeetingCaptureSession,
-  at: string = new Date().toISOString(),
-): boolean {
+export function isResumableSession(session: MeetingCaptureSession): boolean {
   if (isTerminalCaptureStatus(session.status)) return false;
-  if (isCaptureBeingWritten(session, at)) return false;
   return capturedByteLength(session) > 0;
 }
 
@@ -62,9 +75,8 @@ export function resumableSessions(
   options: ResumableSessionOptions = {},
 ): readonly MeetingCaptureSession[] {
   const scope = options.scope;
-  const at = options.at ?? new Date().toISOString();
   return sessions
-    .filter((session) => isResumableSession(session, at))
+    .filter((session) => isResumableSession(session))
     .filter((session) => !scope || sameCaptureScope(session.scope, scope))
     .slice()
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
@@ -114,13 +126,13 @@ export function summarizeRecovery(session: MeetingCaptureSession): MeetingRecove
  * question. Keeping it pure is what lets the desktop reap directories and the
  * dashboard reap OPFS folders with one rule.
  *
- * An orphan is audio NO session claims, so a lease cannot protect it — there is
- * nothing to hold one. The live-capture case is covered by the caller passing
+ * An orphan is audio NO session claims, so nothing in the record can protect it
+ * — there is no record. The live-capture case is covered by the caller passing
  * every session it can read: a capture another window is recording has a record,
  * so it is not in this answer. Everything a reap decides on its own — a record
- * with no audio yet, a directory a `begin` has only half-written — must consult
- * `capturesBeingWritten` first, because those are exactly the shapes a recording
- * that started one second ago has.
+ * with no audio yet, a directory a `begin` has only half-written — must ask the
+ * host which captures are live first, because those are exactly the shapes a
+ * recording that started one second ago has.
  */
 export function orphanCaptureIds(
   storedCaptureIds: readonly string[],

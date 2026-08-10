@@ -65,6 +65,15 @@ test("A — the page hands the recording back on unmount, which is the one wire 
   // The switcher's org reaches it through a ref for the same reason.
   assert.match(page, /activeOrgId: \(\) => activeOrgRef\.current,/);
   assert.match(page, /activeOrgRef\.current = activeOrgId;/);
+  // …and the ports it is built from are `capturePorts.ts`, which is the module
+  // `capturePorts.test.ts` drives. A page that built its own would be tested by
+  // nothing again — and the wire that decides it is `locks`, where a
+  // manager-less stand-in leaves every cross-tab guard answering "nobody is
+  // writing" with the whole suite green.
+  assert.match(page, /const ports = browserCapturePorts\(\{/);
+  for (const inlined of ["browserCaptureLocks", "getUserMedia", "new MediaRecorder", "createSttTranscriber", "openMeetingCaptureStore"]) {
+    assert.equal(page.includes(inlined), false, `${inlined} is capturePorts.ts's, not the page's`);
+  }
 });
 
 test("the page keeps no second copy of the capture's state", () => {
@@ -146,6 +155,21 @@ test("golden rule 23 — the browser that cannot coordinate says so, in its own 
   assert.match(page, /\{!cap\.createOpen && cap\.coordination \? <div className=\{styles\.errorBar\} role="status">/);
   assert.match(page, /\{cap\.coordination \? <div className=\{styles\.errorBar\} role="status">/);
   assert.match(surface, /if \(!ports\.locks\.available\) this\.#state = \{ \.\.\.this\.#state, coordination: CAPTURE_LOCKS_UNAVAILABLE \};/);
+});
+
+test("golden rule 23 — the offer's Discard is DISABLED when this browser cannot vouch for the recording", () => {
+  // A render arrangement, and the one this page was silent about. `discard`
+  // refuses an unknown liveness in the function (driven in
+  // `captureSurface.test.ts`), but on a browser with no Web Locks that refusal
+  // arrives AFTER the click on a control that looked enabled — and the rule is
+  // to say so rather than behave differently in silence. `writer` alone is not
+  // enough: it is empty on such a browser because nothing can be known, not
+  // because nothing is being written.
+  assert.match(page, /const undeletable = writer \?\? \(cap\.writersKnown \? null : CAPTURE_LIVENESS_UNKNOWN\);/);
+  assert.match(page, /disabled=\{cap\.busy === "transcribe" \|\| Boolean\(undeletable\)\} title=\{undeletable \?\? undefined\}/);
+  // Pick up is deliberately NOT gated on it: a browser that cannot coordinate
+  // its tabs must still be able to recover a crashed meeting, which is D1b.
+  assert.match(page, /disabled=\{cap\.busy === "transcribe" \|\| cap\.recording \|\| Boolean\(writer\)\}/);
 });
 
 test("composition has ONE rule, and the recompose model is gone rather than unused", () => {

@@ -33,16 +33,24 @@
 // rounds to arrive here — but it is a rule (which state outranks which) and it
 // had already drifted between the hosts while it lived in each of them.
 //
-// `captureLease` is the eighth, and it is a different KIND of correction from
-// the seven above. Those moved a rule that each host had written out twice; this
-// one moves a FACT that neither host could hold at all. "Is someone recording
-// into this capture right now" was kept in React state in one mount, while the
-// store it describes is per-process on the desktop and per-origin in the
+// `captureHolder` is all that is left of an eighth, and the story is worth
+// keeping because the module is the shape of the lesson. "Is someone recording
+// into this capture right now" was once kept in React state in one mount, while
+// the store it describes is per-process on the desktop and per-origin in the
 // browser — so a second window or a second tab was offered a live recording back
-// with an enabled Delete. The fact now lives in the record every holder reads,
-// as a lease with a heartbeat and a fencing epoch (ADR-029 B2/Q1), and the
-// offer, the discard, the finalize and the reap all ask it rather than asking
-// themselves.
+// with an enabled Delete. The correction moved the fact INTO the record, as a
+// lease with a heartbeat and a fencing epoch, and that was wrong for a reason no
+// amount of care about epochs could fix: a heartbeat is a claim about an instant
+// that has passed, and the case this subsystem is judged on (§6) is a process
+// that was killed. A killed writer's stamp looks fresh, so the recovered meeting
+// was withheld from the offer for a staleness window, and a reloaded renderer's
+// stamp was renewed for ever by a process the page had already left. Both hosts
+// now hold liveness in something that dies when the writer does — a per-process
+// writer map behind a single-instance lock; a Web Lock per browsing context —
+// and hand it to this module's rules as `exclude`. What is shared is the NAME a
+// writer goes by, because a host that minted its own would get the
+// insecure-context fallback wrong; the answer is not shared, because it is not
+// the same question on both hosts.
 //
 // `transcriptFold` is the seventh, and the one that had already drifted into
 // two DIFFERENT answers rather than two copies of one: the desktop appended to
@@ -51,7 +59,7 @@
 // relocated or reverted on the other. Composition is one rule now, and it is
 // the append one — position in that box is the person's, not the surface's.
 export * from './types.js';
-export * from './captureLease.js';
+export * from './captureHolder.js';
 export * from './captureSession.js';
 export * from './transcript.js';
 export * from './recovery.js';

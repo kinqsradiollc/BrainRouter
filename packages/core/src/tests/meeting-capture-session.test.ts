@@ -180,6 +180,26 @@ test('D2 — recovery corrects both lies a crash leaves behind', () => {
   assert.equal(recovered.segments[0]!.state, 'done', 'settled segments survive untouched');
 });
 
+test('D2 — recovery drops the `writer` an older build left in the record', () => {
+  // A third lie a crash leaves behind, for records written by the build that
+  // kept liveness as a heartbeat stamp: "somebody is recording into this",
+  // asserted by a writer that is not running any more. Nothing reads it now, so
+  // the meeting is offered back regardless (`meeting-recovery.test.ts`) — but a
+  // name left in the record is carried by every later spread and written back to
+  // disk for the life of the meeting, waiting for someone to read it again.
+  const killed = {
+    ...withOneSegment(),
+    writer: { holderId: 'wr-killed', epoch: 3, heartbeatAt: '2026-08-09T10:00:59.000Z' },
+  } as MeetingCaptureSession;
+  const recovered = recoverCaptureSession(killed, '2026-08-09T11:00:00.000Z');
+  assert.equal('writer' in recovered, false, 'a dead writer’s name outlived the pass meant to correct the record');
+  // …and dropping it is all that happened: the meeting is the meeting.
+  assert.equal(recovered.id, 'mtg-test');
+  assert.equal(recovered.segments.length, 1);
+  assert.equal(capturedByteLength(recovered), 4096);
+  assert.equal(recovered.status, 'stopped');
+});
+
 test('recovery is idempotent and leaves a terminal session alone', () => {
   const once = recoverCaptureSession(withOneSegment(), '2026-08-09T11:00:00.000Z');
   const twice = recoverCaptureSession(once, '2026-08-09T12:00:00.000Z');

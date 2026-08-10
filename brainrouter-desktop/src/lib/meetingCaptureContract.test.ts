@@ -355,6 +355,14 @@ test('F3 — Create cannot delete a recording out from under itself, and Stop is
   // in the other direction, and `getUserMedia` can sit on a permission prompt.
   assert.match(submit, /return hold\.recording \|\| hold\.arming \|\| hold\.closing;/);
   assert.match(view, /holdStore\.update\(\{ arming: true \}\)/);
+  // G1 — and the recorder is parked where the unmount teardown can reach it
+  // BEFORE the same await, or leaving Meetings during the microphone prompt
+  // stops nothing at all. Positional, like the two above, because both orders
+  // typecheck; what the parked recorder then DOES is asserted in
+  // `meetingsView.test.tsx`.
+  const parkedAt = view.indexOf('recorderRef.current = recorder;');
+  const armedAt = view.indexOf('await recorder.start({');
+  assert.ok(parkedAt > 0 && armedAt > parkedAt, 'the recorder is reachable before the first await');
   assert.match(view, /holdStore\.update\(\{ recording: false, closing: Boolean\(recorder\) \}\)/);
   // In a `finally`, so a settle that THREW cannot wedge Create for good.
   assert.match(view, /\} finally \{ holdStore\.update\(\{ closing: false \}\); \}/);

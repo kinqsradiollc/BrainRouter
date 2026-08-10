@@ -124,6 +124,19 @@ export interface MeetingCaptureProgress {
  * It never has to name WHICH window, because it is only ever shown to a window
  * that is not the writer — the rows below carry the holder id, and a surface
  * drops its own before it renders anything.
+ *
+ * **And it belongs to this host, which is a decision rather than an oversight.**
+ * A byte-for-byte twin of it lived in `@kinqs/brainrouter-core/meetings` for a
+ * round, beside the lease, and that looked like the duplication D1b exists to
+ * refuse. It is not: the sentence names a WINDOW, and a window is the desktop's
+ * unit of a writer. The browser's own answer at the same moment says "another
+ * tab", because that is what a browsing context is there. One shared string
+ * would make one of the two hosts describe a topology it does not have — a
+ * worse failure than saying it twice, because it would be wrong on screen
+ * rather than merely repeated in a file. What IS shared is the rule either host
+ * applies (`resumableSessions`, and the live captures each subtracts from it)
+ * and the NAME a writer goes by (`newCaptureHolderId`); the wording of a fact
+ * about this host's own windows is this host's.
  */
 export const MEETING_CAPTURE_WRITER_NOTE = 'Another window is recording this meeting right now.';
 

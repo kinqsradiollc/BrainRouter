@@ -111,42 +111,36 @@ export interface MeetingSegment {
 }
 
 /**
- * D2/D6 — the writer that is appending to this capture right now, expressed IN
- * THE RECORD so that every holder of the store reads the same answer.
- *
- * It lives here, on the meeting, rather than beside the store, because that is
- * the whole correction: a `MeetingCaptureStore` is per-process on the desktop
- * and per-origin in the browser, so a second window or a second tab holds the
- * SAME store with none of the first one's memory. Liveness kept in either
- * holder's memory is invisible to the other, and what the other then does is
- * offer a live recording back as resumable with an enabled Delete.
- *
- * The rules — freshness, acquisition, the heartbeat, the fencing epoch — are in
- * `captureLease.ts`; only the shape is here, because this is what a host
- * serializes into `session.json` or into an OPFS manifest.
- */
-export interface MeetingCaptureLease {
-  /** One writer: a window or a tab, never a process or an origin. */
-  readonly holderId: string;
-  /**
-   * Bumped by every ACQUISITION and by nothing else, so a writer that lost the
-   * recording while it was stalled cannot renew its way back in (ADR-029 B2/Q1,
-   * migration 048: a lease without a fencing token is not a lock).
-   */
-  readonly epoch: number;
-  /** ISO instant of the last "I am still here". Expiry is measured from this and nothing else. */
-  readonly heartbeatAt: string;
-  /** What a surface calls this writer — "another window", "another tab". */
-  readonly holder?: string;
-}
-
-/**
  * D2 — the meeting itself, created at Record.
  *
  * The id is filesystem-safe by construction (`captureSession.ts` validates it)
  * because the host names a `0700` capture directory after it under D6. A
  * session with a path separator in its id would be a directory-traversal bug in
  * every host that stores audio, so the shared model refuses to mint one.
+ *
+ * ## There is no `writer` here, and there is not going to be one
+ *
+ * A record briefly carried one: a lease with a heartbeat stamp, so that "is
+ * somebody recording into this?" could be answered from the bytes rather than
+ * from one mount's React state. The shape was right for a store two processes
+ * share; it was wrong for the question, because the question is about a PROCESS
+ * and a stamp can only be about a moment. A tab or an app killed one second ago
+ * leaves a stamp that still looks perfectly fresh, so the meeting §6 exists to
+ * recover was withheld from the offer for the whole staleness window — on
+ * surfaces that ask once and never ask again. That is §6's headline failure,
+ * produced by the field meant to prevent it.
+ *
+ * Liveness is now the host's, and each host can state it exactly: the desktop
+ * keeps a writer map in the one process every window lives in (single-instance
+ * locked), and the browser holds a Web Lock per browsing context, which the
+ * browser itself releases the instant the context is gone. Both hand the answer
+ * to the shared rule as `exclude` at their own boundary.
+ *
+ * So a `writer` found in a persisted record is a field from an older build, it
+ * is read by nothing, and `recoverCaptureSession` drops it rather than carrying
+ * it forward. Adding one back would not merely be redundant — it would be a
+ * second, slower opinion that the offer would start honouring again the moment
+ * somebody restored the read.
  */
 export interface MeetingCaptureSession {
   readonly id: string;
@@ -162,10 +156,4 @@ export interface MeetingCaptureSession {
   readonly stoppedAt?: string;
   /** Set once `status` is terminal (`finalized` or `discarded`). */
   readonly closedAt?: string;
-  /**
-   * Who is writing to this capture right now, if anyone. Absent means nobody has
-   * ever claimed it; a lapsed lease is kept rather than removed, because the
-   * fencing epoch has to outlive its term (`captureLease.ts`).
-   */
-  readonly writer?: MeetingCaptureLease;
 }

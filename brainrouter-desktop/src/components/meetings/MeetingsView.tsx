@@ -826,6 +826,12 @@ function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onCaptureHold, o
    * capture stopped, and leaves the host's queue draining what is on disk (D3) —
    * so what the user finds when they come back is a finished recording waiting
    * to be transcribed, which is what actually happened.
+   *
+   * G1 — and it reaches a recording that has not STARTED yet, which is the
+   * defect this line looked like it was already covering. `startRecording` parks
+   * the recorder here before its first await, and `stop` cancels the attempt, so
+   * leaving during the microphone prompt ends with nothing running and nothing
+   * claimed instead of a recorder feeding a view that is gone.
    */
   useEffect(() => () => {
     mountedRef.current = false;
@@ -839,12 +845,16 @@ function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onCaptureHold, o
     // it back beside its own "Stop recording" button is nonsense, and its
     // "Delete audio" deletes the directory the recorder is appending to.
     //
-    // F1/D6 — the `exclude` is belt-and-braces now rather than the mechanism:
-    // the shared predicate drops a capture that is being written to whoever is
-    // asking, because the answer is in the record. What this window still knows
-    // that the record cannot is the moment BEFORE the session exists (Record has
-    // been pressed, `begin` has not returned) — which is what `exclude` and
-    // `arming` are left for.
+    // F1/D6 — the `exclude` is belt-and-braces now rather than the mechanism,
+    // and the braces moved: the answer is no longer in the record at all. The
+    // shared predicate is "audio present, no terminal state" and takes no clock,
+    // because a stamp in the record answered a question about a live process —
+    // an app killed one second ago left one that still looked fresh, and the
+    // meeting §6's destructive test is about was withheld from this very offer.
+    // Main subtracts its own live captures at the channel, from a writer map
+    // that dies with the writer. What this window still knows that neither can
+    // is the moment BEFORE the session exists (Record has been pressed, `begin`
+    // has not returned) — which is what `exclude` and `arming` are left for.
     void capture.resumable(captureScope, hold.sessionId ? { exclude: [hold.sessionId] } : {})
       .then((rows) => { if (active) { setRecoveries(rows); setRecoveryError(""); } })
       .catch((caught) => { if (active) { setRecoveries([]); setRecoveryError(errorText(caught, "Could not check this device for unfinished recordings.")); } });
@@ -1023,6 +1033,17 @@ function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onCaptureHold, o
     // `getUserMedia` can sit on a permission prompt for as long as the person
     // takes to answer it.
     holdStore.update({ arming: true });
+    // G1 — and parked where the teardown below can REACH it, also before the
+    // first await. The unmount effect stops `recorderRef.current`, and this used
+    // to be assigned only once `start` had returned: leaving Meetings while the
+    // microphone prompt was up therefore stopped nothing, and the recording
+    // started on a view that no longer existed. The microphone stayed open, the
+    // chunks kept being written, and main went on claiming the capture under a
+    // holder id whose window was gone — filtered out of every offer by
+    // `isWriting`, dropped from this window's own writers panel as "mine", and
+    // refused to every other window. `start` is cancellable across both of its
+    // awaits, and this is what does the cancelling.
+    recorderRef.current = recorder;
     try {
       const sessionId = await recorder.start({
         scope: captureScope, title, template,
@@ -1037,11 +1058,20 @@ function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onCaptureHold, o
       liveRef.current = null;
       setLive(null);
       setPhase(null);
-      recorderRef.current = recorder;
       holdStore.update({ sessionId, recording: true, arming: false, closing: false });
       setPaused(false);
     } catch (caught) {
       holdStore.update({ arming: false });
+      // The slot is deliberately left as it is. A recorder that never started is
+      // inert — `stop` on it answers `null`, `togglePause` cannot be reached
+      // without `recording`, and the next Record overwrites it — while clearing
+      // it would race the other direction: a cancelled attempt rejects long
+      // after a second Record has parked ITS recorder here, and blanking that
+      // one is how a live recording becomes unreachable from the teardown.
+      // `CaptureCancelledError` carries its own sentence for the same reason it
+      // has its own type: if this ever does reach a surface it should say what
+      // happened, not "Could not start recording." over a stop somebody asked
+      // for (ADR-028).
       setError(errorText(caught, "Could not start recording."));
     }
   }, [capture, captureScope, language, template, title, holdStore]);

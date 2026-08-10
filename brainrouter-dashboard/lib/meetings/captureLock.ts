@@ -59,8 +59,62 @@ export const CAPTURE_LOCK_PREFIX = "brainrouter:meeting-capture:";
 export const CAPTURE_LOCKS_UNAVAILABLE =
   "This browser cannot tell whether another tab is recording — it has no Web Locks API, which usually means this page is not on a secure origin. Recording in two tabs at once is not coordinated here: keep this meeting in one tab.";
 
-/** What a surface says about a capture another tab is holding. */
-export const CAPTURE_HELD_ELSEWHERE = "Another tab of this browser is recording this meeting right now.";
+/**
+ * What a surface says about a capture another tab of this origin is holding —
+ * and why that is two sentences rather than one.
+ *
+ * A lock here means "a tab of this browser has this capture IN HAND": its
+ * recorder is writing audio into it, OR its transcription queue is writing
+ * segments into it. Those are different facts about a meeting, and this host
+ * used to report both as the first one — so a tab that had merely opened a
+ * crashed recording was announced to every other tab as recording it, and the
+ * Delete it blocked was blocked with a sentence that was not true.
+ *
+ * **The desktop draws the line in the same place and can afford a narrower
+ * mechanism.** `MeetingTranscriptionSupervisor.#writers` registers the RECORDING
+ * window only, and `adopt` "registers no writer of its own, because a pick-up is
+ * not a recording". That works there because one Electron process holds every
+ * window and `#entries` hands both windows the SAME queue over a capture, so two
+ * pick-ups cannot become two writers. A browser tab has no shared process: each
+ * tab builds its own `MeetingTranscriptionQueue`, and two of them over one
+ * capture interleave their `apply` calls until the later persist erases the
+ * earlier one's segments. So the lock has to cover the queue and not only the
+ * recorder — and the honesty the desktop gets for free is bought here by saying
+ * WHICH of the two is true instead of always claiming the louder one.
+ */
+export const CAPTURE_RECORDING_ELSEWHERE = "Another tab of this browser is recording this meeting right now.";
+
+/** The pick-up's sentence: held, being transcribed and composed, but not recorded. */
+export const CAPTURE_OPEN_ELSEWHERE = "Another tab of this browser has this meeting open.";
+
+/**
+ * Which of the two a surface should print, from the only evidence there is: the
+ * capture's own stored status. A tab that picked a recording up persists it as
+ * `stopped` before anything else happens to it, so a held capture that still
+ * says `recording` is one whose microphone is open.
+ */
+export function captureHeldNote(stillRecording: boolean): string {
+  return stillRecording ? CAPTURE_RECORDING_ELSEWHERE : CAPTURE_OPEN_ELSEWHERE;
+}
+
+/**
+ * Golden rule 23 — what a surface says when it is asked to DELETE a recording on
+ * a browser that cannot tell whether another tab is writing to it.
+ *
+ * Reproduced end to end on a dashboard served over plain http, which is a shape
+ * D1b names: tab one recording with the microphone open, tab two offered that
+ * LIVE capture in its recovery list, one click and the manifest and every chunk
+ * were gone — while tab one still reported `recording: true` and told the person
+ * their audio was safe. `known: false` is not "nobody is writing", and the one
+ * path that destroys a meeting is not allowed to read it as if it were.
+ *
+ * Create is deliberately still allowed through the same unknown: it can only
+ * ever finalize a capture THIS tab has been writing itself, and wedging it would
+ * be a bigger outage than the one it guards against. Discard is the opposite —
+ * it acts on a row this tab never touched.
+ */
+export const CAPTURE_LIVENESS_UNKNOWN =
+  "This browser cannot tell whether another tab is recording this meeting, so it will not delete it. Pick it up here first — a recording this tab is holding can be discarded.";
 
 /** The lock's name for one capture. Exclusive per session, shared by every tab. */
 export function captureLockName(sessionId: string): string {

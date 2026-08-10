@@ -10,7 +10,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  acquireCaptureLease,
   appendSegment,
   createCaptureSession,
   finalizeCapture,
@@ -224,15 +223,17 @@ test("D6 — a lease left in a record by an older build is read and DROPPED", ()
   const at = "2026-08-10T09:00:10.000Z";
   let session = createCaptureSession({ id: "mtg-1", startedAt: "2026-08-10T09:00:00.000Z", scope: SCOPE });
   session = appendSegment(session, { byteLength: 1024, durationMs: 20_000 });
-  const leased = acquireCaptureLease(session, { holderId: "wr-killed", holder: "Another tab" }, at);
-  assert.equal(leased.ok, true);
-  if (!leased.ok) return;
+  // Written out by hand rather than produced by `acquireCaptureLease`, which no
+  // longer exists: a migration fixture has to keep saying what the OLD build
+  // wrote long after the code that wrote it is deleted. The stamp is nine
+  // seconds old at `at`, which the old thirty-second threshold read as live.
+  const lease = { holderId: "wr-killed", holder: "Another tab", epoch: 1, heartbeatAt: "2026-08-10T09:00:01.000Z" };
   // Exactly what the previous build wrote: the lease inside the session AND
   // mirrored at the top level of the envelope.
-  const legacy = JSON.stringify({ session: leased.session, writer: leased.lease });
+  const legacy = JSON.stringify({ session: { ...session, writer: lease }, writer: lease });
 
   const restored = restoreCaptureSession({ record: record({ payload: legacy, chunks: chunks(1) }), scope: SCOPE, at });
-  assert.equal(restored.writer, undefined, "the stamp does not survive into the session");
+  assert.equal((restored as { writer?: unknown }).writer, undefined, "the stamp does not survive into the session");
   assert.equal(restored.segments.length, 1, "and the meeting itself comes back untouched");
   // One second after the kill, with no threshold waited out and nothing re-asked.
   assert.deepEqual(

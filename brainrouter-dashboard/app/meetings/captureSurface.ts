@@ -76,8 +76,10 @@ import {
 } from "@kinqs/brainrouter-core/meetings";
 
 import {
-  CAPTURE_HELD_ELSEWHERE,
+  captureHeldNote,
+  CAPTURE_LIVENESS_UNKNOWN,
   CAPTURE_LOCKS_UNAVAILABLE,
+  CAPTURE_RECORDING_ELSEWHERE,
   type CaptureLocks,
 } from "../../lib/meetings/captureLock";
 import {
@@ -278,6 +280,17 @@ export interface CaptureSurfaceState {
    * is a rendering, and a rendering is always slightly old.
    */
   readonly writing: readonly string[];
+  /**
+   * Whether the last check could ANSWER "which captures is some tab of this
+   * browser writing to?" at all.
+   *
+   * A property of the last reading rather than of the browser, because a lock
+   * service can also refuse one query and answer the next. `false` is what the
+   * offer's Discard is disabled by (golden rule 23: say so, rather than silently
+   * behaving differently) — `discard` refuses the same case in the function,
+   * which is the answer that actually decides.
+   */
+  readonly writersKnown: boolean;
   readonly createError: string;
   readonly busy: CaptureBusy;
   readonly session: MeetingCaptureSession | null;
@@ -304,6 +317,7 @@ const EMPTY_STATE: CaptureSurfaceState = {
   warning: "",
   coordination: "",
   writing: [],
+  writersKnown: true,
   createError: "",
   busy: "",
   session: null,
@@ -322,6 +336,19 @@ const DRAFT_SAVE_DELAY_MS = 250;
 export function describe(caught: unknown, fallback: string): string {
   const message = caught instanceof Error ? caught.message.trim() : "";
   return message || fallback;
+}
+
+/**
+ * Whether the capture ON THE DEVICE still says a microphone is open on it —
+ * which of `captureHeldNote`'s two sentences another tab's lock deserves.
+ *
+ * Read from the record's payload rather than from a restored session, because
+ * recovery rewrites `recording` → `stopped` by design: nothing is recording a
+ * capture that came back out of storage, so a restored copy can never answer
+ * this question and would call every live recording "open".
+ */
+export function storedStillRecording(record: CaptureSessionRecord): boolean {
+  return parseCapturePayload(record.payload).session?.status === "recording";
 }
 
 export class MeetingCaptureSurface {
@@ -351,6 +378,12 @@ export class MeetingCaptureSurface {
 
   /** One per meeting, and the SINGLE WRITER of its session while it exists. */
   #queue: MeetingTranscriptionQueue | null = null;
+
+  /**
+   * The capture this tab has stopped RECORDING and will hand back as soon as it
+   * has finished writing to it — see `#handBackIfQuiet`.
+   */
+  #handingBack: string | null = null;
 
   #wake: number | null = null;
 
@@ -513,8 +546,21 @@ export class MeetingCaptureSurface {
    * clicked Allow landed into a meeting that no longer existed. A lock has no
    * such hole: it is held from this line, by the browser, whether or not this
    * tab ever gets a microphone, and it is released the instant the tab dies.
+   *
+   * **And this path is cancellable, in three places.** `dispose()` can only stop
+   * a recorder that already EXISTS, and the stretch in front of two permission
+   * prompts is exactly the one where none does yet — so `#disposed` is asked
+   * before each prompt and once more before the recorder starts. Not after every
+   * await: the checks in between were undone by the ones after them, and a guard
+   * whose removal changes nothing observable is a guard nobody can keep honest.
+   * The three that are left each stop something different, and `#abandonArming`
+   * says what each cost when it was missing.
    */
   async record(): Promise<void> {
+    // 1/3 — a press that lands after the teardown. Below this line is
+    // `openStore(true)`, which asks the browser for persistent storage: a
+    // permission prompt raised by a page the person has already left.
+    if (this.#disposed) return;
     this.#patch({ createError: "", warning: "" });
     // Raised before the first await and lowered only once the recorder is
     // running (or has failed to start). `recording` cannot cover this stretch:
@@ -535,7 +581,7 @@ export class MeetingCaptureSurface {
       // Before `begin`, and so before `getUserMedia`. A fresh id cannot already
       // be taken, so the refusal is unreachable rather than impossible — and an
       // unreachable branch that says what it means beats one that assumes.
-      if (await this.#ports.locks.hold(sessionId) === "taken") throw new Error(CAPTURE_HELD_ELSEWHERE);
+      if (await this.#ports.locks.hold(sessionId) === "taken") throw new Error(CAPTURE_RECORDING_ELSEWHERE);
       held = sessionId;
       // Open question 5 — the org is frozen HERE, at Record. Nothing rewrites a
       // session's scope afterwards, so a recording that started under one
@@ -549,6 +595,14 @@ export class MeetingCaptureSurface {
         ...(this.#state.language === "auto" ? {} : { language: this.#state.language }),
       });
       await store.begin({ sessionId, startedAt, payload: serializeCapturePayload({ ...(title ? { title } : {}), session }) });
+      // 2/3 — the last line before `getUserMedia`. A microphone prompt is not
+      // something to raise on a page the person has left, and the lock and the
+      // record taken above go back with this: it is the ordering that used to
+      // leave a lock nothing would ever release.
+      if (this.#disposed) {
+        await this.#abandonArming(store, sessionId);
+        return;
+      }
     } catch (caught) {
       this.#arming = false;
       if (held) this.#ports.locks.release(held);
@@ -580,6 +634,15 @@ export class MeetingCaptureSurface {
         // recording with an unrecorded format beats no recording.
         this.#patch({ warning: `This recording's details could not be saved (${describe(caught, "unknown error")}). If it has to be recovered later it will be read back as WebM.` });
       }
+      // 3/3 — the last await before the recorder starts, and the worst one to
+      // be missing: past this line `dispose()` has a recorder to stop, before it
+      // a `start()` runs on a page that has gone, writing chunks through a
+      // closure nothing can reach and holding the microphone open. It covers the
+      // prompt the person answered on their way out, too.
+      if (this.#disposed) {
+        await this.#abandonArming(store, sessionId, microphone);
+        return;
+      }
       const recorder = microphone.recorder;
       const opened = microphone;
       recorder.ondataavailable = (event) => {
@@ -598,28 +661,60 @@ export class MeetingCaptureSurface {
       this.#patch({ recording: true, paused: false });
       this.#arming = false;
     } catch {
-      this.#arming = false;
-      // A recorder that would not start leaves the stream live and `onstop`
-      // never runs, so without this the microphone stays open with nothing
-      // recording it.
-      microphone?.release();
-      this.#ports.locks.release(sessionId);
-      this.#recorder = null;
-      this.#microphone = null;
-      // Only tear down the queue and the guard if they are THIS recording's: a
-      // previous capture may still be legitimately draining, and dropping the
-      // guard for one that has only just begun is the same defect with the
-      // opposite sign. Leaking it wedges Create PERMANENTLY — every later submit
-      // refuses with "stop the recording first" while `recording` is false and
-      // the button says "Record".
-      if (this.#queue?.session.id === sessionId) {
-        this.#queue = null;
-        this.#patch({ session: null });
-      }
-      if (this.#active?.sessionId === sessionId) this.#active = null;
-      void store.delete(sessionId).catch(() => {});
+      // A microphone that was refused, or a recorder that would not start — the
+      // second of which leaves the stream live with `onstop` never running, so
+      // the teardown below is what stops the microphone light.
+      await this.#abandonArming(store, sessionId, microphone);
       this.#patch({ createError: "Microphone access was denied or is unavailable." });
     }
+  }
+
+  /**
+   * A recording that was being armed and now must not exist: nothing running,
+   * nothing held, nothing half-claimed.
+   *
+   * Two callers, one shape. The microphone was refused (or the recorder would
+   * not start), or the page went away while `record()` was still waiting on an
+   * `await` — and the second is the one `dispose()` structurally cannot cover,
+   * because it only knows how to stop a recorder that already exists. All three
+   * orderings were reproduced and each lost something different:
+   *
+   * - **teardown after the lock, before the recorder** — `releaseAll()` handed
+   *   the lock back and the recording ran holding NOTHING, so a second tab was
+   *   offered the live meeting and its Discard was not refused;
+   * - **teardown before the first chunk** — that same lock-less manifest was
+   *   REAPED by the next tab's ordinary mount refresh, and the recorder appended
+   *   into a session that no longer existed;
+   * - **teardown BEFORE the lock is taken** — the common ordering, since
+   *   `dispose()` runs synchronously to its end when there is no recorder yet:
+   *   the lock was acquired after `releaseAll()` and nothing would ever release
+   *   it, so every tab read that capture as being recorded, permanently
+   *   un-offerable and undeletable.
+   *
+   * The record goes with it. The recorder never started, so there is no audio to
+   * lose — and a chunk-less manifest left behind is only reclaimable by a reap
+   * that can prove nobody is writing to it, which a browser without Web Locks
+   * cannot do at all.
+   */
+  async #abandonArming(store: MeetingCaptureStore, sessionId: string, microphone?: CaptureMicrophone): Promise<void> {
+    this.#arming = false;
+    microphone?.release();
+    this.#ports.locks.release(sessionId);
+    if (this.#recorder === microphone?.recorder) this.#recorder = null;
+    if (this.#microphone === microphone) this.#microphone = null;
+    // Only tear down the queue and the guard if they are THIS recording's: a
+    // previous capture may still be legitimately draining, and dropping the
+    // guard for one that has only just begun is the same defect with the
+    // opposite sign. Leaking it wedges Create PERMANENTLY — every later submit
+    // refuses with "stop the recording first" while `recording` is false and the
+    // button says "Record".
+    if (this.#queue?.session.id === sessionId) {
+      this.#queue = null;
+      this.#cancelWake();
+      this.#patch({ session: null, phase: null, retrying: null });
+    }
+    if (this.#active?.sessionId === sessionId) this.#active = null;
+    await store.delete(sessionId).catch(() => {});
   }
 
   stop(): void {
@@ -755,16 +850,15 @@ export class MeetingCaptureSurface {
       // Ordered after the final chunk's own `apply` by the queue's write chain,
       // so `stopCapture` cannot land before the segment it belongs with.
       await queue.apply((session) => (session.status === "recording" ? stopCapture(session, this.#instant()) : session));
-      // The lock goes back HERE, with the recording, and not when this tab
-      // eventually creates or discards the meeting. What it protects is a
-      // capture being WRITTEN TO — the microphone is closed and the last chunk
-      // has landed, so that has stopped being true, and holding on would keep a
-      // finished meeting out of every other tab's offer for as long as this one
-      // stayed open on the compose box. What remains here afterwards is
-      // transcription and a text box; a second tab that picks the meeting up
-      // from now on is a person moving tabs, and the destructive paths ask the
-      // lock again before they touch anything.
-      this.#ports.locks.release(capture.sessionId);
+      // The recording is over, so this capture is on its way OUT of this tab's
+      // hands — but it has not left them yet, and the lock does not go back
+      // until it has. `#queue` is still the session's single writer and is
+      // still draining: it persists every segment it settles and every gap it
+      // gives up on. Releasing here (which this did) let a second tab pick the
+      // capture up while those writes were still landing, which is two queues
+      // over one capture — the state `pickUp` refuses in every other path,
+      // reached through the one that was supposed to be safe.
+      this.#handingBack = capture.sessionId;
       this.#publishSession(queue.session);
       if (!queue.session.segments.length) {
         this.#patch({ createError: "No audio was captured — check that the right microphone is selected." });
@@ -781,14 +875,45 @@ export class MeetingCaptureSurface {
       if (this.#active === capture) this.#active = null;
       this.#patch({ settling: false });
     }
+    // A meeting whose transcription is already finished — the common case, one
+    // chunk or a hundred — leaves this tab's hands right here, exactly as it
+    // used to. One that is not finished waits for the drain below.
+    this.#handBackIfQuiet();
     await this.refreshRecoverable();
-    // Transcription continues out here, with nothing held: the audio is on the
-    // device and the guard's sentence has stopped being true. Awaited rather
-    // than fired and forgotten so that `dispose()` — which waits for this whole
-    // settle — gives a meeting one more transcription pass before the page goes.
-    // The chunk that landed a moment ago has already scheduled a drain of its
-    // own, so this is a second chance rather than the only one.
+    // Transcription continues out here, with the Create guard released: the
+    // audio is on the device and that guard's sentence has stopped being true.
+    // Awaited rather than fired and forgotten so that `dispose()` — which waits
+    // for this whole settle — gives a meeting one more transcription pass before
+    // the page goes. The chunk that landed a moment ago has already scheduled a
+    // drain of its own, so this is a second chance rather than the only one.
     await this.#runDrain();
+  }
+
+  /**
+   * Hand a stopped recording back the moment this tab has finished writing to
+   * it — the other half of `#handingBack`.
+   *
+   * "Finished" is not "the microphone is closed": the queue keeps persisting
+   * this session until every segment has settled or spent its retry budget, and
+   * a person can ask for a stated gap again from here. So the test is that
+   * `unsettledSegments` is empty and no drain is scheduled — the same pair the
+   * queue's own `idle` phase is defined by.
+   *
+   * Both alternatives are worse and both were tried. Holding until Create or
+   * Discard keeps a finished meeting out of every other tab's offer for as long
+   * as this one stays open on the compose box. Releasing at Stop hands it over
+   * while this tab's queue is still persisting segments into it, which is two
+   * queues over one capture. Releasing when the writing stops is the only rule
+   * that is true at the moment it says so.
+   */
+  #handBackIfQuiet(): void {
+    const sessionId = this.#handingBack;
+    if (!sessionId) return;
+    const queue = this.#queue;
+    if (queue && queue.session.id === sessionId && unsettledSegments(queue.session).length) return;
+    if (this.#wake !== null) return;
+    this.#handingBack = null;
+    this.#ports.locks.release(sessionId);
   }
 
   // ——————————————————————————————————————————————————————— the shared queue
@@ -827,6 +952,9 @@ export class MeetingCaptureSurface {
           void this.#runDrain();
         }, delay);
       }
+      // Asked after the timer is (or is not) set, because "nothing is scheduled"
+      // is half of what makes this tab's writing finished.
+      this.#handBackIfQuiet();
     } catch (caught) {
       this.#patch({ createError: describe(caught, "Transcription could not be scheduled.") });
     }
@@ -853,7 +981,10 @@ export class MeetingCaptureSurface {
     // the first would keep the first out of every tab's offer — including this
     // one's — until the page was closed.
     const previous = this.#queue;
-    if (previous && previous.session.id !== session.id) this.#ports.locks.release(previous.session.id);
+    if (previous && previous.session.id !== session.id) {
+      this.#ports.locks.release(previous.session.id);
+      if (this.#handingBack === previous.session.id) this.#handingBack = null;
+    }
     // A meeting recorded in Japanese was recorded in Japanese; re-transcribing
     // it as "auto" because the page's dropdown has since been reset is the
     // recovered meeting coming back as a lesser one.
@@ -1009,6 +1140,11 @@ export class MeetingCaptureSurface {
         exclude: [...(active ? [active] : []), ...writers.ids],
       }),
       writing: [...writers.ids],
+      // Golden rule 23 — published so the offer can DISABLE Discard on a browser
+      // that cannot answer, rather than offering a control that will refuse. An
+      // empty `writing` and an unknown answer look identical from a render, and
+      // the difference between them is somebody's live meeting.
+      writersKnown: writers.known,
       recoveryError: "",
     });
   }
@@ -1028,7 +1164,7 @@ export class MeetingCaptureSurface {
       const store = await this.#store(false);
       const { title, mimeType } = parseCapturePayload(entry.record.payload);
       if (await this.#ports.locks.hold(entry.session.id) === "taken") {
-        this.#patch({ createError: CAPTURE_HELD_ELSEWHERE });
+        this.#patch({ createError: captureHeldNote(storedStillRecording(entry.record)) });
         return;
       }
       if (title) this.#patch({ title: this.#state.title || title });
@@ -1071,8 +1207,20 @@ export class MeetingCaptureSurface {
       // Asked of the browser at the moment of the click, not read off a listing
       // taken when the page rendered: another tab may have pressed Record on
       // this very capture since, and this deletes an hour of somebody's meeting.
-      if (await this.#writtenElsewhere(record.sessionId)) {
-        this.#patch({ createError: `This recording cannot be deleted. ${CAPTURE_HELD_ELSEWHERE}` });
+      const writer = await this.#otherWriter(record.sessionId);
+      if (writer === "elsewhere") {
+        this.#patch({ createError: `This recording cannot be deleted. ${captureHeldNote(storedStillRecording(record))}` });
+        return;
+      }
+      // Golden rule 23, and the whole of the no-locks defect: an unknown answer
+      // is not "nobody is writing". Reproduced over plain http — tab one
+      // recording, tab two offered that live capture, one click and the manifest
+      // and every chunk were gone while tab one still said it was recording. The
+      // browser cannot rule that out, so this refuses rather than guesses; the
+      // person has been told since the page loaded (`coordination`) that this
+      // browser cannot coordinate its tabs.
+      if (writer === "unknown") {
+        this.#patch({ createError: CAPTURE_LIVENESS_UNKNOWN });
         return;
       }
       await store.delete(record.sessionId);
@@ -1125,6 +1273,7 @@ export class MeetingCaptureSurface {
       // the lock goes back even on the failure path — a retained recording that
       // no tab could ever pick up again would be the audio nobody can reach.
       this.#ports.locks.release(sessionId);
+      if (this.#handingBack === sessionId) this.#handingBack = null;
       this.#patch({ session: null, phase: null, retrying: null });
     }
   }
@@ -1236,8 +1385,8 @@ export class MeetingCaptureSurface {
     // deletes audio. `known: false` allows it through deliberately: a browser
     // that cannot see other tabs must not be a browser where Create is wedged
     // for ever, and its user has been told so since the page loaded.
-    if (queue && await this.#writtenElsewhere(queue.session.id)) {
-      this.#patch({ createError: `This meeting cannot be created from this tab. ${CAPTURE_HELD_ELSEWHERE}` });
+    if (queue && await this.#otherWriter(queue.session.id) === "elsewhere") {
+      this.#patch({ createError: `This meeting cannot be created from this tab. ${captureHeldNote(queue.session.status === "recording")}` });
       return;
     }
     this.#patch({ busy: "create", createError: "" });
@@ -1327,12 +1476,19 @@ export class MeetingCaptureSurface {
    * recorder writing chunks through a closure nothing can reach any more, an
    * object URL over an hour of audio, and the locks.
    *
-   * The locks are the one that needs saying, because they are also the one this
-   * teardown is NOT load-bearing for. A client-side navigation leaves the tab
-   * alive, so nothing would release them and the meeting would stay out of this
-   * browser's offer until the tab was closed — hence `releaseAll`. But a tab
+   * The locks are the one that needs saying. A client-side navigation leaves the
+   * tab alive, so nothing would release them and the meeting would stay out of
+   * this browser's offer until the tab was closed — hence `releaseAll`. A tab
    * that is KILLED never reaches this line and does not need to: the browser
-   * drops what it held. Nothing here is a promise §6 depends on.
+   * drops what it held, so nothing here is a promise §6 depends on.
+   *
+   * What it IS load-bearing for is a Record that has not finished arming.
+   * `releaseAll()` here and a `hold()` still in flight over there are a race
+   * this teardown loses on its own — it can hand back a lock the recording is
+   * about to start using, or run entirely before the lock is taken and leave one
+   * nothing will ever release. `#disposed` is set on the first line for that
+   * reason: `record()` checks it after every await and abandons itself, and this
+   * flag is what it checks.
    */
   async dispose(): Promise<void> {
     if (this.#disposed) return;
@@ -1371,18 +1527,23 @@ export class MeetingCaptureSurface {
    * Is a DIFFERENT tab writing to this capture at this instant — the question
    * both destructive paths ask, and the only place that decides it.
    *
-   * Two things it is careful about. A lock this tab holds is not somebody else's
-   * (a picked-up capture is created from the tab that picked it up), and a
-   * browser that cannot answer says no rather than yes: `known: false` here
-   * would make Create and Discard permanently impossible on an origin without
-   * Web Locks, which is a bigger outage than the one it would be guarding
-   * against — and that user has been told, in `coordination`, since the page
-   * loaded.
+   * Three answers rather than two, and the third is the point. A lock this tab
+   * holds is not somebody else's (`none` — a picked-up capture is created from
+   * the tab that picked it up); a lock another tab holds is `elsewhere`; and a
+   * browser that cannot see other tabs at all is `unknown`, which is NOT the
+   * same fact as `none` however similar the empty set looks.
+   *
+   * The two callers read `unknown` differently, on purpose. Create takes it,
+   * because it can only ever finalize a capture this tab has been writing itself
+   * and refusing would wedge Create for ever on an origin without Web Locks.
+   * Discard refuses it, because it acts on a row this tab never touched and the
+   * thing it does is delete an hour of somebody's meeting.
    */
-  async #writtenElsewhere(sessionId: string): Promise<boolean> {
-    if (this.#ports.locks.holds(sessionId)) return false;
+  async #otherWriter(sessionId: string): Promise<"none" | "elsewhere" | "unknown"> {
+    if (this.#ports.locks.holds(sessionId)) return "none";
     const writers = await this.#ports.locks.writers();
-    return writers.ids.has(sessionId);
+    if (writers.ids.has(sessionId)) return "elsewhere";
+    return writers.known ? "none" : "unknown";
   }
 
   /**

@@ -130,9 +130,26 @@ export class FakeCaptureBackend implements CaptureStorageBackend {
     return this.#shuffleListing ? refs.reverse() : refs;
   }
 
+  /**
+   * When set, the NEXT `writeManifest` refuses and clears the flag — a `begin`
+   * that cannot claim its session.
+   *
+   * Not keyed by id, unlike the sets around it, because the one caller that
+   * needs it cannot know the id: `record()` mints a fresh one and the failure
+   * being driven happens before anything hands it back. What it reaches is the
+   * window between "the lock over this capture is taken" and "the capture
+   * exists" — the one stretch where a refusal leaves a lock over a session that
+   * will never be on the device.
+   */
+  refuseNextManifest = false;
+
   async writeManifest(sessionId: string, manifest: CaptureManifest): Promise<void> {
     this.calls.push(`writeManifest:${sessionId}`);
     await spend(this.#manifestTicks);
+    if (this.refuseNextManifest) {
+      this.refuseNextManifest = false;
+      throw new Error(`this origin refused the manifest for ${sessionId}`);
+    }
     this.manifests.set(sessionId, manifest);
     this.calls.push(`wroteManifest:${sessionId}`);
   }
