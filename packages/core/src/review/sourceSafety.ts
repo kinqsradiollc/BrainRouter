@@ -11,10 +11,27 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { normalizeReviewPath, splitUnifiedDiffFiles } from './reviewBundles.js';
 
+/**
+ * Directories whose contents are credentials rather than code.
+ *
+ * `.git` belongs here for a reason that is easy to miss: `.git/config` carries
+ * remote URLs, and a remote cloned with a token embeds it —
+ * `https://x-access-token:ghp_…@github.com/owner/repo`. So the one directory
+ * guaranteed to exist in every repository we review is also one that routinely
+ * holds a live credential. `.git/credentials` and the packed refs are the same
+ * shape of problem.
+ *
+ * The review path does not reach it today — reads are bounded to the diff's file
+ * inventory and opened `O_NOFOLLOW` — so this is defence in depth rather than a
+ * live hole. It is here because a denylist that names `.aws` and `.ssh` while
+ * omitting `.git` reads as an oversight to the next person, and because the
+ * inventory is not the only caller this predicate will ever have.
+ */
 const SENSITIVE_DIRECTORIES = new Set([
   '.aws',
   '.azure',
   '.docker',
+  '.git',
   '.gnupg',
   '.kube',
   '.ssh',
