@@ -42,7 +42,16 @@ export function resolveRequestUrl(rawBase: string, wireFormat?: string | null): 
  * the path typed in — the KIND decides it (`/embeddings`, `/rerank`, `/models`).
  */
 export function appendApiPath(rawBase: string, path: string): string {
-  const url = String(rawBase ?? "").trim();
+  const url0 = String(rawBase ?? "").trim();
+  if (!url0) return url0;
+  // Drop any fragment BEFORE appending. A fragment is never sent on the wire,
+  // so a base ending in '#' used to swallow the suffix this function exists to
+  // add: `http://host/internal#` + `/models` produced `http://host/internal#/models`,
+  // which fetches `http://host/internal`. That turned the "/models" suffix from a
+  // constraint into decoration, and let a saved base address any path on the
+  // target host. Stripping it keeps the suffix meaningful.
+  const hIdx = url0.indexOf("#");
+  const url = hIdx >= 0 ? url0.slice(0, hIdx) : url0;
   if (!url) return url;
   const qIdx = url.indexOf("?");
   const query = qIdx >= 0 ? url.slice(qIdx) : "";

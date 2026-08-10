@@ -23,11 +23,33 @@ import type {
 import { normalizeContainerLimits, normalizeRuntimeBackend } from './configTypes.js';
 import { stripTrailingSlashes } from '../util/trimEdges.js';
 
-const CONFIG_DIR = path.join(os.homedir(), '.config', 'brainrouter');
-const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
+/**
+ * Where the config lives.
+ *
+ * `BRAINROUTER_CONFIG_DIR` exists so this is TESTABLE. Before it, the directory
+ * was a module-level const of `os.homedir()`, which meant any test that called
+ * `saveConfig` wrote to the developer's real `~/.config/brainrouter/config.json`
+ * — the file holding every provider key, PAT and signing secret — with no way to
+ * redirect it. That is not a hypothetical: it destroyed a real config during
+ * this file's own hardening. A module nobody can point at a temp directory is a
+ * module whose write path can only be exercised destructively.
+ *
+ * Read lazily rather than captured at import, because a test (or a host that
+ * sets it after boot) must be able to change it. `BRAINROUTER_HOME` is
+ * deliberately NOT consulted: it addresses the storage root, not this file, and
+ * conflating them is what made the failure above look sandboxed when it wasn't.
+ */
+function configDir(): string {
+  const override = process.env.BRAINROUTER_CONFIG_DIR?.trim();
+  return override || path.join(os.homedir(), '.config', 'brainrouter');
+}
+
+function configFile(): string {
+  return path.join(configDir(), 'config.json');
+}
 
 export function getConfigPath(): string {
-  return CONFIG_FILE;
+  return configFile();
 }
 
 /**
@@ -44,17 +66,17 @@ export function getConfigPath(): string {
  * skeleton when no file exists rather than exiting.
  */
 export function loadConfig(): Config {
-  if (!fs.existsSync(CONFIG_FILE)) {
-    console.error(`No BrainRouter config found at ${CONFIG_FILE}.`);
+  if (!fs.existsSync(configFile())) {
+    console.error(`No BrainRouter config found at ${configFile()}.`);
     console.error(`Run \`brainrouter login\` to connect to a hosted MCP server, or \`brainrouter config\` to set one up.`);
     process.exit(1);
   }
   let parsed: Config;
   try {
-    const raw = fs.readFileSync(CONFIG_FILE, 'utf8');
+    const raw = fs.readFileSync(configFile(), 'utf8');
     parsed = JSON.parse(raw) as Config;
   } catch (error) {
-    console.error(`Error: Failed to parse config file at ${CONFIG_FILE}: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`Error: Failed to parse config file at ${configFile()}: ${error instanceof Error ? error.message : String(error)}`);
     console.error(`Fix the file by hand, or delete it and run \`brainrouter config\` to recreate.`);
     process.exit(1);
   }
@@ -128,20 +150,43 @@ export function backfillApiKeyFromEnv(endpoint: string | undefined): string | un
  * "no config — run setup" error from `loadConfig`.
  */
 export function loadOrInitConfig(): Config {
-  if (!fs.existsSync(CONFIG_FILE)) {
+  if (!fs.existsSync(configFile())) {
     return { activeServer: '', servers: {} };
   }
   return loadConfig();
 }
 
+/**
+ * Persist the config.
+ *
+ * The modes are explicit because this is the richest secret file the product
+ * writes: `llm.apiKey`, every `providers.*.apiKey`, the signed-in account key,
+ * per-repo PATs, web-search keys, the trigger signing secrets, an inline GitHub
+ * App private key, `cli.router.serveKey`. `scrubCliSecrets` exists purely to keep
+ * this content away from the renderer — which is the clearest statement of how
+ * sensitive it is.
+ *
+ * Without a mode, Node applies 0o666 & ~umask, so the file is 0600 under a
+ * umask of 077 and 0644 under the far more common 022. Depending on an ambient
+ * process setting for whether a credential file is world-readable is not a
+ * decision anyone made; it is one nobody made. Every other secret writer here
+ * already states it — `secretStore.ts` 0o600, `learning/store.ts` 0o600,
+ * `manifestClaim.ts` 0o700/0o600 — and this was the outlier.
+ *
+ * `writeFileSync` preserves the mode of an EXISTING file, so a file already on
+ * disk at 0644 stays 0644 forever without the chmod repair below.
+ */
 export function saveConfig(config: Config): void {
   try {
-    if (!fs.existsSync(CONFIG_DIR)) {
-      fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    if (!fs.existsSync(configDir())) {
+      fs.mkdirSync(configDir(), { recursive: true, mode: 0o700 });
     }
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf8');
+    fs.writeFileSync(configFile(), JSON.stringify(config, null, 2), { encoding: 'utf8', mode: 0o600 });
+    // Repair a file created before this rule (or by an older build). Best-effort:
+    // chmod is meaningless on Windows and must never fail a save.
+    try { fs.chmodSync(configFile(), 0o600); } catch { /* not POSIX — nothing to enforce */ }
   } catch (error) {
-    console.error(`Error: Failed to save config to ${CONFIG_FILE}:`, error instanceof Error ? error.message : error);
+    console.error(`Error: Failed to save config to ${configFile()}:`, error instanceof Error ? error.message : error);
   }
 }
 
@@ -181,10 +226,10 @@ export function hydrateCliDefaults(config: Config): { config: Config; added: num
  * on reads. Returns the number of knobs added (0 = nothing written).
  */
 export function hydrateConfigDefaultsOnDisk(): number {
-  if (!fs.existsSync(CONFIG_FILE)) return 0;
+  if (!fs.existsSync(configFile())) return 0;
   let parsed: Config;
   try {
-    parsed = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) as Config;
+    parsed = JSON.parse(fs.readFileSync(configFile(), 'utf8')) as Config;
   } catch {
     return 0; // malformed — leave it for loadConfig to surface
   }

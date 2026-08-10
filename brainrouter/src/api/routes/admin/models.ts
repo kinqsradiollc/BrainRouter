@@ -13,6 +13,7 @@ import {
   type ProviderModelRecord,
 } from "../../../providers/modelPolicyStore.js";
 import { isSystemProviderOrg, systemProviderOrgId } from "../../../providers/runtime.js";
+import { upstreamProbePolicy } from "../../../providers/upstreamProbePolicy.js";
 
 const effortSchema = z.enum(MODEL_REASONING_EFFORTS);
 const capabilitySourceSchema = z.enum(["verified", "discovered", "manual"]);
@@ -175,7 +176,7 @@ adminModelsRouter.post("/discover", async (req: AuthedRequest, res) => {
   const resolved = await memoryEngine.providers.getResolvedProvider(provider.id);
   if (!resolved) { sendError(res, 400, "Provider is disabled or unavailable"); return; }
   try {
-    const probed = await probeModels(resolved.endpoint, resolved.apiKey, "llm");
+    const probed = await probeModels(resolved.endpoint, resolved.apiKey, "llm", 8000, upstreamProbePolicy());
     // probeModels returns {id, reasoning} objects — the dashboard's model picker
     // expects a string[] of ids (it renders each as an <option>). Returning the
     // objects rendered "[object Object]" and crashed the Discover flow with a

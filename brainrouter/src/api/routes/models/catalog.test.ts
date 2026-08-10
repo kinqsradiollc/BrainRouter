@@ -241,7 +241,17 @@ describe("server-managed model APIs", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(mocks.probeModels).toHaveBeenCalledWith("https://upstream.example/v1", "provider-secret", "llm");
+    // The trailing policy argument is the SSRF boundary, not incidental: an
+    // admin-supplied endpoint reaches `fetch` through it, and `{}` means the
+    // fail-closed hosted mode. Asserted explicitly so dropping it is a test
+    // failure rather than a silent reopening of the hole.
+    expect(mocks.probeModels).toHaveBeenCalledWith(
+      "https://upstream.example/v1",
+      "provider-secret",
+      "llm",
+      8000,
+      {},
+    );
     expect(response.body).toEqual({
       models: [{ id: "model-one" }, { id: "model-two" }],
       selection: { mode: "explicit", upstreamModelIds: ["model-one", "model-two"] },
