@@ -14,6 +14,7 @@ const lazyPrefixes = [
   'CIPanel-',
   'EditorPanel-',
   'NotesModeContainer-',
+  'MeetingsView-',
   'WorkflowsPanel-',
 ];
 

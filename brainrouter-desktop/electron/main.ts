@@ -48,6 +48,7 @@ import { addOpened, noteActivity, reorderWorkspace, type ActivityReason } from '
 import { createComputerUsePort } from './computerUse.js';
 import { hardenWebviewPreferences, isAllowedArtifactWebviewSrc } from './webviewPolicy.js';
 import { registerMeetingsBridge } from './meetingsBridge.js';
+import { registerMeetingCaptureBridge } from './meetingCaptureBridge.js';
 import { registerChatSyncBridge } from './chatSyncBridge.js';
 import { checkComputerUsePermissions, openAccessibilitySettings, openScreenRecordingSettings } from './computerUsePermissions.js';
 import { setupTray } from './tray.js';
@@ -623,7 +624,55 @@ app.commandLine.appendSwitch('enable-features', 'OverlayScrollbar');
 // make the icon vanish). Assigned once the app is ready.
 let tray: ReturnType<typeof setupTray> = null;
 
+/**
+ * ADR-035 D6 — one process per `userData` directory, which Electron does not do
+ * by default.
+ *
+ * The meeting capture store, its boot recovery pass and the transcription
+ * supervisor all assume they are the only writer of that directory, and the
+ * supervisor is what now answers "is somebody recording into this capture?" —
+ * exactly, for every window, because every window is in this process. A SECOND
+ * process is the one case that answer cannot cover, and it is not hypothetical:
+ * the boot pass runs on every launch, so a second launch rewrote a live
+ * capture's record to `stopped` and adopted the chunk the first one had just
+ * written, after which every remaining chunk of that meeting failed `EEXIST` for
+ * ever. Detecting that from inside was what the previous round's lease was for,
+ * and a timing heuristic is a poor substitute for not having two writers.
+ *
+ * The lock is per user-data directory, so the browser e2e harness (which
+ * launches with its own `--user-data-dir`) is unaffected. A second launch hands
+ * its working directory to the primary instance and quits, which is what a
+ * person double-clicking the app a second time means by it.
+ */
+const isPrimaryInstance = app.requestSingleInstanceLock();
+if (!isPrimaryInstance) {
+  app.quit();
+} else {
+  app.on('second-instance', (_event, _argv, workingDirectory) => {
+    // Deferred until ready: the primary instance may still be starting up when
+    // a second launch arrives, and a `BrowserWindow` before `ready` throws.
+    void app.whenReady().then(() => {
+      const root = workingDirectory || readRecents()[0] || process.cwd();
+      trustWorkspace(root);
+      // Focuses an existing window for that workspace, or opens one — the same
+      // call the first launch makes, so a second launch is not a second kind of
+      // start-up.
+      openWorkspaceWindow(root);
+      for (const wp of wins.values()) {
+        if (wp.win.isDestroyed()) continue;
+        if (wp.win.isMinimized()) wp.win.restore();
+      }
+    });
+  });
+}
+
 app.whenReady().then(() => {
+  // `app.quit()` above is a request, and `ready` can still arrive before it
+  // completes. A losing instance that went on to open a window and register the
+  // capture bridge would be the second writer of the `userData` directory this
+  // lock exists to prevent — for the seconds it took to die, which is long
+  // enough for a boot pass to run.
+  if (!isPrimaryInstance) return;
   appearancePreference = readAppearancePreference();
   nativeTheme.themeSource = nativeThemeSource(appearancePreference);
   nativeTheme.on('updated', publishAppearanceState);
@@ -867,6 +916,10 @@ app.whenReady().then(() => {
     return { recents: markWorkspaceReordered(dragged, target) };
   });
   registerMeetingsBridge();
+  // ADR-035 D1 — meeting audio is written by main, which outlives a renderer
+  // crash. Registered here so the boot recovery pass runs before any window can
+  // press Record.
+  registerMeetingCaptureBridge();
   registerChatSyncBridge();
   ipcMain.handle('computerUse:checkPermissions', () => checkComputerUsePermissions());
   ipcMain.handle('computerUse:openAccessibilitySettings', () => openAccessibilitySettings());

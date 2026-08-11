@@ -92,6 +92,21 @@ test('Dashboard cannot import Core or protocol', () => {
   );
 });
 
+test('Dashboard may import the one shared meetings module, and only that one', () => {
+  // ADR-035 D1b — a meeting captured in the browser gets the SAME session model,
+  // segment protocol and recovery flow as one captured on the desktop. The
+  // exception is by specifier, so the assertion that matters is the second one:
+  // opening this did not open Core.
+  assert.equal(
+    fixture('dashboard', 'brainrouter-dashboard/lib/fixture.ts', '@kinqs/brainrouter-core/meetings'),
+    undefined,
+  );
+  assert.match(
+    fixture('dashboard', 'brainrouter-dashboard/lib/fixture.ts', '@kinqs/brainrouter-core/memory').reason,
+    /may not depend on core/,
+  );
+});
+
 test('SDK and hooks are browser-safe outside tests', () => {
   assert.match(fixture('sdk', 'packages/sdk/src/client.ts', 'node:fs').reason, /browser-safe/);
   assert.equal(fixture('sdk', 'packages/sdk/src/client.test.ts', 'node:test'), undefined);

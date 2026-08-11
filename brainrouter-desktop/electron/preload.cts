@@ -18,6 +18,25 @@ try { desktopBootstrapState = ipcRenderer.sendSync('desktop-bootstrap-state'); }
 let desktopAppearanceState: unknown = null;
 try { desktopAppearanceState = ipcRenderer.sendSync('appearance:get-state'); } catch { /* older main process */ }
 
+// ADR-035 D6 — this window's capture-writer identity, remembered from the only
+// call that can create a claim (`captureBegin`), so THE PAGE can hand the
+// recording back when it goes away.
+//
+// It is remembered here rather than asked of the renderer because this script is
+// per-window and outlives every component in it, and because the event that
+// matters is the page's own: `pagehide` fires on a reload, a navigation and a
+// close, which is precisely the set of moments a window stops being able to
+// record. Main is untouched by a renderer reload — that is why the previous
+// answer (a heartbeat main kept sending on the page's behalf) claimed a
+// recording for a page that no longer existed, and refused Transcribe, Create
+// and Delete for ever over it. Main's own `destroyed`/`render-process-gone`
+// hooks cover the case a page cannot report: its renderer died.
+let meetingCaptureHolderId: string | null = null;
+window.addEventListener('pagehide', () => {
+  if (!meetingCaptureHolderId) return;
+  void ipcRenderer.invoke('meetings:captureRelease', meetingCaptureHolderId).catch(() => undefined);
+});
+
 contextBridge.exposeInMainWorld('brainrouter', {
   getBootstrapState(): unknown {
     return desktopBootstrapState;
@@ -177,6 +196,53 @@ contextBridge.exposeInMainWorld('brainrouter', {
     actionToTrack(meetingId: string, actionId: string, orgId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:actionToTrack', meetingId, actionId, orgId); },
     actionUntrack(meetingId: string, actionId: string, orgId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:actionUntrack', meetingId, actionId, orgId); },
     toggleAction(meetingId: string, actionId: string, done: boolean, orgId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:toggleAction', meetingId, actionId, done, orgId); },
+    // ADR-035 D1/D2 — local capture. Audio never accumulates in the renderer:
+    // each recorder chunk crosses here and is on disk before anything else
+    // happens to it, and main owns the directory because it outlives a crash.
+    // `holderId` is ADR-035 D6's window identity: one id per BrowserWindow, sent
+    // with every call that takes or releases a recording, so the process that
+    // holds every window can tell the one that is recording from a second one
+    // looking at a stale offer.
+    captureBegin(input: { title?: string; template?: string; language?: string; orgId?: string | null; workspaceId?: string | null; contentType?: string; holderId?: string }): Promise<unknown> {
+      // Remembered for `pagehide` above — the claim this call creates is the one
+      // the page has to hand back when it goes away.
+      if (typeof input?.holderId === 'string' && input.holderId) meetingCaptureHolderId = input.holderId;
+      return ipcRenderer.invoke('meetings:captureBegin', input);
+    },
+    captureAppend(id: string, bytes: Uint8Array, durationMs: number): Promise<unknown> { return ipcRenderer.invoke('meetings:captureAppend', id, bytes, durationMs); },
+    captureStop(id: string): Promise<unknown> { return ipcRenderer.invoke('meetings:captureStop', id); },
+    captureRead(id: string): Promise<unknown> { return ipcRenderer.invoke('meetings:captureRead', id); },
+    captureFinalize(id: string, holderId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:captureFinalize', id, holderId); },
+    captureDiscard(id: string, holderId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:captureDiscard', id, holderId); },
+    captureResumable(scope?: { orgId?: string | null; workspaceId?: string | null }): Promise<unknown> { return ipcRenderer.invoke('meetings:captureResumable', scope); },
+    captureWriting(scope?: { orgId?: string | null; workspaceId?: string | null }): Promise<unknown> { return ipcRenderer.invoke('meetings:captureWriting', scope); },
+    // ADR-035 D6 — the set of live recordings changed somewhere in this process:
+    // a Record, a Stop, a close, or a window that went away. No payload, because
+    // the answer a surface needs is scoped to its own workspace and its own id —
+    // it asks `captureWriting` again. This is what replaced waiting out a
+    // staleness window: there is nothing to wait for, so the surface is told at
+    // the instant its answer became wrong.
+    onCaptureWriters(listener: () => void): () => void {
+      const wrapped = () => listener();
+      ipcRenderer.on('meetings:capture-writers', wrapped);
+      return () => ipcRenderer.removeListener('meetings:capture-writers', wrapped);
+    },
+    // ADR-035 D3/D4/D5 — the transcription queue lives in main, so the renderer
+    // asks it to start on a capture or to retry one segment, and is TOLD about
+    // every persisted change. A window reload rejoins a drain that never stopped.
+    captureAdopt(id: string, holderId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:captureAdopt', id, holderId); },
+    captureRetrySegment(id: string, index: number): Promise<unknown> { return ipcRenderer.invoke('meetings:captureRetrySegment', id, index); },
+    // ADR-035 D6 — the compose draft lives beside the audio, under the same
+    // 0700 directory, instead of in `localStorage` where any page script could
+    // read the meeting's own words back.
+    draftRead(): Promise<unknown> { return ipcRenderer.invoke('meetings:draftRead'); },
+    draftWrite(draft: { title?: string; transcript?: string; template?: string; language?: string }): Promise<unknown> { return ipcRenderer.invoke('meetings:draftWrite', draft); },
+    draftClear(): Promise<unknown> { return ipcRenderer.invoke('meetings:draftClear'); },
+    onCaptureProgress(listener: (progress: unknown) => void): () => void {
+      const wrapped = (_e: unknown, progress: unknown) => listener(progress);
+      ipcRenderer.on('meetings:capture-progress', wrapped);
+      return () => ipcRenderer.removeListener('meetings:capture-progress', wrapped);
+    },
     // SERVER Track board (org-scoped /api/track), surfaced inside Meetings mode.
     serverTracks(orgId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:serverTracks', orgId); },
     serverTrackCreate(input: { title: string; description?: string; priority?: string; assignee?: string; statusCategory?: string }, orgId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:serverTrackCreate', input, orgId); },

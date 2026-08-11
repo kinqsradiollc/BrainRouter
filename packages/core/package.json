@@ -95,6 +95,10 @@
       "types": "./dist/mcp/index.d.ts",
       "default": "./dist/mcp/index.js"
     },
+    "./meetings": {
+      "types": "./dist/meetings/index.d.ts",
+      "default": "./dist/meetings/index.js"
+    },
     "./memory": {
       "types": "./dist/memory/index.d.ts",
       "default": "./dist/memory/index.js"

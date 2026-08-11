@@ -24,6 +24,7 @@ const REQUIRED_LAZY_CHUNKS = Object.freeze([
   // by its SIZE, which is a number someone can be tempted to raise; this
   // catches it by its cause, which is a static import nobody meant to add.
   'NotesModeContainer-',
+  'MeetingsView-',
   'WorkflowsPanel-',
 ]);
 

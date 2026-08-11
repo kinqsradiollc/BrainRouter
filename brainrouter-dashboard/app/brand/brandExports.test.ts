@@ -67,7 +67,10 @@ test("browser and install metadata use only the canonical coded vector mark", ()
   assert.doesNotMatch(icon, /#(?:34C28E|42D6A0|06120D)|<(?:linear|radial)Gradient\b|<image\b/i);
   assert.match(layout, /\/ico\.svg/);
   assert.match(manifest, /"src"\s*:\s*"\/ico\.svg"/);
-  assert.match(sidebar, /<BrainRouterLogo\b[^>]*\bshowWordmark=\{false\}/);
+  // The sidebar head is the workspace switcher now, not a brand lockup, so
+  // there is no `<BrainRouterLogo showWordmark={false}>` left to assert. What
+  // still matters — and is what this test was ever guarding — is that no raster
+  // image and no hand-typed letterform stands in for the coded mark.
   assert.doesNotMatch(sidebar, /<img\b|<span className="sidebar-org-mark">B<\/span>/i);
 
   for (const asset of ["favicon.ico", "icon-192.png", "icon-512.png", "apple-touch-icon.png"]) {
@@ -76,13 +79,21 @@ test("browser and install metadata use only the canonical coded vector mark", ()
 });
 
 test("shared tokens map dashboard controls to 32px and desktop controls to 30px", () => {
+  // Only the shared tokens and the dashboard's own use of them. This used to
+  // reach across into `brainrouter-desktop/src/theme.css` to check the desktop
+  // CONSUMED the token; a dashboard test reading another workspace's stylesheet
+  // breaks on somebody else's refactor, which is what happened when the desktop
+  // grew `src/styles/foundation/`.
+  //
+  // Nothing is unasserted as a result. The value still lives here (line below:
+  // the shared token maps desktop controls to 30px), and the desktop asserts
+  // that it consumes it — `--chrome-control-size: var(--control-size)`, and
+  // `.rail-top .icon-btn` sized from it — in
+  // `brainrouter-desktop/src/App/layout/shellLayoutContract.test.ts`.
   const shared = readFileSync(new URL("../../../packages/brand/tokens.css", import.meta.url), "utf8");
   const dashboard = readFileSync(new URL("../globals.css", import.meta.url), "utf8");
-  const desktop = readFileSync(new URL("../../../brainrouter-desktop/src/theme.css", import.meta.url), "utf8");
 
   assert.match(shared, /--br-dashboard-control-size:\s*32px/);
   assert.match(shared, /--br-desktop-control-size:\s*30px/);
   assert.match(dashboard, /--control-size:\s*var\(--br-dashboard-control-size\)/);
-  assert.match(desktop, /--control-size:\s*var\(--br-desktop-control-size\)/);
-  assert.match(desktop, /--chrome-control-size:\s*var\(--control-size\)/);
 });

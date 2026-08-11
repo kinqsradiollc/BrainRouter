@@ -6,9 +6,74 @@
  * four-level sharing vocabulary (Private / Team / Org / Public). Real, org-scoped
  * data from the backend at :3747 (/api/meetings) using the signed-in account's JWT
  * — the same dataset the desktop sees for the same account. No sample data.
+ *
+ * ADR-035 D1b — capture is DURABLE here, not held in a React ref. Every chunk is
+ * written to OPFS (or IndexedDB) as it arrives, so a tab that crashes, reloads or
+ * is closed mid-meeting comes back with the audio it had recorded, and the
+ * session is offered back on the next load. The store is `lib/meetings/`.
+ * Nothing here defers work to an unload handler — a closing tab gets very little
+ * time, so nothing important may depend on it running.
+ *
+ * **The recording itself is not in this file any more, and that is the point.**
+ * `captureSurface.ts` owns every decision about a capture that is being written:
+ * the cross-tab lock, the chunk write, composition, the POST, the destructive controls
+ * and the unmount teardown. This page supplies the browser — a real
+ * `MediaRecorder`, the durable store, `authFetch`, timers — renders what the
+ * surface says, and owns the meeting LIBRARY beside it.
+ *
+ * The split is structural rather than cosmetic. Every dashboard defect this ADR
+ * has had to repair lived in this component, and a 1900-line component can only
+ * be checked by reading it: its wiring was pinned by regular expressions over
+ * its own source text, which cannot tell you what a value WAS. Three rounds of
+ * that produced a respelled `base:` (the doubled transcript), a deleted
+ * `transcript = settled.text` (the unmarked hole) and a `meetingOrgId` that
+ * could be respelled `activeOrgId` with nothing able to notice (a meeting
+ * landing in the wrong workspace). Behind the seam, `captureSurface.test.ts`
+ * presses Record, hands over a chunk, navigates away, and reads what actually
+ * reached the POST.
+ *
+ * ADR-035 D3/D4/D5 — and the audio becomes TEXT as it lands, not at Stop. Each
+ * chunk is a segment; the shared `MeetingTranscriptionQueue` transcribes them
+ * with bounded concurrency, the compose box fills in during the meeting, and a
+ * segment that will not transcribe stays in the transcript as a gap with its
+ * time range and a retry control. The scheduler, the retry rule and the session
+ * model all come from `@kinqs/brainrouter-core/meetings` — D1b: only the write
+ * target is host-specific — so nothing here restates a policy the desktop also
+ * has to obey.
+ *
+ * The honest boundary, per open question 3: a renderer-owned queue dies with the
+ * window, and a browser tab has no host process to hand it to. The browser's
+ * answer is that the queue holds nothing worth surviving — it recomputes its work
+ * from the persisted session every pass — so a killed tab loses a scheduler and
+ * not a position, and the next load rebuilds one over the same record.
+ *
+ * Two things this page must do that are easy to leave out. Stop DRAINS the
+ * store's write queue before it settles the session, because `onstop` fires while
+ * the final chunk is still being written. And every load REAPS captures whose
+ * session record is gone, because the browser's quota is finite and audio nothing
+ * can offer back is audio nothing can free.
+ *
+ * ADR-035 D4 — and the text goes into the box by ONE rule, the shared
+ * `foldTranscript`, which appends from where it left off and never moves a line
+ * the box already holds. This page used to have a second answer: it recomposed
+ * `base + transcriptText(session)` on every drain over a base with every segment
+ * stripped out of it, which put all of the person's own words first and the
+ * whole meeting after them. A note typed BETWEEN two segments came back above
+ * the entire transcript across a kill, and an edit to the last settled segment
+ * came back reverted AND relocated to the top — both silent, both POSTed, both
+ * on this host only. Position in that box is the person's, not this surface's.
+ *
+ * ADR-035 D6 — the compose draft lives in that same protected store, not in
+ * `localStorage` (`meetingDraft.ts`): the words of a meeting do not belong in a
+ * store any page script can read. It holds the compose box WHOLE — exactly what
+ * the person can see themselves having typed. The doubling a recovered meeting
+ * used to arrive with is prevented on the way back IN, by reconciling the
+ * restored box against the session once in `attachQueue`, and never by writing
+ * a stripped copy of it down.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from "react";
 import { Lock, UsersThree, Buildings, GlobeHemisphereWest, Microphone, type Icon } from "@phosphor-icons/react";
+import { summarizeRecovery } from "@kinqs/brainrouter-core/meetings";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
 import { InlineLoading } from "../../components/LoadingSpinner";
@@ -17,6 +82,11 @@ import { useActiveOrg } from "../../components/OrgWorkspaceProvider";
 import { BASE_URL } from "../../lib/client";
 import { getApiKey, getJwt } from "../../lib/client-auth";
 import { invalidateDashboardQueries, queryDashboard } from "../../lib/dashboardQuery";
+import { captureHeldNote, CAPTURE_DISCARD_UNKNOWN } from "../../lib/meetings/captureLock";
+import { formatCaptureBytes } from "../../lib/meetings/storageBudget";
+import { browserCapturePorts } from "./capturePorts";
+import { MeetingCaptureSurface, storedStillRecording } from "./captureSurface";
+import { LiveTranscript } from "./LiveTranscript";
 import styles from "./meetings.module.css";
 
 type Scope = "private" | "team" | "org" | "public";
@@ -96,41 +166,44 @@ export default function MeetingsPage() {
   const [detailError, setDetailError] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
-  const [createOpen, setCreateOpen] = useState(false);
-  const [draftTitle, setDraftTitle] = useState("");
-  const [draftTranscript, setDraftTranscript] = useState("");
-  const [createErr, setCreateErr] = useState("");
-  const [recording, setRecording] = useState(false);
-  const [recordingPaused, setRecordingPaused] = useState(false);
-  const [language, setLanguage] = useState("auto");
-  const [summaryTemplate, setSummaryTemplate] = useState("general");
   const [editing, setEditing] = useState(false);
   const [draftSummary, setDraftSummary] = useState("");
   const [meetingQuery, setMeetingQuery] = useState("");
   const [scopeFilter, setScopeFilter] = useState<Scope | "all">("all");
-  const [draftRecovered, setDraftRecovered] = useState(false);
   const [copied, setCopied] = useState(false);
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
 
-  useEffect(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem("brainrouter:meeting-draft") ?? "null") as { title?: string; transcript?: string; language?: string; template?: string } | null;
-      if (saved?.title) setDraftTitle(saved.title);
-      if (saved?.transcript) setDraftTranscript(saved.transcript);
-      if (saved?.language) setLanguage(saved.language);
-      if (saved?.template) setSummaryTemplate(saved.template);
-      if (saved?.title || saved?.transcript) setDraftRecovered(true);
-    } catch { /* a malformed local draft should not block Meetings */ }
+  // ADR-035 — everything about a recording that is being WRITTEN lives in
+  // `captureSurface.ts`, which is a plain object with no React in it, and this
+  // page renders what it says. That is not tidiness: this component is the file
+  // every dashboard defect in this ADR has lived in, and a component can only be
+  // checked by reading it. Behind the seam a test presses Record, hands over a
+  // chunk, kills the tab and reads what actually reached the POST.
+  //
+  // The switcher's org and the page's own `busy` are read through refs, so the
+  // surface always sees the CURRENT value without being rebuilt — rebuilding it
+  // would drop the recording it is holding, which is the defect it exists to fix.
+  // The id of a meeting the surface has just created, so the library reload and
+  // the selection stay here, where the library lives.
+  const [createdMeetingId, setCreatedMeetingId] = useState<string | null>(null);
+  const activeOrgRef = useRef(activeOrgId);
+  activeOrgRef.current = activeOrgId;
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
+  const capture = useMemo(() => {
+    // Everything device-shaped — the lock table, the store, the microphone, the
+    // STT endpoint, the clock — is `capturePorts.ts`, where a test can hold it.
+    // What is passed from here is only what React owns, and all three are
+    // functions so the surface reads the CURRENT value without being rebuilt.
+    const ports = browserCapturePorts({
+      activeOrgId: () => activeOrgRef.current,
+      otherBusy: () => Boolean(busyRef.current),
+      onCreated: (meetingId) => setCreatedMeetingId(meetingId),
+    });
+    return new MeetingCaptureSurface(ports);
   }, []);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      if (draftTitle || draftTranscript) localStorage.setItem("brainrouter:meeting-draft", JSON.stringify({ title: draftTitle, transcript: draftTranscript, language, template: summaryTemplate }));
-      else localStorage.removeItem("brainrouter:meeting-draft");
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [draftTitle, draftTranscript, language, summaryTemplate]);
+  const cap = useSyncExternalStore(capture.subscribe, capture.snapshot, capture.snapshot);
+  // Derived from the snapshot above, so both are recomputed on the same render.
+  const unresolved = capture.unresolved;
 
   // Poll while notes are generating — the server keeps summarizing across refreshes,
   // so this converges the status without the user re-triggering anything.
@@ -164,63 +237,25 @@ export default function MeetingsPage() {
     }
   }, [detail, draftSummary, activeOrgId]);
 
-  const transcribe = useCallback(async (blob: Blob) => {
-    setBusy("transcribe");
-    setCreateErr("");
-    try {
-      if (!blob.size) throw new Error("The selected audio file is empty.");
-      if (blob.size > 40 * 1024 * 1024) throw new Error("Audio must be 40 MB or smaller.");
-      const token = getJwt() || getApiKey() || "";
-      const res = await fetch(`${BASE_URL}/v1/audio/transcriptions${language === "auto" ? "" : `?language=${encodeURIComponent(language)}`}`, {
-        method: "POST",
-        headers: { "Content-Type": blob.type || "audio/webm", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: blob,
-      });
-      if (!res.ok) throw new Error(`Transcription failed (${res.status})`);
-      const out = (await res.json()) as { text?: string };
-      const text = (out.text ?? "").trim();
-      if (text) setDraftTranscript((cur) => (cur ? `${cur}\n${text}` : text));
-      else setCreateErr("No speech was detected in the recording.");
-    } catch (caught) {
-      setCreateErr(caught instanceof Error ? caught.message : "Transcription failed.");
-    } finally {
-      setBusy("");
-    }
-  }, [language]);
-
-  const startRecording = useCallback(async () => {
-    setCreateErr("");
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const rec = new MediaRecorder(stream);
-      chunksRef.current = [];
-      rec.ondataavailable = (e) => { if (e.data.size) chunksRef.current.push(e.data); };
-      rec.onstop = () => {
-        stream.getTracks().forEach((t) => t.stop());
-        void transcribe(new Blob(chunksRef.current, { type: rec.mimeType || "audio/webm" }));
-      };
-      recorderRef.current = rec;
-      rec.start();
-      setRecording(true);
-      setRecordingPaused(false);
-    } catch {
-      setCreateErr("Microphone access was denied or is unavailable.");
-    }
-  }, [transcribe]);
-
-  const stopRecording = useCallback(() => {
-    recorderRef.current?.stop();
-    recorderRef.current = null;
-    setRecording(false);
-    setRecordingPaused(false);
-  }, []);
-
-  const toggleRecordingPause = useCallback(() => {
-    const recorder = recorderRef.current;
-    if (!recorder) return;
-    if (recorder.state === "recording") { recorder.pause(); setRecordingPaused(true); }
-    else if (recorder.state === "paused") { recorder.resume(); setRecordingPaused(false); }
-  }, []);
+  // ADR-035 — the capture surface's lifecycle, and nothing else about it lives
+  // here. `init` restores the compose draft once; the recovery offer is re-asked
+  // whenever the workspace moves, because the offer is scoped to it; and
+  // `dispose` is the unmount teardown.
+  //
+  // That teardown is the whole of defect A. Without it a client-side navigation
+  // away from /meetings left the `MediaRecorder` RUNNING with the microphone
+  // open, still writing chunks through its closure, while the remounted page had
+  // a fresh empty guard — so the live session appeared in the recovery offer
+  // with an enabled Discard beside it, and there was no way to stop it:
+  // `recording` was false, the button said "Record", and pressing it started a
+  // SECOND concurrent recorder over a SECOND session while the first kept
+  // writing into the first. The desktop grew exactly this teardown; D1b says the
+  // browser gets the same guarantee and not a lesser one.
+  useEffect(() => {
+    void capture.init();
+    return () => { void capture.dispose(); };
+  }, [capture]);
+  useEffect(() => { void capture.refreshRecoverable(); }, [capture, activeOrgId]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -240,6 +275,17 @@ export default function MeetingsPage() {
   }, [activeOrgId]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // The surface created a meeting; the LIBRARY is this page's, so refreshing it
+  // and selecting the new row stays here. Kept as an effect over an id rather
+  // than a callback handed across the seam, because `load` closes over the org
+  // and the surface must never be rebuilt when that changes.
+  useEffect(() => {
+    if (!createdMeetingId) return;
+    setCreatedMeetingId(null);
+    invalidateDashboardQueries("meetings:");
+    void load().then(() => setSelectedId(createdMeetingId));
+  }, [createdMeetingId, load]);
 
   const loadMoreMeetings = useCallback(async () => {
     if (!meetingsNext || busy === "more-meetings") return;
@@ -467,27 +513,6 @@ export default function MeetingsPage() {
     } finally { setBusy(""); }
   }, [detail, activeOrgId]);
 
-  const submitCreate = useCallback(async () => {
-    if (!draftTitle.trim() || !draftTranscript.trim()) { setCreateErr("A title and a transcript are required."); return; }
-    setBusy("create");
-    setCreateErr("");
-    try {
-      const out = await authFetch<{ id: string }>("/api/meetings", { method: "POST", body: { title: draftTitle.trim(), transcript: draftTranscript, template: summaryTemplate }, orgId: activeOrgId || undefined });
-      invalidateDashboardQueries("meetings:");
-      setCreateOpen(false);
-      setDraftTitle("");
-      setDraftTranscript("");
-      setDraftRecovered(false);
-      localStorage.removeItem("brainrouter:meeting-draft");
-      await load();
-      setSelectedId(out.id);
-    } catch (caught) {
-      setCreateErr(caught instanceof Error ? caught.message : "Could not create the meeting.");
-    } finally {
-      setBusy("");
-    }
-  }, [draftTitle, draftTranscript, summaryTemplate, load, activeOrgId]);
-
   const summaryBlocks = useMemo(() => renderSummary(detail?.summaryMarkdown ?? ""), [detail?.summaryMarkdown]);
   const filteredItems = useMemo(() => {
     const needle = meetingQuery.trim().toLowerCase();
@@ -499,11 +524,61 @@ export default function MeetingsPage() {
       <PageHeader title="Meetings" description="Recallable meeting summaries across your organization." />
       <div className={styles.page}>
       {error ? <div className={styles.errorBar} role="alert">{error}</div> : null}
+      {/* D6 — outside the dialog on purpose: this is raised by the same commit
+          that closes it, so anywhere inside would be unreadable by construction. */}
+      {cap.retained.map((row) => (
+        <div className={styles.errorBar} role="alert" key={row.sessionId}>
+          {row.message}{" "}
+          <button type="button" className={styles.track} onClick={() => void capture.releaseRetained(row.sessionId)}>Delete the audio</button>
+        </div>
+      ))}
+      {cap.recoveryError ? (
+        <div className={styles.errorBar} role="alert">
+          {cap.recoveryError}{" "}
+          <button type="button" className={styles.track} onClick={() => void capture.refreshRecoverable()}>Check again</button>
+        </div>
+      ) : null}
+      {/* Both capture slots follow the user. The × and the scrim close this
+          dialog WITHOUT stopping the recording, so a meeting can be captured
+          with nothing of it on screen — and a durability warning rendered only
+          inside a closed dialog is a warning nobody can act on. They are
+          rendered here exactly while there is no dialog to render them in. */}
+      {!cap.createOpen && cap.warning ? <div className={styles.errorBar} role="alert">{cap.warning}</div> : null}
+      {!cap.createOpen && cap.notice ? <div className={styles.errorBar} role="status">{cap.notice}</div> : null}
+      {/* Golden rule 23 — this browser has no Web Locks, so it cannot see what
+          another tab is recording. A degradation nobody is shown is
+          indistinguishable from working, and this one can cost a meeting. */}
+      {!cap.createOpen && cap.coordination ? <div className={styles.errorBar} role="status">{cap.coordination}</div> : null}
+      {/* `cap.capturing`, not `cap.recording`: closing the dialog does not file
+          the meeting, and a capture this tab is still holding is deliberately
+          absent from the offer below — so with `recording` alone a person who
+          stopped and closed the dialog had a finished recording on their device
+          with nothing anywhere saying so, and a Record button that refused. */}
+      {!cap.createOpen && cap.capturing ? (
+        <div className={styles.errorBar} role="status">
+          {cap.recording
+            ? "A meeting is being recorded. Its audio is being saved to this device."
+            : cap.settling
+              ? "The end of a recording is still being written to this device."
+              : cap.landing
+                ? "A recording is starting on this page."
+                : "A recording is finished and saved on this device. Create the meeting or discard the recording to start another."}{" "}
+          <button type="button" className={styles.track} onClick={() => capture.openDialog()}>Back to the recording</button>
+        </div>
+      ) : null}
+      {cap.recoverable.length ? (
+        <div className={styles.errorBar} role="status">
+          {cap.recoverable.length === 1
+            ? "An unfinished recording is still saved on this device."
+            : `${cap.recoverable.length} unfinished recordings are still saved on this device.`}{" "}
+          <button type="button" className={styles.track} onClick={() => capture.openDialog()}>Review</button>
+        </div>
+      ) : null}
       <div className={styles.wrap}>
         <div className={styles.list}>
           <div className={styles.listHead}>
             <div><span className={styles.eyebrow}>Library</span><h2>Meetings <span>{items.length}</span></h2></div>
-            <button type="button" className={styles.newBtn} onClick={() => { setCreateErr(""); setCreateOpen(true); }}>+ New</button>
+            <button type="button" className={styles.newBtn} onClick={() => capture.openDialog()}>+ New</button>
           </div>
           <div className={styles.listTools}>
             <label className={styles.listSearch}><span aria-hidden="true">⌕</span><span className="sr-only">Search meetings</span><input value={meetingQuery} onChange={(event) => setMeetingQuery(event.target.value)} placeholder="Search meetings" />{meetingQuery ? <button type="button" onClick={() => setMeetingQuery("")} aria-label="Clear meeting search">×</button> : null}</label>
@@ -670,39 +745,200 @@ export default function MeetingsPage() {
         )}
       </div>
 
-      {createOpen ? (
-        <div className={styles.modalScrim} role="dialog" aria-modal="true" aria-labelledby="new-meeting-title" onClick={() => setCreateOpen(false)} onKeyDown={(event) => { if (event.key === "Escape") setCreateOpen(false); }}>
+      {cap.createOpen ? (
+        <div className={styles.modalScrim} role="dialog" aria-modal="true" aria-labelledby="new-meeting-title" onClick={() => capture.closeDialog()} onKeyDown={(event) => { if (event.key === "Escape") capture.closeDialog(); }}>
           <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
-            <div className={styles.modalHead}><div><span className={styles.eyebrow}>Capture</span><h2 id="new-meeting-title">New meeting</h2></div><button type="button" onClick={() => setCreateOpen(false)} aria-label="Close new meeting dialog">×</button></div>
+            <div className={styles.modalHead}><div><span className={styles.eyebrow}>Capture</span><h2 id="new-meeting-title">New meeting</h2></div><button type="button" onClick={() => capture.closeDialog()} aria-label="Close new meeting dialog">×</button></div>
             <input
               className={styles.modalInput}
               placeholder="Title (e.g. Weekly product sync)"
-              value={draftTitle}
+              value={cap.title}
               autoFocus
-              onChange={(e) => setDraftTitle(e.target.value)}
+              onChange={(e) => capture.setTitle(e.target.value)}
               aria-label="Meeting title"
             />
             <textarea
               className={styles.modalTextarea}
               placeholder="Paste a transcript, or record above — Whisper produces plain text (no speaker labels)."
-              value={draftTranscript}
-              onChange={(e) => setDraftTranscript(e.target.value)}
+              value={cap.transcript}
+              onChange={(e) => capture.setTranscript(e.target.value)}
               rows={10}
               aria-label="Transcript"
             />
             <div className={styles.captureOptions}>
-              <label>Template<select value={summaryTemplate} onChange={(event) => setSummaryTemplate(event.target.value)} aria-label="Meeting summary template"><option value="general">General notes</option><option value="standup">Standup</option><option value="one-on-one">1:1</option><option value="retrospective">Retrospective</option></select></label>
-              <label>Language<select value={language} onChange={(event) => setLanguage(event.target.value)} aria-label="Transcription language"><option value="auto">Auto detect</option><option value="en">English</option><option value="es">Spanish</option><option value="fr">French</option><option value="de">German</option><option value="ja">Japanese</option><option value="ko">Korean</option><option value="zh">Chinese</option></select></label>
-              <label className={styles.importAudio}>Import audio<input type="file" accept="audio/*,.webm,.m4a,.mp3,.wav,.ogg" onChange={(event) => { const file = event.target.files?.[0]; if (file) void transcribe(file); event.target.value = ""; }} /></label>
-              <span>{draftRecovered ? "Recovered your saved draft" : "Drafts are saved on this device"}</span>
+              <label>Template<select value={cap.template} onChange={(event) => capture.setTemplate(event.target.value)} aria-label="Meeting summary template"><option value="general">General notes</option><option value="standup">Standup</option><option value="one-on-one">1:1</option><option value="retrospective">Retrospective</option></select></label>
+              <label>Language<select value={cap.language} onChange={(event) => capture.setLanguage(event.target.value)} aria-label="Transcription language"><option value="auto">Auto detect</option><option value="en">English</option><option value="es">Spanish</option><option value="fr">French</option><option value="de">German</option><option value="ja">Japanese</option><option value="ko">Korean</option><option value="zh">Chinese</option></select></label>
+              <label className={styles.importAudio}>Import audio<input type="file" accept="audio/*,.webm,.m4a,.mp3,.wav,.ogg" onChange={(event) => { const file = event.target.files?.[0]; if (file) void capture.importAudio(file); event.target.value = ""; }} /></label>
+              <span>{cap.draftRecovered ? "Recovered your saved draft" : "Drafts are saved on this device"}</span>
             </div>
-            {createErr ? <div className={styles.errorBar} role="alert">{createErr}</div> : null}
+            {cap.recoverable.length ? (
+              <div className={styles.linkzone}>
+                <div className={styles.teamPickH}>Unfinished recordings on this device</div>
+                {cap.recoverable.map((entry) => {
+                  // The summary is the shared one, so a recovered meeting is
+                  // described here exactly as the desktop describes it — and it
+                  // already knows how much of the transcript survived. The
+                  // session comes from the offer, which restored it once under
+                  // the rule that decided it was offerable at all.
+                  const summary = summarizeRecovery(entry.session);
+                  // D6 — the button says what the function will refuse. The
+                  // offer already excludes a capture somebody is writing to, so
+                  // this is the belt beside `discard`'s braces: a listing taken
+                  // a moment ago and a tab that started recording since. The
+                  // function asks the browser again on the click, which is the
+                  // answer that actually decides.
+                  const writer = cap.writing.includes(entry.record.sessionId)
+                    ? captureHeldNote(storedStillRecording(entry.record))
+                    : null;
+                  // Golden rule 23 — and the one this page was SILENT about. On
+                  // a browser with no Web Locks — older Safari and Firefox and
+                  // some in-app browsers, which are secure contexts that record
+                  // perfectly well, and any page on an insecure origin, which is
+                  // not — `writing` is empty because nothing can be known, not
+                  // because nothing is being written: tab two was offered tab
+                  // one's LIVE recording with an enabled Discard beside it, and
+                  // one click deleted the manifest and every chunk.
+                  //
+                  // Said out loud in the tooltip, and NOT disabled: this browser
+                  // has no other route to the delete — the row is the only place
+                  // Discard is rendered, and picking the capture up takes it out
+                  // of the offer — so a disabled button here is audio nobody can
+                  // remove from their own device. `discard` puts the tooltip's
+                  // own question to the person instead, and this is the same
+                  // sentence so the button cannot promise a different one.
+                  const unsure = !writer && !cap.writersKnown ? CAPTURE_DISCARD_UNKNOWN : null;
+                  return (
+                    <Fragment key={entry.record.sessionId}>
+                      <div className={styles.recoverRow}>
+                        <span className={styles.recoverWhat}>
+                          <b>{summary.title}</b>
+                          <span>
+                            {new Date(summary.startedAt).toLocaleString()} · {formatCaptureBytes(summary.byteLength)} · {summary.segments} segment{summary.segments === 1 ? "" : "s"}
+                            {summary.settled ? ` · ${summary.settled} transcribed` : ""}
+                            {summary.gaps ? ` · ${summary.gaps} gap${summary.gaps === 1 ? "" : "s"}` : ""}
+                          </span>
+                        </span>
+                        <span className={styles.recoverActions}>
+                          {/* §6 — "on disk AND PLAYABLE". Without this the
+                              destructive test can only ever be half-passed: the
+                              session and the transcript come back and the user
+                              cannot hear a second of what they recorded. */}
+                          <button type="button" className={styles.track} disabled={cap.busy === "preview"} aria-pressed={cap.preview?.sessionId === entry.record.sessionId} onClick={() => void capture.previewCapture(entry.record)}>
+                            {cap.preview?.sessionId === entry.record.sessionId ? "Hide audio" : cap.busy === "preview" ? "Reading…" : "Play"}
+                          </button>
+                          {/* `cap.capturing`, not `cap.recording`. `recording`
+                              is false across the whole arming window and across
+                              the settle after Stop, and this button ADOPTS a
+                              meeting: pressed in either window it hands the
+                              recording this tab is making back to the browser
+                              from inside `attachQueue`, and that recording then
+                              writes chunks nothing claims. The surface refuses
+                              it in the function too — this is the belt. */}
+                          <button type="button" className={styles.newBtn} disabled={cap.busy === "transcribe" || cap.capturing || Boolean(writer)} onClick={() => void capture.pickUp(entry)}>Pick up</button>
+                          <button type="button" className={styles.track} disabled={cap.busy === "transcribe" || Boolean(writer)} title={writer ?? unsure ?? undefined} onClick={() => void capture.discard(entry.record)}>Discard</button>
+                        </span>
+                      </div>
+                      {cap.preview?.sessionId === entry.record.sessionId ? (
+                        <div className={styles.recoverPlayer}>
+                          {/* No caption track, deliberately: the text of this
+                              recording is the transcript in the box above, which
+                              is what the segments have been producing all along. */}
+                          <audio src={cap.preview.url} controls preload="metadata" aria-label={`Recording started ${new Date(summary.startedAt).toLocaleString()}`} />
+                          {/* D5's rule, one layer down: a player that silently
+                              skipped unreadable chunks would be the "quietly
+                              wrong" recording rather than the honest one. */}
+                          {cap.preview.missing ? (
+                            <small>{cap.preview.missing} segment{cap.preview.missing === 1 ? "" : "s"} of this recording could not be read back and {cap.preview.missing === 1 ? "is" : "are"} missing from what plays here.</small>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </Fragment>
+                  );
+                })}
+                <div className={styles.teamPickNote}>Audio never leaves this device except one segment at a time as it transcribes, and is deleted once the meeting is created or you discard it.</div>
+              </div>
+            ) : null}
+            {cap.session ? (
+              <LiveTranscript session={cap.session} phase={cap.phase} retrying={cap.retrying} onRetry={(index) => void capture.retrySegment(index)} />
+            ) : null}
+            {/* There is deliberately no catch-up affordance here any more. It
+                existed because automatic composition switched OFF for good the
+                moment a person typed, so new text had to be withheld and then
+                offered back. Under the append-only fold nothing is ever
+                withheld from the box, so there is nothing left to offer. */}
+            {/* Two slots, and the order is the point. `captureNotice` is a
+                READING — the store's kind and how much room is left — rewritten
+                by every chunk and blank most of the time. `captureWarning` is an
+                EVENT that is still true: a persist that failed, a manifest that
+                could not be written, a store that filled up. They used to share
+                one slot, so the highest-frequency writer won and every warning
+                that mattered was erased by the next timeslice while it was still
+                the case. The warning is rendered second, next to the actions, so
+                it is the last thing read before Create. */}
+            {cap.notice ? <div className={styles.errorBar} role="status">{cap.notice}</div> : null}
+            {cap.coordination ? <div className={styles.errorBar} role="status">{cap.coordination}</div> : null}
+            {cap.warning ? <div className={styles.errorBar} role="alert">{cap.warning}</div> : null}
+            {cap.createError ? <div className={styles.errorBar} role="alert">{cap.createError}</div> : null}
+            {/* D5, said in advance. Creating the meeting is what turns an
+                unresolved segment into a printed gap AND deletes the audio it
+                would have been filled in from, so this is the last moment the
+                choice exists. */}
+            {cap.recording ? (
+              <div className={styles.teamPickNote}>Stop the recording before creating the meeting — creating it releases the captured audio, and the chunk being written right now would have nowhere to land.</div>
+            ) : cap.settling ? (
+              /* The window after Stop, which the surface used to show as "ready
+                 to create": `recording` is already false while the last piece of
+                 audio is still being written and has no segment yet, so Create
+                 landing here posted a transcript that stopped early with nothing
+                 saying so. */
+              <div className={styles.teamPickNote}>The end of this recording is still being written to this device — it takes a moment, and creating the meeting before it lands would release the audio for the last piece of it.</div>
+            ) : unresolved > 0 ? (
+              <div className={styles.teamPickNote}>
+                {unresolved === 1 ? "1 segment is still being transcribed" : `${unresolved} segments are still being transcribed`} — creating the meeting now states {unresolved === 1 ? "it" : "them"} as gaps with their time ranges.
+              </div>
+            ) : cap.capturing && !cap.landing ? (
+              /* Said out loud, and not only in the Record button's title: a
+                 tooltip is not reachable on a touch screen, and this is the
+                 state that explains why Record and Pick up are refused. Not
+                 `capturing` alone — that is also true through the arming window,
+                 where nothing is saved on this device yet and this sentence
+                 would be a lie about a recording that has not started. */
+              <div className={styles.teamPickNote}>This recording is saved on this device and has not been filed yet — create the meeting, or discard the recording, to start another.</div>
+            ) : null}
             <div className={styles.modalActions} style={{ justifyContent: "space-between" }}>
-              <div className={styles.recordActions}><button type="button" className={styles.track} onClick={() => (recording ? stopRecording() : void startRecording())} disabled={busy === "transcribe"}>{recording ? "■ Stop recording" : busy === "transcribe" ? "Transcribing…" : <><Microphone size={13} weight="fill" /> Record</>}</button>{recording ? <button type="button" className={styles.track} onClick={toggleRecordingPause}>{recordingPaused ? "▶ Resume" : "Ⅱ Pause"}</button> : null}</div>
+              {/* The Record FACE of this button is disabled by `cap.capturing`,
+                  and the Stop face never is. `recording` stays false through the
+                  arming window — a storage prompt and a microphone prompt, both
+                  of which a person can leave on screen — so a second press was
+                  the ordinary "nothing happened, click it again" and it started
+                  a SECOND recorder over a SECOND session, which `stop()` and the
+                  unmount teardown could both only reach the last of. It stays
+                  false after the settle too, over a meeting still sitting in this
+                  box, where the second press merges two meetings into one POST.
+                  The label says which window it is in rather than looking dead
+                  (ADR-028), and the one window a label cannot describe — a
+                  finished recording nobody has filed — says it in the title. */}
+              <div className={styles.recordActions}><button type="button" className={styles.track} onClick={() => (cap.recording ? capture.stop() : void capture.record())} disabled={cap.busy === "transcribe" || (!cap.recording && cap.capturing)} title={!cap.recording && cap.capturing && !cap.landing ? "Create the meeting or discard the recording before starting another — this box still holds the last one." : undefined}>{cap.recording ? "■ Stop recording" : cap.busy === "transcribe" ? "Transcribing…" : cap.settling ? "Saving the recording…" : cap.landing ? "Starting…" : <><Microphone size={13} weight="fill" /> Record</>}</button>{cap.recording ? <button type="button" className={styles.track} onClick={() => capture.togglePause()}>{cap.paused ? "▶ Resume" : "Ⅱ Pause"}</button> : null}</div>
               <div style={{ display: "flex", gap: 8 }}>
-                <button type="button" className={styles.track} onClick={() => { if (recording) stopRecording(); setCreateOpen(false); }}>Cancel</button>
-                <button type="button" className={styles.newBtn} onClick={() => void submitCreate()} disabled={busy === "create" || recording}>
-                  {busy === "create" ? "Creating…" : "Create + summarize"}
+                {/* The other way out of "in hand", and the reason that predicate
+                    is not a wedge: the offer never lists the capture this tab is
+                    holding, so without this the only Discard in the product is on
+                    a row that will never be rendered for it and a recording
+                    nobody wants can never be put down. Rendered while there is a
+                    capture and its audio has landed — discarding mid-flight would
+                    delete the bytes a chunk is still being written into. */}
+                {cap.session && !cap.landing ? (
+                  <button type="button" className={styles.track} onClick={() => void capture.discardHeld()}>Discard recording</button>
+                ) : null}
+                <button type="button" className={styles.track} onClick={() => { if (cap.recording) capture.stop(); capture.closeDialog(); }}>Cancel</button>
+                {/* `cap.landing`, and deliberately not `cap.capturing`: this is
+                    the press that ENDS a capture's time in this tab, so the
+                    predicate the other two controls are refused by would refuse
+                    the only way out of it. What it waits for is the audio —
+                    `recording`, the settle, and the arming window they both leave
+                    out — which is what `submit()` refuses on. */}
+                <button type="button" className={styles.newBtn} onClick={() => void capture.submit()} disabled={cap.busy === "create" || cap.landing}>
+                  {cap.busy === "create" ? "Creating…" : cap.settling ? "Saving the recording…" : "Create + summarize"}
                 </button>
               </div>
             </div>

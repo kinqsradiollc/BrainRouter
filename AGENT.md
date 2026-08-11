@@ -8,7 +8,7 @@
 
 ## 📖 Read order for any task
 
-1. [`brainrouter-rules/00-golden-rules.md`](brainrouter-rules/00-golden-rules.md) — the top ~20 non-negotiables (`⛔` = has caused a real regression or security bug).
+1. [`brainrouter-rules/00-golden-rules.md`](brainrouter-rules/00-golden-rules.md) — the 30 non-negotiables (`⛔` = has caused a real regression or security bug).
 2. The topical rules file for the area you're touching — see the table in [`brainrouter-rules/README.md`](brainrouter-rules/README.md) (boundaries, code style, refactoring, memory engine, CLI/agent runtime, desktop/dashboard, testing, git/release, docs/skills).
 3. The matching **skill** for your scenario (table below) — read its `SKILL.md` and follow the steps.
 4. For architecture intent: [`brainrouter-docs/architecture-folder-structure-rules.md`](brainrouter-docs/architecture-folder-structure-rules.md). The rules handbook describes what the code does today; the architecture doc is the boundary law.
