@@ -16,6 +16,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createTestStore } from "./helpers/pgTestStore.js";
+import { PostgresMemoryStore } from "../memory/store/postgres/PostgresMemoryStore.js";
 
 const ORG = "org-a";
 const ALICE = "user-alice";
@@ -88,6 +89,79 @@ test("a redelivered operation key is recorded once per tenant, never across them
     // key must not suppress another's operation.
     assert.equal(await store.wasNoteOperationApplied(ORG, BOB, "op-1"), false);
   } finally {
+    await cleanup();
+  }
+});
+
+test("a Notes transaction rolls back its block, projection, receipt and clock together", async () => {
+  const { store, cleanup } = await createTestStore();
+  try {
+    await assert.rejects(store.withNoteMutation(ORG, ALICE, async (queries) => {
+      await queries.upsertNoteBlock(ORG, ALICE, {
+        id: "blk_atomic", parentId: null, kind: "paragraph",
+        payload: { id: "blk_atomic", text: { value: "never committed", at: { physical: 5, logical: 0, deviceId: "d" } } },
+        deletedAtHlc: null,
+      });
+      await queries.upsertNoteIndex(ORG, ALICE, "blk_atomic", {
+        contentText: "never committed", refKeys: [],
+      });
+      await queries.recordNoteOperationApplied(
+        ORG, ALICE, "atomic-receipt", "blk_atomic", "fingerprint", { ok: true },
+      );
+      await queries.observeNoteHostClock(ORG, ALICE, { physical: 9_000, logical: 4, deviceId: "remote" });
+      throw new Error("roll back this mutation");
+    }), /roll back this mutation/);
+
+    assert.equal(await store.getNoteBlock(ORG, ALICE, "blk_atomic"), null);
+    assert.equal(await store.getNoteOperationReceipt(ORG, ALICE, "atomic-receipt"), null);
+    assert.equal((await store.listNoteIndexEntries(ORG, ALICE)).length, 0);
+    const next = await store.withNoteMutation(ORG, ALICE, (queries) =>
+      queries.nextNoteHostClock(ORG, ALICE, "server", 100, 1));
+    assert.equal(next.physical, 100, "the rolled-back future clock leaked out of the transaction");
+  } finally {
+    await cleanup();
+  }
+});
+
+test("an operation receipt retains its fingerprint and original response on redelivery", async () => {
+  const { store, cleanup } = await createTestStore();
+  try {
+    const original = { ok: true, result: { action: "split", createdId: "blk_tail" } };
+    await store.recordNoteOperationApplied(
+      ORG, ALICE, "receipt-with-result", "blk_head", "body-fingerprint", original,
+    );
+    await store.recordNoteOperationApplied(
+      ORG, ALICE, "receipt-with-result", "different-block", "different-fingerprint", { ok: false },
+    );
+    assert.deepEqual(await store.getNoteOperationReceipt(ORG, ALICE, "receipt-with-result"), {
+      blockId: "blk_head",
+      fingerprint: "body-fingerprint",
+      response: original,
+    });
+  } finally {
+    await cleanup();
+  }
+});
+
+test("the hosted Notes clock absorbs remote time, reserves ranges, and survives a new store instance", async () => {
+  const { store, url, cleanup } = await createTestStore();
+  let reopened: PostgresMemoryStore | null = null;
+  try {
+    await store.withNoteMutation(ORG, ALICE, async (queries) => {
+      await queries.observeNoteHostClock(ORG, ALICE, {
+        physical: 9_000_000, logical: 77, deviceId: "offline-device",
+      });
+      const first = await queries.nextNoteHostClock(ORG, ALICE, "server", 1_000, 3);
+      assert.deepEqual(first, { physical: 9_000_000, logical: 78, deviceId: "server" });
+    });
+
+    reopened = new PostgresMemoryStore(url);
+    await reopened.init();
+    const afterRestart = await reopened.withNoteMutation(ORG, ALICE, (queries) =>
+      queries.nextNoteHostClock(ORG, ALICE, "server", 1_001, 1));
+    assert.deepEqual(afterRestart, { physical: 9_000_000, logical: 81, deviceId: "server" });
+  } finally {
+    await reopened?.close().catch(() => undefined);
     await cleanup();
   }
 });
@@ -301,6 +375,43 @@ test("a lease round-trips with the epoch intact and expiry judged on the databas
     const absent = await store.readNoteBlockLease(ORG, ALICE, "blk_none");
     assert.equal(absent.lease, null, "no lock is an answer, not a missing row");
     assert.ok(absent.dbNowMs > 0);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("the user-scoped Notes transaction makes simultaneous lease acquisition single-winner", async () => {
+  const { store, cleanup } = await createTestStore();
+  try {
+    let firstRead!: () => void;
+    const firstHasRead = new Promise<void>((resolve) => { firstRead = resolve; });
+    const acquire = (deviceId: string, pauseAfterRead: boolean) => store.withNoteMutation(
+      ORG,
+      ALICE,
+      async (queries) => {
+        const { lease, dbNowMs } = await queries.readNoteBlockLease(ORG, ALICE, "blk_race");
+        if (pauseAfterRead) {
+          firstRead();
+          await new Promise((resolve) => setTimeout(resolve, 75));
+        }
+        if (lease && lease.expiresAtMs > dbNowMs) return false;
+        await queries.upsertNoteBlockLease(ORG, ALICE, {
+          blockId: "blk_race", deviceId, holder: deviceId,
+          epoch: (lease?.epoch ?? 0) + 1,
+          expiresAtMs: dbNowMs + 30_000,
+        });
+        return true;
+      },
+    );
+
+    const first = acquire("device-a", true);
+    await firstHasRead;
+    const second = acquire("device-b", false);
+    const outcomes = await Promise.all([first, second]);
+    assert.equal(outcomes.filter(Boolean).length, 1);
+    const stored = await store.readNoteBlockLease(ORG, ALICE, "blk_race");
+    assert.equal(stored.lease?.deviceId, "device-a");
+    assert.equal(stored.lease?.epoch, 1);
   } finally {
     await cleanup();
   }

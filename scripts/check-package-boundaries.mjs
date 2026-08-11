@@ -28,6 +28,7 @@ const INTERNAL_PACKAGES = new Map([
   ['@kinqs/brainrouter-core', 'core'],
   ['@kinqs/brainrouter-sdk', 'sdk'],
   ['@kinqs/brainrouter-hooks', 'hooks'],
+  ['@kinqs/brainrouter-ui', 'ui'],
   ['@kinqs/brainrouter-mcp-server', 'backend'],
   ['@kinqs/brainrouter-cli', 'cli'],
 ]);
@@ -38,11 +39,12 @@ const ALLOWED_INTERNAL_EDGES = new Map([
   ['core', new Set(['types', 'protocol'])],
   ['sdk', new Set(['types'])],
   ['hooks', new Set(['sdk', 'types'])],
+  ['ui', new Set(['core'])],
   ['backend', new Set(['core', 'types'])],
   ['cli', new Set(['core', 'sdk', 'types'])],
   ['desktop-host', new Set(['core', 'protocol', 'types'])],
-  ['desktop-renderer', new Set(['core', 'protocol', 'types'])],
-  ['dashboard', new Set(['hooks', 'sdk', 'types'])],
+  ['desktop-renderer', new Set(['core', 'protocol', 'types', 'ui'])],
+  ['dashboard', new Set(['hooks', 'sdk', 'types', 'ui'])],
 ]);
 
 /**
@@ -70,6 +72,7 @@ const SOURCE_AREAS = [
   { id: 'core', root: 'packages/core/src' },
   { id: 'sdk', root: 'packages/sdk/src' },
   { id: 'hooks', root: 'packages/hooks/src' },
+  { id: 'ui', root: 'packages/ui/src' },
   { id: 'backend', root: 'brainrouter/src' },
   { id: 'cli', root: 'brainrouter-cli/src' },
   { id: 'desktop-host', root: 'brainrouter-desktop/electron' },
@@ -77,7 +80,7 @@ const SOURCE_AREAS = [
   { id: 'dashboard', root: 'brainrouter-dashboard' },
 ];
 
-const PACKAGE_SOURCE_AREAS = new Set(['types', 'protocol', 'core', 'sdk', 'hooks']);
+const PACKAGE_SOURCE_AREAS = new Set(['types', 'protocol', 'core', 'sdk', 'hooks', 'ui']);
 const APPLICATION_ROOTS = [
   'brainrouter/src',
   'brainrouter-cli/src',
@@ -125,6 +128,18 @@ const MANIFEST_RULES = new Map([
       path: 'packages/hooks/package.json',
       requiredInternalDependencies: ['@kinqs/brainrouter-sdk', '@kinqs/brainrouter-types'],
       requiredPeerDependencies: ['react'],
+    },
+  ],
+  [
+    'ui',
+    {
+      path: 'packages/ui/package.json',
+      requiredInternalDependencies: ['@kinqs/brainrouter-core'],
+      requiredPeerDependencies: ['react', 'react-dom'],
+      requiredPeerRanges: {
+        react: '^18.3.1 || ^19.0.0',
+        'react-dom': '^18.3.1 || ^19.0.0',
+      },
     },
   ],
 ]);
@@ -212,6 +227,14 @@ export function checkImport({ area, filePath, specifier, policy }) {
       return violation(`${area} may not depend on ${target}`);
     }
 
+    if (
+      area === 'ui'
+      && packageName === '@kinqs/brainrouter-core'
+      && specifier !== '@kinqs/brainrouter-core/notes/editing'
+    ) {
+      return violation('ui may import Core only through the browser-safe notes/editing entrypoint');
+    }
+
     if (packageName === '@kinqs/brainrouter-core' && specifier !== packageName) {
       const subpath = specifier.slice(`${packageName}/`.length);
       if (subpath === 'router' || subpath.startsWith('router/')) {
@@ -225,7 +248,7 @@ export function checkImport({ area, filePath, specifier, policy }) {
     }
   }
 
-  if ((area === 'sdk' || area === 'hooks') && !isTestFile(filePath) && specifier.startsWith('node:')) {
+  if ((area === 'sdk' || area === 'hooks' || area === 'ui') && !isTestFile(filePath) && specifier.startsWith('node:')) {
     return violation(`${area} production code must remain browser-safe and may not import node:*`);
   }
 
@@ -272,8 +295,20 @@ export function checkManifest(area, manifest, manifestPath = 'package.json') {
       add(`${dependency} must remain a peer dependency`);
     }
   }
+  for (const [dependency, range] of Object.entries(rule.requiredPeerRanges ?? {})) {
+    if (peerDependencies[dependency] && peerDependencies[dependency] !== range) {
+      add(`${dependency} peer range must remain ${range}`);
+    }
+  }
   if ((area === 'types' || area === 'protocol') && Object.keys(dependencies).length > 0) {
     add(`${area} must remain dependency-free`);
+  }
+  if (area === 'ui') {
+    const unexpectedRuntime = Object.keys(dependencies)
+      .filter((name) => name !== '@kinqs/brainrouter-core');
+    if (unexpectedRuntime.length > 0) {
+      add('ui runtime dependencies must contain only @kinqs/brainrouter-core; React belongs in peerDependencies');
+    }
   }
   return violations;
 }

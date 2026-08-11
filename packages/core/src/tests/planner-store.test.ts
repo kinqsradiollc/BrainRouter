@@ -14,7 +14,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   addItem, updateItem, deleteItem, listItems, getItem, readPlanner,
-  scheduleBlock, recordActual, listConflicts, resolveConflict, deviceIdFor,
+  scheduleBlock, updateBlock, recordActual, listBlocks, listConflicts, resolveConflict, deviceIdFor,
+  plannerOutboxDetails, retryPlannerOperation,
+  canUpdateItemLocally,
 } from '../planner/plannerStore.js';
 import { todayView, findItems, timetableView } from '../planner/plannerService.js';
 import { plannerFile } from '../planner/plannerStore.js';
@@ -87,16 +89,76 @@ test('delete writes a TOMBSTONE, not an absence', () => {
   } finally { cleanup(ws); }
 });
 
-test('a mirrored item carries its source and a fetch time', () => {
+test('deleting an item tombstones every child block and hides it immediately', () => {
   const ws = workspace();
   try {
-    const item = addItem(ws, { title: 'Issue #12', source: 'github', externalId: '12' }, T);
+    const item = addItem(ws, { title: 'parent' }, T);
+    const block = scheduleBlock(ws, { itemId: item.id, estimateMinutes: 30 }, T + 1);
+    assert.equal(deleteItem(ws, item.id, T + 2), true);
+    const stored = readPlanner(ws).blocks[block.id];
+    assert.ok(stored?.deletedAt);
+    assert.deepEqual(stored?.updatedAt, stored?.deletedAt);
+    assert.deepEqual(listBlocks(ws), []);
+  } finally { cleanup(ws); }
+});
+
+test('a mirrored item carries actionable structured provenance and planner state', () => {
+  const ws = workspace();
+  try {
+    const item = addItem(ws, {
+      title: 'Issue #12', source: 'github', sourceLabel: 'GitHub issue',
+      externalId: '12', sourceUrl: 'https://github.com/example/repo/issues/12',
+      estimateMinutes: 45, blockedReason: 'Waiting for review',
+    }, T);
     assert.equal(item.origin, 'mirrored');
     assert.equal(item.source, 'github');
     assert.ok(item.fetchedAt);
+    assert.deepEqual(item.provenance, {
+      sourceId: 'github', sourceLabel: 'GitHub issue', externalId: '12',
+      sourceUrl: 'https://github.com/example/repo/issues/12',
+      fetchedAt: new Date(T).toISOString(),
+    });
+    assert.equal(item.estimateMinutes, 45);
+    assert.equal(item.blockedReason?.value, 'Waiting for review');
+    const queued = readPlanner(ws).outbox.operations[0]?.payload as { provenance?: { sourceUrl?: string } };
+    assert.equal(queued.provenance?.sourceUrl, 'https://github.com/example/repo/issues/12');
     // The id is derived, so re-reading the same issue updates rather than
     // duplicating it.
     assert.equal(item.id, 'github:12');
+  } finally { cleanup(ws); }
+});
+
+test('a local mirrored projection refuses a non-HTTPS source URL', () => {
+  const ws = workspace();
+  try {
+    assert.throws(() => addItem(ws, {
+      title: 'Unsafe source', source: 'github', externalId: '13',
+      sourceUrl: 'http://github.example/issues/13',
+    }, T), /must use HTTPS/);
+    assert.equal(listItems(ws).length, 0);
+  } finally { cleanup(ws); }
+});
+
+test('source-owned mirrored writes are refused before cache or outbox mutation', () => {
+  const ws = workspace();
+  try {
+    const item = addItem(ws, {
+      title: 'Issue #12', source: 'github', externalId: '12',
+      sourceUrl: 'https://github.com/example/repo/issues/12',
+    }, T);
+    const before = readPlanner(ws);
+    const denied = canUpdateItemLocally(item, { title: 'Local-only rename' });
+    assert.equal(denied.allowed, false);
+    assert.match(denied.reason!, /belongs to github/);
+
+    assert.equal(updateItem(ws, item.id, { title: 'Local-only rename' }, T + 1_000), null);
+    assert.equal(deleteItem(ws, item.id, T + 2_000), false);
+    const after = readPlanner(ws);
+    assert.equal(after.items[item.id]?.title.value, 'Issue #12');
+    assert.equal(after.items[item.id]?.deletedAt, undefined);
+    assert.equal(after.outbox.operations.length, before.outbox.operations.length);
+
+    assert.equal(updateItem(ws, item.id, { priority: 1, estimateMinutes: 30 }, T + 3_000)?.priority?.value, 1);
   } finally { cleanup(ws); }
 });
 
@@ -128,6 +190,55 @@ test('blocks record estimate and actual — the gap D5 exists for', () => {
     const done = recordActual(ws, block.id, 145, T + 3600_000);
     assert.equal(done?.actualMinutes, 145);
     assert.ok(done?.completedAt);
+    const operations = readPlanner(ws).outbox.operations.filter((op) => op.entity === 'block');
+    assert.deepEqual(operations.map((op) => [op.itemId, op.kind]), [
+      [block.id, 'create'],
+      [block.id, 'update'],
+    ], 'the block record, not its parent item, is what sync targets');
+  } finally { cleanup(ws); }
+});
+
+test('a block cannot be created or updated without a live parent item', () => {
+  const ws = workspace();
+  try {
+    assert.throws(
+      () => scheduleBlock(ws, { itemId: 'missing', estimateMinutes: 30 }, T),
+      /parent planner item missing does not exist/,
+    );
+    const item = addItem(ws, { title: 'parent' }, T);
+    const block = scheduleBlock(ws, { itemId: item.id, estimateMinutes: 30 }, T + 1);
+    assert.equal(deleteItem(ws, item.id, T + 2), true);
+    assert.equal(updateBlock(ws, block.id, { estimateMinutes: 45 }, T + 3), null);
+  } finally { cleanup(ws); }
+});
+
+test('moving a block persists locally and queues a typed block update', () => {
+  const ws = workspace();
+  try {
+    const item = addItem(ws, { title: 'move me' }, T);
+    const block = scheduleBlock(ws, {
+      itemId: item.id, scheduledFor: '2026-08-04T09:00:00.000Z', estimateMinutes: 30,
+    }, T);
+    const moved = updateBlock(ws, block.id, {
+      scheduledFor: '2026-08-05T10:30:00.000Z', estimateMinutes: 45,
+    }, T + 1_000);
+    assert.equal(moved?.scheduledFor, '2026-08-05T10:30:00.000Z');
+    assert.equal(moved?.estimateMinutes, 45);
+    assert.equal(readPlanner(ws).outbox.operations.at(-1)?.entity, 'block');
+  } finally { cleanup(ws); }
+});
+
+test('sync detail is payload-free and a targeted retry request is durable', () => {
+  const ws = workspace();
+  try {
+    const item = addItem(ws, { title: 'private title' }, T);
+    const key = readPlanner(ws).outbox.operations.find((op) => op.itemId === item.id)!.idempotencyKey;
+    const requested = retryPlannerOperation(ws, key, T + 10_000);
+    assert.equal(requested?.status, 'retry_requested');
+    assert.equal(requested?.targetId, item.id);
+    assert.equal(Object.hasOwn(requested ?? {}, 'payload'), false, 'detail never exposes user text');
+    assert.ok(readPlanner(ws).outbox.operations[0]?.retryRequestedAt, 'the request survives a restart');
+    assert.equal(plannerOutboxDetails(ws, T + 10_000)[0]?.queuedAt, new Date(T).toISOString());
   } finally { cleanup(ws); }
 });
 
@@ -205,7 +316,7 @@ test('a conflicted field is listed and resolvable, keeping either side', () => {
         title: {
           ours: 'ours', theirs: 'theirs',
           oursAt: { physical: T, logical: 0, deviceId: 'a' },
-          theirsAt: { physical: T, logical: 0, deviceId: 'b' },
+          theirsAt: { physical: T + 1_000_000, logical: 0, deviceId: 'b' },
           reason: 'concurrent_text',
         },
       },
@@ -216,6 +327,38 @@ test('a conflicted field is listed and resolvable, keeping either side', () => {
     assert.equal(listConflicts(ws).length, 1);
     const resolved = resolveConflict(ws, item.id, 'title', 'theirs', T + 5000);
     assert.equal(resolved?.title.value, 'theirs');
+    assert.deepEqual(resolved?.conflictResolutions?.title, resolved?.title.at);
+    assert.ok((resolved?.title.at.physical ?? 0) >= T + 1_000_000);
+    const operation = readPlanner(ws).outbox.operations.at(-1);
+    assert.equal(operation?.kind, 'resolve_conflict');
+    assert.deepEqual(operation?.payload, { field: 'title', value: 'theirs' });
     assert.equal(listConflicts(ws).length, 0);
+  } finally { cleanup(ws); }
+});
+
+test('delete-versus-edit can explicitly retain the edited item', () => {
+  const ws = workspace();
+  try {
+    const item = addItem(ws, { title: 'Edited elsewhere' }, T);
+    const state = readPlanner(ws);
+    state.items[item.id] = {
+      ...state.items[item.id]!,
+      conflicts: {
+        deleted: {
+          ours: 'deleted', theirs: 'edited',
+          oursAt: { physical: T + 1, logical: 0, deviceId: 'a' },
+          theirsAt: { physical: T + 2, logical: 0, deviceId: 'b' },
+          reason: 'delete_vs_edit',
+        },
+      },
+    };
+    writeFileSync(plannerFile(ws), JSON.stringify(state));
+    const resolved = resolveConflict(ws, item.id, 'deleted', 'theirs', T + 3);
+    assert.equal(resolved?.deletedAt, undefined);
+    assert.equal(resolved?.conflicts?.deleted, undefined);
+    assert.equal(resolved?.deletionResolution?.deleted, false);
+    assert.deepEqual(readPlanner(ws).outbox.operations.at(-1)?.payload, {
+      field: 'deleted', keep: 'theirs',
+    });
   } finally { cleanup(ws); }
 });

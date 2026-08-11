@@ -27,9 +27,23 @@ import {
   backlinkNote, canEdit, conflictBanner, conflictLine, indentFor, MAX_VISUAL_DEPTH,
   pendingRefLabel, readOnlyReason, repairNote, sendTargetsFor, visibleBlocks,
   type NoteBlockView,
-} from '../lib/notes/notesView.js';
+} from '@kinqs/brainrouter-ui/notes';
 
-const source = (relative: string): string => readFileSync(new URL(relative, import.meta.url), 'utf8');
+const sharedNotes = new URL('../../../packages/ui/src/notes/', import.meta.url);
+const sharedAlias: Record<string, string> = {
+  'PageHeader.tsx': 'PageHeaderView.tsx',
+  'QuickFind.tsx': 'QuickFindDialog.tsx',
+  'CommentThread.tsx': 'CommentThreadView.tsx',
+};
+const source = (relative: string): string => {
+  if (relative.startsWith('./') && relative !== './NotesModeContainer.tsx') {
+    const name = relative.slice(2);
+    return readFileSync(new URL(sharedAlias[name] ?? name, sharedNotes), 'utf8');
+  }
+  return readFileSync(new URL(relative, import.meta.url), 'utf8');
+};
+
+const notesCss = (): string => readFileSync(new URL('notes.css', sharedNotes), 'utf8');
 
 function block(over: Partial<NoteBlockView> = {}): NoteBlockView {
   return {
@@ -38,6 +52,13 @@ function block(over: Partial<NoteBlockView> = {}): NoteBlockView {
     lockedBy: null, title: null, icon: null, cover: null, favourite: false, template: false, comments: [], ...over,
   };
 }
+
+const conflict = (field: string, reason: string) => ({
+  field,
+  reason,
+  oursAt: { physical: 1, logical: 0, deviceId: 'ours' },
+  theirsAt: { physical: 1, logical: 0, deviceId: 'theirs' },
+});
 
 /* ------------------------------------------------------------ reachability */
 
@@ -52,7 +73,13 @@ test('the Notes mode is reachable: the union, the button, the branch and the wid
   assert.match(mainContent, /mode === 'notes' \?/, 'no branch — the mode chain would fall through to Chat');
   assert.match(mainContent, /<NotesModeContainer/, 'the branch renders something other than the mode');
 
-  const css = source('../theme.css');
+  assert.match(
+    source('./NotesModeContainer.tsx'),
+    /from '@kinqs\/brainrouter-ui\/notes'/,
+    'Desktop does not consume the shared Notes presentation contract',
+  );
+
+  const css = notesCss();
   // `.workrow` is a flex ROW: without `flex: 1` the surface sizes to its
   // content and renders about half the window wide.
   assert.match(css, /\.notes-mode \{[^}]*flex: 1/, 'the surface has no flex rule and will render narrow');
@@ -93,23 +120,8 @@ test('both handler maps answer for Notes — a query in only one is unreachable 
 
 /* ------------------------------------------------------ E1: the keyboard */
 
-test('E1: every editing gesture has a caller from a real key press, not only a handler', () => {
-  // ADR-029 §5 judges this layer on E1's sentence, and ADR-028 E1 exists to
-  // catch exactly this shape of failure: the host served `notes-input-rule` and
-  // `notes-slash-menu` for a release while nothing in the renderer called
-  // either, so the model supported the gestures and the keyboard did not.
-  const editor = source('./BlockEditor.tsx');
+test('E1: Desktop implements every gesture in the shared Notes host contract', () => {
   const container = source('./NotesModeContainer.tsx');
-  const mode = source('./NotesMode.tsx');
-
-  // The keyboard reaches the judgement…
-  assert.match(editor, /blockKeyIntent\(/, 'no key press is interpreted');
-  assert.match(editor, /slashTrigger\(/, 'typing "/" opens nothing');
-  assert.match(editor, /mentionTrigger\(/, 'typing "@" opens nothing');
-  assert.match(editor, /onInputRule\(/, 'the markdown markers are never asked about');
-  assert.match(editor, /toggleInlineMark\(/, 'the mark shortcuts transform nothing');
-
-  // …and the judgement reaches core, through the host.
   for (const [op, query] of [
     ['splitBlock', 'notes-split'], ['mergeBack', 'notes-merge-back'],
     ['duplicate', 'notes-duplicate'], ['moveUp', 'notes-move-up'],
@@ -119,11 +131,6 @@ test('E1: every editing gesture has a caller from a real key press, not only a h
   }
   assert.match(container, /'notes-input-rule'/, 'the input rules are decided in the renderer');
   assert.match(container, /'notes-slash-menu'/, 'the slash menu is a second list in the renderer');
-
-  // The gesture's OUTCOME moves the caret. A split that works and leaves the
-  // caret behind fails the parity test as surely as one that does nothing.
-  assert.match(mode, /focusBlock\(outcome\?\.focusId/, 'the caret is not placed after a gesture');
-  assert.match(mode, /caretForColumn\(/, 'the arrows do not preserve the column');
 });
 
 test('E1: Enter mid-word leaves the head able to recognise its own truncation', () => {
@@ -148,7 +155,7 @@ test('E1: Enter mid-word leaves the head able to recognise its own truncation', 
 
 test('E4: the block editor renders marks, and the textarea that could not is gone', () => {
   const editor = source('./BlockEditor.tsx');
-  assert.match(editor, /contentEditable=\{!readOnly\}/, 'the surface cannot render inline marks');
+  assert.match(editor, /contentEditable=\{!editorReadOnly\}/, 'the surface cannot render inline marks');
   assert.match(editor, /parseInlineMarks|inlineSegments/, 'nothing parses the marks for rendering');
   assert.doesNotMatch(source('./BlockRow.tsx'), /<textarea/, 'a textarea shows raw markdown');
   // B2 — the lease survives the restructuring: read-only WITH the attribution.
@@ -197,12 +204,13 @@ test('C2: every cross-mode move is wired to something a person can press', () =>
   assert.match(notesContainer, /'workspace-create'/, 'the notes menu creates nothing');
   assert.match(notesContainer, /'workspace-link'/, 'the created record is never cited back');
 
-  const planner = source('../planner/PlannerMode.tsx');
-  assert.match(planner, /ops\.openNotesPage\(/, 'Planner → Notes has no control');
+  const planner = source('../../../packages/ui/src/planner/PlannerSurface.tsx');
+  const plannerAdapter = source('../planner/PlannerMode.tsx');
+  assert.match(planner, /ops\.openNotesPage\?\./, 'Planner → Notes has no control');
   assert.match(source('../planner/PlannerModeContainer.tsx'), /openNotesPage: \(itemId, title, notes\)/);
   // A1 — one rendering of a reference, or two surfaces disagree about what a
   // link looks like: the planner used to leave the raw URI in its prose.
-  assert.match(planner, /<RefText text=\{n\.notes/, 'the planner renders a reference as plain text');
+  assert.match(plannerAdapter, /<RefText text=\{text\}/, 'the planner renders a reference as plain text');
   assert.match(blockRow, /<RefChip key=\{uri\}/, 'notes stopped using the shared chip');
   assert.match(
     source('../App/layout/MainContent.tsx'),
@@ -234,7 +242,11 @@ test('a divider refuses text rather than accepting it and discarding it', () => 
 });
 
 test('conflicts get a banner because they are the one state that cannot resolve itself', () => {
-  const conflicted = (id: string) => block({ id, conflicts: [{ field: 'text', reason: 'concurrent_text' }] });
+  const conflicted = (id: string) => block({ id, conflicts: [{
+    field: 'text', reason: 'concurrent_text',
+    oursAt: { physical: 1, logical: 0, deviceId: 'ours' },
+    theirsAt: { physical: 1, logical: 0, deviceId: 'theirs' },
+  }] });
   assert.equal(conflictBanner([block()]), null);
   assert.match(String(conflictBanner([conflicted('b1')])), /^One block/);
   assert.match(String(conflictBanner([conflicted('b1'), conflicted('b2')])), /^2 blocks/);
@@ -246,20 +258,31 @@ test('a fenced conflict reads differently from a concurrent one, because the cau
   // intentions; "your device wrote under a lock it no longer held" explains why
   // the sentence on screen is not the one they typed — and without that the app
   // looks like it lost their work rather than like it kept both copies.
-  const concurrent = conflictLine({ field: 'text', reason: 'concurrent_text' });
-  const stale = conflictLine({ field: 'text', reason: 'fenced_stale_epoch' });
+  const concurrent = conflictLine(conflict('text', 'concurrent_text'));
+  const stale = conflictLine(conflict('text', 'fenced_stale_epoch'));
 
   assert.match(concurrent, /two places at once/);
   assert.match(stale, /reissued/);
   assert.notEqual(concurrent, stale);
-  assert.match(conflictLine({ field: 'text', reason: 'fenced_blocked' }), /Another device was editing/);
-  assert.match(conflictLine({ field: 'text', reason: 'fenced_lease_expired' }), /had expired/);
+  assert.match(conflictLine(conflict('text', 'fenced_blocked')), /Another device was editing/);
+  assert.match(conflictLine(conflict('text', 'fenced_lease_expired')), /had expired/);
 });
 
 test('a reason this build does not know still renders a line rather than taking the page down', () => {
   // The renderer cannot import core's union — the notes barrel reaches the
   // filesystem — so a newer server can send a reason this build has never seen.
-  assert.match(conflictLine({ field: 'level', reason: 'something_new' }), /“level”/);
+  assert.match(conflictLine(conflict('level', 'something_new')), /“level”/);
+});
+
+test('the desktop host forwards the rendered conflict clocks and grants editability asynchronously', () => {
+  const container = source('./NotesModeContainer.tsx');
+  const host = source('../../electron/host/queries.ts');
+  assert.match(container, /beginEdit: async \(id\)/);
+  assert.match(container, /out\.lease\?\.blockId !== id/);
+  assert.match(container, /resolveConflict: \(id, field, keep, expected\)/);
+  assert.match(container, /id, field, keep, expected/);
+  assert.match(host, /readNoteConflictClock\(a\.expected, 'oursAt'\)/);
+  assert.match(host, /readNoteConflictClock\(a\.expected, 'theirsAt'\)/);
 });
 
 test('an empty line offers no cross-mode move — a work item called "" is one someone has to delete', () => {

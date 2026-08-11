@@ -564,19 +564,32 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
 
   // ADR-028 Part D — planner (migration 051). Keyed by (org, USER): a planner is
   // personal, so the user is part of the key rather than an author column.
+  public withPlannerMutation<T>(
+    orgId: string,
+    userId: string,
+    fn: (queries: planner.PlannerMutationQueries) => Promise<T>,
+  ): Promise<T> { return planner.withPlannerMutation(this.exec, orgId, userId, fn); }
   public listPlannerItemsSince(orgId: string, userId: string, since?: string): Promise<planner.PlannerItemRow[]> { return planner.listPlannerItemsSince(this.exec, orgId, userId, since); }
   public getPlannerItem(orgId: string, userId: string, id: string): Promise<planner.PlannerItemRow | null> { return planner.getPlannerItem(this.exec, orgId, userId, id); }
   public upsertPlannerItem(orgId: string, userId: string, item: Parameters<typeof planner.upsertPlannerItem>[3]): Promise<planner.PlannerItemRow> { return planner.upsertPlannerItem(this.exec, orgId, userId, item); }
   public latestPlannerRevision(orgId: string, userId: string): Promise<string> { return planner.latestPlannerRevision(this.exec, orgId, userId); }
-  public wasOperationApplied(orgId: string, userId: string, key: string): Promise<boolean> { return planner.wasOperationApplied(this.exec, orgId, userId, key); }
-  public recordOperationApplied(orgId: string, userId: string, key: string, itemId: string): Promise<void> { return planner.recordOperationApplied(this.exec, orgId, userId, key, itemId); }
+  public getOperationReceipt(orgId: string, userId: string, key: string): Promise<planner.PlannerOperationReceipt | null> { return planner.getOperationReceipt(this.exec, orgId, userId, key); }
+  public recordOperationApplied(orgId: string, userId: string, key: string, itemId: string, entity: "item" | "block", operationKind: string, fingerprint: string): Promise<void> { return planner.recordOperationApplied(this.exec, orgId, userId, key, itemId, entity, operationKind, fingerprint); }
   public listPlannerBlocks(orgId: string, userId: string): Promise<planner.PlannerBlockRow[]> { return planner.listPlannerBlocks(this.exec, orgId, userId); }
+  public listPlannerBlocksSince(orgId: string, userId: string, since?: string): Promise<planner.PlannerBlockRow[]> { return planner.listPlannerBlocksSince(this.exec, orgId, userId, since); }
+  public getPlannerBlock(orgId: string, userId: string, id: string): Promise<planner.PlannerBlockRow | null> { return planner.getPlannerBlock(this.exec, orgId, userId, id); }
   public upsertPlannerBlock(orgId: string, userId: string, block: planner.PlannerBlockRow): Promise<planner.PlannerBlockRow> { return planner.upsertPlannerBlock(this.exec, orgId, userId, block); }
+  public tombstonePlannerBlocksForItem(orgId: string, userId: string, itemId: string, deletedAt: planner.PlannerBlockRow["updatedAt"]): Promise<number> { return planner.tombstonePlannerBlocksForItem(this.exec, orgId, userId, itemId, deletedAt); }
   public compactCompletedPlannerItems(orgId: string, userId: string, retentionDays: number): Promise<number> { return planner.compactCompletedPlannerItems(this.exec, orgId, userId, retentionDays); }
 
   // ADR-029 Part D — notes (migration 052). Same (org, USER, id) partition as
   // the planner (D1). `notes_refs`/`notes_index` are derived from block content
   // alone (A2), which is why the only writers here take a block id and a text.
+  public withNoteMutation<T>(
+    orgId: string,
+    userId: string,
+    fn: (queries: notes.NoteMutationQueries) => Promise<T>,
+  ): Promise<T> { return notes.withNoteMutation(this.exec, orgId, userId, fn); }
   public databaseNowMs(): Promise<number> { return notes.databaseNowMs(this.exec); }
   public listNoteBlocksSince(orgId: string, userId: string, since?: string): Promise<notes.NoteBlockRow[]> { return notes.listNoteBlocksSince(this.exec, orgId, userId, since); }
   public listAllNoteBlocks(orgId: string, userId: string): Promise<notes.NoteBlockRow[]> { return notes.listAllNoteBlocks(this.exec, orgId, userId); }
@@ -586,8 +599,9 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public listNoteChildBlocks(orgId: string, userId: string, parentId: string, limit?: number): Promise<notes.NoteBlockRow[]> { return notes.listNoteChildBlocks(this.exec, orgId, userId, parentId, limit); }
   public setNoteBlockVisibility(orgId: string, userId: string, id: string, visibility: string): Promise<number> { return notes.setNoteBlockVisibility(this.exec, orgId, userId, id, visibility); }
   public latestNoteRevision(orgId: string, userId: string): Promise<string> { return notes.latestNoteRevision(this.exec, orgId, userId); }
+  public getNoteOperationReceipt(orgId: string, userId: string, key: string): Promise<notes.NoteOperationReceipt | null> { return notes.getNoteOperationReceipt(this.exec, orgId, userId, key); }
   public wasNoteOperationApplied(orgId: string, userId: string, key: string): Promise<boolean> { return notes.wasNoteOperationApplied(this.exec, orgId, userId, key); }
-  public recordNoteOperationApplied(orgId: string, userId: string, key: string, blockId: string): Promise<void> { return notes.recordNoteOperationApplied(this.exec, orgId, userId, key, blockId); }
+  public recordNoteOperationApplied(orgId: string, userId: string, key: string, blockId: string, fingerprint?: string, response?: Record<string, unknown>): Promise<void> { return notes.recordNoteOperationApplied(this.exec, orgId, userId, key, blockId, fingerprint, response); }
   public replaceNoteRefs(orgId: string, userId: string, blockId: string, refs: Parameters<typeof notes.replaceNoteRefs>[4]): Promise<void> { return notes.replaceNoteRefs(this.exec, orgId, userId, blockId, refs); }
   public listNoteRefsFrom(orgId: string, userId: string, blockId: string): Promise<notes.NoteRefRow[]> { return notes.listNoteRefsFrom(this.exec, orgId, userId, blockId); }
   public listNoteBacklinks(orgId: string, viewerUserId: string, targetKey: string, limit?: number): Promise<notes.NoteBacklinkRow[]> { return notes.listNoteBacklinks(this.exec, orgId, viewerUserId, targetKey, limit); }
@@ -609,6 +623,8 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public readNoteBlockLease(orgId: string, userId: string, blockId: string): ReturnType<typeof notes.readNoteBlockLease> { return notes.readNoteBlockLease(this.exec, orgId, userId, blockId); }
   public upsertNoteBlockLease(orgId: string, userId: string, lease: notes.NoteBlockLeaseRow): Promise<void> { return notes.upsertNoteBlockLease(this.exec, orgId, userId, lease); }
   public sweepNoteBlockLeases(orgId: string, maxAgeMs: number): Promise<number> { return notes.sweepNoteBlockLeases(this.exec, orgId, maxAgeMs); }
+  public observeNoteHostClock(orgId: string, userId: string, remote: Parameters<typeof notes.observeNoteHostClock>[3]): Promise<void> { return notes.observeNoteHostClock(this.exec, orgId, userId, remote); }
+  public nextNoteHostClock(orgId: string, userId: string, deviceId: string, wallClockMs: number, reserve: number): ReturnType<typeof notes.nextNoteHostClock> { return notes.nextNoteHostClock(this.exec, orgId, userId, deviceId, wallClockMs, reserve); }
   public registerNoteAttachment(orgId: string, object: Parameters<typeof notes.registerNoteAttachment>[2]): Promise<notes.NoteAttachmentRow> { return notes.registerNoteAttachment(this.exec, orgId, object); }
   public linkNoteAttachment(orgId: string, userId: string, link: Parameters<typeof notes.linkNoteAttachment>[3]): Promise<void> { return notes.linkNoteAttachment(this.exec, orgId, userId, link); }
   public unlinkNoteAttachment(orgId: string, userId: string, blockId: string, contentHash: string): Promise<number> { return notes.unlinkNoteAttachment(this.exec, orgId, userId, blockId, contentHash); }

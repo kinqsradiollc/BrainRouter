@@ -55,7 +55,7 @@ export function jiraTokenClient(token: string, baseUrl: string, options?: TokenC
       const data = await client.get('/search', {
         jql: clauses.join(' AND ') || 'ORDER BY updated DESC',
         maxResults: '100',
-        fields: 'summary,description,status,labels,assignee,updated,comment',
+        fields: 'summary,description,status,labels,assignee,updated,timeoriginalestimate,comment',
       }) as { issues?: Array<Record<string, unknown>> };
       return (data.issues ?? []).map((row) => jiraIssueFromRow(root, row));
     },
@@ -73,7 +73,13 @@ function jiraIssueDocument(connector: ConnectorRecord, issue: JiraConnectorIssue
     url: issue.url,
     updatedAt: issue.updatedAt,
     text: [`Issue ${issue.key}`, issue.status ? `Status: ${issue.status}` : undefined, issue.labels?.length ? `Labels: ${issue.labels.join(', ')}` : undefined, issue.assignee ? `Assignee: ${issue.assignee}` : undefined, issue.description, commentsText(issue.comments)].filter(Boolean).join('\n\n'),
-    metadata: { key: issue.key, status: issue.status, labels: issue.labels ?? [], assignee: issue.assignee },
+    metadata: {
+      key: issue.key,
+      status: issue.status,
+      labels: issue.labels ?? [],
+      assignee: issue.assignee,
+      ...(issue.estimateSeconds !== undefined ? { estimateSeconds: issue.estimateSeconds } : {}),
+    },
   };
 }
 
@@ -92,6 +98,9 @@ function jiraIssueFromRow(root: string, row: Record<string, unknown>): JiraConne
     updatedAt: stringField(fields, 'updated') || undefined,
     labels: Array.isArray(fields.labels) ? fields.labels.filter((v): v is string => typeof v === 'string') : [],
     assignee: stringField(record(fields.assignee), 'displayName') || undefined,
+    estimateSeconds: typeof fields.timeoriginalestimate === 'number' && fields.timeoriginalestimate > 0
+      ? fields.timeoriginalestimate
+      : undefined,
     comments,
   };
 }

@@ -5,7 +5,7 @@
  */
 
 export const SLASH_COMMANDS = [
-  '/help', '/status', '/router', '/workspace', '/where', '/tools', '/skills', '/reload-skills', '/plan', '/transcript',
+  '/help', '/status', '/router', '/workspace', '/where', '/tools', '/skills', '/reload-skills', '/plan', '/planner', '/transcript',
   '/doctor', '/policy', '/config', '/diff', '/commit', '/cd', '/clear', '/compact', '/exit', '/quit',
   '/roles', '/agents', '/agent', '/spawn', '/build', '/bg', '/wait', '/dm', '/broadcast', '/inbox', '/delegation-policy', '/handoff', '/pack', '/workers',
   '/spec', '/feature-dev', '/grill-me', '/review', '/reviews', '/review-auto', '/simplify', '/implement-plan', '/skill', '/workflow', '/workflows', '/approve', '/requirement', '/track', '/annotation', '/artifact', '/atlas', '/attach',
@@ -125,6 +125,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/skills', desc: 'List installed BrainRouter skills' },
       { cmd: '/reload-skills', desc: 'Force a re-scan of the skill directories' },
       { cmd: '/plan  /plan clear', desc: 'Show the durable CLI task plan; clear it (drops stale items)' },
+      { cmd: '/planner [add|list|done]', desc: 'Capture, list, and complete items in your personal planner' },
       { cmd: '/tools', desc: 'List local + MCP tools available to the agent' },
       { cmd: '/goal [text|clear|complete|pause|resume|budget <n>]', desc: 'Sticky goal' },
       { cmd: '/continue', desc: 'Resume after a loop-limit abort' },

@@ -23,6 +23,8 @@
  * corpus followed by a JSON walk. `clearNoteDerived` drops them too, which is
  * what keeps A2's claim true for Part E's state as well as for its text.
  */
+import type { PoolClient } from "pg";
+import type { Hlc } from "@kinqs/brainrouter-core/notes";
 import type { Executor } from "./executor.js";
 
 export interface NoteBlockRow {
@@ -107,6 +109,12 @@ export interface NoteBlockLeaseRow {
   expiresAtMs: number;
 }
 
+export interface NoteOperationReceipt {
+  blockId: string;
+  fingerprint: string | null;
+  response: Record<string, unknown> | null;
+}
+
 export interface NoteAttachmentRow {
   contentHash: string;
   byteSize: number;
@@ -118,6 +126,122 @@ export interface NoteAttachmentRow {
 export interface NoteAttachmentUseRow extends NoteAttachmentRow {
   blockId: string;
   fileName: string | null;
+}
+
+/**
+ * The write-side Notes surface bound to one PostgreSQL transaction.
+ *
+ * The backend deliberately receives this structural interface rather than a
+ * PoolClient: policy still lives in the Notes backend, while every SQL effect of
+ * that policy is guaranteed to use the same connection and transaction.
+ */
+export interface NoteMutationQueries {
+  databaseNowMs(): Promise<number>;
+  listAllNoteBlocks(orgId: string, userId: string): Promise<NoteBlockRow[]>;
+  getNoteBlock(orgId: string, userId: string, id: string): Promise<NoteBlockRow | null>;
+  upsertNoteBlock(
+    orgId: string,
+    userId: string,
+    block: Parameters<typeof upsertNoteBlock>[3],
+  ): Promise<NoteBlockRow>;
+  getNoteOperationReceipt(orgId: string, userId: string, key: string): Promise<NoteOperationReceipt | null>;
+  wasNoteOperationApplied(orgId: string, userId: string, key: string): Promise<boolean>;
+  recordNoteOperationApplied(
+    orgId: string,
+    userId: string,
+    key: string,
+    blockId: string,
+    fingerprint?: string,
+    response?: Record<string, unknown>,
+  ): Promise<void>;
+  replaceNoteRefs(
+    orgId: string,
+    userId: string,
+    blockId: string,
+    refs: readonly Omit<NoteRefRow, "fromBlockId">[],
+  ): Promise<void>;
+  upsertNoteIndex(
+    orgId: string,
+    userId: string,
+    blockId: string,
+    entry: { contentText: string; refKeys: string[] },
+  ): Promise<void>;
+  deleteNoteIndexEntry(orgId: string, userId: string, blockId: string): Promise<void>;
+  upsertNotePageMeta(orgId: string, userId: string, meta: NotePageMetaRow): Promise<void>;
+  deleteNotePageMeta(orgId: string, userId: string, blockId: string): Promise<void>;
+  replaceNoteRowValues(
+    orgId: string,
+    userId: string,
+    blockId: string,
+    parentId: string | null,
+    values: readonly NoteRowValueInput[],
+  ): Promise<void>;
+  readNoteBlockLease(
+    orgId: string,
+    userId: string,
+    blockId: string,
+  ): Promise<{ lease: NoteBlockLeaseRow | null; dbNowMs: number }>;
+  upsertNoteBlockLease(orgId: string, userId: string, lease: NoteBlockLeaseRow): Promise<void>;
+  sweepNoteBlockLeases(orgId: string, maxAgeMs: number): Promise<number>;
+  observeNoteHostClock(orgId: string, userId: string, remote: Hlc): Promise<void>;
+  nextNoteHostClock(
+    orgId: string,
+    userId: string,
+    deviceId: string,
+    wallClockMs: number,
+    reserve: number,
+  ): Promise<Hlc>;
+}
+
+function clientExecutor(client: PoolClient): Executor {
+  return {
+    rows: async (text, params) => (await client.query(text, params)).rows,
+    one: async (text, params) => (await client.query(text, params)).rows[0] ?? null,
+    run: async (text, params) => (await client.query(text, params)).rowCount ?? 0,
+    tx: async (fn) => fn(client),
+  };
+}
+
+function mutationQueries(exec: Executor): NoteMutationQueries {
+  return {
+    databaseNowMs: () => databaseNowMs(exec),
+    listAllNoteBlocks: (orgId, userId) => listAllNoteBlocks(exec, orgId, userId),
+    getNoteBlock: (orgId, userId, id) => getNoteBlock(exec, orgId, userId, id),
+    upsertNoteBlock: (orgId, userId, block) => upsertNoteBlock(exec, orgId, userId, block),
+    getNoteOperationReceipt: (orgId, userId, key) => getNoteOperationReceipt(exec, orgId, userId, key),
+    wasNoteOperationApplied: (orgId, userId, key) => wasNoteOperationApplied(exec, orgId, userId, key),
+    recordNoteOperationApplied: (orgId, userId, key, blockId, fingerprint, response) =>
+      recordNoteOperationApplied(exec, orgId, userId, key, blockId, fingerprint, response),
+    replaceNoteRefs: (orgId, userId, blockId, refs) => replaceNoteRefs(exec, orgId, userId, blockId, refs),
+    upsertNoteIndex: (orgId, userId, blockId, entry) => upsertNoteIndex(exec, orgId, userId, blockId, entry),
+    deleteNoteIndexEntry: (orgId, userId, blockId) => deleteNoteIndexEntry(exec, orgId, userId, blockId),
+    upsertNotePageMeta: (orgId, userId, meta) => upsertNotePageMeta(exec, orgId, userId, meta),
+    deleteNotePageMeta: (orgId, userId, blockId) => deleteNotePageMeta(exec, orgId, userId, blockId),
+    replaceNoteRowValues: (orgId, userId, blockId, parentId, values) =>
+      replaceNoteRowValues(exec, orgId, userId, blockId, parentId, values),
+    readNoteBlockLease: (orgId, userId, blockId) => readNoteBlockLease(exec, orgId, userId, blockId),
+    upsertNoteBlockLease: (orgId, userId, lease) => upsertNoteBlockLease(exec, orgId, userId, lease),
+    sweepNoteBlockLeases: (orgId, maxAgeMs) => sweepNoteBlockLeases(exec, orgId, maxAgeMs),
+    observeNoteHostClock: (orgId, userId, remote) => observeNoteHostClock(exec, orgId, userId, remote),
+    nextNoteHostClock: (orgId, userId, deviceId, wallClockMs, reserve) =>
+      nextNoteHostClock(exec, orgId, userId, deviceId, wallClockMs, reserve),
+  };
+}
+
+/** Serialize and atomically commit one person's complete Notes mutation. */
+export function withNoteMutation<T>(
+  exec: Executor,
+  orgId: string,
+  userId: string,
+  fn: (queries: NoteMutationQueries) => Promise<T>,
+): Promise<T> {
+  return exec.tx(async (client) => {
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+      [`brainrouter:notes:${orgId}:${userId}`],
+    );
+    return fn(mutationQueries(clientExecutor(client)));
+  });
 }
 
 function toBlockRow(r: Record<string, unknown>): NoteBlockRow {
@@ -349,18 +473,35 @@ export async function latestNoteRevision(
 
 /* --------------------------------------------------------------- idempotency */
 
+export async function getNoteOperationReceipt(
+  exec: Executor,
+  orgId: string,
+  userId: string,
+  key: string,
+): Promise<NoteOperationReceipt | null> {
+  const row = await exec.one<Record<string, unknown>>(
+    `SELECT block_id, request_fingerprint, response_json
+       FROM notes_applied_operations
+      WHERE org_id = $1 AND user_id = $2 AND idempotency_key = $3`,
+    [orgId, userId, key],
+  );
+  if (!row) return null;
+  return {
+    blockId: String(row.block_id),
+    fingerprint: row.request_fingerprint == null ? null : String(row.request_fingerprint),
+    response: row.response_json && typeof row.response_json === "object"
+      ? row.response_json as Record<string, unknown>
+      : null,
+  };
+}
+
 export async function wasNoteOperationApplied(
   exec: Executor,
   orgId: string,
   userId: string,
   key: string,
 ): Promise<boolean> {
-  const row = await exec.one<Record<string, unknown>>(
-    `SELECT 1 AS present FROM notes_applied_operations
-      WHERE org_id = $1 AND user_id = $2 AND idempotency_key = $3`,
-    [orgId, userId, key],
-  );
-  return row !== null;
+  return (await getNoteOperationReceipt(exec, orgId, userId, key)) !== null;
 }
 
 export async function recordNoteOperationApplied(
@@ -369,13 +510,84 @@ export async function recordNoteOperationApplied(
   userId: string,
   key: string,
   blockId: string,
+  fingerprint?: string,
+  response?: Record<string, unknown>,
 ): Promise<void> {
   await exec.run(
-    `INSERT INTO notes_applied_operations (org_id, user_id, idempotency_key, block_id)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO notes_applied_operations
+       (org_id, user_id, idempotency_key, block_id, request_fingerprint, response_json)
+     VALUES ($1, $2, $3, $4, $5, $6::jsonb)
      ON CONFLICT (org_id, user_id, idempotency_key) DO NOTHING`,
-    [orgId, userId, key, blockId],
+    [orgId, userId, key, blockId, fingerprint ?? null, response ? JSON.stringify(response) : null],
   );
+}
+
+/* ----------------------------------------------------------- hosted HLC state */
+
+/** Absorb every client clock the server has accepted before minting hosted HLCs. */
+export async function observeNoteHostClock(
+  exec: Executor,
+  orgId: string,
+  userId: string,
+  remote: Hlc,
+): Promise<void> {
+  await exec.run(
+    `INSERT INTO notes_host_clocks (org_id, user_id, physical, logical, updated_at)
+     VALUES ($1, $2, $3, $4, now())
+     ON CONFLICT (org_id, user_id) DO UPDATE SET
+       physical = CASE
+         WHEN EXCLUDED.physical > notes_host_clocks.physical THEN EXCLUDED.physical
+         ELSE notes_host_clocks.physical
+       END,
+       logical = CASE
+         WHEN EXCLUDED.physical > notes_host_clocks.physical THEN EXCLUDED.logical
+         WHEN EXCLUDED.physical = notes_host_clocks.physical
+           THEN GREATEST(notes_host_clocks.logical, EXCLUDED.logical)
+         ELSE notes_host_clocks.logical
+       END,
+       updated_at = now()`,
+    [orgId, userId, remote.physical, remote.logical],
+  );
+}
+
+/**
+ * Reserve a contiguous logical-clock range and return its first stamp.
+ *
+ * The surrounding user-scoped Notes transaction serializes this read/update;
+ * reserving the whole generated plan means operation indexes can remain a
+ * synchronous, deterministic addition to the returned logical counter.
+ */
+export async function nextNoteHostClock(
+  exec: Executor,
+  orgId: string,
+  userId: string,
+  deviceId: string,
+  wallClockMs: number,
+  reserve: number,
+): Promise<Hlc> {
+  const safeWall = Math.max(0, Math.trunc(wallClockMs));
+  const safeReserve = Math.max(1, Math.trunc(reserve));
+  const current = await exec.one<Record<string, unknown>>(
+    `SELECT physical, logical
+       FROM notes_host_clocks
+      WHERE org_id = $1 AND user_id = $2
+      FOR UPDATE`,
+    [orgId, userId],
+  );
+  const previousPhysical = Number(current?.physical ?? -1);
+  const previousLogical = Number(current?.logical ?? -1);
+  const physical = Math.max(previousPhysical, safeWall);
+  const logical = physical === previousPhysical ? previousLogical + 1 : 0;
+  await exec.run(
+    `INSERT INTO notes_host_clocks (org_id, user_id, physical, logical, updated_at)
+     VALUES ($1, $2, $3, $4, now())
+     ON CONFLICT (org_id, user_id) DO UPDATE SET
+       physical = EXCLUDED.physical,
+       logical = EXCLUDED.logical,
+       updated_at = now()`,
+    [orgId, userId, physical, logical + safeReserve - 1],
+  );
+  return { physical, logical, deviceId };
 }
 
 /* ---------------------------------------------------------- derived: refs */

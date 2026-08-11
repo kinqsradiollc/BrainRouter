@@ -126,6 +126,8 @@
   --accent: #20242A;
   --accent-press: #0E1115;
   --accent-wash: rgba(32, 36, 42, 0.08);
+  /* Status yellow is a fill in dark mode but readable text in light mode. */
+  --warn: #9A6700;
   --tone-plan: #625E5D;
   --tone-plan-wash: rgba(98, 94, 93, 0.08);
   --tone-build: #555C66;

@@ -12,8 +12,8 @@
   ],
   "scripts": {
     "build": "npm run build:packages && npm run build:apps",
-    "build:packages": "npm run build -w @kinqs/brainrouter-types && npm run build -w @kinqs/brainrouter-agent-protocol && npm run build -w @kinqs/brainrouter-core && npm run build -w @kinqs/brainrouter-sdk && npm run build -w @kinqs/brainrouter-hooks",
-    "build:packages:dashboard": "npm run build -w @kinqs/brainrouter-types && npm run build -w @kinqs/brainrouter-agent-protocol && npm run build -w @kinqs/brainrouter-core && npm run build -w @kinqs/brainrouter-sdk && npm run build -w @kinqs/brainrouter-hooks",
+    "build:packages": "npm run build -w @kinqs/brainrouter-types && npm run build -w @kinqs/brainrouter-agent-protocol && npm run build -w @kinqs/brainrouter-core && npm run build -w @kinqs/brainrouter-sdk && npm run build -w @kinqs/brainrouter-hooks && npm run build -w @kinqs/brainrouter-ui",
+    "build:packages:dashboard": "npm run build -w @kinqs/brainrouter-types && npm run build -w @kinqs/brainrouter-agent-protocol && npm run build -w @kinqs/brainrouter-core && npm run build -w @kinqs/brainrouter-sdk && npm run build -w @kinqs/brainrouter-hooks && npm run build -w @kinqs/brainrouter-ui",
     "build:apps": "npm run build -w @kinqs/brainrouter-mcp-server && npm run build -w @kinqs/brainrouter-cli && npm run build -w dashboard && npm run build -w brainrouter-desktop",
     "bench:memory:dry-run": "npm run bench:memory:dry-run -w brainrouter-benchmark --",
     "bench:memory:retrieval": "npm run bench:memory:retrieval -w brainrouter-benchmark --",
@@ -39,6 +39,10 @@
     "prepare": "node scripts/install-git-hooks.mjs",
     "hooks:install": "node scripts/install-git-hooks.mjs",
     "format:check": "prettier --check .",
+    "test:planner:visual": "node brainrouter-desktop/scripts/planner-visual-gate.mjs --all",
+    "test:planner:visual:dashboard": "node brainrouter-desktop/scripts/planner-visual-gate.mjs --dashboard",
+    "test:planner:visual:electron": "node brainrouter-desktop/scripts/planner-visual-gate.mjs --electron",
+    "test:adr038:postgres": "npm run test:planner:postgres -w brainrouter && npm run test:notes:postgres -w brainrouter",
     "verify": "npm run build && npm run typecheck && npm run lint && npm run test",
     "cli": "npm run build -w @kinqs/brainrouter-cli --silent && node brainrouter-cli/dist/index.js",
     "cli:nobuild": "node brainrouter-cli/dist/index.js"

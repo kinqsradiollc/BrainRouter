@@ -30,6 +30,8 @@ export interface JiraConnectorIssue {
   updatedAt?: string;
   labels?: string[];
   assignee?: string;
+  /** Jira's original time estimate, in seconds. */
+  estimateSeconds?: number;
   comments?: Array<{ author?: string; body: string; updatedAt?: string }>;
 }
 

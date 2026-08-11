@@ -55,11 +55,32 @@ async function sendAuthed(path: string, opts: FetchOpts, timeoutMs: number): Pro
   return fresh ? doFetch(fresh) : res;
 }
 
-async function requestFailure(res: Response): Promise<Error & { status: number }> {
+/** A failed authenticated Dashboard request, including the server's typed JSON
+ *  envelope when it supplied one. Feature adapters use `body` to preserve
+ *  policy failures (for example a fenced Notes mutation) without growing a
+ *  second authenticated fetch path. */
+export interface DashboardRequestError extends Error {
+  status: number;
+  body?: unknown;
+}
+
+async function requestFailure(res: Response): Promise<DashboardRequestError> {
   let msg = `Request failed (${res.status})`;
-  try { const j = await res.json(); if (j?.error) msg = j.error; } catch { /* keep default */ }
-  const error = new Error(msg) as Error & { status: number };
+  let body: unknown;
+  try {
+    body = await res.json();
+    if (body && typeof body === "object") {
+      const record = body as Record<string, unknown>;
+      if (typeof record.error === "string") msg = record.error;
+      else if (record.error && typeof record.error === "object"
+        && typeof (record.error as Record<string, unknown>).detail === "string") {
+        msg = (record.error as Record<string, unknown>).detail as string;
+      } else if (typeof record.detail === "string") msg = record.detail;
+    }
+  } catch { /* keep the status-only default for non-JSON failures */ }
+  const error = new Error(msg) as DashboardRequestError;
   error.status = res.status;
+  if (body !== undefined) error.body = body;
   return error;
 }
 

@@ -83,8 +83,8 @@ jobs:
 
       - name: Run tests
         # Root `test` fans out via `-ws --if-present`. brainrouter uses
-        # vitest, brainrouter-cli rebuilds + runs node --test, and the
-        # dashboard runs its node:test suites through tsx.
+        # Vitest, brainrouter-cli rebuilds + runs node --test, and Dashboard
+        # runs its TypeScript adapter and route-contract suites.
         run: npm run test
         env:
           NODE_NO_WARNINGS: '1'

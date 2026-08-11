@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import {
   emptyOutbox, enqueue, nextBatch, acknowledge, recordFailure, stuckOperations,
   shed, replayOrder, describeSyncState,
+  inspectOutbox, requestOperationRetry,
   MAX_OUTBOX_OPERATIONS, ATTEMPTS_BEFORE_SURFACING,
   type OutboxOperation,
 } from '../sync/outbox.js';
@@ -45,6 +46,19 @@ test('different items go in parallel — one stuck item does not block the queue
   let s = emptyOutbox();
   for (let i = 0; i < 5; i += 1) s = enqueue(s, op({ idempotencyKey: `k${i}`, itemId: `item-${i}` }));
   assert.equal(nextBatch(s).length, 5);
+});
+
+test('a targeted retry is prioritized without overtaking an earlier change to the same record', () => {
+  let s = emptyOutbox();
+  s = enqueue(s, op({ idempotencyKey: 'other', itemId: 'other' }));
+  s = enqueue(s, op({ idempotencyKey: 'before', itemId: 'target' }));
+  s = enqueue(s, op({ idempotencyKey: 'retry-me', itemId: 'target', attempts: 5, lastError: 'timeout' }));
+  s = requestOperationRetry(s, 'retry-me', '2026-08-11T00:00:00.000Z');
+
+  assert.deepEqual(nextBatch(s).map((entry) => entry.idempotencyKey), ['before', 'other']);
+  const detail = inspectOutbox(s, 2_000).find((entry) => entry.idempotencyKey === 'retry-me');
+  assert.equal(detail?.status, 'retry_requested');
+  assert.equal(detail?.lastError, 'timeout', 'the failure stays inspectable until a new result arrives');
 });
 
 test('the batch limit is respected', () => {

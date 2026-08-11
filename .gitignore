@@ -30,6 +30,7 @@ build/
 !brainrouter-desktop/build/**
 out/
 brainrouter-desktop/release/
+brainrouter-desktop/.planner-visual/
 .next/
 .open-next/
 .wrangler/

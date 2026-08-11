@@ -13,7 +13,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  syncOnce, applyRemoteItem, isFirstSync, describeSync,
+  syncOnce, applyRemoteItem, applyRemoteBlock, isFirstSync, describeSync,
   type PlannerTransport, type PullResponse, type PushResponse,
 } from '../planner/plannerSync.js';
 import type { PlannerState } from '../planner/plannerStore.js';
@@ -137,6 +137,85 @@ test('accepted operations leave the outbox', async () => {
   assert.equal(r.pushed, 1);
 });
 
+test('a partial, duplicate or extraneous acknowledgement never removes queued work', async () => {
+  for (const response of [
+    { accepted: [], rejected: [] },
+    { accepted: ['k1', 'k1'], rejected: [] },
+    { accepted: ['not-sent'], rejected: [{ idempotencyKey: 'k1', reason: 'no' }] },
+  ] satisfies PushResponse[]) {
+    const local = state({ outbox: enqueue(emptyOutbox(), op('k1', 'i1')) });
+    const result = await syncOnce(local, transport({ push: async () => response }), NOW);
+    assert.equal(local.outbox.operations.length, 1);
+    assert.match(local.outbox.operations[0]!.lastError ?? '', /acknowledg/);
+    assert.equal(result.pushed, 0);
+  }
+});
+
+test('pulled time blocks land as blocks and never pass through item merge', async () => {
+  const local = state();
+  const result = await syncOnce(local, transport({
+    pull: async () => ({
+      items: [], cursor: 'c1',
+      blocks: [{
+        id: 'block-1', itemId: 'item-1', estimateMinutes: 45, carriedOver: 0,
+        scheduledFor: '2026-08-04T09:00:00.000Z', updatedAt: at(500, 0, 'server'),
+      }],
+    }),
+  }), NOW);
+  assert.equal(result.pulledBlocks, 1);
+  assert.equal(local.blocks['block-1']?.estimateMinutes, 45);
+  assert.equal(local.items['block-1'], undefined);
+});
+
+test('a pulled stale block cannot overwrite a newer queued local move', () => {
+  const move = {
+    ...op('block:move', 'block-1', 2_000),
+    entity: 'block' as const,
+    payload: { scheduledFor: '2026-08-05T10:00:00.000Z' },
+  };
+  const local = state({
+    blocks: {
+      'block-1': {
+        id: 'block-1', itemId: 'item-1', estimateMinutes: 30, carriedOver: 0,
+        scheduledFor: '2026-08-05T10:00:00.000Z', updatedAt: at(2_000),
+      },
+    },
+    outbox: enqueue(emptyOutbox(), move),
+  });
+  const applied = applyRemoteBlock(local, {
+    id: 'block-1', itemId: 'item-1', estimateMinutes: 30, carriedOver: 0,
+    scheduledFor: '2026-08-04T09:00:00.000Z', updatedAt: at(1_000, 0, 'server'),
+  });
+  assert.equal(applied, false);
+  assert.equal(local.blocks['block-1']?.scheduledFor, '2026-08-05T10:00:00.000Z');
+});
+
+test('a pulled item tombstone cascades to and hides its local time blocks', () => {
+  const local = state({
+    items: { i1: item('i1', 'parent', at(100)) },
+    blocks: {
+      b1: {
+        id: 'b1', itemId: 'i1', estimateMinutes: 30, carriedOver: 0,
+        updatedAt: at(150, 0, 'a'),
+      },
+    },
+  });
+  const deletedAt = at(500, 0, 'server');
+  applyRemoteItem(local, item('i1', 'parent', at(100), { deletedAt }), 'now');
+  assert.deepEqual(local.blocks.b1?.deletedAt, deletedAt);
+  assert.deepEqual(local.blocks.b1?.updatedAt, deletedAt);
+});
+
+test('a fresh device persists a pulled block tombstone', () => {
+  const local = state();
+  const deletedAt = at(500, 0, 'server');
+  assert.equal(applyRemoteBlock(local, {
+    id: 'b1', itemId: 'i1', estimateMinutes: 30, carriedOver: 0,
+    updatedAt: deletedAt, deletedAt,
+  }), true);
+  assert.deepEqual(local.blocks.b1?.deletedAt, deletedAt);
+});
+
 /* ------------------------------------------- D11's three destructive cases */
 
 test('CASE 1 — the same field edited on two offline devices conflicts, keeping both', () => {
@@ -199,6 +278,25 @@ test('the server clock is absorbed, so a slow device stops losing every tie', as
   }), NOW);
   assert.ok(local.clock.physical >= 500_000);
   assert.equal(local.clock.deviceId, 'a', 'it is still OUR clock');
+});
+
+test('future item and block stamps are absorbed even when the server wall clock is behind', async () => {
+  const future = NOW + 600_000;
+  const local = state({ clock: at(100, 0, 'a') });
+  await syncOnce(local, transport({
+    pull: async () => ({
+      items: [item('fast', 'from fast peer', at(future, 4, 'fast-peer'))],
+      blocks: [{
+        id: 'fast-block', itemId: 'fast', estimateMinutes: 30, carriedOver: 0,
+        updatedAt: at(future + 1, 2, 'fast-peer'),
+      }],
+      cursor: 'c1',
+      serverClock: at(NOW, 0, 'server'),
+    }),
+  }), NOW);
+  assert.equal(local.clock.physical, future + 1);
+  assert.ok(local.clock.logical > 2);
+  assert.equal(local.clock.deviceId, 'a');
 });
 
 /* ------------------------------------------------------------- the message */

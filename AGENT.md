@@ -25,7 +25,7 @@ When a rule is wrong or stale, **fix it in the same PR**. When you establish a n
 | `brainrouter-cli/`                                | Node/TypeScript CLI + TUI: agent runtime front-end, sessions, skills, `/review`.                                                                                                                                      |
 | `brainrouter-dashboard/`                          | Next.js dashboard (workspace name `dashboard`): auth'd chat, orgs/teams, connections, reviews, operations, memory inspection.                                                                                         |
 | `brainrouter-desktop/`                            | Electron + React workbench: Chat · Track · Code modes, in-app multi-tab browser (`electron/browser/`), terminal, tools, reviews. Renderer (`src/**`) is browser code — see boundary rule below.                       |
-| `packages/`                                       | Shared libraries: `types`, `agent-protocol`, `core` (agent loop, config, extensions), `sdk`, `hooks`.                                                                                                                 |
+| `packages/`                                       | Shared libraries: `types`, `agent-protocol`, `core` (agent loop, config, extensions), `sdk`, `hooks`, and private browser-safe `ui`.                                                                                  |
 | `skills/`                                         | Universal skill workflows (`agent`, `api`, `codebase`, `design`, `devops`, `lifecycle`, `memory`, `qa`, `ux`). The **only** editable copy — packages generate theirs at build/pack time (`scripts/bundle-content.mjs`). |
 | `brainrouter-rules/`                              | The evidence-backed engineering-conventions handbook. Read before coding an area.                                                                                                                                     |
 | `brainrouter-docs/`                               | Product docs, `specs/`, `decisions/` (ADRs), setup guides.                                                                                                                                                            |
@@ -54,7 +54,7 @@ The full list with evidence lives in [`brainrouter-rules/00-golden-rules.md`](br
 
 ```bash
 npm install                 # workspace root
-npm run build               # packages (types → agent-protocol → core → sdk → hooks) then apps
+npm run build               # packages (types → agent-protocol → core → sdk → hooks → ui) then apps
 npm run verify              # build + typecheck + lint + all workspace tests
 npm run test -ws --if-present   # or per workspace:
 npm test -w @kinqs/brainrouter-core        # node --test over dist

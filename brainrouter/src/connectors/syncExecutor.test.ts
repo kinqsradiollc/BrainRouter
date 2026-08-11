@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   githubTokenClient: vi.fn(),
   ingestConnectorSources: vi.fn(),
   connectorRecordIdsByDocument: vi.fn(),
+  refreshConnectedIssueDocuments: vi.fn(),
 }));
 
 vi.mock("../memory/engine.js", () => ({
@@ -37,6 +38,10 @@ vi.mock("@kinqs/brainrouter-core/connectors", () => ({
 vi.mock("./knowledgeImport.js", () => ({
   ingestConnectorSources: mocks.ingestConnectorSources,
   connectorRecordIdsByDocument: mocks.connectorRecordIdsByDocument,
+}));
+
+vi.mock("../memory/planner/backend.js", () => ({
+  refreshConnectedIssueDocuments: mocks.refreshConnectedIssueDocuments,
 }));
 
 import { runConnectorSync } from "./syncExecutor.js";
@@ -79,11 +84,18 @@ describe("server connector sync knowledge scope", () => {
       .mockReturnValueOnce([])
       .mockReturnValue([{ id: "runtime-connector-1", checkpoint: { cursor: "next" } }]);
     mocks.createFileConnector.mockReturnValue({ id: "runtime-connector-1" });
-    mocks.runConnectorCheckpointCore.mockResolvedValue({
-      ok: true,
-      documents: [syncedDocument],
-      failures: [],
-      run: { id: "run-1" },
+    mocks.runConnectorCheckpointCore.mockImplementation(async (_workspace, _connectorId, options) => {
+      const plannerItemsProjected = await options.projectPlannerIssues({
+        connector: { id: "runtime-connector-1", source: "github", name: "GitHub runtime" },
+        documents: [syncedDocument],
+      });
+      return {
+        ok: true,
+        documents: [syncedDocument],
+        failures: [],
+        plannerItemsProjected,
+        run: { id: "run-1" },
+      };
     });
     mocks.exportConnectorDocumentsForMemory.mockReturnValue({
       data: { version: 1, memories: [] },
@@ -95,6 +107,9 @@ describe("server connector sync knowledge scope", () => {
     mocks.ingestConnectorSources.mockResolvedValue({ documents: 1, chunks: 1, links: 1 });
     mocks.connectorRecordIdsByDocument.mockReturnValue(new Map([[syncedDocument.id, ["connector-memory-1"]]]));
     mocks.updateDbConnector.mockResolvedValue({});
+    mocks.refreshConnectedIssueDocuments.mockResolvedValue({
+      created: 1, updated: 0, unchanged: 0, skipped: 0,
+    });
   });
 
   it("imports cognitive and source knowledge with the connector's org visibility and no temp-workspace tag", async () => {
@@ -126,6 +141,12 @@ describe("server connector sync knowledge scope", () => {
       },
       new Map([[syncedDocument.id, ["connector-memory-1"]]]),
     );
+    expect(mocks.refreshConnectedIssueDocuments).toHaveBeenCalledWith("org-1", "user-1", {
+      connectorId: "db-connector-1",
+      source: "github",
+      sourceLabel: "GitHub",
+      documents: [syncedDocument],
+    });
   });
 });
 

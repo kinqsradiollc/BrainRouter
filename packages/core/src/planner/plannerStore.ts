@@ -21,11 +21,16 @@
  * reconstruction.
  */
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { getBrainrouterHome, readJsonFile, writeJsonFile } from '../storage/store.js';
-import { hlcNow, hlcZero, type Hlc } from '../sync/hybridClock.js';
+import { compareHlc, hlcNow, hlcReceive, hlcZero, type Hlc } from '../sync/hybridClock.js';
 import { stableDeviceId } from '../sync/deviceId.js';
-import { mergeOwnedItem, type PlannerItem, type Stamped } from './itemMerge.js';
-import { emptyOutbox, enqueue, type OutboxState } from '../sync/outbox.js';
+import { causalValue, canEditLocally, mergeOwnedItem, type PlannerItem, type Stamped } from './itemMerge.js';
+import {
+  emptyOutbox, enqueue, inspectOutbox, requestOperationRetry,
+  type OutboxOperationDetail, type OutboxState,
+} from '../sync/outbox.js';
+import type { PlannerProvenance } from '@kinqs/brainrouter-types/planner';
 import type { TimeBlock } from './timetable.js';
 
 export interface PlannerState {
@@ -100,13 +105,16 @@ function stamp(state: PlannerState, nowMs: number): Hlc {
   return next;
 }
 
-let counter = 0;
-function newId(prefix: string, nowMs: number): string {
-  counter = (counter + 1) % 100_000;
-  return `${prefix}_${nowMs.toString(36)}${counter.toString(36)}`;
+function newId(prefix: string): string {
+  return `${prefix}_${randomUUID()}`;
 }
 
-const value = <T>(v: T, at: Hlc): Stamped<T> => ({ value: v, at });
+function newOperationKey(): string {
+  return randomUUID();
+}
+
+const value = <T>(v: T, at: Hlc, ...previous: Array<Stamped<unknown> | undefined>): Stamped<T> =>
+  causalValue(v, at, ...previous);
 
 /* --------------------------------------------------------------- mutations */
 
@@ -119,6 +127,12 @@ export interface AddItemInput {
   source?: string;
   /** The source's own id, so a re-read can find it again. */
   externalId?: string;
+  /** Human-readable source name; defaults to `source`. */
+  sourceLabel?: string;
+  /** Opens the mirrored record in the source system. */
+  sourceUrl?: string;
+  estimateMinutes?: number;
+  blockedReason?: string;
 }
 
 export function addItem(
@@ -126,24 +140,46 @@ export function addItem(
   input: AddItemInput,
   nowMs: number,
 ): PlannerItem {
+  if (input.sourceUrl) {
+    let protocol: string | undefined;
+    try { protocol = new URL(input.sourceUrl).protocol; } catch { /* rejected below */ }
+    if (protocol !== 'https:') {
+      throw new Error('A connected planner source URL must use HTTPS.');
+    }
+  }
   const state = readPlanner(userId);
   const at = stamp(state, nowMs);
-  const id = input.externalId ? `${input.source}:${input.externalId}` : newId('itm', nowMs);
+  const id = input.externalId ? `${input.source}:${input.externalId}` : newId('itm');
+  const fetchedAt = new Date(nowMs).toISOString();
+  const provenance: PlannerProvenance | undefined = input.source
+    ? {
+        sourceId: input.source,
+        sourceLabel: input.sourceLabel ?? input.source,
+        fetchedAt,
+        ...(input.externalId ? { externalId: input.externalId } : {}),
+        ...(input.sourceUrl ? { sourceUrl: input.sourceUrl } : {}),
+      }
+    : undefined;
 
   const item: PlannerItem = {
     id,
     origin: input.source ? 'mirrored' : 'owned',
-    ...(input.source ? { source: input.source, fetchedAt: new Date(nowMs).toISOString() } : {}),
+    ...(input.source ? { source: input.source, fetchedAt } : {}),
+    ...(provenance ? { provenance } : {}),
     title: value(input.title, at),
     ...(input.notes ? { notes: value(input.notes, at) } : {}),
     ...(input.dueDate ? { dueDate: value(input.dueDate, at) } : {}),
     ...(input.priority !== undefined ? { priority: value(input.priority, at) } : {}),
+    ...(input.estimateMinutes !== undefined
+      ? { estimateMinutes: input.estimateMinutes, estimateUpdatedAt: at }
+      : {}),
+    ...(input.blockedReason !== undefined ? { blockedReason: value(input.blockedReason, at) } : {}),
   };
 
   state.items[id] = item;
   state.outbox = enqueue(state.outbox, {
-    idempotencyKey: `${id}:create:${at.physical}.${at.logical}`,
-    itemId: id, kind: 'create', at, payload: input, attempts: 0,
+    idempotencyKey: newOperationKey(),
+    itemId: id, entity: 'item', kind: 'create', at, payload: item, attempts: 0,
   });
   writePlanner(userId, state);
   return item;
@@ -155,6 +191,24 @@ export interface UpdateItemInput {
   dueDate?: string | null;
   priority?: number;
   completed?: boolean;
+  estimateMinutes?: number;
+  blockedReason?: string | null;
+}
+
+/**
+ * Check a whole local mutation before changing the cache or appending an
+ * outbox operation. Kept separate from `updateItem` so a surface can show the
+ * same refusal the store enforces instead of interpreting a null return.
+ */
+export function canUpdateItemLocally(
+  item: Pick<PlannerItem, 'origin' | 'source'>,
+  input: UpdateItemInput,
+): { allowed: boolean; reason?: string } {
+  for (const field of Object.keys(input)) {
+    const decision = canEditLocally(item, field);
+    if (!decision.allowed) return decision;
+  }
+  return { allowed: true };
 }
 
 /**
@@ -173,22 +227,31 @@ export function updateItem(
   const state = readPlanner(userId);
   const current = state.items[id];
   if (!current) return null;
+  if (!canUpdateItemLocally(current, input).allowed) return null;
   const at = stamp(state, nowMs);
 
   const edit: PlannerItem = {
     ...current,
-    ...(input.title !== undefined ? { title: value(input.title, at) } : {}),
-    ...(input.notes !== undefined ? { notes: value(input.notes, at) } : {}),
+    ...(input.title !== undefined ? { title: value(input.title, at, current.title) } : {}),
+    ...(input.notes !== undefined ? { notes: value(input.notes, at, current.notes) } : {}),
     ...(input.dueDate !== undefined ? { dueDate: value(input.dueDate, at) } : {}),
     ...(input.priority !== undefined ? { priority: value(input.priority, at) } : {}),
     ...(input.completed !== undefined ? { completed: value(input.completed, at) } : {}),
+    ...(input.estimateMinutes !== undefined
+      ? { estimateMinutes: input.estimateMinutes, estimateUpdatedAt: at }
+      : {}),
+    ...(input.blockedReason !== undefined ? { blockedReason: value(input.blockedReason, at) } : {}),
   };
 
   const merged = current.origin === 'owned' ? mergeOwnedItem(current, edit) : edit;
   state.items[id] = merged;
   state.outbox = enqueue(state.outbox, {
-    idempotencyKey: `${id}:update:${at.physical}.${at.logical}`,
-    itemId: id, kind: 'update', at, payload: input, attempts: 0,
+    idempotencyKey: newOperationKey(),
+    itemId: id, entity: 'item', kind: 'update', at, payload: {
+      ...input,
+      ...(input.title !== undefined ? { title: edit.title } : {}),
+      ...(input.notes !== undefined ? { notes: edit.notes } : {}),
+    }, attempts: 0,
   });
   writePlanner(userId, state);
   return merged;
@@ -205,11 +268,17 @@ export function deleteItem(userId: string | undefined, id: string, nowMs: number
   const state = readPlanner(userId);
   const current = state.items[id];
   if (!current) return false;
+  if (!canEditLocally(current, 'delete').allowed) return false;
   const at = stamp(state, nowMs);
   state.items[id] = { ...current, deletedAt: at };
+  for (const [blockId, block] of Object.entries(state.blocks)) {
+    if (block.itemId === id) {
+      state.blocks[blockId] = { ...block, updatedAt: at, deletedAt: at };
+    }
+  }
   state.outbox = enqueue(state.outbox, {
-    idempotencyKey: `${id}:delete:${at.physical}.${at.logical}`,
-    itemId: id, kind: 'delete', at, payload: {}, attempts: 0,
+    idempotencyKey: newOperationKey(),
+    itemId: id, entity: 'item', kind: 'delete', at, payload: {}, attempts: 0,
   });
   writePlanner(userId, state);
   return true;
@@ -223,22 +292,77 @@ export function scheduleBlock(
   nowMs: number,
 ): TimeBlock {
   const state = readPlanner(userId);
+  const parent = state.items[input.itemId];
+  if (!parent || parent.deletedAt) {
+    throw new Error(`The parent planner item ${input.itemId} does not exist.`);
+  }
   const at = stamp(state, nowMs);
-  const id = newId('blk', nowMs);
+  const id = newId('blk');
   const block: TimeBlock = {
     id,
     itemId: input.itemId,
     ...(input.scheduledFor ? { scheduledFor: input.scheduledFor } : {}),
     estimateMinutes: input.estimateMinutes,
     carriedOver: 0,
+    updatedAt: at,
   };
   state.blocks[id] = block;
   state.outbox = enqueue(state.outbox, {
-    idempotencyKey: `${id}:create:${at.physical}.${at.logical}`,
-    itemId: input.itemId, kind: 'update', at, payload: block, attempts: 0,
+    idempotencyKey: newOperationKey(),
+    itemId: id, entity: 'block', kind: 'create', at, payload: block, attempts: 0,
   });
   writePlanner(userId, state);
   return block;
+}
+
+export interface UpdateBlockInput {
+  scheduledFor?: string | null;
+  estimateMinutes?: number;
+  actualMinutes?: number | null;
+  carriedOver?: number;
+  completedAt?: string | null;
+}
+
+/** Move or update one time block and queue the block record itself for sync. */
+export function updateBlock(
+  userId: string | undefined,
+  blockId: string,
+  input: UpdateBlockInput,
+  nowMs: number,
+): TimeBlock | null {
+  const state = readPlanner(userId);
+  const current = state.blocks[blockId];
+  if (!current || current.deletedAt) return null;
+  const parent = state.items[current.itemId];
+  if (!parent || parent.deletedAt) return null;
+  const at = stamp(state, nowMs);
+  const next: TimeBlock = {
+    ...current,
+    ...(input.scheduledFor !== undefined
+      ? input.scheduledFor === null ? { scheduledFor: undefined } : { scheduledFor: input.scheduledFor }
+      : {}),
+    ...(input.estimateMinutes !== undefined ? { estimateMinutes: input.estimateMinutes } : {}),
+    ...(input.actualMinutes !== undefined
+      ? input.actualMinutes === null ? { actualMinutes: undefined } : { actualMinutes: input.actualMinutes }
+      : {}),
+    ...(input.carriedOver !== undefined ? { carriedOver: input.carriedOver } : {}),
+    ...(input.completedAt !== undefined
+      ? input.completedAt === null ? { completedAt: undefined } : { completedAt: input.completedAt }
+      : {}),
+    updatedAt: at,
+  };
+  state.blocks[blockId] = next;
+  state.outbox = enqueue(state.outbox, {
+    idempotencyKey: newOperationKey(),
+    itemId: blockId,
+    entity: 'block',
+    kind: 'update',
+    at,
+    payload: input,
+    attempts: 0,
+  });
+  writePlanner(userId, state);
+  return next;
 }
 
 /** Record what a block actually took — D5's whole point. */
@@ -248,16 +372,10 @@ export function recordActual(
   actualMinutes: number,
   nowMs: number,
 ): TimeBlock | null {
-  const state = readPlanner(userId);
-  const block = state.blocks[blockId];
-  if (!block) return null;
-  state.blocks[blockId] = {
-    ...block,
+  return updateBlock(userId, blockId, {
     actualMinutes,
     completedAt: new Date(nowMs).toISOString(),
-  };
-  writePlanner(userId, state);
-  return state.blocks[blockId]!;
+  }, nowMs);
 }
 
 /* -------------------------------------------------------------------- reads */
@@ -276,7 +394,32 @@ export function listItems(
 }
 
 export function listBlocks(userId: string | undefined): TimeBlock[] {
-  return Object.values(readPlanner(userId).blocks);
+  const state = readPlanner(userId);
+  return Object.values(state.blocks)
+    .filter((block) => !block.deletedAt)
+    .filter((block) => !state.items[block.itemId]?.deletedAt);
+}
+
+/** Safe details for the sync control; operation payloads stay private. */
+export function plannerOutboxDetails(
+  userId: string | undefined,
+  nowMs: number,
+): OutboxOperationDetail[] {
+  return inspectOutbox(readPlanner(userId).outbox, nowMs);
+}
+
+/** Persist a retry request so it survives a restart before the next sync. */
+export function retryPlannerOperation(
+  userId: string | undefined,
+  idempotencyKey: string,
+  nowMs: number,
+): OutboxOperationDetail | null {
+  const state = readPlanner(userId);
+  const next = requestOperationRetry(state.outbox, idempotencyKey, new Date(nowMs).toISOString());
+  if (next === state.outbox) return null;
+  state.outbox = next;
+  writePlanner(userId, state);
+  return inspectOutbox(next, nowMs).find((detail) => detail.idempotencyKey === idempotencyKey) ?? null;
 }
 
 export function getItem(userId: string | undefined, id: string): PlannerItem | null {
@@ -294,7 +437,7 @@ export function listConflicts(userId: string | undefined): PlannerItem[] {
     .filter((i) => i.conflicts && Object.keys(i.conflicts).length > 0);
 }
 
-/** Keep one side of a conflicted field and clear the marker. */
+/** Keep one of the two recorded versions and clear the conflict marker. */
 export function resolveConflict(
   userId: string | undefined,
   id: string,
@@ -304,20 +447,77 @@ export function resolveConflict(
 ): PlannerItem | null {
   const state = readPlanner(userId);
   const item = state.items[id];
+  if (field !== 'title' && field !== 'notes' && field !== 'deleted') return null;
   const conflict = item?.conflicts?.[field];
   if (!item || !conflict) return null;
+  // A fast remote device may have stamped the conflict ahead of this device's
+  // wall clock. Absorb both sides before choosing so the resolution watermark
+  // is causally after the values it acknowledges, not merely after local time.
+  const latestConflict = compareHlc(conflict.theirsAt, conflict.oursAt) > 0
+    ? conflict.theirsAt
+    : conflict.oursAt;
+  state.clock = hlcReceive(state.clock, latestConflict, nowMs);
   const at = stamp(state, nowMs);
 
   const chosen = keep === 'ours' ? conflict.ours : conflict.theirs;
   const rest = { ...item.conflicts };
   delete rest[field];
 
+  if (field === 'deleted') {
+    const deleted = keep === 'ours';
+    state.items[id] = {
+      ...item,
+      ...(deleted ? { deletedAt: at } : { deletedAt: undefined }),
+      deletionResolution: { deleted, at },
+      ...(Object.keys(rest).length > 0 ? { conflicts: rest } : { conflicts: undefined }),
+    };
+    if (deleted) {
+      for (const [blockId, block] of Object.entries(state.blocks)) {
+        if (block.itemId !== id) continue;
+        state.blocks[blockId] = { ...block, updatedAt: at, deletedAt: at };
+      }
+    }
+    state.outbox = enqueue(state.outbox, {
+      idempotencyKey: newOperationKey(),
+      itemId: id,
+      entity: 'item',
+      kind: 'resolve_conflict',
+      at,
+      payload: { field: 'deleted', keep },
+      attempts: 0,
+    });
+    writePlanner(userId, state);
+    return state.items[id]!;
+  }
+
   state.items[id] = {
     ...item,
-    ...(field === 'title' ? { title: value(String(chosen), at) } : {}),
-    ...(field === 'notes' ? { notes: value(String(chosen), at) } : {}),
+    ...(field === 'title' ? {
+      title: value(
+        String(chosen), at,
+        { value: conflict.ours, at: conflict.oursAt, seen: [] },
+        { value: conflict.theirs, at: conflict.theirsAt, seen: [] },
+      ),
+    } : {}),
+    ...(field === 'notes' ? {
+      notes: value(
+        String(chosen), at,
+        { value: conflict.ours, at: conflict.oursAt, seen: [] },
+        { value: conflict.theirs, at: conflict.theirsAt, seen: [] },
+      ),
+    } : {}),
+    conflictResolutions: { ...item.conflictResolutions, [field]: at },
     ...(Object.keys(rest).length > 0 ? { conflicts: rest } : { conflicts: undefined }),
   };
+  state.outbox = enqueue(state.outbox, {
+    idempotencyKey: newOperationKey(),
+    itemId: id,
+    entity: 'item',
+    kind: 'resolve_conflict',
+    at,
+    payload: { field, value: String(chosen) },
+    attempts: 0,
+  });
   writePlanner(userId, state);
   return state.items[id]!;
 }

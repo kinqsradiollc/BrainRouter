@@ -1,6 +1,6 @@
 # ADR-038 — A planner worth opening
 
-**Status:** PROPOSED — for owner review.
+**Status:** ACCEPTED — 2026-08-11.
 **Depends on:** ADR-029 (one workspace, many surfaces), ADR-026 (desktop native visual system),
 ADR-031 (the design skill and the capability it belongs to), ADR-028 (surfaces that tell the truth).
 
@@ -107,11 +107,12 @@ that pretends to be a GUI is worse at both.
 
 The shared layer for the CLI is the DATA and the operations, not the rendering.
 
-### D6 · One design brief, applied — not three interpretations
+### D6 · One BrainRouter design brief, applied — not three interpretations
 
-ADR-031 vendored a design skill and attached it to the `frontend` capability. This is the work it
-exists for: a single brief for planner and notes, applied to shared components, reviewed once on
-both hosts.
+This ADR and the repository's visual rules are the single brief for BrainRouter's own planner and
+notes surfaces. ADR-031's vendored workspace-design skill remains available to the `frontend`
+capability for work BrainRouter generates in a user's workspace; it does not govern BrainRouter's
+product UI. Shared components are reviewed once against this ADR and exercised in both hosts.
 
 ---
 
@@ -119,28 +120,79 @@ both hosts.
 
 - **It does not redesign the whole product.** Chat, review, meetings and settings keep their current
   look; the tokens they eventually adopt come from this work, but their migration is separate.
-- **It does not change storage or sync semantics.** ADR-029's block model, hybrid clocks, outbox and
-  lease-with-fencing stay exactly as they are. This is presentation and composition.
-- **It does not add planner features.** No dependencies, no gantt, no assignments. The complaint is
-  that what exists is unusable, and adding to an unusable surface makes it worse.
+- **It does not replace the storage or sync model.** ADR-029's block model, hybrid clocks, durable
+  outbox and lease-with-fencing remain the authority. Delivery does harden their browser wire
+  contracts, block persistence, scoped source projection and targeted retry because a polished
+  surface over writes that do not round-trip would still fail this ADR.
+- **It does not expand the planner into project management.** No task dependencies, gantt or
+  assignments are introduced. The added provenance, scheduling and sync controls make the existing
+  day-planning promise usable and truthful rather than widening its product scope.
 
 ---
 
-## 5. Open questions
+## 5. Resolved questions
 
-1. **Where do shared components live?** `packages/core` is browser-safe in parts but is not a UI
-   package, and the renderer already has deep-import constraints. A dedicated UI package is the
-   obvious answer and the one with the most build-system cost — worth deciding before code moves.
-2. **How much can actually be shared?** Desktop has native menus, drag targets and window chrome the
-   dashboard does not. The honest split is probably shared logic and presentational components with
-   host-specific shells; the boundary needs to be drawn deliberately rather than discovered.
-3. **Does the desktop notes implementation move, or does the dashboard's?** The dashboard's is
-   larger; the desktop's is closer to the block model. Neither being obviously the survivor is
-   exactly why this keeps not happening.
-4. **What is the density target?** A planner for ten items and one for a hundred are different
-   designs. This should be answered from real usage, not taste.
-5. **Does this need its own visual review gate?** ADR-026 asked for live macOS and Windows review of
-   the desktop visual system. The same question applies here, on two hosts.
+### Q1 · The shared components live in a dedicated UI package
+
+Create the private workspace package `@kinqs/brainrouter-ui` under `packages/ui`, with curated
+`./planner`, `./notes`, `./planner.css` and `./notes.css` exports. Core continues to own domain
+policy and storage, while Brand continues to own source tokens and assets. Neither becomes a React
+package, and neither application may become a dependency of the other.
+
+React and ReactDOM are peer dependencies (`^18.3.1 || ^19.0.0`) because Desktop and Dashboard do
+not currently run the same major. UI may import Core only through an exact browser-safe allowlist;
+the Notes editor uses `@kinqs/brainrouter-core/notes/editing`. The package-boundary check and the
+Dashboard Cloudflare build enforce that a Node-only Core path cannot enter either browser bundle.
+
+### Q2 · Share the browser interaction layer; adapt host effects
+
+The shared package owns Planner day/week/calendar presentation, Notes pages/blocks/databases,
+empty/loading/error/conflict states, feature view models, keyboard and focus behaviour, page/block/
+calendar drag targets, accessibility semantics, and feature CSS. It receives plain view data and
+typed `PlannerOps` or `NotesOps` capabilities.
+
+Desktop keeps Electron bridge queries, the local-first cache, native downloads and external-open,
+window drag regions, menus and mode switching. Dashboard keeps Next routing, authentication and
+active-organisation resolution, authenticated HTTP, server polling/invalidation and browser
+downloads. Leases, durable sync, clocks, persistence and transport remain Core/host concerns. A
+shared component never branches on a host name; a genuine difference is a typed capability.
+
+The CLI shares Core data and operations only. It never depends on React or the UI package.
+
+### Q3 · Desktop is the presentation seed; neither host container moves
+
+Desktop's Planner and Notes renderers are the survivor because they already separate presentation
+from `PlannerModeContainer` and `NotesModeContainer`, and Notes contains the complete block editor.
+Their host containers stay in Desktop. Dashboard auth, organisation, API, server-resolution and
+download behaviour stays in a Dashboard adapter. Once parity is proven, Dashboard's duplicated
+planner rows, Notes renderers, table codec and feature CSS are retired.
+
+This does not bless every Desktop choice: extraction is a migration through shared contracts and
+tests. It establishes one implementation as the editing source rather than preserving two and
+calling them shared.
+
+### Q4 · Twenty items is the canonical real day
+
+The acceptance fixture contains 20 items: 16 active and four complete, mixing local capture,
+connected issues, estimates, a blocked item, moved/scheduled work, and four pending sync operations.
+Rows target 36px compact density with controls at least 24px. At least 12 actionable rows are visible
+at Dashboard 1440×900 and Desktop 1280×840 at 100%; all 20 are reachable in one surface scroll.
+
+There is no horizontal overflow at Dashboard widths 768 and 390×844, or Desktop 900×600 and 200%
+zoom. One hundred items is a stress/performance case, not the everyday design target; virtualisation
+is added only when measurement shows it is needed.
+
+### Q5 · The cross-host visual/usability gate is blocking
+
+ADR-038 owns a dedicated gate rather than borrowing an embedded-browser smoke test. Both hosts
+render the same deterministic fixture and exercise capture, complete, schedule/move, source-open,
+sync inspection and retry. The gate checks keyboard reachability, focus visibility, accessible
+names/states, contrast, row density, overlap and overflow, plus unexplained console/network errors.
+
+Dashboard is checked in Chromium at 1440, 768 and 390 widths. Electron is checked at 1280×840 and
+its 900×600 minimum at 100% and 200% zoom, with light/dark plus high-contrast, forced-colours and
+reduced-motion coverage where supported. Hosted macOS and Windows runs are release-blocking, with
+screenshots retained as CI artifacts and a human release checkpoint for unexplained visual drift.
 
 ---
 
@@ -165,3 +217,18 @@ Three supporting criteria, because "looks better" is not checkable:
 
 Not judged by: matching any particular reference product. The target is a surface worth opening every
 morning — which is a claim about the second week of use, not the first screenshot.
+
+### 6.1 Currentness and failure semantics
+
+While either surface is active, a local or remote change must become visible within five seconds or
+through explicit event invalidation; a full-page reload is never part of the workflow. Pending sync
+shows the exact operation, age, attempts and last failure. Retry targets failed operations without
+discarding good pending work. A rejected or fenced write remains inspectable until the person has
+resolved or dismissed it.
+
+### 6.2 Delivery evidence
+
+Acceptance requires the focused UI/Core/Desktop/Dashboard/CLI checks, the PostgreSQL two-device
+scenario, the Dashboard Cloudflare build, root verification, the cross-host visual/usability gate,
+and the full hosted CI suite. The delivery pull request records the exact commands and retained
+artifacts; this section must not claim a gate passed before that evidence exists.

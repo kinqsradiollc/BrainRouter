@@ -11,20 +11,33 @@
  * equivalent — every block is owned — so the rule belongs to the planner rather
  * than to the engine.
  */
-import type { OutboxState } from '../sync/outbox.js';
+import type { OutboxOperation, OutboxState } from '../sync/outbox.js';
+import { compareHlc, hlcReceive, type Hlc } from '../sync/hybridClock.js';
 import {
   applyRemoteRecord, describeRecordSync, isFirstSync, syncRecords,
   type PullResponse as RecordPullResponse, type PushResponse,
-  type SyncRecords, type SyncResult, type SyncTransport,
+  type SyncRecords, type SyncResult,
 } from '../sync/recordSync.js';
 import { mergeOwnedItem, refreshMirrored, type PlannerItem } from './itemMerge.js';
 import type { PlannerState } from './plannerStore.js';
+import type { TimeBlock } from './timetable.js';
 
 export { isFirstSync, type PushResponse, type SyncResult };
 
-/** The planner's shape of the shared pull response. */
-export type PullResponse = RecordPullResponse<PlannerItem>;
-export type PlannerTransport = SyncTransport<PlannerItem>;
+/** The planner's pull includes time blocks while retaining the item envelope. */
+export interface PullResponse extends RecordPullResponse<PlannerItem> {
+  /** Optional for compatibility with servers that predate block sync. */
+  blocks?: TimeBlock[];
+}
+
+export interface PlannerTransport {
+  pull(since: string | undefined): Promise<PullResponse>;
+  push(operations: readonly OutboxOperation[]): Promise<PushResponse>;
+}
+
+export interface PlannerSyncResult extends SyncResult {
+  pulledBlocks: number;
+}
 
 const PLANNER_RECORDS: SyncRecords<PlannerState, PlannerItem> = {
   idOf: (item) => item.id,
@@ -37,7 +50,19 @@ const PLANNER_RECORDS: SyncRecords<PlannerState, PlannerItem> = {
     const merged = mergeOwnedItem(local, remote);
     return { value: merged, conflicted: Object.keys(merged.conflicts ?? {}).length > 0 };
   },
+  observedClock: newestPlannerItemStamp,
 };
+
+function newestPlannerItemStamp(item: PlannerItem): Hlc | undefined {
+  const stamps: Hlc[] = [
+    item.title?.at, item.notes?.at, item.dueDate?.at, item.priority?.at,
+    item.completed?.at, item.estimateUpdatedAt, item.blockedReason?.at,
+    item.deletedAt, item.conflictResolutions?.title, item.conflictResolutions?.notes,
+    item.deletionResolution?.at,
+    ...Object.values(item.conflicts ?? {}).flatMap((conflict) => [conflict.oursAt, conflict.theirsAt]),
+  ].filter((stamp): stamp is Hlc => !!stamp);
+  return stamps.sort(compareHlc).at(-1);
+}
 
 /** Merge one server item into local state. */
 export function applyRemoteItem(
@@ -45,7 +70,47 @@ export function applyRemoteItem(
   remote: PlannerItem,
   fetchedAt: string,
 ): { conflicted: boolean } {
-  return applyRemoteRecord(state, remote, fetchedAt, PLANNER_RECORDS);
+  const result = applyRemoteRecord(state, remote, fetchedAt, PLANNER_RECORDS);
+  const deletedAt = state.items[remote.id]?.deletedAt;
+  if (deletedAt) {
+    for (const [blockId, block] of Object.entries(state.blocks)) {
+      if (block.itemId !== remote.id) continue;
+      const tombstone = block.deletedAt && compareHlc(block.deletedAt, deletedAt) > 0
+        ? block.deletedAt
+        : deletedAt;
+      state.blocks[blockId] = { ...block, updatedAt: tombstone, deletedAt: tombstone };
+    }
+  }
+  return result;
+}
+
+function newestLocalBlockStamp(state: PlannerState, blockId: string): Hlc | undefined {
+  const blockStamp = state.blocks[blockId]?.updatedAt;
+  const queued = state.outbox.operations
+    .filter((op) => op.entity === 'block' && op.itemId === blockId)
+    .map((op) => op.at)
+    .sort(compareHlc)
+    .at(-1);
+  if (!blockStamp) return queued;
+  if (!queued) return blockStamp;
+  return compareHlc(queued, blockStamp) > 0 ? queued : blockStamp;
+}
+
+/** Merge one pulled block without overwriting a newer queued local move. */
+export function applyRemoteBlock(state: PlannerState, remote: TimeBlock): boolean {
+  const local = state.blocks[remote.id];
+  if (!local) {
+    state.blocks[remote.id] = remote;
+    return true;
+  }
+  const localStamp = newestLocalBlockStamp(state, remote.id);
+  if (!remote.updatedAt) {
+    if (localStamp) return false;
+  } else if (localStamp && compareHlc(remote.updatedAt, localStamp) <= 0) {
+    return false;
+  }
+  state.blocks[remote.id] = remote;
+  return true;
 }
 
 /** One sync cycle. Mutates `state` in place; the caller persists. */
@@ -53,8 +118,22 @@ export async function syncOnce(
   state: PlannerState,
   transport: PlannerTransport,
   nowMs: number,
-): Promise<SyncResult> {
-  return syncRecords(state, transport, PLANNER_RECORDS, nowMs);
+): Promise<PlannerSyncResult> {
+  let pulledBlocks = 0;
+  const itemTransport = {
+    pull: async (since: string | undefined): Promise<RecordPullResponse<PlannerItem>> => {
+      const response = await transport.pull(since);
+      for (const block of response.blocks ?? []) {
+        const observed = block.deletedAt ?? block.updatedAt;
+        if (observed) state.clock = hlcReceive(state.clock, observed, nowMs);
+        if (applyRemoteBlock(state, block)) pulledBlocks += 1;
+      }
+      return response;
+    },
+    push: transport.push,
+  };
+  const result = await syncRecords(state, itemTransport, PLANNER_RECORDS, nowMs);
+  return { ...result, pulledBlocks };
 }
 
 export function describeSync(result: SyncResult, outbox: OutboxState): string {

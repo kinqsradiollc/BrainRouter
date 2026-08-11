@@ -129,6 +129,17 @@ function newBlockId(deviceId: string, nowMs: number): string {
   return `blk_${nowMs.toString(36)}${counter.toString(36)}_${deviceId}`;
 }
 
+/**
+ * Mint an id before executing a pure gesture plan.
+ *
+ * Creation still happens through `createBlock`; this only lets the planner put
+ * the same id in its result, its reference rewrites and the eventual outbox
+ * operation. A remote host supplies its own deterministic mint function.
+ */
+export function mintNoteBlockId(userId: string | undefined, nowMs: number): string {
+  return newBlockId(notesDeviceId(userId), nowMs);
+}
+
 const value = <T>(v: T, at: Hlc): Stamped<T> => ({ value: v, at });
 
 function liveBlocks(state: NotesState): NoteBlock[] {
@@ -345,6 +356,8 @@ export function asOneUndo<T>(userId: string | undefined, label: string, fn: () =
 /* --------------------------------------------------------------- mutations */
 
 export interface CreateBlockInput extends BlockPosition {
+  /** An id already minted by a Core gesture plan. Ordinary callers omit it. */
+  id?: string;
   kind?: NoteBlockKind;
   text?: string;
   level?: number;
@@ -354,6 +367,7 @@ export interface CreateBlockInput extends BlockPosition {
   icon?: string;
   cover?: string;
   favourite?: boolean;
+  template?: boolean;
   /** E3 — a row's property values, keyed by property id. */
   props?: Record<string, NotePropertyValue>;
   /** E3 — a database block's property definitions. */
@@ -380,7 +394,8 @@ export function createBlock(
 ): NoteBlock {
   const state = readNotes(userId);
   const at = stamp(state, nowMs);
-  const id = newBlockId(state.deviceId, nowMs);
+  const id = input.id ?? newBlockId(state.deviceId, nowMs);
+  if (state.blocks[id]) throw new Error(`Block id ${id} already exists.`);
 
   const parentId = input.parentId ?? null;
   const kind = input.kind ?? 'paragraph';
@@ -413,6 +428,7 @@ export function createBlock(
     ...(input.icon !== undefined ? { icon: value(input.icon, at) } : {}),
     ...(input.cover !== undefined ? { cover: value(input.cover, at) } : {}),
     ...(input.favourite !== undefined ? { favourite: value(input.favourite, at) } : {}),
+    ...(input.template !== undefined ? { template: value(input.template, at) } : {}),
   };
 
   state.blocks[id] = block;
@@ -907,10 +923,14 @@ export function resolveConflict(
   field: string,
   keep: 'ours' | 'theirs',
   nowMs: number,
+  expected: { oursAt: Hlc; theirsAt: Hlc },
 ): NoteBlock | null {
   const state = readNotes(userId);
   const block = state.blocks[id];
   if (!block) return null;
+  const conflict = block.conflicts?.[field];
+  if (!conflict || !sameHlc(conflict.oursAt, expected.oursAt)
+    || !sameHlc(conflict.theirsAt, expected.theirsAt)) return null;
   const at = stamp(state, nowMs);
   const resolved = resolveBlockConflict(block, field, keep, at);
   if (!resolved) return null;
@@ -922,6 +942,12 @@ export function resolveConflict(
   });
   writeNotes(userId, state);
   return resolved;
+}
+
+function sameHlc(left: Hlc, right: Hlc): boolean {
+  return left.physical === right.physical
+    && left.logical === right.logical
+    && left.deviceId === right.deviceId;
 }
 
 /* ------------------------------------------------------- F3: comments (C5) */

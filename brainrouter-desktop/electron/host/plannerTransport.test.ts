@@ -37,3 +37,29 @@ test('constructing a transport for a refused URL THROWS rather than sending', ()
     /Refusing to sync/,
   );
 });
+
+test('authenticated Planner sync keeps the account bearer in the main process request', async () => {
+  const originalFetch = globalThis.fetch;
+  let authorization: string | null = null;
+  let organization: string | null = null;
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    authorization = headers.get('authorization');
+    organization = headers.get('x-brainrouter-org');
+    return new Response(JSON.stringify({ items: [], blocks: [], cursor: '0' }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as typeof fetch;
+  try {
+    await createPlannerTransport({
+      baseUrl: 'https://brain.example.test',
+      token: 'desktop-session-token',
+      orgId: 'org-desktop',
+    }).pull(undefined);
+    assert.equal(authorization, 'Bearer desktop-session-token');
+    assert.equal(organization, 'org-desktop');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

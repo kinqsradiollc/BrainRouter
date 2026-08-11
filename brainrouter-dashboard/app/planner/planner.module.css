@@ -1,67 +1,10 @@
-/* ADR-028 Part D — the planner on the web. Deliberately close to the desktop
-   mode's shape: the same person's day should not read differently depending on
-   which surface they opened. */
-.page { max-width: 820px; }
-
-.add { display: flex; gap: 8px; margin: 16px 0 20px; }
-.add input {
-  flex: 1; padding: 9px 12px; font-size: 14px; border-radius: 8px;
-  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+/* ADR-038 — Dashboard shell-only layout; Planner presentation lives in UI. */
+.page { width: 100%; max-width: 1100px; min-width: 0; }
+.error {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  color: var(--text-muted);
+  font-size: 12px;
 }
-.add button {
-  padding: 9px 16px; border-radius: 8px; border: 1px solid var(--border);
-  background: var(--surface-2, transparent); color: var(--text); cursor: pointer; font-size: 14px;
-}
-.add button:hover { border-color: var(--text-faint); }
-
-.row { display: flex; align-items: baseline; gap: 10px; padding: 9px 8px; border-radius: 8px; }
-.row:hover { background: var(--surface-2, rgba(255, 255, 255, 0.03)); }
-.title { flex: 1; min-width: 0; font-size: 14px; overflow: hidden; text-overflow: ellipsis; }
-.source, .due {
-  flex: none; font-size: 11px; color: var(--text-faint); font-family: var(--mono, monospace);
-  border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px;
-}
-
-.group {
-  font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
-  color: var(--text-faint); margin: 22px 0 6px;
-}
-
-/* Conflicts are the only planner state that cannot resolve itself. */
-.conflict {
-  border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px;
-  font-size: 13px; line-height: 1.55; margin-bottom: 14px;
-}
-.error { font-size: 13px; color: var(--text-faint); margin-bottom: 12px; }
-
-.empty {
-  display: flex; flex-direction: column; gap: 6px; padding: 32px 0;
-  color: var(--text-faint); font-size: 13px; line-height: 1.6;
-}
-.empty strong { color: var(--text); font-size: 15px; font-weight: 600; }
-
-.note { margin-top: 28px; font-size: 12px; color: var(--text-faint); line-height: 1.6; }
-
-/* ADR-028 G6 — the week strip. Deliberately not a copy of the desktop's hour
-   grid: a web planner you check between meetings answers "what is coming", and
-   a second hour-by-hour layout would be two things to keep honest. */
-.week {
-  display: grid; grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 6px; margin: 4px 0 22px;
-}
-.weekDay {
-  border: 1px solid var(--border); border-radius: 8px; padding: 8px;
-  min-height: 84px; display: flex; flex-direction: column; gap: 5px;
-}
-.weekToday { border-color: var(--accent, var(--text-faint)); }
-.weekHead {
-  display: flex; align-items: baseline; gap: 5px; font-size: 11px; color: var(--text-faint);
-}
-.weekHead strong { font-size: 14px; color: var(--text); font-weight: 600; }
-.weekItem {
-  font-size: 11px; line-height: 1.35; padding: 3px 6px; border-radius: 4px;
-  background: var(--surface-2, rgba(255, 255, 255, 0.05));
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-
-@media (max-width: 720px) { .week { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

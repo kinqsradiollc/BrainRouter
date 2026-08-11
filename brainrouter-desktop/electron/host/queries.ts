@@ -17,7 +17,12 @@ import {
   TOOL_REQUIREMENTS, planProvisioning, checkIdentity, bindWorkspace,
   type ForgeOperation,
 } from '@kinqs/brainrouter-core/tooling';
-import { syncOnce, writePlanner } from '@kinqs/brainrouter-core/planner';
+import {
+  recordActual as plannerRecordActual,
+  syncOnce,
+  updateBlock as plannerUpdateBlock,
+  writePlanner,
+} from '@kinqs/brainrouter-core/planner';
 import { createPlannerTransport } from './plannerTransport.js';
 // ADR-029 Part B — Notes is USER-scoped for the same reason the planner is
 // (D1), so none of these take a workspace root either.
@@ -131,6 +136,7 @@ import { ensureBrainSession, setBrainSessionRelay } from './brainSession.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import QRCode from 'qrcode';
 import {
   InteractionBroker,
@@ -156,7 +162,8 @@ import {
   addItem as plannerAdd, updateItem as plannerUpdate, deleteItem as plannerDelete,
   scheduleBlock as plannerSchedule, resolveConflict as plannerResolveConflict,
   listItems as plannerListItems, listBlocks as plannerListBlocks,
-  readPlanner, todayView, summarizeDrift,
+  readPlanner, todayView, summarizeDrift, plannerOutboxDetails,
+  retryPlannerOperation, describeFreshness, isStale,
 } from '@kinqs/brainrouter-core/planner';
 // BROWSER — story prompt/validation helpers + the driver step types the
 // browser:* handlers below use. The host instance itself arrives via ctx.browser.
@@ -482,8 +489,88 @@ function changedLinesByFile(diff: string): Map<string, number> {
   return out;
 }
 
+export function createSerialWorkQueue(): <T>(work: () => T | Promise<T>) => Promise<T> {
+  let tail: Promise<void> = Promise.resolve();
+  return <T>(work: () => T | Promise<T>): Promise<T> => {
+    const result = tail.then(work, work);
+    tail = result.then(() => undefined, () => undefined);
+    return result;
+  };
+}
+
+export interface DesktopPlannerScope {
+  /** Opaque local-store partition. It never contains a credential or raw id. */
+  storeId: string;
+  signedIn: boolean;
+  /** A remote sync is safe only when this exact org is also on the request. */
+  orgId: string | null;
+}
+
+/**
+ * Bind the local Planner cache to the same account and organization as sync.
+ *
+ * A single `planner-local.json` is unsafe on a shared install: after an account
+ * or organization switch its queued text can otherwise be uploaded under the
+ * new bearer. Hashing the identity keeps filenames free of account ids and API
+ * credentials while still producing a stable, collision-resistant partition.
+ */
+export function desktopPlannerScope(config: unknown): DesktopPlannerScope {
+  const candidate = (config && typeof config === 'object' ? config : {}) as {
+    cli?: { account?: { userId?: unknown; orgId?: unknown; url?: unknown; email?: unknown } };
+  };
+  const profile = candidate.cli?.account;
+  const connected = resolveBrainRouterAccountApi(config);
+  if (!profile && !connected) return { storeId: 'local', signedIn: false, orgId: null };
+
+  const userId = typeof profile?.userId === 'string' ? profile.userId.trim() : '';
+  const orgId = typeof profile?.orgId === 'string' ? profile.orgId.trim() : '';
+  const profileUrl = typeof profile?.url === 'string' ? profile.url.trim() : '';
+  const email = typeof profile?.email === 'string' ? profile.email.trim().toLowerCase() : '';
+  // Legacy API-key profiles may predate cli.account.userId. The credential is
+  // suitable partition entropy, but only its digest is retained or returned.
+  const subject = userId || [
+    connected?.baseUrl ?? profileUrl,
+    connected?.apiKey ?? '',
+    email,
+  ].join('\0');
+  const digest = createHash('sha256')
+    .update(subject)
+    .update('\0')
+    .update(orgId || 'personal')
+    .digest('hex');
+  return {
+    storeId: `account_${digest.slice(0, 40)}`,
+    signedIn: true,
+    orgId: orgId || null,
+  };
+}
+
+function readNoteConflictClock(
+  expected: unknown,
+  key: 'oursAt' | 'theirsAt',
+): { physical: number; logical: number; deviceId: string } | null {
+  if (!expected || typeof expected !== 'object' || !Object.hasOwn(expected, key)) return null;
+  const value = (expected as Record<string, unknown>)[key];
+  if (!value || typeof value !== 'object') return null;
+  const clock = value as Record<string, unknown>;
+  if (!Number.isSafeInteger(clock.physical) || Number(clock.physical) < 0
+    || !Number.isSafeInteger(clock.logical) || Number(clock.logical) < 0
+    || typeof clock.deviceId !== 'string' || clock.deviceId.length < 1 || clock.deviceId.length > 200) {
+    return null;
+  }
+  return {
+    physical: Number(clock.physical),
+    logical: Number(clock.logical),
+    deviceId: clock.deviceId,
+  };
+}
+
 export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
   let repoSlugCache: string | null = null;
+  // Planner state is persisted as one atomic JSON document. Keep every local
+  // read-modify-write and network reconciliation in one queue so a sync that
+  // started from snapshot A can never overwrite a mutation that produced A+B.
+  const withPlannerStoreLock = createSerialWorkQueue();
   void (async () => {
     const view = await ctx.ghJson<{ nameWithOwner?: unknown }>(['repo', 'view', '--json', 'nameWithOwner'], { timeout: 8_000 });
     const slug = view.data?.nameWithOwner;
@@ -2315,13 +2402,30 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         verdict: typeof a.answer === 'string' && a.answer.trim() ? 'needs_model_judgement' : 'skipped',
       }),
       'comprehension-dispute': (a) => ({ questionId: String(a.questionId ?? ''), noted: true }),
-      'planner-read': () => {
-        const items = plannerListItems(undefined, { includeCompleted: true });
-        const blocks = plannerListBlocks(undefined);
-        const today = new Date().toISOString().slice(0, 10);
-        const view = todayView(undefined, { date: today, nowMs: Date.now() });
+      'planner-read': () => withPlannerStoreLock(() => {
+        const plannerScope = desktopPlannerScope(loadConfig()).storeId;
+        const items = plannerListItems(plannerScope, { includeCompleted: true });
+        const blocks = plannerListBlocks(plannerScope);
+        const nowMs = Date.now();
+        const pending = plannerOutboxDetails(plannerScope, nowMs);
+        const localNow = new Date();
+        const today = [
+          localNow.getFullYear(),
+          String(localNow.getMonth() + 1).padStart(2, '0'),
+          String(localNow.getDate()).padStart(2, '0'),
+        ].join('-');
+        const view = todayView(plannerScope, { date: today, nowMs });
         const drift = summarizeDrift(blocks);
+        const itemTitle = new Map(items.map((item) => [item.id, item.title.value]));
+        const blockItem = new Map(blocks.map((block) => [block.id, block.itemId]));
+        const ageLabel = (ageMs: number): string => {
+          const minutes = Math.max(1, Math.round(ageMs / 60_000));
+          if (minutes < 60) return `${minutes}m`;
+          const hours = Math.round(minutes / 60);
+          return hours < 48 ? `${hours}h` : `${Math.round(hours / 24)}d`;
+        };
         return {
+          today,
           items: items.map((i) => ({
             id: i.id,
             title: i.title.value,
@@ -2331,85 +2435,211 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
             completed: i.completed?.value === true,
             origin: i.origin,
             source: i.source,
+            ...(i.provenance
+              ? {
+                  provenance: {
+                    source: i.provenance.sourceLabel,
+                    kind: i.provenance.sourceId,
+                    externalId: i.provenance.externalId,
+                    url: i.provenance.sourceUrl,
+                    fetchedAt: i.provenance.fetchedAt,
+                  },
+                  sourceFreshness: {
+                    label: describeFreshness({
+                      sourceId: i.provenance.sourceLabel,
+                      lastFetchedAt: i.provenance.fetchedAt,
+                      itemCount: 1,
+                    }, nowMs),
+                    fetchedAt: i.provenance.fetchedAt,
+                    stale: isStale({
+                      sourceId: i.provenance.sourceId,
+                      lastFetchedAt: i.provenance.fetchedAt,
+                      itemCount: 1,
+                    }, nowMs),
+                  },
+                }
+              : {}),
+            estimateMinutes: i.estimateMinutes,
+            blockedReason: i.blockedReason?.value ?? undefined,
+            capabilities: {
+              editTitle: i.origin === 'owned',
+              complete: i.origin === 'owned',
+              delete: i.origin === 'owned',
+            },
             conflictFields: Object.keys(i.conflicts ?? {}),
+            conflicts: Object.entries(i.conflicts ?? {}).map(([field, conflict]) => ({
+              field,
+              versionA: { label: 'Version A', value: String(conflict.ours) },
+              versionB: { label: 'Version B', value: String(conflict.theirs) },
+            })),
           })),
           blocks: blocks.map((b) => ({
             id: b.id, itemId: b.itemId, scheduledFor: b.scheduledFor,
             estimateMinutes: b.estimateMinutes, actualMinutes: b.actualMinutes,
             carriedOver: b.carriedOver, completedAt: b.completedAt,
           })),
-          syncState: view.syncState,
+          sync: {
+            label: view.syncState,
+            pendingCount: pending.length,
+            issues: pending.map((detail) => {
+              const parentItemId = detail.entity === 'block'
+                ? blockItem.get(detail.targetId)
+                : detail.targetId;
+              return {
+                id: detail.idempotencyKey,
+                entity: detail.entity,
+                itemId: parentItemId ?? detail.targetId,
+                itemTitle: parentItemId ? itemTitle.get(parentItemId) : undefined,
+                action: detail.kind,
+                createdAt: detail.queuedAt,
+                ageLabel: ageLabel(detail.ageMs),
+                attempts: detail.attempts,
+                lastError: detail.lastError,
+                stuck: detail.status === 'needs_attention',
+              };
+            }),
+          },
           staleSources: view.staleSources,
           driftNote: drift.description,
         };
-      },
-      'planner-add': (a) => {
+      }),
+      'planner-add': (a) => withPlannerStoreLock(() => {
         const title = String(a.title ?? '').trim();
         if (!title) return { error: 'A title is required.' };
-        return plannerAdd(undefined, { title }, Date.now());
-      },
-      'planner-update': (a) => {
+        return plannerAdd(desktopPlannerScope(loadConfig()).storeId, { title }, Date.now());
+      }),
+      'planner-update': (a) => withPlannerStoreLock(() => {
         const id = String(a.id ?? '');
         if (!id) return { error: 'An item id is required.' };
-        return plannerUpdate(undefined, id, {
+        return plannerUpdate(desktopPlannerScope(loadConfig()).storeId, id, {
           ...(typeof a.title === 'string' ? { title: a.title } : {}),
           ...(typeof a.notes === 'string' ? { notes: a.notes } : {}),
           ...(a.dueDate !== undefined ? { dueDate: a.dueDate as string | null } : {}),
           ...(typeof a.priority === 'number' ? { priority: a.priority } : {}),
           ...(typeof a.completed === 'boolean' ? { completed: a.completed } : {}),
         }, Date.now());
-      },
-      'planner-delete': (a) => plannerDelete(undefined, String(a.id ?? ''), Date.now()),
-      'planner-schedule': (a) => {
+      }),
+      'planner-delete': (a) => withPlannerStoreLock(
+        () => plannerDelete(desktopPlannerScope(loadConfig()).storeId, String(a.id ?? ''), Date.now()),
+      ),
+      'planner-schedule': (a) => withPlannerStoreLock(() => {
         const itemId = String(a.itemId ?? '');
         const minutes = Number(a.estimateMinutes ?? 0);
         if (!itemId || !Number.isFinite(minutes) || minutes <= 0) {
           return { error: 'A block needs an item and a positive estimate.' };
         }
-        return plannerSchedule(undefined, {
+        return plannerSchedule(desktopPlannerScope(loadConfig()).storeId, {
           itemId, estimateMinutes: minutes,
           ...(typeof a.scheduledFor === 'string' ? { scheduledFor: a.scheduledFor } : {}),
         }, Date.now());
-      },
+      }),
       // ADR-028 G6 — the calendar's primary gesture: click an hour, block it.
-      'planner-schedule-at': (a) => {
+      'planner-schedule-at': (a) => withPlannerStoreLock(() => {
         const at = typeof a.scheduledFor === 'string' ? a.scheduledFor : '';
         if (!at) return { error: 'A time is required.' };
         // Blocking time needs something to block it FOR. Creating the item and
         // the block together is what makes the gesture one click rather than a
         // form — you can rename it after.
-        const item = plannerAdd(undefined, { title: 'Focus block' }, Date.now());
-        return plannerSchedule(undefined, {
+        const plannerScope = desktopPlannerScope(loadConfig()).storeId;
+        const item = plannerAdd(plannerScope, { title: 'Focus block' }, Date.now());
+        return plannerSchedule(plannerScope, {
           itemId: item.id,
           estimateMinutes: Number(a.estimateMinutes) || 60,
           scheduledFor: at,
         }, Date.now());
-      },
-      'planner-open-block': (a) => ({ blockId: String(a.blockId ?? '') }),
-      'planner-resolve': (a) => {
+      }),
+      'planner-reschedule-block': (a) => withPlannerStoreLock(() => {
+        const blockId = typeof a.blockId === 'string' ? a.blockId : '';
+        const scheduledFor = typeof a.scheduledFor === 'string' ? a.scheduledFor : '';
+        if (!blockId || !scheduledFor || !Number.isFinite(Date.parse(scheduledFor))) {
+          return { error: 'A block and a valid time are required.' };
+        }
+        return plannerUpdateBlock(desktopPlannerScope(loadConfig()).storeId, blockId, { scheduledFor }, Date.now())
+          ?? { error: 'That time block no longer exists.' };
+      }),
+      'planner-record-actual': (a) => withPlannerStoreLock(() => {
+        const blockId = typeof a.blockId === 'string' ? a.blockId : '';
+        const actualMinutes = Number(a.actualMinutes);
+        if (!blockId || !Number.isFinite(actualMinutes) || actualMinutes < 0) {
+          return { error: 'A block and non-negative actual minutes are required.' };
+        }
+        return plannerRecordActual(
+          desktopPlannerScope(loadConfig()).storeId,
+          blockId,
+          actualMinutes,
+          Date.now(),
+        ) ?? { error: 'That time block no longer exists.' };
+      }),
+      'planner-resolve': (a) => withPlannerStoreLock(() => {
         const keep = a.keep === 'theirs' ? 'theirs' : 'ours';
-        return plannerResolveConflict(undefined, String(a.id ?? ''), String(a.field ?? ''), keep, Date.now());
-      },
+        return plannerResolveConflict(
+          desktopPlannerScope(loadConfig()).storeId,
+          String(a.id ?? ''),
+          String(a.field ?? ''),
+          keep,
+          Date.now(),
+        );
+      }),
+      'planner-retry-operation': (a) => withPlannerStoreLock(() => {
+        const idempotencyKey = typeof a.idempotencyKey === 'string' ? a.idempotencyKey : '';
+        if (!idempotencyKey) return { error: 'An operation id is required.' };
+        return retryPlannerOperation(desktopPlannerScope(loadConfig()).storeId, idempotencyKey, Date.now())
+          ?? { error: 'That queued change no longer exists.' };
+      }),
+      'planner-retry-all': () => withPlannerStoreLock(() => {
+        const plannerScope = desktopPlannerScope(loadConfig()).storeId;
+        const details = plannerOutboxDetails(plannerScope, Date.now());
+        for (const detail of details) {
+          retryPlannerOperation(plannerScope, detail.idempotencyKey, Date.now());
+        }
+        return { requested: details.length };
+      }),
       // Sync needs a configured server; with none the cache IS the truth (D9),
       // so this reports state rather than failing.
       // ADR-028 D11 — actually reconcile with the server. This counted pending
       // operations and returned the number, which looks like syncing and is
       // not: the store, the merge rules, the outbox and the backend all
       // existed, and nothing carried operations between them.
-      'planner-sync': async () => {
+      'planner-sync': () => withPlannerStoreLock(async () => {
+        const config = loadConfig();
+        const plannerScope = desktopPlannerScope(config);
         const brainUrl = getCliKnobs().brainUrl;
         if (!brainUrl) {
           // Local-only is a supported mode, not a failure (D9). The planner is
           // authoritative until a server is configured.
-          return { pending: readPlanner(undefined).outbox.operations.length, localOnly: true };
+          return { pending: readPlanner(plannerScope.storeId).outbox.operations.length, localOnly: true };
         }
-        const state = readPlanner(undefined);
+        const account = await resolveBrainRouterAccountContext(config).catch(() => null);
+        if (!account || !plannerScope.orgId || account.orgId !== plannerScope.orgId) {
+          return {
+            pending: readPlanner(plannerScope.storeId).outbox.operations.length,
+            authRequired: !plannerScope.signedIn,
+            orgRequired: plannerScope.signedIn,
+            error: plannerScope.signedIn
+              ? 'Choose an active BrainRouter organization before syncing Planner changes.'
+              : 'Sign in before syncing Planner changes with the server.',
+          };
+        }
+        const token = account?.apiKey
+          ?? await secretBridge?.get('account:access-token').catch(() => undefined);
+        if (!token) {
+          return {
+            pending: readPlanner(plannerScope.storeId).outbox.operations.length,
+            authRequired: true,
+            error: 'Sign in before syncing Planner changes with the server.',
+          };
+        }
+        const state = readPlanner(plannerScope.storeId);
         const result = await syncOnce(
           state,
-          createPlannerTransport({ baseUrl: brainUrl, }),
+          createPlannerTransport({
+            baseUrl: account?.baseUrl ?? brainUrl,
+            token,
+            ...(account?.orgId ? { orgId: account.orgId } : {}),
+          }),
           Date.now(),
         );
-        writePlanner(undefined, state);
+        writePlanner(plannerScope.storeId, state);
         return {
           pending: state.outbox.operations.length,
           pulled: result.pulled,
@@ -2418,7 +2648,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           conflicted: result.conflicted,
           ...(result.shedNotice ? { shedNotice: result.shedNotice } : {}),
         };
-      },
+      }),
 
       // ADR-029 Part B — the Notes mode. User-scoped like the planner (D1), so
       // no workspace is threaded: the same note has to be readable from a
@@ -2480,7 +2710,12 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
               // different sentence from two people typing at once, and the
               // renderer cannot re-derive which happened from a field name.
               conflicts: Object.entries(block.conflicts ?? {})
-                .map(([field, conflict]) => ({ field, reason: conflict.reason })),
+                .map(([field, conflict]) => ({
+                  field,
+                  reason: conflict.reason,
+                  oursAt: conflict.oursAt,
+                  theirsAt: conflict.theirsAt,
+                })),
               lockedBy: describeBlockLease(state.leases[block.id], state.deviceId, now),
             });
             walk(node.children);
@@ -2672,10 +2907,15 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           deviceId: state.deviceId, epoch: Number(a.epoch ?? 0),
         }, Date.now());
       },
-      'notes-resolve': (a) => notesResolveConflict(
-        undefined, String(a.id ?? ''), String(a.field ?? ''),
-        a.keep === 'theirs' ? 'theirs' : 'ours', Date.now(),
-      ),
+      'notes-resolve': (a) => {
+        const oursAt = readNoteConflictClock(a.expected, 'oursAt');
+        const theirsAt = readNoteConflictClock(a.expected, 'theirsAt');
+        if (!oursAt || !theirsAt) return null;
+        return notesResolveConflict(
+          undefined, String(a.id ?? ''), String(a.field ?? ''),
+          a.keep === 'theirs' ? 'theirs' : 'ours', Date.now(), { oursAt, theirsAt },
+        );
+      },
       // B5 — content AND references, because "the note where I wrote about
       // BR-114" is as normal a question as "the note that says parser". Ranked
       // in core so the desktop and any other client agree on what a match is;
@@ -5365,6 +5605,13 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const url = typeof args.url === 'string' ? args.url : '';
         if (url) {
           if (!/^https:\/\/[^\s'"]+$/.test(url)) return { ok: false, error: 'only https URLs are allowed' };
+          // Real-Electron qualification clicks this control to prove the host
+          // boundary is wired. A hermetic runner must not spawn an unrelated
+          // OS browser, so acknowledge the validated target without the side
+          // effect when the shared harness environment is present.
+          if (process.env.BRAINROUTER_ELECTRON_HARNESS === '1') {
+            return { ok: true, url, harness: true };
+          }
           void sh(isMac ? `open ${q(url)}` : isWin ? `start "" ${q(url)}` : `xdg-open ${q(url)}`);
           return { ok: true, url };
         }

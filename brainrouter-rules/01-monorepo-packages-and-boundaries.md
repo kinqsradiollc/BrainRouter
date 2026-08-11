@@ -10,6 +10,8 @@ boundaries that keep it all buildable and browser-safe.
   MCP SDK, cheerio)
 - **SDK/hooks:** `@kinqs/brainrouter-sdk` (depends on types),
   `@kinqs/brainrouter-hooks` (depends on sdk + types)
+- **UI:** private `@kinqs/brainrouter-ui` (React peers plus the exact browser-safe
+  Core Notes editing seam; presentation shared by Dashboard and Desktop)
 - **Apps:** `brainrouter` (MCP server), `brainrouter-cli`, `brainrouter-desktop`,
   `brainrouter-dashboard`, `brainrouter-benchmark`
 
@@ -29,7 +31,7 @@ originates in an app (e.g. the CLI's `RunTurnCallbacks`), define it
 
 ### 2. Build packages in the root-defined order before apps
 
-`npm run build:packages` builds types → agent-protocol → core → sdk → hooks; then
+`npm run build:packages` builds types → agent-protocol → core → sdk → hooks → ui; then
 `build:apps`. Workspaces resolve each other via compiled `dist/`, so **after
 editing a package you must rebuild it before building/testing anything
 downstream.** Never reorder the `build:packages` chain.
@@ -95,13 +97,14 @@ compiled internal path.
 
 ### 7. The dashboard may only use the browser-safe package subset
 
-`brainrouter-dashboard` depends on **types + sdk + hooks only** — never on core
-or agent-protocol. The dedicated `build:packages:dashboard` script builds exactly
-those three. Adding a core dependency to dashboard code breaks the scoped
-(Cloudflare) build, which never compiles core.
+`brainrouter-dashboard` directly depends on **types + sdk + hooks + ui only** —
+never on core or agent-protocol. The scoped build also compiles Core and
+agent-protocol before UI because UI's Notes entry consumes the one approved
+browser-safe Core editing seam. Dashboard source still may not import Core, and
+the server-bearing Core barrels must never enter its browser bundle.
 
-- **Why:** the CF pipeline installs and builds only the browser-facing subset;
-  core pulls `node:fs`/`node:crypto` and cannot ship to the browser.
+- **Why:** compiling a workspace dependency is not permission to bundle its
+  server-bearing barrels; the exact UI seam is browser-safe and machine-checked.
 - **Evidence:** `package.json:16`, `brainrouter-dashboard/package.json`
 
 ### 8. In `@kinqs/brainrouter-types`, keep runtime values crypto-free in dedicated modules
@@ -122,9 +125,11 @@ subpaths directly.
 - All packages are `"type": "module"`, tsconfig `module`/`moduleResolution` =
   NodeNext, `declaration: true`, `outDir: "dist"`, `strict: true`,
   `skipLibCheck: true`, `include: ["src"]`. Node-side packages (core,
-  agent-protocol) pin `rootDir: "src"` + `"types": ["node"]`; hooks adds
-  `"jsx": "react-jsx"`; browser-facing packages (types, sdk, hooks) do **not**
-  declare node types. Build is plain `tsc -p tsconfig.json`.
+  agent-protocol) pin `rootDir: "src"` + `"types": ["node"]`; hooks and UI add
+  `"jsx": "react-jsx"`; UI also declares Node types because its colocated
+  `node:test` files compile in the same pass, while the boundary gate rejects
+  every `node:` import from UI production modules. UI copies its curated CSS
+  exports into `dist`. Build is plain `tsc -p tsconfig.json`.
 - Package tests use `node:test` + `node:assert/strict` (no Jest/Vitest in
   `packages/`), compiled and run against `dist` (`node --test "dist/**/*.test.js"`).
 - Packages with tests run a `prepack` that builds then deletes every `*.test.*`
@@ -146,6 +151,13 @@ subpaths directly.
   funnels through one private `request<T>()` (single place for auth headers +
   the transparent refresh-on-401 via injectable `onUnauthorized`); errors thrown
   as `BrainRouterApiError`; config uses `withApiKey`/`withToken` copy-constructors.
+- **ui** keeps React and React DOM as **peerDependencies** over the shared
+  Desktop/Dashboard range (`^18.3.1 || ^19.0.0`). It owns browser presentation,
+  interaction, accessibility and styles; host adapters retain auth, storage,
+  transport, routing, native menus and other side effects. UI accepts plain
+  projections and never imports app source, agent-protocol or `node:`. Its sole
+  Core dependency is the exact browser-safe `@kinqs/brainrouter-core/notes/editing`
+  entrypoint; the boundary checker rejects every other Core subpath.
 - **Evidence:** `packages/agent-protocol/src/index.ts:1`, `packages/hooks/package.json`,
   `packages/sdk/src/client.ts:60,104`
 

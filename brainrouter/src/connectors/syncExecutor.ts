@@ -9,6 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
+import { isConnectorSource } from "@kinqs/brainrouter-types";
 import { memoryEngine } from "../memory/engine.js";
 import { enqueueAgentJob } from "../memory/scheduler/jobs.js";
 import {
@@ -29,6 +30,7 @@ import {
   ingestConnectorSources,
   type ConnectorSourceStore,
 } from "./knowledgeImport.js";
+import { refreshConnectedIssueDocuments } from "../memory/planner/backend.js";
 
 const SERVER_CONNECTORS_ROOT = path.join(
   process.env.BRAINROUTER_HOME ?? path.join(process.env.HOME ?? ".", ".brainrouter"),
@@ -128,6 +130,21 @@ export async function runConnectorSync(connectorId: string): Promise<ConnectorSy
       // Inject the sealed DB token — never env/keychain (that's desktop-only).
       oauthToken: () => ({ token: accessToken }),
       githubClient: () => githubTokenClient(accessToken, { apiBase }),
+      projectPlannerIssues: async ({ documents }) => {
+        if (!conn.orgId) {
+          throw new Error("Connected Planner projection requires an organization-scoped connector.");
+        }
+        if (!isConnectorSource(conn.source)) {
+          throw new Error(`Connected Planner projection does not recognize source ${conn.source}.`);
+        }
+        const projected = await refreshConnectedIssueDocuments(conn.orgId, conn.userId, {
+          connectorId: conn.id,
+          source: conn.source,
+          sourceLabel: conn.name || conn.source,
+          documents,
+        });
+        return projected.created + projected.updated;
+      },
     });
 
     let imported = 0;
