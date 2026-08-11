@@ -24,6 +24,7 @@ import {
   parseGatewayAudioAttach,
   parseGatewayAudioBinaryFrame,
   type GatewayAudioStreamCloseReason,
+  type GatewayAudioStreamDropKind,
   type GatewayAudioStreamOpenResult,
   type GatewayAudioStreamOwner,
   type GatewayAudioStreamSession,
@@ -269,8 +270,15 @@ export function handleGatewayAudioConnection(
         onEvent: (event: unknown): void => {
           events.accept(event);
         },
-        onDrop(): void {
-          closeSocket(socket, GATEWAY_AUDIO_STREAM_CLOSE.upstreamFailure, "transcription stream ended");
+        // Only the exact "input" classification changes the close code; every
+        // other value, including none, stays the refundable outage answer.
+        onDrop(kind?: GatewayAudioStreamDropKind): void {
+          const undecodable = kind === "input";
+          closeSocket(
+            socket,
+            undecodable ? GATEWAY_AUDIO_STREAM_CLOSE.undecodableAudio : GATEWAY_AUDIO_STREAM_CLOSE.upstreamFailure,
+            undecodable ? "audio could not be decoded" : "transcription stream ended",
+          );
         },
       });
       const openInput = Object.freeze({

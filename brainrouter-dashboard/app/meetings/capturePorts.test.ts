@@ -140,3 +140,92 @@ test("a microphone whose recorder cannot be constructed is handed straight back"
   );
   assert.equal(stopped, 2, "every track of the stream is stopped");
 });
+
+test("ADR-035 D10 — discovery goes to the gateway's own capability route, with this browser's current credential", async () => {
+  // A wire nothing watched would be the whole feature: a probe pointed at the
+  // wrong path answers 404, every recording falls back to segments, and the
+  // surface reports the fallback perfectly correctly for a reason that is not
+  // true. The token is read at CALL time because a JWT can be refreshed while a
+  // meeting is being recorded.
+  const calls: { url: string; init: RequestInit }[] = [];
+  const ports = await withGlobals({ navigator: {} }, () => browserCapturePorts(bridge({ activeOrgId: () => "org-showing" })));
+  const described = await withGlobals(
+    {
+      window: {},
+      localStorage: { getItem: (key: string) => (key === "brainrouter_jwt" ? "jwt-current" : null) },
+      sessionStorage: { getItem: () => null },
+      fetch: async (url: string, init: RequestInit) => {
+        calls.push({ url: String(url), init });
+        return new Response(JSON.stringify({ schemaVersion: 1, segmentedUpload: true, streaming: null }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+    },
+    () => ports.describeEndpoint(),
+  );
+
+  assert.equal(described.streaming, null, "production's answer reaches the surface unchanged");
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].url, /\/v1\/audio\/transcriptions\/capabilities$/);
+  const headers = calls[0].init.headers as Record<string, string>;
+  assert.equal(headers.Authorization, "Bearer jwt-current");
+  assert.equal(headers["X-BrainRouter-Org"], "org-showing");
+});
+
+test("ADR-035 D10 — the stream attaches under the RECORDING's workspace, not the switcher's", async () => {
+  // The same defect as the POST above, one layer down and worse: a stream
+  // attached under whichever workspace the switcher happens to show would send a
+  // tenant's audio to another tenant's session for the length of a meeting.
+  const sockets: { url: string; sent: string[] }[] = [];
+  class TestWebSocket {
+    binaryType = "";
+    onopen: (() => void) | null = null;
+    onmessage: ((event: { data: unknown }) => void) | null = null;
+    onclose: ((event: { code: number }) => void) | null = null;
+    onerror: (() => void) | null = null;
+    readonly record: { url: string; sent: string[] };
+    constructor(url: string) {
+      this.record = { url, sent: [] };
+      sockets.push(this.record);
+      // The handlers are attached synchronously by `openCaptureStream`, so the
+      // transport can complete on the next turn exactly as a browser's does.
+      setImmediate(() => {
+        this.onopen?.();
+        this.onmessage?.({
+          data: JSON.stringify({ type: "attached", sessionId: "mtg-wired", generation: "g", acceptedResumeFromSequence: 2, latencyMode: "low-latency" }),
+        });
+      });
+    }
+    send(data: string): void { this.record.sent.push(data); }
+    close(): void {}
+  }
+
+  const ports = await withGlobals({ navigator: {} }, () => browserCapturePorts(bridge({ activeOrgId: () => "org-showing" })));
+  const stream = await withGlobals(
+    {
+      window: {},
+      localStorage: { getItem: (key: string) => (key === "brainrouter_jwt" ? "jwt-current" : null) },
+      sessionStorage: { getItem: () => null },
+      WebSocket: TestWebSocket,
+    },
+    () => ports.openStream({
+      sessionId: "mtg-wired",
+      orgId: "org-recorded-in",
+      mimeType: "audio/webm;codecs=opus",
+      language: "en",
+      latencyMode: "low-latency",
+      resumeFrom: { kind: "transcript-committed", acknowledgedThroughSequence: 2 },
+      handlers: { onEvent: () => undefined, onDrop: () => undefined },
+    }),
+  );
+
+  assert.equal(stream.acceptedThroughSequence, 2);
+  assert.equal(sockets.length, 1);
+  assert.match(sockets[0].url, /^wss?:\/\/.+\/v1\/audio\/transcriptions\/stream$/);
+  const attach = JSON.parse(sockets[0].sent[0]);
+  assert.equal(attach.requestedOrgId, "org-recorded-in", "the workspace the recording was frozen under");
+  assert.equal(attach.bearer, "jwt-current");
+  assert.equal(attach.sessionId, "mtg-wired");
+  assert.equal(attach.resumeFromSequence, 2);
+});

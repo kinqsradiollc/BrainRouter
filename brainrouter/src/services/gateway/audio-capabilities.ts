@@ -3,9 +3,9 @@
  *
  * A capability response is a promise both hosts act on, so this boundary uses
  * Core's single strict normalizer. Missing, throwing, partial, or unfamiliar
- * advertisements all become the honest segmented-only document. The current
- * first-party speech sidecar has no persistent protocol and therefore takes
- * that default; merely having a WebSocket adapter object is not a capability.
+ * advertisements all become the honest segmented-only document — including when
+ * an adapter IS injected but its endpoint cannot currently confirm the protocol,
+ * because merely having a WebSocket adapter object is not a capability.
  */
 import type { Express, Response as ExpressResponse } from "express";
 

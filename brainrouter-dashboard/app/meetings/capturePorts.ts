@@ -29,7 +29,9 @@ import { BASE_URL } from "../../lib/client";
 import { getApiKey, getJwt } from "../../lib/client-auth";
 import { browserCaptureLocks } from "../../lib/meetings/captureLock";
 import { createSttTranscriber, DEFAULT_CAPTURE_MIME_TYPE } from "../../lib/meetings/captureQueue";
+import { openCaptureStream } from "../../lib/meetings/captureStream";
 import { openMeetingCaptureStore } from "../../lib/meetings/openCaptureStore";
+import { describeMeetingTranscriptionEndpoint } from "../../lib/meetings/transcriptionEndpoint";
 import type { CaptureMicrophone, CaptureSurfacePorts } from "./captureSurface";
 
 /**
@@ -100,6 +102,31 @@ export function browserCapturePorts(page: PageBridge): CaptureSurfacePorts {
     openStore: (requestPersistence) => openMeetingCaptureStore({ requestPersistence }),
     activeOrgId: () => page.activeOrgId(),
     openMicrophone: openBrowserMicrophone,
+    // ADR-035 D10 — discovery and the live connection both go to the SAME origin
+    // and the same auth gate the batch POST already uses, so a browser that can
+    // transcribe can discover and stream. The bearer is read at call time rather
+    // than captured when these ports were built: a JWT can be refreshed while a
+    // meeting is being recorded, and a stream opened an hour in must present the
+    // credential this tab holds NOW, not the one it held at mount.
+    describeEndpoint: () => describeMeetingTranscriptionEndpoint({
+      baseUrl: BASE_URL,
+      token: getJwt() || getApiKey() || "",
+      orgId: page.activeOrgId(),
+    }),
+    openStream: (request) => openCaptureStream({
+      baseUrl: BASE_URL,
+      token: getJwt() || getApiKey() || "",
+      // The recording's OWN workspace, frozen at Record. Not `page.activeOrgId()`
+      // — the switcher can move mid-meeting, and this is a request made on a
+      // tenant's behalf.
+      orgId: request.orgId,
+      sessionId: request.sessionId,
+      mimeType: request.mimeType,
+      ...(request.language ? { language: request.language } : {}),
+      latencyMode: request.latencyMode,
+      resumeFrom: request.resumeFrom,
+      handlers: request.handlers,
+    }),
     createTranscriber: (language) => createSttTranscriber({
       baseUrl: BASE_URL,
       token: getJwt() || getApiKey() || "",

@@ -47,9 +47,11 @@ import {
   isTerminalCaptureStatus,
   recoverCaptureSession,
   resumableSessions,
+  validateTranscriptCommittedCheckpoint,
   type MeetingCaptureScope,
   type MeetingCaptureSession,
   type MeetingCaptureTemplate,
+  type MeetingTranscriptCommittedCheckpoint,
 } from "@kinqs/brainrouter-core/meetings";
 
 import { captureManifestChunkMs } from "./captureStorage";
@@ -73,6 +75,22 @@ export interface CapturePayload {
   readonly title?: string;
   readonly mimeType?: string;
   readonly session?: MeetingCaptureSession;
+  /**
+   * ADR-035 D10 — how far a streaming endpoint's coverage has been PROMOTED to
+   * durable transcript, written in the same envelope as the session it belongs
+   * to.
+   *
+   * One write, deliberately. The contract's rule is that a coverage proof
+   * becomes reconnect authority only after the matching transcript state is
+   * persisted, and a checkpoint kept anywhere else could survive a write that
+   * did not — which is a reconnect that resumes past audio nothing transcribed.
+   * Here the two cannot come apart: they are the same JSON document.
+   *
+   * It is never trusted as read. `streamResumeCheckpoint` proves it against the
+   * ledger that came back with it, because a token pointing past the chunks on
+   * this device would resume a stream over audio that is not there.
+   */
+  readonly checkpoint?: MeetingTranscriptCommittedCheckpoint;
 }
 
 interface DecodedCapturePayload {
@@ -146,17 +164,60 @@ function decodeCapturePayload(text: string): DecodedCapturePayload {
     return { payload: {} };
   }
   if (!isRecord(parsed)) return { payload: {} };
-  const candidate = parsed as { title?: unknown; mimeType?: unknown; session?: unknown };
+  const candidate = parsed as { title?: unknown; mimeType?: unknown; session?: unknown; checkpoint?: unknown };
   const title = boundedText(candidate.title, MAX_CAPTURE_TITLE_LENGTH);
   const mimeType = boundedText(candidate.mimeType, MAX_CAPTURE_MIME_TYPE_LENGTH);
+  const checkpoint = storedCheckpointShape(candidate.checkpoint);
   return {
     payload: {
       ...(title === undefined ? {} : { title }),
       ...(mimeType === undefined ? {} : { mimeType }),
       ...(isMeetingCaptureSession(candidate.session) ? { session: candidate.session } : {}),
+      ...(checkpoint === undefined ? {} : { checkpoint }),
     },
     ...(candidate.session === undefined ? {} : { rawSession: candidate.session }),
   };
+}
+
+/**
+ * The stored token's SHAPE, and nothing more.
+ *
+ * Whether it is still true is a question about the ledger, which this function
+ * does not have — `streamResumeCheckpoint` asks it, with Core's own validator,
+ * so the "is this checkpoint provable?" rule exists once.
+ */
+function storedCheckpointShape(value: unknown): MeetingTranscriptCommittedCheckpoint | undefined {
+  if (!isRecord(value) || value.kind !== "transcript-committed") return undefined;
+  const acknowledgedThroughSequence = value.acknowledgedThroughSequence;
+  if (!Number.isSafeInteger(acknowledgedThroughSequence) || (acknowledgedThroughSequence as number) < 0) {
+    return undefined;
+  }
+  return { kind: "transcript-committed", acknowledgedThroughSequence: acknowledgedThroughSequence as number };
+}
+
+/**
+ * ADR-035 D10 — the resume token a reconnect may use, proved against the audio
+ * that actually came back with it.
+ *
+ * Three things have to line up and only one of them is in the token: the
+ * manifest's session must be THIS capture's (a document copied from another
+ * record cannot move a checkpoint onto these bytes), and the sequence must sit
+ * on an unbroken prefix of the ledger this device holds. `null` means "start the
+ * stream from the beginning of what is unclaimed", which is always safe — the
+ * cost of a checkpoint we cannot prove is re-sending audio, and the cost of one
+ * we wrongly believe is a hole in a meeting.
+ */
+export function streamResumeCheckpoint(
+  text: string,
+  session: MeetingCaptureSession,
+): MeetingTranscriptCommittedCheckpoint | null {
+  const payload = parseCapturePayload(text);
+  if (!payload.checkpoint || payload.session?.id !== session.id) return null;
+  return validateTranscriptCommittedCheckpoint(
+    null,
+    payload.checkpoint.acknowledgedThroughSequence,
+    captureChunks(session),
+  );
 }
 
 export interface RestoreCaptureInput {

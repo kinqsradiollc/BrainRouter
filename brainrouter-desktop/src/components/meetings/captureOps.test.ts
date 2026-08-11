@@ -1,10 +1,15 @@
 /**
- * ADR-035 D1/D2 — the renderer's half of the capture contract.
+ * ADR-035 D1/D2/D10 — the renderer's half of the capture contract.
  *
- * Two things are worth asserting here and nothing else is: that a build whose
- * preload has no capture channels says so instead of pretending (ADR-028), and
- * that the scope a capture is started under is the one that crosses the bridge —
- * open question 5 is only answered if the org actually travels with the session.
+ * Three things are worth asserting here and nothing else is: that a build whose
+ * preload has no capture channels says so instead of pretending (ADR-028); that
+ * the scope a capture is started under is the one that crosses the bridge —
+ * open question 5 is only answered if the org actually travels with the session;
+ * and that everything main pushes which will be RENDERED is narrowed before it
+ * can be. The last one is why the writer rows and D10's transcription status are
+ * dropped whole rather than half-believed: a row missing the field that explains
+ * it is the silent state golden rule 23 is about, arriving through the door
+ * meant to describe it.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -186,4 +191,45 @@ test("a capture store that answers with the wrong shape is an error, not a silen
 
   await assert.rejects(() => capture.begin({ scope: { orgId: null } }), /invalid meeting session/);
   await assert.rejects(() => capture.read("mtg-1"), /returned no audio/);
+});
+
+test("D10 — a transcription status is only believed when it can actually be rendered", async () => {
+  const pushes: unknown[] = [];
+  let publish: ((progress: unknown) => void) | null = null;
+  setBridge({
+    captureBegin: async () => SESSION,
+    captureAppend: async () => SESSION,
+    onCaptureProgress: ((listener: (progress: unknown) => void) => {
+      publish = listener;
+      return () => undefined;
+    }) as unknown as (...args: never[]) => Promise<unknown>,
+  });
+  const capture = createMeetingCaptureOps();
+  capture.onProgress((progress) => { pushes.push(progress); });
+
+  // A status with no sentence is precisely the silent degradation golden rule 23
+  // is about, wearing a badge: the surface would print "Segments" with no reason
+  // beside it. Dropped whole, so the last answer that could be rendered stands.
+  publish!({ sessionId: "mtg-1", session: SESSION, transcription: { mode: "segmented", live: false } });
+  publish!({ sessionId: "mtg-1", session: SESSION, transcription: { mode: "carrier-pigeon", live: false, notice: "hi" } });
+  publish!({ sessionId: "mtg-1", session: SESSION, transcription: { mode: "streaming", live: "yes", notice: "hi" } });
+  assert.deepEqual(pushes.map((push) => (push as { transcription?: unknown }).transcription), [undefined, undefined, undefined]);
+
+  publish!({
+    sessionId: "mtg-1",
+    session: SESSION,
+    transcription: { mode: "segmented", live: false, notice: "This meeting is being transcribed in segments." },
+    live: [
+      { kind: "partial", state: "partial", utteranceId: "u0", revision: 1, text: "we should", startMs: 0, endMs: 900 },
+      // Each of these is unrenderable in a different way, and each would reach a
+      // person as a blank row or as "undefined" beside the words they are saying.
+      { kind: "partial", state: "final", utteranceId: "u1", revision: 1, text: "mismatched", startMs: 0, endMs: 900 },
+      { kind: "partial", state: "partial", utteranceId: "", revision: 1, text: "no id", startMs: 0, endMs: 900 },
+      { kind: "partial", state: "partial", utteranceId: "u2", revision: 1, startMs: 0, endMs: 900 },
+      null,
+    ],
+  });
+  const latest = pushes.at(-1) as { transcription?: { notice: string }; live?: Array<{ utteranceId: string }> };
+  assert.equal(latest.transcription?.notice, "This meeting is being transcribed in segments.");
+  assert.deepEqual(latest.live?.map((utterance) => utterance.utteranceId), ["u0"]);
 });

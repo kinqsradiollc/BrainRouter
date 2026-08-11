@@ -857,11 +857,22 @@ export default function MeetingsPage() {
                     </Fragment>
                   );
                 })}
-                <div className={styles.teamPickNote}>Audio never leaves this device except one transcription unit at a time, assembled from its saved chunks, and is deleted once the meeting is created or you discard it.</div>
+                {/* ADR-035 D10 — this sentence has to move with the strategy.
+                    "One unit at a time" is true of the segmented path and false
+                    the moment a live connection exists, where the same chunks go
+                    up continuously — and a privacy claim that has stopped being
+                    true is worse than none. What does not change either way is
+                    the part that matters: it is saved here first, and deleted
+                    when the meeting is filed. */}
+                <div className={styles.teamPickNote}>
+                  {cap.transcription === "streaming"
+                    ? "Audio is saved on this device first and sent to your workspace's transcription service as it is recorded. It is deleted from here once the meeting is created or you discard it."
+                    : "Audio never leaves this device except one transcription unit at a time, assembled from its saved chunks, and is deleted once the meeting is created or you discard it."}
+                </div>
               </div>
             ) : null}
             {cap.session ? (
-              <LiveTranscript session={cap.session} phase={cap.phase} retrying={cap.retrying} onRetry={(index) => void capture.retrySegment(index)} />
+              <LiveTranscript session={cap.session} phase={cap.phase} retrying={cap.retrying} live={cap.live} mode={cap.transcription} notice={cap.streamNotice} onRetry={(index) => void capture.retrySegment(index)} />
             ) : null}
             {/* There is deliberately no catch-up affordance here any more. It
                 existed because automatic composition switched OFF for good the

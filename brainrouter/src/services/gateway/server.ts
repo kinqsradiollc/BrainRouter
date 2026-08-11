@@ -14,6 +14,7 @@ import {
   type GatewayDataPlaneOptions,
   type GatewayDataPlaneService,
 } from "./chatRoutes.js";
+import { createGatewayAudioStreamingPort } from "./audio-streaming-adapter.js";
 import { registerGatewayAudioCapabilities } from "./audio-capabilities.js";
 import { registerGatewayAudioPlane } from "./audioRoutes.js";
 import {
@@ -140,14 +141,28 @@ export function mountGatewayDataPlane(
   registerGatewayHttpDataPlane(app, svc, capturedOptions(options, false));
 }
 
-/** Bind both gateway data planes from one immutable option snapshot. */
+/**
+ * Bind both gateway data planes from one immutable option snapshot.
+ *
+ * This is where ADR-035 D10's adapter seam is filled. An explicitly passed port
+ * always wins; otherwise the environment decides, and with
+ * `BRAINROUTER_STT_STREAM_URL` unset that is `undefined` — capabilities keep
+ * advertising `streaming: null`, the upgrade keeps answering 503, and the batch
+ * POST is untouched. Only a BOUND plane may hold a port: an HTTP-only mount has
+ * no WebSocket to serve, so `capturedOptions` drops it there rather than letting
+ * one advertise a live path it cannot honour.
+ */
 export function bindGatewayDataPlane(
   app: import("express").Express,
   server: Server,
   svc: GatewayHttpService,
   options: GatewayAppOptions = {},
 ): GatewayAudioStreamingController {
-  const captured = capturedOptions(options, true);
+  const port = options.audioStreaming?.port ?? createGatewayAudioStreamingPort() ?? undefined;
+  const captured = capturedOptions(
+    { ...options, audioStreaming: { ...options.audioStreaming, ...(port ? { port } : {}) } },
+    true,
+  );
   registerGatewayHttpDataPlane(app, svc, captured);
   return attachGatewayAudioStreamingPlane(server, svc, captured.audioStreaming);
 }
