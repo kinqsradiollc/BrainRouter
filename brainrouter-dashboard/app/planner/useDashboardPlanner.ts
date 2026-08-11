@@ -231,6 +231,7 @@ export function useDashboardPlanner(): DashboardPlannerState {
     );
     if (pending.length === 0) return false;
     setRetrying(true);
+    let acceptedAnything = false;
     try {
       for (const batch of plannerPushBatches(pending, PUSH_BATCH_LIMIT)) {
         let outcome: PlannerPushOutcome;
@@ -273,9 +274,16 @@ export function useDashboardPlanner(): DashboardPlannerState {
         });
         if (failed.length > 0) persistPlannerOperations(window.localStorage, storageKey, failed);
         if (accepted.size > 0) removePlannerOperations(window.localStorage, storageKey, accepted);
+        if (accepted.size > 0) acceptedAnything = true;
         refreshOutbox();
       }
-      setLastSyncedAt(new Date().toISOString());
+      // Only a cycle that the server ACCEPTED something in. A batch whose every
+      // operation was rejected does not throw — the rejections are persisted with
+      // their reason and the loop moves on — so stamping unconditionally printed
+      // "Last synced seconds ago" over a queue nothing had ever left. A degraded
+      // state wearing a healthy timestamp is the ADR-028 failure this surface
+      // was built to end.
+      if (acceptedAnything) setLastSyncedAt(new Date().toISOString());
       return true;
     } finally {
       if (storageKeyRef.current === requestedScope) setRetrying(false);
@@ -463,9 +471,16 @@ export function useDashboardPlanner(): DashboardPlannerState {
   const itemTitle = useMemo(() => new Map(items.map((item) => [item.id, item.title])), [items]);
   const blockItem = useMemo(() => new Map(blocks.map((block) => [block.id, block.itemId])), [blocks]);
   const sync = useMemo<PlannerSyncView>(() => ({
+    // Three states, not two. `waiting` and `wedged` used to read identically,
+    // and the only remaining signal was the dot's colour — which is
+    // `aria-hidden`, so for a screen reader or a colour-blind reader "queued"
+    // and "permanently rejected" were the same page. §6: with sync failing, the
+    // page says so.
     label: outbox.length === 0
       ? "Everything is synced."
-      : `${outbox.length} change${outbox.length === 1 ? "" : "s"} waiting to sync.`,
+      : outbox.some((operation) => (operation.attempts ?? 0) >= ATTEMPTS_BEFORE_SURFACING)
+        ? `${outbox.length} change${outbox.length === 1 ? "" : "s"} could not be sent — open sync to see why.`
+        : `${outbox.length} change${outbox.length === 1 ? "" : "s"} waiting to sync.`,
     pendingCount: outbox.length,
     retrying,
     lastSyncedAt,

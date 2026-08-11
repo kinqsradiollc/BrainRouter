@@ -34,6 +34,7 @@ import {
   sortForToday,
   visibleEstimate,
   weekStart,
+  scheduledTodayIds,
   whyReadOnly,
 } from './viewModel.js';
 
@@ -59,10 +60,7 @@ export function PlannerSurface({
   const [draft, setDraft] = useState('');
   const [weekOf, setWeekOf] = useState(() => weekStart(today));
   const tabs = useRef<Array<HTMLButtonElement | null>>([]);
-  const scheduledIds = useMemo(
-    () => new Set(blocks.filter((block) => !block.completedAt).map((block) => block.itemId)),
-    [blocks],
-  );
+  const scheduledIds = useMemo(() => scheduledTodayIds(blocks, today), [blocks, today]);
   const open = useMemo(() => sortForToday(items.filter((item) => !item.completed), today, scheduledIds), [items, scheduledIds, today]);
   const done = useMemo(() => items.filter((item) => item.completed), [items]);
   const titleFor = useMemo(() => Object.fromEntries(items.map((item) => [item.id, item.title])), [items]);
@@ -190,7 +188,12 @@ function SyncControl({ sync }: { sync: PlannerSyncView }): ReactElement {
                     {issue.lastError ? ` · ${issue.lastError}` : ' · Waiting for a connection.'}
                     {issue.attempts ? ` · ${issue.attempts} attempt${issue.attempts === 1 ? '' : 's'}` : ''}
                   </small>
-                  {issue.stuck && sync.onRetryIssue ? (
+                  {/* `stuck` is five failed attempts. Below it the row already
+                      showed the error and the attempt count and offered nothing
+                      to do about it — the surface displayed a failure and
+                      withheld the action for it. Anything that has failed at
+                      least once can be retried by hand. */}
+                  {(issue.stuck || issue.attempts > 0) && sync.onRetryIssue ? (
                     <button type="button" className="br-planner-retry-issue" onClick={() => sync.onRetryIssue?.(issue.id)}>
                       Retry this change
                     </button>

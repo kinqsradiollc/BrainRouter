@@ -21,6 +21,7 @@ import {
   visibleEstimate,
   weekStart,
   weekView,
+  scheduledTodayIds,
 } from './viewModel.js';
 import type { PlannerBlockView, PlannerItemView } from './types.js';
 
@@ -114,4 +115,19 @@ test('ADR-038 prefers structured provenance and carries source freshness', () =>
     url: 'https://example.test/38',
     freshness: { label: 'Refreshed yesterday', stale: true },
   });
+});
+
+test('"Now · scheduled" means scheduled TODAY, not merely blocked at some point', () => {
+  const today = '2026-08-11';
+  const blocks: PlannerBlockView[] = [
+    // The two shapes that used to land under a heading that says NOW.
+    { id: 'b1', itemId: 'no-time', estimateMinutes: 30, carriedOver: 0 },
+    { id: 'b2', itemId: 'another-day', scheduledFor: '2026-08-13T09:00:00.000Z', estimateMinutes: 30, carriedOver: 0 },
+    // The one that belongs there.
+    { id: 'b3', itemId: 'today', scheduledFor: `${today}T09:00:00.000Z`, estimateMinutes: 30, carriedOver: 0 },
+    // And one already dealt with.
+    { id: 'b4', itemId: 'done', scheduledFor: `${today}T07:00:00.000Z`, estimateMinutes: 30, carriedOver: 0, completedAt: `${today}T07:30:00.000Z` },
+  ];
+
+  assert.deepEqual([...scheduledTodayIds(blocks, today)], ['today']);
 });
