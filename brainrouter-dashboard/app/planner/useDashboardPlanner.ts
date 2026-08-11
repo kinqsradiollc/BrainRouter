@@ -26,6 +26,7 @@ import type {
 import { authFetch } from "../../lib/adminApi";
 import { getJwt } from "../../lib/client-auth";
 import { useActiveOrg } from "../../components/OrgWorkspaceProvider";
+import { ATTEMPTS_BEFORE_SURFACING, describeSyncState } from "@kinqs/brainrouter-ui/planner";
 import {
   type ApiPlannerBlock,
   type ApiPlannerItem,
@@ -64,7 +65,6 @@ interface DashboardPlannerState {
 
 const ACTIVE_REFRESH_MS = 5_000;
 const STALE_SOURCE_MS = 15 * 60_000;
-const ATTEMPTS_BEFORE_SURFACING = 5;
 const PUSH_BATCH_LIMIT = 200;
 const PULL_PAGE_LIMIT = 1_000;
 const MAX_PULL_PAGES = 100;
@@ -471,16 +471,11 @@ export function useDashboardPlanner(): DashboardPlannerState {
   const itemTitle = useMemo(() => new Map(items.map((item) => [item.id, item.title])), [items]);
   const blockItem = useMemo(() => new Map(blocks.map((block) => [block.id, block.itemId])), [blocks]);
   const sync = useMemo<PlannerSyncView>(() => ({
-    // Three states, not two. `waiting` and `wedged` used to read identically,
-    // and the only remaining signal was the dot's colour — which is
-    // `aria-hidden`, so for a screen reader or a colour-blind reader "queued"
-    // and "permanently rejected" were the same page. §6: with sync failing, the
-    // page says so.
-    label: outbox.length === 0
-      ? "Everything is synced."
-      : outbox.some((operation) => (operation.attempts ?? 0) >= ATTEMPTS_BEFORE_SURFACING)
-        ? `${outbox.length} change${outbox.length === 1 ? "" : "s"} could not be sent — open sync to see why.`
-        : `${outbox.length} change${outbox.length === 1 ? "" : "s"} waiting to sync.`,
+    // Core's rule, through the shared re-export — NOT a third copy of the
+    // wording. This host used to restate it and say "waiting to sync" for a
+    // queue that was permanently rejected, while the desktop said so; the only
+    // remaining signal was the dot's colour, and the dot is `aria-hidden`.
+    label: describeSyncState({ operations: outbox }),
     pendingCount: outbox.length,
     retrying,
     lastSyncedAt,

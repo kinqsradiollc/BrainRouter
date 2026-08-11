@@ -227,12 +227,20 @@ export function checkImport({ area, filePath, specifier, policy }) {
       return violation(`${area} may not depend on ${target}`);
     }
 
+    // Two narrow doors, not one, and both for the same reason: a feature whose
+    // RULES have no legal shared home gets two copies of them, one per host,
+    // and they drift. That is what happened to the planner's sync wording —
+    // one host said "could not be sent", the other said "waiting to sync" for
+    // the same wedged queue. Widen this list only to entrypoints that are pure:
+    // Core's `./planner` reaches storage and the network and would break the
+    // dashboard's bundle.
     if (
       area === 'ui'
       && packageName === '@kinqs/brainrouter-core'
       && specifier !== '@kinqs/brainrouter-core/notes/editing'
+      && specifier !== '@kinqs/brainrouter-core/planner/presentation'
     ) {
-      return violation('ui may import Core only through the browser-safe notes/editing entrypoint');
+      return violation('ui may import Core only through the browser-safe notes/editing or planner/presentation entrypoints');
     }
 
     if (packageName === '@kinqs/brainrouter-core' && specifier !== packageName) {

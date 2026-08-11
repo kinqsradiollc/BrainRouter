@@ -145,3 +145,19 @@ test('sync state never calls offline an error', () => {
   assert.match(pending, /1 change waiting to sync/);
   assert.doesNotMatch(pending, /offline|error|failed/i);
 });
+
+test('the sync wording reads a wire-shaped queue, so the second host has no reason to restate it', () => {
+  // The dashboard's queue holds WIRE operations plus retry bookkeeping, not
+  // outbox records. Demanding the full record is what pushed that host into
+  // writing its own copy of this wording — after which the two drifted, and the
+  // dashboard said "waiting to sync" about a queue that was permanently
+  // rejected while the desktop said so. ADR-038 §6: with sync failing, the page
+  // says so. This asserts the rule accepts what that host actually holds.
+  const wireShaped = { operations: [{ attempts: 7 }, { attempts: 7 }, { attempts: 0 }] };
+  assert.equal(describeSyncState(wireShaped), '2 changes could not be sent — open sync to see why.');
+
+  assert.equal(describeSyncState({ operations: [{ attempts: 0 }] }), '1 change waiting to sync.');
+  assert.equal(describeSyncState({ operations: [] }), 'Everything is synced.');
+  // `attempts` absent is the shape the dashboard persists before a first retry.
+  assert.equal(describeSyncState({ operations: [{}] }), '1 change waiting to sync.');
+});
