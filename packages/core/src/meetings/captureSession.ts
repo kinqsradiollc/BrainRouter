@@ -152,8 +152,8 @@ export function appendChunk(
  * D9 — the open run of chunks becomes one transcription unit.
  *
  * Called by whichever strategy owns the boundary: the streaming one when the
- * endpoint says an utterance is complete (`throughSequence` is what it
- * acknowledged), the segmented one when enough audio has accumulated. A
+ * endpoint proves coverage through a completed run (`throughSequence` is what
+ * it covered), the segmented one when enough audio has accumulated. A
  * no-op when nothing is open, so a caller never has to check first.
  *
  * Permitted while `stopped`, deliberately: `stopCapture` seals through here, and
