@@ -312,8 +312,15 @@ export function createMeetingCaptureOps(): MeetingCaptureOps {
       ...(input.contentType ? { contentType: input.contentType } : {}),
       orgId: input.scope.orgId,
       workspaceId: input.scope.workspaceId ?? null,
-      // D6 — the record names its writer from the moment it exists, before the
-      // first byte of audio does.
+      // D6 — main registers this window as the capture's writer from the moment
+      // the capture exists, before the first byte of audio does.
+      //
+      // Nothing about this id is WRITTEN DOWN. `MeetingCaptureStore.begin` never
+      // sees it: the supervisor puts it in a map that lives in the one process
+      // every window lives in, and `MeetingCaptureSession` has no `writer` field
+      // to put it in — deliberately, and at length (`types.ts`). A name in the
+      // record outlives the writer it named, which is the staleness that made
+      // §6's own destructive test fail.
       holderId,
     })),
     append: async (id, bytes, durationMs) => session(await api.captureAppend!(id, bytes, durationMs)),
@@ -325,9 +332,13 @@ export function createMeetingCaptureOps(): MeetingCaptureOps {
     // about, and it must not be reachable by a stale window.
     adopt: async (id) => {
       if (!api.captureAdopt) unavailable();
-      // D6 — a pick-up TAKES the recording, so it says who is taking it. Main
-      // refuses while another window is recording it, and the rejection is what
-      // reaches the compose form instead of a capture somebody else is making.
+      // D6 — a pick-up REGISTERS NO WRITER, so this id is not a claim: it is the
+      // identity main compares against the writer it already has. Nobody is
+      // producing audio for a capture being picked up, and claiming otherwise
+      // would hide it from every other window for as long as this one lived.
+      // What sending it buys is the refusal — main throws while a DIFFERENT
+      // window is recording this capture, and that rejection is what reaches the
+      // compose form instead of a meeting somebody else is making.
       return session(await api.captureAdopt(id, holderId));
     },
     retrySegment: async (id, index) => {

@@ -161,12 +161,22 @@ test("golden rule 23 — the browser that cannot coordinate says so, in its own 
   // raises it in the constructor and the page renders it unconditionally. It
   // said only "older versions of Safari and Firefox and in some in-app
   // browsers", which told a current-Chrome user on an insecure origin that the
-  // cause was their browser's age — `LockManager` is `[SecureContext]`, so a
-  // plain-http page has no Web Locks whatever it is running — and it had lost
-  // the one remedy that audience actually has. "You cannot record there anyway"
-  // does not reach this sentence: it prints before, and independently of, any
-  // Record.
-  assert.match(CAPTURE_LOCKS_UNAVAILABLE, /plain http/i, "the insecure origin, which is the case a current browser hits");
+  // cause was their browser's age — `LockManager` is `[SecureContext]`, so an
+  // insecure page has no Web Locks whatever it is running — and it had lost the
+  // one remedy that audience actually has. "You cannot record there anyway" does
+  // not reach this sentence: it prints before, and independently of, any Record.
+  assert.match(CAPTURE_LOCKS_UNAVAILABLE, /http from anywhere but localhost/i, "the insecure origin, which is the case a current browser hits");
+  // …and it EXCLUDES the commonest plain-http page there is. `http://localhost`
+  // is potentially trustworthy per Secure Contexts, so it has Web Locks, a
+  // microphone and `crypto.randomUUID`, and it is the URL this dashboard is
+  // developed and demoed on. The sentence used to say "plain http", which named
+  // that page as uncoordinated when it is not — the same over-generalization in
+  // the other direction.
+  assert.equal(
+    CAPTURE_LOCKS_UNAVAILABLE.split("localhost").length - 1,
+    1,
+    "localhost appears once, and the assertion above pins it to the exclusion",
+  );
   assert.match(CAPTURE_LOCKS_UNAVAILABLE, /older versions of Safari and Firefox/i, "and the secure browsers that predate Web Locks and really can record");
   assert.match(CAPTURE_LOCKS_UNAVAILABLE, /https/i, "with the remedy the first of them has");
 });
@@ -191,38 +201,63 @@ test("golden rule 23 — the offer's Discard says what this browser cannot vouch
   assert.match(page, /disabled=\{cap\.busy === "transcribe" \|\| cap\.capturing \|\| Boolean\(writer\)\}/);
 });
 
-test("no control that starts or adopts a capture is gated on `recording`", () => {
-  // The wiring of a `disabled` is only visible in the source, and this is the
-  // defect that lived in it: `recording` is false for the whole arming window —
-  // a persistent-storage prompt, then a microphone prompt — and false again
-  // across the settle after Stop, so every control keyed on it was live in
-  // exactly the window where a capture exists and the surface did not think so.
-  // The behavioural half (what the FUNCTIONS refuse, and what `capturing` says
-  // across both windows) is driven in `captureSurface.test.ts`.
+test("what starts or adopts a capture reads IN HAND, and only what ends one reads LANDING", () => {
+  // The wiring of a `disabled` is only visible in the source, and two defects
+  // have lived in it. `recording` is false for the whole arming window — a
+  // persistent-storage prompt, then a microphone prompt — and false again across
+  // the settle after Stop. Widening every control to "in flight" then made them
+  // all live again ONE TICK after Stop, over a box that still holds a meeting
+  // nobody has filed. So the two questions are different questions: Record and
+  // Pick up ask whether a capture is in this tab's hands, and Create — the press
+  // that takes it out of them — asks only whether its audio has landed.
+  //
+  // The behavioural half (what the FUNCTIONS refuse, and what each flag says
+  // across each window) is driven in `captureSurface.test.ts`.
   assert.match(page, /disabled=\{cap\.busy === "transcribe" \|\| cap\.capturing \|\| Boolean\(writer\)\}/, "Pick up");
   assert.match(page, /disabled=\{cap\.busy === "transcribe" \|\| \(!cap\.recording && cap\.capturing\)\}/, "the Record face of the record/stop button — the Stop face is never disabled");
-  assert.match(page, /disabled=\{cap\.busy === "create" \|\| cap\.capturing\}/, "Create, which now says what submit() has always refused on");
-  // …and the published copy is DERIVED from the predicate rather than kept by
-  // hand beside it. Two of its three facts are private fields, and a second
-  // hand-written copy of this answer is how the four deleted guards came apart.
-  assert.match(surface, /this\.#state = \{ \.\.\.this\.#state, capturing: this\.#captureInFlight \};/);
-  assert.deepEqual(codeLines(surface).filter((line) => line.includes("#captureInFlight")), [
-    "get #captureInFlight(): boolean {",
-    "if (this.#captureInFlight) {",
-    "if (this.#captureInFlight) {",
-    "const captureInFlight = this.#captureInFlight;",
-    "this.#state = { ...this.#state, capturing: this.#captureInFlight };",
+  assert.match(page, /disabled=\{cap\.busy === "create" \|\| cap\.landing\}/, "Create, which waits for the audio and NOT for the capture to be filed");
+  // The one control that files a capture the other way. Without it, in-hand is a
+  // wedge: the offer excludes whatever this tab holds, so the only other Discard
+  // is on a row that is never rendered for it.
+  assert.match(page, /onClick=\{\(\) => void capture\.discardHeld\(\)\}>Discard recording<\/button>/);
+  assert.match(page, /\{cap\.session && !cap\.landing \? \(/, "and it is offered once the audio has landed, not while a chunk is in flight");
+  // …and the published copies are DERIVED from the predicates rather than kept
+  // by hand beside them. Both are made of private fields, and a second
+  // hand-written copy of either answer is how the four deleted guards came apart.
+  assert.match(surface, /this\.#state = \{ \.\.\.this\.#state, capturing: this\.#captureInHand, landing: this\.#captureLanding \};/);
+  assert.deepEqual(codeLines(surface).filter((line) => line.includes("#captureInHand")), [
+    "get #captureInHand(): boolean {",
+    "if (this.#captureInHand) {",
+    "if (this.#captureInHand) {",
+    "this.#state = { ...this.#state, capturing: this.#captureInHand, landing: this.#captureLanding };",
   ]);
-  // The three facts are spelled out in ONE place. An inline second copy is what
-  // this rules out: `submit` had one, and the two paths that can destroy a
-  // recording — `record` and `pickUp` — had none.
+  assert.deepEqual(codeLines(surface).filter((line) => line.includes("#captureLanding")), [
+    "get #captureLanding(): boolean {",
+    "if (this.#captureLanding) {",
+    "const landing = this.#captureLanding;",
+    "this.#state = { ...this.#state, capturing: this.#captureInHand, landing: this.#captureLanding };",
+  ]);
+  // Each predicate's facts are spelled out in ONE place. An inline second copy
+  // is what this rules out: `submit` had one, and the two paths that can destroy
+  // a recording — `record` and `pickUp` — had none.
+  assert.deepEqual(codeLines(surface).filter((line) => line.includes("this.#queue !== null")), [
+    "return this.#claiming !== \"\" || this.#queue !== null;",
+  ]);
   assert.deepEqual(codeLines(surface).filter((line) => line.includes("this.#active !== null")), [
-    "return this.#state.recording || this.#arming || this.#active !== null;",
+    "return this.#claiming !== \"\" || this.#state.recording || this.#active !== null;",
   ]);
+  // `#queue` is the half of in-hand that says FILED, so what may drop it is
+  // enumerated: `#release`, which both a create that succeeded and a discard
+  // pass through, and `#abandonArming`, whose recording never existed. A third
+  // one is a capture leaving this tab's hands without being filed — which is the
+  // state in which Record starts a second meeting into the first one's box.
+  assert.equal(codeLines(surface).filter((line) => line.includes("this.#queue = null")).length, 2);
+  assert.match(surface, /async #release\(accepted: boolean\): Promise<void> \{\s*const queue = this\.#queue;\s*if \(!queue\) return;\s*this\.#queue = null;/);
+  assert.match(surface, /if \(this\.#queue\?\.session\.id === sessionId\) \{\s*this\.#queue = null;/);
   // The two private facts are written through the setters that republish, and
   // nowhere else — a direct assignment would leave the buttons reading a
   // `capturing` that stopped being true.
-  assert.deepEqual(codeLines(surface).filter((line) => line.includes("this.#arming = ")), ["this.#arming = arming;"]);
+  assert.deepEqual(codeLines(surface).filter((line) => line.includes("this.#claiming = ")), ["this.#claiming = claiming;"]);
   assert.deepEqual(codeLines(surface).filter((line) => line.includes("this.#active = ")), ["this.#active = capture;"]);
 });
 
@@ -241,6 +276,10 @@ test("composition has ONE rule, and the recompose model is gone rather than unus
     "this.#fold = beginTranscriptFold(reconciled);",
     // The drain's fold, kept, or the next one appends the same run again.
     "this.#fold = folded.fold;",
+    // A DISCARDED meeting starts a new box too, and for the same reason: its
+    // words leave with its audio, or the next recording folds into a box that
+    // still holds the meeting just thrown away.
+    "this.#fold = EMPTY_TRANSCRIPT_FOLD;",
     // Submit's settle, kept, or a create that failed leaves the fold behind the
     // box and the gap markers it just wrote are appended a second time.
     "this.#fold = submitted.fold;",
@@ -297,7 +336,12 @@ test("the durability slots follow the user out of the dialog", () => {
   // A render arrangement, which is why it is asserted here.
   assert.match(page, /\{!cap\.createOpen && cap\.warning \?/);
   assert.match(page, /\{!cap\.createOpen && cap\.notice \?/);
-  assert.match(page, /\{!cap\.createOpen && cap\.recording \?/);
+  // `capturing` and not `recording`: closing the dialog does not file the
+  // meeting, and the capture this tab is holding is excluded from the offer, so
+  // keyed on `recording` a person who stopped and closed the dialog had a
+  // finished recording on their device with nothing on the page saying so and a
+  // Record button that refused without explanation.
+  assert.match(page, /\{!cap\.createOpen && cap\.capturing \?/);
   // Two slots, not one: the notice is a READING rewritten by every chunk and the
   // warning is an EVENT that is still true. Sharing one slot meant the
   // highest-frequency writer won and every warning that mattered was erased by

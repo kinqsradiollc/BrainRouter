@@ -505,6 +505,107 @@ test("Record and Create are both refused while the last chunk is still being wri
   } finally { restore(); }
 });
 
+test("record, Stop, record, Create — both halves are one meeting, and BOTH recordings are released", async () => {
+  const { host, restore } = installHost();
+  try {
+    const first = "mtg-20260809-firsthalf";
+    const second = "mtg-20260809-scndhalff";
+    // The offer already knows about the first half, which is what makes the
+    // exclusion visible: without it the form advertises the capture it is
+    // holding back to the person recording its second half.
+    host.resumable = [recovery({ sessionId: first, title: "First half" })];
+    const mounted = await compose(host);
+
+    host.record = session({ id: first });
+    await press(mounted, "● Record audio");
+    await mounted.act(() => host.push({ session: session({ id: first, segments: [segment(0, { text: "Before the break." })] }) }));
+    host.record = session({ id: first, status: "stopped", segments: [segment(0, { text: "Before the break." })] });
+    await press(mounted, "Stop recording");
+
+    // …and the meeting carries on in a second capture, which is an ordinary
+    // thing to do: the microphone was released for the break and picked up again.
+    host.record = session({ id: second });
+    await press(mounted, "● Record audio");
+    await mounted.act(() => host.push({ sessionId: second, session: session({ id: second, segments: [segment(0, { text: "After the break." })] }) }));
+    host.record = session({ id: second, status: "stopped", segments: [segment(0, { text: "After the break." })] });
+    await press(mounted, "Stop recording");
+
+    // Invariant 5 — the first capture is still IN HAND, so the offer must not be
+    // inviting the user to transcribe it a second time. Excluding only the bound
+    // capture put "First half" back on screen the instant Record was pressed
+    // again.
+    assert.doesNotMatch(screenText(mounted.root), /First half/);
+
+    assert.equal(transcriptBox(mounted), "Before the break.\nAfter the break.");
+    await typeInto(mounted, TITLE_FIELD, "Weekly sync");
+    await press(mounted, "Create meeting");
+
+    // One meeting, holding both halves…
+    assert.equal(host.created.length, 1);
+    assert.equal(host.created[0]!.transcript, "Before the break.\nAfter the break.");
+    // …and D6 kept for both of them. Releasing only the last one left the first
+    // half's audio on the device with no terminal state, so the next glance at
+    // the library offered to transcribe words this meeting already contains.
+    assert.deepEqual(host.finalized.map((row) => row.id), [first, second]);
+    mounted.unmount();
+  } finally { restore(); }
+});
+
+test("two Record clicks in one commit open one microphone, not two", async () => {
+  const { host, restore } = installHost();
+  try {
+    const opened = { count: 0 };
+    Object.defineProperty(globalThis, "navigator", {
+      value: { mediaDevices: { getUserMedia: async () => { opened.count += 1; return fakeStream(); } } },
+      configurable: true,
+      writable: true,
+    });
+    const mounted = await compose(host);
+    const record = button(mounted.root, "● Record audio");
+    const onClick = (record.props as { onClick(): void }).onClick;
+    // G2 — both handlers run before React can commit the `disabled` the first one
+    // earned. `arming` normally keeps a human's double-click out of one commit,
+    // which is why this reaches past the pixel: the hole is that the rule lived
+    // only on the attribute.
+    await mounted.act(() => { onClick(); onClick(); });
+    await mounted.flush();
+
+    // A second recorder would have overwritten `recorderRef.current`, so Stop
+    // would reach only the second: the first would go on recording, go on
+    // appending after Stop, and hold its stream — with no row anywhere in the
+    // app, because main subtracts live writers from the offer.
+    assert.equal(host.begun.length, 1, "one capture was created");
+    assert.equal(opened.count, 1, "one microphone was opened");
+
+    host.record = session({ status: "stopped" });
+    await press(mounted, "Stop recording");
+    assert.deepEqual(host.stopped, [host.record.id], "and Stop reached the one recording there is");
+    mounted.unmount();
+  } finally { restore(); }
+});
+
+test("a pick-up is refused while this form is still recording, past the disabled attribute", async () => {
+  const { host, restore } = installHost();
+  try {
+    host.resumable = [recovery({ sessionId: "mtg-20260809-otherrec", title: "Board review" })];
+    const mounted = await compose(host);
+    await press(mounted, "● Record audio");
+
+    // The pixel says no…
+    assert.equal(isDisabled(button(mounted.root, "Transcribe it")), true);
+    // …and so does the rule, which is the half that survives a click landing in
+    // the commit that disabled it. Taking a recovery here rebinds the live
+    // surface away from the running recorder, and Create would then finalize
+    // BOTH — deleting the directory the microphone is still appending to.
+    const take = button(mounted.root, "Transcribe it");
+    await mounted.act(() => (take.props as { onClick(): void }).onClick());
+
+    assert.deepEqual(host.adopted, [], "nothing was picked up");
+    assert.ok(hasButton(mounted.root, "Stop recording"), "and the form is still watching its own recording");
+    mounted.unmount();
+  } finally { restore(); }
+});
+
 test("cancelling while the microphone is being opened does not throw the composer away", async () => {
   const { host, restore } = installHost();
   try {
@@ -594,6 +695,14 @@ test("a capture another window is recording is named, not offered back with a De
     await mounted.act(() => (del.props as { onClick(): void }).onClick());
     assert.deepEqual(host.discarded, []);
     assert.match(screenText(mounted.root), /cannot be deleted while it is being recorded/);
+    // G2 — and the pick-up beside it, which had the guard on the pixel alone.
+    // Taking a capture another window is recording fills this compose form in
+    // from a meeting somebody else is making, and puts it in the hand this
+    // form's Create releases.
+    const take = button(mounted.root, "Transcribe it");
+    await mounted.act(() => (take.props as { onClick(): void }).onClick());
+    assert.deepEqual(host.adopted, []);
+    assert.match(screenText(mounted.root), /cannot be transcribed from here while that recording is running/);
     mounted.unmount();
   } finally { restore(); }
 });

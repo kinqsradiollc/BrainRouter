@@ -19,14 +19,25 @@
  * test can execute. The store treats `payload` as opaque text on purpose, so a
  * draft is a payload it is already able to hold.
  *
- * Two invariants make the reserved id safe to keep in that listing:
+ * One invariant makes the reserved id safe to keep in that listing, and one
+ * caller-side guard is what keeps it there — the difference matters, because
+ * only the first is structural:
  *
  * 1. **It can never be offered back as a meeting.** It holds no chunks, and
  *    `isResumableSession` requires audio, so `resumableCaptures` cannot surface
- *    it however the payload is shaped.
- * 2. **The reap cannot take it.** `reapOrphans` deletes captures with no
- *    manifest or a `closed` one; the draft's manifest exists and is never
- *    closed, so it is left alone exactly like a recording in progress.
+ *    it however the payload is shaped. Nothing has to remember this.
+ * 2. **The reap CAN take it, and one `if` is what stops it.** This used to say
+ *    the store left the draft alone "exactly like a recording in progress",
+ *    which stopped being true when `reapOrphans` gained its third category: a
+ *    manifest that is not closed, holds no audio and that nobody is writing to
+ *    is reclaimed, and that is precisely the draft's shape. Verified against a
+ *    real store — `reapOrphans({ abandoned: async () => true })` deletes a
+ *    written draft and `readMeetingDraft` comes back empty. What actually
+ *    protects it is the surface's `abandoned` predicate, whose first line is
+ *    `if (record.sessionId === MEETING_DRAFT_CAPTURE_ID) return false;`, because
+ *    the store treats the payload as opaque and cannot tell that one id in its
+ *    listing is not a meeting. Any other caller of `reapOrphans` has to say the
+ *    same thing.
  *
  * `takeLegacyMeetingDraft` is the other half of "move": a draft already sitting
  * in `localStorage` is read once and REMOVED. Leaving it would mean the words

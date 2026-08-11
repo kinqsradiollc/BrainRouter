@@ -62,6 +62,18 @@
  *    matters is main's — `submit` finalizes the capture, and main throws over a
  *    capture another window is recording — because a rule reading state this
  *    window fetched a moment ago is a rule that can be a moment out of date.
+ * 5. **A capture is IN HAND from Record until it is FILED** — created or
+ *    discarded — and not one moment less. Not until Stop, which ends the
+ *    microphone and nothing else; not until the settle, which decides what the
+ *    POST says and releases nothing. The hold used to keep one `sessionId`, so
+ *    Record → Stop → Record silently dropped the first capture the instant the
+ *    second one existed: both halves went into one meeting, only the last was
+ *    finalized, and D6's "audio is deleted when the meeting is summarized and
+ *    the user has accepted it" was simply not kept for the first — whose audio
+ *    then came back as an unfinished-recording offer inviting a duplicate of
+ *    text already filed. So the hand is a LIST, `sessionId` is only the one the
+ *    live rows are bound to, and every id in the list is excluded from the
+ *    offer, released by Create, and dropped by `file`.
  */
 import {
   settleTranscriptForSubmit,
@@ -71,18 +83,30 @@ import {
 import type { CreateMeetingInput } from "./types.js";
 
 /**
- * The capture the compose form is holding, as everything outside the form needs
- * to see it.
+ * The captures the compose form is holding, as everything outside the form needs
+ * to see them.
  *
- * `sessionId` is the capture in hand — a live recording, OR a recovery this form
- * adopted — and is what keeps the recovery offer from advertising it back while
- * the microphone is still open. The three booleans are the windows in which a
- * capture is being written to; they are separate because they are separately
- * reachable and each one was its own click.
+ * `sessionId` is the one the LIVE SURFACE is bound to — the recording being made,
+ * or the recovery just adopted — and it is what the progress subscription filters
+ * on and what the retry acts on. `inHand` is invariant 5: every capture this form
+ * has taken and not yet filed, which is the set the offer must not advertise and
+ * the set Create releases. They are usually the same one capture; they come apart
+ * the moment a second Record lands on a form that already holds one.
+ *
+ * The three booleans are the windows in which a capture is being WRITTEN to; they
+ * are separate because they are separately reachable and each one was its own
+ * click. None of them says anything about the hand: a stopped capture is not
+ * being written to and is still very much in it.
  */
 export interface MeetingCaptureHold {
-  /** The capture this form holds: a live recording, or an adopted recovery. */
+  /** The capture the live rows, the progress filter and the retry are bound to. */
   readonly sessionId: string | null;
+  /**
+   * Invariant 5 — every capture taken and not yet filed, oldest first. Contains
+   * `sessionId` whenever that is set, and outlives it: Record → Stop → Record
+   * leaves the first capture here until the create releases it.
+   */
+  readonly inHand: readonly string[];
   /** The microphone is open. */
   readonly recording: boolean;
   /** Record was pressed and the recorder is not running yet — or has failed to start. */
@@ -93,6 +117,7 @@ export interface MeetingCaptureHold {
 
 export const NO_CAPTURE_HOLD: MeetingCaptureHold = {
   sessionId: null,
+  inHand: [],
   recording: false,
   arming: false,
   closing: false,
@@ -112,18 +137,58 @@ export const NO_CAPTURE_HOLD: MeetingCaptureHold = {
 export interface CaptureHoldStore {
   /** The hold as it is RIGHT NOW. What a rule reads. */
   readonly current: MeetingCaptureHold;
-  /** Apply a patch, publish the result for rendering, and return it. */
-  update(patch: Partial<MeetingCaptureHold>): MeetingCaptureHold;
+  /**
+   * Apply a patch, publish the result for rendering, and return it.
+   *
+   * Binding a `sessionId` also TAKES that capture: invariant 5 is maintained
+   * here rather than by the six call sites, because "the form now holds this
+   * recording" and "the live rows now point at it" are the same event and a
+   * caller that had to say both is a caller that can say one.
+   */
+  update(patch: CaptureHoldPatch): MeetingCaptureHold;
+  /**
+   * Invariant 5 — this capture is filed: created, or discarded. It leaves the
+   * hand, and the live binding with it if that is what it was.
+   *
+   * The only way out. Setting `sessionId` to null does NOT release a capture —
+   * that was the defect — because a form can stop rendering a capture's rows
+   * long before anything has been done with its audio.
+   */
+  file(sessionId: string): MeetingCaptureHold;
 }
+
+/** Everything a caller may set. `inHand` is not on it: it is taken and filed, never assigned. */
+export type CaptureHoldPatch = Partial<Omit<MeetingCaptureHold, "inHand">>;
 
 export function createCaptureHold(publish: (hold: MeetingCaptureHold) => void): CaptureHoldStore {
   let current = NO_CAPTURE_HOLD;
+  const commit = (next: MeetingCaptureHold): MeetingCaptureHold => {
+    current = next;
+    publish(current);
+    return current;
+  };
   return {
     get current() { return current; },
     update(patch) {
-      current = { ...current, ...patch };
-      publish(current);
-      return current;
+      const taken = patch.sessionId;
+      // The array identity is reused when the set does not change, because it is
+      // an effect dependency on the other side of `publish`: a fresh `[]` on
+      // every keystroke-driven patch would re-query the offer on each one.
+      const inHand = taken && !current.inHand.includes(taken)
+        ? [...current.inHand, taken]
+        : current.inHand;
+      return commit({ ...current, ...patch, inHand });
+    },
+    file(sessionId) {
+      // A capture that was never in hand — a recovery row discarded straight
+      // from the offer — changes nothing, and publishing an identical hold would
+      // re-run the effects that read it.
+      if (!current.inHand.includes(sessionId)) return current;
+      return commit({
+        ...current,
+        inHand: current.inHand.filter((id) => id !== sessionId),
+        ...(current.sessionId === sessionId ? { sessionId: null } : {}),
+      });
     },
   };
 }

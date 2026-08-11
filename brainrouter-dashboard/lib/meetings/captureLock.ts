@@ -47,18 +47,30 @@
  * manifest leave it alone.
  *
  * **Which browsers that actually is — two of them, and the banner reaches
- * both.** `LockManager` is `[SecureContext]`, so a page served over plain http
+ * both.** `LockManager` is `[SecureContext]`, so a page in an INSECURE CONTEXT
  * has no `navigator.locks` at all and takes this whole path: the banner is
  * raised in the surface's constructor, `#otherWriter` answers `unknown`, and the
- * reap declines to reclaim what it cannot prove is dead. What such an origin
- * cannot reach is a RECORDING — `navigator.mediaDevices` is `undefined` there
- * for the same reason — so the two-tab race the coordination exists for cannot
- * happen on it. An earlier version of this paragraph said that environment
- * "cannot reach any of this", which overstated a true platform fact: it reaches
- * everything except the race. The browsers that reach the race are SECURE ones
- * that predate Web Locks — Safari up to 15.3, Firefox up to 95, and the older
- * in-app WebViews that lag both. They record perfectly well and cannot
- * coordinate, which is the whole point.
+ * reap declines to reclaim what it cannot prove is dead. Such a page cannot
+ * reach a RECORDING either — `navigator.mediaDevices` is `undefined` there for
+ * the same reason — so the two-tab race the coordination exists for cannot
+ * happen on it.
+ *
+ * **"Insecure context" is not "plain http", and the difference is the URL this
+ * dashboard is developed on.** Secure Contexts makes `http://localhost` and
+ * `http://127.0.0.1` potentially trustworthy, so a plain-http page served from
+ * there is a SECURE context with `navigator.locks`, `navigator.mediaDevices` and
+ * `crypto.randomUUID` all present, and a meeting records and coordinates on it
+ * exactly as it does over https. Saying "plain http" here would therefore be
+ * wrong about the commonest plain-http page there is — an earlier version of
+ * this paragraph said it, and the banner said it too, which told a developer on
+ * `http://localhost:3000` that their tabs were uncoordinated when they are not.
+ * The insecure origins this really names are plain http served from anywhere
+ * else, and `file:`.
+ *
+ * The other browsers that reach the race are SECURE ones that predate Web Locks
+ * — Safari up to 15.3, Firefox up to 95, and the older in-app WebViews that lag
+ * both. They record perfectly well and cannot coordinate, which is the whole
+ * point.
  *
  * The sentence below therefore has to be true for both, because it prints from
  * the constructor — before, and independently of, any Record. It names the
@@ -75,7 +87,7 @@ export const CAPTURE_LOCK_PREFIX = "brainrouter:meeting-capture:";
  * it is in".
  */
 export const CAPTURE_LOCKS_UNAVAILABLE =
-  "This browser cannot tell whether another tab is recording — it has no Web Locks API. That is the case on a page served over plain http, where Web Locks needs a secure context (so does the microphone), and in older versions of Safari and Firefox and some in-app browsers. Recording in two tabs at once is not coordinated here: open this dashboard over https if it is not already, and keep this meeting in one tab.";
+  "This browser cannot tell whether another tab is recording — it has no Web Locks API. That is the case on a page served over http from anywhere but localhost, where Web Locks needs a secure context (so does the microphone), and in older versions of Safari and Firefox and some in-app browsers. Recording in two tabs at once is not coordinated here: open this dashboard over https if it is not already, and keep this meeting in one tab.";
 
 /**
  * What a surface says about a capture another tab of this origin is holding —

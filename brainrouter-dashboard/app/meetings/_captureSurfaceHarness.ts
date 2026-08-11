@@ -208,10 +208,13 @@ export interface TabOptions {
    * the fallback's behaviour.
    *
    * Deliberately NOT "a dashboard served over plain http", which this said and
-   * which cannot happen: an insecure origin has no `navigator.mediaDevices`
-   * either, so nothing can be recorded there and no two tabs can race over a
-   * recording. The browsers above are secure contexts that record perfectly well
-   * and cannot coordinate — which is what makes the fallback worth having.
+   * which is wrong twice over. `http://localhost` is a potentially trustworthy
+   * origin, so it is a SECURE context with Web Locks, a microphone and no reason
+   * to be here at all — and it is the URL this dashboard is developed on. An
+   * origin that really is insecure has no `navigator.mediaDevices` either, so
+   * nothing can be recorded there and no two tabs can race over a recording. The
+   * browsers above are secure contexts that record perfectly well and cannot
+   * coordinate, which is what makes the fallback worth having.
    */
   readonly withoutLocks?: boolean;
   /**

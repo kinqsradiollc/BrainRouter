@@ -91,9 +91,15 @@ test("an emptied draft is deleted, not blanked", async () => {
   assert.equal(isEmptyMeetingDraft(await readMeetingDraft(subject)), true);
 });
 
-test("the draft is never offered back as a meeting, and the reap cannot take it", async () => {
-  // Two invariants that make the reserved id safe to keep in the store's own
-  // listing: it holds no audio, and its manifest is never closed.
+test("the draft is never offered back as a meeting, and the reap takes it unless the CALLER says not to", async () => {
+  // One invariant and one caller-side guard, and the difference is the point.
+  // Holding no audio is structural: `isResumableSession` requires audio, so
+  // nothing can surface the reserved id as a meeting however the payload is
+  // shaped. Surviving the reap is NOT structural, and the header used to say it
+  // was — "the draft's manifest exists and is never closed, so it is left alone
+  // exactly like a recording in progress" stopped being true when `reapOrphans`
+  // gained its third category, because a not-closed, chunk-less manifest that
+  // nobody is writing to is exactly the draft's shape.
   const backend = new FakeCaptureBackend();
   const subject = store(backend);
   await writeMeetingDraft(subject, DRAFT);
@@ -101,8 +107,20 @@ test("the draft is never offered back as a meeting, and the reap cannot take it"
   await subject.appendChunk("mtg-real", audioBlob(64, 1));
 
   const offered = resumableCaptures(await subject.list(), { scope: { orgId: null } });
-  assert.deepEqual(offered.map((entry) => entry.record.sessionId), ["mtg-real"]);
-  assert.deepEqual(await subject.reapOrphans(), []);
+  assert.deepEqual(offered.map((entry) => entry.record.sessionId), ["mtg-real"], "audio is what makes a record offerable, and the draft has none");
+  // A caller that only asks the browser — the surface's predicate with its first
+  // line removed — reclaims the draft, and the compose box comes back empty.
+  const careless = store(new FakeCaptureBackend());
+  await writeMeetingDraft(careless, DRAFT);
+  assert.deepEqual(await careless.reapOrphans({ abandoned: async () => true }), [MEETING_DRAFT_CAPTURE_ID]);
+  assert.equal(isEmptyMeetingDraft(await readMeetingDraft(careless)), true, "which is the person's typing, gone");
+  // What actually protects it is the one line `captureSurface.ts` puts at the
+  // top of `abandoned`: the store treats the payload as opaque, so only the
+  // caller can know that one id in this listing is not a meeting.
+  assert.deepEqual(
+    await subject.reapOrphans({ abandoned: async (record) => record.sessionId !== MEETING_DRAFT_CAPTURE_ID }),
+    [],
+  );
   assert.deepEqual(await readMeetingDraft(subject), DRAFT, "the draft survived the reap");
 });
 

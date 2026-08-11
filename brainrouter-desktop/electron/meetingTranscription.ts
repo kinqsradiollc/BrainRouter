@@ -134,9 +134,15 @@ export interface MeetingCaptureProgress {
  * would make one of the two hosts describe a topology it does not have — a
  * worse failure than saying it twice, because it would be wrong on screen
  * rather than merely repeated in a file. What IS shared is the rule either host
- * applies (`resumableSessions`, and the live captures each subtracts from it)
- * and the NAME a writer goes by (`newCaptureHolderId`); the wording of a fact
- * about this host's own windows is this host's.
+ * applies: `resumableSessions`, and the live captures each subtracts from it.
+ *
+ * The NAME a writer goes by is not shared either, and used to be listed here as
+ * though it were. The browser identifies its writer by HOLDING a Web Lock, which
+ * the browser itself releases when the browsing context dies; it has no id
+ * anywhere, and its holder-id module is deleted with a contract test asserting
+ * the deletion. `newCaptureHolderId` therefore has exactly one caller, in this
+ * host, and calling it shared is the kind of claim that keeps a module alive for
+ * a contract nobody is party to.
  */
 export const MEETING_CAPTURE_WRITER_NOTE = 'Another window is recording this meeting right now.';
 

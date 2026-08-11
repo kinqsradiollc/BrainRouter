@@ -549,9 +549,20 @@ export default function MeetingsPage() {
           another tab is recording. A degradation nobody is shown is
           indistinguishable from working, and this one can cost a meeting. */}
       {!cap.createOpen && cap.coordination ? <div className={styles.errorBar} role="status">{cap.coordination}</div> : null}
-      {!cap.createOpen && cap.recording ? (
+      {/* `cap.capturing`, not `cap.recording`: closing the dialog does not file
+          the meeting, and a capture this tab is still holding is deliberately
+          absent from the offer below — so with `recording` alone a person who
+          stopped and closed the dialog had a finished recording on their device
+          with nothing anywhere saying so, and a Record button that refused. */}
+      {!cap.createOpen && cap.capturing ? (
         <div className={styles.errorBar} role="status">
-          A meeting is being recorded. Its audio is being saved to this device.{" "}
+          {cap.recording
+            ? "A meeting is being recorded. Its audio is being saved to this device."
+            : cap.settling
+              ? "The end of a recording is still being written to this device."
+              : cap.landing
+                ? "A recording is starting on this page."
+                : "A recording is finished and saved on this device. Create the meeting or discard the recording to start another."}{" "}
           <button type="button" className={styles.track} onClick={() => capture.openDialog()}>Back to the recording</button>
         </div>
       ) : null}
@@ -780,13 +791,13 @@ export default function MeetingsPage() {
                     ? captureHeldNote(storedStillRecording(entry.record))
                     : null;
                   // Golden rule 23 — and the one this page was SILENT about. On
-                  // a browser with no Web Locks (older Safari and Firefox, some
-                  // in-app browsers — all of them secure contexts that can
-                  // record perfectly well) `writing` is empty because nothing
-                  // can be known, not because nothing is being written: tab two
-                  // was offered tab one's LIVE recording with an enabled Discard
-                  // beside it, and one click deleted the manifest and every
-                  // chunk.
+                  // a browser with no Web Locks — older Safari and Firefox and
+                  // some in-app browsers, which are secure contexts that record
+                  // perfectly well, and any page on an insecure origin, which is
+                  // not — `writing` is empty because nothing can be known, not
+                  // because nothing is being written: tab two was offered tab
+                  // one's LIVE recording with an enabled Discard beside it, and
+                  // one click deleted the manifest and every chunk.
                   //
                   // Said out loud in the tooltip, and NOT disabled: this browser
                   // has no other route to the delete — the row is the only place
@@ -885,6 +896,14 @@ export default function MeetingsPage() {
               <div className={styles.teamPickNote}>
                 {unresolved === 1 ? "1 segment is still being transcribed" : `${unresolved} segments are still being transcribed`} — creating the meeting now states {unresolved === 1 ? "it" : "them"} as gaps with their time ranges.
               </div>
+            ) : cap.capturing && !cap.landing ? (
+              /* Said out loud, and not only in the Record button's title: a
+                 tooltip is not reachable on a touch screen, and this is the
+                 state that explains why Record and Pick up are refused. Not
+                 `capturing` alone — that is also true through the arming window,
+                 where nothing is saved on this device yet and this sentence
+                 would be a lie about a recording that has not started. */
+              <div className={styles.teamPickNote}>This recording is saved on this device and has not been filed yet — create the meeting, or discard the recording, to start another.</div>
             ) : null}
             <div className={styles.modalActions} style={{ justifyContent: "space-between" }}>
               {/* The Record FACE of this button is disabled by `cap.capturing`,
@@ -893,16 +912,32 @@ export default function MeetingsPage() {
                   of which a person can leave on screen — so a second press was
                   the ordinary "nothing happened, click it again" and it started
                   a SECOND recorder over a SECOND session, which `stop()` and the
-                  unmount teardown could both only reach the last of. The label
-                  says which window it is in rather than looking dead: ADR-028. */}
-              <div className={styles.recordActions}><button type="button" className={styles.track} onClick={() => (cap.recording ? capture.stop() : void capture.record())} disabled={cap.busy === "transcribe" || (!cap.recording && cap.capturing)}>{cap.recording ? "■ Stop recording" : cap.busy === "transcribe" ? "Transcribing…" : cap.settling ? "Saving the recording…" : cap.capturing ? "Starting…" : <><Microphone size={13} weight="fill" /> Record</>}</button>{cap.recording ? <button type="button" className={styles.track} onClick={() => capture.togglePause()}>{cap.paused ? "▶ Resume" : "Ⅱ Pause"}</button> : null}</div>
+                  unmount teardown could both only reach the last of. It stays
+                  false after the settle too, over a meeting still sitting in this
+                  box, where the second press merges two meetings into one POST.
+                  The label says which window it is in rather than looking dead
+                  (ADR-028), and the one window a label cannot describe — a
+                  finished recording nobody has filed — says it in the title. */}
+              <div className={styles.recordActions}><button type="button" className={styles.track} onClick={() => (cap.recording ? capture.stop() : void capture.record())} disabled={cap.busy === "transcribe" || (!cap.recording && cap.capturing)} title={!cap.recording && cap.capturing && !cap.landing ? "Create the meeting or discard the recording before starting another — this box still holds the last one." : undefined}>{cap.recording ? "■ Stop recording" : cap.busy === "transcribe" ? "Transcribing…" : cap.settling ? "Saving the recording…" : cap.landing ? "Starting…" : <><Microphone size={13} weight="fill" /> Record</>}</button>{cap.recording ? <button type="button" className={styles.track} onClick={() => capture.togglePause()}>{cap.paused ? "▶ Resume" : "Ⅱ Pause"}</button> : null}</div>
               <div style={{ display: "flex", gap: 8 }}>
+                {/* The other way out of "in hand", and the reason that predicate
+                    is not a wedge: the offer never lists the capture this tab is
+                    holding, so without this the only Discard in the product is on
+                    a row that will never be rendered for it and a recording
+                    nobody wants can never be put down. Rendered while there is a
+                    capture and its audio has landed — discarding mid-flight would
+                    delete the bytes a chunk is still being written into. */}
+                {cap.session && !cap.landing ? (
+                  <button type="button" className={styles.track} onClick={() => void capture.discardHeld()}>Discard recording</button>
+                ) : null}
                 <button type="button" className={styles.track} onClick={() => { if (cap.recording) capture.stop(); capture.closeDialog(); }}>Cancel</button>
-                {/* `cap.capturing` covers `recording` and `settling` and the
-                    arming window they both leave out — which is the predicate
-                    `submit()` has always refused on, so the button now says the
-                    same thing the function does. */}
-                <button type="button" className={styles.newBtn} onClick={() => void capture.submit()} disabled={cap.busy === "create" || cap.capturing}>
+                {/* `cap.landing`, and deliberately not `cap.capturing`: this is
+                    the press that ENDS a capture's time in this tab, so the
+                    predicate the other two controls are refused by would refuse
+                    the only way out of it. What it waits for is the audio —
+                    `recording`, the settle, and the arming window they both leave
+                    out — which is what `submit()` refuses on. */}
+                <button type="button" className={styles.newBtn} onClick={() => void capture.submit()} disabled={cap.busy === "create" || cap.landing}>
                   {cap.busy === "create" ? "Creating…" : cap.settling ? "Saving the recording…" : "Create + summarize"}
                 </button>
               </div>

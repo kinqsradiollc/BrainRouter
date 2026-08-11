@@ -365,7 +365,7 @@ test("the recording in hand survives a reap even before its first chunk", async 
 });
 
 test("a settled capture whose audio outlived its delete is reaped", async () => {
-  // D6 — `releaseCapture` marks the record terminal BEFORE deleting the audio,
+  // D6 — `MeetingCaptureSurface.#release` marks the record terminal BEFORE deleting the audio,
   // so a failed or interrupted delete leaves exactly this: audio for a meeting
   // the user accepted or threw away, which `resumable` will never offer back.
   // The desktop reaps terminal captures on sight; without this the browser holds

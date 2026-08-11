@@ -5,9 +5,10 @@
  * it builds its own ports by construction, so nothing it can do says which
  * objects the real page hands over. Measured on the build before this file
  * existed: replacing `browserCaptureLocks()` with a manager-less `CaptureLocks`
- * — the exact object a dashboard served over plain http gets — left every test
- * green while every cross-tab guard in the product started answering "nobody is
- * writing" to every question, including the two that delete audio.
+ * — the exact object a dashboard in an insecure context gets, and the one an
+ * older Safari or Firefox gets over https — left every test green while every
+ * cross-tab guard in the product started answering "nobody is writing" to every
+ * question, including the two that delete audio.
  *
  * So the three wires that can lose a meeting are asked here, of the same module
  * `page.tsx` calls: are the locks over the browser's real lock table, does the

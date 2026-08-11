@@ -702,30 +702,55 @@ test("leaving the page hands back a recording this tab only PICKED UP", async ()
   assert.deepEqual(third.state.recoverable.map((candidate) => candidate.record.sessionId), [sessionId]);
 });
 
-test("starting a NEW recording hands back the one this tab was holding", async () => {
-  // A person picks a crashed meeting up, changes their mind and records a fresh
-  // one. The queue is replaced, so the old capture has left this tab's hands —
-  // and a lock kept for it would strand that meeting for every tab of this
-  // browser until the page was closed.
+test("a picked-up meeting has to be FILED before a fresh one can be recorded over it", async () => {
+  // This used to be "starting a NEW recording hands back the one this tab was
+  // holding", and the hand-back was the defect wearing a tidy name. A person
+  // picks a crashed meeting up — its transcript folds into the compose box — and
+  // then presses Record: `#attachQueue` released the adopted capture's lock, so
+  // the new recording wrote into a box that still held yesterday's words, and
+  // Create posted the two meetings as one while yesterday's audio was left on
+  // the device to be offered, and posted, again.
+  //
+  // In hand is what refuses it, and the way out is Create or Discard.
   const origin = new CaptureOrigin();
   const first = origin.tab();
   await first.surface.init();
+  first.transcribeSegment = async () => "YESTERDAY WORDS";
   const older = await recordOneChunk(first);
   await first.surface.dispose();
   await flush();
 
   const second = origin.tab();
   await second.surface.init();
+  second.transcribeSegment = async () => "TODAY WORDS";
   await second.surface.refreshRecoverable();
   const entry = second.state.recoverable.find((candidate) => candidate.record.sessionId === older);
   assert.ok(entry);
   await second.surface.pickUp(entry);
   await flush();
+  assert.equal(second.state.capturing, true, "the adopted meeting is in this tab's hands");
+  assert.equal(second.state.landing, false, "and nothing is being written to it, so Create is live");
+
+  await second.record();
+  assert.match(second.state.createError, /has not been created or discarded yet/i);
+  assert.equal(second.microphones.length, 0, "no microphone was opened");
+  const captures = (await origin.records()).map((row) => row.sessionId).filter((id) => id !== MEETING_DRAFT_CAPTURE_ID);
+  assert.deepEqual(captures, [older], "and no second session was begun");
+  assert.equal(second.locks.holds(older), true, "the adopted meeting is still held rather than handed back mid-click");
+  assert.match(second.state.transcript, /YESTERDAY WORDS/);
+
+  // Filed — and only then does Record work, into a box with nothing left in it.
+  second.confirmAnswer = true;
+  await second.surface.discardHeld();
+  await flush();
+  assert.equal(second.state.capturing, false, "a discard files the capture");
+  assert.equal(second.state.transcript, "", "and its words leave the box with its audio");
+  assert.equal(await origin.record(older), undefined, "which is deleted from the device");
 
   const newer = await recordOneChunk(second);
   assert.notEqual(newer, older);
-  assert.equal(locked(origin, older), false, "the picked-up meeting is let go");
   assert.equal(second.locks.holds(newer), true, "and the new recording is the one being held");
+  assert.doesNotMatch(second.state.transcript, /YESTERDAY WORDS/, "with no trace of the meeting that was thrown away");
 });
 
 test("Create cannot finalize a capture a second tab has taken over", async () => {
@@ -1066,7 +1091,7 @@ test("Pick up is refused while this tab is arming a recording, which is the clic
 
   await tab.surface.pickUp(entry);
   await flush();
-  assert.match(tab.state.createError, /Stop the recording before opening a saved one/i);
+  assert.match(tab.state.createError, /still starting/i, "and the refusal names the window the person is actually in");
   const adopted = tab.state.session;
   assert.equal(adopted, null, "nothing was adopted");
   assert.equal(tab.locks.holds(abandoned), false, "and the saved meeting was not taken out of the offer");
@@ -1119,7 +1144,16 @@ test("…and refused across the settle too, which is the other window `recording
   await flush();
   assert.match(tab.state.createError, /still being written to this device/i);
   assert.equal(tab.state.session?.id, live, "the box still holds the meeting that was just recorded");
-  assert.equal(tab.state.capturing, false, "and the window closes when the recording has landed, not when Create is pressed");
+  // LANDING closes when the recording has landed. IN HAND does not, and that is
+  // the whole of this round: a Pick up one tick later used to be allowed, and it
+  // merged the two meetings just as surely as one pressed inside the settle.
+  assert.equal(tab.state.landing, false, "the audio is down");
+  assert.equal(tab.state.capturing, true, "and the meeting is still this tab's, because nobody has filed it");
+  await tab.surface.pickUp(entry);
+  await flush();
+  assert.match(tab.state.createError, /has not been created or discarded yet/i);
+  assert.equal(tab.state.session?.id, live, "so the second press adopted nothing either");
+  assert.doesNotMatch(tab.state.transcript, /YESTERDAY WORDS/);
 
   await tab.surface.submit();
   await flush();
@@ -1128,6 +1162,150 @@ test("…and refused across the settle too, which is the other window `recording
   assert.doesNotMatch(tab.posts[0].transcript, /YESTERDAY WORDS/, "one meeting was posted, not two");
   assert.equal(await origin.record(live), undefined, "and the audio released is the audio this meeting was made from");
   assert.ok(await origin.record(abandoned), "yesterday's is untouched, and still offered back");
+});
+
+test("Record ONE TICK AFTER STOP is refused, which is where an \"in flight\" guard let two meetings merge", async () => {
+  // REPRODUCED against the predicate this round replaces. `#finishCapture`'s
+  // `finally` lets go of the recording in hand the instant the settle lands, so
+  // `recording || arming || active !== null` was false one tick after Stop while
+  // the meeting was still in the compose box waiting to be created. Pressed
+  // there, Record began a SECOND session whose segments folded into the SAME box
+  // under the SAME title — the box became "FIRST WORDS\nSECOND WORDS" — and
+  // Create posted the two meetings as one while releasing only the second one's
+  // audio. The first stayed on the device, to be offered and posted again.
+  //
+  // Three ticks per write is what makes the settle a window a test can press a
+  // button in, exactly as a real store makes it one a person can click in.
+  const origin = new CaptureOrigin({ writeTicks: 3 });
+  const tab = origin.tab();
+  await tab.surface.init();
+  tab.transcribeSegment = async () => "FIRST WORDS";
+  tab.surface.setTitle("Standup");
+  const first = await recordOneChunk(tab);
+  // Handed over BY `stop()`, as a real MediaRecorder hands over its last one.
+  tab.recorder.pending.push(new Blob([new Uint8Array(2048).fill(3)]));
+  await tab.stop();
+  assert.equal(tab.state.settling, false, "the settle is over");
+  assert.equal(tab.state.landing, false, "the audio is down, so Create is live");
+  assert.equal(tab.state.capturing, true, "and the meeting is still this tab's, because nobody has filed it");
+
+  tab.transcribeSegment = async () => "SECOND WORDS";
+  await tab.record();
+  assert.match(tab.state.createError, /has not been created or discarded yet/i);
+  assert.equal(tab.microphones.length, 1, "no second recorder was started");
+  assert.equal(tab.state.session?.id, first, "and the box still holds the one meeting");
+  const captures = (await origin.records()).map((row) => row.sessionId).filter((id) => id !== MEETING_DRAFT_CAPTURE_ID);
+  assert.deepEqual(captures, [first], "with no second session begun on the device");
+
+  await tab.surface.submit();
+  await flush();
+  assert.equal(tab.posts.length, 1, tab.state.createError);
+  assert.match(tab.posts[0].transcript, /FIRST WORDS/);
+  assert.doesNotMatch(tab.posts[0].transcript, /SECOND WORDS/, "one meeting was posted, not two");
+  assert.equal(await origin.record(first), undefined, "and the audio it was made from is the audio released");
+  assert.equal(tab.state.capturing, false, "a create that reached the server files the capture");
+});
+
+test("Record pressed INSIDE a pick-up's awaits is refused, which is the ordering the last round left open", async () => {
+  // `pickUp` marked nothing at all while it ran — no claim, no recording in hand
+  // — so a Record landing between the press and `#attachQueue` saw an idle tab
+  // and started. `#attachQueue` then ran with the NEW recording as its
+  // "previous" and handed that lock straight back: the live recording held
+  // nothing, its chunks were written and never claimed as segments, a second tab
+  // was offered it, and yesterday's words folded into the box it was writing to.
+  const origin = new CaptureOrigin();
+  const yesterday = origin.tab();
+  await yesterday.surface.init();
+  yesterday.transcribeSegment = async () => "YESTERDAY WORDS";
+  const abandoned = await recordOneChunk(yesterday);
+  yesterday.kill();
+
+  const tab = origin.tab();
+  await tab.surface.init();
+  tab.transcribeSegment = async () => "TODAY WORDS";
+  await tab.surface.refreshRecoverable();
+  const entry = tab.state.recoverable.find((candidate) => candidate.record.sessionId === abandoned);
+  assert.ok(entry, "the killed tab's meeting is offered back");
+
+  // The pick-up is in flight: the store open, the `hold` and the writer query
+  // are all awaits, and this is the press that used to land in the middle of
+  // them.
+  const adopting = tab.surface.pickUp(entry);
+  assert.equal(tab.state.capturing, true, "published in the same turn as the press, before the first await");
+  await tab.record();
+  assert.match(tab.state.createError, /still being opened in this tab/i);
+  assert.equal(tab.microphones.length, 0, "no microphone was opened on top of the adoption");
+
+  await adopting;
+  await flush();
+  assert.equal(tab.state.session?.id, abandoned, "the adoption finished, and it is the only capture in this tab's hands");
+  assert.equal(tab.locks.holds(abandoned), true, "still holding the lock it took, rather than one handed back mid-click");
+  assert.match(tab.state.transcript, /YESTERDAY WORDS/);
+  assert.doesNotMatch(tab.state.transcript, /TODAY WORDS/, "and nothing else is in the box with it");
+});
+
+test("closing the dialog is not filing the meeting, and the page keeps saying so", async () => {
+  // The × and the scrim close the compose dialog and nothing else. A capture is
+  // filed by Create or by a discard, so this is one of the states in-hand has to
+  // survive — and the capture this tab holds is deliberately absent from the
+  // recovery offer, so the page outside the dialog is the only thing that can
+  // mention it at all.
+  const origin = new CaptureOrigin();
+  const tab = origin.tab();
+  await tab.surface.init();
+  tab.surface.setTitle("Retro");
+  const sessionId = await recordOneChunk(tab);
+  await tab.stop();
+
+  tab.surface.closeDialog();
+  assert.equal(tab.state.createOpen, false);
+  assert.equal(tab.state.capturing, true, "the dialog closed; the meeting did not go anywhere");
+  await tab.surface.refreshRecoverable();
+  assert.deepEqual(tab.state.recoverable.map((row) => row.record.sessionId), [], "and it is not offered back to its own tab");
+
+  await tab.record();
+  assert.match(tab.state.createError, /has not been created or discarded yet/i);
+  assert.equal(tab.microphones.length, 1, "so Record is refused from outside the dialog too");
+  assert.ok(await origin.record(sessionId), "and the recording is where it was, waiting to be filed");
+});
+
+test("D6 — the held recording is discardable, and not while a piece of it is still being written", async () => {
+  // The other way out of in-hand, and the reason the predicate is not a wedge.
+  // The offer never lists the capture this tab is holding, so without this the
+  // only Discard in the product is on a row that will never be rendered for it.
+  const origin = new CaptureOrigin({ writeTicks: 3 });
+  const tab = origin.tab();
+  await tab.surface.init();
+  tab.surface.setTitle("Cancelled");
+  const sessionId = await recordOneChunk(tab);
+  tab.recorder.pending.push(new Blob([new Uint8Array(2048).fill(3)]));
+  tab.surface.stop();
+  assert.equal(tab.state.landing, true, "the last chunk is still on its way to the store");
+
+  await tab.surface.discardHeld();
+  assert.deepEqual(tab.confirms, [], "nothing is asked, because nothing may be deleted yet");
+  assert.match(tab.state.createError, /still being written to this device/i);
+  await flush();
+  assert.ok(await origin.record(sessionId), "and the audio is intact");
+
+  // A no is a no, and it leaves the capture exactly where it was.
+  tab.confirmAnswer = false;
+  await tab.surface.discardHeld();
+  await flush();
+  assert.equal(tab.confirms.length, 1);
+  assert.ok(await origin.record(sessionId));
+  assert.equal(tab.state.capturing, true);
+  assert.equal(tab.state.title, "Cancelled", "with the box untouched");
+
+  tab.confirmAnswer = true;
+  await tab.surface.discardHeld();
+  await flush();
+  assert.match(tab.confirms[1], /cleared with it/i, "the question says the box goes with the audio");
+  assert.equal(await origin.record(sessionId), undefined, "a real deletion");
+  assert.equal((await origin.records()).some((row) => row.sessionId === sessionId), false);
+  assert.equal(tab.state.capturing, false, "the capture is filed");
+  assert.equal(tab.state.title, "", "and its words are out of the box, or the next recording folds into them");
+  assert.equal(tab.state.transcript, "");
 });
 
 test("Record pressed twice during the arming window starts ONE recorder over ONE session", async () => {

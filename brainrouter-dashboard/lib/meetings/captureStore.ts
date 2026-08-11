@@ -112,8 +112,15 @@ export interface BeginCaptureInput {
 export interface ReapOrphansOptions {
   /**
    * Ids the reap must not touch whatever their manifest says — in practice the
-   * recording in hand and the compose draft's reserved record. Everything else
-   * the store can judge for itself; this is the one fact only the caller has.
+   * capture the caller has in hand, plus every capture the browser says a tab of
+   * this origin is writing to. Everything else the store can judge for itself;
+   * this is the one fact only the caller has.
+   *
+   * NOT the compose draft, which this used to claim: the draft is kept out by
+   * the `abandoned` predicate below (`captureSurface.ts` refuses
+   * `MEETING_DRAFT_CAPTURE_ID` on its first line) rather than by being listed
+   * here, because it is a chunk-less manifest that is never closed and would
+   * otherwise be reaped as abandoned.
    */
   readonly keep?: readonly string[];
   /**
@@ -434,12 +441,14 @@ export class MeetingCaptureStore {
    *
    * - **Orphans**: chunks with no manifest. Audio `list` cannot see, `resumable`
    *   cannot offer and no user can delete, holding origin quota forever.
-   * - **Settled captures**: a manifest marked `closed`. `releaseCapture` writes
-   *   the terminal record BEFORE deleting the audio (so a kill in between leaves
-   *   a meeting that will not be offered back), which means a delete that failed
-   *   or never ran leaves exactly this. The desktop reaps terminal captures on
-   *   sight for the same reason; without it, audio the user accepted or threw
-   *   away outlives the deletion they asked for.
+   * - **Settled captures**: a manifest marked `closed`. `MeetingCaptureSurface`
+   *   writes the terminal record BEFORE deleting the audio (`#release` applies
+   *   `finalizeCapture`/`discardCaptureSession` through the queue, then calls
+   *   `delete`), so a kill in between leaves a meeting that will not be offered
+   *   back — which means a delete that failed or never ran leaves exactly this.
+   *   The desktop reaps terminal captures on sight for the same reason; without
+   *   it, audio the user accepted or threw away outlives the deletion they asked
+   *   for.
    * - **Captures abandoned before their first chunk**: a manifest that is not
    *   closed, holds no audio, and that nobody is writing to. `begin` runs before
    *   `getUserMedia`, so a tab killed while the microphone prompt is on screen
@@ -450,9 +459,12 @@ export class MeetingCaptureStore {
    *   rationale since `recoverInterrupted` was written — so leaving it was the
    *   shared reap rule holding on one host and not the other.
    *
-   * `keep` is for the recording in hand and for the draft's reserved record;
-   * `writing` is for a recording ANOTHER TAB began after the caller last looked,
-   * which `keep` structurally cannot cover.
+   * `keep` is for the capture the caller has in hand and the ones the browser
+   * already named as being written to; `abandoned` is for a recording ANOTHER
+   * TAB began after the caller last looked, and for the one id in this listing
+   * that is not a meeting at all — neither of which `keep` can cover, the first
+   * because the caller's listing is older than this one and the second because
+   * the store cannot read a payload.
    */
   async reapOrphans(options: ReapOrphansOptions = {}): Promise<readonly string[]> {
     const keep = new Set(options.keep ?? []);

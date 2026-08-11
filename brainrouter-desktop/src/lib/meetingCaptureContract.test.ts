@@ -69,13 +69,18 @@ test('meeting audio is written on a cadence, through the host, and never held in
   // D2 — the offer is queried where the user lands after a crash (the library),
   // not only inside a compose form they would have to think to open.
   //
-  // F1 — and BOTH ask it to leave out the capture in hand. `isResumableSession`
+  // F1 — and BOTH ask it to leave out the captures in hand. `isResumableSession`
   // deliberately does not narrow on `recording` (a clean quit leaves audio that
   // never transcribed), so the live recording satisfied D2's predicate and the
   // library offered to transcribe it — or DELETE it, with no confirmation and
   // no guard — while its own microphone was still open.
-  assert.match(view, /capture\.resumable\(\{ orgId: scopedOrgId \?\? null \}, heldCaptureId \? \{ exclude: \[heldCaptureId\] \} : \{\}\)/);
-  assert.match(view, /capture\.resumable\(captureScope, hold\.sessionId \? \{ exclude: \[hold\.sessionId\] \} : \{\}\)/);
+  //
+  // Invariant 5 — the HAND, not the one capture the live rows are bound to. Both
+  // read `inHand` because Record → Stop → Record leaves the first capture held
+  // and unbound, and the version that excluded only `hold.sessionId` offered it
+  // straight back while the second half was still being recorded.
+  assert.match(view, /capture\.resumable\(\{ orgId: scopedOrgId \?\? null \}, heldCaptureIds\.length \? \{ exclude: heldCaptureIds \} : \{\}\)/);
+  assert.match(view, /capture\.resumable\(captureScope, hold\.inHand\.length \? \{ exclude: hold\.inHand \} : \{\}\)/);
   // …and the delete that used to be one unguarded click is confirmed, and
   // refused outright while the capture is still being written to.
   assert.match(view, /Discard this unfinished recording\? Its audio is deleted from this device\./);
@@ -88,7 +93,72 @@ test('meeting audio is written on a cadence, through the host, and never held in
   // non-terminal and the next launch would call a meeting that SUCCEEDED an
   // interrupted recording.
   assert.doesNotMatch(view, /capture\.finalize\([^)]*\)\.catch\(/);
-  assert.match(view, /onAudioRetained\(\{ sessionId: captured/);
+  assert.match(view, /onAudioRetained\(\{ sessionId, message:/);
+});
+
+test('invariant 5 — a capture is in hand from Record until it is FILED, and every one of them is released', () => {
+  const view = read('../components/meetings/MeetingsView.tsx');
+  const submit = read('../components/meetings/composeSubmit.ts');
+
+  // The hand is a LIST and `sessionId` is only the live binding. The behaviour
+  // is asserted for real in `meetingsView.test.tsx` (record → Stop → record →
+  // Create); what is pinned here is that there is one writer of the list and one
+  // way out of it, because a second assignment anywhere would typecheck.
+  assert.match(submit, /readonly inHand: readonly string\[\];/);
+  assert.match(submit, /file\(sessionId: string\): MeetingCaptureHold;/);
+  assert.match(submit, /export type CaptureHoldPatch = Partial<Omit<MeetingCaptureHold, "inHand">>;/);
+  // …so nothing outside the store can put a capture into the hand or take one
+  // out of it. `update({ sessionId: null })` is what USED to release a capture,
+  // and it released nothing but the rendering.
+  assert.doesNotMatch(view, /update\(\{ inHand/);
+  assert.doesNotMatch(view, /inHand: \[/);
+
+  // Create releases the whole hand, and the hand is read BEFORE the create's
+  // await: a capture picked up while the POST is in flight is not part of the
+  // meeting being created, and finalizing it would delete audio that meeting
+  // does not contain. Positional, because both orders typecheck and both look
+  // right.
+  const filingAt = view.indexOf('const filing = holdStore.current.inHand;');
+  const postAt = view.indexOf('await ops.createFromTranscript(prepared.input, prepared.orgId)');
+  assert.ok(filingAt > 0 && postAt > filingAt, 'the hand is snapshotted before the create');
+  const loopAt = view.indexOf('for (const sessionId of filing) {');
+  const retainAt = view.indexOf('onAudioRetained({ sessionId, message:', loopAt);
+  const fileAt = view.indexOf('holdStore.file(sessionId);', loopAt);
+  // Filed AFTER the catch, so on both branches of the release: a finalize that
+  // failed is still a capture this form has finished with, and leaving it in the
+  // hand keeps excluding it from the offer that is now the only way back to it.
+  assert.ok(loopAt > 0 && retainAt > loopAt && fileAt > retainAt, 'each capture is filed whether or not its release succeeded');
+  // Two callers, and there are exactly two ways a capture is filed: the create
+  // releases it, or a discard deletes it.
+  assert.equal(view.match(/holdStore\.file\(/g)?.length, 2);
+});
+
+test('G2 — the rules that guard Record and Pick up are in the functions, not on the pixels', () => {
+  const view = read('../components/meetings/MeetingsView.tsx');
+
+  // A `disabled` is a statement about a pixel: React renders it a commit late,
+  // so a second handler arriving in the same commit reaches the function with
+  // the attribute still false. Two Records in one commit gave two `captureBegin`
+  // calls and two microphone streams, and Stop reached only the second — main
+  // subtracts live writers from the offer, so NO row existed anywhere for the
+  // first and nothing in the app could stop it.
+  //
+  // The refusal is the first statement of each function and reads the
+  // synchronous hold. Behaviour is asserted in `meetingsView.test.tsx`; what is
+  // pinned here is that it comes before anything is mutated or awaited.
+  const recordAt = view.indexOf('const startRecording = useCallback(async () => {');
+  assert.ok(recordAt > 0);
+  assert.match(
+    view.slice(recordAt, recordAt + 120),
+    /useCallback\(async \(\) => \{\n\s*if \(captureInFlight\(holdStore\.current\)\) return;/,
+    'Record refuses before it clears an error, builds a recorder or opens a microphone',
+  );
+  const adoptAt = view.indexOf('const adoptCapture = useCallback(async (sessionId: string) => {');
+  assert.ok(adoptAt > 0 && view.indexOf('if (captureInFlight(holdStore.current)) return;', adoptAt) > adoptAt);
+  assert.ok(
+    view.indexOf('if (captureInFlight(holdStore.current)) return;', adoptAt) < view.indexOf('await capture.adopt(sessionId)'),
+    'a pick-up refuses before it takes the recording',
+  );
 });
 
 test('a capture is transcribed segment by segment, by the host, and the 40 MB refusal is import-only', () => {
@@ -395,9 +465,9 @@ test('F3 — Create cannot delete a recording out from under itself, and Stop is
   // The rule reads the values that are true NOW; the button reads the ones React
   // last rendered. A disabled attribute is a statement about a pixel.
   assert.match(view, /hold: holdStore\.current, busy: Boolean\(busy\)/);
-  // `heldByAnother` is the D6 half — a capture a SECOND window's lease is fresh
-  // on, which this window's hold reads false about because the hold is this
-  // window's memory. It is asserted behaviourally in `meetingsView.test.tsx`;
+  // `heldByAnother` is the D6 half — a capture main says a SECOND window is
+  // recording, which this window's hold reads false about because the hold is
+  // this window's memory. It is asserted behaviourally in `meetingsView.test.tsx`;
   // here it only has to not have been dropped from the button.
   assert.match(view, /disabled=\{!title\.trim\(\) \|\| !transcript\.trim\(\) \|\| Boolean\(busy\) \|\| capturing \|\| heldByAnother\}/);
   // …and it says why it is refusing rather than silently doing nothing.

@@ -162,7 +162,7 @@ test("the hold has one writer, and both of its copies move on every patch", () =
   assert.equal(published.at(-1), hold.current);
 
   hold.update({ sessionId: "mtg-1", recording: true, arming: false });
-  assert.deepEqual(hold.current, { sessionId: "mtg-1", recording: true, arming: false, closing: false });
+  assert.deepEqual(hold.current, { sessionId: "mtg-1", inHand: ["mtg-1"], recording: true, arming: false, closing: false });
 
   // A patch leaves what it does not name alone: Stop lowers `recording` without
   // forgetting WHICH capture is being closed, and the capture stays in hand
@@ -175,6 +175,51 @@ test("the hold has one writer, and both of its copies move on every patch", () =
   assert.equal(hold.current.sessionId, "mtg-1");
   assert.equal(published.length, 4);
   assert.equal(published.at(-1), hold.current);
+});
+
+test("invariant 5 — binding a capture takes it, and only filing it lets it go", () => {
+  const published: MeetingCaptureHold[] = [];
+  const hold = createCaptureHold((next) => published.push(next));
+
+  hold.update({ sessionId: "mtg-1", recording: true });
+  hold.update({ recording: false });
+  // The second Record. The live rows follow it, and the FIRST capture does not
+  // stop existing because they did: its audio is on the device, unfinalized and
+  // undiscarded, and the meeting about to be created contains its words.
+  hold.update({ sessionId: "mtg-2", recording: true });
+  assert.equal(hold.current.sessionId, "mtg-2");
+  assert.deepEqual(hold.current.inHand, ["mtg-1", "mtg-2"]);
+
+  // Re-binding a capture already in hand — Stop rebinds the id it just closed —
+  // does not add it twice, and does not churn the array identity that the
+  // recovery effect depends on.
+  const before = hold.current.inHand;
+  hold.update({ sessionId: "mtg-2", recording: false });
+  assert.equal(hold.current.inHand, before);
+
+  // Filing the one the rows are bound to drops the binding with it…
+  hold.file("mtg-2");
+  assert.equal(hold.current.sessionId, null);
+  assert.deepEqual(hold.current.inHand, ["mtg-1"]);
+  // …and filing an unbound one leaves the binding alone.
+  hold.update({ sessionId: "mtg-3" });
+  hold.file("mtg-1");
+  assert.equal(hold.current.sessionId, "mtg-3");
+  assert.deepEqual(hold.current.inHand, ["mtg-3"]);
+
+  // A capture that was never in hand — a recovery row discarded straight from
+  // the offer — changes nothing and publishes nothing, or every such click would
+  // re-run the effects that read the hold.
+  const publishes = published.length;
+  const current = hold.current;
+  assert.equal(hold.file("mtg-never-held"), current);
+  assert.equal(published.length, publishes);
+
+  // And `sessionId: null` releases the RENDERING, never the capture. That was
+  // the defect: Create nulled the binding and then finalized "the capture", of
+  // which there was by then only ever one.
+  hold.update({ sessionId: null });
+  assert.deepEqual(hold.current.inHand, ["mtg-3"]);
 });
 
 test("an empty form and a busy one are refused, and are not the same refusal", () => {
