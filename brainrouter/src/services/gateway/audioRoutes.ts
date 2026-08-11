@@ -11,14 +11,18 @@
  * only; the dev composes publish it on `127.0.0.1:3752` so it can be probed by
  * hand, which is loopback and not the LAN, but is not "never".
  *
- * Contract (ours; the desktop/dashboard are the clients): POST /v1/audio/transcriptions
- * with the raw audio body (Content-Type: audio/webm | audio/wav | audio/mpeg | …),
- * optional `?language=xx`. Returns `{ text }` (200) or an OpenAI error envelope.
+ * Batch contract (ours; the desktop/dashboard are the clients):
+ * POST /v1/audio/transcriptions with the raw audio body (Content-Type:
+ * audio/webm | audio/wav | audio/mpeg | …), optional `?language=xx`. Returns
+ * `{ text }` (200) or an OpenAI error envelope. D10 capability discovery and
+ * its optional persistent transport are owned by separate gateway modules;
+ * this POST remains the required fallback.
  *
  * ## What this route OWNS, and why it is not just a proxy
  *
- * ADR-035 made transcription incremental: a meeting is now ~180 twenty-second
- * segments, each posted here, each retried from audio that is already on disk.
+ * ADR-035 made transcription incremental: a meeting is now a sequence of
+ * bounded transcription units assembled from independently durable chunks,
+ * each posted here and retried from audio that is already on disk.
  * `packages/core`'s transcription queue decides whether a failed attempt costs a
  * retry, and it decides it FROM THE HTTP STATUS THIS ROUTE RETURNS — 408/429/
  * 502/503/504 mean "the endpoint declined to serve", so the attempt is refunded
