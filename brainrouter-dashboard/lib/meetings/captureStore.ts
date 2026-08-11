@@ -1,5 +1,5 @@
 /**
- * ADR-035 D1/D1b/D2 — the durable capture protocol, in the one place both
+ * ADR-035 D1/D1b/D2/D9 — the durable capture protocol, in the one place both
  * browser backends share.
  *
  * This module owns every decision the dashboard makes about a recording that is
@@ -34,13 +34,19 @@
  * - **A failed write does not consume a sequence.** If the bytes did not land,
  *   the number is still free, so the recording continues without a hole in it.
  *
- * The store never parses `payload`. It is whatever the caller's session model
- * serialized (see `captureStorage.ts` for why that boundary is where it is).
+ * The store never interprets `payload` as lifecycle or tenant authority. The
+ * one narrow read is playback integrity: `capturePayload.ts` may return the
+ * chunk sequences from a shared-validator-approved, matching-id session so a
+ * claimed trailing file can be named as missing. Invalid payloads return no
+ * ledger and cannot mint or move a meeting.
  */
-import { DEFAULT_MEETING_SEGMENT_MS } from "@kinqs/brainrouter-core/meetings";
+import { DEFAULT_MEETING_CHUNK_MS } from "@kinqs/brainrouter-core/meetings";
 
+import { capturePayloadAuthorizesDeletion, capturePayloadChunkSequences } from "./capturePayload";
 import {
   assertCaptureSessionId,
+  captureManifestChunkMs,
+  isCaptureManifestChunkMs,
   type CaptureChunkRef,
   type CaptureManifest,
   type CaptureStorageBackend,
@@ -53,20 +59,19 @@ import {
 } from "./storageBudget";
 
 /**
- * ADR-035 D1/§5.1 — the recorder's chunk cadence.
+ * ADR-035 D1/D9/§5.1 — the recorder's durability cadence.
  *
  * D1 is explicit that `MediaRecorder` needs an explicit timeslice, because
  * without one it may deliver a single blob at the end and the durable write buys
- * nothing. The number is the SHARED one: a chunk is a segment (D3), so the
- * cadence a browser records at and the length a segment is transcribed in are
- * the same decision, and open question 1 asks for it to be measured once rather
- * than guessed twice.
+ * nothing. D9 separates this short, loss-bounding cadence from the longer
+ * transcription unit: a chunk is durable as soon as it lands, while several
+ * chunks can be assembled into the utterance-sized request the endpoint sees.
  *
  * The alias exists because the two names mean different things at their own
  * layer — this one is an argument to `MediaRecorder.start()` — and a reader here
- * should not have to know that a "segment" is what the shared model calls it.
+ * should not have to know how the transcription strategy groups those writes.
  */
-export const MEETING_CAPTURE_TIMESLICE_MS = DEFAULT_MEETING_SEGMENT_MS;
+export const MEETING_CAPTURE_TIMESLICE_MS = DEFAULT_MEETING_CHUNK_MS;
 
 /** A stored session as the store sees it: manifest fields plus measured audio. */
 export interface CaptureSessionRecord {
@@ -74,6 +79,8 @@ export interface CaptureSessionRecord {
   readonly startedAt: string;
   readonly closed: boolean;
   readonly payload: string;
+  /** Absent only for manifests written before durability chunks were split from units. */
+  readonly chunkMs?: number;
   /** Sorted by sequence, always — never the backend's listing order. */
   readonly chunks: readonly CaptureChunkRef[];
   readonly byteLength: number;
@@ -107,6 +114,8 @@ export interface BeginCaptureInput {
   readonly sessionId: string;
   readonly startedAt?: string;
   readonly payload?: string;
+  /** Persisted independently so torn session JSON cannot erase the cadence. */
+  readonly chunkMs?: number;
 }
 
 export interface ReapOrphansOptions {
@@ -198,13 +207,18 @@ export class MeetingCaptureStore {
    */
   async begin(input: BeginCaptureInput): Promise<CaptureSessionRecord> {
     const sessionId = assertCaptureSessionId(input.sessionId);
+    if (input.chunkMs !== undefined && !isCaptureManifestChunkMs(input.chunkMs)) {
+      throw new Error("A capture chunk cadence must be a whole number from 2,000 to 5,000 milliseconds.");
+    }
+    const chunkMs = captureManifestChunkMs(input.chunkMs);
     return this.#serialize(sessionId, async () => {
       const existing = await this.#backend.readManifest(sessionId);
-      if (existing) throw new Error(`A meeting capture named ${sessionId} already exists.`);
+      if (existing.state !== "absent") throw new Error(`A meeting capture named ${sessionId} already exists.`);
       const manifest: CaptureManifest = {
         startedAt: input.startedAt ?? new Date().toISOString(),
         closed: false,
         payload: input.payload ?? "",
+        ...(chunkMs === undefined ? {} : { chunkMs }),
       };
       await this.#backend.writeManifest(sessionId, manifest);
       this.#next.set(sessionId, await this.#seedSequence(sessionId));
@@ -241,10 +255,10 @@ export class MeetingCaptureStore {
   /**
    * Replace the caller's serialized session model, and optionally settle it.
    *
-   * This is the transcription queue's `persist` port, so it runs while segments
-   * are still landing and while the user may be discarding the meeting — and it
-   * is a read-modify-write (it preserves `startedAt` and, unless told otherwise,
-   * `closed`). Off the queue, its read and its write straddle a `delete`: the
+   * This is the transcription queue's `persist` port, so it runs while chunk and
+   * unit state is still landing and while the user may be discarding the meeting
+   * — and it is a read-modify-write (it preserves `startedAt` and, unless told
+   * otherwise, `closed`). Off the queue, its read and its write straddle a `delete`: the
    * read sees a live manifest, the delete removes the session, and then the
    * write puts a manifest BACK, re-creating a zero-byte session that `resumable`
    * will not offer and no user can remove. D6 says deletion is a real deletion,
@@ -257,8 +271,9 @@ export class MeetingCaptureStore {
   ): Promise<CaptureSessionRecord> {
     const id = assertCaptureSessionId(sessionId);
     return this.#serialize(id, async () => {
-      const manifest = await this.#backend.readManifest(id);
-      if (!manifest) throw new Error(`No meeting capture named ${id} is stored.`);
+      const reading = await this.#backend.readManifest(id);
+      if (reading.state !== "present") throw new Error(`No meeting capture named ${id} is stored.`);
+      const manifest = reading.manifest;
       const next: CaptureManifest = { ...manifest, payload, closed: options.closed ?? manifest.closed };
       await this.#backend.writeManifest(id, next);
       return this.#record(id, next);
@@ -267,8 +282,8 @@ export class MeetingCaptureStore {
 
   async read(sessionId: string): Promise<CaptureSessionRecord | undefined> {
     const id = assertCaptureSessionId(sessionId);
-    const manifest = await this.#backend.readManifest(id);
-    return manifest ? this.#record(id, manifest) : undefined;
+    const reading = await this.#backend.readManifest(id);
+    return reading.state === "present" ? this.#record(id, reading.manifest) : undefined;
   }
 
   /**
@@ -278,7 +293,7 @@ export class MeetingCaptureStore {
    * This exists because `MediaRecorder` delivers its final chunk from
    * `ondataavailable` and then fires `onstop` immediately after, and no handler
    * on that path can await anything. Without a public drain, Stop reads the
-   * audio back while the last twenty seconds are still being written, hands
+   * audio back while the last durability chunk is still being written, hands
    * transcription a truncated meeting, and then deletes the session on success —
    * losing the very chunk that was in flight. The desktop recorder awaits its
    * own queue at exactly this point; D1b asks for the same guarantee here, not a
@@ -319,31 +334,57 @@ export class MeetingCaptureStore {
    *
    * **Unreadable is unreadable, whatever the reason.** A chunk that reads back
    * `undefined` and a chunk whose read THROWS are the same fact about the same
-   * twenty seconds of audio, and both belong in `missing`. Letting the throw
+   * few seconds of audio, and both belong in `missing`. Letting the throw
    * escape made one bad chunk deny the user the whole meeting — `preview` came
    * back null and fifty-nine playable minutes went unheard — and it is not a
    * hypothetical shape: the IndexedDB backend's request wrapper rejects on
    * `onerror`/`onabort`, and OPFS's `getFile()` throws when the entry is gone or
    * the file is locked. The desktop answers this injury with `missing=[2]`; D1b
    * says this host gets the same guarantee and not a lesser one.
+   *
+   * **A hole is not an ending.** Physical sequences 0 and 2 mean "play both and
+   * report 1", not "stop at 0" and not "silently join them". A valid matching
+   * payload ledger may extend that range by a claimed trailing sequence whose
+   * file disappeared; damaged or wrong-id payloads supply no such authority.
    */
   async readAudio(sessionId: string, type = "audio/webm"): Promise<CaptureAudio> {
     const id = assertCaptureSessionId(sessionId);
     return this.#serialize(id, async () => {
       const chunks = await this.#chunks(id);
+      let claimedSequences: readonly number[] | undefined;
+      try {
+        const manifest = await this.#backend.readManifest(id);
+        claimedSequences = manifest.state === "present"
+          ? capturePayloadChunkSequences(manifest.manifest.payload, id)
+          : undefined;
+      } catch {
+        // The physical listing is enough to play every readable file and name
+        // its interior holes. A top-level record that cannot be read only costs
+        // the optional trailing-ledger check, never the audio itself.
+        claimedSequences = undefined;
+      }
+      const lastPhysicalSequence = chunks[chunks.length - 1]?.sequence ?? -1;
+      const lastClaimedSequence = claimedSequences?.[claimedSequences.length - 1] ?? -1;
+      const throughSequence = Math.max(lastPhysicalSequence, lastClaimedSequence);
+      const chunksBySequence = new Map(chunks.map((chunk) => [chunk.sequence, chunk]));
       const parts: Blob[] = [];
       const missing: number[] = [];
       let byteLength = 0;
-      for (const chunk of chunks) {
+      for (let sequence = 0; sequence <= throughSequence; sequence += 1) {
+        const chunk = chunksBySequence.get(sequence);
+        if (!chunk) {
+          missing.push(sequence);
+          continue;
+        }
         let blob: Blob | undefined;
         try {
-          blob = await this.#backend.readChunk(id, chunk.sequence);
+          blob = await this.#backend.readChunk(id, sequence);
         } catch {
           // Named below with every other chunk this device could not hand back.
           blob = undefined;
         }
         if (!blob) {
-          missing.push(chunk.sequence);
+          missing.push(sequence);
           continue;
         }
         parts.push(blob);
@@ -354,17 +395,15 @@ export class MeetingCaptureStore {
   }
 
   /**
-   * ADR-035 D3 — the audio for ONE segment, which is the unit transcription
-   * actually works in.
+   * ADR-035 D3/D9 — read ONE durability chunk by its independent sequence.
    *
-   * The whole-capture `readAudio` is deliberately not what the transcription
-   * path uses: D3 removes the body-size ceiling precisely by never assembling
-   * the meeting, so reading it back in one piece to send a piece of it would put
-   * the hour of audio the ADR is trying to stop handling straight back into the
-   * tab's heap.
+   * The method keeps its pre-D9 name because it is an internal store seam, but
+   * it no longer claims to return a whole transcription unit. The shared audio
+   * reader calls it for every sequence in `segment.chunks` and assembles that
+   * bounded unit without ever putting the whole meeting in the tab's heap.
    *
-   * Queued behind this session's writes for the same reason `readAudio` is: the
-   * segment being retried may be the one still being written.
+   * Queued behind this session's writes for the same reason `readAudio` is: one
+   * of the unit's chunks may be the write still landing.
    */
   async readSegment(sessionId: string, sequence: number): Promise<Blob | undefined> {
     const id = assertCaptureSessionId(sessionId);
@@ -376,8 +415,8 @@ export class MeetingCaptureStore {
     const ids = await this.#backend.listSessionIds();
     const records: CaptureSessionRecord[] = [];
     for (const id of ids) {
-      const manifest = await this.#backend.readManifest(id);
-      if (manifest) records.push(await this.#record(id, manifest));
+      const reading = await this.#backend.readManifest(id);
+      if (reading.state === "present") records.push(await this.#record(id, reading.manifest));
     }
     return records.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
   }
@@ -435,20 +474,21 @@ export class MeetingCaptureStore {
    * desktop's `recoverInterrupted` never had this bug because it takes one
    * snapshot first and only ever deletes from it; so does this now.
    *
-   * A manifest IS the session row here — `begin` writes it before a single byte
-   * of audio exists — so "claimed" needs no list from anybody. Two kinds of
-   * capture are reaped:
+   * A valid manifest IS the session row here — `begin` writes it before a single
+   * byte of audio exists — so "claimed" needs no list from anybody. A corrupt
+   * manifest is different from an absent one: its audio is quarantined in place,
+   * never offered under guessed metadata and never reaped merely because the
+   * record cannot currently be decoded. Three kinds of capture are reaped:
    *
    * - **Orphans**: chunks with no manifest. Audio `list` cannot see, `resumable`
    *   cannot offer and no user can delete, holding origin quota forever.
-   * - **Settled captures**: a manifest marked `closed`. `MeetingCaptureSurface`
-   *   writes the terminal record BEFORE deleting the audio (`#release` applies
+   * - **Settled captures**: a manifest marked `closed` whose matching payload is
+   *   independently a valid terminal session. `MeetingCaptureSurface` writes
+   *   that terminal record BEFORE deleting the audio (`#release` applies
    *   `finalizeCapture`/`discardCaptureSession` through the queue, then calls
-   *   `delete`), so a kill in between leaves a meeting that will not be offered
-   *   back — which means a delete that failed or never ran leaves exactly this.
-   *   The desktop reaps terminal captures on sight for the same reason; without
-   *   it, audio the user accepted or threw away outlives the deletion they asked
-   *   for.
+   *   `delete`), so a kill in between leaves exactly this. The closed bit alone
+   *   cannot authorize a recursive delete: a torn or corrupt payload, or a live
+   *   payload beside an accidentally flipped bit, is quarantined instead.
    * - **Captures abandoned before their first chunk**: a manifest that is not
    *   closed, holds no audio, and that nobody is writing to. `begin` runs before
    *   `getUserMedia`, so a tab killed while the microphone prompt is on screen
@@ -475,7 +515,13 @@ export class MeetingCaptureStore {
     const reaped: string[] = [];
     for (const id of stored) {
       if (keep.has(id)) continue;
-      const manifest = await this.#backend.readManifest(id);
+      const reading = await this.#backend.readManifest(id);
+      // The manifest bytes exist but cannot safely name or scope this capture.
+      // Preserve every physical chunk without inventing a recovery identity;
+      // repeated boots take this same branch until the record is repaired or a
+      // person explicitly removes the origin's data.
+      if (reading.state === "corrupt") continue;
+      const manifest = reading.state === "present" ? reading.manifest : undefined;
       if (manifest && !manifest.closed) {
         // A session claimed by its own manifest. It holds audio, so whatever
         // else is true of it there is something here a person may still want —
@@ -491,6 +537,11 @@ export class MeetingCaptureStore {
         // began after it. That question is the caller's to answer, and it is
         // awaited because the browser answers it asynchronously.
         if (!(await options.abandoned?.({ sessionId: id, startedAt: manifest.startedAt, payload: manifest.payload }))) continue;
+      } else if (manifest && !capturePayloadAuthorizesDeletion(manifest.payload, id)) {
+        // A small index bit cannot outrank the validated lifecycle record. It
+        // still suppresses recovery offers, so keeping the bytes here neither
+        // re-homes them nor guesses a tenant; it only refuses an unsafe delete.
+        continue;
       } else if (!manifest) {
         // No manifest AND no chunks: nothing to reclaim, and it is exactly what
         // a `begin` in another tab looks like for the instant between creating
@@ -549,6 +600,7 @@ export class MeetingCaptureStore {
       startedAt: manifest.startedAt,
       closed: manifest.closed,
       payload: manifest.payload,
+      ...(manifest.chunkMs === undefined ? {} : { chunkMs: manifest.chunkMs }),
       chunks,
       byteLength: chunks.reduce((total, chunk) => total + chunk.byteLength, 0),
     };

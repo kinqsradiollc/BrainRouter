@@ -1,16 +1,21 @@
 /**
- * ADR-035 D1 — the two properties that make a recording survivable, tested
+ * ADR-035 D1/D9 — the two properties that make a recording survivable, tested
  * without a microphone: the recorder is started with a timeslice, and every
  * chunk it produces is handed to the host instead of being kept.
  *
  * The timeslice assertion is the one that looks trivial and is not. Without an
  * argument, `MediaRecorder` may deliver a single blob at `stop`, and every other
- * line of this feature — the capture directory, the per-segment records, the
+ * line of this feature — the capture directory, the chunk ledger, the
  * recovery offer — would still be there and would still lose the meeting.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DEFAULT_MEETING_SEGMENT_MS, type MeetingCaptureSession } from "@kinqs/brainrouter-core/meetings";
+import {
+  appendChunk,
+  DEFAULT_MEETING_CHUNK_MS,
+  sealDueUnits,
+  type MeetingCaptureSession,
+} from "@kinqs/brainrouter-core/meetings";
 import type { MeetingCaptureOps } from "./captureOps.js";
 import { CaptureCancelledError, MeetingCaptureRecorder, MicrophoneUnavailableError } from "./captureRecorder.js";
 
@@ -93,7 +98,7 @@ function tracked(): { stream: MediaStream; stops: number } {
   return { get stops() { return state.stops; }, stream };
 }
 
-test("the recorder is started with an explicit segment timeslice", async () => {
+test("D9 the recorder writes on the durability cadence rather than the transcription-unit cadence", async () => {
   const capture = fakeCapture();
   const fake = new FakeRecorder();
   const recorder = new MeetingCaptureRecorder({
@@ -105,7 +110,9 @@ test("the recorder is started with an explicit segment timeslice", async () => {
   const id = await recorder.start({ scope: { orgId: null } });
 
   assert.equal(id, "mtg-test");
-  assert.equal(fake.timeslice, DEFAULT_MEETING_SEGMENT_MS);
+  assert.equal(fake.timeslice, DEFAULT_MEETING_CHUNK_MS);
+  assert.ok(typeof fake.timeslice === "number");
+  assert.ok(fake.timeslice >= 2_000 && fake.timeslice <= 5_000, "a kill can cost only the bounded write cadence");
   assert.equal(fake.state, "recording");
 });
 
@@ -121,22 +128,22 @@ test("every chunk is written through the host, in order, and none is kept", asyn
   });
   await recorder.start({ scope: { orgId: null }, title: "Sync" });
 
-  clock = 21_000;
+  clock = 4_000;
   fake.emit([1, 2]);
-  clock = 41_000;
+  clock = 7_000;
   fake.emit([3]);
-  // A zero-byte chunk is not a segment: the shared model refuses one, and
+  // A zero-byte chunk is not durable audio: the shared model refuses one, and
   // recording it would make "there is audio" true for a session with none.
   fake.emit([]);
-  clock = 47_000;
+  clock = 9_000;
 
   const stopped = await recorder.stop();
 
   assert.equal(stopped, "mtg-test");
   assert.deepEqual(capture.appended, [
-    { id: "mtg-test", bytes: [1, 2], durationMs: 20_000 },
-    { id: "mtg-test", bytes: [3], durationMs: 20_000 },
-    { id: "mtg-test", bytes: [7, 7], durationMs: 6_000 },
+    { id: "mtg-test", bytes: [1, 2], durationMs: 3_000 },
+    { id: "mtg-test", bytes: [3], durationMs: 3_000 },
+    { id: "mtg-test", bytes: [7, 7], durationMs: 2_000 },
   ]);
   // The capture is marked stopped only AFTER the final chunk is on disk.
   assert.deepEqual(capture.stopped, ["mtg-test"]);
@@ -145,6 +152,178 @@ test("every chunk is written through the host, in order, and none is kept", asyn
   // surface because there is no test-only accessor for the id.
   assert.equal(await recorder.stop(), null);
   assert.deepEqual(capture.stopped, ["mtg-test"]);
+});
+
+test("a long pause is excluded from the next chunk's duration and cannot seal a unit", async () => {
+  const fake = new FakeRecorder();
+  let clock = 1_000;
+  let current: MeetingCaptureSession = {
+    id: "mtg-paused",
+    startedAt: "2026-01-01T00:00:00.000Z",
+    scope: { orgId: null, workspaceId: null },
+    title: "Paused sync",
+    template: "general",
+    status: "recording",
+    segments: [],
+    chunks: [],
+  };
+  const durations: number[] = [];
+  const capture = fakeCapture();
+  const recorder = new MeetingCaptureRecorder({
+    capture: {
+      ...capture.ops,
+      begin: async () => current,
+      append: async (_id, bytes, durationMs) => {
+        durations.push(durationMs);
+        current = sealDueUnits(appendChunk(current, { byteLength: bytes.byteLength, durationMs }));
+        return current;
+      },
+    },
+    openStream: async () => tracked().stream,
+    createRecorder: () => fake as unknown as MediaRecorder,
+    now: () => clock,
+  });
+  await recorder.start({ scope: { orgId: null } });
+
+  recorder.pause();
+  clock += 60 * 60 * 1_000;
+  recorder.resume();
+  clock += 3_000;
+  fake.emit([1, 2, 3]);
+  await recorder.settled();
+
+  assert.deepEqual(durations, [3_000], "paused wall-clock time is not recorded as audio duration");
+  assert.deepEqual(current.chunks?.map((chunk) => [chunk.startMs, chunk.endMs]), [[0, 3_000]]);
+  assert.deepEqual(current.segments, [], "three active seconds remain an open tail, not a due transcription unit");
+});
+
+test("a blob delivered while paused uses the frozen active clock, not paused wall time", async () => {
+  const fake = new FakeRecorder();
+  let clock = 1_000;
+  let current: MeetingCaptureSession = {
+    id: "mtg-paused-event",
+    startedAt: "2026-01-01T00:00:00.000Z",
+    scope: { orgId: null, workspaceId: null },
+    title: "Paused event sync",
+    template: "general",
+    status: "recording",
+    segments: [],
+    chunks: [],
+  };
+  const durations: number[] = [];
+  const capture = fakeCapture();
+  const recorder = new MeetingCaptureRecorder({
+    capture: {
+      ...capture.ops,
+      begin: async () => current,
+      append: async (_id, bytes, durationMs) => {
+        durations.push(durationMs);
+        current = sealDueUnits(appendChunk(current, { byteLength: bytes.byteLength, durationMs }));
+        return current;
+      },
+    },
+    openStream: async () => tracked().stream,
+    createRecorder: () => fake as unknown as MediaRecorder,
+    now: () => clock,
+  });
+  await recorder.start({ scope: { orgId: null } });
+
+  clock = 4_000;
+  recorder.pause();
+  clock += 60 * 60 * 1_000;
+  fake.emit([1]);
+  await recorder.settled();
+  recorder.resume();
+  clock += 3_000;
+  fake.emit([2]);
+  await recorder.settled();
+
+  assert.deepEqual(durations, [3_000, 3_000], "the event during pause stops at the pause boundary");
+  assert.deepEqual(current.chunks?.map((chunk) => [chunk.startMs, chunk.endMs]), [[0, 3_000], [3_000, 6_000]]);
+  assert.deepEqual(current.segments, [], "paused wall time cannot manufacture a due transcription unit");
+});
+
+test("a failed resume keeps the whole pause excluded when a later resume succeeds", async () => {
+  const fake = new FakeRecorder();
+  let clock = 1_000;
+  let current: MeetingCaptureSession = {
+    id: "mtg-resume-retry",
+    startedAt: "2026-01-01T00:00:00.000Z",
+    scope: { orgId: null, workspaceId: null },
+    title: "Resume retry sync",
+    template: "general",
+    status: "recording",
+    segments: [],
+    chunks: [],
+  };
+  const durations: number[] = [];
+  const capture = fakeCapture();
+  const recorder = new MeetingCaptureRecorder({
+    capture: {
+      ...capture.ops,
+      begin: async () => current,
+      append: async (_id, bytes, durationMs) => {
+        durations.push(durationMs);
+        current = sealDueUnits(appendChunk(current, { byteLength: bytes.byteLength, durationMs }));
+        return current;
+      },
+    },
+    openStream: async () => tracked().stream,
+    createRecorder: () => fake as unknown as MediaRecorder,
+    now: () => clock,
+  });
+  await recorder.start({ scope: { orgId: null } });
+
+  clock = 4_000;
+  fake.emit([1]);
+  await recorder.settled();
+  recorder.pause();
+
+  let rejectResume = true;
+  fake.resume = () => {
+    if (rejectResume) throw new Error("resume failed");
+    fake.state = "recording";
+  };
+  clock += 60 * 60 * 1_000;
+  assert.throws(() => recorder.resume(), /resume failed/);
+  assert.equal(recorder.paused, true, "a rejected platform resume leaves the recorder paused");
+
+  rejectResume = false;
+  clock += 30 * 60 * 1_000;
+  recorder.resume();
+  clock += 3_000;
+  fake.emit([2]);
+  await recorder.settled();
+
+  assert.deepEqual(durations, [3_000, 3_000], "both failed and successful resume attempts stay outside active time");
+  assert.deepEqual(current.chunks?.map((chunk) => [chunk.startMs, chunk.endMs]), [[0, 3_000], [3_000, 6_000]]);
+  assert.deepEqual(current.segments, [], "a failed resume cannot manufacture a due transcription unit");
+});
+
+test("a failed pause rolls back the frozen clock and capture remains continuous", async () => {
+  const fake = new FakeRecorder();
+  const capture = fakeCapture();
+  let clock = 1_000;
+  const recorder = new MeetingCaptureRecorder({
+    capture: capture.ops,
+    openStream: async () => tracked().stream,
+    createRecorder: () => fake as unknown as MediaRecorder,
+    now: () => clock,
+  });
+  await recorder.start({ scope: { orgId: null } });
+
+  fake.pause = () => { throw new Error("pause failed"); };
+  clock = 4_000;
+  assert.throws(() => recorder.pause(), /pause failed/);
+  assert.equal(fake.state, "recording");
+  assert.equal(recorder.paused, false);
+
+  clock = 7_000;
+  fake.emit([1]);
+  await recorder.settled();
+  assert.deepEqual(capture.appended, [
+    { id: "mtg-test", bytes: [1], durationMs: 6_000 },
+  ], "the failed pause boundary is not retained as a false duration cutoff");
 });
 
 test("a chunk that cannot be written is reported while the meeting is still running", async () => {

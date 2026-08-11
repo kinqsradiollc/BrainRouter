@@ -86,8 +86,9 @@
  * back on unmount.
  */
 import {
-  appendSegment,
+  appendChunk as appendCaptureChunk,
   beginTranscriptFold,
+  captureChunks,
   createCaptureSession,
   discardCapture as discardCaptureSession,
   drainWakeDelayMs,
@@ -95,6 +96,7 @@ import {
   finalizeCapture,
   foldTranscript,
   reconcileCaptureDraft,
+  sealDueUnits,
   settleTranscriptForSubmit,
   stopCapture,
   unsettledSegments,
@@ -164,16 +166,27 @@ export const REAP_WARNING = "Recordings this device can no longer account for we
 interface ActiveCapture {
   readonly store: MeetingCaptureStore;
   readonly sessionId: string;
-  readonly startedMs: number;
+  /** Active-time origin, reset at the exact instant `MediaRecorder.start` runs. */
+  startedMs: number;
   readonly mimeType: string;
   bytes: number;
   /**
-   * When the previous chunk landed. A segment's duration is measured rather than
-   * assumed to be the timeslice: `MediaRecorder` pauses, the tab is backgrounded,
-   * and the last chunk of a meeting is always short — and these numbers are what
-   * D5 prints in a gap marker, so a guessed one misreports where the hole is.
+   * Active recorder time at the previous chunk. Wall-clock time spent paused is
+   * excluded, while a slow durable write is harmless because the media event
+   * captures its timestamp before that await begins. These numbers are what D5
+   * prints in a gap marker, so a guessed one misreports where the hole is.
    */
-  lastChunkMs: number;
+  lastChunkActiveMs: number;
+  /** Wall-clock time accumulated across completed pauses. */
+  pausedMs: number;
+  /** Start of the current pause, or null while audio time is advancing. */
+  pausedAtMs: number | null;
+}
+
+/** Elapsed audio time, deliberately different from elapsed wall-clock time. */
+function activeCaptureMs(capture: ActiveCapture, at: number): number {
+  const openPauseMs = capture.pausedAtMs === null ? 0 : Math.max(0, at - capture.pausedAtMs);
+  return Math.max(0, at - capture.startedMs - capture.pausedMs - openPauseMs);
 }
 
 /**
@@ -194,14 +207,15 @@ export interface RetainedAudio {
  *
  * A recovered meeting whose transcript comes back but whose recording can never
  * be heard satisfies half of the destructive test. `url` is an object URL over
- * what the store reassembled, so it is revoked on the way out; `missing` is how
- * many chunks the store could not read, because a player that silently skips
- * them is the "quietly wrong" failure D5 rules out one layer up.
+ * what the store reassembled, so it is revoked on the way out;
+ * `missingChunks` is how many saved durability chunks the store could not read,
+ * because a player that silently skips them is the "quietly wrong" failure D5
+ * rules out one layer up. It is deliberately not a unit/segment count.
  */
 export interface CapturePreview {
   readonly sessionId: string;
   readonly url: string;
-  readonly missing: number;
+  readonly missingChunks: number;
 }
 
 /** The one recorder fact this module needs, so a test does not have to be a browser. */
@@ -292,7 +306,7 @@ export interface CaptureSurfaceState {
   /**
    * The window between `stop()` and the capture being settled — `recording` is
    * already false across it while the final chunk is still being written and has
-   * no segment yet.
+   * no ledger entry yet.
    */
   readonly settling: boolean;
   /**
@@ -853,7 +867,12 @@ export class MeetingCaptureSurface {
         template: captureTemplate(this.#state.template),
         ...(this.#state.language === "auto" ? {} : { language: this.#state.language }),
       });
-      await store.begin({ sessionId, startedAt, payload: serializeCapturePayload({ ...(title ? { title } : {}), session }) });
+      await store.begin({
+        sessionId,
+        startedAt,
+        chunkMs: MEETING_CAPTURE_TIMESLICE_MS,
+        payload: serializeCapturePayload({ ...(title ? { title } : {}), session }),
+      });
       // 2/3 — the last line before `getUserMedia`. A microphone prompt is not
       // something to raise on a page the person has left, and the lock and the
       // record taken above go back with this: it is the ordering that used to
@@ -876,7 +895,9 @@ export class MeetingCaptureSurface {
         store,
         sessionId,
         startedMs: recordingMs,
-        lastChunkMs: recordingMs,
+        lastChunkActiveMs: 0,
+        pausedMs: 0,
+        pausedAtMs: null,
         mimeType: microphone.recorder.mimeType || DEFAULT_CAPTURE_MIME_TYPE,
         bytes: 0,
       };
@@ -905,7 +926,10 @@ export class MeetingCaptureSurface {
       const recorder = microphone.recorder;
       const opened = microphone;
       recorder.ondataavailable = (event) => {
-        if (event.data.size) void this.#persistChunk(capture, event.data);
+        // Capture the media event's time, not the later instant a slow durable
+        // write resolves. Unit policy is about audio duration; storage latency
+        // must not make a three-second chunk look like a thirty-second utterance.
+        if (event.data.size) void this.#persistChunk(capture, event.data, this.#ports.now());
       };
       recorder.onstop = () => {
         opened.release();
@@ -916,6 +940,7 @@ export class MeetingCaptureSurface {
       this.#microphone = opened;
       // D1 — an explicit timeslice. Without one MediaRecorder may hand over a
       // single blob at the end, and writing it down then buys nothing.
+      capture.startedMs = this.#ports.now();
       recorder.start(MEETING_CAPTURE_TIMESLICE_MS);
       this.#setClaiming("");
       this.#patch({ recording: true, paused: false });
@@ -986,40 +1011,72 @@ export class MeetingCaptureSurface {
   togglePause(): void {
     const recorder = this.#recorder;
     if (!recorder) return;
+    const capture = this.#active;
     if (recorder.state === "recording") {
-      recorder.pause();
+      const previousPausedAtMs = capture?.pausedAtMs ?? null;
+      if (capture) capture.pausedAtMs = this.#ports.now();
+      try {
+        recorder.pause();
+      } catch (caught) {
+        // MediaRecorder can reject a pause when its state changes underneath
+        // the click. Its clock did not pause, so neither may ours: leaving this
+        // timestamp behind would erase the next active chunk from the timeline.
+        if (capture) capture.pausedAtMs = previousPausedAtMs;
+        throw caught;
+      }
       this.#patch({ paused: true });
     } else if (recorder.state === "paused") {
-      recorder.resume();
+      const previousPausedMs = capture?.pausedMs ?? 0;
+      const previousPausedAtMs = capture?.pausedAtMs ?? null;
+      if (capture && capture.pausedAtMs !== null) {
+        const resumedMs = this.#ports.now();
+        capture.pausedMs += Math.max(0, resumedMs - capture.pausedAtMs);
+        capture.pausedAtMs = null;
+      }
+      try {
+        recorder.resume();
+      } catch (caught) {
+        // A failed resume is still paused. Restore the open pause exactly, or a
+        // later successful retry counts the interval between the two clicks as
+        // audio and can seal a transcription unit that was never recorded.
+        if (capture) {
+          capture.pausedMs = previousPausedMs;
+          capture.pausedAtMs = previousPausedAtMs;
+        }
+        throw caught;
+      }
       this.#patch({ paused: false });
     }
   }
 
   /**
-   * ADR-035 D1/D3 — the chunk becomes bytes before it becomes anything else,
-   * then a segment, then work for the queue.
+   * ADR-035 D1/D9 — the chunk becomes bytes before it becomes anything else,
+   * then a ledger entry; only the transcription policy can seal a run of those
+   * entries into work for the queue.
    *
-   * **Nothing is asked before the write.** There used to be a heartbeat here,
-   * and with it a rule about what to do when this tab could no longer tell
-   * whether it still held the recording. Neither is needed now and neither is
+   * **Nothing asynchronous is asked before the write.** The media-event
+   * timestamp is captured synchronously by the caller, then there used to be a
+   * heartbeat here, and with it a rule about what to do when this tab could no
+   * longer tell whether it still held the recording. Neither is needed now and neither is
    * safe to reintroduce: a lock cannot be taken from a tab that holds it, so
    * while this handler is running nobody else is writing to this capture —
-   * there is no zombie case to detect. `appendChunk` is the first statement
-   * again, which also restores the property the beat quietly broke: the write
-   * joins the store's queue synchronously, before Stop can settle around it.
+   * there is no zombie case to detect. `appendChunk` is the first awaited
+   * operation again, which also restores the property the beat quietly broke:
+   * the write joins the store's queue synchronously, before Stop can settle
+   * around it.
    *
-   * **Keep it first.** That ordering is the entire reason `#finishCapture` can
-   * settle a meeting by draining the store alone. Put any await in front of it
-   * and the final chunk is no longer in the queue Stop waits on: that is how a
-   * meeting came to be settled without its ending, and nothing above this line
-   * will say so.
+   * **Keep it the first awaited operation.** That ordering is the entire reason
+   * `#finishCapture` can settle a meeting by draining the store alone. Put any
+   * await in front of it and the final chunk is no longer in the queue Stop
+   * waits on: that is how a meeting came to be settled without its ending, and
+   * nothing above this line will say so.
    *
    * Three steps, three separate failures, and they are NOT the same news. One
    * `try` around all three wrote one sentence for all of them — "that audio is
    * missing from the meeting" — which is true of the first and false of the
    * other two.
    */
-  async #persistChunk(capture: ActiveCapture, data: Blob): Promise<void> {
+  async #persistChunk(capture: ActiveCapture, data: Blob, receivedMs: number): Promise<void> {
     // Stopping is the same response to "the store is full" whichever write
     // discovered it: the surface must stop offering "■ Stop recording" while
     // every remaining chunk is refused.
@@ -1037,30 +1094,31 @@ export class MeetingCaptureSurface {
       // close WITHOUT stopping the recording, and `submit` clears it — so the
       // one statement that part of the recording was never written was erased at
       // the exact moment the user committed and the audio was deleted.
-      this.#patch({ warning: `A piece of this recording could not be saved on this device — ${describe(caught, "the capture store refused the write.")} That audio is missing from the meeting, and no segment was recorded for it, so the transcript cannot state it as a gap either.` });
+      this.#patch({ warning: `A piece of this recording could not be saved on this device — ${describe(caught, "the capture store refused the write.")} That audio is missing from the meeting, so the transcript cannot state it as a gap either.` });
       // The success path's `exhausted` guard never runs when the WRITE is what
       // failed — which is precisely when the store is full.
       await stopIfFull(caught);
       return;
     }
     capture.bytes += chunk.byteLength;
-    const landedMs = this.#ports.now();
-    const durationMs = Math.max(1, landedMs - capture.lastChunkMs);
-    capture.lastChunkMs = landedMs;
+    const receivedActiveMs = activeCaptureMs(capture, receivedMs);
+    const durationMs = Math.max(1, receivedActiveMs - capture.lastChunkActiveMs);
+    capture.lastChunkActiveMs = receivedActiveMs;
     const queue = this.#queue;
     if (queue && queue.session.id === capture.sessionId) {
       try {
-        // The index/sequence check is INSIDE the transition because `apply` is
-        // serialized: reading the length outside it would race a concurrent
-        // append. The queue's `readSegment(index)` port reads chunk `index`, so a
-        // segment recorded at the wrong index would transcribe somebody else's
-        // audio into plausible-looking text. An unclaimed chunk is the safe
-        // failure — `restoreCaptureSession` adopts it on the next load.
-        await queue.apply((session) => (
-          session.status === "recording" && session.segments.length === chunk.sequence
-            ? appendSegment(session, { byteLength: chunk.byteLength, durationMs })
-            : session
-        ));
+        // The sequence check is INSIDE the transition because `apply` is
+        // serialized: unit count is deliberately unrelated to chunk sequence
+        // after D9. A mismatch is left unclaimed for recovery instead of filing
+        // plausible audio under the wrong storage key.
+        await queue.apply((session) => {
+          if (session.status !== "recording" || captureChunks(session).length !== chunk.sequence) return session;
+          const appended = appendCaptureChunk(session, { byteLength: chunk.byteLength, durationMs });
+          // The durability write has already happened. Sealing is a separate,
+          // policy-sized decision and leaves a short tail open until more audio
+          // arrives or Stop/recovery seals it.
+          return sealDueUnits(appended);
+        });
         this.#publishSession(queue.session);
         void this.#runDrain();
       } catch (caught) {
@@ -1074,14 +1132,14 @@ export class MeetingCaptureSurface {
     try {
       const budget = await capture.store.budget({
         byteLength: capture.bytes,
-        recordedMs: this.#ports.now() - capture.startedMs,
+        recordedMs: activeCaptureMs(capture, this.#ports.now()),
       });
       this.#patch({ notice: budget.message });
       // Out of space: stop while everything recorded so far is still readable.
       if (budget.level === "exhausted") this.stop();
     } catch {
       // A reading we could not take, and nothing more: the chunk is written and
-      // the segment recorded. There is no loss here to report.
+      // recorded in the ledger. There is no loss here to report.
     }
   }
 
@@ -1114,7 +1172,7 @@ export class MeetingCaptureSurface {
       // enough BECAUSE `appendChunk` is the first thing `#persistChunk` does:
       // the write joins `#serialize` in the same turn the chunk was delivered
       // in, so every chunk the recorder has handed over is already in the queue
-      // this drains, and the segment each one records is applied ahead of the
+      // this drains, and each ledger append is applied ahead of the
       // `stopCapture` below it. That is a property of the order of two lines,
       // not a law — a heartbeat inserted in front of `appendChunk` once broke it
       // and a meeting was settled without its ending, which is why `#persistChunk`
@@ -1131,7 +1189,7 @@ export class MeetingCaptureSurface {
       const queue = this.#queue;
       if (!queue || queue.session.id !== capture.sessionId) return;
       // Ordered after the final chunk's own `apply` by the queue's write chain,
-      // so `stopCapture` cannot land before the segment it belongs with.
+      // so `stopCapture` cannot seal the open unit before that chunk is in it.
       await queue.apply((session) => (session.status === "recording" ? stopCapture(session, this.#instant()) : session));
       // The recording is over, so this capture is on its way OUT of this tab's
       // hands — but it has not left them yet, and the lock does not go back
@@ -1758,7 +1816,7 @@ export class MeetingCaptureSurface {
       this.#revokePreview();
       const url = this.#ports.createObjectUrl(audio.blob);
       this.#previewRef = { sessionId: record.sessionId, url };
-      this.#patch({ preview: { sessionId: record.sessionId, url, missing: audio.missing.length } });
+      this.#patch({ preview: { sessionId: record.sessionId, url, missingChunks: audio.missing.length } });
     } catch (caught) {
       this.#patch({ createError: describe(caught, "This recording could not be read back from this device.") });
     } finally {
@@ -2037,7 +2095,7 @@ export class MeetingCaptureSurface {
     try {
       const budget = await capture.store.budget({
         byteLength: capture.bytes,
-        recordedMs: this.#ports.now() - capture.startedMs,
+        recordedMs: activeCaptureMs(capture, this.#ports.now()),
       });
       return budget.level === "exhausted";
     } catch {

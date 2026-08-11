@@ -8,7 +8,7 @@
  * to save the "after" fails — which is the class of silent loss this ADR is
  * about.
  *
- * Two invariants this module enforces, because a host that got either wrong
+ * Four invariants this module enforces, because a host that got any one wrong
  * would fail quietly:
  *
  * 1. **A session id names a directory.** D6 has the desktop create a `0700`
@@ -20,7 +20,14 @@
  *    result for a segment that is already `done` is therefore dropped here, in
  *    the one place both hosts share, rather than in whichever surface remembered
  *    to guard against it.
- * 3. **A meeting someone is recording cannot be closed by someone else — and
+ * 3. **What is written and what is transcribed are sized separately (D9).** A
+ *    chunk is appended the moment the host has written its bytes; a unit is
+ *    sealed from a run of chunks when the transcription strategy says so. The
+ *    mechanics live in `chunkLedger.ts`; what lives here is which lifecycle
+ *    states permit each, and the two places a seal is not optional — a stop and
+ *    a recovery both have to claim the open run, or the last few seconds of
+ *    every meeting would be audio no unit mentions and nothing ever transcribes.
+ * 4. **A meeting someone is recording cannot be closed by someone else — and
  *    that is not decided here.** The two terminal transitions release the audio,
  *    so calling either on a live capture destroys a meeting in progress. For one
  *    round this module refused them by reading a heartbeat stamp off the record.
@@ -33,6 +40,17 @@
  *    it BEFORE these transitions. A guard here could only re-derive a worse
  *    answer from the record, so there is none.
  */
+import {
+  appendChunkToLedger,
+  capturedChunkByteLength,
+  DEFAULT_MEETING_UNIT_MS,
+  DEFAULT_MEETING_UNIT_POLICY,
+  sealUnitsFromLedger,
+  shouldSealUnit,
+  type AppendChunkInput,
+  type MeetingUnitPolicy,
+  type SealUnitsInput,
+} from './chunkLedger.js';
 import type {
   MeetingCaptureScope,
   MeetingCaptureSession,
@@ -42,15 +60,28 @@ import type {
 } from './types.js';
 
 /**
- * Open question 1 — segment length.
+ * Open question 1 — ANSWERED, and the question was wrong (D9).
  *
- * The ADR names 15–30s and says it should be measured against transcription
- * quality rather than guessed, because too-short segments cut words in half.
- * Until that measurement exists, both hosts use the midpoint from one constant
- * instead of picking their own: a shared default that is provably identical on
- * both surfaces is worth more than a marginally better one that is not.
+ * This was one 20-second constant doing three jobs: the recorder's timeslice,
+ * the size of the file on disk, the identity of a segment record, and the amount
+ * of audio posted for transcription. It was measured and the result was visibly
+ * slow, and the finding was not that the number should be smaller — it was that
+ * one number cannot answer "how much may a crash cost" (seconds),
+ * "how much audio does the model need" (an utterance) and "how fast does text
+ * appear" (continuously) at the same time.
+ *
+ * The two that survive as numbers are `DEFAULT_MEETING_CHUNK_MS` and
+ * `DEFAULT_MEETING_UNIT_MS` in `chunkLedger.ts`; the third is D10's job and is
+ * not a duration at all. This name stays, equal to the UNIT, only so a host that
+ * has not yet split its recorder keeps posting the same amount of audio it
+ * always did while it moves. **It is not a timeslice.** A recorder still handing
+ * this to `MediaRecorder` has not adopted D9, and §6 will say so: kill it
+ * mid-sentence and twenty seconds are missing.
+ *
+ * @deprecated Use `DEFAULT_MEETING_CHUNK_MS` for the write cadence and
+ * `DEFAULT_MEETING_UNIT_MS` for how much audio one request carries.
  */
-export const DEFAULT_MEETING_SEGMENT_MS = 20_000;
+export const DEFAULT_MEETING_SEGMENT_MS = DEFAULT_MEETING_UNIT_MS;
 
 /** Ids name directories (D6), so the alphabet is deliberately narrow. */
 const SESSION_ID_SHAPE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
@@ -93,8 +124,66 @@ export interface CreateMeetingCaptureInput {
 export interface AppendMeetingSegmentInput {
   readonly byteLength: number;
   readonly durationMs: number;
-  /** Elapsed-ms start. Defaults to the previous segment's end, which is the recorder's own cadence. */
+  /** Elapsed-ms start. Defaults to the previous unit's end for the one-file compatibility path. */
   readonly startMs?: number;
+}
+
+/**
+ * D1/D9 — a chunk of audio has been written to the device; put it in the ledger.
+ *
+ * This is the ONLY thing that happens on the write path. No unit is created, no
+ * request is prepared, nothing is decided about transcription: the point of D9
+ * is that the write cadence stops being an opinion about any of that. Sealing is
+ * a separate call the strategy makes (`sealDueUnits`, `sealUnit`), and while a
+ * unit is still being assembled the chunks are already durable — which is what
+ * makes §6's "kill it mid-sentence and count what is missing" answer in seconds.
+ */
+export function appendChunk(
+  session: MeetingCaptureSession,
+  input: AppendChunkInput,
+): MeetingCaptureSession {
+  if (session.status !== 'recording') {
+    throw new Error(`Cannot append audio to a meeting that is ${session.status}.`);
+  }
+  return appendChunkToLedger(session, input);
+}
+
+/**
+ * D9 — the open run of chunks becomes one transcription unit.
+ *
+ * Called by whichever strategy owns the boundary: the streaming one when the
+ * endpoint says an utterance is complete (`throughSequence` is what it
+ * acknowledged), the segmented one when enough audio has accumulated. A
+ * no-op when nothing is open, so a caller never has to check first.
+ *
+ * Permitted while `stopped`, deliberately: `stopCapture` seals through here, and
+ * a recovered capture whose chunks have just been adopted is stopped when its
+ * last run needs claiming.
+ */
+export function sealUnit(
+  session: MeetingCaptureSession,
+  input: SealUnitsInput = {},
+): MeetingCaptureSession {
+  requireOpen(session, 'seal audio for');
+  return sealUnitsFromLedger(session, input);
+}
+
+/**
+ * D9 — seal the units the policy says are due and leave the rest open.
+ *
+ * The segmented strategy's per-chunk call: hand it every chunk as it lands and
+ * it produces units of about `targetMs`, with the part-unit at the head of the
+ * queue still growing. The trailing remainder is NOT sealed here — that is
+ * `stopCapture`'s job, and sealing it early would post a two-second fragment on
+ * every chunk, which is the "shrinking the segment" non-fix D9 warns about.
+ */
+export function sealDueUnits(
+  session: MeetingCaptureSession,
+  policy: MeetingUnitPolicy = DEFAULT_MEETING_UNIT_POLICY,
+): MeetingCaptureSession {
+  requireOpen(session, 'seal audio for');
+  if (!shouldSealUnit(session, policy)) return session;
+  return sealUnitsFromLedger(session, { policy, keepRemainder: true });
 }
 
 export function isMeetingSessionId(value: unknown): value is string {
@@ -140,11 +229,22 @@ export function createCaptureSession(input: CreateMeetingCaptureInput): MeetingC
     ...(input.language ? { language: input.language } : {}),
     status: 'recording',
     segments: [],
+    // An explicit empty ledger distinguishes this record from the pre-D9 shape.
+    // That matters if chunk 0 lands but its record update is interrupted: orphan
+    // adoption must know whether the stored bytes cover 3s or the legacy 20s.
+    chunks: [],
   };
 }
 
 /**
- * D1/D3 — the host has just written a chunk of audio down; record it.
+ * D1/D3 — one chunk of audio written down AND sealed as a unit of its own.
+ *
+ * This is what appending meant before D9, when those were the same act, and it
+ * is kept because it still describes two honest cases: an import, which is one
+ * file that is one thing to transcribe, and a host that has not split its
+ * recorder yet. Everything else should append chunks and let a strategy decide
+ * where units end — a recorder calling this per chunk has made the chunk the
+ * unit again, which is the conflation D9 exists to undo.
  *
  * Called AFTER the bytes land, never before: a segment record is the model's
  * claim that audio for that range exists, and recovery believes it.
@@ -155,6 +255,14 @@ export function appendSegment(
 ): MeetingCaptureSession {
   if (session.status !== 'recording') {
     throw new Error(`Cannot append audio to a meeting that is ${session.status}.`);
+  }
+  // Once a capture has a ledger it is the only truth about what was written, so
+  // this goes through it rather than beside it — a segment appended around the
+  // ledger would claim audio under a sequence the store never filed anything at.
+  if (session.chunks !== undefined) {
+    const appended = appendChunkToLedger(session, input);
+    const sequence = appended.chunks![appended.chunks!.length - 1]!.sequence;
+    return sealUnitsFromLedger(appended, { throughSequence: sequence });
   }
   if (!Number.isFinite(input.byteLength) || input.byteLength <= 0) {
     throw new Error('A meeting segment must carry at least one byte of audio.');
@@ -300,14 +408,23 @@ export function requeueSegment(
   });
 }
 
-/** Capture ended; segments already on disk keep draining (D7). */
+/**
+ * Capture ended; units already on disk keep draining (D7).
+ *
+ * The open run is sealed on the way out (D9). Nothing more will be appended to
+ * it, so leaving it open would mean the last few seconds of every meeting were
+ * audio the ledger holds, no unit claims, and no queue will ever transcribe —
+ * an unmarked hole D5 could not even state, because there would be no segment to
+ * state it about.
+ */
 export function stopCapture(
   session: MeetingCaptureSession,
   at: string = new Date().toISOString(),
 ): MeetingCaptureSession {
   requireOpen(session, 'stop');
-  if (session.status === 'stopped') return session;
-  return { ...session, status: 'stopped', stoppedAt: at };
+  const sealed = sealUnitsFromLedger(session, { policy: DEFAULT_MEETING_UNIT_POLICY });
+  if (session.status === 'stopped') return sealed;
+  return { ...sealed, status: 'stopped', stoppedAt: at };
 }
 
 /** The "resume" half of what a recovered session offers (D2). */
@@ -337,12 +454,16 @@ export function finalizeCapture(
   at: string = new Date().toISOString(),
 ): MeetingCaptureSession {
   requireOpen(session, 'finalize');
-  const segments = session.segments.map((segment) =>
+  // Seal first (D9), so audio still in an unclaimed run becomes a stated gap
+  // rather than vanishing with the record. The audio is about to be released,
+  // so this is the last moment the transcript can say that stretch existed.
+  const sealed = sealUnitsFromLedger(session, { policy: DEFAULT_MEETING_UNIT_POLICY });
+  const segments = sealed.segments.map((segment) =>
     segment.state === 'pending' || segment.state === 'transcribing'
       ? { ...segment, state: 'failed' as const, failureReason: MEETING_UNFINISHED_REASON, lastAttemptAt: at }
       : segment,
   );
-  return { ...session, status: 'finalized', segments, stoppedAt: session.stoppedAt ?? at, closedAt: at };
+  return { ...sealed, status: 'finalized', segments, stoppedAt: session.stoppedAt ?? at, closedAt: at };
 }
 
 /**
@@ -366,16 +487,26 @@ export function discardCapture(
 /**
  * D2 — what a host applies to a persisted session at startup.
  *
- * THREE truths a crash leaves behind, and all are corrected here rather than
- * displayed: nothing is recording any more, a segment left mid-attempt did NOT
- * succeed, and — for records written by one earlier build — a `writer` stamp
- * claims somebody is still recording into this capture. Marking the second
+ * FOUR truths a crash leaves behind, and all are corrected here rather than
+ * displayed: nothing is recording any more, a unit left mid-attempt did NOT
+ * succeed, the chunks of a unit that was still being assembled belong to a unit
+ * nobody will ever finish assembling, and — for records written by one earlier
+ * build — a `writer` stamp claims somebody is still recording into this
+ * capture. Marking the second
  * failed rather than pending is the ADR-028 point: "Transcribing…" on a segment
  * whose process died twenty minutes ago is exactly the lie this ADR exists to
  * end. It keeps its spent attempt, so the retry bound still means something
  * across restarts.
  *
- * The third is a migration, and it is the same lie one level up. That build
+ * The third is D9's, and it is the one that keeps the split honest. A chunk is
+ * durable the instant it is written, but it is only WORK once a unit claims it,
+ * and the process that was going to seal that unit is gone. Sealing the open run
+ * here is what turns "the audio up to the kill is on disk" into "…and it is in
+ * the transcript" — §6's destructive test reads both halves. It is also why the
+ * worst case is the write cadence and not the unit size: the chunks written
+ * before the kill are all claimed, and only the audio never written is missing.
+ *
+ * The fourth is a migration, and it is the same lie one level up. That build
  * answered "is somebody recording into this?" from a heartbeat stamp in the
  * record, and a stamp cannot say that — an application killed a second ago
  * leaves one that looks perfectly fresh, so the meeting was withheld from the
@@ -393,20 +524,30 @@ export function recoverCaptureSession(
   at: string = new Date().toISOString(),
 ): MeetingCaptureSession {
   if (isTerminalCaptureStatus(session.status)) return session;
-  const segments = session.segments.map((segment) =>
+  const claimed = sealUnitsFromLedger(session, { policy: DEFAULT_MEETING_UNIT_POLICY });
+  const segments = claimed.segments.map((segment) =>
     segment.state === 'transcribing'
       ? { ...segment, state: 'failed' as const, failureReason: MEETING_INTERRUPTED_REASON, lastAttemptAt: at }
       : segment,
   );
   // Typed as unknown rather than as a lease: the shape is gone from the model,
   // and this is the only place that still has to know it was ever there.
-  const { writer: _abandoned, ...carried } = session as MeetingCaptureSession & { writer?: unknown };
+  const { writer: _abandoned, ...carried } = claimed as MeetingCaptureSession & { writer?: unknown };
   return { ...carried, status: 'stopped', segments, stoppedAt: session.stoppedAt ?? at };
 }
 
-/** Total bytes of audio the host claims to hold for this session. */
+/**
+ * Total bytes of audio the host claims to hold for this session.
+ *
+ * Counted from the LEDGER, not from the units (D9). A recording killed before
+ * its first unit was sealed still holds real audio, and counting units would
+ * report zero for it — which `isResumableSession` reads as "nothing to offer
+ * back", so §6's destructive test would lose exactly the meetings the split was
+ * supposed to protect. Identical to the old count for a pre-D9 record, where
+ * the units were the ledger.
+ */
 export function capturedByteLength(session: MeetingCaptureSession): number {
-  return session.segments.reduce((total, segment) => total + segment.byteLength, 0);
+  return capturedChunkByteLength(session);
 }
 
 /** Segments that have neither settled nor failed — D4's provisional set. */

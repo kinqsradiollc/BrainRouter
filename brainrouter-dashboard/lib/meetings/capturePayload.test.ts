@@ -1,20 +1,23 @@
 /**
- * ADR-035 D2/D3 — putting a meeting back together from what the store holds.
+ * ADR-035 D2/D3/D9 — putting a meeting back together from what the store holds.
  *
- * The invariant under test throughout: **a segment's index is its chunk's
- * sequence.** The queue reads audio by index, so any drift here transcribes the
- * wrong audio into text that looks perfectly plausible — the one failure worse
- * than a stated gap, because nothing about it looks wrong.
+ * The invariant under test throughout: **a transcription unit names every
+ * durability chunk it spans.** The queue reads those keys in order, so any
+ * drift here transcribes incomplete or wrong audio into plausible text — the
+ * one failure worse than a stated gap, because nothing about it looks wrong.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  appendChunk,
   appendSegment,
   createCaptureSession,
   finalizeCapture,
   markDone,
+  sealUnit,
   stopCapture,
+  type MeetingCaptureSession,
 } from "@kinqs/brainrouter-core/meetings";
 
 import {
@@ -48,8 +51,208 @@ function record(overrides: Partial<CaptureSessionRecord> = {}): CaptureSessionRe
 test("an unreadable payload leaves the audio beside it reachable", () => {
   assert.deepEqual(parseCapturePayload("{not json"), {});
   const restored = restoreCaptureSession({ record: record({ payload: "<<<", chunks: chunks(3) }), scope: SCOPE });
-  assert.equal(restored.segments.length, 3);
+  assert.equal(restored.segments.length, 3, "a record with no ledger retains the old one-chunk-per-unit cadence");
   assert.equal(restored.id, "mtg-1");
+});
+
+test("D9 — a kill before the first unit seals every durable chunk during recovery", () => {
+  let session = createCaptureSession({
+    id: "mtg-1",
+    scope: SCOPE,
+    startedAt: "2026-08-10T09:00:00.000Z",
+  });
+  session = appendChunk(session, { byteLength: 1024, durationMs: 3_000 });
+  assert.equal(session.segments.length, 0, "the durability write is not yet a transcription boundary");
+
+  const restored = restoreCaptureSession({
+    record: record({ payload: serializeCapturePayload({ session }), chunkMs: 3_000, chunks: chunks(1) }),
+    scope: SCOPE,
+    at: "2026-08-10T09:00:03.000Z",
+  });
+
+  assert.equal(restored.status, "stopped");
+  assert.deepEqual(restored.segments[0]?.chunks, [0]);
+  assert.equal(restored.segments[0]?.byteLength, 1024);
+  assert.equal(restored.segments[0]?.endMs, 3_000, "the recovered unit covers the audio written before the kill");
+});
+
+test("D9 — corrupt current unit references fall back to every physical chunk at the marked cadence", () => {
+  let session = createCaptureSession({ id: "mtg-1", scope: SCOPE });
+  session = appendChunk(session, { byteLength: 10, durationMs: 3_000 });
+  session = appendChunk(session, { byteLength: 20, durationMs: 3_000 });
+  session = sealUnit(session);
+  const payload = serializeCapturePayload({ session });
+
+  assert.deepEqual(parseCapturePayload(payload).session?.chunks?.map((chunk) => chunk.sequence), [0, 1]);
+  assert.deepEqual(parseCapturePayload(payload).session?.segments[0]?.chunks, [0, 1]);
+
+  const parsed = JSON.parse(payload) as { session: MeetingCaptureSession };
+  parsed.session = {
+    ...parsed.session,
+    segments: [{ ...parsed.session.segments[0]!, chunks: [0] }],
+  };
+  assert.equal(
+    parseCapturePayload(JSON.stringify(parsed)).session,
+    undefined,
+    "a unit that silently drops its second referenced chunk is not trusted",
+  );
+
+  const restored = restoreCaptureSession({
+    record: record({
+      payload: JSON.stringify(parsed),
+      chunkMs: 3_000,
+      // Listing a chunk does not promise its bytes can currently be read. The
+      // restore must still retain every physical reference so playback can name
+      // an unreadable one instead of losing it with the corrupt session JSON.
+      chunks: chunks(8, 10),
+    }),
+    scope: SCOPE,
+  });
+  assert.deepEqual(restored.chunks?.map((chunk) => chunk.sequence), [0, 1, 2, 3, 4, 5, 6, 7]);
+  assert.deepEqual(restored.segments.map((segment) => segment.chunks), [
+    [0, 1, 2, 3, 4, 5, 6],
+    [7],
+  ]);
+  assert.deepEqual(restored.segments.map((segment) => segment.endMs), [21_000, 24_000]);
+});
+
+test("a corrupt current capture keeps its original tenant metadata and cannot move with the switcher", () => {
+  const originalScope = { orgId: "org-a", workspaceId: "workspace-a" };
+  const currentScope = { orgId: "org-b", workspaceId: "workspace-b" };
+  let session = createCaptureSession({
+    id: "mtg-1",
+    startedAt: "2026-08-09T07:30:00.000Z",
+    scope: originalScope,
+    title: "Original planning session",
+    template: "retrospective",
+    language: "en-AU",
+  });
+  session = appendChunk(session, { byteLength: 10, durationMs: 3_000 });
+  session = appendChunk(session, { byteLength: 10, durationMs: 3_000 });
+  session = sealUnit(session);
+  const damaged = {
+    ...session,
+    // Neither terminality nor this unit claim is trusted during salvage.
+    status: "finalized",
+    closedAt: "2039-01-01T00:00:00.000Z",
+    segments: [{ ...session.segments[0]!, chunks: [0] }],
+  };
+  const held = record({
+    startedAt: "2026-08-10T07:30:00.000Z",
+    chunkMs: 3_000,
+    chunks: chunks(8, 10),
+    payload: JSON.stringify({ session: damaged }),
+  });
+  assert.equal(parseCapturePayload(held.payload).session, undefined, "the corrupt state is not accepted as a session");
+
+  const restored = restoreCaptureSession({
+    record: held,
+    scope: currentScope,
+    at: "2026-08-11T10:00:00.000Z",
+  });
+  assert.deepEqual(restored.scope, originalScope);
+  assert.equal(restored.title, "Original planning session");
+  assert.equal(restored.template, "retrospective");
+  assert.equal(restored.language, "en-AU");
+  assert.equal(restored.startedAt, "2026-08-09T07:30:00.000Z");
+  assert.equal(restored.status, "stopped", "a corrupt terminal status is not carried over");
+  assert.equal(restored.stoppedAt, "2026-08-11T10:00:00.000Z");
+  assert.equal(restored.closedAt, undefined, "a corrupt terminal timestamp is not carried over");
+  assert.deepEqual(restored.chunks?.map((chunk) => chunk.sequence), [0, 1, 2, 3, 4, 5, 6, 7]);
+  assert.deepEqual(restored.segments.map((segment) => segment.chunks), [[0, 1, 2, 3, 4, 5, 6], [7]]);
+  assert.deepEqual(resumableCaptures([held], { scope: currentScope }), [], "org B cannot be offered org A's capture");
+  assert.equal(resumableCaptures([held], { scope: originalScope }).length, 1, "the original tenant can still recover it");
+});
+
+for (const status of ["finalized", "discarded"] as const) {
+  test(`a live session changed only to ${status} without terminal stamps is salvaged`, () => {
+    let session = createCaptureSession({
+      id: "mtg-1",
+      scope: { orgId: "org-a" },
+      title: "Lifecycle integrity",
+    });
+    session = appendChunk(session, { byteLength: 10, durationMs: 3_000 });
+    const damaged = { ...session, status };
+    const held = record({
+      payload: JSON.stringify({ session: damaged }),
+      chunkMs: 3_000,
+      chunks: chunks(1, 10),
+    });
+
+    assert.equal(
+      parseCapturePayload(held.payload).session,
+      undefined,
+      "a terminal status without stoppedAt and closedAt is not a valid session",
+    );
+    const restored = restoreCaptureSession({
+      record: held,
+      scope: { orgId: "org-b" },
+      at: "2026-08-11T10:00:00.000Z",
+    });
+    assert.equal(restored.status, "stopped");
+    assert.equal(restored.stoppedAt, "2026-08-11T10:00:00.000Z");
+    assert.equal(restored.closedAt, undefined);
+    assert.equal(restored.scope.orgId, "org-a", "bounded matching-id metadata survives lifecycle salvage");
+    assert.deepEqual(restored.chunks?.map((chunk) => chunk.sequence), [0]);
+  });
+}
+
+test("corrupt metadata is ignored when its raw session id does not match the physical record", () => {
+  const payload = JSON.stringify({
+    session: {
+      id: "mtg-someone-else",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      scope: { orgId: "org-a" },
+      title: "Another recording",
+      template: "standup",
+      language: "en-AU",
+      status: "recording",
+      segments: "corrupt",
+    },
+  });
+  const restored = restoreCaptureSession({
+    record: record({ payload, chunkMs: 3_000, chunks: chunks(1) }),
+    scope: { orgId: "org-b" },
+  });
+  assert.equal(restored.scope.orgId, "org-b");
+  assert.equal(restored.title, "Untitled meeting");
+  assert.equal(restored.template, "general");
+  assert.equal(restored.language, undefined);
+});
+
+test("matching corrupt metadata is retained field-by-field only inside its bounds", () => {
+  const payload = JSON.stringify({
+    session: {
+      id: "mtg-1",
+      startedAt: "x".repeat(65),
+      scope: { orgId: "org-a", workspaceId: "workspace-a" },
+      title: "x".repeat(501),
+      template: "not-a-template",
+      language: "x".repeat(65),
+      status: "recording",
+      segments: "corrupt",
+    },
+  });
+  const restored = restoreCaptureSession({
+    record: record({ payload, chunkMs: 3_000, chunks: chunks(1) }),
+    scope: { orgId: "org-b" },
+    template: "standup",
+    language: "fr",
+  });
+  assert.deepEqual(restored.scope, { orgId: "org-a", workspaceId: "workspace-a" }, "the bounded tenant identity survives");
+  assert.equal(restored.title, "Untitled meeting", "an overlong title is not carried");
+  assert.equal(restored.template, "standup", "an unknown template is not carried");
+  assert.equal(restored.language, "fr", "an overlong language tag is not carried");
+  assert.equal(restored.startedAt, "2026-08-10T09:00:00.000Z", "an invalid raw instant falls back to the bounded manifest instant");
+});
+
+test("an invalid present cadence marker falls back to D9 rather than legacy timing", () => {
+  const restored = restoreCaptureSession({
+    record: record({ payload: "<<<", chunkMs: 20_000, chunks: chunks(7, 10) }),
+    scope: SCOPE,
+  });
+  assert.deepEqual(restored.segments.map((segment) => segment.chunks), [[0, 1, 2, 3, 4, 5, 6]]);
+  assert.equal(restored.segments[0]?.endMs, 21_000, "an invalid marker must not stretch seven current chunks to 140 seconds");
 });
 
 test("a capture recorded before the session model existed still comes back, named", () => {
@@ -61,10 +264,12 @@ test("a capture recorded before the session model existed still comes back, name
   assert.equal(restored.scope.orgId, "org-1");
 });
 
-test("a chunk the manifest never mentioned is adopted, not stranded", () => {
+test("a legacy orphan chunk keeps the pre-D9 duration when it is adopted", () => {
   // D1b: a closing tab gets very little time, so the write that was meant to
   // record the last segment is exactly the one that does not land.
-  let session = createCaptureSession({ id: "mtg-1", scope: SCOPE, startedAt: "2026-08-10T09:00:00.000Z" });
+  const minted = createCaptureSession({ id: "mtg-1", scope: SCOPE, startedAt: "2026-08-10T09:00:00.000Z" });
+  const { chunks: _newLedger, ...legacy } = minted;
+  let session: MeetingCaptureSession = legacy;
   session = appendSegment(session, { byteLength: 1024, durationMs: 20_000 });
   const restored = restoreCaptureSession({
     record: record({ payload: serializeCapturePayload({ session }), chunks: chunks(3) }),
@@ -72,6 +277,9 @@ test("a chunk the manifest never mentioned is adopted, not stranded", () => {
   });
   assert.equal(restored.segments.length, 3);
   assert.deepEqual(restored.segments.map((segment) => segment.index), [0, 1, 2]);
+  assert.deepEqual(restored.segments[1]?.chunks, [1]);
+  assert.deepEqual(restored.segments[2]?.chunks, [2]);
+  assert.equal(restored.segments[2]?.endMs, 60_000, "forcing the D9 3s default here must fail this guard");
 });
 
 // The adoption RULE is `adoptCaptureChunks` in the shared model and is tested

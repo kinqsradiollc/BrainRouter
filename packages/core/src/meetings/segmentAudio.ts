@@ -1,9 +1,9 @@
 /**
- * ADR-035 D3 — turning ONE stored chunk into something the STT endpoint can
- * decode.
+ * ADR-035 D3/D9 — turning the stored chunks of ONE transcription unit into
+ * something the STT endpoint can decode.
  *
  * This module exists because of a property of `MediaRecorder` that quietly
- * breaks per-segment transcription if nobody accounts for it: with an explicit
+ * breaks per-unit transcription if nobody accounts for it: with an explicit
  * timeslice (D1), only the FIRST blob carries the container header. Every blob
  * after it is a bare media fragment — a Matroska cluster, or an MP4
  * `moof`/`mdat` pair — and a bare fragment is not a file. Post one to
@@ -18,7 +18,7 @@
  * fragment) followed by any single media fragment is a valid, decodable stream.
  * So this module finds where the first blob stops being a header and starts
  * being audio, and the queue's `readSegment` port prepends that prefix to every
- * later chunk.
+ * later unit.
  *
  * Why prepend a prefix rather than the alternatives:
  *
@@ -91,17 +91,38 @@ export function initializationSegmentLength(first: Uint8Array): number {
 }
 
 /**
- * The bytes to POST for one segment.
+ * The bytes to POST for one unit, given the chunks it spans.
  *
- * Segment 0 already IS a complete file, so it is passed through untouched —
- * copying it would double the largest allocation on the recording path for
- * nothing. Later segments get the header in front of them.
+ * A unit that starts at chunk 0 already begins with a complete file header, so
+ * its first chunk carries the initialization segment and nothing is prepended;
+ * every later unit gets the header in front of its first fragment. The chunks
+ * themselves are concatenated in order, which is exactly the "initialization
+ * segment followed by media fragments" shape Media Source Extensions decode —
+ * one fragment or twenty makes no difference to the decoder.
+ *
+ * The single-chunk call (`index === 0` meaning "this unit starts the recording")
+ * is the same rule with a run of one, which is what a pre-D9 record has.
  */
-export function segmentUploadBytes(index: number, chunk: Uint8Array, initialization: Uint8Array): Uint8Array {
-  if (index === 0 || initialization.byteLength === 0) return chunk;
-  const joined = new Uint8Array(initialization.byteLength + chunk.byteLength);
-  joined.set(initialization, 0);
-  joined.set(chunk, initialization.byteLength);
+export function segmentUploadBytes(
+  index: number,
+  chunk: Uint8Array | readonly Uint8Array[],
+  initialization: Uint8Array,
+): Uint8Array {
+  const run = Array.isArray(chunk) ? (chunk as readonly Uint8Array[]) : [chunk as Uint8Array];
+  if (!run.length) throw new Error(MEETING_SEGMENT_AUDIO_MISSING.replace('{index}', String(index)));
+  const prefix = index === 0 || initialization.byteLength === 0 ? undefined : initialization;
+  if (!prefix && run.length === 1) return run[0]!;
+  const total = (prefix?.byteLength ?? 0) + run.reduce((sum, part) => sum + part.byteLength, 0);
+  const joined = new Uint8Array(total);
+  let at = 0;
+  if (prefix) {
+    joined.set(prefix, at);
+    at += prefix.byteLength;
+  }
+  for (const part of run) {
+    joined.set(part, at);
+    at += part.byteLength;
+  }
   return joined;
 }
 
@@ -117,37 +138,68 @@ export interface SegmentAudioSource {
   readChunk(index: number): Promise<Uint8Array | null> | Uint8Array | null;
 }
 
+export interface SegmentAudioReaderOptions {
+  /**
+   * D9 — the durability chunks a unit spans, in order.
+   *
+   * Omit it and a unit is one chunk under its own index, which is what a record
+   * written before D9 means and what an import is. A host that assembles units
+   * from several chunks passes `unitChunkSequences(session.segments[index])`;
+   * getting this wrong is not a crash but a plausible-looking transcript of the
+   * wrong audio, which is why the ordering is the caller's ledger and never
+   * inferred here.
+   */
+  chunksOf?(index: number): readonly number[] | undefined;
+}
+
 /**
  * A `readSegment` port for `MeetingTranscriptionQueue`, built over one host's
  * chunk store.
  *
  * Both hosts need exactly this and neither should write it twice: read the
- * chunk, and for anything after the first put the container header back in front
- * of it. The header is read once and reused, because re-deriving it per attempt
- * would read chunk 0 off the device ~180 times in an hour-long meeting.
+ * unit's chunks, and for any unit that does not start the recording put the
+ * container header back in front of them. The header is read once and reused,
+ * because re-deriving it per attempt would read chunk 0 off the device once per
+ * unit for the length of the meeting.
  *
  * The mid-meeting case is the subtle one, and it is why this is a function
  * rather than a note in a comment: a queue rebuilt after a crash or a reload may
- * be asked for segment 57 having never read segment 0. So the reader fetches
- * chunk 0 for its header on demand — and if chunk 0 is itself gone, it prepends
- * nothing rather than throwing. That is the right failure: the endpoint still
- * gets the fragment and may well decode it, whereas throwing would spend a retry
- * on a segment whose audio is perfectly fine.
+ * be asked for unit 57 having never read chunk 0. So the reader fetches chunk 0
+ * for its header on demand — and if chunk 0 is itself gone, it prepends nothing
+ * rather than throwing. That is the right failure: the endpoint still gets the
+ * fragments and may well decode them, whereas throwing would spend a retry on a
+ * unit whose audio is perfectly fine.
+ *
+ * A chunk the unit names and the store no longer holds IS a fact about this
+ * unit, so it throws and the queue counts it (D5). Silently transcribing the
+ * chunks that survived would attribute the unit's whole time range to part of
+ * its audio — a gap with no marker, inside a segment that claims to be settled.
  */
-export function createSegmentAudioReader(source: SegmentAudioSource): (index: number) => Promise<Uint8Array> {
+export function createSegmentAudioReader(
+  source: SegmentAudioSource,
+  options: SegmentAudioReaderOptions = {},
+): (index: number) => Promise<Uint8Array> {
   let initialization: Uint8Array | undefined;
   return async (index: number): Promise<Uint8Array> => {
-    const chunk = await source.readChunk(index);
-    if (!chunk) throw new Error(MEETING_SEGMENT_AUDIO_MISSING.replace('{index}', String(index)));
-    if (index === 0) {
-      initialization = chunk.slice(0, initializationSegmentLength(chunk));
-      return chunk;
+    const sequences = options.chunksOf?.(index) ?? [index];
+    const run: Uint8Array[] = [];
+    for (const sequence of sequences) {
+      const chunk = await source.readChunk(sequence);
+      if (!chunk) throw new Error(MEETING_SEGMENT_AUDIO_MISSING.replace('{index}', String(index)));
+      run.push(chunk);
+    }
+    if (!run.length) throw new Error(MEETING_SEGMENT_AUDIO_MISSING.replace('{index}', String(index)));
+    // A unit that starts the recording carries the header itself, so this is
+    // also where the header is learned for every later unit.
+    if (sequences[0] === 0) {
+      initialization = run[0]!.slice(0, initializationSegmentLength(run[0]!));
+      return segmentUploadBytes(0, run, new Uint8Array(0));
     }
     if (!initialization) {
       const first = await source.readChunk(0);
       initialization = first ? first.slice(0, initializationSegmentLength(first)) : new Uint8Array(0);
     }
-    return segmentUploadBytes(index, chunk, initialization);
+    return segmentUploadBytes(index, run, initialization);
   };
 }
 

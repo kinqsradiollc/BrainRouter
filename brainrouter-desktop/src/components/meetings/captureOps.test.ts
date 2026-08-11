@@ -131,7 +131,7 @@ test("D6 — a preload with no draft channels keeps no draft, rather than keepin
   assert.equal(createMeetingCaptureOps().draftAvailable, true);
 });
 
-test("§6 — the segments the store could not read back cross the bridge with the audio", async () => {
+test("§6 — the saved audio chunks the store could not read back cross the bridge with the audio", async () => {
   setBridge({
     captureBegin: async () => SESSION,
     captureAppend: async () => SESSION,

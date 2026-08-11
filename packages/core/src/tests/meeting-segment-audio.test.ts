@@ -87,6 +87,16 @@ test('with no header to prepend, a later segment is still sent as-is', () => {
   assert.equal(segmentUploadBytes(2, chunk, new Uint8Array(0)), chunk);
 });
 
+test('D9 — a unit upload contains every durability chunk in ledger order', () => {
+  const initialization = Uint8Array.from([1, 2]);
+  const upload = segmentUploadBytes(
+    4,
+    [Uint8Array.from([10, 11]), Uint8Array.from([20, 21]), Uint8Array.from([30, 31])],
+    initialization,
+  );
+  assert.deepEqual([...upload], [1, 2, 10, 11, 20, 21, 30, 31]);
+});
+
 /** A host's chunk store: the first chunk carries a 12-byte header, the rest do not. */
 function recorderChunks(count: number): { chunks: (Uint8Array | null)[]; reads: number[] } {
   const chunks: (Uint8Array | null)[] = [webmFirstChunk(12, 4)];
@@ -157,4 +167,52 @@ test('a chunk whose bytes are gone is this segment’s failure, and it says so',
   const store = recorderChunks(2);
   store.chunks[1] = null;
   await assert.rejects(reader(store)(1), /segment 1 is no longer readable/);
+});
+
+test('D9 — the reader assembles every named chunk and frames the later unit once', async () => {
+  const store = recorderChunks(5);
+  const units = [[0, 1, 2], [3, 4]] as const;
+  const readUnit = createSegmentAudioReader(
+    {
+      readChunk(index) {
+        store.reads.push(index);
+        return store.chunks[index] ?? null;
+      },
+    },
+    { chunksOf: (index) => units[index] },
+  );
+
+  const first = await readUnit(0);
+  assert.deepEqual(
+    [...first],
+    [...(store.chunks[0] as Uint8Array), ...(store.chunks[1] as Uint8Array), ...(store.chunks[2] as Uint8Array)],
+  );
+
+  const second = await readUnit(1);
+  assert.deepEqual(
+    [...second],
+    [
+      ...(store.chunks[0] as Uint8Array).slice(0, 12),
+      ...(store.chunks[3] as Uint8Array),
+      ...(store.chunks[4] as Uint8Array),
+    ],
+  );
+  assert.deepEqual(store.reads, [0, 1, 2, 3, 4], 'the cached header does not add a second chunk-0 read');
+});
+
+test('D9 — one missing interior chunk fails the whole unit instead of silently omitting audio', async () => {
+  const store = recorderChunks(3);
+  store.chunks[1] = null;
+  const readUnit = createSegmentAudioReader(
+    {
+      readChunk(index) {
+        store.reads.push(index);
+        return store.chunks[index] ?? null;
+      },
+    },
+    { chunksOf: () => [0, 1, 2] },
+  );
+
+  await assert.rejects(readUnit(0), /segment 0 is no longer readable/);
+  assert.deepEqual(store.reads, [0, 1], 'audio after the hole is not misattributed to the unit');
 });

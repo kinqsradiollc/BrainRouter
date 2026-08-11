@@ -39,6 +39,7 @@
  * for it.
  */
 import { capturedByteLength, isTerminalCaptureStatus, sameCaptureScope } from './captureSession.js';
+import { capturedElapsedMs } from './chunkLedger.js';
 import type { MeetingCaptureScope, MeetingCaptureSession } from './types.js';
 
 export interface ResumableSessionOptions {
@@ -51,7 +52,14 @@ export interface ResumableSessionOptions {
 }
 
 /**
- * D2 — audio present and no terminal state.
+ * D2/D9 — audio present and no terminal state.
+ *
+ * "Audio present" is asked of the chunk LEDGER, not of the units
+ * (`capturedByteLength`). A recording killed before its first unit was sealed
+ * holds real bytes on the device and no units at all, and a unit-shaped count
+ * would answer zero for it — so the offer would skip exactly the meeting §6's
+ * destructive test is about, and D9 would have introduced the failure it was
+ * meant to bound.
  *
  * Status is deliberately not narrowed to `recording`: a session stopped by a
  * clean quit still holds audio that never finished transcribing, and D7 says it
@@ -104,12 +112,14 @@ export function summarizeRecovery(session: MeetingCaptureSession): MeetingRecove
     else if (segment.state === 'failed') gaps += 1;
     else unsettled += 1;
   }
-  const last = session.segments[session.segments.length - 1];
   return {
     sessionId: session.id,
     title: session.title,
     startedAt: session.startedAt,
-    durationMs: last ? last.endMs : 0,
+    // From the ledger, for the same reason `isResumableSession` counts bytes
+    // there: a capture whose last chunks are not in a unit yet still recorded
+    // them, and an offer that under-reports its own length reads as data loss.
+    durationMs: capturedElapsedMs(session),
     byteLength: capturedByteLength(session),
     segments: session.segments.length,
     settled,

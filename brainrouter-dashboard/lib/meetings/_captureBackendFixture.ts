@@ -17,6 +17,7 @@
 import type {
   CaptureChunkRef,
   CaptureManifest,
+  CaptureManifestRead,
   CaptureStorageBackend,
   CaptureStorageKind,
 } from "./captureStorage";
@@ -86,6 +87,14 @@ export class FakeCaptureBackend implements CaptureStorageBackend {
   readonly chunks = new Map<string, Blob>();
   readonly manifests = new Map<string, CaptureManifest>();
 
+  /**
+   * Session ids whose top-level record physically exists but cannot be decoded.
+   * This models malformed OPFS JSON and malformed or unreadable IndexedDB rows;
+   * it is intentionally independent from `manifests`, just as corrupt bytes are
+   * independent from a valid in-memory `CaptureManifest` value.
+   */
+  readonly corruptManifests = new Set<string>();
+
   readonly #shuffleListing: boolean;
 
   readonly #writeTicks: number;
@@ -151,6 +160,7 @@ export class FakeCaptureBackend implements CaptureStorageBackend {
       throw new Error(`this origin refused the manifest for ${sessionId}`);
     }
     this.manifests.set(sessionId, manifest);
+    this.corruptManifests.delete(sessionId);
     this.calls.push(`wroteManifest:${sessionId}`);
   }
 
@@ -162,10 +172,12 @@ export class FakeCaptureBackend implements CaptureStorageBackend {
    */
   readonly failManifestReads = new Set<string>();
 
-  async readManifest(sessionId: string): Promise<CaptureManifest | undefined> {
+  async readManifest(sessionId: string): Promise<CaptureManifestRead> {
     this.calls.push(`readManifest:${sessionId}`);
     if (this.failManifestReads.delete(sessionId)) throw new Error(`cannot read ${sessionId}`);
-    return this.manifests.get(sessionId);
+    if (this.corruptManifests.has(sessionId)) return { state: "corrupt" };
+    const manifest = this.manifests.get(sessionId);
+    return manifest ? { state: "present", manifest } : { state: "absent" };
   }
 
   /**
@@ -180,7 +192,7 @@ export class FakeCaptureBackend implements CaptureStorageBackend {
   async listSessionIds(): Promise<readonly string[]> {
     await this.beforeListSessionIds?.();
     this.calls.push("listSessionIds");
-    const ids = new Set<string>(this.manifests.keys());
+    const ids = new Set<string>([...this.manifests.keys(), ...this.corruptManifests]);
     for (const key of this.chunks.keys()) ids.add(splitKey(key)[0]);
     return [...ids];
   }
@@ -189,6 +201,7 @@ export class FakeCaptureBackend implements CaptureStorageBackend {
     this.calls.push(`deleteSession:${sessionId}`);
     await spend(this.#deleteTicks);
     this.manifests.delete(sessionId);
+    this.corruptManifests.delete(sessionId);
     for (const key of [...this.chunks.keys()]) {
       if (splitKey(key)[0] === sessionId) this.chunks.delete(key);
     }

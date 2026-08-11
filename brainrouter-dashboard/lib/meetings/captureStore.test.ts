@@ -1,17 +1,24 @@
 /**
- * ADR-035 D1b — the durable capture protocol, exercised where the decisions are.
+ * ADR-035 D1b/D9 — the durable capture protocol, exercised where the decisions are.
  *
- * These run directly with node:test + tsx, the same way the dashboard's other
- * tests do (the workspace has no test script). Neither OPFS nor IndexedDB exists
- * here, which is exactly why `MeetingCaptureStore` holds all of the logic and the
- * two backends hold none: everything asserted below is behaviour the real store
- * performs against the real seam, not behaviour a mock performs against itself.
+ * These run directly with node:test + tsx through the dashboard test script.
+ * Neither OPFS nor IndexedDB exists here, which is exactly why
+ * `MeetingCaptureStore` holds all of the logic and the two backends hold none:
+ * everything asserted below is behaviour the real store performs against the
+ * real seam, not behaviour a mock performs against itself.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import {
+  appendChunk as appendCaptureChunk,
+  createCaptureSession,
+  discardCapture,
+  finalizeCapture,
+} from "@kinqs/brainrouter-core/meetings";
+
 import { audioBlob, FakeCaptureBackend } from "./_captureBackendFixture";
-import { resumableCaptures } from "./capturePayload";
+import { resumableCaptures, serializeCapturePayload } from "./capturePayload";
 import { MeetingCaptureStore, MEETING_CAPTURE_TIMESLICE_MS, type MeetingCaptureStoreOptions } from "./captureStore";
 
 /**
@@ -31,8 +38,18 @@ function store(backend = new FakeCaptureBackend(), options: MeetingCaptureStoreO
   return new MeetingCaptureStore(backend, options);
 }
 
-test("the chunk cadence stays inside the ADR's 15–30s range", () => {
-  assert.ok(MEETING_CAPTURE_TIMESLICE_MS >= 15_000 && MEETING_CAPTURE_TIMESLICE_MS <= 30_000);
+test("D9 — the durability cadence stays inside the ADR's 2–5s loss bound", () => {
+  assert.ok(MEETING_CAPTURE_TIMESLICE_MS >= 2_000 && MEETING_CAPTURE_TIMESLICE_MS <= 5_000);
+});
+
+test("a new manifest refuses a cadence outside D9's integer loss bound", async () => {
+  const subject = store();
+  for (const chunkMs of [1_999, 5_001, 3_000.5]) {
+    await assert.rejects(
+      () => subject.begin({ sessionId: `mtg-invalid-${String(chunkMs).replace(".", "-")}`, chunkMs }),
+      /whole number from 2,000 to 5,000 milliseconds/,
+    );
+  }
 });
 
 test("a session exists before any audio does", async () => {
@@ -115,6 +132,47 @@ test("audio reassembles in sequence order even when the backend lists out of ord
   assert.deepEqual(audio.missing, []);
 });
 
+test("readAudio keeps physical chunks after a sequence hole and names the hole", async () => {
+  const backend = new FakeCaptureBackend();
+  const subject = store(backend);
+  await subject.begin({ sessionId: "mtg-hole", payload: "{not valid session JSON" });
+  await backend.writeChunk("mtg-hole", 0, audioBlob(2, 0xaa));
+  await backend.writeChunk("mtg-hole", 2, audioBlob(2, 0xcc));
+
+  const audio = await subject.readAudio("mtg-hole");
+  assert.deepEqual(
+    [...new Uint8Array(await audio.blob.arrayBuffer())],
+    [0xaa, 0xaa, 0xcc, 0xcc],
+    "a hole does not silently truncate every later physical chunk",
+  );
+  assert.deepEqual(audio.missing, [1], "the missing physical sequence is reported honestly");
+});
+
+test("readAudio names a trailing chunk only a valid matching payload ledger claims", async () => {
+  let session = createCaptureSession({ id: "mtg-trailing", scope: SCOPE });
+  session = appendCaptureChunk(session, { byteLength: 2, durationMs: 3_000 });
+  session = appendCaptureChunk(session, { byteLength: 2, durationMs: 3_000 });
+  const backend = new FakeCaptureBackend();
+  const subject = store(backend);
+  await subject.begin({
+    sessionId: session.id,
+    payload: serializeCapturePayload({ session }),
+  });
+  await backend.writeChunk(session.id, 0, audioBlob(2, 0xaa));
+
+  const audio = await subject.readAudio(session.id);
+  assert.equal(audio.byteLength, 2);
+  assert.deepEqual(audio.missing, [1], "the valid ledger makes a missing trailing file visible");
+
+  const copied = createCaptureSession({ id: "mtg-someone-else", scope: { orgId: "org-other" } });
+  await subject.setPayload(session.id, serializeCapturePayload({ session: copied }));
+  assert.deepEqual(
+    (await subject.readAudio(session.id)).missing,
+    [],
+    "a valid session copied from another record supplies neither sequences nor tenant authority",
+  );
+});
+
 test("an unreadable chunk is reported, not thrown away and not thrown", async () => {
   const backend = new FakeCaptureBackend();
   const subject = store(backend);
@@ -127,10 +185,10 @@ test("an unreadable chunk is reported, not thrown away and not thrown", async ()
   assert.equal(audio.byteLength, 4, "the rest of the meeting still comes back");
 });
 
-test("a chunk whose read THROWS is reported too — one bad segment does not cost the meeting", async () => {
+test("a chunk whose read THROWS is reported too — one bad chunk does not cost the meeting", async () => {
   // The reproduction: `preview` came back null and the whole recovered meeting
-  // was unplayable while five of six segments sat on the device, because the
-  // read of segment 2 rejected instead of resolving `undefined`. Both real
+  // was unplayable while five of six chunks sat on the device, because the
+  // read of chunk 2 rejected instead of resolving `undefined`. Both real
   // backends reject — IndexedDB on `onerror`/`onabort`, OPFS when `getFile()`
   // finds the entry gone — so this is the ordinary injury, not the exotic one.
   const backend = new FakeCaptureBackend();
@@ -140,7 +198,7 @@ test("a chunk whose read THROWS is reported too — one bad segment does not cos
   backend.failReads.add("mtg-1:1");
 
   const audio = await subject.readAudio("mtg-1");
-  assert.deepEqual(audio.missing, [1], "the segment that could not be read is NAMED");
+  assert.deepEqual(audio.missing, [1], "the saved chunk that could not be read is NAMED");
   assert.equal(audio.byteLength, 8, "and the rest of the recording is still playable");
 });
 
@@ -197,12 +255,13 @@ test("recovery offers sessions with audio and no terminal state, newest first", 
   assert.deepEqual(await offered(subject), ["new", "old"]);
 });
 
-test("the payload round-trips without the store looking inside it", async () => {
+test("the payload round-trips without erasing its independent durability cadence", async () => {
   const subject = store();
-  await subject.begin({ sessionId: "mtg-1", payload: '{"segments":[]}' });
+  await subject.begin({ sessionId: "mtg-1", chunkMs: 3_000, payload: '{"segments":[]}' });
   const updated = await subject.setPayload("mtg-1", '{"segments":[{"index":0}]}');
   assert.equal(updated.payload, '{"segments":[{"index":0}]}');
   assert.equal(updated.closed, false, "settling is a separate, explicit decision");
+  assert.equal(updated.chunkMs, 3_000, "opaque session JSON cannot erase the recovery cadence");
 });
 
 test("a slow backend cannot lose the chunk that was still being written at Stop", async () => {
@@ -210,7 +269,7 @@ test("a slow backend cannot lose the chunk that was still being written at Stop"
   // `onstop` are both handlers that cannot await, so Stop calls readAudio while
   // the final write is still in flight; with an OPFS-shaped backend (a write
   // costs more ticks than a read) the read used to overtake it and transcription
-  // received a meeting missing its last twenty seconds.
+  // received a meeting missing its last durability chunk.
   const backend = new FakeCaptureBackend({ writeTicks: 5 });
   const subject = store(backend);
   await subject.begin({ sessionId: "mtg-1" });
@@ -319,6 +378,42 @@ test("reaping deletes audio no manifest claims, and names it", async () => {
   assert.deepEqual(await subject.listStoredSessionIds(), ["known"]);
 });
 
+for (const kind of ["opfs", "indexeddb"] as const) {
+  test(`${kind} keeps corrupt-manifest audio quarantined across repeated boots`, async () => {
+    const backend = new FakeCaptureBackend({ kind });
+    await backend.writeChunk("mtg-corrupt", 0, audioBlob(4, 7));
+    await backend.writeChunk("mtg-corrupt", 1, audioBlob(6, 8));
+    backend.corruptManifests.add("mtg-corrupt");
+    // The control has genuinely absent top-level metadata and remains eligible
+    // for ordinary orphan cleanup.
+    await backend.writeChunk("true-orphan", 0, audioBlob(3, 9));
+
+    const firstBoot = store(backend);
+    assert.deepEqual(await firstBoot.list(), [], "corrupt metadata cannot invent a tenant-scoped record");
+    assert.deepEqual(await offered(firstBoot), [], "and cannot become a recovery offer under the current tenant");
+    await assert.rejects(
+      () => firstBoot.begin({ sessionId: "mtg-corrupt" }),
+      /already exists/,
+      "Record cannot overwrite bytes merely because their manifest is corrupt",
+    );
+    assert.deepEqual(await firstBoot.reapOrphans(), ["true-orphan"]);
+    assert.equal(backend.chunks.get("mtg-corrupt:0")?.size, 4);
+    assert.equal(backend.chunks.get("mtg-corrupt:1")?.size, 6);
+    assert.equal(backend.chunks.has("true-orphan:0"), false, "a truly absent manifest still reaps");
+
+    const secondBoot = store(backend);
+    assert.deepEqual(await secondBoot.reapOrphans(), []);
+    assert.deepEqual(await secondBoot.listStoredSessionIds(), ["mtg-corrupt"]);
+    assert.equal(backend.chunks.get("mtg-corrupt:0")?.size, 4);
+    assert.equal(backend.chunks.get("mtg-corrupt:1")?.size, 6);
+    assert.equal(
+      backend.calls.some((call) => call === "deleteSession:mtg-corrupt"),
+      false,
+      "neither boot attempts to delete quarantined audio",
+    );
+  });
+}
+
 test("a live recording is never reaped, not even one this store has never seen", async () => {
   // THE data-loss reproduction. The reap used to be told which sessions were
   // known, by a caller that had listed them a moment earlier — so a recording
@@ -364,20 +459,52 @@ test("the recording in hand survives a reap even before its first chunk", async 
   assert.ok(await subject.read("in-hand"));
 });
 
-test("a settled capture whose audio outlived its delete is reaped", async () => {
-  // D6 — `MeetingCaptureSurface.#release` marks the record terminal BEFORE deleting the audio,
-  // so a failed or interrupted delete leaves exactly this: audio for a meeting
-  // the user accepted or threw away, which `resumable` will never offer back.
-  // The desktop reaps terminal captures on sight; without this the browser holds
-  // them until the origin is evicted.
+for (const [status, settle] of [
+  ["finalized", finalizeCapture],
+  ["discarded", discardCapture],
+] as const) {
+  test(`a valid ${status} capture whose audio outlived its delete is reaped`, async () => {
+    const sessionId = `mtg-${status}`;
+    let session = createCaptureSession({ id: sessionId, scope: SCOPE });
+    const backend = new FakeCaptureBackend();
+    const subject = store(backend);
+    await subject.begin({ sessionId, payload: serializeCapturePayload({ session }) });
+    await subject.appendChunk(sessionId, audioBlob(8, 1));
+    session = appendCaptureChunk(session, { byteLength: 8, durationMs: 3_000 });
+    const terminal = settle(session, "2026-08-11T10:00:00.000Z");
+    await subject.setPayload(sessionId, serializeCapturePayload({ session: terminal }), { closed: true });
+
+    assert.deepEqual(await subject.reapOrphans(), [sessionId]);
+    assert.deepEqual(await subject.listStoredSessionIds(), []);
+  });
+}
+
+test("a closed bit flipped over a valid live payload cannot authorize audio deletion", async () => {
+  let session = createCaptureSession({ id: "mtg-live-closed", scope: SCOPE });
   const backend = new FakeCaptureBackend();
   const subject = store(backend);
-  await subject.begin({ sessionId: "accepted" });
-  await subject.appendChunk("accepted", audioBlob(8, 1));
-  await subject.setPayload("accepted", "{}", { closed: true });
+  await subject.begin({ sessionId: session.id, payload: serializeCapturePayload({ session }) });
+  await subject.appendChunk(session.id, audioBlob(8, 1));
+  session = appendCaptureChunk(session, { byteLength: 8, durationMs: 3_000 });
+  // The payload remains byte-for-byte a valid live session; only the small
+  // top-level index bit is changed, reproducing the unsafe deletion authority.
+  await subject.setPayload(session.id, serializeCapturePayload({ session }), { closed: true });
 
-  assert.deepEqual(await subject.reapOrphans(), ["accepted"]);
-  assert.deepEqual(await subject.listStoredSessionIds(), []);
+  assert.deepEqual(await subject.reapOrphans(), []);
+  assert.equal(backend.chunks.get(`${session.id}:0`)?.size, 8);
+  assert.deepEqual(await offered(subject), [], "quarantine does not re-home the capture under a tenant");
+});
+
+test("a closed manifest with corrupt payload is quarantined rather than reaped", async () => {
+  const backend = new FakeCaptureBackend();
+  const subject = store(backend);
+  await subject.begin({ sessionId: "mtg-corrupt-closed", payload: "{torn" });
+  await subject.appendChunk("mtg-corrupt-closed", audioBlob(8, 1));
+  await subject.setPayload("mtg-corrupt-closed", "{torn", { closed: true });
+
+  assert.deepEqual(await subject.reapOrphans(), []);
+  assert.equal(backend.chunks.get("mtg-corrupt-closed:0")?.size, 8);
+  assert.deepEqual(await offered(subject), []);
 });
 
 test("reaping clears leftovers this model would never have minted", async () => {
@@ -554,8 +681,13 @@ test("D6 — `keep` protects a record the caller alone knows is in use", async (
   const backend = new FakeCaptureBackend();
   const subject = store(backend);
   await subject.begin({ sessionId: "mtg-in-hand", payload: "{}" });
-  await subject.begin({ sessionId: "mtg-settled", payload: "{}" });
-  await subject.setPayload("mtg-settled", "{}", { closed: true });
+  const settled = finalizeCapture(
+    createCaptureSession({ id: "mtg-settled", scope: SCOPE }),
+    "2026-08-11T10:00:00.000Z",
+  );
+  const settledPayload = serializeCapturePayload({ session: settled });
+  await subject.begin({ sessionId: "mtg-settled", payload: settledPayload });
+  await subject.setPayload("mtg-settled", settledPayload, { closed: true });
 
   // Both would be reaped — one as a settled capture, one as a chunk-less
   // manifest the caller called abandoned — and `keep` is the caller's one way to

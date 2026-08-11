@@ -26,7 +26,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { captureLockName } from "../../lib/meetings/captureLock";
-import { resumableCaptures } from "../../lib/meetings/capturePayload";
+import { parseCapturePayload, resumableCaptures } from "../../lib/meetings/capturePayload";
 import { SegmentTranscriptionError } from "../../lib/meetings/captureQueue";
 import { MEETING_CAPTURE_TIMESLICE_MS } from "../../lib/meetings/captureStore";
 import { MEETING_DRAFT_CAPTURE_ID } from "../../lib/meetings/meetingDraft";
@@ -55,6 +55,7 @@ test("D2 — Record takes the LOCK, then writes the session, then the audio, in 
 
   const record = await origin.record(sessionId);
   assert.ok(record, "the manifest exists");
+  assert.equal(record.chunkMs, MEETING_CAPTURE_TIMESLICE_MS, "the cadence survives even if the opaque session payload does not");
   assert.equal(record.chunks.length, 1, "the chunk is on the device");
   const stored = await origin.session(sessionId, "org-a");
   assert.equal(stored.segments.length, 1, "and the session claims it");
@@ -188,7 +189,7 @@ test("§6 — a KILLED tab's recording is offered back on the next load, with no
   const sessionId = await recordOneChunk(killed);
 
   // THE destructive test, and the whole regression this round exists for. No
-  // Stop, no teardown, no heartbeat — and, deliberately, NO CLOCK MOVEMENT
+  // Stop, no teardown, no heartbeat — and, deliberately, NO POST-KILL WAIT
   // either: the meeting must be offered back on the FIRST check a reopened tab
   // makes, because that surface asks once on mount and nothing re-asks it. With
   // a staleness threshold in the way this is where a person was shown an empty
@@ -210,6 +211,35 @@ test("§6 — a KILLED tab's recording is offered back on the next load, with no
   await flush();
   assert.equal(reopened.state.createError, "", "no refusal — nobody is writing to it");
   assert.equal(await origin.record(sessionId), undefined, "and the audio is really gone");
+});
+
+test("D9/§6 — a kill before the first unit recovers the short durable chunks as one unit", async () => {
+  const origin = new CaptureOrigin();
+  const killed = origin.tab();
+  await killed.surface.init();
+  await killed.record();
+  await killed.chunk(1024, 0x11, MEETING_CAPTURE_TIMESLICE_MS);
+  await killed.chunk(2048, 0x22, MEETING_CAPTURE_TIMESLICE_MS);
+  const sessionId = killed.state.session?.id ?? "";
+
+  const beforeKill = await origin.record(sessionId);
+  assert.ok(beforeKill);
+  const persisted = parseCapturePayload(beforeKill.payload).session;
+  assert.equal(persisted?.chunks?.length, 2, "each recorder event is already represented durably");
+  assert.equal(persisted?.segments.length, 0, "six seconds has not been mistaken for a transcription boundary");
+
+  killed.kill();
+  const reopened = origin.tab();
+  await reopened.surface.init();
+  await reopened.surface.refreshRecoverable();
+  const recovered = reopened.state.recoverable.find((candidate) => candidate.record.sessionId === sessionId);
+  assert.ok(recovered, "the ledger makes audio offerable even before any unit existed at the kill");
+  assert.deepEqual(recovered.session.segments[0]?.chunks, [0, 1]);
+  assert.equal(recovered.session.segments[0]?.byteLength, 3072);
+
+  await reopened.surface.pickUp(recovered);
+  await flush();
+  assert.match(reopened.state.transcript, /spoken words/, "the recovered multi-chunk unit reaches transcription");
 });
 
 test("§6 — a tab that RELOADS mid-recording can pick its own meeting straight back up", async () => {
@@ -1211,8 +1241,9 @@ test("Record pressed INSIDE a pick-up's awaits is refused, which is the ordering
   // — so a Record landing between the press and `#attachQueue` saw an idle tab
   // and started. `#attachQueue` then ran with the NEW recording as its
   // "previous" and handed that lock straight back: the live recording held
-  // nothing, its chunks were written and never claimed as segments, a second tab
-  // was offered it, and yesterday's words folded into the box it was writing to.
+  // nothing, its chunks were written and never entered in the session ledger, a
+  // second tab was offered it, and yesterday's words folded into the box it was
+  // writing to.
   const origin = new CaptureOrigin();
   const yesterday = origin.tab();
   await yesterday.surface.init();
@@ -1613,11 +1644,39 @@ test("§6 — the audio that came back is playable, and its object URL is handed
   await reopened.surface.previewCapture(record);
   await flush();
   assert.equal(reopened.state.preview?.sessionId, sessionId);
-  assert.equal(reopened.state.preview?.missing, 0, "every chunk read back");
+  assert.equal(reopened.state.preview?.missingChunks, 0, "every chunk read back");
 
   reopened.surface.closeDialog();
   assert.deepEqual(reopened.revokedUrls, reopened.objectUrls, "the URL over a whole meeting is not left pinned in the heap");
   assert.equal(reopened.state.preview, null);
+});
+
+test("D9 — playback counts two unreadable saved chunks even when they belong to one unit", async () => {
+  const origin = new CaptureOrigin();
+  const first = origin.tab();
+  await first.surface.init();
+  await first.record();
+  for (const fill of [1, 2, 3]) {
+    await first.chunk(1_024, fill, MEETING_CAPTURE_TIMESLICE_MS);
+  }
+  const sessionId = first.state.session?.id;
+  assert.ok(sessionId);
+  first.kill();
+
+  origin.backend.unreadable.add(`${sessionId}:0`);
+  origin.backend.unreadable.add(`${sessionId}:1`);
+  const restored = await origin.session(sessionId, "org-a");
+  assert.equal(restored.segments.length, 1, "the three durability chunks are one transcription unit");
+  assert.deepEqual(restored.segments[0]?.chunks, [0, 1, 2]);
+
+  const reopened = origin.tab();
+  await reopened.surface.init();
+  await reopened.surface.refreshRecoverable();
+  const record = (await origin.records()).find((candidate) => candidate.sessionId === sessionId);
+  assert.ok(record, "the current recording survives even when some listed bytes cannot be read");
+  await reopened.surface.previewCapture(record);
+  assert.equal(reopened.state.preview?.missingChunks, 2, "the warning counts physical chunks, not the one unit");
+  assert.ok(reopened.state.preview?.url, "the readable saved chunk still plays");
 });
 
 test("a chunk the store refuses is reported as lost audio, and one it accepts is not", async () => {
@@ -1649,6 +1708,82 @@ test("D1 — the recorder is given an explicit timeslice, so chunks arrive durin
 
   assert.ok(MEETING_CAPTURE_TIMESLICE_MS > 0, "the cadence is a real interval");
   assert.equal(tab.recorder.timeslice, MEETING_CAPTURE_TIMESLICE_MS, "and it is the one the recorder was started with");
+});
+
+test("D9 — paused wall time is not recorded as audio or used to seal a unit", async () => {
+  const origin = new CaptureOrigin();
+  const tab = origin.tab();
+  await tab.surface.init();
+  await tab.record();
+  await tab.chunk(1_024, 1, MEETING_CAPTURE_TIMESLICE_MS);
+
+  tab.surface.togglePause();
+  origin.skip(60_000);
+  tab.surface.togglePause();
+  await tab.chunk(1_024, 2, MEETING_CAPTURE_TIMESLICE_MS);
+
+  const sessionId = tab.state.session?.id;
+  assert.ok(sessionId);
+  const record = await origin.record(sessionId);
+  assert.ok(record);
+  const stored = parseCapturePayload(record.payload).session;
+  assert.ok(stored);
+  assert.deepEqual(stored.chunks?.map((chunk) => chunk.endMs), [3_000, 6_000]);
+  assert.equal(stored.segments.length, 0, "six seconds of audio stays below the unit boundary despite the long pause");
+});
+
+test("D9 — a refused pause rolls its clock back before the next successful pause", async () => {
+  const origin = new CaptureOrigin();
+  const tab = origin.tab();
+  await tab.surface.init();
+  await tab.record();
+
+  tab.recorder.pauseFails = true;
+  assert.throws(() => tab.surface.togglePause(), /pause refused/);
+  assert.equal(tab.recorder.state, "recording");
+  assert.equal(tab.state.paused, false);
+  await tab.chunk(1_024, 1, MEETING_CAPTURE_TIMESLICE_MS);
+
+  tab.surface.togglePause();
+  origin.skip(60_000);
+  tab.surface.togglePause();
+  await tab.chunk(1_024, 2, MEETING_CAPTURE_TIMESLICE_MS);
+
+  const sessionId = tab.state.session?.id;
+  assert.ok(sessionId);
+  const record = await origin.record(sessionId);
+  assert.ok(record);
+  const stored = parseCapturePayload(record.payload).session;
+  assert.ok(stored);
+  assert.deepEqual(stored.chunks?.map((chunk) => chunk.endMs), [3_000, 6_000]);
+  assert.equal(stored.segments.length, 0, "the failed click cannot manufacture a unit boundary");
+});
+
+test("D9 — a refused resume keeps the whole pause open for a successful retry", async () => {
+  const origin = new CaptureOrigin();
+  const tab = origin.tab();
+  await tab.surface.init();
+  await tab.record();
+  await tab.chunk(1_024, 1, MEETING_CAPTURE_TIMESLICE_MS);
+  tab.surface.togglePause();
+  origin.skip(60_000);
+
+  tab.recorder.resumeFails = true;
+  assert.throws(() => tab.surface.togglePause(), /resume refused/);
+  assert.equal(tab.recorder.state, "paused");
+  assert.equal(tab.state.paused, true);
+  origin.skip(60_000);
+  tab.surface.togglePause();
+  await tab.chunk(1_024, 2, MEETING_CAPTURE_TIMESLICE_MS);
+
+  const sessionId = tab.state.session?.id;
+  assert.ok(sessionId);
+  const record = await origin.record(sessionId);
+  assert.ok(record);
+  const stored = parseCapturePayload(record.payload).session;
+  assert.ok(stored);
+  assert.deepEqual(stored.chunks?.map((chunk) => chunk.endMs), [3_000, 6_000]);
+  assert.equal(stored.segments.length, 0, "paused wall time cannot prematurely seal a unit");
 });
 
 test("a Record that cannot claim its session hands the lock straight back", async () => {

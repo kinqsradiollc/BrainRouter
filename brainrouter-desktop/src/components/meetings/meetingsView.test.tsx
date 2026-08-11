@@ -149,6 +149,8 @@ interface FakeHost {
   /** The offer, and its complement — what window is recording what. */
   resumable: MeetingRecoverySummary[];
   writing: MeetingCaptureWriter[];
+  /** Physical saved chunks playback must identify as unreadable. */
+  readMissing: number[];
   /** Push "the live set changed", as main does on Record, Stop, close and a window going away. */
   announceWriters(): void;
   /** Fail the next create, so the compose form stays up and can be read. */
@@ -193,6 +195,7 @@ function installHost(): { host: FakeHost; restore: () => void } {
     record: session(),
     resumable: [],
     writing: [],
+    readMissing: [],
     announceWriters: () => undefined,
     createFails: false,
     adoptRefusal: null,
@@ -259,7 +262,7 @@ function installHost(): { host: FakeHost; restore: () => void } {
     },
     captureRead: async () => {
       if (pendingRead) { const gate = pendingRead; pendingRead = null; await gate; }
-      return { bytes: new Uint8Array([1, 2, 3]), contentType: "audio/webm", missing: [] };
+      return { bytes: new Uint8Array([1, 2, 3]), contentType: "audio/webm", missing: host.readMissing };
     },
     captureFinalize: async (id: string, holderId?: string) => { host.finalized.push({ id, ...(holderId ? { holderId } : {}) }); return { ok: true }; },
     captureDiscard: async (id: string, holderId?: string) => { host.discarded.push({ id, ...(holderId ? { holderId } : {}) }); return { ok: true }; },
@@ -347,6 +350,23 @@ async function compose(host: FakeHost): Promise<Mounted> {
 function transcriptBox(mounted: Mounted): string {
   return valueOf(field(mounted.root, TRANSCRIPT_FIELD));
 }
+
+test("D9 the surface distinguishes the durability cadence from transcription units", async () => {
+  const { host, restore } = installHost();
+  try {
+    const mounted = await compose(host);
+    const beforeRecord = screenText(mounted.root);
+    assert.match(beforeRecord, /Audio is saved every 3s/);
+    assert.match(beforeRecord, /transcription units are about 20s/);
+
+    await press(mounted, "● Record audio");
+    await mounted.act(() => host.push({ session: session() }));
+    const recording = screenText(mounted.root);
+    assert.match(recording, /Audio is saved to this device every 3 seconds/);
+    assert.match(recording, /first transcription unit is about 20 seconds/);
+    mounted.unmount();
+  } finally { restore(); }
+});
 
 test("a segment the host persists reaches the transcript box and the live panel", async () => {
   const { host, restore } = installHost();
@@ -845,6 +865,30 @@ test("Delete audio names this window too, or the window that recorded it is refu
     assert.deepEqual(host.discarded, [{ id: recovery().sessionId, holderId: captureHolderId() }]);
     mounted.unmount();
   } finally { restore(); }
+});
+
+test("recovery playback names missing saved audio chunks rather than transcription segments", async () => {
+  const { host, restore } = installHost();
+  const previous = { create: URL.createObjectURL, revoke: URL.revokeObjectURL };
+  URL.createObjectURL = () => "blob:recovered-meeting";
+  URL.revokeObjectURL = () => undefined;
+  try {
+    host.resumable = [recovery({ title: "Board review" })];
+    host.readMissing = [1, 3];
+    const mounted = await compose(host);
+
+    await press(mounted, "▶ Play");
+
+    const text = screenText(mounted.root);
+    assert.match(text, /2 saved audio chunks could not be read back and are missing from what plays here/);
+    assert.doesNotMatch(text, /segments? of this recording could not be read back/,
+      "unit vocabulary must not misidentify physical playback loss");
+    mounted.unmount();
+  } finally {
+    URL.createObjectURL = previous.create;
+    URL.revokeObjectURL = previous.revoke;
+    restore();
+  }
 });
 
 test("a recording read back after the compose form has gone mints no object URL to leak", async () => {

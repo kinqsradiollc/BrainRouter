@@ -102,7 +102,7 @@ function requireId(value: unknown): string {
   return id;
 }
 
-/** Segment indices name files, so anything that is not a whole number is refused. */
+/** Retry targets are transcription-unit indices, so only non-negative whole numbers cross IPC. */
 function requireIndex(value: unknown): number {
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
     throw new Error('A meeting segment index is required.');
@@ -147,7 +147,11 @@ export function registerMeetingCaptureChannels(
   /** D6 — "the live set changed"; every window asks again, with its own scope and id. */
   const announce = (): void => { host.broadcast(MEETING_CAPTURE_WRITERS_CHANNEL, {}); };
 
-  void store.recoverInterrupted({
+  // Every capture channel waits on this ONE pass. Registration itself cannot
+  // await, and without a shared gate a window can read/adopt a stale manifest
+  // while reconciliation is rewriting it. The rejection is handled here so a
+  // failed recovery is visible but never leaves every capture IPC deadlocked.
+  const bootRecovery = store.recoverInterrupted({
     // D6 — the boot pass rewrites records, adopts chunk files and deletes
     // directories, and none of that is right for a capture being recorded into.
     // It runs before any window can press Record, so this is empty in practice —
@@ -173,6 +177,7 @@ export function registerMeetingCaptureChannels(
   });
 
   host.handle('meetings:captureBegin', async (caller, input: unknown) => {
+    await bootRecovery;
     const raw = input && typeof input === 'object' ? input as Record<string, unknown> : {};
     const template = text(raw.template);
     const holderId = holderOf(raw.holderId);
@@ -193,6 +198,7 @@ export function registerMeetingCaptureChannels(
   });
 
   host.handle('meetings:captureAppend', async (_caller, id: unknown, bytes: unknown, durationMs: unknown) => {
+    await bootRecovery;
     const elapsed = typeof durationMs === 'number' && Number.isFinite(durationMs) ? durationMs : 0;
     // A chunk that measured as instant is still a chunk of audio; clamping to
     // one millisecond keeps the shared model's positive-duration rule from
@@ -201,6 +207,7 @@ export function registerMeetingCaptureChannels(
   });
 
   host.handle('meetings:captureStop', async (_caller, id: unknown) => {
+    await bootRecovery;
     const session = await supervisor.stop(requireId(id));
     // The recording ended, so every other window's offer and every disabled
     // destructive control is now wrong. This is what a lease made a surface wait
@@ -209,28 +216,38 @@ export function registerMeetingCaptureChannels(
     return session;
   });
 
-  host.handle('meetings:captureRead', async (_caller, id: unknown) => await store.read(requireId(id)));
+  host.handle('meetings:captureRead', async (_caller, id: unknown) => {
+    await bootRecovery;
+    return await store.read(requireId(id));
+  });
   // D3 — "transcribe this capture" no longer means "post the whole thing". It
   // means: this process should be draining it, segment by segment, from here on.
-  host.handle('meetings:captureAdopt', async (_caller, id: unknown, holderId: unknown) =>
-    await supervisor.adopt(requireId(id), holderOf(holderId)));
-  host.handle('meetings:captureRetrySegment', async (_caller, id: unknown, index: unknown) =>
-    await supervisor.retry(requireId(id), requireIndex(index)));
+  host.handle('meetings:captureAdopt', async (_caller, id: unknown, holderId: unknown) => {
+    await bootRecovery;
+    return await supervisor.adopt(requireId(id), holderOf(holderId));
+  });
+  host.handle('meetings:captureRetrySegment', async (_caller, id: unknown, index: unknown) => {
+    await bootRecovery;
+    return await supervisor.retry(requireId(id), requireIndex(index));
+  });
   // D6 — both of these DELETE the audio, so both name the window asking. Without
   // the actor the supervisor has no way to tell the window that recorded this
   // meeting from a second one that is merely looking at a stale offer, and it
   // would have to refuse for either or neither.
   host.handle('meetings:captureFinalize', async (_caller, id: unknown, holderId: unknown) => {
+    await bootRecovery;
     await supervisor.close(requireId(id), 'finalize', holderOf(holderId));
     announce();
     return { ok: true };
   });
   host.handle('meetings:captureDiscard', async (_caller, id: unknown, holderId: unknown) => {
+    await bootRecovery;
     await supervisor.close(requireId(id), 'discard', holderOf(holderId));
     announce();
     return { ok: true };
   });
   host.handle('meetings:captureResumable', async (_caller, scope: unknown) => {
+    await bootRecovery;
     const offers = await store.resumable(scopeOf(scope));
     // D2/D6 — a recording IN PROGRESS is not an unfinished recording to offer
     // back, and the store cannot tell the difference: `isResumableSession`
@@ -244,7 +261,10 @@ export function registerMeetingCaptureChannels(
   // D6 — the complement of `captureResumable`: what a surface must say instead of
   // offering a live recording back. A window that only ever learns about its OWN
   // capture has nothing to print here, which is the defect this answers.
-  host.handle('meetings:captureWriting', async (_caller, scope: unknown) => await supervisor.writing(scopeOf(scope)));
+  host.handle('meetings:captureWriting', async (_caller, scope: unknown) => {
+    await bootRecovery;
+    return await supervisor.writing(scopeOf(scope));
+  });
   /**
    * D6 — that window's page is going away, reported by the page itself.
    *
@@ -255,7 +275,8 @@ export function registerMeetingCaptureChannels(
    * moment the page really is gone, and `watchCaller` above covers the case a
    * page cannot report: its renderer died.
    */
-  host.handle('meetings:captureRelease', (_caller, holderId: unknown) => {
+  host.handle('meetings:captureRelease', async (_caller, holderId: unknown) => {
+    await bootRecovery;
     const holder = holderOf(holderId);
     if (holder) release(holder);
     return { ok: true };

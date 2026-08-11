@@ -101,10 +101,20 @@ test("the page keeps no second copy of the capture's state", () => {
   assert.doesNotMatch(surface, /chunksRef|Blob\[\]/);
 });
 
+test("playback names unreadable saved chunks, not transcription segments", () => {
+  // The behavioural parity case has two unreadable chunks inside one unit. This
+  // is the render half: showing "one segment" for that state would undercount
+  // the physical losses and conflate the two D9 layers again.
+  assert.match(page, /saved audio chunk/);
+  assert.match(page, /cap\.preview\.missingChunks/);
+  assert.doesNotMatch(page, /segment.*could not be read back/);
+});
+
 test("every session transition goes through the queue, which is the single writer", () => {
-  // Two writers would interleave a `markDone` with an `appendSegment` and lose
-  // one of them — the same class of defect as losing the audio, just quieter.
-  for (const transition of ["appendSegment(", "stopCapture(", "finalizeCapture(", "discardCaptureSession("]) {
+  // Two writers would interleave a `markDone` with a ledger append or unit seal
+  // and lose one of them — the same class of defect as losing the audio, just
+  // quieter.
+  for (const transition of ["appendCaptureChunk(", "sealDueUnits(", "stopCapture(", "finalizeCapture(", "discardCaptureSession("]) {
     const calls = [...surface.matchAll(new RegExp(transition.replace("(", "\\("), "g"))];
     assert.ok(calls.length > 0, `${transition} is still applied somewhere`);
     for (const call of calls) {

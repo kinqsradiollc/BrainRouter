@@ -1,15 +1,17 @@
 # ADR-035 — A meeting you cannot lose
 
-**Status:** ACCEPTED — owner-approved. D1/D1b/D2 built; D3/D4/D5/D7 built and under repair;
-D9–D11 added after use and NOT built; D6's retention window not built.
+**Status:** ACCEPTED — owner-approved. D1/D1b/D2 built; D3/D4/D5/D7 built and hardened;
+D9 implemented with automated host coverage, with destructive acceptance still pending; D10/D11
+and D6's retention window are not built.
 **Depends on:** ADR-018 (meetings capture/transcribe/summarize), ADR-028 (surfaces that tell the truth),
 ADR-027 D12 (distributed-systems correctness), ADR-029 (one workspace, many surfaces).
 
 ---
 
-## 1. Where we are
+## 1. Pre-implementation baseline
 
-Capture works, and it has one shape: **hold everything in memory, transcribe once at the end.**
+When this decision was written, capture had one shape: **hold everything in memory, transcribe once
+at the end.** The code below records that baseline; later decisions in this ADR replace it.
 
 `brainrouter-desktop/src/components/meetings/MeetingsView.tsx`:
 
@@ -117,9 +119,10 @@ Two things the browser makes harder, and neither is a reason to accept less:
 
 ### D2 · A meeting is a session with an id, created at Record, not at Stop
 
-Today a meeting row appears only when capture succeeded. That is why a failed capture has nowhere
-to live. Pressing Record creates the session — id, started-at, device, language, template — and the
-capture directory is named by it. Everything after is an append to something that already exists.
+In that baseline, a meeting row appeared only when capture succeeded. That is why a failed capture
+had nowhere to live. Pressing Record now creates the session — id, started-at, device, language,
+template — and the capture directory is named by it. Everything after is an append to something
+that already exists.
 
 This is also what makes a crash recoverable rather than merely detectable: on next launch, a session
 with audio and no terminal state is offered back to the user.
@@ -213,8 +216,8 @@ than a number that needed tuning.
 ### D9 · The durability chunk and the transcription unit are different things
 
 D3 said "the unit of transcription is a segment" and D1 said chunks are written as they arrive, and
-the implementation quite reasonably made those **one 20-second constant**
-(`DEFAULT_MEETING_SEGMENT_MS`). That constant is now doing three jobs with three different right
+the pre-D9 implementation quite reasonably made those **one 20-second constant**
+(`DEFAULT_MEETING_SEGMENT_MS`). That constant was doing three jobs with three different right
 answers:
 
 | concern | what it actually wants |
@@ -300,9 +303,9 @@ now:
 1. ~~**Segment length.**~~ **ANSWERED, and the question was wrong.** It was measured: 20s was
    chosen from the "obvious starting range" below and the result is visibly slow. But the finding is
    not that the number should be smaller — it is that one number was serving three concerns with
-   three different right answers. See **D9**. What remains open is the durability chunk's size
-   (2–5s, bounded by how much loss is acceptable, not by transcription quality) and the streaming
-   endpoint's latency setting, both of which are now separate questions with separate evidence.
+   three different right answers. See **D9**. The implemented durability default is three seconds,
+   within the 2–5s bound; the destructive host acceptance still has to validate that choice. The
+   streaming endpoint's latency setting remains a separate open question with separate evidence.
 2. **Where does the capture directory live?** The desktop already has an app-data root and a
    per-session browser partition. Reusing an existing rooted location beats inventing one.
 3. **Who owns retry — renderer or host?** A renderer-owned queue dies with the window, which is the
@@ -331,7 +334,8 @@ now:
 The meeting must be there, the audio up to the kill must be on disk and playable, the transcript for
 every completed segment must be present, and the session must offer to resume or finalize.
 
-Today, that test loses everything.
+In the pre-ADR baseline, that test lost everything. D9 now has automated coverage for bounded
+seconds-scale loss, but the destructive run on both hosts remains a release acceptance requirement.
 
 Two supporting criteria, because the destructive test alone can be satisfied badly:
 
@@ -353,4 +357,4 @@ For D9–D11, three more, because "it feels faster" is not checkable either:
   bytes are elsewhere. If the answer is a louder warning, D11 was not built.
 
 Not judged by: whether live text looks good. It will. The question is what remains when something
-goes wrong, because that is the case the current design answers with silence.
+goes wrong, because that is the case the pre-ADR design answered with silence.

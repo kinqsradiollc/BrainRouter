@@ -1,44 +1,50 @@
 /**
- * ADR-035 D1/D2 — the record catches up with the bytes.
+ * ADR-035 D1/D2/D9 — the record catches up with the bytes.
  *
  * D1 writes the audio and THEN the record, so a kill leaves stored chunks the
  * session never claimed. §6 asks for "the audio up to the kill", which means the
  * chunk at the end must be believed rather than deleted to match a stale record.
  *
- * The negative assertions are the ones that matter: nothing bridges a hole (a
- * segment's index IS the chunk its audio is read from, so a bridged hole
- * transcribes the wrong audio into plausible text), and a terminal meeting
- * adopts nothing at all.
+ * The negative assertions are the ones that matter: nothing bridges a hole,
+ * and a terminal meeting adopts nothing at all. Legacy records still map one
+ * stored chunk to one segment; D9 records adopt into the ledger and then group
+ * the recovered chunks into transcription units.
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
   adoptCaptureChunks,
+  DEFAULT_MEETING_CHUNK_MS,
   appendSegment,
   createCaptureSession,
   discardCapture,
   finalizeCapture,
   stopCapture,
+  unitChunkSequences,
   type MeetingCaptureSession,
 } from '../meetings/index.js';
 
 const SCOPE = { orgId: null, workspaceId: null } as const;
 
 function recording(segments = 0): MeetingCaptureSession {
-  let session = createCaptureSession({
+  const created = createCaptureSession({
     id: 'mtg-adopt',
     scope: SCOPE,
     title: 'Weekly sync',
     startedAt: '2026-08-09T10:00:00.000Z',
   });
+  // No ledger is the persisted pre-D9 shape. Keeping these fixtures explicit
+  // guards the compatibility path instead of accidentally testing new records.
+  const { chunks: _d9Ledger, ...legacy } = created;
+  let session: MeetingCaptureSession = legacy;
   for (let index = 0; index < segments; index += 1) {
     session = appendSegment(session, { byteLength: 1024, durationMs: 20_000 });
   }
   return session;
 }
 
-test('a chunk the record never claimed becomes the segment it always was', () => {
+test('a legacy chunk the record never claimed keeps its one-segment meaning', () => {
   const result = adoptCaptureChunks(recording(1), [
     { sequence: 0, byteLength: 1024 },
     { sequence: 1, byteLength: 2048 },
@@ -122,6 +128,23 @@ test('order in the listing does not matter; sequence does', () => {
   assert.deepEqual(result.session.segments.map((segment) => segment.byteLength), [1, 2, 3]);
 });
 
+test('D9 — adopted durability chunks are grouped into a transcription unit, not seven tiny uploads', () => {
+  const session = createCaptureSession({
+    id: 'mtg-adopt-d9',
+    scope: SCOPE,
+    startedAt: '2026-08-11T10:00:00.000Z',
+  });
+  const chunks = Array.from({ length: 7 }, (_, sequence) => ({ sequence, byteLength: 100 + sequence }));
+  const result = adoptCaptureChunks(session, chunks, { chunkMs: DEFAULT_MEETING_CHUNK_MS });
+
+  assert.deepEqual(result.adopted, [0, 1, 2, 3, 4, 5, 6]);
+  assert.equal(result.session.chunks!.length, 7);
+  assert.equal(result.session.segments.length, 1, 'adoption preserves the chunk/unit split');
+  assert.deepEqual(unitChunkSequences(result.session.segments[0]!), [0, 1, 2, 3, 4, 5, 6]);
+  assert.equal(result.session.segments[0]!.byteLength, 721);
+  assert.equal(result.session.segments[0]!.endMs, 21_000);
+});
+
 test('a non-integer or negative sequence is not a chunk this rule will believe', () => {
   const result = adoptCaptureChunks(recording(0), [
     { sequence: 0.5, byteLength: 1024 },
@@ -132,7 +155,7 @@ test('a non-integer or negative sequence is not a chunk this rule will believe',
   assert.equal(result.session.segments.length, 0);
 });
 
-test('the segment length credited to an unclaimed chunk is the caller\'s nominal one', () => {
+test('the deprecated segmentMs option still credits an unclaimed legacy chunk correctly', () => {
   const result = adoptCaptureChunks(recording(0), [{ sequence: 0, byteLength: 900 }], { segmentMs: 30_000 });
   assert.equal(result.session.segments[0]!.endMs, 30_000);
 });

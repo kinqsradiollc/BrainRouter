@@ -32,14 +32,16 @@
  * presses Record, hands over a chunk, navigates away, and reads what actually
  * reached the POST.
  *
- * ADR-035 D3/D4/D5 — and the audio becomes TEXT as it lands, not at Stop. Each
- * chunk is a segment; the shared `MeetingTranscriptionQueue` transcribes them
- * with bounded concurrency, the compose box fills in during the meeting, and a
- * segment that will not transcribe stays in the transcript as a gap with its
- * time range and a retry control. The scheduler, the retry rule and the session
- * model all come from `@kinqs/brainrouter-core/meetings` — D1b: only the write
- * target is host-specific — so nothing here restates a policy the desktop also
- * has to obey.
+ * ADR-035 D3/D4/D5/D9 — durability chunks and transcription units are separate.
+ * Short chunks are written often enough to bound crash loss to seconds; the
+ * shared policy groups them into utterance-sized units for the
+ * `MeetingTranscriptionQueue`. Sealed units transcribe while capture continues,
+ * the compose box fills during the meeting, and a unit that will not transcribe
+ * stays in the transcript as a gap with its time range and a retry control. The
+ * scheduler, grouping rule and session model all come from
+ * `@kinqs/brainrouter-core/meetings` — D1b: only the write target is
+ * host-specific — so nothing here restates a policy the desktop also has to
+ * obey.
  *
  * The honest boundary, per open question 3: a renderer-owned queue dies with the
  * window, and a browser tab has no host process to hand it to. The browser's
@@ -847,15 +849,15 @@ export default function MeetingsPage() {
                           {/* D5's rule, one layer down: a player that silently
                               skipped unreadable chunks would be the "quietly
                               wrong" recording rather than the honest one. */}
-                          {cap.preview.missing ? (
-                            <small>{cap.preview.missing} segment{cap.preview.missing === 1 ? "" : "s"} of this recording could not be read back and {cap.preview.missing === 1 ? "is" : "are"} missing from what plays here.</small>
+                          {cap.preview.missingChunks ? (
+                            <small>{cap.preview.missingChunks} saved audio chunk{cap.preview.missingChunks === 1 ? "" : "s"} could not be read back and {cap.preview.missingChunks === 1 ? "is" : "are"} missing from what plays here.</small>
                           ) : null}
                         </div>
                       ) : null}
                     </Fragment>
                   );
                 })}
-                <div className={styles.teamPickNote}>Audio never leaves this device except one segment at a time as it transcribes, and is deleted once the meeting is created or you discard it.</div>
+                <div className={styles.teamPickNote}>Audio never leaves this device except one transcription unit at a time, assembled from its saved chunks, and is deleted once the meeting is created or you discard it.</div>
               </div>
             ) : null}
             {cap.session ? (
@@ -888,9 +890,9 @@ export default function MeetingsPage() {
             ) : cap.settling ? (
               /* The window after Stop, which the surface used to show as "ready
                  to create": `recording` is already false while the last piece of
-                 audio is still being written and has no segment yet, so Create
-                 landing here posted a transcript that stopped early with nothing
-                 saying so. */
+                 audio is still being written and has no ledger entry yet, so
+                 Create landing here posted a transcript that stopped early with
+                 nothing saying so. */
               <div className={styles.teamPickNote}>The end of this recording is still being written to this device — it takes a moment, and creating the meeting before it lands would release the audio for the last piece of it.</div>
             ) : unresolved > 0 ? (
               <div className={styles.teamPickNote}>

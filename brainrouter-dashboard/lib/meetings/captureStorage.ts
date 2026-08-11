@@ -33,7 +33,11 @@
  * divergent model — the ADR-029 failure D1b names by name. `capturePayload.ts`
  * owns the envelope; this file moves the bytes it is given.
  */
-import { isMeetingSessionId, newMeetingSessionId } from "@kinqs/brainrouter-core/meetings";
+import {
+  DEFAULT_MEETING_CHUNK_MS,
+  isMeetingSessionId,
+  newMeetingSessionId,
+} from "@kinqs/brainrouter-core/meetings";
 
 /**
  * Which durable store is actually in use.
@@ -62,6 +66,50 @@ export interface CaptureManifest {
   readonly startedAt: string;
   readonly closed: boolean;
   readonly payload: string;
+  /**
+   * Durability cadence of the physical chunks beside this manifest.
+   *
+   * Kept outside the opaque payload so recovery still knows how to place audio
+   * on the timeline when that payload is torn or from an incompatible build.
+   * Absence is the backward-compatible signal for pre-D9 20-second blobs.
+   */
+  readonly chunkMs?: number;
+}
+
+/**
+ * The result of reading the top-level record beside a capture.
+ *
+ * `absent` and `corrupt` are deliberately different. Audio with no manifest is
+ * an unreachable orphan the reap may reclaim; audio beside a manifest whose
+ * bytes exist but cannot be understood may still be the only copy of a meeting
+ * and must be quarantined in place rather than deleted or offered to a tenant.
+ */
+export type CaptureManifestRead =
+  | { readonly state: "absent" }
+  | { readonly state: "corrupt" }
+  | { readonly state: "present"; readonly manifest: CaptureManifest };
+
+export const MIN_CAPTURE_MANIFEST_CHUNK_MS = 2_000;
+export const MAX_CAPTURE_MANIFEST_CHUNK_MS = 5_000;
+
+/** The manifest can only claim the D9 durability range, in whole milliseconds. */
+export function isCaptureManifestChunkMs(value: unknown): value is number {
+  return typeof value === "number"
+    && Number.isInteger(value)
+    && value >= MIN_CAPTURE_MANIFEST_CHUNK_MS
+    && value <= MAX_CAPTURE_MANIFEST_CHUNK_MS;
+}
+
+/**
+ * Read a marker without turning a damaged current record into a legacy one.
+ *
+ * Absence means pre-D9. Presence with an invalid value is still evidence that
+ * the writer used split durability chunks, so it falls back to the shared D9
+ * cadence instead of stretching each physical blob to twenty seconds.
+ */
+export function captureManifestChunkMs(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  return isCaptureManifestChunkMs(value) ? value : DEFAULT_MEETING_CHUNK_MS;
 }
 
 /**
@@ -75,17 +123,18 @@ export interface CaptureStorageBackend {
   /** What is actually stored, in whatever order the store hands it over. */
   listChunks(sessionId: string): Promise<readonly CaptureChunkRef[]>;
   writeManifest(sessionId: string, manifest: CaptureManifest): Promise<void>;
-  readManifest(sessionId: string): Promise<CaptureManifest | undefined>;
+  readManifest(sessionId: string): Promise<CaptureManifestRead>;
   /** Every session id with anything stored — including audio whose manifest is missing. */
   listSessionIds(): Promise<readonly string[]>;
   deleteSession(sessionId: string): Promise<void>;
 }
 
 /**
- * Zero-padding width for a chunk key. Six digits is 999,999 chunks — at a
- * twenty-second cadence that is over 230 days of continuous recording, so the
- * ceiling is theatre; what matters is that every key is the same width and
- * therefore sorts as a string exactly as it sorts as a number.
+ * Zero-padding width for a chunk key. Six digits is 999,999 chunks — even at
+ * D9's shortest two-second durability cadence that is over 23 days of
+ * continuous recording, so the ceiling is theatre; what matters is that every
+ * key is the same width and therefore sorts as a string exactly as it sorts as
+ * a number.
  */
 export const CAPTURE_CHUNK_KEY_DIGITS = 6;
 

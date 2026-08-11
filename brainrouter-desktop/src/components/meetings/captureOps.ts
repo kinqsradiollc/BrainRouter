@@ -52,7 +52,7 @@ export interface CapturedAudio {
   bytes: Uint8Array<ArrayBuffer>;
   contentType: string;
   /**
-   * §6 — segment indices the store could not read back, so the player can say
+   * §6 — saved-audio chunk sequences the store could not read back, so the player can say
    * that what it is playing is short of the recording rather than pretend it is
    * the whole thing. Empty on a healthy capture, which is every capture that has
    * not lost a file.
@@ -240,7 +240,7 @@ function audio(value: unknown): CapturedAudio {
     ? payload.bytes as Uint8Array<ArrayBuffer>
     : payload.bytes instanceof ArrayBuffer ? new Uint8Array(payload.bytes) : null;
   if (!bytes) throw new Error("The capture store returned no audio for that meeting.");
-  // A host that predates the per-segment guard reports nothing here, which reads
+  // A host that predates the per-chunk guard reports nothing here, which reads
   // as "nothing was missing" — the same answer it used to give by rejecting, but
   // without taking the rest of the recording down with it.
   const missing = Array.isArray(payload.missing)

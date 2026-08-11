@@ -3,7 +3,7 @@
 // keeping the subsystem's file layout internal.
 //
 // The whole surface is pure: no filesystem, no OPFS/IndexedDB, no network. That
-// is what D1b requires of it — the desktop writes segment bytes to a `0700`
+// is what D1b requires of it — the desktop writes chunk bytes to a `0700`
 // capture directory and the dashboard writes them to OPFS, but both compute the
 // SAME session, the same transcript-with-gaps and the same retry schedule from
 // this module. A shared promise with two implementations is two features, and
@@ -19,6 +19,12 @@
 // handle in it, so there is no honest reason for either host to own a copy —
 // and a host WITHOUT one transcribes segment 0 and nothing else, which is the
 // lesser-second-host failure D1b names.
+//
+// `chunkLedger` is D9's boundary: a short durability write is not a
+// transcription unit. It owns the explicit ledger and the pure grouping rule,
+// while `captureSession` keeps lifecycle checks around those transitions. Hosts
+// get both from this entrypoint so neither can quietly return to one cadence for
+// two different jobs.
 //
 // `chunkAdoption` and `draftReconcile` are the fourth and fifth, and both got
 // here the same way: a rule each host had worked out for itself, twice, and got
@@ -61,6 +67,8 @@
 export * from './types.js';
 export * from './captureHolder.js';
 export * from './captureSession.js';
+export * from './chunkLedger.js';
+export * from './sessionValidation.js';
 export * from './transcript.js';
 export * from './recovery.js';
 export * from './retryPolicy.js';
@@ -70,4 +78,5 @@ export * from './chunkAdoption.js';
 export * from './draftReconcile.js';
 export * from './transcriptFold.js';
 export * from './transcriptionQueue.js';
+export * from './transcriptionStrategy.js';
 export * from './capturePhase.js';

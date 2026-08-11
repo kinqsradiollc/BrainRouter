@@ -1,5 +1,5 @@
 /**
- * ADR-035 D3/D5/D7 — the dashboard's half of the shared transcription queue.
+ * ADR-035 D3/D5/D7/D9 — the dashboard's half of the shared transcription queue.
  *
  * The scheduler is NOT here. It is `MeetingTranscriptionQueue` in
  * `@kinqs/brainrouter-core/meetings`, and it owns everything with a rule in it:
@@ -12,7 +12,8 @@
  * What lives here is the three ports the scheduler asks a host for, and nothing
  * else:
  *
- * - `readSegment` — one chunk out of OPFS/IndexedDB, handed to the SHARED
+ * - `readSegment` — every durability chunk named by one unit, read out of
+ *   OPFS/IndexedDB and handed to the SHARED
  *   `createSegmentAudioReader`, which puts the container header back in front of
  *   it because a `MediaRecorder` timeslice chunk after the first is a fragment
  *   rather than a file. The framing used to live here, in the browser; a host
@@ -38,6 +39,7 @@ import {
   createMeetingTranscriptionQueue,
   createSegmentAudioReader,
   isTerminalCaptureStatus,
+  unitChunkSequences,
   type MeetingCaptureSession,
   type MeetingTranscriptionPorts,
   type MeetingTranscriptionQueue,
@@ -85,7 +87,7 @@ export interface SttTranscriberOptions {
  *
  * Deliberately no client-side size ceiling. D3's third consequence is that "the
  * 40 MB body limit stops being a ceiling on meeting length, because nothing ever
- * posts an hour of audio in one request" — a twenty-second segment is a few
+ * posts an hour of audio in one request" — an utterance-sized unit is a few
  * hundred kilobytes, so a refusal here could only ever be wrong. The ceiling
  * still applies to the import/paste path (D8), where a user really can hand us a
  * whole file.
@@ -143,13 +145,19 @@ export interface CaptureQueueOptions {
  *
  * One queue per meeting, and it is the SINGLE WRITER of that session while it
  * exists — the surface mutates through `queue.apply(...)` rather than beside it.
- * Two writers would interleave a `markDone` with an `appendSegment` and lose one
- * of them, which is the same class of defect as losing the audio, just quieter.
+ * Two writers would interleave a `markDone` with a chunk-ledger append or unit
+ * seal and lose one of them, which is the same class of defect as losing the
+ * audio, just quieter.
  */
 export function createCaptureQueue(options: CaptureQueueOptions): MeetingTranscriptionQueue {
   const { store, session } = options;
   const sessionId = session.id;
   const mimeType = options.mimeType || DEFAULT_CAPTURE_MIME_TYPE;
+  // Assigned immediately after the ports are built. `chunksOf` is only called
+  // by a later drain, and it must read the queue's CURRENT session: units can be
+  // sealed by `apply` after this function returns, so the constructor snapshot
+  // does not yet know which chunks those units claim.
+  let queue: MeetingTranscriptionQueue | undefined;
 
   const ports: MeetingTranscriptionPorts = {
     // The shared reader owns everything with a rule in it — which segment needs
@@ -162,6 +170,11 @@ export function createCaptureQueue(options: CaptureQueueOptions): MeetingTranscr
       async readChunk(index) {
         const chunk = await store.readSegment(sessionId, index);
         return chunk ? new Uint8Array(await chunk.arrayBuffer()) : null;
+      },
+    }, {
+      chunksOf(index) {
+        const unit = (queue?.session ?? session).segments[index];
+        return unit ? unitChunkSequences(unit) : undefined;
       },
     }),
     transcribe: (audio, type) => options.transcribe(audio, type),
@@ -182,12 +195,13 @@ export function createCaptureQueue(options: CaptureQueueOptions): MeetingTranscr
     },
   };
 
-  return createMeetingTranscriptionQueue({
+  queue = createMeetingTranscriptionQueue({
     session,
     ports,
     mimeType,
     ...(options.maxInFlight === undefined ? {} : { maxInFlight: options.maxInFlight }),
   });
+  return queue;
 }
 
 /** The endpoint's own words when it has them; the status alone when it does not. */
