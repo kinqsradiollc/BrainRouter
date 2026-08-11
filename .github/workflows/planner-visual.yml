@@ -119,6 +119,13 @@ jobs:
         run: npm --prefix brainrouter-desktop run build:deps
 
       - name: Build Desktop host
+        # The renderer's transform phase exhausts Node's default ~2 GB heap on
+        # the hosted runners — "Reached heap limit Allocation failed" — while the
+        # OUTPUT is well inside the release budget. It is the graph being large,
+        # not the bundle: `verify-visual-release.mjs` still gates the shipped
+        # size, so raising this cannot hide a bundle regression.
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
         run: npm run build --workspace brainrouter-desktop
 
       - name: Run native Electron visual and usability gate
