@@ -24,7 +24,13 @@ import { PlannerModeContainer } from '../../planner/PlannerModeContainer.js';
 const NotesModeContainer = lazy(() =>
   import('../../notes/NotesModeContainer.js').then((m) => ({ default: m.NotesModeContainer })));
 import { parseWorkspaceRef } from '@kinqs/brainrouter-core/workspace/references';
-import { MeetingsView } from '../../components/meetings/MeetingsView.js';
+/**
+ * Meetings owns the capture, recovery, queue and transcript surfaces. Keep that
+ * feature out of the entry bundle for sessions that never open it, while the
+ * render condition below still keeps the resolved view mounted during capture.
+ */
+const MeetingsView = lazy(() =>
+  import('../../components/meetings/MeetingsView.js').then((m) => ({ default: m.MeetingsView })));
 import { createMeetingsOps } from '../../components/meetings/meetingsOps.js';
 import { ChatThread } from '../../components/chat/ChatThread.js';
 import { Composer } from '../../components/chat/Composer.js';
@@ -268,7 +274,9 @@ export function MainContent(p: MainContentProps): React.ReactElement {
           regions built in DOM order below are unaffected. */}
       {meetingsVisible || meetingCapture ? (
         <div className="workrow" ref={meetingsVisible ? workrowRef : null} {...(meetingsVisible ? {} : { style: { display: 'none' } })}>
-          <MeetingsView ops={meetingsOps} onCaptureChange={setMeetingCapture} />
+          <Suspense fallback={null}>
+            <MeetingsView ops={meetingsOps} onCaptureChange={setMeetingCapture} />
+          </Suspense>
         </div>
       ) : null}
       {/* ADR-028 — and something says so from wherever the person went, because
