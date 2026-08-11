@@ -21,6 +21,21 @@
  *   cleanup cancelled it.** Closing the composer inside that window left the
  *   draft nowhere at all. The write here is immediate and awaited.
  *
+ * And a fourth, which is why what is exported is a HOLDER rather than the
+ * migration itself:
+ *
+ * - **It ran twice, and the answer that was kept came from the run that found
+ *   nothing.** The view started it from a render-phase `useMemo`. React may call
+ *   a component's body more than once for one commit and keep the LAST result —
+ *   StrictMode's double render does exactly that on every mount in `vite dev` —
+ *   while the first statement here reads-and-REMOVES the key, so the second call
+ *   found an empty store and resolved `null`. The words were out of
+ *   `localStorage` and the only promise still holding them had been discarded,
+ *   so a preload with no draft channel or a write that threw lost the draft
+ *   outright. The compose form's restore awaits this FIRST precisely so it reads
+ *   the protected file after the hand-over, and it was awaiting a promise that
+ *   had never performed one.
+ *
  * Invariants:
  *
  * 1. **The key is removed exactly once, unconditionally, before anything else
@@ -33,6 +48,12 @@
  * 3. **It never rejects.** The caller holds this promise for the lifetime of the
  *    view and a rejection nobody awaited is an unhandled rejection in the
  *    renderer, on a path whose entire purpose is tidying up.
+ * 4. **Asked any number of times, it runs once, and every asker gets that run's
+ *    answer.** There are two askers by design — the view, so a user who never
+ *    opens the composer is migrated too, and the composer's restore, which is
+ *    where a hand-back has to arrive — and React runs the first of them more
+ *    than once. A read-and-remove that answers something different each time is
+ *    one whose answer depends on who asked last, which is invariant 2 undone.
  */
 import type { MeetingCaptureTemplate } from "@kinqs/brainrouter-core/meetings";
 import type { MeetingCaptureOps, MeetingComposeDraft } from "./captureOps.js";
@@ -79,6 +100,38 @@ export function takeLegacyDraft(storage: LegacyDraftStorage): MeetingComposeDraf
 }
 
 /**
+ * The migration, as something that can be asked twice and only runs once.
+ *
+ * Creating one is a pure step: it reads nothing and removes nothing, so what a
+ * discarded render leaves behind is a holder that never ran. Running one is the
+ * read-and-remove, which is why that belongs to an effect and to no render.
+ */
+export interface LegacyDraftMigration {
+  /**
+   * Start the migration if it has not begun, and answer with whatever could not
+   * be handed over. Every caller is answered by the same, single run.
+   */
+  run(): Promise<MeetingComposeDraft | null>;
+}
+
+/**
+ * Hold a migration over this window's `localStorage`, without performing it.
+ *
+ * The storage is resolved here rather than at `run` so a test can hand over a
+ * plain object, and so the holder a discarded render produced is inert in every
+ * respect rather than merely unstarted.
+ */
+export function createLegacyDraftMigration(
+  capture: MeetingCaptureOps,
+  storage: LegacyDraftStorage | null = typeof localStorage === "undefined" ? null : localStorage,
+): LegacyDraftMigration {
+  let started: Promise<MeetingComposeDraft | null> | null = null;
+  // Invariant 4 — the promise, not the answer: a second asker that arrives while
+  // the first run is still in flight must wait for it rather than start another.
+  return { run: () => (started ??= migrateLegacyDraft(capture, storage)) };
+}
+
+/**
  * Move the legacy draft into the protected file, and answer with whatever could
  * not be moved.
  *
@@ -87,10 +140,14 @@ export function takeLegacyDraft(storage: LegacyDraftStorage): MeetingComposeDraf
  * returned draft is one the words came out of `localStorage` for and had nowhere
  * durable to go, so the form restores it from memory instead — the user still
  * has it this session, and it is no longer in a store any page script can read.
+ *
+ * Deliberately not exported: the surface has one way to do this and it is the
+ * holder above, because the defect invariant 4 is about was reachable from any
+ * call site that could run this twice.
  */
-export async function migrateLegacyDraft(
+async function migrateLegacyDraft(
   capture: MeetingCaptureOps,
-  storage: LegacyDraftStorage | null = typeof localStorage === "undefined" ? null : localStorage,
+  storage: LegacyDraftStorage | null,
 ): Promise<MeetingComposeDraft | null> {
   if (!storage) return null;
   const draft = takeLegacyDraft(storage);

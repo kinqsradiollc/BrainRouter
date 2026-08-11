@@ -597,6 +597,11 @@ test("…and a teardown still cancels the arming it interrupted, even with a rem
   assert.equal(tab.recorder.starts, 0, "no recorder was started for the attempt that was cancelled");
   assert.equal(tab.microphone.releases, 1, "and the microphone was handed straight back");
   assert.equal(tab.state.recording, false);
+  // The abandon is the last thing to touch either of `capturing`'s private
+  // facts, so it is also the last chance to publish that they are false. A
+  // remounted page that never hears about it has a Record button and a Pick up
+  // button disabled for the rest of its life, by a capture that does not exist.
+  assert.equal(tab.state.capturing, false, "and the controls are live again");
   assert.deepEqual(origin.locks.names, [], "nothing is left held");
   assert.equal(await origin.record(begun.sessionId), undefined, "and the empty manifest went with it");
 });
@@ -1025,6 +1030,213 @@ test("Create refuses while the recording is still in flight, in the function and
   assert.match(tab.state.createError, /Stop the recording/i);
   const stored = await origin.session(tab.state.session?.id ?? "", "org-a");
   assert.notEqual(stored.status, "finalized", "and the capture was not finalized under the live recorder");
+});
+
+test("Pick up is refused while this tab is arming a recording, which is the click that hands the live one's lock back", async () => {
+  // REPRODUCED, and on CHROME rather than only on a browser without Web Locks.
+  // `recording` is false for the whole arming window — `openStore(true)`,
+  // `store.begin`, then `getUserMedia`, the last two of which are prompts a
+  // person can leave on screen — and Pick up was disabled by `cap.recording`
+  // alone with no guard at all in `pickUp`. Pressed there, `#attachQueue` runs a
+  // second time over a different session and hands
+  // `locks.release(previous.session.id)` to the recording that has just
+  // started: it then holds NO lock, its chunks are written but never claimed as
+  // segments, and a second tab is OFFERED it with a Discard that asks the
+  // ROUTINE question — while this tab still reports `recording: true` with
+  // `warning`, `notice` and `createError` all empty.
+  const origin = new CaptureOrigin();
+  const yesterday = origin.tab();
+  await yesterday.surface.init();
+  yesterday.transcribeSegment = async () => "YESTERDAY WORDS";
+  const abandoned = await recordOneChunk(yesterday);
+  yesterday.kill();
+
+  const tab = origin.tab();
+  await tab.surface.init();
+  tab.transcribeSegment = async () => "TODAY WORDS";
+  await tab.surface.refreshRecoverable();
+  const entry = tab.state.recoverable.find((candidate) => candidate.record.sessionId === abandoned);
+  assert.ok(entry, "the killed tab's meeting is offered back");
+
+  tab.microphonePending = true;
+  const pressed = tab.start();
+  await flush();
+  assert.equal(tab.state.recording, false, "the prompt is on screen and `recording` is false");
+  assert.equal(tab.state.capturing, true, "which is why this, and not `recording`, is what the button reads");
+
+  await tab.surface.pickUp(entry);
+  await flush();
+  assert.match(tab.state.createError, /Stop the recording before opening a saved one/i);
+  const adopted = tab.state.session;
+  assert.equal(adopted, null, "nothing was adopted");
+  assert.equal(tab.locks.holds(abandoned), false, "and the saved meeting was not taken out of the offer");
+
+  // The recording that was starting is then a whole meeting: its lock is this
+  // tab's, its audio is claimed, and yesterday's words are nowhere near its box.
+  tab.answerMicrophone();
+  await pressed;
+  await flush();
+  const live = tab.state.session?.id ?? "";
+  assert.ok(live && live !== abandoned);
+  await tab.chunk();
+  assert.equal(locked(origin, live), true, "the live recording still holds its lock");
+  assert.equal((await origin.session(live, "org-a")).segments.length, 1, "so its audio is claimed as a segment rather than orphaned");
+  assert.doesNotMatch(tab.state.transcript, /YESTERDAY WORDS/, "and two meetings were not merged into one box");
+  assert.ok(await origin.record(abandoned), "yesterday's recording is still there, to be picked up when this one is finished");
+});
+
+test("…and refused across the settle too, which is the other window `recording` is false in", async () => {
+  // DETERMINISTIC, and it contradicts the offer's own sentence. Stop → Pick up →
+  // Create posted the two meetings as one transcript and released the PICKED-UP
+  // audio, leaving the recording just made unfinalized on a device whose dialog
+  // says audio "is deleted once the meeting is created or you discard it".
+  //
+  // Three ticks per write is what makes the settle a window a test can press a
+  // button in, exactly as a real store makes it one a person can click in.
+  const origin = new CaptureOrigin({ writeTicks: 3 });
+  const yesterday = origin.tab();
+  await yesterday.surface.init();
+  yesterday.transcribeSegment = async () => "YESTERDAY WORDS";
+  const abandoned = await recordOneChunk(yesterday);
+  yesterday.kill();
+
+  const tab = origin.tab();
+  await tab.surface.init();
+  tab.transcribeSegment = async () => "TODAY WORDS";
+  await tab.surface.refreshRecoverable();
+  const entry = tab.state.recoverable.find((candidate) => candidate.record.sessionId === abandoned);
+  assert.ok(entry);
+  tab.surface.setTitle("Today");
+  const live = await recordOneChunk(tab);
+  // Handed over BY `stop()`, as a real MediaRecorder hands over its last one.
+  tab.recorder.pending.push(new Blob([new Uint8Array(2048).fill(3)]));
+  tab.surface.stop();
+  assert.equal(tab.state.recording, false, "Stop already says it is not recording");
+  assert.equal(tab.state.settling, true, "while the last piece of the meeting is still being written");
+  assert.equal(tab.state.capturing, true, "and this is what the controls read across it");
+
+  await tab.surface.pickUp(entry);
+  await flush();
+  assert.match(tab.state.createError, /still being written to this device/i);
+  assert.equal(tab.state.session?.id, live, "the box still holds the meeting that was just recorded");
+  assert.equal(tab.state.capturing, false, "and the window closes when the recording has landed, not when Create is pressed");
+
+  await tab.surface.submit();
+  await flush();
+  assert.equal(tab.posts.length, 1);
+  assert.match(tab.posts[0].transcript, /TODAY WORDS/);
+  assert.doesNotMatch(tab.posts[0].transcript, /YESTERDAY WORDS/, "one meeting was posted, not two");
+  assert.equal(await origin.record(live), undefined, "and the audio released is the audio this meeting was made from");
+  assert.ok(await origin.record(abandoned), "yesterday's is untouched, and still offered back");
+});
+
+test("Record pressed twice during the arming window starts ONE recorder over ONE session", async () => {
+  // REPRODUCED, blocking, and it is the ordinary "nothing happened, click it
+  // again": the button was `disabled={cap.busy === "transcribe"}` and nothing
+  // else while `recording` stayed false through two permission prompts. A
+  // second press started a SECOND recorder over a SECOND session —
+  // `#attachQueue` handed the first capture's lock back as the "previous" queue
+  // and `#recorder`/`#active` then pointed only at the second — so `stop()`
+  // stopped only the second and `dispose()` could not reach the first either.
+  // The first went on recording with the microphone open, and was offered back
+  // in THIS tab's own recovery list with `writersKnown: true`, so Discard would
+  // delete the audio its own recorder was still appending to.
+  const origin = new CaptureOrigin();
+  const tab = origin.tab();
+  await tab.surface.init();
+  tab.microphonePending = true;
+  const pressed = tab.start();
+  // Read with NOTHING awaited: the first thing after the press is
+  // `openStore(true)`, which is a persistent-storage prompt on Firefox, so a
+  // published `capturing` that only catches up on the next patch is a live
+  // Record and a live Pick up for as long as that prompt is on screen.
+  assert.equal(tab.state.capturing, true, "published in the same turn as the press");
+  await flush();
+  const [begun] = await origin.records();
+  assert.ok(begun, "one session, and its lock, already exist");
+  assert.equal(tab.state.recording, false, "with `recording` false for all of it");
+  assert.equal(tab.state.capturing, true);
+
+  // The second press, with the prompt answered instantly this time — which is
+  // what a browser that has already granted the microphone does, so nothing but
+  // the function's own refusal is in the way.
+  tab.microphonePending = false;
+  await tab.surface.record();
+  await flush();
+  assert.match(tab.state.createError, /still starting/i);
+  assert.equal(tab.microphones.length, 0, "no second microphone was opened");
+  assert.deepEqual((await origin.records()).map((record) => record.sessionId), [begun.sessionId], "and no second session was begun");
+
+  // The recording that was starting is then a whole meeting, and Stop reaches it.
+  tab.answerMicrophone();
+  await pressed;
+  await flush();
+  assert.equal(tab.microphones.length, 1, "one microphone");
+  assert.equal(tab.recorder.starts, 1, "one recorder");
+  await tab.chunk();
+  await tab.stop();
+  assert.equal(tab.recorder.state, "inactive", "which Stop really stopped");
+  assert.equal(tab.state.recording, false);
+  assert.equal((await origin.session(begun.sessionId, "org-a")).status, "stopped", "so nothing is left running with the microphone open");
+});
+
+test("§6 — a ▶ Play that lands after the page has gone mints no URL for nothing to revoke", async () => {
+  // `previewCapture` reads a whole recording back across two awaits and then
+  // mints an object URL over it. A URL minted for a page that has already gone
+  // is one nothing will ever revoke: `#revokePreview()` ran during the teardown,
+  // BEFORE the URL existed, and there is no later hand to put it back — so an
+  // hour of WebM stays pinned in the tab's heap, which is §1's defect in
+  // miniature. `#attempt` already counts the lives; this asks it.
+  const origin = new CaptureOrigin();
+  const first = origin.tab();
+  await first.surface.init();
+  const sessionId = await recordOneChunk(first);
+  await first.stop();
+
+  const tab = origin.tab();
+  await tab.surface.init();
+  await tab.surface.refreshRecoverable();
+  const record = await origin.record(sessionId);
+  assert.ok(record);
+  const playing = tab.surface.previewCapture(record);
+  // The client-side navigation, mid-read.
+  await tab.surface.dispose();
+  await playing;
+  await flush();
+
+  assert.deepEqual(tab.objectUrls, [], "nothing was minted");
+  assert.deepEqual(tab.revokedUrls, [], "so there is nothing outstanding to revoke");
+  assert.equal(tab.state.preview, null, "and no player is claimed for a page that has gone");
+});
+
+test("a StrictMode remount does not put a stale draft over the box the person is looking at", async () => {
+  // REGRESSION, dev-only in the sense that matters least: it is the environment
+  // this feature is written in. React 19's StrictMode runs mount → cleanup →
+  // mount on the COMMITTED object, so `init()` can run over a compose box that
+  // already holds what the person typed — and what it reads back is the OLDER
+  // copy, because the teardown's own `#flushDraftSave` is still in flight behind
+  // it. The box then reverted to the previous save with no error anywhere, and
+  // the next keystroke wrote the reverted text down for good.
+  const origin = new CaptureOrigin();
+  const tab = origin.tab();
+  await tab.surface.init();
+  tab.surface.setTitle("Monday retro");
+  tab.surface.setTranscript("the first half");
+  await origin.advance(500);
+  assert.match(String((await origin.record(MEETING_DRAFT_CAPTURE_ID))?.payload), /Monday retro/, "the debounce has written one draft down");
+
+  // …and now the newest words exist only in the box and in a save that has not
+  // run yet, which is exactly what a teardown interrupts.
+  tab.surface.setTitle("Monday retro — decisions");
+  const teardown = tab.surface.dispose();
+  const remount = tab.surface.init();
+  await teardown;
+  await remount;
+  await flush();
+
+  assert.equal(tab.state.title, "Monday retro — decisions", "the box is still the person's");
+  assert.equal(tab.state.transcript, "the first half");
+  assert.match(String((await origin.record(MEETING_DRAFT_CAPTURE_ID))?.payload), /Monday retro — decisions/, "and the device agrees with it");
 });
 
 test("D4 — a recovered capture is folded into the restored box once, not appended a second time", async () => {

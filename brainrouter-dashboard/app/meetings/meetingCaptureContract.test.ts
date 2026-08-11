@@ -30,6 +30,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import { CAPTURE_LOCKS_UNAVAILABLE } from "../../lib/meetings/captureLock";
+
 const read = (relative: string): string => readFileSync(new URL(relative, import.meta.url), "utf8");
 
 const page = read("./page.tsx");
@@ -155,6 +157,18 @@ test("golden rule 23 — the browser that cannot coordinate says so, in its own 
   assert.match(page, /\{!cap\.createOpen && cap\.coordination \? <div className=\{styles\.errorBar\} role="status">/);
   assert.match(page, /\{cap\.coordination \? <div className=\{styles\.errorBar\} role="status">/);
   assert.match(surface, /if \(!ports\.locks\.available\) this\.#state = \{ \.\.\.this\.#state, coordination: CAPTURE_LOCKS_UNAVAILABLE \};/);
+  // …and the sentence names BOTH browsers it is printed to, because that line
+  // raises it in the constructor and the page renders it unconditionally. It
+  // said only "older versions of Safari and Firefox and in some in-app
+  // browsers", which told a current-Chrome user on an insecure origin that the
+  // cause was their browser's age — `LockManager` is `[SecureContext]`, so a
+  // plain-http page has no Web Locks whatever it is running — and it had lost
+  // the one remedy that audience actually has. "You cannot record there anyway"
+  // does not reach this sentence: it prints before, and independently of, any
+  // Record.
+  assert.match(CAPTURE_LOCKS_UNAVAILABLE, /plain http/i, "the insecure origin, which is the case a current browser hits");
+  assert.match(CAPTURE_LOCKS_UNAVAILABLE, /older versions of Safari and Firefox/i, "and the secure browsers that predate Web Locks and really can record");
+  assert.match(CAPTURE_LOCKS_UNAVAILABLE, /https/i, "with the remedy the first of them has");
 });
 
 test("golden rule 23 — the offer's Discard says what this browser cannot vouch for, and still works", () => {
@@ -174,7 +188,42 @@ test("golden rule 23 — the offer's Discard says what this browser cannot vouch
   // coordinate its tabs must still be able to recover a crashed meeting, which is
   // D1b — and `pickUp` asks the same person the same kind of question, which is
   // driven in `captureSurface.test.ts`.
-  assert.match(page, /disabled=\{cap\.busy === "transcribe" \|\| cap\.recording \|\| Boolean\(writer\)\}/);
+  assert.match(page, /disabled=\{cap\.busy === "transcribe" \|\| cap\.capturing \|\| Boolean\(writer\)\}/);
+});
+
+test("no control that starts or adopts a capture is gated on `recording`", () => {
+  // The wiring of a `disabled` is only visible in the source, and this is the
+  // defect that lived in it: `recording` is false for the whole arming window —
+  // a persistent-storage prompt, then a microphone prompt — and false again
+  // across the settle after Stop, so every control keyed on it was live in
+  // exactly the window where a capture exists and the surface did not think so.
+  // The behavioural half (what the FUNCTIONS refuse, and what `capturing` says
+  // across both windows) is driven in `captureSurface.test.ts`.
+  assert.match(page, /disabled=\{cap\.busy === "transcribe" \|\| cap\.capturing \|\| Boolean\(writer\)\}/, "Pick up");
+  assert.match(page, /disabled=\{cap\.busy === "transcribe" \|\| \(!cap\.recording && cap\.capturing\)\}/, "the Record face of the record/stop button — the Stop face is never disabled");
+  assert.match(page, /disabled=\{cap\.busy === "create" \|\| cap\.capturing\}/, "Create, which now says what submit() has always refused on");
+  // …and the published copy is DERIVED from the predicate rather than kept by
+  // hand beside it. Two of its three facts are private fields, and a second
+  // hand-written copy of this answer is how the four deleted guards came apart.
+  assert.match(surface, /this\.#state = \{ \.\.\.this\.#state, capturing: this\.#captureInFlight \};/);
+  assert.deepEqual(codeLines(surface).filter((line) => line.includes("#captureInFlight")), [
+    "get #captureInFlight(): boolean {",
+    "if (this.#captureInFlight) {",
+    "if (this.#captureInFlight) {",
+    "const captureInFlight = this.#captureInFlight;",
+    "this.#state = { ...this.#state, capturing: this.#captureInFlight };",
+  ]);
+  // The three facts are spelled out in ONE place. An inline second copy is what
+  // this rules out: `submit` had one, and the two paths that can destroy a
+  // recording — `record` and `pickUp` — had none.
+  assert.deepEqual(codeLines(surface).filter((line) => line.includes("this.#active !== null")), [
+    "return this.#state.recording || this.#arming || this.#active !== null;",
+  ]);
+  // The two private facts are written through the setters that republish, and
+  // nowhere else — a direct assignment would leave the buttons reading a
+  // `capturing` that stopped being true.
+  assert.deepEqual(codeLines(surface).filter((line) => line.includes("this.#arming = ")), ["this.#arming = arming;"]);
+  assert.deepEqual(codeLines(surface).filter((line) => line.includes("this.#active = ")), ["this.#active = capture;"]);
 });
 
 test("composition has ONE rule, and the recompose model is gone rather than unused", () => {

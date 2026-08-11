@@ -7,12 +7,13 @@
  * decisions out of the component so a test could press Record; the wiring stayed
  * behind, and a wire nothing checks is a decision nobody has checked either.
  * Measured: swapping `browserCaptureLocks()` for a manager-less `CaptureLocks`
- * — which is precisely what a dashboard served over plain http gets, and the
- * shape D1b names — left the whole suite green while every cross-tab guard in
- * the product silently stopped working. The surface's own tests cannot see it,
- * because they construct their own ports by definition, and `page.tsx` cannot be
- * imported in this runner at all (it pulls in React, Next and a CSS module). So
- * the ports leave the component too, and `capturePorts.test.ts` asks the
+ * — the shape a page over plain http gets, and the shape an older Safari or
+ * Firefox gets over https, where a recording really can be made — left the
+ * whole suite green while every cross-tab guard in the product silently stopped
+ * working. The surface's own tests cannot see it, because they construct their
+ * own ports by definition, and `page.tsx` cannot be imported in this runner at
+ * all (it pulls in React, Next and a CSS module). So the ports leave the
+ * component too, and `capturePorts.test.ts` asks the
  * questions the wiring is: are these locks over the browser's real lock table,
  * does the POST carry the workspace the surface froze at Record, does a recorder
  * that will not construct hand the microphone back.

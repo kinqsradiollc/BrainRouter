@@ -19,10 +19,10 @@ import "./meetings.css";
 import { MeetingTracksView } from "./MeetingTracksView.js";
 import { SharePopover } from "./SharePopover.js";
 import { TeamsView } from "./TeamsView.js";
-import { createMeetingCaptureOps, type MeetingCaptureProgress, type MeetingCaptureWriter, type MeetingComposeDraft } from "./captureOps.js";
+import { createMeetingCaptureOps, type MeetingCaptureProgress, type MeetingCaptureWriter } from "./captureOps.js";
 import { MeetingCaptureRecorder } from "./captureRecorder.js";
 import { NO_CAPTURE_HOLD, captureInFlight, createCaptureHold, createComposeLife, prepareSubmission, type MeetingCaptureHold } from "./composeSubmit.js";
-import { migrateLegacyDraft } from "./legacyDraft.js";
+import { createLegacyDraftMigration, type LegacyDraftMigration } from "./legacyDraft.js";
 import { createTeamsOps } from "./teamsOps.js";
 import { useActiveOrg } from "../../lib/orgContext.js";
 import { bridgeQuery } from "../../lib/bridgeQuery.js";
@@ -116,11 +116,24 @@ export function MeetingsView({ ops, onCaptureChange }: { ops: MeetingsOps; onCap
    * and only ever read old summaries kept the previous build's draft — including
    * every live segment D4 folded into it — for as long as they never pressed
    * "+ New". This view mounts whenever anyone looks at meetings at all, which is
-   * the earliest point that is still inside the feature. The promise is handed
+   * the earliest point that is still inside the feature. The migration is handed
    * to the composer so its restore reads the protected file AFTER the hand-over,
    * and so anything that could not be handed over is still offered back.
+   *
+   * BUILT here and RUN below, because building one does nothing and running one
+   * reads-and-REMOVES `localStorage`. React may call this function twice for a
+   * single commit and keep the second result — StrictMode's double render does
+   * exactly that on every mount in `vite dev` — and the second run of a
+   * read-and-remove finds an empty store and answers `null`. Starting it from
+   * this memo therefore took the draft out of `localStorage` and then discarded
+   * the one promise still holding it: an old preload or a failed write lost the
+   * words, and the composer's restore below awaited a hand-over that had never
+   * happened. A read-and-remove is not a computation and does not belong in a
+   * render — and it is the same double invoke, one layer up, that made
+   * `createComposeLife` a counter rather than a latch.
    */
-  const legacyDraft = useMemo(() => migrateLegacyDraft(capture), [capture]);
+  const legacyDraft = useMemo(() => createLegacyDraftMigration(capture), [capture]);
+  useEffect(() => { void legacyDraft.run(); }, [legacyDraft]);
   /**
    * A1/F1 — the capture the compose form is holding, as a fact about the APP
    * rather than about whether that form happens to be on screen.
@@ -586,14 +599,16 @@ function LiveTranscript({ session, phase, retrying, onRetry }: { session: Meetin
  * capture.
  *
  * `legacyDraft` is the view's one-time migration out of `localStorage`, awaited
- * rather than repeated here so the protected file is read after the hand-over,
- * and `onCaptureHold` is what keeps this component mounted through the four
+ * rather than repeated here so the protected file is read after the hand-over —
+ * `run()` answers with the promise of the view's own run, and a second migration
+ * would find the key already gone and answer that nothing was left over. And
+ * `onCaptureHold` is what keeps this component mounted through the four
  * clicks that used to unmount it mid-meeting (A1) and what keeps the library's
  * recovery offer from advertising the recording in hand (F1). Everything the
  * recording consists of — the `MediaRecorder`, the fold, the phase, the live
  * rows — is state inside this function, so its lifetime IS the meeting's.
  */
-function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onCaptureHold, onCreated, onCancel }: { ops: MeetingsOps; orgId?: string; legacyDraft: Promise<MeetingComposeDraft | null>; onAudioRetained(notice: { sessionId: string; message: string }): void; onCaptureHold(hold: MeetingCaptureHold): void; onCreated(id: string): Promise<void>; onCancel(): void }): ReactElement {
+function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onCaptureHold, onCreated, onCancel }: { ops: MeetingsOps; orgId?: string; legacyDraft: LegacyDraftMigration; onAudioRetained(notice: { sessionId: string; message: string }): void; onCaptureHold(hold: MeetingCaptureHold): void; onCreated(id: string): Promise<void>; onCancel(): void }): ReactElement {
   const [title, setTitle] = useState("");
   const [transcript, setTranscript] = useState("");
   const [template, setTemplate] = useState<CreateMeetingInput["template"]>("general");
@@ -751,7 +766,12 @@ function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onCaptureHold, o
       // finished would find nothing and then overwrite it with an empty form.
       // It resolves to a draft only when the hand-over could not happen at all,
       // in which case this form is the last place those words exist.
-      const pending = await legacyDraft;
+      //
+      // `run()` is the view's migration, not a second one: the words are already
+      // out of `localStorage` by the time this form exists, so a fresh migration
+      // would answer "nothing was left over" for every draft that had nowhere to
+      // go — and the 250 ms autosave below would then clear the file over them.
+      const pending = await legacyDraft.run();
       const saved = (await capture.readDraft().catch(() => null)) ?? pending;
       if (!active) return;
       if (saved?.title) setTitle(saved.title);

@@ -815,7 +815,15 @@ export default function MeetingsPage() {
                           <button type="button" className={styles.track} disabled={cap.busy === "preview"} aria-pressed={cap.preview?.sessionId === entry.record.sessionId} onClick={() => void capture.previewCapture(entry.record)}>
                             {cap.preview?.sessionId === entry.record.sessionId ? "Hide audio" : cap.busy === "preview" ? "Reading…" : "Play"}
                           </button>
-                          <button type="button" className={styles.newBtn} disabled={cap.busy === "transcribe" || cap.recording || Boolean(writer)} onClick={() => void capture.pickUp(entry)}>Pick up</button>
+                          {/* `cap.capturing`, not `cap.recording`. `recording`
+                              is false across the whole arming window and across
+                              the settle after Stop, and this button ADOPTS a
+                              meeting: pressed in either window it hands the
+                              recording this tab is making back to the browser
+                              from inside `attachQueue`, and that recording then
+                              writes chunks nothing claims. The surface refuses
+                              it in the function too — this is the belt. */}
+                          <button type="button" className={styles.newBtn} disabled={cap.busy === "transcribe" || cap.capturing || Boolean(writer)} onClick={() => void capture.pickUp(entry)}>Pick up</button>
                           <button type="button" className={styles.track} disabled={cap.busy === "transcribe" || Boolean(writer)} title={writer ?? unsure ?? undefined} onClick={() => void capture.discard(entry.record)}>Discard</button>
                         </span>
                       </div>
@@ -879,10 +887,22 @@ export default function MeetingsPage() {
               </div>
             ) : null}
             <div className={styles.modalActions} style={{ justifyContent: "space-between" }}>
-              <div className={styles.recordActions}><button type="button" className={styles.track} onClick={() => (cap.recording ? capture.stop() : void capture.record())} disabled={cap.busy === "transcribe"}>{cap.recording ? "■ Stop recording" : cap.busy === "transcribe" ? "Transcribing…" : <><Microphone size={13} weight="fill" /> Record</>}</button>{cap.recording ? <button type="button" className={styles.track} onClick={() => capture.togglePause()}>{cap.paused ? "▶ Resume" : "Ⅱ Pause"}</button> : null}</div>
+              {/* The Record FACE of this button is disabled by `cap.capturing`,
+                  and the Stop face never is. `recording` stays false through the
+                  arming window — a storage prompt and a microphone prompt, both
+                  of which a person can leave on screen — so a second press was
+                  the ordinary "nothing happened, click it again" and it started
+                  a SECOND recorder over a SECOND session, which `stop()` and the
+                  unmount teardown could both only reach the last of. The label
+                  says which window it is in rather than looking dead: ADR-028. */}
+              <div className={styles.recordActions}><button type="button" className={styles.track} onClick={() => (cap.recording ? capture.stop() : void capture.record())} disabled={cap.busy === "transcribe" || (!cap.recording && cap.capturing)}>{cap.recording ? "■ Stop recording" : cap.busy === "transcribe" ? "Transcribing…" : cap.settling ? "Saving the recording…" : cap.capturing ? "Starting…" : <><Microphone size={13} weight="fill" /> Record</>}</button>{cap.recording ? <button type="button" className={styles.track} onClick={() => capture.togglePause()}>{cap.paused ? "▶ Resume" : "Ⅱ Pause"}</button> : null}</div>
               <div style={{ display: "flex", gap: 8 }}>
                 <button type="button" className={styles.track} onClick={() => { if (cap.recording) capture.stop(); capture.closeDialog(); }}>Cancel</button>
-                <button type="button" className={styles.newBtn} onClick={() => void capture.submit()} disabled={cap.busy === "create" || cap.recording || cap.settling}>
+                {/* `cap.capturing` covers `recording` and `settling` and the
+                    arming window they both leave out — which is the predicate
+                    `submit()` has always refused on, so the button now says the
+                    same thing the function does. */}
+                <button type="button" className={styles.newBtn} onClick={() => void capture.submit()} disabled={cap.busy === "create" || cap.capturing}>
                   {cap.busy === "create" ? "Creating…" : cap.settling ? "Saving the recording…" : "Create + summarize"}
                 </button>
               </div>

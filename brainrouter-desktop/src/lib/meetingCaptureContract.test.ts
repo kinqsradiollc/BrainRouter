@@ -288,7 +288,27 @@ test('D6 — the draft lives where the audio does, and is the compose box itself
   // here as in the adapter below, so only a CALL is refused.)
   assert.doesNotMatch(view, /localStorage\.\w/);
   assert.match(legacy, /storage\.removeItem\(LEGACY_DRAFT_KEY\)/);
-  assert.match(view, /migrateLegacyDraft\(capture\)/);
+  // …and it is BUILT in render and RUN from an effect, which is the difference
+  // between a migration and a lost draft. React may call a component body twice
+  // for one commit and keep the second result — StrictMode's double render, on
+  // every mount in `vite dev` — and the second run of a read-and-remove finds an
+  // empty store. Started from the memo, the draft came out of `localStorage` and
+  // the only promise still holding it was the discarded one, so an old preload
+  // or a failed write lost it outright and the compose form's restore awaited a
+  // hand-over that had never happened. Two `run()` calls and no more: the view's
+  // effect and the form's restore, both answered by the same single run.
+  assert.match(view, /const legacyDraft = useMemo\(\(\) => createLegacyDraftMigration\(capture\), \[capture\]\);/);
+  assert.match(view, /useEffect\(\(\) => \{ void legacyDraft\.run\(\); \}, \[legacyDraft\]\);/);
+  assert.match(view, /const pending = await legacyDraft\.run\(\);/);
+  assert.equal(view.match(/legacyDraft\.run\(\)/g)?.length, 2);
+  // And the form waits for it BEFORE it reads the protected file. Reading first
+  // finds a file the hand-over has not written yet, and the 250 ms autosave that
+  // `draftLoaded` releases a moment later then clears it over the migrated
+  // words — the same loss, arrived at from the other end.
+  assert.ok(
+    view.indexOf('const pending = await legacyDraft.run();') < view.indexOf('const saved = (await capture.readDraft()'),
+    'the compose form awaits the migration before it reads the protected draft',
+  );
   // …and no fallback to it from the adapter either, which is where a "the host
   // is unavailable" branch would be tempting. (Naming the store in a comment is
   // how that branch is argued against, so only a CALL is refused here.)

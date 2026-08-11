@@ -46,17 +46,24 @@
  * browser cannot say", and callers that would otherwise reap a chunk-less
  * manifest leave it alone.
  *
- * **Which browser that actually is.** This file used to name "a dashboard served
- * over plain http on a LAN", and that environment cannot reach any of this: on
- * an insecure origin Chromium reports `isSecureContext: false`, and
- * `navigator.mediaDevices` is `undefined` alongside `navigator.locks` — so there
- * is no microphone there, nothing can be recorded, and the two-tab race the
- * fallback is about cannot happen on that origin at all. The browsers that
- * really have this shape are SECURE ones that predate Web Locks: Safari up to
- * 15.3, Firefox up to 95, and the older in-app WebViews that lag both. They can
- * record perfectly well and cannot coordinate, which is the whole point — and
- * telling a plain-http user to "keep this meeting in one tab" was advice about
- * an origin where they cannot record a meeting in any number of tabs.
+ * **Which browsers that actually is — two of them, and the banner reaches
+ * both.** `LockManager` is `[SecureContext]`, so a page served over plain http
+ * has no `navigator.locks` at all and takes this whole path: the banner is
+ * raised in the surface's constructor, `#otherWriter` answers `unknown`, and the
+ * reap declines to reclaim what it cannot prove is dead. What such an origin
+ * cannot reach is a RECORDING — `navigator.mediaDevices` is `undefined` there
+ * for the same reason — so the two-tab race the coordination exists for cannot
+ * happen on it. An earlier version of this paragraph said that environment
+ * "cannot reach any of this", which overstated a true platform fact: it reaches
+ * everything except the race. The browsers that reach the race are SECURE ones
+ * that predate Web Locks — Safari up to 15.3, Firefox up to 95, and the older
+ * in-app WebViews that lag both. They record perfectly well and cannot
+ * coordinate, which is the whole point.
+ *
+ * The sentence below therefore has to be true for both, because it prints from
+ * the constructor — before, and independently of, any Record. It names the
+ * insecure origin as well as the old browser, and it keeps the one remedy the
+ * insecure origin actually has: serve the page over https.
  */
 
 /** Namespaced like every other key this product puts in a browser-wide namespace. */
@@ -68,7 +75,7 @@ export const CAPTURE_LOCK_PREFIX = "brainrouter:meeting-capture:";
  * it is in".
  */
 export const CAPTURE_LOCKS_UNAVAILABLE =
-  "This browser cannot tell whether another tab is recording — it has no Web Locks API, which is the case in older versions of Safari and Firefox and in some in-app browsers. Recording in two tabs at once is not coordinated here: keep this meeting in one tab.";
+  "This browser cannot tell whether another tab is recording — it has no Web Locks API. That is the case on a page served over plain http, where Web Locks needs a secure context (so does the microphone), and in older versions of Safari and Firefox and some in-app browsers. Recording in two tabs at once is not coordinated here: open this dashboard over https if it is not already, and keep this meeting in one tab.";
 
 /**
  * What a surface says about a capture another tab of this origin is holding —
