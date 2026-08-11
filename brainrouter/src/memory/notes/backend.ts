@@ -31,14 +31,17 @@
  * exists to prevent exactly that, and a database with its own sync path would
  * disagree with the page it lives on within a day of shipping.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { memoryEngine } from "../engine.js";
 import {
   acquireBlockLease, blockComments, blockReferences, blockReferenceText, boundCommentAuthor,
-  boundCommentBody, contentWithoutRefs, DATABASE_BLOCK_KIND,
-  datePropertyDay, exportFormatsFor, exportNote, fenceBlockWrite,
-  FIRST_RANK, isLiveBlock, isSyncedBlock, MAX_COMMENT_LENGTH, MAX_EXPORT_BLOCKS, MAX_EXPORT_CHARS,
-  MAX_HEADING_LEVEL, mergeNoteBlock, newCommentId, NOTE_BLOCK_KINDS,
+  boundCommentBody, contentWithoutRefs, DATABASE_BLOCK_KIND, defaultDatabaseSchema,
+  defaultDatabaseViews, describeTrashEntry,
+  datePropertyDay, deletedSubtreeIds, exportFormatsFor, exportNote, fenceBlockWrite,
+  FIRST_RANK, isLiveBlock, isSyncedBlock, isTemplate, MAX_COMMENT_LENGTH, MAX_EXPORT_BLOCKS, MAX_EXPORT_CHARS,
+  listTrashEntries, MAX_HEADING_LEVEL, mergeNoteBlock, newCommentId, NOTE_BLOCK_KINDS,
+  orphanedComments, pageTitleOrDefault,
   projectDatabase, rankBetween, readDatabase, releaseBlockLease,
   renewBlockLease, resolveBlockConflict, subtreeBlockIds, syncedSourceId, validateDatabaseFields,
   BLOCK_LEASE_MS,
@@ -48,12 +51,24 @@ import {
   type NotePropertyDef, type NotePropertyValue, type Stamped,
 } from "@kinqs/brainrouter-core/notes";
 import {
+  EMPTY_NOTES_MUTATION_SYNC, NOTES_EDITING_CONTRACT_VERSION, REMOTE_NOTES_HISTORY_STATE,
+  describeInstantiation,
+  planAddDatabaseProperty, planCreateDatabaseRow, planDeleteDatabaseProperty,
+  planDeleteDatabaseView, planNoteGesture, planNoteSubtreeCopy, planReorderDatabaseProperties,
+  planSaveDatabaseView, planSetDatabaseRowValue, planUpdateDatabaseProperty,
+  remapNoteRefs, resolveNoteMutationPosition, rollupTargetPropertiesFromBlocks,
+  type DatabaseMutationPlan, type NoteGesture, type NoteGesturePlan,
+  type NoteGestureStep, type NotesMutationError, type NotesMutationOperation,
+  type NotesMutationRequest, type NotesMutationResponse, type NotesMutationSyncReport,
+  type RollupTargetPropertiesResult,
+} from "@kinqs/brainrouter-core/notes/editing";
+import {
   extractWorkspaceRefs, parseWorkspaceRef, workspaceRefKey,
 } from "@kinqs/brainrouter-core/workspace/references";
 import type {
   NoteAttachmentRow, NoteAttachmentUseRow, NoteBacklinkRow, NoteBlockLeaseRow,
   NoteBlockOwnerRow, NoteBlockRow, NotePageMetaRow, NoteRefRow, NoteRowValueInput,
-  NoteSearchRow,
+  NoteSearchRow, NoteOperationReceipt, NoteMutationQueries,
 } from "../store/postgres/queries/notesQueries.js";
 
 /**
@@ -89,6 +104,11 @@ export const ATTACHMENT_GRACE_MS = 24 * 60 * 60 * 1000;
 const LEASE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 interface NotesStore {
+  withNoteMutation<T>(
+    orgId: string,
+    userId: string,
+    fn: (queries: NoteMutationQueries) => Promise<T>,
+  ): Promise<T>;
   databaseNowMs(): Promise<number>;
   listNoteBlocksSince(orgId: string, userId: string, since?: string): Promise<NoteBlockRow[]>;
   listAllNoteBlocks(orgId: string, userId: string): Promise<NoteBlockRow[]>;
@@ -106,8 +126,16 @@ interface NotesStore {
   listNoteChildBlocks(orgId: string, userId: string, parentId: string, limit?: number): Promise<NoteBlockRow[]>;
   setNoteBlockVisibility(orgId: string, userId: string, id: string, visibility: string): Promise<number>;
   latestNoteRevision(orgId: string, userId: string): Promise<string>;
+  getNoteOperationReceipt(orgId: string, userId: string, key: string): Promise<NoteOperationReceipt | null>;
   wasNoteOperationApplied(orgId: string, userId: string, key: string): Promise<boolean>;
-  recordNoteOperationApplied(orgId: string, userId: string, key: string, blockId: string): Promise<void>;
+  recordNoteOperationApplied(
+    orgId: string,
+    userId: string,
+    key: string,
+    blockId: string,
+    fingerprint?: string,
+    response?: Record<string, unknown>,
+  ): Promise<void>;
   replaceNoteRefs(orgId: string, userId: string, blockId: string, refs: readonly Omit<NoteRefRow, "fromBlockId">[]): Promise<void>;
   listNoteRefsFrom(orgId: string, userId: string, blockId: string): Promise<NoteRefRow[]>;
   listNoteBacklinks(orgId: string, viewerUserId: string, targetKey: string, limit?: number): Promise<NoteBacklinkRow[]>;
@@ -126,6 +154,14 @@ interface NotesStore {
   readNoteBlockLease(orgId: string, userId: string, blockId: string): Promise<{ lease: NoteBlockLeaseRow | null; dbNowMs: number }>;
   upsertNoteBlockLease(orgId: string, userId: string, lease: NoteBlockLeaseRow): Promise<void>;
   sweepNoteBlockLeases(orgId: string, maxAgeMs: number): Promise<number>;
+  observeNoteHostClock(orgId: string, userId: string, remote: Hlc): Promise<void>;
+  nextNoteHostClock(
+    orgId: string,
+    userId: string,
+    deviceId: string,
+    wallClockMs: number,
+    reserve: number,
+  ): Promise<Hlc>;
   registerNoteAttachment(orgId: string, object: { contentHash: string; byteSize: number; mediaType: string; storageKey: string }): Promise<NoteAttachmentRow>;
   linkNoteAttachment(orgId: string, userId: string, link: { blockId: string; contentHash: string; fileName?: string | null }): Promise<void>;
   unlinkNoteAttachment(orgId: string, userId: string, blockId: string, contentHash: string): Promise<number>;
@@ -133,7 +169,50 @@ interface NotesStore {
   countNoteAttachmentUses(orgId: string, contentHash: string): Promise<number>;
   listUnreferencedNoteAttachments(orgId: string, olderThanMs: number, limit?: number): Promise<NoteAttachmentRow[]>;
 }
-const store = (): NotesStore => memoryEngine.store as unknown as NotesStore;
+interface NotesMutationContext {
+  orgId: string;
+  userId: string;
+  store: NotesStore;
+}
+
+const notesMutationContext = new AsyncLocalStorage<NotesMutationContext>();
+const rootStore = (): NotesStore => memoryEngine.store as unknown as NotesStore;
+const store = (): NotesStore => notesMutationContext.getStore()?.store ?? rootStore();
+
+/**
+ * Enter the one transaction that owns a complete Notes mutation.
+ *
+ * Nested writers such as comments and gesture primitives reuse the active
+ * transaction rather than opening a second pooled connection. Test stores that
+ * predate this contract still run, but production must provide the transaction
+ * primitive and is intentionally failed closed when it does not.
+ */
+async function withNotesMutation<T>(
+  orgId: string,
+  userId: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const active = notesMutationContext.getStore();
+  if (active) {
+    if (active.orgId !== orgId || active.userId !== userId) {
+      throw new Error("A nested Notes mutation cannot change its organization or user scope.");
+    }
+    return fn();
+  }
+  const base = rootStore();
+  if (typeof base.withNoteMutation !== "function") {
+    // Small in-memory test stores are updated alongside this contract. A real
+    // store without atomic Notes support must never silently fall back.
+    if (process.env.NODE_ENV !== "test") {
+      throw new Error("The Notes store does not support atomic mutations.");
+    }
+    return fn();
+  }
+  return base.withNoteMutation(orgId, userId, async (queries) => {
+    const locked = queries as unknown as NotesStore;
+    return notesMutationContext.run({ orgId, userId, store: locked }, fn);
+  });
+}
 
 export interface NotePushOperation {
   idempotencyKey: string;
@@ -160,6 +239,43 @@ export interface PushOutcome {
   fenced?: Array<{ idempotencyKey: string; itemId: string; reason: BlockFence }>;
 }
 
+function canonicalJson(value: unknown): string {
+  if (value === null) return "null";
+  if (typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
+  if (typeof value === "number") return Number.isFinite(value) ? JSON.stringify(value) : JSON.stringify(String(value));
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object).sort().filter((key) => object[key] !== undefined).map((key) => (
+      `${JSON.stringify(key)}:${canonicalJson(object[key])}`
+    )).join(",")}}`;
+  }
+  return JSON.stringify(String(value));
+}
+
+function digestParts(...parts: readonly string[]): string {
+  const hash = createHash("sha256");
+  for (const part of parts) {
+    hash.update(String(Buffer.byteLength(part, "utf8")));
+    hash.update(":");
+    hash.update(part);
+  }
+  return hash.digest("hex");
+}
+
+function pushReceiptKey(idempotencyKey: string): string {
+  return `notes:push:v1:${digestParts(idempotencyKey)}`;
+}
+
+function pushFingerprint(operation: NotePushOperation): string {
+  return digestParts(canonicalJson({
+    itemId: operation.itemId,
+    kind: operation.kind,
+    at: operation.at,
+    payload: operation.payload,
+  }));
+}
+
 /**
  * The server's own clock, sent with every pull so clients absorb it (D3).
  *
@@ -175,9 +291,160 @@ function hlcText(at: Hlc): string {
   return `${at.physical}.${at.logical}.${at.deviceId}`;
 }
 
+function plainRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null
+    ? value as Record<string, unknown>
+    : null;
+}
+
 function isHlc(value: unknown): value is Hlc {
-  const h = value as Hlc | undefined;
-  return !!h && typeof h.physical === "number" && typeof h.logical === "number" && typeof h.deviceId === "string";
+  const h = plainRecord(value) as unknown as Hlc | null;
+  return !!h
+    && Number.isSafeInteger(h.physical) && h.physical >= 0
+    && Number.isSafeInteger(h.logical) && h.logical >= 0
+    && safeWireToken(h.deviceId, 128);
+}
+
+function laterClock(left: Hlc | null, right: Hlc): Hlc {
+  if (!left || right.physical > left.physical
+    || (right.physical === left.physical && right.logical > left.logical)) return right;
+  return left;
+}
+
+/** Find the newest clock already persisted, including stamps written before migration 060. */
+function latestStoredClock(value: unknown): Hlc | null {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  let latest: Hlc | null = null;
+  while (pending.length > 0) {
+    const candidate = pending.pop();
+    if (!candidate || typeof candidate !== "object" || seen.has(candidate)) continue;
+    seen.add(candidate);
+    if (isHlc(candidate)) latest = laterClock(latest, candidate);
+    if (Array.isArray(candidate)) pending.push(...candidate);
+    else pending.push(...Object.values(candidate as Record<string, unknown>));
+  }
+  return latest;
+}
+
+async function absorbStoredNoteClocks(
+  orgId: string,
+  userId: string,
+  rows?: readonly NoteBlockRow[],
+): Promise<readonly NoteBlockRow[]> {
+  const stored = rows ?? await store().listAllNoteBlocks(orgId, userId);
+  let latest: Hlc | null = null;
+  for (const row of stored) {
+    const candidate = latestStoredClock(row.payload);
+    if (candidate) latest = laterClock(latest, candidate);
+  }
+  if (latest) await store().observeNoteHostClock(orgId, userId, latest);
+  return stored;
+}
+
+function safeWireToken(value: unknown, max: number): value is string {
+  return typeof value === "string"
+    && value.length > 0
+    && value.length <= max
+    && !/[\u0000-\u001f\u007f]/u.test(value)
+    && value !== "__proto__"
+    && value !== "prototype"
+    && value !== "constructor";
+}
+
+function safeMapKey(value: string): boolean {
+  return safeWireToken(value, 256);
+}
+
+function nullPrototypeMap(value: Record<string, unknown>): Record<string, unknown> {
+  const next = Object.create(null) as Record<string, unknown>;
+  for (const [key, entry] of Object.entries(value)) {
+    next[key] = Array.isArray(entry)
+      ? entry.map((item) => (plainRecord(item) ? nullPrototypeMap(item as Record<string, unknown>) : item))
+      : plainRecord(entry)
+        ? nullPrototypeMap(entry as Record<string, unknown>)
+        : entry;
+  }
+  return next;
+}
+
+export type NotePushOperationParseResult =
+  | { ok: true; value: NotePushOperation }
+  | { ok: false; idempotencyKey: string; reason: string };
+
+/** Strictly validate the legacy device-outbox wire envelope. */
+export function parseNotePushOperation(value: unknown): NotePushOperationParseResult {
+  const raw = plainRecord(value);
+  if (!raw) {
+    return { ok: false, idempotencyKey: "unknown", reason: "A Notes operation must be an object." };
+  }
+  const key = typeof raw.idempotencyKey === "string" ? raw.idempotencyKey : "unknown";
+  if (!safeWireToken(raw.idempotencyKey, 512)) {
+    return { ok: false, idempotencyKey: key, reason: "The operation has an invalid idempotency key." };
+  }
+  if (!safeWireToken(raw.itemId, 256)) {
+    return { ok: false, idempotencyKey: key, reason: "The operation has an invalid block id." };
+  }
+  if (raw.kind !== "create" && raw.kind !== "update" && raw.kind !== "delete" && raw.kind !== "source_action") {
+    return { ok: false, idempotencyKey: key, reason: "The operation has an unsupported kind." };
+  }
+  if (!isHlc(raw.at)) {
+    return { ok: false, idempotencyKey: key, reason: "The operation has an invalid clock stamp." };
+  }
+  const rawPayload = plainRecord(raw.payload);
+  if (!rawPayload) {
+    return { ok: false, idempotencyKey: key, reason: "The operation carried no usable block." };
+  }
+  const payload = nullPrototypeMap(rawPayload);
+  for (const mapField of ["props", "comments"] as const) {
+    const map = payload[mapField];
+    if (map === undefined) continue;
+    const mapRecord = plainRecord(map);
+    if (!mapRecord) {
+      return { ok: false, idempotencyKey: key, reason: `${mapField} must be an object map.` };
+    }
+    for (const mapKey of Object.keys(mapRecord)) {
+      if (!safeMapKey(mapKey)) {
+        return { ok: false, idempotencyKey: key, reason: `${mapField} contains a reserved or invalid key.` };
+      }
+    }
+    payload[mapField] = nullPrototypeMap(mapRecord);
+  }
+  if (payload.parentId !== undefined && payload.parentId !== null && !safeWireToken(payload.parentId, 256)) {
+    return { ok: false, idempotencyKey: key, reason: "The operation has an invalid parent block id." };
+  }
+  if (payload.rank !== undefined && (typeof payload.rank !== "string" || payload.rank.length > 512)) {
+    return { ok: false, idempotencyKey: key, reason: "The operation has an invalid rank." };
+  }
+  if (payload.leaseEpoch !== undefined
+    && (!Number.isSafeInteger(payload.leaseEpoch) || (payload.leaseEpoch as number) < 1)) {
+    return { ok: false, idempotencyKey: key, reason: "The operation has an invalid lease epoch." };
+  }
+  if (payload.restore !== undefined && payload.restore !== true) {
+    return { ok: false, idempotencyKey: key, reason: "A restore marker must be true." };
+  }
+  if (payload.field !== undefined || payload.keep !== undefined) {
+    const field = payload.field;
+    const validField = field === "text" || field === "deleted"
+      || (typeof field === "string" && field.startsWith("comment:") && safeMapKey(field.slice(8)));
+    if (!validField || (payload.keep !== "ours" && payload.keep !== "theirs")) {
+      return { ok: false, idempotencyKey: key, reason: "The operation has an invalid conflict resolution." };
+    }
+  }
+  const invalid = validatePatch(payload, raw.itemId);
+  if (invalid) return { ok: false, idempotencyKey: key, reason: invalid };
+  return {
+    ok: true,
+    value: {
+      idempotencyKey: raw.idempotencyKey,
+      itemId: raw.itemId,
+      kind: raw.kind,
+      at: { physical: raw.at.physical, logical: raw.at.logical, deviceId: raw.at.deviceId },
+      payload,
+    },
+  };
 }
 
 function blockOf(row: NoteBlockRow): NoteBlock {
@@ -199,7 +466,10 @@ function stampedProps(
   patch: Record<string, unknown>,
   at: Hlc,
 ): NonNullable<NoteBlock["props"]> {
-  const next: NonNullable<NoteBlock["props"]> = { ...(existing ?? {}) };
+  const next = Object.assign(
+    Object.create(null) as NonNullable<NoteBlock["props"]>,
+    existing ?? {},
+  );
   for (const [key, value] of Object.entries(patch)) {
     next[key] = stampedWith(value as NotePropertyValue, at);
   }
@@ -224,7 +494,10 @@ function stampedComments(
   patch: Record<string, unknown>,
   at: Hlc,
 ): NonNullable<NoteBlock["comments"]> {
-  const next: NonNullable<NoteBlock["comments"]> = { ...(existing ?? {}) };
+  const next = Object.assign(
+    Object.create(null) as NonNullable<NoteBlock["comments"]>,
+    existing ?? {},
+  );
   for (const [key, raw] of Object.entries(patch)) {
     if (!raw || typeof raw !== "object") continue;
     const incoming = raw as Partial<NoteComment> & { body?: { value?: unknown } };
@@ -265,7 +538,11 @@ export async function pullChanges(
   const rows = await store().listNoteBlocksSince(orgId, userId, since);
   return {
     blocks: rows.map(blockOf),
-    cursor: await store().latestNoteRevision(orgId, userId),
+    // Advance only through the last row actually delivered. The SQL read is
+    // bounded; jumping to MAX(revision) here would strand every row beyond that
+    // page because the next pull would ask strictly after an unseen revision.
+    cursor: rows.at(-1)?.revision
+      ?? (since && /^\d+$/.test(since) ? since : await store().latestNoteRevision(orgId, userId)),
   };
 }
 
@@ -279,6 +556,63 @@ export async function listBlocks(orgId: string, userId: string): Promise<NoteBlo
 export async function listAllBlocks(orgId: string, userId: string): Promise<NoteBlock[]> {
   const rows = await store().listAllNoteBlocks(orgId, userId);
   return rows.map(blockOf);
+}
+
+export interface NoteTrashEntryDto {
+  id: string;
+  kind: string;
+  title: string;
+  descendants: number;
+  deletedAt: Hlc;
+  line: string;
+}
+
+/** Authenticated trash projection over the complete tombstone corpus. */
+export async function listTrash(
+  orgId: string,
+  userId: string,
+): Promise<NoteTrashEntryDto[]> {
+  return listTrashEntries(await listAllBlocks(orgId, userId)).map((entry) => {
+    const title = pageTitleOrDefault(entry.block);
+    return {
+      id: entry.block.id,
+      kind: entry.block.kind.value,
+      title,
+      descendants: entry.descendants,
+      deletedAt: entry.deletedAt,
+      line: describeTrashEntry(entry, title),
+    };
+  });
+}
+
+export interface OrphanedNoteThreadDto {
+  blockId: string;
+  text: string;
+  comments: Array<{
+    id: string;
+    body: string;
+    author: string;
+    resolved: boolean;
+    createdAtMs: number;
+  }>;
+}
+
+/** C5 — complete deleted-block comment projection; no bounded pull derivation. */
+export async function listOrphanedCommentThreads(
+  orgId: string,
+  userId: string,
+): Promise<OrphanedNoteThreadDto[]> {
+  return orphanedComments(await listAllBlocks(orgId, userId), isLiveBlock).map((entry) => ({
+    blockId: entry.block.id,
+    text: entry.block.text.value,
+    comments: entry.comments.map((comment) => ({
+      id: comment.id,
+      body: comment.body.value,
+      author: comment.author,
+      resolved: comment.resolved.value === true,
+      createdAtMs: comment.createdAt.physical,
+    })),
+  }));
 }
 
 export async function getBlock(orgId: string, userId: string, id: string): Promise<NoteBlock | null> {
@@ -416,6 +750,20 @@ export async function readDatabaseView(
     rowsRead: rowBlocks.length,
     exportFormats: exportFormatsFor(block),
   };
+}
+
+/** F2 — authenticated server equivalent of Core's local rollup-target picker. */
+export async function readRollupTargetProperties(
+  orgId: string,
+  userId: string,
+  databaseId: string,
+  relationPropertyId: string,
+): Promise<RollupTargetPropertiesResult> {
+  return rollupTargetPropertiesFromBlocks(
+    await listAllBlocks(orgId, userId),
+    databaseId,
+    relationPropertyId,
+  );
 }
 
 /* ---------------------------------------------------------------- writing */
@@ -640,43 +988,46 @@ export async function createBlock(
   },
   nowMs: number,
 ): Promise<NoteBlock> {
-  const kind = input.kind ?? "paragraph";
-  if (!NOTE_BLOCK_KINDS.includes(kind)) throw new Error(`"${kind}" is not a block kind`);
-  const text = input.text ?? "";
-  if (text.length > MAX_BLOCK_TEXT) throw new Error(`A block holds at most ${MAX_BLOCK_TEXT} characters`);
+  return withNotesMutation(orgId, userId, async () => {
+    const kind = input.kind ?? "paragraph";
+    if (!NOTE_BLOCK_KINDS.includes(kind)) throw new Error(`"${kind}" is not a block kind`);
+    const text = input.text ?? "";
+    if (text.length > MAX_BLOCK_TEXT) throw new Error(`A block holds at most ${MAX_BLOCK_TEXT} characters`);
 
-  const at = serverClock(nowMs);
-  const parentId = input.parentId ?? null;
-  const siblings = (await store().listAllNoteBlocks(orgId, userId))
-    .filter((r) => !r.deletedAtHlc && r.parentId === parentId)
-    .map(blockOf);
-  const last = siblings.map((b) => b.rank?.value).filter((r): r is string => typeof r === "string").sort().at(-1);
+    const rows = await absorbStoredNoteClocks(orgId, userId);
+    const at = await store().nextNoteHostClock(orgId, userId, "server", nowMs, 1);
+    const parentId = input.parentId ?? null;
+    const siblings = rows
+      .filter((r) => !r.deletedAtHlc && r.parentId === parentId)
+      .map(blockOf);
+    const last = siblings.map((b) => b.rank?.value).filter((r): r is string => typeof r === "string").sort().at(-1);
 
-  const patch: Record<string, unknown> = {
-    ...(input.fields ?? {}),
-    kind,
-    text,
-    parentId,
-    rank: last ? rankBetween(last, null) : FIRST_RANK,
-    ...(input.level !== undefined ? { level: input.level } : {}),
-  };
-  // The same bounds a pushed operation gets. A create is not a privileged path:
-  // an icon or a schema that arrives here reaches every viewer of the page.
-  const invalid = validatePatch(patch);
-  if (invalid) throw new Error(invalid);
+    const patch: Record<string, unknown> = {
+      ...(input.fields ?? {}),
+      kind,
+      text,
+      parentId,
+      rank: last ? rankBetween(last, null) : FIRST_RANK,
+      ...(input.level !== undefined ? { level: input.level } : {}),
+    };
+    // The same bounds a pushed operation gets. A create is not a privileged path:
+    // an icon or a schema that arrives here reaches every viewer of the page.
+    const invalid = validatePatch(patch);
+    if (invalid) throw new Error(invalid);
 
-  const block = incomingBlock(
-    null,
-    {
-      idempotencyKey: "",
-      itemId: `blk_${nowMs.toString(36)}${randomUUID().slice(0, 8)}_server`,
-      kind: "create",
-      at,
-      payload: patch,
-    },
-    patch,
-  );
-  return persistBlock(orgId, userId, block, input.visibility);
+    const block = incomingBlock(
+      null,
+      {
+        idempotencyKey: "",
+        itemId: `blk_${nowMs.toString(36)}${randomUUID().slice(0, 8)}_server`,
+        kind: "create",
+        at,
+        payload: patch,
+      },
+      patch,
+    );
+    return persistBlock(orgId, userId, block, input.visibility);
+  });
 }
 
 /** D1 — sharing widens visibility rather than moving the row. */
@@ -701,12 +1052,30 @@ export async function pushOperations(
   userId: string,
   operations: readonly NotePushOperation[],
 ): Promise<PushOutcome> {
+  return withNotesMutation(orgId, userId, () => pushOperationsLocked(orgId, userId, operations));
+}
+
+async function pushOperationsLocked(
+  orgId: string,
+  userId: string,
+  operations: readonly NotePushOperation[],
+): Promise<PushOutcome> {
   const outcome: PushOutcome = { accepted: [], rejected: [] };
 
   for (const op of operations) {
-    // Idempotency first: a redelivered push must be a no-op, not a second apply.
-    // Reported as accepted because from the client's side it DID land.
-    if (await store().wasNoteOperationApplied(orgId, userId, op.idempotencyKey)) {
+    const receiptKey = pushReceiptKey(op.idempotencyKey);
+    const fingerprint = pushFingerprint(op);
+    const receipt = await store().getNoteOperationReceipt(orgId, userId, receiptKey);
+    if (receipt) {
+      if (receipt.fingerprint && receipt.fingerprint !== fingerprint) {
+        outcome.rejected.push({
+          idempotencyKey: op.idempotencyKey,
+          reason: "This idempotency key was already used for a different Notes operation.",
+        });
+        continue;
+      }
+      // Report a byte-identical redelivery as accepted: from the client's side
+      // it did land, and there is no second effect to apply.
       outcome.accepted.push(op.idempotencyKey);
       continue;
     }
@@ -723,41 +1092,38 @@ export async function pushOperations(
       continue;
     }
 
-    const invalid = validatePatch(patch);
+    const invalid = validatePatch(patch, op.itemId);
     if (invalid) {
       outcome.rejected.push({ idempotencyKey: op.idempotencyKey, reason: invalid });
       continue;
     }
 
-    try {
-      const existingRow = await store().getNoteBlock(orgId, userId, op.itemId);
-      const existing = existingRow ? blockOf(existingRow) : null;
+    await store().observeNoteHostClock(orgId, userId, op.at);
+    const existingRow = await store().getNoteBlock(orgId, userId, op.itemId);
+    const existing = existingRow ? blockOf(existingRow) : null;
 
-      const merged = existing
-        ? await mergeIncoming(orgId, userId, existing, op, patch)
-        : { block: incomingBlock(null, op, patch) };
+    const merged = existing
+      ? await mergeIncoming(orgId, userId, existing, op, patch)
+      : { block: incomingBlock(null, op, patch) };
 
-      await persistBlock(orgId, userId, merged.block, existingRow?.visibility);
-      await store().recordNoteOperationApplied(orgId, userId, op.idempotencyKey, op.itemId);
-      outcome.accepted.push(op.idempotencyKey);
-      if (merged.penalty) {
-        (outcome.fenced ??= []).push({
-          idempotencyKey: op.idempotencyKey,
-          itemId: op.itemId,
-          reason: merged.penalty,
-        });
-      }
-    } catch (error) {
-      outcome.rejected.push({
+    await persistBlock(orgId, userId, merged.block, existingRow?.visibility);
+    await store().recordNoteOperationApplied(
+      orgId, userId, receiptKey, op.itemId, fingerprint,
+    );
+    outcome.accepted.push(op.idempotencyKey);
+    if (merged.penalty) {
+      (outcome.fenced ??= []).push({
         idempotencyKey: op.idempotencyKey,
-        reason: error instanceof Error ? error.message : "The server could not apply this change.",
+        itemId: op.itemId,
+        reason: merged.penalty,
       });
     }
   }
   return outcome;
 }
 
-function validatePatch(patch: Record<string, unknown>): string | null {
+function validatePatch(patch: Record<string, unknown>, itemId?: unknown): string | null {
+  if (itemId !== undefined && patch.parentId === itemId) return "A block cannot be its own parent.";
   if (typeof patch.text === "string" && patch.text.length > MAX_BLOCK_TEXT) {
     return `A block holds at most ${MAX_BLOCK_TEXT} characters; this one had ${patch.text.length}.`;
   }
@@ -791,11 +1157,17 @@ function validatePatch(patch: Record<string, unknown>): string | null {
     if (entries.length > MAX_COMMENTS_PER_PUSH) {
       return `One operation carries at most ${MAX_COMMENTS_PER_PUSH} comments; this one had ${entries.length}.`;
     }
-    for (const [, raw] of entries) {
+    for (const [commentId, raw] of entries) {
+      if (!safeMapKey(commentId)) return "A comment id is reserved or invalid.";
       const body = (raw as { body?: { value?: unknown } } | null)?.body?.value;
       if (typeof body === "string" && body.length > MAX_COMMENT_LENGTH) {
         return `A comment holds at most ${MAX_COMMENT_LENGTH} characters; this one had ${body.length}.`;
       }
+    }
+  }
+  if (patch.props && typeof patch.props === "object" && !Array.isArray(patch.props)) {
+    for (const propertyId of Object.keys(patch.props as Record<string, unknown>)) {
+      if (!safeMapKey(propertyId)) return "A property id is reserved or invalid.";
     }
   }
   // ADR-029 E3 — the database fields, bounded by the SAME function the client
@@ -1006,20 +1378,22 @@ export async function acquireLease(
   blockId: string,
   request: { deviceId: string; holder?: string },
 ): Promise<LeaseOutcome> {
-  const { lease, dbNowMs } = await store().readNoteBlockLease(orgId, userId, blockId);
-  const outcome = acquireBlockLease(
-    lease ? toLease(lease) : undefined,
-    { blockId, deviceId: request.deviceId, ...(request.holder ? { holder: request.holder } : {}) },
-    dbNowMs,
-  );
-  if (outcome.ok) {
-    await store().upsertNoteBlockLease(orgId, userId, toRow(outcome.lease));
-    // Bounded rather than unbounded growth, and safe here: an operation older
-    // than the outbox keeps has already been shed, so no write carrying a
-    // swept lease's epoch can still arrive.
-    await store().sweepNoteBlockLeases(orgId, LEASE_RETENTION_MS);
-  }
-  return outcome;
+  return withNotesMutation(orgId, userId, async () => {
+    const { lease, dbNowMs } = await store().readNoteBlockLease(orgId, userId, blockId);
+    const outcome = acquireBlockLease(
+      lease ? toLease(lease) : undefined,
+      { blockId, deviceId: request.deviceId, ...(request.holder ? { holder: request.holder } : {}) },
+      dbNowMs,
+    );
+    if (outcome.ok) {
+      await store().upsertNoteBlockLease(orgId, userId, toRow(outcome.lease));
+      // Bounded rather than unbounded growth, and safe here: an operation older
+      // than the outbox keeps has already been shed, so no write carrying a
+      // swept lease's epoch can still arrive.
+      await store().sweepNoteBlockLeases(orgId, LEASE_RETENTION_MS);
+    }
+    return outcome;
+  });
 }
 
 /** Q1's "renewed while typing". The epoch does not move — see `blockLease.ts`. */
@@ -1029,10 +1403,12 @@ export async function renewLease(
   blockId: string,
   claim: LeaseClaim,
 ): Promise<LeaseOutcome> {
-  const { lease, dbNowMs } = await store().readNoteBlockLease(orgId, userId, blockId);
-  const outcome = renewBlockLease(lease ? toLease(lease) : undefined, claim, dbNowMs);
-  if (outcome.ok) await store().upsertNoteBlockLease(orgId, userId, toRow(outcome.lease));
-  return outcome;
+  return withNotesMutation(orgId, userId, async () => {
+    const { lease, dbNowMs } = await store().readNoteBlockLease(orgId, userId, blockId);
+    const outcome = renewBlockLease(lease ? toLease(lease) : undefined, claim, dbNowMs);
+    if (outcome.ok) await store().upsertNoteBlockLease(orgId, userId, toRow(outcome.lease));
+    return outcome;
+  });
 }
 
 /**
@@ -1048,10 +1424,926 @@ export async function releaseLease(
   blockId: string,
   claim: LeaseClaim,
 ): Promise<LeaseOutcome> {
-  const { lease, dbNowMs } = await store().readNoteBlockLease(orgId, userId, blockId);
-  const outcome = releaseBlockLease(lease ? toLease(lease) : undefined, claim, dbNowMs);
-  if (outcome.ok) await store().upsertNoteBlockLease(orgId, userId, toRow(outcome.lease));
-  return outcome;
+  return withNotesMutation(orgId, userId, async () => {
+    const { lease, dbNowMs } = await store().readNoteBlockLease(orgId, userId, blockId);
+    const outcome = releaseBlockLease(lease ? toLease(lease) : undefined, claim, dbNowMs);
+    if (outcome.ok) await store().upsertNoteBlockLease(orgId, userId, toRow(outcome.lease));
+    return outcome;
+  });
+}
+
+/* ------------------------------------------------ ADR-038: shared mutation */
+
+function emptyMutationSync(): NotesMutationSyncReport {
+  return {
+    accepted: [...EMPTY_NOTES_MUTATION_SYNC.accepted],
+    rejected: [...EMPTY_NOTES_MUTATION_SYNC.rejected],
+    fenced: [...EMPTY_NOTES_MUTATION_SYNC.fenced],
+  };
+}
+
+function mutationSync(outcome: PushOutcome): NotesMutationSyncReport {
+  return {
+    accepted: [...outcome.accepted],
+    rejected: [...outcome.rejected],
+    fenced: (outcome.fenced ?? []).map((entry) => ({
+      idempotencyKey: entry.idempotencyKey,
+      itemId: entry.itemId,
+      reason: entry.reason,
+    })),
+  };
+}
+
+function mutationSuccess(
+  request: NotesMutationRequest,
+  result: unknown,
+  sync: NotesMutationSyncReport = emptyMutationSync(),
+): NotesMutationResponse {
+  return {
+    version: NOTES_EDITING_CONTRACT_VERSION,
+    requestId: request.requestId,
+    operation: request.operation.type,
+    ok: true,
+    result,
+    sync,
+    history: REMOTE_NOTES_HISTORY_STATE,
+  };
+}
+
+function mutationFailure(
+  request: NotesMutationRequest,
+  error: NotesMutationError,
+  sync: NotesMutationSyncReport = emptyMutationSync(),
+): NotesMutationResponse {
+  return {
+    version: NOTES_EDITING_CONTRACT_VERSION,
+    requestId: request.requestId,
+    operation: request.operation.type,
+    ok: false,
+    error,
+    sync,
+    history: REMOTE_NOTES_HISTORY_STATE,
+  };
+}
+
+function mutationLimitFailure(
+  request: NotesMutationRequest,
+  operations: number,
+): NotesMutationResponse {
+  return mutationFailure(request, {
+    code: "limit_exceeded",
+    detail: `A Notes mutation may affect at most ${MAX_GENERATED_MUTATION_OPERATIONS} blocks; this would affect ${operations}.`,
+    retryable: false,
+  });
+}
+
+function planFailure(
+  request: NotesMutationRequest,
+  failure: { reason: string; detail: string },
+): NotesMutationResponse {
+  return mutationFailure(request, {
+    code: failure.reason === "not_found" ? "not_found" : "refused",
+    detail: failure.detail,
+    retryable: false,
+  });
+}
+
+const MAX_GENERATED_MUTATION_OPERATIONS = 200;
+
+/** Stable across retries, domain-separated, and scoped by the receipt table. */
+function mutationMarker(request: NotesMutationRequest): string {
+  return `notes:mutation:v1:${digestParts(request.deviceId, request.requestId)}`;
+}
+
+function primitiveKey(request: NotesMutationRequest, index: number): string {
+  return `notes:mutation-primitive:v1:${digestParts(
+    request.deviceId, request.requestId, String(index),
+  )}`;
+}
+
+function mutationFingerprint(request: NotesMutationRequest): string {
+  return digestParts(canonicalJson(request));
+}
+
+function deterministicMutationId(
+  prefix: "blk" | "cmt",
+  request: NotesMutationRequest,
+  source: string,
+  index: number,
+): string {
+  const digest = createHash("sha256")
+    .update(`${request.requestId}\0${request.deviceId}\0${source}\0${index}`)
+    .digest("hex")
+    .slice(0, 20);
+  const device = request.deviceId.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 40) || "remote";
+  return `${prefix}_${digest}_${device}`;
+}
+
+function operationBlockId(operation: NotesMutationOperation): string | null {
+  switch (operation.type) {
+    case "block.create": return operation.input.blockId ?? null;
+    case "block.update":
+    case "block.delete":
+    case "block.restore":
+    case "block.move":
+    case "gesture.split":
+    case "gesture.merge":
+    case "gesture.duplicate":
+    case "gesture.indent":
+    case "gesture.outdent":
+    case "gesture.move":
+    case "lease.acquire":
+    case "lease.renew":
+    case "lease.release":
+    case "comment.add":
+    case "comment.edit":
+    case "comment.resolve":
+    case "comment.delete":
+    case "conflict.resolve":
+    case "attachment.upload-bytes": return operation.blockId;
+    case "template.instantiate": return operation.templateId;
+    case "database.row.create": return operation.databaseId;
+    case "database.row.set":
+    case "database.row.delete": return operation.rowId;
+    case "database.property.add":
+    case "database.property.update":
+    case "database.property.delete":
+    case "database.property.reorder":
+    case "database.view.save":
+    case "database.view.delete": return operation.databaseId;
+    case "history.state":
+    case "history.undo":
+    case "history.redo": return operation.pageId ?? null;
+  }
+}
+
+function pushOperation(
+  request: NotesMutationRequest,
+  index: number,
+  itemId: string,
+  kind: NotePushOperation["kind"],
+  payload: Record<string, unknown>,
+): NotePushOperation {
+  return {
+    idempotencyKey: primitiveKey(request, index),
+    itemId,
+    kind,
+    at: {
+      physical: Date.now(),
+      logical: index,
+      deviceId: request.deviceId,
+    },
+    payload,
+  };
+}
+
+function pushOperationAt(
+  request: NotesMutationRequest,
+  base: Hlc,
+  index: number,
+  itemId: string,
+  kind: NotePushOperation["kind"],
+  payload: Record<string, unknown>,
+): NotePushOperation {
+  const operation = pushOperation(request, index, itemId, kind, payload);
+  operation.at.physical = base.physical;
+  operation.at.logical = base.logical + index;
+  return operation;
+}
+
+class AtomicNotesMutationRejection extends Error {
+  public constructor(public readonly outcome: PushOutcome) {
+    super("The Notes mutation contained a refused primitive operation.");
+    this.name = "AtomicNotesMutationRejection";
+  }
+}
+
+class NotesMutationLimitError extends Error {
+  public constructor(public readonly operations: number) {
+    super(`A Notes mutation may generate at most ${MAX_GENERATED_MUTATION_OPERATIONS} operations; this generated ${operations}.`);
+    this.name = "NotesMutationLimitError";
+  }
+}
+
+async function pushMutationOperations(
+  orgId: string,
+  userId: string,
+  request: NotesMutationRequest,
+  operations: readonly NotePushOperation[],
+): Promise<NotesMutationSyncReport> {
+  if (operations.length > MAX_GENERATED_MUTATION_OPERATIONS) {
+    throw new NotesMutationLimitError(operations.length);
+  }
+  const outcome = await pushOperationsLocked(orgId, userId, operations);
+  if (outcome.rejected.length > 0) throw new AtomicNotesMutationRejection(outcome);
+  return mutationSync(outcome);
+}
+
+function rejectedMutation(
+  request: NotesMutationRequest,
+  sync: NotesMutationSyncReport,
+): NotesMutationResponse | null {
+  if (sync.rejected.length === 0) return null;
+  return mutationFailure(request, {
+    code: "sync_rejected",
+    detail: sync.rejected.map((entry) => entry.reason).join("; "),
+    retryable: false,
+  }, sync);
+}
+
+function gestureOf(operation: NotesMutationOperation): NoteGesture | null {
+  switch (operation.type) {
+    case "gesture.split":
+      return { type: "split", blockId: operation.blockId, caret: operation.caret };
+    case "gesture.merge": return { type: "merge", blockId: operation.blockId };
+    case "gesture.duplicate": return { type: "duplicate", blockId: operation.blockId };
+    case "gesture.indent": return { type: "indent", blockId: operation.blockId };
+    case "gesture.outdent": return { type: "outdent", blockId: operation.blockId };
+    case "gesture.move":
+      return { type: "move", blockId: operation.blockId, direction: operation.direction };
+    default: return null;
+  }
+}
+
+function leaseEpochOf(operation: NotesMutationOperation): number | undefined {
+  switch (operation.type) {
+    case "block.update":
+    case "gesture.split":
+    case "gesture.merge":
+    case "database.row.set":
+    case "database.property.add":
+    case "database.property.update":
+    case "database.property.delete":
+    case "database.property.reorder":
+    case "database.view.save":
+    case "database.view.delete": return operation.leaseEpoch;
+    default: return undefined;
+  }
+}
+
+function operationsForGesturePlan(
+  request: NotesMutationRequest,
+  plan: NoteGesturePlan,
+  base: Hlc,
+  leasedBlockId: string,
+): NotePushOperation[] {
+  if (!plan.ok) return [];
+  const out: NotePushOperation[] = [];
+  const leaseEpoch = leaseEpochOf(request.operation);
+  for (const step of plan.steps) {
+    if (step.type === "create") {
+      const { id, parentId, rank, ...fields } = step.block;
+      out.push(pushOperationAt(request, base, out.length, id, "create", {
+        ...fields,
+        parentId,
+        rank,
+      }));
+      continue;
+    }
+    if (step.type === "update") {
+      out.push(pushOperationAt(request, base, out.length, step.blockId, "update", {
+        ...step.patch,
+        ...(leaseEpoch !== undefined && step.blockId === leasedBlockId ? { leaseEpoch } : {}),
+      }));
+      continue;
+    }
+    if (step.type === "move") {
+      out.push(pushOperationAt(request, base, out.length, step.blockId, "update", {
+        parentId: step.parentId,
+        rank: step.rank,
+      }));
+      continue;
+    }
+    for (const blockId of step.subtreeIds) {
+      out.push(pushOperationAt(request, base, out.length, blockId, "delete", {}));
+    }
+  }
+  return out;
+}
+
+async function applyGestureMutation(
+  orgId: string,
+  userId: string,
+  request: NotesMutationRequest,
+  base: Hlc,
+): Promise<NotesMutationResponse> {
+  const gesture = gestureOf(request.operation);
+  if (!gesture) return mutationFailure(request, {
+    code: "invalid_request", detail: "This is not a Notes gesture.", retryable: false,
+  });
+  const blocks = await listAllBlocks(orgId, userId);
+  const plan = planNoteGesture(blocks, gesture, {
+    mintId: (source, index) => deterministicMutationId("blk", request, source, index),
+  });
+  if (!plan.ok) return planFailure(request, plan.result);
+  const operations = operationsForGesturePlan(request, plan, base, gesture.blockId);
+  const sync = await pushMutationOperations(orgId, userId, request, operations);
+  return rejectedMutation(request, sync) ?? mutationSuccess(request, plan.result, sync);
+}
+
+async function deleteMutationSubtree(
+  orgId: string,
+  userId: string,
+  request: NotesMutationRequest,
+  blockId: string,
+  base: Hlc,
+): Promise<NotesMutationResponse> {
+  const blocks = await listAllBlocks(orgId, userId);
+  const ids = subtreeBlockIds(blocks, blockId);
+  if (ids.length === 0) return mutationFailure(request, {
+    code: "not_found", detail: `No block ${blockId}.`, retryable: false,
+  });
+  if (ids.length > MAX_GENERATED_MUTATION_OPERATIONS) return mutationLimitFailure(request, ids.length);
+  const operations = ids.map((id, index) =>
+    pushOperationAt(request, base, index, id, "delete", {}));
+  const sync = await pushMutationOperations(orgId, userId, request, operations);
+  return rejectedMutation(request, sync) ?? mutationSuccess(request, { removedIds: ids }, sync);
+}
+
+async function restoreMutationSubtree(
+  orgId: string,
+  userId: string,
+  request: NotesMutationRequest,
+  blockId: string,
+  base: Hlc,
+): Promise<NotesMutationResponse> {
+  const blocks = await listAllBlocks(orgId, userId);
+  const ids = deletedSubtreeIds(blocks, blockId);
+  if (ids.length === 0) return mutationFailure(request, {
+    code: "not_found", detail: `No deleted block ${blockId}.`, retryable: false,
+  });
+  if (ids.length > MAX_GENERATED_MUTATION_OPERATIONS) return mutationLimitFailure(request, ids.length);
+  const operations = ids.map((id, index) =>
+    pushOperationAt(request, base, index, id, "update", { restore: true }));
+  const sync = await pushMutationOperations(orgId, userId, request, operations);
+  return rejectedMutation(request, sync) ?? mutationSuccess(request, { restoredIds: ids }, sync);
+}
+
+async function instantiateTemplateMutation(
+  orgId: string,
+  userId: string,
+  request: NotesMutationRequest,
+  base: Hlc,
+): Promise<NotesMutationResponse> {
+  if (request.operation.type !== "template.instantiate") {
+    return mutationFailure(request, {
+      code: "invalid_request", detail: "This is not a template mutation.", retryable: false,
+    });
+  }
+  const operation = request.operation;
+  const blocks = await listAllBlocks(orgId, userId);
+  const template = blocks.find((block) => block.id === operation.templateId);
+  if (!template || !isTemplate(template)) return mutationFailure(request, {
+    code: "not_found", detail: `No template ${operation.templateId}.`, retryable: false,
+  });
+  const plan = planNoteSubtreeCopy(
+    blocks,
+    operation.templateId,
+    { parentId: operation.parentId },
+    { mintId: (source, index) => deterministicMutationId("blk", request, source, index) },
+  );
+  if (!plan.ok) return planFailure(request, plan.result);
+  const operations = operationsForGesturePlan(request, plan, base, operation.templateId);
+  if (operations.length > MAX_GENERATED_MUTATION_OPERATIONS) {
+    return mutationLimitFailure(request, operations.length);
+  }
+  const sync = await pushMutationOperations(orgId, userId, request, operations);
+  const refused = rejectedMutation(request, sync);
+  if (refused) return refused;
+
+  const byId = new Map(blocks.map((block) => [block.id, block] as const));
+  let rewritten = 0;
+  for (const originalId of plan.idMap.keys()) {
+    const original = byId.get(originalId);
+    if (original && remapNoteRefs(original.text.value, plan.idMap) !== original.text.value) {
+      rewritten += 1;
+    }
+  }
+  const result = {
+    ok: true,
+    pageId: plan.result.createdId ?? null,
+    blocks: plan.idMap.size,
+    rewritten,
+  };
+  return mutationSuccess(request, {
+    ...result,
+    line: describeInstantiation(result),
+  }, sync);
+}
+
+async function resolveConflictMutation(
+  orgId: string,
+  userId: string,
+  request: NotesMutationRequest,
+  base: Hlc,
+): Promise<NotesMutationResponse> {
+  if (request.operation.type !== "conflict.resolve") {
+    return mutationFailure(request, {
+      code: "invalid_request", detail: "This is not a conflict resolution.", retryable: false,
+    });
+  }
+  const operation = request.operation;
+  const block = await getBlock(orgId, userId, operation.blockId);
+  if (!block) return mutationFailure(request, {
+    code: "not_found", detail: `No block ${operation.blockId}.`, retryable: false,
+  });
+  if (!block.conflicts || !Object.hasOwn(block.conflicts, operation.field)) return mutationFailure(request, {
+    code: "refused",
+    detail: `Block ${operation.blockId} has no unresolved ${operation.field} conflict.`,
+    retryable: false,
+  });
+  const conflict = block.conflicts[operation.field]!;
+  const sameClock = (left: Hlc, right: Hlc): boolean => (
+    left.physical === right.physical
+    && left.logical === right.logical
+    && left.deviceId === right.deviceId
+  );
+  if (!sameClock(conflict.oursAt, operation.expected.oursAt)
+    || !sameClock(conflict.theirsAt, operation.expected.theirsAt)) {
+    return mutationFailure(request, {
+      code: "stale_conflict",
+      detail: "This conflict changed after it was shown. Refresh it before choosing a version.",
+      retryable: false,
+    });
+  }
+  const sync = await pushMutationOperations(orgId, userId, request, [
+    pushOperationAt(request, base, 0, operation.blockId, "update", {
+      field: operation.field,
+      keep: operation.keep,
+    }),
+  ]);
+  const refused = rejectedMutation(request, sync);
+  if (refused) return refused;
+  return mutationSuccess(request, {
+    block: await getBlock(orgId, userId, operation.blockId),
+  }, sync);
+}
+
+async function applyDatabasePlan<T>(
+  orgId: string,
+  userId: string,
+  request: NotesMutationRequest,
+  databaseId: string,
+  plan: DatabaseMutationPlan<T>,
+  base: Hlc,
+): Promise<NotesMutationResponse> {
+  if (!plan.ok) return planFailure(request, plan);
+  const leaseEpoch = leaseEpochOf(request.operation);
+  const sync = await pushMutationOperations(orgId, userId, request, [
+    pushOperationAt(request, base, 0, databaseId, "update", {
+      ...plan.patch,
+      ...(leaseEpoch === undefined ? {} : { leaseEpoch }),
+    }),
+  ]);
+  const refused = rejectedMutation(request, sync);
+  if (refused) return refused;
+  return mutationSuccess(request, {
+    value: plan.value,
+    block: await getBlock(orgId, userId, databaseId),
+  }, sync);
+}
+
+async function applyCommentMutation(
+  orgId: string,
+  userId: string,
+  request: NotesMutationRequest,
+  base: Hlc,
+): Promise<NotesMutationResponse> {
+  const operation = request.operation;
+  if (!operation.type.startsWith("comment.")) {
+    return mutationFailure(request, {
+      code: "invalid_request", detail: "This is not a comment mutation.", retryable: false,
+    });
+  }
+  const key = primitiveKey(request, 0);
+  let outcome: CommentWriteOutcome;
+  switch (operation.type) {
+    case "comment.add":
+      {
+        const commentId = operation.commentId
+          ?? deterministicMutationId("cmt", request, operation.blockId, 0);
+        const block = await getBlock(orgId, userId, operation.blockId);
+        if (block?.comments?.[commentId]) {
+          return mutationFailure(request, {
+            code: "refused", detail: `Comment id ${commentId} already exists.`, retryable: false,
+          });
+        }
+        outcome = await addComment(orgId, userId, operation.blockId, {
+        body: operation.body,
+        ...(operation.author ? { author: operation.author } : {}),
+        id: commentId,
+        idempotencyKey: key,
+      }, base);
+      }
+      break;
+    case "comment.edit":
+      outcome = await editComment(
+        orgId, userId, operation.blockId, operation.commentId, operation.body, base, key,
+      );
+      break;
+    case "comment.resolve":
+      outcome = await setCommentResolved(
+        orgId, userId, operation.blockId, operation.commentId, operation.resolved, base, key,
+      );
+      break;
+    case "comment.delete":
+      outcome = await removeComment(
+        orgId, userId, operation.blockId, operation.commentId, base, key,
+      );
+      break;
+    default:
+      return mutationFailure(request, {
+        code: "invalid_request", detail: "This is not a comment mutation.", retryable: false,
+      });
+  }
+  if (!outcome.ok) {
+    const sync = outcome.sync ? mutationSync(outcome.sync) : emptyMutationSync();
+    return mutationFailure(request, {
+      code: outcome.reason === "refused" ? "sync_rejected" : "not_found",
+      detail: outcome.detail ?? (outcome.reason === "no_block" ? "No such block." : "No such comment."),
+      retryable: false,
+    }, sync);
+  }
+  return mutationSuccess(request, {
+    comment: outcome.comment,
+    blockDeleted: outcome.blockDeleted,
+  }, mutationSync(outcome.sync));
+}
+
+async function applyContentMutation(
+  orgId: string,
+  userId: string,
+  request: NotesMutationRequest,
+  base: Hlc,
+): Promise<NotesMutationResponse> {
+  const operation = request.operation;
+  if (operation.type.startsWith("gesture.")) {
+    return applyGestureMutation(orgId, userId, request, base);
+  }
+  if (operation.type.startsWith("comment.")) {
+    return applyCommentMutation(orgId, userId, request, base);
+  }
+  if (operation.type === "template.instantiate") {
+    return instantiateTemplateMutation(orgId, userId, request, base);
+  }
+  if (operation.type === "conflict.resolve") {
+    return resolveConflictMutation(orgId, userId, request, base);
+  }
+
+  switch (operation.type) {
+    case "block.create": {
+      const blocks = await listAllBlocks(orgId, userId);
+      const id = operation.input.blockId
+        ?? deterministicMutationId("blk", request, "create", 0);
+      if (blocks.some((block) => block.id === id)) {
+        return mutationFailure(request, {
+          code: "refused", detail: `Block id ${id} already exists.`, retryable: false,
+        });
+      }
+      const placed = resolveNoteMutationPosition(blocks, operation.input);
+      if (!placed.ok) return mutationFailure(request, {
+        code: "refused", detail: placed.detail, retryable: false,
+      });
+      const { blockId: _blockId, parentId: _parentId, after: _after, before: _before, ...fields } = operation.input;
+      const schema = fields.kind === DATABASE_BLOCK_KIND ? defaultDatabaseSchema() : undefined;
+      const views = schema ? defaultDatabaseViews(schema) : undefined;
+      const sync = await pushMutationOperations(orgId, userId, request, [
+        pushOperationAt(request, base, 0, id, "create", {
+          ...fields,
+          ...(schema ? { schema } : {}),
+          ...(views ? { views } : {}),
+          parentId: placed.parentId,
+          rank: placed.rank,
+        }),
+      ]);
+      const refused = rejectedMutation(request, sync);
+      if (refused) return refused;
+      return mutationSuccess(request, { block: await getBlock(orgId, userId, id) }, sync);
+    }
+    case "block.update": {
+      const existing = await getBlock(orgId, userId, operation.blockId);
+      if (!existing) return mutationFailure(request, {
+        code: "not_found", detail: `No block ${operation.blockId}.`, retryable: false,
+      });
+      const schema = operation.patch.kind === DATABASE_BLOCK_KIND && !existing.schema
+        ? defaultDatabaseSchema()
+        : undefined;
+      const views = schema && !existing.views ? defaultDatabaseViews(schema) : undefined;
+      const sync = await pushMutationOperations(orgId, userId, request, [
+        pushOperationAt(request, base, 0, operation.blockId, "update", {
+          ...operation.patch,
+          ...(schema ? { schema } : {}),
+          ...(views ? { views } : {}),
+          ...(operation.leaseEpoch === undefined ? {} : { leaseEpoch: operation.leaseEpoch }),
+        }),
+      ]);
+      const refused = rejectedMutation(request, sync);
+      if (refused) return refused;
+      return mutationSuccess(request, {
+        block: await getBlock(orgId, userId, operation.blockId),
+      }, sync);
+    }
+    case "block.delete":
+      return deleteMutationSubtree(orgId, userId, request, operation.blockId, base);
+    case "block.restore":
+      return restoreMutationSubtree(orgId, userId, request, operation.blockId, base);
+    case "block.move": {
+      const blocks = await listAllBlocks(orgId, userId);
+      const placed = resolveNoteMutationPosition(blocks, operation.to, operation.blockId);
+      if (!placed.ok) return mutationFailure(request, {
+        code: placed.detail.startsWith("No block") ? "not_found" : "refused",
+        detail: placed.detail,
+        retryable: false,
+      });
+      const sync = await pushMutationOperations(orgId, userId, request, [
+        pushOperationAt(request, base, 0, operation.blockId, "update", {
+          parentId: placed.parentId,
+          rank: placed.rank,
+        }),
+      ]);
+      const refused = rejectedMutation(request, sync);
+      if (refused) return refused;
+      return mutationSuccess(request, {
+        block: await getBlock(orgId, userId, operation.blockId),
+      }, sync);
+    }
+    case "database.row.create": {
+      const database = await getBlock(orgId, userId, operation.databaseId);
+      const planned = planCreateDatabaseRow(database, operation.databaseId, {
+        ...(operation.title !== undefined ? { title: operation.title } : {}),
+        ...(operation.values ? { values: operation.values } : {}),
+      });
+      if (!planned.ok) return planFailure(request, planned);
+      const blocks = await listAllBlocks(orgId, userId);
+      const rowId = operation.rowId
+        ?? deterministicMutationId("blk", request, operation.databaseId, 0);
+      if (blocks.some((block) => block.id === rowId)) {
+        return mutationFailure(request, {
+          code: "refused", detail: `Block id ${rowId} already exists.`, retryable: false,
+        });
+      }
+      const placed = resolveNoteMutationPosition(blocks, {
+        parentId: operation.databaseId,
+        ...(operation.after ? { after: operation.after } : {}),
+        ...(operation.before ? { before: operation.before } : {}),
+      });
+      if (!placed.ok) return mutationFailure(request, {
+        code: "refused", detail: placed.detail, retryable: false,
+      });
+      const sync = await pushMutationOperations(orgId, userId, request, [
+        pushOperationAt(request, base, 0, rowId, "create", {
+          ...planned.value,
+          parentId: placed.parentId,
+          rank: placed.rank,
+        }),
+      ]);
+      const refused = rejectedMutation(request, sync);
+      if (refused) return refused;
+      return mutationSuccess(request, { row: await getBlock(orgId, userId, rowId) }, sync);
+    }
+    case "database.row.set": {
+      const row = await getBlock(orgId, userId, operation.rowId);
+      if (!row || !row.parentId.value) return mutationFailure(request, {
+        code: "not_found", detail: `No database row ${operation.rowId}.`, retryable: false,
+      });
+      const databaseId = row.parentId.value;
+      const database = await getBlock(orgId, userId, databaseId);
+      const planned = planSetDatabaseRowValue(
+        database, databaseId, row, operation.propertyId, operation.value,
+      );
+      if (!planned.ok) return planFailure(request, planned);
+      const sync = await pushMutationOperations(orgId, userId, request, [
+        pushOperationAt(request, base, 0, operation.rowId, "update", {
+          ...planned.patch,
+          ...(operation.leaseEpoch === undefined ? {} : { leaseEpoch: operation.leaseEpoch }),
+        }),
+      ]);
+      const refused = rejectedMutation(request, sync);
+      if (refused) return refused;
+      return mutationSuccess(request, { row: await getBlock(orgId, userId, operation.rowId) }, sync);
+    }
+    case "database.row.delete":
+      return deleteMutationSubtree(orgId, userId, request, operation.rowId, base);
+    case "database.property.add":
+      return applyDatabasePlan(
+        orgId, userId, request, operation.databaseId,
+        planAddDatabaseProperty(
+          await getBlock(orgId, userId, operation.databaseId),
+          operation.databaseId,
+          operation.property,
+        ),
+        base,
+      );
+    case "database.property.update":
+      return applyDatabasePlan(
+        orgId, userId, request, operation.databaseId,
+        planUpdateDatabaseProperty(
+          await getBlock(orgId, userId, operation.databaseId),
+          operation.databaseId,
+          operation.propertyId,
+          operation.patch,
+        ),
+        base,
+      );
+    case "database.property.delete":
+      return applyDatabasePlan(
+        orgId, userId, request, operation.databaseId,
+        planDeleteDatabaseProperty(
+          await getBlock(orgId, userId, operation.databaseId),
+          operation.databaseId,
+          operation.propertyId,
+        ),
+        base,
+      );
+    case "database.property.reorder":
+      return applyDatabasePlan(
+        orgId, userId, request, operation.databaseId,
+        planReorderDatabaseProperties(
+          await getBlock(orgId, userId, operation.databaseId),
+          operation.databaseId,
+          operation.order,
+        ),
+        base,
+      );
+    case "database.view.save":
+      return applyDatabasePlan(
+        orgId, userId, request, operation.databaseId,
+        planSaveDatabaseView(
+          await getBlock(orgId, userId, operation.databaseId),
+          operation.databaseId,
+          operation.view,
+        ),
+        base,
+      );
+    case "database.view.delete":
+      return applyDatabasePlan(
+        orgId, userId, request, operation.databaseId,
+        planDeleteDatabaseView(
+          await getBlock(orgId, userId, operation.databaseId),
+          operation.databaseId,
+          operation.viewId,
+        ),
+        base,
+      );
+    default:
+      return mutationFailure(request, {
+        code: "invalid_request", detail: `Unsupported mutation ${operation.type}.`, retryable: false,
+      });
+  }
+}
+
+function leaseMutationFailure(
+  request: NotesMutationRequest,
+  outcome: Exclude<LeaseOutcome, { ok: true }>,
+): NotesMutationResponse {
+  return mutationFailure(request, {
+    code: "locked",
+    detail: outcome.detail,
+    retryable: outcome.reason === "held_by_another" || outcome.reason === "lease_expired",
+  });
+}
+
+async function applyLeaseMutation(
+  orgId: string,
+  userId: string,
+  request: NotesMutationRequest,
+): Promise<NotesMutationResponse> {
+  const operation = request.operation;
+  const blockId = operationBlockId(operation);
+  const block = blockId ? await getBlock(orgId, userId, blockId) : null;
+  if (!block || !isLiveBlock(block)) {
+    return mutationFailure(request, {
+      code: "not_found", detail: `No block ${blockId ?? "requested"}.`, retryable: false,
+    });
+  }
+  if (operation.type === "lease.acquire") {
+    const outcome = await acquireLease(orgId, userId, operation.blockId, {
+      deviceId: request.deviceId,
+      ...(operation.holder ? { holder: operation.holder } : {}),
+    });
+    return outcome.ok ? mutationSuccess(request, { lease: outcome.lease }) : leaseMutationFailure(request, outcome);
+  }
+  if (operation.type === "lease.renew") {
+    const outcome = await renewLease(orgId, userId, operation.blockId, {
+      deviceId: request.deviceId,
+      epoch: operation.epoch,
+    });
+    return outcome.ok ? mutationSuccess(request, { lease: outcome.lease }) : leaseMutationFailure(request, outcome);
+  }
+  if (operation.type === "lease.release") {
+    const outcome = await releaseLease(orgId, userId, operation.blockId, {
+      deviceId: request.deviceId,
+      epoch: operation.epoch,
+    });
+    return outcome.ok ? mutationSuccess(request, { lease: outcome.lease }) : leaseMutationFailure(request, outcome);
+  }
+  return mutationFailure(request, {
+    code: "invalid_request", detail: "This is not a lease mutation.", retryable: false,
+  });
+}
+
+/**
+ * Execute the one browser/host Notes mutation contract.
+ *
+ * The authenticated route supplies `(orgId,userId)`; neither value exists in
+ * the request body, so a renderer cannot select another person's partition.
+ * Existing `/push` remains the device-sync transport and this function composes
+ * it for higher-level editor intentions.
+ */
+export async function mutateNotes(
+  orgId: string,
+  userId: string,
+  request: NotesMutationRequest,
+  nowMs: number,
+): Promise<NotesMutationResponse> {
+  try {
+    return await withNotesMutation(orgId, userId, () => mutateNotesLocked(orgId, userId, request, nowMs));
+  } catch (error) {
+    if (error instanceof AtomicNotesMutationRejection) {
+      const sync = mutationSync(error.outcome);
+      return mutationFailure(request, {
+        code: "sync_rejected",
+        detail: sync.rejected.map((entry) => entry.reason).join("; "),
+        retryable: false,
+      }, sync);
+    }
+    if (error instanceof NotesMutationLimitError) {
+      return mutationLimitFailure(request, error.operations);
+    }
+    throw error;
+  }
+}
+
+async function mutateNotesLocked(
+  orgId: string,
+  userId: string,
+  request: NotesMutationRequest,
+  nowMs: number,
+): Promise<NotesMutationResponse> {
+  const operation = request.operation;
+  if (operation.type === "history.state") {
+    return mutationSuccess(request, { history: REMOTE_NOTES_HISTORY_STATE });
+  }
+  if (operation.type === "history.undo" || operation.type === "history.redo") {
+    return mutationFailure(request, {
+      code: "unsupported_capability",
+      capability: "remote_history",
+      detail: REMOTE_NOTES_HISTORY_STATE.detail,
+      retryable: false,
+    });
+  }
+  if (operation.type === "attachment.upload-bytes") {
+    return mutationFailure(request, {
+      code: "unsupported_capability",
+      capability: "attachment_bytes",
+      detail: "Attachment bytes require the host's upload transport; the JSON Notes mutation endpoint accepts metadata only.",
+      retryable: false,
+    });
+  }
+
+  const marker = mutationMarker(request);
+  const fingerprint = mutationFingerprint(request);
+  const receipt = await store().getNoteOperationReceipt(orgId, userId, marker);
+  if (receipt) {
+    if (receipt.fingerprint && receipt.fingerprint !== fingerprint) {
+      return mutationFailure(request, {
+        code: "idempotency_conflict",
+        detail: "This request id was already used for a different Notes mutation.",
+        retryable: false,
+      });
+    }
+    if (receipt.response) return receipt.response as unknown as NotesMutationResponse;
+    // Receipts written before ADR-038 did not retain a response. Preserve their
+    // no-double-apply guarantee while requiring a refresh for the missing value.
+    return mutationSuccess(request, {
+      replayed: true,
+      refreshRequired: true,
+      detail: "This request was already applied; refresh the affected block for the merged server value.",
+    }, { accepted: [marker], rejected: [], fenced: [] });
+  }
+
+  if (!operation.type.startsWith("lease.")) await absorbStoredNoteClocks(orgId, userId);
+  const hostedClock = operation.type.startsWith("lease.")
+    ? null
+    : await store().nextNoteHostClock(
+      orgId, userId, request.deviceId, nowMs, MAX_GENERATED_MUTATION_OPERATIONS,
+    );
+  const response = operation.type.startsWith("lease.")
+    ? await applyLeaseMutation(orgId, userId, request)
+    : await applyContentMutation(orgId, userId, request, hostedClock!);
+  // Successful and deterministic terminal outcomes replay byte-for-byte. A
+  // retryable refusal is deliberately not consumed: the condition may clear.
+  if (response.ok || !response.error.retryable) {
+    await store().recordNoteOperationApplied(
+      orgId,
+      userId,
+      marker,
+      operationBlockId(operation) ?? marker,
+      fingerprint,
+      response as unknown as Record<string, unknown>,
+    );
+  }
+  return response;
 }
 
 /* ------------------------------------------------------- search + backlinks */
@@ -1247,8 +2539,8 @@ export interface NoteCommentThread {
 }
 
 export type CommentWriteOutcome =
-  | { ok: true; comment: NoteComment; blockDeleted: boolean }
-  | { ok: false; reason: "no_block" | "no_comment" | "refused"; detail?: string };
+  | { ok: true; comment: NoteComment; blockDeleted: boolean; sync: PushOutcome }
+  | { ok: false; reason: "no_block" | "no_comment" | "refused"; detail?: string; sync?: PushOutcome };
 
 /**
  * A block's thread, scoped to the partition every other read uses.
@@ -1303,34 +2595,41 @@ async function pushComment(
   blockId: string,
   commentId: string,
   change: (existing: NoteComment | undefined, at: Hlc) => NoteComment | null,
-  nowMs: number,
+  clock: number | Hlc,
+  idempotencyKey?: string,
 ): Promise<CommentWriteOutcome> {
-  const block = await getBlock(orgId, userId, blockId);
-  if (!block) return { ok: false, reason: "no_block" };
+  return withNotesMutation(orgId, userId, async () => {
+    const block = await getBlock(orgId, userId, blockId);
+    if (!block) return { ok: false, reason: "no_block" };
 
-  const at = serverClock(nowMs);
-  const next = change(block.comments?.[commentId], at);
-  if (!next) return { ok: false, reason: "no_comment" };
+    if (typeof clock === "number") await absorbStoredNoteClocks(orgId, userId);
+    const at = typeof clock === "number"
+      ? await store().nextNoteHostClock(orgId, userId, "server", clock, 1)
+      : clock;
+    const next = change(block.comments?.[commentId], at);
+    if (!next) return { ok: false, reason: "no_comment" };
 
-  const outcome = await pushOperations(orgId, userId, [{
-    idempotencyKey: `${blockId}:comment:${commentId}:${at.physical}.${at.logical}`,
-    itemId: blockId,
-    kind: "update",
-    at,
-    payload: { comments: { [commentId]: next } },
-  }]);
-  const refusal = outcome.rejected[0];
-  if (refusal) return { ok: false, reason: "refused", detail: refusal.reason };
+    const outcome = await pushOperationsLocked(orgId, userId, [{
+      idempotencyKey: idempotencyKey ?? `${blockId}:comment:${commentId}:${at.physical}.${at.logical}`,
+      itemId: blockId,
+      kind: "update",
+      at,
+      payload: { comments: { [commentId]: next } },
+    }]);
+    const refusal = outcome.rejected[0];
+    if (refusal) return { ok: false, reason: "refused", detail: refusal.reason, sync: outcome };
 
-  const after = await getBlock(orgId, userId, blockId);
-  return {
-    ok: true,
-    // The MERGED comment, not the one that was sent: the server decides what the
-    // thread now says, and a surface echoing its own write would show a remark
-    // that a concurrent resolve had already changed.
-    comment: after?.comments?.[commentId] ?? next,
-    blockDeleted: !!after && !isLiveBlock(after),
-  };
+    const after = await getBlock(orgId, userId, blockId);
+    return {
+      ok: true,
+      // The MERGED comment, not the one that was sent: the server decides what the
+      // thread now says, and a surface echoing its own write would show a remark
+      // that a concurrent resolve had already changed.
+      comment: after?.comments?.[commentId] ?? next,
+      blockDeleted: !!after && !isLiveBlock(after),
+      sync: outcome,
+    };
+  });
 }
 
 /**
@@ -1345,17 +2644,17 @@ export async function addComment(
   orgId: string,
   userId: string,
   blockId: string,
-  input: { body: string; author?: string },
-  nowMs: number,
+  input: { body: string; author?: string; id?: string; idempotencyKey?: string },
+  clock: number | Hlc,
 ): Promise<CommentWriteOutcome> {
-  const id = newCommentId("server", nowMs);
+  const id = input.id ?? newCommentId("server", typeof clock === "number" ? clock : clock.physical);
   return pushComment(orgId, userId, blockId, id, (_existing, at) => ({
     id,
     body: { value: boundCommentBody(input.body), at },
     author: boundCommentAuthor(input.author),
     createdAt: at,
     resolved: { value: false, at },
-  }), nowMs);
+  }), clock, input.idempotencyKey);
 }
 
 /** F3's "resolved and unresolved", as a stamped field that merges like any other. */
@@ -1365,14 +2664,46 @@ export async function setCommentResolved(
   blockId: string,
   commentId: string,
   resolved: boolean,
-  nowMs: number,
+  clock: number | Hlc,
+  idempotencyKey?: string,
 ): Promise<CommentWriteOutcome> {
   return pushComment(orgId, userId, blockId, commentId, (existing, at) => (
     // A retracted remark is not re-openable: the tombstone is the author taking
     // it back, and answering "no such comment" leads somewhere, where silently
     // resolving a comment nobody can see does not.
     existing && !existing.deletedAt ? { ...existing, resolved: { value: resolved, at } } : null
-  ), nowMs);
+  ), clock, idempotencyKey);
+}
+
+/** Edit a remark's body through the same per-comment merge as add/resolve. */
+async function editComment(
+  orgId: string,
+  userId: string,
+  blockId: string,
+  commentId: string,
+  body: string,
+  clock: number | Hlc,
+  idempotencyKey?: string,
+): Promise<CommentWriteOutcome> {
+  return pushComment(orgId, userId, blockId, commentId, (existing, at) => (
+    existing && !existing.deletedAt
+      ? { ...existing, body: { value: boundCommentBody(body), at } }
+      : null
+  ), clock, idempotencyKey);
+}
+
+/** Retract a remark with a tombstone so a stale edit cannot revive it. */
+async function removeComment(
+  orgId: string,
+  userId: string,
+  blockId: string,
+  commentId: string,
+  clock: number | Hlc,
+  idempotencyKey?: string,
+): Promise<CommentWriteOutcome> {
+  return pushComment(orgId, userId, blockId, commentId, (existing, at) => (
+    existing ? { ...existing, deletedAt: at } : null
+  ), clock, idempotencyKey);
 }
 
 /* -------------------------------------------------------------- attachments */

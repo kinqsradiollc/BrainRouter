@@ -323,7 +323,11 @@ test('a conflict is readable as its own list, because one nobody is shown is one
 
     assert.equal(listConflicts(undefined).length, 1);
 
-    const resolved = resolveConflict(undefined, created.id, 'text', 'theirs', T + 5000);
+    const shown = state.blocks[created.id]!.conflicts!.text!;
+    const resolved = resolveConflict(undefined, created.id, 'text', 'theirs', T + 5000, {
+      oursAt: shown.oursAt,
+      theirsAt: shown.theirsAt,
+    });
     assert.equal(resolved?.text.value, 'theirs');
     assert.equal(listConflicts(undefined).length, 0);
     assert.equal(
@@ -331,6 +335,42 @@ test('a conflict is readable as its own list, because one nobody is shown is one
       true,
       'the resolution must be queued, or the other device never learns of it',
     );
+  } finally { cleanup(dir); }
+});
+
+test('a stale conflict click cannot clear a newer kept-both pair', () => {
+  const dir = home();
+  try {
+    const created = createBlock(undefined, { text: 'ours' }, T);
+    const state = readNotes(undefined);
+    const shown = {
+      ours: 'ours', theirs: 'theirs',
+      oursAt: { ...state.clock },
+      theirsAt: { ...state.clock, deviceId: 'd-other' },
+      reason: 'concurrent_text' as const,
+    };
+    state.blocks[created.id] = {
+      ...state.blocks[created.id]!,
+      conflicts: { text: shown },
+    };
+    writeNotes(undefined, state);
+
+    const refreshed = readNotes(undefined);
+    refreshed.blocks[created.id]!.conflicts!.text = {
+      ...shown,
+      theirs: 'newer theirs',
+      theirsAt: { physical: shown.theirsAt.physical + 1, logical: 0, deviceId: 'd-third' },
+    };
+    writeNotes(undefined, refreshed);
+    const outboxBefore = readNotes(undefined).outbox.operations.length;
+
+    const resolved = resolveConflict(undefined, created.id, 'text', 'ours', T + 6000, {
+      oursAt: shown.oursAt,
+      theirsAt: shown.theirsAt,
+    });
+    assert.equal(resolved, null);
+    assert.equal(getBlock(undefined, created.id)?.conflicts?.text?.theirs, 'newer theirs');
+    assert.equal(readNotes(undefined).outbox.operations.length, outboxBefore);
   } finally { cleanup(dir); }
 });
 

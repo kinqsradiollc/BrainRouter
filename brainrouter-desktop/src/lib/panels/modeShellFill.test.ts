@@ -22,14 +22,15 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (rel: string): string => readFileSync(path.join(root, rel), 'utf8');
+const NOTES_CSS = '../../packages/ui/src/notes/notes.css';
 
 /** Every shell mounted directly inside `.workrow`, and the file declaring it. */
 const MODE_SHELLS: ReadonlyArray<readonly [string, string]> = [
-  ['.planner-mode', 'theme.css'],
+  ['.br-planner', '../../packages/ui/src/planner/planner.css'],
   ['.mv-shell', 'components/meetings/meetings.css'],
   // ADR-029 — Notes. Its shell is a flex ROW rather than a column, which makes
   // the rule matter twice: see the inner-column test below.
-  ['.notes-mode', 'theme.css'],
+  ['.notes-mode', NOTES_CSS],
 ];
 
 /**
@@ -43,7 +44,7 @@ const MODE_SHELLS: ReadonlyArray<readonly [string, string]> = [
  * like a layout that broke rather than one that was never told to fill.
  */
 const INNER_COLUMNS: ReadonlyArray<readonly [string, string, string]> = [
-  ['.notes-mode', '.notes-page', 'theme.css'],
+  ['.notes-mode', '.notes-page', NOTES_CSS],
 ];
 
 function ruleFor(css: string, selector: string): string {
@@ -83,6 +84,23 @@ test('.workrow is still a flex row — the premise these rules depend on', () =>
   assert.doesNotMatch(rule, /flex-direction\s*:\s*column/);
 });
 
+test('the asynchronous tooling notice stays above, not beside, the active mode', () => {
+  // The notice resolves after startup. As a direct sibling of MainContent in
+  // `.app` (a flex row), it consumed a horizontal column and pushed Planner
+  // completely outside the viewport only after the visual gate had loaded.
+  const app = read('App.tsx');
+  assert.match(
+    app,
+    /<div className="app-main-stack">[\s\S]*<ToolingNotice\s*\/>[\s\S]*<MainContent/,
+    'ToolingNotice and MainContent must remain in the shared vertical stack',
+  );
+  const stack = ruleFor(read('theme.css'), '.app-main-stack');
+  assert.match(stack, /display\s*:\s*flex/);
+  assert.match(stack, /flex-direction\s*:\s*column/);
+  assert.match(stack, /flex\s*:\s*1/);
+  assert.match(stack, /min-width\s*:\s*0/);
+});
+
 test('a shell that is itself a flex row gives its content column the same rules', () => {
   for (const [shell, column, file] of INNER_COLUMNS) {
     const css = read(file);
@@ -101,16 +119,21 @@ test('the notes sidebar is a fixed rail, not a flex child that fights the page',
   // `flex: none` is what keeps the tree from shrinking to nothing when a page
   // holds a long unbroken line — the failure is that the sidebar's titles
   // collapse to ellipses one at a time as you type.
-  const rule = ruleFor(read('theme.css'), '.notes-sidebar');
+  const rule = ruleFor(read(NOTES_CSS), '.notes-sidebar');
   assert.match(rule, /flex\s*:\s*none/);
   assert.match(rule, /width\s*:/);
 });
 
-test('the planner list views keep a reading column', () => {
+test('the shared planner list views keep a reading column', () => {
   // A text input spanning 1600px is unusable — you lose the start of the line
   // looking at the end of it. The calendar is deliberately exempt.
-  const rule = ruleFor(read('theme.css'), '.planner-body');
+  const rule = ruleFor(read('../../packages/ui/src/planner/planner.css'), '.br-planner-scroll');
   assert.match(rule, /max-width/);
+});
+
+test('interactive planner source chips keep the compact 24px hit target', () => {
+  const rule = ruleFor(read('../../packages/ui/src/planner/planner.css'), '.br-planner-source');
+  assert.match(rule, /min-height\s*:\s*24px/);
 });
 
 test('a mode header reserves room for the floating control cluster above it', () => {
@@ -124,12 +147,15 @@ test('a mode header reserves room for the floating control cluster above it', ()
   // Asserted as a CSS contract for the same reason as the rules above: a
   // screenshot in a harness has no floating cluster to collide with, so the
   // collision is invisible exactly where it would be checked.
-  const css = read('theme.css');
-  assert.match(css, /--topbar-right-clearance\s*:/, 'the clearance is no longer declared once');
-  for (const header of ['.planner-head', '.notes-head']) {
+  const theme = read('theme.css');
+  assert.match(theme, /--topbar-right-clearance\s*:/, 'the clearance is no longer declared once');
+  for (const [header, file] of [
+    ['.br-planner-header', '../../packages/ui/src/planner/planner.css'],
+    ['.notes-head', NOTES_CSS],
+  ] as const) {
     assert.match(
-      ruleFor(css, header),
-      /padding-right\s*:\s*calc\([^)]*--topbar-right-clearance/,
+      ruleFor(read(file), header),
+      /padding-right\s*:\s*calc\([^;]*--topbar-right-clearance/,
       `${header} does not reserve room, so its right-hand content renders under the toolbar`,
     );
   }

@@ -6,10 +6,11 @@
  * naming a user would be an IDOR waiting to happen — the same class of bug as
  * CWE-639, which this repository has already shipped once.
  *
- * Two endpoints carry the sync contract (D11):
+ * Three endpoints carry the sync contract (D11/D4):
  *
  *   GET  /api/planner/pull?since=<cursor>   — changes, plus the server clock
  *   POST /api/planner/push                  — operations, merged server-side
+ *   POST /api/planner/retry                 — one inspected operation only
  *
  * The rest are conveniences for surfaces that only want to read.
  */
@@ -28,8 +29,8 @@ plannerRouter.get("/pull", async (req: AuthedRequest, res) => {
   if (!(await attachOrgContext(req, res))) return;
   const since = typeof req.query.since === "string" ? req.query.since : undefined;
   try {
-    const { items, cursor } = await planner.pullChanges(req.orgId!, req.userId!, since);
-    res.json({ items, cursor, serverClock: planner.serverClock(Date.now()) });
+    const { items, blocks, cursor } = await planner.pullChanges(req.orgId!, req.userId!, since);
+    res.json({ items, blocks, cursor, serverClock: planner.serverClock(Date.now()) });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : "pull failed" });
   }
@@ -52,34 +53,31 @@ plannerRouter.post("/push", async (req: AuthedRequest, res) => {
     return;
   }
 
-  const valid: planner.PushOperation[] = [];
-  const rejected: Array<{ idempotencyKey: string; reason: string }> = [];
-
-  for (const raw of operations) {
-    const op = raw as Record<string, unknown>;
-    // Malformed operations are REJECTED individually rather than failing the
-    // batch: one bad entry must not strand every good one in the client's
-    // outbox, where it would retry forever.
-    if (typeof op.idempotencyKey !== "string" || typeof op.itemId !== "string") {
-      rejected.push({
-        idempotencyKey: typeof op.idempotencyKey === "string" ? op.idempotencyKey : "unknown",
-        reason: "The operation is missing an idempotency key or item id.",
-      });
-      continue;
-    }
-    valid.push(op as unknown as planner.PushOperation);
-  }
-
   try {
-    const outcome = await planner.pushOperations(
-      req.orgId!, req.userId!, valid, new Date().toISOString(),
+    const outcome = await planner.pushUntrustedOperations(
+      req.orgId!, req.userId!, operations, new Date().toISOString(),
     );
-    res.json({
-      accepted: outcome.accepted,
-      rejected: [...rejected, ...outcome.rejected],
-    });
+    res.json(outcome);
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : "push failed" });
+  }
+});
+
+/** Retry one inspected outbox operation without resending unrelated changes. */
+plannerRouter.post("/retry", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  if (!body.operation || typeof body.operation !== "object" || Array.isArray(body.operation)) {
+    res.status(400).json({ error: "operation must be an object" });
+    return;
+  }
+  try {
+    const outcome = await planner.pushUntrustedOperations(
+      req.orgId!, req.userId!, [body.operation], new Date().toISOString(),
+    );
+    res.json(outcome);
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : "retry failed" });
   }
 });
 

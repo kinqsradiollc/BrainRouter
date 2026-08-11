@@ -17,7 +17,7 @@ import {
   formatHlc, parseHlc, NOTABLE_SKEW_MS,
 } from '../sync/hybridClock.js';
 import {
-  mergeField, mergeText, mergeCompletion, mergeOwnedItem, refreshMirrored, canEditLocally,
+  causalValue, mergeField, mergeText, mergeCompletion, mergeOwnedItem, refreshMirrored, canEditLocally,
   type PlannerItem, type Stamped,
 } from '../planner/itemMerge.js';
 
@@ -122,6 +122,23 @@ test('a strictly LATER text edit supersedes without a conflict', () => {
   assert.equal(r.value!.value, 'second');
 });
 
+test('different wall times do not invent causality between offline replicas', () => {
+  const ours = causalValue('our offline edit', at(100, 0, A));
+  const theirs = causalValue('their later-clock edit', at(500, 0, B));
+  const result = mergeText(ours, theirs);
+  assert.equal(result.conflict?.reason, 'concurrent_text');
+  assert.equal(result.conflict?.ours, 'our offline edit');
+  assert.equal(result.conflict?.theirs, 'their later-clock edit');
+});
+
+test('an edit carrying the version it observed supersedes without crying conflict', () => {
+  const first = causalValue('first', at(100, 0, A));
+  const second = causalValue('second', at(500, 0, B), first);
+  const result = mergeText(first, second);
+  assert.equal(result.conflict, undefined);
+  assert.equal(result.value?.value, 'second');
+});
+
 test('identical text is never a conflict, whatever the stamps', () => {
   const r = mergeText(s('Same', at(100, 0, A)), s('Same', at(100, 0, B)));
   assert.equal(r.conflict, undefined);
@@ -166,6 +183,100 @@ test('a delete after the last edit simply stands', () => {
   assert.equal(merged.conflicts?.deleted, undefined);
 });
 
+test('a delete-versus-edit choice survives stale pulls in either direction', () => {
+  const deletion = at(200, 0, A);
+  const edit = at(400, 0, B);
+  const choice = at(500, 0, A);
+  const stale: PlannerItem = {
+    id: 'i1', origin: 'owned', title: s('Edited', edit), deletedAt: deletion,
+    conflicts: {
+      deleted: {
+        ours: 'deleted', theirs: 'edited', oursAt: deletion, theirsAt: edit,
+        reason: 'delete_vs_edit',
+      },
+    },
+  };
+  const keptEdit: PlannerItem = {
+    id: 'i1', origin: 'owned', title: s('Edited', edit),
+    deletionResolution: { deleted: false, at: choice },
+  };
+  const keptDelete: PlannerItem = {
+    id: 'i1', origin: 'owned', title: s('Edited', edit), deletedAt: choice,
+    deletionResolution: { deleted: true, at: choice },
+  };
+
+  for (const merged of [mergeOwnedItem(keptEdit, stale), mergeOwnedItem(stale, keptEdit)]) {
+    assert.equal(merged.deletedAt, undefined);
+    assert.equal(merged.conflicts?.deleted, undefined);
+    assert.deepEqual(merged.deletionResolution, { deleted: false, at: choice });
+  }
+  for (const merged of [mergeOwnedItem(keptDelete, stale), mergeOwnedItem(stale, keptDelete)]) {
+    assert.deepEqual(merged.deletedAt, choice);
+    assert.equal(merged.conflicts?.deleted, undefined);
+    assert.deepEqual(merged.deletionResolution, { deleted: true, at: choice });
+  }
+});
+
+test('a resolution watermark prevents an old pulled conflict from reappearing', () => {
+  const oldConflict = {
+    ours: 'ours', theirs: 'theirs',
+    oursAt: at(300, 1, A), theirsAt: at(300, 1, B),
+    reason: 'concurrent_text' as const,
+  };
+  const resolution = at(400, 0, A);
+  const resolved: PlannerItem = {
+    id: 'i1', origin: 'owned', title: s('chosen', resolution),
+    conflictResolutions: { title: resolution },
+  };
+  const staleServer: PlannerItem = {
+    id: 'i1', origin: 'owned', title: s('theirs', at(300, 1, B)),
+    conflicts: { title: oldConflict },
+  };
+  const merged = mergeOwnedItem(resolved, staleServer);
+  assert.equal(merged.title.value, 'chosen');
+  assert.equal(merged.conflicts?.title, undefined);
+  assert.deepEqual(merged.conflictResolutions?.title, resolution);
+});
+
+test('concurrent conflict resolutions converge by total HLC without a new conflict', () => {
+  const aResolution = at(400, 0, A);
+  const bResolution = at(400, 0, B);
+  const a: PlannerItem = {
+    id: 'i1', origin: 'owned', title: s('keep A', aResolution),
+    conflictResolutions: { title: aResolution },
+  };
+  const b: PlannerItem = {
+    id: 'i1', origin: 'owned', title: s('keep B', bResolution),
+    conflictResolutions: { title: bResolution },
+  };
+  const ab = mergeOwnedItem(a, b);
+  const ba = mergeOwnedItem(b, a);
+  assert.equal(ab.title.value, 'keep B');
+  assert.equal(ba.title.value, 'keep B');
+  assert.equal(ab.conflicts?.title, undefined);
+  assert.deepEqual(ab, ba);
+});
+
+test('resolving a notes conflict to empty text remains a durable value', () => {
+  const resolution = at(500, 0, A);
+  const resolved: PlannerItem = {
+    id: 'i1', origin: 'owned', title: s('title'), notes: s('', resolution),
+    conflictResolutions: { notes: resolution },
+  };
+  const stale: PlannerItem = {
+    id: 'i1', origin: 'owned', title: s('title'), notes: s('stale notes', at(300, 0, B)),
+    conflicts: {
+      notes: {
+        ours: 'first', theirs: 'stale notes',
+        oursAt: at(300, 0, A), theirsAt: at(300, 0, B), reason: 'concurrent_text',
+      },
+    },
+  };
+  const merged = mergeOwnedItem(resolved, stale);
+  assert.equal(merged.notes?.value, '');
+  assert.equal(merged.conflicts?.notes, undefined);
+});
+
 /* ------------------------------------------------------- mirrored items */
 
 test('a mirrored item is RE-READ, not merged — the remote is the truth', () => {
@@ -190,6 +301,9 @@ test('planner metadata on a mirrored item is editable; source fields are not', (
   const item = { origin: 'mirrored' as const, source: 'github' };
   assert.equal(canEditLocally(item, 'priority').allowed, true);
   assert.equal(canEditLocally(item, 'scheduledFor').allowed, true);
+  const deleteDenied = canEditLocally(item, 'delete');
+  assert.equal(deleteDenied.allowed, false);
+  assert.match(deleteDenied.reason!, /Delete or close it in its source/);
   const denied = canEditLocally(item, 'title');
   assert.equal(denied.allowed, false);
   assert.match(denied.reason!, /reverted by the next refresh/);

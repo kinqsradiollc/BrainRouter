@@ -22,6 +22,41 @@ import { compareHlc, hlcAfter, type Hlc } from './hybridClock.js';
 export interface Stamped<T> {
   value: T;
   at: Hlc;
+  /**
+   * Per-replica causal frontier this edit had observed. Optional only for
+   * backward compatibility with records written before causal metadata.
+   */
+  seen?: Hlc[];
+}
+
+const MAX_CAUSAL_REPLICAS = 64;
+
+/** Compact a causal frontier to the newest event per replica. */
+export function causalFrontier(stamps: ReadonlyArray<Hlc | undefined>): Hlc[] {
+  const newest = new Map<string, Hlc>();
+  for (const stamp of stamps) {
+    if (!stamp) continue;
+    const current = newest.get(stamp.deviceId);
+    if (!current || compareHlc(stamp, current) > 0) newest.set(stamp.deviceId, stamp);
+  }
+  return [...newest.values()]
+    .sort(compareHlc)
+    .slice(-MAX_CAUSAL_REPLICAS);
+}
+
+/** Stamp an edit with the version(s) it was derived from. */
+export function causalValue<T>(value: T, at: Hlc, ...previous: Array<Stamped<unknown> | undefined>): Stamped<T> {
+  return {
+    value,
+    at,
+    seen: causalFrontier(previous.flatMap((stamp) => stamp ? [stamp.at, ...(stamp.seen ?? [])] : [])),
+  };
+}
+
+function observes(edit: Stamped<unknown>, event: Hlc): boolean {
+  if (edit.at.deviceId === event.deviceId && compareHlc(edit.at, event) >= 0) return true;
+  return (edit.seen ?? []).some((seen) =>
+    seen.deviceId === event.deviceId && compareHlc(seen, event) >= 0);
 }
 
 /**
@@ -112,16 +147,39 @@ export function mergeText(
 ): { value: Stamped<string> | undefined; conflict?: ConflictRecord } {
   if (!ours) return { value: theirs };
   if (!theirs) return { value: ours };
+  const causal = ours.seen !== undefined && theirs.seen !== undefined;
   if (ours.value === theirs.value) {
-    return { value: hlcAfter(theirs.at, ours.at) ? theirs : ours };
+    const winner = hlcAfter(theirs.at, ours.at) ? theirs : ours;
+    if (!causal) return { value: winner };
+    return {
+      value: {
+        ...winner,
+        seen: causalFrontier([
+          ours.at, ...(ours.seen ?? []), theirs.at, ...(theirs.seen ?? []),
+        ]),
+      },
+    };
   }
   const order = compareHlc(theirs.at, ours.at);
   if (order === 0) {
     return { value: ours };
   }
-  // Concurrent = neither stamp saw the other. With an HLC that shows up as
-  // equal physical+logical from different devices; a strictly later stamp did
-  // see it and legitimately supersedes.
+  if (causal) {
+    const theirsSawOurs = observes(theirs, ours.at);
+    const oursSawTheirs = observes(ours, theirs.at);
+    if (theirsSawOurs && !oursSawTheirs) return { value: theirs };
+    if (oursSawTheirs && !theirsSawOurs) return { value: ours };
+    return {
+      value: order > 0 ? theirs : ours,
+      conflict: {
+        ours: ours.value, theirs: theirs.value,
+        oursAt: ours.at, theirsAt: theirs.at,
+        reason: 'concurrent_text',
+      },
+    };
+  }
+  // Legacy records had no causal frontier. Preserve their former HLC behavior
+  // while every new Planner edit carries explicit ancestry.
   if (ours.at.physical === theirs.at.physical && ours.at.logical === theirs.at.logical) {
     return {
       value: order > 0 ? theirs : ours,

@@ -16,7 +16,7 @@
 import React from 'react';
 import { Icon } from '../../icons.js';
 import { splitTextByWorkspaceRefs } from '@kinqs/brainrouter-core/workspace/references';
-import { pendingRefLabel } from '../../lib/notes/notesView.js';
+import { pendingRefLabel } from '@kinqs/brainrouter-ui/notes';
 
 export function RefChip({ uri, label, onOpen }: {
   uri: string;

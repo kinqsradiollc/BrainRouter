@@ -22,6 +22,7 @@ COPY packages/agent-protocol/package.json packages/agent-protocol/
 COPY packages/core/package.json packages/core/
 COPY packages/sdk/package.json packages/sdk/
 COPY packages/hooks/package.json packages/hooks/
+COPY packages/ui/package.json packages/ui/
 COPY brainrouter/package.json brainrouter/
 COPY brainrouter-cli/package.json brainrouter-cli/
 COPY brainrouter-dashboard/package.json brainrouter-dashboard/

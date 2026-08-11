@@ -19,6 +19,7 @@
     "@kinqs/brainrouter-hooks": "^0.4.18",
     "@kinqs/brainrouter-sdk": "^0.4.18",
     "@kinqs/brainrouter-types": "^0.4.18",
+    "@kinqs/brainrouter-ui": "^0.4.19",
     "@opennextjs/cloudflare": "^1.20.1",
     "@phosphor-icons/react": "^2.1.10",
     "framer-motion": "^12.42.2",

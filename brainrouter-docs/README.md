@@ -50,6 +50,10 @@ deep dives.
   current package/host owners, public entrypoints, mixed-responsibility module
   triage, migration order, and boundary-guard backlog for the accepted
   whole-platform modernization.
+- **[Notes editing host contract](guides/notes-editing-host-contract.md)** — the
+  authenticated mutation envelope, exact idempotent replay, lease-gated
+  editing, conflict clocks, reconciliation rules, and honest remote capability
+  limits used by Dashboard and Desktop Notes.
 
 ### Specs & decisions
 
@@ -109,11 +113,10 @@ deep dives.
   so an origin check plus a double-submit token ship WITH the cookie rather than after it — and a
   `*` CORS origin combined with credentials must refuse to boot.;
   [ADR-038 a planner worth opening](decisions/ADR-038-a-planner-worth-opening.md) —
-  proposed rework of planner and notes across dashboard, desktop and CLI: shared components instead
-  of one implementation per host (notes exists twice today), a real token system instead of 67 lines
-  of per-page CSS, a Today view designed for a working day rather than an empty text field, sync
-  turned from a caption into a control, and the CLI given the operations a terminal is better at
-  rather than an imitation of the GUI;
+  accepted rework of planner and notes across dashboard, desktop and CLI: a private shared UI
+  package instead of one implementation per host, semantic tokens shared by both applications, a
+  20-item Today view designed for a working day, inspectable/retriable sync, canonical `/planner`
+  terminal operations, and a blocking two-host visual/usability gate;
   [ADR-039 the half of security a model cannot see](decisions/ADR-039-the-half-of-security-a-model-cannot-see.md) —
   proposed addition of static data-flow analysis as a review INPUT rather than a parallel bot: the
   engine enumerates candidates deterministically, the model adversarially verifies which are

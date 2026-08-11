@@ -26,7 +26,7 @@ import {
   type SyncRecords, type SyncResult, type SyncTransport,
 } from '../sync/recordSync.js';
 import type { NoteBlock } from './block.js';
-import { mergeNoteBlock } from './blockMerge.js';
+import { blockWrittenAt, mergeNoteBlock } from './blockMerge.js';
 import type { NotesState } from './noteStore.js';
 
 export { isFirstSync, type PushResponse, type SyncResult };
@@ -42,6 +42,7 @@ const NOTE_RECORDS: SyncRecords<NotesState, NoteBlock> = {
     const merged = mergeNoteBlock(local, remote);
     return { value: merged, conflicted: Object.keys(merged.conflicts ?? {}).length > 0 };
   },
+  observedClock: blockWrittenAt,
 };
 
 /** Merge one server block into local state. */

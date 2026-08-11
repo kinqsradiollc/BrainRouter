@@ -13,6 +13,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Hlc, NoteBlock } from "@kinqs/brainrouter-core/notes";
+import type { NoteMutationQueries } from "../memory/store/postgres/queries/notesQueries.js";
 
 interface StoredBlock {
   parentId: string | null;
@@ -25,18 +27,65 @@ interface StoredBlock {
 /** Just enough store for the routes under test; the SQL has its own suite. */
 const db = {
   blocks: new Map<string, StoredBlock>(),
-  applied: new Set<string>(),
+  applied: new Map<string, {
+    blockId: string;
+    fingerprint: string | null;
+    response: Record<string, unknown> | null;
+  }>(),
   index: new Map<string, { contentText: string; refKeys: string[] }>(),
   refs: new Map<string, unknown[]>(),
   leases: new Map<string, { blockId: string; deviceId: string; holder: string | null; epoch: number; expiresAtMs: number }>(),
+  hostClocks: new Map<string, { physical: number; logical: number }>(),
   // ADR-029 Part E (migration 053) — the projections the page and database
   // routes read. Written by the same re-derive call as `index`.
   pageMeta: new Map<string, Record<string, unknown>>(),
   rowValues: new Map<string, unknown[]>(),
 };
 const key = (orgId: string, userId: string, id: string) => `${orgId}/${userId}/${id}`;
+let mutationQueue: Promise<void> = Promise.resolve();
+let failNextReceipt: Error | null = null;
+
+function restoreMap<K, V>(target: Map<K, V>, snapshot: Map<K, V>): void {
+  target.clear();
+  for (const [entryKey, value] of snapshot) target.set(entryKey, value);
+}
 
 const fakeStore = {
+  async withNoteMutation<T>(
+    _orgId: string,
+    _userId: string,
+    fn: (queries: NoteMutationQueries) => Promise<T>,
+  ): Promise<T> {
+    const previous = mutationQueue;
+    let release!: () => void;
+    mutationQueue = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    const snapshot = {
+      blocks: structuredClone(db.blocks),
+      applied: structuredClone(db.applied),
+      index: structuredClone(db.index),
+      refs: structuredClone(db.refs),
+      leases: structuredClone(db.leases),
+      hostClocks: structuredClone(db.hostClocks),
+      pageMeta: structuredClone(db.pageMeta),
+      rowValues: structuredClone(db.rowValues),
+    };
+    try {
+      return await fn(fakeStore as unknown as NoteMutationQueries);
+    } catch (error) {
+      restoreMap(db.blocks, snapshot.blocks);
+      restoreMap(db.applied, snapshot.applied);
+      restoreMap(db.index, snapshot.index);
+      restoreMap(db.refs, snapshot.refs);
+      restoreMap(db.leases, snapshot.leases);
+      restoreMap(db.hostClocks, snapshot.hostClocks);
+      restoreMap(db.pageMeta, snapshot.pageMeta);
+      restoreMap(db.rowValues, snapshot.rowValues);
+      throw error;
+    } finally {
+      release();
+    }
+  },
   async databaseNowMs() { return Date.now(); },
   async listNoteBlocksSince() { return []; },
   async listAllNoteBlocks(orgId: string, userId: string) {
@@ -65,7 +114,28 @@ const fakeStore = {
   },
   async latestNoteRevision() { return "1"; },
   async wasNoteOperationApplied(orgId: string, userId: string, k: string) { return db.applied.has(`${orgId}/${userId}/${k}`); },
-  async recordNoteOperationApplied(orgId: string, userId: string, k: string) { db.applied.add(`${orgId}/${userId}/${k}`); },
+  async getNoteOperationReceipt(orgId: string, userId: string, k: string) {
+    if (failNextReceipt) {
+      const error = failNextReceipt;
+      failNextReceipt = null;
+      throw error;
+    }
+    return db.applied.get(`${orgId}/${userId}/${k}`) ?? null;
+  },
+  async recordNoteOperationApplied(
+    orgId: string,
+    userId: string,
+    k: string,
+    blockId: string,
+    fingerprint?: string,
+    response?: Record<string, unknown>,
+  ) {
+    db.applied.set(`${orgId}/${userId}/${k}`, {
+      blockId,
+      fingerprint: fingerprint ?? null,
+      response: response ? structuredClone(response) : null,
+    });
+  },
   async replaceNoteRefs(orgId: string, userId: string, blockId: string, refs: unknown[]) { db.refs.set(key(orgId, userId, blockId), refs); },
   async listNoteRefsFrom(orgId: string, userId: string, blockId: string) { return db.refs.get(key(orgId, userId, blockId)) ?? []; },
   async listNoteBacklinks() { return []; },
@@ -85,6 +155,31 @@ const fakeStore = {
     db.leases.set(key(orgId, userId, lease.blockId), lease);
   },
   async sweepNoteBlockLeases() { return 0; },
+  async observeNoteHostClock(orgId: string, userId: string, remote: Hlc) {
+    const scope = `${orgId}/${userId}`;
+    const current = db.hostClocks.get(scope);
+    if (!current || remote.physical > current.physical
+      || (remote.physical === current.physical && remote.logical > current.logical)) {
+      db.hostClocks.set(scope, { physical: remote.physical, logical: remote.logical });
+    }
+  },
+  async nextNoteHostClock(
+    orgId: string,
+    userId: string,
+    deviceId: string,
+    wallClockMs: number,
+    reserve: number,
+  ): Promise<Hlc> {
+    const scope = `${orgId}/${userId}`;
+    const current = db.hostClocks.get(scope) ?? { physical: -1, logical: -1 };
+    const physical = Math.max(current.physical, Math.max(0, Math.trunc(wallClockMs)));
+    const logical = physical === current.physical ? current.logical + 1 : 0;
+    db.hostClocks.set(scope, {
+      physical,
+      logical: logical + Math.max(1, Math.trunc(reserve)) - 1,
+    });
+    return { physical, logical, deviceId };
+  },
   async clearNoteDerived(orgId: string, userId: string) {
     for (const map of [db.index, db.refs, db.pageMeta, db.rowValues] as Array<Map<string, unknown>>) {
       for (const k of [...map.keys()]) if (k.startsWith(`${orgId}/${userId}/`)) map.delete(k);
@@ -145,9 +240,23 @@ describe("notes + workspace routes", () => {
   let baseUrl = "";
   const headers = { Authorization: "Bearer br_user", "Content-Type": "application/json", "X-BrainRouter-Org": "org-a" };
 
+  const mutate = (
+    operation: Record<string, unknown>,
+    requestId: string,
+    deviceId = "dashboard-tab",
+    extra: Record<string, unknown> = {},
+  ) => fetch(`${baseUrl}/api/notes/mutate`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      version: 1, requestId, deviceId, operation, ...extra,
+    }),
+  });
+
   beforeEach(async () => {
-    db.blocks.clear(); db.applied.clear(); db.index.clear(); db.refs.clear(); db.leases.clear();
+    db.blocks.clear(); db.applied.clear(); db.index.clear(); db.refs.clear(); db.leases.clear(); db.hostClocks.clear();
     db.pageMeta.clear(); db.rowValues.clear();
+    failNextReceipt = null;
     vi.clearAllMocks();
     mocks.getDefaultOrgId.mockResolvedValue("org-a");
     mocks.getUserById.mockImplementation(async (userId: string) => ({ userId, isAdmin: false, status: "active" }));
@@ -183,6 +292,338 @@ describe("notes + workspace routes", () => {
     expect((await read.json()).block.text.value).toBe("the parser rewrite");
   });
 
+  it("publishes an honest writable-editor capability document", async () => {
+    const res = await fetch(`${baseUrl}/api/notes/mutate/capabilities`, { headers });
+    expect(res.status).toBe(200);
+    const capabilities = await res.json();
+    expect(capabilities.endpoint).toBe("/api/notes/mutate");
+    expect(capabilities.operations["gesture.split"]).toBe(true);
+    expect(capabilities.operations["block.restore"]).toBe(true);
+    expect(capabilities.operations["conflict.resolve"]).toBe(true);
+    expect(capabilities.operations["template.instantiate"]).toBe(true);
+    expect(capabilities.operations["history.undo"]).toBe(false);
+    expect(capabilities.operations["history.redo"]).toBe(false);
+    expect(capabilities.operations["attachment.upload-bytes"]).toBe(false);
+  });
+
+  it("validates the mutation envelope before it reaches persistence", async () => {
+    const res = await fetch(`${baseUrl}/api/notes/mutate`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        version: 1,
+        requestId: "bad-move",
+        deviceId: "dashboard-tab",
+        operation: { type: "gesture.move", blockId: "blk_1", direction: 0 },
+      }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe("invalid_request");
+    expect(body.error.detail).toContain("direction");
+    expect(db.applied.size).toBe(0);
+  });
+
+  it("scopes browser mutations only from auth, ignoring forged org/user body fields", async () => {
+    const res = await mutate(
+      { type: "block.create", input: { blockId: "blk_scoped", text: "private draft" } },
+      "scoped-create",
+      "dashboard-tab",
+      { orgId: "org-other", userId: "user-2" },
+    );
+    expect(res.status).toBe(200);
+    expect(db.blocks.has("org-a/user-1/blk_scoped")).toBe(true);
+    expect(db.blocks.has("org-other/user-2/blk_scoped")).toBe(false);
+  });
+
+  it("uses Core's gesture plan remotely and makes a retry idempotent", async () => {
+    await mutate(
+      { type: "block.create", input: { blockId: "blk_split", text: "one two" } },
+      "split-seed",
+    );
+    const request = {
+      version: 1,
+      requestId: "split-once",
+      deviceId: "dashboard-tab",
+      operation: { type: "gesture.split", blockId: "blk_split", caret: 3 },
+    };
+    const first = await fetch(`${baseUrl}/api/notes/mutate`, {
+      method: "POST", headers, body: JSON.stringify(request),
+    });
+    expect(first.status).toBe(200);
+    const firstBody = await first.json();
+    expect(firstBody.ok).toBe(true);
+    expect(firstBody.result.action).toBe("split");
+    expect(firstBody.sync.accepted).toHaveLength(2);
+
+    const afterFirst = [...db.blocks.keys()].filter((k) => k.startsWith("org-a/user-1/"));
+    const retry = await fetch(`${baseUrl}/api/notes/mutate`, {
+      method: "POST", headers, body: JSON.stringify(request),
+    });
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toEqual(firstBody);
+    expect([...db.blocks.keys()].filter((k) => k.startsWith("org-a/user-1/"))).toEqual(afterFirst);
+    expect((db.blocks.get("org-a/user-1/blk_split")!.payload as unknown as NoteBlock).text.value).toBe("one");
+  });
+
+  it("reports lease-fenced edits instead of claiming the displayed text changed", async () => {
+    await mutate(
+      { type: "block.create", input: { blockId: "blk_locked", text: "original" } },
+      "locked-seed",
+    );
+    const lease = await mutate(
+      { type: "lease.acquire", blockId: "blk_locked", holder: "the desktop" },
+      "lease-a",
+      "device-a",
+    );
+    expect(lease.status).toBe(200);
+    expect((await lease.json()).result.lease.epoch).toBe(1);
+
+    const fenced = await mutate(
+      { type: "block.update", blockId: "blk_locked", patch: { text: "stale dashboard text" } },
+      "blocked-write",
+      "device-b",
+    );
+    expect(fenced.status).toBe(200);
+    const body = await fenced.json();
+    expect(body.sync.fenced).toEqual([
+      expect.objectContaining({ itemId: "blk_locked", reason: "blocked" }),
+    ]);
+    const stored = db.blocks.get("org-a/user-1/blk_locked")!.payload as unknown as NoteBlock;
+    expect(stored.text.value).toBe("original");
+    expect(stored.conflicts!.text).toBeTruthy();
+  });
+
+  it("performs comments and basic database writes through the same mutation transport", async () => {
+    await mutate(
+      { type: "block.create", input: { blockId: "db_mut", kind: "database", text: "Reading" } },
+      "db-create",
+    );
+    const property = await mutate({
+      type: "database.property.add",
+      databaseId: "db_mut",
+      property: { id: "status", name: "Status", type: "select" },
+    }, "db-property");
+    expect(property.status).toBe(200);
+
+    const row = await mutate({
+      type: "database.row.create",
+      databaseId: "db_mut",
+      rowId: "row_mut",
+      title: "A book",
+      values: { status: "reading" },
+    }, "db-row");
+    expect(row.status).toBe(200);
+    const set = await mutate({
+      type: "database.row.set", rowId: "row_mut", propertyId: "status", value: "done",
+    }, "db-cell");
+    expect(set.status).toBe(200);
+    const savedView = await mutate({
+      type: "database.view.save",
+      databaseId: "db_mut",
+      view: { id: "list", name: "List", kind: "list", visible: ["title", "status"] },
+    }, "db-view");
+    expect(savedView.status).toBe(200);
+
+    const comment = await mutate({
+      type: "comment.add", blockId: "row_mut", body: "check the citation", author: "Ada",
+    }, "comment-add");
+    expect(comment.status).toBe(200);
+    const commentBody = await comment.json();
+    const commentId = commentBody.result.comment.id;
+    const edited = await mutate({
+      type: "comment.edit", blockId: "row_mut", commentId, body: "citation checked",
+    }, "comment-edit");
+    expect(edited.status).toBe(200);
+
+    const database = db.blocks.get("org-a/user-1/db_mut")!.payload as unknown as NoteBlock;
+    expect(database.schema!.value.map((def: { id: string }) => def.id)).toEqual(["title", "status"]);
+    expect(database.views!.value.map((view: { id: string }) => view.id)).toContain("list");
+    const storedRow = db.blocks.get("org-a/user-1/row_mut")!.payload as unknown as NoteBlock;
+    expect(storedRow.props!.status!.value).toBe("done");
+    expect(storedRow.comments![commentId]!.body.value).toBe("citation checked");
+  });
+
+  it("restores subtrees, resolves conflicts and instantiates templates through the same transport", async () => {
+    await mutate(
+      { type: "block.create", input: { blockId: "page_trash", kind: "page", text: "Recover me" } },
+      "restore-page-seed",
+    );
+    await mutate(
+      { type: "block.create", input: { blockId: "trash_child", parentId: "page_trash", text: "Child" } },
+      "restore-child-seed",
+    );
+    expect((await mutate({ type: "block.delete", blockId: "page_trash" }, "restore-delete")).status).toBe(200);
+    const restored = await mutate({ type: "block.restore", blockId: "page_trash" }, "restore-subtree");
+    expect(restored.status).toBe(200);
+    expect((await restored.json()).result.restoredIds).toEqual(["page_trash", "trash_child"]);
+    expect((db.blocks.get("org-a/user-1/trash_child")!.payload as unknown as NoteBlock).restoredAt).toBeTruthy();
+
+    await mutate(
+      { type: "block.create", input: { blockId: "page_template", kind: "page", text: "Runbook" } },
+      "template-page-seed",
+    );
+    await mutate(
+      {
+        type: "block.create",
+        input: {
+          blockId: "template_child",
+          parentId: "page_template",
+          text: "See brainrouter://notes/block/template_child",
+        },
+      },
+      "template-child-seed",
+    );
+    await mutate(
+      { type: "block.update", blockId: "page_template", patch: { template: true } },
+      "template-mark",
+    );
+    const instantiated = await mutate(
+      { type: "template.instantiate", templateId: "page_template", parentId: null },
+      "template-instantiate",
+    );
+    expect(instantiated.status).toBe(200);
+    const made = await instantiated.json();
+    expect(made.result.pageId).toMatch(/^blk_/);
+    expect(made.result.blocks).toBe(2);
+    expect(made.result.rewritten).toBe(1);
+    expect(made.result.line).toContain("1 link");
+    const copiedPage = db.blocks.get(`org-a/user-1/${made.result.pageId}`)!.payload as unknown as NoteBlock;
+    expect(copiedPage.template?.value).not.toBe(true);
+
+    await mutate(
+      { type: "block.create", input: { blockId: "blk_conflict", text: "mine" } },
+      "conflict-seed",
+    );
+    await mutate(
+      { type: "lease.acquire", blockId: "blk_conflict", holder: "desktop" },
+      "conflict-lease",
+      "device-a",
+    );
+    await mutate(
+      { type: "block.update", blockId: "blk_conflict", patch: { text: "theirs" } },
+      "conflict-write",
+      "device-b",
+    );
+    const conflict = (db.blocks.get("org-a/user-1/blk_conflict")!.payload as unknown as NoteBlock)
+      .conflicts!.text!;
+    const resolved = await mutate({
+      type: "conflict.resolve", blockId: "blk_conflict", field: "text", keep: "theirs",
+      expected: { oursAt: conflict.oursAt, theirsAt: conflict.theirsAt },
+    }, "conflict-resolve", "device-b");
+    expect(resolved.status).toBe(200);
+    const resolvedBlock = db.blocks.get("org-a/user-1/blk_conflict")!.payload as unknown as NoteBlock;
+    expect(resolvedBlock.text.value).toBe("theirs");
+    expect(resolvedBlock.conflicts?.text).toBeUndefined();
+  });
+
+  it("serves complete scoped trash and orphaned-comment projections", async () => {
+    await mutate(
+      { type: "block.create", input: { blockId: "page_orphan", kind: "page", text: "Old plan" } },
+      "orphan-page-seed",
+    );
+    await mutate(
+      { type: "block.create", input: { blockId: "orphan_child", parentId: "page_orphan", text: "Questioned line" } },
+      "orphan-child-seed",
+    );
+    await mutate(
+      { type: "comment.add", blockId: "orphan_child", body: "Does this still apply?", author: "Ada" },
+      "orphan-comment",
+    );
+    await mutate({ type: "block.delete", blockId: "page_orphan" }, "orphan-delete");
+
+    const trash = await fetch(`${baseUrl}/api/notes/trash`, { headers });
+    expect(trash.status).toBe(200);
+    expect((await trash.json()).entries).toEqual([
+      expect.objectContaining({
+        id: "page_orphan",
+        kind: "page",
+        title: "Old plan",
+        descendants: 1,
+        line: "Old plan — and 1 block inside it",
+      }),
+    ]);
+
+    const orphaned = await fetch(`${baseUrl}/api/notes/comments/orphaned`, { headers });
+    expect(orphaned.status).toBe(200);
+    expect((await orphaned.json()).threads).toEqual([{
+      blockId: "orphan_child",
+      text: "Questioned line",
+      comments: [expect.objectContaining({
+        body: "Does this still apply?",
+        author: "Ada",
+        resolved: false,
+      })],
+    }]);
+  });
+
+  it("reads rollup targets through authenticated Core policy instead of client-side traversal", async () => {
+    await mutate(
+      { type: "block.create", input: { blockId: "db_target", kind: "database", text: "Tasks" } },
+      "rollup-target-db",
+    );
+    await mutate({
+      type: "database.property.add",
+      databaseId: "db_target",
+      property: { id: "points", name: "Points", type: "number" },
+    }, "rollup-target-property");
+    await mutate({
+      type: "database.row.create", databaseId: "db_target", rowId: "row_target", title: "Ship",
+    }, "rollup-target-row");
+
+    await mutate(
+      { type: "block.create", input: { blockId: "db_source", kind: "database", text: "Projects" } },
+      "rollup-source-db",
+    );
+    await mutate({
+      type: "database.property.add",
+      databaseId: "db_source",
+      property: { id: "tasks", name: "Tasks", type: "relation" },
+    }, "rollup-source-property");
+    await mutate({
+      type: "database.row.create",
+      databaseId: "db_source",
+      rowId: "row_source",
+      title: "Release",
+      values: { tasks: ["brainrouter://notes/block/row_target"] },
+    }, "rollup-source-row");
+
+    const res = await fetch(
+      `${baseUrl}/api/notes/databases/db_source/rollup-targets?relation=tasks`,
+      { headers },
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      ok: true,
+      properties: [
+        { id: "title", name: "Name", type: "title" },
+        { id: "points", name: "Points", type: "number" },
+      ],
+      databases: [{ id: "db_target", title: "Tasks" }],
+    });
+  });
+
+  it("returns typed unsupported capabilities for remote undo and attachment bytes", async () => {
+    const state = await mutate({ type: "history.state", pageId: null }, "history-state");
+    expect(state.status).toBe(200);
+    expect((await state.json()).history.canUndo).toBe(false);
+
+    const undo = await mutate({ type: "history.undo", pageId: null }, "history-undo");
+    expect(undo.status).toBe(422);
+    expect((await undo.json()).error.capability).toBe("remote_history");
+
+    const bytes = await mutate({
+      type: "attachment.upload-bytes",
+      blockId: "blk_1",
+      fileName: "image.png",
+      mediaType: "image/png",
+      byteSize: 20,
+    }, "attachment-bytes");
+    expect(bytes.status).toBe(422);
+    expect((await bytes.json()).error.capability).toBe("attachment_bytes");
+  });
+
   it("an unauthenticated push is refused before it reaches any store", async () => {
     const res = await fetch(`${baseUrl}/api/notes/push`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operations: [] }),
@@ -198,6 +639,74 @@ describe("notes + workspace routes", () => {
     const res = await fetch(`${baseUrl}/api/notes/push`, { method: "POST", headers, body: JSON.stringify({ operations }) });
     expect(res.status).toBe(413);
     expect((await res.json()).error).toContain("200");
+  });
+
+  it("rejects reserved legacy map keys without polluting or persisting a block", async () => {
+    const res = await fetch(`${baseUrl}/api/notes/push`, {
+      method: "POST",
+      headers,
+      body: '{"operations":[{"idempotencyKey":"poison","itemId":"blk_poison","kind":"create","at":{"physical":1000,"logical":0,"deviceId":"d"},"payload":{"text":"x","props":{"__proto__":"pollute"}}}]}',
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.accepted).toEqual([]);
+    expect(body.rejected[0].reason).toMatch(/reserved|invalid/i);
+    expect(db.blocks.has("org-a/user-1/blk_poison")).toBe(false);
+    expect(({} as Record<string, unknown>).pollute).toBeUndefined();
+  });
+
+  it("returns a fenced legacy push signal instead of claiming its text became visible", async () => {
+    await fetch(`${baseUrl}/api/notes/push`, {
+      method: "POST", headers, body: JSON.stringify({ operations: [{
+        idempotencyKey: "fence-seed", itemId: "blk_raw_fence", kind: "create",
+        at: { physical: 1000, logical: 0, deviceId: "device-a" },
+        payload: { text: "visible", rank: "m" },
+      }] }),
+    });
+    await mutate(
+      { type: "lease.acquire", blockId: "blk_raw_fence", holder: "desktop" },
+      "raw-fence-lease", "device-a",
+    );
+    const res = await fetch(`${baseUrl}/api/notes/push`, {
+      method: "POST", headers, body: JSON.stringify({ operations: [{
+        idempotencyKey: "fenced-raw", itemId: "blk_raw_fence", kind: "update",
+        at: { physical: 2000, logical: 0, deviceId: "device-b" },
+        payload: { text: "fenced copy" },
+      }] }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.accepted).toEqual(["fenced-raw"]);
+    expect(body.fenced).toEqual([{
+      idempotencyKey: "fenced-raw", itemId: "blk_raw_fence", reason: "blocked",
+    }]);
+    expect((db.blocks.get("org-a/user-1/blk_raw_fence")!.payload as unknown as NoteBlock).text.value)
+      .toBe("visible");
+  });
+
+  it("sanitizes retryable internal push and mutation errors", async () => {
+    failNextReceipt = new Error("secret relation notes_applied_operations failed");
+    const pushed = await fetch(`${baseUrl}/api/notes/push`, {
+      method: "POST", headers, body: JSON.stringify({ operations: [{
+        idempotencyKey: "internal-push", itemId: "blk_internal", kind: "create",
+        at: { physical: 1000, logical: 0, deviceId: "d" }, payload: { text: "x" },
+      }] }),
+    });
+    expect(pushed.status).toBe(503);
+    const pushBody = await pushed.json();
+    expect(pushBody.error).toBe("The Notes service could not apply this push. Retry it.");
+    expect(JSON.stringify(pushBody)).not.toContain("secret relation");
+
+    failNextReceipt = new Error("secret connection string");
+    const mutation = await mutate(
+      { type: "block.create", input: { blockId: "blk_internal", text: "x" } },
+      "internal-mutation",
+    );
+    expect(mutation.status).toBe(500);
+    const mutationBody = await mutation.json();
+    expect(mutationBody.error.code).toBe("internal_error");
+    expect(mutationBody.error.retryable).toBe(true);
+    expect(JSON.stringify(mutationBody)).not.toContain("secret connection");
   });
 
   it("search reaches the index the push wrote, which is what makes B5 a feature rather than a table", async () => {
@@ -938,16 +1447,17 @@ describe("notes + workspace routes", () => {
    */
   it("the dashboard asks for the favourites, the databases and the shared update verb", () => {
     const here = path.dirname(fileURLToPath(import.meta.url));
-    const notesPage = fs.readFileSync(
-      path.join(here, "..", "..", "..", "brainrouter-dashboard", "app", "notes", "page.tsx"),
-      "utf8",
-    );
+    const dashboardNotes = ["page.tsx", "useDashboardNotes.ts", "notesAdapter.ts"]
+      .map((file) => fs.readFileSync(
+        path.join(here, "..", "..", "..", "brainrouter-dashboard", "app", "notes", file),
+        "utf8",
+      )).join("\n");
     // Ordered by rank on the server, and a favourite is any block — filtering
     // the page list here would show them in document order and miss the lines.
-    expect(notesPage).toContain('"/api/notes/favourites"');
-    expect(notesPage).toContain('"/api/notes/databases"');
-    expect(notesPage).toContain('"/api/workspace/update"');
-    expect(notesPage).toContain('fields: { favourite }');
+    expect(dashboardNotes).toContain('"/api/notes/favourites"');
+    expect(dashboardNotes).toContain('/api/notes/databases/');
+    expect(dashboardNotes).toContain('"/api/notes/mutate"');
+    expect(dashboardNotes).toContain('queueBlockUpdate(id, { favourite })');
   });
 
   /**
@@ -959,19 +1469,20 @@ describe("notes + workspace routes", () => {
    */
   it("the dashboard downloads the export and reads and writes the thread", () => {
     const here = path.dirname(fileURLToPath(import.meta.url));
-    const notesPage = fs.readFileSync(
-      path.join(here, "..", "..", "..", "brainrouter-dashboard", "app", "notes", "page.tsx"),
-      "utf8",
-    );
-    expect(notesPage).toContain("/export?");
+    const dashboardNotes = ["page.tsx", "useDashboardNotes.ts", "notesAdapter.ts"]
+      .map((file) => fs.readFileSync(
+        path.join(here, "..", "..", "..", "brainrouter-dashboard", "app", "notes", file),
+        "utf8",
+      )).join("\n");
+    expect(dashboardNotes).toContain("/export?");
     // The formats come from the server's read, never from the block's kind —
     // F1's rule is that the menu must not offer what the writer cannot honour.
-    expect(notesPage).toContain("exportFormats");
-    expect(notesPage).toContain("/comments");
+    expect(dashboardNotes).toContain("exportPage:");
+    expect(dashboardNotes).toContain('type: "comment.add"');
     // The claim is that the dashboard resolves a thread over the route, not how
     // the flag reaches the call: both surfaces that leave a remark now go
     // through one `setCommentResolved`, so the value is a shorthand rather than
     // an inline literal. `notes-dashboard-renderers.test.ts` pins that helper.
-    expect(notesPage).toMatch(/method: "PATCH", body: \{ resolved/);
+    expect(dashboardNotes).toContain('type: "comment.resolve"');
   });
 });

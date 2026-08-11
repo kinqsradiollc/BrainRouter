@@ -158,7 +158,11 @@ function fsyncDirectory(directory: string): void {
     fs.fsyncSync(descriptor);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code !== 'EINVAL' && code !== 'ENOTSUP' && code !== 'EBADF' && code !== 'EISDIR') throw error;
+    const unsupportedOnThisPlatform = code === 'EINVAL' || code === 'ENOTSUP' ||
+      code === 'EBADF' || code === 'EISDIR' ||
+      // Windows keeps the atomic rename but rejects fsync on a directory handle.
+      (process.platform === 'win32' && code === 'EPERM');
+    if (!unsupportedOnThisPlatform) throw error;
   } finally {
     if (descriptor !== undefined) {
       try { fs.closeSync(descriptor); } catch { /* best-effort descriptor cleanup */ }

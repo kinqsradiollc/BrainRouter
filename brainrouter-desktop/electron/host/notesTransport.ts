@@ -53,9 +53,12 @@ export function createNotesTransport(config: NotesTransportConfig): NotesTranspo
         redirect: 'manual',
       });
       if (!res.ok) throw new Error(`notes push failed: ${res.status}`);
-      const body = await res.json() as { accepted?: unknown; rejected?: unknown };
+      const body = await res.json() as { accepted?: unknown; rejected?: unknown; fenced?: unknown };
       if (!body || !Array.isArray(body.accepted) || !Array.isArray(body.rejected)) {
         throw new Error('notes push returned a body that is not a notes response');
+      }
+      if (body.fenced !== undefined && !Array.isArray(body.fenced)) {
+        throw new Error('notes push returned an invalid fencing report');
       }
       return body as Awaited<ReturnType<NotesTransport['push']>>;
     },

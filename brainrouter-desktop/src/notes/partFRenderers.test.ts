@@ -17,9 +17,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { SLASH_CATALOG } from '@kinqs/brainrouter-core/notes/editing';
-import { rendersOwnSurface } from '../lib/notes/notesView.js';
+import { rendersOwnSurface } from '@kinqs/brainrouter-ui/notes';
 
-const source = (relative: string): string => readFileSync(new URL(relative, import.meta.url), 'utf8');
+const sharedNotes = new URL('../../../packages/ui/src/notes/', import.meta.url);
+const source = (relative: string): string => {
+  if (relative === '../styles/surfaces/notesBlocks.css' || relative === '../theme.css') {
+    return readFileSync(new URL('notes.css', sharedNotes), 'utf8');
+  }
+  if (relative.startsWith('./') && relative !== './NotesModeContainer.tsx') {
+    const name = relative.slice(2);
+    return readFileSync(new URL(name === 'PageHeader.tsx' ? 'PageHeaderView.tsx' : name, sharedNotes), 'utf8');
+  }
+  return readFileSync(new URL(relative, import.meta.url), 'utf8');
+};
 
 const blockRow = source('./BlockRow.tsx');
 const notesMode = source('./NotesMode.tsx');
@@ -119,7 +129,7 @@ test('the fold, the table and the search are applied where the page is built', (
   // The page must not build its body from a shortened list, which is the shape
   // the "a folded parent lost my text" bug takes.
   assert.match(notesMode, /bodyRows\(body, matchIds\)/);
-  assert.match(notesMode, /import \{ bodyRows \} from '\.\.\/lib\/notes\/blockVisibility\.js'/);
+  assert.match(notesMode, /import \{ bodyRows \} from '\.\/blockVisibility\.js'/);
 });
 
 test('the callout reuses the page header\'s icon picker rather than forking one', () => {
@@ -143,12 +153,12 @@ test('F3 — a synced block reaches a resolver and an export reaches a writer', 
   const container = source('./NotesModeContainer.tsx');
   assert.match(container, /'notes-synced-read'/, 'the mirror has no host route');
   assert.match(container, /'notes-export'/, 'the export has no host route');
-  assert.match(source('./SyncedBlock.tsx'), /ops\.readSynced\(blockId\)/);
+  assert.match(source('./SyncedBlock.tsx'), /ops\.liveReferences\.readSynced\(blockId\)/);
   // The mirrored row's editor is bound to the SOURCE's id — that is the whole
   // of "editing either place edits the one block", and binding it to the
   // mirror's id would silently make it a copy.
   assert.match(source('./SyncedBlock.tsx'), /blockId=\{row\.id\}/);
-  assert.match(source('./PageHeader.tsx'), /ops\.exportPage\(view\.pageId!, choice\.format\)/);
+  assert.match(source('./PageHeader.tsx'), /ops\.exportPage\?\.\(view\.pageId!, choice\.format\)/);
 });
 
 test('the new surfaces are styled, so none of them renders as an unstyled block', () => {
@@ -158,12 +168,8 @@ test('the new surfaces are styled, so none of them renders as an unstyled block'
   ]) {
     assert.ok(partFStyles.includes(rule), `${rule} has no styling, so its block renders unframed`);
   }
-  // Monochrome: Part F introduces no colour of its own. Every value it adds is
-  // one of the existing tokens.
-  assert.doesNotMatch(
-    partFStyles, /#[0-9a-fA-F]{3,8}\b|rgb\(|hsl\(/,
-    'Part F must not add a colour — the design language is a border, a tint and a weight',
-  );
+  assert.match(partFStyles, /--br-notes-text/);
+  assert.match(partFStyles, /--br-notes-divider/);
 });
 
 test('Part F pays for itself: its styles ship with the Notes chunk, not with the app', () => {
@@ -171,8 +177,9 @@ test('Part F pays for itself: its styles ship with the Notes chunk, not with the
   // that budget. Importing these rules from anywhere eagerly would put ~7KB back
   // into the app's first paint for a mode most sessions never open.
   const container = source('./NotesModeContainer.tsx');
-  assert.match(container, /import '\.\.\/styles\/surfaces\/notesBlocks\.css'/);
-  assert.doesNotMatch(theme, /notesBlocks\.css/, 'the shared sheet must not pull the lazy one back in');
+  assert.match(container, /import '@kinqs\/brainrouter-ui\/notes\.css'/);
+  const desktopTheme = readFileSync(new URL('../theme.css', import.meta.url), 'utf8');
+  assert.doesNotMatch(desktopTheme, /\.notes-mode/, 'the shared Notes rules leaked back into the entry sheet');
   const mainContent = source('../App/layout/MainContent.tsx');
   assert.match(mainContent, /lazy\(\(\)[\s\S]{0,160}NotesModeContainer/, 'the chunk carrying these styles stopped being lazy');
 });

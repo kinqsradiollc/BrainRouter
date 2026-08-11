@@ -24,6 +24,9 @@ export * from './rank.js';
 // touches the store, so a renderer can count and order a thread per keystroke.
 export * from './comment.js';
 export * from './noteTree.js';
+// Reference extraction and backlink projection are pure and needed by browser
+// hosts to build the same Notes view model without importing the IO barrel.
+export * from './noteSearch.js';
 export * from './blockMerge.js';
 export * from './blockLease.js';
 export * from './trash.js';
@@ -39,6 +42,12 @@ export * from './noteImageRef.js';
 // the browser dev harness copies a subtree too: a second implementation of the
 // rule is the one that keeps rewriting after the first stops.
 export * from './noteRefRemap.js';
+// ADR-038 — the one browser/host mutation envelope. Types and runtime parsing
+// stay on this curated barrel; persistence remains on the broad `notes` entry.
+export * from './editingContract.js';
+export * from './gesturePlan.js';
+export * from './templatePolicy.js';
+export * from './databaseMutation.js';
 // E3's database model, minus `databaseOps` — a surface renders a projection per
 // keystroke and writes through a host handler, which is the same split by PURITY
 // this barrel already makes for the editing gestures.

@@ -28,6 +28,10 @@ export interface TimeBlock {
   /** How many days this has been carried forward. */
   carriedOver: number;
   completedAt?: string;
+  /** Last mutation stamp, used to reconcile a pull with queued local work. */
+  updatedAt?: import('../sync/hybridClock.js').Hlc;
+  /** Parent deletion cascades to a durable block tombstone. */
+  deletedAt?: import('../sync/hybridClock.js').Hlc;
 }
 
 export interface DriftSummary {

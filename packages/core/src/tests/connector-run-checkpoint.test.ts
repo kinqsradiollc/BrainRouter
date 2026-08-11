@@ -7,6 +7,8 @@ import {
   runConnectorCheckpointCore,
 } from '../connectors/runtime/runCheckpoint.js';
 import { createConnector } from '../connectors/store/connectorStore.js';
+import { refreshLocalPlannerFromConnectorIssues } from '../planner/connectorIssueAdapter.js';
+import { readPlanner } from '../planner/plannerStore.js';
 import type { GithubConnectorClient } from '../connectors/sources/githubConnector.js';
 import type { McpConnectorClient } from '../connectors/sources/mcpConnector.js';
 import { withTempWorkspaceAsync } from './_helpers.js';
@@ -32,7 +34,11 @@ const fakeGithubClient: GithubConnectorClient = {
     return [];
   },
   async listIssues() {
-    return [{ number: 1, title: 'Issue', body: 'body', state: 'open', updatedAt: '2026-01-02T00:00:00.000Z' }];
+    return [{
+      number: 1, title: 'Issue', body: 'body', state: 'open',
+      url: 'https://github.com/kinqsradiollc/BrainRouter/issues/1',
+      updatedAt: '2026-01-02T00:00:00.000Z',
+    }];
   },
   async listPullRequests() {
     return [];
@@ -217,6 +223,44 @@ test('runConnectorCheckpointCore records a run, persists documents, and returns 
     assert.equal(result.run.status, 'succeeded');
     assert.equal(result.run.documentsSeen, 1);
     assert.equal(result.run.documentsIndexed, 1);
+  });
+});
+
+test('a successful connector ingestion invokes the scoped Planner sink and updates its store', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const priorHome = process.env.BRAINROUTER_HOME;
+    process.env.BRAINROUTER_HOME = workspace;
+    try {
+      const created = createConnector(workspace, {
+        source: 'github',
+        name: 'GitHub work',
+        config: { owner: 'kinqsradiollc', repositories: ['BrainRouter'], includeIssues: true, includePullRequests: false, includeFiles: false },
+        credential: { mode: 'none' },
+        flows: ['checkpoint'],
+      });
+      const result = await runConnectorCheckpointCore(workspace, created.id, {
+        githubClient: () => fakeGithubClient,
+        projectPlannerIssues: async ({ connector: scopedConnector, documents }) => {
+          const projected = await refreshLocalPlannerFromConnectorIssues('user-1', {
+            connectorId: scopedConnector.id,
+            source: scopedConnector.source,
+            sourceLabel: scopedConnector.name,
+            documents,
+          });
+          return projected.created + projected.updated;
+        },
+      });
+
+      const state = readPlanner('user-1');
+      assert.equal(result.ok, true);
+      assert.equal(result.plannerItemsProjected, 1);
+      assert.equal(Object.values(state.items)[0]?.provenance?.sourceUrl,
+        'https://github.com/kinqsradiollc/BrainRouter/issues/1');
+      assert.equal(state.outbox.operations.length, 0);
+    } finally {
+      if (priorHome === undefined) delete process.env.BRAINROUTER_HOME;
+      else process.env.BRAINROUTER_HOME = priorHome;
+    }
   });
 });
 

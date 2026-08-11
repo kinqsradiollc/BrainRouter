@@ -14,11 +14,12 @@ Match the workspace's existing runner:
 | `brainrouter/` (the brain) | **Vitest** for unit + `node:test` for PG integration (`"test": "vitest run && npm run test:integration"`) |
 | `brainrouter-cli`, `packages/core`, `packages/agent-protocol`, `brainrouter-benchmark` | compile with `tsc` then `node --test "dist/**/*.test.js"` |
 | `brainrouter-desktop` | `node --test "dist-electron/**/*.test.js"` (electron-main) + `tsx --test` over `src/**` (renderer) |
+| `brainrouter-dashboard` | `tsx --test` over `app/**`, `components/**`, and `lib/**` (`*.test.ts` and `*.test.tsx`) |
 
 `jest`/`ts-jest` sit in root devDependencies but **no workspace uses Jest — do not
-write Jest tests.** `brainrouter-dashboard`, `packages/hooks`, `packages/sdk`,
-`packages/types` have **no `test` script** and are silently skipped by the root
-`-ws --if-present` fan-out — adding a test script to one suddenly gates CI.
+write Jest tests.** `packages/hooks`, `packages/sdk`, and `packages/types` have
+**no `test` script** and are silently skipped by the root `-ws --if-present`
+fan-out — adding a test script to one suddenly gates CI.
 
 - **Why:** each runner matches the runtime of the code under test; a test for the
   wrong runner simply never executes.
@@ -29,6 +30,8 @@ write Jest tests.** `brainrouter-dashboard`, `packages/hooks`, `packages/sdk`,
 - Brain: `brainrouter/src/__tests__/` — `*.test.ts` (Vitest) and `*.node-test.ts`
   (integration).
 - CLI: `brainrouter-cli/src/tests/`. Core: `packages/core/src/tests/`.
+- Dashboard: colocated under `app/**`, `components/**`, or `lib/**`, using
+  `*.test.ts` or `*.test.tsx`.
 - Desktop: **colocated** next to source (`electron/foo.test.ts` beside `foo.ts`;
   `src/lib/**/bar.test.ts` beside `bar.ts`).
 - Shared fixtures live in a `_helpers.ts` in the same tests dir — the underscore
@@ -245,3 +248,26 @@ hosted CI is the full merge gate. The root `verify` script remains available for
 cross-cutting/high-risk work, release/publish work, and CI-parity diagnosis.
 
 - **Evidence:** `.githooks/pre-commit`, `scripts/install-git-hooks.mjs`, `.githooks/README.md`
+
+### 14. ADR-038 Planner visual/usability CI is a blocking three-lane contract
+
+`.github/workflows/planner-visual.yml` runs on every pull request and exposes the
+stable `Planner Visual & Usability (required)` aggregate check. Its three lanes
+exercise the deterministic 20-item fixture in the actual supported hosts:
+
+- Dashboard Chromium on Linux at 1440×900, 768×900, and 390×844; the 1440×900
+  lane also covers light and forced-colours/reduced-motion presentation.
+- Native Electron on hosted macOS and Windows at 1280×840 and the 900×600
+  minimum; the minimum viewport also covers 200% zoom, light, and
+  forced-colours/reduced-motion presentation where the platform supports it.
+
+Every lane retains its JSON report and screenshots from
+`brainrouter-desktop/.planner-visual/` even when a gate fails. Automation blocks
+on density, overflow, contrast, keyboard focus, accessible names/states,
+currentness, core interactions, and unexplained console/network errors. Before a
+release, a human must inspect the retained viewport/theme screenshots and the
+accessibility gate results; unexplained visual drift or an accessibility failure
+blocks release even when unrelated suites are green.
+
+- **Evidence:** `.github/workflows/planner-visual.yml`,
+  `brainrouter-desktop/scripts/planner-visual-gate.mjs`

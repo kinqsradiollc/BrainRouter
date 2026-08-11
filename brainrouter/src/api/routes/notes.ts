@@ -6,10 +6,13 @@
  * naming a user would be an IDOR waiting to happen — the same class of bug as
  * CWE-639, which this repository has already shipped once.
  *
- * Two endpoints carry the sync contract (ADR-028 D11):
+ * Two backwards-compatible endpoints carry device sync (ADR-028 D11):
  *
  *   GET  /api/notes/pull?since=<cursor>  — changes, plus the server clock
  *   POST /api/notes/push                 — operations, MERGED server-side
+ *
+ * ADR-038 adds `/mutate` as the higher-level browser gesture seam; it composes
+ * the same push path rather than becoming another Notes writer.
  *
  * The lease routes are the other half of B2: the lock lives on the server
  * because that is the only place two devices can see the same one.
@@ -21,6 +24,11 @@ import * as notes from "../../memory/notes/backend.js";
 import {
   MAX_COMMENT_LENGTH, type LeaseOutcome, type NoteExportFormat,
 } from "@kinqs/brainrouter-core/notes";
+import {
+  EMPTY_NOTES_MUTATION_SYNC, NOTES_EDITING_CAPABILITIES,
+  NOTES_EDITING_CONTRACT_VERSION, REMOTE_NOTES_HISTORY_STATE,
+  parseNotesMutationRequest, type NotesMutationErrorCode,
+} from "@kinqs/brainrouter-core/notes/editing";
 
 export const notesRouter = Router();
 notesRouter.use(requireAnyAuth);
@@ -108,25 +116,106 @@ notesRouter.post("/push", async (req: AuthedRequest, res) => {
   const valid: notes.NotePushOperation[] = [];
   const rejected: Array<{ idempotencyKey: string; reason: string }> = [];
   for (const raw of operations) {
-    const op = raw as Record<string, unknown>;
+    const parsed = notes.parseNotePushOperation(raw);
     // Malformed operations are REJECTED individually rather than failing the
     // batch: one bad entry must not strand every good one in the client's
     // outbox, where it would retry forever.
-    if (typeof op.idempotencyKey !== "string" || typeof op.itemId !== "string") {
-      rejected.push({
-        idempotencyKey: typeof op.idempotencyKey === "string" ? op.idempotencyKey : "unknown",
-        reason: "The operation is missing an idempotency key or block id.",
-      });
-      continue;
-    }
-    valid.push(op as unknown as notes.NotePushOperation);
+    if (!parsed.ok) rejected.push({ idempotencyKey: parsed.idempotencyKey, reason: parsed.reason });
+    else valid.push(parsed.value);
   }
 
   try {
     const outcome = await notes.pushOperations(req.orgId!, req.userId!, valid);
-    res.json({ accepted: outcome.accepted, rejected: [...rejected, ...outcome.rejected] });
+    res.json({
+      accepted: outcome.accepted,
+      rejected: [...rejected, ...outcome.rejected],
+      fenced: outcome.fenced ?? [],
+    });
   } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : "push failed" });
+    console.error("notes push failed", error);
+    res.status(503).json({ error: "The Notes service could not apply this push. Retry it." });
+  }
+});
+
+/**
+ * ADR-038 — the capability document a Dashboard adapter gates controls from.
+ *
+ * In particular it says remote undo and JSON attachment bytes are unavailable;
+ * a control that cannot be honoured is hidden/disabled from this response
+ * rather than wired to a successful no-op.
+ */
+notesRouter.get("/mutate/capabilities", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  res.json(NOTES_EDITING_CAPABILITIES);
+});
+
+function mutationStatus(code: NotesMutationErrorCode): number {
+  switch (code) {
+    case "invalid_request": return 400;
+    case "not_found": return 404;
+    case "locked":
+    case "refused":
+    case "idempotency_conflict":
+    case "stale_conflict":
+    case "sync_rejected": return 409;
+    case "limit_exceeded": return 413;
+    case "unsupported_capability": return 422;
+    case "internal_error": return 500;
+  }
+}
+
+/**
+ * The one writable Notes host seam for browser renderers.
+ *
+ * `/push` remains the backwards-compatible device outbox transport. This route
+ * accepts the higher-level operation vocabulary from Core, executes Core's pure
+ * gesture/database policy, and reports the primitive sync outcome. Org/user
+ * scope comes exclusively from the authenticated request, never the body.
+ */
+notesRouter.post("/mutate", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  const parsed = parseNotesMutationRequest(req.body);
+  if (!parsed.ok) {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const operation = body.operation && typeof body.operation === "object"
+      ? (body.operation as { type?: unknown }).type
+      : undefined;
+    res.status(400).json({
+      version: NOTES_EDITING_CONTRACT_VERSION,
+      requestId: typeof body.requestId === "string" ? body.requestId.slice(0, 128) : "invalid",
+      operation: typeof operation === "string" ? operation : "unknown",
+      ok: false,
+      error: {
+        code: "invalid_request",
+        detail: `${parsed.error.path}: ${parsed.error.detail}`,
+        retryable: false,
+      },
+      sync: EMPTY_NOTES_MUTATION_SYNC,
+      history: REMOTE_NOTES_HISTORY_STATE,
+    });
+    return;
+  }
+
+  try {
+    const outcome = await notes.mutateNotes(
+      req.orgId!, req.userId!, parsed.value, Date.now(),
+    );
+    res.status(outcome.ok ? 200 : mutationStatus(outcome.error.code)).json(outcome);
+  } catch (error) {
+    console.error("notes mutation failed", error);
+    res.status(500).json({
+      version: NOTES_EDITING_CONTRACT_VERSION,
+      requestId: parsed.value.requestId,
+      operation: parsed.value.operation.type,
+      ok: false,
+      error: {
+        code: "internal_error",
+        detail: "The server could not apply this Notes mutation. Retry the request.",
+        retryable: true,
+      },
+      sync: EMPTY_NOTES_MUTATION_SYNC,
+      history: REMOTE_NOTES_HISTORY_STATE,
+    });
   }
 });
 
@@ -181,6 +270,18 @@ notesRouter.get("/favourites", async (req: AuthedRequest, res) => {
   res.json({ favourites: await notes.listFavourites(req.orgId!, req.userId!) });
 });
 
+/** C5 — full scoped tombstone projection; never inferred from bounded `/pull`. */
+notesRouter.get("/trash", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  res.json({ entries: await notes.listTrash(req.orgId!, req.userId!) });
+});
+
+/** C5 — comments remain discoverable when their target block is in the trash. */
+notesRouter.get("/comments/orphaned", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  res.json({ threads: await notes.listOrphanedCommentThreads(req.orgId!, req.userId!) });
+});
+
 /**
  * One page, with its blocks in document order.
  *
@@ -226,6 +327,31 @@ notesRouter.get("/databases/:id", async (req: AuthedRequest, res) => {
     return;
   }
   res.json(view);
+});
+
+/** F2 — columns on the databases reached by one relation property. */
+notesRouter.get("/databases/:id/rollup-targets", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  const relation = typeof req.query.relation === "string" ? req.query.relation.trim() : "";
+  if (!relation || relation.length > 256 || /[\u0000-\u001f\u007f]/u.test(relation)) {
+    res.status(400).json({ ok: false, detail: "relation must be a valid property id" });
+    return;
+  }
+  const outcome = await notes.readRollupTargetProperties(
+    req.orgId!, req.userId!, String(req.params.id), relation,
+  );
+  if (!outcome.ok) {
+    res.status(outcome.reason === "refused" ? 409 : 404).json({
+      ok: false,
+      detail: outcome.detail,
+    });
+    return;
+  }
+  res.json({
+    ok: true,
+    properties: outcome.value.properties.map(({ id, name, type }) => ({ id, name, type })),
+    databases: outcome.value.databases,
+  });
 });
 
 notesRouter.get("/search", async (req: AuthedRequest, res) => {

@@ -67,6 +67,8 @@ export interface PushResponse {
   accepted: string[];
   /** Keys the server refused, with a reason the human can read. */
   rejected: Array<{ idempotencyKey: string; reason: string }>;
+  /** Accepted operations whose content was kept as a fenced conflict. */
+  fenced?: Array<{ idempotencyKey: string; itemId: string; reason: string }>;
 }
 
 export interface SyncTransport<T> {
@@ -87,6 +89,8 @@ export interface SyncRecords<S extends SyncState, T> {
   read(state: S, id: string): T | undefined;
   write(state: S, id: string, record: T): void;
   merge(local: T, remote: T, fetchedAt: string): { value: T; conflicted: boolean };
+  /** Highest embedded stamp, so a fast peer is absorbed before our next edit. */
+  observedClock?(record: T): Hlc | undefined;
 }
 
 export interface SyncResult {
@@ -126,6 +130,48 @@ export function applyRemoteRecord<S extends SyncState, T>(
   const merged = records.merge(local, remote, fetchedAt);
   records.write(state, id, merged.value);
   return { conflicted: merged.conflicted };
+}
+
+/**
+ * A push response must account for exactly the operations in its request.
+ * Anything else is an untrusted/partial acknowledgement and must leave every
+ * operation durable: accepting an extraneous key can delete work that was not
+ * sent, while omitting a key can leave it retrying forever without a reason.
+ */
+export function invalidPushPartition(
+  batch: readonly Pick<OutboxOperation, 'idempotencyKey'>[],
+  response: unknown,
+): string | null {
+  if (!response || typeof response !== 'object' || Array.isArray(response)) {
+    return 'The server returned an invalid Planner acknowledgement.';
+  }
+  const record = response as Record<string, unknown>;
+  if (!Array.isArray(record.accepted) || !Array.isArray(record.rejected)) {
+    return 'The server returned an incomplete Planner acknowledgement.';
+  }
+  const expected = new Set(batch.map((operation) => operation.idempotencyKey));
+  if (expected.size !== batch.length) return 'The Planner batch contains duplicate idempotency keys.';
+  const seen = new Set<string>();
+  for (const key of record.accepted) {
+    if (typeof key !== 'string' || !expected.has(key) || seen.has(key)) {
+      return 'The server acknowledged an unknown or duplicate Planner operation.';
+    }
+    seen.add(key);
+  }
+  for (const rejection of record.rejected) {
+    if (!rejection || typeof rejection !== 'object' || Array.isArray(rejection)) {
+      return 'The server returned an invalid Planner rejection.';
+    }
+    const value = rejection as Record<string, unknown>;
+    if (typeof value.idempotencyKey !== 'string' || !expected.has(value.idempotencyKey)
+      || seen.has(value.idempotencyKey) || typeof value.reason !== 'string' || !value.reason.trim()) {
+      return 'The server rejected an unknown or duplicate Planner operation.';
+    }
+    seen.add(value.idempotencyKey);
+  }
+  return seen.size === expected.size
+    ? null
+    : 'The server omitted a Planner operation from its acknowledgement.';
 }
 
 /**
@@ -171,6 +217,8 @@ export async function syncRecords<S extends SyncState, T>(
 
   const fetchedAt = new Date(nowMs).toISOString();
   for (const remote of pull.items) {
+    const observed = records.observedClock?.(remote);
+    if (observed) state.clock = hlcReceive(state.clock, observed, nowMs);
     const { conflicted } = applyRemoteRecord(state, remote, fetchedAt, records);
     result.pulled += 1;
     if (conflicted) result.conflicted.push(records.idOf(remote));
@@ -192,6 +240,15 @@ export async function syncRecords<S extends SyncState, T>(
       state.outbox = recordFailure(state.outbox, op.idempotencyKey, 'Could not reach the server.');
     }
     result.offline = true;
+    return result;
+  }
+
+  const invalidPartition = invalidPushPartition(batch, push);
+  if (invalidPartition) {
+    for (const op of batch) {
+      state.outbox = recordFailure(state.outbox, op.idempotencyKey, invalidPartition);
+      result.rejected.push({ idempotencyKey: op.idempotencyKey, reason: invalidPartition });
+    }
     return result;
   }
 

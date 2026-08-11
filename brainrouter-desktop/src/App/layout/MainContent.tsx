@@ -9,7 +9,6 @@ import type { WorkspaceMode } from '../../components/layout/ActivityBar.js';
 import React, { Suspense, lazy } from 'react';
 import { Icon } from '../../icons.js';
 import { TrackView } from '../../track/TrackView.js';
-import { PlannerModeContainer } from '../../planner/PlannerModeContainer.js';
 /**
  * Notes is lazy for the reason the panels above it are (see renderPanelBody):
  * a block editor, five database views and their controls are ~60KB of initial
@@ -23,6 +22,10 @@ import { PlannerModeContainer } from '../../planner/PlannerModeContainer.js';
  */
 const NotesModeContainer = lazy(() =>
   import('../../notes/NotesModeContainer.js').then((m) => ({ default: m.NotesModeContainer })));
+// The shared Planner now carries its interaction and calendar model. Keep that
+// mode-sized code out of Chat's initial entry just as we do for Notes.
+const PlannerModeContainer = lazy(() =>
+  import('../../planner/PlannerModeContainer.js').then((m) => ({ default: m.PlannerModeContainer })));
 import { parseWorkspaceRef } from '@kinqs/brainrouter-core/workspace/references';
 /**
  * Meetings owns the capture, recovery, queue and transcript surfaces. Keep that
@@ -303,7 +306,9 @@ export function MainContent(p: MainContentProps): React.ReactElement {
         // ADR-028 G6 — cross-workspace, so it renders WITHOUT the side panel
         // rail: a personal planner has no per-workspace tabs to carry.
         <div className="workrow" ref={workrowRef}>
-          <PlannerModeContainer onOpenNotes={() => setMode('notes')} onOpenRef={openWorkspaceRef} />
+          <Suspense fallback={<div className="br-planner" />}>
+            <PlannerModeContainer onOpenNotes={() => setMode('notes')} onOpenRef={openWorkspaceRef} />
+          </Suspense>
         </div>
       ) : mode === 'track' ? (
         <div className="workrow track-workrow" ref={workrowRef}>

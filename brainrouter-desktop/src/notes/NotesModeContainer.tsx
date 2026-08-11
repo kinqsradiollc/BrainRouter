@@ -12,38 +12,54 @@
  * is one people stop writing in.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-// Part F's block styles ride with this chunk rather than with the app's initial
-// stylesheet — see the file's own header for why, and for what would make a rule
-// belong back in the shared sheet.
-import '../styles/surfaces/notesBlocks.css';
-import { NotesMode, type BlockOpOutcome, type CodeSymbolPick, type NotesOps, type NotesShellState } from './NotesMode.js';
-import type { NoteBlockView, NoteSendTarget, NoteTreeRepairView } from '../lib/notes/notesView.js';
+// The shared stylesheet rides with this lazy chunk rather than the app entry.
+import '@kinqs/brainrouter-ui/notes.css';
+import {
+  NotesMode,
+  blockLinkUri,
+  exportNotice,
+  isQuickFindShortcut,
+  mentionCandidates,
+  newPageIntent,
+  noteBlockUri,
+  selectedPageOrTop,
+  withAncestorsExpanded,
+  type BlockOpOutcome,
+  type BookmarkAnswer,
+  type CodeSymbolPick,
+  type DatabaseHostOps,
+  type DatabaseReadDto,
+  type FavouriteRow,
+  type InputRuleTransformDto,
+  type MentionCandidate,
+  type MentionSources,
+  type NoteBlockView,
+  type NoteExportDto,
+  type NoteFileDto,
+  type NoteImageDto,
+  type NoteSendTarget,
+  type NotesHostCapabilities,
+  type NotesOps,
+  type NotesShellState,
+  type NoteTreeRepairView,
+  type OrphanedThreadDto,
+  type PageUndoDto,
+  type PropertyCatalogDto,
+  type QuickFindHit,
+  type RollupTargetsDto,
+  type SaveViewInput,
+  type SlashCommandDto,
+  type SyncedReadDto,
+  type TemplateRowDto,
+  type TrashEntryDto,
+  type WorkspaceResolutionDto,
+} from '@kinqs/brainrouter-ui/notes';
 import { bridgeQuery } from '../lib/bridgeQuery.js';
-import { codeFileUri, codeSymbolUri, noteBlockUri } from '../lib/workspace/crossMode.js';
-import { selectedPageOrTop, withAncestorsExpanded } from '../lib/notes/pageTree.js';
-import { isQuickFindShortcut, type QuickFindHit } from '../lib/notes/quickFind.js';
-import { newPageIntent } from '../lib/notes/pageHeader.js';
-import { blockLinkUri } from '../lib/notes/blockSelection.js';
-import { mentionCandidates, type MentionCandidate, type MentionSources } from '../lib/notes/mentionPicker.js';
-import type { InputRuleTransformDto } from '../lib/notes/blockEditing.js';
-import type { SlashCommandDto } from '../lib/notes/slashMenu.js';
+import { codeFileUri, codeSymbolUri } from '../lib/workspace/crossMode.js';
 import { createMeetingsOps } from '../components/meetings/meetingsOps.js';
-import type { FavouriteRow, TrashEntryDto } from '../lib/notes/sidebar.js';
-import type { DatabaseHostOps, SaveViewInput } from './databaseOps.js';
-import type {
-  DatabaseReadDto, NoteFileDto, PropertyCatalogDto, RollupTargetsDto,
-} from '../lib/notes/database.js';
 // Part F — the table seed comes from core, so `/table` and an empty table's own
 // button produce a table of the same width.
 import { defaultTableHeader, emptyTableRow, NEW_TABLE_COLUMNS } from '@kinqs/brainrouter-core/notes/editing';
-import type { PageUndoDto } from '../lib/notes/pageUndo.js';
-import type { OrphanedThreadDto } from '../lib/notes/commentThread.js';
-import type { TemplateRowDto } from '../lib/notes/templates.js';
-import type { NoteImageDto } from '../lib/notes/imageView.js';
-import type { BookmarkAnswer } from '../lib/notes/bookmarkView.js';
-import type { WorkspaceResolutionDto } from '../lib/notes/embedView.js';
-import type { SyncedReadDto } from '../lib/notes/syncedView.js';
-import { exportNotice, type NoteExportDto } from '../lib/notes/exportView.js';
 // F3 — the shell's own download, which already asks the person where their
 // files go. A second save path in Notes would be a second answer to that.
 import { download } from '../lib/format.js';
@@ -426,20 +442,22 @@ export function NotesModeContainer({
      * picture in a block holds, resolved by the same function. A files column
      * with its own store would be the second store D3 exists to refuse.
      */
-    attachFile: async (name, dataBase64) => {
-      const stored = await bridgeQuery<{ ok?: boolean; ref?: string; error?: string }>(
-        'notes-file-attach', { name, dataBase64 },
-      ).catch(() => null);
-      if (!stored?.ok || !stored.ref) {
-        return { ok: false, error: stored?.error ?? 'That file could not be stored.' };
-      }
-      return { ok: true, ref: stored.ref };
-    },
-    describeFiles: async (ids) => {
-      const answer = await bridgeQuery<{ files?: NoteFileDto[] }>('notes-file-describe', {
-        ids: [...ids],
-      }).catch(() => null);
-      return answer?.files ?? [];
+    files: {
+      attach: async (name, dataBase64) => {
+        const stored = await bridgeQuery<{ ok?: boolean; ref?: string; error?: string }>(
+          'notes-file-attach', { name, dataBase64 },
+        ).catch(() => null);
+        if (!stored?.ok || !stored.ref) {
+          return { ok: false, error: stored?.error ?? 'That file could not be stored.' };
+        }
+        return { ok: true, ref: stored.ref };
+      },
+      describe: async (ids) => {
+        const answer = await bridgeQuery<{ files?: NoteFileDto[] }>('notes-file-describe', {
+          ids: [...ids],
+        }).catch(() => null);
+        return answer?.files ?? [];
+      },
     },
     openPage: (pageId) => live.current.openPage(pageId),
     openRef: (uri) => live.current.onOpenRef?.(uri),
@@ -474,7 +492,68 @@ export function NotesModeContainer({
     return null;
   }, [mutate]);
 
+  /** Native and shell effects the Desktop host can genuinely perform. */
+  const capabilities = useMemo<NotesHostCapabilities>(() => ({
+    images: {
+      attach: (blockId, file) => storeImage(
+        blockId, 'notes-image-attach', { name: file.name, dataBase64: file.dataBase64 },
+        'That picture could not be stored.',
+      ),
+      storeRemote: (blockId, url) => storeImage(
+        blockId, 'notes-image-fetch', { url }, 'That address could not be fetched.',
+      ),
+      read: (attachmentId) => bridgeQuery<NoteImageDto>('notes-image-read', { id: attachmentId })
+        .catch(() => null),
+    },
+    bookmarks: {
+      preview: (url) => bridgeQuery<BookmarkAnswer>('notes-bookmark-preview', { url })
+        .catch(() => null),
+      openExternal: async (url) => {
+        const opened = await bridgeQuery<{ ok?: boolean; error?: string }>('action:open-external', { url })
+          .catch(() => null);
+        if (opened?.ok) return null;
+        return opened?.error
+          ? `This link could not be opened: ${opened.error}.`
+          : 'This link could not be opened from here.';
+      },
+    },
+    liveReferences: {
+      resolve: (uri) => bridgeQuery<WorkspaceResolutionDto>('workspace-resolve', { uri })
+        .catch(() => null),
+      readSynced: (blockId) => bridgeQuery<SyncedReadDto>('notes-synced-read', { id: blockId })
+        .catch(() => null),
+    },
+    export: {
+      exportPage: async (blockId, format) => {
+        const written = await bridgeQuery<NoteExportDto>('notes-export', { id: blockId, format })
+          .catch(() => null);
+        if (!written?.ok || typeof written.content !== 'string') {
+          return written?.error ?? 'That page could not be written out.';
+        }
+        download(written.filename ?? 'note.md', written.content);
+        return exportNotice(written);
+      },
+    },
+    clipboard: {
+      copyBlockLink: (id) => {
+        void navigator.clipboard?.writeText(blockLinkUri(id)).catch(() => {});
+      },
+    },
+    history: {
+      undo: () => bridgeQuery<PageUndoDto>('notes-undo', { pageId: openPageId })
+        .then(async (answer) => { await refresh(); return answer; })
+        .catch(() => null),
+      redo: () => bridgeQuery<PageUndoDto>('notes-redo', { pageId: openPageId })
+        .then(async (answer) => { await refresh(); return answer; })
+        .catch(() => null),
+      state: () => bridgeQuery<{ undo: string | null; redo: string | null }>(
+        'notes-undo-state', { pageId: openPageId },
+      ).catch(() => null),
+    },
+  }), [openPageId, refresh, storeImage]);
+
   const ops: NotesOps = {
+    capabilities,
     // A new line belongs to the page being read, or it lands at the top level
     // and the person watches it appear on a page they are not looking at.
     addBlock: async (afterId, kind, level) => {
@@ -601,76 +680,6 @@ export function NotesModeContainer({
     },
 
     /**
-     * D3 — the picture is stored ONCE and the block points at it.
-     *
-     * Returns the error rather than throwing, because the block is rendering the
-     * outcome: a rejected promise would make "why is there no picture" the
-     * component's problem to remember, which is how a blank frame gets shipped.
-     */
-    attachImage: (blockId, file) => storeImage(
-      blockId, 'notes-image-attach', { name: file.name, dataBase64: file.dataBase64 },
-      'That picture could not be stored.',
-    ),
-    storeRemoteImage: (blockId, url) => storeImage(
-      blockId, 'notes-image-fetch', { url }, 'That address could not be fetched.',
-    ),
-    readImage: (attachmentId) => bridgeQuery<NoteImageDto>('notes-image-read', { id: attachmentId })
-      .catch(() => null),
-
-    // A3 — the preview is READ, never stored on the block: a title cached into
-    // the note is the snapshot that goes quietly wrong when the page changes.
-    previewBookmark: (url) => bridgeQuery<BookmarkAnswer>('notes-bookmark-preview', { url })
-      .catch(() => null),
-
-    // A3 — the same `workspace-resolve` the agent's verbs call (C3). A second
-    // resolution path would render the same reference differently in two places.
-    resolveRef: (uri) => bridgeQuery<WorkspaceResolutionDto>('workspace-resolve', { uri })
-      .catch(() => null),
-
-    // F3 — a mirror's state and the SOURCE's rows. Host-side because the source
-    // usually lives on a page this renderer is not holding; the rows come back
-    // with the source's own ids, which is what makes editing either place edit
-    // the one block.
-    readSynced: (blockId) => bridgeQuery<SyncedReadDto>('notes-synced-read', { id: blockId })
-      .catch(() => null),
-
-    /**
-     * F3 — "can I leave", answered with a file.
-     *
-     * The writing is core's and the SAVING is the shell's own download, which
-     * already asks the person where their files go. The omissions come back with
-     * the text and are shown: an export that quietly dropped what it could not
-     * carry would look complete, which is the outcome F3 rules out.
-     */
-    exportPage: async (blockId, format) => {
-      const written = await bridgeQuery<NoteExportDto>('notes-export', { id: blockId, format })
-        .catch(() => null);
-      if (!written?.ok || typeof written.content !== 'string') {
-        return written?.error ?? 'That page could not be written out.';
-      }
-      download(written.filename ?? 'note.md', written.content);
-      return exportNotice(written);
-    },
-
-    /**
-     * A bookmark leaves the app through the shell's EXISTING opener, which is
-     * https-only by policy — a note is not the place to widen what this app
-     * hands to the operating system.
-     *
-     * Its refusal is returned rather than dropped: an `http://` link a person
-     * pasted will preview and will not open, and a card that said nothing about
-     * that would be a button that does nothing.
-     */
-    openExternal: async (url) => {
-      const opened = await bridgeQuery<{ ok?: boolean; error?: string }>('action:open-external', { url })
-        .catch(() => null);
-      if (opened?.ok) return null;
-      return opened?.error
-        ? `This link could not be opened: ${opened.error}.`
-        : 'This link could not be opened from here.';
-    },
-
-    /**
      * E1 — the gestures, every one of them core's.
      *
      * These used to be re-derived here: `indent` looked for the previous
@@ -720,31 +729,30 @@ export function NotesModeContainer({
     },
     searchMentions: async (query): Promise<MentionCandidate[]> => {
       const sources = await loadMentionSources();
-      // Ranked in `lib/notes/mentionPicker`, not here: the same few characters
+      // Ranked by the shared Notes mention picker, not here: the same few characters
       // are typed at this menu and at the slash menu, and a second ranking
       // would make one of them behave differently for no reason a person could
       // see.
       return mentionCandidates(sources, query);
     },
-    copyLink: (id) => {
-      // A1 — the same spelling every other surface writes. Best effort: a
-      // clipboard a browser refuses is not something to report as a failure of
-      // the note.
-      void navigator.clipboard?.writeText(blockLinkUri(id)).catch(() => {});
-    },
-    beginEdit: (id) => {
-      void bridgeQuery<{ ok?: boolean; lease?: { epoch: number } }>('notes-begin-edit', { id })
-        .then((out) => { if (out?.ok && out.lease) held.current.set(id, out.lease.epoch); })
-        // A refused lease is not an error to show here: the block already
-        // renders read-only with the holder's name from `notes-read`.
-        .catch(() => {});
+    beginEdit: async (id) => {
+      const out = await bridgeQuery<{
+        ok?: boolean;
+        lease?: { blockId?: string; epoch?: number };
+      }>('notes-begin-edit', { id }).catch(() => null);
+      if (!out?.ok || out.lease?.blockId !== id
+        || !Number.isSafeInteger(out.lease.epoch) || Number(out.lease.epoch) < 1) return false;
+      held.current.set(id, Number(out.lease.epoch));
+      return true;
     },
     endEdit: (id) => {
       const epoch = held.current.get(id);
       held.current.delete(id);
       if (epoch !== undefined) void bridgeQuery('notes-end-edit', { id, epoch }).catch(() => {});
     },
-    resolveConflict: (id, field, keep) => void mutate('notes-resolve', { id, field, keep }),
+    resolveConflict: (id, field, keep, expected) => void mutate('notes-resolve', {
+      id, field, keep, expected,
+    }),
 
     /**
      * ADR-029 C2 — the line becomes a record in another mode, and the note
@@ -813,21 +821,6 @@ export function NotesModeContainer({
         .then((res) => setBacklinkCounts((current) => ({ ...current, [id]: res?.blockIds?.length ?? 0 })))
         .catch(() => {});
     },
-
-    /**
-     * F4 — ⌘Z that ran out of typing in a block. The page is threaded because
-     * core's stacks are per page: undoing something off screen is the one thing
-     * ⌘Z must never do.
-     */
-    undoPage: () => bridgeQuery<PageUndoDto>('notes-undo', { pageId: openPageId })
-      .then(async (answer) => { await refresh(); return answer; })
-      .catch(() => null),
-    redoPage: () => bridgeQuery<PageUndoDto>('notes-redo', { pageId: openPageId })
-      .then(async (answer) => { await refresh(); return answer; })
-      .catch(() => null),
-    undoState: () => bridgeQuery<{ undo: string | null; redo: string | null }>(
-      'notes-undo-state', { pageId: openPageId },
-    ).catch(() => null),
 
     /* F3 — comments. They sync, so they go through the store like everything
        else; they are NOT on the undo stack, for the reason `writeComment`

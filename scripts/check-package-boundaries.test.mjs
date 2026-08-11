@@ -54,7 +54,7 @@ test('leaf packages cannot depend on Core', () => {
   );
 });
 
-test('leaf and hooks manifest contracts reject dependency drift', () => {
+test('leaf and browser UI manifest contracts reject dependency drift', () => {
   assert.match(
     checkManifest('types', {
       name: '@kinqs/brainrouter-types',
@@ -71,6 +71,51 @@ test('leaf and hooks manifest contracts reject dependency drift', () => {
       },
     })[0].reason,
     /react must remain a peer dependency/,
+  );
+  assert.match(
+    checkManifest('ui', {
+      name: '@kinqs/brainrouter-ui',
+      dependencies: { '@kinqs/brainrouter-core': '^0.4.19' },
+      peerDependencies: { react: '^19.0.0' },
+    })[0].reason,
+    /react-dom must remain a peer dependency/,
+  );
+  assert.match(
+    checkManifest('ui', {
+      name: '@kinqs/brainrouter-ui',
+      dependencies: { '@kinqs/brainrouter-core': '^0.4.19' },
+      peerDependencies: {
+        react: '^19.0.0',
+        'react-dom': '^18.3.1 || ^19.0.0',
+      },
+    }).find((row) => row.reason.includes('react peer range')).reason,
+    /\^18\.3\.1 \|\| \^19\.0\.0/,
+  );
+  assert.match(
+    checkManifest('ui', {
+      name: '@kinqs/brainrouter-ui',
+      dependencies: { '@kinqs/brainrouter-core': '^0.4.19', clsx: '^2.0.0' },
+      peerDependencies: {
+        react: '^18.3.1 || ^19.0.0',
+        'react-dom': '^18.3.1 || ^19.0.0',
+      },
+    }).find((row) => row.reason.includes('runtime dependencies')).reason,
+    /only @kinqs\/brainrouter-core/,
+  );
+});
+
+test('shared UI can consume only the browser-safe Notes editing Core seam', () => {
+  assert.equal(
+    fixture('ui', 'packages/ui/src/notes/fixture.ts', '@kinqs/brainrouter-core/notes/editing'),
+    undefined,
+  );
+  assert.match(
+    fixture('ui', 'packages/ui/src/notes/fixture.ts', '@kinqs/brainrouter-core/planner').reason,
+    /only through the browser-safe notes\/editing entrypoint/,
+  );
+  assert.match(
+    fixture('ui', 'packages/ui/src/notes/fixture.ts', '@kinqs/brainrouter-core').reason,
+    /only through the browser-safe notes\/editing entrypoint/,
   );
 });
 
@@ -89,6 +134,10 @@ test('Dashboard cannot import Core or protocol', () => {
   assert.match(
     fixture('dashboard', 'brainrouter-dashboard/app/fixture.ts', '@kinqs/brainrouter-agent-protocol').reason,
     /may not depend on protocol/,
+  );
+  assert.equal(
+    fixture('dashboard', 'brainrouter-dashboard/app/fixture.tsx', '@kinqs/brainrouter-ui/planner'),
+    undefined,
   );
 });
 
@@ -112,6 +161,8 @@ test('SDK and hooks are browser-safe outside tests', () => {
   assert.equal(fixture('sdk', 'packages/sdk/src/client.test.ts', 'node:test'), undefined);
   assert.match(fixture('hooks', 'packages/hooks/src/useFixture.ts', 'node:events').reason, /browser-safe/);
   assert.equal(fixture('hooks', 'packages/hooks/src/useFixture.test.ts', 'node:test'), undefined);
+  assert.match(fixture('ui', 'packages/ui/src/planner/fixture.tsx', 'node:fs').reason, /browser-safe/);
+  assert.equal(fixture('ui', 'packages/ui/src/planner/fixture.test.ts', 'node:test'), undefined);
 });
 
 test('Core imports require curated public subpaths in every maintained consumer', () => {

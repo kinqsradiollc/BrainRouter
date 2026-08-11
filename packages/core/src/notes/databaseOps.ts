@@ -23,23 +23,22 @@
  * brings its data straight back. `removeProperty` leaves the values on the rows
  * for exactly the same reason.
  */
-import { isLiveBlock, NOTES_MODE, type NoteBlock } from './block.js';
+import { isLiveBlock, type NoteBlock } from './block.js';
 import {
-  coerceRowValue, DATABASE_BLOCK_KIND, defaultDatabaseSchema,
-  isDatabaseBlock, readDatabase, schemaIndex, TITLE_PROPERTY_ID,
-  type NoteDatabase,
+  DATABASE_BLOCK_KIND, isDatabaseBlock, readDatabase, type NoteDatabase,
 } from './database.js';
+import {
+  planAddDatabaseProperty, planCreateDatabaseRow, planDeleteDatabaseProperty,
+  planDeleteDatabaseView, planReorderDatabaseProperties, planSaveDatabaseView,
+  planSetDatabaseRowValue, planUpdateDatabaseProperty,
+  rollupTargetPropertiesFromBlocks,
+  type DatabaseMutationPlan,
+} from './databaseMutation.js';
 import {
   projectDatabase, type ComputeOptions, type DatabaseProjection,
 } from './databaseProjection.js';
-import { parseWorkspaceRef } from '../workspace/references/ref.js';
+import { type NoteDatabaseView, type NoteViewKind } from './databaseView.js';
 import {
-  isNoteViewKind, MAX_DATABASE_VIEWS,
-  type NoteDatabaseView, type NoteViewKind,
-} from './databaseView.js';
-import { MAX_FORMULA_LENGTH } from './formula/value.js';
-import {
-  isNotePropertyType, MAX_DATABASE_PROPERTIES,
   type NotePropertyDef, type NotePropertyType, type NoteRollupSpec,
   type NoteSelectOption, type NotePropertyValue,
 } from './properties.js';
@@ -57,7 +56,7 @@ const refuse = (
   detail: string,
 ): DatabaseOpResult<never> => ({ ok: false, reason, detail });
 
-/** The database block, or the reason it is not one. */
+/** Read-only lookup used by the rollup picker; writes use the pure planners. */
 function databaseAt(userId: string | undefined, id: string): DatabaseOpResult<NoteDatabase> {
   const block = getBlock(userId, id);
   if (!block || !isLiveBlock(block)) return refuse('not_found', `There is no database ${id}.`);
@@ -65,40 +64,20 @@ function databaseAt(userId: string | undefined, id: string): DatabaseOpResult<No
   return { ok: true, value: readDatabase(block) };
 }
 
-/**
- * Write a repaired schema back.
- *
- * `readDatabase` fills in what a stored schema was missing — a title column, a
- * default view — and this writes that repaired form rather than the stored one.
- * Otherwise the first edit to an older database would save a list that still had
- * the gap, and the repair would run again on every read forever.
- */
-function saveSchema(
+function writePlan<T>(
   userId: string | undefined,
-  database: NoteDatabase,
-  schema: readonly NotePropertyDef[],
+  blockId: string,
+  plan: DatabaseMutationPlan<T>,
   nowMs: number,
-): DatabaseOpResult<NotePropertyDef[]> {
-  if (schema.length > MAX_DATABASE_PROPERTIES) {
-    return refuse('refused', `A database holds at most ${MAX_DATABASE_PROPERTIES} properties.`);
-  }
-  const known = new Set(schema.map((def) => def.id));
-  // A view pointing at a column that has gone would render a header with no
-  // cells, and a board grouped by one would have nothing to make columns from.
-  // Both are trimmed with the schema so the two cannot drift.
-  const views = database.views.map(({ groupBy, ...view }) => ({
-    ...view,
-    visible: view.visible.filter((id) => known.has(id)),
-    ...(groupBy && known.has(groupBy) ? { groupBy } : {}),
-  }));
-
-  const written = updateBlock(userId, database.block.id, { schema, views }, nowMs);
+): DatabaseOpResult<T> {
+  if (!plan.ok) return plan;
+  const written = updateBlock(userId, blockId, plan.patch, nowMs);
   if (!written.ok) {
     return written.reason === 'locked'
       ? refuse('locked', written.detail)
       : refuse('refused', 'The database could not be written.');
   }
-  return { ok: true, value: [...schema] };
+  return { ok: true, value: plan.value };
 }
 
 /* --------------------------------------------------------------- creating */
@@ -148,15 +127,7 @@ export function listDatabases(userId: string | undefined): NoteBlock[] {
  * what every row's `props` key on. Two columns sharing an id would make one
  * column's values appear in the other.
  */
-export function propertyIdFor(name: string, taken: ReadonlySet<string>): string {
-  const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'property';
-  if (!taken.has(base)) return base;
-  for (let n = 2; n < 1000; n += 1) {
-    const candidate = `${base}-${n}`;
-    if (!taken.has(candidate)) return candidate;
-  }
-  return `${base}-${Date.now().toString(36)}`;
-}
+export { propertyIdFor } from './databaseMutation.js';
 
 export interface AddPropertyInput {
   name: string;
@@ -184,44 +155,12 @@ export function addProperty(
   input: AddPropertyInput,
   nowMs: number,
 ): DatabaseOpResult<NotePropertyDef> {
-  const found = databaseAt(userId, databaseId);
-  if (!found.ok) return found;
-  const database = found.value;
-
-  if (!isNotePropertyType(input.type)) {
-    return refuse('refused', `"${input.type}" is not a property type.`);
-  }
-  if (input.type === 'title' && database.schema.some((def) => def.type === 'title')) {
-    return refuse('refused', 'A database has one title column, and it is the row page’s own title.');
-  }
-
-  const taken = new Set(database.schema.map((def) => def.id));
-  const id = input.id && !taken.has(input.id) ? input.id : propertyIdFor(input.name, taken);
-  const def: NotePropertyDef = {
-    id,
-    name: input.name.trim() || id,
-    type: input.type,
-    ...(input.options && input.options.length > 0 ? { options: input.options } : {}),
-    ...(input.description ? { description: input.description } : {}),
-    // F2 — a formula column arrives WITH its expression, and a rollup with its
-    // configuration. A column added empty and configured on a second call is a
-    // column that renders "this has not been set up yet" in every row in
-    // between, which is the same window `create` gaining `fields` closes for a
-    // row (E6).
-    ...(typeof input.formula === 'string' ? { formula: input.formula } : {}),
-    ...(input.rollup ? { rollup: input.rollup } : {}),
-  };
-
-  const saved = saveSchema(userId, database, [...database.schema, def], nowMs);
-  if (!saved.ok) return saved;
-
-  // New columns are visible by default. A column added and then not shown is a
-  // column the person concludes was not added.
-  const views = database.views.map((view) => ({ ...view, visible: [...view.visible, id] }));
-  const written = updateBlock(userId, databaseId, { views }, nowMs);
-  if (!written.ok && written.reason === 'locked') return refuse('locked', written.detail);
-
-  return { ok: true, value: def };
+  return writePlan(
+    userId,
+    databaseId,
+    planAddDatabaseProperty(getBlock(userId, databaseId), databaseId, input),
+    nowMs,
+  );
 }
 
 export function updateProperty(
@@ -238,35 +177,12 @@ export function updateProperty(
   },
   nowMs: number,
 ): DatabaseOpResult<NotePropertyDef> {
-  const found = databaseAt(userId, databaseId);
-  if (!found.ok) return found;
-  const database = found.value;
-  const existing = schemaIndex(database.schema).get(propertyId);
-  if (!existing) return refuse('not_found', `There is no property "${propertyId}" in this database.`);
-
-  // The TYPE is not patchable. Changing a column's type would have to reinterpret
-  // every stored value, and a value that cannot be reinterpreted would be either
-  // silently emptied or silently kept in the old shape — the first loses data,
-  // the second leaves cells that no filter on the column can match. Adding a
-  // column of the new type and moving the values is visible work with a visible
-  // outcome.
-  //
-  // The FORMULA is patchable, and the difference is not arbitrary: nothing is
-  // stored under it. Rewriting an expression recomputes every row from the same
-  // data, so the worst outcome is a column that says why it cannot be worked out
-  // — where rewriting a type would have to reinterpret values somebody typed.
-  const next: NotePropertyDef = {
-    ...existing,
-    ...(patch.name !== undefined && patch.name.trim().length > 0 ? { name: patch.name.trim() } : {}),
-    ...(patch.options !== undefined ? { options: patch.options } : {}),
-    ...(patch.description !== undefined ? { description: patch.description } : {}),
-    ...(patch.formula !== undefined ? { formula: patch.formula.slice(0, MAX_FORMULA_LENGTH) } : {}),
-    ...(patch.rollup !== undefined ? { rollup: patch.rollup } : {}),
-  };
-
-  const schema = database.schema.map((def) => (def.id === propertyId ? next : def));
-  const saved = saveSchema(userId, database, schema, nowMs);
-  return saved.ok ? { ok: true, value: next } : saved;
+  return writePlan(
+    userId,
+    databaseId,
+    planUpdateDatabaseProperty(getBlock(userId, databaseId), databaseId, propertyId, patch),
+    nowMs,
+  );
 }
 
 /**
@@ -287,18 +203,12 @@ export function removeProperty(
   propertyId: string,
   nowMs: number,
 ): DatabaseOpResult<NotePropertyDef[]> {
-  const found = databaseAt(userId, databaseId);
-  if (!found.ok) return found;
-  const database = found.value;
-
-  const existing = schemaIndex(database.schema).get(propertyId);
-  if (!existing) return refuse('not_found', `There is no property "${propertyId}" in this database.`);
-  if (existing.type === 'title') {
-    return refuse('refused', 'The title column is the row’s own title and cannot be removed.');
-  }
-
-  const schema = database.schema.filter((def) => def.id !== propertyId);
-  return saveSchema(userId, database, schema.length > 0 ? schema : defaultDatabaseSchema(), nowMs);
+  return writePlan(
+    userId,
+    databaseId,
+    planDeleteDatabaseProperty(getBlock(userId, databaseId), databaseId, propertyId),
+    nowMs,
+  );
 }
 
 export function reorderProperties(
@@ -307,22 +217,12 @@ export function reorderProperties(
   order: readonly string[],
   nowMs: number,
 ): DatabaseOpResult<NotePropertyDef[]> {
-  const found = databaseAt(userId, databaseId);
-  if (!found.ok) return found;
-  const database = found.value;
-  const byId = schemaIndex(database.schema);
-
-  const moved: NotePropertyDef[] = [];
-  for (const id of order) {
-    const def = byId.get(id);
-    if (def && !moved.includes(def)) moved.push(def);
-  }
-  // Anything the caller forgot keeps its place at the end rather than being
-  // dropped: a reorder that silently deletes the column it did not mention is a
-  // schema edit disguised as a drag.
-  for (const def of database.schema) if (!moved.includes(def)) moved.push(def);
-
-  return saveSchema(userId, database, moved, nowMs);
+  return writePlan(
+    userId,
+    databaseId,
+    planReorderDatabaseProperties(getBlock(userId, databaseId), databaseId, order),
+    nowMs,
+  );
 }
 
 /* ---------------------------------------------------------------- the rows */
@@ -345,30 +245,13 @@ export function addRow(
   input: AddRowInput,
   nowMs: number,
 ): DatabaseOpResult<NoteBlock> {
-  const found = databaseAt(userId, databaseId);
-  if (!found.ok) return found;
-  const database = found.value;
-
-  const props: Record<string, NotePropertyValue> = {};
-  for (const [propertyId, raw] of Object.entries(input.values ?? {})) {
-    const coerced = coerceRowValue(database, propertyId, raw);
-    // A value for a column that does not exist is refused rather than stored:
-    // data nothing can display is data nobody will find again.
-    if (!coerced.ok) return refuse('refused', coerced.detail);
-    if (coerced.def.type === 'title') continue;
-    props[propertyId] = coerced.value;
-  }
-
-  const titleValue = input.values?.[TITLE_PROPERTY_ID];
-  const title = input.title ?? (typeof titleValue === 'string' ? titleValue : '');
-
+  const planned = planCreateDatabaseRow(getBlock(userId, databaseId), databaseId, input);
+  if (!planned.ok) return planned;
   const row = createBlock(userId, {
-    kind: 'page',
-    text: title,
+    ...planned.value,
     parentId: databaseId,
     ...(input.after ? { after: input.after } : {}),
     ...(input.before ? { before: input.before } : {}),
-    ...(Object.keys(props).length > 0 ? { props } : {}),
   }, nowMs);
   return { ok: true, value: row };
 }
@@ -391,24 +274,17 @@ export function setRowValue(
 ): DatabaseOpResult<NoteBlock> {
   const row = getBlock(userId, rowId);
   if (!row || !isLiveBlock(row)) return refuse('not_found', `There is no row ${rowId}.`);
-
   const parentId = row.parentId.value;
   if (!parentId) return refuse('not_a_database', 'That block is not a row of a database.');
-  const found = databaseAt(userId, parentId);
-  if (!found.ok) {
-    return found.reason === 'not_a_database'
+  const planned = planSetDatabaseRowValue(
+    getBlock(userId, parentId), parentId, row, propertyId, raw,
+  );
+  if (!planned.ok) {
+    return planned.reason === 'not_a_database'
       ? refuse('not_a_database', 'That block is not a row of a database.')
-      : found;
+      : planned;
   }
-
-  const coerced = coerceRowValue(found.value, propertyId, raw);
-  if (!coerced.ok) return refuse('refused', coerced.detail);
-
-  const written = coerced.def.type === 'title'
-    // E4's "title as its own field": a title write is a write to the page's own
-    // text, never a second copy in `props`.
-    ? updateBlock(userId, rowId, { text: typeof coerced.value === 'string' ? coerced.value : '' }, nowMs)
-    : updateBlock(userId, rowId, { props: { [propertyId]: coerced.value } }, nowMs);
+  const written = updateBlock(userId, rowId, planned.patch, nowMs);
 
   if (!written.ok) {
     return written.reason === 'locked'
@@ -457,55 +333,12 @@ export function saveView(
   input: SaveViewInput,
   nowMs: number,
 ): DatabaseOpResult<NoteDatabaseView> {
-  const found = databaseAt(userId, databaseId);
-  if (!found.ok) return found;
-  const database = found.value;
-
-  const existing = input.id ? database.views.find((view) => view.id === input.id) : undefined;
-  if (!existing && database.views.length >= MAX_DATABASE_VIEWS) {
-    return refuse('refused', `A database holds at most ${MAX_DATABASE_VIEWS} views.`);
-  }
-
-  const kind: NoteViewKind = isNoteViewKind(input.kind) ? input.kind : existing?.kind ?? 'table';
-  const known = new Set(database.schema.map((def) => def.id));
-  const visible = (input.visible ?? existing?.visible ?? database.schema.map((def) => def.id))
-    .filter((id) => known.has(id));
-
-  const groupBy = input.groupBy === null
-    ? undefined
-    : input.groupBy !== undefined
-      ? (known.has(input.groupBy) ? input.groupBy : undefined)
-      : existing?.groupBy;
-
-  const view: NoteDatabaseView = {
-    id: existing?.id ?? input.id ?? viewIdFor(input.name ?? kind, new Set(database.views.map((v) => v.id))),
-    name: input.name?.trim() || existing?.name || defaultViewName(kind),
-    kind,
-    visible: visible.length > 0 ? visible : database.schema.map((def) => def.id),
-    ...(input.filter !== undefined ? { filter: input.filter } : existing?.filter ? { filter: existing.filter } : {}),
-    ...(input.sort !== undefined ? { sort: input.sort } : existing?.sort ? { sort: existing.sort } : {}),
-    ...(groupBy ? { groupBy } : {}),
-  };
-
-  const views = existing
-    ? database.views.map((candidate) => (candidate.id === view.id ? view : candidate))
-    : [...database.views, view];
-
-  const written = updateBlock(userId, databaseId, { views }, nowMs);
-  if (!written.ok) {
-    return written.reason === 'locked'
-      ? refuse('locked', written.detail)
-      : refuse('refused', 'The view could not be written.');
-  }
-  return { ok: true, value: view };
-}
-
-function defaultViewName(kind: NoteViewKind): string {
-  return kind.charAt(0).toUpperCase() + kind.slice(1);
-}
-
-function viewIdFor(name: string, taken: ReadonlySet<string>): string {
-  return propertyIdFor(name, taken);
+  return writePlan(
+    userId,
+    databaseId,
+    planSaveDatabaseView(getBlock(userId, databaseId), databaseId, input),
+    nowMs,
+  );
 }
 
 /**
@@ -521,25 +354,12 @@ export function removeView(
   viewId: string,
   nowMs: number,
 ): DatabaseOpResult<NoteDatabaseView[]> {
-  const found = databaseAt(userId, databaseId);
-  if (!found.ok) return found;
-  const database = found.value;
-
-  if (database.views.length <= 1) {
-    return refuse('refused', 'A database keeps at least one view.');
-  }
-  const views = database.views.filter((view) => view.id !== viewId);
-  if (views.length === database.views.length) {
-    return refuse('not_found', `There is no view "${viewId}" on this database.`);
-  }
-
-  const written = updateBlock(userId, databaseId, { views }, nowMs);
-  if (!written.ok) {
-    return written.reason === 'locked'
-      ? refuse('locked', written.detail)
-      : refuse('refused', 'The view could not be removed.');
-  }
-  return { ok: true, value: views };
+  return writePlan(
+    userId,
+    databaseId,
+    planDeleteDatabaseView(getBlock(userId, databaseId), databaseId, viewId),
+    nowMs,
+  );
 }
 
 /* -------------------------------------------------------------- projection */
@@ -579,36 +399,5 @@ export function rollupTargetProperties(
   databaseId: string,
   relationPropertyId: string,
 ): DatabaseOpResult<{ properties: NotePropertyDef[]; databases: Array<{ id: string; title: string }> }> {
-  const found = databaseAt(userId, databaseId);
-  if (!found.ok) return found;
-
-  const blocks = listAllBlocks(userId);
-  const byId = new Map(blocks.map((block) => [block.id, block] as const));
-  const rows = blocks.filter((block) => isLiveBlock(block) && block.parentId.value === databaseId);
-
-  const properties = new Map<string, NotePropertyDef>();
-  const databases = new Map<string, string>();
-  for (const row of rows) {
-    const stored = row.props?.[relationPropertyId]?.value;
-    const uris = Array.isArray(stored) ? stored : typeof stored === 'string' && stored ? [stored] : [];
-    for (const uri of uris) {
-      const parsed = parseWorkspaceRef(String(uri));
-      if (!parsed.ok || parsed.ref.mode !== NOTES_MODE) continue;
-      const target = byId.get(parsed.ref.id);
-      const ownerId = target?.parentId.value;
-      const owner = ownerId ? byId.get(ownerId) : undefined;
-      if (!owner || !isDatabaseBlock(owner)) continue;
-      const schema = readDatabase(owner);
-      databases.set(owner.id, schema.title);
-      for (const def of schema.schema) if (!properties.has(def.id)) properties.set(def.id, def);
-    }
-  }
-
-  return {
-    ok: true,
-    value: {
-      properties: [...properties.values()],
-      databases: [...databases].map(([id, title]) => ({ id, title })),
-    },
-  };
+  return rollupTargetPropertiesFromBlocks(listAllBlocks(userId), databaseId, relationPropertyId);
 }

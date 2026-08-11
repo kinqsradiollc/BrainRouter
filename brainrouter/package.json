@@ -31,6 +31,8 @@
     "start": "node dist/index.js",
     "start:http": "node dist/index.js --http --port 3747",
     "migrate:postgres": "node dist/migrate.js",
+    "test:planner:postgres": "node scripts/planner-two-device-e2e.mjs",
+    "test:notes:postgres": "node scripts/notes-mutation-e2e.mjs",
     "test": "vitest run && npm run test:integration",
     "test:integration": "tsc && node scripts/copy-migrations.mjs && node --test --import ./dist/__tests__/helpers/test-teardown.js --test-concurrency=1 'dist/**/*.node-test.js'",
     "setup:mcp": "node scripts/setup-mcp.js",

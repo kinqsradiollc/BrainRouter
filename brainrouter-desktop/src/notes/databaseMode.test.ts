@@ -13,7 +13,7 @@
  *     page above it,
  *   - a shell that fills half the window because a flex child has no `flex: 1`.
  *
- * The view-model behaviour is tested in `lib/notes/database.test.ts`; this file
+ * The view-model behaviour is tested once in the shared Notes package; this file
  * is the wiring, asserted at the source because the components are hook-heavy
  * and cannot be rendered outside React here.
  */
@@ -22,12 +22,19 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   blocksOnPage, buildPageTree, containerParents, isContainerKind, pageBreadcrumbs,
-  selectedPageOrTop,
-} from '../lib/notes/pageTree.js';
-import { pageHeaderView } from '../lib/notes/pageHeader.js';
-import type { NoteBlockView } from '../lib/notes/notesView.js';
+  pageHeaderView, selectedPageOrTop, type NoteBlockView,
+} from '@kinqs/brainrouter-ui/notes';
 
-const source = (relative: string): string => readFileSync(new URL(relative, import.meta.url), 'utf8');
+const sharedNotes = new URL('../../../packages/ui/src/notes/', import.meta.url);
+const source = (relative: string): string => {
+  if (relative === '../styles/surfaces/notesBlocks.css') {
+    return readFileSync(new URL('notes.css', sharedNotes), 'utf8');
+  }
+  if (relative.startsWith('./') && relative !== './NotesModeContainer.tsx') {
+    return readFileSync(new URL(relative.slice(2), sharedNotes), 'utf8');
+  }
+  return readFileSync(new URL(relative, import.meta.url), 'utf8');
+};
 
 function block(over: Partial<NoteBlockView> & { id: string }): NoteBlockView {
   return {
@@ -165,7 +172,7 @@ test('the cell editors are wired per property type, and a relation writes a real
 
 test('a database block sizes to the page instead of widening it', () => {
   // The database rules live in the LAZY notes sheet, not the shared one: they
-  // only ever apply inside the Notes chunk, and while they sat in `theme.css`
+  // only ever apply inside the lazy Notes chunk; when they sat in `theme.css`
   // every session that never opened Notes paid for them in the initial
   // stylesheet — which had 260 bytes of budget left when that was found.
   const css = source('../styles/surfaces/notesBlocks.css');

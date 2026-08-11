@@ -17,6 +17,8 @@ export interface TransportConfig {
   baseUrl: string;
   /** Session or federation key for the API. */
   token?: string;
+  /** Active account organization; the server re-authorizes membership. */
+  orgId?: string;
 }
 
 /**
@@ -59,6 +61,7 @@ export function createPlannerTransport(config: TransportConfig): PlannerTranspor
   }
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (config.token) headers.authorization = `Bearer ${config.token}`;
+  if (config.orgId) headers['x-brainrouter-org'] = config.orgId;
 
   return {
     async pull(since) {

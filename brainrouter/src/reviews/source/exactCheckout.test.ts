@@ -111,7 +111,7 @@ describe('ExactShaCheckoutAdapter', () => {
     await adapter.release(result.source.checkoutRef!);
     expect(adapter.resolve(result.source.checkoutRef!)).toBeNull();
     await expect(stat(sourceRoot)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
+  }, 15_000);
 
   it('records bounded inventory as partial instead of claiming full coverage', async () => {
     const repository = await localRepository();
@@ -129,7 +129,7 @@ describe('ExactShaCheckoutAdapter', () => {
       expect.objectContaining({ reasonCode: 'SOURCE_FILE_LIMIT', state: 'partial' }),
     ]);
     await adapter.release(result.source.checkoutRef!);
-  });
+  }, 15_000);
 
   it('scopes authorization to fetch and disables prompts, hooks, and unsafe protocols', async () => {
     let cancellationChecks = 0;

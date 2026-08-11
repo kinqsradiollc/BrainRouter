@@ -478,21 +478,23 @@ PRs, review findings, meeting actions, manual entry.
 **A stale source says so.** If GitHub has been unreachable six hours, the view says the GitHub items
 are six hours old rather than presenting them as current.
 
-> **Not built. There are zero adapters.** The interface is
-> `packages/core/src/planner/sourceAdapter.ts:26` and **no file in the repository implements it**;
-> `collectFromSources` (`:80`) is never called. No mirrored item can enter the planner from Track,
-> GitHub, review findings or meetings, which means D1's mirrored/owned split — the distinction the
-> whole design rests on — has only the owned half in use. Only `isStale` and `describeFreshness` are
-> consumed (`packages/core/src/planner/plannerService.ts:20`): the staleness vocabulary exists with
-> nothing to describe.
+> **Built in part.** `connectorIssueAdapter.ts` is the first production adapter. A successful
+> server connector checkpoint invokes it from `connectors/syncExecutor.ts` with the connector's
+> explicit `(org_id, user_id)` and persists supported GitHub, GitLab, Jira and Linear issue records
+> into the Planner backend. The projection carries a stable external id, actionable source URL,
+> actual ingest freshness, explicit blocked facts and time estimates; it deliberately never infers
+> Planner completion. Replaying the same ingest is idempotent and does not bump a Planner revision.
+> Track, pull-request, review-finding and meeting-action adapters remain to be built.
 
 #### D8 · Retention follows ADR-027 D11
 
 Completed items keep detail 90 days, then compact. The planner is a working surface, not an archive.
 
-> **Not built.** `partitionForRetention` and `DETAIL_RETENTION_DAYS`
-> (`packages/core/src/planner/sourceAdapter.ts:137,119`) are referenced only by
-> `packages/core/src/tests/planner-surface.test.ts`. Nothing compacts anything, on any schedule.
+> **Not built end-to-end.** The server now has `compactCompletedPlannerItems`, and its SQL rebuilds
+> payloads from an explicit data-minimisation allowlist (id, origin, title, completion, estimate and
+> estimate HLC) and advances the revision so device caches receive the minimised row. The
+> real-Postgres harness verifies the exact retained shape. No maintenance job
+> schedules the sweep yet, so retention is still not an operational guarantee.
 
 ---
 
@@ -1088,14 +1090,14 @@ invented here:
 |---|---|---|
 | A3 | Exit-code contract | `packages/core/src/review/stackRunner.ts:21,118` — every `gh stack` call classifies its exit |
 | B2 | Artifacts panel re-fetch + scoping | `brainrouter-desktop/src/App.tsx:350-354`, `src/panels/memory/ArtifactsPanel.tsx:32,55` |
-| D1 | Mirrored vs owned | `packages/core/src/planner/itemMerge.ts:27,199,229`; `plannerStore.ts:131,148` |
-| D2 | Outbox, local-first | `packages/core/src/planner/outbox.ts` ← `plannerStore.ts:27`, `plannerSync.ts:28` |
-| D3 | Hybrid logical clocks | `packages/core/src/planner/hybridClock.ts` ← `plannerSync.ts:131` |
-| D4 | Field-level LWW + retained conflicts | `itemMerge.ts` ← `plannerSync.ts`, `brainrouter/src/memory/planner/backend.ts:18,173` |
-| D5 | Timetable and drift ratio | `packages/core/src/planner/timetable.ts` ← `plannerService.ts:18`; `brainrouter-desktop/src/planner/PlannerMode.tsx:157-161` |
-| D9 | User-scoped, backend truth | migration `051_planner.sql`; `brainrouter/src/index.ts:309` mounts `/api/planner` |
-| D10 | Dashboard is a device | `brainrouter-dashboard/app/planner/page.tsx:25,49,121-131` |
-| D11 | Pull → merge → push | `packages/core/src/planner/plannerSync.ts:117-150`; server merge at `brainrouter/src/memory/planner/backend.ts:109,173` |
+| D1 | Mirrored vs owned | `packages/core/src/planner/itemMerge.ts`, `plannerStore.ts`, and the production `connectorIssueAdapter.ts` projection |
+| D2 | Outbox, local-first | `packages/core/src/sync/outbox.ts`, scoped Core stores and Dashboard's per-operation durable browser queue |
+| D3 | Hybrid logical clocks | `packages/core/src/sync/stamped.ts`; both pull paths absorb every remote item/block/conflict stamp before a local tick |
+| D4 | Field merge + retained conflicts | `itemMerge.ts`, `recordSync.ts` and server `memory/planner/backend.ts`; text and delete-versus-edit choices are durable operations with causal watermarks |
+| D5 | Timetable and drift ratio | `packages/core/src/planner/timetable.ts`; shared `packages/ui/src/planner/PlannerCalendar.tsx` records planned and actual time in both hosts |
+| D9 | User-scoped, backend truth | migrations `051`, `058`, `059`, `061`; API routes bind authenticated org/user and Desktop files bind the same scope |
+| D10 | Dashboard is a device | `brainrouter-dashboard/app/planner/useDashboardPlanner.ts` gates on active organisation, pages snapshots and replays durable pending work |
+| D11 | Pull → merge → push | Core `sync/recordSync.ts` and Dashboard's single-flight pull/push/pull loop validate an exact outcome partition |
 | G1 | `offerPanel` vs `revealPanel` | `brainrouter-desktop/src/lib/panels/usePanels.ts:62,231`; callers at `App.tsx:341`, `useAppHandlers.ts:326` |
 | G2 | Closed at launch, restore offered | `usePanels.ts:106-108`; the restore is pressable in the views chooser (`ViewsRail.tsx:209-217`), threaded through `MainContent.tsx` and `App.tsx:731` |
 | G3 | Panel grouping | `brainrouter-desktop/src/panels/panelCatalog.ts:66-103` |
@@ -1108,9 +1110,10 @@ invented here:
 | I2 | Bundling rejected | a decision not to build; nothing to verify |
 | I4 | Reads never prompt | `github-track-services.ts:616` is the only identity call site, and it passes `create_pr` |
 
-Surfaces genuinely reachable: desktop planner mode (Today · Calendar · Notes),
-dashboard `/planner`, CLI `/plan`, five `planner_*` tools, migration 051 and
-`/api/planner`.
+Surfaces genuinely reachable: Desktop Planner and Notes modes, Dashboard
+`/planner` and `/notes`, CLI `/planner`, five `planner_*` tools, migrations
+051/058/059/061 and `/api/planner`. `/plan` remains the durable agent-workflow
+command and no longer shadows Planner.
 
 ### Built in part
 
@@ -1121,6 +1124,7 @@ dashboard `/planner`, CLI `/plan`, five `planner_*` tools, migration 051 and
 | A7 | plan → route (`prRouter.ts:75-83`) | no layer-per-phase authoring; `mayProposeStack`/`canAddLayer` unconsulted |
 | C1 | knob read and engine named (`runTurn.impl.ts:286-291`); control at `RuntimeSection.tsx:64` | no parity, so `graph` always falls back (`engineSelection.ts:72-79`); no parity matrix |
 | D6 | five `planner_*` tools registered | `buildPlannerContext` has no caller — no planner context reaches the model |
+| D7 | connector issue adapter is invoked after successful scoped ingestion and writes durable mirrored Planner rows | Track, PR, review-finding and meeting-action adapters remain |
 | E1 | the sweep exists with all four parts | its orphan assertion inspects only `planner/`, so four of this ADR's own orphans pass |
 | F7 | panel, invoke path and honest host stubs | `comprehensionReview.ts:125-261` unused; dispute records nothing; no `/understand` command |
 | G4 | the Understand group exists | one panel in it, not Explain + Decisions + Verification |
@@ -1135,8 +1139,7 @@ dashboard `/planner`, CLI `/plan`, five `planner_*` tools, migration 051 and
 | A5 | Merge cascade with confirmation | `packages/core/src/review/stackLifecycle.ts:192,259,296` |
 | A8 | Stack/PR panel | renders, receives no props, and its three buttons dispatch queries with no host handler |
 | B1 | Message receipts | `packages/core/src/task/messageReceipts.ts` — sole importer is its own test |
-| D7 | Source adapters | `packages/core/src/planner/sourceAdapter.ts:26,80` — **zero implementations exist** |
-| D8 | Retention | `packages/core/src/planner/sourceAdapter.ts:119,137` |
+| D8 | Retention | compaction query and exact PostgreSQL harness exist, but no maintenance job invokes the sweep |
 | F1 | Profile-shaped comprehension | `packages/core/src/comprehension/profileComprehension.ts:28,50` |
 | F2 | Explain-back | `packages/core/src/comprehension/workRecord.ts:25,46` |
 | F3 | Decision log | `packages/core/src/comprehension/workRecord.ts:81,96` |

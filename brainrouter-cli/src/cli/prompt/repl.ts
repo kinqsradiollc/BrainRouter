@@ -29,7 +29,7 @@ import { tryHandleRequirementCommand } from '../commands/requirement/index.js';
 import { tryHandleTrackCommand } from '../commands/track/index.js';
 import { tryHandleAnnotationCommand } from '../commands/annotation/index.js';
 import { tryHandleArtifactCommand } from '../commands/artifact/index.js';
-// ADR-028 Part D — the planner is USER-scoped, so /plan takes no workspace.
+// ADR-038 D5 — the personal planner is USER-scoped, so /planner takes no workspace.
 import { tryHandlePlannerCommand } from '../commands/planner/index.js';
 import { tryHandleAtlasCommand } from '../commands/atlas/index.js';
 import { tryHandleAttachmentCommand } from '../commands/attachment/index.js';

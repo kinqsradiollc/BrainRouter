@@ -100,6 +100,7 @@ services:
       - brain_hooks_node_modules:/repo/packages/hooks/node_modules
       - brain_sdk_node_modules:/repo/packages/sdk/node_modules
       - brain_types_node_modules:/repo/packages/types/node_modules
+      - brain_ui_node_modules:/repo/packages/ui/node_modules
       # Isolate generated runtime packages from host builds. The package build
       # scripts clean dist first; sharing those folders used to crash the live
       # container mid-build with ERR_MODULE_NOT_FOUND.
@@ -133,6 +134,7 @@ volumes:
   brain_hooks_node_modules:
   brain_sdk_node_modules:
   brain_types_node_modules:
+  brain_ui_node_modules:
   brain_types_dist:
   brain_agent_protocol_dist:
   brain_core_dist:

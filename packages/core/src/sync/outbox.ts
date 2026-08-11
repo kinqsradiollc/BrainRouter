@@ -22,6 +22,9 @@
  *    refreshes from the server instead of replaying a thousand stale
  *    operations — and is TOLD that happened, because silently discarding
  *    someone's queued work is the same lie B1 refuses for receipts.
+ *
+ * ADR-038 D4 also makes each queued operation inspectable and lets a person
+ * prioritize one retry without bypassing earlier writes to that same record.
  */
 import type { Hlc } from './hybridClock.js';
 import { compareHlc } from './hybridClock.js';
@@ -38,7 +41,9 @@ export interface OutboxOperation {
    * out of B1 instead of needing a rule of its own.
    */
   itemId: string;
-  kind: 'create' | 'update' | 'delete' | 'source_action';
+  /** Planner operations distinguish item records from time-block records. */
+  entity?: 'item' | 'block';
+  kind: 'create' | 'update' | 'delete' | 'source_action' | 'resolve_conflict';
   /** The stamp of the local write, for ordering and for the server's merge. */
   at: Hlc;
   /** Opaque to the outbox. */
@@ -47,6 +52,8 @@ export interface OutboxOperation {
   attempts: number;
   /** Why the last attempt failed, if it did. */
   lastError?: string;
+  /** Durable user intent to put this record at the front of the next batch. */
+  retryRequestedAt?: string;
 }
 
 export interface OutboxState {
@@ -84,9 +91,18 @@ export function enqueue(state: OutboxState, op: OutboxOperation): OutboxState {
  * operation block the entire queue.
  */
 export function nextBatch(state: OutboxState, limit = 25): OutboxOperation[] {
+  const retryRecords = new Set(
+    state.operations.filter((op) => op.retryRequestedAt).map((op) => op.itemId),
+  );
+  const ordered = retryRecords.size === 0
+    ? state.operations
+    : [
+        ...state.operations.filter((op) => retryRecords.has(op.itemId)),
+        ...state.operations.filter((op) => !retryRecords.has(op.itemId)),
+      ];
   const claimed = new Set<string>();
   const batch: OutboxOperation[] = [];
-  for (const op of state.operations) {
+  for (const op of ordered) {
     if (claimed.has(op.itemId)) continue;
     claimed.add(op.itemId);
     batch.push(op);
@@ -116,7 +132,70 @@ export function recordFailure(
   return {
     ...state,
     operations: state.operations.map((o) =>
-      o.idempotencyKey === key ? { ...o, attempts: o.attempts + 1, lastError: error } : o,
+      o.idempotencyKey === key
+        ? { ...o, attempts: o.attempts + 1, lastError: error, retryRequestedAt: undefined }
+        : o,
+    ),
+  };
+}
+
+export type OutboxOperationStatus = 'pending' | 'needs_attention' | 'retry_requested';
+
+export interface OutboxOperationDetail {
+  idempotencyKey: string;
+  targetId: string;
+  entity: 'item' | 'block';
+  kind: OutboxOperation['kind'];
+  queuedAt: string;
+  ageMs: number;
+  attempts: number;
+  lastError?: string;
+  status: OutboxOperationStatus;
+}
+
+function outboxTimestamp(physical: number): { queuedAt: string; ageBase: number } {
+  const safe = Number.isFinite(physical)
+    ? Math.min(8_640_000_000_000_000, Math.max(-8_640_000_000_000_000, physical))
+    : 0;
+  return { queuedAt: new Date(safe).toISOString(), ageBase: safe };
+}
+
+/** Inspect every durable pending change without exposing its user-text payload. */
+export function inspectOutbox(state: OutboxState, nowMs: number): OutboxOperationDetail[] {
+  return state.operations.map((op) => {
+    const timestamp = outboxTimestamp(op.at.physical);
+    return {
+      idempotencyKey: op.idempotencyKey,
+      targetId: op.itemId,
+      entity: op.entity ?? 'item',
+      kind: op.kind,
+      queuedAt: timestamp.queuedAt,
+      ageMs: Math.max(0, nowMs - timestamp.ageBase),
+      attempts: op.attempts,
+      ...(op.lastError ? { lastError: op.lastError } : {}),
+      status: op.retryRequestedAt
+        ? 'retry_requested'
+        : op.attempts >= ATTEMPTS_BEFORE_SURFACING ? 'needs_attention' : 'pending',
+    };
+  });
+}
+
+/**
+ * Persist a targeted retry request.
+ *
+ * `nextBatch` prioritizes the record while preserving all earlier operations
+ * for that same record, so retry never violates per-record ordering.
+ */
+export function requestOperationRetry(
+  state: OutboxState,
+  idempotencyKey: string,
+  nowIso: string,
+): OutboxState {
+  if (!state.operations.some((op) => op.idempotencyKey === idempotencyKey)) return state;
+  return {
+    ...state,
+    operations: state.operations.map((op) =>
+      op.idempotencyKey === idempotencyKey ? { ...op, retryRequestedAt: nowIso } : op,
     ),
   };
 }

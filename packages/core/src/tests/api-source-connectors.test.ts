@@ -8,6 +8,7 @@ import {
   runNotionConnectorCheckpoint,
   runSlackConnectorCheckpoint,
   confluenceTokenClient,
+  jiraTokenClient,
   linearTokenClient,
   notionTokenClient,
   slackTokenClient,
@@ -83,6 +84,7 @@ test('runJiraConnectorCheckpoint maps issues and comments', async () => {
         status: 'In Progress',
         updatedAt: '2026-01-02T00:00:00.000Z',
         labels: ['connectors'],
+        estimateSeconds: 5_400,
         comments: [{ author: 'A', body: 'Looks good', updatedAt: '2026-01-03T00:00:00.000Z' }],
       }];
     },
@@ -91,6 +93,7 @@ test('runJiraConnectorCheckpoint maps issues and comments', async () => {
   assert.equal(result.documents[0].kind, 'issue');
   assert.equal(result.documents[0].repository, 'BR');
   assert.match(result.documents[0].text, /Looks good/);
+  assert.equal(result.documents[0].metadata.estimateSeconds, 5_400);
   assert.equal(result.checkpoint.highWatermark, '2026-01-05T00:00:00.000Z');
 });
 
@@ -142,6 +145,24 @@ test('linearTokenClient prefixes server OAuth tokens with Bearer', async () => {
   };
   await linearTokenClient('oauth-token', { fetchImpl, oauth: true }).listIssues({ teamKeys: [], includeArchived: false, includeComments: false });
   assert.equal(auth, 'Bearer oauth-token');
+});
+
+test('jiraTokenClient requests and maps the source time estimate', async () => {
+  let requested = '';
+  const fetchImpl = async (url: string | URL | Request): Promise<Response> => {
+    requested = String(url);
+    return Response.json({ issues: [{
+      key: 'BR-17',
+      fields: {
+        summary: 'Estimated work', status: { name: 'In Progress' }, labels: [],
+        updated: '2026-01-02T00:00:00.000Z', timeoriginalestimate: 5_400,
+      },
+    }] });
+  };
+  const issues = await jiraTokenClient('oauth-token', 'https://example.atlassian.net', { fetchImpl })
+    .listIssues({ projects: ['BR'], includeComments: false });
+  assert.match(decodeURIComponent(requested), /timeoriginalestimate/);
+  assert.equal(issues[0].estimateSeconds, 5_400);
 });
 
 test('slackTokenClient sends bearer auth and maps paginated channels/messages', async () => {

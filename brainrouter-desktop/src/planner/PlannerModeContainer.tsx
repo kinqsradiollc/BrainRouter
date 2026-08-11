@@ -10,17 +10,22 @@
  * a background concern that never blocks a keystroke — a planner that stalls is
  * one people stop using mid-thought.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { PlannerMode, type PlannerOps } from './PlannerMode.js';
-import type { PlannerItemView, PlannerBlockView } from '../lib/planner/plannerView.js';
+import type {
+  PlannerBlockView,
+  PlannerItemView,
+  PlannerSyncView,
+} from '@kinqs/brainrouter-ui/planner';
 import { bridgeQuery } from '../lib/bridgeQuery.js';
 import { splitTextByWorkspaceRefs } from '@kinqs/brainrouter-core/workspace/references';
 import { createAndCite, plannerItemUri } from '../lib/workspace/crossMode.js';
 
 interface PlannerSnapshot {
+  today?: string;
   items: PlannerItemView[];
   blocks: PlannerBlockView[];
-  syncState: string;
+  sync: Omit<PlannerSyncView, 'onRetry' | 'onRetryIssue'>;
   staleSources: string[];
   driftNote: string | null;
 }
@@ -28,15 +33,18 @@ interface PlannerSnapshot {
 /**
  * How often the planner reconciles with the server.
  *
- * Thirty seconds: fast enough that a change made on your phone is on screen
- * before you wonder where it went, slow enough that an idle planner is not a
- * heartbeat. The focus listener covers the case this interval would be too slow
- * for — coming back to the machine after an hour elsewhere.
+ * Five seconds matches the active Dashboard adapter and ADR-038's visibility
+ * bound. The focus listener still covers returning from another app before the
+ * next tick; hidden windows skip polling until they become active again.
  */
-const SYNC_INTERVAL_MS = 30_000;
+const SYNC_INTERVAL_MS = 5_000;
 
 const EMPTY: PlannerSnapshot = {
-  items: [], blocks: [], syncState: 'Everything is synced.', staleSources: [], driftNote: null,
+  items: [],
+  blocks: [],
+  sync: { label: 'Everything is synced.', pendingCount: 0, issues: [] },
+  staleSources: [],
+  driftNote: null,
 };
 
 export function PlannerModeContainer({
@@ -50,7 +58,15 @@ export function PlannerModeContainer({
 } = {}): React.ReactElement {
   const [snapshot, setSnapshot] = useState<PlannerSnapshot>(EMPTY);
   const [refLabels, setRefLabels] = useState<Record<string, string>>({});
-  const today = new Date().toISOString().slice(0, 10);
+  const [retrying, setRetrying] = useState(false);
+  const syncInFlight = useRef<Promise<void> | null>(null);
+  const syncAgain = useRef(false);
+  const now = new Date();
+  const today = snapshot.today ?? [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+  ].join('-');
 
   const refresh = useCallback(async () => {
     try {
@@ -64,6 +80,30 @@ export function PlannerModeContainer({
   }, []);
 
   useEffect(() => { void refresh(); }, [refresh]);
+
+  const reconcile = useCallback((): Promise<void> => {
+    if (syncInFlight.current) {
+      // A mutation that lands during a pull must get its own pass. Coalescing
+      // repeated focus/timer requests is safe; dropping the post-mutation pass
+      // would leave new work queued until the next interval or app launch.
+      syncAgain.current = true;
+      return syncInFlight.current;
+    }
+    const run = (async () => {
+      do {
+        syncAgain.current = false;
+        try {
+          await bridgeQuery('planner-sync', {});
+          await refresh();
+        } catch {
+          // Local-only/offline are normal modes. The durable sync detail is the
+          // truthful status and the next active trigger will request another pass.
+        }
+      } while (syncAgain.current);
+    })().finally(() => { syncInFlight.current = null; });
+    syncInFlight.current = run;
+    return run;
+  }, [refresh]);
 
   /**
    * ADR-029 A3 — the labels are RESOLVED, never stored beside the link.
@@ -110,26 +150,20 @@ export function PlannerModeContainer({
    */
   useEffect(() => {
     let cancelled = false;
-    const tick = async (): Promise<void> => {
+    const tick = (): void => {
       if (cancelled || document.hidden) return;
-      try {
-        await bridgeQuery('planner-sync', {});
-        if (!cancelled) await refresh();
-      } catch {
-        // Offline is the normal mode that happens to be syncing (D2). The
-        // state line already says how many changes are waiting.
-      }
+      void reconcile();
     };
-    const timer = window.setInterval(() => void tick(), SYNC_INTERVAL_MS);
-    const onFocus = (): void => void tick();
+    const timer = window.setInterval(tick, SYNC_INTERVAL_MS);
+    const onFocus = (): void => tick();
     window.addEventListener('focus', onFocus);
-    void tick();
+    tick();
     return () => {
       cancelled = true;
       window.clearInterval(timer);
       window.removeEventListener('focus', onFocus);
     };
-  }, [refresh]);
+  }, [reconcile]);
 
   /**
    * Apply a mutation, then re-read.
@@ -145,9 +179,24 @@ export function PlannerModeContainer({
       await refresh();
       // Push straight away rather than waiting for the interval: an edit you
       // make and then close the laptop on should already be on its way.
-      void bridgeQuery('planner-sync', {}).catch(() => {});
+      void reconcile();
     }
-  }, [refresh]);
+  }, [reconcile, refresh]);
+
+  const retrySync = useCallback(async (idempotencyKey?: string): Promise<void> => {
+    setRetrying(true);
+    try {
+      if (idempotencyKey) {
+        await bridgeQuery('planner-retry-operation', { idempotencyKey });
+      } else {
+        await bridgeQuery('planner-retry-all', {}).catch(() => {});
+      }
+      await reconcile();
+    } finally {
+      await refresh();
+      setRetrying(false);
+    }
+  }, [reconcile, refresh]);
 
   const ops: PlannerOps = {
     addItem: (title) => void mutate('planner-add', { title }),
@@ -161,7 +210,10 @@ export function PlannerModeContainer({
     // the unit people actually think in; anything shorter turns the primary
     // gesture into a form.
     blockTimeAt: (iso) => void mutate('planner-schedule-at', { scheduledFor: iso, estimateMinutes: 60 }),
-    openBlock: (blockId) => void mutate('planner-open-block', { blockId }),
+    rescheduleBlock: (blockId, scheduledFor) =>
+      void mutate('planner-reschedule-block', { blockId, scheduledFor }),
+    recordActual: (blockId, actualMinutes) =>
+      void mutate('planner-record-actual', { blockId, actualMinutes }),
 
     /**
      * ADR-029 C2 — Planner → Notes: the notes field opens as a real page.
@@ -189,6 +241,7 @@ export function PlannerModeContainer({
     },
 
     openRef: (uri) => onOpenRef?.(uri),
+    openSource: (url) => { void bridgeQuery('action:open-external', { url }); },
   };
 
   return (
@@ -196,7 +249,12 @@ export function PlannerModeContainer({
       items={snapshot.items}
       blocks={snapshot.blocks}
       today={today}
-      syncState={snapshot.syncState}
+      sync={{
+        ...snapshot.sync,
+        retrying,
+        onRetry: () => { void retrySync(); },
+        onRetryIssue: (idempotencyKey) => { void retrySync(idempotencyKey); },
+      }}
       staleSources={snapshot.staleSources}
       driftNote={snapshot.driftNote}
       refLabels={refLabels}

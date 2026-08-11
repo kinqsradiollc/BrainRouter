@@ -29,6 +29,8 @@ export interface SourceAdapter {
   label: string;
   /** True when items from here are mirrors of an external truth (D1). */
   mirrored: boolean;
+  /** Actual source fetch time when records came from an existing ingest cache. */
+  lastFetchedAt?: string | null;
   list(): Promise<PlannerItem[]>;
 }
 
@@ -91,7 +93,11 @@ export async function collectFromSources(
     try {
       const listed = await adapter.list();
       items.push(...listed);
-      freshness.push({ sourceId: adapter.id, lastFetchedAt: nowIso, itemCount: listed.length });
+      freshness.push({
+        sourceId: adapter.id,
+        lastFetchedAt: adapter.lastFetchedAt === undefined ? nowIso : adapter.lastFetchedAt,
+        itemCount: listed.length,
+      });
     } catch (error) {
       // Keep the last good fetch time: the items on screen ARE that old, and
       // resetting it to null would say we have nothing when we have something

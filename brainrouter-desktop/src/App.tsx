@@ -720,9 +720,12 @@ export function App(): React.ReactElement {
         }}
         openAccountSettings={() => openSettings('account')} />
 
-      {/* ADR-028 I1 — once per launch, dismissible, never blocking. */}
-      <ToolingNotice />
-      <MainContent
+      <div className="app-main-stack">
+        {/* ADR-028 I1 — once per launch, dismissible, never blocking. Keep it
+            in the main vertical flow so it cannot consume a work surface's
+            horizontal column when it resolves after startup. */}
+        <ToolingNotice />
+        <MainContent
         mode={mode} setMode={setMode} workrowRef={workrowRef} track={track} trackOps={trackOps}
         railOpen={railOpen} setRailOpen={setRailOpen} sidePanelOpen={sidePanelOpen} sidePinned={sidePinned}
         sideFullScreen={sideFullScreen} setSidePanelOpen={setSidePanelOpen} setSidePinned={setSidePinned}
@@ -759,7 +762,8 @@ export function App(): React.ReactElement {
         termDockHeight={termDockHeight} resizeTerminal={resizeTerminal} termTabs={termTabs} activeTerm={activeTerm}
         setActiveTerm={setActiveTerm} closeBottomTab={closeBottomTab} addBottomTab={addBottomTab} envOpen={envOpen}
         setEnvOpen={setEnvOpen} termDockOpen={termDockOpen} setSideFullScreen={setSideFullScreen} openBottomDock={openBottomDock}
-        workspaceViewContext={workspaceViewContextByRoot[activeRoot] ?? { profileId: 'custom', capabilityIds: [] }} />
+          workspaceViewContext={workspaceViewContextByRoot[activeRoot] ?? { profileId: 'custom', capabilityIds: [] }} />
+      </div>
 
       <AppDialogs
         pop={pop} setPop={setPop} q={q} cmdCtx={cmdCtx} commands={commands}

@@ -14,6 +14,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Hlc, NoteBlock } from "@kinqs/brainrouter-core/notes";
+import type { NotesMutationRequest } from "@kinqs/brainrouter-core/notes/editing";
 
 interface StoredBlock {
   parentId: string | null;
@@ -28,12 +29,59 @@ class FakeNotesStore {
   blocks = new Map<string, StoredBlock>();
   refs = new Map<string, Array<{ targetKey: string }>>();
   index = new Map<string, { contentText: string; refKeys: string[] }>();
-  applied = new Set<string>();
+  applied = new Map<string, {
+    blockId: string;
+    fingerprint: string | null;
+    response: Record<string, unknown> | null;
+  }>();
   leases = new Map<string, { blockId: string; deviceId: string; holder: string | null; epoch: number; expiresAtMs: number }>();
+  hostClocks = new Map<string, { physical: number; logical: number }>();
   nowMs = 1_000_000;
   upserts = 0;
+  pullLimit = 1_000;
+  failUpsertAt: number | null = null;
+  onGetReceipt: (() => Promise<void>) | null = null;
+  private mutationQueue: Promise<void> = Promise.resolve();
 
   private key(orgId: string, userId: string, id: string): string { return `${orgId}/${userId}/${id}`; }
+
+  async withNoteMutation<T>(
+    _orgId: string,
+    _userId: string,
+    fn: (queries: FakeNotesStore) => Promise<T>,
+  ): Promise<T> {
+    const previous = this.mutationQueue;
+    let release!: () => void;
+    this.mutationQueue = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    const snapshot = {
+      blocks: structuredClone(this.blocks),
+      refs: structuredClone(this.refs),
+      index: structuredClone(this.index),
+      applied: structuredClone(this.applied),
+      leases: structuredClone(this.leases),
+      hostClocks: structuredClone(this.hostClocks),
+      pageMeta: structuredClone(this.pageMeta),
+      rowValues: structuredClone(this.rowValues),
+      upserts: this.upserts,
+    };
+    try {
+      return await fn(this);
+    } catch (error) {
+      this.blocks = snapshot.blocks;
+      this.refs = snapshot.refs;
+      this.index = snapshot.index;
+      this.applied = snapshot.applied;
+      this.leases = snapshot.leases;
+      this.hostClocks = snapshot.hostClocks;
+      this.pageMeta = snapshot.pageMeta;
+      this.rowValues = snapshot.rowValues;
+      this.upserts = snapshot.upserts;
+      throw error;
+    } finally {
+      release();
+    }
+  }
 
   async databaseNowMs(): Promise<number> { return this.nowMs; }
 
@@ -48,11 +96,28 @@ class FakeNotesStore {
       .map(([k, row]) => ({ id: k.split("/").at(-1)!, ...row, revision: String(row.revision) }));
   }
 
+  async listNoteBlocksSince(orgId: string, userId: string, since?: string): Promise<unknown[]> {
+    const cursor = since && /^\d+$/.test(since) ? Number(since) : 0;
+    return (await this.listAllNoteBlocks(orgId, userId))
+      .filter((row) => Number((row as { revision: string }).revision) > cursor)
+      .sort((a, b) => Number((a as { revision: string }).revision) - Number((b as { revision: string }).revision))
+      .slice(0, this.pullLimit);
+  }
+
+  async latestNoteRevision(orgId: string, userId: string): Promise<string> {
+    const rows = await this.listAllNoteBlocks(orgId, userId);
+    return String(rows.reduce<number>(
+      (latest, row) => Math.max(latest, Number((row as { revision: string }).revision)),
+      0,
+    ));
+  }
+
   async upsertNoteBlock(orgId: string, userId: string, block: {
     id: string; parentId: string | null; kind: string; visibility?: string;
     payload: Record<string, unknown>; deletedAtHlc?: string | null;
   }): Promise<unknown> {
     this.upserts += 1;
+    if (this.failUpsertAt === this.upserts) throw new Error("injected note upsert failure");
     const stored: StoredBlock = {
       parentId: block.parentId,
       kind: block.kind,
@@ -68,8 +133,27 @@ class FakeNotesStore {
   async wasNoteOperationApplied(orgId: string, userId: string, key: string): Promise<boolean> {
     return this.applied.has(`${orgId}/${userId}/${key}`);
   }
-  async recordNoteOperationApplied(orgId: string, userId: string, key: string): Promise<void> {
-    this.applied.add(`${orgId}/${userId}/${key}`);
+  async getNoteOperationReceipt(orgId: string, userId: string, key: string) {
+    const hook = this.onGetReceipt;
+    if (hook) {
+      this.onGetReceipt = null;
+      await hook();
+    }
+    return this.applied.get(`${orgId}/${userId}/${key}`) ?? null;
+  }
+  async recordNoteOperationApplied(
+    orgId: string,
+    userId: string,
+    key: string,
+    blockId: string,
+    fingerprint?: string,
+    response?: Record<string, unknown>,
+  ): Promise<void> {
+    this.applied.set(`${orgId}/${userId}/${key}`, {
+      blockId,
+      fingerprint: fingerprint ?? null,
+      response: response ? structuredClone(response) : null,
+    });
   }
 
   async replaceNoteRefs(orgId: string, userId: string, blockId: string, refs: Array<{ targetKey: string }>): Promise<void> {
@@ -137,6 +221,33 @@ class FakeNotesStore {
     this.leases.set(this.key(orgId, userId, lease.blockId), lease);
   }
   async sweepNoteBlockLeases(): Promise<number> { return 0; }
+
+  async observeNoteHostClock(orgId: string, userId: string, remote: Hlc): Promise<void> {
+    const key = `${orgId}/${userId}`;
+    const current = this.hostClocks.get(key);
+    if (!current || remote.physical > current.physical
+      || (remote.physical === current.physical && remote.logical > current.logical)) {
+      this.hostClocks.set(key, { physical: remote.physical, logical: remote.logical });
+    }
+  }
+
+  async nextNoteHostClock(
+    orgId: string,
+    userId: string,
+    deviceId: string,
+    wallClockMs: number,
+    reserve: number,
+  ): Promise<Hlc> {
+    const key = `${orgId}/${userId}`;
+    const current = this.hostClocks.get(key) ?? { physical: -1, logical: -1 };
+    const physical = Math.max(current.physical, Math.max(0, Math.trunc(wallClockMs)));
+    const logical = physical === current.physical ? current.logical + 1 : 0;
+    this.hostClocks.set(key, {
+      physical,
+      logical: logical + Math.max(1, Math.trunc(reserve)) - 1,
+    });
+    return { physical, logical, deviceId };
+  }
 }
 
 const fake = new FakeNotesStore();
@@ -168,8 +279,25 @@ async function seed(id: string, text: string, stamp: Hlc): Promise<void> {
 describe("notes push — the server merges, it does not accept", () => {
   beforeEach(() => {
     fake.blocks.clear(); fake.refs.clear(); fake.index.clear();
-    fake.applied.clear(); fake.leases.clear();
-    fake.upserts = 0; fake.nowMs = 1_000_000;
+    fake.applied.clear(); fake.leases.clear(); fake.hostClocks.clear();
+    fake.upserts = 0; fake.pullLimit = 1_000; fake.nowMs = 1_000_000;
+    fake.failUpsertAt = null;
+    fake.onGetReceipt = null;
+  });
+
+  it("a bounded pull cursor advances only through rows actually delivered", async () => {
+    await seed("blk_1", "one", at(1_000, "device-a"));
+    await seed("blk_2", "two", at(2_000, "device-a"));
+    await seed("blk_3", "three", at(3_000, "device-a"));
+    fake.pullLimit = 2;
+
+    const first = await notes.pullChanges(ORG, USER);
+    expect(first.blocks.map((block) => block.id)).toEqual(["blk_1", "blk_2"]);
+    expect(first.cursor).toBe("2");
+
+    const second = await notes.pullChanges(ORG, USER, first.cursor);
+    expect(second.blocks.map((block) => block.id)).toEqual(["blk_3"]);
+    expect(second.cursor).toBe("3");
   });
 
   it("a client that has been offline cannot overwrite newer server text by pushing last", async () => {
@@ -223,6 +351,42 @@ describe("notes push — the server merges, it does not accept", () => {
     // Reported accepted, because from the client's side it DID land.
     expect(second.accepted).toEqual(["blk_1:dup"]);
     expect(fake.upserts).toBe(before + 1);
+  });
+
+  it("rejects an inherited legacy push envelope before inherited fields can name a victim", () => {
+    const inherited = Object.create({
+      idempotencyKey: "poisoned",
+      itemId: "victim",
+      kind: "delete",
+      at: at(2_000, "device-a"),
+      payload: {},
+    });
+    const parsed = notes.parseNotePushOperation(inherited);
+    expect(parsed.ok).toBe(false);
+  });
+
+  it("one raw idempotency key cannot be reused for a different operation", async () => {
+    await seed("blk_1", "first", at(1_000, "device-a"));
+    const accepted = await push({
+      key: "same-key", id: "blk_1", at: at(2_000, "device-a"), payload: { text: "second" },
+    });
+    const rejected = await push({
+      key: "same-key", id: "blk_1", at: at(3_000, "device-a"), payload: { text: "different body" },
+    });
+    expect(accepted.accepted).toEqual(["same-key"]);
+    expect(rejected.accepted).toEqual([]);
+    expect(rejected.rejected[0]?.reason).toMatch(/different Notes operation/);
+    expect(blockOf("blk_1").text.value).toBe("second");
+  });
+
+  it("serializes concurrent field writes so neither read-modify-write projection is lost", async () => {
+    await seed("blk_1", "first", at(1_000, "device-a"));
+    await Promise.all([
+      push({ key: "concurrent-text", id: "blk_1", at: at(2_000, "device-a"), payload: { text: "second" } }),
+      push({ key: "concurrent-check", id: "blk_1", at: at(3_000, "device-b"), payload: { checked: true } }),
+    ]);
+    expect(blockOf("blk_1").text.value).toBe("second");
+    expect(blockOf("blk_1").checked?.value).toBe(true);
   });
 
   it("a delete is a tombstone, so an edit from a device that had not seen it brings the block back marked", async () => {
@@ -315,8 +479,9 @@ describe("notes push — the server merges, it does not accept", () => {
 describe("notes push — the fencing epoch decides what a write may take", () => {
   const reset = (): void => {
     fake.blocks.clear(); fake.refs.clear(); fake.index.clear();
-    fake.applied.clear(); fake.leases.clear();
+    fake.applied.clear(); fake.leases.clear(); fake.hostClocks.clear();
     fake.upserts = 0; fake.nowMs = 1_000_000;
+    fake.failUpsertAt = null;
   };
   beforeEach(reset);
 
@@ -467,7 +632,8 @@ describe("notes push — the fencing epoch decides what a write may take", () =>
 describe("notes derived tables — A2's cache rule", () => {
   beforeEach(() => {
     fake.blocks.clear(); fake.refs.clear(); fake.index.clear(); fake.applied.clear();
-    fake.pageMeta.clear(); fake.rowValues.clear(); fake.upserts = 0;
+    fake.pageMeta.clear(); fake.rowValues.clear(); fake.hostClocks.clear(); fake.upserts = 0;
+    fake.failUpsertAt = null;
   });
 
   it("rebuilding the index from content alone produces the same answer the incremental writes did", async () => {
@@ -514,7 +680,8 @@ describe("notes derived tables — A2's cache rule", () => {
 
 describe("notes leases — B2's prevention half", () => {
   beforeEach(() => {
-    fake.blocks.clear(); fake.leases.clear(); fake.applied.clear(); fake.nowMs = 1_000_000;
+    fake.blocks.clear(); fake.leases.clear(); fake.applied.clear(); fake.hostClocks.clear(); fake.nowMs = 1_000_000;
+    fake.failUpsertAt = null;
   });
 
   it("a second device is told WHO holds the block rather than being refused without a reason", async () => {
@@ -526,6 +693,18 @@ describe("notes leases — B2's prevention half", () => {
     if (outcome.ok) return;
     expect(outcome.reason).toBe("held_by_another");
     expect(outcome.detail).toContain("the desktop");
+  });
+
+  it("two simultaneous acquirers produce one lease winner and one attributed refusal", async () => {
+    await seed("blk_1", "lease me", at(1_000, "seed"));
+    const outcomes = await Promise.all([
+      notes.acquireLease(ORG, USER, "blk_1", { deviceId: "device-a", holder: "desktop" }),
+      notes.acquireLease(ORG, USER, "blk_1", { deviceId: "device-b", holder: "browser" }),
+    ]);
+    expect(outcomes.filter((outcome) => outcome.ok)).toHaveLength(1);
+    const refused = outcomes.find((outcome) => !outcome.ok);
+    expect(refused && !refused.ok && refused.reason).toBe("held_by_another");
+    expect(fake.leases.get(`${ORG}/${USER}/blk_1`)?.epoch).toBe(1);
   });
 
   it("taking over an expired lease issues a NEWER epoch, which is what fences the previous holder", async () => {
@@ -562,8 +741,9 @@ describe("notes leases — B2's prevention half", () => {
 describe("notes push — E3 property values", () => {
   beforeEach(() => {
     fake.blocks.clear(); fake.refs.clear(); fake.index.clear();
-    fake.applied.clear(); fake.leases.clear();
+    fake.applied.clear(); fake.leases.clear(); fake.hostClocks.clear();
     fake.upserts = 0; fake.nowMs = 1_000_000;
+    fake.failUpsertAt = null;
   });
 
   it("a pushed property value survives the round trip", async () => {
@@ -648,8 +828,9 @@ describe("notes push — E3 property values", () => {
 describe("notes push — Part E's projections travel with the block", () => {
   beforeEach(() => {
     fake.blocks.clear(); fake.refs.clear(); fake.index.clear(); fake.applied.clear();
-    fake.pageMeta.clear(); fake.rowValues.clear(); fake.leases.clear();
+    fake.pageMeta.clear(); fake.rowValues.clear(); fake.leases.clear(); fake.hostClocks.clear();
     fake.upserts = 0; fake.nowMs = 1_000_000;
+    fake.failUpsertAt = null;
   });
 
   it("a page's icon, cover and title reach the projection a sidebar reads", async () => {
@@ -743,6 +924,234 @@ describe("notes push — Part E's projections travel with the block", () => {
   });
 });
 
+describe("notes editor mutations — one remote gesture transport", () => {
+  beforeEach(() => {
+    fake.blocks.clear(); fake.refs.clear(); fake.index.clear();
+    fake.applied.clear(); fake.leases.clear(); fake.hostClocks.clear();
+    fake.pageMeta.clear(); fake.rowValues.clear();
+    fake.upserts = 0; fake.nowMs = 1_000_000;
+    fake.failUpsertAt = null;
+  });
+
+  it("executes Core's split plan once and treats a redelivered request as a replay", async () => {
+    await seed("blk_split", "one two", at(1_000, "device-a"));
+    const request: NotesMutationRequest = {
+      version: 1,
+      requestId: "split-once",
+      deviceId: "dashboard-tab",
+      operation: { type: "gesture.split", blockId: "blk_split", caret: 3 },
+    };
+
+    const first = await notes.mutateNotes(ORG, USER, request, fake.nowMs);
+    expect(first.ok).toBe(true);
+    expect(first.ok && (first.result as { action: string }).action).toBe("split");
+    expect(first.sync.accepted).toHaveLength(2);
+    const idsAfterFirst = [...fake.blocks.keys()].sort();
+
+    const retry = await notes.mutateNotes(ORG, USER, request, fake.nowMs + 1);
+    expect(retry).toEqual(first);
+    expect([...fake.blocks.keys()].sort()).toEqual(idsAfterFirst);
+    expect(blockOf("blk_split").text.value).toBe("one");
+  });
+
+  it("rolls back every primitive, projection, clock and receipt when a later split write fails", async () => {
+    await seed("blk_atomic", "one two", at(1_000, "device-a"));
+    const request: NotesMutationRequest = {
+      version: 1,
+      requestId: "split-rollback",
+      deviceId: "dashboard-tab",
+      operation: { type: "gesture.split", blockId: "blk_atomic", caret: 3 },
+    };
+    const blocksBefore = [...fake.blocks.keys()];
+    const receiptsBefore = fake.applied.size;
+    fake.failUpsertAt = fake.upserts + 2;
+
+    await expect(notes.mutateNotes(ORG, USER, request, fake.nowMs)).rejects
+      .toThrow("injected note upsert failure");
+    expect([...fake.blocks.keys()]).toEqual(blocksBefore);
+    expect(blockOf("blk_atomic").text.value).toBe("one two");
+    expect(fake.applied.size).toBe(receiptsBefore);
+
+    fake.failUpsertAt = null;
+    const retry = await notes.mutateNotes(ORG, USER, request, fake.nowMs + 1);
+    expect(retry.ok).toBe(true);
+    expect(blockOf("blk_atomic").text.value).toBe("one");
+  });
+
+  it("absorbs a future persisted stamp before allocating a hosted mutation clock", async () => {
+    const future = at(9_000_000, "offline-device", 77);
+    await seed("blk_future", "future copy", future);
+    fake.hostClocks.clear(); // Simulate a restart/migration with pre-existing blocks.
+    fake.nowMs = 1_000;
+    const response = await notes.mutateNotes(ORG, USER, {
+      version: 1,
+      requestId: "future-hosted-update",
+      deviceId: "dashboard-tab",
+      operation: { type: "block.update", blockId: "blk_future", patch: { text: "hosted copy" } },
+    }, fake.nowMs);
+    expect(response.ok).toBe(true);
+    expect(blockOf("blk_future").text.value).toBe("hosted copy");
+    expect(blockOf("blk_future").text.at.physical).toBe(future.physical);
+    expect(blockOf("blk_future").text.at.logical).toBeGreaterThan(future.logical);
+  });
+
+  it("returns the original response on replay and refuses the same request id with a different body", async () => {
+    const firstRequest: NotesMutationRequest = {
+      version: 1,
+      requestId: "fingerprinted-request",
+      deviceId: "dashboard-tab",
+      operation: { type: "block.create", input: { blockId: "blk_first", text: "first" } },
+    };
+    const first = await notes.mutateNotes(ORG, USER, firstRequest, fake.nowMs);
+    const replay = await notes.mutateNotes(ORG, USER, firstRequest, fake.nowMs + 1);
+    expect(replay).toEqual(first);
+
+    const collision = await notes.mutateNotes(ORG, USER, {
+      ...firstRequest,
+      operation: { type: "block.create", input: { blockId: "blk_second", text: "second" } },
+    }, fake.nowMs + 2);
+    expect(collision.ok).toBe(false);
+    expect(!collision.ok && collision.error.code).toBe("idempotency_conflict");
+    expect(fake.blocks.has(`${ORG}/${USER}/blk_second`)).toBe(false);
+  });
+
+  it("domain-separates a raw outbox key from a hosted mutation request id", async () => {
+    await push({
+      key: "shared-token", id: "blk_raw", kind: "create", at: at(1_000, "device-a"),
+      payload: { text: "raw", rank: "m" },
+    });
+    const response = await notes.mutateNotes(ORG, USER, {
+      version: 1,
+      requestId: "shared-token",
+      deviceId: "device-a",
+      operation: { type: "block.create", input: { blockId: "blk_hosted", text: "hosted" } },
+    }, fake.nowMs);
+    expect(response.ok).toBe(true);
+    expect(blockOf("blk_hosted").text.value).toBe("hosted");
+  });
+
+  it("fails closed if a nested mutation attempts to change tenant scope", async () => {
+    const nested: NotesMutationRequest = {
+      version: 1,
+      requestId: "nested-other-scope",
+      deviceId: "dashboard-tab",
+      operation: { type: "block.create", input: { blockId: "blk_other", text: "other" } },
+    };
+    fake.onGetReceipt = () => notes.mutateNotes("org-other", USER, nested, fake.nowMs).then(() => undefined);
+    await expect(notes.mutateNotes(ORG, USER, {
+      ...nested,
+      requestId: "outer-scope",
+      operation: { type: "block.create", input: { blockId: "blk_outer", text: "outer" } },
+    }, fake.nowMs)).rejects.toThrow(/cannot change its organization or user scope/);
+    expect(fake.blocks.has(`${ORG}/${USER}/blk_outer`)).toBe(false);
+    expect(fake.blocks.has(`org-other/${USER}/blk_other`)).toBe(false);
+  });
+
+  it("refuses a duplicate client id and a lease for a missing block", async () => {
+    await seed("blk_existing", "keep me", at(1_000, "device-a"));
+    const duplicate: NotesMutationRequest = {
+      version: 1,
+      requestId: "duplicate-id",
+      deviceId: "dashboard-tab",
+      operation: {
+        type: "block.create",
+        input: { blockId: "blk_existing", text: "overwrite me" },
+      },
+    };
+    const duplicateResult = await notes.mutateNotes(ORG, USER, duplicate, fake.nowMs);
+    expect(duplicateResult.ok).toBe(false);
+    expect(!duplicateResult.ok && duplicateResult.error.code).toBe("refused");
+    expect(blockOf("blk_existing").text.value).toBe("keep me");
+
+    const missingLease: NotesMutationRequest = {
+      version: 1,
+      requestId: "missing-lease",
+      deviceId: "dashboard-tab",
+      operation: { type: "lease.acquire", blockId: "blk_missing" },
+    };
+    const leaseResult = await notes.mutateNotes(ORG, USER, missingLease, fake.nowMs);
+    expect(leaseResult.ok).toBe(false);
+    expect(!leaseResult.ok && leaseResult.error.code).toBe("not_found");
+    expect(fake.leases.size).toBe(0);
+  });
+
+  it("does not let comment.add overwrite an existing client-minted comment id", async () => {
+    await seed("blk_comment", "Discuss", at(1_000, "device-a"));
+    const add = (requestId: string, body: string): NotesMutationRequest => ({
+      version: 1,
+      requestId,
+      deviceId: "dashboard-tab",
+      operation: {
+        type: "comment.add", blockId: "blk_comment", commentId: "cmt_stable", body,
+      },
+    });
+    const first = await notes.mutateNotes(ORG, USER, add("comment-first", "first"), fake.nowMs);
+    expect(first.ok).toBe(true);
+
+    const collision = await notes.mutateNotes(
+      ORG, USER, add("comment-collision", "overwrite"), fake.nowMs + 1,
+    );
+    expect(collision.ok).toBe(false);
+    expect(!collision.ok && collision.error.code).toBe("refused");
+    expect(blockOf("blk_comment").comments!.cmt_stable!.body.value).toBe("first");
+  });
+
+  it("does not let a stale conflict choice clear a newer kept-both pair", async () => {
+    await seed("blk_conflict", "ours", at(1_000, "device-a"));
+    await push({
+      key: "make-conflict", id: "blk_conflict", at: at(1_000, "device-b"),
+      payload: { text: "theirs" },
+    });
+    const shown = structuredClone(blockOf("blk_conflict").conflicts!.text!);
+    blockOf("blk_conflict").conflicts!.text = {
+      ...shown,
+      theirs: "newer theirs",
+      theirsAt: at(shown.theirsAt.physical + 1, "device-c"),
+    };
+
+    const response = await notes.mutateNotes(ORG, USER, {
+      version: 1,
+      requestId: "stale-conflict-choice",
+      deviceId: "dashboard-tab",
+      operation: {
+        type: "conflict.resolve", blockId: "blk_conflict", field: "text", keep: "ours",
+        expected: { oursAt: shown.oursAt, theirsAt: shown.theirsAt },
+      },
+    }, fake.nowMs);
+    expect(response.ok).toBe(false);
+    expect(!response.ok && response.error.code).toBe("stale_conflict");
+    expect(blockOf("blk_conflict").conflicts?.text?.theirs).toBe("newer theirs");
+  });
+
+  it("refuses an over-bound generated template plan before any copied block is written", async () => {
+    const operations = Array.from({ length: 201 }, (_, index) => ({
+      idempotencyKey: `large-template:${index}`,
+      itemId: index === 0 ? "large-template" : `large-child-${index}`,
+      kind: "create" as const,
+      at: at(1_000 + index, "seed"),
+      payload: {
+        kind: index === 0 ? "page" : "paragraph",
+        text: `row ${index}`,
+        parentId: index === 0 ? null : "large-template",
+        rank: `r-${index.toString().padStart(3, "0")}`,
+        ...(index === 0 ? { template: true } : {}),
+      },
+    }));
+    const seeded = await notes.pushOperations(ORG, USER, operations);
+    expect(seeded.accepted).toHaveLength(201);
+    const before = fake.blocks.size;
+    const response = await notes.mutateNotes(ORG, USER, {
+      version: 1,
+      requestId: "over-bound-template",
+      deviceId: "dashboard-tab",
+      operation: { type: "template.instantiate", templateId: "large-template", parentId: null },
+    }, fake.nowMs);
+    expect(response.ok).toBe(false);
+    expect(!response.ok && response.error.code).toBe("limit_exceeded");
+    expect(fake.blocks.size).toBe(before);
+  });
+});
+
 /**
  * ADR-029 C5 + E6 — the SERVER half of the workspace verbs.
  *
@@ -766,9 +1175,10 @@ describe("the workspace verbs, server-side", () => {
   const VIEWER = { userId: USER, orgId: ORG };
   const reset = (): void => {
     fake.blocks.clear(); fake.refs.clear(); fake.index.clear();
-    fake.applied.clear(); fake.leases.clear();
+    fake.applied.clear(); fake.leases.clear(); fake.hostClocks.clear();
     fake.pageMeta.clear(); fake.rowValues.clear();
     fake.upserts = 0; fake.nowMs = 1_000_000;
+    fake.failUpsertAt = null;
   };
   beforeEach(reset);
 

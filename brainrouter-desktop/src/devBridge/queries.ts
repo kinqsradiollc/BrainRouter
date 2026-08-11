@@ -26,7 +26,7 @@ import {
   type NoteBlock, type NoteBlockKind, type NoteDatabaseView, type NotePropertyDef,
   type NotePropertyValue, type NoteViewKind,
 } from '@kinqs/brainrouter-core/notes/editing';
-import type { NoteCommentDto } from '../lib/notes/commentThread.js';
+import type { NoteCommentDto } from '@kinqs/brainrouter-ui/notes';
 import { devAtlasEnriched, devAtlasGraph } from './atlas.js';
 import type { DevState } from './state.js';
 import {
@@ -46,8 +46,34 @@ type DevAttachment = DevState['devAttachments'] extends Map<string, infer V> ? V
 
 export function createQueries(S: DevState): Record<string, (args: Record<string, unknown>) => unknown> {
   const {
-    DEMO_DIFF, prefs, sessionModes, effectivePrefs, resolvedModel, SESSIONS_BY_ROOT, devMeta, mergeMeta, devGroups, devSchedules, devWorktrees, devRequirements, devAnnotations, devAnnotMarkdown, devArtifacts, devPlanState, trackCat, mkItem, devTrack, devSprints, devModules, devViews, devFindItem, devAutomations, devPlanDecisions, DEV_DIFF_HASH, devRunReview, devGate, devRules, devProviders, devCliKnobs, devExtensions, devGithub, devConnectorCatalog, devSlimDocuments, devConnectorPermissionCounts, devConnectorRuns, devServers, devFiles, devWorkflows, devShortcuts, devFileRead, devAttachments, attachmentKind, attachmentMime, decodePreview, attachmentContext,
+    DEMO_DIFF, prefs, sessionModes, effectivePrefs, resolvedModel, SESSIONS_BY_ROOT, devMeta, mergeMeta, devGroups, devSchedules, devWorktrees, devRequirements, devAnnotations, devAnnotMarkdown, devArtifacts, devPlanState, devPlanner, trackCat, mkItem, devTrack, devSprints, devModules, devViews, devFindItem, devAutomations, devPlanDecisions, DEV_DIFF_HASH, devRunReview, devGate, devRules, devProviders, devCliKnobs, devExtensions, devGithub, devConnectorCatalog, devSlimDocuments, devConnectorPermissionCounts, devConnectorRuns, devServers, devFiles, devWorkflows, devShortcuts, devFileRead, devAttachments, attachmentKind, attachmentMime, decodePreview, attachmentContext,
   } = S;
+  const refreshDevPlannerSync = (): void => {
+    const count = devPlanner.sync.issues.length;
+    devPlanner.sync.pendingCount = count;
+    devPlanner.sync.label = count === 0
+      ? 'Everything is synced.'
+      : `${count} change${count === 1 ? '' : 's'} waiting to sync.`;
+  };
+  const queueDevPlannerChange = (
+    itemId: string,
+    itemTitle: string,
+    action: string,
+    entity: 'item' | 'block' = 'item',
+  ): void => {
+    devPlanner.sync.issues.push({
+      id: `dev-op-${S.devPlannerN++}`,
+      entity,
+      itemId,
+      itemTitle,
+      action,
+      createdAt: new Date().toISOString(),
+      ageLabel: 'now',
+      attempts: 0,
+      stuck: false,
+    });
+    refreshDevPlannerSync();
+  };
   /**
    * ADR-030 Q4 — the harness's stand-in for a parsed document.
    *
@@ -140,7 +166,12 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
   // without a server to produce them.
   type DevNote = {
     id: string; parentId: string | null; kind: string; text: string; checked: boolean;
-    level: number | null; refs: string[]; conflicts: Array<{ field: string; reason: string }>;
+    level: number | null; refs: string[]; conflicts: Array<{
+      field: string;
+      reason: string;
+      oursAt: { physical: number; logical: number; deviceId: string };
+      theirsAt: { physical: number; logical: number; deviceId: string };
+    }>;
     // E4's page metadata. The harness carries it because the sidebar tree, the
     // icon picker and the favourites section read it — without these fields the
     // shell renders here as an untitled, iconless list and looks broken in the
@@ -167,7 +198,11 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
   const devNotes: DevNote[] = [
     { id: 'blk_1', parentId: null, kind: 'page', text: 'Release notes', checked: false, level: null, refs: [], conflicts: [], icon: '📝', cover: null, favourite: true },
     { id: 'blk_2', parentId: 'blk_1', kind: 'paragraph', text: 'The parser is unbounded on hostile input.', checked: false, level: null, refs: [], conflicts: [], icon: null, cover: null, favourite: false },
-    { id: 'blk_3', parentId: 'blk_1', kind: 'todo', text: 'Ship the parser fix', checked: false, level: null, refs: ['brainrouter://planner/item/itm_dev1'], conflicts: [{ field: 'text', reason: 'fenced_stale_epoch' }], icon: null, cover: null, favourite: false },
+    { id: 'blk_3', parentId: 'blk_1', kind: 'todo', text: 'Ship the parser fix', checked: false, level: null, refs: ['brainrouter://planner/item/itm_dev1'], conflicts: [{
+      field: 'text', reason: 'fenced_stale_epoch',
+      oursAt: { physical: 1, logical: 0, deviceId: 'dev' },
+      theirsAt: { physical: 1, logical: 0, deviceId: 'other-device' },
+    }], icon: null, cover: null, favourite: false },
     { id: 'blk_4', parentId: 'blk_1', kind: 'page', text: 'Parser rewrite', checked: false, level: null, refs: [], conflicts: [], icon: '🧪', cover: null, favourite: false },
     // E3 — a database with every view kind stored, so the switcher, the board's
     // no-value column and the calendar's unscheduled strip all render here.
@@ -2325,7 +2360,20 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     'notes-end-edit': () => ({ ok: true }),
     'notes-resolve': (a) => {
       const block = devNotes.find((b) => b.id === a.id);
-      if (block) block.conflicts = block.conflicts.filter((c) => c.field !== a.field);
+      const expected = a.expected as {
+        oursAt?: { physical?: unknown; logical?: unknown; deviceId?: unknown };
+        theirsAt?: { physical?: unknown; logical?: unknown; deviceId?: unknown };
+      } | undefined;
+      const conflict = block?.conflicts.find((candidate) => candidate.field === a.field);
+      const sameClock = (
+        left: { physical: number; logical: number; deviceId: string },
+        right: { physical?: unknown; logical?: unknown; deviceId?: unknown } | undefined,
+      ): boolean => !!right && left.physical === right.physical
+        && left.logical === right.logical && left.deviceId === right.deviceId;
+      if (block && conflict && sameClock(conflict.oursAt, expected?.oursAt)
+        && sameClock(conflict.theirsAt, expected?.theirsAt)) {
+        block.conflicts = block.conflicts.filter((c) => c.field !== a.field);
+      }
       return block ?? null;
     },
     'notes-search': (a) => {
@@ -2725,6 +2773,142 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     // anywhere, so there is nothing to summarise and it says so rather than
     // offering columns that do not exist.
     'notes-rollup-targets': () => ({ ok: true, properties: [], databases: [] }),
+
+    'planner-read': () => ({
+      today: devPlanner.today,
+      items: devPlanner.items.map((item) => ({
+        ...item,
+        conflictFields: [...item.conflictFields],
+        ...(item.provenance ? { provenance: { ...item.provenance } } : {}),
+        ...(item.sourceFreshness ? { sourceFreshness: { ...item.sourceFreshness } } : {}),
+      })),
+      blocks: devPlanner.blocks.map((block) => ({ ...block })),
+      sync: {
+        ...devPlanner.sync,
+        issues: devPlanner.sync.issues.map((issue) => ({ ...issue })),
+      },
+      staleSources: [...devPlanner.staleSources],
+      driftNote: devPlanner.driftNote,
+    }),
+    'planner-add': (a) => {
+      const title = String(a.title ?? '').trim();
+      if (!title) return { error: 'A title is required.' };
+      const item = {
+        id: `itm_dev_${S.devPlannerN++}`,
+        title,
+        completed: false,
+        origin: 'owned' as const,
+        conflictFields: [] as string[],
+      };
+      devPlanner.items.unshift(item);
+      queueDevPlannerChange(item.id, item.title, 'create');
+      return item;
+    },
+    'planner-update': (a) => {
+      const item = devPlanner.items.find((candidate) => candidate.id === String(a.id ?? ''));
+      if (!item) return { error: 'That item is gone.' };
+      if (typeof a.title === 'string') item.title = a.title;
+      if (typeof a.notes === 'string') item.notes = a.notes;
+      if (typeof a.priority === 'number') item.priority = a.priority;
+      if (typeof a.completed === 'boolean') item.completed = a.completed;
+      if (typeof a.dueDate === 'string') item.dueDate = a.dueDate;
+      else if (a.dueDate === null) delete item.dueDate;
+      queueDevPlannerChange(item.id, item.title, 'update');
+      return item;
+    },
+    'planner-delete': (a) => {
+      const id = String(a.id ?? '');
+      const index = devPlanner.items.findIndex((item) => item.id === id);
+      if (index < 0) return false;
+      const [item] = devPlanner.items.splice(index, 1);
+      devPlanner.blocks.splice(0, devPlanner.blocks.length, ...devPlanner.blocks.filter((block) => block.itemId !== id));
+      queueDevPlannerChange(id, item?.title ?? id, 'delete');
+      return true;
+    },
+    'planner-schedule': (a) => {
+      const itemId = String(a.itemId ?? '');
+      const item = devPlanner.items.find((candidate) => candidate.id === itemId);
+      const estimateMinutes = Number(a.estimateMinutes ?? 0);
+      if (!item || !Number.isFinite(estimateMinutes) || estimateMinutes <= 0) {
+        return { error: 'A block needs an item and a positive estimate.' };
+      }
+      const block = {
+        id: `blk_dev_${S.devPlannerN++}`,
+        itemId,
+        estimateMinutes,
+        carriedOver: 0,
+        ...(typeof a.scheduledFor === 'string' ? { scheduledFor: a.scheduledFor } : {}),
+      };
+      devPlanner.blocks.push(block);
+      queueDevPlannerChange(item.id, item.title, 'create', 'block');
+      return block;
+    },
+    'planner-schedule-at': (a) => {
+      const item = {
+        id: `itm_dev_${S.devPlannerN++}`,
+        title: 'Focus block',
+        completed: false,
+        origin: 'owned' as const,
+        conflictFields: [] as string[],
+      };
+      devPlanner.items.unshift(item);
+      const block = {
+        id: `blk_dev_${S.devPlannerN++}`,
+        itemId: item.id,
+        scheduledFor: String(a.scheduledFor ?? ''),
+        estimateMinutes: Number(a.estimateMinutes) || 60,
+        carriedOver: 0,
+      };
+      devPlanner.blocks.push(block);
+      queueDevPlannerChange(item.id, item.title, 'create');
+      queueDevPlannerChange(item.id, item.title, 'create', 'block');
+      return block;
+    },
+    'planner-reschedule-block': (a) => {
+      const block = devPlanner.blocks.find((candidate) => candidate.id === String(a.blockId ?? ''));
+      const scheduledFor = typeof a.scheduledFor === 'string' ? a.scheduledFor : '';
+      if (!block || !scheduledFor || !Number.isFinite(Date.parse(scheduledFor))) {
+        return { error: 'A block and a valid time are required.' };
+      }
+      block.scheduledFor = scheduledFor;
+      const item = devPlanner.items.find((candidate) => candidate.id === block.itemId);
+      queueDevPlannerChange(block.itemId, item?.title ?? block.itemId, 'update', 'block');
+      return block;
+    },
+    'planner-record-actual': (a) => {
+      const block = devPlanner.blocks.find((candidate) => candidate.id === String(a.blockId ?? ''));
+      const actualMinutes = Number(a.actualMinutes);
+      if (!block || !Number.isFinite(actualMinutes) || actualMinutes < 0) {
+        return { error: 'A block and non-negative actual minutes are required.' };
+      }
+      block.actualMinutes = actualMinutes;
+      block.completedAt = new Date().toISOString();
+      const item = devPlanner.items.find((candidate) => candidate.id === block.itemId);
+      queueDevPlannerChange(block.itemId, item?.title ?? block.itemId, 'update', 'block');
+      return block;
+    },
+    'planner-resolve': (a) => {
+      const item = devPlanner.items.find((candidate) => candidate.id === String(a.id ?? ''));
+      if (!item) return { error: 'That item is gone.' };
+      item.conflictFields = item.conflictFields.filter((field) => field !== String(a.field ?? ''));
+      return item;
+    },
+    // The browser harness has no server. Background sync leaves the four-item
+    // acceptance state intact; explicit retry controls below mutate it.
+    'planner-sync': () => ({ pending: devPlanner.sync.issues.length, localOnly: true }),
+    'planner-retry-operation': (a) => {
+      const id = String(a.idempotencyKey ?? '');
+      const before = devPlanner.sync.issues.length;
+      devPlanner.sync.issues = devPlanner.sync.issues.filter((issue) => issue.id !== id);
+      refreshDevPlannerSync();
+      return { retried: before !== devPlanner.sync.issues.length };
+    },
+    'planner-retry-all': () => {
+      const requested = devPlanner.sync.issues.length;
+      devPlanner.sync.issues = [];
+      refreshDevPlannerSync();
+      return { requested };
+    },
 
     'workspace-modes': () => ({ modes: ['chat', 'code', 'notes', 'planner', 'track'], creatable: ['notes', 'planner', 'track'] }),
     // ADR-029 C2 row 6 — the browser harness has no checkout, so it answers
