@@ -450,3 +450,29 @@ test("Stop lets the connection go, and the tail the stream never covered is tran
   await flush();
   assert.equal(tab.state.transcript, "the whole point\nspoken words");
 });
+
+test("D10 — a partial arriving inside a coverage commit is not discarded", async () => {
+  const origin = new CaptureOrigin();
+  const tab = origin.tab();
+  const { sessionId, stream } = await recordStreaming(tab);
+
+  // The bundled sidecar emits these three in ONE pass, at the same millisecond:
+  // deploy/stt/stream.mjs writes final, then the proof, then the next
+  // utterance's first words. Dispatched concurrently, the partial reduced from
+  // the state as it was BEFORE the coverage commit's store write and was then
+  // overwritten by it — so the first words of every new utterance vanished, and
+  // a `final` caught the same way left a unit marked done with nothing in it.
+  stream.emit({ kind: "final", utteranceId: "u0", revision: 0, text: "good morning everyone", startMs: 0, endMs: 2_400 });
+  stream.emit({ kind: "coverage", coveredThroughSequence: 0 });
+  stream.emit({ kind: "partial", utteranceId: "u1", revision: 0, text: "next thing", startMs: 3_100, endMs: 3_600 });
+  for (let i = 0; i < 8; i += 1) await flush();
+
+  assert.equal(tab.state.transcript, "good morning everyone", "the covered words still settle");
+  assert.deepEqual(
+    tab.state.live.map((utterance) => utterance.text),
+    ["next thing"],
+    "and the partial that landed during that commit survives it",
+  );
+  const stored = await origin.session(sessionId, "org-a");
+  assert.equal(stored.segments[0]!.text, "good morning everyone");
+});

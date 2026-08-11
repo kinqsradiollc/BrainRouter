@@ -15,9 +15,9 @@ import {
   transcriptSoFar,
   type MeetingCaptureSession,
   type MeetingLiveUtterance,
-} from "@kinqs/brainrouter-core/meetings";
+} from "../meetings/index.js";
 
-import { commitStreamedCoverage } from "./streamCommit";
+import { commitStreamedCoverage } from "../meetings/streamCommit.js";
 
 /** A recording of `count` three-second durability chunks, as D9 writes them. */
 function recording(count: number): MeetingCaptureSession {

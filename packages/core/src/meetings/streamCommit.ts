@@ -27,18 +27,20 @@
  * are already accounted for — by an earlier commit, or by a unit the segmented
  * path owns — and are deliberately not written again.
  *
- * **This is a rule both hosts need and it is temporarily host-local.** It lives
- * here rather than in `@kinqs/brainrouter-core/meetings` only because the
- * desktop's D10 wiring lands separately; D1b means the second host must call
- * this rule rather than write a second one, and this file should move to core
- * the moment it does.
+ * **One rule, both hosts** (D1b). It lived in the dashboard while the desktop's
+ * D10 wiring landed separately, and in that window the desktop wrote a SECOND
+ * rule which exempted the first and last unit of a batch from the range check.
+ * Because a commit almost always seals exactly one unit — which is then both
+ * first and last — every final in hand was written into it whatever its
+ * timestamp: a span could be transcribed twice, and a unit could be sealed
+ * `done` with nothing in it. That is why this is here and not there.
  */
 import {
   markDone,
   sealUnit,
-  type MeetingCaptureSession,
-  type MeetingLiveUtterance,
-} from "@kinqs/brainrouter-core/meetings";
+} from "./captureSession.js";
+import type { MeetingCaptureSession } from "./types.js";
+import type { MeetingLiveUtterance } from "./streamingTranscript.js";
 
 /**
  * The session as it is once the proof through `coveredThroughSequence` has been

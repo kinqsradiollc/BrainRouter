@@ -45,11 +45,10 @@
  */
 import {
   captureChunks,
+  commitStreamedCoverage,
   describeTranscriptionEndpoint,
   initializationSegmentLength,
-  markDone,
   reduceStreamingTranscript,
-  sealUnit,
   selectTranscriptionMode,
   EMPTY_STREAMING_TRANSCRIPT,
   type MeetingCaptureSession,
@@ -185,34 +184,6 @@ function defaultDelay(ms: number): Promise<void> {
   });
 }
 
-/**
- * The finals that belong inside one unit's elapsed range.
- *
- * Clamped at both ends on purpose: a coverage event proves every sample through
- * a chunk is represented, so an utterance that began a few milliseconds before
- * the first sealed unit or ran a few past the last one still belongs to the
- * meeting, and dropping it would put an unmarked hole inside a segment that
- * claims to be settled (D5's worse failure).
- */
-export function utteranceTextForUnit(
-  unit: MeetingSegment,
-  units: readonly MeetingSegment[],
-  utterances: readonly MeetingLiveUtterance[],
-): string {
-  const first = units[0];
-  const last = units[units.length - 1];
-  const isFirst = unit.index === first?.index;
-  const isLast = unit.index === last?.index;
-  const parts: string[] = [];
-  for (const utterance of utterances) {
-    if (utterance.state !== 'final') continue;
-    const startsBefore = utterance.startMs < unit.startMs;
-    const startsAfter = utterance.startMs >= unit.endMs;
-    if ((startsBefore && !isFirst) || (startsAfter && !isLast)) continue;
-    if (utterance.text.trim()) parts.push(utterance.text.trim());
-  }
-  return parts.join(' ');
-}
 
 export class MeetingStreamSession {
   readonly #options: MeetingStreamSessionOptions;
@@ -407,6 +378,15 @@ export class MeetingStreamSession {
     const latencyMode = this.#latencyMode;
     if (!latencyMode) return;
     const resumeFromSequence = this.checkpoint;
+    // The live buffer is reset to the checkpoint on every open, exactly as the
+    // dashboard does at `captureSurface.ts:1624`. Finals from the connection
+    // that died are still in hand, and the replacement re-decodes the replayed
+    // audio and emits the same words under a NEW id — ids are namespaced by
+    // connection generation — so the reducer's checkpoint guard cannot tell the
+    // copies apart and the next commit writes both. An ordinary mid-meeting
+    // blip, which is what the reconnect budget exists for, put the last
+    // sentence in the transcript twice.
+    this.#state = { utterances: [], checkpoint: this.#state.checkpoint };
     const replay = this.#highestOffered - (resumeFromSequence ?? -1);
     if (replay > MAX_REPLAY_CHUNKS) {
       this.#degrade(MEETING_STREAM_NOTICE.degraded);
@@ -555,16 +535,10 @@ export class MeetingStreamSession {
     // is the tail that has not been covered yet.
     const finals = reduced.utterances.filter((utterance) => utterance.state === 'final');
     try {
-      await this.#options.ledger.apply((current) => {
-        const before = current.segments.length;
-        const sealed = sealUnit(current, { throughSequence: advanced });
-        const created = sealed.segments.slice(before);
-        let next = sealed;
-        for (const unit of created) {
-          next = markDone(next, unit.index, utteranceTextForUnit(unit, created, finals));
-        }
-        return next;
-      });
+      // The shared rule (D1b). This host used to seal and attribute inline, and
+      // its attribution exempted the first and last unit of a batch from the
+      // range check — which for a single-unit commit meant no check at all.
+      await this.#options.ledger.apply((current) => commitStreamedCoverage(current, advanced, finals));
     } catch {
       // The transcript state is not on disk, so the checkpoint does not move and
       // the same audio is replayed on the next connection. Nothing is dropped.

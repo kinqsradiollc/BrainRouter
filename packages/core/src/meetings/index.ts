@@ -86,5 +86,6 @@ export * from './draftReconcile.js';
 export * from './transcriptFold.js';
 export * from './transcriptionQueue.js';
 export * from './transcriptionStrategy.js';
+export * from './streamCommit.js';
 export * from './streamingTranscript.js';
 export * from './capturePhase.js';

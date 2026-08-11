@@ -119,10 +119,10 @@ import {
   type MeetingTranscriptionQueue,
   type MeetingUnitPolicy,
   type TranscriptFold,
+  commitStreamedCoverage,
 } from "@kinqs/brainrouter-core/meetings";
 
 import type { CaptureStream, CaptureStreamDrop, CaptureStreamHandlers } from "../../lib/meetings/captureStream";
-import { commitStreamedCoverage } from "../../lib/meetings/streamCommit";
 import {
   captureHeldNote,
   CAPTURE_DISCARD_UNKNOWN,
@@ -497,6 +497,17 @@ const EMPTY_STATE: CaptureSurfaceState = {
 const DRAFT_SAVE_DELAY_MS = 250;
 
 /**
+ * How long Record will wait for the endpoint to say what it offers.
+ *
+ * Generous, because the probe overlaps the microphone prompt and answering late
+ * only costs this recording its live text. Bounded, because it is on the path in
+ * FRONT of `recorder.start()`: a proxy that accepts and never answers held the
+ * microphone open and recorded nothing at all, which is the one outcome D1 does
+ * not allow. A timeout here means segmented, and the surface says so.
+ */
+const STRATEGY_PROBE_DEADLINE_MS = 4_000;
+
+/**
  * What a discard asks when this browser CAN say nobody else is writing —
  * `CAPTURE_DISCARD_UNKNOWN` is the same question on a browser that cannot, and
  * the difference between the two sentences is the whole of what the person is
@@ -691,6 +702,8 @@ export class MeetingCaptureSurface {
   #streamNext = 0;
 
   /** Whether an open is in flight, so the chunk cadence cannot start a second one. */
+  #streamEvents: Promise<void> = Promise.resolve();
+
   #streamOpening = false;
 
   /** A drop that was a verdict rather than an outage: this capture stops trying. */
@@ -1088,7 +1101,19 @@ export class MeetingCaptureSurface {
     // recordings: a sidecar that came back since the last meeting is a fact this
     // page has to be able to notice, and a probe that cannot fail (it resolves
     // to the segmented document) is never a new way to lose one.
-    const endpoint = this.#ports.describeEndpoint().catch(() => SEGMENTED_TRANSCRIPTION_CAPABILITIES);
+    // `.catch()` covers a probe that FAILS. It does not cover one that hangs,
+    // and a hang is what a proxy that accepts and never answers produces — the
+    // await below sits in front of `recorder.start()`, so an unbounded probe
+    // opened the microphone and then never recorded a byte, silently, for the
+    // whole meeting. The deadline is what makes the sentence above true.
+    // Losing the answer costs this recording its live text; losing the
+    // recording is not on the table (D1).
+    const endpoint = Promise.race([
+      this.#ports.describeEndpoint().catch(() => SEGMENTED_TRANSCRIPTION_CAPABILITIES),
+      new Promise<MeetingTranscriptionCapabilities>((resolve) => {
+        this.#ports.setTimer(() => resolve(SEGMENTED_TRANSCRIPTION_CAPABILITIES), STRATEGY_PROBE_DEADLINE_MS);
+      }),
+    ]);
     let microphone: CaptureMicrophone | undefined;
     try {
       microphone = await this.#ports.openMicrophone();
@@ -1568,7 +1593,18 @@ export class MeetingCaptureSurface {
         resumeFrom: this.#streamState.checkpoint,
         handlers: {
           onEvent: (event) => {
-            void this.#onStreamEvent(open, event);
+            // One chain, for the reason the desktop states at
+            // `meetingStreamSession.ts:511`: `#onStreamEvent` awaits a real
+            // store write when it commits coverage, and the sidecar emits
+            // final -> committed -> partial in a single pass. Dispatched
+            // concurrently, anything arriving during that write reduced from
+            // the PRE-commit state and was then overwritten — the first partial
+            // of every utterance vanished, and a `final` caught the same way
+            // left a unit marked done with no words in it, which is D5's
+            // unmarked hole rather than a gap.
+            this.#streamEvents = this.#streamEvents
+              .then(() => this.#onStreamEvent(open, event))
+              .catch(() => undefined);
           },
           onDrop: (drop) => {
             this.#streamLost(open, drop);

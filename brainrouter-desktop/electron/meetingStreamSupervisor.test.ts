@@ -580,3 +580,48 @@ test('a killed streaming capture still recovers: the chunks are on disk and a ne
   assert.equal(transcriptText(stored), 'recovered');
   assert.equal(stored.segments.every((segment) => segment.state === 'done'), true);
 });
+
+test('a reconnect does not write the replayed sentence twice', async () => {
+  const { store, supervisor, endpoint, runWakes, wakeCount } = harness(STREAMING);
+  const session = await supervisor.begin({ scope: { orgId: 'org_1' }, title: 'Replay' });
+  await supervisor.append(session.id, firstChunk(), 3_000);
+  for (let index = 0; index < 2; index += 1) await supervisor.append(session.id, chunk(), 3_000);
+  await until(() => endpoint.sent.length === 3, 'three chunks to be sent');
+
+  // A final the endpoint produced but never PROVED — no coverage reaches it, so
+  // it is still in the live buffer when the socket dies. That is the ordinary
+  // shape of a blip: the words exist, the proof does not.
+  const first = endpoint.connections[0]!;
+  first.emit({ kind: 'final', utteranceId: 'gen0-u1', revision: 0, text: 'the same sentence', startMs: 3_000, endMs: 5_800 });
+  first.drop('endpoint');
+
+  await until(() => wakeCount() > 0, 'the reconnect backoff');
+  await runWakes();
+  await until(() => endpoint.connections.length === 2, 'the reconnect');
+
+  // The replacement re-decodes the replayed audio and says the same words. Its
+  // utterance id differs because the adapter namespaces ids by connection
+  // generation, so nothing downstream can tell the two copies apart by id — the
+  // live buffer has to have been reset instead.
+  const second = endpoint.connections[1]!;
+  second.emit({ kind: 'final', utteranceId: 'gen1-u1', revision: 0, text: 'the same sentence', startMs: 3_000, endMs: 5_800 });
+  second.emit({ kind: 'coverage', coveredThroughSequence: 1 });
+
+  let committedText = '';
+  await until(() => {
+    void record(store, session.id).then((current) => {
+      committedText = current.segments
+        .filter((unit) => unit.state === 'done')
+        .map((unit) => unit.text ?? '')
+        .join(' ');
+    });
+    return committedText.length > 0;
+  }, 'the covered unit to be committed');
+
+  const committed = (await record(store, session.id)).segments
+    .filter((unit) => unit.state === 'done')
+    .map((unit) => unit.text ?? '')
+    .join(' ');
+  const occurrences = committed.split('the same sentence').length - 1;
+  assert.equal(occurrences, 1, `the replayed sentence is in the transcript ${occurrences} times: ${committed}`);
+});
