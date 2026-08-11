@@ -59,7 +59,7 @@ export function isMeetingCaptureSession(value: unknown): value is MeetingCapture
     return segments.every((segment) => segment.chunks === undefined)
       && rangesAreOrdered(segments);
   }
-  if (!Array.isArray(value.chunks) || !isStoredChunkLedger(value.chunks)) return false;
+  if (!isMeetingChunkLedger(value.chunks)) return false;
 
   const ledger = value.chunks as readonly MeetingChunk[];
   let nextSequence = 0;
@@ -112,17 +112,25 @@ function isStoredSegment(value: unknown, position: number): value is MeetingSegm
   return true;
 }
 
-function isStoredChunkLedger(value: readonly unknown[]): value is readonly MeetingChunk[] {
-  let previousEnd = 0;
-  return value.every((entry, position) => {
-    if (!isRecord(entry) || entry.sequence !== position || !isPositiveFinite(entry.byteLength)) return false;
-    if (!isNonNegativeFinite(entry.startMs) || !isPositiveFinite(entry.endMs) || entry.endMs <= entry.startMs) {
-      return false;
-    }
-    if (entry.startMs < previousEnd) return false;
-    previousEnd = entry.endMs as number;
-    return true;
-  });
+/** The one pure D9 ledger validator used by storage and streaming coverage. */
+export function isMeetingChunkLedger(value: unknown): value is readonly MeetingChunk[] {
+  try {
+    if (!Array.isArray(value)) return false;
+    let previousEnd = 0;
+    return value.every((entry, position) => {
+      if (!isRecord(entry) || entry.sequence !== position || !isPositiveSafeInteger(entry.byteLength)) return false;
+      if (!isNonNegativeSafeInteger(entry.startMs)
+        || !isPositiveSafeInteger(entry.endMs)
+        || entry.endMs <= entry.startMs) {
+        return false;
+      }
+      if (entry.startMs < previousEnd) return false;
+      previousEnd = entry.endMs;
+      return true;
+    });
+  } catch {
+    return false;
+  }
 }
 
 function rangesAreOrdered(segments: readonly MeetingSegment[]): boolean {
@@ -166,4 +174,12 @@ function isPositiveFinite(value: unknown): value is number {
 
 function isNonNegativeFinite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) > 0;
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
 }

@@ -75,7 +75,7 @@ test('D9 — short durability writes stay separate from a longer transcription u
   assert.deepEqual(openChunks(session).map((chunk) => chunk.sequence), [7]);
 });
 
-test('D9 — an endpoint boundary seals only the acknowledged chunk prefix', () => {
+test('D9 — an endpoint boundary seals only the covered chunk prefix', () => {
   const written = appendDurabilityChunks(recording('mtg-boundary'), 3);
   const first = sealUnit(written, { throughSequence: 1 });
   assert.deepEqual(unitChunkSequences(first.segments[0]!), [0, 1]);
@@ -90,7 +90,7 @@ test('D9 — an endpoint boundary cannot grow one upload past the hard duration 
   const written = appendDurabilityChunks(recording('mtg-bounded-boundary'), 16);
   const sealed = sealUnit(written, { throughSequence: 15 });
 
-  assert.equal(sealed.segments.length, 2, 'a 48-second acknowledgement is split before upload');
+  assert.equal(sealed.segments.length, 2, 'a 48-second covered run is split before upload');
   assert.deepEqual(unitChunkSequences(sealed.segments[0]!), Array.from({ length: 15 }, (_, index) => index));
   assert.deepEqual(unitChunkSequences(sealed.segments[1]!), [15]);
   assert.ok(sealed.segments.every((segment) => segment.endMs - segment.startMs <= 45_000));

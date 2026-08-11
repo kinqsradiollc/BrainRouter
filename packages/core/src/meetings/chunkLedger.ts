@@ -108,13 +108,16 @@ export const DEFAULT_MEETING_UNIT_POLICY: MeetingUnitPolicy = {
  *
  * Using `maxMs` as the target preserves the endpoint's linguistic boundary for
  * ordinary utterances while still making `maxMs`/`maxBytes` truthful ceilings.
- * Without this, omitting `policy` bypassed both and one delayed acknowledgement
+ * Without this, omitting `policy` bypassed both and one delayed coverage event
  * could recreate the oversized request D3 removed.
  */
-const BOUNDED_ENDPOINT_UNIT_POLICY: MeetingUnitPolicy = {
-  ...DEFAULT_MEETING_UNIT_POLICY,
-  targetMs: DEFAULT_MEETING_UNIT_POLICY.maxMs,
-};
+export function boundedEndpointUnitPolicy(
+  policy: MeetingUnitPolicy = DEFAULT_MEETING_UNIT_POLICY,
+): MeetingUnitPolicy {
+  return { ...policy, targetMs: policy.maxMs };
+}
+
+const BOUNDED_ENDPOINT_UNIT_POLICY = boundedEndpointUnitPolicy();
 
 /**
  * Invariant 3 — the chunks one unit was assembled from.
@@ -271,7 +274,7 @@ export function appendChunkToLedger(
 export interface SealUnitsInput {
   /**
    * Seal only as far as this chunk, inclusive — what a streaming endpoint's
-   * acknowledgement means (D10). Chunks past it stay open.
+   * coverage event proves complete (D10). Chunks past it stay open.
    */
   readonly throughSequence?: number;
   /**

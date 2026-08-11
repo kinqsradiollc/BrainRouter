@@ -14,6 +14,13 @@
 // transcribing, the reading and the writing injected as ports, so the two hosts
 // share a drain loop instead of each growing their own.
 //
+// `transcriptionStrategy` and `streamingTranscript` are D10's endpoint boundary:
+// a strict versioned capability document selects the same mode on both hosts,
+// while a pure ephemeral reducer keeps partial/final text separate from server
+// coverage proofs over the persisted chunk ledger. A proof becomes reconnect
+// authority only after the host atomically persists the returned transcript
+// state and checkpoint; editable draft text never enters that reducer.
+//
 // `segmentAudio` is the third: the container framing that makes a segment after
 // the first decodable at all. It is byte inspection with no `Blob` and no file
 // handle in it, so there is no honest reason for either host to own a copy —
@@ -79,4 +86,5 @@ export * from './draftReconcile.js';
 export * from './transcriptFold.js';
 export * from './transcriptionQueue.js';
 export * from './transcriptionStrategy.js';
+export * from './streamingTranscript.js';
 export * from './capturePhase.js';
