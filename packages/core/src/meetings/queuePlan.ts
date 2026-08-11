@@ -107,7 +107,7 @@ export function planTranscription(
  * the schedule rather than in each host's timer.
  *
  * It is one number now, and both hosts ask for it: the desktop's
- * `meetingTranscription.ts` and the dashboard's meetings page each call
+ * `meetingTranscription.ts` and the dashboard's `captureSurface.ts` each call
  * `drainWakeDelayMs` and neither keeps a floor of its own. What they kept
  * before is the argument for this export, and it is a stronger one than "two
  * copies that agree": they did NOT agree. The desktop had `MIN_WAKE_MS = 250`

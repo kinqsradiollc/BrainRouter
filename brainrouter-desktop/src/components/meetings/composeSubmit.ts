@@ -243,6 +243,23 @@ export function captureInFlight(hold: MeetingCaptureHold): boolean {
   return hold.recording || hold.arming || hold.closing;
 }
 
+/**
+ * Invariant 5 — may this form take on ANOTHER capture.
+ *
+ * Wider than `captureInFlight`, and the difference is the whole of invariant 5.
+ * In-flight ends the moment the last chunk settles; the capture is still IN HAND
+ * until it is filed, because the person is still typing a title for it. Starting
+ * or adopting a second one in that stretch is what put two meetings in one POST,
+ * released the audio of one of them, and left the other on disk to be filed
+ * twice.
+ *
+ * Create is deliberately NOT gated on this: filing is how a capture leaves the
+ * hand, so refusing it here would be the only way out of a state with no exit.
+ */
+export function captureInHand(hold: MeetingCaptureHold): boolean {
+  return captureInFlight(hold) || hold.inHand.length > 0;
+}
+
 export interface MeetingSubmissionInput {
   readonly title: string;
   readonly template: CreateMeetingInput["template"];

@@ -47,10 +47,10 @@
 // stamp was renewed for ever by a process the page had already left. Both hosts
 // now hold liveness in something that dies when the writer does — a per-process
 // writer map behind a single-instance lock; a Web Lock per browsing context —
-// and hand it to this module's rules as `exclude`. What is shared is the NAME a
-// writer goes by, because a host that minted its own would get the
-// insecure-context fallback wrong; the answer is not shared, because it is not
-// the same question on both hosts.
+// and hand it to this module's rules as `exclude`. Not even the writer's NAME is
+// shared: the desktop keys its per-process map by an id, and the browser has no
+// id at all — a tab identifies itself by HOLDING a Web Lock. The answer is not
+// shared because it is not the same question on both hosts.
 //
 // `transcriptFold` is the seventh, and the one that had already drifted into
 // two DIFFERENT answers rather than two copies of one: the desktop appended to

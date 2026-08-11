@@ -7,7 +7,9 @@
  * bytes to the internal Whisper STT sidecar at BRAINROUTER_STT_URL, and returns an
  * OpenAI-shaped `{ text }`. The sidecar is swappable behind one env var + one HTTP
  * contract, so whisper.cpp today can become faster-whisper later with no route
- * change. The sidecar is never exposed to the host — only :3747 is.
+ * change. In the shipped stack the sidecar is `expose:`d to the compose network
+ * only; the dev composes publish it on `127.0.0.1:3752` so it can be probed by
+ * hand, which is loopback and not the LAN, but is not "never".
  *
  * Contract (ours; the desktop/dashboard are the clients): POST /v1/audio/transcriptions
  * with the raw audio body (Content-Type: audio/webm | audio/wav | audio/mpeg | …),

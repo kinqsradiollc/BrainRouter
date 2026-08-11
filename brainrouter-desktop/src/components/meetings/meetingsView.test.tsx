@@ -157,6 +157,8 @@ interface FakeHost {
   adoptRefusal: string | null;
   /** Hold `captureStop` open, which is the window `closing` covers. */
   holdStop(): () => void;
+  /** Hold `captureAdopt` open — the window a Record used to be able to land in. */
+  holdAdopt(): () => void;
   /**
    * Hold `captureRead` open — a whole recording coming back over IPC, which is
    * the window the compose form can disappear in.
@@ -195,6 +197,7 @@ function installHost(): { host: FakeHost; restore: () => void } {
     createFails: false,
     adoptRefusal: null,
     holdStop: () => () => undefined,
+    holdAdopt: () => () => undefined,
     holdRead: () => () => undefined,
     push: () => undefined,
     ops: {
@@ -223,9 +226,15 @@ function installHost(): { host: FakeHost; restore: () => void } {
   };
 
   let pendingStop: Promise<void> | null = null;
+  let pendingAdopt: Promise<void> | null = null;
   host.holdStop = () => {
     let release = (): void => undefined;
     pendingStop = new Promise<void>((resolve) => { release = () => resolve(); });
+    return () => release();
+  };
+  host.holdAdopt = () => {
+    let release = (): void => undefined;
+    pendingAdopt = new Promise<void>((resolve) => { release = () => resolve(); });
     return () => release();
   };
   let pendingRead: Promise<void> | null = null;
@@ -258,6 +267,7 @@ function installHost(): { host: FakeHost; restore: () => void } {
     captureWriting: async () => host.writing,
     captureAdopt: async (id: string, holderId?: string) => {
       host.adopted.push({ id, ...(holderId ? { holderId } : {}) });
+      if (pendingAdopt) { const gate = pendingAdopt; pendingAdopt = null; await gate; }
       if (host.adoptRefusal) throw new Error(host.adoptRefusal);
       return host.record;
     },
@@ -502,6 +512,35 @@ test("Record and Create are both refused while the last chunk is still being wri
     await mounted.flush();
     assert.equal(isDisabled(button(mounted.root, "Create meeting")), false, "Create is available once the capture is closed");
     mounted.unmount();
+  } finally { restore(); }
+});
+
+test("Record cannot land inside a pick-up, which used to delete the recovered meeting unread", async () => {
+  const { host, restore } = installHost();
+  try {
+    const recovered = "mtg-20260809-recovered";
+    host.resumable = [recovery({ sessionId: recovered, title: "Yesterday" })];
+    const mounted = await compose(host);
+
+    // The pick-up's IPC is held open — the stretch that used to read as an idle
+    // tab, because `sessionId` alone said nothing to the rule Record consults.
+    const release = host.holdAdopt();
+    host.record = session({ id: recovered, status: "stopped", segments: [segment(0, { text: "Yesterday's words." })] });
+    const pickUp = press(mounted, "Transcribe it");
+
+    // The whole finding: a Record here started a SECOND capture, and Create then
+    // finalized — deleted — the recovered meeting without one of its words ever
+    // reaching the box. The refusal is in the function; the disabled attribute
+    // is only how it reaches the pixel.
+    await assert.rejects(press(mounted, "● Record audio"), /disabled/);
+    assert.deepEqual(host.begun, [], "no second capture was begun inside the pick-up");
+
+    release();
+    await pickUp;
+
+    // And the ordinary path is intact once the pick-up lands.
+    assert.equal(transcriptBox(mounted), "Yesterday's words.");
+    assert.deepEqual(host.begun, []);
   } finally { restore(); }
 });
 

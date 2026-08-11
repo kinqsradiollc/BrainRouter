@@ -149,16 +149,31 @@ test('G2 — the rules that guard Record and Pick up are in the functions, not o
   const recordAt = view.indexOf('const startRecording = useCallback(async () => {');
   assert.ok(recordAt > 0);
   assert.match(
-    view.slice(recordAt, recordAt + 120),
-    /useCallback\(async \(\) => \{\n\s*if \(captureInFlight\(holdStore\.current\)\) return;/,
+    view.slice(recordAt, recordAt + 620),
+    /useCallback\(async \(\) => \{(?:\n\s*\/\/[^\n]*)*\n\s*if \(captureInFlight\(holdStore\.current\)\) return;/,
     'Record refuses before it clears an error, builds a recorder or opens a microphone',
   );
   const adoptAt = view.indexOf('const adoptCapture = useCallback(async (sessionId: string) => {');
-  assert.ok(adoptAt > 0 && view.indexOf('if (captureInFlight(holdStore.current)) return;', adoptAt) > adoptAt);
+  // Invariant 5 — the WIDE rule, and only here. A pick-up takes on a SECOND
+  // meeting, so anything already in hand forbids it; Record does not, because
+  // Record -> Stop -> Record is two takes of one meeting and Create files both.
+  assert.ok(adoptAt > 0 && view.indexOf('if (captureInHand(holdStore.current)) return;', adoptAt) > adoptAt);
+  // And the pick-up raises `arming` BEFORE its IPC, which is what makes the
+  // narrow rule above cover it: a Record landing inside `capture.adopt` started
+  // a second capture, and Create then finalized — deleted — the recovered
+  // meeting without one of its words reaching the box.
+  const armAt = view.indexOf('holdStore.update({ sessionId, arming: true });', adoptAt);
+  assert.ok(armAt > adoptAt && armAt < view.indexOf('await capture.adopt(sessionId)'));
+  assert.match(view.slice(adoptAt), /finally \{ holdStore\.update\(\{ arming: false \}\); \}/);
   assert.ok(
-    view.indexOf('if (captureInFlight(holdStore.current)) return;', adoptAt) < view.indexOf('await capture.adopt(sessionId)'),
+    view.indexOf('if (captureInHand(holdStore.current)) return;', adoptAt) < view.indexOf('await capture.adopt(sessionId)'),
     'a pick-up refuses before it takes the recording',
   );
+  // The two controls that can TAKE ON another capture read the wide rule; Create
+  // and Delete deliberately do not, because filing is how a capture leaves the
+  // hand and gating those would leave the state with no exit.
+  assert.match(view, /disabled=\{Boolean\(busy\) \|\| holding \|\| lockedIds\.has\(row\.sessionId\)\} onClick=\{\(\) => void adoptCapture/);
+  assert.match(view, /const holding = captureInHand\(hold\);/);
 });
 
 test('a capture is transcribed segment by segment, by the host, and the 40 MB refusal is import-only', () => {

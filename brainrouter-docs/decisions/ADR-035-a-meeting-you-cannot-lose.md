@@ -168,6 +168,25 @@ Captured audio is the most sensitive artifact this product writes to disk. So:
 draft should move to the same protected location for the same reason — meeting content is not
 credential material, but it is not something to leave in a store any page script can read.
 
+**D6a · Where we cannot tell whether a meeting is live, we ask rather than guess.** Added after
+building it. "Deleted on an explicit discard" assumes the product knows whether anything is still
+writing, and one host sometimes cannot: a browser without Web Locks — a secure context on an older
+Safari or Firefox, or an in-app WebView — has no way to see its own other tabs. Both available
+answers were wrong. Deleting anyway destroyed a recording in progress; refusing forever left a
+person unable to delete their own audio while the surface printed an instruction the interface did
+not permit, which is a worse failure than the one it prevented.
+
+So the third answer: state the consequence and honour the reply. It is not a fallback to be
+embarrassed about — it is the only honest thing to say when the question genuinely cannot be
+answered, and per golden rule 23 the surface says which mode it is in.
+
+> **Liveness is not stored.** It was, briefly, as a heartbeat in the capture record, and that was
+> wrong in both directions at once — a killed meeting stayed invisible for the staleness window
+> while a reloaded window's recording was stranded for ever. Each host is now asked the question by
+> the thing that already knows the answer: the desktop's per-process writer map behind a
+> single-instance lock, and the browser's Web Lock, which the browser itself releases when the tab
+> dies. That is exactly §6's test, which a timer can only approximate.
+
 ### D7 · Local-first, with the network as an accelerator
 
 Capture and disk persistence require no network at all. Transcription prefers the configured STT
