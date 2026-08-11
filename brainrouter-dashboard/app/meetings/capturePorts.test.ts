@@ -72,9 +72,10 @@ test("the locks port is this browser's real lock table, not a stand-in that answ
   assert.equal(writers.known, true);
   assert.equal(writers.ids.has("mtg-wired"), true);
 
-  // …and on a browser that has none — plain http over a LAN — the port says so
-  // rather than reporting an empty set as an answer. The surface prints
-  // `CAPTURE_LOCKS_UNAVAILABLE` for exactly this, and Discard refuses.
+  // …and on a browser that has none — older Safari and Firefox, some in-app
+  // browsers — the port says so rather than reporting an empty set as an answer.
+  // The surface prints `CAPTURE_LOCKS_UNAVAILABLE` for exactly this, and the two
+  // paths that can destroy a recording ask the person before they act.
   const bare = await withGlobals({ navigator: {} }, () => browserCapturePorts(bridge()));
   assert.equal(bare.locks.available, false);
   assert.equal((await bare.locks.writers()).known, false);

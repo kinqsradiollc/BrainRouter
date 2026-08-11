@@ -243,6 +243,30 @@ test('every change to the live set is announced, so a second window never sits o
   assert.deepEqual(harness.published, [MEETING_CAPTURE_WRITERS_CHANNEL], 'the close announced');
 });
 
+test('a release that really released a recording is announced, and so is a renderer that died', async () => {
+  const harness = wire();
+  const first = harness.window('wr-first');
+  const second = harness.window('wr-second');
+  await record(harness, first);
+  harness.published.length = 0;
+
+  // The other half of the condition above, and the half that carries the news
+  // anybody is waiting for. Announcing only the EMPTY release is the failure
+  // inverted: a second window's compose form sits on "another window is
+  // recording this meeting" over a window that has gone, for the whole page
+  // view, because the writers push is the only thing that re-runs the query.
+  await harness.call(first, 'meetings:captureRelease', first.holderId);
+  assert.deepEqual(harness.published, [MEETING_CAPTURE_WRITERS_CHANNEL], 'the release was announced');
+
+  // …and the window that cannot report anything, because its renderer died.
+  // Same `release`, reached from `watchCaller` instead of `pagehide`, and the
+  // staleness it leaves behind is the same staleness.
+  await record(harness, second);
+  harness.published.length = 0;
+  second.destroy();
+  assert.deepEqual(harness.published, [MEETING_CAPTURE_WRITERS_CHANNEL], 'the crash was announced');
+});
+
 test('the boot pass runs at registration, and cannot correct a capture being recorded into', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-meeting-wire-boot-'));
   const previous = new MeetingCaptureStore(home);

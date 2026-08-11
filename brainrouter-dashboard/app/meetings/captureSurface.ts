@@ -77,8 +77,9 @@ import {
 
 import {
   captureHeldNote,
-  CAPTURE_LIVENESS_UNKNOWN,
+  CAPTURE_DISCARD_UNKNOWN,
   CAPTURE_LOCKS_UNAVAILABLE,
+  CAPTURE_PICK_UP_UNKNOWN,
   CAPTURE_RECORDING_ELSEWHERE,
   type CaptureLocks,
 } from "../../lib/meetings/captureLock";
@@ -332,6 +333,14 @@ const EMPTY_STATE: CaptureSurfaceState = {
 /** How long a keystroke waits before the draft is written down. */
 const DRAFT_SAVE_DELAY_MS = 250;
 
+/**
+ * What a discard asks when this browser CAN say nobody else is writing —
+ * `CAPTURE_DISCARD_UNKNOWN` is the same question on a browser that cannot, and
+ * the difference between the two sentences is the whole of what the person is
+ * being asked to decide.
+ */
+const DISCARD_QUESTION = "Discard this unfinished recording? Its audio is deleted from this device.";
+
 /** An error's own words when it has any, and a plain sentence when it does not. */
 export function describe(caught: unknown, fallback: string): string {
   const message = caught instanceof Error ? caught.message.trim() : "";
@@ -403,25 +412,24 @@ export class MeetingCaptureSurface {
   /** The settle in flight, so `dispose` can wait for the recording to finish landing. */
   #finishing: Promise<void> | null = null;
 
-  /**
-   * The chunks being written RIGHT NOW.
-   *
-   * `MediaRecorder` delivers its final `ondataavailable` and fires `onstop`
-   * immediately after it, from a handler that cannot await anything — so at the
-   * instant Stop settles the capture, the last piece of the meeting is somewhere
-   * between the media stack and the store. `store.settled()` waits for writes it
-   * has already been GIVEN, which is not the same thing: this set is the step
-   * before that, and without it a chunk still ahead of `appendChunk` is settled
-   * around rather than waited for. It used to work by accident, because
-   * `appendChunk` was the first statement and therefore joined the store's queue
-   * synchronously; a heartbeat inserted in front of it broke that accident and a
-   * meeting was settled without its ending. The heartbeat is gone and the
-   * accident holds again — which is exactly why this stays: the invariant should
-   * not depend on which statement happens to come first.
-   */
-  readonly #chunkWork = new Set<Promise<void>>();
-
   #disposed = false;
+
+  /**
+   * Which attempt to start a recording is the current one.
+   *
+   * Bumped by `dispose()`, and compared by `record()` across each of its awaits.
+   * The flag above cannot do this job: `dispose()` sets it permanently, and this
+   * object OUTLIVES a teardown — React 19's StrictMode runs
+   * mount → cleanup → mount on the committed instance, and Next turns StrictMode
+   * on for the App Router by default. So a `record()` that latched on `#disposed`
+   * was dead for the rest of the page's life in `next dev`: 0 store opens, 0
+   * microphone prompts, no session, and an empty `createError` — a dead button
+   * with no message, which is ADR-028's own complaint. What is cancelled is one
+   * ATTEMPT, exactly as `MeetingCaptureRecorder.attempt` cancels one on the
+   * desktop, so a teardown still abandons the arming in flight and the next mount
+   * can still record.
+   */
+  #attempt = 0;
 
   constructor(ports: CaptureSurfacePorts) {
     this.#ports = ports;
@@ -498,6 +506,17 @@ export class MeetingCaptureSurface {
    * second copy of the thing the decision is about.
    */
   async init(): Promise<void> {
+    // This mount is live, whatever the last one did. React 19's StrictMode runs
+    // mount → cleanup → mount on the COMMITTED object — `init#1 → dispose#1 →
+    // init#1`, proved with react-test-renderer — and Next turns StrictMode on
+    // for the App Router by default, which this dashboard does not override. So
+    // without this line every teardown flag `dispose()` set was still set on the
+    // object the page went on using: `draftReady` stayed false (the guard below
+    // returns before it is patched), so the compose draft was never persisted,
+    // and `#scheduleDraftSave` refused every keystroke after it. A page that
+    // cannot save a draft in the environment it is developed in is a page whose
+    // draft has not been tested.
+    this.#disposed = false;
     let draft: MeetingDraft | null = null;
     try {
       const storage = this.#ports.legacyDraftStorage();
@@ -549,18 +568,26 @@ export class MeetingCaptureSurface {
    *
    * **And this path is cancellable, in three places.** `dispose()` can only stop
    * a recorder that already EXISTS, and the stretch in front of two permission
-   * prompts is exactly the one where none does yet — so `#disposed` is asked
-   * before each prompt and once more before the recorder starts. Not after every
-   * await: the checks in between were undone by the ones after them, and a guard
-   * whose removal changes nothing observable is a guard nobody can keep honest.
-   * The three that are left each stop something different, and `#abandonArming`
-   * says what each cost when it was missing.
+   * prompts is exactly the one where none does yet — so the teardown is asked
+   * about before each prompt and once more before the recorder starts. Not after
+   * every await: the checks in between were undone by the ones after them, and a
+   * guard whose removal changes nothing observable is a guard nobody can keep
+   * honest. The three that are left each stop something different, and
+   * `#abandonArming` says what each cost when it was missing.
+   *
+   * What those three compare is `#attempt` and not `#disposed`, because a
+   * teardown cancels THIS start and not the object: see the field, and the
+   * StrictMode remount that made a permanently latched flag a dead Record button
+   * in `next dev`.
    */
   async record(): Promise<void> {
-    // 1/3 — a press that lands after the teardown. Below this line is
-    // `openStore(true)`, which asks the browser for persistent storage: a
-    // permission prompt raised by a page the person has already left.
+    // 1/3 — a press that lands after the teardown, on a page with no mount after
+    // it. Below this line is `openStore(true)`, which asks the browser for
+    // persistent storage: a permission prompt raised by a page the person has
+    // already left. This one is the flag, because there is no attempt yet to
+    // compare — `init()` clears it, so a remounted page records normally.
     if (this.#disposed) return;
+    const attempt = this.#attempt;
     this.#patch({ createError: "", warning: "" });
     // Raised before the first await and lowered only once the recorder is
     // running (or has failed to start). `recording` cannot cover this stretch:
@@ -599,7 +626,7 @@ export class MeetingCaptureSurface {
       // something to raise on a page the person has left, and the lock and the
       // record taken above go back with this: it is the ordering that used to
       // leave a lock nothing would ever release.
-      if (this.#disposed) {
+      if (this.#attempt !== attempt) {
         await this.#abandonArming(store, sessionId);
         return;
       }
@@ -639,14 +666,14 @@ export class MeetingCaptureSurface {
       // a `start()` runs on a page that has gone, writing chunks through a
       // closure nothing can reach and holding the microphone open. It covers the
       // prompt the person answered on their way out, too.
-      if (this.#disposed) {
+      if (this.#attempt !== attempt) {
         await this.#abandonArming(store, sessionId, microphone);
         return;
       }
       const recorder = microphone.recorder;
       const opened = microphone;
       recorder.ondataavailable = (event) => {
-        if (event.data.size) this.#trackChunk(this.#persistChunk(capture, event.data));
+        if (event.data.size) void this.#persistChunk(capture, event.data);
       };
       recorder.onstop = () => {
         opened.release();
@@ -748,6 +775,12 @@ export class MeetingCaptureSurface {
    * again, which also restores the property the beat quietly broke: the write
    * joins the store's queue synchronously, before Stop can settle around it.
    *
+   * **Keep it first.** That ordering is the entire reason `#finishCapture` can
+   * settle a meeting by draining the store alone. Put any await in front of it
+   * and the final chunk is no longer in the queue Stop waits on: that is how a
+   * meeting came to be settled without its ending, and nothing above this line
+   * will say so.
+   *
    * Three steps, three separate failures, and they are NOT the same news. One
    * `try` around all three wrote one sentence for all of them — "that audio is
    * missing from the meeting" — which is true of the first and false of the
@@ -839,11 +872,23 @@ export class MeetingCaptureSurface {
     try {
       // The final chunk arrives at `ondataavailable` and `onstop` fires straight
       // after it, so at this instant the last piece of the meeting is still on
-      // its way to the store. Both halves are waited for, in this order: the
-      // chunk handlers that have not reached `appendChunk` yet, and then the
-      // store's own write queue. Either one alone settles the meeting without
-      // its ending.
-      await this.#settleChunks();
+      // its way to the store — and this is the line that waits for it. It is
+      // enough BECAUSE `appendChunk` is the first thing `#persistChunk` does:
+      // the write joins `#serialize` in the same turn the chunk was delivered
+      // in, so every chunk the recorder has handed over is already in the queue
+      // this drains, and the segment each one records is applied ahead of the
+      // `stopCapture` below it. That is a property of the order of two lines,
+      // not a law — a heartbeat inserted in front of `appendChunk` once broke it
+      // and a meeting was settled without its ending, which is why `#persistChunk`
+      // says so where the statement is.
+      //
+      // This used to be one of a PAIR, with a set of in-flight chunk handlers
+      // awaited first and a comment claiming "either one alone settles the
+      // meeting without its ending". That claim was false: each half was
+      // individually deletable with the whole suite green, and on a backend
+      // slowed to three ticks per write neither ordering could lose the ending.
+      // A redundancy no test can tell apart from its absence is not a belt, so
+      // it is gone rather than left with a sentence defending it.
       await capture.store.settled(capture.sessionId);
       const queue = this.#queue;
       if (!queue || queue.session.id !== capture.sessionId) return;
@@ -1157,16 +1202,36 @@ export class MeetingCaptureSurface {
    * persist would erase the first one's segments. A tab that crashed while
    * holding it is not a refusal — the browser released it when the tab died, so
    * the recording is available on the first ask.
+   *
+   * **And the answer is read the same way here as everywhere else that can cost
+   * somebody a meeting**, which it was not. This branched on `hold()` alone and
+   * therefore only ever refused `"taken"` — so on a browser with no Web Locks
+   * the outcome is `"unavailable"` and the pick-up went through onto a capture
+   * another tab had the microphone open on. Reproduced: tab one recording, tab
+   * two's Pick up enabled, one click, and Create from tab two posted TAB TWO's
+   * transcript and deleted the manifest and every chunk while tab one still said
+   * `recording: true` — its next chunk failing with "No meeting capture named …
+   * is stored." The rule this round is about ("when we cannot tell whether a
+   * meeting is live, we do not act on it as though it were dead") had been
+   * applied to the discard and to the reap and not to the button beside them.
+   *
+   * So `#otherWriter` decides, after the acquisition rather than instead of it:
+   * a lock we now hold answers `none` without a query, a lock another tab holds
+   * is refused, and an unknown is put to the person, because on that browser
+   * they are the only one who can answer it.
    */
   async pickUp(entry: ResumableCapture): Promise<void> {
     this.#patch({ createOpen: true, notice: "", warning: "", createError: "" });
     try {
       const store = await this.#store(false);
       const { title, mimeType } = parseCapturePayload(entry.record.payload);
-      if (await this.#ports.locks.hold(entry.session.id) === "taken") {
+      await this.#ports.locks.hold(entry.session.id);
+      const writer = await this.#otherWriter(entry.session.id);
+      if (writer === "elsewhere") {
         this.#patch({ createError: captureHeldNote(storedStillRecording(entry.record)) });
         return;
       }
+      if (writer === "unknown" && !this.#ports.confirm(CAPTURE_PICK_UP_UNKNOWN)) return;
       if (title) this.#patch({ title: this.#state.title || title });
       const queue = this.#attachQueue(store, entry.session, {
         ...(mimeType ? { mimeType } : {}),
@@ -1185,44 +1250,51 @@ export class MeetingCaptureSurface {
   }
 
   /**
-   * D6 — deletion is a real deletion, and it is refused while somebody is
-   * recording into it.
+   * D6 — deletion is a real deletion, it is refused while somebody else is
+   * recording into it, and where nobody can say, it is ASKED.
    *
    * The refusal is in the FUNCTION and not only on the button, because the
    * button's `disabled` is a statement about a pixel and this deletes an hour of
    * somebody's meeting.
+   *
+   * **The three answers, and why the middle one is a question.** A capture this
+   * tab is holding is not an uncertainty at all — this tab is the one writing to
+   * it — so that is settled first and the browser is only asked about a row this
+   * tab never touched. A capture another tab holds is refused outright. An
+   * unknown used to be refused too, and that was a delete this browser could
+   * never perform on any path: the sentence sent people to "pick it up here
+   * first", but a picked-up capture is the ACTIVE one and leaves the offer that
+   * renders the only Discard there is, and a reload brings the row back with the
+   * same disabled button. D6 says audio is deleted on an explicit discard; a
+   * product that prints an instruction its own UI does not permit has not
+   * refused a delete, it has lost the audio in the other direction. So the
+   * question names what cannot be ruled out and the person answers it.
    */
   async discard(record: CaptureSessionRecord): Promise<void> {
-    if (!this.#ports.confirm("Discard this unfinished recording? Its audio is deleted from this device.")) return;
+    // A capture that is currently in hand is discarded THROUGH the queue, so the
+    // record says it was thrown away rather than merely vanishing — and it is
+    // this tab's own, so no question is put about it.
+    const inHand = this.#queue?.session.id === record.sessionId;
+    // Asked of the browser at the moment of the click, not read off a listing
+    // taken when the page rendered: another tab may have pressed Record on this
+    // very capture since, and this deletes an hour of somebody's meeting. Before
+    // the confirmation rather than after it, because the answer chooses which
+    // question gets asked.
+    const writer = inHand ? "none" : await this.#otherWriter(record.sessionId);
+    if (writer === "elsewhere") {
+      this.#patch({ createError: `This recording cannot be deleted. ${captureHeldNote(storedStillRecording(record))}` });
+      await this.refreshRecoverable();
+      return;
+    }
+    if (!this.#ports.confirm(writer === "unknown" ? CAPTURE_DISCARD_UNKNOWN : DISCARD_QUESTION)) return;
     // The player is reading the bytes this is about to delete.
     if (this.#previewRef?.sessionId === record.sessionId) this.#revokePreview();
     try {
-      // A capture that is currently in hand is discarded THROUGH the queue, so
-      // the record says it was thrown away rather than merely vanishing.
-      if (this.#queue?.session.id === record.sessionId) {
+      if (inHand) {
         await this.#release(false);
         return;
       }
       const store = await this.#store(false);
-      // Asked of the browser at the moment of the click, not read off a listing
-      // taken when the page rendered: another tab may have pressed Record on
-      // this very capture since, and this deletes an hour of somebody's meeting.
-      const writer = await this.#otherWriter(record.sessionId);
-      if (writer === "elsewhere") {
-        this.#patch({ createError: `This recording cannot be deleted. ${captureHeldNote(storedStillRecording(record))}` });
-        return;
-      }
-      // Golden rule 23, and the whole of the no-locks defect: an unknown answer
-      // is not "nobody is writing". Reproduced over plain http — tab one
-      // recording, tab two offered that live capture, one click and the manifest
-      // and every chunk were gone while tab one still said it was recording. The
-      // browser cannot rule that out, so this refuses rather than guesses; the
-      // person has been told since the page loaded (`coordination`) that this
-      // browser cannot coordinate its tabs.
-      if (writer === "unknown") {
-        this.#patch({ createError: CAPTURE_LIVENESS_UNKNOWN });
-        return;
-      }
       await store.delete(record.sessionId);
     } catch (caught) {
       this.#patch({ createError: describe(caught, "The recording could not be deleted.") });
@@ -1486,13 +1558,14 @@ export class MeetingCaptureSurface {
    * `releaseAll()` here and a `hold()` still in flight over there are a race
    * this teardown loses on its own — it can hand back a lock the recording is
    * about to start using, or run entirely before the lock is taken and leave one
-   * nothing will ever release. `#disposed` is set on the first line for that
-   * reason: `record()` checks it after every await and abandons itself, and this
-   * flag is what it checks.
+   * nothing will ever release. The two lines below are for that: `record()`
+   * abandons an arming whose attempt is no longer the current one, and refuses
+   * to start a new one at all until a mount clears the flag.
    */
   async dispose(): Promise<void> {
     if (this.#disposed) return;
     this.#disposed = true;
+    this.#attempt += 1;
     this.#cancelWake();
     this.#flushDraftSave();
     this.#revokePreview();
@@ -1634,27 +1707,6 @@ export class MeetingCaptureSurface {
       });
     } catch {
       // A draft that could not be saved is not worth an alert of its own.
-    }
-  }
-
-  /** Remember one chunk's write until it lands, so Stop can wait for it. */
-  #trackChunk(work: Promise<void>): void {
-    this.#chunkWork.add(work);
-    void work.finally(() => this.#chunkWork.delete(work));
-  }
-
-  /**
-   * Wait for every chunk handler in flight, twice.
-   *
-   * Twice because the recorder can deliver its final chunk while the first pass
-   * is already running — which is precisely the case this exists for — and never
-   * more, because a drain must not be somewhere a producer can hang Stop for
-   * ever. Rejections are absorbed: a chunk that failed to write has already
-   * reported itself, and Stop must still settle the meeting.
-   */
-  async #settleChunks(): Promise<void> {
-    for (let pass = 0; pass < 2 && this.#chunkWork.size; pass += 1) {
-      await Promise.allSettled([...this.#chunkWork]);
     }
   }
 

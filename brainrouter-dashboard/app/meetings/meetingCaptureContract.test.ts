@@ -157,18 +157,23 @@ test("golden rule 23 — the browser that cannot coordinate says so, in its own 
   assert.match(surface, /if \(!ports\.locks\.available\) this\.#state = \{ \.\.\.this\.#state, coordination: CAPTURE_LOCKS_UNAVAILABLE \};/);
 });
 
-test("golden rule 23 — the offer's Discard is DISABLED when this browser cannot vouch for the recording", () => {
-  // A render arrangement, and the one this page was silent about. `discard`
-  // refuses an unknown liveness in the function (driven in
-  // `captureSurface.test.ts`), but on a browser with no Web Locks that refusal
-  // arrives AFTER the click on a control that looked enabled — and the rule is
-  // to say so rather than behave differently in silence. `writer` alone is not
-  // enough: it is empty on such a browser because nothing can be known, not
-  // because nothing is being written.
-  assert.match(page, /const undeletable = writer \?\? \(cap\.writersKnown \? null : CAPTURE_LIVENESS_UNKNOWN\);/);
-  assert.match(page, /disabled=\{cap\.busy === "transcribe" \|\| Boolean\(undeletable\)\} title=\{undeletable \?\? undefined\}/);
-  // Pick up is deliberately NOT gated on it: a browser that cannot coordinate
-  // its tabs must still be able to recover a crashed meeting, which is D1b.
+test("golden rule 23 — the offer's Discard says what this browser cannot vouch for, and still works", () => {
+  // A render arrangement, and the one this page was silent about. `writer` alone
+  // is not enough: on a browser with no Web Locks it is empty because nothing can
+  // be KNOWN, not because nothing is being written — so the tooltip carries the
+  // unknown as well, and it is the same sentence `discard` puts to the person, so
+  // the button cannot promise a different one.
+  assert.match(page, /const unsure = !writer && !cap\.writersKnown \? CAPTURE_DISCARD_UNKNOWN : null;/);
+  // Disabled only by a writer this browser can actually name. Disabling it on the
+  // unknown was a delete with no path at all on that browser: the offer's row is
+  // the only place Discard is rendered, and picking the capture up to "discard it
+  // here" removes the row. The function asks; the button must be pressable for
+  // the question to be reachable.
+  assert.match(page, /disabled=\{cap\.busy === "transcribe" \|\| Boolean\(writer\)\} title=\{writer \?\? unsure \?\? undefined\}/);
+  // Pick up is deliberately NOT gated on it either — a browser that cannot
+  // coordinate its tabs must still be able to recover a crashed meeting, which is
+  // D1b — and `pickUp` asks the same person the same kind of question, which is
+  // driven in `captureSurface.test.ts`.
   assert.match(page, /disabled=\{cap\.busy === "transcribe" \|\| cap\.recording \|\| Boolean\(writer\)\}/);
 });
 

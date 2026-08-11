@@ -490,6 +490,62 @@ test('Stop waits for the chunk that is still landing before it commits', async (
   assert.deepEqual((await record(store, session.id)).segments.map((segment) => segment.text), ['chunk-3']);
 });
 
+test('a Record whose queue could not be opened claims nothing', async () => {
+  const { home, store, supervisor } = harness(async () => 'text');
+  // The record and its directory are written, and the queue over them cannot be
+  // built — the record was written by a version this one cannot read, the
+  // directory went away between the two calls, the disk refused the read back.
+  let created = '';
+  const began = store.begin.bind(store);
+  store.begin = async (input) => { const session = await began(input); created = session.id; return session; };
+  const stored = store.stored.bind(store);
+  store.stored = async () => { throw new Error('that capture could not be read back'); };
+  await assert.rejects(
+    () => supervisor.begin({ scope: { orgId: null }, title: 'Doomed', writerId: 'wr-first' }),
+    /could not be read back/,
+  );
+  store.stored = stored;
+
+  // Nothing will ever record into that capture, so nothing may go on claiming
+  // it — and a claim left here is PERMANENT: none of the four removals is
+  // reachable for a capture with no queue, so it would be filtered out of every
+  // window's offer and refused to every window's Delete for the life of the
+  // process. The directory would be on disk and unreachable.
+  assert.equal(supervisor.isWriting(created), false);
+  assert.deepEqual(await supervisor.writing(), []);
+  await supervisor.close(created, 'discard', 'wr-second');
+  assert.equal(fs.existsSync(captureDirectory(home, created)), false);
+});
+
+test('a close another window is refused leaves the live capture exactly as it was', async () => {
+  let release = (): void => undefined;
+  const inFlight = new Promise<void>((resolve) => { release = () => resolve(); });
+  let held = true;
+  const { home, store, supervisor } = harness(async (bytes) => {
+    // The first segment is at the endpoint, which is where a capture spends most
+    // of a meeting and therefore where a second window's click lands.
+    if (held) { held = false; await inFlight; }
+    return `chunk-${bytes.byteLength}`;
+  });
+  const session = await supervisor.begin({ scope: { orgId: null }, writerId: 'wr-first' });
+  await supervisor.append(session.id, new Uint8Array([1, 2]), 20_000);
+
+  await assert.rejects(() => supervisor.close(session.id, 'discard', 'wr-second'), /recording this meeting right now/);
+  release();
+  await supervisor.settle(session.id);
+
+  // The refusal happened BEFORE the first mutation, and that ordering is the
+  // whole of this test. This supervisor is per PROCESS, so the entry a refusal
+  // dropped, marked closed and un-timed on its way to throwing would be the
+  // RECORDING window's: its ports go inert, and the segment that was at the
+  // endpoint when somebody else clicked Delete never reaches disk — no text, no
+  // gap marker, and nothing anywhere that says a second window's refused click
+  // cost the meeting twenty seconds.
+  assert.equal((await record(store, session.id)).segments[0]?.text, 'chunk-2');
+  assert.ok(fs.existsSync(captureDirectory(home, session.id)), 'the audio survived the refusal');
+  assert.equal(supervisor.isWriting(session.id), true, 'and the recording window is still the writer');
+});
+
 test('an anonymous Record claims nothing, and blocks nobody', async () => {
   const { supervisor } = harness(async () => 'text');
   // The caller would not say who it was, so there is nothing for another window

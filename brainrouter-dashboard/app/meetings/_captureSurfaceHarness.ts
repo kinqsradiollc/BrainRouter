@@ -29,7 +29,7 @@
  *
  * The underscore prefix keeps it out of the `*.test.ts` glob.
  */
-import { FakeCaptureBackend } from "../../lib/meetings/_captureBackendFixture";
+import { FakeCaptureBackend, type FakeCaptureBackendOptions } from "../../lib/meetings/_captureBackendFixture";
 import { FakeLockManager, FakeLockOrigin } from "../../lib/meetings/_captureLockFixture";
 import { CaptureLocks } from "../../lib/meetings/captureLock";
 import { MeetingCaptureStore } from "../../lib/meetings/captureStore";
@@ -118,7 +118,13 @@ interface Timer {
 
 /** The origin: one backend, one lock table, one wall clock, many tabs. */
 export class CaptureOrigin {
-  readonly backend = new FakeCaptureBackend();
+  /**
+   * This origin's storage. `writeTicks` and friends are how a test makes a write
+   * slower than the settle that has to wait for it — with instant writes every
+   * ordering looks correct, which is the shape that hid a meeting being settled
+   * without its ending.
+   */
+  readonly backend: FakeCaptureBackend;
 
   /**
    * `navigator.locks` for this origin — shared by every tab, as the real one is.
@@ -126,7 +132,7 @@ export class CaptureOrigin {
    * It logs into the backend's own call list so the two fakes read as one
    * ordered history of what this origin did.
    */
-  readonly locks = new FakeLockOrigin(this.backend.calls);
+  readonly locks: FakeLockOrigin;
 
   /** A fixed instant, so every stamp in a stored record is checkable. */
   clock = Date.parse("2026-08-01T09:00:00.000Z");
@@ -134,6 +140,11 @@ export class CaptureOrigin {
   readonly timers: Timer[] = [];
 
   #nextHandle = 1;
+
+  constructor(storage: FakeCaptureBackendOptions = {}) {
+    this.backend = new FakeCaptureBackend(storage);
+    this.locks = new FakeLockOrigin(this.backend.calls);
+  }
 
   tab(options: TabOptions = {}): CaptureTab {
     return new CaptureTab(this, options);
@@ -192,8 +203,15 @@ export interface TabOptions {
   readonly orgId?: string;
   readonly legacyDraft?: LegacyDraftStorage;
   /**
-   * A tab whose browser has no Web Locks — a dashboard served over plain http.
-   * Golden rule 23's case, and the only way to reach the fallback's behaviour.
+   * A tab whose browser has no Web Locks — Safari up to 15.3, Firefox up to 95,
+   * the older in-app WebViews. Golden rule 23's case, and the only way to reach
+   * the fallback's behaviour.
+   *
+   * Deliberately NOT "a dashboard served over plain http", which this said and
+   * which cannot happen: an insecure origin has no `navigator.mediaDevices`
+   * either, so nothing can be recorded there and no two tabs can race over a
+   * recording. The browsers above are secure contexts that record perfectly well
+   * and cannot coordinate — which is what makes the fallback worth having.
    */
   readonly withoutLocks?: boolean;
   /**
@@ -273,8 +291,18 @@ export class CaptureTab {
   /** A recorder that opens and then refuses to start. */
   recorderStartFails = false;
 
-  /** The answer `window.confirm` gives the discard. */
+  /** The answer `window.confirm` gives. */
   confirmAnswer = true;
+
+  /**
+   * Every question this tab put to the person, in order.
+   *
+   * Recorded rather than merely answered because on a browser that cannot tell
+   * whether another tab is recording, WHICH question was asked is the whole of
+   * the guarantee: the same click either states that this delete may destroy a
+   * live recording, or asks a routine "are you sure?" over the top of it.
+   */
+  readonly confirms: string[] = [];
 
   postFails: Error | null = null;
 
@@ -319,7 +347,10 @@ export class CaptureTab {
       },
       transcribeFile: async () => this.importText,
       legacyDraftStorage: () => options.legacyDraft ?? null,
-      confirm: () => this.confirmAnswer,
+      confirm: (question) => {
+        this.confirms.push(question);
+        return this.confirmAnswer;
+      },
       now: () => origin.clock,
       setTimer: (run, ms) => origin.setTimer(run, ms),
       clearTimer: (handle) => origin.clearTimer(handle),

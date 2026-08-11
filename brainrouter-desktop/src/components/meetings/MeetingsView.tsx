@@ -21,7 +21,7 @@ import { SharePopover } from "./SharePopover.js";
 import { TeamsView } from "./TeamsView.js";
 import { createMeetingCaptureOps, type MeetingCaptureProgress, type MeetingCaptureWriter, type MeetingComposeDraft } from "./captureOps.js";
 import { MeetingCaptureRecorder } from "./captureRecorder.js";
-import { NO_CAPTURE_HOLD, captureInFlight, createCaptureHold, prepareSubmission, type MeetingCaptureHold } from "./composeSubmit.js";
+import { NO_CAPTURE_HOLD, captureInFlight, createCaptureHold, createComposeLife, prepareSubmission, type MeetingCaptureHold } from "./composeSubmit.js";
 import { migrateLegacyDraft } from "./legacyDraft.js";
 import { createTeamsOps } from "./teamsOps.js";
 import { useActiveOrg } from "../../lib/orgContext.js";
@@ -694,12 +694,14 @@ function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onCaptureHold, o
   const draftRetiredRef = useRef(false);
   const foldRef = useRef<TranscriptFold>(EMPTY_TRANSCRIPT_FOLD);
   const liveRef = useRef<MeetingCaptureSession | null>(null);
-  // False once this form is gone. Reading a recording back is a real allocation
-  // that takes a moment, and a `setPreview` after unmount is dropped by React —
-  // leaving an object URL nothing will ever revoke, pinning a whole meeting in
-  // this window's heap. That is §1's defect in miniature, so the URL is only
-  // minted while there is still something to revoke it.
-  const mountedRef = useRef(true);
+  // Which life of this form a read-back belongs to. Reading a recording back is
+  // a real allocation that takes a moment, and a `setPreview` after unmount is
+  // dropped by React — leaving an object URL nothing will ever revoke, pinning a
+  // whole meeting in this window's heap. That is §1's defect in miniature, so
+  // the URL is only minted while there is still something to revoke it. A life
+  // rather than a `useRef(true)` flag because a flag the teardown lowers is a
+  // flag nothing raises again — see `createComposeLife`.
+  const formLife = useMemo(() => createComposeLife(), []);
 
   /** The one place the box is written to from a segment — the shared `foldTranscript`. */
   const applySession = useCallback((session: MeetingCaptureSession) => {
@@ -834,11 +836,11 @@ function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onCaptureHold, o
    * claimed instead of a recorder feeding a view that is gone.
    */
   useEffect(() => () => {
-    mountedRef.current = false;
+    formLife.retire();
     const recorder = recorderRef.current;
     recorderRef.current = null;
     void recorder?.stop();
-  }, []);
+  }, [formLife]);
   useEffect(() => {
     let active = true;
     // F1 — never the capture in hand. It is unfinished by definition, offering
@@ -983,13 +985,17 @@ function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onCaptureHold, o
    * count the card above was still advertising.
    */
   const playCapture = useCallback(async (sessionId: string) => {
+    // Read BEFORE the await, which is what makes this survivable: the answer to
+    // "is this still my form?" is a life this attempt belongs to, not a flag a
+    // teardown lowered once and nothing raises.
+    const life = formLife.begin();
     setError("");
     setBusy(`play:${sessionId}`);
     try {
       const audio = await capture.read(sessionId);
       // Checked AFTER the await and BEFORE the URL exists: an object URL minted
       // for a form that has already closed is one nothing will ever revoke.
-      if (!mountedRef.current) return;
+      if (formLife.ended(life)) return;
       // Nothing readable at all is not a player with a caption under it: there
       // is nothing to play, and an empty `<audio>` that silently refuses to
       // start is exactly the surface ADR-028 asks us not to build.
@@ -1002,7 +1008,7 @@ function NewMeeting({ ops, orgId, legacyDraft, onAudioRetained, onCaptureHold, o
       setPreview({ sessionId, url: URL.createObjectURL(new Blob([audio.bytes], { type: audio.contentType })), missing: audio.missing.length });
     } catch (caught) { setError(errorText(caught, "Could not read that recording back from this device.")); }
     finally { setBusy(""); }
-  }, [capture]);
+  }, [capture, formLife]);
 
   /** D5 — the retry affordance on a stated gap, from the audio still on disk. */
   const retrySegment = useCallback(async (index: number) => {

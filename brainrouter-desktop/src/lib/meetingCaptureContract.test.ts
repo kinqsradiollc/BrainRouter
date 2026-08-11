@@ -110,10 +110,16 @@ test('a capture is transcribed segment by segment, by the host, and the 40 MB re
   // PLAYABLE", which a recovery card that can only offer "transcribe it" cannot
   // answer for a user whose STT endpoint is down.
   assert.equal(view.match(/capture\.read\(/g)?.length, 1);
-  assert.match(view, /const playCapture = useCallback\(async \(sessionId: string\)[\s\S]{0,240}await capture\.read\(sessionId\)/);
+  assert.match(view, /const playCapture = useCallback\(async \(sessionId: string\)[\s\S]{0,420}await capture\.read\(sessionId\)/);
   // …and the object URL is a handle on a whole recording held in this window's
-  // heap, so it is released rather than leaked — §1's defect in miniature.
+  // heap, so it is released rather than leaked — §1's defect in miniature. Twice
+  // over: the effect revokes the one this form is showing, and the read-back
+  // refuses to mint one at all for a form whose life has ended — see
+  // `createComposeLife`, and `meetingsView.test.tsx` for the assertion that a
+  // form which has gone leaks nothing.
   assert.match(view, /URL\.revokeObjectURL\(preview\.url\)/);
+  assert.match(view, /const life = formLife\.begin\(\);/);
+  assert.match(view, /if \(formLife\.ended\(life\)\) return;/);
 
   // Open question 3 — the queue is HOST-owned. A renderer that constructed one
   // would lose it on the next reload, which is the defect this ADR is about.
@@ -444,7 +450,7 @@ test('A1 — navigating away from the compose form does not end the meeting', ()
   // `status: "recording"` and the library advertised the user's own click as an
   // interrupted recording.
   assert.doesNotMatch(view, /recorderRef\.current\?\.dispose\(\)/);
-  assert.match(view, /mountedRef\.current = false;\s*\n\s*const recorder = recorderRef\.current;\s*\n\s*recorderRef\.current = null;\s*\n\s*void recorder\?\.stop\(\);/);
+  assert.match(view, /formLife\.retire\(\);\s*\n\s*const recorder = recorderRef\.current;\s*\n\s*recorderRef\.current = null;\s*\n\s*void recorder\?\.stop\(\);/);
 });
 
 test('F4 — the fifth click: the mode rail does not end the meeting either', () => {

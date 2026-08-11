@@ -36,16 +36,27 @@
  *    from an opaque `clientId`. That is also why the writer set unions in our own
  *    ids: a lock we are holding is a fact, not a question.
  *
- * **When `navigator.locks` is missing** — it needs a secure context, so a
- * dashboard served over plain http on a LAN has none — this object answers
- * `unavailable` and reports `known: false` rather than an empty set, and the
- * surface prints `CAPTURE_LOCKS_UNAVAILABLE`. Golden rule 23: a fallback that is
- * invisible is a silent outage, and the degradation here is real — a second tab
- * of such a browser is not coordinated at all, so two tabs recording at once can
- * only be told apart by the person doing it. `known: false` is deliberately NOT
- * the same value as "nobody is writing": callers that destroy things read it as
- * "this browser cannot say", and callers that would otherwise reap a chunk-less
+ * **When `navigator.locks` is missing** this object answers `unavailable` and
+ * reports `known: false` rather than an empty set, and the surface prints
+ * `CAPTURE_LOCKS_UNAVAILABLE`. Golden rule 23: a fallback that is invisible is a
+ * silent outage, and the degradation here is real — a second tab of such a
+ * browser is not coordinated at all, so two tabs recording at once can only be
+ * told apart by the person doing it. `known: false` is deliberately NOT the same
+ * value as "nobody is writing": callers that destroy things read it as "this
+ * browser cannot say", and callers that would otherwise reap a chunk-less
  * manifest leave it alone.
+ *
+ * **Which browser that actually is.** This file used to name "a dashboard served
+ * over plain http on a LAN", and that environment cannot reach any of this: on
+ * an insecure origin Chromium reports `isSecureContext: false`, and
+ * `navigator.mediaDevices` is `undefined` alongside `navigator.locks` — so there
+ * is no microphone there, nothing can be recorded, and the two-tab race the
+ * fallback is about cannot happen on that origin at all. The browsers that
+ * really have this shape are SECURE ones that predate Web Locks: Safari up to
+ * 15.3, Firefox up to 95, and the older in-app WebViews that lag both. They can
+ * record perfectly well and cannot coordinate, which is the whole point — and
+ * telling a plain-http user to "keep this meeting in one tab" was advice about
+ * an origin where they cannot record a meeting in any number of tabs.
  */
 
 /** Namespaced like every other key this product puts in a browser-wide namespace. */
@@ -57,7 +68,7 @@ export const CAPTURE_LOCK_PREFIX = "brainrouter:meeting-capture:";
  * it is in".
  */
 export const CAPTURE_LOCKS_UNAVAILABLE =
-  "This browser cannot tell whether another tab is recording — it has no Web Locks API, which usually means this page is not on a secure origin. Recording in two tabs at once is not coordinated here: keep this meeting in one tab.";
+  "This browser cannot tell whether another tab is recording — it has no Web Locks API, which is the case in older versions of Safari and Firefox and in some in-app browsers. Recording in two tabs at once is not coordinated here: keep this meeting in one tab.";
 
 /**
  * What a surface says about a capture another tab of this origin is holding —
@@ -98,23 +109,41 @@ export function captureHeldNote(stillRecording: boolean): string {
 }
 
 /**
- * Golden rule 23 — what a surface says when it is asked to DELETE a recording on
+ * Golden rule 23 — what a surface ASKS when it is told to destroy a recording on
  * a browser that cannot tell whether another tab is writing to it.
  *
- * Reproduced end to end on a dashboard served over plain http, which is a shape
- * D1b names: tab one recording with the microphone open, tab two offered that
- * LIVE capture in its recovery list, one click and the manifest and every chunk
- * were gone — while tab one still reported `recording: true` and told the person
- * their audio was safe. `known: false` is not "nobody is writing", and the one
- * path that destroys a meeting is not allowed to read it as if it were.
+ * Reproduced with a tab whose browser has no Web Locks (`withoutLocks` in the
+ * harness, and any of the browsers the header names): tab one recording with the
+ * microphone open, tab two offered that LIVE capture in its recovery list, one
+ * click and the manifest and every chunk were gone — while tab one still
+ * reported `recording: true` and told the person their audio was safe.
+ * `known: false` is not "nobody is writing", and no path that destroys a meeting
+ * may read it as if it were.
  *
- * Create is deliberately still allowed through the same unknown: it can only
- * ever finalize a capture THIS tab has been writing itself, and wedging it would
- * be a bigger outage than the one it guards against. Discard is the opposite —
- * it acts on a row this tab never touched.
+ * **These are questions rather than refusals, and that is the correction.** The
+ * refusal they replace said "Pick it up here first — a recording this tab is
+ * holding can be discarded", and on this browser that instruction could not be
+ * followed: a picked-up capture is the ACTIVE one, it leaves the recovery offer
+ * the moment it is adopted, and Discard is only rendered on an offered row — so
+ * the one browser that refused the delete was also the one browser with no
+ * second way to make it. Audio the product will not delete on any path is audio
+ * a person cannot get rid of, which is a worse answer to D6 than asking them.
+ *
+ * So the browser states exactly what it cannot vouch for and the person, who is
+ * the only one here who can know whether another tab is open, decides. Both
+ * questions name the consequence rather than asking "are you sure?".
+ *
+ * Create is deliberately not asked at all through the same unknown: it can only
+ * ever finalize a capture THIS tab has been writing itself, and a confirmation
+ * on every meeting made on such a browser would be noise that teaches people to
+ * click through the two that mean something.
  */
-export const CAPTURE_LIVENESS_UNKNOWN =
-  "This browser cannot tell whether another tab is recording this meeting, so it will not delete it. Pick it up here first — a recording this tab is holding can be discarded.";
+export const CAPTURE_DISCARD_UNKNOWN =
+  "This browser cannot tell whether another tab is recording this meeting. If one is, deleting it here destroys the audio that tab is still recording, and it cannot be undone. Delete it anyway?";
+
+/** The same unknown, on the path that ADOPTS a recording instead of deleting it. */
+export const CAPTURE_PICK_UP_UNKNOWN =
+  "This browser cannot tell whether another tab is recording this meeting. If one is, opening it here means two tabs writing to one recording, and creating the meeting from this tab would delete the audio the other is still capturing. Open it here anyway?";
 
 /** The lock's name for one capture. Exclusive per session, shared by every tab. */
 export function captureLockName(sessionId: string): string {

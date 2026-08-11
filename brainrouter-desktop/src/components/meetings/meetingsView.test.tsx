@@ -157,6 +157,11 @@ interface FakeHost {
   adoptRefusal: string | null;
   /** Hold `captureStop` open, which is the window `closing` covers. */
   holdStop(): () => void;
+  /**
+   * Hold `captureRead` open — a whole recording coming back over IPC, which is
+   * the window the compose form can disappear in.
+   */
+  holdRead(): () => void;
   /** Publish a persisted change, as main's broadcast does. */
   push(progress: { sessionId?: string; session: MeetingCaptureSession; phase?: string; errors?: string[] }): void;
   readonly ops: MeetingsOps;
@@ -190,6 +195,7 @@ function installHost(): { host: FakeHost; restore: () => void } {
     createFails: false,
     adoptRefusal: null,
     holdStop: () => () => undefined,
+    holdRead: () => () => undefined,
     push: () => undefined,
     ops: {
       listPage: async () => ({ meetings: [], nextCursor: null }),
@@ -222,6 +228,12 @@ function installHost(): { host: FakeHost; restore: () => void } {
     pendingStop = new Promise<void>((resolve) => { release = () => resolve(); });
     return () => release();
   };
+  let pendingRead: Promise<void> | null = null;
+  host.holdRead = () => {
+    let release = (): void => undefined;
+    pendingRead = new Promise<void>((resolve) => { release = () => resolve(); });
+    return () => release();
+  };
   host.push = (progress) => {
     const payload = { sessionId: progress.sessionId ?? progress.session.id, ...progress };
     for (const listener of [...listeners]) listener(payload);
@@ -236,7 +248,10 @@ function installHost(): { host: FakeHost; restore: () => void } {
       if (pendingStop) { const gate = pendingStop; pendingStop = null; await gate; }
       return host.record;
     },
-    captureRead: async () => ({ bytes: new Uint8Array([1, 2, 3]), contentType: "audio/webm", missing: [] }),
+    captureRead: async () => {
+      if (pendingRead) { const gate = pendingRead; pendingRead = null; await gate; }
+      return { bytes: new Uint8Array([1, 2, 3]), contentType: "audio/webm", missing: [] };
+    },
     captureFinalize: async (id: string, holderId?: string) => { host.finalized.push({ id, ...(holderId ? { holderId } : {}) }); return { ok: true }; },
     captureDiscard: async (id: string, holderId?: string) => { host.discarded.push({ id, ...(holderId ? { holderId } : {}) }); return { ok: true }; },
     captureResumable: async () => host.resumable,
@@ -663,4 +678,52 @@ test("every call that takes or releases a recording names this window", async ()
     assert.deepEqual(host.finalized, [{ id: host.record.id, holderId: holder }]);
     mounted.unmount();
   } finally { restore(); }
+});
+
+test("Delete audio names this window too, or the window that recorded it is refused its own discard", async () => {
+  const { host, restore } = installHost();
+  try {
+    host.resumable = [recovery({ title: "Board review" })];
+    const mounted = await compose(host);
+    await press(mounted, "Delete audio");
+
+    // The enumeration above stopped at begin/adopt/finalize, so this one holder
+    // id was deletable with everything green — and `discard` is the call that
+    // matters most for it. Main refuses `close(id, 'discard', undefined)` for
+    // ANY live writer including this window's own, and the caller that reaches
+    // it for a cancelled Record is `MeetingCaptureRecorder.abandon`, which
+    // SWALLOWS the failure: the capture then stays claimed for the life of the
+    // process, hidden from every window's offer and refused to every other one.
+    assert.deepEqual(host.discarded, [{ id: recovery().sessionId, holderId: captureHolderId() }]);
+    mounted.unmount();
+  } finally { restore(); }
+});
+
+test("a recording read back after the compose form has gone mints no object URL to leak", async () => {
+  const { host, restore } = installHost();
+  const minted: string[] = [];
+  const previous = { create: URL.createObjectURL, revoke: URL.revokeObjectURL };
+  URL.createObjectURL = () => { minted.push(`blob:meeting-${minted.length}`); return minted[minted.length - 1]!; };
+  URL.revokeObjectURL = () => undefined;
+  try {
+    host.resumable = [recovery({ title: "Board review" })];
+    const mounted = await compose(host);
+    // §6's "on disk and PLAYABLE" is a whole meeting's bytes coming back over
+    // IPC, and the person can leave Meetings while they are still coming.
+    const release = host.holdRead();
+    const play = button(mounted.root, "▶ Play");
+    await mounted.act(() => (play.props as { onClick(): void }).onClick());
+    mounted.unmount();
+    release();
+    await new Promise((resolve) => { setTimeout(resolve, 0); });
+
+    // The `setPreview` would be dropped by React and the effect that revokes the
+    // URL went with the form, so a URL minted here is a whole recording pinned
+    // in this window's heap with nothing left that could ever release it.
+    assert.deepEqual(minted, [], "no object URL was minted for a form that had already gone");
+  } finally {
+    URL.createObjectURL = previous.create;
+    URL.revokeObjectURL = previous.revoke;
+    restore();
+  }
 });

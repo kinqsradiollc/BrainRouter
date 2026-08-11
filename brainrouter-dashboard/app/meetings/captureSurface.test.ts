@@ -29,6 +29,7 @@ import { captureLockName } from "../../lib/meetings/captureLock";
 import { resumableCaptures } from "../../lib/meetings/capturePayload";
 import { SegmentTranscriptionError } from "../../lib/meetings/captureQueue";
 import { MEETING_CAPTURE_TIMESLICE_MS } from "../../lib/meetings/captureStore";
+import { MEETING_DRAFT_CAPTURE_ID } from "../../lib/meetings/meetingDraft";
 import { CaptureOrigin, flush } from "./_captureSurfaceHarness";
 
 /** Record, one chunk, Stop — the shortest complete meeting. */
@@ -322,6 +323,39 @@ test("Stop does NOT hand it back while the queue is still writing to the capture
   assert.deepEqual(second.state.recoverable.map((entry) => entry.record.sessionId), [sessionId]);
 });
 
+test("Stop waits for the store's own queue, so the meeting keeps its ending", async () => {
+  // `MediaRecorder` delivers its final `ondataavailable` and fires `onstop`
+  // immediately after it, from a handler that cannot await anything — so at the
+  // instant Stop settles the capture, the last piece of the meeting is still
+  // being written. `#finishCapture`'s `store.settled()` is the whole of the wait,
+  // and deleting it does not merely leave bytes in flight: `stopCapture` lands
+  // first, and the segment that claims those bytes is then refused by its own
+  // `status === "recording"` guard. The meeting keeps its audio and loses its
+  // ending.
+  //
+  // Three ticks per write is what makes that visible. With instant writes every
+  // ordering looks correct here, which is exactly how this line came to be
+  // deletable with the whole suite green.
+  const origin = new CaptureOrigin({ writeTicks: 3 });
+  const tab = origin.tab();
+  await tab.surface.init();
+  tab.surface.setTitle("Right to the end");
+  const sessionId = await recordOneChunk(tab);
+  // Handed over BY `stop()`, as a real MediaRecorder hands over its last one.
+  tab.recorder.pending.push(new Blob([new Uint8Array(2048).fill(3)]));
+  await tab.stop();
+
+  assert.equal((await origin.record(sessionId))?.chunks.length, 2, "both chunks are on the device");
+  // Read from the SESSION this tab settled, not from `restoreCaptureSession`:
+  // recovery adopts an unclaimed chunk on the next load, so a stored reading
+  // answers "2" either way and cannot see the segment being dropped at all. What
+  // the person is looking at, and what Create posts, is this.
+  const settled = tab.state.session;
+  assert.equal(settled?.status, "stopped");
+  assert.equal(settled?.segments.length, 2, "and the meeting claims both — the ending is not settled around");
+  assert.equal(settled?.segments[1].byteLength, 2048, "with the bytes the store actually took");
+});
+
 test("B — the POST carries the workspace frozen at Record, not the one the switcher moved to", async () => {
   const origin = new CaptureOrigin();
   const tab = origin.tab({ orgId: "org-recorded-in" });
@@ -498,6 +532,73 @@ test("Record pressed after the page has gone asks this browser for nothing", asy
   assert.equal(origin.backend.calls.some((call) => call.startsWith("writeManifest:mtg")), false, "and no meeting was begun");
   assert.deepEqual(origin.locks.names, []);
   assert.deepEqual(await origin.records(), []);
+});
+
+test("a StrictMode remount can still record, and still saves its draft", async () => {
+  // REGRESSION, reproduced, and dev-only in the sense that matters least: it is
+  // the environment this feature is written in. React 19's StrictMode runs
+  // mount → cleanup → mount ON THE COMMITTED OBJECT — `init#1 → dispose#1 →
+  // init#1` — and Next turns StrictMode on for the App Router by default, which
+  // this dashboard's `next.config.ts` does not override. `page.tsx` builds the
+  // surface with `useMemo(..., [])` and wires init/dispose to one effect, so the
+  // second mount got an object whose teardown flag was permanently set: pressing
+  // Record did NOTHING — no store open, no microphone prompt, no session, and an
+  // EMPTY `createError`, which is ADR-028's own complaint — and `draftReady`
+  // never came back, so the compose box stopped being written down at all.
+  // The refused-persistence tab is what makes "did Record open the durable
+  // store?" answerable at all: an already-persisted store is reused, so nothing
+  // is asked again. D11 says persistence can simply be refused, and that is the
+  // browser this is.
+  const origin = new CaptureOrigin();
+  const tab = origin.tab({ persistenceRefused: true });
+  void tab.surface.init();
+  await tab.surface.dispose();
+  await tab.surface.init();
+
+  assert.equal(tab.state.draftReady, true, "the remounted page can save a draft again");
+  tab.surface.setTitle("Second mount");
+  const sessionId = await recordOneChunk(tab);
+  assert.equal(tab.state.recording, true, "and Record does what the button says");
+  assert.equal(tab.microphones.length, 1, "the microphone was asked for");
+  assert.equal(tab.storeOpens.includes(true), true, "the durable store was opened for it");
+  assert.equal((await origin.record(sessionId))?.chunks.length, 1, "and the audio is on the device");
+
+  // The draft debounce is a timer, so this is the whole path: keystroke →
+  // scheduled → written. It is refused outright by a latched teardown flag.
+  tab.surface.setTranscript("typed after the remount");
+  await origin.advance(500);
+  const stored = await origin.record(MEETING_DRAFT_CAPTURE_ID);
+  assert.match(String(stored?.payload), /typed after the remount/, "the draft really reached the durable store");
+});
+
+test("…and a teardown still cancels the arming it interrupted, even with a remount behind it", async () => {
+  // The reason the fix is an ATTEMPT rather than a cleared flag. Cancelling
+  // `record()` by re-reading a flag that the next mount clears would let a
+  // recording armed by the OLD mount carry on into the new one — starting a
+  // recorder for a lock `releaseAll()` has already handed back, which is the
+  // first of the three orderings `#abandonArming` was written for.
+  const origin = new CaptureOrigin();
+  const tab = origin.tab();
+  await tab.surface.init();
+  tab.microphonePending = true;
+  const pressed = tab.start();
+  await flush();
+  const [begun] = await origin.records();
+  assert.ok(begun, "the session exists and the prompt is still on screen");
+
+  await tab.surface.dispose();
+  await tab.surface.init();
+  // Allow, answered after the unmount that abandoned it. The mount that followed
+  // does not make it this attempt's page again.
+  tab.answerMicrophone();
+  await pressed;
+  await flush();
+
+  assert.equal(tab.recorder.starts, 0, "no recorder was started for the attempt that was cancelled");
+  assert.equal(tab.microphone.releases, 1, "and the microphone was handed straight back");
+  assert.equal(tab.state.recording, false);
+  assert.deepEqual(origin.locks.names, [], "nothing is left held");
+  assert.equal(await origin.record(begun.sessionId), undefined, "and the empty manifest went with it");
 });
 
 test("the microphone prompt is not a window in which the recording looks abandoned", async () => {
@@ -693,15 +794,14 @@ test("D7 — the outage backoff runs on the HARNESS clock, so this host's schedu
   assert.match(tab.state.transcript, /back from the outage/, "and the meeting drains when it returns");
 });
 
-test("golden rule 23 — a browser that cannot see other tabs may not delete a live recording", async () => {
+test("golden rule 23 — a browser that cannot see other tabs asks before deleting a live recording, and takes no for an answer", async () => {
   // DATA LOSS, reproduced end to end, and the case the existing no-locks test
-  // never put a second tab beside. `navigator.locks` needs a secure context, so
-  // a dashboard served over plain http on a LAN — a shape D1b names — has none:
-  // `writers()` answers `known: false` with an empty set, the offer read that as
-  // "nobody is writing", and tab two was handed tab one's LIVE capture with an
-  // enabled Discard beside it. One click removed the manifest and every chunk
-  // while tab one still reported `recording: true` and told the person the audio
-  // was safe.
+  // never put a second tab beside. A browser with no Web Locks — older Safari,
+  // older Firefox, an in-app WebView — answers `known: false` with an EMPTY set,
+  // the offer read that as "nobody is writing", and tab two was handed tab one's
+  // LIVE capture with an enabled Discard beside it. One click removed the
+  // manifest and every chunk while tab one still reported `recording: true` and
+  // told the person the audio was safe.
   const origin = new CaptureOrigin();
   const recording = origin.tab({ withoutLocks: true });
   await recording.surface.init();
@@ -712,21 +812,101 @@ test("golden rule 23 — a browser that cannot see other tabs may not delete a l
   await other.surface.refreshRecoverable();
   // It is still OFFERED — a crashed meeting on this browser has to be
   // recoverable, and this browser cannot tell the two apart. What it may not be
-  // is deleted, and the surface says which state it is in rather than behaving
-  // differently in silence.
+  // is deleted BEHIND the person, and the surface says which state it is in
+  // rather than behaving differently in silence.
   assert.equal(other.state.writersKnown, false, "the surface knows the answer is an unknown, not an empty set");
   const record = await origin.record(sessionId);
   assert.ok(record);
+  other.confirmAnswer = false;
   await other.surface.discard(record);
   await flush();
-  assert.match(other.state.createError, /cannot tell whether another tab is recording/i);
-  assert.ok(await origin.record(sessionId), "the live recording is still on the device");
+
+  // The question is the one that names the consequence, not the routine "are you
+  // sure?" — asking the wrong one here is the whole difference between an
+  // informed decision and a click-through, and it is what a swapped constant
+  // would look like.
+  assert.equal(other.confirms.length, 1, "the person was asked");
+  assert.match(other.confirms[0], /cannot tell whether another tab is recording/i);
+  assert.match(other.confirms[0], /destroys the audio that tab is still recording/i);
+  assert.ok(await origin.record(sessionId), "and 'no' left the live recording on the device");
   assert.equal((await origin.session(sessionId, "org-a")).segments.length, 1, "with its audio");
 
   // …and the tab holding the microphone never learns any of this happened.
   assert.equal(recording.state.recording, true);
   await recording.chunk();
   assert.equal((await origin.session(sessionId, "org-a")).segments.length, 2, "it is still recording into it");
+});
+
+test("D6 — and on that same browser the audio can still be deleted, because refusing for ever is not a deletion policy", async () => {
+  // The other half, and a defect of its own: the refusal this replaces sent the
+  // person to "pick it up here first — a recording this tab is holding can be
+  // discarded", and that instruction could not be followed. A picked-up capture
+  // is the ACTIVE one, so it leaves `recoverable` — and the offer's row is the
+  // only place a Discard is rendered. `locks.holds()` is permanently false on
+  // this browser, a reload brings the row back with the same disabled button, and
+  // D6's "audio is deleted on an explicit discard" had no path on this host at
+  // all: the product printed an instruction its own UI did not permit.
+  const origin = new CaptureOrigin();
+  const owner = origin.tab({ withoutLocks: true });
+  await owner.surface.init();
+  const sessionId = await recordOneChunk(owner);
+  await owner.stop();
+
+  const later = origin.tab({ withoutLocks: true });
+  await later.surface.init();
+  await later.surface.refreshRecoverable();
+  const record = await origin.record(sessionId);
+  assert.ok(record, "the recording is on the device and offered back");
+  await later.surface.discard(record);
+  await flush();
+
+  assert.equal(later.state.createError, "", "no refusal — the person was asked and said yes");
+  assert.equal(await origin.record(sessionId), undefined, "and their audio is really gone from their own device");
+  assert.deepEqual(later.state.recoverable, [], "with nothing left offering it back");
+});
+
+test("the round's own rule, one button over — a pick-up this browser cannot vouch for is asked about too", async () => {
+  // DATA LOSS, reproduced. "When we cannot tell whether a meeting is live, we do
+  // not treat it as dead" reached `discard` and the reap and stopped at the
+  // button beside them: `pickUp` branched on `hold()` alone, which answers
+  // `"unavailable"` on this browser rather than `"taken"`, so the pick-up went
+  // through onto a capture ANOTHER tab had the microphone open on. Then Create
+  // from here posts THIS tab's transcript and `#release(true)` deletes the
+  // manifest and every chunk — while the recording tab still says `recording:
+  // true` and its next chunk fails with "No meeting capture named … is stored."
+  const origin = new CaptureOrigin();
+  const recording = origin.tab({ withoutLocks: true });
+  await recording.surface.init();
+  const sessionId = await recordOneChunk(recording);
+
+  const other = origin.tab({ withoutLocks: true });
+  await other.surface.init();
+  await other.surface.refreshRecoverable();
+  const entry = other.state.recoverable.find((candidate) => candidate.record.sessionId === sessionId);
+  assert.ok(entry, "this browser cannot exclude it, so it is offered");
+  other.confirmAnswer = false;
+  await other.surface.pickUp(entry);
+  await flush();
+
+  assert.equal(other.confirms.length, 1, "the person was asked before a second queue was put over a live capture");
+  assert.match(other.confirms[0], /cannot tell whether another tab is recording/i);
+  assert.match(other.confirms[0], /two tabs writing to one recording/i);
+  const adopted = other.state.session;
+  assert.equal(adopted, null, "and 'no' adopted nothing");
+  assert.equal(other.state.createError, "", "without pretending it was refused");
+
+  // The recording tab is untouched: still recording, still writing into its own
+  // meeting, with the transcript the person is actually speaking.
+  assert.equal(recording.state.recording, true);
+  await recording.chunk();
+  assert.equal((await origin.session(sessionId, "org-a")).segments.length, 2);
+
+  // …and the escape hatch is real, because a crashed meeting on this browser has
+  // to be recoverable: the person who knows no other tab is open says yes.
+  other.confirmAnswer = true;
+  await other.surface.pickUp(entry);
+  await flush();
+  assert.equal(other.state.session?.id, sessionId, "the same click, answered the other way, adopts it");
 });
 
 test("golden rule 23 — and the reap will not reclaim a capture it cannot vouch for either", async () => {
@@ -759,11 +939,11 @@ test("golden rule 23 — and the reap will not reclaim a capture it cannot vouch
 });
 
 test("golden rule 23 — a browser without Web Locks says so, and still records", async () => {
-  // `navigator.locks` needs a secure context, so a dashboard on plain http over
-  // a LAN has none. The recording must still be durable — that is D1b, and it
-  // does not depend on coordination — but the thing that is now WORSE must be
-  // on screen, because a fallback nobody can see is indistinguishable from
-  // working.
+  // Safari up to 15.3, Firefox up to 95, the older in-app WebViews: secure
+  // contexts with a microphone and no `navigator.locks`. The recording must still
+  // be durable — that is D1b, and it does not depend on coordination — but the
+  // thing that is now WORSE must be on screen, because a fallback nobody can see
+  // is indistinguishable from working.
   const origin = new CaptureOrigin();
   const tab = origin.tab({ withoutLocks: true });
   await tab.surface.init();

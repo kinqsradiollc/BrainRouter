@@ -25,6 +25,7 @@ import {
   NO_CAPTURE_HOLD,
   captureInFlight,
   createCaptureHold,
+  createComposeLife,
   prepareSubmission,
   type MeetingCaptureHold,
 } from "./composeSubmit.js";
@@ -180,4 +181,30 @@ test("an empty form and a busy one are refused, and are not the same refusal", (
   assert.deepEqual(prepareSubmission(ready({ title: "   " })), { ok: false, reason: "incomplete" });
   assert.deepEqual(prepareSubmission(ready({ transcript: "  \n " })), { ok: false, reason: "incomplete" });
   assert.deepEqual(prepareSubmission(ready({ busy: true })), { ok: false, reason: "busy" });
+});
+
+test("a read-back that began before the form was torn down is no longer in the current life", () => {
+  const life = createComposeLife();
+  const attempt = life.begin();
+  life.retire();
+  // The case the guard is for: the bytes arrive after the form has closed, so
+  // the object URL this attempt was about to mint would be one nothing ever
+  // revokes — the meeting stays pinned in this window's heap.
+  assert.equal(life.ended(attempt), true);
+});
+
+test("a form that outlives its own teardown gets a new life, and its next attempt is in it", () => {
+  const life = createComposeLife();
+  // React may run an effect's cleanup and then its setup again on the SAME
+  // instance — StrictMode's double invoke does exactly that on every mount in
+  // `vite dev`. A latched boolean lowered here is a latch nothing raises: ▶ Play
+  // returned silently for the rest of the page view, and §6's "on disk and
+  // PLAYABLE" was unreachable in the environment this is developed in.
+  life.retire();
+  const attempt = life.begin();
+  assert.equal(life.ended(attempt), false);
+  // …and it is still the guard it was, rather than one disarmed by surviving:
+  // the next teardown ends this attempt too.
+  life.retire();
+  assert.equal(life.ended(attempt), true);
 });

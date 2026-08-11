@@ -3,12 +3,14 @@
  *
  * ## What it owns
  *
- * Two things, and the second exists to make the first answerable.
+ * Three things, and the second and third exist to make the first answerable.
  *
  * 1. Given the compose form as it stands, what is the `CreateMeetingInput` this
  *    click should send, and under which organization.
  * 2. `MeetingCaptureHold` — what the form is holding while it answers — and the
  *    single writer that keeps its synchronous and rendered copies equal.
+ * 3. `ComposeFormLife` — which life of the form an async answer belongs to, so a
+ *    step that crosses an await can tell that the form it started in has gone.
  *
  * No ops, no React, no draft store, no textarea: what is here is what a test can
  * hold to a string, which is the whole reason it is a module and not four lines
@@ -123,6 +125,45 @@ export function createCaptureHold(publish: (hold: MeetingCaptureHold) => void): 
       publish(current);
       return current;
     },
+  };
+}
+
+/**
+ * §6 — which LIFE of the compose form an async answer belongs to.
+ *
+ * `playCapture` reads a whole recording back across an await and then mints an
+ * object URL over the bytes. A URL minted for a form that has already gone is
+ * one nothing will ever revoke — React drops the `setPreview`, and the revoking
+ * effect went with the form — so a whole meeting stays pinned in the window's
+ * heap. That is §1's defect in miniature, which is why the step asks.
+ *
+ * **It is a counter and not a boolean, and that is the decision rather than the
+ * detail.** The boolean was a `useRef(true)` cleared by the form's unmount
+ * cleanup and set back by nothing, and React does not promise that a cleanup is
+ * the end of an instance: it may run one and then run the setup again on the
+ * same instance, which is precisely what StrictMode's double invoke does on
+ * every mount in `vite dev`. A latch lowered there can never be raised, so ▶
+ * Play returned silently for the rest of that page view and §6's "on disk and
+ * PLAYABLE" was broken in the environment this is developed in. A life is read
+ * at the START of each attempt, so a form that outlives a teardown simply has a
+ * new life and its next attempt is in it. Same shape, and the same reason, as
+ * `MeetingCaptureRecorder.attempt`: what is cancelled is one ATTEMPT.
+ */
+export interface ComposeFormLife {
+  /** The life this step belongs to. Read before its first await, never after. */
+  begin(): number;
+  /** Has the form been torn down since that step began? */
+  ended(life: number): boolean;
+  /** This form's effects have been torn down. */
+  retire(): void;
+}
+
+export function createComposeLife(): ComposeFormLife {
+  let life = 0;
+  return {
+    begin: () => life,
+    ended: (started) => started !== life,
+    retire: () => { life += 1; },
   };
 }
 

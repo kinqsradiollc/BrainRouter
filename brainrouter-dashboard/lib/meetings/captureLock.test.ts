@@ -111,6 +111,29 @@ test("golden rule 23 — a browser with no Web Locks says it cannot tell, not th
   assert.deepEqual([...seen.ids], []);
 });
 
+test("a lock manager that REFUSES the request answers, rather than leaving Record waiting for ever", async () => {
+  // The other half of `unavailable`, and the one nothing reached: storage blocked
+  // for this origin, or a context that lost its lock service, rejects the
+  // `request` itself. `hold()` resolves from inside the callback, which in that
+  // case never runs — so without the rejection handler this promise never
+  // settles and Record hangs before the microphone, with no error and no
+  // recording, for as long as the page is open.
+  const locks = new CaptureLocks({
+    request: async () => {
+      throw new Error("the storage for this origin is blocked");
+    },
+    query: async () => ({ held: [] }),
+  });
+  // Raced rather than awaited outright: a `hold()` that never settles must fail
+  // this test rather than hang the runner, which is what it did.
+  const outcome = await Promise.race([locks.hold("mtg-1"), settled().then(() => "never settled" as const)]);
+  assert.equal(outcome, "unavailable", "a refusal is an answer: this browser cannot say who is writing");
+  assert.equal(locks.holds("mtg-1"), false, "and nothing is left behind claiming we hold it");
+  // …so the surface reads it as an unknown rather than as an empty device: the
+  // handle was removed, so it cannot make our own writer set lie either.
+  assert.deepEqual([...(await locks.writers()).ids], []);
+});
+
 test("a lock service that will not answer is unknown, not empty — and still names our own", async () => {
   const origin = new FakeLockOrigin();
   const tab = origin.tab();
@@ -130,8 +153,9 @@ test("the lock name is namespaced, and another product's lock is not a recording
 });
 
 test("the browser wrapper detects the API rather than assuming it", () => {
-  // This runner has a `navigator` and no `navigator.locks`, which is also what a
-  // dashboard served over plain http gets. Assuming the API here is how the
-  // fallback becomes silent.
+  // This runner has a `navigator` and no `navigator.locks`, which is the shape
+  // of the browsers this fallback is for: secure contexts old enough to have a
+  // microphone and no lock table. Assuming the API here is how the fallback
+  // becomes silent.
   assert.equal(browserCaptureLocks().available, false);
 });

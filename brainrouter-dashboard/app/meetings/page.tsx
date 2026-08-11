@@ -82,7 +82,7 @@ import { useActiveOrg } from "../../components/OrgWorkspaceProvider";
 import { BASE_URL } from "../../lib/client";
 import { getApiKey, getJwt } from "../../lib/client-auth";
 import { invalidateDashboardQueries, queryDashboard } from "../../lib/dashboardQuery";
-import { captureHeldNote, CAPTURE_LIVENESS_UNKNOWN } from "../../lib/meetings/captureLock";
+import { captureHeldNote, CAPTURE_DISCARD_UNKNOWN } from "../../lib/meetings/captureLock";
 import { formatCaptureBytes } from "../../lib/meetings/storageBudget";
 import { browserCapturePorts } from "./capturePorts";
 import { MeetingCaptureSurface, storedStillRecording } from "./captureSurface";
@@ -780,13 +780,22 @@ export default function MeetingsPage() {
                     ? captureHeldNote(storedStillRecording(entry.record))
                     : null;
                   // Golden rule 23 — and the one this page was SILENT about. On
-                  // a browser with no Web Locks (a dashboard on plain http over
-                  // a LAN) `writing` is empty because nothing can be known, not
-                  // because nothing is being written: tab two was offered tab
-                  // one's LIVE recording with an enabled Discard beside it, and
-                  // one click deleted the manifest and every chunk. Disabled and
-                  // said out loud rather than refused after the click.
-                  const undeletable = writer ?? (cap.writersKnown ? null : CAPTURE_LIVENESS_UNKNOWN);
+                  // a browser with no Web Locks (older Safari and Firefox, some
+                  // in-app browsers — all of them secure contexts that can
+                  // record perfectly well) `writing` is empty because nothing
+                  // can be known, not because nothing is being written: tab two
+                  // was offered tab one's LIVE recording with an enabled Discard
+                  // beside it, and one click deleted the manifest and every
+                  // chunk.
+                  //
+                  // Said out loud in the tooltip, and NOT disabled: this browser
+                  // has no other route to the delete — the row is the only place
+                  // Discard is rendered, and picking the capture up takes it out
+                  // of the offer — so a disabled button here is audio nobody can
+                  // remove from their own device. `discard` puts the tooltip's
+                  // own question to the person instead, and this is the same
+                  // sentence so the button cannot promise a different one.
+                  const unsure = !writer && !cap.writersKnown ? CAPTURE_DISCARD_UNKNOWN : null;
                   return (
                     <Fragment key={entry.record.sessionId}>
                       <div className={styles.recoverRow}>
@@ -807,7 +816,7 @@ export default function MeetingsPage() {
                             {cap.preview?.sessionId === entry.record.sessionId ? "Hide audio" : cap.busy === "preview" ? "Reading…" : "Play"}
                           </button>
                           <button type="button" className={styles.newBtn} disabled={cap.busy === "transcribe" || cap.recording || Boolean(writer)} onClick={() => void capture.pickUp(entry)}>Pick up</button>
-                          <button type="button" className={styles.track} disabled={cap.busy === "transcribe" || Boolean(undeletable)} title={undeletable ?? undefined} onClick={() => void capture.discard(entry.record)}>Discard</button>
+                          <button type="button" className={styles.track} disabled={cap.busy === "transcribe" || Boolean(writer)} title={writer ?? unsure ?? undefined} onClick={() => void capture.discard(entry.record)}>Discard</button>
                         </span>
                       </div>
                       {cap.preview?.sessionId === entry.record.sessionId ? (
