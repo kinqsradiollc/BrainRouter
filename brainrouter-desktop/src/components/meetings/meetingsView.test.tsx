@@ -153,7 +153,7 @@ interface FakeHost {
   announceWriters(): void;
   /** Fail the next create, so the compose form stays up and can be read. */
   createFails: boolean;
-  /** Refuse the next pick-up, the way a lease held by another window does. */
+  /** Refuse the next pick-up, the way another window's writer registration does. */
   adoptRefusal: string | null;
   /** Hold `captureStop` open, which is the window `closing` covers. */
   holdStop(): () => void;

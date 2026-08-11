@@ -146,3 +146,35 @@ else, remember these. Each links to the topical file with the full context.
     single-threaded brain for one 64 KB PR comment. Use a bounded quantifier and
     a character class that cannot cross the repeated delimiter, and cap input
     length before matching. → [`02`](02-code-style-and-conventions.md)
+
+28. **When you delete a mechanism, grep for its NAME in prose, not only in code.**
+    A comment that describes behaviour the code no longer has is the same defect
+    as a spinner that says "Transcribing…" over a segment that failed twenty
+    minutes ago (rule 23), except it misleads the next engineer instead of the
+    user — and it survives every test, every typecheck and every lint. Removing
+    a capture lease left six such claims behind, three of them describing the
+    lease itself and two written by the very change that reversed them; one was
+    a banner blaming "older Safari and Firefox" for a condition any browser
+    meets on an insecure origin. Deleting an identifier is not done until every
+    hit in comments, docstrings, module headers, and user-facing strings has
+    been dispositioned: remove stale present-tense claims; retain only explicit
+    migration, history, and negative assertions. → [`02`](02-code-style-and-conventions.md)
+
+29. **⛔ A test that still passes when you delete the line it protects is not a
+    test.** Asserting that a call is PRESENT — a source-text grep, an ordering
+    check, a spy that fires — pins the shape and not the property. Deleting one
+    line, `transcript = settled.text;`, restored a data loss verbatim while all
+    ten tests written to prevent it stayed green, and the same mutation later
+    survived on the other host. Before you claim a guard is covered, delete or
+    invert the line it guards and watch the suite FAIL. Assert the value that
+    reaches the network, the disk, or the screen. → [`07`](07-testing.md)
+
+30. **Ask what already knows the answer before you build something to compute
+    it.** A mechanism that needs a tuned constant — a staleness threshold, a
+    debounce, a retry window — is a guess wearing a number, and every value is
+    wrong in one direction. Liveness was built as a heartbeat with a 30s
+    expiry; it made a killed meeting invisible AND stranded a reloaded window's
+    recording, at once. Both hosts already held the exact answer: a per-process
+    writer map, and `navigator.locks`, which the browser releases when the tab
+    dies. Reach for the authoritative source first; a timer is what you use when
+    there genuinely is not one. → [`02`](02-code-style-and-conventions.md)
