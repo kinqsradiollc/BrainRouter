@@ -188,12 +188,12 @@ function SyncControl({ sync }: { sync: PlannerSyncView }): ReactElement {
                     {issue.lastError ? ` · ${issue.lastError}` : ' · Waiting for a connection.'}
                     {issue.attempts ? ` · ${issue.attempts} attempt${issue.attempts === 1 ? '' : 's'}` : ''}
                   </small>
-                  {/* `stuck` is five failed attempts. Below it the row already
-                      showed the error and the attempt count and offered nothing
-                      to do about it — the surface displayed a failure and
-                      withheld the action for it. Anything that has failed at
-                      least once can be retried by hand. */}
-                  {(issue.stuck || issue.attempts > 0) && sync.onRetryIssue ? (
+                  {/* `stuck` alone is five failed attempts, and below it the row
+                      showed an error and an attempt count while offering nothing
+                      to do about it. Anything that has failed once can be retried
+                      by hand — but NOT while a retry is already in flight, or the
+                      click has no visible consequence and invites another. */}
+                  {(issue.stuck || issue.attempts > 0) && !issue.retryRequested && sync.onRetryIssue ? (
                     <button type="button" className="br-planner-retry-issue" onClick={() => sync.onRetryIssue?.(issue.id)}>
                       Retry this change
                     </button>

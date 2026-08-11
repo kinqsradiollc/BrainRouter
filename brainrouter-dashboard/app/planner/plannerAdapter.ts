@@ -634,6 +634,7 @@ export function plannerSyncProjection(
         attempts: operation.attempts ?? 0,
         lastError: operation.lastError,
         stuck: (operation.attempts ?? 0) >= ATTEMPTS_BEFORE_SURFACING,
+        retryRequested: Boolean(operation.retryRequestedAt),
       };
     }),
   };
@@ -650,4 +651,5 @@ export interface PlannerSyncIssueProjection {
   attempts: number;
   lastError?: string;
   stuck: boolean;
+  retryRequested: boolean;
 }

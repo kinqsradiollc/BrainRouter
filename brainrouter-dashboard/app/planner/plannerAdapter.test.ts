@@ -302,4 +302,14 @@ test("the sync projection says a wedged queue is wedged, in Core's words", () =>
   );
   assert.equal(waiting.label, "1 change waiting to sync.");
   assert.equal(waiting.issues[0]?.stuck, false);
+
+  // A retry already asked for is not offered again. The visual gate caught this:
+  // widening the control to "anything that failed once" left it on screen after
+  // the click, so the row looked identical before and after and the only
+  // feedback was that nothing had happened.
+  const asked = plannerSyncProjection(
+    [{ idempotencyKey: "k4", itemId: "i4", kind: "update", at: { physical: 1_000, logical: 0, deviceId: "d" }, attempts: 5, retryRequestedAt: "2026-08-11T10:00:00.000Z" }] as never,
+    { itemTitle: new Map(), blockItem: new Map(), now: 61_000, ageLabel: () => "1m" },
+  );
+  assert.equal(asked.issues[0]?.retryRequested, true);
 });
