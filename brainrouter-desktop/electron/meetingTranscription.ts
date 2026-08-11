@@ -1,12 +1,13 @@
 /**
- * ADR-035 D3/D4/D5/D7 — the desktop's transcription supervisor: the thing that
- * turns segments on disk into text, in the process that outlives the window.
+ * ADR-035 D3/D4/D5/D7/D9 — the desktop's transcription supervisor: the thing that
+ * turns durability chunks on disk into transcription units and text, in the
+ * process that outlives the window.
  *
  * Open question 3 asks who owns retry, renderer or host, and the ADR answers it
  * in the question: "a renderer-owned queue dies with the window, which is the
  * defect this ADR exists to fix". So the queue lives HERE, in Electron main. A
  * window reload, a renderer crash, or a user navigating away from Meetings does
- * not interrupt transcription — the segments are already on disk and the drain
+ * not interrupt transcription — the chunks are already on disk and the drain
  * loop is not in the window that went away.
  *
  * This module is a wiring layer and deliberately nothing more. The scheduling,
@@ -59,13 +60,16 @@
  * transcriber.
  */
 import {
-  appendSegment,
+  appendChunk,
   createMeetingTranscriptionQueue,
   createSegmentAudioReader,
   drainWakeDelayMs,
   isTerminalCaptureStatus,
+  nextChunkSequence,
   sameCaptureScope,
+  sealDueUnits,
   stopCapture,
+  unitChunkSequences,
   MeetingEndpointUnavailableError,
   type MeetingCaptureScope,
   type MeetingCaptureSession,
@@ -101,7 +105,7 @@ export interface MeetingCaptureProgress {
   readonly session: MeetingCaptureSession;
   /**
    * D4/D7 — why the queue last stopped, so a surface can tell "waiting on a dead
-   * endpoint" from "working". Absent on the per-segment pushes, which happen
+   * endpoint" from "working". Absent on the per-unit pushes, which happen
    * mid-drain when there is no answer to that question yet.
    */
   readonly phase?: MeetingDrainPhase;
@@ -275,18 +279,25 @@ export class MeetingTranscriptionSupervisor {
   }
 
   /**
-   * D1/D3 — a chunk lands: bytes first, record second, then transcribe it.
+   * D1/D9 — a durability chunk lands: bytes first, ledger second, units last.
    *
-   * The index comes from the queue's own session, and appends for one capture
-   * are serialized here, so two chunks can never claim the same segment file.
+   * The disk sequence comes from the chunk ledger, never from the number of
+   * transcription units. Those counters deliberately diverge once several
+   * three-second writes make one unit; using `segments.length` here would try
+   * to overwrite chunk 1 after the first unit sealed and lose the rest of the
+   * recording to `O_EXCL` failures.
    */
   async append(id: string, bytes: Uint8Array, durationMs: number): Promise<MeetingCaptureSession> {
     const entry = await this.#entry(id);
     const next = entry.appends.then(async () => {
-      const index = entry.queue.session.segments.length;
-      const written = await this.#store.writeSegment(id, index, bytes);
-      const session = await entry.queue.apply((current) =>
-        appendSegment(current, { byteLength: written, durationMs }));
+      const sequence = nextChunkSequence(entry.queue.session);
+      const written = await this.#store.writeSegment(id, sequence, bytes);
+      const session = await entry.queue.apply((current) => {
+        if (nextChunkSequence(current) !== sequence) {
+          throw new Error('The meeting chunk ledger changed while audio was being written.');
+        }
+        return sealDueUnits(appendChunk(current, { byteLength: written, durationMs }));
+      });
       this.#kick(id, entry);
       return session;
     });
@@ -525,9 +536,18 @@ export class MeetingTranscriptionSupervisor {
         // filesystem in it, so it is core's (D1b: only the write target is
         // host-specific) and this file supplies only the chunks.
         readSegment: createSegmentAudioReader({
-          readChunk: async (index) => {
+          readChunk: async (sequence) => {
             if (entry.closed) throw new Error('This meeting capture is closing.');
-            return await this.#store.readSegment(id, index);
+            return await this.#store.readSegment(id, sequence);
+          },
+        }, {
+          // D9 — a unit is not a file. The record is the authority for exactly
+          // which durability chunks it spans; reading only `segment.index`
+          // produces plausible text for a fraction of the meeting with no gap.
+          chunksOf: (index) => {
+            const unit = entry.queue.session.segments[index];
+            if (!unit) throw new Error(`Meeting ${id} has no transcription unit ${index}.`);
+            return unitChunkSequences(unit);
           },
         }),
         transcribe: async (audio, mimeType) => {

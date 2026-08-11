@@ -1,10 +1,10 @@
 /**
- * ADR-035 D3/D5/D7 — the dashboard's ports, driven by the REAL shared queue.
+ * ADR-035 D3/D5/D7/D9 — the dashboard's ports, driven by the REAL shared queue.
  *
  * Nothing here mocks the scheduler. The point of these tests is the seam: the
  * queue is the shared one, and what is being checked is that this host's three
- * ports hand it what it expects — one segment's audio with its container header
- * back in front of it, a failure that carries its HTTP status so D7's
+ * ports hand it what it expects — every chunk of one unit with its container
+ * header back in front of it, a failure that carries its HTTP status so D7's
  * outage-versus-rejection distinction still works, and a persist that writes the
  * whole session where the next load will find it.
  *
@@ -15,8 +15,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  appendChunk,
   appendSegment,
   createCaptureSession,
+  sealUnit,
   transcriptGaps,
   type MeetingCaptureSession,
 } from "@kinqs/brainrouter-core/meetings";
@@ -75,6 +77,42 @@ test("every segment is transcribed, and each request carries only its own audio"
   assert.deepEqual(posted[0], [...HEADER, ...CLUSTER, 0x01]);
   assert.deepEqual(posted[1], [...HEADER, ...CLUSTER, 0x11]);
   assert.deepEqual(posted[2], [...HEADER, ...CLUSTER, 0x22]);
+});
+
+test("D9 — one transcription unit uploads every durability chunk it names", async () => {
+  const backend = new FakeCaptureBackend();
+  const store = new MeetingCaptureStore(backend);
+  await store.begin({ sessionId: SESSION_ID, startedAt: "2026-08-10T09:00:00.000Z" });
+  let session = createCaptureSession({
+    id: SESSION_ID,
+    scope: { orgId: null },
+    startedAt: "2026-08-10T09:00:00.000Z",
+  });
+  const blobs = [firstChunk(), laterChunk(0x11), laterChunk(0x22)];
+  for (const blob of blobs) {
+    const stored = await store.appendChunk(SESSION_ID, blob);
+    session = appendChunk(session, { byteLength: stored.byteLength, durationMs: 3_000 });
+  }
+  session = sealUnit(session);
+
+  const posted: number[][] = [];
+  const queue = createCaptureQueue({
+    store,
+    session,
+    transcribe: async (audio) => {
+      posted.push([...audio]);
+      return "the whole utterance";
+    },
+  });
+  await queue.drain();
+
+  assert.deepEqual(queue.session.segments[0]?.chunks, [0, 1, 2]);
+  assert.equal(posted.length, 1, "one unit is one request, not one request per durability write");
+  assert.deepEqual(
+    posted[0],
+    [...HEADER, ...CLUSTER, 0x01, ...CLUSTER, 0x11, ...CLUSTER, 0x22],
+    "deleting the chunksOf mapping must expose the first-chunk-only data loss",
+  );
 });
 
 test("a queue rebuilt over a reloaded session finds the header without segment 0", async () => {

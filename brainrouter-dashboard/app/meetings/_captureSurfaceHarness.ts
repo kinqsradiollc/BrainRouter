@@ -29,6 +29,8 @@
  *
  * The underscore prefix keeps it out of the `*.test.ts` glob.
  */
+import { DEFAULT_MEETING_UNIT_MS } from "@kinqs/brainrouter-core/meetings";
+
 import { FakeCaptureBackend, type FakeCaptureBackendOptions } from "../../lib/meetings/_captureBackendFixture";
 import { FakeLockManager, FakeLockOrigin } from "../../lib/meetings/_captureLockFixture";
 import { CaptureLocks } from "../../lib/meetings/captureLock";
@@ -71,6 +73,11 @@ export class FakeRecorder implements CaptureRecorder {
   /** A recorder that refuses to start — a mic unplugged between `getUserMedia` and here. */
   startFails = false;
 
+  /** One-shot failures used to prove pause timing changes are transactional. */
+  pauseFails = false;
+
+  resumeFails = false;
+
   start(timesliceMs: number): void {
     if (this.startFails) throw new Error("NotSupportedError");
     this.state = "recording";
@@ -87,10 +94,18 @@ export class FakeRecorder implements CaptureRecorder {
   }
 
   pause(): void {
+    if (this.pauseFails) {
+      this.pauseFails = false;
+      throw new Error("InvalidStateError: pause refused");
+    }
     this.state = "paused";
   }
 
   resume(): void {
+    if (this.resumeFails) {
+      this.resumeFails = false;
+      throw new Error("InvalidStateError: resume refused");
+    }
     this.state = "recording";
   }
 
@@ -415,8 +430,15 @@ export class CaptureTab {
     return this.surface.record();
   }
 
-  /** Hand over one timeslice of audio and let it land. */
-  async chunk(size = 1024, fill = 7): Promise<void> {
+  /**
+   * Hand over audio and let it land.
+   *
+   * Existing scenarios use one unit-sized event so they stay focused on their
+   * own lifecycle property. D9 scenarios pass the durability cadence explicitly
+   * and emit several chunks before a unit boundary.
+   */
+  async chunk(size = 1024, fill = 7, elapsedMs = DEFAULT_MEETING_UNIT_MS): Promise<void> {
+    this.origin.skip(elapsedMs);
     this.recorder.emit(audio(size, fill));
     await flush();
   }

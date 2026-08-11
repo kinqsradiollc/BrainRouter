@@ -12,8 +12,9 @@ import test from 'node:test';
 import {
   appendSegment,
   createCaptureSession,
+  DEFAULT_MEETING_CHUNK_MS,
   DEFAULT_MEETING_RETRY_POLICY,
-  DEFAULT_MEETING_SEGMENT_MS,
+  DEFAULT_MEETING_UNIT_MS,
   deferralsExhausted,
   discardCapture,
   markDone,
@@ -32,7 +33,7 @@ const T0_MS = Date.parse(T0);
 
 function oneSegment(): MeetingCaptureSession {
   const session = createCaptureSession({ id: 'mtg-retry', scope: { orgId: null }, startedAt: T0 });
-  return appendSegment(session, { byteLength: 4096, durationMs: DEFAULT_MEETING_SEGMENT_MS });
+  return appendSegment(session, { byteLength: 4096, durationMs: DEFAULT_MEETING_UNIT_MS });
 }
 
 /** Fail the segment `times` times, each attempt announced, all stamped at T0. */
@@ -44,8 +45,10 @@ function failed(times: number, session: MeetingCaptureSession = oneSegment()): M
   return next;
 }
 
-test('the shared segment cadence sits inside the ADR range', () => {
-  assert.ok(DEFAULT_MEETING_SEGMENT_MS >= 15_000 && DEFAULT_MEETING_SEGMENT_MS <= 30_000);
+test('D9 — the batch unit target no longer sets the durability write cadence', () => {
+  assert.ok(DEFAULT_MEETING_UNIT_MS >= 15_000 && DEFAULT_MEETING_UNIT_MS <= 30_000);
+  assert.ok(DEFAULT_MEETING_CHUNK_MS >= 2_000 && DEFAULT_MEETING_CHUNK_MS <= 5_000);
+  assert.ok(DEFAULT_MEETING_CHUNK_MS < DEFAULT_MEETING_UNIT_MS);
 });
 
 test('backoff is exponential, capped, and deterministic', () => {
@@ -117,8 +120,8 @@ test('a custom policy is obeyed in full — the rule is data, not a constant', (
 // about when a meeting is out of retries, so the plan is asked directly.
 test('D7 — the plan offers exactly the segments due right now', () => {
   let session = oneSegment();
-  session = appendSegment(session, { byteLength: 4096, durationMs: DEFAULT_MEETING_SEGMENT_MS });
-  session = appendSegment(session, { byteLength: 4096, durationMs: DEFAULT_MEETING_SEGMENT_MS });
+  session = appendSegment(session, { byteLength: 4096, durationMs: DEFAULT_MEETING_UNIT_MS });
+  session = appendSegment(session, { byteLength: 4096, durationMs: DEFAULT_MEETING_UNIT_MS });
   session = markDone(markTranscribing(session, 0, T0), 0, 'settled');
   session = markFailed(markTranscribing(session, 1, T0), 1, 'endpoint unreachable', T0);
   session = markFailed(markTranscribing(session, 2, T0), 2, 'endpoint unreachable', '2026-08-09T09:00:30.000Z');

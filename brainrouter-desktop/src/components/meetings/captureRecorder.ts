@@ -1,9 +1,9 @@
 /**
- * ADR-035 D1 — the recorder that never holds a meeting.
+ * ADR-035 D1/D9 — the recorder that never holds a meeting.
  *
  * Two things here are the whole decision:
  *
- * 1. **The recorder is started with an explicit timeslice.** Without one,
+ * 1. **The recorder is started with an explicit durability timeslice.** Without one,
  *    `MediaRecorder` is free to deliver a single blob at `stop`, and writing
  *    that blob to disk buys nothing — the crash it was meant to survive happens
  *    while the audio is still in the heap.
@@ -32,7 +32,7 @@
  * clock — so the cadence and the "nothing accumulates" property can be tested
  * without a microphone.
  */
-import { DEFAULT_MEETING_SEGMENT_MS, type MeetingCaptureScope, type MeetingCaptureTemplate } from "@kinqs/brainrouter-core/meetings";
+import { DEFAULT_MEETING_CHUNK_MS, type MeetingCaptureScope, type MeetingCaptureTemplate } from "@kinqs/brainrouter-core/meetings";
 import type { MeetingCaptureOps } from "./captureOps.js";
 
 export interface StartCaptureInput {
@@ -46,7 +46,8 @@ export interface MeetingCaptureRecorderOptions {
   capture: MeetingCaptureOps;
   /** Reported when a chunk could not be written — the user must not learn this at Stop. */
   onChunkError?: (message: string) => void;
-  segmentMs?: number;
+  /** D9 — how often bytes become durable. This does not choose transcription-unit boundaries. */
+  chunkMs?: number;
   openStream?: () => Promise<MediaStream>;
   createRecorder?: (stream: MediaStream) => MediaRecorder;
   now?: () => number;
@@ -79,7 +80,7 @@ export class CaptureCancelledError extends Error {
 export class MeetingCaptureRecorder {
   private readonly capture: MeetingCaptureOps;
   private readonly onChunkError: (message: string) => void;
-  private readonly segmentMs: number;
+  private readonly chunkMs: number;
   private readonly openStream: () => Promise<MediaStream>;
   private readonly createRecorder: (stream: MediaStream) => MediaRecorder;
   private readonly now: () => number;
@@ -88,6 +89,8 @@ export class MeetingCaptureRecorder {
   private stream: MediaStream | null = null;
   private sessionId: string | null = null;
   private lastChunkAt = 0;
+  /** Wall-clock instant at which active capture stopped, excluded from the next chunk's range. */
+  private pausedAt: number | null = null;
   private writes: Promise<unknown> = Promise.resolve();
   /**
    * Which attempt to start is the current one.
@@ -102,7 +105,7 @@ export class MeetingCaptureRecorder {
   constructor(options: MeetingCaptureRecorderOptions) {
     this.capture = options.capture;
     this.onChunkError = options.onChunkError ?? (() => undefined);
-    this.segmentMs = options.segmentMs ?? DEFAULT_MEETING_SEGMENT_MS;
+    this.chunkMs = options.chunkMs ?? DEFAULT_MEETING_CHUNK_MS;
     this.openStream = options.openStream ?? (() => navigator.mediaDevices.getUserMedia({ audio: true }));
     this.createRecorder = options.createRecorder ?? ((stream) => new MediaRecorder(stream));
     this.now = options.now ?? (() => Date.now());
@@ -161,6 +164,7 @@ export class MeetingCaptureRecorder {
     this.recorder = recorder;
     this.sessionId = sessionId;
     this.lastChunkAt = this.now();
+    this.pausedAt = null;
     this.writes = Promise.resolve();
     recorder.ondataavailable = (event: BlobEvent) => {
       if (event.data.size) this.enqueue(sessionId, event.data);
@@ -179,7 +183,7 @@ export class MeetingCaptureRecorder {
      * `begin` returned, and a claim nothing releases outlives the failure by the
      * whole life of the process.
      */
-    try { recorder.start(this.segmentMs); }
+    try { recorder.start(this.chunkMs); }
     catch {
       this.recorder = null;
       this.sessionId = null;
@@ -191,17 +195,30 @@ export class MeetingCaptureRecorder {
   }
 
   pause(): void {
-    if (this.recorder?.state === "recording") this.recorder.pause();
+    if (this.recorder?.state !== "recording") return;
+    const at = this.now();
+    // Set before invoking the platform: a recorder is allowed to deliver a
+    // queued blob as pausing takes effect, and that event must see the active
+    // clock stop here rather than crediting any later wall time as audio.
+    this.pausedAt = at;
+    try { this.recorder.pause(); }
+    catch (caught) { this.pausedAt = null; throw caught; }
   }
 
   resume(): void {
-    if (this.recorder?.state === "paused") this.recorder.resume();
+    if (this.recorder?.state !== "paused") return;
+    const at = this.now();
+    // Keep `pausedAt` authoritative until the platform accepts the resume. If
+    // `resume()` throws (device loss is one real cause), clearing it first makes
+    // the remainder of the pause look like recorded audio on the next attempt.
+    this.recorder.resume();
+    this.finishPause(at);
   }
 
   /**
    * Stops the recorder, waits for the final chunk to be written, and only then
    * marks the capture stopped. Returning before the queue drains would let the
-   * caller read audio that is missing its last segment.
+   * caller read audio that is missing its last saved chunk.
    *
    * It is also the CANCEL for a `start` that has not returned yet, which is the
    * same statement one step earlier: a caller asking for this recording to end
@@ -219,6 +236,10 @@ export class MeetingCaptureRecorder {
       this.release();
       return null;
     }
+    // `stop()` flushes a final data event even while paused. Move the active
+    // baseline first so that event describes recorded audio, not the hour the
+    // microphone was deliberately suspended.
+    if (recorder.state === "paused") this.finishPause(this.now());
     await new Promise<void>((resolve) => {
       if (recorder.state === "inactive") { resolve(); return; }
       recorder.onstop = () => resolve();
@@ -237,10 +258,12 @@ export class MeetingCaptureRecorder {
   }
 
   private enqueue(sessionId: string, blob: Blob): void {
-    const at = this.now();
-    // Measured elapsed time, not the nominal timeslice: a paused or throttled
-    // recorder delivers chunks late, and a segment's stated time range is what
-    // a gap marker prints under D5.
+    const wallAt = this.now();
+    // Active elapsed time, not the nominal timeslice. While paused the active
+    // clock is frozen at `pausedAt`, including for a blob event the platform
+    // delivers during the pause; otherwise an hour-long pause becomes an hour
+    // of claimed audio and can seal an empty transcription unit.
+    const at = this.pausedAt ?? wallAt;
     const durationMs = Math.max(1, Math.round(at - this.lastChunkAt));
     this.lastChunkAt = at;
     this.writes = this.writes.then(async () => {
@@ -256,6 +279,14 @@ export class MeetingCaptureRecorder {
   private release(): void {
     stopTracks(this.stream);
     this.stream = null;
+    this.pausedAt = null;
+  }
+
+  /** Shift the elapsed-time baseline past a pause without inventing captured audio. */
+  private finishPause(at: number): void {
+    if (this.pausedAt === null) return;
+    this.lastChunkAt += Math.max(0, at - this.pausedAt);
+    this.pausedAt = null;
   }
 
   /**

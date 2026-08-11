@@ -285,13 +285,88 @@ test('the boot pass runs at registration, and cannot correct a capture being rec
     },
     { store, drafts: new MeetingDraftStore(home), supervisor, warn: (message) => { reports.push(message); } },
   );
-  // The pass is asynchronous; the offer below is what waits for it.
-  await new Promise((resolve) => { setTimeout(resolve, 20); });
-
   // §6 — the chunk the kill landed on top of was adopted, and the meeting is
   // offered back. That is the deliverable, and it happens at registration,
-  // before any window can press Record.
-  assert.ok(reports.some((line) => line.includes('adopted a durable chunk')), reports.join(' | '));
+  // before any window can press Record. The offer itself waits on the shared
+  // boot gate, so this assertion needs no timing sleep.
   const offers = await handlers.get('meetings:captureResumable')!({ id: 0 }, { orgId: null });
+  assert.ok(reports.some((line) => line.includes('adopted a durable chunk')), reports.join(' | '));
   assert.deepEqual((offers as { sessionId: string }[]).map((row) => row.sessionId), [interrupted.id]);
+});
+
+test('read, resume and adopt all wait for the same boot reconciliation pass', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-meeting-wire-gate-'));
+  const seedStore = new MeetingCaptureStore(home);
+  const seed = new MeetingTranscriptionSupervisor(seedStore, { transcribe: async () => 'text' });
+  const interrupted = await seed.begin({ scope: { orgId: null }, title: 'Interrupted' });
+  await seed.append(interrupted.id, new Uint8Array([1, 2, 3]), 3_000);
+  await seed.stop(interrupted.id);
+  // This fixture is the previous process, so finish and dispose its background
+  // queue before constructing the next process below. Leaving both supervisors
+  // live over one record creates a state Electron's single-instance lock rules
+  // out, and under a loaded full suite their independent wake timers can race
+  // forever instead of testing the boot gate this case is about.
+  await seed.settle(interrupted.id);
+  seed.dispose();
+
+  const store = new MeetingCaptureStore(home);
+  const recover = store.recoverInterrupted.bind(store);
+  let releaseRecovery = (): void => undefined;
+  const held = new Promise<void>((resolve) => { releaseRecovery = resolve; });
+  store.recoverInterrupted = async (options) => {
+    await held;
+    return await recover(options);
+  };
+  const supervisor = new MeetingTranscriptionSupervisor(store, { transcribe: async () => 'text' });
+  const handlers = new Map<string, (caller: unknown, ...args: unknown[]) => unknown>();
+  registerMeetingCaptureChannels(
+    {
+      handle: (channel, listener) => { handlers.set(channel, listener); },
+      broadcast: () => undefined,
+      watchCaller: () => undefined,
+    },
+    { store, drafts: new MeetingDraftStore(home), supervisor, warn: () => undefined },
+  );
+
+  let settlements = 0;
+  const invoke = (channel: string, ...args: unknown[]): Promise<unknown> => Promise.resolve(
+    handlers.get(channel)!({ id: 1 }, ...args),
+  ).finally(() => { settlements += 1; });
+  const pending = [
+    invoke('meetings:captureResumable', { orgId: null }),
+    invoke('meetings:captureRead', interrupted.id),
+    invoke('meetings:captureAdopt', interrupted.id, 'wr-after-boot'),
+  ];
+  await Promise.resolve();
+  assert.equal(settlements, 0, 'no capture operation can observe a half-reconciled record');
+
+  releaseRecovery();
+  const results = await Promise.allSettled(pending);
+  assert.deepEqual(results.map((result) => result.status), ['fulfilled', 'fulfilled', 'fulfilled']);
+});
+
+test('a failed boot recovery warns once and releases the capture gate', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-meeting-wire-gate-failure-'));
+  const store = new MeetingCaptureStore(home);
+  store.recoverInterrupted = async () => { throw new Error('record reconciliation failed'); };
+  const supervisor = new MeetingTranscriptionSupervisor(store, { transcribe: async () => 'text' });
+  const handlers = new Map<string, (caller: unknown, ...args: unknown[]) => unknown>();
+  const warnings: string[] = [];
+  registerMeetingCaptureChannels(
+    {
+      handle: (channel, listener) => { handlers.set(channel, listener); },
+      broadcast: () => undefined,
+      watchCaller: () => undefined,
+    },
+    { store, drafts: new MeetingDraftStore(home), supervisor, warn: (message) => { warnings.push(message); } },
+  );
+
+  const session = await handlers.get('meetings:captureBegin')!({ id: 1 }, {
+    orgId: null,
+    title: 'Still usable',
+    holderId: 'wr-recovery-failed',
+  }) as MeetingCaptureSession;
+
+  assert.equal(session.title, 'Still usable', 'recovery failure does not deadlock later capture calls');
+  assert.deepEqual(warnings, ['[meetings] capture recovery failed: record reconciliation failed']);
 });

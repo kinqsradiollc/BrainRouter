@@ -21,7 +21,7 @@ import {
   createCaptureSession,
   createMeetingTranscriptionQueue,
   DEFAULT_MEETING_RETRY_POLICY,
-  DEFAULT_MEETING_SEGMENT_MS,
+  DEFAULT_MEETING_UNIT_MS,
   discardCapture,
   drainWakeDelayMs,
   finalizeCapture,
@@ -49,7 +49,7 @@ const T0_MS = Date.parse(T0);
 function recorded(count: number): MeetingCaptureSession {
   let session = createCaptureSession({ id: 'mtg-queue', scope: { orgId: null }, startedAt: T0 });
   for (let i = 0; i < count; i += 1) {
-    session = appendSegment(session, { byteLength: 4_096, durationMs: DEFAULT_MEETING_SEGMENT_MS });
+    session = appendSegment(session, { byteLength: 4_096, durationMs: DEFAULT_MEETING_UNIT_MS });
   }
   return session;
 }
@@ -412,7 +412,7 @@ test('D6 — a finalized or discarded meeting is never touched', async () => {
 
 test('D2 — the host appends through the queue and every transition is written down', async () => {
   const { queue, state } = harness(recorded(0), succeed);
-  await queue.apply((session) => appendSegment(session, { byteLength: 2_048, durationMs: DEFAULT_MEETING_SEGMENT_MS }));
+  await queue.apply((session) => appendSegment(session, { byteLength: 2_048, durationMs: DEFAULT_MEETING_UNIT_MS }));
   assert.equal(state.persists.length, 1, 'the record is written before anything else happens to it');
   assert.equal(queue.session.segments.length, 1);
   const result = await queue.drain();

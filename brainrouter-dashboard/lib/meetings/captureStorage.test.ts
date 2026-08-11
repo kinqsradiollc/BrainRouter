@@ -11,10 +11,14 @@ import test from "node:test";
 
 import {
   CAPTURE_CHUNK_KEY_DIGITS,
+  MAX_CAPTURE_MANIFEST_CHUNK_MS,
   MAX_CAPTURE_CHUNK_SEQUENCE,
+  MIN_CAPTURE_MANIFEST_CHUNK_MS,
   assertCaptureSessionId,
   captureChunkKey,
   captureChunkSequence,
+  captureManifestChunkMs,
+  isCaptureManifestChunkMs,
   isCaptureSessionId,
   newCaptureSessionId,
   selectCaptureBackendKind,
@@ -74,6 +78,18 @@ test("a chunk key round-trips, and anything else in the directory is ignored", (
 test("a sequence outside the key's width is refused rather than silently truncated", () => {
   for (const sequence of [-1, 1.5, Number.NaN, MAX_CAPTURE_CHUNK_SEQUENCE + 1]) {
     assert.throws(() => captureChunkKey(sequence), /sequence must be an integer/);
+  }
+});
+
+test("a persisted durability cadence is an integer in D9's range, with safe fallback for a damaged marker", () => {
+  assert.equal(captureManifestChunkMs(undefined), undefined, "absence alone is the legacy signal");
+  for (const value of [MIN_CAPTURE_MANIFEST_CHUNK_MS, 3_000, MAX_CAPTURE_MANIFEST_CHUNK_MS]) {
+    assert.equal(isCaptureManifestChunkMs(value), true);
+    assert.equal(captureManifestChunkMs(value), value);
+  }
+  for (const value of [null, "3000", 1_999, 5_001, 3_000.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.equal(isCaptureManifestChunkMs(value), false);
+    assert.equal(captureManifestChunkMs(value), 3_000, "a present-but-invalid marker remains D9, never legacy");
   }
 });
 

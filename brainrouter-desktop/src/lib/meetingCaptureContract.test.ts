@@ -37,8 +37,8 @@ test('meeting audio is written on a cadence, through the host, and never held in
 
   // D1 — the timeslice. Without an argument here `MediaRecorder` is free to
   // deliver one blob at stop, and the disk write buys nothing.
-  assert.match(recorder, /recorder\.start\(this\.segmentMs\)/);
-  assert.match(recorder, /segmentMs = options\.segmentMs \?\? DEFAULT_MEETING_SEGMENT_MS/);
+  assert.match(recorder, /recorder\.start\(this\.chunkMs\)/);
+  assert.match(recorder, /chunkMs = options\.chunkMs \?\? DEFAULT_MEETING_CHUNK_MS/);
 
   // D1 — a chunk goes straight to the host. There is no array of blobs anywhere.
   assert.match(recorder, /ondataavailable = \(event: BlobEvent\) =>[\s\S]{0,120}this\.enqueue\(sessionId, event\.data\)/);
@@ -58,7 +58,7 @@ test('meeting audio is written on a cadence, through the host, and never held in
 
   // D2 — the session (and its directory) exists before the recorder is started.
   const beginAt = recorder.indexOf('await this.capture.begin(');
-  const startAt = recorder.indexOf('recorder.start(this.segmentMs)');
+  const startAt = recorder.indexOf('recorder.start(this.chunkMs)');
   assert.ok(beginAt > 0 && startAt > beginAt);
 
   // The renderer holds no filesystem path and no audio buffer: its only route to
@@ -248,7 +248,7 @@ test('the transcription queue lives in main and pushes every persisted change', 
   assert.ok(persistAt > 0 && publishAt > persistAt);
 });
 
-test('D1 still holds through the supervisor: bytes first, then the count the disk took', () => {
+test('D1/D9 still hold through the supervisor: bytes first, then ledger, then units', () => {
   const store = read('../../electron/meetingCapture.ts');
   const supervisor = read('../../electron/meetingTranscription.ts');
 
@@ -260,14 +260,15 @@ test('D1 still holds through the supervisor: bytes first, then the count the dis
   // second copy reappearing here is the drift D1b is about.
   assert.match(store, /adoptCaptureChunks\(session, chunks\)/);
   assert.doesNotMatch(store, /appendSegment\(|resumeCapture\(/);
-  const writeAt = supervisor.indexOf('await this.#store.writeSegment(id, index, bytes)');
+  const sequenceAt = supervisor.indexOf('nextChunkSequence(entry.queue.session)');
+  const writeAt = supervisor.indexOf('await this.#store.writeSegment(id, sequence, bytes)');
   const recordAt = supervisor.indexOf('{ byteLength: written, durationMs }');
-  assert.ok(writeAt > 0 && recordAt > writeAt);
+  assert.ok(sequenceAt > 0 && writeAt > sequenceAt && recordAt > writeAt);
   // D6 — and the commit carries nothing else. The append used to fold a lease
   // heartbeat into it, which is a clock standing in for a fact main already had;
   // gating the audio path on any part of that is the loss this ADR exists to
   // prevent arriving through the door meant to stop it.
-  assert.match(supervisor, /appendSegment\(current, \{ byteLength: written, durationMs \}\)/);
+  assert.match(supervisor, /sealDueUnits\(appendChunk\(current, \{ byteLength: written, durationMs \}\)\)/);
 });
 
 test('D6 — liveness is the process\'s own answer, and nothing on this host reads a lease', () => {
@@ -593,26 +594,38 @@ test('F4 — the fifth click: the mode rail does not end the meeting either', ()
   assert.match(view, /useEffect\(\(\) => \{ onCaptureChange\?\.\(capturing\); \}, \[capturing, onCaptureChange\]\)/);
 });
 
-test('B — one unreadable segment is stated, not thrown at the whole recording', () => {
+test('B — unreadable saved chunks are stated, not thrown at the whole recording', () => {
   const view = read('../components/meetings/MeetingsView.tsx');
   const store = read('../../electron/meetingCapture.ts');
   const ops = read('../components/meetings/captureOps.ts');
+  const readSegmentStart = store.indexOf('async readSegment');
+  const chunkReader = store.slice(readSegmentStart, store.indexOf('\n  /**', readSegmentStart));
 
   // §6 judges this on the audio being "on disk AND playable". A `readFile` per
-  // claimed segment with no guard meant one missing file rejected the whole
+  // claimed chunk with no guard meant one missing file rejected the whole
   // concatenation: fifty-nine other minutes on disk and unreachable, with the
   // recovery card still advertising their byte count and the user shown an
-  // errno. The per-segment reader already draws this line for transcription.
-  assert.match(store, /const bytes = await this\.readSegment\(id, segment\.index\);/);
-  assert.match(store, /if \(!bytes\) \{ missing\.push\(segment\.index\); continue; \}/);
+  // errno. D9 requires playback to start from the ledger, including its open
+  // suffix, then extend through every preserved physical sequence instead of
+  // considering only sealed transcription units or a contiguous file prefix.
+  assert.match(store, /const sequences = new Set\(captureChunks\(stored\.session\)\.map\(\(chunk\) => chunk\.sequence\)\);/);
+  assert.match(store, /const physical = await this\.physicalChunkSizes\(id\);/);
+  assert.match(store, /for \(const sequence of physical\.keys\(\)\) sequences\.add\(sequence\);/);
+  assert.match(store, /for \(let sequence = 0; sequence <= maximum; sequence \+= 1\)/);
+  assert.match(store, /if \(!sequences\.has\(sequence\)\) \{ missing\.push\(sequence\); continue; \}/);
+  assert.match(store, /const bytes = await this\.readSegment\(id, sequence\);/);
+  assert.match(store, /missing\.push\(sequence\)/);
   assert.doesNotMatch(store, /parts\.push\(await fs\.promises\.readFile\(/);
   // F2 — and "unreadable" is not one errno. `readSegment` reported only ENOENT
-  // as missing and rethrew the rest, so a segment at mode 000 (EACCES) or a
+  // as missing and rethrew the rest, so a saved chunk at mode 000 (EACCES) or a
   // directory in its place (EISDIR) still took the whole recording down. The
   // behaviour is asserted for real in `meetingCapture.test.ts`; what is asserted
-  // here is that no errno is being read at all, because the moment one is, this
-  // draws a line between two kinds of unreadable again.
-  assert.doesNotMatch(store, /ErrnoException|\bcode === '/);
+  // here is that the CHUNK reader does not inspect an errno, because the moment
+  // it does this draws a line between two kinds of unreadable again. Recovery's
+  // record-file classifier legitimately distinguishes ENOENT from an existing
+  // corrupt record — that is a deletion boundary, not playback behavior.
+  assert.match(chunkReader, /catch \{\s*return null;\s*\}/);
+  assert.doesNotMatch(chunkReader, /ErrnoException|\bcode === '/);
   // Carried across the bridge and rendered, because a player that is short of
   // the recording and says nothing is the silent loss in a smaller costume.
   assert.match(ops, /missing: readonly number\[\]/);

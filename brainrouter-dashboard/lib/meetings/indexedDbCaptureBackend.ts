@@ -18,8 +18,10 @@
  * as "this audio now survives the tab".
  */
 import {
+  captureManifestChunkMs,
   type CaptureChunkRef,
   type CaptureManifest,
+  type CaptureManifestRead,
   type CaptureStorageBackend,
 } from "./captureStorage";
 
@@ -93,12 +95,30 @@ class IndexedDbCaptureBackend implements CaptureStorageBackend {
     await this.#commit(MANIFEST_STORE, "readwrite", (store) => store.put(row));
   }
 
-  async readManifest(sessionId: string): Promise<CaptureManifest | undefined> {
-    const row = await this.#request<ManifestRow | undefined>(MANIFEST_STORE, "readonly", (store) =>
-      store.get(sessionId),
-    );
-    if (!row || typeof row.startedAt !== "string") return undefined;
-    return { startedAt: row.startedAt, closed: row.closed === true, payload: typeof row.payload === "string" ? row.payload : "" };
+  async readManifest(sessionId: string): Promise<CaptureManifestRead> {
+    let row: ManifestRow | undefined;
+    try {
+      row = await this.#request<ManifestRow | undefined>(MANIFEST_STORE, "readonly", (store) =>
+        store.get(sessionId),
+      );
+    } catch {
+      // A row that cannot currently be read is not evidence that it never
+      // existed. Classifying it as absent lets the reap delete audio that may
+      // still be the only recoverable copy of a meeting.
+      return { state: "corrupt" };
+    }
+    if (!row) return { state: "absent" };
+    if (typeof row.startedAt !== "string") return { state: "corrupt" };
+    const chunkMs = captureManifestChunkMs(row.chunkMs);
+    return {
+      state: "present",
+      manifest: {
+        startedAt: row.startedAt,
+        closed: row.closed === true,
+        payload: typeof row.payload === "string" ? row.payload : "",
+        ...(chunkMs === undefined ? {} : { chunkMs }),
+      },
+    };
   }
 
   async listSessionIds(): Promise<readonly string[]> {

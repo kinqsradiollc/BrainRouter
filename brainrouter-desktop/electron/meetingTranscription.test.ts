@@ -1,18 +1,18 @@
 /**
- * ADR-035 D3/D5/D7 — what the host-owned queue has to be true about.
+ * ADR-035 D3/D5/D7/D9 — what the host-owned queue has to be true about.
  *
  * §6 names three things beyond the destructive test, and each of the first three
  * tests here is one of them made checkable without a microphone or a sidecar:
  *
  * - **A meeting longer than the body limit completes**, because no request ever
- *   carries the whole thing — asserted as "every request is one segment".
+ *   carries the whole thing — asserted as "every request is one unit".
  * - **A failed segment is visible and recoverable** — it becomes a stated gap
  *   with its time range, and the retry fills it in from the audio on disk.
  * - **A meeting never fails because a server was down** (D7) — an outage costs
  *   no retry budget and the queue drains when the endpoint returns.
  *
  * The fourth is the one this ADR exists for: a process that died mid-meeting
- * leaves segments on disk, and a NEW supervisor over the recovered record
+ * leaves chunks on disk, and a NEW supervisor over the recovered record
  * finishes them. That is the queue surviving the thing that killed the last one.
  */
 import assert from 'node:assert/strict';
@@ -99,7 +99,7 @@ function harness(
   };
 }
 
-test('every segment is transcribed on its own, and the text is persisted as it lands', async () => {
+test('every transcription unit is posted on its own, and the text is persisted as it lands', async () => {
   const { store, supervisor, requests, published } = harness(async (bytes) => `chunk-${bytes.byteLength}`);
   const session = await supervisor.begin({ scope: { orgId: 'org_1' }, title: 'Long meeting' });
 
@@ -108,7 +108,7 @@ test('every segment is transcribed on its own, and the text is persisted as it l
   await supervisor.settle(session.id);
 
   // §6 — nothing ever posts the whole capture, so a meeting past the 40 MB body
-  // limit is not a meeting that fails. Each request carried exactly one segment.
+  // limit is not a meeting that fails. Each request carried exactly one unit.
   assert.deepEqual(requests, [2, 3]);
   const stored = await record(store, session.id);
   assert.deepEqual(stored.segments.map((segment) => [segment.state, segment.text]), [['done', 'chunk-2'], ['done', 'chunk-3']]);
@@ -124,6 +124,81 @@ test('every segment is transcribed on its own, and the text is persisted as it l
  */
 const WEBM_HEADER = [0x1a, 0x45, 0xdf, 0xa3, 0x99];
 const WEBM_CLUSTER = [0x1f, 0x43, 0xb6, 0x75];
+
+test('D9 one transcription unit reads every durability chunk it names', async () => {
+  const posted: Uint8Array[] = [];
+  const chunks = [
+    Uint8Array.from([...WEBM_HEADER, ...WEBM_CLUSTER, 0x00]),
+    ...Array.from({ length: 6 }, (_, index) => Uint8Array.from([...WEBM_CLUSTER, index + 1])),
+  ];
+  const { store, supervisor, requests } = harness(async (bytes) => {
+    posted.push(bytes.slice());
+    return 'whole utterance';
+  });
+  const session = await supervisor.begin({ scope: { orgId: null }, title: 'Chunked unit' });
+
+  for (const chunk of chunks) await supervisor.append(session.id, chunk, 3_000);
+  await supervisor.settle(session.id);
+
+  const stored = await record(store, session.id);
+  assert.equal(stored.chunks?.length, 7, 'all short writes are durable in the ledger');
+  assert.deepEqual(stored.segments.map((unit) => unit.chunks), [[0, 1, 2, 3, 4, 5, 6]]);
+  assert.deepEqual(requests, [chunks.reduce((total, chunk) => total + chunk.byteLength, 0)]);
+  assert.deepEqual(posted, [Uint8Array.from(chunks.flatMap((chunk) => [...chunk]))],
+    'deleting any read in the unit changes the bytes that reach the endpoint');
+});
+
+test('D9 disk chunk sequence advances independently of the unit count', async () => {
+  const { store, supervisor } = harness(async () => 'unit');
+  const written: number[] = [];
+  const write = store.writeSegment.bind(store);
+  store.writeSegment = async (id, sequence, bytes) => {
+    written.push(sequence);
+    return await write(id, sequence, bytes);
+  };
+  const session = await supervisor.begin({ scope: { orgId: null }, title: 'Independent counters' });
+
+  for (let index = 0; index < 14; index += 1) {
+    await supervisor.append(session.id, Uint8Array.of(index + 1), 3_000);
+  }
+  await supervisor.settle(session.id);
+
+  const stored = await record(store, session.id);
+  assert.deepEqual(written, Array.from({ length: 14 }, (_, index) => index));
+  assert.equal(stored.segments.length, 2, 'fourteen chunk files became two transcription units');
+  assert.deepEqual(stored.segments.map((unit) => unit.chunks), [
+    [0, 1, 2, 3, 4, 5, 6],
+    [7, 8, 9, 10, 11, 12, 13],
+  ]);
+});
+
+test('D9 a kill before the first unit seals recovers every written chunk', async () => {
+  const home = userData();
+  const first = harness(async () => 'not reached', home);
+  const session = await first.supervisor.begin({ scope: { orgId: null }, title: 'Killed mid-utterance' });
+  await first.supervisor.append(session.id, Uint8Array.of(1, 2), 3_000);
+  await first.supervisor.append(session.id, Uint8Array.of(3, 4), 3_000);
+  await first.supervisor.settle(session.id);
+
+  const beforeKill = await record(first.store, session.id);
+  assert.equal(beforeKill.segments.length, 0, 'no transcription boundary was reached');
+  assert.deepEqual(beforeKill.chunks?.map((chunk) => chunk.sequence), [0, 1]);
+  first.supervisor.dispose();
+
+  const recoveredStore = new MeetingCaptureStore(home);
+  const report = await recoveredStore.recoverInterrupted();
+  const recovered = await record(recoveredStore, session.id);
+  assert.deepEqual(report.recovered, [session.id]);
+  assert.deepEqual(recovered.segments.map((unit) => unit.chunks), [[0, 1]],
+    'recovery seals the interrupted open run instead of omitting it');
+
+  const posted: Uint8Array[] = [];
+  const second = harness(async (bytes) => { posted.push(bytes.slice()); return 'recovered'; }, home);
+  await second.supervisor.adopt(session.id);
+  await second.supervisor.settle(session.id);
+  assert.deepEqual(posted, [Uint8Array.of(1, 2, 3, 4)]);
+  assert.equal((await record(second.store, session.id)).segments[0]?.text, 'recovered');
+});
 
 test('a segment after the first is posted with the container header in front of it', async () => {
   const posted: Uint8Array[] = [];

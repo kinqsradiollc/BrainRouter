@@ -91,11 +91,11 @@ deep dives.
   transport, and session titles are named by the agent on the first turn rather than left as a
   timestamp;
   [ADR-035 a meeting you cannot lose](decisions/ADR-035-a-meeting-you-cannot-lose.md) —
-  proposed durability-then-liveness rework of meeting capture: audio written to disk as it arrives
-  instead of accumulating in a renderer ref, a session created at Record rather than at Stop,
-  incremental per-segment transcription so text exists during the meeting and a failure is bounded
-  to one segment, failed segments shown as marked gaps that retry from the audio still on disk, and
-  a destructive acceptance test — kill the app mid-recording and lose nothing.
+  accepted durability-then-liveness rework of meeting capture: a session is created at Record,
+  roughly three-second durability chunks are written independently from transcription units, and
+  corrupt or interrupted captures preserve their audio for bounded recovery on both hosts. D9 is
+  implemented with automated coverage; destructive host acceptance, live streaming, browser
+  server-of-record durability and retention remain pending;
   [ADR-036 the finding carries its code](decisions/ADR-036-the-finding-carries-its-code.md) —
   proposed review-console change that renders each bot finding's own hunk in the dashboard: the
   excerpt persisted with the finding at the reviewed revision rather than fetched from the forge, so

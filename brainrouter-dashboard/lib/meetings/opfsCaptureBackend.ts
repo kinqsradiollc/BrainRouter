@@ -22,8 +22,10 @@ import {
   CAPTURE_MANIFEST_NAME,
   captureChunkKey,
   captureChunkSequence,
+  captureManifestChunkMs,
   type CaptureChunkRef,
   type CaptureManifest,
+  type CaptureManifestRead,
   type CaptureStorageBackend,
 } from "./captureStorage";
 
@@ -119,15 +121,29 @@ class OpfsCaptureBackend implements CaptureStorageBackend {
     await writable.close();
   }
 
-  async readManifest(sessionId: string): Promise<CaptureManifest | undefined> {
-    const directory = await this.#existing(sessionId);
-    if (!directory) return undefined;
+  async readManifest(sessionId: string): Promise<CaptureManifestRead> {
+    let directory: FileSystemDirectoryHandle;
     try {
-      const handle = await directory.getFileHandle(CAPTURE_MANIFEST_NAME);
+      directory = await this.#root.getDirectoryHandle(sessionId);
+    } catch (caught) {
+      // A missing directory is absence; a directory the browser refuses to
+      // open is still physical state whose audio the reap must not erase.
+      return { state: isNotFoundError(caught) ? "absent" : "corrupt" };
+    }
+    let handle: FileSystemFileHandle;
+    try {
+      handle = await directory.getFileHandle(CAPTURE_MANIFEST_NAME);
+    } catch (caught) {
+      // A session directory without a manifest is the true orphan case. Any
+      // other failure means the manifest may exist but is unreadable.
+      return { state: isNotFoundError(caught) ? "absent" : "corrupt" };
+    }
+    try {
       const text = await (await handle.getFile()).text();
-      return parseManifest(text);
+      const manifest = parseManifest(text);
+      return manifest ? { state: "present", manifest } : { state: "corrupt" };
     } catch {
-      return undefined;
+      return { state: "corrupt" };
     }
   }
 
@@ -162,20 +178,29 @@ class OpfsCaptureBackend implements CaptureStorageBackend {
 }
 
 /**
- * A manifest that will not parse is treated as absent rather than as a crash: a
- * torn 200-byte JSON write must not make the megabytes of audio beside it
- * unreachable.
+ * Parse without recovery policy. A torn 200-byte JSON write must not make the
+ * megabytes of audio beside it unreachable, so `readManifest` reports this
+ * function's `undefined` as `corrupt`, never as `absent`.
  */
 function parseManifest(text: string): CaptureManifest | undefined {
   try {
     const parsed = JSON.parse(text) as Partial<CaptureManifest>;
     if (typeof parsed?.startedAt !== "string") return undefined;
+    const chunkMs = captureManifestChunkMs(parsed.chunkMs);
     return {
       startedAt: parsed.startedAt,
       closed: parsed.closed === true,
       payload: typeof parsed.payload === "string" ? parsed.payload : "",
+      ...(chunkMs === undefined ? {} : { chunkMs }),
     };
   } catch {
     return undefined;
   }
+}
+
+function isNotFoundError(value: unknown): boolean {
+  return typeof value === "object"
+    && value !== null
+    && "name" in value
+    && value.name === "NotFoundError";
 }

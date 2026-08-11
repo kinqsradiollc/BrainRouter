@@ -41,9 +41,9 @@
  *
  * The queue is the SINGLE WRITER of the session while it exists: one queue per
  * meeting, and the host mutates the session through `apply` rather than beside
- * it. Two writers would interleave a `markDone` with an `appendSegment` and one
- * of them would be lost — which is the same class of defect as losing the audio,
- * just quieter.
+ * it. Two writers would interleave a `markDone` with an `appendChunk`/unit seal
+ * and one of them would be lost — which is the same class of defect as losing
+ * the audio, just quieter.
  */
 import {
   markDone,
@@ -220,8 +220,9 @@ interface DrainOutcome {
  *
  * ```ts
  * const queue = createMeetingTranscriptionQueue({ session, ports });
- * // a chunk landed on disk:
- * await queue.apply((s) => appendSegment(s, { byteLength, durationMs }));
+ * // a durability chunk landed on disk; grouping it into transcription work is
+ * // a separate policy decision:
+ * await queue.apply((s) => sealDueUnits(appendChunk(s, { byteLength, durationMs })));
  * const result = await queue.drain();
  * if (result.nextWakeMs !== null) scheduleAnotherDrain(result.nextWakeMs);
  * ```

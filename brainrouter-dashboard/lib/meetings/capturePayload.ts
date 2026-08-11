@@ -1,5 +1,5 @@
 /**
- * ADR-035 D2/D3 — what the dashboard keeps in the capture manifest, and how a
+ * ADR-035 D2/D3/D9 — what the dashboard keeps in the capture manifest, and how a
  * meeting is put back together from it after the tab is gone.
  *
  * `captureStore.ts` deliberately treats the manifest `payload` as opaque text:
@@ -22,11 +22,11 @@
  * `restoreCaptureSession` closes that gap by believing the chunks.
  *
  * The other invariant here, which the transcription queue depends on absolutely:
- * **a segment's `index` equals its chunk's `sequence` in the store.** The
- * queue's `readSegment(index)` port reads chunk `index`, so if those ever
- * diverged, every segment after the divergence would be transcribed from the
- * wrong audio — silently, with plausible text. Nothing here appends a segment
- * for a chunk whose sequence is not exactly the next index.
+ * **a unit names every durability chunk it spans.** Before D9 one segment was
+ * one chunk and `index === sequence`; current records carry `session.chunks`
+ * plus `segment.chunks`. Recovery validates both rather than guessing, because
+ * reading only the first referenced chunk would produce plausible but incomplete
+ * text with no visible gap.
  *
  * **Liveness is deliberately NOT in this envelope.** It was: a lease with a
  * heartbeat stamp, mirrored beside the session so a damaged payload still named
@@ -40,17 +40,19 @@
  */
 import {
   adoptCaptureChunks,
+  captureChunks,
   createCaptureSession,
-  DEFAULT_MEETING_SEGMENT_MS,
+  isMeetingCaptureSession,
   isMeetingSessionId,
+  isTerminalCaptureStatus,
   recoverCaptureSession,
   resumableSessions,
   type MeetingCaptureScope,
   type MeetingCaptureSession,
   type MeetingCaptureTemplate,
-  type MeetingSegment,
 } from "@kinqs/brainrouter-core/meetings";
 
+import { captureManifestChunkMs } from "./captureStorage";
 import type { CaptureSessionRecord } from "./captureStore";
 
 /**
@@ -73,6 +75,27 @@ export interface CapturePayload {
   readonly session?: MeetingCaptureSession;
 }
 
+interface DecodedCapturePayload {
+  readonly payload: CapturePayload;
+  readonly rawSession?: unknown;
+}
+
+interface RecoverableSessionMetadata {
+  readonly startedAt?: string;
+  readonly scope?: MeetingCaptureScope;
+  readonly title?: string;
+  readonly template?: MeetingCaptureTemplate;
+  readonly language?: string;
+}
+
+const MAX_CAPTURE_TITLE_LENGTH = 500;
+const MAX_CAPTURE_MIME_TYPE_LENGTH = 255;
+const MAX_CAPTURE_SCOPE_ID_LENGTH = 256;
+const MAX_CAPTURE_LANGUAGE_LENGTH = 64;
+const MAX_CAPTURE_INSTANT_LENGTH = 64;
+const CAPTURE_TEMPLATES = new Set<MeetingCaptureTemplate>(["general", "standup", "one-on-one", "retrospective"]);
+const LANGUAGE_TAG = /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/;
+
 export function serializeCapturePayload(payload: CapturePayload): string {
   return JSON.stringify(payload);
 }
@@ -85,18 +108,54 @@ export function serializeCapturePayload(payload: CapturePayload): string {
  * which is the trade this ADR exists to refuse.
  */
 export function parseCapturePayload(text: string): CapturePayload {
+  return decodeCapturePayload(text).payload;
+}
+
+/**
+ * The exact physical sequences a valid matching session claims were written.
+ *
+ * Playback uses this only to name a claimed trailing chunk whose file has gone
+ * missing. It never restores a session or supplies a scope: damaged JSON and a
+ * valid session copied from another record both return `undefined`, so audio
+ * integrity cannot turn into tenant inference.
+ */
+export function capturePayloadChunkSequences(text: string, sessionId: string): readonly number[] | undefined {
+  const session = parseCapturePayload(text).session;
+  if (!session || session.id !== sessionId) return undefined;
+  return captureChunks(session).map((chunk) => chunk.sequence);
+}
+
+/**
+ * Whether a manifest's opaque payload independently authorizes audio deletion.
+ *
+ * The top-level `closed` bit is an index hint, not deletion authority: a torn
+ * write can flip it without successfully persisting the terminal session. The
+ * shared validator supplies the required lifecycle timestamps, the id match
+ * binds that verdict to these physical bytes, and no scope is ever invented.
+ */
+export function capturePayloadAuthorizesDeletion(text: string, sessionId: string): boolean {
+  const session = parseCapturePayload(text).session;
+  return session?.id === sessionId && isTerminalCaptureStatus(session.status);
+}
+
+function decodeCapturePayload(text: string): DecodedCapturePayload {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text || "{}");
   } catch {
-    return {};
+    return { payload: {} };
   }
-  if (!parsed || typeof parsed !== "object") return {};
+  if (!isRecord(parsed)) return { payload: {} };
   const candidate = parsed as { title?: unknown; mimeType?: unknown; session?: unknown };
+  const title = boundedText(candidate.title, MAX_CAPTURE_TITLE_LENGTH);
+  const mimeType = boundedText(candidate.mimeType, MAX_CAPTURE_MIME_TYPE_LENGTH);
   return {
-    ...(typeof candidate.title === "string" ? { title: candidate.title } : {}),
-    ...(typeof candidate.mimeType === "string" ? { mimeType: candidate.mimeType } : {}),
-    ...(isStoredSession(candidate.session) ? { session: candidate.session } : {}),
+    payload: {
+      ...(title === undefined ? {} : { title }),
+      ...(mimeType === undefined ? {} : { mimeType }),
+      ...(isMeetingCaptureSession(candidate.session) ? { session: candidate.session } : {}),
+    },
+    ...(candidate.session === undefined ? {} : { rawSession: candidate.session }),
   };
 }
 
@@ -111,7 +170,9 @@ export interface RestoreCaptureInput {
   readonly scope: MeetingCaptureScope;
   readonly template?: MeetingCaptureTemplate;
   readonly language?: string;
-  /** Duration credited to a chunk the manifest never described. */
+  /** Duration credited to a durability chunk the manifest never described. */
+  readonly chunkMs?: number;
+  /** @deprecated Use `chunkMs`; retained for callers restoring a pre-D9 fixture. */
   readonly segmentMs?: number;
   /** ISO instant used for the recovery stamp; injected by tests. */
   readonly at?: string;
@@ -126,27 +187,34 @@ export interface RestoreCaptureInput {
  *    capture recorded before it did (or one whose payload is unreadable) gets a
  *    fresh session minted over the same id, so old recordings keep working
  *    rather than becoming unreachable audio.
- * 2. **Believe the chunks.** Any chunk the session does not describe becomes a
- *    segment. That rule is the SHARED `adoptCaptureChunks` — both hosts had
- *    written it out for themselves, and a pure rule kept aligned by attention is
- *    a rule that is one edit away from diverging. What is left here is the
- *    host-specific half: this store leaves the chunks past a hole where they are
- *    (`rejected`) for its own reap to claim, rather than deleting them.
+ * 2. **Believe the chunks.** Any chunk the ledger does not describe is adopted
+ *    into it, then the shared unit policy groups the recovered tail. That rule
+ *    is `adoptCaptureChunks` — both hosts used to write it out for themselves,
+ *    and a pure rule kept aligned by attention is one edit away from diverging.
+ *    What is left here is host policy: this store leaves chunks past a hole
+ *    where they are (`rejected`) for its own reap to claim.
  * 3. **Recover.** `recoverCaptureSession` is the shared rule: nothing is
- *    recording any more, and a segment left mid-attempt did not succeed. It runs
- *    LAST because step 2 needs a session that still accepts appends.
+ *    recording any more, an open tail is sealed, and a unit left mid-attempt did
+ *    not succeed. It runs LAST because step 2 needs a session that still accepts
+ *    appends.
  */
 export function restoreCaptureSession(input: RestoreCaptureInput): MeetingCaptureSession {
-  const payload = parseCapturePayload(input.record.payload);
-  const stored = payload.session && payload.session.id === input.record.sessionId
+  const decoded = decodeCapturePayload(input.record.payload);
+  const payload = decoded.payload;
+  const storedPayloadSession = payload.session && payload.session.id === input.record.sessionId
     ? payload.session
+    : undefined;
+  const metadata = recoverableSessionMetadata(decoded.rawSession, input.record.sessionId);
+  const startedAt = metadata.startedAt ?? boundedInstant(input.record.startedAt);
+  const stored = storedPayloadSession
+    ? storedPayloadSession
     : createCaptureSession({
       id: isMeetingSessionId(input.record.sessionId) ? input.record.sessionId : undefined,
-      startedAt: input.record.startedAt,
-      scope: input.scope,
-      ...(payload.title ? { title: payload.title } : {}),
-      ...(input.template ? { template: input.template } : {}),
-      ...(input.language ? { language: input.language } : {}),
+      ...(startedAt ? { startedAt } : {}),
+      scope: metadata.scope ?? input.scope,
+      ...((metadata.title ?? payload.title) ? { title: metadata.title ?? payload.title } : {}),
+      ...((metadata.template ?? input.template) ? { template: metadata.template ?? input.template } : {}),
+      ...((metadata.language ?? input.language) ? { language: metadata.language ?? input.language } : {}),
     });
   // A lease written by an older build is dropped here. `isResumableSession` no
   // longer reads it — the field is gone from the shared model and
@@ -156,11 +224,83 @@ export function restoreCaptureSession(input: RestoreCaptureInput): MeetingCaptur
   // altogether. Cast because the shape is no longer part of a session; what is
   // read here is what an older build left on the device. Liveness on this host
   // is the Web Lock, and only the Web Lock.
-  const { writer: _legacy, ...adopted } = stored as MeetingCaptureSession & { writer?: unknown };
-  const reconciled = adoptCaptureChunks(adopted, input.record.chunks, {
-    segmentMs: input.segmentMs ?? DEFAULT_MEETING_SEGMENT_MS,
-  });
+  const { writer: _legacy, ...withoutWriter } = stored as MeetingCaptureSession & { writer?: unknown };
+  // A marker-less record with no usable session payload predates the ledger.
+  // The current constructor includes `chunks: []`, so drop that freshly-minted
+  // field only for that genuinely legacy shape. A D9 marker lives outside the
+  // payload precisely so damaged current JSON still adopts every physical chunk
+  // at its short cadence instead of stretching it to old 20-second blobs.
+  let adopted: MeetingCaptureSession = withoutWriter;
+  const storedChunkMs = captureManifestChunkMs(input.record.chunkMs);
+  const requestedChunkMs = captureManifestChunkMs(input.chunkMs);
+  if (!storedPayloadSession && storedChunkMs === undefined && requestedChunkMs === undefined) {
+    const { chunks: _newLedger, ...legacy } = withoutWriter;
+    adopted = legacy;
+  }
+  const adoptionChunkMs = requestedChunkMs ?? storedChunkMs;
+  const adoptionDuration = adoptionChunkMs !== undefined
+    ? { chunkMs: adoptionChunkMs }
+    : input.segmentMs !== undefined
+      ? { segmentMs: input.segmentMs }
+      : {};
+  const reconciled = adoptCaptureChunks(adopted, input.record.chunks, adoptionDuration);
   return recoverCaptureSession(reconciled.session, input.at);
+}
+
+/**
+ * Recover only identity metadata from a damaged current session.
+ *
+ * The id match is the authority boundary: without it, JSON copied from another
+ * record could move that recording's tenant/title onto these physical bytes.
+ * Lifecycle and audio fields are intentionally absent from the return type — a
+ * corrupt `status`, ledger, unit list or terminal timestamp is never carried
+ * into the freshly minted recording session that adopts the store's bytes.
+ */
+function recoverableSessionMetadata(value: unknown, sessionId: string): RecoverableSessionMetadata {
+  if (!isRecord(value) || value.id !== sessionId || !isMeetingSessionId(value.id)) return {};
+  const startedAt = boundedInstant(value.startedAt);
+  const scope = boundedCaptureScope(value.scope);
+  const title = boundedText(value.title, MAX_CAPTURE_TITLE_LENGTH);
+  const template = typeof value.template === "string" && CAPTURE_TEMPLATES.has(value.template as MeetingCaptureTemplate)
+    ? value.template as MeetingCaptureTemplate
+    : undefined;
+  const language = boundedLanguage(value.language);
+  return {
+    ...(startedAt === undefined ? {} : { startedAt }),
+    ...(scope === undefined ? {} : { scope }),
+    ...(title === undefined ? {} : { title }),
+    ...(template === undefined ? {} : { template }),
+    ...(language === undefined ? {} : { language }),
+  };
+}
+
+function boundedCaptureScope(value: unknown): MeetingCaptureScope | undefined {
+  if (!isRecord(value)) return undefined;
+  const orgId = value.orgId === null ? null : boundedText(value.orgId, MAX_CAPTURE_SCOPE_ID_LENGTH);
+  if (orgId === undefined) return undefined;
+  const workspaceId = value.workspaceId === undefined || value.workspaceId === null
+    ? null
+    : boundedText(value.workspaceId, MAX_CAPTURE_SCOPE_ID_LENGTH);
+  if (workspaceId === undefined) return undefined;
+  return { orgId, workspaceId };
+}
+
+function boundedLanguage(value: unknown): string | undefined {
+  const language = boundedText(value, MAX_CAPTURE_LANGUAGE_LENGTH);
+  return language && LANGUAGE_TAG.test(language) ? language : undefined;
+}
+
+function boundedInstant(value: unknown): string | undefined {
+  const instant = boundedText(value, MAX_CAPTURE_INSTANT_LENGTH);
+  return instant && Number.isFinite(Date.parse(instant)) ? instant : undefined;
+}
+
+function boundedText(value: unknown, maxLength: number): string | undefined {
+  return typeof value === "string" && value.length <= maxLength ? value : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 /**
@@ -221,12 +361,10 @@ export function resumableCaptures(
   const at = options.at ?? new Date().toISOString();
   const candidates = records
     .filter((record) => !excluded.has(record.sessionId))
-    // `closed` is not a second opinion about terminality — it IS
-    // `isTerminalCaptureStatus`, written by the queue's persist so the store can
-    // answer without parsing anything. Honouring it first is what covers the one
-    // case restoring cannot: a payload too damaged to read yields a freshly
-    // minted RECORDING session over the chunks, which would offer back a meeting
-    // the user finalized or explicitly threw away.
+    // `closed` is the manifest's recovery-offer index. Honouring it first keeps
+    // a damaged payload from being re-homed under a newly minted recording, but
+    // it is not deletion authority: `reapOrphans` separately requires a valid,
+    // matching terminal payload before recursively removing any audio.
     .filter((record) => !record.closed)
     .map((record) => ({ record, session: restoreCaptureSession({ record, scope: options.scope, at }) }));
   // No instant is threaded into the shared rule, because it no longer has one to
@@ -244,38 +382,4 @@ export function resumableCaptures(
   return candidates
     .filter((candidate) => offered.has(candidate.session.id))
     .sort((left, right) => right.session.startedAt.localeCompare(left.session.startedAt));
-}
-
-const SEGMENT_STATES = new Set(["pending", "transcribing", "done", "failed"]);
-const CAPTURE_STATUSES = new Set(["recording", "stopped", "finalized", "discarded"]);
-
-/**
- * Structural validation of a session read back out of browser storage.
- *
- * Not paranoia about an attacker — IndexedDB and OPFS are origin-scoped — but
- * about our own past selves: a session shape written by an older build, or a
- * half-written record, must degrade to "mint a fresh one from the chunks"
- * instead of feeding the queue a segment list with holes in it.
- */
-function isStoredSession(value: unknown): value is MeetingCaptureSession {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<MeetingCaptureSession> & { scope?: unknown };
-  if (!isMeetingSessionId(candidate.id) || typeof candidate.startedAt !== "string") return false;
-  if (typeof candidate.status !== "string" || !CAPTURE_STATUSES.has(candidate.status)) return false;
-  if (!candidate.scope || typeof candidate.scope !== "object") return false;
-  if (!Array.isArray(candidate.segments)) return false;
-  return candidate.segments.every(isStoredSegment);
-}
-
-function isStoredSegment(value: unknown, position: number): value is MeetingSegment {
-  if (!value || typeof value !== "object") return false;
-  const segment = value as Partial<MeetingSegment>;
-  // The index must be the position: it is the chunk sequence the queue reads
-  // audio from, so a list whose indices have drifted is not repairable here.
-  if (segment.index !== position) return false;
-  if (!Number.isFinite(segment.byteLength) || !Number.isFinite(segment.startMs) || !Number.isFinite(segment.endMs)) {
-    return false;
-  }
-  if (!Number.isFinite(segment.attempts)) return false;
-  return typeof segment.state === "string" && SEGMENT_STATES.has(segment.state);
 }
