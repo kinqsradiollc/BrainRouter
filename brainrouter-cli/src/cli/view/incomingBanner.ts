@@ -21,7 +21,11 @@
  */
 
 import chalk from 'chalk';
-import type { InboxTextMessage } from '../../runtime/federation/federationRegistration.js';
+import { sanitizePeerTextForTerminal } from '@kinqs/brainrouter-core/session';
+import type {
+  InboxTextMessage,
+  SenderReceiptNotice,
+} from '../../runtime/federation/federationRegistration.js';
 
 const BANNER_WIDTH = 80;
 
@@ -48,14 +52,44 @@ export function formatIncomingBanner(m: InboxTextMessage): string {
   return formatBanner(m);
 }
 
+export function renderSenderReceipts(receipts: SenderReceiptNotice[]): void {
+  for (const receipt of receipts) {
+    process.stdout.write(`\n${formatSenderReceipt(receipt)}\n`);
+  }
+}
+
+export function formatSenderReceipt(receipt: SenderReceiptNotice): string {
+  const messageId = sanitizePeerTextForTerminal(receipt.messageId).slice(0, 12);
+  const targetSessionKey = sanitizePeerTextForTerminal(receipt.targetSessionKey);
+  const reason = receipt.reason ? ` — ${sanitizePeerTextForTerminal(receipt.reason)}` : '';
+  return chalk.gray(
+    `Message ${messageId} to ${targetSessionKey}: ${receiptStatusLabel(receipt.status)}${reason}`,
+  );
+}
+
 function formatBanner(m: InboxTextMessage): string {
-  const sender = m.fromSessionKey;
+  const sender = sanitizePeerTextForTerminal(m.fromSessionKey);
   const age = formatAge(Date.parse(m.receivedAt));
-  const header = chalk.cyan(`┌─ 📨 from ${sender}`) + chalk.gray(` (${age})`);
+  const header = chalk.cyan(`┌─ 📨 from ${sender}`) +
+    chalk.gray(` (${age} · ${m.transport} · ${stateLabel(m.state)})`);
   const footer = chalk.cyan('└─');
-  const bodyLines = wrap(m.text, BANNER_WIDTH - 4)
+  const bodyLines = wrap(sanitizePeerTextForTerminal(m.text), BANNER_WIDTH - 4)
     .map((line) => chalk.cyan('│ ') + line);
   return [header, ...bodyLines, footer].join('\n');
+}
+
+function stateLabel(state: InboxTextMessage['state']): string {
+  if (state === 'queued') return 'queued for safe boundary';
+  if (state === 'held') return 'held for approval';
+  return state;
+}
+
+function receiptStatusLabel(status: SenderReceiptNotice['status']): string {
+  if (status === 'pending') return 'persisted, awaiting recipient admission';
+  if (status === 'held') return 'held by recipient for approval';
+  if (status === 'applied') return 'applied at the recipient safe boundary';
+  if (status === 'queue_full') return 'refused because the recipient queue is full';
+  return status;
 }
 
 function formatAge(receivedAtMs: number): string {

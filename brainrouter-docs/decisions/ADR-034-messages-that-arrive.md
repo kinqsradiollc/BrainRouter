@@ -1,386 +1,423 @@
 # ADR-034 — Messages that arrive
 
-**Status:** PROPOSED — planning only. Nothing here is built.
-**Depends on:** ADR-019 (federation, the active-session registry), ADR-027 D12 (bounded queues), ADR-028 (surfaces that tell the truth).
+**Status:** ACCEPTED — owner-approved on 2026-08-11.
+
+**Target:** `release/0.4.20`.
+
+**Implementation status:** COMPLETE. Core, Brain, CLI, and Desktop implement the same exact-key
+address space, recipient trust gate, safe-boundary application, durable remote lifecycle, and
+truthful receipts. The reproducible §12 command combines production host suites, an adapter-class
+Brain-offline composition, and two isolated install identities over MCP/Postgres. Full hosted CI
+remains the child pull request's mandatory merge gate; no physical multi-device run is claimed.
+
+**Depends on:**
+
+- [ADR-007](ADR-007-postgres-memory-store.md) for the native asynchronous Postgres store;
+- [ADR-010](ADR-010-enterprise-multitenancy.md) for organization and user isolation;
+- [ADR-027](ADR-027-compounding-debt-graph-execution-and-workbench-modernization.md) D8 for
+  session identity/title lifecycle and D12 for idempotent bounded queues; and
+- [ADR-028](ADR-028-surfaces-that-tell-the-truth.md) for truthful delivery states and reconciled
+  steering receipts.
+
+ADR-019 is not a dependency; it governs the application-wide organization/workspace selector,
+not session federation.
 
 ---
 
-## 1. We built most of this, and then stopped one step short
+## 1. Context
 
-Cross-session messaging is not missing. Three federation stages shipped:
+BrainRouter already had active-session heartbeats and a pull-based inbox. That foundation could
+persist a row, but it did not establish that a live recipient was the intended session, wake a busy
+recipient, distinguish persistence from application, protect a recipient with mutation authority,
+or provide the same behavior when the Brain was offline.
 
-| Stage | What it gave us |
+This ADR closes the architecture gap with one rule:
+
+> A peer message is untrusted input addressed to an exact live session. Persistence happens before
+> wake-up, application happens only at a model-safe boundary, and every failure is a visible receipt.
+
+The feature is session steering, not a general chat fabric and not delegated task execution.
+
+## 2. Required properties
+
+1. Two first-party sessions on one installation communicate while the Brain and network are
+   unavailable.
+2. Sessions on different installations communicate through the Brain without weakening tenant
+   isolation.
+3. A title helps a person choose; only an exact session key routes.
+4. A wake is only a hint. A durable inbox and poll path remain authoritative.
+5. A peer message never becomes a user-role message and never inherits the recipient's authority.
+6. Peer steering waits for a complete model/tool boundary and never calls `requestInterrupt()` or
+   aborts an in-flight turn.
+7. Elevated or unknown recipient mutation authority holds the message for a human at the recipient.
+8. Queue depth, fanout, age, text size, body size, and receipt retention are fixed and tested.
+9. CLI and Desktop consume the same contracts and address space.
+
+## 3. Questions Q1–Q6 — settled answers
+
+| Question | Accepted answer |
 |---|---|
-| **2** (0.4.0) | `session_register` / `session_heartbeat` / `active_sessions` — a registry of who is alive |
-| **3** (0.4.0) | `session_send`, `session_inbox_read`, `session_inbox_ack` — an inbox with peek-and-ack replay |
-| **5** (0.4.2) | `session_delegate_task` — cross-vendor delegation |
+| **Q1 · What identifies one installation?** | A cryptographically random UUID persisted once under the private BrainRouter home. A corrupt identity fails closed instead of silently minting a new peer identity. A logical session key is created for a new conversation and reused when that conversation resumes; per-incarnation listener ids plus a database-clocked MCP connection lease prevent concurrent live claims across Brain processes. |
+| **Q2 · How do same-installation sessions discover and authenticate each other?** | Each live session binds an ephemeral listener to `127.0.0.1` and writes an instance-specific, mode-`0600` registry record beneath a mode-`0700` directory. The target's random 256-bit bearer token authenticates health and delivery before the body is read; an HMAC made with the sender's independent registry capability binds the exact sender, target, install id, content, and timestamp. |
+| **Q3 · How does cross-installation delivery work?** | The Brain transactionally persists tenant-scoped inbox rows and sender receipts in Postgres, then emits an ID-only wake. MCP notifications wake a connected recipient; transaction-coupled `NOTIFY` and a reconnecting `LISTEN` feed carry wakes between Brain processes. Polling the durable inbox is the reconnect and loss fallback. |
+| **Q4 · How does a message affect a busy turn?** | It queues as typed peer steering and is applied at the next complete model/tool boundary. It does not call `requestInterrupt()`, set the cooperative interrupt flag, or abort the turn controller. |
+| **Q5 · When is recipient approval required?** | The recipient evaluates a transport-neutral authority tuple. A host presents held messages through its generic human-interaction protocol (`InteractionPort` in CLI, `InteractionBroker` in Desktop); a missing or dismissed human interaction stays held. Auto-application is permitted only when every mutation surface is denied or guaranteed to ask the human again. |
+| **Q6 · What are the bounds?** | Pending/held TTL 24 hours; terminal receipt retention seven days; pending depth 100 per recipient; fanout 100; local accepted-id ledger 1,000; durable held/terminal records 1,000; text 20,000 UTF-8 bytes; local HTTP body 64 KiB. Overflow, expiry, ambiguity, conflicts, rejection, and oversize input produce loud receipts. |
 
-Broadcast, pattern fan-out (`<clientKind>:*`), per-recipient ids, a two-minute liveness window, and
-atomic delivery marking are all there. This is a good foundation and most of the hard modelling is
-done.
+### 3.1 Q1 details — install identity and session identity are different
 
-**What is missing is the last step: the message reaching someone.**
+`getLocalMessagingDeviceId()` creates a random UUID once and stores it in
+`session-messaging/device.json`. The identity file and its directory are private, symlinks are
+refused, size is bounded, and an invalid stored value is an error. This identity answers only
+“same BrainRouter installation?” It is not an account credential and is never accepted as tenant
+authority.
 
-`federationRegistration.ts:126` says so in its own comment:
+`resolveFederationSessionKey()` uses the Agent conversation's stable session key. Resuming that
+conversation therefore reclaims its durable inbox after a crash; starting a new conversation
+creates a new key, even when a human reuses the same label. Renaming changes only human discovery
+metadata and never changes the routing key. The loopback registry's random instance id and the
+remote renewable connection claim remain per-incarnation. The remote claim is atomically fenced
+in Postgres and validated on heartbeat, send, read, transition, receipt, wake, and cleanup, so two
+Brain processes cannot
+silently share one address. Two different conversations in the same workspace remain distinct.
 
-> *"Federation Stage 3 (FED-S3-T6) — inbox poller. Pull-only for now; SSE push is deferred to 0.4.1
-> per the spec sub-item marked `[-]`."*
+Per-session disk state preserves that exact identity too. Unambiguous short legacy directory names
+remain readable; exact-boundary and long keys use a private exact-key marker plus a collision-resistant
+hash bucket. A non-empty ambiguous directory created by an older truncating layout fails loudly for
+manual recovery instead of being guessed, merged, or silently resumed as empty. Session metadata
+mutations hold a cross-process lock through validation and durable replacement, so concurrent hosts
+cannot lose rows or let a late lower-priority title overwrite a human or hook title. Corrupt, oversized,
+symlinked, or schema-invalid metadata fails closed.
 
-That deferral is still open. Everything below follows from it.
+### 3.2 Q2 details — authenticated loopback, not a broker daemon
 
-### 1.1 The four consequences
+The local route has no resident broker and no backend dependency. Each participant owns its
+listener lifecycle. Registry filenames hash the session key and include a random instance id;
+cleanup can therefore remove only the exact listener instance it created. Discovery probes the
+authenticated health endpoint, verifies protocol, device id, session key, and instance id, then
+reaps an unreachable or malformed entry. Delivery additionally proves one exact live sender with
+an HMAC over the envelope; possessing only the recipient token cannot impersonate another session.
 
-- **A five-second poll is the delivery mechanism.** Not fatal on its own, but it means *nothing*
-  arrives except by asking.
-- **A session that is not running receives nothing.** The message sits in the inbox until that
-  session next starts and polls — which may be never. There is no notion of "you have mail" outside
-  a live process.
-- **A busy session does not hear you.** The poller runs on its own timer; a session mid-turn is not
-  interruptible by a message, so "wake a stuck teammate" — the one thing you most want messaging
-  for — is exactly what it cannot do.
-- **Desktop is not a participant.** `session_register` and the inbox appear only in the CLI's
-  federation runtime. The desktop app can neither be addressed nor discover anyone.
+The client never treats the registry as an arbitrary URL. It reconstructs every request against
+`127.0.0.1` and a validated numeric port. Duplicate live claims for one exact key are ambiguous and
+refused rather than resolved by recency or title.
 
----
+### 3.3 Q3 details — persist, wake by id, then poll if necessary
 
-## 2. What the reference implementation's history teaches
+The remote path is ordered:
 
-The instructive part of Claude Code's cross-session `SendMessage` is not the feature announcement.
-It is that **most of the entries about it are bug fixes**, and they cluster on exactly two themes.
+1. authenticate the MCP connection, atomically lease the exact session key in Postgres, and pin
+   `(orgId, userId, fromSessionKey, claimToken)` on the server;
+2. require the sender and exact recipient to be active in that tenant;
+3. transactionally reserve the sender-generated `messageId`, enforce fanout/depth, and persist one
+   inbox/receipt row per recipient;
+4. commit the transaction;
+5. wake by recipient session key and inbox ids only; and
+6. let the recipient read the payload from the durable inbox and acknowledge its resulting state.
 
-**Delivery honesty** — fixed twice, in 2.1.211 and again in 2.1.222:
+The wake never carries message content. A failed stream, lost notification, process restart, or
+temporary `LISTEN` disconnect cannot lose the row. It changes latency only; polling remains the
+correctness path.
 
-> *"Fixed `SendMessage` reporting 'Message sent' when the write to a teammate's inbox had actually
-> failed; failed deliveries are now reported as errors."*
+### 3.4 Q4 details — steering is not cancellation
 
-**Addressing the wrong session** — three separate fixes: a re-spawned agent reusing a previous
-agent's name (2.1.199), background agents spawned by another agent not being found (2.1.212), and a
-confirmed remote recipient being swapped for a same-named local session (2.1.221).
+`requestPeerSessionSteer()` appends typed pending steering. `applyPendingSteeringAtBoundary()`
+drains it only between complete model/tool batches, records a steering receipt, adds a trusted
+system reconciliation record, and appends the peer content as an assistant observation named
+`peer-session` with authenticated provenance and `trust: "untrusted-session"`.
 
-> **Both themes are the same failure: the sender is told something happened that did not.** That is
-> ADR-028's rule, in a place we have not yet applied it.
+The boundary also revalidates the envelope's absolute deadline. A remote poll preserves the
+Postgres row's `expiresAt`; a late read cannot start a second 24-hour clock. Local live delivery has
+no database deadline and therefore uses 24 hours from recipient admission.
 
-Two more worth taking directly:
+Cancellation remains separate:
 
-- **2.1.198** — *"messaging a stuck teammate wakes it to retry immediately"*, and a teammate that
-  dies on an API error reports **failed** to the lead rather than going quiet.
-- **2.1.224 / 2.1.221** — inbound messages to a session running with bypassed permissions are **held
-  for approval**; messages to ordinary sessions auto-deliver. And outbound sends are evaluated by
-  the permission classifier **before dispatch**.
+- cancelling before persistence creates no delivery row;
+- cancelling the sender after persistence does not retract a committed message;
+- a peer message never aborts the recipient's current model call or tool; and
+- this ADR adds no recall/retract verb. A correction is another idempotent message.
 
----
+### 3.5 Q5 details — recipient-owned, transport-neutral approval
 
-## 3. Decisions
+The recipient evaluates five mutation surfaces. The most conservative value wins:
 
-### D1 · Delivery is pushed; the poll becomes the fallback
-
-Close FED-S3-T6. The recipient learns of a message because it was delivered, not because it asked
-at the right moment.
-
-Keep the poll — it is the reconnect path and the answer to a dropped stream — but demote it from
-mechanism to safety net. A five-second floor on every interaction is the difference between
-messaging and a mailbox you check.
-
-### D2 · A message can WAKE a session, and that is the point
-
-The reason to message another session is usually that it is stuck, looping, or about to do the
-wrong thing. A design where it only notices between turns fails precisely then.
-
-> **A session that cannot be interrupted cannot be helped.**
-
-Delivery therefore interrupts at a turn boundary the runtime already owns, the same way a
-cancellation does. What it must not do is inject into the middle of a tool call.
-
-### D3 · The sender is told the truth, and "the recipient exists" is part of it
-
-Two failures, distinguished, because they lead somewhere different:
-
-- **not delivered** — the write failed. An error, never "sent".
-- **delivered, not yet seen** — it is in the inbox and the recipient has not read it. Also not
-  "sent", and not an error either.
-
-`session_send` already returns per-recipient ids and `delivered: rows.length`; the gap is that a
-broadcast reaching nobody and a broadcast reaching four peers are both a success today.
-
-### D4 · Address by identity, not by name
-
-The reference implementation fixed misrouting three times. Every one is a name collision: a name is
-a label a human chose, and it gets reused the moment a session is re-spawned.
-
-> **A message routes on a session key. A name is for the human, and is resolved to a key at send
-> time — with the ambiguity reported rather than guessed.**
-
-Where a name matches two live sessions, the tool refuses and lists them. Where it matches a session
-that has since been replaced, it refuses rather than delivering to the impostor.
-
-### D4b · You choose a session by its DESCRIPTION, and we already generate one
-
-D4 says routing is by key. That leaves the question it does not answer: **a key is opaque, so how
-does anyone — a person or an agent — know which session they mean?**
-
-Today `session_register` carries `sessionKey`, `clientKind`, `workspaceRoot` and timestamps. Nothing
-a human would recognise. Discovery can tell you five sessions are alive and nothing about which one
-you want.
-
-**The missing piece is already built.** `packages/core/src/session/sessionTitle.ts` (ADR-027 D8) has
-the agent propose a title on turn 1, with validation that rejects the ways a model gets this wrong —
-refusals, preambles, quoted restatements, essays — and a truncation fallback so a title always
-exists. Its own reasoning is exactly why this matters here:
-
-> *"the first thing someone types is usually the situation, not the task — 'hey, the build is broken
-> again after that merge, can you look' truncates to noise, while the session is really 'Fix
-> post-merge build failure'."*
-
-So: **the title travels to the registry**, on register and on refresh when it changes. Discovery then
-answers the question a person actually asks:
-
-| Field | Answers |
+| Effective authority for a surface | Recipient action |
 |---|---|
-| title | *what is it doing* — AI-proposed, human-readable |
-| workspace | *which project* |
-| device | *which machine* (`stableDeviceId`, per Q3) |
-| state | *idle, working, or waiting for you* |
-| last seen | *is it still alive* |
+| `denied` | May auto-apply as untrusted steering; the surface cannot mutate. |
+| `confirm` | May auto-apply as untrusted steering; any later mutation still requires a human. |
+| `allow` | Hold for explicit recipient approval. |
+| `unknown` or omitted | Hold; uncertainty never becomes authority. |
 
-**State is the one to get right, because it is the whole reason you are messaging.** You do not
-send to a session at random — you send to the one that is stuck, or looping, or waiting. A listing
-that cannot distinguish *working* from *waiting for you* fails at the moment of use.
+Surfaces are `workspaceFiles`, `shell`, `computerUse`, `externalWrites`, and `remoteTools`. If any
+surface says hold, the whole message is held. Approval, rejection, expiry, and applied state are
+durable and idempotent. Approval replays until application is acknowledged; an applied approval
+does not replay.
 
-#### The naming module exists and nothing calls it
+Presentation belongs to the generic host interaction layer: CLI adapts the `InteractionPort`, and
+Desktop adapts the `InteractionBroker` plus its resolved-event bridge. Both resolve the same durable
+recipient decision; neither transport owns approval. Headless, dismissed, timed-out, or
+disconnected interactions have no implicit approval path and leave the record held.
 
-I said above that naming is "already built". That is true of the *module* and false of the
-*feature*, and the difference is the whole of ADR-028 E1:
+### 3.6 Q6 details — fixed lifecycle and loud shedding
 
-> **`packages/core/src/session/sessionTitle.ts` has no non-test importer.** `resolveSessionTitle`,
-> `deriveSessionTitle` and `normalizeAgentTitle` are compiled, tested, and called by nothing.
+| Bound | Accepted value | Failure state |
+|---|---:|---|
+| Local/remote pending depth per recipient | 100 | `queue_full` / `not_queued` |
+| Broadcast fanout | 100 | whole send rejected; no partial fanout |
+| Local accepted-id dedupe ledger | 1,000 within the 24-hour window | `queue_full`; accepted ids are never silently evicted |
+| Durable held/terminal record store | 1,000 | `queue_full`; retained decisions are never silently overwritten |
+| Pending or held age | 24 hours | `expired` receipt/notices |
+| Terminal receipt retention | seven days | swept after retention, or earlier after sender acknowledgement |
+| Message text | 20,000 UTF-8 bytes | `payload_too_large` |
+| Local request/response body | 64 KiB | request refused before unbounded buffering |
 
-So what actually names a session today:
+Remote statuses are `pending`, `held`, `applied`, `rejected`, `declined`, `expired`, and
+`queue_full`. The SQL constraint and shared TypeScript list have an exact parity test.
 
-- **The desktop truncates.** `lib/composer/useComposerDerived.ts:43` — `firstUser.text.slice(0, 48)`
-  falling back to `'New session'`. The exact behaviour the module was written to replace, still
-  running.
-- **A hook can rename it.** `hooksStore.ts` parses `{"sessionTitle":"…"}` and
-  `cli/ink/runChat.tsx:98` applies it. That is a *user's shell hook* naming the session — useful,
-  and not the agent proposing anything.
-- **The agent is never asked.** No prompt anywhere requests a title. ADR-027 D8's central
-  decision — *"the agent proposes a title on turn 1 and it wins when it is usable"* — was never
-  wired.
+## 4. Decisions D1–D7
 
-**So ADR-034 owns finishing it**, because D4b depends on it and a dependency that does not run is
-not a dependency:
+### D1 · One address space, exact keys, descriptive discovery
 
-1. **Ask the agent on turn 1.** Cheap, and it is the only step that produces a title worth reading.
-2. **Route it through `resolveSessionTitle`.** The validation is the load-bearing part — a model
-   asked for a title will sometimes return a refusal or an essay, and either pasted into a session
-   list is worse than the honest fallback.
-3. **Delete the independent truncations.** Two surfaces cutting at 48 and 52 characters is two
-   answers to one question, which is the class of duplication this codebase keeps paying for.
-4. **Then publish it to the registry** (D4b).
+Local and remote routes use the same exact session key. Titles, workspace, device, client kind,
+activity state, and last-seen time are discovery metadata only. A title collision never routes.
+When one exact key is visible locally and remotely, the verified local route wins and the duplicate
+is hidden. A self-send or duplicate live local claim is refused.
 
-Steps 1–3 are worth doing even if the rest of this ADR is deferred: they fix a naming inconsistency
-that exists today and cost nothing to the messaging design.
+Every successfully finalized first user turn also produces a bounded discovery title.
+`deriveSessionTitle()` is persisted and emitted immediately as the deterministic `derived` floor.
+A bounded asynchronous model proposal
+may CAS-replace that floor with source `agent`; invalid output, refusal, timeout, or provider failure
+leaves the derived title intact. Precedence is `human > hook > agent > derived`, so a late proposal
+cannot overwrite a stronger title. CLI and Desktop publish each winning metadata update to their
+live registration. Titles remain display metadata and never route.
 
-#### Titles are for choosing; keys are for routing
+### D2 · Same-installation delivery is authenticated and Brain-offline
 
-The distinction is D4's, and naming makes it sharper rather than softer:
+Same-installation delivery uses the two-sided authenticated loopback registry described in Q2.
+Successful local admission means only “queued in the live recipient's bounded mailbox”; it never
+claims that a model read or applied the content. Local messages are not mail: if either the exact
+sender or exact recipient is not live, the send fails loudly instead of writing a file for a future
+process.
 
-> **An AI-generated title makes collisions MORE likely, not less** — two sessions debugging the same
-> failure will be titled the same thing, and that is the system working.
+### D3 · Cross-installation delivery is durable and tenant-pinned
 
-So a title never routes. Where a name matches two live sessions, discovery lists both with the fields
-that distinguish them — workspace, device, state — and the send refuses rather than guessing. That is
-D4 unchanged; naming just makes the refusal legible instead of cryptic.
+Remote identity is `(orgId, userId, sessionKey)`. Organization and user come from authenticated
+server context, not tool arguments. The sender must own the unexpired database claim for that MCP
+connection; the recipient must have one current claim in the same tenant. A failed claim validator
+also reaps a stale process-local wake binding. Broadcast excludes the sender and is all-or-none when
+it exceeds fanout 100.
 
-#### Before turn 1 there is no title, and that is said rather than faked
+The sender supplies an idempotency key. Reuse with identical canonical content returns the original
+receipts; reuse with different recipient, kind, or content fails with an explicit id conflict.
 
-A session registers at startup, before anyone has typed. It appears as its derived fallback and is
-marked as **not yet named** — not given a plausible-looking invented one. The title arrives when the
-agent proposes it, and the registry refreshes.
+### D4 · Peer content enters only at a safe model boundary
 
-### D5 · Inbound is a permission boundary, not just a payload
+The recipient converts a verified envelope to `PeerSessionSteeringInput`. It records sender session,
+device, client, title, and transport provenance, but provenance establishes identity rather than
+authority. The content is never appended with role `user`. Existing goal/plan reconciliation and
+steering receipt machinery remain authoritative.
 
-The most consequential decision here, and it is not obvious until you look at what a message can do.
+### D5 · The recipient owns the trust decision
 
-> **A message from another session is an INSTRUCTION arriving from outside this session's trust
-> boundary** — and if that session is running with elevated permissions, it is an instruction with
-> those permissions behind it.
+No transport may decide that an instruction is safe. The authority matrix in Q5 executes inside the
+recipient host for local and remote paths alike. Unknown authority holds. The generic host
+interaction protocol owns human presentation; transport-specific approval concepts are rejected.
 
-So: inbound messages to a session with bypassed or elevated permissions are **held for the human**;
-ordinary sessions auto-deliver. Outbound sends are classified before dispatch. And the message is
-rendered as *from another session*, never as if the user said it.
+### D6 · Every state is truthful, durable where it must be, and bounded
 
-This is the same reasoning as ADR-029 C4 and ADR-032 D7 — content crossing a boundary does not
-inherit the trust of the boundary it arrived at.
+“Queued”, “persisted-unseen”, “held”, and “applied” are different states. A wake is not delivery, a
+database insert is not model application, and an approval is not application until acknowledged.
+Queue-full, expiry, rejection, ambiguity, unreachable routes, oversize input, and id conflicts are
+returned rather than logged and hidden.
 
-### D6 · Every surface participates, or the feature is a CLI feature
+Local live-mailbox state is deliberately process-local. Local held approvals are persisted beneath
+the recipient workspace. Remote inbox and sender receipts are durable Postgres rows. Terminal
+receipts remain visible for seven days unless the sender acknowledges them earlier.
 
-Desktop registers, appears in discovery, receives, and can send. Today it does none of these, so a
-person working in the app is invisible to their own agents.
+The remote row's absolute expiry is carried through recipient admission, durable hold, and
+safe-boundary steering. Approval or delayed polling never extends it. Presentation surfaces strip
+terminal control sequences from peer labels and text while retaining the original untrusted content
+for the mailbox, transcript, and model context.
 
-Discovery has to answer the question a human actually asks — *which of my sessions are alive, on
-which machine, doing what* — rather than list opaque keys.
+### D7 · CLI and Desktop are equal participants, proved by one reproducible command
 
-### D6b · Two transports, one address space — and the backend is not on the local path
+Both first-party interactive hosts must register, discover, send, receive, hold/approve/decline, and
+apply at the same safe boundary using shared core contracts. A CLI-only result does not complete
+this decision.
 
-Sessions on **one machine** must reach each other **without a round trip to the brain**. Only
-crossing devices needs the backend.
+Final acceptance is one same-machine automated command, not an anecdotal physical-device run. It
+composes production-host, focused security/lifecycle, and end-to-end transport tests into these
+phases:
 
-| | |
+- **Brain-offline phase:** one temporary BrainRouter home (one persisted install identity), two
+  isolated live host instances, Brain disabled. Verify exact-key discovery, local preference,
+  authenticated send, safe-boundary application, held approval, truthful receipt, duplicate id,
+  queue full, expiry, and stale-instance reaping.
+- **Cross-installation evidence:** a two-identity MCP delivery phase plus a distributed-claim phase,
+  using two different temporary BrainRouter homes, isolated MCP clients, two independent
+  feed/hub/store participants, and scratch Postgres databases. Verify remote selection, distributed
+  live-claim exclusion, tenant pinning, persist-before-ID-only-wake, multi-process `LISTEN` fan-in,
+  wake-loss polling, idempotent replay/conflict, receipt transitions, and cleanup.
+
+This command runs two device identities on one machine. It is deterministic and CI-suitable. It is
+not evidence that a physical network or two live devices were exercised.
+
+## 5. Ownership
+
+| Concern | Owner | Primary implementation |
+|---|---|---|
+| Shared remote records, statuses, limits | shared types | `packages/types/src/memory/session.ts`, `packages/types/src/store.ts` |
+| Title fallback, precedence, persistence, and live publication | browser-safe shared types + core session metadata + hosts | `packages/types/src/session-title.ts`, Core `sessionTitle.ts`/`sessionMetaStore.ts`, first-turn callbacks |
+| Local identity, registry, listener, client, mailbox, route merge | core session messaging | `packages/core/src/session/messaging/` |
+| Peer envelope and safe-boundary application | core session input/runtime | `packages/core/src/session/input/inputDelivery.ts`, `packages/core/src/agent/runtime/steering.ts` |
+| Recipient authority and durable hold lifecycle | core agent/session | `packages/core/src/agent/guards/sessionMessageApproval.ts`, `packages/core/src/session/input/heldSessionMessages.ts` |
+| Durable inbox, receipts, idempotency, limits, expiry | Brain Postgres store | migration 058 and Postgres session queries |
+| Transaction-coupled cross-process wake | Brain Postgres store | `sessionMessageNotificationFeed.ts` and the store subscription |
+| Authenticated MCP ownership, ID-only wake, poll fallback | Brain MCP transport | session tools, `SessionDeliveryHub`, `mcpServer.ts` |
+| Untrusted peer presentation sanitization | browser-safe shared types + hosts | `packages/types/src/peer-presentation.ts`, CLI/Desktop presentation surfaces |
+| Terminal participant lifecycle and admission | CLI host | `federationRegistration.ts`, `peerMessageAdmission.ts`, chat host wiring |
+| Graphical participant lifecycle and approval UI | Desktop host | `sessionMessaging.ts`, `PeersPanel.tsx`, InteractionBroker bridge |
+| Reproducible acceptance command | repository verification | focused suites plus `adr034-host-adapters.test.mts` and `adr034-acceptance.node-test.ts` |
+
+## 6. Compatibility
+
+- Older Brains that do not advertise registration/heartbeat tools leave federation disabled; the
+  CLI remains usable.
+- A recipient without wake capability continues polling. Notification negotiation is additive.
+- Existing personal sessions normalize an omitted organization to the personal tenant; new remote
+  sends use server-pinned organization context.
+- Migration 058 backfills existing inbox ids as message ids and maps old delivered rows to
+  `applied`, preserving prior rows before adding the lifecycle constraint.
+- Migration 058 gives existing active-session rows a bounded legacy lease. First-party clients
+  re-register when heartbeat reports that their current MCP connection does not own it.
+- Existing unambiguous short per-session state paths remain readable. A non-empty legacy long-key
+  bucket is inherently ambiguous because earlier releases truncated its name, so the new runtime
+  refuses automatic adoption and reports a recovery-required error rather than risking cross-session
+  state.
+- The legacy store send/read/ack methods remain adapters while first-party handlers migrate to the
+  authoritative route API.
+- Reserved non-text message kinds remain durable records but are not automatically injected as
+  text steering.
+
+## 7. Security and privacy
+
+- Local listeners bind only `127.0.0.1`; registry ports never become arbitrary outbound URLs.
+- Private directories/files, no-follow reads, identity/schema validation, hashed registry
+  filenames, and per-instance capabilities reduce same-user process confusion and symlink
+  substitution. They are not an operating-system account isolation boundary.
+- Target authentication happens before local body handling; the sender HMAC binds the accepted
+  envelope to one exact same-installation sender. Both body and text are bounded.
+- Remote authorization is the authenticated `(orgId, userId, sessionKey)` tuple. Tool arguments
+  cannot select another tenant or impersonate a sender key owned by another connection.
+- Active exact-recipient validation prevents delivery to a recycled label or inactive row.
+- Peer content is always `untrusted-session`; sender authentication does not grant instruction
+  authority.
+- No cross-user or cross-organization messaging is in scope.
+
+## 8. Failure, cancellation, and recovery semantics
+
+| Event | Required outcome |
 |---|---|
-| **Local** — same machine | direct, no backend. Works with the brain unreachable, and with no network at all. |
-| **Online** — another device | brain-mediated, the registry we already have |
+| Local registry entry is stale or listener fails authentication/probe | Reap only that instance; return `unreachable`/`not_found`. |
+| Two live local instances claim one exact key | Return `ambiguous`; never guess. |
+| Two Brain processes claim one exact remote key | Postgres atomically accepts one unexpired lease; reject the loser and fence every stale operation/wake by claim token. |
+| Remote sender is inactive or does not own its connection key | Reject before trusted persistence. |
+| Exact remote recipient is inactive or in another tenant | Persist a sender-visible rejection only after sender validation. |
+| Postgres commit succeeds but wake fails | Return persisted-unseen/poll fallback; recipient polls the row. |
+| Wake arrives twice | Read/deduplicate by inbox/message id; do not enqueue twice. |
+| Same message id carries different content | Loud id conflict; original delivery remains unchanged. |
+| A pre-upgrade long session key maps to a non-empty truncated state bucket | Fail with a recovery-required ambiguity; never create a fresh hashed bucket or guess ownership. |
+| Recipient queue reaches 100 | Reject that recipient with `queue_full`; pending depth never exceeds 100. |
+| Broadcast resolves to more than 100 recipients | Reject the whole logical send; no partial fanout. |
+| Pending/held row reaches 24 hours without a durable application acknowledgement | Move to `expired` and retain the sender-visible terminal receipt. Expiry alone proves neither application nor non-application across a crash seam. |
+| Recipient host has unsafe or unknown mutation authority | Persist `held`; no steering application until recipient approval. |
+| Sender or recipient exits after commit | Do not retract or silently mark applied; durable lifecycle remains queryable. |
+| Recipient stops mid-turn | Existing cancellation owns the stop. A peer message never requests it. |
 
-Two reasons this is a decision and not an optimisation:
+## 9. Consequences
 
-1. **Latency and dependency.** The common case is two sessions in one workspace on one laptop.
-   Routing that through a server to come back is slower and makes local work depend on a remote
-   being up.
-2. **It still works offline.** A person on a plane with two sessions open should be able to message
-   between them. Requiring the backend for that is a product regression dressed as architecture.
+### Benefits
 
-**But the sender must not care.** One address space, one session key, one `session_send`. A router
-picks the transport; a session is reachable by exactly one identity whichever path carries it.
+- Same-installation messaging has no Brain/network availability dependency.
+- Remote wake latency improves without making a lossy notification the source of truth.
+- Exact identity, active validation, and tenant pinning eliminate label-based misrouting.
+- Safe-boundary injection preserves complete tool/model operations and sender provenance.
+- The authority matrix is host- and transport-neutral and fails closed.
+- Fixed limits make overload, expiry, and retention observable and testable.
 
-> **A session that appears twice — once locally, once through the brain — is D4's name collision
-> wearing a transport label.** Discovery merges by session key, and if the same key resolves both
-> ways, local wins and the duplicate is not shown.
+### Costs and trade-offs
 
-#### The consequence that matters: where the permission gate lives
+- Each live local participant owns a loopback listener and private registry record.
+- Local queued messages disappear with the live recipient process; the sender was promised only
+  live mailbox admission, not offline mail.
+- Postgres stores one row per fanout recipient plus a logical-send idempotency row.
+- Every Brain process needs a reconnecting `LISTEN` connection for low-latency multi-process wake;
+  polling still consumes periodic reads as the fallback.
+- Conservative unknown authority increases held-message volume until every host supplies an exact
+  authority tuple and approval surface.
 
-D5 holds inbound messages for approval when the recipient runs with elevated permissions. If that
-check lived in the backend, **the local transport would skip it entirely** — and the local path is
-the common one.
+## 10. Dependency-ordered implementation slices
 
-> **The gate belongs to the RECIPIENT, not the transport.** A message is evaluated where it is
-> delivered, by the session whose permissions are at stake, on every path.
+| Order | Slice | State on 2026-08-11 | Exit condition |
+|---:|---|---|---|
+| 1 | Shared contracts, exact identity, titles/state metadata, validation and bounds | Implemented | Remote and local both enforce the accepted 20,000 UTF-8-byte rule. |
+| 2 | Persisted install identity, authenticated local registry/listener, mailbox and route merge | Implemented | Brain-offline two-host core tests pass. |
+| 3 | Tenant-scoped Postgres inbox/receipts, idempotency, limits, expiry and migration parity | Implemented | Scratch-Postgres tests pass under contention. |
+| 4 | Transaction-coupled `NOTIFY`, reconnecting `LISTEN`, MCP ID wake and poll fallback | Implemented | Commit-before-wake and failed-stream fallback tests pass. |
+| 5 | Typed peer steering, provenance, recipient authority classifier and durable held lifecycle | Implemented | Both hosts use their generic interaction protocol; headless/dismissed stays held. |
+| 6 | CLI participant lifecycle and admission | Implemented | CLI completes approve/decline/apply and preserves retryable receipt state across restart. |
+| 7 | Desktop participant lifecycle, discovery/send/receive and approval UI | Implemented | Desktop passes the same adapter contract and restart/switch cases as CLI. |
+| 8 | Composite two-identity acceptance harness, docs and hosted CI gate | Implemented | §12 command passes locally; the child PR requires the full hosted suite before merge. |
 
-Same reasoning for D3's honesty and D7's bounds: both are properties of the inbox, so both must hold
-whether the message arrived over a socket or over HTTPS.
+## 11. Taskboard
 
-### D7 · Bounded, like every other queue we own
+- [x] Persist a random installation UUID privately and fail closed on corruption.
+- [x] Use resume-stable logical session keys, per-incarnation live claims, and exact-key routing.
+- [x] Build authenticated loopback discovery, liveness probing and stale reaping.
+- [x] Enforce the same 20,000 UTF-8-byte text rule on local and remote paths, plus the 64-KiB body,
+  depth 100 and 24-hour local expiry bounds.
+- [x] Add tenant-scoped active-session and inbox persistence.
+- [x] Add sender idempotency, active exact-recipient validation, self-exclusion and fanout 100.
+- [x] Add durable statuses, sender receipts, 24-hour expiry and seven-day terminal retention.
+- [x] Add transaction-coupled Postgres notification and reconnecting multi-process feed.
+- [x] Add MCP ID-only wake, connection ownership and poll fallback.
+- [x] Add typed peer steering that applies at a safe boundary without interruption.
+- [x] Add the conservative authority matrix and durable held-message state machine.
+- [x] Wire the CLI participant lifecycle and recipient admission.
+- [x] Route held-message approve/decline presentation through each host's generic interaction
+  protocol, with dismissal/timeout remaining held.
+- [x] Wire Desktop registration, discovery, send, receive, state/title refresh and cleanup.
+- [x] Add and run the composite same-machine Brain-offline/two-identity MCP/Postgres harness.
+- [x] Declare the full hosted CI suite as a mandatory ADR-034 child-PR merge gate.
 
-An inbox is a queue and ADR-027 D12 already settled how we treat those: bounded depth, bounded
-retention, and shedding that is **stated** rather than silent. A message dropped for age tells
-someone; a message dropped quietly is worse than never sent, because the sender believes it landed.
+## 12. Acceptance evidence D1–D7
 
----
+Component and composite evidence are implementation-backed and reproducible. The commands below
+establish local acceptance; hosted CI is the independent merge gate recorded on the child pull
+request.
 
-## 4. Out of scope
+| Decision | Evidence | Exact command | Current result |
+|---|---|---|---|
+| **D1** exact identity and one address space | registry/route tests, collision-safe `state.test.ts`, cross-process `sessionMeta.test.ts`, Core title policy/model tests, CLI `turn-runner-session-title.test.ts`, Desktop `hostCore.peerSessions.test.ts`, and Dashboard fallback parity | `npm run test:adr034:acceptance` | Persisted install identity, collision-safe exact-key state, fresh-key creation, resume-stable routing, title precedence, and derived/agent live publication without title-based routing are covered. |
+| **D2** authenticated Brain-offline local delivery | `session-messaging-local.test.ts` and hostile/authentication cases in `session-messaging-bounds.test.ts` | `node --import tsx --test packages/core/src/tests/session-messaging-local.test.ts packages/core/src/tests/session-messaging-bounds.test.ts` | Component tests implemented; exercises two offline hosts on one temporary identity. |
+| **D3** durable tenant-pinned remote delivery and ID wake/poll | `session-inbox.node-test.ts`, `session-claim.node-test.ts`, `sessionMessageSchema.test.ts`, `sessionMessageNotificationFeed.test.ts`, `sessionDeliveryHub.test.ts`, `mcpServer.session-messaging.test.ts`, `session-message-notification.test.ts` | `npx vitest run brainrouter/src/memory/store/postgres/sessionMessageSchema.test.ts brainrouter/src/memory/store/postgres/sessionMessageNotificationFeed.test.ts brainrouter/src/services/sessionDeliveryHub.test.ts brainrouter/src/transport/mcpServer.session-messaging.test.ts && node --import tsx --test --test-concurrency=1 brainrouter/src/__tests__/session-inbox.node-test.ts brainrouter/src/__tests__/session-claim.node-test.ts && node --import tsx --test packages/core/src/tests/session-message-notification.test.ts` | Scratch-Postgres contention and a two-store/two-feed/two-hub race prove one distributed lease winner, stale-owner fencing, takeover, tenant isolation, transaction-coupled wake fan-in, and wake-loss recovery; no physical-device claim. |
+| **D4** safe-boundary peer steering without interruption | `peer-session-steering.test.ts`; peer cases in `external-steering.test.ts` and `agent-runtime.test.ts` | `node --import tsx --test packages/core/src/tests/peer-session-steering.test.ts packages/core/src/tests/external-steering.test.ts packages/core/src/tests/agent-runtime.test.ts` | Core path includes retry-safe suffix restoration and absolute-deadline revalidation before model-visible application. |
+| **D5** recipient authority and durable hold | Core classifier/store tests plus CLI/Desktop approval and interaction lifecycle tests | `node --import tsx --test packages/core/src/tests/session-message-approval.test.ts packages/core/src/tests/held-session-messages.test.ts && npm run test:adr034:acceptance` | Fail-closed authority, cross-process hold serialization, approve/decline/dismiss, and exactly-once presentation/application are covered. |
+| **D6** bounds, receipts, expiry, idempotency and contention | `session-messaging-bounds.test.ts`; queue/fanout/retention cases in `session-inbox.node-test.ts`; schema parity and multibyte MCP tests | `node --import tsx --test packages/core/src/tests/session-messaging-bounds.test.ts && node --import tsx --test --test-concurrency=1 brainrouter/src/__tests__/session-inbox.node-test.ts && npx vitest run brainrouter/src/memory/store/postgres/sessionMessageSchema.test.ts brainrouter/src/transport/mcpServer.session-messaging.test.ts` | Local, MCP and Postgres component coverage implemented. |
+| **D7** CLI/Desktop parity and reproducible end-to-end proof | Production CLI/Desktop host suites, an adapter-class Brain-offline composition phase, and an isolated two-identity MCP/Postgres phase | `npm run test:adr034:acceptance` | One command builds all participating packages and exercises HostCore/interaction wiring, adapter lifecycle, local preference/bounds/reaping, remote claim exclusion, wake loss/poll replay, id conflicts, restart recovery, and terminal receipts. |
 
-- **Cross-user messaging.** Same partition rule as everything else: `(org_id, user_id)`. A message
-  crossing tenants is a data leak with a friendly name.
-- **A general pub/sub bus.** This is session-to-session; anything wider is a different ADR.
-- **Replacing delegation.** `session_delegate_task` is a different verb — *do this* rather than
-  *know this* — and stays.
+`npm run test:adr034:acceptance` creates its temporary homes, listeners, isolated MCP connections,
+and scratch Postgres databases; it cleans them itself and never prints raw installation identities.
+It requires a reachable Postgres admin server configured by `BRAINROUTER_TEST_PG_ADMIN_URL`,
+`BRAINROUTER_DATABASE_URL`, or `DATABASE_URL`, and otherwise uses the repository's local Docker
+default. It proves two different persisted install identities on one machine, not two physical
+devices.
 
----
+## 13. Out of scope
 
-## 5. Open questions — answered against the code
-
-Each was investigated in our own repository. In every case the answer was already there, which is
-the useful finding: this needs assembling more than inventing.
-
-### Q1 · The local transport · **a loopback listener per session, a directory as the registry**
-
-We already have the shape. `packages/core/src/runtime/server.ts` is an HTTP listener with a
-versioned prefix (`/runtime/v1`) and a session-key header (`x-brainrouter-runtime-key`), and
-`triggers/server.ts` and the provider gateway use the same pattern.
-
-> **Each session opens a loopback listener on an ephemeral port and writes one small file** —
-> session key, host id, pid, port — **into a directory under the BrainRouter home. That directory
-> IS local discovery.**
-
-Why not the alternatives:
-
-| | |
-|---|---|
-| a per-user broker daemon | a background process nobody asked to run, that has to be started, supervised and killed. §5's own constraint refuses it. |
-| a watched directory of message files | works, and makes every message a filesystem event with no delivery confirmation and no back-pressure — it re-creates D3's dishonesty in a new place. |
-| the existing Electron IPC | desktop-only. A CLI cannot join, so D6 fails by construction. |
-
-Liveness is the port answering, not a heartbeat: a session that died leaves a stale file whose port
-refuses a connection, and the reader reaps it. **That is strictly better than the two-minute
-heartbeat window** the remote path uses, because it is a fact rather than an inference.
-
-### Q2 · The remote transport · **the MCP stream that already exists**
-
-`brainrouter/src/index.ts:335` — *"MCP endpoint — handles POST (requests) and GET (SSE stream)"*.
-The brain already speaks Streamable HTTP with SSE, and every session is already an MCP client of it.
-
-So the remote push is a **server-initiated MCP notification on the channel the session is already
-holding open**. No second channel, no new auth, no new reconnect logic — and it inherits the
-Accept-header promotion already built for naive clients.
-
-### Q3 · Deciding which transport applies · **`stableDeviceId`, not a hostname**
-
-`packages/core/src/sync/deviceId.ts` already provides *"a stable per-install device id, shared by
-every offline-first surface"*, persisted and deliberately non-drifting because HLC ordering depends
-on it — *"a device that silently changes its id looks like a NEW peer to the merge rules."*
-
-Same `deviceId` means same machine, so the router uses local. A hostname would have been the obvious
-choice and the wrong one: hostnames collide, change on network moves, and are attacker-suppliable in
-some setups.
-
-**Reusing it also means the registry gains nothing new to keep correct** — the id is already
-maintained for the sync stack.
-
-### Q4 · The interruption point · **the cooperative turn interrupt, already built**
-
-`agent.ts:796-806` has exactly what D2 needs and it is documented as such:
-
-> *"cooperative turn interrupt … checked at every LLM-call and tool boundary so a long multi-tool
-> turn stops at the next seam instead of running to completion"* — plus `turnAbort`, whose signal is
-> threaded into LLM calls and tools.
-
-**Delivery raises the same cooperative flag the Stop button and Esc raise**, and the message is
-presented at the next seam. It must NOT abort `turnAbort` — that is the *stop* gesture, and a
-message is an interruption, not a cancellation. Getting those two confused would make every incoming
-message kill the work it was trying to correct.
-
-### Q5 · The held-message surface · **the MCP approval path**
-
-`packages/core/src/agent/guards/mcpApproval.ts` already routes approval requests through a typed
-guardian path, with a classifier that treats `send`-shaped verbs as requiring approval.
-
-A held message is the same shape: something arrived, it needs a human yes, and both surfaces already
-know how to draw that. **Adding a second approval concept for messages would give us two places to
-get consent wrong.**
-
-### Q6 · Retention · **age-based shedding with a loud notice, exactly as ADR-028 D2 does it**
-
-`packages/core/src/sync/outbox.ts` already settled this for the planner: `MAX_OUTBOX_AGE_MS` of 30
-days, a `shed()` pass, and — the important part — `shedNotice`, *"set when shedding dropped
-operations, so the UI can say so."*
-
-An inbox gets the same treatment and the same bound. A message that expires unread tells someone; a
-message that vanishes quietly is worse than one never sent, because the sender believes it landed.
-
-**The one thing to decide fresh:** 30 days is right for a planner operation and probably too long
-for a message to a session that never came back. A shorter default belongs here, and the notice
-matters more than the number.
-
----
-
-## 6. How this will be judged
-
-**Two sessions, one stuck.**
-
-Start a session on a long or looping task. From another session — on the same machine or a
-different one — send it a correction. The test is:
-
-1. it **arrives while the task is running**, not after it finishes (D1, D2);
-2. the sender is told whether it **actually landed** (D3);
-3. sending to a re-spawned same-named session **refuses** rather than misroutes (D4);
-4. the same message to a session running with elevated permissions **waits for the human** (D5);
-5. and all of it works with the **desktop** on either end (D6).
-
-Today, one through five all fail. Step 2 is the one that would embarrass us most: we would report
-success.
-
-**Then run the whole thing twice more**, because D6b says the transport must not change the answer:
-
-6. **both sessions on one machine, with the brain stopped.** Every step above still passes. If
-   messaging needs a server to reach the next window, D6b was not implemented.
-7. **the two sessions on different devices.** Same behaviour, same wording, same approval prompt —
-   and the elevated-permission hold in step 4 still fires, because the gate lives in the recipient
-   rather than in whatever carried the message.
+- Cross-user or cross-organization messaging.
+- General publish/subscribe infrastructure.
+- Offline mail to a local session process that does not exist.
+- Replacing task delegation or worker orchestration.
+- Routing by title, workspace, client kind label, or device name.
+- Treating a wake, receipt, approval, or persisted row as proof that a model acted.

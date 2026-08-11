@@ -1,3 +1,10 @@
+/**
+ * Approval classifier for dynamically discovered MCP tools.
+ *
+ * Tool names are only warning evidence: a call bypasses host approval solely
+ * when its annotations explicitly and consistently prove read-only behavior.
+ */
+
 export interface McpToolApprovalAssessment {
   requiresApproval: boolean;
   dangerous: boolean;
@@ -20,13 +27,13 @@ function bareMcpToolName(name: string, toolSpec?: any): string {
 }
 
 /**
- * CODEX-MCP-APPROVAL — classify MCP calls before dispatch.
+ * Classify MCP calls before dispatch.
  *
  * MCP tools are open-ended: some are read-only (`search`, `get`, `list`), while
  * others mutate remote systems (`create_issue`, `send_message`, `delete_file`).
- * Codex routes MCP approval requests through a typed guardian path. BrainRouter
- * does not have that full host protocol yet, so this classifier gives the agent
- * a fail-closed boundary for clearly mutating or open-world MCP calls.
+ * Only an explicit, non-contradictory read-only annotation bypasses the generic
+ * host approval path. Names and descriptions can strengthen the warning, but
+ * their silence can never prove that an open-ended remote tool is non-mutating.
  */
 export function assessMcpToolApproval(name: string, toolSpec?: any): McpToolApprovalAssessment {
   const annotations = toolSpec?.annotations ?? toolSpec?.inputSchema?.annotations;
@@ -97,8 +104,8 @@ export function assessMcpToolApproval(name: string, toolSpec?: any): McpToolAppr
   }
 
   return {
-    requiresApproval: false,
+    requiresApproval: true,
     dangerous: false,
-    reason: 'MCP tool did not advertise mutating behavior',
+    reason: 'MCP tool did not provide an explicit trusted read-only annotation',
   };
 }

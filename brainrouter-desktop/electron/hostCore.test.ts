@@ -1,3 +1,8 @@
+/**
+ * Desktop HostCore lifecycle and interaction-broker regressions. Tests preserve
+ * exact session identity across host actions and require user decisions, peer
+ * expiry, and shutdown to resolve once without stale-session application.
+ */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createBrokerPort, createHostCore, isUnsavedNewSessionKey, type AgentLike } from './hostCore.js';
@@ -552,12 +557,30 @@ test('new-session: fresh key + cleared history + session-changed event', async (
     resetSessionCounters: () => {},
     getModel: () => 'test-model',
   };
-  const core = createHostCore({ agent, send });
+  const titles: Array<{ sessionKey: string; title: string; source: string }> = [];
+  const core = createHostCore({
+    agent,
+    send,
+    onSessionTitle: (sessionKey, title, source) => titles.push({ sessionKey, title, source }),
+  });
   await core.handle({ kind: 'new-session', label: 'My Chat!' });
   assert.equal(cleared, true);
-  assert.equal(agent.sessionKey, 'root:My-Chat-');
+  assert.match(agent.sessionKey, /^root:new-[0-9a-f-]{36}$/);
   const ev = out.find((m) => m.event.kind === 'session-changed')!.event as { sessionKey: string; loadedMessages: number };
   assert.equal(ev.loadedMessages, 0);
+  assert.deepEqual(titles, [{ sessionKey: agent.sessionKey, title: 'My Chat!', source: 'human' }]);
+});
+
+test('new-session fails loudly instead of spinning when every generated identity collides', async () => {
+  const { send } = collect();
+  const agent = fakeAgent();
+  const core = createHostCore({ agent, send, transcriptExists: () => true });
+
+  await assert.rejects(
+    core.handle({ kind: 'new-session', label: 'Collision' }),
+    /Could not mint a fresh session identity after 8 collision checks/,
+  );
+  assert.equal(agent.sessionKey, 'sess-test');
 });
 
 test('ADR-032 D5: an idle retarget awaits endSession before changing session identity', async () => {
@@ -575,7 +598,11 @@ test('ADR-032 D5: an idle retarget awaits endSession before changing session ide
     resetSessionCounters: () => { lifecycle.push(`reset:${agent.sessionKey}`); },
     clearHistory: () => { lifecycle.push(`clear:${agent.sessionKey}`); },
   };
-  const core = createHostCore({ agent, send, transcriptExists: () => true });
+  const core = createHostCore({
+    agent,
+    send,
+    transcriptExists: (sessionKey) => sessionKey === 'root:old' || sessionKey === 'root:saved',
+  });
 
   const retarget = core.handle({ kind: 'new-session', label: 'next' });
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -584,12 +611,13 @@ test('ADR-032 D5: an idle retarget awaits endSession before changing session ide
 
   releaseDrain();
   await retarget;
-  assert.equal(agent.sessionKey, 'root:next');
-  assert.deepEqual(lifecycle, ['drain:root:old', 'reset:root:next', 'clear:root:next']);
+  const nextKey = agent.sessionKey;
+  assert.match(nextKey, /^root:new-[0-9a-f-]{36}$/);
+  assert.deepEqual(lifecycle, ['drain:root:old', `reset:${nextKey}`, `clear:${nextKey}`]);
 
   await core.handle({ kind: 'resume-session', sessionKey: 'root:saved' });
   assert.equal(agent.sessionKey, 'root:saved');
-  assert.deepEqual(lifecycle.slice(-2), ['drain:root:next', 'reset:root:saved']);
+  assert.deepEqual(lifecycle.slice(-2), [`drain:${nextKey}`, 'reset:root:saved']);
 });
 
 test('ADR-032 D8: tenant rebind drains every pooled Agent before transport replacement and respawn', async () => {
@@ -820,7 +848,7 @@ test('new-session after lazy resume does not load the previous transcript on fir
 
   await core.handle({ kind: 'start-turn', prompt: 'brand new prompt' });
   assert.equal(historyLoads, 0, 'fresh chat did not ingest the lazily-resumed transcript');
-  assert.equal(agent.sessionKey, 'root:fresh');
+  assert.match(agent.sessionKey, /^root:new-[0-9a-f-]{36}$/);
 });
 
 test('set-model: switches + persists; persist failure degrades gracefully', async () => {
@@ -999,8 +1027,9 @@ test('a spawned/focused session restores its stored per-session model', async ()
     agent, send,
     spawnAgent: (k) => modelAgent(k),
     getSessionModel: (k) => (k === 'sess-test:feature' ? 'qwen3-coder' : undefined),
+    transcriptExists: () => true,
   });
-  await core.handle({ kind: 'new-session', label: 'feature' });
+  await core.handle({ kind: 'resume-session', sessionKey: 'sess-test:feature' });
   // The agent now serving sess-test:feature must carry that session's model.
   const sc = out.filter((m) => m.event.kind === 'session-changed').pop();
   assert.equal(sc!.sessionKey, 'sess-test:feature');

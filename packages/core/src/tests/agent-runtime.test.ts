@@ -1,3 +1,11 @@
+/**
+ * Integration coverage for the Agent model/tool loop and runtime guardrails.
+ *
+ * Provider calls are stubbed and filesystem state is isolated; the suite must
+ * exercise production orchestration without contacting real services or using
+ * a developer's persisted preferences.
+ */
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -1143,6 +1151,37 @@ test('Agent steering inbox is ordered, bounded, and consumed exactly once', () =
   assert.deepEqual(agent.consumePendingSteering(), []);
   assert.throws(() => agent.requestSteer('   '), /cannot be empty/);
   assert.throws(() => agent.requestSteer('x'.repeat(20_001)), /exceeds 20000/);
+
+  for (let index = 0; index < 100; index++) {
+    agent.requestSteer(`bounded-${index}`, { id: `bounded-${index}` });
+  }
+  assert.throws(() => agent.requestSteer('overflow'), /queue is full.*maximum 100/i);
+  assert.equal(agent.pendingSteeringCount, 100);
+});
+
+test('peer-session steering preserves sender provenance without interrupting or aborting', () => {
+  const stubMcp: any = { callTool: async () => ({ content: [] }) };
+  const agent = new Agent(stubMcp, { provider: 'openai', apiKey: '', model: 'gpt-4o-mini' }, {
+    workspaceRoot: '/tmp', launchCwd: '/tmp', sessionKey: 's:peer',
+  });
+  const input = agent.requestPeerSessionSteer({
+    id: 'message-1',
+    senderSessionKey: 's:sender',
+    senderDeviceId: 'device-1',
+    targetSessionKey: 's:peer',
+    text: 'Check the latest failure.',
+    source: 'peer-session',
+    trust: 'untrusted-session',
+    createdAt: 10,
+    receivedAt: 20,
+  });
+  assert.equal(input.source, 'peer-session');
+  if (input.source === 'peer-session') {
+    assert.equal(input.sender.sessionKey, 's:sender');
+    assert.equal(input.sender.deviceId, 'device-1');
+  }
+  assert.equal(agent.interruptRequested, false);
+  assert.equal(agent.turnAbort, null);
 });
 
 test('runTurn applies Steer after an in-flight model response and before the next request', async () => {
@@ -2955,7 +2994,7 @@ test('R4: mixed batch — 2 reads in parallel, then 1 write_file serially; write
   });
 });
 
-test('R4: unknown tool name in the batch is treated as serial (conservative fail-safe)', async () => {
+test('R4: unknown tool name in the batch is serial and fails closed before MCP dispatch', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const { Agent } = await import('../agent/agent.js');
     fs.writeFileSync(path.join(workspace, 'a.txt'), 'A');
@@ -2971,9 +3010,13 @@ test('R4: unknown tool name in the batch is treated as serial (conservative fail
       // Unknown tools fall through to the MCP client; make the stub
       // surface a JSON-RPC-style "unknown tool" so the agent's catch
       // branch produces the canonical error envelope.
+      let mcpCalls = 0;
       const stub = {
         listTools: async () => ({ tools: [] }),
-        callTool: async (name: string) => { throw new Error(`-32601 Unknown tool: ${name}`); },
+        callTool: async (name: string) => {
+          mcpCalls += 1;
+          throw new Error(`-32601 Unknown tool: ${name}`);
+        },
         close: async () => {},
       } as any;
       const agent = new Agent(stub, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
@@ -2989,7 +3032,8 @@ test('R4: unknown tool name in the batch is treated as serial (conservative fail
       // The unknown one is reported as an error envelope.
       const unknown = toolMsgs.find((m) => m.tool_call_id === 'u1');
       assert.equal(unknown.isError, true);
-      assert.match(String(unknown.content), /does not exist|Unknown tool/i);
+      assert.match(String(unknown.content), /requires approval/i);
+      assert.equal(mcpCalls, 0, 'an unannotated unknown tool never reaches the remote server');
     } finally {
       restore();
     }
@@ -4289,7 +4333,12 @@ test('runTurn recovery: truly unknown MCP tool name carries "did you mean" hint 
     }) as any;
     try {
       const stubMcp: any = {
-        listTools: async () => ({ tools: [{ name: 'mcp_brainrouter_memory_recall' }] }),
+        listTools: async () => ({
+          tools: [{
+            name: 'mcp_brainrouter_memory_recall',
+            annotations: { readOnlyHint: true },
+          }],
+        }),
         callTool: async (name: string) => {
           // Simulate the JSON-RPC -32601 MethodNotFound that the real pool
           // throws for an unknown name. (After normalizeToolName resolves

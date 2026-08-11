@@ -235,7 +235,6 @@ async function invokeMcpAdapter(
     args,
     agent.federationSessionKey,
   ) as Record<string, any>;
-  await agent.approveMcpToolCall(name, mcpTool, mcpArgs);
   const rawName = String(
     mcpTool?.__rawName ?? agent.rawMcpToolName(name),
   );
@@ -267,6 +266,13 @@ async function invokeMcpAdapter(
     // skill can have, so ordering is not load-bearing (`learnedSkills.ts`).
     ?? resolveLearnedSkill(learnedTenantForAgent(agent), mcpArgs.name)
     : undefined;
+  // A managed skill resolved from the package/workspace store is a local
+  // BrainRouter read, even when a stale MCP server advertises the same name.
+  // Only the actual remote fallback crosses the open-ended MCP authority
+  // boundary and therefore needs the fail-closed approval gate.
+  if (localSkillResult === undefined) {
+    await agent.approveMcpToolCall(name, mcpTool, mcpArgs);
+  }
   const response =
     localSkillResult ??
     await agent.mcpClient.callTool(name, mcpArgs, {

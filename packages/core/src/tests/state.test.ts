@@ -1,9 +1,29 @@
+/**
+ * Core persistence and workspace-state regressions.
+ *
+ * Personal state stays outside repositories, exact session buckets never
+ * collide, and every durable workflow store preserves its scoped invariants.
+ */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { getSessionStateFile, getStateDir, getStateFile } from '../storage/store.js';
-import { appendTranscriptEntry, listTranscripts, readTranscriptEntries, redactText } from '../session/transcript/sessionStore.js';
+import {
+  encodeSessionKey,
+  getSessionStateDir,
+  getSessionStateFile,
+  getStateDir,
+  getStateFile,
+  listSessionDirs,
+} from '../storage/store.js';
+import {
+  appendTranscriptEntry,
+  deleteSession,
+  listTranscripts,
+  readTranscriptEntries,
+  redactText,
+} from '../session/transcript/sessionStore.js';
+import { readGoal, setGoal } from '../goal/store/goalStore.js';
 import {
   formatPlan,
   readPlan,
@@ -31,6 +51,105 @@ test('CLI state helpers live under ~/.brainrouter, not the workspace', () => {
     assert.equal(fs.existsSync(path.join(fs.realpathSync(workspace), '.brainrouter', 'cli')), false);
     assert.equal(getStateFile(workspace, 'tasks.json'), path.join(stateDir, 'tasks.json'));
     assert.throws(() => getStateFile(workspace, '../tasks.json'), /Invalid CLI state file name/);
+  });
+});
+
+test('long exact session keys use distinct collision-resistant buckets and remain listable', () => {
+  withTempWorkspace((workspace) => {
+    const commonPrefix = 'shared-session-prefix-'.padEnd(500, 'x');
+    const firstKey = `${commonPrefix}A`;
+    const secondKey = `${commonPrefix}B`;
+    assert.ok(Buffer.byteLength(firstKey, 'utf8') <= 512);
+    assert.ok(Buffer.byteLength(secondKey, 'utf8') <= 512);
+
+    const firstDir = path.dirname(getSessionStateFile(workspace, firstKey, 'transcript.jsonl'));
+    const secondDir = path.dirname(getSessionStateFile(workspace, secondKey, 'transcript.jsonl'));
+    assert.notEqual(encodeSessionKey(firstKey), encodeSessionKey(secondKey));
+    assert.notEqual(firstDir, secondDir);
+    assert.ok(path.basename(firstDir).startsWith('v2~'));
+
+    appendTranscriptEntry(workspace, firstKey, { role: 'user', content: 'first exact session' });
+    appendTranscriptEntry(workspace, secondKey, { role: 'user', content: 'second exact session' });
+    setGoal(workspace, 'First exact goal', firstKey);
+    setGoal(workspace, 'Second exact goal', secondKey);
+    assert.equal(readTranscriptEntries(workspace, firstKey)[0]?.content, 'first exact session');
+    assert.equal(readTranscriptEntries(workspace, secondKey)[0]?.content, 'second exact session');
+    assert.equal(readGoal(workspace, firstKey)?.text, 'First exact goal');
+    assert.equal(readGoal(workspace, secondKey)?.text, 'Second exact goal');
+
+    const listed = new Set(listSessionDirs(workspace).map((entry) => entry.sessionKey));
+    assert.equal(listed.has(firstKey), true);
+    assert.equal(listed.has(secondKey), true);
+    const transcriptKeys = new Set(listTranscripts(workspace, { limit: 10 }).map((entry) => entry.sessionKey));
+    assert.equal(transcriptKeys.has(firstKey), true);
+    assert.equal(transcriptKeys.has(secondKey), true);
+    if (process.platform !== 'win32') {
+      assert.equal(fs.statSync(path.join(firstDir, '.session-key.json')).mode & 0o777, 0o600);
+    }
+  });
+});
+
+test('the legacy 180-character boundary is never adopted, listed, or deleted ambiguously', () => {
+  withTempWorkspace((workspace) => {
+    const exactKey = 'a'.repeat(135);
+    const legacyLongKey = `${exactKey}longer`;
+    const exactEncoding = Buffer.from(exactKey, 'utf8').toString('base64url');
+    const oldLongEncoding = Buffer.from(legacyLongKey, 'utf8').toString('base64url').slice(0, 180);
+    assert.equal(exactEncoding.length, 180);
+    assert.equal(oldLongEncoding, exactEncoding);
+
+    const sessionsDir = path.join(getStateDir(workspace), 'sessions');
+    fs.mkdirSync(sessionsDir, { mode: 0o700 });
+    const ambiguous = path.join(sessionsDir, exactEncoding);
+    fs.mkdirSync(ambiguous, { mode: 0o700 });
+    const legacyTranscript = path.join(ambiguous, 'transcript.jsonl');
+    fs.writeFileSync(legacyTranscript, '{"role":"user","content":"legacy owner"}\n');
+
+    const v2Bucket = path.join(sessionsDir, encodeSessionKey(legacyLongKey));
+    assert.throws(
+      () => getSessionStateDir(workspace, legacyLongKey),
+      /legacy long-key session state is ambiguous.*manual recovery/i,
+    );
+    assert.equal(fs.existsSync(v2Bucket), false, 'failed recovery must not create an empty v2 session');
+    assert.throws(
+      () => getSessionStateDir(workspace, exactKey),
+      /ambiguous.*missing.*exact-key marker/i,
+    );
+    assert.equal(listSessionDirs(workspace).some((entry) => entry.sessionKey === exactKey), false);
+    assert.equal(listTranscripts(workspace, { limit: 10 }).some((entry) => entry.sessionKey === exactKey), false);
+    assert.equal(deleteSession(workspace, exactKey), false);
+    assert.equal(fs.readFileSync(legacyTranscript, 'utf8'), '{"role":"user","content":"legacy owner"}\n');
+
+    const safeExactKey = 'b'.repeat(135);
+    const safeDir = getSessionStateDir(workspace, safeExactKey);
+    assert.equal(path.basename(safeDir).length, 180, 'the legacy pathname itself is preserved');
+    assert.equal(fs.existsSync(path.join(safeDir, '.session-key.json')), true);
+    assert.equal(listSessionDirs(workspace).some((entry) => entry.sessionKey === safeExactKey), true);
+  });
+});
+
+test('exact-key buckets reject nonempty markerless state and directory symlinks', () => {
+  withTempWorkspace((workspace) => {
+    const longKey = `${'safe-long-key-'.padEnd(500, 'x')}A`;
+    const sessionsDir = path.join(getStateDir(workspace), 'sessions');
+    fs.mkdirSync(sessionsDir, { mode: 0o700 });
+    const bucket = path.join(sessionsDir, encodeSessionKey(longKey));
+    fs.mkdirSync(bucket, { mode: 0o700 });
+    const sentinel = path.join(bucket, 'goal.json');
+    fs.writeFileSync(sentinel, '{"text":"must not be adopted"}\n');
+    assert.throws(
+      () => getSessionStateDir(workspace, longKey),
+      /ambiguous.*missing.*exact-key marker/i,
+    );
+    assert.equal(fs.readFileSync(sentinel, 'utf8'), '{"text":"must not be adopted"}\n');
+
+    if (process.platform === 'win32') return;
+    fs.rmSync(bucket, { recursive: true, force: true });
+    const outside = path.join(workspace, 'outside-session-state');
+    fs.mkdirSync(outside);
+    fs.symlinkSync(outside, bucket);
+    assert.throws(() => getSessionStateDir(workspace, longKey), /unsafe session state directory/i);
+    assert.equal(fs.existsSync(path.join(outside, '.session-key.json')), false);
   });
 });
 

@@ -11,25 +11,35 @@ import chalk from 'chalk';
 import { callMcpTool } from '@kinqs/brainrouter-core/mcp';
 import { readWorkerMeta, readWorkerSummary, readWorkerTranscript } from '@kinqs/brainrouter-core/worker';
 import type { CommandContext } from '../_context.js';
+import type { FederationHandle } from '../../../runtime/federation/federationRegistration.js';
 
 export interface DmAddressResolution {
   to: string;
   error?: string;
 }
 
-export function isLikelyFullSessionKey(target: string): boolean {
-  return target.length >= 32 || target.includes(':child:');
-}
-
-export async function resolveDmAddress(mcpClient: CommandContext['mcpClient'], target: string): Promise<DmAddressResolution> {
+export async function resolveDmAddress(
+  mcpClient: CommandContext['mcpClient'],
+  target: string,
+  federation?: FederationHandle | null,
+): Promise<DmAddressResolution> {
   const rawTarget = target.trim();
+  if (federation) {
+    const resolved = await federation.resolveTarget(rawTarget);
+    return resolved.route
+      ? { to: resolved.route.sessionKey }
+      : { to: rawTarget, error: resolved.error ?? `No active session matched "${rawTarget}".` };
+  }
   const res = await callMcpTool<{ sessions: Array<{ sessionKey?: string }> }>(
     mcpClient,
     'session_list',
     { includeStale: true },
   );
   if (res.isError) {
-    return { to: rawTarget };
+    return {
+      to: rawTarget,
+      error: `Session discovery failed; no message was queued. Try again when the session list is available.`,
+    };
   }
 
   const sessionKeys = (res.parsed?.sessions ?? [])
@@ -47,13 +57,10 @@ export async function resolveDmAddress(mcpClient: CommandContext['mcpClient'], t
       error: `Ambiguous session prefix "${rawTarget}" matched ${matches.length} sessions (${prefixes}). Use more characters.`,
     };
   }
-  if (!isLikelyFullSessionKey(rawTarget)) {
-    return {
-      to: rawTarget,
-      error: `No active or recently-seen session matched prefix "${rawTarget}". Use /agents --remote to copy a session prefix.`,
-    };
-  }
-  return { to: rawTarget };
+  return {
+    to: rawTarget,
+    error: `No active session matched "${rawTarget}". Refresh /agents --remote and choose an exact key or unique prefix.`,
+  };
 }
 
 /**

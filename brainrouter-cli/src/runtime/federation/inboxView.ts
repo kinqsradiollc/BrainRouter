@@ -7,6 +7,8 @@
  * The `/inbox --watch` poll loop + inline handoff-accept build on this view.
  */
 
+import { sanitizePeerTextForTerminal } from '@kinqs/brainrouter-core/session';
+
 export interface InboxMessage {
   id: string;
   fromSessionKey: string;
@@ -29,7 +31,7 @@ function preview(m: InboxMessage, max = 70): string {
     : m.kind === 'goal-handoff' && typeof m.payload?.goal === 'string'
       ? m.payload.goal
       : `(${m.kind} payload)`;
-  const clean = raw.replace(/\s+/g, ' ').trim();
+  const clean = sanitizePeerTextForTerminal(raw).replace(/\s+/g, ' ').trim();
   return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
 }
 
@@ -56,12 +58,14 @@ export function groupInboxByKind(messages: InboxMessage[]): InboxGroup[] {
 export function formatInboxPane(messages: InboxMessage[]): string[] {
   if (messages.length === 0) return ['Inbox empty.'];
   const groups = groupInboxByKind(messages);
-  const summary = groups.map((g) => `${g.count} ${g.kind}`).join(' · ');
+  const summary = groups.map((g) => `${g.count} ${sanitizePeerTextForTerminal(g.kind)}`).join(' · ');
   const lines: string[] = [`${messages.length} message${messages.length === 1 ? '' : 's'} — ${summary}`, ''];
   for (const g of groups) {
-    lines.push(`${g.kind} (${g.count})`);
+    lines.push(`${sanitizePeerTextForTerminal(g.kind)} (${g.count})`);
     for (const m of g.messages) {
-      lines.push(`  ${m.fromSessionKey.slice(0, 8)} · ${preview(m)} (${m.id.slice(0, 8)})`);
+      const sender = sanitizePeerTextForTerminal(m.fromSessionKey).slice(0, 8);
+      const id = sanitizePeerTextForTerminal(m.id).slice(0, 8);
+      lines.push(`  ${sender} · ${preview(m)} (${id})`);
     }
   }
   return lines;

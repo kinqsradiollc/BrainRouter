@@ -19,10 +19,12 @@
  * the original single-agent behavior — including interrupt-and-defer for a
  * switch requested mid-turn — because one agent can't safely run two turns.
  */
+import { randomUUID } from 'node:crypto';
 import {
   createCallbackBridge,
   InteractionBroker,
   isAgentCommand,
+  toExplicitConfirmDecision,
   type AgentCommand,
   type AgentEvent,
   type AgentEventMessage,
@@ -32,10 +34,13 @@ import {
 import {
   InputQueue,
   drainExternalSteering,
+  normalizeExplicitSessionTitle,
   pendingCompletionCount,
   peekCompletions,
   subscribeCompletions,
   subscribeExternalSteering,
+  type LocalSessionMessage,
+  type PeerSessionSender,
   type SteeringInput,
 } from '@kinqs/brainrouter-core/session';
 import { buildChildResumePrompt } from '@kinqs/brainrouter-core/util';
@@ -52,7 +57,15 @@ export interface AgentLike {
   runTurn(prompt: string, callbacks: any, opts?: { hiddenPrompt?: boolean; images?: AgentImage[]; preplanned?: boolean }): Promise<string>;
   /** DESK-2 — cooperative stop; the turn unwinds at the next boundary. */
   requestInterrupt?(): void;
-  requestSteer?(text: string, options?: { id?: string; source?: SteeringInput['source'] }): SteeringInput;
+  requestSteer?(text: string, options?: {
+    id?: string;
+    source?: 'user' | 'extension';
+    createdAt?: number;
+  }): SteeringInput;
+  requestPeerSessionSteer?(
+    message: LocalSessionMessage,
+    senderOverrides?: Partial<Omit<PeerSessionSender, 'sessionKey' | 'deviceId' | 'sentAt'>>,
+  ): SteeringInput;
   consumePendingSteering?(): SteeringInput[];
   readonly pendingSteeringCount?: number;
   // DESK-3 — session lifecycle + model control (all present on the real Agent).
@@ -82,7 +95,7 @@ export type QueryHandler = (args: Record<string, unknown>) => Promise<unknown> |
  * its `<workspaceHash>:new-…` key has no transcript yet. Resuming such a key
  * must self-heal (create the empty session) rather than hard-error — whereas a
  * missing transcript for a SAVED key is a real error. `applyNew` mints keys as
- * `<hash>:new-<base36 ts>`, so the session-name segment (after the first ':')
+ * `<hash>:new-<uuid>`, so the session-name segment (after the first ':')
  * starting with `new-` is the unsaved-new marker.
  */
 export function isUnsavedNewSessionKey(key: string): boolean {
@@ -107,6 +120,11 @@ export function createBrokerPort(
       emit({ kind: 'interaction-request', request });
       const r = await response;
       return r.type === 'confirm' ? r.approved : false;
+    },
+    async confirmExplicit(req: { title: string; detail?: string; dangerous?: boolean; tool?: string }) {
+      const { request, response } = broker.request({ type: 'confirm', ...req }, { timeoutMs });
+      emit({ kind: 'interaction-request', request });
+      return toExplicitConfirmDecision(await response);
     },
     async choice(req: { question: string; header: string; options: Array<{ label: string; description: string }>; multiSelect?: boolean }): Promise<string[] | null> {
       const { request, response } = broker.request({ type: 'choice', ...req }, { timeoutMs });
@@ -133,6 +151,12 @@ export interface HostCore {
     tenant: { userId: string; orgId: string | null },
     enabled: boolean,
   ): Promise<void>;
+  /** Admit already-authorized peer content into the addressed Agent's typed
+   * safe-boundary steering queue. The peer text is never started as a user turn. */
+  deliverPeerMessage(
+    message: LocalSessionMessage,
+    sender?: PeerSessionSender,
+  ): { accepted: boolean; state: 'steered' | 'not_found' | 'queue_full' | 'unavailable'; reason?: string };
   /** Pending interaction count (exposed for tests + drain-on-shutdown). */
   readonly broker: InteractionBroker;
 }
@@ -164,6 +188,17 @@ export function createHostCore(input: {
   /** DESK-5v — notified whenever the viewed/active agent changes, so the host's
    * read-only queries can report the agent the user is actually looking at. */
   onActiveAgentChange?: (agent: AgentLike) => void;
+  /** Participant-discovery lifecycle. Hosts may advertise only the active
+   * Agent, but its activity must remain accurate while turns and approvals run. */
+  onSessionActivityChange?: (sessionKey: string, state: 'idle' | 'working' | 'waiting') => void;
+  /** A successfully persisted shared title is discovery metadata too. */
+  onSessionTitle?: (sessionKey: string, title: string, source: 'agent' | 'hook' | 'human' | 'derived') => void;
+  /** Receipt transition seam: peer persistence becomes `applied` only after
+   * Core has appended the observation at an actual model-safe boundary. */
+  onPeerSteerApplied?: (sessionKey: string, input: { id: string; source: 'peer-session' }) => void;
+  /** Core revalidates age at the safe boundary; expired content never applies
+   * and the host must publish the exact terminal sender receipt. */
+  onPeerSteerExpired?: (sessionKey: string, input: { id: string; source: 'peer-session' }) => void;
   send: (msg: AgentEventMessage) => void;
   /**
    * Verification scoping — observe EVERY event a main-session turn emits, tagged
@@ -306,13 +341,35 @@ export function createHostCore(input: {
 
   let deliverySequence = 0;
   const nextDeliveryId = (): string => `delivery-${Date.now().toString(36)}-${++deliverySequence}`;
+  const peerWakeScheduled = new Set<string>();
+
+  function schedulePeerWake(key: string): void {
+    if (peerWakeScheduled.has(key) || shuttingDown || tenantRebinding) return;
+    peerWakeScheduled.add(key);
+    setImmediate(() => {
+      peerWakeScheduled.delete(key);
+      const runtime = pool.get(key);
+      if (!runtime || runtime.running || shuttingDown || tenantRebinding) return;
+      // This host-owned prompt is hidden and contains no peer text. The Agent
+      // consumes the typed peer observation at beginLoop's safe boundary.
+      void startTurnForKey(
+        key,
+        'Continue after admitting the pending peer-session observation.',
+        true,
+        undefined,
+        undefined,
+        false,
+      );
+    });
+  }
 
   async function startTurnForKey(
     key: string,
     prompt: string,
     hidden?: boolean,
     images?: AgentImage[],
-    delivery?: { id: string; mode: 'queue' | 'steer'; source: SteeringInput['source'] },
+    delivery?: { id: string; mode: 'queue' | 'steer'; source: SteeringInput['source']; sender?: PeerSessionSender },
+    suppressTurnStart = false,
   ): Promise<void> {
     // Preserve the long-standing synchronous `running` reservation when there
     // is no session mutation. Queue/Steer commands may arrive in the same tick
@@ -348,6 +405,7 @@ export function createHostCore(input: {
       if (entries.length) rt.agent.loadHistory?.(entries);
       rt.pendingHistoryKey = undefined;
     }
+    input.onSessionActivityChange?.(key, 'working');
     // Capture the session this turn belongs to: the user may switch away while
     // it runs, but every event it emits stays tagged with ITS key so the
     // renderer routes it to the right chat (and never the one now on screen).
@@ -357,22 +415,54 @@ export function createHostCore(input: {
       // with the turn's own sessionKey) to track build/test/lint as durable
       // tasks; never let an observer error break the turn.
       try { input.observeTurnEvent?.(sk, event); } catch { /* advisory */ }
+      if (event.kind === 'session-title') {
+        try { input.onSessionTitle?.(sk, event.title, event.source); } catch { /* advisory */ }
+      }
       stamp(sk, event);
     };
-    const turnCallbacks = createCallbackBridge(turnEmit) as unknown as Record<string, unknown>;
-    if (delivery) turnEmit({ kind: 'input-delivery', id: delivery.id, mode: delivery.mode, state: 'running', text: prompt, source: delivery.source });
-    turnEmit({ kind: 'turn-start', prompt });
+    const turnCallbacks = createCallbackBridge(turnEmit);
+    const emitSteerApplied = turnCallbacks.onSteerApplied;
+    turnCallbacks.onSteerApplied = (steering, receipt) => {
+      emitSteerApplied(steering, receipt);
+      if (steering.source === 'peer-session') {
+        try {
+          input.onPeerSteerApplied?.(sk, { id: steering.id, source: 'peer-session' });
+        } catch { /* receipt persistence is advisory to the turn */ }
+      }
+    };
+    const emitSteerExpired = turnCallbacks.onSteerExpired;
+    turnCallbacks.onSteerExpired = (steering) => {
+      emitSteerExpired(steering);
+      try {
+        input.onPeerSteerExpired?.(sk, { id: steering.id, source: 'peer-session' });
+      } catch { /* receipt persistence is advisory to the turn */ }
+    };
+    if (delivery) turnEmit({
+      kind: 'input-delivery', id: delivery.id, mode: delivery.mode,
+      state: 'running', text: prompt, source: delivery.source,
+      ...(delivery.sender ? { sender: delivery.sender } : {}),
+    });
+    if (!suppressTurnStart) turnEmit({ kind: 'turn-start', prompt });
     try {
       const answer = await rt.agent.runTurn(prompt, turnCallbacks, { hiddenPrompt: hidden, images });
       turnEmit({ kind: 'turn-complete', answer });
-      if (delivery) turnEmit({ kind: 'input-delivery', id: delivery.id, mode: delivery.mode, state: 'completed', text: prompt, source: delivery.source });
+      if (delivery) turnEmit({
+        kind: 'input-delivery', id: delivery.id, mode: delivery.mode,
+        state: 'completed', text: prompt, source: delivery.source,
+        ...(delivery.sender ? { sender: delivery.sender } : {}),
+      });
       const u = rt.agent.sessionUsage;
       if (u) turnEmit({ kind: 'tokens-updated', promptTokens: u.promptTokens, completionTokens: u.completionTokens, calls: u.calls, turns: u.turns, cachedTokens: u.cachedTokens });
     } catch (err) {
       turnEmit({ kind: 'turn-error', message: err instanceof Error ? err.message : String(err) });
-      if (delivery) turnEmit({ kind: 'input-delivery', id: delivery.id, mode: delivery.mode, state: 'canceled', text: prompt, source: delivery.source });
+      if (delivery) turnEmit({
+        kind: 'input-delivery', id: delivery.id, mode: delivery.mode,
+        state: 'canceled', text: prompt, source: delivery.source,
+        ...(delivery.sender ? { sender: delivery.sender } : {}),
+      });
     } finally {
       rt.running = false;
+      input.onSessionActivityChange?.(key, 'idle');
       // A steer accepted during late turn-finalization missed the last model
       // boundary. Convert it into a normal queued follow-up instead of losing it.
       for (const pending of rt.agent.consumePendingSteering?.() ?? []) {
@@ -384,7 +474,38 @@ export function createHostCore(input: {
             state: 'canceled',
             text: pending.text,
             source: pending.source,
+            ...(pending.source === 'peer-session' ? { sender: pending.sender } : {}),
           });
+          continue;
+        }
+        if (pending.source === 'peer-session') {
+          // It arrived after the turn's final safe seam. Put the same typed
+          // observation back and wake a hidden turn; never demote peer text to
+          // InputQueue, whose entries are ordinary user follow-ups.
+          if (!rt.agent.requestPeerSessionSteer || !pending.sender.deviceId) {
+            turnEmit({
+              kind: 'input-delivery', id: pending.id, mode: 'steer', state: 'canceled',
+              text: pending.text, source: pending.source, sender: pending.sender,
+            });
+            continue;
+          }
+          rt.agent.requestPeerSessionSteer({
+            id: pending.id,
+            senderSessionKey: pending.sender.sessionKey,
+            senderDeviceId: pending.sender.deviceId,
+            targetSessionKey: sk,
+            text: pending.text,
+            createdAt: pending.sender.sentAt ?? pending.createdAt,
+            receivedAt: pending.createdAt,
+            expiresAt: pending.expiresAt,
+            source: 'peer-session',
+            trust: 'untrusted-session',
+          }, peerSenderDetails(pending.sender));
+          turnEmit({
+            kind: 'input-delivery', id: pending.id, mode: 'steer', state: 'queued',
+            text: pending.text, source: pending.source, sender: pending.sender,
+          });
+          schedulePeerWake(sk);
           continue;
         }
         const queued = rt.queue.enqueue(pending.text, {
@@ -430,6 +551,7 @@ export function createHostCore(input: {
             id: next.deliveryId ?? nextDeliveryId(),
             mode: next.deliveryMode ?? 'queue',
             source: next.deliverySource ?? 'user',
+            ...(next.deliverySender ? { sender: next.deliverySender } : {}),
           });
         });
       }
@@ -476,6 +598,43 @@ export function createHostCore(input: {
       return;
     }
     emit({ kind: 'turn-error', message: 'A turn is already running. Choose Queue or Steer.' });
+  }
+
+  function deliverPeerMessage(
+    message: LocalSessionMessage,
+    sender?: PeerSessionSender,
+  ): { accepted: boolean; state: 'steered' | 'not_found' | 'queue_full' | 'unavailable'; reason?: string } {
+    if (shuttingDown || tenantRebinding) {
+      return { accepted: false, state: 'unavailable', reason: 'The recipient session is changing or shutting down.' };
+    }
+    const key = message.targetSessionKey;
+    const rt = pool.get(key);
+    if (!rt) return { accepted: false, state: 'not_found', reason: 'The addressed session is not active in this host.' };
+    if (!rt.agent.requestPeerSessionSteer) {
+      return { accepted: false, state: 'unavailable', reason: 'This Agent runtime does not support peer-session steering.' };
+    }
+    try {
+      const accepted = rt.agent.requestPeerSessionSteer(message, peerSenderDetails(sender));
+      if (accepted.source !== 'peer-session') {
+        throw new Error('The Agent runtime returned an invalid peer-session steering record.');
+      }
+      const provenance = sender ?? accepted.sender;
+      stamp(key, {
+        kind: 'input-delivery', id: message.id, mode: 'steer', state: 'steered',
+        text: message.text, source: 'peer-session', sender: provenance,
+      });
+      if (!rt.running) schedulePeerWake(key);
+      return { accepted: true, state: 'steered' };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      const queueFull = (error as { code?: unknown })?.code === 'SESSION_INPUT_QUEUE_FULL';
+      stamp(key, {
+        kind: 'input-delivery', id: message.id, mode: 'steer', state: 'canceled',
+        text: message.text, source: 'peer-session',
+        sender: sender ?? { sessionKey: message.senderSessionKey, deviceId: message.senderDeviceId, sentAt: message.createdAt },
+      });
+      return { accepted: false, state: queueFull ? 'queue_full' : 'unavailable', reason };
+    }
   }
 
   // WS1 — auto-resume the active session when detached background work (a
@@ -581,7 +740,10 @@ export function createHostCore(input: {
    */
   async function acquireRuntime(targetKey: string): Promise<Runtime | null> {
     const cur = pool.get(activeKey);
-    if (cur && !cur.running) {
+    const pendingPeerBoundary = cur && (
+      (cur.agent.pendingSteeringCount ?? 0) > 0 || peerWakeScheduled.has(activeKey)
+    );
+    if (cur && !cur.running && !pendingPeerBoundary) {
       pool.delete(activeKey);
       await trackSessionDrain(cur.agent);
       await awaitSessionDrains(targetKey);
@@ -679,9 +841,23 @@ export function createHostCore(input: {
   }
 
   async function applyNew(label?: string): Promise<void> {
-    const safe = (label ?? `new-${Date.now().toString(36)}`).replace(/[^A-Za-z0-9._-]+/g, '-');
-    const targetKey = `${activeKey.split(':')[0]}:${safe}`;
+    const prefix = activeKey.split(':')[0]!;
+    let targetKey: string | undefined;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const candidate = `${prefix}:new-${randomUUID()}`;
+      if (!pool.has(candidate) && !input.transcriptExists?.(candidate)) {
+        targetKey = candidate;
+        break;
+      }
+    }
+    if (!targetKey) {
+      throw new Error('Could not mint a fresh session identity after 8 collision checks.');
+    }
     await focusOrCreate(targetKey, (rt) => { rt.agent.clearHistory?.(); return 0; });
+    const title = normalizeExplicitSessionTitle(label);
+    if (title) {
+      try { input.onSessionTitle?.(targetKey, title, 'human'); } catch { /* advisory */ }
+    }
   }
 
   async function rebindTenant(
@@ -839,7 +1015,7 @@ export function createHostCore(input: {
         return;
       }
       case 'new-session': {
-        const label = (cmd.label ?? '').trim() || undefined;
+        const label = typeof cmd.label === 'string' ? cmd.label.trim() || undefined : undefined;
         await runSessionMutation(() => applyNew(label));
         return;
       }
@@ -912,5 +1088,17 @@ export function createHostCore(input: {
     }
   }
 
-  return { handle, rebindTenant, bindLearning, broker };
+  return { handle, rebindTenant, bindLearning, deliverPeerMessage, broker };
+}
+
+function peerSenderDetails(
+  sender: PeerSessionSender | undefined,
+): Partial<Omit<PeerSessionSender, 'sessionKey' | 'deviceId' | 'sentAt'>> | undefined {
+  if (!sender) return undefined;
+  return {
+    ...(sender.clientKind ? { clientKind: sender.clientKind } : {}),
+    ...(sender.workspaceRoot ? { workspaceRoot: sender.workspaceRoot } : {}),
+    ...(sender.title ? { title: sender.title } : {}),
+    ...(sender.transport ? { transport: sender.transport } : {}),
+  };
 }

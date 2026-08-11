@@ -502,12 +502,45 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       },
     };
   };
+  const devPeerReceipts: Array<Record<string, unknown>> = [];
+  const devHeldPeerMessages: Array<Record<string, unknown>> = [{
+    id: 'inbox_dev_held', senderSessionKey: 'cli:release-check', senderDeviceId: 'dev-cli-device',
+    targetSessionKey: 'dev:desktop', text: 'The release branch has one unresolved check.',
+    status: 'held', holdReason: 'Recipient can mutate without a guaranteed human confirmation on: workspaceFiles.',
+    createdAt: Date.now() - 30_000, expiresAt: Date.now() + 86_370_000,
+  }];
   const queries: Record<string, (args: Record<string, unknown>) => unknown> = {
     'workspace-onboarding-propose': (args) => proposeDevWorkspaceOnboarding(S.wsCurrent, args),
     'workspace-onboarding-preview': (args) => previewDevWorkspaceOnboarding(S.wsCurrent, args),
     'workspace-onboarding-preview-instruction': (args) =>
       previewDevWorkspaceInstruction(S.onboarding, S.wsCurrent, args),
     'list-sessions': () => mergeMeta(S.wsCurrent),
+    'peers-list': () => ({
+      ownSessionKey: 'dev:desktop', brainOnline: true,
+      routes: [
+        { sessionKey: 'cli:release-check', deviceId: 'dev-cli-device', clientKind: 'cli', state: 'working', transport: 'local', lastSeenAt: Date.now(), title: 'Check release readiness', workspaceRoot: S.wsCurrent, instanceCount: 1 },
+        { sessionKey: 'desktop:review-1302', deviceId: 'dev-remote-device', clientKind: 'desktop', state: 'idle', transport: 'remote', lastSeenAt: Date.now(), title: 'Review PR 1302', instanceCount: 1 },
+      ],
+    }),
+    'peers-send': (a) => {
+      const remote = String(a.to ?? '').startsWith('desktop:');
+      const receipt = {
+        ok: true, messageId: `dev-peer-${Date.now()}`, targetSessionKey: String(a.to ?? ''),
+        transport: remote ? 'remote' : 'local', status: remote ? 'pending' : 'queued',
+        wording: remote ? 'Persisted for the recipient; not yet applied.' : 'Queued in the recipient’s local inbox; not yet applied.',
+        updatedAt: new Date().toISOString(),
+      };
+      devPeerReceipts.unshift(receipt);
+      return receipt;
+    },
+    'peers-held': () => ({ messages: devHeldPeerMessages }),
+    'peers-held-decide': (a) => {
+      const row = devHeldPeerMessages.find((message) => message.id === a.id);
+      if (row) row.status = a.approved === true ? 'approved' : 'rejected';
+      return row ?? { error: 'Unknown held message.' };
+    },
+    'peers-receipts': () => ({ receipts: devPeerReceipts }),
+    'peers-receipts-ack': (a) => ({ acknowledged: Array.isArray(a.ids) ? a.ids.length : 0 }),
     'runtime-runner-info': () => ({ mode: 'in-process', remoteUrl: null }),
     'runtime-runner-status': (a) => ({ runtimeId: String(a.runtimeId ?? ''), status: 'unknown', live: false }),
     'runtime-previews-list': () => ({

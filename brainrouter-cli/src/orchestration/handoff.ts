@@ -70,17 +70,13 @@ export interface HandoffTargetResolution {
 
 const NEXT_IDLE_RE = /^([a-z][a-z0-9-]*):next-idle$/i;
 
-function isLikelyFullKey(t: string): boolean {
-  return t.length >= 32 || t.includes(":child:");
-}
-
 /**
  * Resolve a `/handoff` target into a concrete recipient sessionKey:
  *   - `<clientKind>:next-idle` → the active peer of that kind whose last
  *     heartbeat is OLDEST (most idle), excluding the sender.
  *   - exact sessionKey → itself.
  *   - unique prefix → the match; ambiguous → error.
- *   - otherwise a full-looking key passes through literally.
+ *   - unknown keys are refused; callers never persist to an undiscovered key.
  */
 export function resolveHandoffTarget(
   sessions: HandoffSessionLike[],
@@ -113,6 +109,5 @@ export function resolveHandoffTarget(
         .join(", ")}). Use more characters.`,
     };
   }
-  if (isLikelyFullKey(raw)) return { to: raw };
   return { error: `No active session matched "${raw}". Use /agents --remote to see peers, or <clientKind>:next-idle.` };
 }

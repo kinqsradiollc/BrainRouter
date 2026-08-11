@@ -89,11 +89,11 @@ deep dives.
   [ADR-033 review that finds things, and says where](decisions/ADR-033-review-that-finds-things-and-says-where.md) —
   accepted split of deterministic engineering from model judgement in code review: review units are bundles of related files decided by path and import relationships and run concurrently, the non-interactive bot may ask once for a file from the checkout it already has, a finding's line is computed from the evidence it quoted rather than remembered, a reflection pass reads the findings as a set and may publish fewer than it received, precision is the target and recall is the trade, a benchmark built from our own merged pull requests keeps that claim checkable, and a review that cannot complete says so instead of holding the merge gate.;
   [ADR-034 messages that arrive](decisions/ADR-034-messages-that-arrive.md) —
-  proposed cross-session messaging that works offline on one device and across devices through the
-  backend, addressed by what a session IS rather than by an opaque id: sessions choose each other by
-  description, the delivery gate lives in the RECIPIENT so a message cannot bypass it by choosing a
-  transport, and session titles are named by the agent on the first turn rather than left as a
-  timestamp;
+  accepted exact-key session messaging with authenticated Brain-offline loopback delivery, a
+  tenant-pinned durable Postgres inbox plus ID-only MCP wake/poll recovery, safe-boundary untrusted
+  peer steering, recipient-owned conservative approval, and loud fixed bounds; Core, Brain, CLI,
+  Desktop, the shared approval presentation, and the reproducible production-host/two-identity
+  acceptance command are implemented;
   [ADR-035 a meeting you cannot lose](decisions/ADR-035-a-meeting-you-cannot-lose.md) —
   accepted durability-then-liveness rework of meeting capture: a session is created at Record,
   roughly three-second durability chunks are written independently from transcription units, and

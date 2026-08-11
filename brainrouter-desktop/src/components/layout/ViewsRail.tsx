@@ -113,6 +113,7 @@ export function ViewsRail(p: ViewsRailProps): React.ReactElement | null {
     { id: 'prototype' as PanelId, title: 'Prototype', hint: '', icon: 'bolt', badge: '', group: 'Quality' },
     { id: 'tools' as PanelId, title: 'Tool calls', hint: '', icon: 'bolt', group: 'Advanced',
       badge: toolLog.length ? String(toolLog.length) : '' },
+    { id: 'peers' as PanelId, title: 'Peers', hint: '', icon: 'bubble', badge: '', group: 'Advanced' },
     { id: 'worktrees' as PanelId, title: 'Worktrees', hint: '', icon: 'branch', group: 'Advanced',
       badge: worktrees.length ? String(worktrees.length) : '' },
   ] as Array<{ id: PanelId; title: string; hint: string; icon: string; badge: string; group: LauncherGroup; live?: boolean }>);
