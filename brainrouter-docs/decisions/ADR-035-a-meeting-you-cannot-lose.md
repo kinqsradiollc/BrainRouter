@@ -293,7 +293,7 @@ implied by a green suite.
 | Real streaming endpoint adapter (sliding-window decode over whisper.cpp) | Implemented, opt-in |
 | Desktop main-process integration | Implemented |
 | Dashboard integration | Implemented |
-| A shipped configuration that turns streaming on | **Pending** |
+| A shipped configuration that turns streaming on | Implemented — `BRAINROUTER_STT_STREAM_URL` in the dev compose, unset by default |
 | Live text, reconnect/replay, and visible fallback acceptance, against a real engine | **Pending** |
 
 ### D11 · In the browser, the server is the system of record — not the origin's quota

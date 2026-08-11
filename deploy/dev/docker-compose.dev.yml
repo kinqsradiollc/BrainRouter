@@ -84,6 +84,14 @@ services:
       # Job runner ON so meeting notes + depth agents generate in-process.
       BRAINROUTER_JOB_RUNNER: ${BRAINROUTER_JOB_RUNNER:-on}
       BRAINROUTER_STT_URL: ${BRAINROUTER_STT_URL:-http://stt:3752}
+      # ADR-035 D10 — live transcription, OFF unless this is set. Unset, the
+      # gateway injects no adapter, capabilities report `streaming: null`, and
+      # both hosts pick the segmented path, which is what every shipped stack
+      # does. Set it and D10's acceptance becomes runnable: text mid-sentence,
+      # reconnect/replay, and a visible fallback when the stream drops. That
+      # acceptance has never been run, which is why the ADR still lists it
+      # Pending — the point of this line is that it now CAN be.
+      BRAINROUTER_STT_STREAM_URL: ${BRAINROUTER_STT_STREAM_URL:-}
       BRAINROUTER_REDIS_URL: ${BRAINROUTER_REDIS_URL:-redis://redis:6379}
     volumes:
       - ../../:/repo
