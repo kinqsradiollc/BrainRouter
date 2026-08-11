@@ -36,6 +36,7 @@ import {
   latestPlannerEnvelopeClock,
   latestPlannerWireHlc,
   migratePlannerOutbox,
+  plannerSyncProjection,
   persistPlannerOperations,
   plannerOutboxStorageKey,
   plannerPushBatches,
@@ -471,30 +472,9 @@ export function useDashboardPlanner(): DashboardPlannerState {
   const itemTitle = useMemo(() => new Map(items.map((item) => [item.id, item.title])), [items]);
   const blockItem = useMemo(() => new Map(blocks.map((block) => [block.id, block.itemId])), [blocks]);
   const sync = useMemo<PlannerSyncView>(() => ({
-    // Core's rule, through the shared re-export — NOT a third copy of the
-    // wording. This host used to restate it and say "waiting to sync" for a
-    // queue that was permanently rejected, while the desktop said so; the only
-    // remaining signal was the dot's colour, and the dot is `aria-hidden`.
-    label: describeSyncState({ operations: outbox }),
-    pendingCount: outbox.length,
+    ...plannerSyncProjection(outbox, { itemTitle, blockItem, now: Date.now(), ageLabel }),
     retrying,
     lastSyncedAt,
-    issues: outbox.map((operation) => {
-      const entity = operation.entity ?? "item";
-      const parentItemId = entity === "block" ? blockItem.get(operation.itemId) : operation.itemId;
-      return {
-        id: operation.idempotencyKey,
-        entity,
-        itemId: parentItemId ?? operation.itemId,
-        itemTitle: parentItemId ? itemTitle.get(parentItemId) : undefined,
-        action: operation.kind,
-        createdAt: new Date(operation.at.physical).toISOString(),
-        ageLabel: ageLabel(Date.now() - operation.at.physical),
-        attempts: operation.attempts ?? 0,
-        lastError: operation.lastError,
-        stuck: (operation.attempts ?? 0) >= ATTEMPTS_BEFORE_SURFACING,
-      };
-    }),
     onRetry: () => {
       void reconcile(new Set(outboxRef.current.map((operation) => operation.idempotencyKey)));
     },

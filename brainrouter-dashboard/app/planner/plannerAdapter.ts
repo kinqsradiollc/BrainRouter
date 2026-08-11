@@ -47,6 +47,8 @@ export interface ApiPlannerBlock {
   deletedAt?: PlannerWireHlc;
 }
 
+import { ATTEMPTS_BEFORE_SURFACING, describeSyncState } from "@kinqs/brainrouter-ui/planner";
+
 export type DashboardPlannerOperation = PlannerPushOperation & {
   attempts?: number;
   lastError?: string;
@@ -594,4 +596,58 @@ export function replayPlannerOutbox(
     items,
     blocks: blocks.filter((block) => visibleIds.has(block.itemId)),
   };
+}
+
+/**
+ * The queue, as the shared sync control renders it.
+ *
+ * Pure, and here rather than inside the hook's `useMemo` for the reason
+ * `scheduledTodayIds` moved: a rule nothing can call is a rule nothing can pin.
+ * Reverting the label to a hand-built string used to pass every test in the
+ * repository, which is how this host came to say "waiting to sync" about a queue
+ * that was permanently rejected while the desktop said so.
+ */
+export function plannerSyncProjection(
+  outbox: readonly DashboardPlannerOperation[],
+  context: {
+    readonly itemTitle: ReadonlyMap<string, string>;
+    readonly blockItem: ReadonlyMap<string, string>;
+    readonly now: number;
+    readonly ageLabel: (ms: number) => string;
+  },
+): { label: string; pendingCount: number; issues: PlannerSyncIssueProjection[] } {
+  return {
+    // Core's rule through the shared door — never a third copy of the wording.
+    label: describeSyncState({ operations: outbox }),
+    pendingCount: outbox.length,
+    issues: outbox.map((operation) => {
+      const entity = operation.entity ?? "item";
+      const parentItemId = entity === "block" ? context.blockItem.get(operation.itemId) : operation.itemId;
+      return {
+        id: operation.idempotencyKey,
+        entity,
+        itemId: parentItemId ?? operation.itemId,
+        itemTitle: parentItemId ? context.itemTitle.get(parentItemId) : undefined,
+        action: operation.kind,
+        createdAt: new Date(operation.at.physical).toISOString(),
+        ageLabel: context.ageLabel(context.now - operation.at.physical),
+        attempts: operation.attempts ?? 0,
+        lastError: operation.lastError,
+        stuck: (operation.attempts ?? 0) >= ATTEMPTS_BEFORE_SURFACING,
+      };
+    }),
+  };
+}
+
+export interface PlannerSyncIssueProjection {
+  id: string;
+  entity: "item" | "block";
+  itemId: string;
+  itemTitle?: string;
+  action: DashboardPlannerOperation["kind"];
+  createdAt: string;
+  ageLabel: string;
+  attempts: number;
+  lastError?: string;
+  stuck: boolean;
 }
