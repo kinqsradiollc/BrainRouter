@@ -8,7 +8,8 @@ implemented end to end and OFF by default: the bundled sidecar streams, the gate
 injected only when `BRAINROUTER_STT_STREAM_URL` is set, and both hosts discover the capability and
 consume it. With the variable unset — every shipped compose — capabilities advertise
 `streaming: null`, upgrades are refused, and batch transcription is byte-for-byte what it was. The
-dev compose now sets that variable, so a configuration that turns streaming on ships; what remains
+dev compose THREADS that variable through (`${BRAINROUTER_STT_STREAM_URL:-}`) but leaves it empty,
+so streaming is off in every shipped configuration and an operator opts in by setting it; what remains
 for D10 is RUNNING its acceptance (live text, reconnect/replay, visible fallback) against a real
 engine, and a CI job that exercises the streaming sidecar.
 
