@@ -1,7 +1,7 @@
 {
   "name": "@kinqs/brainrouter-core",
   "version": "0.4.19",
-  "description": "BrainRouter's headless engine — config, durable stores, runtime, orchestration, telemetry, and the agent — shared verbatim by the CLI and the Desktop app so neither reaches into the other's build output.",
+  "description": "BrainRouter's headless engine \u2014 config, durable stores, runtime, orchestration, telemetry, and the agent \u2014 shared verbatim by the CLI and the Desktop app so neither reaches into the other's build output.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -302,6 +302,10 @@
     "./tooling": {
       "types": "./dist/tooling/index.d.ts",
       "default": "./dist/tooling/index.js"
+    },
+    "./planner/presentation": {
+      "types": "./dist/planner/presentation.d.ts",
+      "default": "./dist/planner/presentation.js"
     }
   },
   "files": [

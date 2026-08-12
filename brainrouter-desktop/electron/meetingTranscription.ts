@@ -1,6 +1,6 @@
 /**
- * ADR-035 D3/D4/D5/D7/D9 — the desktop's transcription supervisor: the thing that
- * turns durability chunks on disk into transcription units and text, in the
+ * ADR-035 D3/D4/D5/D7/D9/D10 — the desktop's transcription supervisor: the thing
+ * that turns durability chunks on disk into transcription units and text, in the
  * process that outlives the window.
  *
  * Open question 3 asks who owns retry, renderer or host, and the ADR answers it
@@ -39,6 +39,13 @@
  *   that ends also publishes its PHASE and any write errors it collected —
  *   without those two, a queue waiting on a dead endpoint and a queue that is
  *   working push exactly the same thing, which is the spinner ADR-028 refuses.
+ * - **The live connection, where the endpoint offers one (D10).** It belongs
+ *   here for the same reason the queue does — a renderer-owned socket dies with
+ *   the window — and it belongs BESIDE the queue rather than instead of it. The
+ *   stream covers what it covers; every chunk it has not covered is still sealed
+ *   at the ceiling and drained by the segmented path, which is why a dropped
+ *   connection costs a reconnect and never a meeting. `meetingStreamSession.ts`
+ *   owns the rules; this file owns only the wiring and the order of the two.
  * - **Closing.** A capture whose audio D6 has released must have no queue still
  *   writing to it, so the entry is marked closed BEFORE the delete and its ports
  *   become inert rather than racing the `rm`.
@@ -70,14 +77,21 @@ import {
   sealDueUnits,
   stopCapture,
   unitChunkSequences,
+  unitPolicyFor,
   MeetingEndpointUnavailableError,
   type MeetingCaptureScope,
   type MeetingCaptureSession,
   type MeetingDrainPhase,
   type MeetingDrainResult,
+  type MeetingLiveUtterance,
   type MeetingTranscriptionQueue,
 } from '@kinqs/brainrouter-core/meetings';
 import type { BeginCaptureInput, MeetingCaptureStore } from './meetingCapture.js';
+import {
+  MeetingStreamSession,
+  type MeetingTranscriptionStatus,
+  type MeetingTranscriptionStreamPort,
+} from './meetingStreamSession.js';
 
 /**
  * The one thing the supervisor cannot do itself: reach the STT endpoint. It is
@@ -115,6 +129,28 @@ export interface MeetingCaptureProgress {
    * meeting, and that is worth saying out loud (ADR-028).
    */
   readonly errors?: readonly string[];
+  /**
+   * D10 — which transcription strategy this capture is actually on, and the one
+   * sentence explaining it.
+   *
+   * Present only on the pushes that change it, so a surface keeps the last
+   * answer rather than blinking between "streaming" and "we did not say" on
+   * every persisted segment. Golden rule 23 is the whole reason it is on the
+   * wire at all: a host that degraded to segmented upload without saying so is
+   * indistinguishable from one that is working.
+   */
+  readonly transcription?: MeetingTranscriptionStatus;
+  /**
+   * D4/D10 — provisional live utterances, and the ONE thing here that is not
+   * persisted.
+   *
+   * The rest of this payload is a record already on disk. These are words the
+   * endpoint is still revising, published so text can appear WHILE a sentence is
+   * being spoken; they are never folded into the compose box, because a person
+   * cannot be asked to edit text that is still being rewritten under them (D4).
+   * A committed one arrives again — settled, and on disk — as a `done` segment.
+   */
+  readonly live?: readonly MeetingLiveUtterance[];
 }
 
 /**
@@ -169,6 +205,17 @@ export interface MeetingCaptureWriter {
 
 export interface MeetingTranscriptionSupervisorOptions {
   readonly transcribe: MeetingSegmentTranscriber;
+  /**
+   * D10 — the live transcription seam, absent when this build has no way to
+   * reach one.
+   *
+   * Absent means exactly today's behaviour: no capability request is made, every
+   * capture is segmented, and nothing on the append path changes. The port is
+   * injected for the same reason `transcribe` is — so this module never learns
+   * about account bearers, and so a test can drive an endpoint that offers
+   * streaming, refuses it, or drops halfway through.
+   */
+  readonly streaming?: MeetingTranscriptionStreamPort;
   readonly publish?: (progress: MeetingCaptureProgress) => void;
   /** Returns a canceller. Injected so a test can drive the backoff at an exact instant. */
   readonly schedule?: (run: () => void, delayMs: number) => () => void;
@@ -195,6 +242,13 @@ function defaultSchedule(run: () => void, delayMs: number): () => void {
 class CaptureEntry {
   /** Assigned by the factory immediately after construction; the ports close over the entry. */
   queue!: MeetingTranscriptionQueue;
+  /**
+   * D10 — this capture's live connection, or null when no streaming port was
+   * injected. It stays inert until `begin` starts it: picking a recording up
+   * again is not a reason to open a stream, because nobody is producing audio
+   * for it.
+   */
+  stream: MeetingStreamSession | null = null;
   closed = false;
   cancelWake: (() => void) | null = null;
   appends: Promise<unknown> = Promise.resolve();
@@ -223,6 +277,7 @@ export interface BeginRecordingInput extends BeginCaptureInput {
 export class MeetingTranscriptionSupervisor {
   readonly #store: MeetingCaptureStore;
   readonly #transcribe: MeetingSegmentTranscriber;
+  readonly #streaming: MeetingTranscriptionStreamPort | undefined;
   readonly #publish: (progress: MeetingCaptureProgress) => void;
   readonly #schedule: (run: () => void, delayMs: number) => () => void;
   readonly #now: (() => number) | undefined;
@@ -253,6 +308,7 @@ export class MeetingTranscriptionSupervisor {
   constructor(store: MeetingCaptureStore, options: MeetingTranscriptionSupervisorOptions) {
     this.#store = store;
     this.#transcribe = options.transcribe;
+    this.#streaming = options.streaming;
     this.#publish = options.publish ?? (() => undefined);
     this.#schedule = options.schedule ?? defaultSchedule;
     this.#now = options.now;
@@ -267,7 +323,12 @@ export class MeetingTranscriptionSupervisor {
     try {
       // Materialized now rather than on the first chunk so the queue is never
       // constructed from a record another writer is already appending to.
-      await this.#entry(session.id);
+      const entry = await this.#entry(session.id);
+      // D10 — ask the endpoint what it offers at RECORD, not at the first chunk.
+      // The answer has to be in hand before a unit could seal, and nothing on
+      // the append path may ever wait for it: a probe that hung would otherwise
+      // hold up a durable write, which is the one thing D1 does not allow.
+      void entry.stream?.start();
     } catch (caught) {
       // A capture whose queue could not be opened is one nothing will ever
       // record into, and leaving it claimed would bury it from every window for
@@ -296,8 +357,21 @@ export class MeetingTranscriptionSupervisor {
         if (nextChunkSequence(current) !== sequence) {
           throw new Error('The meeting chunk ledger changed while audio was being written.');
         }
-        return sealDueUnits(appendChunk(current, { byteLength: written, durationMs }));
+        // D9/D10 — how big a unit is belongs to the STRATEGY, and the strategy
+        // belongs to the endpoint. A streaming endpoint seals at its own spoken
+        // boundary, so the policy here becomes ceilings-only and this seal
+        // catches nothing until the endpoint has been silent for a long time.
+        // Until the capability answer arrives it is the segmented policy, which
+        // is what keeps a segmented deployment behaving exactly as it does now.
+        return sealDueUnits(
+          appendChunk(current, { byteLength: written, durationMs }),
+          unitPolicyFor(entry.stream?.mode ?? 'segmented'),
+        );
       });
+      // D1/D10 — offered only once the bytes and the ledger entry are BOTH on
+      // disk. The stream reads them back from there, so a dropped connection
+      // replays from the disk rather than from anything held in memory.
+      entry.stream?.offer(sequence);
       this.#kick(id, entry);
       return session;
     });
@@ -321,6 +395,11 @@ export class MeetingTranscriptionSupervisor {
     const entry = await this.#entry(id);
     await entry.appends.catch(() => undefined);
     this.#writers.delete(id);
+    // D10 — the last utterance is sealed by the endpoint, not by us, so the
+    // stream is told the audio has ended BEFORE the remainder is sealed for the
+    // batch path. Bounded inside the stream: what it never covers is sealed
+    // below and transcribed segment-wise, which is the mandatory fallback.
+    await entry.stream?.finish().catch(() => undefined);
     const session = await entry.queue.apply((current) => stopCapture(current));
     this.#kick(id, entry);
     return session;
@@ -388,6 +467,10 @@ export class MeetingTranscriptionSupervisor {
     const entry = pending ? await pending.catch(() => null) : null;
     if (entry) {
       entry.closed = true;
+      // D10 — before the audio is released, and for the same reason the ports go
+      // inert: a live connection still sending chunks out of a directory that is
+      // about to stop existing would be a write racing the `rm`.
+      entry.stream?.close();
       entry.cancelWake?.();
       entry.cancelWake = null;
       // Let what is already running finish against the now-inert ports, so the
@@ -482,6 +565,10 @@ export class MeetingTranscriptionSupervisor {
   dispose(): void {
     for (const pending of this.#entries.values()) {
       void pending.then((entry) => {
+        // The socket goes with the timers: the audio and the record are already
+        // on disk, so quitting mid-stream costs the uncovered tail a segmented
+        // transcription and nothing else.
+        entry.stream?.close();
         entry.cancelWake?.();
         entry.cancelWake = null;
       }, () => undefined);
@@ -569,6 +656,35 @@ export class MeetingTranscriptionSupervisor {
         ...(this.#now ? { now: this.#now } : {}),
       },
     });
+    if (this.#streaming) {
+      entry.stream = new MeetingStreamSession({
+        sessionId: id,
+        mimeType: contentType,
+        ...(language ? { language } : {}),
+        port: this.#streaming,
+        ledger: {
+          // Everything the live path touches goes through the SINGLE WRITER the
+          // queue already is. A stream that edited the record beside it would be
+          // the second writer this subsystem spent a round removing.
+          session: () => entry.queue.session,
+          apply: async (transition) => await entry.queue.apply(transition),
+          readChunk: async (sequence) => (entry.closed ? null : await this.#store.readSegment(id, sequence)),
+        },
+        publish: (publication) => {
+          if (entry.closed) return;
+          this.#publish({
+            sessionId: id,
+            // Already on disk: the live utterances ride beside the last
+            // persisted record rather than opening a second channel of their
+            // own, so a surface has one place to read a capture's state from.
+            session: entry.queue.session,
+            transcription: publication.status,
+            live: publication.live,
+          });
+        },
+        schedule: this.#schedule,
+      });
+    }
     return entry;
   }
 

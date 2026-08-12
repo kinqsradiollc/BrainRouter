@@ -27,6 +27,28 @@ function daysBetween(from: string, to: string): number {
   return Math.round((end - start) / 86_400_000);
 }
 
+/**
+ * The items whose "Now · scheduled" claim is true.
+ *
+ * Membership used to be every item holding any open block, which put two kinds
+ * of item in a group whose heading says NOW: ones whose block carries no time at
+ * all — the same ones the calendar files under "No time" — and ones blocked out
+ * on other days. The Today tab and the Calendar tab then disagreed about the
+ * same block, and the heading was the one that was wrong.
+ */
+export function scheduledTodayIds(
+  blocks: readonly PlannerBlockView[],
+  today: string,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const block of blocks) {
+    if (block.completedAt) continue;
+    if (block.scheduledFor?.slice(0, 10) !== today) continue;
+    ids.add(block.itemId);
+  }
+  return ids;
+}
+
 export function groupFor(item: PlannerItemView, today: string, scheduledIds: ReadonlySet<string>): TodayGroup {
   const due = item.dueDate?.slice(0, 10);
   if (due && due < today) return 'overdue';

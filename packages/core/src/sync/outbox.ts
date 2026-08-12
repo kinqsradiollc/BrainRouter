@@ -269,13 +269,27 @@ export function replayOrder(operations: readonly OutboxOperation[]): OutboxOpera
 }
 
 /**
+ * The least this wording needs to know.
+ *
+ * Deliberately structural rather than `OutboxState`: the dashboard's queue holds
+ * WIRE operations plus retry bookkeeping, not outbox records, and demanding the
+ * full record is what pushed that host into restating the wording instead of
+ * calling it — after which the two drifted, and the one that mattered said
+ * "waiting to sync" about a queue that was permanently rejected. A rule that
+ * asks for more than it reads is a rule the second caller will copy.
+ */
+export interface SyncWording {
+  readonly operations: readonly { readonly attempts?: number }[];
+}
+
+/**
  * What the UI says about sync state.
  *
  * Never "offline" as an error. A pending count is a fact; a banner announcing
  * degradation is a judgement about a mode that is supposed to be normal.
  */
-export function describeSyncState(state: OutboxState): string {
-  const stuck = stuckOperations(state).length;
+export function describeSyncState(state: SyncWording): string {
+  const stuck = state.operations.filter((op) => (op.attempts ?? 0) >= ATTEMPTS_BEFORE_SURFACING).length;
   if (stuck > 0) {
     return `${stuck} change${stuck === 1 ? '' : 's'} could not be sent — open sync to see why.`;
   }

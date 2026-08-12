@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   isDashboardPlannerOperation,
+  plannerSyncProjection,
   invalidPlannerPushOutcome,
   latestPlannerWireHlc,
   latestPlannerEnvelopeClock,
@@ -277,4 +278,38 @@ test("ADR-038 observes future record stamps in addition to the server wall clock
     updatedAt: at(9_300),
   }], at(100));
   assert.deepEqual(latest, at(9_300));
+});
+
+test("the sync projection says a wedged queue is wedged, in Core's words", () => {
+  const wedged = plannerSyncProjection(
+    [
+      { idempotencyKey: "k1", itemId: "i1", kind: "update", at: { physical: 1_000, logical: 0, deviceId: "d" }, attempts: 7, lastError: "HTTP 500" },
+      { idempotencyKey: "k2", itemId: "i2", kind: "update", at: { physical: 1_000, logical: 0, deviceId: "d" }, attempts: 7 },
+    ] as never,
+    { itemTitle: new Map([["i1", "Ship it"]]), blockItem: new Map(), now: 61_000, ageLabel: () => "1m" },
+  );
+
+  // ADR-038 §6: with sync failing, the page says so. This host used to print
+  // "waiting to sync" here whatever the attempt count, and the only other signal
+  // was an aria-hidden dot.
+  assert.equal(wedged.label, "2 changes could not be sent — open sync to see why.");
+  assert.equal(wedged.issues[0]?.stuck, true);
+  assert.equal(wedged.issues[0]?.itemTitle, "Ship it");
+
+  const waiting = plannerSyncProjection(
+    [{ idempotencyKey: "k3", itemId: "i3", kind: "update", at: { physical: 1_000, logical: 0, deviceId: "d" } }] as never,
+    { itemTitle: new Map(), blockItem: new Map(), now: 61_000, ageLabel: () => "1m" },
+  );
+  assert.equal(waiting.label, "1 change waiting to sync.");
+  assert.equal(waiting.issues[0]?.stuck, false);
+
+  // A retry already asked for is not offered again. The visual gate caught this:
+  // widening the control to "anything that failed once" left it on screen after
+  // the click, so the row looked identical before and after and the only
+  // feedback was that nothing had happened.
+  const asked = plannerSyncProjection(
+    [{ idempotencyKey: "k4", itemId: "i4", kind: "update", at: { physical: 1_000, logical: 0, deviceId: "d" }, attempts: 5, retryRequestedAt: "2026-08-11T10:00:00.000Z" }] as never,
+    { itemTitle: new Map(), blockItem: new Map(), now: 61_000, ageLabel: () => "1m" },
+  );
+  assert.equal(asked.issues[0]?.retryRequested, true);
 });

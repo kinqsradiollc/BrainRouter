@@ -268,7 +268,22 @@ test('D1/D9 still hold through the supervisor: bytes first, then ledger, then un
   // heartbeat into it, which is a clock standing in for a fact main already had;
   // gating the audio path on any part of that is the loss this ADR exists to
   // prevent arriving through the door meant to stop it.
-  assert.match(supervisor, /sealDueUnits\(appendChunk\(current, \{ byteLength: written, durationMs \}\)\)/);
+  //
+  // D10 — the one thing it gained is the STRATEGY's unit policy, and that is the
+  // whole of the streaming path's reach into the write: how big a unit is
+  // belongs to the endpoint, while WHEN the bytes land does not. The default is
+  // the segmented one, so an endpoint that offers no stream — production today —
+  // seals on exactly the cadence it always did.
+  assert.match(
+    supervisor,
+    /sealDueUnits\(\s*appendChunk\(current, \{ byteLength: written, durationMs \}\),\s*unitPolicyFor\(entry\.stream\?\.mode \?\? 'segmented'\),\s*\)/,
+  );
+  // The live path is offered the chunk only after both the bytes and the ledger
+  // entry are durable, which is what makes a dropped connection a reconnect
+  // rather than a loss. Behaviour asserted for real in
+  // `meetingStreamSupervisor.test.ts`; the ORDER is pinned here.
+  const offerAt = supervisor.indexOf('entry.stream?.offer(sequence)');
+  assert.ok(offerAt > recordAt);
 });
 
 test('D6 — liveness is the process\'s own answer, and nothing on this host reads a lease', () => {

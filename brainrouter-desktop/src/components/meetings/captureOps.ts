@@ -14,6 +14,15 @@
  * says the surface must say which state it is in instead of looking like it
  * worked.
  *
+ * D10 rides the same bridge rather than a second one. The host owns the live
+ * connection because a renderer-owned socket dies with the window — the defect
+ * this ADR exists to end — so what arrives here is the same progress push with
+ * two more facts on it: which transcription strategy the endpoint gave this
+ * capture, and the utterances still being spoken. The second is the only part of
+ * that payload which is not already on disk, and it deliberately never reaches
+ * the compose box: settled text gets there through the shared fold, and a
+ * revision that could overwrite an edit has nowhere to write.
+ *
  * The compose DRAFT crosses the same bridge for D6's reason rather than D1's:
  * "the existing text draft should move to the same protected location". There is
  * deliberately no `localStorage` fallback for it — falling back would be writing
@@ -25,12 +34,20 @@ import type {
   MeetingCaptureSession,
   MeetingCaptureTemplate,
   MeetingDrainPhase,
+  MeetingLiveUtterance,
   MeetingRecoverySummary,
+  MeetingTranscriptionMode,
 } from "@kinqs/brainrouter-core/meetings";
 import { captureHolderId } from "./captureHolder.js";
 
 /** The queue phases main may push. Listed so an unknown one is dropped rather than rendered. */
 const DRAIN_PHASES: readonly MeetingDrainPhase[] = ["idle", "waiting", "unavailable", "closed"];
+
+/** D10 — the two strategies. An unknown one is dropped, which reads as "main did not say". */
+const TRANSCRIPTION_MODES: readonly MeetingTranscriptionMode[] = ["streaming", "segmented"];
+
+/** Bounded because these are RENDERED: a runaway push must not become an unbounded list on screen. */
+const MAX_LIVE_UTTERANCES = 64;
 
 export interface BeginCaptureInput {
   title?: string;
@@ -73,6 +90,34 @@ export interface MeetingCaptureProgress {
   /** D4/D7 — why the host's queue last stopped. Absent on mid-drain pushes. */
   phase?: MeetingDrainPhase;
   errors?: readonly string[];
+  /**
+   * D10 — which transcription strategy this capture is on, and the sentence
+   * saying why.
+   *
+   * Absent on the pushes that do not change it, so a surface keeps the last
+   * answer. It exists because golden rule 23 makes a silent degradation the
+   * defect: a meeting transcribed in segments because live transcription was
+   * refused must not look identical to one that never asked.
+   */
+  transcription?: MeetingTranscriptionStatus;
+  /**
+   * D4/D10 — provisional text, mid-utterance, and the one part of this payload
+   * that is NOT on disk.
+   *
+   * It is display-only and never enters the compose box: the shared
+   * `transcriptFold` appends settled segments, and a person's edit cannot be
+   * overwritten by a revision that has nowhere to write. A committed utterance
+   * arrives again as a `done` segment, which is what the box gets.
+   */
+  live?: readonly MeetingLiveUtterance[];
+}
+
+/** D10 — the wire shape of `MeetingTranscriptionStatus` in `electron/meetingStreamSession.ts`. */
+export interface MeetingTranscriptionStatus {
+  mode: MeetingTranscriptionMode;
+  live: boolean;
+  /** Composed in main, so the words a fallback is described with are one sentence, not two copies. */
+  notice: string;
 }
 
 /**
@@ -267,6 +312,50 @@ function draft(value: unknown): MeetingComposeDraft | null {
   return { title, transcript, ...(template ? { template } : {}), ...(language ? { language } : {}) };
 }
 
+/**
+ * D10 — main's answer about which path is running, re-validated on the way in.
+ *
+ * Every field is load-bearing and every field is rendered, so a row missing one
+ * is dropped whole rather than shown half: a status with no `notice` is exactly
+ * the silent degradation golden rule 23 is about, wearing a badge.
+ */
+function transcriptionStatus(value: unknown): MeetingTranscriptionStatus | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as { mode?: unknown; live?: unknown; notice?: unknown };
+  const mode = TRANSCRIPTION_MODES.find((candidate) => candidate === raw.mode);
+  if (!mode || typeof raw.live !== "boolean" || typeof raw.notice !== "string") return null;
+  return { mode, live: raw.live, notice: raw.notice };
+}
+
+/**
+ * D4/D10 — the provisional utterances, narrowed and bounded.
+ *
+ * `null` means "this push said nothing about live text", which is not the same
+ * as an empty list: an empty list is main saying the live buffer is now empty
+ * (everything committed), and clearing the rows is the right answer to it.
+ */
+function liveUtterances(value: unknown): readonly MeetingLiveUtterance[] | null {
+  if (!Array.isArray(value)) return null;
+  const rows: MeetingLiveUtterance[] = [];
+  for (const entry of value.slice(0, MAX_LIVE_UTTERANCES)) {
+    const raw = entry as Partial<MeetingLiveUtterance> | null;
+    if (!raw || typeof raw.utteranceId !== "string" || !raw.utteranceId) continue;
+    if (typeof raw.text !== "string" || typeof raw.startMs !== "number" || typeof raw.endMs !== "number") continue;
+    if (raw.state !== "partial" && raw.state !== "final") continue;
+    if (raw.kind !== raw.state || typeof raw.revision !== "number") continue;
+    rows.push({
+      kind: raw.state,
+      state: raw.state,
+      utteranceId: raw.utteranceId,
+      revision: raw.revision,
+      text: raw.text,
+      startMs: raw.startMs,
+      endMs: raw.endMs,
+    } as MeetingLiveUtterance);
+  }
+  return rows;
+}
+
 function unavailable(): never { throw new MeetingCaptureUnavailableError(); }
 
 export function createMeetingCaptureOps(): MeetingCaptureOps {
@@ -346,7 +435,7 @@ export function createMeetingCaptureOps(): MeetingCaptureOps {
       return session(await api.captureRetrySegment(id, index));
     },
     onProgress: (listener) => api.onCaptureProgress?.((value) => {
-      const progress = (value ?? {}) as { sessionId?: unknown; session?: unknown; phase?: unknown; errors?: unknown; writerLost?: unknown };
+      const progress = (value ?? {}) as { sessionId?: unknown; session?: unknown; phase?: unknown; errors?: unknown; transcription?: unknown; live?: unknown };
       const payload = progress.session as MeetingCaptureSession | undefined;
       // A malformed push is dropped rather than thrown: this runs inside an IPC
       // listener, where a throw would take out every later event on the channel.
@@ -358,11 +447,15 @@ export function createMeetingCaptureOps(): MeetingCaptureOps {
         ? progress.errors.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
         : [];
       const phase = DRAIN_PHASES.find((candidate) => candidate === progress.phase);
+      const transcription = transcriptionStatus(progress.transcription);
+      const live = liveUtterances(progress.live);
       listener({
         sessionId: progress.sessionId,
         session: payload,
         ...(phase ? { phase } : {}),
         ...(errors.length ? { errors } : {}),
+        ...(transcription ? { transcription } : {}),
+        ...(live ? { live } : {}),
       });
     }) ?? (() => undefined),
     // D6 — both of these delete the audio, so both name this window. Main uses

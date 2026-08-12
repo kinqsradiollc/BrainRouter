@@ -83,9 +83,23 @@
 .mv-live{margin-bottom:15px;padding:12px 13px;border:1px solid var(--border);border-radius:10px;background:var(--surface)}.mv-live .mv-card-lab{margin-bottom:8px}.mv-live-empty{margin:0;color:var(--text-faint);font-size:10px}.mv-live-rows{display:flex;flex-direction:column;gap:2px;max-height:186px;overflow:auto}
 .mv-live-row{display:flex;align-items:center;gap:9px;padding:4px 2px;border-top:1px solid var(--border)}.mv-live-row:first-child{border-top:0}.mv-live-at{color:var(--text-faint);font:9px var(--mono);white-space:nowrap}.mv-live-state{color:var(--text-faint);font-size:10px}.mv-live-settled .mv-live-state{color:color-mix(in srgb,var(--ok) 62%,var(--text))}.mv-live-provisional .mv-live-state{color:var(--accent)}
 .mv-live-gap{display:flex;min-width:0;flex-direction:column;flex:1;color:color-mix(in srgb,var(--err) 62%,var(--text));font-size:10px}.mv-live-gap small{color:var(--text-faint);font-size:9px}
+/* ADR-035 D10 — words still being spoken. They are PROVISIONAL and they are not
+   in the compose box, so they are drawn as speech rather than as transcript: the
+   partial one is dimmed and italic because it is still being rewritten, and one
+   waiting to be committed is plain but still labelled as unsaved. When a
+   coverage proof lands, the words leave this block and reappear below as a
+   settled segment — which is the moment they are on disk. */
+.mv-live-speech{display:flex;flex-direction:column;gap:5px;max-height:120px;margin-bottom:9px;overflow:auto}
+.mv-live-utterance{display:flex;align-items:baseline;gap:8px;margin:0}.mv-live-words{min-width:0;flex:1;font-size:11.5px;line-height:1.5}.mv-live-utterance small{color:var(--text-faint);font-size:9px;white-space:nowrap}
+.mv-live-utterance-partial .mv-live-words{color:var(--text-faint);font-style:italic}.mv-live-utterance-final .mv-live-words{color:var(--text)}
+/* D10/golden rule 23 — which strategy is running, said rather than implied. */
+.mv-live-mode{margin-left:7px;padding:1px 6px;border-radius:999px;font:9px var(--mono);font-style:normal;letter-spacing:.06em;text-transform:uppercase}
+.mv-live-mode-streaming{background:color-mix(in srgb,var(--accent) 20%,transparent);color:var(--accent)}
+.mv-live-mode-segmented{background:color-mix(in srgb,var(--text-faint) 18%,transparent);color:var(--text-faint)}
 /* D7 — the drain phase in words. The rows cannot say it: an outage leaves every
    segment `pending`, which looks exactly like a queue that is working. */
 .mv-live-note{margin:8px 0 0;color:var(--text-faint);font-size:9.5px;line-height:1.5}
+.mv-live-degraded{color:color-mix(in srgb,var(--warn,var(--err)) 58%,var(--text))}
 .mv-unresolved{align-self:center;color:var(--text-faint);font-size:10px;line-height:1.4}
 .mv-compose-grid{display:grid;grid-template-columns:1fr 1fr;gap:13px}.mv-field{display:flex;flex-direction:column;gap:6px}.mv-field-wide{grid-column:1/-1}.mv-field>span{color:var(--text-faint);font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase}.mv-field input,.mv-field select,.mv-field textarea,.tmv input,.tmv select,.mtk input{width:100%;min-width:0;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:var(--input);color:var(--text);outline:0}.mv-field input:focus,.mv-field select:focus,.mv-field textarea:focus,.tmv input:focus,.tmv select:focus,.mtk input:focus{border-color:var(--accent)}.mv-field textarea{min-height:280px;resize:vertical;font:11.5px/1.6 var(--mono)}.mv-compose-actions{display:flex;gap:8px;margin-top:15px}
 

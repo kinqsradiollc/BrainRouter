@@ -128,6 +128,27 @@ product UI. Shared components are reviewed once against this ADR and exercised i
   assignments are introduced. The added provenance, scheduling and sync controls make the existing
   day-planning promise usable and truthful rather than widening its product scope.
 
+> **This section was RELAXED by the change that implemented it, and that is recorded here rather
+> than left in the diff.** As written and approved, the second bullet read: *"It does not change
+> storage or sync semantics. ADR-029's block model, hybrid clocks, outbox and lease-with-fencing
+> stay exactly as they are. This is presentation and composition."* Commit `1d7264756` rewrote it to
+> the wording above in the same change that shipped the feature.
+>
+> Sync semantics did change. `stamped.ts` gained a causal branch and planner writes now carry
+> `seen`, so two offline edits to one title return a conflict record where they previously merged
+> silently to the later stamp. `syncRecords` calls `hlcReceive` on every pulled record. The outbox
+> reorders retry-requested records to the front, gained a `resolve_conflict` kind, and moved from
+> deterministic idempotency keys to `randomUUID()` — a fix, since the old key omitted `deviceId`,
+> but a wire change. A block operation's identity changed from `{itemId, kind:'update'}` to
+> `{itemId: blockId, entity:'block', kind:'create'}`, and a persisted pre-upgrade desktop outbox
+> has no migration for that.
+>
+> None of this is asserted to be wrong. Lease-with-fencing is genuinely untouched, and hardening a
+> wire contract under a surface that depends on it is a defensible call. What is not defensible is
+> a constraint quietly becoming its own exception: an ADR that moves to fit its implementation
+> stops being a decision and becomes a description. Whether the expansion is accepted is the
+> owner's; whether it is VISIBLE is not.
+
 ---
 
 ## 5. Resolved questions

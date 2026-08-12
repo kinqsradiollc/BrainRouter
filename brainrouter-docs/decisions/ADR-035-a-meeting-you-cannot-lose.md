@@ -1,8 +1,17 @@
 # ADR-035 — A meeting you cannot lose
 
-**Status:** ACCEPTED — owner-approved. D1/D1b/D2 built; D3/D4/D5/D7 built and hardened;
-D9 implemented with automated host coverage, with destructive acceptance still pending; D10/D11
-and D6's retention window are not built.
+**Status:** ACCEPTED — owner-approved.
+
+**Implementation status (2026-08-11): PARTIAL** — D9 is implemented with automated host coverage,
+with destructive acceptance still pending. D10 is implemented end to end and OFF by default: the
+bundled sidecar streams, the gateway adapter is injected only when `BRAINROUTER_STT_STREAM_URL` is
+set, and both hosts discover the capability and consume it. With the variable unset — every shipped
+compose — capabilities advertise `streaming: null`, upgrades are refused, and batch transcription is
+byte-for-byte what it was. What is NOT done is acceptance: no shipped configuration turns streaming
+on, so live-text, reconnect/replay and visible-fallback have never been run against a real whisper
+outside a scratch driver, and no CI job exercises the streaming sidecar. D11 and D6's
+accepted-summary retention/deletion policy are not built.
+
 **Depends on:** ADR-018 (meetings capture/transcribe/summarize), ADR-028 (surfaces that tell the truth),
 ADR-027 D12 (distributed-systems correctness), ADR-029 (one workspace, many surfaces).
 
@@ -167,9 +176,12 @@ Captured audio is the most sensitive artifact this product writes to disk. So:
   discard, or after a retention window the user can see and set;
 - an orphaned capture directory with no session row is reaped at boot, and the reap is logged.
 
-**Audio is never written to `localStorage` or any renderer-accessible store.** The existing text
-draft should move to the same protected location for the same reason — meeting content is not
-credential material, but it is not something to leave in a store any page script can read.
+**Audio is never written to `localStorage`.** Desktop capture remains behind the Electron main
+process rather than in a renderer-accessible store. The browser necessarily uses origin-accessible
+OPFS or IndexedDB as its local outage buffer; D11 moves authority to the server so losing that
+buffer cannot lose already-uploaded audio. The existing text draft should move out of
+`localStorage` for the same reason — meeting content is not credential material, but it is not
+something to leave in a store any page script can read.
 
 **D6a · Where we cannot tell whether a meeting is live, we ask rather than guess.** Added after
 building it. "Deleted on an explicit discard" assumes the product knows whether anything is still
@@ -257,7 +269,32 @@ endpoint supports, or D1b's promise breaks again in a new place.
 
 Durability does not move. Chunks are still written before anything is sent, so a dropped connection
 costs a reconnect and not a meeting — and the queue that already exists is what replays what the
-stream did not acknowledge.
+stream has not covered and the host has not durably committed.
+
+**Delivery state: foundation only, not D10 acceptance.** Core recognizes streaming only from an
+exact v1 capability document promising persistent sessions, partial results, server-owned
+boundaries, server coverage checkpoints, resumability, supported latency modes, and segmented
+fallback. A host promotes proven coverage to a durable resume checkpoint only after persisting the
+matching transcript state. The authenticated gateway exposes capability discovery and a bounded
+optional WebSocket adapter boundary. The adapter is injected only when
+`BRAINROUTER_STT_STREAM_URL` is set; unset — which is every shipped compose — it advertises
+`streaming: null`, rejects stream upgrades, and leaves batch transcription unchanged. Both hosts now
+ask for capabilities at Record and pick a strategy from the answer.
+
+D10 remains incomplete until that acceptance is RUN: a configuration that turns streaming on, and
+both hosts passing live-text, reconnect/replay and visible-fallback against a real engine. Built and
+never exercised is the state this ADR has paid for repeatedly, so it is named here rather than
+implied by a green suite.
+
+| D10 delivery slice | State |
+|---|---|
+| Strict capability schema, strategy selection, checkpoint validation | Implemented |
+| Authenticated capability route and bounded gateway transport seam | Implemented |
+| Real streaming endpoint adapter (sliding-window decode over whisper.cpp) | Implemented, opt-in |
+| Desktop main-process integration | Implemented |
+| Dashboard integration | Implemented |
+| A shipped configuration that turns streaming on | Implemented — `BRAINROUTER_STT_STREAM_URL` in the dev compose, unset by default |
+| Live text, reconnect/replay, and visible fallback acceptance, against a real engine | **Pending** |
 
 ### D11 · In the browser, the server is the system of record — not the origin's quota
 
@@ -293,8 +330,9 @@ now:
 - **No system-audio / other-participant capture.** Today's capture is `getUserMedia({ audio: true })`
   — the local microphone. Capturing the far side of a call raises consent and platform questions
   this ADR is not the place to settle.
-- **No new STT engine.** The sidecar contract (`audioRoutes.ts`) is unchanged; only the size and
-  cadence of what is sent to it change.
+- **No second first-party STT engine.** The same pinned engine remains authoritative. D10 may add
+  an additive persistent stream to it, while `POST /v1/audio/transcriptions` remains the mandatory
+  fallback.
 
 ---
 

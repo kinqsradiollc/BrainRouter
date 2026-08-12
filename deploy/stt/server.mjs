@@ -6,7 +6,14 @@
  * ffmpeg), transcodes to the 16 kHz mono PCM WAV whisper.cpp expects, runs the
  * whisper.cpp CLI, and returns `{ text }`. Swappable behind the same HTTP contract
  * (BRAINROUTER_STT_URL on the gateway) — a faster-whisper sidecar could replace it
- * with no gateway change. Runs on the internal network only; never host-exposed.
+ * with no gateway change. In the shipped stack it is reachable on the compose
+ * network only; the dev composes additionally publish it on `127.0.0.1:3752` so
+ * it can be probed by hand, which is loopback and not the LAN.
+ *
+ * `stream.mjs` adds ADR-035 D10's live path (POST /stream) on the same port and
+ * through the same two helpers below, so both paths invoke the same engine the
+ * same way. It is inert unless a caller uses it: the batch contract is unchanged
+ * and remains the mandatory fallback.
  */
 import http from "node:http";
 import os from "node:os";
@@ -15,6 +22,7 @@ import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createStreamHandler, streamCapabilities } from "./stream.mjs";
 
 const PORT = Number.parseInt(process.env.STT_PORT ?? "3752", 10);
 const MODELS_DIR = process.env.WHISPER_MODELS_DIR ?? "/models";
@@ -69,9 +77,18 @@ async function transcribe(input, modelPath = MODEL) {
   }
 }
 
+const handleStream = createStreamHandler({
+  run,
+  resolveModelPath,
+  whisperBin: WHISPER_BIN,
+  threads: THREADS,
+});
+
 const server = http.createServer((req, res) => {
   const json = (status, body) => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
   if (req.method === "GET" && req.url === "/health") { json(200, { status: "ok", service: "stt-whisper", model: MODEL }); return; }
+  if (req.method === "GET" && req.url === "/stream/capabilities") { json(200, streamCapabilities()); return; }
+  if (req.method === "POST" && (req.url === "/stream" || req.url?.startsWith("/stream?"))) { handleStream(req, res); return; }
   if (req.method === "POST" && (req.url === "/inference" || req.url?.startsWith("/inference?"))) {
     const chunks = [];
     let size = 0;
