@@ -48,7 +48,6 @@ export {
   evaluateStackMerge,
   highestMergeableLayer,
   attributeFindingsToLayers,
-  adviseStacking,
   describeStack,
   displayRef,
   REVIEWABLE_LAYER_LINES,

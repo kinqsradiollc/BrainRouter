@@ -184,7 +184,7 @@ function modulesWithoutImporters(): string[] {
  * Adding an entry there is therefore the one way to expand the budget, and it
  * costs a written, reviewable reason.
  */
-const ORPHAN_MODULE_CEILING = 28;
+const ORPHAN_MODULE_CEILING = 27;
 
 /**
  * Modules that ARE orphans and are known to be, with the reason.
@@ -556,7 +556,7 @@ function deadExports(): string[] {
  *
  * It caught nine of this ADR's own decisions the first time it ran.
  */
-const DEAD_EXPORT_CEILING = 273;
+const DEAD_EXPORT_CEILING = 270;
 
 test('E1 — the repository is visible, or this sweep measures nothing', () => {
   // A guard, not a formality: with the siblings missing, every export below

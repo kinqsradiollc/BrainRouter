@@ -235,38 +235,18 @@ export interface StackAdvice {
 
 export const REVIEWABLE_LAYER_LINES = 200;
 
-export function adviseStacking(input: {
-  totalChangedLines: number;
-  /** Files grouped by the unit of work they belong to, in dependency order. */
-  groups: ReadonlyArray<{ label: string; files: readonly string[]; changedLines: number }>;
-}): StackAdvice {
-  const { totalChangedLines, groups } = input;
-  if (totalChangedLines <= REVIEWABLE_LAYER_LINES) {
-    return {
-      shouldStack: false,
-      reason: `The change is ${totalChangedLines} lines, already within the ${REVIEWABLE_LAYER_LINES}-line band that reviews quickly.`,
-      suggestedLayers: [],
-    };
-  }
-  if (groups.length <= 1) {
-    // Splitting a genuinely indivisible change produces layers that cannot be
-    // reviewed independently, which is worse than one honest large PR.
-    return {
-      shouldStack: false,
-      reason:
-        `The change is ${totalChangedLines} lines but forms a single unit of work. Splitting it ` +
-        'would produce layers that cannot be understood or merged independently.',
-      suggestedLayers: [],
-    };
-  }
-  return {
-    shouldStack: true,
-    reason:
-      `${totalChangedLines} lines across ${groups.length} separable units. Stacking keeps each ` +
-      `layer near the ${REVIEWABLE_LAYER_LINES}-line band and lets the reviewer decide once per unit.`,
-    suggestedLayers: groups.map((g) => ({ label: g.label, files: g.files })),
-  };
-}
+/*
+ * `adviseStacking` was here. A7 claimed it had been deleted; it was still
+ * exported, still had a registered control action, and had no caller. It advised
+ * splitting a change into a stack — for a stacking system retired earlier in
+ * this release, because the build loop emits one squashed patch on one throwaway
+ * branch and there was never a second layer to author. Advice with nothing to
+ * advise on.
+ *
+ * `displayRef` and `describeStack` below stay: the brain's PR review renders
+ * them (prSecurityReview.ts:1344).
+ */
+
 
 /**
  * Render a branch name as inert display text.
