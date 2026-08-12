@@ -16,7 +16,7 @@ import { listRoles, listAll as listAgentDefs, formatSessionSummary, getSession, 
 import { activeRun, formatActivePhase } from '@kinqs/brainrouter-core/workflow';
 import { buildAgentForest, formatAgentForest, formatAgentWhy } from '../../../orchestration/agentTree.js';
 import { formatAgentTranscript, formatAgentReplay } from '../../../orchestration/agentTranscriptView.js';
-import { readTranscriptEntries } from '@kinqs/brainrouter-core/session';
+import { readTranscriptEntries, sanitizePeerTextForTerminal } from '@kinqs/brainrouter-core/session';
 import type { CommandContext } from '../_context.js';
 import { formatTranscriptContent } from '../_helpers.js';
 
@@ -109,54 +109,60 @@ export async function handleAgents(ctx: CommandContext): Promise<boolean> {
     const wantUsage = args.includes('--usage');
     const wantJson = args.includes('--json');
     const wantStale = args.includes('--include-stale');
+    const federation = ctx.repl.federation;
 
     const renderOnce = async (): Promise<void> => {
-      const res = await callMcpTool<{ sessions: any[] }>(mcpClient, 'session_list', {
-        includeUsage: wantUsage,
-        includeStale: wantStale,
-      });
-      if (res.isError) {
-        console.log(chalk.red(`\nsession_list failed: ${res.text || '(no message)'}\n`));
-        return;
+      let remoteError: string | undefined;
+      let sessions: any[];
+      if (federation) {
+        const discovered = await federation.discoverSessions();
+        sessions = discovered.routes;
+        remoteError = discovered.remoteError;
+      } else {
+        const res = await callMcpTool<{ sessions: any[] }>(mcpClient, 'session_list', {
+          includeUsage: wantUsage,
+          includeStale: wantStale,
+        });
+        if (res.isError) {
+          console.log(chalk.red(`\nsession_list failed: ${sanitizePeerTextForTerminal(res.text || '(no message)')}\n`));
+          return;
+        }
+        sessions = (res.parsed?.sessions ?? []).map((session) => ({
+          ...session,
+          deviceId: session.deviceId ?? session.metadata?.deviceId ?? 'unreported',
+          state: session.state ?? session.metadata?.state ?? 'idle',
+          title: session.title ?? session.metadata?.title,
+          titleSource: session.titleSource ?? session.metadata?.titleSource,
+          transport: 'remote',
+          lastSeenAt: Date.parse(session.lastHeartbeatAt ?? ''),
+        }));
       }
-      const sessions = res.parsed?.sessions ?? [];
       if (wantJson) {
-        console.log(JSON.stringify({ sessions }));
+        console.log(JSON.stringify({ sessions, ...(remoteError ? { remoteError } : {}) }));
         return;
       }
       if (sessions.length === 0) {
-        console.log(chalk.gray('\nNo active remote sessions (default scope = heartbeat within 2 min). Try --include-stale.'));
-        console.log(chalk.gray('  Hint: peers show up here when another MCP host (Claude Code, Codex, Cursor, Gemini CLI, …)'));
-        console.log(chalk.gray('  registers against the same brain. See `brainrouter-docs/mcp-install.md` for setup.\n'));
+        console.log(chalk.gray('\nNo active local or remote peer sessions.'));
+        if (remoteError) console.log(chalk.yellow(`  Remote discovery failed: ${sanitizePeerTextForTerminal(remoteError)}`));
+        console.log();
         return;
       }
-      console.log(chalk.bold(`\nRemote sessions (${sessions.length})`));
-      const KIND_W = Math.max(...sessions.map((s: any) => (s.clientKind ?? '').length), 6) + 2;
-      const SK_W = 14;
-      const HB_W = 12;
-      const header = `  ${'CLIENT'.padEnd(KIND_W)}${'SESSION'.padEnd(SK_W)}${'HEARTBEAT'.padEnd(HB_W)}${wantUsage ? 'TOKENS    USD     ' : ''}WORKSPACE`;
+      console.log(chalk.bold(`\nUnified sessions (${sessions.length})`));
+      const KIND_W = Math.max(...sessions.map((s: any) => sanitizePeerTextForTerminal(String(s.clientKind ?? '')).length), 6) + 2;
+      const header = `  ${'VIA'.padEnd(8)}${'STATE'.padEnd(10)}${'CLIENT'.padEnd(KIND_W)}${'SESSION KEY'.padEnd(39)}${'DEVICE'.padEnd(38)}TITLE / WORKSPACE`;
       console.log(chalk.gray(header));
-      const now = Date.now();
       for (const s of sessions) {
-        const kind = chalk.cyan((s.clientKind ?? 'unknown').padEnd(KIND_W));
-        const sk = chalk.gray((s.sessionKey ?? '').slice(0, 12).padEnd(SK_W));
-        const hbMs = now - new Date(s.lastHeartbeatAt ?? 0).getTime();
-        const hbAge = hbMs < 60_000
-          ? `${Math.max(1, Math.round(hbMs / 1000))}s ago`
-          : `${Math.round(hbMs / 60_000)}m ago`;
-        const hbStr = (hbMs > 2 * 60_000 ? chalk.gray : chalk.green)(hbAge.padEnd(HB_W));
-        let usageStr = '';
-        if (wantUsage) {
-          const usage = s.usage ?? {};
-          const tokens = (usage.promptTokens ?? 0) + (usage.completionTokens ?? 0);
-          const usd = typeof usage.totalUsd === 'number' ? usage.totalUsd : null;
-          usageStr =
-            chalk.gray(String(tokens).padStart(9)) + '  ' +
-            chalk.gray((usd === null ? '   —   ' : `$${usd.toFixed(3)}`).padEnd(8));
-        }
-        const ws = chalk.gray(s.workspaceRoot ?? '');
-        console.log(`  ${kind}${sk}${hbStr}${usageStr}${ws}`);
+        const safe = (value: unknown) => sanitizePeerTextForTerminal(String(value ?? ''));
+        const via = chalk.cyan(safe(s.transport ?? 'remote').padEnd(8));
+        const state = chalk.gray(safe(s.state ?? 'idle').padEnd(10));
+        const kind = chalk.cyan(safe(s.clientKind ?? 'unknown').padEnd(KIND_W));
+        const sk = chalk.gray(safe(s.sessionKey).padEnd(39));
+        const device = chalk.gray(safe(s.deviceId ?? 'unreported').padEnd(38));
+        const label = [s.title, s.workspaceRoot].filter(Boolean).map(safe).join(' · ');
+        console.log(`  ${via}${state}${kind}${sk}${device}${chalk.gray(label)}`);
       }
+      if (wantUsage) console.log(chalk.gray('  Usage remains available from the remote registry JSON view.'));
+      if (remoteError) console.log(chalk.yellow(`  Remote discovery failed; showing local routes only: ${sanitizePeerTextForTerminal(remoteError)}`));
       console.log();
     };
 

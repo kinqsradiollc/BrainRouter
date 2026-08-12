@@ -1,3 +1,11 @@
+/**
+ * Lifecycle wrapper for one MCP client connection.
+ *
+ * Owns transport creation, session-aware reconnects, identity, and wake
+ * subscriptions behind one stable API. Connectivity failures degrade locally,
+ * and a host wake listener cannot break the authenticated receive loop.
+ */
+
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -16,6 +24,10 @@ import {
   type HostLearningRequest,
   type HostLearningResult,
 } from '../hostLearning.js';
+import {
+  SessionMessageNotificationSchema,
+  type SessionMessageWakeListener,
+} from '../sessionMessages.js';
 
 export class McpClientWrapper {
   public client: Client;
@@ -46,12 +58,36 @@ export class McpClientWrapper {
    */
   private lastServerConfig?: ServerConfig;
   private lastLlmConfig?: LLMConfig;
+  private readonly sessionMessageWakeListeners = new Set<SessionMessageWakeListener>();
 
   constructor() {
     this.client = new Client(
       { name: 'brainrouter-cli', version: VERSION },
       { capabilities: {} }
     );
+    this.installSessionMessageWakeHandler();
+  }
+
+  private installSessionMessageWakeHandler(): void {
+    this.client.setNotificationHandler(SessionMessageNotificationSchema, async (notification) => {
+      const wake = {
+        sessionKey: notification.params.sessionKey,
+        messageIds: [...notification.params.messageIds],
+      };
+      for (const listener of this.sessionMessageWakeListeners) {
+        try {
+          await listener(wake);
+        } catch {
+          // A presentation host must not be able to break the MCP receive loop.
+        }
+      }
+    });
+  }
+
+  /** Subscribe to authenticated BrainRouter inbox wake hints. */
+  public subscribeSessionMessageWakes(listener: SessionMessageWakeListener): () => void {
+    this.sessionMessageWakeListeners.add(listener);
+    return () => { this.sessionMessageWakeListeners.delete(listener); };
   }
 
   /** Whether this wrapper has an active MCP transport. */
@@ -364,6 +400,7 @@ export class McpClientWrapper {
       { name: 'brainrouter-cli', version: VERSION },
       { capabilities: {} },
     );
+    this.installSessionMessageWakeHandler();
     await this._connect(this.lastServerConfig!, this.lastLlmConfig);
   }
 

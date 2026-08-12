@@ -286,12 +286,13 @@ export function createOnAgentEvent(deps: OnAgentEventDeps): (msg: AgentEventMess
                 ? { ...row, delivery }
                 : row);
           }
-          if (e.source === 'extension') {
+          if (e.source === 'extension' || e.source === 'peer-session') {
             return [...current, {
               id: e.id,
               kind: 'delivery',
               text: e.text,
-              source: 'extension',
+              source: e.source,
+              ...(e.sender ? { sender: e.sender } : {}),
               delivery,
               ts: Date.now(),
             }];
@@ -347,6 +348,27 @@ export function createOnAgentEvent(deps: OnAgentEventDeps): (msg: AgentEventMess
       // turn-end, where setLiveTurn(null) above keeps the two from double-counting.
       case 'usage-live': if (isForeground) { setLiveTurn({ promptTokens: e.promptTokens, completionTokens: e.completionTokens, calls: e.calls, cachedTokens: e.cachedTokens }); q('q-ctx', 'context-usage'); } break;
       case 'interaction-request': setInteraction(e.request); setPicked([]); break;
+      case 'interaction-resolved':
+        setInteraction((current) => current?.id === e.id ? null : current);
+        break;
+      case 'session-title':
+        // Core emitted this only after its precedence-aware compare-and-set.
+        // Update both foreground and background sidebar rows immediately; a
+        // later list-sessions refresh reads the same shared metadata record.
+        setSessions((current) => current.map((session) =>
+          session.sessionKey === owningSessionKey
+            ? { ...session, firstUserMessage: e.title }
+            : session));
+        setProjSessions((current) => Object.fromEntries(Object.entries(current).map(([root, value]) => [
+          root,
+          {
+            ...value,
+            rows: value.rows.map((session) => session.sessionKey === owningSessionKey
+                ? { ...session, firstUserMessage: e.title }
+                : session),
+          },
+        ])) as typeof current);
+        break;
       case 'session-changed':
         // DESK-5u — session-changed is the authoritative "current session"
         // signal; track it directly (info.sessionKey can be clobbered by a

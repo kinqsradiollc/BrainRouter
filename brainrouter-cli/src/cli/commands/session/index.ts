@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
 import { spinner as makeSpinner } from '../../prompt/spinner.js';
 import { marked } from 'marked';
-import { listTranscripts, loadTranscript, exportTranscriptMarkdown, exportTranscriptJson, exportFileName, type ExportFormat, searchTranscript, formatMatches, buildRecap, listChapters, formatChapters } from '@kinqs/brainrouter-core/session';
+import { listTranscripts, loadTranscript, exportTranscriptMarkdown, exportTranscriptJson, exportFileName, type ExportFormat, searchTranscript, formatMatches, buildRecap, listChapters, formatChapters, getSessionMeta, setSessionTitle } from '@kinqs/brainrouter-core/session';
 import { readPlan } from '@kinqs/brainrouter-core/task';
 import { buildRewindTimeline, truncateAtTurn } from '../../../runtime/observability/rewindTimeline.js';
 import { planRestore, readFileMutations } from '@kinqs/brainrouter-core/storage';
@@ -18,6 +18,56 @@ import { askYesNo } from '../../prompt/cliPrompt.js';
 import { buildGoalKickoffPrompt } from '../_helpers.js';
 import type { CommandContext } from '../_context.js';
 import { createEphemeralSideAgent } from './ephemeralSideAgent.js';
+import {
+  deferPendingSteeringForSessionSwitch,
+  recoverApprovedPeerMessagesForAgent,
+  type DeferredPeerSteeringResult,
+} from '../../../runtime/federation/peerMessageAdmission.js';
+
+export async function transitionLogicalSession(
+  ctx: CommandContext,
+  nextSessionKey: string,
+  transition: () => void | Promise<void>,
+): Promise<void> {
+  const { agent, repl } = ctx;
+  const previousParticipantKey = agent.getFederationSessionKey() ?? agent.sessionKey;
+  let reconciliation: DeferredPeerSteeringResult = {
+    deferredPeerMessages: 0,
+    discardedOtherInputs: 0,
+  };
+  const mutateWithoutListener = async (): Promise<void> => {
+    reconciliation = deferPendingSteeringForSessionSwitch(agent, previousParticipantKey);
+    await transition();
+    agent.setFederationSessionKey(nextSessionKey);
+  };
+  const meta = getSessionMeta(agent.workspaceRoot, nextSessionKey);
+  try {
+    if (repl.federation) {
+      await repl.federation.rebindSession(nextSessionKey, mutateWithoutListener, {
+        title: meta.title,
+        titleSource: meta.titleSource,
+      });
+    } else {
+      await mutateWithoutListener();
+    }
+  } catch (error) {
+    // The facade restores the old participant when transition itself throws.
+    // Recover only when the Agent also stayed on that exact old identity; a
+    // partially-mutated Agent must never receive A-addressed peer content.
+    if (agent.sessionKey === previousParticipantKey &&
+        agent.getFederationSessionKey() === previousParticipantKey) {
+      recoverApprovedPeerMessagesForAgent(agent, previousParticipantKey);
+    }
+    throw error;
+  }
+  const recovered = recoverApprovedPeerMessagesForAgent(agent, nextSessionKey);
+  if (reconciliation.deferredPeerMessages > 0 || reconciliation.discardedOtherInputs > 0 || recovered > 0) {
+    console.log(chalk.gray(
+      `  Peer/input reconciliation: ${reconciliation.deferredPeerMessages} deferred to the old session, ` +
+      `${reconciliation.discardedOtherInputs} cleared, ${recovered} recovered for this session.`,
+    ));
+  }
+}
 
 
 export async function tryHandleSessionCommand(ctx: CommandContext): Promise<boolean> {
@@ -144,14 +194,17 @@ export async function tryHandleSessionCommand(ctx: CommandContext): Promise<bool
         console.log(chalk.red(`\nNo transcript found for "${sessionKey}".\n`));
         return true;
       }
-      await agent.endSession();
-      agent.sessionKey = sessionKey;
-      // The persisted transcript doesn't record per-call token usage, so
-      // we can't reconstruct counters for the resumed session — start
-      // counting from this point forward instead of carrying over the
-      // pre-resume parent counts (which were for a different session).
-      agent.resetSessionCounters();
-      const loaded = agent.loadHistory(entries);
+      let loaded = 0;
+      await transitionLogicalSession(ctx, sessionKey, async () => {
+        await agent.endSession();
+        agent.sessionKey = sessionKey;
+        // The persisted transcript doesn't record per-call token usage, so
+        // we can't reconstruct counters for the resumed session — start
+        // counting from this point forward instead of carrying over the
+        // pre-resume parent counts (which were for a different session).
+        agent.resetSessionCounters();
+        loaded = agent.loadHistory(entries);
+      });
       console.log(chalk.green(`\n✓ Resumed session ${chalk.cyan(sessionKey)} with ${loaded} prior messages.`));
 
       // If the resumed session has a goal that was suspended (paused,
@@ -200,8 +253,10 @@ export async function tryHandleSessionCommand(ctx: CommandContext): Promise<bool
       const label = args.join(' ').trim() || `fork-${new Date().toISOString().slice(11, 19)}`;
       const newKey = `${agent.sessionKey}:fork:${randomUUID().slice(0, 8)}:${label.replace(/[^A-Za-z0-9._-]+/g, '-')}`;
       const previous = agent.sessionKey;
-      await agent.endSession();
-      agent.fork(newKey);
+      await transitionLogicalSession(ctx, newKey, async () => {
+        await agent.endSession();
+        agent.fork(newKey);
+      });
       console.log(chalk.green(`\n✓ Forked session.`));
       console.log(chalk.gray(`  Parent : ${previous}`));
       console.log(chalk.gray(`  New    : ${newKey}`));
@@ -273,10 +328,13 @@ export async function tryHandleSessionCommand(ctx: CommandContext): Promise<bool
       const kept = truncateAtTurn(entries, chosen.endIndex);
       const previous = agent.sessionKey;
       const newKey = `${agent.sessionKey.split(':')[0]}:rewind:${randomUUID().slice(0, 8)}`;
-      await agent.endSession();
-      agent.fork(newKey);
-      const loaded = agent.loadHistory(kept);
-      agent.refreshSystemPrompt();
+      let loaded = 0;
+      await transitionLogicalSession(ctx, newKey, async () => {
+        await agent.endSession();
+        agent.fork(newKey);
+        loaded = agent.loadHistory(kept);
+        agent.refreshSystemPrompt();
+      });
       console.log(chalk.green(`\n✓ Rewound to turn ${n} in a new session.`));
       console.log(chalk.gray(`  Parent : ${previous}`));
       console.log(chalk.gray(`  New    : ${newKey}`));
@@ -290,15 +348,15 @@ export async function tryHandleSessionCommand(ctx: CommandContext): Promise<bool
         console.log(chalk.red('\nUsage: /rename <new session label>\n'));
         return true;
       }
-      const safe = newName.replace(/[^A-Za-z0-9._-]+/g, '-');
-      const previous = agent.sessionKey;
-      const newKey = `${previous.split(':')[0]}:${safe}`;
-      agent.sessionKey = newKey;
+      const meta = setSessionTitle(agent.workspaceRoot, agent.sessionKey, newName, 'human');
+      await repl.federation?.updateRegistration({
+        title: meta.title,
+        titleSource: 'human',
+      });
       agent.refreshSystemPrompt();
-      console.log(chalk.green(`\n✓ Session renamed`));
-      console.log(chalk.gray(`  Old: ${previous}`));
-      console.log(chalk.gray(`  New: ${newKey}`));
-      console.log(chalk.gray('  (Future transcript entries land under the new key; existing entries stay under the old.)\n'));
+      console.log(chalk.green(`\n✓ Session title updated to ${chalk.cyan(meta.title ?? newName)}.`));
+      console.log(chalk.gray(`  Address unchanged: ${agent.sessionKey}`));
+      console.log(chalk.gray('  Titles are display-only; history, counters, and pending input remain on this exact key.\n'));
       return true;
     }
     case '/compact':
@@ -322,16 +380,20 @@ export async function tryHandleSessionCommand(ctx: CommandContext): Promise<bool
     }
     case '/new':
     {
-      const label = args.join(' ').trim() || `new-${new Date().toISOString().slice(11, 19)}`;
-      const newKey = `${agent.sessionKey.split(':')[0]}:${label.replace(/[^A-Za-z0-9._-]+/g, '-')}`;
+      const label = args.join(' ').trim();
+      const newKey = `${agent.sessionKey.split(':')[0]}:new:${randomUUID().slice(0, 8)}`;
       const previous = agent.sessionKey;
-      await agent.endSession();
-      agent.sessionKey = newKey;
-      agent.resetSessionCounters();
-      agent.clearHistory();
+      if (label) setSessionTitle(agent.workspaceRoot, newKey, label, 'human');
+      await transitionLogicalSession(ctx, newKey, async () => {
+        await agent.endSession();
+        agent.sessionKey = newKey;
+        agent.resetSessionCounters();
+        agent.clearHistory();
+      });
       console.log(chalk.green(`\n✓ Started a new chat.`));
       console.log(chalk.gray(`  Old: ${previous}`));
       console.log(chalk.gray(`  New: ${newKey}\n`));
+      if (label) console.log(chalk.gray(`  Title: ${label}\n`));
       return true;
     }
     case '/side':

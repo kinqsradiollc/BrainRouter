@@ -1,6 +1,15 @@
+/**
+ * CLI peer-banner and receipt-presentation regressions. Wording reflects the
+ * durable delivery state, while every peer-owned field is terminal-safe and
+ * ordinary intentional line breaks remain readable.
+ */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { renderIncomingMessages } from '../cli/view/incomingBanner.js';
+import {
+  formatSenderReceipt,
+  renderIncomingMessages,
+  renderSenderReceipts,
+} from '../cli/view/incomingBanner.js';
 
 function stripAnsi(s: string): string {
   return s.replace(/\x1b\[[0-9;]*m/g, '');
@@ -34,6 +43,8 @@ test('renderIncomingMessages: prints sender prefix, age, and body', () => {
         fromSessionKey: 'abcdef0123456789-rest',
         text: 'heads up, deploying main',
         receivedAt: new Date().toISOString(),
+        transport: 'local',
+        state: 'queued',
       },
     ]),
   );
@@ -53,6 +64,8 @@ test('renderIncomingMessages: wraps long lines at 76 chars (banner width minus t
         fromSessionKey: 'sender',
         text: long,
         receivedAt: new Date().toISOString(),
+        transport: 'local',
+        state: 'queued',
       },
     ]),
   );
@@ -66,8 +79,8 @@ test('renderIncomingMessages: wraps long lines at 76 chars (banner width minus t
 test('renderIncomingMessages: renders multiple messages as separate banners', () => {
   const out = captureStdout(() =>
     renderIncomingMessages([
-      { id: 'a', fromSessionKey: 'peer-a', text: 'hi', receivedAt: new Date().toISOString() },
-      { id: 'b', fromSessionKey: 'peer-b', text: 'yo', receivedAt: new Date().toISOString() },
+      { id: 'a', fromSessionKey: 'peer-a', text: 'hi', receivedAt: new Date().toISOString(), transport: 'local', state: 'queued' },
+      { id: 'b', fromSessionKey: 'peer-b', text: 'yo', receivedAt: new Date().toISOString(), transport: 'remote', state: 'held' },
     ]),
   );
   // Two `┌─` headers means two banners — not one block with two body lines.
@@ -79,8 +92,58 @@ test('renderIncomingMessages: age tag reads "Xm ago" for older messages', () => 
   const eightMinutesAgo = new Date(Date.now() - 8 * 60_000).toISOString();
   const out = captureStdout(() =>
     renderIncomingMessages([
-      { id: 'm', fromSessionKey: 'peer', text: 'late mail', receivedAt: eightMinutesAgo },
+      { id: 'm', fromSessionKey: 'peer', text: 'late mail', receivedAt: eightMinutesAgo, transport: 'remote', state: 'held' },
     ]),
   );
   assert.match(out, /8m ago/);
+});
+
+test('sender receipts distinguish persistence, held admission, and safe-boundary application', () => {
+  assert.match(stripAnsi(formatSenderReceipt({
+    inboxId: 'inbox-pending',
+    messageId: 'message-pending',
+    targetSessionKey: 'peer-one',
+    status: 'pending',
+  })), /persisted, awaiting recipient admission/);
+  assert.match(stripAnsi(formatSenderReceipt({
+    inboxId: 'inbox-held',
+    messageId: 'message-held',
+    targetSessionKey: 'peer-two',
+    status: 'held',
+  })), /held by recipient for approval/);
+  const out = captureStdout(() => renderSenderReceipts([{
+    inboxId: 'inbox-applied',
+    messageId: 'message-applied',
+    targetSessionKey: 'peer-three',
+    status: 'applied',
+  }]));
+  assert.match(out, /applied at the recipient safe boundary/);
+});
+
+test('peer banners and receipts strip terminal control sequences but preserve intentional newlines', () => {
+  const hostile = '\u001b]52;c;Y2xpcGJvYXJk\u0007\u001b]0;forged title\u0007\u001b]8;;https://invalid.example\u0007linked\u001b]8;;\u0007';
+  const out = captureStdout(() => {
+    renderIncomingMessages([{
+      id: 'unsafe-banner',
+      fromSessionKey: `peer:${hostile}\u0000\bidentity`,
+      text: `first line\nsecond ${hostile}\u0000\bline`,
+      receivedAt: new Date().toISOString(),
+      transport: 'remote',
+      state: 'held',
+    }]);
+    renderSenderReceipts([{
+      inboxId: 'unsafe-receipt',
+      messageId: `message-${hostile}`,
+      targetSessionKey: `target-${hostile}`,
+      status: 'rejected',
+      reason: `reason-${hostile}\u0000`,
+    }]);
+  });
+
+  assert.match(out, /first line\n(?:│ )?second/);
+  assert.match(out, /linked/);
+  assert.match(out, /identity/);
+  assert.doesNotMatch(out, /\u001b|\u0007|\u0000|\u0008/,
+    'ANSI, OSC, and C0 controls are removed');
+  assert.doesNotMatch(out, /Y2xpcGJvYXJk|forged title|https:\/\/invalid\.example/);
 });

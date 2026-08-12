@@ -1,3 +1,9 @@
+/**
+ * Public protocol contract tests for command/event guards, callback bridges,
+ * interaction brokers, and explicit confirmation. These cases protect wire
+ * compatibility without depending on a presentation host or live transport.
+ */
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -7,6 +13,7 @@ import {
   isAgentEventMessage,
   isBackgroundTaskEventView,
   InteractionBroker,
+  toExplicitConfirmDecision,
   type AgentEvent,
   type AgentEventMessage,
   type BackgroundTaskEventView,
@@ -178,6 +185,65 @@ test('createCallbackBridge: steering receipt lifecycle preserves revisions', () 
   }
 });
 
+test('createCallbackBridge: peer delivery preserves sender provenance and title events', () => {
+  const events: AgentEvent[] = [];
+  const cb = createCallbackBridge((event) => events.push(event));
+  const receipt = {
+    id: 'peer_1',
+    source: 'peer-session' as const,
+    receivedAt: '2026-08-11T01:00:00.000Z',
+    priorRevision: 0,
+    affectedRequirementIds: [],
+    affectedTaskIds: [],
+    summary: 'Check the release branch.',
+    status: 'pending' as const,
+  };
+  cb.onSteerApplied({
+    id: 'peer_1',
+    text: 'Check the release branch.',
+    source: 'peer-session',
+    createdAt: 1,
+    sender: { sessionKey: 'sender:1', deviceId: 'device:1', transport: 'local' },
+  }, receipt);
+  cb.onSessionTitle({ title: 'Check release branch', source: 'agent' });
+
+  assert.deepEqual(events[0], {
+    kind: 'input-delivery',
+    id: 'peer_1',
+    mode: 'steer',
+    state: 'applied',
+    text: 'Check the release branch.',
+    source: 'peer-session',
+    sender: { sessionKey: 'sender:1', deviceId: 'device:1', transport: 'local' },
+    receipt,
+  });
+  assert.deepEqual(events[1], {
+    kind: 'session-title', title: 'Check release branch', source: 'agent',
+  });
+});
+
+test('createCallbackBridge: peer expiry is terminal and carries authenticated provenance', () => {
+  const events: AgentEvent[] = [];
+  const cb = createCallbackBridge((event) => events.push(event));
+  cb.onSteerExpired({
+    id: 'peer_expired_1',
+    text: 'Too late for this model boundary.',
+    source: 'peer-session',
+    createdAt: 1,
+    sender: { sessionKey: 'sender:expired', deviceId: 'device:expired', transport: 'remote' },
+  });
+
+  assert.deepEqual(events, [{
+    kind: 'input-delivery',
+    id: 'peer_expired_1',
+    mode: 'steer',
+    state: 'expired',
+    text: 'Too late for this model boundary.',
+    source: 'peer-session',
+    sender: { sessionKey: 'sender:expired', deviceId: 'device:expired', transport: 'remote' },
+  }]);
+});
+
 // --- envelope writer -----------------------------------------------------------
 
 test('createEnvelopeWriter: stamps monotonic seq + ts + sessionKey', () => {
@@ -204,6 +270,7 @@ test('guards: accept valid, reject malformed', () => {
   assert.equal(isAgentCommand('start-turn'), false);
 
   assert.equal(isAgentEventMessage({ seq: 1, ts: 2, sessionKey: 's', event: { kind: 'status', text: 'x' } }), true);
+  assert.equal(isAgentEventMessage({ seq: 1, ts: 2, sessionKey: 's', event: { kind: 'interaction-resolved', id: 'ir_1' } }), true);
   assert.equal(isAgentEventMessage({ seq: 1, ts: 2, sessionKey: 's', event: { kind: 'annotation-event', action: 'created', annotationId: 'ann', targetKind: 'file' } }), true);
   assert.equal(isAgentEventMessage({ seq: 1, ts: 2, sessionKey: 's', event: { kind: 'bogus' } }), false);
   assert.equal(isAgentEventMessage({ event: { kind: 'status' } }), false);
@@ -262,4 +329,15 @@ test('InteractionBroker: timeout settles as dismissed; dismissAll sweeps', async
   assert.equal(broker.dismissAll(), 2);
   assert.deepEqual(await p1.response, { type: 'dismissed' });
   assert.deepEqual(await p2.response, { type: 'dismissed' });
+});
+
+test('toExplicitConfirmDecision: preserves approve, decline, and dismissal semantics', () => {
+  assert.equal(toExplicitConfirmDecision({ type: 'confirm', approved: true }), 'approved');
+  assert.equal(toExplicitConfirmDecision({ type: 'confirm', approved: false }), 'declined');
+  assert.equal(toExplicitConfirmDecision({ type: 'dismissed' }), 'dismissed');
+  assert.equal(
+    toExplicitConfirmDecision({ type: 'choice', labels: ['unexpected'] }),
+    'dismissed',
+    'an unexpected wire response must fail closed',
+  );
 });

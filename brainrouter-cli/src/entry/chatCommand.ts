@@ -1,3 +1,8 @@
+/**
+ * CLI chat-command bootstrap and ownership boundary. It resolves configuration
+ * before attaching one exact session participant, and shutdown releases that
+ * Agent, transport, and remote registration exactly once.
+ */
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import { loadConfig, setCliKnobOverride, hydrateConfigDefaultsOnDisk, resolveCliKnobs, type LLMConfig } from '@kinqs/brainrouter-core/config';
@@ -10,6 +15,7 @@ import { setKnownMcpServerIds } from '../cli/ink/text/toolFormat.js';
 import type { ServerConfig } from '@kinqs/brainrouter-core/config';
 import { Agent } from '@kinqs/brainrouter-core/agent';
 import { cliPrompter } from '../cli/prompt/cliPrompt.js';
+import { cliInteractionPort } from '../cli/prompt/cliInteractionPort.js';
 import { runChat } from '../cli/ink/runChat.js';
 import { applyWorkspaceRoot, findWorkspaceRoot } from '@kinqs/brainrouter-core/workspace';
 import { DEFAULT_LLM } from './shared.js';
@@ -243,6 +249,7 @@ export function registerChatCommand(program: Command): void {
         workspaceRoot: workspace.workspaceRoot,
         launchCwd: workspace.launchCwd,
         prompter: cliPrompter,
+        interactionPort: cliInteractionPort,
         learnedTenant: learnedIdentity.tenant,
         learningEnabled: learnedIdentity.enabled,
       });
@@ -267,23 +274,33 @@ export function registerChatCommand(program: Command): void {
           console.log(chalk.yellow(pick.error + ' Starting a fresh session.'));
         }
       }
-      // Federation Stage 2 (FED-S2-T2/T3): claim a row in the brain's
-      // active_sessions registry + heartbeat every 30s. Resolves to null
-      // (no-op) when the brain pre-dates Stage 2 — older brains keep
-      // working unchanged. The federation sessionKey is per-workspace
-      // and persisted (NOT the same as agent.sessionKey, which is the
-      // chat session and rotates per-launch) so clean restarts refresh
-      // the registry row instead of stacking ghosts.
+      // The logical Agent session owns both the always-on loopback listener
+      // and optional Brain registration. Resume therefore reclaims pending
+      // durable rows; per-incarnation registry/MCP ownership still prevents
+      // two live hosts from silently sharing the same address.
       const { attachFederation, resolveFederationSessionKey } = await import(
         '../runtime/federation/federationRegistration.js'
       );
-      const federationKey = resolveFederationSessionKey(workspace.workspaceRoot);
+      const { admitPeerMessageForAgent, recoverApprovedPeerMessagesForAgent } = await import(
+        '../runtime/federation/peerMessageAdmission.js'
+      );
+      const { getSessionMeta } = await import('@kinqs/brainrouter-core/session');
+      const federationKey = resolveFederationSessionKey(agent.sessionKey);
       agent.setFederationSessionKey(federationKey);
+      const sessionMeta = getSessionMeta(agent.workspaceRoot, agent.sessionKey);
       const federation = await attachFederation({
         mcpClient,
         sessionKey: federationKey,
         workspaceRoot: workspace.workspaceRoot,
         clientKind: 'brainrouter-cli',
+        state: 'idle',
+        title: sessionMeta.title,
+        titleSource: sessionMeta.titleSource,
+        onPeerMessage: (message, senderDetails) =>
+          admitPeerMessageForAgent(agent, message, senderDetails),
+        onInboxError: (error) => {
+          console.error(chalk.yellow(`[BrainRouter] session inbox: ${error.message}`));
+        },
         // Federation Stage 3: render incoming text messages as a banner
         // above the next prompt. The poller fires every 5 s; `text`-kind
         // is the only kind we surface in 0.4.0, other kinds stay in the
@@ -292,7 +309,12 @@ export function registerChatCommand(program: Command): void {
           const { renderIncomingMessages } = await import('../cli/view/incomingBanner.js');
           renderIncomingMessages(messages);
         },
+        onReceipts: async (receipts) => {
+          const { renderSenderReceipts } = await import('../cli/view/incomingBanner.js');
+          renderSenderReceipts(receipts);
+        },
       });
+      recoverApprovedPeerMessagesForAgent(agent, federationKey);
       // Hard-kill safety net: Ctrl-C, SIGTERM, and `process.exit` paths
       // skip the `finally` below. Best-effort unregister on signal so a
       // mid-tool-call kill doesn't leave a ghost waiting for the brain's

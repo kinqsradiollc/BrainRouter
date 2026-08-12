@@ -1,3 +1,8 @@
+/**
+ * Mutable state shared by one interactive chat mount. Extraction keeps input,
+ * turn, and teardown helpers coherent; the context is never shared across
+ * mounts, and its Agent and federation handle represent the same session.
+ */
 import type { Agent } from '@kinqs/brainrouter-core/agent';
 import type { Config } from '@kinqs/brainrouter-core/config';
 import { InputQueue } from '../../../runtime/input/inputQueue.js';
@@ -29,6 +34,7 @@ export interface RunChatContext {
   readonly inputQueue: InputQueue;
   readonly notifiedCompletions: Set<string>;
   readonly detectGitHubPR: (cwd: string) => string | null;
+  readonly federation: import('../../../runtime/federation/federationRegistration.js').FederationHandle | null;
 
   // --- mutable turn/session flags (were closure `let`s) ---
   isProcessing: boolean;

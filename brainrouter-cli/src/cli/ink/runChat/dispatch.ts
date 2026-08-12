@@ -1,3 +1,8 @@
+/**
+ * Serialized CLI input dispatcher for commands, skills, and model turns.
+ * Central dispatch preserves input order and ensures host commands are handled
+ * as commands rather than becoming model-visible conversation content.
+ */
 import type readline from 'node:readline';
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 import { readPreferences } from '@kinqs/brainrouter-core/session';
@@ -33,6 +38,7 @@ export function installDispatch(ctx: RunChatContext): void {
     try {
       const captured = await captureConsoleOutput(() =>
         handleSlashCommand(command, args, agent, mcpClient, config, rl as readline.Interface, {
+          federation: ctx.federation,
           refreshPromptForMode: ctx.refreshFooter,
           replaceBanner: (text: string) => ctx.controller?.replaceBanner(text),
           isProcessing: () => ctx.isProcessing,

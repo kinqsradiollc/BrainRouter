@@ -1,3 +1,11 @@
+/**
+ * Multiplexes configured MCP endpoints behind the single-client API.
+ *
+ * Each endpoint connects and reconnects independently. Prefixed tool names are
+ * authoritative, raw aliases route only when unambiguous, and wake listeners
+ * survive wrapper replacement so a reconnect cannot silently drop delivery.
+ */
+
 import { McpClientWrapper } from '../client/client.js';
 import type { LLMConfig, ServerConfig } from '../../config/config.js';
 import { reconnectBackoffMs } from '../reconnect/reconnect.js';
@@ -5,34 +13,8 @@ import type { McpServerStatus } from '../types.js';
 import { dueForReconnect } from './reconnectSweep.js';
 import { isBrainrouterOwnedTool, normalizeMcpToolName } from './toolNames.js';
 import type { HostLearningRequest, HostLearningResult } from '../hostLearning.js';
+import type { SessionMessageWakeListener } from '../sessionMessages.js';
 
-/**
- * 0.3.7 — Multi-MCP support. Wraps a `Map<serverId, McpClientWrapper>`
- * and exposes the same public API as a single wrapper (`isConnected`,
- * `getIdentity`, `getServerName`, `listTools`, `callTool`, `close`),
- * so existing call-sites that hold an `mcpClient` reference keep
- * working unchanged.
- *
- * Concurrent startup:,
- * tool prefixing at line 1515, graceful degradation at line 189). Our
- * shape:
- *
- *   - All configured servers attempt connection concurrently on boot,
- *     each with a 5s timeout. Offline ones do NOT block others.
- *   - Tools surface to the agent with `mcp_<serverId>_<toolName>`
- *   - `callTool` accepts BOTH the prefixed form (the canonical name
- *     the LLM sees in the tool inventory) AND the raw form (back-compat
- *     for the existing system prompt and skills that hardcode
- *     `memory_recall` etc.). Raw form routes to the unique server
- *     providing that tool name; collision (two servers expose the same
- *     unprefixed name) returns a helpful error pointing at the
- *     prefixed form.
- *
- * Future versions may drop the raw-name fallback once skills and
- * prompts are migrated to prefixed names; the pool then becomes the
- * pure Claude Code shape. Until then the dual-name resolution is a
- * transition aid documented in CHANGELOG `[0.3.7]`.
- */
 export class McpClientPool {
   /** serverId → connected wrapper. */
   private clients = new Map<string, McpClientWrapper>();
@@ -58,6 +40,8 @@ export class McpClientPool {
   private reconnectTimer?: ReturnType<typeof setInterval>;
   private reconnectAttempts = new Map<string, number>();
   private reconnectNextAt = new Map<string, number>();
+  /** Host listeners survive wrapper replacement during reconnects. */
+  private sessionMessageWakeListeners = new Set<SessionMessageWakeListener>();
 
   /** WS9 — start a background supervisor that auto-reconnects any dropped server
    *  (brain or tool) with per-server exponential backoff, so a transient outage
@@ -166,6 +150,11 @@ export class McpClientPool {
       try { await wrapper.close(); } catch { /* ignore */ }
     }
     await this.refreshToolIndex();
+    if (wrapper.isConnected() && wrapper.getIdentity() === 'brainrouter') {
+      for (const listener of this.sessionMessageWakeListeners) {
+        wrapper.subscribeSessionMessageWakes(listener);
+      }
+    }
   }
 
   /** Tear down a single server. Removes it from the pool and rebuilds the tool index. */
@@ -547,6 +536,26 @@ export class McpClientPool {
       if (w.isConnected() && w.getIdentity() === 'brainrouter') return w;
     }
     return undefined;
+  }
+
+  /**
+   * Subscribe to durable-inbox wake hints from the verified BrainRouter MCP.
+   * The subscription is reinstalled whenever the pool replaces a wrapper.
+   */
+  subscribeSessionMessageWakes(listener: SessionMessageWakeListener): () => void {
+    this.sessionMessageWakeListeners.add(listener);
+    for (const wrapper of this.clients.values()) {
+      if (wrapper.isConnected() && wrapper.getIdentity() === 'brainrouter') {
+        wrapper.subscribeSessionMessageWakes(listener);
+      }
+    }
+    return () => {
+      this.sessionMessageWakeListeners.delete(listener);
+      for (const wrapper of this.clients.values()) {
+        const remove = wrapper.subscribeSessionMessageWakes(listener);
+        remove();
+      }
+    };
   }
 
   /** Server id for the currently connected BrainRouter MCP, if one is active. */

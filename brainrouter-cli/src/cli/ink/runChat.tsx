@@ -1,3 +1,8 @@
+/**
+ * Interactive CLI chat-host composition. It owns one mounted Agent lifecycle
+ * so exact session identity, federation callbacks, and teardown stay aligned;
+ * display titles never route and stale callbacks never publish for a new key.
+ */
 import React from 'react';
 import readline from 'node:readline';
 import chalk from 'chalk';
@@ -171,6 +176,7 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
     inputQueue: new InputQueue(),
     notifiedCompletions: new Set<string>(),
     detectGitHubPR: createGitHubPRDetector(),
+    federation: federation ?? null,
     isProcessing: false,
     pendingContinuation: false,
     goalNoToolStrikes: 0,
@@ -268,10 +274,17 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
           // in persistent scrollback ABOVE the composer. Any messages
           // that arrived during the startup gap replay on swap.
           if (federation) {
-            void import('../view/incomingBanner.js').then(({ formatIncomingBanner }) => {
+            void import('../view/incomingBanner.js').then(({ formatIncomingBanner, formatSenderReceipt }) => {
               federation.setOnInboxText((messages) => {
                 for (const m of messages) {
                   ctrl.push.notice(formatIncomingBanner(m), 'info');
+                }
+              });
+              federation.setOnReceipts((receipts) => {
+                for (const receipt of receipts) {
+                  const level = receipt.status === 'rejected' || receipt.status === 'declined' ||
+                    receipt.status === 'expired' || receipt.status === 'queue_full' ? 'warn' : 'info';
+                  ctrl.push.notice(formatSenderReceipt(receipt), level);
                 }
               });
             });

@@ -25,6 +25,7 @@ import type {
   MemoryOperation,
   SessionInboxKind,
   SessionInboxRecord,
+  SessionMessageStatus,
 } from "@kinqs/brainrouter-types";
 
 export function parseJsonObject(raw: string | null | undefined): Record<string, unknown> {
@@ -99,6 +100,7 @@ export function evidenceRowToRecord(row: any): MemoryEvidence {
 }
 
 export function activeSessionRowToRecord(row: any, includeUsage: boolean): ActiveSessionRecord {
+  const metadata = parseJsonObject(row.metadata_json);
   let usage: ActiveSessionUsage | null | undefined;
   if (includeUsage && row.usage_json) {
     try {
@@ -112,25 +114,41 @@ export function activeSessionRowToRecord(row: any, includeUsage: boolean): Activ
     usage = null;
   }
   return {
+    orgId: row.org_id ? String(row.org_id) : null,
     sessionKey: row.session_key,
     userId: row.user_id,
     clientKind: row.client_kind ?? "http-unknown",
     workspaceRoot: row.workspace_root ?? "",
     startedAt: row.started_at,
     lastHeartbeatAt: row.last_heartbeat_at,
-    metadata: parseJsonObject(row.metadata_json),
+    metadata,
+    ...(typeof metadata.deviceId === "string" && metadata.deviceId ? { deviceId: metadata.deviceId } : {}),
+    ...(typeof metadata.title === "string" && metadata.title ? { title: metadata.title } : {}),
+    ...(["derived", "agent", "hook", "human"].includes(String(metadata.titleSource))
+      ? { titleSource: metadata.titleSource as ActiveSessionRecord["titleSource"] } : {}),
+    ...(["idle", "working", "waiting"].includes(String(metadata.state))
+      ? { state: metadata.state as ActiveSessionRecord["state"] } : {}),
+    ...(metadata.messageWakeVersion === 1 ? { messageWakeVersion: 1 as const } : {}),
     ...(usage !== undefined ? { usage } : {}),
   };
 }
 
 export function inboxRowToRecord(row: {
   id: string;
+  org_id?: string | null;
   user_id: string;
+  message_id?: string | null;
   from_session_key: string;
   to_session_key: string;
   kind: string;
   payload_json: string;
+  status?: string | null;
+  status_reason?: string | null;
   created_at: string;
+  updated_at?: string | null;
+  expires_at?: string | null;
+  terminal_at?: string | null;
+  sender_acknowledged_at?: string | null;
   delivered_at: string | null;
 }): SessionInboxRecord {
   let payload: Record<string, unknown> = {};
@@ -144,12 +162,20 @@ export function inboxRowToRecord(row: {
   }
   return {
     id: row.id,
+    orgId: row.org_id ? String(row.org_id) : null,
     userId: row.user_id,
+    messageId: row.message_id ?? row.id,
     fromSessionKey: row.from_session_key,
     toSessionKey: row.to_session_key,
     kind: row.kind as SessionInboxKind,
     payload,
+    status: (row.status ?? (row.delivered_at ? "applied" : "pending")) as SessionMessageStatus,
+    statusReason: row.status_reason ?? null,
     createdAt: row.created_at,
+    updatedAt: row.updated_at ?? row.delivered_at ?? row.created_at,
+    expiresAt: row.expires_at ?? row.created_at,
+    terminalAt: row.terminal_at ?? row.delivered_at ?? null,
+    senderAcknowledgedAt: row.sender_acknowledged_at ?? null,
     deliveredAt: row.delivered_at,
   };
 }

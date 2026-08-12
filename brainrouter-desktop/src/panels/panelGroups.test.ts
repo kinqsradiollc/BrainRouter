@@ -14,7 +14,7 @@ test('every registered panel has a group', () => {
   const ungrouped = PANEL_DEFS
     .map((d) => d.id)
     .filter((id) => groupOf(id) === 'environment')
-    .filter((id) => !['tools', 'servers', 'browser', 'context', 'atlas', 'prototype'].includes(id));
+    .filter((id) => !['tools', 'servers', 'peers', 'browser', 'context', 'atlas', 'prototype'].includes(id));
   assert.deepEqual(ungrouped, [], `these panels fell to Environment by default: ${ungrouped.join(', ')}`);
 });
 

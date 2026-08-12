@@ -2,7 +2,7 @@
  * DESK-5f — pure panel identity and presentation catalog. Kept free of React
  * and panel implementations so layout/recommendation models are Node-testable.
  */
-export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'task-detail' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'stack' | 'comprehension' | 'review' | 'requirements' | 'annotations' | 'artifacts' | 'attachments' | 'ci' | 'atlas' | 'workflows' | 'memory' | 'knowledge' | 'prototype' | 'servers' | 'browser';
+export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'task-detail' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'stack' | 'comprehension' | 'review' | 'requirements' | 'annotations' | 'artifacts' | 'attachments' | 'ci' | 'atlas' | 'workflows' | 'memory' | 'knowledge' | 'prototype' | 'servers' | 'browser' | 'peers';
 
 export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'context', title: 'Context', icon: 'layout-right' },
@@ -38,6 +38,7 @@ export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'knowledge', title: 'Project knowledge', icon: 'brain' },
   { id: 'prototype', title: 'Prototype', icon: 'bolt' },
   { id: 'servers', title: 'Servers', icon: 'globe' },
+  { id: 'peers', title: 'Peers', icon: 'bubble' },
   { id: 'browser', title: 'Browser', icon: 'globe' },
 ];
 
@@ -78,7 +79,7 @@ const GROUP_OF: Partial<Record<PanelId, PanelGroup>> = {
   memory: 'knowledge', knowledge: 'knowledge', artifacts: 'knowledge',
   annotations: 'knowledge', requirements: 'knowledge', attachments: 'knowledge',
   comprehension: 'understand',
-  tools: 'environment', servers: 'environment', browser: 'environment',
+  tools: 'environment', servers: 'environment', peers: 'environment', browser: 'environment',
   context: 'environment', atlas: 'environment', prototype: 'environment',
 };
 

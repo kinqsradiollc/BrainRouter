@@ -9,6 +9,7 @@ import type {
   AgentEvent,
   BriefingRecord,
   ProfileStageEventView,
+  PeerSessionSenderEventView,
   ProvenanceRef,
   RecordLifecycleAction,
   SteeringReceiptEventView,
@@ -20,10 +21,24 @@ export interface BridgedCallbacks {
   onStatusUpdate: (text: string) => void;
   onNotice: (notice: { level: 'info' | 'warn'; message: string }) => void;
   onSteerApplied: (
-    input: { id: string; text: string; source: 'user' | 'extension'; createdAt: number },
+    input: {
+      id: string;
+      text: string;
+      source: 'user' | 'extension' | 'peer-session';
+      createdAt: number;
+      sender?: PeerSessionSenderEventView;
+    },
     receipt: SteeringReceiptEventView,
   ) => void;
+  onSteerExpired: (input: {
+    id: string;
+    text: string;
+    source: 'peer-session';
+    createdAt: number;
+    sender: PeerSessionSenderEventView;
+  }) => void;
   onSteerReceipt: (receipt: SteeringReceiptEventView) => void;
+  onSessionTitle: (event: { title: string; source: 'agent' | 'hook' | 'human' | 'derived' }) => void;
   onToolStart: (tool: string, args: Record<string, unknown>, callId?: string) => void;
   onToolEnd: (
     tool: string,
@@ -73,9 +88,20 @@ export function createCallbackBridge(emit: EmitEvent): BridgedCallbacks {
       state: 'applied',
       text: input.text,
       source: input.source,
+      ...(input.sender ? { sender: { ...input.sender } } : {}),
       receipt,
     }),
+    onSteerExpired: (input) => emit({
+      kind: 'input-delivery',
+      id: input.id,
+      mode: 'steer',
+      state: 'expired',
+      text: input.text,
+      source: input.source,
+      sender: { ...input.sender },
+    }),
     onSteerReceipt: (receipt) => emit({ kind: 'steering-receipt', receipt }),
+    onSessionTitle: (event) => emit({ kind: 'session-title', ...event }),
     onUsageUpdate: (usage) => emit({
       kind: 'usage-live',
       promptTokens: usage.promptTokens,

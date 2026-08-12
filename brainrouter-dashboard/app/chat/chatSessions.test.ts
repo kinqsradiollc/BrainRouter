@@ -1,3 +1,8 @@
+/**
+ * Dashboard chat-session persistence and title-policy regressions. Exact keys
+ * remain stable across labels, malformed storage fails safely, and shared title
+ * precedence cannot silently reopen or reroute a conversation.
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -72,4 +77,12 @@ test("upsert replaces one session and scope/title helpers stay deterministic", (
   assert.equal(sessionTitle(updated[0]!.messages), "Ship the managed model gateway safely");
   assert.equal(sameChatScope(updated[0]!.scope, { ...updated[0]!.scope }), true);
   assert.equal(sameChatScope(updated[0]!.scope, { ...updated[0]!.scope, projectId: "project-2" }), false);
+});
+
+test("dashboard titles use the shared session fallback and word boundary", () => {
+  assert.equal(sessionTitle([]), "Untitled session");
+  assert.equal(
+    sessionTitle([{ id: "m1", role: "user", content: "Investigate the failing release workflow after the dependency update introduced a regression" }]),
+    "Investigate the failing release workflow after the…",
+  );
 });
