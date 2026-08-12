@@ -18,11 +18,24 @@
  * truncation.
  */
 
-/** Upper bound on a stored title. Long enough to be specific, short enough to render. */
-export const MAX_SESSION_TITLE = 60;
+import {
+  deriveSessionTitle,
+  MAX_SESSION_TITLE,
+  UNTITLED_SESSION,
+} from '@kinqs/brainrouter-types/session-title';
 
-/** What we call a session with nothing to go on yet. */
-export const UNTITLED_SESSION = 'Untitled session';
+export {
+  deriveSessionTitle,
+  MAX_SESSION_TITLE,
+  UNTITLED_SESSION,
+} from '@kinqs/brainrouter-types/session-title';
+
+export type SessionTitleSource = 'derived' | 'agent' | 'hook' | 'human';
+
+export interface ResolvedSessionTitle {
+  title: string;
+  source: SessionTitleSource;
+}
 
 /**
  * Phrases that mean the model answered the wrong question. A title beginning
@@ -66,10 +79,22 @@ function unwrap(value: string): string {
 
 function truncate(value: string): string {
   if (value.length <= MAX_SESSION_TITLE) return value;
+  // The ellipsis is part of the persisted title and therefore part of the
+  // shared JS string-length bound used by registry publication. Avoid cutting
+  // between UTF-16 surrogate halves while reserving that final code unit.
+  let cut = value.slice(0, MAX_SESSION_TITLE - 1);
+  if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
   // Prefer a word boundary so a title does not end mid-token.
-  const cut = value.slice(0, MAX_SESSION_TITLE);
   const space = cut.lastIndexOf(' ');
   return `${(space > MAX_SESSION_TITLE * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
+
+/** Human and hook titles may be concise, but still share the rendering bound. */
+export function normalizeExplicitSessionTitle(raw: string | null | undefined): string | null {
+  if (typeof raw !== 'string' || /\r?\n/.test(raw.trim())) return null;
+  const cleaned = collapse(unwrap(raw));
+  if (!cleaned || /^[#>*|]/.test(cleaned)) return null;
+  return truncate(cleaned);
 }
 
 /**
@@ -98,42 +123,32 @@ export function normalizeAgentTitle(raw: string | null | undefined): string | nu
 }
 
 /**
- * Derive a fallback title from the first user message.
- *
- * Deliberately conservative: strip fenced code and markdown noise, keep the
- * first sentence, and truncate on a word boundary. It is a placeholder until
- * the agent proposes something better, so it should never look authoritative.
- */
-export function deriveSessionTitle(firstUserMessage: string | null | undefined): string {
-  if (typeof firstUserMessage !== 'string') return UNTITLED_SESSION;
-
-  // A pasted stack trace or code block is not a name; drop fenced regions and
-  // inline code before looking for prose.
-  const withoutCode = firstUserMessage
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/`[^`]*`/g, ' ');
-
-  const prose = collapse(withoutCode);
-  if (!prose) return UNTITLED_SESSION;
-
-  // First sentence, when there is a clear one worth keeping.
-  const sentence = prose.match(/^[^.!?]{8,}?[.!?](?:\s|$)/)?.[0]?.trim();
-  const candidate = sentence && sentence.length <= MAX_SESSION_TITLE * 1.5
-    ? sentence.replace(/[.!?]+$/, '')
-    : prose;
-
-  return truncate(candidate) || UNTITLED_SESSION;
-}
-
-/**
  * The single answer to "what is this session called?".
  *
  * Both surfaces call this so a session does not change name when the user
  * switches between the desktop and the dashboard.
  */
 export function resolveSessionTitle(input: {
+  humanTitle?: string | null;
+  hookTitle?: string | null;
   agentTitle?: string | null;
   firstUserMessage?: string | null;
 }): string {
-  return normalizeAgentTitle(input.agentTitle) ?? deriveSessionTitle(input.firstUserMessage);
+  return resolveSessionTitleDecision(input).title;
+}
+
+/** Resolve title and provenance with explicit authority precedence. */
+export function resolveSessionTitleDecision(input: {
+  humanTitle?: string | null;
+  hookTitle?: string | null;
+  agentTitle?: string | null;
+  firstUserMessage?: string | null;
+}): ResolvedSessionTitle {
+  const human = normalizeExplicitSessionTitle(input.humanTitle);
+  if (human) return { title: human, source: 'human' };
+  const hook = normalizeExplicitSessionTitle(input.hookTitle);
+  if (hook) return { title: hook, source: 'hook' };
+  const agent = normalizeAgentTitle(input.agentTitle);
+  if (agent) return { title: agent, source: 'agent' };
+  return { title: deriveSessionTitle(input.firstUserMessage), source: 'derived' };
 }

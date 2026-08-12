@@ -33,6 +33,8 @@ import { RemoteWorktreeManager } from './host/sshRemote.js';
 import { MobileRelayServer } from './host/mobileRelayServer.js';
 import { createRemoteAccessClient } from './host/remoteAccessWiring.js';
 import { endBrainSession, ensureBrainSession, getBrainSessionKey } from './host/brainSession.js';
+import { requestDesktopHeldConfirmation } from './host/heldMessageConfirmation.js';
+import { DesktopSessionMessaging } from './host/sessionMessaging.js';
 import {
   fetchAccountModelCatalog,
   emptyAccountModelCatalog,
@@ -471,6 +473,7 @@ async function main(): Promise<void> {
   };
   let llm: LLMConfig = config.llm || { provider: 'openai', model: 'gpt-4o-mini', apiKey: '' };
   const mcpClient = new McpClientPool();
+  let sessionMessaging: DesktopSessionMessaging | undefined;
   const resolveLearningIdentity = async (
     candidate: ReturnType<typeof loadConfig> = loadConfig(),
   ): Promise<typeof learningBinding> => {
@@ -499,11 +502,8 @@ async function main(): Promise<void> {
     llm,
     { timeoutMs: 5_000 },
   )
-    .then(async () => {
+    .then(() => {
       mcpClient.startReconnectSupervisor(); // WS9 — auto-reconnect dropped MCP servers in the background
-      // FED — register this desktop as an active session for the signed-in user, so it
-      // appears on the Account page + dashboard "Devices & sessions" (heartbeats itself).
-      await ensureBrainSession(mcpClient, workspaceRoot);
     })
     .catch(() => { /* offline-mode: local tools only, same as the CLI */ })
     // Resolve even after an offline connect attempt: hosted profiles remain in
@@ -540,6 +540,8 @@ async function main(): Promise<void> {
     sessionKey: string,
     e: { kind: 'interaction-request'; request: import('@kinqs/brainrouter-agent-protocol').InteractionRequest },
   ): void => send({ seq: ++portSeq, ts: Date.now(), sessionKey, event: e });
+  const emitInteractionResolvedFor = (sessionKey: string, id: string): void =>
+    send({ seq: ++portSeq, ts: Date.now(), sessionKey, event: { kind: 'interaction-resolved', id } });
   // EXTENSIONS — activate code-level extensions before the first turn (workspace
   // tier gated on project trust). Best-effort; never blocks the host boot.
   await loadExtensions(workspaceRoot).catch(() => undefined);
@@ -1496,7 +1498,7 @@ async function main(): Promise<void> {
             try { await mcpClient.disconnectOne(id); } catch { /* offline is the fail-closed state */ }
           }
         }
-        if (nextBrainIds.length) await ensureBrainSession(mcpClient, workspaceRoot);
+        if (nextBrainIds.length) await sessionMessaging?.refreshRemote();
         await resolveLearningIdentity(reboundConfig);
       } catch (error) {
         // The only expected throw above is persistence (connectOne records
@@ -1523,7 +1525,7 @@ async function main(): Promise<void> {
             try { await mcpClient.disconnectOne(id); } catch { /* offline remains tenant-safe */ }
           }
         }
-        if (survivingBrainIds.length) await ensureBrainSession(mcpClient, workspaceRoot);
+        if (survivingBrainIds.length) await sessionMessaging?.refreshRemote();
         await resolveLearningIdentity(repaired);
         throw error;
       } finally {
@@ -1537,13 +1539,30 @@ async function main(): Promise<void> {
     return true;
   };
 
+  sessionMessaging = new DesktopSessionMessaging({
+    workspaceRoot,
+    mcp: mcpClient,
+    getActiveAgent: () => activeAgent,
+    deliverPeer: (message, sender) => core.deliverPeerMessage(message, sender),
+    confirmHeld: (record) => requestDesktopHeldConfirmation(broker, record, {
+      emitRequest: emitPortFor,
+      emitResolved: emitInteractionResolvedFor,
+    }),
+    onNotice: (sessionKey, message) => send({
+      seq: ++portSeq,
+      ts: Date.now(),
+      sessionKey,
+      event: { kind: 'notice', level: 'warn', message },
+    }),
+  });
+
   const ctx: HostContext = {
     browser,
     devServers,
     workspaceRoot, wsGit, fileListCache, listWorkspaceFilesCached, send,
     computerUseBridge, secretBridge, config,
     getLlm: () => llm, setLlm: (next) => { llm = next; },
-    mcpClient, callBrainAtlas, broker, emitPortFor, agent,
+    mcpClient, sessionMessaging, callBrainAtlas, broker, emitPortFor, agent,
     getActiveAgent: () => activeAgent,
     loadGlobalLlm, llmForSession, resolveProviderLlm, refreshAccountModelCatalog, peekAccountModelCatalog, syncActiveSessionLlm,
     rebindActiveAccountOrg, activeTenantBindingError, humanCorrectionIngress,
@@ -1569,7 +1588,14 @@ async function main(): Promise<void> {
   core = createHostCore({
     agent,
     spawnAgent,
-    onActiveAgentChange: (a) => { activeAgent = a as unknown as typeof agent; },
+    onActiveAgentChange: (a) => {
+      activeAgent = a as unknown as typeof agent;
+      void sessionMessaging?.activate(activeAgent);
+    },
+    onSessionActivityChange: (sessionKey, state) => sessionMessaging?.setActivity(sessionKey, state),
+    onSessionTitle: (sessionKey, title, source) => sessionMessaging?.setTitle(sessionKey, title, source),
+    onPeerSteerApplied: (sessionKey, steering) => sessionMessaging?.onPeerApplied(sessionKey, steering.id),
+    onPeerSteerExpired: (sessionKey, steering) => sessionMessaging?.onPeerExpired(sessionKey, steering.id),
     send: send as never,
     // Verification scoping — observe each turn's tool stream to track its
     // build/test/lint commands as durable `verification` background tasks.
@@ -1648,11 +1674,18 @@ async function main(): Promise<void> {
       browser.dispose();
       browserControlBridge?.dispose();
       devServers.disposeAll();
-      await endBrainSession(mcpClient);
+      if (sessionMessaging) await sessionMessaging.close();
+      else await endBrainSession(mcpClient);
       await mcpClient.close?.();
       process.exit(0);
     },
   });
+
+  // Local registration is independent of Brain connectivity and starts as soon
+  // as the Agent/core pair exists. The background MCP result only refreshes the
+  // remote registration and immediately polls the durable inbox.
+  void sessionMessaging.start(activeAgent);
+  void mcpReady.then(() => sessionMessaging?.refreshRemote()).catch(() => {});
 
   // Apply the background boot result at hostCore's serialized idle boundary.
   // If a turn is already running, bindLearning waits for its finalization and

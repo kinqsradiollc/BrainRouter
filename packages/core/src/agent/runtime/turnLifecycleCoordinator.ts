@@ -1,3 +1,11 @@
+/**
+ * Per-turn coordinator for loop boundaries and terminal-output guards.
+ *
+ * Centralizing the bounded guard counters prevents retry loops from diverging
+ * across execution paths. Pending steering is reconciled only at model-safe
+ * boundaries, before the next loop can consume it.
+ */
+
 import type { Agent, RunTurnCallbacks } from '../agent.js';
 import { getCliKnobs } from '../../config/config.js';
 import { readPlan } from '../../task/taskStore.js';
@@ -120,6 +128,9 @@ export class TurnLifecycleCoordinator {
       return '⏹ Turn interrupted by user.';
     }
 
+    // Peer messages use this same seam but never raise interruptRequested or
+    // abort turnAbort: delivery redirects the next model step, not the work in
+    // progress between safe boundaries.
     applyPendingSteeringAtBoundary(this.agent, this.callbacks);
     if (
       isBudgetCheckpoint(

@@ -38,6 +38,14 @@
       "types": "./dist/planner.d.ts",
       "import": "./dist/planner.js"
     },
+    "./session-title": {
+      "types": "./dist/session-title.d.ts",
+      "import": "./dist/session-title.js"
+    },
+    "./peer-presentation": {
+      "types": "./dist/peer-presentation.d.ts",
+      "import": "./dist/peer-presentation.js"
+    },
     "./atlas-ops": {
       "types": "./dist/atlas-ops.d.ts",
       "import": "./dist/atlas-ops.js"

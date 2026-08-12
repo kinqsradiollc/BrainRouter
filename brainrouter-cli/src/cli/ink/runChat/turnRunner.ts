@@ -1,5 +1,10 @@
+/**
+ * One-turn CLI lifecycle and callback bridge. Checkpoints and peer receipts
+ * follow actual turn outcomes; title and expiry callbacks are generation-bound
+ * so a completed old turn cannot mutate the active logical session.
+ */
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';
-import { readPreferences } from '@kinqs/brainrouter-core/session';
+import { getSessionMeta, readPreferences } from '@kinqs/brainrouter-core/session';
 import { runHooks, applyMessageDisplayHooks } from '@kinqs/brainrouter-core/hooks';
 import { beginTurnCheckpoint, endTurnCheckpoint, queueOfflinePrompt, isConnectivityError } from '@kinqs/brainrouter-core/storage';
 import { shouldAutoExtractSkill, buildSessionSummary } from '../../../runtime/commands/autoSkill.js';
@@ -8,6 +13,10 @@ import { toolPairKey } from '../../../runtime/observability/toolPairing.js';
 import { expandMentions } from '../../../memory/mentions.js';
 import { formatToolCall } from '../text/toolFormat.js';
 import type { RunChatContext } from './context.js';
+import {
+  forgetExpiredPeerMessageForAgent,
+  markApprovedPeerMessageApplied,
+} from '../../../runtime/federation/peerMessageAdmission.js';
 
 /**
  * Run a single agent turn through the Ink chat REPL. Mirrors
@@ -29,6 +38,7 @@ export function installTurnRunner(ctx: RunChatContext): void {
     const controller = ctx.controller;
     const turnAgent = options.agent ?? agent;
     const ephemeral = options.ephemeral === true;
+    const turnSessionKey = turnAgent.sessionKey;
     if (ctx.isProcessing) {
       controller.push.notice('A previous turn is still running.');
       return;
@@ -36,6 +46,7 @@ export function installTurnRunner(ctx: RunChatContext): void {
     // A fresh turn supersedes any armed auto-resume watch.
     ctx.cancelChildResume();
     ctx.isProcessing = true;
+    if (!ephemeral) void ctx.federation?.updateRegistration({ state: 'working' });
     ctx.clearIdleHint();
     // CLI-21 — crash checkpoint: record the in-flight prompt before the turn so
     // a mid-turn crash can be recovered on the next launch. Cleared in finally.
@@ -136,11 +147,40 @@ export function installTurnRunner(ctx: RunChatContext): void {
     };
     try {
       const answer = await turnAgent.runTurn(expanded, {
+        onSessionTitle: (event) => {
+          // Title generation completes asynchronously after first-turn
+          // persistence. Publish immediately, but never let a late callback
+          // rename a participant that /resume or /new has already rebound.
+          if (ephemeral || turnAgent !== agent) return;
+          if (agent.sessionKey !== turnSessionKey) return;
+          if (agent.getFederationSessionKey() !== turnSessionKey) return;
+          if (ctx.federation?.sessionKey !== turnSessionKey) return;
+          void ctx.federation.updateRegistration({
+            title: event.title,
+            titleSource: event.source,
+          });
+        },
         onStatusUpdate: tickStatus,
-        onSteerApplied: (_input, receipt) => {
+        onSteerApplied: (input, receipt) => {
+          if (input.source === 'peer-session') {
+            markApprovedPeerMessageApplied(turnAgent, turnSessionKey, input.id);
+            void ctx.federation?.transitionInbound(input.id, 'applied');
+          }
           controller!.push.notice(
-            `Steer received · ${receipt.id.slice(0, 8)} · awaiting classification`,
+            `${input.source === 'peer-session' ? 'Peer message applied at a safe boundary' : 'Steer received'} · ${receipt.id.slice(0, 8)} · awaiting classification`,
             'info',
+          );
+        },
+        onSteerExpired: (input) => {
+          forgetExpiredPeerMessageForAgent(turnAgent, input.id);
+          void ctx.federation?.transitionInbound(
+            input.id,
+            'expired',
+            'Message expired before recipient safe-boundary application.',
+          );
+          controller!.push.notice(
+            `Peer message expired before safe-boundary application · ${input.id.slice(0, 8)}`,
+            'warn',
           );
         },
         onSteerReceipt: (receipt) => {
@@ -443,6 +483,14 @@ export function installTurnRunner(ctx: RunChatContext): void {
       }
     } finally {
       ctx.isProcessing = false;
+      if (!ephemeral) {
+        const sessionMeta = getSessionMeta(turnAgent.workspaceRoot, turnAgent.sessionKey);
+        void ctx.federation?.updateRegistration({
+          state: 'idle',
+          title: sessionMeta.title,
+          titleSource: sessionMeta.titleSource,
+        });
+      }
       // CLI-21 — turn settled (success or normal error): clear the in-flight
       // checkpoint so only a true crash leaves one behind.
       if (!ephemeral) endTurnCheckpoint(turnAgent.workspaceRoot, turnAgent.sessionKey);

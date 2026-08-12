@@ -1,3 +1,7 @@
+/**
+ * Shared CLI prompt ownership: one live readline/Ink surface serializes human
+ * choices, while headless/default paths fail closed instead of inventing consent.
+ */
 import readline from 'node:readline';
 import { getAmbientChat } from '../ink/chat/ambientChat.js';
 // §ADR-003 — NoTTYError now lives in core (the headless engine throws it too),
@@ -27,6 +31,13 @@ export function setActiveReadline(rl: readline.Interface | undefined): void {
 
 export function getActiveReadline(): readline.Interface | undefined {
   return activeReadline;
+}
+
+export type ExplicitYesNoDecision = 'approved' | 'declined' | 'dismissed';
+
+/** True only when a yes/no response can be attributed to a live human UI. */
+export function hasInteractivePromptSurface(): boolean {
+  return process.stdin.isTTY === true && Boolean(getAmbientChat() || activeReadline);
 }
 
 /**
@@ -59,6 +70,41 @@ export function askYesNo(question: string, defaultValue = false): Promise<boolea
       const yes = lower === 'y' || lower === 'yes';
       rl.pause();
       resolve(yes);
+    });
+  });
+}
+
+/**
+ * Tri-state confirmation for durable peer-message decisions. Unlike the
+ * legacy boolean helper, headless/default/cancel paths are dismissal, while
+ * only a literal Yes or No becomes a terminal human decision.
+ */
+export async function askExplicitYesNo(question: string): Promise<ExplicitYesNoDecision> {
+  if (!hasInteractivePromptSurface()) return 'dismissed';
+  if (getAmbientChat()) {
+    const { runPicker } = await import('../ink/prompt/runPicker.js');
+    const result = await runPicker({
+      title: question,
+      badge: 'Confirm',
+      rows: [
+        { id: 'yes', label: 'Yes', description: 'Apply this peer message' },
+        { id: 'no', label: 'No', description: 'Decline this peer message' },
+      ],
+      initialCursor: 1,
+      allowOther: false,
+    });
+    if (result.kind !== 'pick') return 'dismissed';
+    return result.id === 'yes' ? 'approved' : 'declined';
+  }
+  return new Promise((resolve) => {
+    const rl = activeReadline!;
+    rl.resume();
+    rl.question(question, (answer) => {
+      const normalized = (answer ?? '').trim().toLowerCase();
+      rl.pause();
+      if (normalized === 'y' || normalized === 'yes') resolve('approved');
+      else if (normalized === 'n' || normalized === 'no') resolve('declined');
+      else resolve('dismissed');
     });
   });
 }

@@ -1,3 +1,13 @@
+/**
+ * Core agent runtime and turn orchestrator.
+ *
+ * Owns durable conversation state, model/tool execution, approval boundaries,
+ * and safe-boundary input delivery while presentation hosts observe through
+ * callbacks and ports. Untrusted peer or tool content must never gain user
+ * authority, and every tool call/result pair must remain history-safe across
+ * interruption, replay, and session changes.
+ */
+
 import fs from 'node:fs';
 import path from 'node:path';
 import { exec } from 'node:child_process';
@@ -15,10 +25,29 @@ import { getCliKnobs, isRemoteBrainUrl } from '../config/config.js';
 import type {
   ChildExecutionReceipt,
   ComputerUsePort,
+  InteractionPort,
 } from '@kinqs/brainrouter-agent-protocol';
 import { browserUseAvailableFor, type BrowserControlPort } from '../browser/control.js';
-import { appendTranscriptEntry, isInternalSessionKey, redactText, readTranscriptEntries } from '../session/transcript/sessionStore.js';
-import { publishExternalSteering, type SteeringInput } from '../session/input/inputDelivery.js';
+import {
+  appendTranscriptEntry,
+  isInternalSessionKey,
+  redactText,
+  readTranscriptEntries,
+  type TranscriptReplayEntry,
+} from '../session/transcript/sessionStore.js';
+import {
+  MAX_PENDING_SESSION_INPUTS,
+  MAX_STEERING_TEXT_LENGTH,
+  SessionInputQueueFullError,
+  peerSessionSteeringFromMessage,
+  publishExternalSteering,
+  type PeerSessionSender,
+  type PeerSessionSenderDetails,
+  type SteeringInput,
+} from '../session/input/inputDelivery.js';
+import type { LocalSessionMessage } from '../session/messaging/contracts.js';
+import { resolveSessionTitleDecision } from '../session/sessionTitle.js';
+import { compareAndSetSessionTitle, getSessionMeta } from '../session/state/sessionMetaStore.js';
 import { recordFileMutation } from '../storage/fileSnapshotStore.js';
 import { isConnectivityError, isRetryableServerError } from '../storage/checkpointStore.js';
 import { reconnectBackoffMs, probeConnectivity, parseRetryAfterMs } from '../mcp/reconnect/reconnect.js';
@@ -101,6 +130,13 @@ import { summarizeLedger, formatBrief } from '../research/evidenceLedger.js';
 import { localToolExecutor, type OrchestrationRuntimePort, type ToolLifecycleRuntimePort } from '../tool/registry/executors.js';
 import { assessMcpToolApproval } from './guards/mcpApproval.js';
 export { normalizeToolName } from '../tool/specs/names.js';
+export {
+  assessSessionMessageApproval,
+  shouldHoldSessionMessage,
+  type MutationAuthority,
+  type SessionMessageApprovalAssessment,
+  type SessionMessageRecipientAuthority,
+} from './guards/sessionMessageApproval.js';
 import { applyToolScope, rankAndCapTools, toolNameMatchesAny } from '../tool/policy/toolBudget.js';
 import { resolveToolVisible } from '../tool/policy/toolPolicy.js';
 import { buildDefaultSourcePlan, buildMemoryBriefing, describeSourcePlan, selectCitedRecordIds, type RecalledRecord } from '../memory/briefing.js';
@@ -292,6 +328,10 @@ import { emptySessionProvenance, type SessionProvenance } from './runtime/conten
 import type { LearnedTenant } from '../learning/index.js';
 import type { SteeringReceipt } from '../task/workContract.js';
 import { ReviewProviderRequestBudgetExceededError } from './runtime/modelRequestBudget.js';
+import {
+  proposeSessionTitleWithModel,
+  type SessionTitleModelCall,
+} from './adapters/sessionTitleModel.js';
 
 export interface RunTurnCallbacks {
   onStatusUpdate: (status: string) => void;
@@ -305,8 +345,12 @@ export interface RunTurnCallbacks {
   /** Fired when an input accepted during a running turn reaches the next safe
    * model boundary and is appended as a real user message. */
   onSteerApplied?: (input: SteeringInput, receipt: SteeringReceipt) => void;
+  /** Peer content that reached its 24-hour cutoff before a model-safe boundary. */
+  onSteerExpired?: (input: Extract<SteeringInput, { source: 'peer-session' }>) => void;
   /** Fired when semantic reconciliation changes a steering receipt. */
   onSteerReceipt?: (receipt: SteeringReceipt) => void;
+  /** Fired for each first-turn title update that wins durable precedence. */
+  onSessionTitle?: (event: { title: string; source: 'derived' | 'agent' }) => void;
   /** Fired once after a bounded provider recovery campaign completes. */
   onProviderRecovery?: (receipt: ProviderRecoveryReceipt) => void;
   // POLISH-1 (0.4.13) — `callId` (the LLM tool_call id) lets the REPL pair each
@@ -475,6 +519,10 @@ export interface AgentOptions {
   workspaceRoot: string;
   launchCwd: string;
   sessionKey?: string;
+  /** Test/host seam for the bounded first-turn title proposal. */
+  sessionTitleModelCall?: SessionTitleModelCall;
+  /** Test seam for the bounded title call; production uses the adapter default. */
+  sessionTitleModelTimeoutMs?: number;
   /** Host-authenticated learning partition. Captured for the lifetime of each
    * conceptual session so a mutable UI/account selection cannot retarget it. */
   learnedTenant?: LearnedTenant;
@@ -564,10 +612,7 @@ export interface AgentOptions {
    * of readline prompts; when unset the CLI's readline behavior is unchanged.
    * Dismissals fail CLOSED (deny / "decide yourself"), never hang a turn.
    */
-  interactionPort?: {
-    confirm(req: { title: string; detail?: string; dangerous?: boolean; tool?: string }): Promise<boolean>;
-    choice(req: { question: string; header: string; options: Array<{ label: string; description: string }>; multiSelect?: boolean }): Promise<string[] | null>;
-  };
+  interactionPort?: InteractionPort;
   /** Desktop-only native computer control capability. Omitted in CLI/headless runtimes. */
   computerUsePort?: ComputerUsePort;
   /** Desktop-only control of this window's embedded browser. Omitted everywhere else. */
@@ -686,11 +731,9 @@ export class Agent {
   public readonly learnedTenantPinnedByHost: boolean;
   public learningEnabled: boolean;
   /**
-   * Federation Stage 3 — the per-process key the `attachFederation`
-   * runtime registered against the brain. Used by `/dm` and
-   * `/broadcast` so the recipient sees the sender's federation
-   * identity (which appears in `/agents --remote`) rather than the
-   * agent's per-chat sessionKey (which rotates per `/new`).
+   * Exact logical conversation key registered by the federation runtime.
+   * Used by `/dm` and `/broadcast` so a resumed conversation can reclaim its
+   * durable inbox while a new conversation still receives a new address.
    */
   public federationSessionKey: string | null = null;
   public setFederationSessionKey(key: string | null): void {
@@ -702,9 +745,21 @@ export class Agent {
   public workspaceRoot: string;
   public launchCwd: string;
   public chatHistory: any[] = [];
+  /**
+   * Runtime projection of peer observations already durably appended to the
+   * transcript. It survives context compaction and is rebuilt on resume, so a
+   * lost remote acknowledgement cannot present the same peer content twice.
+   */
+  private appliedPeerDeliveries = new Map<string, {
+    trust: 'untrusted-session';
+    provenance: PeerSessionSender;
+  }>();
   /** Inputs accepted while a turn is running. Consumed only at model-safe
    * boundaries, never between assistant tool calls and their results. */
   private pendingSteering: SteeringInput[] = [];
+  private sessionTitleProposalStarted = false;
+  private readonly sessionTitleModelCall?: SessionTitleModelCall;
+  private readonly sessionTitleModelTimeoutMs?: number;
   /** MAS-P5-T2: per-session cache of full tool results, keyed by resultRef. */
   // MEM-22 — retention is configurable via cli.offloadRetentionMs / cli.offloadMaxEntries.
   public readonly resultCache = new ResultCache(getCliKnobs().offloadRetentionMs, getCliKnobs().offloadMaxEntries);
@@ -970,6 +1025,8 @@ export class Agent {
     // each CLI is its own session for local state. The memory DB is
     // userId-scoped, so cross-CLI recall continuity is unaffected.
     this.sessionKey = options.sessionKey ?? randomUUID();
+    this.sessionTitleModelCall = options.sessionTitleModelCall;
+    this.sessionTitleModelTimeoutMs = options.sessionTitleModelTimeoutMs;
     this.learnedTenant = options.learnedTenant
       ? { orgId: options.learnedTenant.orgId?.trim() || null, userId: options.learnedTenant.userId.trim() || 'local' }
       : undefined;
@@ -1418,6 +1475,7 @@ export class Agent {
 
   clearHistory() {
     this.chatHistory = [this.createSystemMessage()];
+    this.appliedPeerDeliveries.clear();
     this.initialized = true;
     // DESK-5t — a new session has no accumulated context; drop the prior
     // session's authoritative prompt count so getCurrentContextTokens() falls
@@ -1457,19 +1515,56 @@ export class Agent {
 
   public requestSteer(
     text: string,
-    options: { id?: string; source?: SteeringInput['source'] } = {},
+    options: {
+      id?: string;
+      source?: SteeringInput['source'];
+      sender?: PeerSessionSender;
+      createdAt?: number;
+      expiresAt?: number;
+    } = {},
   ): SteeringInput {
     const normalized = text.trim();
     if (!normalized) throw new Error('Steering input cannot be empty.');
-    if (normalized.length > 20_000) throw new Error('Steering input exceeds 20000 characters.');
-    const input: SteeringInput = {
+    if (normalized.length > MAX_STEERING_TEXT_LENGTH) throw new Error('Steering input exceeds 20000 characters.');
+    if (this.pendingSteering.length >= MAX_PENDING_SESSION_INPUTS) {
+      throw new SessionInputQueueFullError('steering', MAX_PENDING_SESSION_INPUTS);
+    }
+    const source = options.source ?? 'user';
+    if (source === 'peer-session' && !options.sender?.sessionKey.trim()) {
+      throw new Error('Peer-session steering requires sender provenance.');
+    }
+    const base = {
       id: options.id?.trim() || randomUUID(),
       text: normalized,
-      source: options.source ?? 'user',
-      createdAt: Date.now(),
+      createdAt: options.createdAt ?? Date.now(),
     };
+    const input: SteeringInput = source === 'peer-session'
+      ? {
+          ...base,
+          source,
+          sender: { ...options.sender! },
+          ...(options.expiresAt !== undefined ? { expiresAt: options.expiresAt } : {}),
+        }
+      : { ...base, source };
     this.pendingSteering.push(input);
-    return { ...input };
+    return input.source === 'peer-session'
+      ? { ...input, sender: { ...input.sender } }
+      : { ...input };
+  }
+
+  /** Queue peer content for the next model-safe seam; never aborts the turn. */
+  public requestPeerSessionSteer(
+    message: LocalSessionMessage,
+    sender: PeerSessionSenderDetails = {},
+  ): SteeringInput {
+    const input = peerSessionSteeringFromMessage(message, sender);
+    return this.requestSteer(input.text, {
+      id: input.id,
+      source: input.source,
+      sender: input.sender,
+      createdAt: input.createdAt,
+      expiresAt: input.expiresAt,
+    });
   }
 
   public consumePendingSteering(): SteeringInput[] {
@@ -1478,8 +1573,134 @@ export class Agent {
     return pending.map((input) => ({ ...input }));
   }
 
+  /** Restore a failed safe-boundary item and its untouched suffix ahead of newer arrivals. */
+  public restorePendingSteering(inputs: SteeringInput[]): void {
+    if (inputs.length === 0) return;
+    if (inputs.length + this.pendingSteering.length > MAX_PENDING_SESSION_INPUTS) {
+      throw new SessionInputQueueFullError('steering', MAX_PENDING_SESSION_INPUTS);
+    }
+    this.pendingSteering = [
+      ...inputs.map((input) => input.source === 'peer-session'
+        ? { ...input, sender: { ...input.sender } }
+        : { ...input }),
+      ...this.pendingSteering,
+    ];
+  }
+
   public get pendingSteeringCount(): number {
     return this.pendingSteering.length;
+  }
+
+  public hasAppliedPeerDelivery(deliveryId: string): boolean {
+    return this.appliedPeerDeliveries.has(deliveryId);
+  }
+
+  public rememberAppliedPeerDelivery(
+    input: Extract<SteeringInput, { source: 'peer-session' }>,
+  ): void {
+    this.appliedPeerDeliveries.set(input.id, {
+      trust: 'untrusted-session',
+      provenance: { ...input.sender },
+    });
+  }
+
+  /** Rebuild the compaction-stable replay projection from durable history. */
+  public restoreAppliedPeerDeliveries(entries: readonly TranscriptReplayEntry[]): void {
+    this.appliedPeerDeliveries.clear();
+    for (const entry of entries) {
+      if (
+        entry.role !== 'assistant'
+        || entry.name !== 'peer-session'
+        || entry.trust !== 'untrusted-session'
+        || typeof entry.deliveryId !== 'string'
+        || !entry.deliveryId.trim()
+        || !entry.provenance
+        || typeof entry.provenance.sessionKey !== 'string'
+        || !entry.provenance.sessionKey.trim()
+      ) continue;
+      this.appliedPeerDeliveries.set(entry.deliveryId, {
+        trust: 'untrusted-session',
+        provenance: { ...entry.provenance } as unknown as PeerSessionSender,
+      });
+    }
+  }
+
+  /** Run at most once for a user-facing session and persist only through CAS. */
+  public async proposeFirstTurnSessionTitle(
+    firstUserMessage: string,
+    answerPreview: string,
+    callbacks: Pick<RunTurnCallbacks, 'onSessionTitle'> = {},
+  ): Promise<string | null> {
+    // The Agent object is reused across `/new`, `/resume`, and `fork`. Pin the
+    // logical key before the provider await so a late proposal from session A
+    // can never CAS metadata belonging to the now-active session B.
+    const titleSessionKey = this.sessionKey;
+    if (
+      this.sessionTitleProposalStarted ||
+      this.silent ||
+      isInternalSessionKey(titleSessionKey) ||
+      this.sessionUsage.turns !== 0
+    ) {
+      return null;
+    }
+    this.sessionTitleProposalStarted = true;
+    const initial = getSessionMeta(this.workspaceRoot, titleSessionKey);
+    // A persisted title proves this logical session already crossed its title
+    // boundary. In particular, a resumed derived fallback must not trigger a
+    // second provider call merely because this Agent incarnation is new.
+    if (initial.title) return null;
+
+    let derivedExpectation = initial;
+    if (!initial.title) {
+      const derived = resolveSessionTitleDecision({ firstUserMessage });
+      const stored = compareAndSetSessionTitle(
+        this.workspaceRoot,
+        titleSessionKey,
+        { title: initial.title, titleSource: initial.titleSource },
+        derived,
+      );
+      if (!stored.updated) return null;
+      derivedExpectation = stored.meta;
+      try {
+        callbacks.onSessionTitle?.({ title: derived.title, source: 'derived' });
+      } catch {
+        // Title persistence is authoritative; host presentation is advisory.
+      }
+    }
+
+    try {
+      const raw = await proposeSessionTitleWithModel(
+        this.llmConfig,
+        { firstUserMessage, answerPreview, timeoutMs: this.sessionTitleModelTimeoutMs },
+        this.sessionTitleModelCall,
+      );
+      const resolved = resolveSessionTitleDecision({
+        agentTitle: raw,
+        firstUserMessage,
+      });
+      if (resolved.source === 'agent') {
+        const stored = compareAndSetSessionTitle(
+          this.workspaceRoot,
+          titleSessionKey,
+          { title: derivedExpectation.title, titleSource: derivedExpectation.titleSource },
+          resolved,
+        );
+        if (stored.updated) {
+          try {
+            callbacks.onSessionTitle?.({ title: resolved.title, source: 'agent' });
+          } catch {
+            // Title persistence is authoritative; host presentation is advisory.
+          }
+          return resolved.title;
+        }
+      }
+    } catch {
+      // The deterministic title was committed before the bounded model call.
+    }
+    const current = getSessionMeta(this.workspaceRoot, titleSessionKey);
+    return current.titleSource === 'derived' && current.title === derivedExpectation.title
+      ? current.title ?? null
+      : null;
   }
 
   public setModel(model: string): void {
@@ -1554,7 +1775,7 @@ export class Agent {
     return getPolicyAuditImpl.call(this);
   }
 
-  public loadHistory(entries: Array<{ role: string; content?: unknown; name?: string; tool_call_id?: string; tool_calls?: unknown }>): number {
+  public loadHistory(entries: TranscriptReplayEntry[]): number {
     return loadHistoryImpl.call(this, entries);
   }
 
@@ -1781,6 +2002,11 @@ export class Agent {
    */
   public resetSessionCounters(): void {
     this.sessionUsage = { promptTokens: 0, completionTokens: 0, calls: 0, turns: 0, cachedTokens: 0, missedTokens: 0 };
+    // The proposal guard belongs to the logical conversation, not this Agent
+    // object. `/new`, `/resume`, and `fork` reuse the object but reset counters
+    // at the session boundary; the new key must be allowed its own first-turn
+    // title while an existing persisted title still prevents re-proposal.
+    this.sessionTitleProposalStarted = false;
     this.repairTotals = { scavenged: 0, truncationsFixed: 0, truncationsUnrecoverable: 0, stormsBroken: 0, turnsWithRepair: 0 };
     this.memoryMetrics = {
       briefingTokensInjected: 0,

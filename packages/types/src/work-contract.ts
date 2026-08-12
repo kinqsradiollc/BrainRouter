@@ -60,7 +60,7 @@ export interface WorkTaskRef {
 
 export interface SteeringReceipt {
   id: string;
-  source: "user" | "parent" | "extension";
+  source: "user" | "parent" | "extension" | "peer-session";
   /**
    * Absent only while the receipt is pending semantic reconciliation.
    * Delivery to the model is not the same as accepting the steer.

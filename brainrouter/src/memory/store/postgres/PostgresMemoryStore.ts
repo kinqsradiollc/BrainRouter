@@ -35,10 +35,20 @@ import { fileURLToPath } from "node:url";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 import type {
   ActiveSessionFilters,
+  ActiveSessionClaim,
   ActiveSessionRecord,
   ActiveSessionUsage,
+  LegacySessionMessageSendInput,
+  LegacySessionMessageSendOptions,
   SessionInboxFilters,
   SessionInboxRecord,
+  SessionMessageReceiptAckInput,
+  SessionMessageReceiptFilters,
+  SessionMessageRouteOptions,
+  SessionMessageSendInput,
+  SessionMessageSendResult,
+  SessionMessageTransitionInput,
+  SessionMessageStoreNotification,
   PendingDelegationRecord,
   PendingDelegationEnqueueInput,
   PendingDelegationFilters,
@@ -92,6 +102,10 @@ import type {
 } from "@kinqs/brainrouter-types";
 import type { AssessmentEvidenceCleanupResult } from "@kinqs/brainrouter-types/review";
 import { createPgPool } from "./connection.js";
+import {
+  startSessionMessageNotificationFeed,
+  type SessionMessageNotificationFeed,
+} from "./sessionMessageNotificationFeed.js";
 import { loadMigrations, applyMigrations, withSchemaLock } from "./migrate.js";
 import {
   asNumber,
@@ -246,6 +260,7 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   private readonly ownsPool: boolean;
   private vecReady = false;
   private vecDimensions = 0;
+  private readonly sessionMessageNotificationFeeds = new Set<SessionMessageNotificationFeed>();
 
   // CCR config
   private readonly ccrTtlSeconds: number;
@@ -477,7 +492,27 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
 
   /** Close the pool (only if this store created it). For test/teardown use. */
   public async close(): Promise<void> {
+    await Promise.all([...this.sessionMessageNotificationFeeds].map((feed) => feed.close()));
+    this.sessionMessageNotificationFeeds.clear();
     if (this.ownsPool) await this.pool.end();
+  }
+
+  /**
+   * Subscribe this brain process to transaction-committed message wake hints.
+   * Every process holds its own LISTEN connection; durable polling remains the
+   * correctness path if this feed is temporarily unavailable.
+   */
+  public subscribeSessionMessageNotifications(
+    listener: (notification: SessionMessageStoreNotification) => void | Promise<void>,
+  ): SessionMessageNotificationFeed {
+    const feed = startSessionMessageNotificationFeed(this.pool, listener);
+    this.sessionMessageNotificationFeeds.add(feed);
+    const close = feed.close.bind(feed);
+    feed.close = async () => {
+      await close();
+      this.sessionMessageNotificationFeeds.delete(feed);
+    };
+    return feed;
   }
 
   /** Liveness probe for the status gateway — a trivial round-trip to Postgres. */
@@ -1248,20 +1283,28 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
 
   // ── active sessions (federation) ─────────────────────────────────────────
 
-  public registerActiveSession(record: ActiveSessionRecord): Promise<ActiveSessionRecord> {
-    return session.registerActiveSession(this.exec, record);
+  public registerActiveSession(record: ActiveSessionRecord, claim?: ActiveSessionClaim): Promise<ActiveSessionRecord> {
+    return session.registerActiveSession(this.exec, record, claim);
   }
 
-  public heartbeatActiveSession(userId: string, sessionKey: string, at: string, usage?: ActiveSessionUsage | null): Promise<boolean> {
-    return session.heartbeatActiveSession(this.exec, userId, sessionKey, at, usage);
+  public heartbeatActiveSession(userId: string, sessionKey: string, at: string, usage?: ActiveSessionUsage | null, orgId?: string | null, claim?: ActiveSessionClaim): Promise<boolean> {
+    return session.heartbeatActiveSession(this.exec, userId, sessionKey, at, usage, orgId, claim);
+  }
+
+  public ownsActiveSessionClaim(orgId: string | null, userId: string, sessionKey: string, claimToken: string): Promise<boolean> {
+    return session.ownsActiveSessionClaim(this.exec, orgId, userId, sessionKey, claimToken);
   }
 
   public listActiveSessions(filters: ActiveSessionFilters): Promise<ActiveSessionRecord[]> {
     return session.listActiveSessions(this.exec, filters);
   }
 
-  public unregisterActiveSession(userId: string, sessionKey: string): Promise<boolean> {
-    return session.unregisterActiveSession(this.exec, userId, sessionKey);
+  public unregisterActiveSession(userId: string, sessionKey: string, orgId?: string | null, claimToken?: string): Promise<boolean> {
+    return session.unregisterActiveSession(this.exec, userId, sessionKey, orgId, claimToken);
+  }
+
+  public releaseActiveSessionClaims(claimToken: string): Promise<number> {
+    return session.releaseActiveSessionClaims(this.exec, claimToken);
   }
 
   public sweepActiveSessions(olderThanMs: number): Promise<number> {
@@ -1270,9 +1313,16 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
 
   // ── session inbox (federation) ───────────────────────────────────────────
 
+  public routeSessionMessage(
+    input: SessionMessageSendInput,
+    options?: SessionMessageRouteOptions,
+  ): Promise<SessionMessageSendResult> {
+    return session.routeSessionMessage(this.exec, input, options);
+  }
+
   public sendSessionMessage(
-    record: Omit<SessionInboxRecord, "id" | "createdAt" | "deliveredAt">,
-    options?: { idGenerator?: () => string; now?: string },
+    record: LegacySessionMessageSendInput,
+    options?: LegacySessionMessageSendOptions,
   ): Promise<SessionInboxRecord[]> {
     return session.sendSessionMessage(this.exec, record, options);
   }
@@ -1281,8 +1331,24 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
     return session.readSessionInbox(this.exec, filters);
   }
 
-  public ackSessionInbox(userId: string, toSessionKey: string, ids: string[], at: string): Promise<number> {
-    return session.ackSessionInbox(this.exec, userId, toSessionKey, ids, at);
+  public ackSessionInbox(userId: string, toSessionKey: string, ids: string[], at: string, orgId?: string | null, claimToken?: string): Promise<number> {
+    return session.ackSessionInbox(this.exec, userId, toSessionKey, ids, at, orgId, claimToken);
+  }
+
+  public transitionSessionMessages(input: SessionMessageTransitionInput): Promise<SessionInboxRecord[]> {
+    return session.transitionSessionMessages(this.exec, input);
+  }
+
+  public readSessionMessageReceipts(filters: SessionMessageReceiptFilters): Promise<SessionInboxRecord[]> {
+    return session.readSessionMessageReceipts(this.exec, filters);
+  }
+
+  public ackSessionMessageReceipts(input: SessionMessageReceiptAckInput): Promise<number> {
+    return session.ackSessionMessageReceipts(this.exec, input);
+  }
+
+  public expireSessionMessages(at?: string): Promise<number> {
+    return session.expireSessionMessages(this.exec, at);
   }
 
   public sweepSessionInbox(olderThanMs: number): Promise<number> {

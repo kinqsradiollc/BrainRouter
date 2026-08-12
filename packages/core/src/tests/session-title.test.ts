@@ -10,7 +10,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   resolveSessionTitle,
+  resolveSessionTitleDecision,
   normalizeAgentTitle,
+  normalizeExplicitSessionTitle,
   deriveSessionTitle,
   MAX_SESSION_TITLE,
   UNTITLED_SESSION,
@@ -67,9 +69,17 @@ test('a paragraph is rejected; a merely-long title is truncated', () => {
   const longish = 'Fix the authentication redirect loop that appears after session expiry';
   const out = normalizeAgentTitle(longish);
   assert.ok(out);
-  assert.ok(out.length <= MAX_SESSION_TITLE + 1, 'the ellipsis may exceed the cap by one');
+  assert.ok(out.length <= MAX_SESSION_TITLE, 'the ellipsis remains inside the shared title cap');
   assert.match(out, /…$/);
   assert.doesNotMatch(out, /\s…$/, 'truncation trims before the ellipsis');
+});
+
+test('title truncation keeps the ellipsis in bounds without splitting emoji', () => {
+  const out = normalizeExplicitSessionTitle('😀'.repeat(40));
+  assert.ok(out);
+  assert.ok(out.length <= MAX_SESSION_TITLE);
+  assert.equal(out.endsWith('…'), true);
+  assert.equal(Array.from(out.slice(0, -1)).every((character) => character === '😀'), true);
 });
 
 test('derivation keeps the first sentence rather than a blind cut', () => {
@@ -88,7 +98,7 @@ test('derivation drops pasted code and stack traces', () => {
 
 test('derivation truncates on a word boundary, never mid-token', () => {
   const derived = deriveSessionTitle('a'.repeat(20) + ' ' + 'b'.repeat(80));
-  assert.ok(derived.length <= MAX_SESSION_TITLE + 1);
+  assert.ok(derived.length <= MAX_SESSION_TITLE);
   assert.match(derived, /…$/);
 });
 
@@ -109,6 +119,20 @@ test('resolve prefers the agent title and falls back on a bad one', () => {
     'The login is broken',
   );
   assert.equal(resolveSessionTitle({}), UNTITLED_SESSION);
+});
+
+test('human and hook titles outrank agent and derived titles', () => {
+  assert.deepEqual(resolveSessionTitleDecision({
+    humanTitle: 'Release work',
+    hookTitle: 'Hook title',
+    agentTitle: 'Agent proposal',
+    firstUserMessage: 'Derived request',
+  }), { title: 'Release work', source: 'human' });
+  assert.deepEqual(resolveSessionTitleDecision({
+    hookTitle: 'Hook title',
+    agentTitle: 'Agent proposal',
+    firstUserMessage: 'Derived request',
+  }), { title: 'Hook title', source: 'hook' });
 });
 
 test('the same inputs give the same name on every surface', () => {

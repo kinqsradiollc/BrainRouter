@@ -1,3 +1,8 @@
+/**
+ * CLI handoff packet and address-resolution regressions. Packets stay bounded
+ * and exact session keys—not labels—select recipients; ambiguous targets must
+ * fail before any handoff is persisted or presented as delivered.
+ */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildHandoffPacket, resolveHandoffTarget } from '../orchestration/handoff.js';
@@ -51,7 +56,9 @@ test('resolveHandoffTarget: excludes self and rejects unknown short prefix', () 
   assert.match(r.error ?? '', /No active session matched/);
 });
 
-test('resolveHandoffTarget: a full-looking unknown key passes through literally', () => {
+test('resolveHandoffTarget: a full-looking unknown key is refused', () => {
   const full = '99999999-2222-3333-4444-555555555555';
-  assert.equal(resolveHandoffTarget(sessions, full).to, full);
+  const result = resolveHandoffTarget(sessions, full);
+  assert.equal(result.to, undefined);
+  assert.match(result.error ?? '', /No active session matched/);
 });

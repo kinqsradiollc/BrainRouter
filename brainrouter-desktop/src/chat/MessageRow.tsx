@@ -9,6 +9,7 @@
  */
 import React from 'react';
 import remarkGfm from 'remark-gfm';
+import { sanitizePeerTextForTerminal } from '@kinqs/brainrouter-types/peer-presentation';
 import type { ChatRow } from '../types.js';
 import { Icon } from '../icons.js';
 import { fmtRel } from '../lib/format.js';
@@ -21,6 +22,7 @@ import { ArtifactCard } from './ArtifactCard.js';
 function deliveryLabel(delivery: Extract<ChatRow, { kind: 'user' }>['delivery']): string {
   if (!delivery) return '';
   if (delivery.state === 'canceled') return 'Canceled';
+  if (delivery.state === 'expired') return 'Steer · expired before application';
   if (delivery.mode === 'queue') {
     if (delivery.state === 'queued') return delivery.position ? `Queued · ${delivery.position}` : 'Queued';
     if (delivery.state === 'running') return 'Queue · running';
@@ -78,8 +80,12 @@ export function MessageRow({ r, liveLast, inlineDiffs, onRequestDiff, onOpenFile
     );
     case 'delivery': return (
       <div className="row delivery-row">
-        <div className="delivery-source">Extension event</div>
-        <div className="delivery-copy">{r.text}</div>
+        <div className="delivery-source">
+          {r.source === 'peer-session'
+            ? `Peer session · ${sanitizePeerTextForTerminal(r.sender?.title || r.sender?.sessionKey || 'unknown sender')}${r.sender?.transport ? ` · ${sanitizePeerTextForTerminal(r.sender.transport)}` : ''}`
+            : 'Extension event'}
+        </div>
+        <div className="delivery-copy">{r.source === 'peer-session' ? sanitizePeerTextForTerminal(r.text) : r.text}</div>
         <span className={`delivery-badge ${r.delivery.mode} state-${r.delivery.state}`}>{deliveryLabel(r.delivery)}</span>
       </div>
     );

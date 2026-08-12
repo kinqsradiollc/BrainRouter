@@ -108,6 +108,10 @@ export function ViewsRail(p: ViewsRailProps): React.ReactElement | null {
     { id: 'schedule' as PanelId, title: 'Schedules', hint: '', icon: 'clock',
       badge: schedules.filter((s) => s.enabled).length ? String(schedules.filter((s) => s.enabled).length) : '' },
     { id: 'stack' as PanelId, title: 'Pull request', hint: '', icon: 'branch', badge: prBadge },
+    // ADR-034 — messages that arrive. `review` and `ci` are deliberately absent:
+    // ADR-028 G5 retired them into the one `stack` entry above, whose badge
+    // already carries both counts.
+    { id: 'peers' as PanelId, title: 'Peers', hint: '', icon: 'bubble', badge: '' },
     { id: 'worktrees' as PanelId, title: 'Worktrees', hint: '', icon: 'branch',
       badge: worktrees.length ? String(worktrees.length) : '' },
     { id: 'requirements' as PanelId, title: 'Requirements', hint: '', icon: 'tasks',

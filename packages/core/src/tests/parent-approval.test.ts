@@ -1,3 +1,10 @@
+/**
+ * Approval-inheritance tests for silent child execution and MCP tool calls.
+ *
+ * Model responses are stubbed and only the cases that execute shell commands
+ * opt out of unattended sandbox enforcement immediately before Agent creation.
+ */
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -49,7 +56,7 @@ function makeStubMcp(): any {
   };
 }
 
-test('CODEX-MCP-APPROVAL classifier honors MCP safety annotations', () => {
+test('MCP approval classifier honors explicit safety annotations', () => {
   assert.deepEqual(
     assessMcpToolApproval('mcp_github_create_issue', {
       annotations: { destructiveHint: true },
@@ -70,9 +77,18 @@ test('CODEX-MCP-APPROVAL classifier honors MCP safety annotations', () => {
     assessMcpToolApproval('mcp_slack_send_message').requiresApproval,
     true,
   );
+  assert.deepEqual(
+    assessMcpToolApproval('mcp_inventory_lookup_without_annotations'),
+    {
+      requiresApproval: true,
+      dangerous: false,
+      reason: 'MCP tool did not provide an explicit trusted read-only annotation',
+    },
+    'an unannotated remote tool must fail closed even when its name sounds harmless',
+  );
 });
 
-test('CODEX-MCP-APPROVAL network/egress + open-world tools require approval', () => {
+test('MCP approval network/egress + open-world tools require approval', () => {
   // Open-world annotation, not read-only → gated (the openWorldHint path).
   assert.equal(
     assessMcpToolApproval('mcp_web_search', { annotations: { openWorldHint: true } }).requiresApproval,
@@ -84,7 +100,7 @@ test('CODEX-MCP-APPROVAL network/egress + open-world tools require approval', ()
   }
 });
 
-test('CODEX-MCP-APPROVAL a readOnly hint cannot whitelist a destructive/egress NAME (bypass closed)', () => {
+test('MCP approval readOnly hint cannot whitelist a destructive/egress name', () => {
   // The exact rogue/mis-marked case: tool claims read-only but is named to
   // delete or to exfiltrate. The name wins — approval is still required.
   const del = assessMcpToolApproval('mcp_repo_delete_branch', { annotations: { readOnlyHint: true } });
@@ -101,7 +117,7 @@ test('CODEX-MCP-APPROVAL a readOnly hint cannot whitelist a destructive/egress N
   );
 });
 
-test('CODEX-PARENT-APPROVAL silent child forwards shell approval and runs when parent approves', async () => {
+test('parent approval forwards shell approval and runs when parent approves', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const marker = path.join(workspace, 'approved.txt');
     const restore = stubLlmTool('run_command', { command: 'printf approved > approved.txt' });
@@ -217,7 +233,7 @@ test('WF-NO-NEST a silent child cannot launch run_workflow (blocked outright, no
   });
 });
 
-test('CODEX-PARENT-APPROVAL silent child does not run shell when parent rejects', async () => {
+test('parent approval does not run shell when parent rejects', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const marker = path.join(workspace, 'rejected.txt');
     const restore = stubLlmTool('run_command', { command: 'printf rejected > rejected.txt' });
@@ -241,7 +257,7 @@ test('CODEX-PARENT-APPROVAL silent child does not run shell when parent rejects'
   });
 });
 
-test('CODEX-PARENT-APPROVAL silent child forwards write_file approval before mutating', async () => {
+test('parent approval forwards write_file approval before mutating', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const target = path.join(workspace, 'approved-write.txt');
     const restore = stubLlmTool('write_file', { path: 'approved-write.txt', content: 'approved write' });
@@ -321,7 +337,7 @@ test('DESK-5n non-Auto parent (fast + request) STILL forwards the silent child w
   });
 });
 
-test('CODEX-PARENT-APPROVAL silent child does not write_file when parent rejects', async () => {
+test('parent approval does not write_file when parent rejects', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const target = path.join(workspace, 'rejected-write.txt');
     const restore = stubLlmTool('write_file', { path: 'rejected-write.txt', content: 'rejected write' });
@@ -345,7 +361,7 @@ test('CODEX-PARENT-APPROVAL silent child does not write_file when parent rejects
   });
 });
 
-test('CODEX-PARENT-APPROVAL silent child forwards apply_patch approval before mutating', async () => {
+test('parent approval forwards apply_patch approval before mutating', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     fs.writeFileSync(path.join(workspace, 'patch.txt'), 'before\n', 'utf8');
     const patch = [
@@ -384,7 +400,7 @@ test('CODEX-PARENT-APPROVAL silent child forwards apply_patch approval before mu
   });
 });
 
-test('CODEX-MCP-APPROVAL silent child forwards mutating MCP approval before dispatch', async () => {
+test('MCP approval forwards a mutating silent-child call before dispatch', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const restore = stubLlmTool('mcp_github_create_issue', { title: 'Bug', body: 'Details' });
     const approvals: Array<{ tool: string; arguments?: Record<string, unknown>; dangerous?: boolean }> = [];
@@ -430,7 +446,7 @@ test('CODEX-MCP-APPROVAL silent child forwards mutating MCP approval before disp
   });
 });
 
-test('CODEX-MCP-APPROVAL silent child does not dispatch mutating MCP when parent rejects', async () => {
+test('MCP approval does not dispatch a mutating silent-child call when parent rejects', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const restore = stubLlmTool('mcp_slack_send_message', { channel: 'alerts', text: 'hi' });
     let calls = 0;

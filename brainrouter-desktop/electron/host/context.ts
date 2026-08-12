@@ -38,6 +38,7 @@ import type { BrowserHost } from '../browserHost.js';
 import type { DevServerRegistry } from '../devServerRegistry.js';
 import type { DesktopAccountModelCatalog } from '../accountIntegration.js';
 import type { HumanCorrectionIngress } from './humanCorrectionIngress.js';
+import type { DesktopSessionMessaging } from './sessionMessaging.js';
 
 type WsGit = ReturnType<typeof resolveWorkspaceGit>;
 
@@ -77,6 +78,8 @@ export interface HostContext {
   getLlm: () => LLMConfig;
   setLlm: (next: LLMConfig) => void;
   mcpClient: McpClientPool;
+  /** ADR-034 active Desktop participant + local/remote inbox lifecycle. */
+  sessionMessaging: DesktopSessionMessaging;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   callBrainAtlas: (tool: string, args: Record<string, unknown>) => Promise<any | null>;
   broker: import('@kinqs/brainrouter-agent-protocol').InteractionBroker;

@@ -1,3 +1,7 @@
+/**
+ * ADR-034 CLI session recovery regression: a resumed logical conversation
+ * reclaims its durable address without letting a second live incarnation win.
+ */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
@@ -7,12 +11,10 @@ import { isSessionNotFoundError } from '@kinqs/brainrouter-core/mcp';
 import { resolveFederationSessionKey } from '../runtime/federation/federationRegistration.js';
 
 /**
- * Coverage for the three fixes shipped on top of FED-S2:
+ * Coverage for federation participant recovery:
  *
- *  - `resolveFederationSessionKey` is stable across calls for one
- *    workspace (reuse the on-disk key instead of minting a fresh UUID
- *    every CLI start, which used to stack ghost rows in the registry
- *    until the 5-min sweeper ran).
+ *  - `resolveFederationSessionKey` preserves the logical Agent conversation
+ *    key so a resumed host can reclaim durable rows after a crash.
  *  - `isSessionNotFoundError` matches the Streamable HTTP transport's
  *    session-expiry shape (drives `callTool`'s auto-reconnect path).
  */
@@ -22,30 +24,20 @@ function freshWorkspace(label: string): { dir: string; cleanup: () => void } {
   return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-test('resolveFederationSessionKey: per-process — every call mints a fresh UUID', () => {
-  // Previous behaviour persisted to `<workspace>/.brainrouter/cli/federation.json`
-  // and reused the key. That collapsed two concurrent terminals into one
-  // row in `active_sessions` (the brain saw both `register` calls under
-  // the same composite PK). The fix: per-process keys, so two terminals
-  // open in the same directory are two distinct rows.
-  const { dir, cleanup } = freshWorkspace('per-proc');
-  try {
-    const first = resolveFederationSessionKey(dir);
-    const second = resolveFederationSessionKey(dir);
-    const third = resolveFederationSessionKey(dir);
-    assert.match(first, /^[0-9a-f-]{36}$/);
-    assert.notEqual(first, second);
-    assert.notEqual(second, third);
-    assert.notEqual(first, third);
-  } finally {
-    cleanup();
-  }
+test('resolveFederationSessionKey: resume preserves the exact logical conversation address', () => {
+  const logicalSessionKey = '24fd9ca8-4e42-4da9-b247-41e51d494d72';
+  assert.equal(resolveFederationSessionKey(logicalSessionKey), logicalSessionKey);
+  assert.equal(resolveFederationSessionKey(logicalSessionKey), logicalSessionKey);
+  assert.notEqual(
+    resolveFederationSessionKey('98cf79ab-4f29-4b6f-9c28-d14a8ed76e70'),
+    logicalSessionKey,
+  );
 });
 
 test('resolveFederationSessionKey: leaves no on-disk artifact (no persistence)', () => {
   const { dir, cleanup } = freshWorkspace('no-disk');
   try {
-    resolveFederationSessionKey(dir);
+    resolveFederationSessionKey('24fd9ca8-4e42-4da9-b247-41e51d494d72');
     // Was `<workspace>/.brainrouter/cli/federation.json`; that path must
     // not exist anymore — its presence in a real workspace is what caused
     // the two-terminal collision bug.

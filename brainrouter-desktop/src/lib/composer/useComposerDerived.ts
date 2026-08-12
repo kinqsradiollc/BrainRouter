@@ -40,7 +40,9 @@ export function useComposerDerived(i: ComposerDerivedInput): ComposerDerived {
 
   const sessionTitle = useMemo(() => {
     const firstUser = rows.find((r) => r.kind === 'user') as { text: string } | undefined;
-    return firstUser ? firstUser.text.slice(0, 48) : 'New session';
+    // Core's session-title event replaces this first-turn placeholder after its
+    // precedence-aware CAS. Do not invent a second renderer truncation policy.
+    return firstUser ? firstUser.text : 'New session';
   }, [rows]);
 
   const hasConversation = useMemo(() => rows.some((r) => r.kind === 'user' || r.kind === 'assistant' || r.kind === 'tool-group'), [rows]);

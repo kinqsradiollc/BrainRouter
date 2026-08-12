@@ -560,6 +560,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
     config,
     secretBridge,
     mcpClient,
+    sessionMessaging,
     callBrainAtlas,
     agent,
     llmForSession,
@@ -755,6 +756,25 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         // pinned first, then the store's recency order (sessionRows already sorts).
         return rows.sort((a, b) => Number(b.pinned) - Number(a.pinned));
       },
+      // ADR-034 — one Desktop participant surface over local discovery and the
+      // authenticated Brain inbox. Addresses remain exact keys/unique prefixes;
+      // titles are display metadata only.
+      'peers-list': () => sessionMessaging.listPeers(),
+      'peers-send': (args) => sessionMessaging.send(
+        typeof args.to === 'string' ? args.to : '',
+        typeof args.text === 'string' ? args.text : '',
+      ),
+      'peers-held': () => ({ messages: sessionMessaging.listHeld() }),
+      'peers-held-decide': async (args) => {
+        const id = typeof args.id === 'string' ? args.id.trim() : '';
+        if (!id) throw new Error('A held message id is required.');
+        if (typeof args.approved !== 'boolean') throw new Error('An explicit approve or reject decision is required.');
+        return sessionMessaging.decideHeld(id, args.approved);
+      },
+      'peers-receipts': async () => ({ receipts: await sessionMessaging.listReceipts() }),
+      'peers-receipts-ack': async (args) => sessionMessaging.acknowledgeReceipts(
+        Array.isArray(args.ids) ? args.ids.filter((id): id is string => typeof id === 'string') : [],
+      ),
       // DESK-5d — another project's chat history, for the sidebar's expanded
       // project folders. Read-only transcript summaries; the trust gate still
       // guards SWITCHING into the workspace.

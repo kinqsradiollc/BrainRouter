@@ -1,3 +1,11 @@
+/**
+ * Final turn phase shared by every Agent execution path.
+ *
+ * Normalizes the answer, records completion telemetry and hooks, and schedules
+ * optional learning/title work. Opportunistic title naming is contained so a
+ * filesystem or model failure cannot reject an already completed turn.
+ */
+
 import type { Agent, RunTurnCallbacks } from '../agent.js';
 import type { ActiveTurnOrchestrationResolution } from '../../workspace/activeTurnOrchestration.js';
 import { collectStopAdditionalContext, runHooks } from '../../hooks/hooksStore.js';
@@ -46,6 +54,14 @@ export async function finalizeTurnPhase(
   agent.lastAnswer = finalAnswer;
 
   await agent.captureTurn(input.prompt, finalAnswer, input.callbacks);
+  // Naming is opportunistic and bounded. It must not delay the completed turn;
+  // compare-and-set prevents a concurrent human/hook rename from being lost.
+  scheduleFirstTurnSessionTitleProposal(
+    agent,
+    input.prompt,
+    finalAnswer.slice(0, 2_000),
+    input.callbacks,
+  );
   // ADR-032 D5 — the turn-end checkpoint. Dispatched, never awaited: §1's worst
   // gap is that an agent learns only when it remembers to ask, and the fix for
   // that must not become a thing a person waits on. It sits after captureTurn
@@ -170,6 +186,24 @@ export async function finalizeTurnPhase(
   }
 
   return finalAnswer;
+}
+
+type FirstTurnTitleProposalPort = Pick<
+  Agent,
+  'sessionUsage' | 'proposeFirstTurnSessionTitle'
+>;
+
+/** Fire-and-forget naming must never surface a rejected persistence/model task. */
+export function scheduleFirstTurnSessionTitleProposal(
+  agent: FirstTurnTitleProposalPort,
+  prompt: string,
+  answerPreview: string,
+  callbacks: RunTurnCallbacks,
+): void {
+  if (agent.sessionUsage.turns !== 0) return;
+  void agent.proposeFirstTurnSessionTitle(prompt, answerPreview, callbacks).catch(() => {
+    // The completed turn is authoritative; naming remains opportunistic.
+  });
 }
 
 export function resolveTurnTerminationReason(

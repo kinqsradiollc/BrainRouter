@@ -184,7 +184,9 @@ function modulesWithoutImporters(): string[] {
  * Adding an entry there is therefore the one way to expand the budget, and it
  * costs a written, reviewable reason.
  */
-const ORPHAN_MODULE_CEILING = 27;
+// 28 → 27 with ADR-028's retirements, then → 26 when merging ADR-034 wired one
+// up. The ratchet working in the direction it was built for.
+const ORPHAN_MODULE_CEILING = 26;
 
 /**
  * Modules that ARE orphans and are known to be, with the reason.
@@ -555,8 +557,24 @@ function deadExports(): string[] {
  * debt hides that.
  *
  * It caught nine of this ADR's own decisions the first time it ran.
+ *
+ * **It rose once, on purpose, and this is the record of it.** ADR-028's
+ * retirements took it 273 → 270. Merging ADR-034 (messages that arrive) put it
+ * back to 273 with three exports that compile, typecheck, are covered by tests,
+ * and are called by nothing on a user path:
+ *
+ * - `session/input/heldSessionMessages.ts :: rejectHeldSessionMessage` (3 test refs)
+ * - `session/messaging/routes.ts :: findSessionRouteByKey` (5 test refs)
+ * - `session/sessionTitle.ts :: resolveSessionTitle` (5 test refs) — a second
+ *   variant of `resolveSessionTitleDecision`, which IS the one `agent.ts` calls
+ *
+ * They are named rather than absorbed because an unexplained ceiling rise is
+ * how a ratchet stops meaning anything, and because deleting another decision's
+ * tested behaviour inside a merge commit is not the merge's call to make. Each
+ * must be wired or deleted; when that happens this comment goes and the number
+ * falls with it.
  */
-const DEAD_EXPORT_CEILING = 270;
+const DEAD_EXPORT_CEILING = 273;
 
 test('E1 — the repository is visible, or this sweep measures nothing', () => {
   // A guard, not a formality: with the siblings missing, every export below

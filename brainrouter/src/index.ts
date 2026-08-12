@@ -45,6 +45,7 @@ import {
 import { recordHttp, routeBucket, renderPrometheus, metricsSnapshot } from './observability/metrics.js';
 import { collectSystemStatus } from './observability/status.js';
 import { modelGateway } from './services/modelGateway/modelGateway.js';
+import { sessionDeliveryHub } from './services/sessionDeliveryHub.js';
 
 import { memoryEngine, closeMemoryEngine } from './memory/engine.js';
 import { resolveOrgContext } from './tenancy/context.js';
@@ -94,6 +95,7 @@ import { securityHeaders, corsMiddleware, resolveCorsAllowlist } from './api/mid
 import { resolveJsonBodyLimit, payloadTooLargeHandler } from './api/bodyLimit.js';
 import { createRateLimiter } from './api/middleware/rateLimit.js';
 import { errorHandler } from './api/middleware/errorHandler.js';
+import type { SessionMessageStoreNotification } from '@kinqs/brainrouter-types';
 
 // Strict limiter for the credential endpoints — brute-force backstop.
 const authRateLimit = createRateLimiter({
@@ -155,6 +157,45 @@ registry.build();
 // connect) so we never serve against an un-migrated database.
 await memoryEngine.ready;
 
+// Every brain process listens for committed inbox changes so a recipient or
+// sender bound to a different process still gets an immediate wake. The inbox
+// remains authoritative; absence of this optional concrete-store seam only
+// demotes delivery to the clients' polling fallback.
+const notificationStore = memoryEngine.store as typeof memoryEngine.store & {
+  subscribeSessionMessageNotifications?: (
+    listener: (notification: SessionMessageStoreNotification) => void | Promise<void>,
+  ) => { ready: Promise<void>; close(): Promise<void> };
+};
+const sessionMessageFeed = notificationStore.subscribeSessionMessageNotifications?.(
+  async (notification) => {
+    await sessionDeliveryHub.notifyStoreNotification(
+      notification,
+      (binding) => memoryEngine.store.ownsActiveSessionClaim(
+        binding.orgId,
+        binding.userId,
+        binding.sessionKey,
+        binding.connectionId,
+      ),
+    );
+  },
+);
+void sessionMessageFeed?.ready.catch((error) => {
+  console.error('[BrainRouter] session-message notification feed failed to start:',
+    error instanceof Error ? error.message : String(error));
+});
+
+async function releaseMcpConnection(connectionId: string): Promise<void> {
+  sessionDeliveryHub.disconnect(connectionId);
+  try {
+    await memoryEngine.store.releaseActiveSessionClaims(connectionId);
+  } catch (error) {
+    console.error(
+      '[BrainRouter] failed to release active-session claims:',
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+}
+
 // Auto-scan skills dirs for memory_hints on startup
 const skillsDirsToScan = [
   path.join(config.globalRoot, 'skills'),
@@ -170,6 +211,7 @@ if (USE_HTTP) {
     server: Server;
     transport: StreamableHTTPServerTransport;
     identity: McpSessionIdentity;
+    connectionId: string;
   }>();
   // Tracks which User-Agents we've already warned about for missing
   // `text/event-stream` in their Accept header — one warning per UA
@@ -448,10 +490,11 @@ if (USE_HTTP) {
 
     if (req.method === 'POST' && !sessionId) {
       // New session — initialise
+      const connectionId = randomUUID();
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (id) => {
-          sessions.set(id, { server: mcpServer, transport, identity: requestIdentity });
+          sessions.set(id, { server: mcpServer, transport, identity: requestIdentity, connectionId });
         },
       });
 
@@ -460,9 +503,12 @@ if (USE_HTTP) {
         isAdmin: user.isAdmin,
         defaultOrgId,
         defaultRole: orgCtx?.role,
+        connectionId,
+        sessionDeliveryHub,
       });
 
       transport.onclose = () => {
+        void releaseMcpConnection(connectionId);
         const id = [...sessions.entries()].find(([, v]) => v.transport === transport)?.[0];
         if (id) sessions.delete(id);
       };
@@ -495,9 +541,14 @@ if (USE_HTTP) {
     app.get('/mcp', handleMcp);
 
     // DELETE — client-side session teardown
-    app.delete('/mcp', (req: Request, res: Response) => {
+    app.delete('/mcp', async (req: Request, res: Response) => {
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
-      if (sessionId) sessions.delete(sessionId);
+      const session = sessionId ? sessions.get(sessionId) : undefined;
+      if (session) {
+        sessions.delete(sessionId!);
+        await releaseMcpConnection(session.connectionId);
+        try { await session.transport.close(); } catch { /* already closed */ }
+      }
       res.status(204).send();
     });
   }
@@ -539,10 +590,24 @@ if (USE_HTTP) {
     shuttingDown = true;
     const hardExit = setTimeout(() => process.exit(0), 700);
     hardExit.unref();
+    // Both halves of shutdown, in the only order that is safe for either.
+    //
+    // ADR-034 must stop DELIVERING before anything is torn down, or a message
+    // routed into a closing session is a receipt that lies. D10 must stop
+    // accepting upgraded audio and await generation-bound adapter cleanup
+    // BEFORE the shared HTTP listener or the provider pool disappears, or a
+    // stream outlives the thing it writes through. Neither constraint moves, so
+    // the disconnects run first, the audio plane closes next, and the listener
+    // goes only once both are quiet.
+    const closingSessions = [...sessions.values()];
+    for (const session of closingSessions) sessionDeliveryHub.disconnect(session.connectionId);
+    sessions.clear();
     void (async () => {
-      // Stop accepting upgraded audio first and await generation-bound adapter
-      // cleanup before the shared HTTP listener or provider pool disappears.
       await gatewayAudioStreaming?.close().catch(() => undefined);
+      await Promise.all(closingSessions.map(async (session) => {
+        await releaseMcpConnection(session.connectionId);
+        try { await session.transport.close(); } catch { /* already closed */ }
+      }));
       const httpClosed = new Promise<void>((resolve) => httpServer.close(() => resolve()));
       try { httpServer.closeAllConnections?.(); } catch { /* older Node */ }
       await httpClosed;
@@ -550,7 +615,7 @@ if (USE_HTTP) {
         closeMemoryEngine(),
         inProcessGatewayService?.close(),
       ]);
-      process.exit(0);
+      process.exit(0)
     })();
   };
   process.on('SIGINT', shutdownHttp);
@@ -605,7 +670,13 @@ if (USE_HTTP) {
   stdioIsAdmin = user.isAdmin;
   console.error(`[BrainRouter] Authenticated via BRAINROUTER_API_KEY. Mapping local session to user: ${user.displayName || user.userId}`);
 
-  const server = buildMcpServer(registry, { defaultUserId: stdioUserId, isAdmin: stdioIsAdmin });
+  const stdioConnectionId = `stdio-${randomUUID()}`;
+  const server = buildMcpServer(registry, {
+    defaultUserId: stdioUserId,
+    isAdmin: stdioIsAdmin,
+    connectionId: stdioConnectionId,
+    sessionDeliveryHub,
+  });
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('BrainRouter MCP server running on stdio');
@@ -614,9 +685,12 @@ if (USE_HTTP) {
   const shutdownStdio = async () => {
     if (stdioShuttingDown) return;
     stdioShuttingDown = true;
+    sessionDeliveryHub.disconnect(stdioConnectionId);
     const hardExit = setTimeout(() => process.exit(0), 700);
     hardExit.unref();
+    await releaseMcpConnection(stdioConnectionId);
     try { await server.close(); } catch { /* ignore */ }
+    await closeMemoryEngine().catch(() => undefined);
     process.exit(0);
   };
   process.on('SIGINT', shutdownStdio);

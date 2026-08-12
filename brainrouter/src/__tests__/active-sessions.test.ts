@@ -1,3 +1,9 @@
+/**
+ * Active-session tool contract regressions.
+ *
+ * Tests pin tenant/claim forwarding, exact-key validation, idempotent lifecycle,
+ * and truthful registration/heartbeat results before any store mutation.
+ */
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 vi.mock("../memory/engine.js", () => ({
@@ -37,6 +43,25 @@ function record(overrides: Partial<ActiveSessionRecord> = {}): ActiveSessionReco
     ...overrides,
   };
 }
+
+describe("exact session key validation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("rejects whitespace, control characters, and oversized keys before storage", async () => {
+    const results = await Promise.all([
+      handleSessionRegister({ sessionKey: " leading-space" }, { defaultUserId: "u1" }),
+      handleSessionHeartbeat({ sessionKey: "line\nbreak" }, { defaultUserId: "u1" }),
+      handleSessionUnregister({ sessionKey: "peer\u001b]52;c;clipboard\u0007" }, { defaultUserId: "u1" }),
+      handleSessionRegister({ sessionKey: "x".repeat(513) }, { defaultUserId: "u1" }),
+    ]);
+    expect(results.every((result: any) => result.isError === true)).toBe(true);
+    expect(memoryEngine.store.registerActiveSession).not.toHaveBeenCalled();
+    expect(memoryEngine.store.heartbeatActiveSession).not.toHaveBeenCalled();
+    expect(memoryEngine.store.unregisterActiveSession).not.toHaveBeenCalled();
+  });
+});
 
 describe("session_register tool", () => {
   beforeEach(() => {
@@ -124,6 +149,7 @@ describe("session_heartbeat tool", () => {
       "sk-1",
       expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
       expect.objectContaining({ promptTokens: 1500, totalUsd: 0.04 }),
+      null,
     );
   });
 
@@ -145,7 +171,7 @@ describe("session_unregister tool", () => {
       await handleSessionUnregister({ sessionKey: "sk-1" }, { defaultUserId: "u1" }),
     );
     expect(res.deleted).toBe(true);
-    expect(memoryEngine.store.unregisterActiveSession).toHaveBeenCalledWith("u1", "sk-1");
+    expect(memoryEngine.store.unregisterActiveSession).toHaveBeenCalledWith("u1", "sk-1", null);
   });
 
   it("is idempotent — returns deleted:false when no row exists", async () => {
@@ -200,6 +226,7 @@ describe("session_list tool", () => {
     );
     expect(memoryEngine.store.listActiveSessions).toHaveBeenCalledWith({
       userId: "u1",
+      orgId: null,
       clientKind: "codex",
       workspaceRoot: undefined,
       includeStale: true,

@@ -175,6 +175,10 @@
       "types": "./dist/session/index.d.ts",
       "default": "./dist/session/index.js"
     },
+    "./session/title": {
+      "types": "./dist/session/sessionTitle.d.ts",
+      "default": "./dist/session/sessionTitle.js"
+    },
     "./session/permission-modes": {
       "types": "./dist/session/preferences/permissionModes.d.ts",
       "default": "./dist/session/preferences/permissionModes.js"
