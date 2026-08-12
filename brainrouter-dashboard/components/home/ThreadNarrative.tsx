@@ -64,12 +64,18 @@ function Scene({
 }) {
   const start = index / count;
   const end = (index + 1) / count;
+  // The scenes are stacked in one place, so the fades are SEQUENCED rather than
+  // overlapped: this one is gone by `end`, and the next only begins there. They
+  // used to share the window [end - BLEND, end + BLEND], which put both at half
+  // opacity at its midpoint — two headlines and two paragraphs superimposed and
+  // neither of them readable. A crossfade is only free when the things crossing
+  // are pictures; with body copy it is just text on text.
   // The first scene is already on screen at progress 0 and the last one must
   // not fade out before the runway ends, so their outer stops sit off-domain.
-  const enterFrom = index === 0 ? -1 : start - BLEND;
+  const enterFrom = index === 0 ? -1 : start;
   const enterTo = index === 0 ? -0.5 : start + BLEND;
   const exitFrom = index === count - 1 ? 1.5 : end - BLEND;
-  const exitTo = index === count - 1 ? 2 : end + BLEND;
+  const exitTo = index === count - 1 ? 2 : end;
   const opacity = useTransform(progress, [enterFrom, enterTo, exitFrom, exitTo], [0, 1, 1, 0]);
   const y = useTransform(progress, [start, end], [20, -20]);
 
