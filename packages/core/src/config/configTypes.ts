@@ -659,24 +659,13 @@ export interface CliKnobs {
    * settable per-launch via `--safe-mode` / `BRAINROUTER_SAFE_MODE`. Default false.
    */
   safeMode?: boolean;
-  /**
-   * ADR-027 D2 — which execution engine drives a turn.
-   *
-   * `loop` (default) is the established turn loop. `graph` runs the typed
-   * graph executor: conditional routing, checkpoints folded after each node,
-   * and human-in-the-loop interrupts that resume at the SUCCESSOR of the
-   * interrupting node.
-   *
-   * Both ship, and the choice is a setting rather than a migration, because
-   * the two are good at different things. The loop is better for open-ended
-   * conversational work where the next step genuinely depends on what the
-   * model just said. The graph is better for work with a known shape that
-   * must survive interruption — review pipelines, migrations, anything where
-   * "resume exactly once, after the effect that already happened" matters.
-   * Replacing one with the other would trade a real strength for a different
-   * real strength; carrying both costs a branch at dispatch.
+  /*
+   * `executionEngine` used to live here (ADR-027 D2, ADR-028 C1) and was
+   * retired 2026-08-12 along with the graph executor it selected. It is left
+   * documented rather than silently dropped because a config file in the wild
+   * may still carry it: the key is now ignored, and ignoring it changes
+   * nothing, because `graph` never ran a turn.
    */
-  executionEngine?: 'loop' | 'graph';
   /**
    * ADR-028 H3 — how eagerly a change becomes a stacked pull request.
    *
@@ -1273,8 +1262,6 @@ export interface ResolvedCliKnobs {
   enforceVersionRange: boolean;
   /** CC-CONFIG-A1 — safe/troubleshooting mode. */
   safeMode: boolean;
-  /** ADR-027 D2 — turn loop or typed graph executor. Both ship; this selects. */
-  executionEngine: 'loop' | 'graph';
   stackingMode: 'auto' | 'always' | 'never';
   comprehension: { enabled: boolean; model: string; questions: number };
   autoInstallTools: 'off' | 'safe';

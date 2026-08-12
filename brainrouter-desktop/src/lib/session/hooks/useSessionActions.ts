@@ -161,7 +161,8 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
   const resumeSessionRef = useRef<(key: string) => void>(() => {});
 
   const openUrl = (url: string): void => { if (url) q('q-open-url', 'action:open-external', { url }); };
-  const openCiPanel = (): void => { ensurePanel('ci'); ci.refresh(); };
+  // ADR-028 G5 — Checks live in the one Pull request panel; there is no `ci` id.
+  const openCiPanel = (): void => { ensurePanel('stack'); ci.refresh(); };
 
   const refreshDashboard = (): void => {
     if (!window.brainrouter.globalDashboard) return;

@@ -2,7 +2,12 @@
  * DESK-5f — pure panel identity and presentation catalog. Kept free of React
  * and panel implementations so layout/recommendation models are Node-testable.
  */
-export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'task-detail' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'stack' | 'comprehension' | 'review' | 'requirements' | 'annotations' | 'artifacts' | 'attachments' | 'ci' | 'atlas' | 'workflows' | 'memory' | 'knowledge' | 'prototype' | 'servers' | 'browser';
+// ADR-028 G5 — `review` and `ci` are NOT members: they were retired into the
+// one `stack` (Pull request) panel. They survive only as keys in
+// `lastSessionPanels.PANEL_ID_ALIASES`, which migrates a persisted layout, and
+// keeping them out of this union is what stops a new call site opening a tab
+// that nothing renders.
+export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'task-detail' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'stack' | 'comprehension' | 'requirements' | 'annotations' | 'artifacts' | 'attachments' | 'atlas' | 'workflows' | 'memory' | 'knowledge' | 'prototype' | 'servers' | 'browser';
 
 export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'context', title: 'Context', icon: 'layout-right' },
@@ -56,6 +61,13 @@ export const MANUAL_PANEL_DEFS = PANEL_DEFS.filter((panel) => !HIDDEN_MANUAL_PAN
  * grouping is not new information: it is the structure the panel list already
  * had implicitly, made visible.
  *
+ * **Where it is consumed:** the views chooser in
+ * `components/layout/ViewsRail.tsx`, which is the list you scan. It used to
+ * carry its OWN five group names in a local constant, so the app had two
+ * panel taxonomies and only one of them was this one. The open-tab strip stays
+ * flat on purpose — G2 means it starts empty and only ever holds the tabs you
+ * opened yourself, so there is nothing there to scan.
+ *
  * `diff` sits in Code rather than Work deliberately — reading a change is a
  * different activity from deciding whether to land it. That argument is
  * recorded in the ADR as one deserving a second look, since it would also have
@@ -93,10 +105,11 @@ export function panelsInGroup(group: PanelGroup, ids: readonly PanelId[]): Panel
 }
 
 /**
- * Groups that currently have an open tab.
+ * The groups these panels fall into, in catalog order.
  *
- * Only these are shown, so the strip never offers a group with nothing in it —
- * an empty group is a click that leads to a blank panel.
+ * Only these are shown, so the chooser never offers a group with nothing in
+ * it — an empty heading is a row that leads nowhere. Pass the ids currently on
+ * offer: the launchers left after the search filter, or the open tabs.
  */
 export function activeGroups(ids: readonly PanelId[]): PanelGroup[] {
   const present = new Set(ids.map(groupOf));

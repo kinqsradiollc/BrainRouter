@@ -5480,11 +5480,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .views-rail .side-chooser { display: flex !important; flex-direction: column !important; grid-template-columns: none !important; align-content: stretch !important; gap: 10px !important; padding: 46px 10px 14px !important; }
 .side-chooser-options { display: flex; flex-direction: column; gap: 10px; }
 .side-launcher-group { --launcher-tone: var(--text-dim); display: flex; flex-direction: column; gap: 3px; padding: 7px; background: color-mix(in srgb, var(--raised) 42%, transparent); border: 1px solid var(--border); border-radius: 10px; }
+/* ADR-028 G3 — the chooser's group ids come from `panelCatalog.PANEL_GROUPS`
+   now, not from a taxonomy this rail kept to itself. */
+.side-launcher-group[data-group="code"],
 .side-launcher-group[data-group="work"],
-.side-launcher-group[data-group="plan"],
 .side-launcher-group[data-group="knowledge"],
-.side-launcher-group[data-group="quality"] { --launcher-tone: var(--text-dim); }
-.side-launcher-group[data-group="advanced"] { --launcher-tone: var(--text-dim); }
+.side-launcher-group[data-group="understand"] { --launcher-tone: var(--text-dim); }
+.side-launcher-group[data-group="environment"] { --launcher-tone: var(--text-dim); }
 .side-launcher-group-title { padding: 2px 5px 5px; color: var(--launcher-tone); font-size: 9px; font-weight: 680; letter-spacing: .09em; text-transform: uppercase; }
 .views-rail .side-launcher-group .side-launcher { display: grid !important; grid-template-columns: 20px minmax(0, 1fr) auto !important; flex-direction: row !important; align-items: center !important; justify-content: stretch !important; gap: 9px !important; min-height: 36px !important; padding: 0 9px !important; color: var(--text-dim) !important; background: transparent !important; border: 1px solid transparent !important; border-radius: 7px !important; box-shadow: none !important; text-align: left !important; font-size: 12px !important; font-weight: 520 !important; transform: none !important; }
 .views-rail .side-launcher-group .side-launcher > .ic,

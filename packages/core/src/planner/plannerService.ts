@@ -100,20 +100,10 @@ export function findItems(userId: string | undefined, query: string): PlannerIte
   );
 }
 
-/**
- * The timetable for a day, oldest first.
- *
- * Separate from `todayView` because a timetable is a different question: what
- * does the shape of this day look like, rather than what should I be doing.
+/*
+ * `timetableView` stood here and was **retired 2026-08-12** — no caller in the
+ * repository, and no second question to answer: `todayView` already returns
+ * `scheduled` and `unscheduled` from the same `dayView`, and both hosts render
+ * the day from that. The only thing this added was an id→title map the callers
+ * build from the items they already hold.
  */
-export function timetableView(
-  userId: string | undefined,
-  date: string,
-): { blocks: TimeBlock[]; titles: Record<string, string> } {
-  const blocks = listBlocks(userId);
-  const day = dayView(blocks, date);
-  const items = listItems(userId, { includeCompleted: true });
-  const titles: Record<string, string> = {};
-  for (const item of items) titles[item.id] = item.title.value;
-  return { blocks: [...day.scheduled, ...day.unscheduled], titles };
-}

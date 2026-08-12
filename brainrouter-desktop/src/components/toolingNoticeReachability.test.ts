@@ -92,6 +92,30 @@ test('the command that ran stays inspectable, because "it installed something" i
   assert.deepEqual(writes, [TOOL_REQUIREMENTS.find((r) => r.id === 'gh-stack')!.installCommand]);
 });
 
+test('the offer arm shows core\'s full install preview, not a bare command', () => {
+  // ADR-028 I1 — `installPreview` is core's wording for this exact moment and
+  // had no caller in the repository until 2026-08-12, while this button showed
+  // `installCommand` on its own. The three things it says are the three the
+  // decision asks for: what runs, what that unlocks, and that you may run it
+  // yourself. Asserted through the button a person presses, so wiring the
+  // import without reaching the click would not pass.
+  const plan = planProvisioning(
+    [{ id: 'git', present: true }, { id: 'gh', present: false }, { id: 'gh-stack', present: true }],
+    { declined: new Set(), autoInstall: 'off' },
+  );
+  assert.equal(plan.kind, 'offer', 'precondition: a non-auto-installable gap is an offer');
+  const { tree, writes } = render({ plan });
+  const button = tree.find((el) => typeof el.props.onClick === 'function'
+    && text(el.props.children).join('').includes('Show command'));
+  assert.ok(button, 'the offer notice offers no way to see the command');
+  (button.props.onClick as () => void)();
+  const shown = writes[0] ?? '';
+  const gh = TOOL_REQUIREMENTS.find((r) => r.id === 'gh')!;
+  assert.match(shown, new RegExp(`This runs: ${gh.installCommand.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  assert.match(shown, /which enables/);
+  assert.match(shown, /You can run it yourself instead/);
+});
+
 test('every arm planProvisioning can return renders — an unhandled arm is a crash, not a blank', () => {
   const plans = [
     planProvisioning([{ id: 'git', present: true }, { id: 'gh', present: true }, { id: 'gh-stack', present: true }]),

@@ -1,15 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import type { ConnectorDocumentRecord } from '@kinqs/brainrouter-types';
-import {
-  createConnectorIssueSourceAdapter,
-  refreshLocalPlannerFromConnectorIssues,
-} from '../planner/connectorIssueAdapter.js';
-import { collectFromSources } from '../planner/sourceAdapter.js';
-import { readPlanner } from '../planner/plannerStore.js';
+import { createConnectorIssueSourceAdapter } from '../planner/connectorIssueAdapter.js';
+import { sourceFreshnessFromItems } from '../planner/agentContext.js';
 
 const FETCHED = '2026-08-11T00:00:00.000Z';
 
@@ -57,8 +50,12 @@ test('connector issue adapter preserves actionable facts and never infers comple
   assert.equal(item.blockedReason?.value, 'blocked: awaiting API');
   assert.equal(Object.hasOwn(item, 'completed'), false, 'even an explicitly closed source issue does not complete the planner item');
 
-  const collected = await collectFromSources([adapter], [], '2099-01-01T00:00:00.000Z');
-  assert.equal(collected.freshness[0]?.lastFetchedAt, FETCHED, 'freshness reflects ingest time, not projection time');
+  // Freshness is derived from the ITEMS, by the function the turn's context
+  // phase calls. `collectFromSources` computed a second one and was retired
+  // 2026-08-12 with no caller; asserting against it proved the projection was
+  // fresh in a way nothing rendered.
+  const [freshness] = sourceFreshnessFromItems(items);
+  assert.equal(freshness?.lastFetchedAt, FETCHED, 'freshness reflects ingest time, not projection time');
 });
 
 test('connector issue adapter refuses a non-HTTPS source URL', async () => {
@@ -68,23 +65,15 @@ test('connector issue adapter refuses a non-HTTPS source URL', async () => {
   assert.deepEqual(await adapter.list(), []);
 });
 
-test('connector projection is idempotent and never creates source-refresh outbox churn', async () => {
-  const home = mkdtempSync(path.join(tmpdir(), 'br-planner-source-'));
-  const priorHome = process.env.BRAINROUTER_HOME;
-  process.env.BRAINROUTER_HOME = home;
-  try {
-    const input = projection([issue()]);
-    const first = await refreshLocalPlannerFromConnectorIssues('user-1', input);
-    const second = await refreshLocalPlannerFromConnectorIssues('user-1', input);
-    const state = readPlanner('user-1');
-
-    assert.deepEqual(first, { created: 1, updated: 0, unchanged: 0, skipped: 0 });
-    assert.deepEqual(second, { created: 0, updated: 0, unchanged: 1, skipped: 0 });
-    assert.equal(Object.keys(state.items).length, 1);
-    assert.equal(state.outbox.operations.length, 0, 'source reads never round-trip back through the mutation outbox');
-  } finally {
-    if (priorHome === undefined) delete process.env.BRAINROUTER_HOME;
-    else process.env.BRAINROUTER_HOME = priorHome;
-    rmSync(home, { recursive: true, force: true });
-  }
+test('connector projection is idempotent — the same documents project the same item', async () => {
+  // This asserted through `refreshLocalPlannerFromConnectorIssues`, a
+  // device-local sink retired 2026-08-12 with no caller; the projection that
+  // runs is the server's. What has to hold either way is that the ADAPTER is a
+  // pure function of the documents, so a re-ingest of unchanged issues produces
+  // an identical item and gives its sink nothing to write.
+  const input = projection([issue()]);
+  const first = await createConnectorIssueSourceAdapter(input).list();
+  const second = await createConnectorIssueSourceAdapter(input).list();
+  assert.equal(first.length, 1);
+  assert.deepEqual(second, first);
 });

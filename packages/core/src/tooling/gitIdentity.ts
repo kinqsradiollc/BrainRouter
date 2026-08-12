@@ -105,9 +105,17 @@ export function checkIdentity(input: {
     active: input.active.login,
     // Names BOTH accounts. "Wrong account" makes you go and look; naming them
     // lets you decide from the message.
+    //
+    // It also names the COMMAND. I3 wanted two one-click answers and no
+    // renderer ever built them, so what a person actually meets is this
+    // sentence — and a sentence that says "switch account" without saying how
+    // is a refusal wearing the word "or". `switchCommand` had no caller until
+    // 2026-08-12 for exactly that reason: it was written for the UI that did
+    // not arrive.
     message:
       `This workspace has pushed as ${input.binding.expectedLogin}; you are signed in as ` +
-      `${input.active.login}. Switch account, or update what this workspace expects?`,
+      `${input.active.login}. Switch account with \`${switchCommand({ login: input.binding.expectedLogin, host: input.binding.host })}\`, ` +
+      'or update what this workspace expects?',
   };
 }
 
@@ -137,23 +145,12 @@ export function bindWorkspace(
   };
 }
 
-/**
- * What the account picker shows.
- *
- * The active account is marked rather than merely sorted first, because "which
- * one am I using" is the entire question a multi-account user opens this to
- * answer.
+/*
+ * `describeAccounts` annotated a list of accounts for an account PICKER, and
+ * was **retired 2026-08-12**: there is no picker, and none is proposed. Nothing
+ * in the product enumerates GitHub accounts — the identity check reads the
+ * ACTIVE one and compares it to the binding, which is one account, not a list.
+ * The rest of what the picker would have said now appears where the question
+ * is actually asked: `checkIdentity`'s mismatch names both logins and the
+ * command that switches between them.
  */
-export function describeAccounts(
-  accounts: readonly GitHubAccount[],
-  binding: WorkspaceBinding | null,
-): Array<{ login: string; host: string; note: string | null }> {
-  return accounts.map((a) => {
-    const notes: string[] = [];
-    if (a.active) notes.push('signed in');
-    if (binding?.expectedLogin === a.login && binding.host === a.host) {
-      notes.push('this workspace');
-    }
-    return { login: a.login, host: a.host, note: notes.length ? notes.join(' · ') : null };
-  });
-}

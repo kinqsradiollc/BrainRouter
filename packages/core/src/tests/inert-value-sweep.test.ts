@@ -24,6 +24,15 @@
  *    lowered with it, so the slack from a wiring cannot be re-spent on the next
  *    orphan. The first version of this file allowed headroom, and fifteen of
  *    this ADR's own decisions sat inside it.
+ *  - **Exports are a pinned count too, and that is the 2026-08-12 addition.**
+ *    Everything above is MODULE-granular, and module granularity has an
+ *    obvious hole: one live export makes a module look wired while its
+ *    siblings are dead. Nine of this ADR's decisions were in exactly that
+ *    state on the day the module sweep was declared fixed — `capabilityGap`
+ *    and friends inside a module `runTurn` imports, three planner policy
+ *    predicates inside a barrel the backend imports, `applyRemoteItem` beside
+ *    a `syncOnce` the desktop calls every minute. The module check cannot see
+ *    any of them, because it is not asking about them.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -162,6 +171,9 @@ function modulesWithoutImporters(): string[] {
  * `workbench/workbenchActions.ts` — passed underneath it. A ratchet that only
  * catches a rise still lets the count sit wherever the last careless PR left it.
  *
+ * 30 → 28 on 2026-08-12: C1's graph cluster went, and with it the last of the
+ * four named above that was still a module rather than a decision.
+ *
  * Equality fails in BOTH directions, which is what closes that:
  *
  *  - the count goes UP → a PR added a module nothing calls. Wire it or delete it.
@@ -172,7 +184,7 @@ function modulesWithoutImporters(): string[] {
  * Adding an entry there is therefore the one way to expand the budget, and it
  * costs a written, reviewable reason.
  */
-const ORPHAN_MODULE_CEILING = 30;
+const ORPHAN_MODULE_CEILING = 28;
 
 /**
  * Modules that ARE orphans and are known to be, with the reason.
@@ -419,6 +431,206 @@ test('E1/H4 — the count of imported-but-UNREACHABLE modules does not rise', ()
       'Something was added that other code calls, but that nothing a USER can reach ' +
       'calls. That is how Part A shipped five modules nobody could get to.\n\n' +
       unreachable.slice(0, 12).map((o) => `  - ${o}`).join('\n'),
+  );
+});
+
+/* ------------------------------------------------- E1 · export granularity */
+
+/**
+ * The repository, not just this package.
+ *
+ * Core is a LIBRARY: most of what it exports is consumed by the CLI, the
+ * desktop, the dashboard or the brain, none of which this file could see. The
+ * knob half of the sweep works around that with a hand-kept `CONSUMED_ELSEWHERE`
+ * allowlist, which is affordable for thirty knobs and absurd for four thousand
+ * exports. So the export half reads the sibling workspaces directly.
+ *
+ * Absent siblings are a FAILURE rather than a skip: run somewhere that cannot
+ * see them and every export looks dead, which is a number that measures the
+ * checkout instead of the code — the same class of mistake as the basename
+ * collision that once made 74% of the package look unreachable.
+ */
+const REPO_ROOT = path.resolve(SRC, '..', '..', '..');
+const CONSUMER_ROOTS = [
+  'packages',
+  'brainrouter/src',
+  'brainrouter-cli/src',
+  'brainrouter-desktop/src',
+  'brainrouter-desktop/electron',
+  'brainrouter-dashboard',
+];
+const SKIP_DIRS = new Set(['node_modules', 'dist', 'dist-electron', '.next', 'build', 'coverage']);
+
+function walkRepo(dir: string, out: string[] = []): string[] {
+  let entries: string[];
+  try { entries = readdirSync(dir); } catch { return out; }
+  for (const entry of entries) {
+    if (SKIP_DIRS.has(entry)) continue;
+    const full = path.join(dir, entry);
+    let stat;
+    try { stat = statSync(full); } catch { continue; }
+    if (stat.isDirectory()) walkRepo(full, out);
+    else if (/\.(ts|tsx|mts|cts)$/.test(full)) out.push(full);
+  }
+  return out;
+}
+
+const isRepoTest = (f: string) =>
+  f.includes(`${path.sep}tests${path.sep}`) || /\.test\.(ts|tsx)$/.test(f);
+
+const CONSUMER_FILES = [
+  ...new Set(CONSUMER_ROOTS.flatMap((rel) => walkRepo(path.join(REPO_ROOT, rel)))),
+].filter((f) => !isRepoTest(f));
+
+/**
+ * Source with comments stripped.
+ *
+ * Prose is not a caller, and this sweep has already been fooled by that once:
+ * `stackingMode` is on the knob allowlist precisely because the only mentions
+ * left in core were in a comment. At export granularity the risk is worse,
+ * because every retirement in this pass leaves a paragraph naming what it
+ * removed — and a name in a paragraph explaining that nothing calls it would
+ * otherwise register as something calling it.
+ */
+function stripComments(text: string): string {
+  return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+}
+
+const CONSUMER_CODE = new Map(CONSUMER_FILES.map((f) => [f, stripComments(readFileSync(f, 'utf8'))]));
+
+/**
+ * VALUE exports — functions, consts, classes, enums.
+ *
+ * Types are deliberately out of scope. An unused interface costs nothing at
+ * runtime and disappears at compile time; an unused function is code that
+ * looks like it runs. This sweep is about the second thing.
+ */
+function valueExports(text: string): string[] {
+  const names = new Set<string>();
+  for (const m of text.matchAll(/^export\s+(?:async\s+)?function\s+(\w+)/gm)) names.add(m[1]!);
+  for (const m of text.matchAll(/^export\s+(?:const|let|class|enum)\s+(\w+)/gm)) names.add(m[1]!);
+  return [...names];
+}
+
+/**
+ * Exports with no use in any non-test file, including their own module.
+ *
+ * The last clause is the whole reason this is tractable. `parseRobotsTxt` is
+ * exported so its unit test can reach it and is called by `isAllowedByRobots`
+ * three lines down — over-exported, not dead, and failing on it would push
+ * people to un-export things for the checker rather than for the reader. What
+ * is left after excluding those is code that genuinely never executes: 273
+ * exports today, against roughly four thousand.
+ *
+ * Matching is textual, like the knob half, and for the same reason: a real
+ * cross-package symbol resolution is a project of its own, and the shape that
+ * actually ships is a NAME THAT APPEARS NOWHERE ELSE.
+ */
+function deadExports(): string[] {
+  const dead: string[] = [];
+  for (const file of NON_TEST) {
+    const raw = SOURCE_TEXT.get(file) ?? '';
+    const own = stripComments(raw);
+    for (const name of valueExports(raw)) {
+      const pattern = new RegExp(`\\b${name}\\b`);
+      const elsewhere = CONSUMER_FILES.some(
+        (other) => other !== file && pattern.test(CONSUMER_CODE.get(other) ?? ''),
+      );
+      if (elsewhere) continue;
+      const usesHere = (own.match(new RegExp(`\\b${name}\\b`, 'g')) ?? []).length;
+      if (usesHere <= 1) dead.push(`${path.relative(SRC, file)} :: ${name}`);
+    }
+  }
+  return dead.sort();
+}
+
+/**
+ * The export ceiling. Like the module one, it only ever falls.
+ *
+ * Not zero, and unlike the module count it is a long way from zero — 273 is a
+ * real number about a real backlog, and pretending otherwise by scoping the
+ * check to a corner is precisely the mistake the `planner/` filter was. What
+ * makes an equality useful at this size is that it fails on the DELTA: a PR
+ * that adds an export nothing calls raises it, and no amount of pre-existing
+ * debt hides that.
+ *
+ * It caught nine of this ADR's own decisions the first time it ran.
+ */
+const DEAD_EXPORT_CEILING = 273;
+
+test('E1 — the repository is visible, or this sweep measures nothing', () => {
+  // A guard, not a formality: with the siblings missing, every export below
+  // reads as dead and the ceiling assertion fails with a number that says
+  // nothing about the code. Better to fail here, where the message is true.
+  assert.ok(
+    CONSUMER_FILES.length > 2000,
+    `Only ${CONSUMER_FILES.length} consumer files found under ${REPO_ROOT}. The export ` +
+      'sweep needs the sibling workspaces (CLI, desktop, dashboard, brain) to know what ' +
+      'calls core. Run it from a full checkout.',
+  );
+});
+
+test('E1 — the count of DEAD exports is a ceiling that only falls', () => {
+  const dead = deadExports();
+  assert.equal(
+    dead.length,
+    DEAD_EXPORT_CEILING,
+    `Exports with no non-test caller anywhere — not in another package, not even in ` +
+      `their own module: ${dead.length}, ceiling ${DEAD_EXPORT_CEILING}.\n` +
+      (dead.length > DEAD_EXPORT_CEILING
+        ? 'A PR added an export nothing calls. This is the MODULE check one level down: ' +
+          'the module has other exports that are wired, so nothing else here notices.\n' +
+          'Wire it, un-export it, or delete it.'
+        : 'You removed one — thank you. Lower DEAD_EXPORT_CEILING to ' +
+          `${dead.length} in this same commit, so the slack cannot be quietly spent on ` +
+          'the next one.') +
+      '\n\nFirst twelve:\n' +
+      dead.slice(0, 12).map((d) => `  - ${d}`).join('\n'),
+  );
+});
+
+/**
+ * Exports ADR-028 retired, and the reason each was not wired instead.
+ *
+ * The ceiling above catches a RISE. It cannot notice a specific export coming
+ * back if something else was deleted in the same commit, and these are the ones
+ * where that matters: each was reached only by its own unit test, inside a
+ * module the module-granular sweep had already certified as wired, and each was
+ * therefore invisible to every check this file had before today.
+ */
+const RETIRED_EXPORTS = new Map<string, string>([
+  ['agent/runtime/engineSelection.ts :: selectEngine', 'C1 — one engine; the whole module is gone'],
+  ['planner/agentContext.ts :: classifyPlannerAction', 'D6 — toolCatalog.ts classifies the verbs that exist'],
+  ['planner/agentContext.ts :: mayCompleteFromInference', 'D6 — enforced by there being no inferring caller'],
+  ['planner/agentContext.ts :: mayRaiseBacklog', 'D6 — gates a proposer §6 has not decided to build'],
+  ['planner/plannerService.ts :: timetableView', 'D5 — todayView answers it from the same dayView'],
+  ['planner/plannerSync.ts :: applyRemoteItem', 'D11 — its cascade is a SyncRecords.afterApply hook now'],
+  ['planner/plannerSync.ts :: describeSync', 'D11 — describeRecordSync already defaults to "item"'],
+  ['planner/sourceAdapter.ts :: collectFromSources', 'D7 — one source, and freshness comes from the items'],
+  ['planner/sourceAdapter.ts :: partitionForRetention', 'D8 — retention runs server-side, where the rows are'],
+  ['planner/connectorIssueAdapter.ts :: refreshLocalPlannerFromConnectorIssues', 'D7 — the server owns the projection'],
+  ['planner/wireContract.ts :: isPlannerPushOperation', 'D11 — callers need the normalized operation, not a boolean'],
+  ['sync/outbox.ts :: replayOrder', 'D2 — nextBatch is where per-item order is actually kept'],
+  ['sync/hybridClock.ts :: formatHlc', 'D3 — stamps cross the wire as objects'],
+  ['sync/hybridClock.ts :: parseHlc', 'D3 — same'],
+  ['tooling/gitIdentity.ts :: describeAccounts', 'I4 — there is no account picker, and none proposed'],
+]);
+
+test('E1 — the exports ADR-028 retired have not come back', () => {
+  const back: string[] = [];
+  for (const entry of RETIRED_EXPORTS.keys()) {
+    const [rel, name] = entry.split(' :: ');
+    const raw = SOURCE_TEXT.get(path.join(SRC, rel!));
+    if (!raw) continue; // module deleted outright — retired harder
+    if (valueExports(raw).includes(name!)) back.push(entry);
+  }
+  assert.deepEqual(
+    back,
+    [],
+    'These were retired because nothing outside their own test reached them:\n' +
+      back.map((b) => `  - ${b} (${RETIRED_EXPORTS.get(b)})`).join('\n') +
+      '\n\nIf one is needed again, it needs a caller in the same commit — and then ' +
+      'this entry comes out with a note saying who calls it.',
   );
 });
 

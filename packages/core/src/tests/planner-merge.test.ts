@@ -14,7 +14,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   hlcNow, hlcReceive, hlcZero, compareHlc, hlcAfter, clockSkewMs, describeSkew,
-  formatHlc, parseHlc, NOTABLE_SKEW_MS,
+  NOTABLE_SKEW_MS,
 } from '../sync/hybridClock.js';
 import {
   causalValue, mergeField, mergeText, mergeCompletion, mergeOwnedItem, refreshMirrored, canEditLocally,
@@ -77,11 +77,9 @@ test('notable clock skew is reported rather than silently absorbed', () => {
   assert.match(notice!, /Ordering is still correct/);
 });
 
-test('stamps round-trip through the wire form', () => {
-  const h = at(1723, 4, 'dev-x');
-  assert.deepEqual(parseHlc(formatHlc(h)), h);
-  assert.equal(parseHlc('nonsense'), null);
-});
+// `formatHlc`/`parseHlc` and their round-trip test were retired 2026-08-12:
+// stamps cross the wire as objects, validated by `isPlannerWireHlc`, and the
+// string form had no producer or consumer to round-trip against.
 
 /* --------------------------------------------------------------- the merge */
 

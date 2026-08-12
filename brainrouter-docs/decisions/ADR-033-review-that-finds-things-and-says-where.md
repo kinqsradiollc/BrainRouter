@@ -1,10 +1,25 @@
 # ADR-033 — Review that finds things, and says where
 
 **Status:** ACCEPTED — approved by the owner for implementation.
-**Implementation status (2026-08-10):** PARTIAL — the shared orchestration, evidence safety and
-paired fail-closed benchmark harness are implemented, and the deterministic COST conjunct of §6 now
-passes: bundled sends **516,672 characters in 16 calls versus legacy's 545,529 in 12** (−28,857,
-−5.29%), down from +33,537 before.
+**Implementation status (2026-08-12):** PARTIAL, and precisely one conjunct short. The shared
+orchestration, evidence safety and paired fail-closed benchmark harness are implemented and reached
+on a user path; the deterministic COST conjunct of §6 passes: bundled sends **516,672 characters in
+16 calls versus legacy's 545,529 in 12** (−28,857, −5.29%), down from +33,537 before.
+
+**What D7 still owes is a QUALITY number — precision and recall — and it is blocked on a provider,
+not on code.** The corpus exists and is frozen (`benchmark/data/review-cases.json`, schema 2, 11
+cases: 7 carrying curated known issues, 4 clean with explicit no-linked-fix evidence, observation
+cutoff 2026-08-09, ground-truth bias restated inside the data). The runner exists
+(`npm run bench:review -w @kinqs/brainrouter-mcp-server -- --provider-config=…`) and is
+paired-only by design, because a lone arm cannot prove a delta.
+
+A run was attempted on 2026-08-12 against a local OpenAI-compatible endpoint. It failed — the server
+listed models but served no completions — and that failure is worth recording rather than hiding,
+because it exercised §6's own discipline for the first time against a REAL provider fault instead of
+the synthetic bootstrap case the tests cover: six bounded retries, then a `status: "failed"`
+artifact at mode 0600 carrying corpus identity, zero completed cases and the one attempted model
+call. **It did not become a zero-finding report**, which is the failure mode that would have made
+every other number in this ADR untrustworthy.
 
 What closed it was a mis-scoped budget rather than any relaxation of D2/D3/D5/D9. The
 repository-context cap was applied PER UNIT, so a review's evidence budget grew with how many units

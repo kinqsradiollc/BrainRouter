@@ -186,14 +186,13 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
             }} />
         </Suspense>
       );
-      case 'ci': return <Suspense fallback={<div className="row status"><span className="spinner" /> Loading…</div>}><CIPanel ci={ci} onOpenExternal={openUrl} onReviewPr={reviewPrWithAi} trackPr={track.pr} trackOps={trackOps} /></Suspense>;
       case 'diff': return (
         <DiffPanel gitInfo={gitInfo} changed={changedFiles} diff={diffView}
           scrollToLine={diffView && diffTarget && diffView.path === diffTarget.path ? diffTarget.line : undefined}
           onPick={(p) => { setDiffTarget(null); q('q-diff', 'file-diff', { path: p }); }}
           onBack={() => { setDiffTarget(null); setDiffView(null); }} onOpenFile={openFile}
           onGit={runGit} onGitBypass={(kind, msg) => runGit(kind, msg, { bypass: true })} gitBusy={gitBusy}
-          reviewGate={reviewGate} onReview={() => ensurePanel('review')}
+          reviewGate={reviewGate} onReview={() => ensurePanel('stack')}
           findingsByFile={reviewFindingsByFile} />);
       case 'terminal': return <TerminalPanel />;
       case 'tools': return <ToolsPanel log={toolLog} />;
@@ -292,38 +291,6 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
         onRemove={(path) => { q('q-worktree-remove', 'worktree-remove', { path }); setTimeout(() => q('q-worktrees', 'git-worktrees'), 250); }}
         onOpen={(path) => openWorktree(path)}
         onDiff={(path) => q('q-worktree-diff', 'worktree-diff', { path })} />;
-      case 'review': {
-        const refresh = () => setTimeout(() => q('q-review-current', 'review-current'), 120);
-        const fixPrompt = (f: ReviewFindingView) => `Fix this review finding in \`${f.file}${f.line ? `:${f.line}` : ''}\` (${f.severity}): ${f.summary}`;
-        return <ReviewPanel review={review} gate={reviewGate} running={reviewRunning}
-          onRun={() => { setReviewRunningByWs((m) => ({ ...m, [activeRoot]: true })); setReviewByWs((m) => setEntry(m, activeRoot, null)); q('q-review-diff', 'review-diff'); }}
-          onDiscuss={(f) => setDraft(`About the review finding in \`${f.file}${f.line ? `:${f.line}` : ''}\` (${f.severity}): ${f.summary}\n\nWhat's the fix?`)}
-          onApply={(f) => { if (f.id) { q('q-review-apply', 'review-apply-suggestion', { id: f.id }); refresh(); setTimeout(() => { q('q-files', 'changed-files'); q('q-gitinfo', 'git-info'); }, 450); } }}
-          onAskFix={(f) => {
-            // T3 — launch a scoped fix agent for THIS finding (not just a draft);
-            // it edits the file, then the review re-runs. Falls back to a draft if
-            // the finding has no id.
-            if (f.id) { setReviewRunningByWs((m) => ({ ...m, [activeRoot]: true })); setToast('Fixing this finding — the agent is editing the file…'); q('q-review-fix', 'review-fix-finding', { id: f.id }); }
-            else { setDraft(fixPrompt(f)); setToast('Fix request drafted — press Enter to ask the agent.'); }
-          }}
-          onDismiss={(f) => { if (f.id) { q('q-review-dismiss', 'review-dismiss-finding', { id: f.id }); refresh(); } }}
-          onResolve={(f) => { if (f.id) { q('q-review-resolve', 'review-resolve-finding', { id: f.id }); refresh(); } }}
-          onTriage={(f, status) => { if (f.id) { q('q-review-triage', 'review-set-finding-status', { id: f.id, status }); refresh(); } }}
-          onAnnotate={(f) => {
-            // §9 — capture a review finding as a durable annotation: a review-finding
-            // record referencing the finding by id, anchored to its file/lines, with
-            // the finding's severity. Refreshes the annotation slice afterwards.
-            const sev = (['info', 'low', 'medium', 'high'] as const).includes(f.severity as never) ? f.severity : undefined;
-            q('q-annot-create', 'annotation-create', {
-              type: 'review-finding', targetId: f.id, body: f.summary, severity: sev,
-              anchor: { filePath: f.file, startLine: f.line, endLine: f.endLine },
-            });
-            setTimeout(() => q('q-annot', 'annotation-list'), 150);
-            setToast('Finding saved as an annotation — see the Annotations view.');
-          }}
-          onOpenFile={(f) => openFile(f.file)}
-          onOpenDiff={(f) => { setDiffTarget({ path: f.file, line: f.line }); ensurePanel('diff'); q('q-diff', 'file-diff', { path: f.file }); }} />;
-      }
       case 'atlas':
         return <Suspense fallback={<div className="row status"><span className="spinner" /> Loading Atlas…</div>}><AtlasPanel graph={atlasGraph} building={atlasBuilding} enriching={atlasEnriching}
           onLoad={() => q('q-atlas', 'atlas-graph')}
@@ -390,12 +357,49 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
         // layers with buttons that cannot act on them was claiming a state it
         // had not established — this ADR's own defect, inside the surface
         // written to fix it.
+        const refreshReview = () => setTimeout(() => q('q-review-current', 'review-current'), 120);
+        const fixPrompt = (f: ReviewFindingView) => `Fix this review finding in \`${f.file}${f.line ? `:${f.line}` : ''}\` (${f.severity}): ${f.summary}`;
         return <div className="scroll pr-panel">
           <div className="pr-section">
             <div className="pr-section-head">Checks</div>
             <Suspense fallback={<div className="row status"><span className="spinner" /> Loading…</div>}>
               <CIPanel ci={ci} onOpenExternal={openUrl} onReviewPr={reviewPrWithAi} trackPr={track.pr} trackOps={trackOps} />
             </Suspense>
+          </div>
+          {/* The review findings, inline — the second half of "can this land".
+              This section is what makes G5 true: for a while the panel carried
+              Checks alone while `review` was aliased onto this id, so the one
+              consolidated panel answered half the question it consolidated. */}
+          <div className="pr-section">
+            <div className="pr-section-head">Review</div>
+            <ReviewPanel review={review} gate={reviewGate} running={reviewRunning}
+              onRun={() => { setReviewRunningByWs((m) => ({ ...m, [activeRoot]: true })); setReviewByWs((m) => setEntry(m, activeRoot, null)); q('q-review-diff', 'review-diff'); }}
+              onDiscuss={(f) => setDraft(`About the review finding in \`${f.file}${f.line ? `:${f.line}` : ''}\` (${f.severity}): ${f.summary}\n\nWhat's the fix?`)}
+              onApply={(f) => { if (f.id) { q('q-review-apply', 'review-apply-suggestion', { id: f.id }); refreshReview(); setTimeout(() => { q('q-files', 'changed-files'); q('q-gitinfo', 'git-info'); }, 450); } }}
+              onAskFix={(f) => {
+                // T3 — launch a scoped fix agent for THIS finding (not just a draft);
+                // it edits the file, then the review re-runs. Falls back to a draft if
+                // the finding has no id.
+                if (f.id) { setReviewRunningByWs((m) => ({ ...m, [activeRoot]: true })); setToast('Fixing this finding — the agent is editing the file…'); q('q-review-fix', 'review-fix-finding', { id: f.id }); }
+                else { setDraft(fixPrompt(f)); setToast('Fix request drafted — press Enter to ask the agent.'); }
+              }}
+              onDismiss={(f) => { if (f.id) { q('q-review-dismiss', 'review-dismiss-finding', { id: f.id }); refreshReview(); } }}
+              onResolve={(f) => { if (f.id) { q('q-review-resolve', 'review-resolve-finding', { id: f.id }); refreshReview(); } }}
+              onTriage={(f, status) => { if (f.id) { q('q-review-triage', 'review-set-finding-status', { id: f.id, status }); refreshReview(); } }}
+              onAnnotate={(f) => {
+                // §9 — capture a review finding as a durable annotation: a review-finding
+                // record referencing the finding by id, anchored to its file/lines, with
+                // the finding's severity. Refreshes the annotation slice afterwards.
+                const sev = (['info', 'low', 'medium', 'high'] as const).includes(f.severity as never) ? f.severity : undefined;
+                q('q-annot-create', 'annotation-create', {
+                  type: 'review-finding', targetId: f.id, body: f.summary, severity: sev,
+                  anchor: { filePath: f.file, startLine: f.line, endLine: f.endLine },
+                });
+                setTimeout(() => q('q-annot', 'annotation-list'), 150);
+                setToast('Finding saved as an annotation — see the Annotations view.');
+              }}
+              onOpenFile={(f) => openFile(f.file)}
+              onOpenDiff={(f) => { setDiffTarget({ path: f.file, line: f.line }); ensurePanel('diff'); q('q-diff', 'file-diff', { path: f.file }); }} />
           </div>
         </div>;
       }

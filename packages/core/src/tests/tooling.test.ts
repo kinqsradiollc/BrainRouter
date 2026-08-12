@@ -11,7 +11,7 @@ import {
   type ToolStatus,
 } from '../tooling/provisioning.js';
 import {
-  checkIdentity, isWriteOperation, bindWorkspace, switchCommand, describeAccounts,
+  checkIdentity, isWriteOperation, bindWorkspace, switchCommand,
   type GitHubAccount, type WorkspaceBinding,
 } from '../tooling/gitIdentity.js';
 
@@ -129,10 +129,20 @@ test('switching uses gh, not a second credential store', () => {
   );
 });
 
-test('the picker marks which account is active AND which owns this workspace', () => {
-  const rows = describeAccounts([acct('work', false), acct('personal', true)], bound('work'));
-  assert.equal(rows.find((r) => r.login === 'personal')!.note, 'signed in');
-  assert.equal(rows.find((r) => r.login === 'work')!.note, 'this workspace');
+test('the mismatch names both accounts AND the command that switches', () => {
+  // I3's "question, both one click" UI was never built, so this sentence is
+  // what a person actually meets. `describeAccounts` annotated rows for the
+  // picker that would have shown it and was retired 2026-08-12 with no caller;
+  // `switchCommand` had none either, which is why the message said "switch
+  // account" without saying how.
+  const v = checkIdentity({
+    operation: 'push', active: acct('personal', true), binding: bound('work'),
+  });
+  assert.equal(v.kind, 'mismatch');
+  const message = (v as { message: string }).message;
+  assert.match(message, /pushed as work/);
+  assert.match(message, /signed in as personal/);
+  assert.match(message, /gh auth switch --hostname github\.com --user work/);
 });
 
 test('binding records the account and when', () => {

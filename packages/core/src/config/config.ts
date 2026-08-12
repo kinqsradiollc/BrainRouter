@@ -751,9 +751,6 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     enforceVersionRange: c.enforceVersionRange === true,
     // CC-CONFIG-A1 — env override wins (opt-in troubleshooting from any shell).
     safeMode: resolveBoolWithEnv(c.safeMode, 'BRAINROUTER_SAFE_MODE'),
-    // ADR-027 D2 — anything other than an explicit 'graph' stays on the loop.
-    // A typo must not silently switch the engine that runs every turn.
-    executionEngine: c.executionEngine === 'graph' ? 'graph' : 'loop',
     // ADR-028 H3 — anything unrecognised falls back to `auto`, so a typo in
     // config cannot silently change how pull requests are opened.
     stackingMode: c.stackingMode === 'always' || c.stackingMode === 'never' ? c.stackingMode : 'auto',

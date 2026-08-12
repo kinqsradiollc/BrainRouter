@@ -206,57 +206,28 @@ function nextBlock(blocks: readonly TimeBlock[], nowMs: number): TimeBlock | nul
   return scheduled[0] ?? open.find((b) => !b.scheduledFor) ?? null;
 }
 
-/* ------------------------------------------------------------ tool policy */
+/* ---------------------------------------------------- tool policy, retired */
 
-export type PlannerActionClass = 'read' | 'mutate' | 'destructive';
-
-export const PLANNER_ACTIONS: Record<string, PlannerActionClass> = {
-  'planner.today': 'read',
-  'planner.timetable': 'read',
-  'planner.find': 'read',
-  'planner.add': 'mutate',
-  'planner.schedule': 'mutate',
-  'planner.complete': 'mutate',
-  'planner.reschedule': 'mutate',
-  'planner.delete': 'destructive',
-};
-
-export function classifyPlannerAction(action: string): PlannerActionClass | null {
-  return PLANNER_ACTIONS[action] ?? null;
-}
-
-/**
- * May the agent complete this item on its own initiative?
+/*
+ * D6's three policy predicates stood here — `classifyPlannerAction` over a
+ * `PLANNER_ACTIONS` table, `mayCompleteFromInference`, and `mayRaiseBacklog` —
+ * and were **retired 2026-08-12**. Each was reached only by its own unit test,
+ * which is the ADR's own §1.6 failure inside the ADR's own Part D.
  *
- * No — never inferred, only ever on an explicit instruction. The reason is not
- * caution for its own sake: the todo is usually broader than the thing that
- * looks like it finished it, so the inference is wrong often enough that the
- * planner stops being a record of what you decided.
- */
-export function mayCompleteFromInference(): { allowed: false; reason: string } {
-  return {
-    allowed: false,
-    reason:
-      'Completing a planner item is never inferred. A merged pull request or a finished tool call ' +
-      'is evidence about the work, not about the intention that was written down — the item is ' +
-      'usually broader. Ask, or wait to be told.',
-  };
-}
-
-/**
- * Should the agent bring up how far behind someone is?
+ * Where each rule actually lives now:
  *
- * Only when it bears on what is being asked. Knowing is not the same as
- * mentioning, and an assistant that opens every turn with an overdue count gets
- * tuned out — after which it cannot raise the one that mattered.
+ *  - **Action classification.** `extension/builtin/toolCatalog.ts:85-92`
+ *    classifies every planner verb by `accessTier` and `actionKind`, and that
+ *    classification is the one the authorization path reads. The table here
+ *    was a second one, keyed on `planner.*` names no dispatcher has ever
+ *    accepted — the tools are `planner_today` and friends.
+ *  - **Never infer completion.** Enforced by the absence of the capability:
+ *    there is no tool or projection that sets `completed` without being told
+ *    to, and `connectorIssueAdapter.ts:120` states that in the one projection
+ *    that could. A predicate that returns `{ allowed: false }` unconditionally
+ *    and that nothing consults enforces nothing.
+ *  - **Raising the backlog unprompted.** ADR-028 §6 open question 2 asks
+ *    whether the agent may propose a day plan unprompted, and it is still open.
+ *    Nothing proposes, so nothing gated. F5 is the precedent: an open question
+ *    cannot be held open by code that never runs.
  */
-export function mayRaiseBacklog(input: {
-  userAskedAboutPlanning: boolean;
-  itemsCarriedOver: number;
-  raisedThisSession: boolean;
-}): boolean {
-  if (input.raisedThisSession) return false;
-  if (input.userAskedAboutPlanning) return true;
-  // Unprompted only when something has genuinely stalled — not merely late.
-  return input.itemsCarriedOver >= 3;
-}

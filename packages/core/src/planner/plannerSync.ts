@@ -11,10 +11,10 @@
  * equivalent — every block is owned — so the rule belongs to the planner rather
  * than to the engine.
  */
-import type { OutboxOperation, OutboxState } from '../sync/outbox.js';
+import type { OutboxOperation } from '../sync/outbox.js';
 import { compareHlc, hlcReceive, type Hlc } from '../sync/hybridClock.js';
 import {
-  applyRemoteRecord, describeRecordSync, isFirstSync, syncRecords,
+  isFirstSync, syncRecords,
   type PullResponse as RecordPullResponse, type PushResponse,
   type SyncRecords, type SyncResult,
 } from '../sync/recordSync.js';
@@ -51,7 +51,34 @@ const PLANNER_RECORDS: SyncRecords<PlannerState, PlannerItem> = {
     return { value: merged, conflicted: Object.keys(merged.conflicts ?? {}).length > 0 };
   },
   observedClock: newestPlannerItemStamp,
+  afterApply: cascadeItemTombstone,
 };
+
+/**
+ * A deleted item takes its time blocks with it.
+ *
+ * An item's blocks are not records the server sends — they hang off the item —
+ * so a tombstone pulled from another device would otherwise remove the item and
+ * leave its blocks sitting on the day, attached to nothing. `updateBlock`
+ * refuses to touch a block whose parent is gone, so they would also be
+ * unmovable.
+ *
+ * This ran as part of `applyRemoteItem` until 2026-08-12, and `applyRemoteItem`
+ * had no caller: the pull loop goes through `applyRemoteRecord`, which knew
+ * nothing about it. It is a `SyncRecords` hook now, so the loop cannot take a
+ * path that skips it.
+ */
+function cascadeItemTombstone(state: PlannerState, remote: PlannerItem): void {
+  const deletedAt = state.items[remote.id]?.deletedAt;
+  if (!deletedAt) return;
+  for (const [blockId, block] of Object.entries(state.blocks)) {
+    if (block.itemId !== remote.id) continue;
+    const tombstone = block.deletedAt && compareHlc(block.deletedAt, deletedAt) > 0
+      ? block.deletedAt
+      : deletedAt;
+    state.blocks[blockId] = { ...block, updatedAt: tombstone, deletedAt: tombstone };
+  }
+}
 
 function newestPlannerItemStamp(item: PlannerItem): Hlc | undefined {
   const stamps: Hlc[] = [
@@ -64,25 +91,14 @@ function newestPlannerItemStamp(item: PlannerItem): Hlc | undefined {
   return stamps.sort(compareHlc).at(-1);
 }
 
-/** Merge one server item into local state. */
-export function applyRemoteItem(
-  state: PlannerState,
-  remote: PlannerItem,
-  fetchedAt: string,
-): { conflicted: boolean } {
-  const result = applyRemoteRecord(state, remote, fetchedAt, PLANNER_RECORDS);
-  const deletedAt = state.items[remote.id]?.deletedAt;
-  if (deletedAt) {
-    for (const [blockId, block] of Object.entries(state.blocks)) {
-      if (block.itemId !== remote.id) continue;
-      const tombstone = block.deletedAt && compareHlc(block.deletedAt, deletedAt) > 0
-        ? block.deletedAt
-        : deletedAt;
-      state.blocks[blockId] = { ...block, updatedAt: tombstone, deletedAt: tombstone };
-    }
-  }
-  return result;
-}
+/*
+ * `applyRemoteItem` stood here and was **retired 2026-08-12**. It wrapped
+ * `applyRemoteRecord` to add the block-tombstone cascade above, and nothing
+ * called it — `syncOnce` reaches `applyRemoteRecord` through `syncRecords`,
+ * which had no way to know the wrapper existed. The cascade is a
+ * `SyncRecords.afterApply` hook now, so it runs on the path that actually
+ * pulls.
+ */
 
 function newestLocalBlockStamp(state: PlannerState, blockId: string): Hlc | undefined {
   const blockStamp = state.blocks[blockId]?.updatedAt;
@@ -136,6 +152,10 @@ export async function syncOnce(
   return { ...result, pulledBlocks };
 }
 
-export function describeSync(result: SyncResult, outbox: OutboxState): string {
-  return describeRecordSync(result, outbox, 'item');
-}
+/*
+ * `describeSync` — `describeRecordSync(result, outbox, 'item')` — was **retired
+ * 2026-08-12**. No caller: what both hosts render is `describeSyncState`, which
+ * describes the OUTBOX and is what a person looks at between syncs. Notes keeps
+ * its own wrapper because its noun differs ("block"); the planner's said
+ * "item", which is `describeRecordSync`'s default.
+ */

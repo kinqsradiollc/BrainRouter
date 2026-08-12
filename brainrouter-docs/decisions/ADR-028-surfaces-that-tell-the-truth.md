@@ -21,7 +21,7 @@ Four subsystems sit in this release. They are one ADR because they are **one def
 | `stack.addlayer` | "I created a stack layer" | It created an ordinary pull request |
 | A sent steer | "Delivered" | Nothing knows whether the model received it |
 | Artifacts panel | "These are this session's artifacts" | They are the previous session's |
-| `cli.executionEngine` | "Selects loop or graph" | Nothing reads it; the loop always runs |
+| `cli.executionEngine` | "Selects loop or graph" | Nothing reads it; the loop always runs *(knob and engine retired — C1)* |
 | A planner (proposed) | "Here is your day" | Three sources would be hours stale, unmarked |
 
 The fix in each case has the same shape, and it is not *be more careful*:
@@ -92,6 +92,10 @@ nothing.
 
 ADR-027 D2 claimed "both engines ship and a setting selects". It shipped both engines, a setting,
 and no wire between them.
+
+> *Left in the present tense because it is the state C1 was written against. It is no longer true in
+> either direction: the wire was built, and then the whole thing was deleted — engine, selector,
+> knob and dropdown — on 2026-08-12. See C1, and ADR-027 D2, which this withdraws.*
 
 ### 1.5 No planner — work has no single home
 
@@ -295,13 +299,25 @@ notification — a proposal that fires often is dismissed reflexively and worth 
 **`cli.buildLoopEmitPr`, when wired, emits into the current stack**, not a competing branch.
 
 > **Retired — the whole decision, not only its unbuilt half.** `review/planToStack.ts`
-> (`proposeStackFromPlan`, `mayProposeStack`), `canAddLayer` and the auto-propose gate are deleted,
-> and the router no longer accepts plan phases or diff groups.
+> (`proposeStackFromPlan`, `mayProposeStack`) and `canAddLayer` are deleted, and the router no
+> longer accepts plan phases or diff groups.
+>
+> **Correction, 2026-08-12: this note said "and the auto-propose gate" and that was not true.**
+> This decision defines the gate as `adviseStacking` returning `shouldStack: true`, and
+> `adviseStacking` is still exported (`packages/core/src/review/stackedPr.ts:238`,
+> `packages/core/src/review/index.ts:51`), still has a registered control action
+> (`stack.advise` → `packages/core/src/workbench/workbenchActions.ts:129-131`), and still has no
+> caller outside its own test. Deleting the thing that CONSUMED the gate and then writing that the
+> gate was deleted is the same move this ADR objects to everywhere else — reporting a state on the
+> strength of an adjacent one. **It is outstanding, and it is the last piece of A7 in the tree.**
+> Nothing proposes a stack, because the action that would carry the advice is one of the fifteen
+> `workbenchRegistry` declares and nothing dispatches (see A2), so the behaviour is already what
+> this note claimed; the code is not.
 >
 > The previous audit called the mapping "live" because `routePullRequest` called it. It did not run
-> once: **no caller ever supplied `phases` or `groups`.** The build loop passed neither
-> (`buildLoop.ts:426-428` passed a mode, a capability and a line count) and the Track path passes
-> neither, so the arm holding `proposeStackFromPlan` was unreachable in production while looking
+> once: **no caller ever supplied `phases` or `groups`.** The build loop passed neither, and no longer consults the router at all
+> (`packages/core/src/orchestration/workflow/buildLoop.ts:380` · `finalizeBuildLoop`), and the Track
+> path passes neither, so the arm holding `proposeStackFromPlan` was unreachable in production while looking
 > reached in the import graph — the H4 failure one level in from where H4 was looking.
 >
 > Finishing it was the alternative, and it is not a wiring job. *One layer per phase* requires a
@@ -318,8 +334,14 @@ confirmations.
 
 > **Retired.** `StackPanel.tsx` and `lib/stack/stackPanelView.ts` are deleted, the chain block is
 > gone from `renderPanelBody.tsx`, and the two host actions nothing dispatched (`stack-describe`,
-> `stack-advise`) are gone from `electron/host/queries.ts` with `stackActions.ts`. The Pull request
-> panel keeps its Checks and review findings, which are wired.
+> `stack-advise`) are gone from `electron/host/queries.ts` with `stackActions.ts` — the removal is
+> recorded in place at `brainrouter-desktop/electron/host/queries.ts:809`.
+>
+> **This sentence used to end "the Pull request panel keeps its Checks and review findings, which
+> are wired", and that was half true — see G5, repaired 2026-08-12.** The panel kept Checks. The
+> findings half was a claim about a section that did not render. It renders now
+> (`brainrouter-desktop/src/App/render/renderPanelBody.tsx:374-375`), which is what makes the
+> sentence safe to write.
 >
 > This was the clearest instance of the defect the ADR is named for: the panel read `stackLayers`
 > and `stackAvailability` props no caller passed, `refreshPanelData` had no `stack` branch, and its
@@ -394,7 +416,7 @@ on purpose.
 
 ### Part C — Execution engine
 
-#### C1 · Wire the setting, or delete it
+#### C1 · Wire the setting, or delete it — *(DELETED 2026-08-12; see the note)*
 
 Four requirements:
 
@@ -415,26 +437,35 @@ ships and one exists".
 because the graph's value for interrupted, resumable work is real — but it is currently zero and
 would stay zero.
 
-> **Requirements 1, 3 and 4 are built. Requirement 2 is not, and the consequence is that `graph`
-> can never actually run.** `runTurn` reads the knob and names the running engine in the session
-> (`packages/core/src/agent/runtime/runTurn.impl.ts:286-291`). The control is
-> `brainrouter-desktop/src/settings/runtime/RuntimeSection.tsx:64`, mounted unconditionally from
-> `brainrouter-desktop/src/settings.tsx:443-453` — under **Automation → Runtime**, rather than the
-> "agent runtime" this decision names. Its nav keywords carried none of "engine", "loop" or "graph"
-> at audit time, so settings search returned nothing for the control's own name; they now do
-> (`brainrouter-desktop/src/settings/shared/types.ts:185`).
+> **RETIRED 2026-08-12 — the rejected alternative was the right one after all.** Delete the knob,
+> ship only the loop. Requirement 2 was never met, and the three that were built were a knob, a
+> dropdown and a status line for an engine no turn could reach.
 >
-> Parity is absent and declared absent: `ENGINE_CAPABILITIES` gives graph no interrupts, no tool
-> authorization, no receipts and no delegation
-> (`packages/core/src/agent/runtime/engineSelection.ts:72-79`), so `selectEngine` always falls back
-> to the loop with a notice, and the `allowIncomplete` escape is passed by nothing outside
-> `packages/core/src/tests/engine-selection.test.ts:80`. `packages/core/src/graph/graphExecutor.ts`
-> has exactly one importer in the repo: its own test. **There is no parity matrix** —
-> `engine-selection.test.ts` exercises the selector, not the same scenarios through both engines.
+> The state that forced it: `ENGINE_CAPABILITIES` gave graph no interrupts, no tool authorization,
+> no receipts and no delegation, so `selectEngine` always fell back to the loop; the
+> `allowIncomplete` escape that would have honoured the request anyway was passed by nothing but a
+> test; and `graph/graphExecutor.ts` had exactly one importer in the repository — its own test — so
+> even a selector that returned `graph` had no path to an executor. **Two test files passed for two
+> releases while the thing they were about could not happen.**
 >
-> This is the honest version of the failure §1.4 describes, not a repeat of it: the knob is read and
-> the fallback says why. But §5 anticipated exactly this, and its instruction now applies — say so,
-> and reconsider whether the option should exist.
+> `graph/graphExecutor.ts`, `graph/graphState.ts`, `graph/compensation.ts`,
+> `agent/runtime/engineSelection.ts` and the `cli.executionEngine` knob are deleted; the Execution
+> engine group is gone from `brainrouter-desktop/src/settings/runtime/RuntimeSection.tsx`. The knob
+> is documented as ignored rather than silently dropped
+> (`packages/core/src/config/configTypes.ts:663-668`), because config files in the wild carry it and
+> ignoring it changes nothing — `graph` never ran a turn. `runTurn` now says there is one engine and
+> why (`packages/core/src/agent/runtime/runTurn.impl.ts:303-307`).
+>
+> Absence is what regresses quietly, so it is pinned from both sides:
+> `packages/core/src/tests/execution-engine-retired.test.ts` and
+> `brainrouter-desktop/src/settings/runtime/executionEngineRetired.test.ts` — including that a stale
+> `executionEngine` in a config file is inert rather than an error, and that Settings search no
+> longer advertises a choice that does not exist.
+>
+> **§5 reserved this decision explicitly** and its condition was met: parity was more than a week
+> away, so the honest response was to say so and stop offering the option. What went with it is the
+> dropdown — the part of the defect that was still visible to a user, who could pick `graph` and get
+> the loop.
 
 ---
 
@@ -533,7 +564,7 @@ agent opening each turn with your overdue count is notification fatigue in a pla
 
 > **Built — both halves, 2026-08-12.** Five `planner_*` tools are registered and advertised
 > (`packages/core/src/extension/builtin/toolCatalog.ts:85-92`, handlers at
-> `packages/core/src/extension/builtin/runtime.ts:250-298`), and `buildPlannerContext` is now
+> `packages/core/src/extension/builtin/runtime.ts:285-341`), and `buildPlannerContext` is now
 > attached to every non-silent turn from
 > `packages/core/src/agent/runtime/contextPreparationPhase.ts` — the same phase, and the same tagged
 > system-message mechanism, that the goal anchor and ADR-032's learned block use. Nothing is merged
@@ -690,6 +721,48 @@ ships. So:
 > cluster was retired and the `./comprehension` subpath removed with it, because deleting the files
 > and leaving the subpath would have left the laundering in place for whatever went there next.
 > `packages/core/src/tests/comprehension-retired.test.ts` fails if either comes back.
+
+> **Third blindness, and the one this decision had built in from the start:
+> every part of the sweep above asks about MODULES.** Fixed 2026-08-12, after the
+> fix above was found to have moved the defect down a level rather than out.
+>
+> A module with one live export is wired, as far as any check on this page could
+> tell — and its dead siblings are invisible. Nine of this ADR's decisions were
+> in that state on the day the orphan count became an equality:
+> `engineSelection`'s capability table and three functions around it, inside a
+> module `runTurn` imports; D6's three planner policy predicates, inside a
+> barrel the backend imports; `applyRemoteItem`, sitting beside the `syncOnce`
+> the desktop calls every minute. That last one is the argument for why this is
+> not tidiness: it carried the rule that a deleted item tombstones its time
+> blocks, so the rule was written, tested, and never executed by the pull path.
+>
+> **The check is a count of DEAD EXPORTS, pinned as an equality like the module
+> one.** "Dead" means no non-test file mentions the name — not in another
+> package, not in its own module. That last clause is what makes it tractable:
+> `parseRobotsTxt` is exported for its unit test and called three lines down, so
+> it is over-exported rather than dead, and failing on it would teach people to
+> un-export things for the checker. What remains is 273 exports out of roughly
+> four thousand — a real backlog, stated rather than scoped away, and an
+> equality fails on the DELTA no matter how large the standing number is.
+>
+> **It reads the sibling workspaces.** Core is a library; most of what it
+> exports is consumed by the CLI, the desktop, the dashboard or the brain, and a
+> check that cannot see them would call almost everything dead. A missing
+> checkout fails loudly rather than skipping, because a number that measures the
+> checkout is the same class of mistake as the basename collision that once made
+> 74% of the package look unreachable.
+>
+> Two more things it does. Comments are stripped before matching, because every
+> retirement in this pass leaves a paragraph naming what it removed and a name
+> in that paragraph would otherwise register as a caller. And the fifteen
+> exports retired here are listed by name with their reasons, so one coming back
+> fails even in a commit that deletes something else — the equality alone
+> catches a rise, not a substitution.
+>
+> Mutation-proven in three directions before it was trusted: a dead export added
+> to a live module fails it **while every module-level check on this page still
+> passes**, which is the whole finding in one run; deleting a dead export fails
+> until the constant is lowered; and re-adding a retired export fails by name.
 
 ---
 
@@ -962,12 +1035,12 @@ inert code. The directory, its tests and the `./comprehension` subpath are now a
 
 **What F7 does have.** The panel is real and a person can reach it:
 `brainrouter-desktop/src/panels/memory/ComprehensionPanel.tsx` with its container at
-`ComprehensionContainer.tsx:40`, wired at
-`brainrouter-desktop/src/App/render/renderPanelBody.tsx:381` to `reviewMyUnderstanding`
+`brainrouter-desktop/src/panels/memory/ComprehensionContainer.tsx:40`, wired at
+`brainrouter-desktop/src/App/render/renderPanelBody.tsx:343` to `reviewMyUnderstanding`
 (`brainrouter-desktop/src/App/hooks/useAppHandlers.ts:235-245`), which submits a turn carrying the
 question rules and the "a wrong answer is not always yours" instruction. That is the honest design:
 only the model that did the work can write the questions, and the handler says so rather than
-faking them (`brainrouter-desktop/electron/host/queries.ts:2079-2099`).
+faking them (`brainrouter-desktop/electron/host/queries.ts:2312-2333`).
 
 **What F7 does not have, and what went with F1–F6.** The judging logic — `validateQuestion`,
 `validateReview`, `judgeAnswer`, `buildJudgePrompt`, `toFinding`, `summarizeReview` — lived in
@@ -979,7 +1052,7 @@ to validate or a judge to judge. Rebuilding it is the second half of building th
 a review, not a prerequisite for it.
 
 Still true, and not fixed here: `'comprehension-dispute'`
-(`brainrouter-desktop/electron/host/queries.ts:2107`) returns `{noted:true}` and records nothing,
+(`brainrouter-desktop/electron/host/queries.ts:2340`) returns `{noted:true}` and records nothing,
 and the `/understand` invocation this decision names does not exist as a command.
 
 ### Open questions for review
@@ -1008,15 +1081,22 @@ So G comes first, and it also fixes two behaviours that are wrong today independ
 ### G1 · The agent may make a panel AVAILABLE; only the human makes one ACTIVE
 
 **The bug:** `ensurePanel` does three things at once — adds the tab, makes it the active tab, and
-opens the panel (`usePanels.ts:167`). Twenty-one call sites use it, and many fire from agent
+opens the panel (`brainrouter-desktop/src/lib/panels/usePanels.ts:199`; correct for a human, wrong
+for everything else that was calling it). Twenty-one call sites use it, and many fire from agent
 activity: `diff` ×6, `tasks` ×3, `review` ×3, `browser` ×3. So the agent editing a file yanks you off
 whatever you were reading.
 
 This is the same category as everything else in this ADR. The panel is claiming *"this is what you
 want to look at now"* — a claim about your attention that nothing established.
 
-> **Split the verb.** `revealPanel` (human intent: add, activate, open) versus `offerPanel` (agent
+> **Split the verb.** `ensurePanel` (human intent: add, activate, open) versus `offerPanel` (agent
 > intent: ensure the tab exists, mark it with an unread dot, change nothing about focus).
+
+*(This decision was drafted naming the human verb `revealPanel`, and shipped keeping the existing
+name `ensurePanel`. The draft name was never renamed away and no such function has ever existed —
+corrected here and in [§2.9](#29--audit--what-is-built-what-is-half-built-what-is-not) on
+2026-08-12. Evidence that names a symbol the tree does not contain is not evidence, and this ADR is
+the last document that should be carrying one.)*
 
 Every agent-triggered call becomes `offerPanel`. The dot is how you learn a diff is waiting without
 being moved to it. **The one exception is an interaction request** — a permission prompt is not the
@@ -1024,8 +1104,9 @@ agent deciding what interests you, it is the agent blocked until you answer.
 
 ### G2 · Closed at launch, and closed means closed
 
-**The bug:** `sidePanelOpen` and `sideTabs` both restore from `localStorage`
-(`usePanels.ts:66–86`), so a session that ended with six tabs open starts with six tabs open. That is
+**The bug:** `sidePanelOpen` and `sideTabs` both restored from `localStorage`, so a session that
+ended with six tabs open started with six tabs open. (`brainrouter-desktop/src/lib/panels/usePanels.ts:65-83`
+is now the comment recording that, and the initialisers that do not.) That is
 defensible as a general principle and wrong here, because panel state accumulates across a long
 session and nobody ever prunes it.
 
@@ -1053,8 +1134,28 @@ Twenty-six flat ids is a list you scan, not a strip you navigate. Grouped by wha
 | **Understand** *(new — Part F)* | Understand (F7). Explain, Decisions and Verification were proposed here and withdrawn with F2/F3/F4 |
 | **Environment** | Tools, Servers, Browser, Context |
 
-Only the active group's tabs are in the strip. The grouping is not new information — it is the
-structure the panel list already has implicitly, made visible.
+The grouping is not new information — it is the structure the panel list already has implicitly,
+made visible.
+
+> **2026-08-12 — built, in the chooser, and the strip stays flat.** For a release this decision
+> read *"only the active group's tabs are in the strip"*, and §2.9 recorded G3 as Built because
+> `PANEL_GROUPS` / `groupOf` / `panelsInGroup` / `activeGroups` existed and passed their tests. They
+> had exactly one importer: their own test. The strip rendered every open tab flat, and the views
+> chooser — the list a person actually scans — grouped by **a different, hard-coded five**
+> (`Work · Plan · Knowledge · Quality · Advanced`) that it kept to itself. Two taxonomies, and the
+> one in this ADR was the one nobody saw.
+>
+> The grouping now drives the chooser
+> (`brainrouter-desktop/src/components/layout/ViewsRail.tsx:15,137,242`), and the local taxonomy is
+> gone. **The strip claim is withdrawn rather than built**: G2 means the panel opens with no tabs,
+> so the strip only ever holds what you opened yourself. There is nothing there to scan, and hiding
+> tabs you deliberately opened behind a group switch would cost a click to solve a problem the strip
+> does not have. *Twenty-six flat ids is a list you scan* was always about the chooser; that is
+> where the fix landed.
+>
+> Pinned by `brainrouter-desktop/src/panels/panelGroups.test.ts` — "the views chooser groups by the
+> CATALOG, not a taxonomy of its own", which reads the chooser's source with its imports stripped,
+> because importing a symbol is not using one and that distinction is the whole of H4.
 
 ### G4 · Comprehension lives in "Understand", never inline
 
@@ -1072,8 +1173,15 @@ message that produced them. A panel persists; a message is gone by the next turn
 mechanism that stops "it compiled" being reported as "it works".
 
 > **The group exists with one panel in it, and one is now the right number.**
-> `brainrouter-desktop/src/panels/panelCatalog.ts:28` registers `comprehension` (title "Understand")
-> and `:80` puts it in the group. Explain, Decisions and Verification never became panel ids, and
+> `brainrouter-desktop/src/panels/panelCatalog.ts:33` registers `comprehension` (title "Understand")
+> and `:92` puts it in the group.
+>
+> **Corrected 2026-08-12: for a release "the group exists" meant a map entry, not a heading.**
+> Nothing rendered any group (see G3), and the panel itself was reachable only from the topbar's
+> "More views" overflow — so the Understand *group* was a claim about a surface, made by a
+> constant. The chooser now renders it, with the launcher that opens the panel
+> (`brainrouter-desktop/src/components/layout/ViewsRail.tsx:123`). Explain, Decisions and
+> Verification never became panel ids, and
 > **as of 2026-08-12 they are not going to be**: F2, F3 and F4 are withdrawn, so the three-panel
 > layout and the unread-dot rule above describe surfaces that were never built and are no longer
 > proposed. F4's guarantee is kept — by the per-turn verification guardrail, not by a panel.
@@ -1114,10 +1222,37 @@ built a stack panel, and neither the ADR nor I asked whether a repository that a
 called "PR / Checks" needed a second one next to it.
 
 > **2026-08-12 — the consolidation stands; the chain inside it does not.** The one Pull request
-> panel is right and stays, with checks and review findings inline. The stack-chain section and
-> `layerStatus` are deleted with A8: the chain was never passed any data, and BrainRouter no longer
-> creates the chains it would have listed. G5's argument survives intact — it was about not
-> fragmenting one question across four tabs, not about how many facets the answer has.
+> panel is right and stays. The stack-chain section and `layerStatus` are deleted with A8: the chain
+> was never passed any data, and BrainRouter no longer creates the chains it would have listed.
+> G5's argument survives intact — it was about not fragmenting one question across four tabs, not
+> about how many facets the answer has.
+>
+> **2026-08-12, second pass — "with checks and review findings inline" was a claim, and half of it
+> was false.** The consolidation retired the ids and then rendered only one facet. `review` and `ci`
+> were aliased onto `stack` inside `ensurePanel` AND `offerPanel`, so every caller that asked for
+> the review panel silently got the consolidated one — which carried Checks and nothing else.
+> `ReviewPanel` stayed in the switch under `case 'review'`, a branch no `PanelId` could select, and
+> the views chooser went on offering a **"Review" launcher badged with the finding count it was not
+> going to display**. Four tabs became one tab answering half the question, which is worse than the
+> fragmentation it replaced: at least three tabs held three answers.
+>
+> **Repaired.** The panel renders Checks and Review as two sections of one answer
+> (`brainrouter-desktop/src/App/render/renderPanelBody.tsx:344,364,374`), opening it fetches the
+> findings (`brainrouter-desktop/src/lib/panels/usePanels.ts:185`), and the chooser offers one
+> **Pull request** launcher badged with both counts
+> (`brainrouter-desktop/src/components/layout/ViewsRail.tsx:110`).
+>
+> **`review` and `ci` are gone from the `PanelId` union**, not merely aliased
+> (`brainrouter-desktop/src/panels/panelCatalog.ts:5-10`), so no call site can name one. Removing
+> them is what surfaced the rest of the damage the alias was hiding: the home screen's Review and
+> Checks buttons both opened the consolidated panel under two names
+> (`brainrouter-desktop/src/components/chat/HomeView.tsx:64`), and the engineering profile's view
+> recommendations still suggested `review` and `ci`
+> (`brainrouter-desktop/src/lib/panels/viewRecommendations.ts:17`) — two of its seven suggestions
+> matched no registered panel and dropped silently out of the menu. **The alias survives for
+> PERSISTED layouts only** (`brainrouter-desktop/src/lib/panels/lastSessionPanels.ts:28-33`), which
+> is the one place a retired id can still legitimately arrive from. Pinned by
+> `brainrouter-desktop/src/panels/pullRequestPanel.test.ts`.
 
 ### G6 · The planner is a MODE, not a panel — Calendar, Today and Notes
 
@@ -1160,7 +1295,10 @@ between projects — if it does, it is planner; if it belongs to the repo, it is
 1. **Does G2's clean start need the "reopen last session" affordance at all**, or is it a feature
    nobody uses that exists to soften a decision that is simply correct?
 2. **Is G3's grouping worth the navigation cost** — one more click to reach a panel — against the
-   scanning cost it removes?
+   scanning cost it removes? — *Closed 2026-08-12: there is no extra click. The grouping went into
+   the views chooser, which was already a grouped list (by its own five names), so this replaced a
+   taxonomy rather than adding a level. The version that would have cost a click — hiding the open
+   tabs of inactive groups — is the half that is withdrawn.*
 3. **Should `offerPanel`'s unread dot decay?** A dot that has been there for two days is furniture.
 4. **Should Notes be a planner view at all**, or does personal note-taking deserve its own mode?
    The cross-workspace test says planner; the amount of surface it needs says otherwise.
@@ -1190,8 +1328,8 @@ knows the stack machinery exists:
 
 | Call site | What opens the PR |
 |---|---|
-| `brainrouter-desktop/electron/host/github-track-services.ts:610` | Track item → draft PR |
-| `packages/core/src/forge/forge.ts:24` | the forge adapter's `createChangeRequest` |
+| `brainrouter-desktop/electron/host/github-track-services.ts:638-641` | Track item → draft PR |
+| `packages/core/src/forge/forge.ts:33` | the forge adapter's `createChangeRequest` |
 | `packages/core/src/git/prEmit.ts` | the build-loop PR emit |
 | `packages/core/src/plugin/publish.ts:154` | plugin registry publish |
 
@@ -1242,10 +1380,10 @@ a PR against a *different* repository, where a local stack has no meaning.
 > **Audited 2026-08-06 — this is stated more strongly than it is built.** What
 > converged is the ROUTE (H1): `routePullRequest` decides stack-vs-plain in one
 > place and both the build-loop emit and the Track path consult it.
-> `createChangeRequest` did not converge — `git/prEmit.ts:310` is its only
-> non-test caller, and the Track path at
-> `brainrouter-desktop/electron/host/github-track-services.ts:635-636` still
-> invokes `gh stack submit` / `gh pr create` itself. The duplication H2 exists to
+> `createChangeRequest` did not converge — `packages/core/src/git/prEmit.ts:395`
+> is its only non-test caller, and the Track path
+> (`brainrouter-desktop/electron/host/github-track-services.ts:638-641`) still
+> invoked `gh stack submit` / `gh pr create` itself. The duplication H2 exists to
 > remove is still there, one layer down from where the decision claims it was
 > removed. Tracked in "Built in part".
 
@@ -1276,6 +1414,18 @@ Reachability is a graph walk from the entry points rather than a lookup, so it
 is more work — but it is the check that would have caught Part A the day it
 landed, instead of the owner catching it in the product weeks later.
 
+> **The same sentence, one level down — 2026-08-12.** H4 replaced "something
+> imports it" with "something a user reaches calls it" and kept the subject:
+> a MODULE. That leaves the identical hole one size smaller, and nine of this
+> ADR's decisions were sitting in it. Read the rule with the subject changed and
+> it is the correction:
+>
+> > **An EXPORT is not done until something a user can reach calls it.**
+>
+> H4's own §2.9 note already saw this coming — *"the reachability walk should be
+> asking about arms, not only modules"* — and then asked about modules for
+> another pass. E1 now asks about exports too.
+
 ---
 
 ## 2.9 · Audit — what is built, what is half-built, what is not
@@ -1302,6 +1452,20 @@ ADR's own orphans sat underneath it for weeks. E1 is fixed in the same pass (an
 equality over the whole package), because a systemic fix that misses the
 instances in its own document is the defect one level up.
 
+**Second pass, 2026-08-12.** The tiers were rebuilt out of `file:line`
+evidence, and a check of every pointer in this document found that a good number
+of them no longer landed on the code they named — not as dead links, which
+announce themselves, but as live ones pointing at whatever had drifted into that
+line. Four rows turned out to be false once their evidence was read, one named a
+function that does not exist, and the rest of the pointers were repaired. Where
+a row's target moves often it now names a **test** or a **symbol** instead of a
+line, because a citation that has to be re-derived every fortnight is one that
+will be wrong most of the time.
+
+> **A tier table made of pointers is only worth what re-running them costs.**
+> Every `file:line` below resolved on 2026-08-12; that is the claim, and it is
+> the one to re-check before believing the rest.
+
 The tiers below use one definition, taken from E1 and H4 rather than invented
 here:
 
@@ -1320,29 +1484,29 @@ here:
 | # | Decision | Reached from |
 |---|---|---|
 | A1 | Capability detection | `packages/core/src/review/stackProbe.ts:39` — `gh` 2.90+, git 2.20+ and the extension, each with its own reason; reached from the Track create-PR path |
-| B2 | Artifacts panel re-fetch + scoping | `brainrouter-desktop/src/App.tsx:350-354`, `src/panels/memory/ArtifactsPanel.tsx:32,55` |
+| B2 | Artifacts panel re-fetch + scoping | `brainrouter-desktop/src/App.tsx:350-354`, `brainrouter-desktop/src/panels/memory/ArtifactsPanel.tsx:32,55` |
 | D1 | Mirrored vs owned | `packages/core/src/planner/itemMerge.ts`, `plannerStore.ts`, and the production `connectorIssueAdapter.ts` projection |
-| D2 | Outbox, local-first | `packages/core/src/sync/outbox.ts`, scoped Core stores and Dashboard's per-operation durable browser queue |
-| D3 | Hybrid logical clocks | `packages/core/src/sync/stamped.ts`; both pull paths absorb every remote item/block/conflict stamp before a local tick |
+| D2 | Outbox, local-first | `packages/core/src/sync/outbox.ts`, scoped Core stores and Dashboard's per-operation durable browser queue. Per-item ordering is kept by `nextBatch` — one operation per record in flight; `replayOrder` stated the same guarantee a second time with nothing sending in its order, and is retired |
+| D3 | Hybrid logical clocks | `packages/core/src/sync/stamped.ts`; both pull paths absorb every remote item/block/conflict stamp before a local tick. **A notable skew is now REPORTED**, which D3 always said it would be: `syncRecords` measures it before `hlcReceive` absorbs it and `describeRecordSync` says so (`packages/core/src/sync/recordSync.ts`). `clockSkewMs`/`describeSkew` had no caller until 2026-08-12; `formatHlc`/`parseHlc` had none either and are retired, since stamps cross the wire as objects |
 | D4 | Field merge + retained conflicts | `itemMerge.ts`, `recordSync.ts` and server `memory/planner/backend.ts`; text and delete-versus-edit choices are durable operations with causal watermarks |
-| D5 | Timetable and drift ratio | `packages/core/src/planner/timetable.ts`; shared `packages/ui/src/planner/PlannerCalendar.tsx` records planned and actual time in both hosts |
-| D6 | Planner tools AND planner context | five `planner_*` tools (`toolCatalog.ts:85-92`, `runtime.ts:250-298`), and `buildPlannerContext` attached to every non-silent turn from `agent/runtime/contextPreparationPhase.ts`; freshness derived from `provenance.fetchedAt` |
-| D8 | Retention, scheduled | `compactCompletedPlannerItems` runs inside `runRetentionPass` (`brainrouter/src/memory/store/postgres/queries/retentionQueries.ts`), which `MemoryJobRunner.maybeRunRetention` drives hourly |
-| E1 | The sweep, with an exact ceiling | `packages/core/src/tests/inert-value-sweep.test.ts` — knob consumers, an equality-pinned orphan count over the WHOLE package, a `KNOWN_UNWIRED` list that must stay honest, and H4's walk |
+| D5 | Timetable and drift ratio | `packages/core/src/planner/timetable.ts`; shared `packages/ui/src/planner/PlannerCalendar.tsx` records planned and actual time in both hosts. **The carry-forward half was inert until 2026-08-12**: `needsAttention` and `describeCarryOver` both read `carriedOver`, both render, and nothing incremented it — `carryOver` had no caller, so "this has moved four times" could never be said about anything. `plannerStore.updateBlock` now applies it when an unfinished block moves to a later day, and sends the derived count with the move. `timetableView` is retired — `todayView` answers the same question from the same `dayView` |
+| D6 | Planner tools AND planner context | five `planner_*` tools (`packages/core/src/extension/builtin/toolCatalog.ts:85-92`, handlers at `packages/core/src/extension/builtin/runtime.ts:285-341`), and `buildPlannerContext` attached to every non-silent turn from `packages/core/src/agent/runtime/contextPreparationPhase.ts`; freshness derived from `provenance.fetchedAt`. **The three policy predicates this row never mentioned are retired** — `classifyPlannerAction`, `mayCompleteFromInference`, `mayRaiseBacklog`, each reached only by its own test. Action classification is `toolCatalog.ts:85-92`, which the authorization path reads; "never infer completion" is enforced by there being no inferring caller; and unprompted proposals gate nothing, because §6 open question 2 has not decided to build a proposer |
+| D8 | Retention, scheduled | `compactCompletedPlannerItems` runs inside `runRetentionPass` (`brainrouter/src/memory/store/postgres/queries/retentionQueries.ts`), which `MemoryJobRunner.maybeRunRetention` drives hourly. Core's `partitionForRetention` + `DETAIL_RETENTION_DAYS` were a second, client-side split of the same rows with their own 90-day constant and no caller; retired 2026-08-12 |
+| E1 | The sweep, with an exact ceiling — now per EXPORT as well as per module | `packages/core/src/tests/inert-value-sweep.test.ts` — knob consumers, an equality-pinned orphan count over the WHOLE package, a `KNOWN_UNWIRED` list that must stay honest, H4's walk, and (2026-08-12) an equality-pinned count of DEAD EXPORTS measured against every sibling workspace, plus a named `RETIRED_EXPORTS` list that fails if one comes back. Mutation-proven in three directions: adding a dead export to a live module fails it while every module-level check still passes, removing one fails until the constant drops, and re-adding a retired export fails by name |
 | D9 | User-scoped, backend truth | migrations `051`, `058`, `059`, `061`; API routes bind authenticated org/user and Desktop files bind the same scope |
 | D10 | Dashboard is a device | `brainrouter-dashboard/app/planner/useDashboardPlanner.ts` gates on active organisation, pages snapshots and replays durable pending work |
-| D11 | Pull → merge → push | Core `sync/recordSync.ts` and Dashboard's single-flight pull/push/pull loop validate an exact outcome partition |
-| G1 | `offerPanel` vs `revealPanel` | `brainrouter-desktop/src/lib/panels/usePanels.ts:62,231`; callers at `App.tsx:341`, `useAppHandlers.ts:326` |
-| G2 | Closed at launch, restore offered | `usePanels.ts:106-108`; the restore is pressable in the views chooser (`ViewsRail.tsx:209-217`), threaded through `MainContent.tsx` and `App.tsx:731` |
-| G3 | Panel grouping | `brainrouter-desktop/src/panels/panelCatalog.ts:66-103` |
-| G5 | One Pull request panel | `panelCatalog.ts:21-25` — `review` and `ci` gone from `PANEL_DEFS`; checks and findings inline at `renderPanelBody.tsx:393-399`. The chain section is retired with A8 |
-| G6 | Planner is a mode | `brainrouter-desktop/src/components/layout/ActivityBar.tsx:15,24`; `App/layout/MainContent.tsx:212-216` |
-| H1 | One PR create path | `packages/core/src/review/prRouter.ts:60` decides, `changeRequestArgv` builds every argv; called from `github-track-services.ts:630-633`. The build-loop emit states `single` instead of asking, because one branch is all it has |
-| H3 | `cli.stackingMode` | `packages/core/src/config/config.ts:759`, read at `github-track-services.ts:631` — **config file only, no settings UI**; `always` is the only route to `gh stack submit` |
-| H4 | Reachability walk | `packages/core/src/tests/inert-value-sweep.test.ts:244-249,281,341` |
-| I1 | Startup detection, blast-radius install, and the report | `packages/core/src/tooling/provisioning.ts:52,128`; host `queries.ts:2021-2058`; UI `ToolingNotice.tsx` mounted at `App.tsx:724`, `auto_install` arm at `:47-75` |
+| D11 | Pull → merge → push | Core `sync/recordSync.ts` and Dashboard's single-flight pull/push/pull loop validate an exact outcome partition. **One rule was in the module and not on the path until 2026-08-12**: a pulled item tombstone has to tombstone the item's time blocks, and that cascade lived in `applyRemoteItem`, a wrapper `syncRecords` never called — so a deletion synced from another device left its blocks on the day, unmovable, because `updateBlock` refuses a block whose parent is gone. It is a `SyncRecords.afterApply` hook now, which the loop cannot route around. `applyRemoteItem` and `describeSync` are retired with it |
+| G1 | `offerPanel` vs `ensurePanel` | `brainrouter-desktop/src/lib/panels/usePanels.ts:199,230` — the two verbs. The agent-triggered call is `offerPanel('tasks')` at `brainrouter-desktop/src/App/hooks/useAppHandlers.ts:326`; every surviving `ensurePanel` call site is a click, a command or a menu item. **Corrected 2026-08-12**: this row named `revealPanel`, which has never existed in the tree, and credited `brainrouter-desktop/src/App.tsx:341` — a destructuring of the hook's return — as a caller |
+| G2 | Closed at launch, restore offered | `brainrouter-desktop/src/lib/panels/usePanels.ts:81,83` start from no tabs and a closed panel; the restore is pressable in the views chooser (`brainrouter-desktop/src/components/layout/ViewsRail.tsx:233-238`), threaded through `brainrouter-desktop/src/App/layout/MainContent.tsx` from `brainrouter-desktop/src/App.tsx:735` |
+| G3 | Panel grouping, in the views chooser | `brainrouter-desktop/src/panels/panelCatalog.ts:76-116` defines it and `brainrouter-desktop/src/components/layout/ViewsRail.tsx:15,137,242` consumes it. **This row was FALSE until 2026-08-12** — it cited the definition, whose only importer was its own test, while the chooser grouped by five names of its own and the strip rendered flat. Reachability is now its own test (`brainrouter-desktop/src/panels/panelGroups.test.ts`), separate from the ones proving the mapping is right. The "only the active group's tabs are in the strip" half is withdrawn, not built — see G3 |
+| G5 | One Pull request panel | `brainrouter-desktop/src/panels/panelCatalog.ts:5-10,26-30` — `review` and `ci` gone from `PANEL_DEFS` **and from the `PanelId` union**; Checks and Review inline at `brainrouter-desktop/src/App/render/renderPanelBody.tsx:344,364,374`, fetched on open at `brainrouter-desktop/src/lib/panels/usePanels.ts:185`, one launcher at `brainrouter-desktop/src/components/layout/ViewsRail.tsx:110`. **"Checks AND findings" was FALSE until 2026-08-12**: the panel carried Checks, `ReviewPanel` sat under a `case` no id could select, and the chooser badged a Review button with findings it would not show. The chain section is retired with A8 |
+| G6 | Planner is a mode | `brainrouter-desktop/src/components/layout/ActivityBar.tsx:16,25` — the `WorkspaceMode` member and its row in `MODES`; rendered by `brainrouter-desktop/src/App/layout/MainContent.tsx:305-310` |
+| H1 | One PR create path | `packages/core/src/review/prRouter.ts:60` decides, `changeRequestArgv` builds every argv; called from `brainrouter-desktop/electron/host/github-track-services.ts:630-633`. The build-loop emit states `single` instead of asking, because one branch is all it has |
+| H3 | `cli.stackingMode` | `packages/core/src/config/config.ts:756` (`resolveCliKnobs`), read at `brainrouter-desktop/electron/host/github-track-services.ts:631` — **config file only, no settings UI**; `always` is the only route to `gh stack submit` |
+| H4 | Reachability walk | `packages/core/src/tests/inert-value-sweep.test.ts` — "the count of imported-but-UNREACHABLE modules does not rise" and "what survives of the stack support IS reachable". Named rather than numbered: this row cited three line numbers, two of which had drifted onto other tests, and a sweep is edited more often than most files |
+| I1 | Startup detection, blast-radius install, and the report | `packages/core/src/tooling/provisioning.ts:52,128`; host `brainrouter-desktop/electron/host/queries.ts:2254,2286` (`tooling-check`, `tooling-decline`); UI `brainrouter-desktop/src/components/ToolingNotice.tsx` mounted at `brainrouter-desktop/src/App.tsx:727`, `auto_install` arm at `ToolingNotice.tsx:47-75`. "Shown in full, always" is now literally true: **Show command** renders core's `installPreview` — what runs, what it unlocks, and that you may run it yourself — which had no caller until 2026-08-12 while the button showed the bare command with none of that around it |
 | I2 | Bundling rejected | a decision not to build; nothing to verify |
-| I4 | Reads never prompt | the two identity call sites are `github-track-services.ts:616` (`create_pr`) and `prEmit.checkPushIdentity` (`push`) — both writes; no read operation consults the binding |
+| I4 | Reads never prompt | the two identity call sites are `github-track-services.ts:616` (`create_pr`) and `prEmit.checkPushIdentity` (`push`) — both writes; no read operation consults the binding. The mismatch message now names the switch command as well as both logins (`packages/core/src/tooling/gitIdentity.ts`): `switchCommand` was written for I3's two-button UI, which was never built, so until 2026-08-12 the sentence said "switch account" without saying how. `describeAccounts` annotated rows for that same absent picker and is retired |
 
 Surfaces genuinely reachable: Desktop Planner and Notes modes, Dashboard
 `/planner` and `/notes`, CLI `/planner`, five `planner_*` tools, migrations
@@ -1353,11 +1517,10 @@ command and no longer shadows Planner.
 
 | # | What works | What does not |
 |---|---|---|
-| A2 | the lying action is gone (`workbenchActions.ts:123-132`) | there is no create path, and none is coming — the replacement is retired, not pending. See the Retired table |
-| C1 | knob read and engine named (`runTurn.impl.ts:286-291`); control at `RuntimeSection.tsx:64` | no parity, so `graph` always falls back (`engineSelection.ts:72-79`); no parity matrix |
-| D7 | connector issue adapter is invoked after successful scoped ingestion and writes durable mirrored Planner rows | Track, PR, review-finding and meeting-action adapters remain |
-| F7 | panel, invoke path and honest host stubs | the review happens in chat, not in the panel; dispute records nothing (`queries.ts:2107`); no `/understand` command. Its uncalled judging module was retired 2026-08-12 — see the Retired table |
-| G4 | the Understand group exists, with the one panel that is reachable | Explain, Decisions and Verification are not panel ids and are no longer proposed: F2/F3/F4 are withdrawn |
+| A2 | the lying action is gone (`packages/core/src/workbench/workbenchActions.ts:123-132`), and its absence is pinned (`packages/core/src/tests/workbench-actions.test.ts:142-145`) | there is no create path, and none is coming — the replacement is retired, not pending. **And this row used to credit what is left as a surviving read-only surface, which overstates it**: `workbenchRegistry` (`packages/core/src/workbench/workbenchActions.ts:150`) has no production caller anywhere — only its own test constructs one — so all fifteen control actions it declares, the two `stack.*` reads included, are declared and undispatchable. Removing `stack.addlayer` was right; what remains is not a surface, it is a list |
+| D7 | connector issue adapter is invoked after successful scoped ingestion and writes durable mirrored Planner rows | Track, PR, review-finding and meeting-action adapters remain — which is also why `collectFromSources` is retired: it fanned out over several adapters and there is one, the server calls it directly, and the freshness the model reads is derived from the items by `sourceFreshnessFromItems`. `refreshLocalPlannerFromConnectorIssues` went with it — a device-local projection sink whose doc comment named "production callers that explicitly own a local planner scope", of which there were none |
+| F7 | panel, invoke path and honest host stubs (`brainrouter-desktop/electron/host/queries.ts:2312`) | the review happens in chat, not in the panel; dispute records nothing (`brainrouter-desktop/electron/host/queries.ts:2340`); no `/understand` command. Its uncalled judging module was retired 2026-08-12 — see the Retired table |
+| G4 | the Understand group renders in the chooser with the one panel in it (`brainrouter-desktop/src/components/layout/ViewsRail.tsx:123`), and the panel opens | Explain, Decisions and Verification are not panel ids and are no longer proposed: F2/F3/F4 are withdrawn. **Until 2026-08-12 "the group exists" meant a map entry**: no surface rendered any group (G3), and the panel was reachable only from the topbar's overflow menu |
 | H2 | the ROUTE is decided once (`prRouter.routePullRequest`) AND the ARGV is built once (`prRouter.changeRequestArgv`) | closed. The audit was right that a shared decision was not enough: each site still assembled its own command, and the argv is what drifts — `gh stack link` shipped and survived a ten-code exit contract because an unknown subcommand exits 1 exactly like a real failure. Track now builds its command from core (`github-track-services.ts:637-641`). The argv builder returns argv rather than spawning, because the surfaces genuinely differ in how they run commands and forcing one runner would be a worse coupling than the duplication it removes |
 | I3 | identity checked on BOTH write paths — the Track create-PR button and the build-loop push (`prEmit.checkPushIdentity`) | the "question, both one click" UI has no renderer caller, so a mismatch still reads as a refusal rather than a choice |
 
@@ -1374,8 +1537,9 @@ is what produced the state above, and is not available.
 | A3 | The ten-code exit contract | `review/stackExitCodes.ts` + `review/stackRunner.ts`. It classified exits for four commands that are all retired; the one that remains fails like every other `gh` |
 | A4 | Stack sync with a rewrite preview | `review/stackLifecycle.ts`. Rebasing branches that carry review comments, driven by a subcommand nobody here has run |
 | A5 | Merge cascade with confirmation | `review/stackLifecycle.ts`. The most destructive operation in the ADR; `gh` has its own confirmation. The READ half (`evaluateStackMerge`) stays and is used |
-| A7 | Plan phase → layer, and its guards | `review/planToStack.ts` + `canAddLayer`. No caller ever supplied `phases`, and one patch cannot become five layers |
+| A7 *(part)* | Plan phase → layer, and its guards | `review/planToStack.ts` + `canAddLayer`. No caller ever supplied `phases`, and one patch cannot become five layers. **Not the whole of A7**: the auto-propose gate this row used to claim was deleted — `adviseStacking` (`packages/core/src/review/stackedPr.ts:238`) and its `stack.advise` action (`packages/core/src/workbench/workbenchActions.ts:129-131`) — is still exported with no non-test caller. Corrected 2026-08-12; the deletion is owed |
 | A8 | The stack panel | `StackPanel.tsx`, `lib/stack/stackPanelView.ts`, `electron/host/stackActions.ts`. A chain view for chains we do not create, with three buttons dispatching host actions that never existed |
+| C1 | The graph engine, its selector and its setting | `graph/graphExecutor.ts`, `graph/graphState.ts`, `graph/compensation.ts`, `agent/runtime/engineSelection.ts`, the `cli.executionEngine` knob and the desktop Execution engine dropdown. Graph had no interrupts, tool authorization, receipts or delegation, so the selector could only ever return the loop — and `graphExecutor` had one importer, its own test, so there was no path to it either way. **The dropdown is the part that mattered**: a person could pick `graph` and get the loop. Absence pinned by `packages/core/src/tests/execution-engine-retired.test.ts` and `brainrouter-desktop/src/settings/runtime/executionEngineRetired.test.ts` |
 | B1 | The message-receipt lifecycle | `task/messageReceipts.ts`. **Superseded, not abandoned**: ADR-034 D3 distinguishes "not delivered" from "delivered, not yet seen" on the real send path, and `task/steeringReceiptStore.ts` behind `reconcile_steer` already sets `acknowledged` on evidence. Two receipt mechanisms are two answers to one question |
 | F1 | Profile-shaped comprehension | `comprehension/profileComprehension.ts`. A per-profile ordering of questions nothing produces; the only consumer would be a review the panel does not render |
 | F2 | Explain-back | `comprehension/workRecord.ts`. No Explain panel and no panel id for one. Asking the agent to explain what it did, at the depth you want, needs none of it |
@@ -1399,6 +1563,14 @@ milestone.* Every decision that sat here — code compiling, tested, and importe
 by nothing outside its own tests — has been wired to a caller a user reaches or
 deleted. B1 and D8 were the last two: B1 is in the Retired table above, D8 is in
 Built.
+
+**Empty is not the same as clean, and the definition is why.** "Nothing outside
+its own tests imports it" is the importer check H4 exists to replace. A7's
+`adviseStacking` is imported — by `review/index.ts` and by a control action —
+and reached by nothing, so it passes this tier's test while being exactly as
+inert as anything that ever sat in it. The same is true of every action
+`workbenchRegistry` declares. Those are recorded against A7 and A2 rather than
+here, because moving them here would imply the definition caught them.
 
 F1–F6 were here on 2026-08-06. They are not "not built" any more and they are
 not built either — they are **withdrawn**, and they moved to the Retired table
@@ -1453,7 +1625,8 @@ Added by the 2026-08-06 audit, because the list was itself out of date:
   built at all.**
   The document became the last surface running this ADR's defect, and it is the
   one that had least excuse: the code at least declared its own gaps in
-  `engineSelection.ts` and in the comprehension host stubs.
+  `engineSelection.ts` (since deleted with C1) and in the comprehension host
+  stubs.
 - **Left three Part headers reading "PROPOSED — not implemented" underneath a
   summary calling the same decisions shipped.** Both statements were wrong, and
   a document that contradicts itself is read as neither.
@@ -1484,6 +1657,46 @@ Added by the 2026-08-12 pass, which stopped recording the gaps and closed them:
   behind `if (input.phases)`, and no caller has ever passed `phases`. A branch
   no input can take is not a wiring; the reachability walk should be asking
   about arms, not only modules.
+- **Fixed the sweep at MODULE granularity and called the class closed.** The
+  same pass that made the orphan count an equality declared the defect handled,
+  and the defect had moved down a level rather than out: nine of this ADR's
+  decisions were unreached at EXPORT granularity, inside modules the new check
+  had just certified as wired. `capabilityGap` and three siblings in a module
+  `runTurn` imports. Three planner policy predicates in a barrel the backend
+  imports. `applyRemoteItem` next to a `syncOnce` the desktop calls every
+  minute — and that one was not merely unused, it was carrying the
+  block-tombstone cascade the pull path therefore never ran. The lesson is the
+  one H4 already stated and this pass under-applied: **the granularity of the
+  check decides the granularity of the lie it can find.** Closed 2026-08-12 by
+  a dead-export ceiling measured against every sibling workspace.
+
+Added by the 2026-08-12 second pass, which checked the evidence instead of
+reading it:
+
+- **Wrote four §2.9 rows whose evidence did not support them.** G3 cited the
+  grouping's definition and called it Built while its only importer was its own
+  test; G5 said "checks AND findings inline" of a panel rendering Checks; G4
+  said the Understand group existed when no surface rendered a group; A7 said
+  the auto-propose gate was deleted when what was deleted was its consumer. All
+  four were *true about a file* and false about the product, which is the
+  distinction this whole ADR is about.
+- **Named a function that has never existed.** G1 was drafted around
+  `revealPanel`, shipped as `ensurePanel`, and the draft name survived in both
+  the decision and its §2.9 row. A reader checking the evidence finds nothing,
+  and there is no worse outcome for a row whose entire job is to be checkable.
+- **Left a crop of `path:line` pointers that had drifted onto other code.** Not
+  broken links — *worse*: they resolved, so they looked verified.
+  C1's `runTurn.impl.ts` range landed on MCP tool plumbing, I3's host-handler
+  line on the Atlas graph stats, the D6 row's `runtime.ts` range past the end of the
+  only file of that name it could reach, `usePanels.ts:62,231` on a closing brace and a blank
+  line, `MainContent.tsx:212-216` on a props list. A pointer nobody re-runs is a
+  citation that decays into decoration, so the fix is not only repointing them:
+  where the target moves often, the row now names the **test** or the **symbol**
+  rather than a line number.
+- **Credited `workbenchActions.ts` as a surviving read-only surface.**
+  `workbenchRegistry` has no production caller, so its fifteen control actions
+  are declared and undispatchable. A2 is corrected; the registry itself is not,
+  and that is recorded rather than absorbed.
 
 ---
 
@@ -1580,7 +1793,7 @@ by someone else.
 >
 > The "mismatch is a question, both one click" affordance
 > does not exist either: the `'git-identity-check'` handler
-> (`brainrouter-desktop/electron/host/queries.ts:2062`) has no caller in the renderer, so a mismatch
+> (`brainrouter-desktop/electron/host/queries.ts:2295`) has no caller in the renderer, so a mismatch
 > reaches the person as a refusal with an error string — which is the shape this decision names as
 > wrong, because an error is not a choice between two legitimate answers.
 
@@ -1613,7 +1826,7 @@ diverge and then nobody knows which is current.
 | Weeks | Focus |
 |---|---|
 | 1–3 | **Repairs** — remove the lying action, exit codes, create path, navigation, merge, receipts, artifacts panel |
-| 4 | **Execution engine** — wire, parity matrix, settings surface |
+| 4 | ~~**Execution engine** — wire, parity matrix, settings surface~~ *(week spent; C1 retired 2026-08-12 — the wire and the surface were built, the parity matrix never was, and the engine is deleted)* |
 | 5–6 | HLC, schema, local store, outbox |
 | **7–8** | **Sync and the conflicts that must not auto-merge** ← highest risk |
 | 9–11 | Adapters, planner, timetable, agent wiring, surfaces |
@@ -1636,13 +1849,14 @@ history of branches under review.
 the honest response is to say so and reconsider whether the knob should exist — not to ship a
 `graph` option that silently loses features.
 
-> **It did, and this is the saying-so.** Graph lacks interrupts, tool
-> authorization, receipts and delegation
-> (`packages/core/src/agent/runtime/engineSelection.ts:72-79`), so selecting it
-> runs the loop and explains why. The knob is now honest rather than inert,
-> which is better — but the decision this paragraph reserved is live: either the
-> parity work is scheduled, or C1's rejected alternative (delete the knob, ship
-> only the loop) becomes the right answer after all.
+> **It did, and the decision this paragraph reserved was taken on 2026-08-12:
+> C1's rejected alternative wins.** Graph lacked interrupts, tool authorization,
+> receipts and delegation, so selecting it ran the loop and explained why — and
+> "honest rather than inert" turned out to be the wrong bar. A control whose
+> second option cannot happen is still a surface claiming a state it has not
+> established; explaining the gap underneath it documents the defect instead of
+> fixing it. The knob, the selector, the executor and the dropdown are deleted.
+> See C1.
 
 **The planner adds persistence and sync we have never had.** Sync bugs are found by use, not unit
 tests, and found late they cost someone's data. Hence weeks 7–8 and the week-12 soak.
