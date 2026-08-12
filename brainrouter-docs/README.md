@@ -98,8 +98,11 @@ deep dives.
   accepted durability-then-liveness rework of meeting capture: a session is created at Record,
   roughly three-second durability chunks are written independently from transcription units, and
   corrupt or interrupted captures preserve their audio for bounded recovery on both hosts. D9 is
-  implemented with automated coverage; destructive host acceptance, live streaming, browser
-  server-of-record durability and retention remain pending;
+  implemented with automated coverage. D10's strict capability/checkpoint contract and guarded
+  gateway transport foundation are present but dormant: the bundled sidecar has no streaming
+  adapter, and both hosts remain on segmented uploads. Destructive host acceptance, D10 adapter
+  and both-host activation, D11 browser server-of-record durability, and D6 accepted-summary
+  retention/deletion remain pending;
   [ADR-036 the finding carries its code](decisions/ADR-036-the-finding-carries-its-code.md) —
   proposed review-console change that renders each bot finding's own hunk in the dashboard: the
   excerpt persisted with the finding at the reviewed revision rather than fetched from the forge, so

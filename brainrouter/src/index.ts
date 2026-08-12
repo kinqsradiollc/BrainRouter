@@ -31,6 +31,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { randomUUID } from 'node:crypto';
+import { createServer } from 'node:http';
 import express, { type Request, type Response } from 'express';
 import fs from "node:fs";
 
@@ -88,7 +89,7 @@ import {
 import { brainRouter, fleetRouter, hooksRouter, governanceRouter } from './api/routes/agent/index.js';
 import { USING_FALLBACK_JWT_SECRET, IS_PRODUCTION, jwtSecretBootError, JWT_SECRET } from './api/middleware/auth.js';
 import { GatewayProviderService } from './services/gateway/providerPool.js';
-import { mountGatewayDataPlane } from './services/gateway/server.js';
+import { bindGatewayDataPlane } from './services/gateway/server.js';
 import { securityHeaders, corsMiddleware, resolveCorsAllowlist } from './api/middleware/securityHeaders.js';
 import { resolveJsonBodyLimit, payloadTooLargeHandler } from './api/bodyLimit.js';
 import { createRateLimiter } from './api/middleware/rateLimit.js';
@@ -176,6 +177,7 @@ if (USE_HTTP) {
   const warnedUserAgents = new Set<string>();
 
   const app = express();
+  const httpServer = createServer(app);
 
   // OBSERVABILITY (Phase 4) — time every request and record HTTP metrics on
   // finish (always on, cheap + in-process). Opt-in structured access log via
@@ -248,6 +250,8 @@ if (USE_HTTP) {
   // BRAINROUTER_INPROCESS_GATEWAY=on to force it, =off to opt a brain out.
   const serveGateway = process.env.BRAINROUTER_INPROCESS_GATEWAY === "on"
     || (SERVICE === "brain" && process.env.BRAINROUTER_INPROCESS_GATEWAY !== "off");
+  let inProcessGatewayService: GatewayProviderService | undefined;
+  let gatewayAudioStreaming: ReturnType<typeof bindGatewayDataPlane> | undefined;
 
   // Health check (fast liveness probe).
   app.get('/health', (_req: Request, res: Response) => {
@@ -281,8 +285,9 @@ if (USE_HTTP) {
     const gatewayDbUrl = process.env.BRAINROUTER_DATABASE_URL ?? process.env.DATABASE_URL;
     if (gatewayDbUrl) {
       const gatewayService = new GatewayProviderService(gatewayDbUrl, JWT_SECRET);
+      inProcessGatewayService = gatewayService;
       app.use('/v1', apiRateLimit);
-      mountGatewayDataPlane(app, gatewayService);
+      gatewayAudioStreaming = bindGatewayDataPlane(app, httpServer, gatewayService);
       // Point internal scoped dispatch (dashboard brain-chat) at THIS in-process
       // gateway (base URL — modelGateway appends /v1/chat/completions) so a
       // single-node deploy needs no separate :3748 process.
@@ -515,14 +520,13 @@ if (USE_HTTP) {
   // to clients in production. Mounted LAST so specific handlers (413) run first.
   app.use(errorHandler({ production: IS_PRODUCTION }));
 
-  const httpServer = app.listen(PORT, () => {
+  httpServer.listen(PORT, () => {
     console.log(`\n🧠 BrainRouter MCP Server`);
     console.log(`   Transport : HTTP (Streamable)`);
     console.log(`   Endpoint  : http://localhost:${PORT}/mcp`);
     console.log(`   Health    : http://localhost:${PORT}/health`);
     console.log(`   Root      : ${config.localRoot}\n`);
   });
-
   // Fast, idempotent shutdown on SIGINT *and* SIGTERM (the latter is what
   // `tsx watch` sends on a file change). Without this the open keep-alive
   // connections + background sweeper intervals keep the event loop alive, so
@@ -535,12 +539,19 @@ if (USE_HTTP) {
     shuttingDown = true;
     const hardExit = setTimeout(() => process.exit(0), 700);
     hardExit.unref();
-    // Stop the engine's sweepers/job-runner and close the pg pool so the event
-    // loop drains cleanly (best-effort; the hard deadline above still guarantees
-    // exit if the pool is slow to close).
-    void closeMemoryEngine().catch(() => undefined);
-    try { httpServer.closeAllConnections?.(); } catch { /* older Node */ }
-    httpServer.close(() => process.exit(0));
+    void (async () => {
+      // Stop accepting upgraded audio first and await generation-bound adapter
+      // cleanup before the shared HTTP listener or provider pool disappears.
+      await gatewayAudioStreaming?.close().catch(() => undefined);
+      const httpClosed = new Promise<void>((resolve) => httpServer.close(() => resolve()));
+      try { httpServer.closeAllConnections?.(); } catch { /* older Node */ }
+      await httpClosed;
+      await Promise.allSettled([
+        closeMemoryEngine(),
+        inProcessGatewayService?.close(),
+      ]);
+      process.exit(0);
+    })();
   };
   process.on('SIGINT', shutdownHttp);
   process.on('SIGTERM', shutdownHttp);

@@ -17,6 +17,13 @@ GET  /health           # { status, service, model }
 The gateway exposes this to clients as `POST /v1/audio/transcriptions` (on the
 single `:3747` door), with an optional `?model=<name>` or `x-model` passthrough.
 
+The bundled sidecar is batch-only. Authenticated clients may query
+`GET /v1/audio/transcriptions/capabilities`; this deployment reports
+`{ "schemaVersion": 1, "segmentedUpload": true, "streaming": null }`.
+`POST /v1/audio/transcriptions` remains the active transcription path. The
+gateway's WebSocket route is reserved for an injected adapter satisfying the
+complete D10 contract and returns 503 without one.
+
 ## Using a HuggingFace Whisper model
 
 The sidecar loads `whisper.cpp` **ggml** models — all of which live on HuggingFace.
