@@ -260,8 +260,8 @@ function LearnedBehaviorsContent() {
 
       {!loading && visible.length === 0 && (
         <EmptyState
-          title={items.length ? "No learned behavior matches this filter" : "No hosted learned behavior yet"}
-          description={items.length ? "Choose another status." : "Gated learning checkpoints will appear here after they write a tenant-scoped central memory record."}
+          title={items.length ? "No learned behavior matches this filter" : "Nothing learned here yet"}
+          description={items.length ? "Choose another status." : "When a repeated correction is promoted into a lasting workspace behavior, the checkpoint appears here with what changed and who it applies to."}
         />
       )}
       {(loading || orgLoading) && <div className="settings-loading">Loading learned behavior…</div>}

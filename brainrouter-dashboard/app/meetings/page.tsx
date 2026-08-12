@@ -523,7 +523,7 @@ export default function MeetingsPage() {
 
   return (
     <AuthGuard>
-      <PageHeader title="Meetings" description="Recallable meeting summaries across your organization." />
+      <PageHeader title="Meetings" description="Record the meeting, get a summary, send the follow-ups to the board — and keep what was decided." />
       <div className={styles.page}>
       {error ? <div className={styles.errorBar} role="alert">{error}</div> : null}
       {/* D6 — outside the dialog on purpose: this is raised by the same commit

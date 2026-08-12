@@ -144,7 +144,7 @@ function TeamsInner() {
   );
 
   return <>
-    <PageHeader title="Teams" description="Organization groups and personal collaboration circles, with explicit meeting and memory access." />
+    <PageHeader title="Teams" description="Groups inside your organization, plus personal circles that cross them — each with explicit access to meetings and knowledge." />
     <div className={styles.page}>
       {error ? <div className={styles.errorBar} role="alert"><span>{error}</span><button type="button" onClick={() => setError("")} aria-label="Dismiss error">×</button></div> : null}
       <div className={styles.wrap}>

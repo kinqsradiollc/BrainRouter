@@ -241,11 +241,25 @@
 .immersive .sceneHeader small { display: none; }
 .immersive .coreLabel { display: none; }
 .immersive .activityRail { right: clamp(20px, 4vw, 64px); bottom: 14px; left: clamp(20px, 5vw, 72px); border-top: 0; }
-.immersive .node[data-slot="workbench"] { top: 22%; left: 12%; }
+/*
+ * Immersive is the HERO, and the hero's left half belongs to the headline.
+ *
+ * The three left-hand nodes were rendering underneath it — measured, not
+ * guessed: the h1 spans x 64-884 and `workbench`, `knowledge` and `reviews`
+ * landed at 0, 76 and 178. Text over text, on the first thing anyone sees.
+ *
+ * They are hidden rather than relocated. Crowding all six onto the right would
+ * collide with the standfirst that already lists every surface in prose, and
+ * the sphere and its orbit lines still carry the left as a backdrop — which is
+ * what a backdrop is for. Fewer labels is the better composition, not the
+ * concession. The full set still shows in the non-immersive orbit, where no
+ * copy sits on top of it.
+ */
+.immersive .node[data-slot="workbench"],
+.immersive .node[data-slot="knowledge"],
+.immersive .node[data-slot="reviews"] { display: none; }
 .immersive .node[data-slot="sources"] { top: 18%; right: 13%; }
-.immersive .node[data-slot="knowledge"] { top: 46%; left: 6%; }
 .immersive .node[data-slot="testing"] { right: 8%; bottom: 30%; }
-.immersive .node[data-slot="reviews"] { bottom: 34%; left: 14%; }
 .immersive .node[data-slot="automation"] { top: 40%; right: 6%; }
 @media (max-width: 900px) {
   .immersive .node { display: none; }

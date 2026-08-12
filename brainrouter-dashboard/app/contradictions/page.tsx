@@ -154,8 +154,8 @@ export default function ContradictionsPage() {
                 </svg>
               </div>
             }
-            title="Semantic Coherence Attained"
-            description="The memory engine has detected no overlapping or contradictory belief systems."
+            title="Nothing is in conflict"
+            description="When two saved records disagree, they are surfaced here side by side — with their sources — so a person can settle it instead of the workspace quietly picking one."
           />
         )}
         <InfiniteScrollSentinel hasMore={hasMore} isFetchingMore={isFetchingMore} onLoadMore={loadMore} />

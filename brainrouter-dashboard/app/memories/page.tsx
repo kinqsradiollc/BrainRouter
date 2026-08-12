@@ -184,8 +184,8 @@ export default function MemoriesPage() {
 
         {!isLoading && memories.length === 0 && (
           <EmptyState
-            title={debouncedQuery ? "No memories match your search" : "No Semantic Memories"}
-            description={debouncedQuery ? "Try a different query or filter combination." : "Active agent sessions will populate this index once memory capture runs."}
+            title={debouncedQuery ? "No memories match your search" : "Nothing saved here yet"}
+            description={debouncedQuery ? "Try a different query or filter combination." : "Decisions, preferences, and lessons from meetings, notes, and work in progress are saved here as you go — each one keeping the source it came from."}
           />
         )}
         <InfiniteScrollSentinel hasMore={hasMore} isFetchingMore={isLoadingMore} onLoadMore={() => void load("append")} />
