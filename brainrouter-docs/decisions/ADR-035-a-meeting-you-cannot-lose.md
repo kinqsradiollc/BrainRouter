@@ -333,10 +333,24 @@ meeting"*, which the final then revised to *"Dana will present the migration pla
 a hypothesis, only a final is a boundary, and only `committed` may move a resume point. The batch
 path was accepted in the same run.
 
-What is still pending is the HOST end, and the distinction matters: no shipped compose sets
-`BRAINROUTER_STT_STREAM_URL`, so Dashboard and Desktop have been exercised only against the
-segmented path. Reconnect/replay and visible fallback are host behaviours and remain unrun. An
-engine that streams correctly is not a host that survives losing it.
+**The host's half of that acceptance has been run too** (`npm run acceptance:meeting-streaming`,
+`brainrouter/benchmark/meeting-streaming-acceptance.ts`). It drives the SHIPPED chain — the sidecar's
+own document through the brain's `probeGatewayAudioStreamingCapabilities`, into Core's strict v1
+reader, into `selectTranscriptionMode` — and asserts both arms:
+
+- against the live engine, the host selects `streaming` and the live-text promise is permitted, with
+  the advertised latency modes surviving translation;
+- and every incomplete answer degrades to `segmented` instead — an unreachable origin, an endpoint
+  speaking a different protocol, the right protocol advertising a latency mode this host cannot
+  honour, and the right protocol advertising none at all.
+
+Those four negative arms are the point. Absence is obvious; a half-answer is not, and a host that
+believes half a contract is the failure this ADR is named for. The suite was mutation-checked:
+removing the adapter's protocol gate fails exactly one case and no others.
+
+What remains is reconnect/replay through a stream dropped mid-meeting, which needs a capture session
+driven end to end rather than a capability exchange. An engine that streams correctly is not a host
+that survives losing it, and that last sentence is now the only part still owed.
 
 | D10 delivery slice | State |
 |---|---|
@@ -347,7 +361,8 @@ engine that streams correctly is not a host that survives losing it.
 | Dashboard integration | Implemented |
 | A shipped configuration that turns streaming on | Implemented — `BRAINROUTER_STT_STREAM_URL` in the dev compose, unset by default |
 | Live text against a real engine (partial → revised final → committed) | Accepted 2026-08-12, engine end |
-| Reconnect/replay and visible fallback, on both hosts | **Pending** — needs a host pointed at a streaming URL |
+| Host selects streaming from a real engine's answer, and degrades on every incomplete one | Accepted 2026-08-12 — `npm run acceptance:meeting-streaming` |
+| Reconnect/replay through a dropped stream mid-meeting | **Pending** — needs a capture session driven end to end |
 
 ### D11 · In the browser, the server is the system of record — not the origin's quota
 

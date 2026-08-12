@@ -16,7 +16,7 @@ that were built, typechecked, tested, and called by nothing a user could reach.
 | **032** | An agent that gets better and cannot get worse | **COMPLETE IN CODE** | Two items, both named below. |
 | **033** | Review that finds things and says where | **PARTIAL** | One number, from a harness that ships and has never been run. |
 | **034** | Messages that arrive | **COMPLETE** | Nothing. Merged as #1345. |
-| **035** | A meeting you cannot lose | **PARTIAL** | The host end of D10's streaming acceptance. |
+| **035** | A meeting you cannot lose | **PARTIAL** | One acceptance: reconnect/replay through a dropped stream. |
 | **038** | A planner worth opening | **COMPLETE** | Nothing. |
 
 ---
@@ -95,11 +95,16 @@ retirement was ever consulted. Fixed by annotating the genuinely read-only
 - **D11** — ships as a server-side **transcript** escrow. Its audio half is
   **withdrawn**, not deferred.
 
-**Not closed:** the **host** end of D10. No shipped compose sets
-`BRAINROUTER_STT_STREAM_URL`, so Dashboard and Desktop have been exercised only
-against the segmented path; reconnect/replay and visible fallback are host
-behaviours and remain unrun. An engine that streams correctly is not a host that
-survives losing it.
+- **D10 host end** — accepted 2026-08-12 via `npm run acceptance:meeting-streaming`,
+  which drives the shipped chain (sidecar document → the brain's gateway probe →
+  Core's strict v1 reader → `selectTranscriptionMode`). Against the live engine the
+  host selects `streaming`; against an unreachable origin, a different protocol, an
+  unhonourable latency mode, and an empty mode list it degrades to `segmented`.
+  Mutation-checked: removing the adapter's protocol gate fails exactly one case.
+
+**Not closed:** reconnect/replay through a stream dropped mid-meeting. That needs a
+capture session driven end to end, not a capability exchange. An engine that
+streams correctly is not a host that survives losing it.
 
 ## 038 — A planner worth opening · COMPLETE
 
@@ -123,6 +128,6 @@ Three items are outstanding and **none of them is blocked on engineering**:
 |---|---|
 | 032 · live-model §6 run | Approval to spend tokens on it |
 | 033 · D7 precision/recall | A provider key supplied to the harness's env var |
-| 035 · D10 host end | A host pointed at a streaming URL, then reconnect/replay and fallback exercised |
+| 035 · reconnect/replay | Nothing from you — this one is engineering, and it is next |
 
 032's procedure action ledger is the one genuinely unwritten piece of code.

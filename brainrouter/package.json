@@ -49,7 +49,8 @@
     "bench:review:harvest": "npx tsx benchmark/review-harvest.ts",
     "bench:download": "npx tsx benchmark/lib/dataset-loader.ts",
     "bench:overnight": "npx tsx benchmark/run-overnight.ts",
-    "setup:admin": "node scripts/setup-admin.js"
+    "setup:admin": "node scripts/setup-admin.js",
+    "acceptance:meeting-streaming": "npx tsx benchmark/meeting-streaming-acceptance.ts"
   },
   "dependencies": {
     "@kinqs/brainrouter-core": "^0.4.20",

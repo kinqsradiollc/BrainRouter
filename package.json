@@ -45,7 +45,8 @@
     "test:adr038:postgres": "npm run test:planner:postgres -w brainrouter && npm run test:notes:postgres -w brainrouter",
     "verify": "npm run build && npm run typecheck && npm run lint && npm run test",
     "cli": "npm run build -w @kinqs/brainrouter-cli --silent && node brainrouter-cli/dist/index.js",
-    "cli:nobuild": "node brainrouter-cli/dist/index.js"
+    "cli:nobuild": "node brainrouter-cli/dist/index.js",
+    "acceptance:meeting-streaming": "npm run acceptance:meeting-streaming -w @kinqs/brainrouter-mcp-server"
   },
   "devDependencies": {
     "@types/react": "^19.2.15",
