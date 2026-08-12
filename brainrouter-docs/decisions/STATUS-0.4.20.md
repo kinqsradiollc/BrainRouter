@@ -15,7 +15,7 @@ that were built, typechecked, tested, and called by nothing a user could reach.
 | **028** | Surfaces that tell the truth | **SETTLED** | Nothing. Every decision reaches a user or is retired. |
 | **032** | An agent that gets better and cannot get worse | **COMPLETE IN CODE** | One acceptance run, which spends your tokens. |
 | **033** | Review that finds things and says where | **PARTIAL** | One number, from a harness that ships and has never been run. |
-| **034** | Messages that arrive | **COMPLETE** | Nothing. Merged as #1345. |
+| **034** | Messages that arrive | **COMPLETE** | Three exports nothing reaches — see below. |
 | **035** | A meeting you cannot lose | **COMPLETE** | Nothing blocking. A CI job for the streaming acceptance is still owed. |
 | **038** | A planner worth opening | **COMPLETE** | Nothing. |
 
@@ -79,11 +79,37 @@ deliberately by the owner. This is a measurement not taken, not code not written
 
 ## 034 — Messages that arrive · COMPLETE
 
-Merged as #1345 on 2026-08-12, before the rest of this release's ADR work. Its
-first CI run earned its keep by catching a cross-ADR regression: a fail-closed MCP
-approval broke ADR-032's §6 test, because a headless prompter refused before
-retirement was ever consulted. Fixed by annotating the genuinely read-only
-`get_skill` stub with `readOnlyHint`.
+Merged as #1345 on 2026-08-12 at 13:08:58, before the rest of this release's ADR
+work. Its first CI run earned its keep by catching a cross-ADR regression: a
+fail-closed MCP approval broke ADR-032's §6 test, because a headless prompter
+refused before retirement was ever consulted. Fixed by annotating the genuinely
+read-only `get_skill` stub with `readOnlyHint`.
+
+**It reached the D10 branch late, and that mattered.** #1345 landed on
+`release/0.4.20`, but `feat/adr-035-d10-adapter` had branched 56 seconds earlier
+and never pulled it in — so every green result on that branch was measured on a
+tree without it. Merging the two took nine conflicts, six of them real: ADR-028
+retired the `review` and `ci` panels while ADR-034 added `peers` (both correct,
+either side alone wrong), and ADR-028 G5 had folded `StackPanel` into an inline
+case so its import had to go. The five meetings-path conflicts were ours-is-newer
+throughout — checked hunk by hunk, their side introduced no identifier ours
+lacked. Combined tree: 4342 core, 544 + 648 desktop, zero failures.
+
+**The sweep caught three unreached exports in this ADR**, which is the
+built-but-unreached class 028 exists to find, found by the mechanism 028 built:
+
+- `session/input/heldSessionMessages.ts :: rejectHeldSessionMessage`
+- `session/messaging/routes.ts :: findSessionRouteByKey`
+- `session/sessionTitle.ts :: resolveSessionTitle` — a second variant of
+  `resolveSessionTitleDecision`, which is the one `agent.ts` actually calls
+
+All three compile, typecheck, and are covered by tests. None is called on a user
+path. `DEAD_EXPORT_CEILING` therefore rose 270 → 273 **with a comment naming all
+three**, rather than absorbing the delta silently — an unexplained rise is how a
+ratchet stops meaning anything. Deleting another decision's tested behaviour
+inside a merge commit was deliberately not done; each needs wiring or deleting.
+`rejectHeldSessionMessage` looks like a half-wired feature: messages can be held,
+apparently not rejected.
 
 ## 035 — A meeting you cannot lose · PARTIAL
 

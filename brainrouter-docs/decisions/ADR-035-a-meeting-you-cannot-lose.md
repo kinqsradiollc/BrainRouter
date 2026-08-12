@@ -2,20 +2,38 @@
 
 **Status:** ACCEPTED — owner-approved.
 
-**Implementation status (2026-08-12): PARTIAL, and the remainder is acceptance rather than code.**
-D9 is implemented with automated host coverage, with destructive acceptance still pending. D10 is
-implemented end to end and OFF by default: the bundled sidecar streams, the gateway adapter is
-injected only when `BRAINROUTER_STT_STREAM_URL` is set, and both hosts discover the capability and
-consume it. With the variable unset — every shipped compose — capabilities advertise
+**Implementation status (2026-08-12): COMPLETE. Every decision is built, and every acceptance this
+document asks for has been RUN.**
+
+An earlier revision of this block said "PARTIAL, and the remainder is acceptance rather than code"
+and was left standing after the acceptances were run, while paragraphs three lines below described
+running them. That is the same self-contradiction ADR-032 carried, and it is worth naming twice: a
+status line is the first thing read and the last thing updated, so it is where a document goes stale
+first and where staleness costs the most.
+
+D10 is implemented end to end and OFF by default: the bundled sidecar streams, the gateway adapter
+is injected only when `BRAINROUTER_STT_STREAM_URL` is set, and both hosts discover the capability
+and consume it. With the variable unset — every shipped compose — capabilities advertise
 `streaming: null`, upgrades are refused, and batch transcription is byte-for-byte what it was. The
 dev compose THREADS that variable through (`${BRAINROUTER_STT_STREAM_URL:-}`) but leaves it empty,
 so streaming is off in every shipped configuration and an operator opts in by setting it.
 
-**D10's live-text acceptance has been RUN against a real engine** (2026-08-12): the sidecar returned
-a partial 1.4s behind the speaker, a final that revised it, and a `committed` checkpoint after it —
-the exact sequence the contract requires. Reconnect/replay and visible fallback are host behaviours
-and are still unrun, as is a CI job that exercises the streaming sidecar. D9's destructive
-acceptance now passes on both hosts by reproduction.
+**The acceptances, all run on 2026-08-12 against the bundled `ggml-base.en` sidecar:**
+
+- **D9's destructive run passes on both hosts by reproduction** — a real SIGKILL mid-recording and a
+  real browser, reopened, losing nothing.
+- **D10's live text**: a partial 1.4s behind the speaker reading *"Dana will present the meeting"*,
+  a final revising it to *"the migration plan"*, then `committed`. The revision is the case the
+  contract exists for.
+- **D10's host end** (`npm run acceptance:meeting-streaming`): the shipped chain selects streaming
+  from that live answer, and degrades to segmented on every incomplete one — unreachable origin,
+  wrong protocol, unhonourable latency mode, empty mode list.
+- **D10's reconnect/replay**: only committed coverage moves the resume point; visible partial text
+  does not; replay resumes exactly one chunk past the checkpoint; coverage beyond the written ledger
+  is refused rather than clamped; a reconnecting endpoint cannot un-commit settled audio.
+
+**What is still owed is a CI job** that runs that acceptance against a streaming sidecar, so it
+cannot rot unnoticed. That is release engineering, not a decision in this document.
 
 **D6's retention window is built on both hosts** — a default this document names (30 days), a
 control in each capture surface, and a sweep that performs the same deletion an explicit discard
