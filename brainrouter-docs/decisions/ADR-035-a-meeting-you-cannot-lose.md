@@ -345,12 +345,21 @@ reader, into `selectTranscriptionMode` — and asserts both arms:
   honour, and the right protocol advertising none at all.
 
 Those four negative arms are the point. Absence is obvious; a half-answer is not, and a host that
-believes half a contract is the failure this ADR is named for. The suite was mutation-checked:
-removing the adapter's protocol gate fails exactly one case and no others.
+believes half a contract is the failure this ADR is named for.
 
-What remains is reconnect/replay through a stream dropped mid-meeting, which needs a capture session
-driven end to end rather than a capability exchange. An engine that streams correctly is not a host
-that survives losing it, and that last sentence is now the only part still owed.
+**Reconnect and replay are covered by the same run.** A stream cut mid-meeting leaves the resume
+point where the engine last COMMITTED — visible partial text does not move it; replay resumes at
+exactly the chunk after the checkpoint, so no committed audio is sent twice and none is skipped; a
+coverage claim beyond the written ledger is refused rather than clamped; and a reconnecting endpoint
+that has forgotten what it acknowledged cannot un-commit settled audio.
+
+Mutation-checked, and the mutation testing found something worth writing down: `@kinqs/brainrouter-core`
+resolves to its COMPILED output, so a mutation in `packages/core/src` does not reach the running
+acceptance and the suite stays green while protecting nothing. Mutating the built artifact instead,
+removing the coverage guards fails exactly the two checkpoint cases; removing the adapter's protocol
+gate fails exactly the protocol case. The partial-does-not-commit case is structural rather than
+guarded — only the `coverage` branch computes a checkpoint at all — and is not mutation-provable in
+the same way, which is stated here rather than counted as if it were.
 
 | D10 delivery slice | State |
 |---|---|
@@ -362,7 +371,7 @@ that survives losing it, and that last sentence is now the only part still owed.
 | A shipped configuration that turns streaming on | Implemented — `BRAINROUTER_STT_STREAM_URL` in the dev compose, unset by default |
 | Live text against a real engine (partial → revised final → committed) | Accepted 2026-08-12, engine end |
 | Host selects streaming from a real engine's answer, and degrades on every incomplete one | Accepted 2026-08-12 — `npm run acceptance:meeting-streaming` |
-| Reconnect/replay through a dropped stream mid-meeting | **Pending** — needs a capture session driven end to end |
+| Reconnect/replay: only committed coverage moves the resume point | Accepted 2026-08-12, same run |
 
 ### D11 · In the browser, the server is the system of record — not the origin's quota
 

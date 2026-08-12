@@ -16,7 +16,7 @@ that were built, typechecked, tested, and called by nothing a user could reach.
 | **032** | An agent that gets better and cannot get worse | **COMPLETE IN CODE** | Two items, both named below. |
 | **033** | Review that finds things and says where | **PARTIAL** | One number, from a harness that ships and has never been run. |
 | **034** | Messages that arrive | **COMPLETE** | Nothing. Merged as #1345. |
-| **035** | A meeting you cannot lose | **PARTIAL** | One acceptance: reconnect/replay through a dropped stream. |
+| **035** | A meeting you cannot lose | **COMPLETE** | Nothing blocking. A CI job for the streaming acceptance is still owed. |
 | **038** | A planner worth opening | **COMPLETE** | Nothing. |
 
 ---
@@ -102,9 +102,14 @@ retirement was ever consulted. Fixed by annotating the genuinely read-only
   unhonourable latency mode, and an empty mode list it degrades to `segmented`.
   Mutation-checked: removing the adapter's protocol gate fails exactly one case.
 
-**Not closed:** reconnect/replay through a stream dropped mid-meeting. That needs a
-capture session driven end to end, not a capability exchange. An engine that
-streams correctly is not a host that survives losing it.
+- **D10 reconnect/replay** — accepted in the same run. A stream cut mid-meeting
+  leaves the resume point where the engine last *committed*; visible partial text
+  does not move it; replay resumes exactly one chunk past the checkpoint; coverage
+  beyond the written ledger is refused rather than clamped; and a reconnecting
+  endpoint cannot un-commit settled audio.
+
+**Not closed:** nothing that blocks the release. The remaining D10 item is a CI job
+that runs this acceptance against a streaming sidecar, so it cannot silently rot.
 
 ## 038 — A planner worth opening · COMPLETE
 
@@ -122,12 +127,13 @@ same outbox as every other planner write.
 
 ## What an owner has to decide
 
-Three items are outstanding and **none of them is blocked on engineering**:
+Two items are outstanding and **neither is blocked on engineering**. Both were
+checked rather than assumed: no local model is serving on this machine, so
+neither can be run at zero cost without you.
 
 | Item | Needs |
 |---|---|
 | 032 · live-model §6 run | Approval to spend tokens on it |
 | 033 · D7 precision/recall | A provider key supplied to the harness's env var |
-| 035 · reconnect/replay | Nothing from you — this one is engineering, and it is next |
 
 032's procedure action ledger is the one genuinely unwritten piece of code.

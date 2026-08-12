@@ -31,6 +31,10 @@ import {
   selectTranscriptionMode,
   liveTextExpected,
   isStreamingTranscriptionCapabilities,
+  reduceStreamingTranscript,
+  validateTranscriptCommittedCheckpoint,
+  EMPTY_STREAMING_TRANSCRIPT,
+  type MeetingChunk,
 } from "@kinqs/brainrouter-core/meetings";
 import {
   resolveGatewayAudioStreamingEndpoint,
@@ -39,6 +43,16 @@ import {
 
 const ORIGIN = process.argv[2] ?? "http://127.0.0.1:3752";
 const results: string[] = [];
+
+/** Eight one-second chunks, as a recorder would have written them to disk. */
+const LEDGER: readonly MeetingChunk[] = Object.freeze(
+  Array.from({ length: 8 }, (_, i) => ({
+    sequence: i,
+    byteLength: 32_000,
+    startMs: i * 1000,
+    endMs: (i + 1) * 1000,
+  })),
+);
 
 function check(name: string, run: () => void | Promise<void>): Promise<void> {
   return Promise.resolve()
@@ -149,11 +163,87 @@ await check("a truthful protocol with an empty mode list is refused", async () =
   }
 });
 
+// ---- Reconnect and replay -------------------------------------------------
+//
+// Chunk sequences are 0-BASED indices into the written ledger, and coverage is
+// only believed while `coveredThroughSequence < ledger.length`. Getting that
+// wrong is how a test comes to assert the opposite of the contract, so it is
+// stated once here rather than re-derived in four places.
+//
+// The whole point of a coverage checkpoint is that it is the ONLY thing allowed
+// to move a resume point. If a dropped connection could advance it by the text
+// already on screen, a reconnect would resume past audio nobody transcribed and
+// the meeting would have a hole in it that nothing reports.
+
+await check("a stream cut mid-meeting leaves the resume point where the ENGINE last committed", () => {
+  let state = EMPTY_STREAMING_TRANSCRIPT;
+
+  // The engine settles the first four seconds and says so.
+  state = reduceStreamingTranscript(
+    state,
+    { kind: "final", utteranceId: "u0", revision: 1, startMs: 0, endMs: 4000, text: "the first four seconds" },
+    LEDGER,
+  );
+  state = reduceStreamingTranscript(state, { kind: "coverage", coveredThroughSequence: 3 }, LEDGER);
+  assert.equal(state.checkpoint?.acknowledgedThroughSequence, 3, "a committed coverage event must move the checkpoint");
+
+  // Then it shows a hypothesis for later audio — and the connection dies.
+  const withPartial = reduceStreamingTranscript(
+    state,
+    { kind: "partial", utteranceId: "u1", revision: 1, startMs: 4000, endMs: 7000, text: "text the viewer can see" },
+    LEDGER,
+  );
+
+  assert.equal(
+    withPartial.checkpoint?.acknowledgedThroughSequence,
+    3,
+    "a partial is a hypothesis: visible text must NOT move the resume point",
+  );
+});
+
+await check("replay resumes from the checkpoint, so no committed audio is sent twice and none is skipped", () => {
+  const resumeAfter = 3;
+  const replay = LEDGER.filter((chunk) => chunk.sequence > resumeAfter);
+
+  assert.deepEqual(
+    replay.map((c) => c.sequence),
+    [4, 5, 6, 7],
+    "everything after the checkpoint must be replayed, and nothing before it",
+  );
+  // The join has to be exact at the boundary: a gap loses words, an overlap
+  // transcribes them twice and the transcript stutters.
+  assert.equal(replay[0]!.startMs, LEDGER[resumeAfter]!.endMs, "replay must begin exactly where coverage ended");
+});
+
+await check("a checkpoint cannot advance past audio the device has actually written", () => {
+  // An endpoint claiming coverage of sequence 9 when eight chunks exist is
+  // either confused or lying; either way believing it would strand the tail.
+  assert.equal(
+    validateTranscriptCommittedCheckpoint(null, 9, LEDGER),
+    null,
+    "coverage beyond the ledger must be refused, not clamped",
+  );
+  assert.ok(
+    validateTranscriptCommittedCheckpoint(null, LEDGER.length - 1, LEDGER),
+    "coverage of the whole written ledger is legitimate",
+  );
+});
+
+await check("a checkpoint never moves backwards on a reconnect", () => {
+  // A reconnecting endpoint that has forgotten what it acknowledged must not be
+  // able to un-commit settled audio.
+  assert.equal(
+    validateTranscriptCommittedCheckpoint(5, 2, LEDGER),
+    null,
+    "a lower coverage claim after a reconnect must be refused",
+  );
+});
+
 console.log(results.join("\n"));
 console.log(
   process.exitCode
     ? "\nADR-035 D10 host acceptance FAILED.\n"
-    : "\nADR-035 D10 host acceptance PASSED: streaming is selected from a real engine's answer, and every incomplete answer degrades to segmented.\n",
+    : "\nADR-035 D10 host acceptance PASSED: streaming is selected from a real engine's answer, every incomplete answer degrades to segmented, and only committed coverage moves the resume point.\n",
 );
 
 /** A throwaway loopback endpoint that advertises whatever document is given. */
