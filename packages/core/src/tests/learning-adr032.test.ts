@@ -2340,6 +2340,14 @@ test('§6: one Agent learns from its own repetition, a second runs it, a third c
     const stubMcp: any = {
       listTools: async () => ({ tools: [{
         name: 'get_skill', __rawName: 'get_skill', description: 'Get a skill',
+        // ADR-034 made MCP approval fail-closed: silence no longer proves a
+        // remote tool is non-mutating, so a read-only tool must SAY so. Without
+        // this the headless prompter refuses before retirement is ever
+        // consulted, and the assertion below reports "still resolved" for a call
+        // that never reached the store — a false failure hiding an untested
+        // property. `get_skill` really is read-only, so the annotation is the
+        // honest fix, not a way around the guard.
+        annotations: { readOnlyHint: true },
         inputSchema: { type: 'object', properties: { name: { type: 'string' }, section: { type: 'string' } }, required: ['name'] },
       }] }),
       // D4 — a lesson stays away from the model until its reversible central
