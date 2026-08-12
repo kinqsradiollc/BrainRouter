@@ -290,7 +290,7 @@ function mergeEstimate(
  * queued as an outbound operation and failing visibly, not a local write that
  * the next refresh silently reverts.
  */
-const PLANNER_OWNED_FIELDS = new Set([
+export const PLANNER_OWNED_FIELDS: ReadonlySet<string> = new Set([
   'priority', 'estimateMinutes', 'scheduledFor', 'snoozedUntil', 'order',
 ]);
 

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Agent(Explore)",
+      "Bash(git log *)"
+    ]
+  },
+  "$version": 5
+}

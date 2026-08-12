@@ -72,7 +72,10 @@ export function sortForToday(
   });
 }
 
-const PLANNER_OWNED_FIELDS = new Set(['priority', 'estimateMinutes', 'scheduledFor', 'snoozedUntil', 'order']);
+// The merge rule itself, not a second copy of it. Core decides what survives a
+// refresh; a surface that duplicated the list would eventually offer an edit the
+// next sync undoes — which is the projection drift ADR-038's audit found.
+import { PLANNER_OWNED_FIELDS } from '@kinqs/brainrouter-core/planner/presentation';
 
 export function canEdit(item: PlannerItemView, field: string): boolean {
   if (field === 'title' && item.capabilities?.editTitle !== undefined) return item.capabilities.editTitle;

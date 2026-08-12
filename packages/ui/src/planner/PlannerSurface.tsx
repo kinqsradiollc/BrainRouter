@@ -317,7 +317,32 @@ function ItemRow({ item, blocks, ops }: {
           {provenance.source}{provenance.externalId ? ` ${provenance.externalId}` : ''}
         </button>
       ) : null}
-      {item.dueDate ? <time className="br-planner-due" dateTime={item.dueDate}>{item.dueDate.slice(0, 10)}</time> : null}
+      {/*
+        D3 — the field that SORTS the day, editable from the surface whose job is
+        the day. `groupFor` reads `dueDate` to decide overdue / due today / next
+        / anytime, and until now nothing on either host could set it: `setDueDate`
+        was declared on the contract and implemented by the desktop, and no
+        component called it. `/planner due` worked from the terminal, so the CLI
+        could move work the GUI could not — the inverse of D5.
+
+        Owned-only, and honestly so: `dueDate` is not in Core's
+        PLANNER_OWNED_FIELDS, so a due date set on a mirrored issue would be
+        undone by the next refresh. `whyReadOnly` already says exactly that, and
+        it is the tooltip rather than a disabled control with no explanation.
+      */}
+      {ops.setDueDate && canEdit(item, 'dueDate') ? (
+        <input
+          type="date"
+          className="br-planner-due"
+          value={item.dueDate?.slice(0, 10) ?? ''}
+          aria-label={`Due date for ${item.title}`}
+          onChange={(event) => ops.setDueDate?.(item.id, event.target.value || null)}
+        />
+      ) : item.dueDate ? (
+        <time className="br-planner-due" dateTime={item.dueDate} title={whyReadOnly(item, 'dueDate') ?? undefined}>
+          {item.dueDate.slice(0, 10)}
+        </time>
+      ) : null}
       {conflicts.map((conflict) => (
         <span key={conflict.field} className="br-planner-conflict">
           <span>{conflict.field} differs</span>
