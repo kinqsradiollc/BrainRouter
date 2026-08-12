@@ -467,28 +467,6 @@ import type { HostContext, TrackPrView } from './context.js';
 import { isBrainRouterLearningProfile } from './learningIdentity.js';
 import type { QueryHandler } from '../hostCore.js';
 
-import {
-  describeStackAction,
-  adviseStackingAction,
-  type StackActionDeps,
-} from './stackActions.js';
-
-/** Changed lines per file, parsed from a unified diff. */
-function changedLinesByFile(diff: string): Map<string, number> {
-  const out = new Map<string, number>();
-  let current: string | null = null;
-  for (const line of diff.split('\n')) {
-    const header = /^\+\+\+ b\/(.+)$/.exec(line);
-    if (header) { current = header[1]!; continue; }
-    if (!current) continue;
-    if (line.startsWith('+++') || line.startsWith('---')) continue;
-    if (line.startsWith('+') || line.startsWith('-')) {
-      out.set(current, (out.get(current) ?? 0) + 1);
-    }
-  }
-  return out;
-}
-
 export function createSerialWorkQueue(): <T>(work: () => T | Promise<T>) => Promise<T> {
   let tail: Promise<void> = Promise.resolve();
   return <T>(work: () => T | Promise<T>): Promise<T> => {
@@ -566,50 +544,10 @@ function readNoteConflictClock(
 }
 
 export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
-  let repoSlugCache: string | null = null;
   // Planner state is persisted as one atomic JSON document. Keep every local
   // read-modify-write and network reconciliation in one queue so a sync that
   // started from snapshot A can never overwrite a mutation that produced A+B.
   const withPlannerStoreLock = createSerialWorkQueue();
-  void (async () => {
-    const view = await ctx.ghJson<{ nameWithOwner?: unknown }>(['repo', 'view', '--json', 'nameWithOwner'], { timeout: 8_000 });
-    const slug = view.data?.nameWithOwner;
-    if (typeof slug === 'string' && slug.includes('/')) repoSlugCache = slug;
-  })();
-
-  /**
-   * Deps for the stack actions, assembled from what the host already has.
-   * `workingTreeGroups` groups the working diff by top-level directory: a crude
-   * seam, but a real one, and better than asking the model to invent cut points
-   * from a file list. Stacking advice only ever suggests — it never cuts.
-   */
-  const stackDeps = (): StackActionDeps => ({
-    ghJson: ctx.ghJson,
-    // Resolved through gh rather than a context field: there is no repo-slug
-    // accessor on HostContext, and inventing one that silently returns null
-    // would make every stack action a no-op that still reports success.
-    repo: () => repoSlugCache,
-    workingTreeGroups: async () => {
-      const working = await ctx.collectWorkingDiff();
-      // `files` is a plain string[]; per-file change counts are not carried, so
-      // they are parsed from the unified diff rather than guessed. Counting
-      // nothing would make every change look small enough to skip stacking,
-      // which is the failure mode that matters here.
-      const perFile = changedLinesByFile(working?.diff ?? '');
-      const byGroup = new Map<string, { files: string[]; changedLines: number }>();
-      for (const filePath of working?.files ?? []) {
-        const label = filePath.split('/')[0] || 'root';
-        const entry = byGroup.get(label) ?? { files: [], changedLines: 0 };
-        entry.files.push(filePath);
-        entry.changedLines += perFile.get(filePath) ?? 0;
-        byGroup.set(label, entry);
-      }
-      return {
-        totalChangedLines: [...byGroup.values()].reduce((sum, g) => sum + g.changedLines, 0),
-        groups: [...byGroup.entries()].map(([label, g]) => ({ label, ...g })),
-      };
-    },
-  });
 
   const {
     browser,
@@ -868,12 +806,10 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // expose the core catalog/store to the renderer without making Track Sync
       // pretend to be the general connector abstraction.
       'connectors-catalog': () => ({ catalog: listConnectorCatalog() }),
-      // ADR-027 D13 — the host half of the `stack.*` control actions. These
-      // were declarations with no implementation until now, which is the same
-      // "module with no caller" gap that made the stack model inert when it
-      // first shipped.
-      'stack-describe': async (args) => describeStackAction(stackDeps(), args ?? {}),
-      'stack-advise': async () => adviseStackingAction(stackDeps()),
+      // ADR-028 A8 — `stack-describe` and `stack-advise` were registered here
+      // and dispatched by nothing: the only renderer that would have called
+      // them was the stack panel, whose own buttons dispatched three OTHER
+      // names that were never registered. Both are retired with that panel.
       'connectors-list': (args) => {
         const source = typeof args.source === 'string' ? args.source as ConnectorSource : undefined;
         const status = typeof args.status === 'string' ? args.status as never : undefined;

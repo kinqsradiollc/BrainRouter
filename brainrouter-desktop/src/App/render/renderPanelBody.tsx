@@ -7,12 +7,10 @@
 import React, { Suspense, lazy } from 'react';
 import {
   DiffPanel, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel, WorktreesPanel, ReviewPanel,
-  RequirementsPanel, AnnotationsPanel, ArtifactsPanel, StackPanel, ComprehensionContainer, AttachmentsPanel, MemoryPanel, KnowledgePanel, PrototypePanel, TasksPanel, TaskDetailPanel, TerminalPanel, ToolsPanel, ServersPanel, ContextPanel, type PanelId, type SearchHit, type ReviewFindingView, type GrepHit, type FinishedTask,
+  RequirementsPanel, AnnotationsPanel, ArtifactsPanel, ComprehensionContainer, AttachmentsPanel, MemoryPanel, KnowledgePanel, PrototypePanel, TasksPanel, TaskDetailPanel, TerminalPanel, ToolsPanel, ServersPanel, ContextPanel, type PanelId, type SearchHit, type ReviewFindingView, type GrepHit, type FinishedTask,
 } from '../../panels/index.js';
 import type { RequirementRecord, AnnotationRecord, ArtifactRecord, AtlasGraph } from '@kinqs/brainrouter-types';
 import type { TrackPrStatus } from '../../track/TrackView.js';
-import { partitionBranches } from '../../lib/stack/stackPanelView.js';
-import type { StackLayerView, StackAvailability } from '../../lib/stack/stackPanelView.js';
 import type { ScheduleRecordView } from '../../lib/schedule/scheduleView.js';
 import { setEntry } from '../../lib/review/reviewWorkspace.js';
 import type { PlanItem, PlanView, FleetRow, TaskViewState, ChatRow } from '../../types.js';
@@ -45,9 +43,6 @@ type Query = (id: string, name: string, args?: Record<string, unknown>) => void;
 export interface RenderPanelBodyCtx {
   /** ADR-028 B2 — the session the Artifacts panel opens scoped to. */
   viewKey?: string | null;
-  /** ADR-028 A8 — the stack on this branch, and whether gh stack is usable. */
-  stackLayers?: StackLayerView[];
-  stackAvailability?: StackAvailability;
   /** Session key → title, for artifact scope chips and provenance labels. */
   sessionTitles?: Record<string, string | undefined>;
   q: Query;
@@ -152,7 +147,7 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
     lastPlan, planHistory, planFeedbackRef, searchHits, schedules, worktrees, worktreeDiffs, openWorktree,
     reviewMyUnderstanding, review, reviewRunning, setReviewRunningByWs, setReviewByWs, setDraft, atlasGraph, atlasBuilding, atlasEnriching,
     atlasAssessments, atlasAssessing, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, requirements,
-    annotations, artifacts, atlasUiMap, atlasStories, runStory, viewKey, sessionTitles, stackLayers, stackAvailability,
+    annotations, artifacts, atlasUiMap, atlasStories, runStory, viewKey, sessionTitles,
   } = ctx;
 
   // DESK-5f — tab CONTENT only; the tab strip owns titles and closing.
@@ -381,36 +376,21 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId, act
       case 'comprehension': return <ComprehensionContainer onStart={reviewMyUnderstanding} />;
       case 'stack': {
         // ADR-028 G5 — one panel, one question: can this land, and if not what
-        // is stopping it. The chain, the checks and the review findings are
-        // sections of the same answer rather than three tabs to assemble it
-        // from. `diff` stays separate: reading a change and deciding to land it
-        // are different activities.
+        // is stopping it. Checks and review findings are sections of the same
+        // answer rather than two tabs to assemble it from. `diff` stays
+        // separate: reading a change and deciding to land it are different
+        // activities.
 
-        // ADR-028 A8 — read-only first. The panel decides nothing; every
-        // judgement comes from stackPanelView, and the host runs the commands.
+        // ADR-028 A8 — the stack CHAIN is not shown here, and that is the
+        // truthful state rather than a gap. The chain view read `stackLayers`
+        // and `stackAvailability` props no caller passed, and its View / Sync /
+        // Merge buttons dispatched host actions that were never registered. It
+        // is retired with the rest of the stack authoring and mutation surface:
+        // BrainRouter does not create, sync or merge stacks, so a panel listing
+        // layers with buttons that cannot act on them was claiming a state it
+        // had not established — this ADR's own defect, inside the surface
+        // written to fix it.
         return <div className="scroll pr-panel">
-          <StackPanel
-          layers={stackLayers ?? []}
-          availability={stackAvailability ?? { capable: false, halted: false }}
-          onView={() => q('q-stack', 'stack-read')}
-          onSync={(rewrites) => {
-            // Branch names are chosen by whoever pushed them. One shaped like
-            // `--upload-pack=…` is read by git as an option, not a ref, so it
-            // is refused before it reaches the host rather than after.
-            const { safe, refused } = partitionBranches(rewrites);
-            if (refused.length > 0) {
-              setToast(`Refused ${refused.length} branch name(s) that could be read as command options.`);
-              return;
-            }
-            q('q-stack-sync', 'stack-sync', { branches: safe.map((l) => l.branch) });
-            setToast('Syncing the stack…');
-          }}
-          onMerge={(target) => { q('q-stack-merge', 'stack-merge', { number: target.number }); setToast('Merging — a stack merge can take a minute.'); }}
-          onOpenPr={(number) => openUrl(`https://github.com/pulls/${number}`)}
-          />
-          {/* Checks and review findings, in the same scroll. Previously two
-              other tabs, which is why `layerStatus` could not name a failing
-              check as the blocker. */}
           <div className="pr-section">
             <div className="pr-section-head">Checks</div>
             <Suspense fallback={<div className="row status"><span className="spinner" /> Loading…</div>}>

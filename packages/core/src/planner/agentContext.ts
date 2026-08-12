@@ -92,6 +92,54 @@ export function asUntrustedText(value: string, maxLength = 120): string {
 /** Committed items listed in full before the rest becomes a count. */
 export const MAX_LISTED_ITEMS = 7;
 
+/**
+ * The tagged system-message slot this block occupies.
+ *
+ * Named here rather than at the call site for the same reason
+ * `LEARNED_CONTEXT_TAG` is: the code that writes the block and the code that
+ * removes a stale one must agree on the tag, and two string literals eventually
+ * do not.
+ */
+export const PLANNER_CONTEXT_TAG = 'planner-context';
+
+/**
+ * Per-source freshness, derived from the items already in the cache.
+ *
+ * D7's adapters stamp every mirrored item with the moment its source last
+ * answered (`provenance.fetchedAt`). That stamp is the honest answer to "how old
+ * is this?", so freshness is READ from the items rather than kept in a second
+ * place that could disagree with them: a separate freshness record would be a
+ * surface claiming a state the data does not support, which is the defect this
+ * whole ADR is about.
+ *
+ * Owned items contribute nothing — there is no external source that could be
+ * stale, and inventing a "local" source would put a line in the model's context
+ * saying only that you are still yourself.
+ */
+export function sourceFreshnessFromItems(
+  items: readonly PlannerItem[],
+): SourceFreshness[] {
+  const bySource = new Map<string, SourceFreshness>();
+  for (const item of items) {
+    const sourceId = item.provenance?.sourceId ?? item.source;
+    if (!sourceId) continue;
+    const fetchedAt = item.provenance?.fetchedAt ?? item.fetchedAt ?? null;
+    const seen = bySource.get(sourceId);
+    if (!seen) {
+      bySource.set(sourceId, { sourceId, lastFetchedAt: fetchedAt, itemCount: 1 });
+      continue;
+    }
+    seen.itemCount += 1;
+    // The NEWEST stamp wins: one item left behind by a failed refresh does not
+    // make the source as old as that item, and reporting the oldest would cry
+    // stale on a source that answered a minute ago.
+    if (fetchedAt && (!seen.lastFetchedAt || fetchedAt > seen.lastFetchedAt)) {
+      seen.lastFetchedAt = fetchedAt;
+    }
+  }
+  return [...bySource.values()];
+}
+
 export interface PlannerContextInput {
   todayItems: readonly PlannerItem[];
   blocks: readonly TimeBlock[];

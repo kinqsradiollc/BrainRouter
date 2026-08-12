@@ -28,7 +28,7 @@ const HOSTED_RETIREMENT_ELIGIBILITY = `
           metadata_json::jsonb -> 'learned' ->> 'tier' = 'instruction'
           AND metadata_json::jsonb -> 'learned' ->> 'origin' <> 'human-correction'
         )
-        AND metadata_json::jsonb -> 'learned' ->> 'form' IN ('lesson', 'procedure', 'delegation')
+        AND metadata_json::jsonb -> 'learned' ->> 'form' IN ('lesson', 'procedure')
         AND metadata_json::jsonb -> 'learned' ->> 'status' IN ('active', 'demoted')
         AND btrim(content) <> ''
         AND btrim(metadata_json::jsonb -> 'learned' ->> 'falsifier') <> ''

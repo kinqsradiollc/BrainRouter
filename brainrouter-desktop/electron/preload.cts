@@ -235,6 +235,11 @@ contextBridge.exposeInMainWorld('brainrouter', {
     // ADR-035 D6 — the compose draft lives beside the audio, under the same
     // 0700 directory, instead of in `localStorage` where any page script could
     // read the meeting's own words back.
+    // ADR-035 D6 — the retention window. The renderer may READ it and ASK for a
+    // different one; it never performs the deletion, because the directory the
+    // sweep empties is one only main may open.
+    retentionRead(): Promise<unknown> { return ipcRenderer.invoke('meetings:retentionRead'); },
+    retentionWrite(days: number): Promise<unknown> { return ipcRenderer.invoke('meetings:retentionWrite', days); },
     draftRead(): Promise<unknown> { return ipcRenderer.invoke('meetings:draftRead'); },
     draftWrite(draft: { title?: string; transcript?: string; template?: string; language?: string }): Promise<unknown> { return ipcRenderer.invoke('meetings:draftWrite', draft); },
     draftClear(): Promise<unknown> { return ipcRenderer.invoke('meetings:draftClear'); },

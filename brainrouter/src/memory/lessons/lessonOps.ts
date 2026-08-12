@@ -25,7 +25,7 @@ export interface LearnedLessonMetadata {
   itemId: string;
   tier: "evidence" | "instruction";
   origin: "model-inferred" | "human-correction";
-  form: "lesson" | "procedure" | "delegation";
+  form: "lesson" | "procedure";
   falsifier: string;
   expectation: string;
   status: "active" | "demoted" | "retired" | "reverted";

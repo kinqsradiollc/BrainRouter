@@ -57,7 +57,7 @@ const learnedSchema = z.object({
     // human correction endpoint is the sole authority for instruction tier.
     tier: z.literal("evidence"),
     origin: z.literal("model-inferred"),
-    form: z.enum(["lesson", "procedure", "delegation"]),
+    form: z.enum(["lesson", "procedure"]),
     falsifier: z.string().max(400),
     expectation: z.string().max(400),
     status: z.enum(["active", "demoted", "retired", "reverted"]),

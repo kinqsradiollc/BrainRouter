@@ -22,7 +22,7 @@ const ITEM_ID = /^lrn_[a-f0-9]{18}$/;
 const STATUSES = new Set(["active", "demoted", "retired", "reverted"]);
 const TIERS = new Set(["evidence", "instruction"]);
 const ORIGINS = new Set(["model-inferred", "human-correction"]);
-const FORMS = new Set(["lesson", "procedure", "delegation"]);
+const FORMS = new Set(["lesson", "procedure"]);
 
 interface HostedLearnedStore {
   listHostedLearnedRecords(userId: string, orgId: string, limit?: number): Promise<CognitiveRecord[]>;
@@ -46,7 +46,7 @@ export interface HostedLearnedBehavior {
   statement: string;
   tier: "evidence" | "instruction";
   origin: "model-inferred" | "human-correction";
-  form: "lesson" | "procedure" | "delegation";
+  form: "lesson" | "procedure";
   status: "active" | "demoted" | "retired" | "reverted";
   statusReason?: string;
   statusChangedAt?: string;

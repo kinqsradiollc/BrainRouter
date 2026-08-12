@@ -15,7 +15,6 @@ export { ReviewPanel } from './review/ReviewPanel.js';
 export { TerminalPanel } from './workspace/TerminalPanel.js';
 export { ToolsPanel } from './workspace/ToolsPanel.js';
 export { WorktreesPanel } from './workspace/WorktreesPanel.js';
-export { StackPanel } from './workspace/StackPanel.js';
 export { ComprehensionPanel } from './memory/ComprehensionPanel.js';
 export { ComprehensionContainer } from './memory/ComprehensionContainer.js';
 export { AttachmentsPanel } from './workspace/AttachmentsPanel.js';

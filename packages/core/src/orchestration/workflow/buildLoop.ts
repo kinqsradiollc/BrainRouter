@@ -15,7 +15,6 @@ import { removeChildWorktree, applyPatchFile, type ChildWorktreeIsolation } from
 import { getStateDir } from '../../storage/store.js';
 import { getCliKnobs } from '../../config/config.js';
 import { emitPrFromPatch, derivePrTitle, derivePrBody } from '../../git/prEmit.js';
-import { probeStackCapability } from '../../review/stackProbe.js';
 import { parsePatchFiles, planSynthesisMerge, type WorktreeChangeSet } from './mergeGate.js';
 import { normalizePhasePlan, type PhasePlan } from './phasePlan.js';
 import type { PhasePlanExecution } from './phaseOrchestrator.js';
@@ -420,12 +419,9 @@ export function finalizeBuildLoop(
       body: derivePrBody({ slug, verifyGreen, changedFiles: cleanup.changedFiles ?? 0, reviewOutput: phaseOutput('review'), attributionSessionUrl: getCliKnobs().attribution.sessionUrl }),
       baseBranch: getCliKnobs().buildLoopPrBaseBranch,
       draft: getCliKnobs().buildLoopPrDraft,
-      // ADR-028 H1/H3 — the build loop asks whether this should be a stack
-      // rather than always opening one pull request. Capability is probed here
-      // so a repository without `gh stack` keeps its current behaviour exactly.
-      stackingMode: getCliKnobs().stackingMode,
-      stackCapability: probeStackCapability(shared.isolation.sourceRoot),
-      ...(cleanup.changedFiles ? { totalChangedLines: cleanup.changedFiles } : {}),
+      // ADR-028 A7 — no stacking inputs: the emit lays down ONE squashed patch
+      // on ONE branch, so there is no second layer for a stack to hold. Stacks
+      // are published from a checkout that is already part of one.
     });
     if (res.ok) {
       pr = { ok: true, url: res.prUrl, number: res.prNumber, branch: res.branch };
