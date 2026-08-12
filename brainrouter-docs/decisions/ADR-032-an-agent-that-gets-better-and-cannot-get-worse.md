@@ -62,10 +62,19 @@ was a promise with no owner and a branch no execution could reach (see D3 and D5
 - **hosted D5 is turn-end, and that is the whole of it.** There is no compaction event and no
   session-end signal on a stateless chat endpoint to hook one to.
 
-What remains genuinely incomplete: command-based local procedures do not yet carry a separate
-runtime-owned ledger of the exact successful actions they may need. Deterministic and real-Postgres
-tests exercise the lifecycle, but neither a fresh full-Agent repeated-mistake exercise nor a
-qualifying live-model acceptance run has been recorded.
+What remains genuinely incomplete, and it is exactly two things:
+
+1. **Command-based local procedures do not carry a separate runtime-owned ledger** of the exact
+   successful actions they may need. This is missing code, not a missing measurement.
+2. **The live-model §6 run is unrecorded**, and §6 says it needs an owner-approved run. It is not
+   blocked on code: the providers exist and are enabled. It is blocked on a decision that costs
+   someone's tokens, which is the owner's to make and not the agent's to assume.
+
+An earlier revision of this paragraph also claimed no full-Agent repeated-mistake exercise had been
+recorded. That contradicted the two paragraphs above it, which describe exactly such an exercise
+driven through real Agents (A learns from its own repetition, B runs what A learned, C cannot once
+it is retired) across 82 tests. The exercise exists; it is the LIVE-MODEL arm that does not. Saying
+both in one document is how a reader comes to trust neither.
 
 ---
 
