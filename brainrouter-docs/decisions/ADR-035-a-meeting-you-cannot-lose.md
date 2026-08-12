@@ -9,9 +9,13 @@ injected only when `BRAINROUTER_STT_STREAM_URL` is set, and both hosts discover 
 consume it. With the variable unset — every shipped compose — capabilities advertise
 `streaming: null`, upgrades are refused, and batch transcription is byte-for-byte what it was. The
 dev compose THREADS that variable through (`${BRAINROUTER_STT_STREAM_URL:-}`) but leaves it empty,
-so streaming is off in every shipped configuration and an operator opts in by setting it; what remains
-for D10 is RUNNING its acceptance (live text, reconnect/replay, visible fallback) against a real
-engine, and a CI job that exercises the streaming sidecar.
+so streaming is off in every shipped configuration and an operator opts in by setting it.
+
+**D10's live-text acceptance has been RUN against a real engine** (2026-08-12): the sidecar returned
+a partial 1.4s behind the speaker, a final that revised it, and a `committed` checkpoint after it —
+the exact sequence the contract requires. Reconnect/replay and visible fallback are host behaviours
+and are still unrun, as is a CI job that exercises the streaming sidecar. D9's destructive
+acceptance now passes on both hosts by reproduction.
 
 **D6's retention window is built on both hosts** — a default this document names (30 days), a
 control in each capture surface, and a sweep that performs the same deletion an explicit discard
@@ -321,6 +325,19 @@ both hosts passing live-text, reconnect/replay and visible-fallback against a re
 never exercised is the state this ADR has paid for repeatedly, so it is named here rather than
 implied by a green suite.
 
+**The engine end of that acceptance has now been run** (2026-08-12), against the bundled sidecar
+with `ggml-base.en`. `/stream/capabilities` returns the v1 protocol and its latency modes; audio fed
+at microphone pace produced a partial 1.4s behind the speaker reading *"Dana will present the
+meeting"*, which the final then revised to *"Dana will present the migration plan"* before
+`committed` advanced the checkpoint. That revision is the case the contract exists for: a partial is
+a hypothesis, only a final is a boundary, and only `committed` may move a resume point. The batch
+path was accepted in the same run.
+
+What is still pending is the HOST end, and the distinction matters: no shipped compose sets
+`BRAINROUTER_STT_STREAM_URL`, so Dashboard and Desktop have been exercised only against the
+segmented path. Reconnect/replay and visible fallback are host behaviours and remain unrun. An
+engine that streams correctly is not a host that survives losing it.
+
 | D10 delivery slice | State |
 |---|---|
 | Strict capability schema, strategy selection, checkpoint validation | Implemented |
@@ -329,7 +346,8 @@ implied by a green suite.
 | Desktop main-process integration | Implemented |
 | Dashboard integration | Implemented |
 | A shipped configuration that turns streaming on | Implemented — `BRAINROUTER_STT_STREAM_URL` in the dev compose, unset by default |
-| Live text, reconnect/replay, and visible fallback acceptance, against a real engine | **Pending** |
+| Live text against a real engine (partial → revised final → committed) | Accepted 2026-08-12, engine end |
+| Reconnect/replay and visible fallback, on both hosts | **Pending** — needs a host pointed at a streaming URL |
 
 ### D11 · In the browser, the server is the system of record — not the origin's quota
 
