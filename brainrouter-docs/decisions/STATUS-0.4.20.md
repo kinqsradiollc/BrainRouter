@@ -70,12 +70,24 @@ stance and lives in the prompt. §6's deterministic COST conjunct passes: bundle
 sends **516,672 characters in 16 calls against legacy's 545,529 in 12** — −5.29%,
 down from +33,537 before.
 
-**Not closed:** D7's harness ships and **has never produced a number**. The corpus
-is frozen (11 cases: 7 with curated known issues, 4 clean with explicit
-no-linked-fix evidence). The harness takes its key from an environment variable by
-design and never from a config file, and the stored provider keys are sealed with
-`BRAINROUTER_SECRET_KEY`. Producing the number therefore needs a key supplied
-deliberately by the owner. This is a measurement not taken, not code not written.
+**The harness has been RUN and it works** (2026-08-12, local `qwen2.5-coder` on
+Ollama). It prepared exact-revision evidence, executed both arms of case `pr-743`
+across six model calls, scored them, and wrote its artifact. That settles a
+question this page could not previously answer: whether the runner would execute
+at all.
+
+**Not closed:** the number itself, and the reason is now specific. The 7B could
+not produce the fenced envelope on its first call. The 14B produces it reliably,
+completed `pr-743` — and found nothing: legacy 0/0, bundled 0/0, on a case
+carrying curated known issues — then failed `pr-1242` on invalid findings. Zero
+recall against planted defects is a capability wall, not a formatting one, so a
+third local model would not help. D7 needs a frontier-class provider, and the
+stored keys are sealed with `BRAINROUTER_SECRET_KEY`, so that key is the owner's
+to supply.
+
+Both failures are evidence FOR the design: each aborted the run and wrote an
+explicitly FAILED artifact rather than degrading into a zero-finding report that
+would have read as a clean review.
 
 ## 034 — Messages that arrive · COMPLETE
 

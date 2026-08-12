@@ -28,6 +28,33 @@ cutoff 2026-08-09, ground-truth bias restated inside the data). The runner exist
 (`npm run bench:review -w @kinqs/brainrouter-mcp-server -- --provider-config=…`) and is
 paired-only by design, because a lone arm cannot prove a delta.
 
+**The harness has now been RUN, and it works** (2026-08-12, against a local `qwen2.5-coder` on
+Ollama through the loopback exemption the provider resolver already allows). That is a change of
+kind: this document previously said the runner "ships and has never produced a number", which left
+open whether it would even execute. It does. It prepared exact-revision evidence from a local
+checkout, executed both arms of case `pr-743` across six model calls, scored them, and wrote its
+machine-readable artifact.
+
+**What it demonstrated is that the number needs a better model than a local one**, and the evidence
+is specific rather than a shrug:
+
+- `qwen2.5-coder:7b` failed on its FIRST call — it could not produce the fenced findings envelope at
+  all (`reviewer returned malformed JSON findings`).
+- `qwen2.5-coder:14b` produces the envelope reliably, completed `pr-743` — and found **nothing**:
+  legacy 0/0, bundled 0/0, on a case carrying curated known issues. It then failed `pr-1242` with
+  `reviewer returned one or more invalid findings`.
+
+Zero recall on a case with planted defects is not a formatting problem, so a third local model is
+not the answer; the wall is reviewing capability. D7's number therefore needs a frontier-class
+provider, which is the owner's key to supply.
+
+**Both failures are evidence FOR the design, and worth keeping.** A malformed envelope and an
+invalid finding each aborted the run and wrote an explicitly FAILED artifact. Neither degraded into
+a zero-finding report that would have read as a clean review — which is exactly the outcome
+`parseReviewFindingsEnvelope`'s strictness exists to prevent, and it was the temptation when the
+first run failed: loosening that parser would have "fixed" the run by turning a loud failure into a
+silent one.
+
 A run was attempted on 2026-08-12 against a local OpenAI-compatible endpoint. It failed — the server
 listed models but served no completions — and that failure is worth recording rather than hiding,
 because it exercised §6's own discipline for the first time against a REAL provider fault instead of
