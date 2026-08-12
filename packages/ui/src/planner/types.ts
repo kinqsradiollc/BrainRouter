@@ -86,6 +86,15 @@ export interface PlannerSyncIssue {
   attempts: number;
   lastError?: string;
   stuck: boolean;
+  /**
+   * A targeted retry has been asked for and has not resolved.
+   *
+   * The control hides while this is true. Showing it after the click makes the
+   * surface stop acknowledging the action — the row looks identical before and
+   * after, so the only feedback is that nothing happened, and the obvious
+   * response is to click again.
+   */
+  retryRequested?: boolean;
 }
 
 export interface PlannerSyncView {
